@@ -157,6 +157,8 @@ property or fuzz harness; a property authored later by reading the implementatio
 | I7 | For every refused create, all three per-loop maps hold the values they held before the call | fence requirement, second scenario |
 | I8 | After terminal release, for every reader, an absent loop and a present terminal loop produce the same observable outcome | `agentic-loop` — release requirement, third scenario |
 | I9 | Terminal release is idempotent: applying it n times equals applying it once | release requirement, first scenario |
+| I10 | Every message published on `agent.signal.<loop_id>`, from any lane, decodes to exactly one payload type | `agentic-dispatch` — control-signal requirement, first scenario |
+| I11 | For every refused signal request, nothing is published on the loop's signal subject | control-signal requirement, third scenario |
 
 ## Decision skills applied
 
@@ -178,7 +180,88 @@ No production struct retains a `context.Context`. Every seam the gate is called 
 handler via `withRequestID(w, r)`. The gate takes `ctx` as its first argument for the durable read. Terminal
 release takes none. No root is created anywhere in this change.
 
-## Open questions — owner word needed before implementation
+## Rulings (owner, 2026-09-01, on #1227) — settled, do not re-litigate
+
+Three questions were raised by this design pass. All three were ruled the same day, verbatim: *"1. confirm
+fail-closed 2. confirm 3. fold it in"*. They are recorded here as answers so a later reader does not reopen
+them.
+
+**R1 — a user-lane request naming a system-lane (ownerless) loop is REFUSED. Fail-closed, confirmed.**
+Ruling 4 (unknown owner ⇒ fail closed) and the two-lane ruling (a system-lane loop must not be refused for
+having no owner) appear to meet here; they do not. The two-lane ruling is about system-lane **traffic** — a
+rule-spawned or research-continuation task, which is published straight to `agent.task.*` and never traverses
+the user-lane gate at all (`processor/rule/actions.go:1713-1720` builds a task with no `LoopID`). It is not a
+licence to admit user-lane requests to ownerless loops. So a user continuing, cancelling, or signalling a
+rule-spawned loop by its token is refused, and a system-lane task is never owner-checked because it never
+reaches the check.
+
+**R2 — `Permissions.CancelOwn` keeps exactly one home, the command lane. Confirmed as designed.**
+The ruled model for `cancel`/`signal` is owner OR `cancel_any` and does not mention `CancelOwn`. Today
+`CancelOwn` is consulted twice: as the `/cancel` command's declared permission (`commands.go:22` →
+`component.go:759` → `component.go:1182`) and again inside `canUserControlLoop` (`component.go:1216`). The
+second consult is deleted with `canUserControlLoop`; the first stays. **Accepted consequence, recorded so it is
+not read later as an oversight:** `CancelOwn: false` still denies the `/cancel` chat command, and does NOT deny
+`POST /loops/{id}/signal`, which has never consulted `CancelOwn` and does not begin to.
+
+**R3 — the signal payload unification is FOLDED IN.** See Piece 5 below.
+
+## Piece 5 — one control-signal payload on the loop signal subject (folded in by R3)
+
+Two payload types travel `agent.signal.<loop_id>`:
+
+| | `agentic.UserSignal` | `agenticdispatch.SignalMessage` |
+|---|---|---|
+| category | `signal` (`agentic/constants.go:13`) | `signal_message` (`agentic/constants.go:24`) |
+| declared | `agentic/user_types.go:111-160` | `processor/agentic-dispatch/loop_tracker.go:585-615` |
+| fields | signal id, type, loop id, user id, channel type, channel id, payload, timestamp | loop id, type, reason, timestamp |
+| `Validate` | signal id, type against a closed verb set, loop id, user id (`user_types.go:124-142`) | `return nil` (`loop_tracker.go:594-596`) |
+| producers | `commands.go:112`; **sisters** `semdragon/…/bossbattle/handler.go:1106`, `semsage/…/ui-api/http.go:195` | `loop_tracker.go:621` — one, dispatch's own HTTP lane |
+| consumers | `component.go:2077` → `handleCancelSignal` `:2106`, `handlePauseSignal` `:2192`, `handleResumeSignal` `:2232` | **none** |
+| rule-readable | yes — `agentic/rule_fields.go:293` | no |
+| registered by | `agentic/payload_registry.go:36` | `processor/agentic-dispatch/payload_registry.go:41-53` |
+
+**Direction: retire `SignalMessage`.** Four reasons from the code, none of them convenience:
+
+1. **Zero consumers.** Retiring it removes no reader. Repairing it would repair something nothing reads.
+2. **It cannot satisfy this change's own ownership requirement.** It has no user id, no channel route, and no
+   signal id. Keeping it means either growing it into a copy of `UserSignal` or exempting the signal seam from
+   the ownership model — and R2 keeps the seam inside the model.
+3. **`UserSignal` is the consumed, rule-readable, documented type** (`processor/agentic-loop/doc.go:86`).
+4. **The outside world already agrees.** Both sister producers on this subject construct `UserSignal`. Dispatch
+   is the outlier, not the standard.
+
+**What retires:** `SignalMessage` and its four methods, `buildSignalMessage`
+(`processor/agentic-dispatch/payload_registry.go:12-37`), `agenticdispatch.RegisterPayloads` (its only
+registration was that type), its call at `payloadbuiltins/register.go:47`, and the
+`agentic.CategorySignalMessage` token (`agentic/constants.go:24`). Per the payload-registry checklist there is
+no `init()` and no singleton to unwind — the registration is one explicit call from one composition root, which
+is exactly why removing it is a three-line change and not a migration.
+
+**What `SendSignal` becomes.** It publishes `agentic.UserSignal`, which needs a signal id (minted), a verb, the
+loop token, and a user id. The user id is the **requester**, resolved by `IdentityFromRequest` — not the loop
+owner — because the loop attributes the action to that field (`component.go:2119` builds
+`"loop cancelled by %s"` from `signal.UserID`). The channel route is taken from the loop's merged facts the gate
+already fetched, not recomputed. The endpoint's `reason` maps onto the existing `Payload` field; no consumer
+reads it today, and it is preserved rather than dropped because the endpoint already accepts it — it is a
+pre-existing zero-consumer field on `SignalRequest` (`http.go:484-487`), not new surface.
+
+**A third interpreter of "which signal verbs exist", left alone deliberately.** The endpoint admits
+`pause|resume|cancel` (`http.go:671-678`); `UserSignal.Validate` admits seven verbs (`user_types.go:139-141`);
+the loop's switch handles three and warns on the rest (`component.go:2091-2103`). These are different layers —
+endpoint policy ⊂ payload grammar ⊇ handler coverage — not three spellings of one fact, and this change does not
+widen the endpoint. Recorded so the next reader does not "unify" them into a behaviour change nobody asked for.
+
+**Effect on the gate design, which the unification changes.** The signal seam stops being inert and starts
+pausing and cancelling real loops. Three adjustments, all now in the spec: the ownership check on `signal`
+becomes load-bearing rather than decorative; a refusal must happen **before** publication, so no signal reaches
+the subject for a request the gate rejects; and the unification MUST NOT land before the gate, or the seam goes
+live ungated for the length of that window. Sequencing is stated in the requirement, not left to task order.
+
+## Superseded — the questions as originally raised
+
+Ruled above on 2026-09-01. Retained only as the record of what was asked.
+
+### As raised
 
 1. **A user-lane request naming a system-lane loop.** Ruling 4 (unknown owner ⇒ fail closed) and the two-lane
    ruling (a system-lane loop must not be refused for having no owner) meet here. The design implements

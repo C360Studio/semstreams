@@ -80,6 +80,29 @@ Each re-derived from source in this worktree, not relayed.
    bases; every pin in the target state uses the corrected values, and `inventory-problem-shape.md` verifies
    clean at 43/43.
 
+## Signal-type unification — the enumeration behind the direction (owner ruling R3)
+
+The direction was not chosen; it was read off a census. `SignalMessage`: **one producer**
+(`loop_tracker.go:621`), **zero consumers** — no file anywhere decodes or type-asserts it — a `Validate` that
+returns nil, and no user id, channel route, or signal id. `UserSignal`: two in-tree producers, four consumer
+functions, a real `Validate` over a closed verb set, `RuleFields`, and the type the loop package documents.
+Dispatch registers exactly one payload and it is the retired one, from one composition-root call, so the
+registry unwind is three lines and not a migration.
+
+**Sister sweep (read-only grep across 13 sibling repositories; no Go tooling invoked, nothing written).** Two
+sisters publish on `agent.signal.<loop_id>` themselves, and **both already construct `agentic.UserSignal`** —
+`semdragon/processor/bossbattle/handler.go:1106` (with `UserID: "bossbattle"`, `ChannelType: "system"`) and
+`semsage/processor/ui-api/http.go:195`. **No repository anywhere constructs `SignalMessage`.** Two consequences
+for the migration note, which this repository owns and does not act on for them: the retirement costs the
+sisters nothing, and semdragon is a real out-of-repo **system-lane** signal producer that bypasses dispatch
+entirely — so it never meets the admission gate, and the only thing that reaches it is the newly enforced
+loop-token form check on `UserSignal.Validate`, which its framework-minted tokens already satisfy.
+
+Recorded and NOT acted on: the signal verb set is admitted at three layers (`http.go:671`,
+`user_types.go:124`, `component.go:2091`). These are endpoint policy, payload grammar, and handler coverage —
+different layers of one contract, not three spellings of one fact. Widening the endpoint would be a behaviour
+change nobody asked for.
+
 ## Pins for the additions above
 
 - `processor/agentic-dispatch/loop_tracker.go:594` — `func (s *SignalMessage) Validate() error {`
@@ -109,6 +132,17 @@ Each re-derived from source in this worktree, not relayed.
 - `processor/agentic-dispatch/component.go:1186` — `case "approve":`
 - `processor/agentic-dispatch/config.go:37` — `Approve    []string `json:"approve"`
 - `processor/rule/actions.go:1713` — `task := agentic.TaskMessage{`
+- `agentic/constants.go:13` — `CategorySignal           = "signal"`
+- `agentic/constants.go:24` — `CategorySignalMessage    = "signal_message"`
+- `processor/agentic-dispatch/loop_tracker.go:621` — `signal := SignalMessage{`
+- `processor/agentic-dispatch/payload_registry.go:12` — `func buildSignalMessage(fields map[string]any) (any, error) {`
+- `payloadbuiltins/register.go:47` — `track(agenticdispatch.RegisterPayloads(reg))`
+- `agentic/rule_fields.go:293` — `func (s *UserSignal) RuleFields() map[string]any {`
+- `processor/agentic-loop/doc.go:86` — `//	signal := agentic.UserSignal{`
+- `processor/agentic-dispatch/http.go:671` — `switch req.Type {`
+- `processor/agentic-dispatch/http.go:484` — `type SignalRequest struct {`
+- `processor/agentic-dispatch/loop_tracker.go:616` — `func (t *LoopTracker) SendSignal(ctx context.Context, nc *natsclient.Client, loopID, signalType, reason string) error {`
+- `processor/graph-ingest/indexing_profile_registry_test.go:107` — `{key(agentic.Domain, agentic.CategorySignalMessage, agentic.SchemaVersion), vocabulary.IndexingProfileSignal},`
 
 ## STRUCK — over-included or mis-scoped
 
@@ -159,6 +193,17 @@ Both files this pass wrote verify clean: `inventory-problem-shape.md` `pins=43 o
   (`entity-id-contract` is the only spec with attach-relevant text), so the conclusion stands and only the
   recorded search is wrong. Recorded so the reviewer does not re-derive a false negative.
 
+### Signal-unification searches
+
+- `git grep -n "SignalMessage" -- '*.go'` → 30; producer `loop_tracker.go:621`, zero consumers, 8 test hits
+- `git grep -n "CategorySignalMessage" -- '*.go' '*.json' '*.md'` → 7 (1 const, 2 production, 1 test, 3 in this change's own files)
+- `git grep -n "UserSignal" -- '*.go' | grep -v _test` → 19
+- `git grep -n "SendSignal" -- '*.go'` → 8 (1 decl, 1 production caller, 1 test, comments)
+- `git grep -n "agenticdispatch" -- 'payloadbuiltins/*.go' 'cmd/'` → 2, both in `payloadbuiltins/register.go`
+- `grep -c "reg.Register" processor/agentic-dispatch/payload_registry.go` → 1
+- `git grep -rn "signal_message" -- schemas/ specs/ docs/ configs/` → 1, `docs/proposals/gh1100-type-authority-inventory.md:25`
+- sister sweep: `grep -rl "SignalMessage\|signal_message\|SendSignal\|agent\.signal"` across 13 sibling repos → hits in semdragon, semmachina (archived change doc), semsage; payload construction inspected in semdragon and semsage only
+
 ### NOT RUN
 
 - `gopls` structural passes. `inventory-carriers.md` ran `gopls references` on `looptoken.Valid`; every
@@ -166,6 +211,6 @@ Both files this pass wrote verify clean: `inventory-problem-shape.md` `pins=43 o
   completeness for `LoopManager`'s 71 methods is not claimed beyond the readers enumerated in `design.md`
   §Piece 4.
 - Sister-repo sweep for products that author `reply_to` or rely on the unenforced `approve` permission. Per the
-  standing ruling a sister pass sizes a migration note and never gates a design; it belongs with task 9.4.
+  standing ruling a sister pass sizes a migration note and never gates a design; it belongs with task 10.4.
 - `git log -S` on `CreateLoopWithID`'s overwrite or on `DeleteLoop`'s disuse. No claim is made here about when
   or why either arose beyond what ADR-105 and the code comments already state.

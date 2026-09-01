@@ -130,6 +130,49 @@ for a reason the existing comment already states: the transition happens BEFORE 
 terminal graph write, both of which read the entity. The correct placement was already written down; the
 design's only job is to notice it.
 
+## Shape 6 — one home per interpreted fact, and the tell is a second type on one subject
+
+The job: a subject, a bucket, or a predicate carries one fact. When two types claim it, one of them is
+unreachable — and because publishing still succeeds, the failure is silent on the producing side.
+
+The instance this change closes. Two payload types travel `agent.signal.<loop_id>`; the loop's only handler for
+that port accepts one and drops the other, so the endpoint that publishes the second reports success and does
+nothing:
+
+- `agentic/constants.go:13` — `CategorySignal           = "signal"`
+- `agentic/constants.go:24` — `CategorySignalMessage    = "signal_message"`
+- `processor/agentic-dispatch/loop_tracker.go:621` — `signal := SignalMessage{`
+- `processor/agentic-dispatch/loop_tracker.go:634` — `subject := "agent.signal." + loopID`
+- `processor/agentic-dispatch/commands.go:112` — `signal := agentic.UserSignal{`
+- `processor/agentic-dispatch/commands.go:127` — `subject, err := component.ResolveSubject(c.outputPortDefs(), "agent.signal", targetLoopID)`
+- `processor/agentic-loop/component.go:898` — `handler = adaptVoidInputHandler(c.handleSignalMessage)`
+- `processor/agentic-loop/component.go:2077` — `signalPtr, ok := baseMsg.Payload().(*agentic.UserSignal)`
+- `processor/agentic-loop/component.go:2079` — `c.logger.Error("Unexpected payload type", "type", fmt.Sprintf("%T", baseMsg.Payload()))`
+
+The evidence deciding which type is the home — the surviving one is consumed, validated, rule-readable and
+documented; the retired one is none of those:
+
+- `agentic/user_types.go:124` — `func (s UserSignal) Validate() error {`
+- `processor/agentic-dispatch/loop_tracker.go:594` — `func (s *SignalMessage) Validate() error {`
+- `processor/agentic-dispatch/loop_tracker.go:595` — `return nil`
+- `agentic/rule_fields.go:293` — `func (s *UserSignal) RuleFields() map[string]any {`
+- `processor/agentic-loop/doc.go:86` — `//	signal := agentic.UserSignal{`
+- `processor/agentic-dispatch/payload_registry.go:12` — `func buildSignalMessage(fields map[string]any) (any, error) {`
+- `payloadbuiltins/register.go:47` — `track(agenticdispatch.RegisterPayloads(reg))`
+
+The same repository's own statement of the rule, on a different fact — the metric-reason mapping of Shape 1 —
+which is what makes this a shape and not a one-off bug:
+
+- `processor/graph-ingest/authority_gate.go:59` — `var classified *errs.ClassifiedError`
+
+**Disposition: ADOPT — retire the duplicate, do not admit both.** Two further instances of the tell were found
+on this surface and are recorded rather than fixed, because each is a different layer of one contract rather
+than a second spelling of it: the signal verb set is admitted at three places (endpoint policy at
+`processor/agentic-dispatch/http.go:671`, payload grammar at `agentic/user_types.go:124`, handler coverage at
+`processor/agentic-loop/component.go:2091`), and the subject is resolved two ways (through the port projection
+at `processor/agentic-dispatch/commands.go:127`, and by string concatenation at
+`processor/agentic-dispatch/loop_tracker.go:634` — the latter is folded into the unification).
+
 ## What this category caught that the others did not
 
 1. That the admission gate is not new work. Four of the five shapes above already exist in the tree; three are
@@ -140,8 +183,13 @@ design's only job is to notice it.
    placement argument.
 3. That `CreateLoopWithID` is an anti-instance of a house pattern, not merely an unguarded function — which is
    what makes "adopt the shape" a smaller change than "design a fence".
+4. That a live defect was sitting on a seam the change already touched. The fact-scoped inventories recorded
+   both signal types separately and neither connected them, because "which types carry a loop token" and "which
+   types travel one subject" are different questions and only the second finds an unreachable consumer. Asking
+   for the SHAPE — one home per interpreted fact — is what put them side by side. This is the strongest evidence
+   for keeping the category: it found a broken endpoint, not just a tidier design.
 
-Cost: five searches beyond the fact-scoped set, listed below. Recommend the category be kept.
+Cost: seven searches beyond the fact-scoped set, listed below. Recommend the category be kept.
 
 ## Searches
 
@@ -150,3 +198,5 @@ Cost: five searches beyond the fact-scoped set, listed below. Recommend the cate
 - `git grep -n 'ErrAlreadyExists' -- '*.go' | grep -v _test` → 19 (declaration, 4 production consumers, doc comments)
 - `git grep -n 'releaseLoopTransientState' -- '*.go' | grep -v _test` → 7 (declaration, 4 deferred/called sites, 2 doc comments)
 - `git grep -n 'mergeRouteField\|reconcileTerminalRoute' -- '*.go' | grep -v _test` → 5
+- `git grep -n 'SignalMessage' -- '*.go'` → 30 (1 producer, 0 consumers, 8 test hits)
+- `git grep -n 'UserSignal' -- '*.go' | grep -v _test` → 19 (2 producers in-tree, 4 consumer functions)

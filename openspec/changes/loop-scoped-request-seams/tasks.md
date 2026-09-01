@@ -21,7 +21,8 @@ the two `state.go` edits are reviewed together rather than re-derived.
 - [x] 2.1 `proposal.md`, including the adopter seam inventory and the measured premises
 - [x] 2.2 `design.md` — seam census, per-piece shape, invariants, decision-skill outcomes
 - [x] 2.3 Spec deltas: `agentic-dispatch` (new capability), `agentic-loop`, `entity-id-contract`
-- [ ] 2.4 HALT — owner word on `design.md` §Open questions 1, 2, 3 before implementation starts
+- [x] 2.4 Owner ruling on the three design questions — RULED 2026-09-01 on #1227 (*"1. confirm fail-closed
+      2. confirm 3. fold it in"*); recorded as R1/R2/R3 in `design.md`. Question 3 added section 9
 
 ## 3. The admission gate
 
@@ -57,8 +58,8 @@ the two `state.go` edits are reviewed together rather than re-derived.
 - [ ] 5.1 `agentic.UserSignal.Validate` (`agentic/user_types.go:124-141`)
 - [ ] 5.2 `agentic.ApprovalResponse.Validate` (`agentic/approval.go:122`)
 - [ ] 5.3 `agentic.ApprovalPendingEvent.Validate` (`agentic/approval.go:66`)
-- [ ] 5.4 `agenticdispatch.SignalMessage.Validate` (`processor/agentic-dispatch/loop_tracker.go:594-596`) —
-      today an unconditional `return nil`; add non-emptiness and form
+- [ ] 5.4 `agenticdispatch.SignalMessage.Validate` needs no fix — the type is RETIRED in section 10. Do not
+      add validation to a type being deleted; verify section 10 landed instead
 - [ ] 5.5 Retire the fixtures that encode a retired token shape as VALID, starting with
       `agentic/user_types_test.go:143-154`, and sweep for others
 
@@ -93,11 +94,40 @@ the two `state.go` edits are reviewed together rather than re-derived.
 - [ ] 8.2 Answer the submitter with a typed error naming the offending field on both lanes; count the refusal
 - [ ] 8.3 Test I5: a submission that publishes no task leaves the tracker and the gauge unchanged
 
-## 9. Gates
+## 9. One control-signal payload (folded in by owner ruling R3)
 
-- [ ] 9.1 `task lint`, `go test -race ./...`, `go test -tags=integration -race -p 2 ./...`
-- [ ] 9.2 `task schema:generate` and commit any schema/spec drift with the code
-- [ ] 9.3 `task e2e:agentic` green BEFORE the breaking commit lands (the `reply_to`-must-exist change)
-- [ ] 9.4 Migration note in `docs/operations/` covering the `reply_to` behaviour change and the newly enforced
-      `approve` permission, including the statement that the default admits everyone
-- [ ] 9.5 Archive/spec sync as the last content commit, reviewed with the code
+Sequencing: 9.4 MUST NOT land before section 4 — the seam goes live here, and it must be gated first.
+
+- [ ] 9.1 Change `LoopTracker.SendSignal` (`loop_tracker.go:615-648`) to build and publish
+      `agentic.UserSignal`: minted signal id, the verb, the loop token, the **requester** identity from
+      `IdentityFromRequest`, the loop's channel route from the gate's merged facts, and the endpoint's `reason`
+      on the existing `Payload` field
+- [ ] 9.2 Resolve the subject through `component.ResolveSubject` as the chat lane does (`commands.go:127`)
+      rather than the hardcoded `"agent.signal." + loopID` (`loop_tracker.go:634`)
+- [ ] 9.3 Delete `SignalMessage` and its four methods (`loop_tracker.go:585-613`), `buildSignalMessage` and
+      `RegisterPayloads` (`processor/agentic-dispatch/payload_registry.go` — the whole file; its only
+      registration was that type), the `track(agenticdispatch.RegisterPayloads(reg))` call
+      (`payloadbuiltins/register.go:47`) and its import (`:21`), and `agentic.CategorySignalMessage`
+      (`agentic/constants.go:24`)
+- [ ] 9.4 Wire `handleLoopSignal` (`http.go:642-733`) to the gate and to the new `SendSignal` signature;
+      refuse BEFORE publication
+- [ ] 9.5 Retire the tests that pin the deleted type: `loop_tracker_test.go:421-473`
+      (`TestSignalMessage_Serialization`, `TestSignalMessage_Types`), `loop_tracker_test.go:475-481`
+      (`TestLoopTracker_SendSignal_NoClient`, signature change), and the registry-floor assertion at
+      `processor/graph-ingest/indexing_profile_registry_test.go:107`
+- [ ] 9.6 Sweep prose for the retired category: `docs/proposals/gh1100-type-authority-inventory.md:25` names
+      `agentic.signal_message.v1` in a registered-type count
+- [ ] 9.7 Test that the endpoint now actually cancels a running loop end to end, and that exactly one payload
+      type appears on `agent.signal.*` (I10, I11)
+
+## 10. Gates
+
+- [ ] 10.1 `task lint`, `go test -race ./...`, `go test -tags=integration -race -p 2 ./...`
+- [ ] 10.2 `task schema:generate` and commit any schema/spec drift with the code
+- [ ] 10.3 `task e2e:agentic` green BEFORE the breaking commit lands (the `reply_to`-must-exist change)
+- [ ] 10.4 Migration note in `docs/operations/`, LEADING with the signal-endpoint behaviour change (it starts
+      actually cancelling loops), then the `reply_to` existence refusal, then the newly enforced `approve`
+      permission with the statement that its default admits everyone, then the retired exported surface
+      (`SignalMessage`, `CategorySignalMessage`, `agenticdispatch.RegisterPayloads`, `SendSignal`'s signature)
+      and the recorded finding that no sister constructs any of them
+- [ ] 10.5 Archive/spec sync as the last content commit, reviewed with the code

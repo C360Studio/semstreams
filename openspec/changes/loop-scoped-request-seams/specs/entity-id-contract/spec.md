@@ -38,8 +38,10 @@ complete and closed; a new carrier of a loop token joins it rather than validati
 - `agentrun.Mint` MUST refuse a non-canonical firing-loop instance (its scenario lives in the graph-ingest
   capability, which owns Mint's refusal behavior).
 - Every remaining payload that carries a loop token MUST refuse a non-canonical one in its own `Validate`:
-  the user control signal, the approval response, the approval-pending event, and dispatch's own control-signal
-  message — the last of which validated nothing at all, not even non-emptiness.
+  the user control signal, the approval response, and the approval-pending event. A fourth carrier existed —
+  dispatch's own control-signal message, whose `Validate` returned nil unconditionally — and is RETIRED rather
+  than repaired: it had one producer, zero consumers, and no identity fields, so the seam that produced it now
+  publishes the user control signal instead. A carrier with no reader is deleted, not validated.
 - Every loop-scoped HTTP endpoint MUST refuse a non-canonical loop id taken from its URL path, before the
   existence check, so a malformed token is answered as malformed rather than as not found.
 
@@ -115,16 +117,15 @@ sites, not at the accepting seams.
 
 #### Scenario: every remaining loop-token carrier refuses a non-canonical token
 
-- **GIVEN** a user control signal, an approval response, an approval-pending event, and a dispatch control-signal
-  message, each carrying the loop token `loop_ab12cd34`
+- **GIVEN** a user control signal, an approval response, and an approval-pending event, each carrying the loop
+  token `loop_ab12cd34`
 - **WHEN** each is validated
 - **THEN** each is refused with a classified invalid error naming its loop-token field, and none is published or
   acted on
-- **AND** an empty loop token is likewise refused by the dispatch control-signal message, whose validation
-  previously accepted everything
+- **AND** no payload type carrying a loop token remains whose validation accepts every input
 - **AND** the tests that verify this are `TestUserSignalRefusesNonCanonicalLoopID`,
   `TestApprovalResponseRefusesNonCanonicalLoopID`, `TestApprovalPendingEventRefusesNonCanonicalLoopID`, and
-  `TestSignalMessageValidatesItsLoopID`
+  `TestNoLoopTokenCarrierAcceptsEveryInput`
 
 #### Scenario: a non-canonical loop id in a URL path is refused before the existence check
 

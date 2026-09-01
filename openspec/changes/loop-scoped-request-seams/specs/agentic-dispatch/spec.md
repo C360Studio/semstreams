@@ -225,6 +225,56 @@ MUST increment a counter. A logged bare return is not an acceptable outcome on a
 - **AND** the tests that verify this are `TestValidationFailureAnswersChannelSubmitter`,
   `TestValidationFailureAnswersHTTPSubmitter`, and `TestFailedSubmissionLeavesGaugeAndTrackerUnchanged`
 
+### Requirement: One control-signal payload travels the loop signal subject
+
+Dispatch MUST publish `agentic.UserSignal` for every control signal it sends to a loop, on every lane, and the
+duplicate control-signal payload it declared for the HTTP lane MUST be retired along with its payload-registry
+category. Two payload types share the `agent.signal.<loop_id>` subject today — the chat command lane publishes
+the user control signal, and the HTTP lane publishes a dispatch-local type — while the loop's only handler for
+that subject accepts the first and drops anything else as an unexpected payload type. The HTTP signal endpoint
+therefore reports success and the loop never pauses, resumes, or cancels.
+
+Retirement, not repair, is required, and the reason is a rule rather than a preference: the dispatch-local type
+has one producer and **zero consumers**, so nothing reads what would be repaired. It also carries no requester
+identity, no channel route, and no signal id, so it cannot satisfy the ownership model this capability requires
+of the signal seam — keeping it would mean either growing it into a copy of the user control signal or exempting
+the signal seam from ownership, and neither is admissible.
+
+The published signal MUST carry the **requester's** identity as its user, not the loop owner's: a control signal
+records who acted, and the loop's cancellation path attributes the action to that field. Its channel route MUST
+be taken from the loop's merged facts rather than recomputed by the caller. The signal verbs the HTTP endpoint
+admits remain a property of the endpoint and MUST NOT be widened by this unification.
+
+Sequencing is part of the requirement: this seam becomes live — it begins actually pausing, resuming, and
+cancelling loops — and MUST NOT become live before the admission gate governs it. Unification and the gate land
+together, never the unification first.
+
+#### Scenario: the HTTP signal endpoint actually stops the loop
+
+- **GIVEN** a running loop and its owner
+- **WHEN** the owner posts a cancel signal to the loop signal endpoint
+- **THEN** a user control signal naming the requester is published on the loop's signal subject, the loop's
+  handler accepts it, and the loop transitions to cancelled
+- **AND** no payload is dropped as an unexpected type on that subject
+- **AND** the tests that verify this are `TestHTTPSignalEndpointCancelsTheLoop` and
+  `TestSignalSubjectCarriesExactlyOnePayloadType`
+
+#### Scenario: the retired control-signal payload is gone from the registry
+
+- **GIVEN** a composed binary registering the framework's built-in payloads
+- **WHEN** the payload registry is inspected
+- **THEN** the dispatch-local control-signal category is absent, and the user control-signal category is the
+  only registered payload for the loop signal subject
+- **AND** no composition root still calls a dispatch payload registration that registers nothing
+- **AND** the test that verifies this is `TestRetiredSignalMessageCategoryIsUnregistered`
+
+#### Scenario: a signal from a non-owner without cancel-any is refused before publication
+
+- **GIVEN** a running loop owned by `user-a` and a requester `user-b` absent from the cancel-any list
+- **WHEN** `user-b` posts a cancel signal to the loop signal endpoint
+- **THEN** the gate refuses it, nothing is published on the loop's signal subject, and the loop keeps running
+- **AND** the test that verifies this is `TestSignalFromNonOwnerIsRefusedBeforePublish`
+
 ### Requirement: The ungated seams are named, with the reason each is exempt
 
 Every seam that accepts a loop token and does NOT pass through the gate MUST be listed here with its reason, so

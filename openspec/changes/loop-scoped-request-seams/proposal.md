@@ -47,7 +47,15 @@ Two measured facts decide the design, and neither was established when the issue
    (`loop_tracker.go:209-231`), so the overwrite lands on **live** state. That reclassifies part of #1227 from
    hardening to a defect on the happy path.
 
-And a third, found while verifying the inventories: **`LoopManager` never releases anything.** `DeleteLoop`
+A third and a fourth were found while verifying the inventories. **The HTTP signal endpoint has never worked.**
+`LoopTracker.SendSignal` publishes an `agenticdispatch.SignalMessage` (category `signal_message`,
+`loop_tracker.go:600`) on `agent.signal.<loopID>` (`:634`), while agentic-loop's only handler for that port
+(`component.go:898`) asserts `*agentic.UserSignal` (category `signal`) at `component.go:2077` and logs
+*"Unexpected payload type"* otherwise. The chat `/cancel` command publishes the correct type
+(`commands.go:112`). So `POST /loops/{id}/signal` answers `200 {"accepted": true}` and the loop is never
+paused, resumed, or cancelled. Two payload types on one subject is one home per interpreted fact, violated.
+
+And **`LoopManager` never releases anything.** `DeleteLoop`
 (`state.go:340-354`) is the only site that clears eleven per-loop maps and has zero production callers — its only
 references are `recovery_test.go:530` and `state_test.go:202,218,233`. Every loop the process ever runs keeps its
 full conversation until the process exits. That is #1233.
@@ -83,14 +91,42 @@ uncoded `Wrap*` family only. That is the mechanical reason #1225 is a silent dro
   (`component.go:1447,1613,1813,2128`) after the terminal observation and terminal graph write have returned.
 - **#1225's ordering fix**: track the loop and move the gauge only after the task serializes, and answer the
   submitter with a typed error naming the field on both paths.
+- **One control-signal payload on the loop signal subject.** Dispatch publishes `agentic.UserSignal` on both
+  lanes; `agenticdispatch.SignalMessage`, its builder, and the `agentic.CategorySignalMessage` token are
+  retired. The direction is decided by the code, not by convenience: `SignalMessage` has **one producer and zero
+  consumers**, carries no requester identity, no channel route and no signal id — so it cannot satisfy the
+  ownership model this change requires of the signal seam — and its `Validate` returns nil unconditionally.
+  `UserSignal` is the type the loop actually consumes, the type that is rule-readable
+  (`agentic/rule_fields.go:293`), the type the loop package documents (`processor/agentic-loop/doc.go:86`), and
+  the type **both sister producers already publish** on this subject.
 - **`approve` becomes load-bearing.** `Permissions.Approve` (`config.go:37`) is reachable through
   `hasPermission` (`component.go:1186`) and has zero call sites; the approval endpoint checks nothing. The
   default is `Approve: []string{"*"}` (`config.go:101`), so **no deployment's behaviour changes by default**.
+
+## Consequences an operator will see
 
 **BREAKING, wire behaviour:** a `reply_to` naming a loop that does not exist is now refused rather than silently
 minting a loop under the client's token. A canonical UUID still passes the FORM check — that contract is
 unchanged — but a token this framework never minted names no loop to continue.
 `TestCanonicalReplyToContinuesTheLoop` asserts today's behaviour and is replaced.
+
+**BEHAVIOUR CHANGE, not a type cleanup: `POST /loops/{id}/signal` starts working.** Today it returns
+`200 {"accepted": true}` and the loop ignores the message. After this change the same call actually pauses,
+resumes, or cancels the loop. An operator or product shell that has been calling this endpoint — and reasonably
+concluded from the `200` that it worked — will see loops respond for the first time. Anyone who built a
+workaround around its silence (polling, a second cancel path, a rule that force-terminates) now has two things
+cancelling the same loop. This is the single most user-visible effect in the change and it needs to lead the
+migration note, ahead of the `reply_to` refusal.
+
+**BREAKING, exported Go surface:** `agenticdispatch.SignalMessage` and `agentic.CategorySignalMessage` are
+deleted, and `agenticdispatch.RegisterPayloads` — whose only registration was that type — goes with them, along
+with its call at `payloadbuiltins/register.go:47`. `LoopTracker.SendSignal`'s signature changes to carry the
+requester identity the published payload now requires. No repository in the sister sweep constructs
+`SignalMessage`; both sisters that publish on this subject already construct `agentic.UserSignal`
+(`semdragon/processor/bossbattle/handler.go:1106`, `semsage/processor/ui-api/http.go:195`), so the retirement
+costs them nothing. Those two also become subject to the newly enforced loop-token form check on
+`UserSignal.Validate`; both pass it today because their tokens are framework-minted. Recorded here as the
+migration note's content — this repository does not change theirs.
 
 ## Non-goals
 
@@ -143,6 +179,10 @@ dispatch's HTTP and channel surfaces, who has never opened any file named above.
   point); and `reply_to` must name a loop that exists (you can no longer seed your own loop id).
 - One caveat, not an action: `user_id` is asserted, not authenticated. These guards prevent accidents. They do
   not isolate untrusted parties.
+- For a **component author** rather than a client: `agenticdispatch.SignalMessage`,
+  `agentic.CategorySignalMessage`, and `agenticdispatch.RegisterPayloads` no longer exist. Build
+  `agentic.UserSignal` instead — which is what the two sister producers on this subject already do, so this
+  debt is owed by nobody currently in the tree.
 
 The raw list is four items, which the contract calls a design finding rather than a documentation task. It
 compresses to one because items two and three are entailments of item one and item four requires nothing of
@@ -160,6 +200,8 @@ Traced for someone who learns none of the above:
 | Authors its own `reply_to` UUID | a loop is silently minted under it | typed refusal: no such loop |
 | Resumes by `reply_to` after dispatch was replaced | HTTP endpoints answer 404; the submission path silently forks a NEW loop under the same token | admitted from the durable record and genuinely continued |
 | Approves a tool call without the approve permission | admitted — the permission is advertised and unread | refused, unless the default `["*"]` is in force, which it is |
+| Calls `POST /loops/{id}/signal` to cancel a loop | `200 accepted:true`, loop keeps running | `200`, and the loop actually cancels — see the consequences section |
+| Constructs `agenticdispatch.SignalMessage` | compiles | **compile error** — the type is gone; no in-tree or sister caller does this |
 
 Row five is the important one: today the adopter must **predict** whether dispatch still holds their loop in
 memory, and gets a silent fork when they predict wrong. After, the framework observes the durable record. That
@@ -169,7 +211,8 @@ Nothing on this table is a silent loss after the change; every refusal is typed 
 
 ### 3. Where do they find out?
 
-Ranked honestly: **typed runtime error**, on the lane they are already listening to — a synchronous HTTP body
+For the retired Go surface, the answer is the best rank available: **compile error**. For everything else,
+ranked honestly: **typed runtime error**, on the lane they are already listening to — a synchronous HTTP body
 with a status code (`400` malformed, `404` absent, `403` not permitted or not owned — new on these endpoints,
 `409` terminal, joining the `409` the approval endpoint already returns), or a typed error response on the
 response subject for the channel path. Behind that, an operator sees one refusal counter labelled by seam and
@@ -182,7 +225,9 @@ caller-asserted (`identity.go:52-59`); so it must ask the adopter to be consiste
 prediction-shaped ask. That residual gap is exactly the scope of epic #1205, and it is the reason this
 capability's spec states in its own words that it is not authorization. What the change does delete is the
 other prediction on this surface — whether the loop is still in dispatch's memory — which the framework now
-observes for them.
+observes for them — and the second: an operator no longer has to know that one of the two documented ways to
+cancel a loop silently does nothing. A surface that reports success and does nothing is the worst rank on the
+list, below "nowhere", because it actively teaches the wrong fact.
 
 ## Premises (each measured; pins in the inventory files)
 
@@ -203,10 +248,15 @@ observes for them.
 | P13 | A single terminal-release point already exists, correctly placed | `trajectory_handler_wiring.go:35-55`; deferred at `component.go:1447,1613,1813,2128` |
 | P14 | The loop-result tool reads the durable record, not the map | `processor/agentic-tools/loop_result.go:34-50` |
 | P15 | Approval sweeping cannot lose a candidate to terminal release | `state.go:258` skips any loop not awaiting approval |
+| P16 | `SignalMessage` has one producer and zero consumers | producer `loop_tracker.go:621`; `git grep SignalMessage` shows no decode/type-assert anywhere |
+| P17 | The loop's only `agent.signal` handler accepts `*agentic.UserSignal` and drops the rest | `component.go:898` → `:2077`, `:2079` |
+| P18 | `SignalMessage` carries no identity, route, or signal id | `loop_tracker.go:586-591` — `LoopID`, `Type`, `Reason`, `Timestamp` only |
+| P19 | Dispatch registers exactly one payload, and it is the retired type | `processor/agentic-dispatch/payload_registry.go:41-53`; one `reg.Register` call; one caller at `payloadbuiltins/register.go:47` |
+| P20 | Both sister producers on this subject already publish `UserSignal` | `semdragon/processor/bossbattle/handler.go:1106`, `semsage/processor/ui-api/http.go:195` (read-only sweep) |
 
 ## Capabilities touched
 
-`agentic-dispatch` (**new capability, seeded here** — ADDED ×6), `agentic-loop` (ADDED ×2), `entity-id-contract`
+`agentic-dispatch` (**new capability, seeded here** — ADDED ×7), `agentic-loop` (ADDED ×2), `entity-id-contract`
 (MODIFIED ×1 — the seam census and the isolation caveat).
 
 ## Coordination and gates
