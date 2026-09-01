@@ -52,11 +52,15 @@ base: <40-hex sha>
 - `git grep -n 'NewAlertEvent'` → 0
 ```
 
-The four categories mirror the architect contract: **Claimed gap** (every plausible spelling of what the change says
+The five categories mirror the architect contract: **Claimed gap** (every plausible spelling of what the change says
 is missing), **Spellings of the fact** (every place the modeled fact is computed, declared, interpreted, persisted),
 **Adjacent claims** (specs, ADRs, active changes, open issues, draft PRs, sister-repo asks on the surface),
-**Consumers** (for each named symbol, port, subject, bucket, or field, its present readers). Every entry in the first,
-second, and fourth categories is a pin — `` `path:line` — `text` `` — verifiable by `task inventory:verify -- <file>`.
+**Consumers** (for each named symbol, port, subject, bucket, or field, its present readers), **Problem shape** (the
+closest existing instance of the same *shape* — admit-or-refuse at a seam, create-vs-exists, read-through over a
+cache, classified refusal plus observed signal, authority delegation, bounded dispatch — **on any plane, including
+one modeling an unrelated fact**; the other four categories all scope to the fact, so nothing else finds it). Every
+entry in the first, second, fourth, and fifth categories is a pin — `` `path:line` — `text` `` — verifiable by
+`task inventory:verify -- <file>`.
 Under **Adjacent claims**, in-tree files are pins too; an open issue, draft PR, or sister-repo ask has no `path:line`
 and is written `- #1180 — <title>` or `- semmem: <ask>`, deliberately outside the pin grammar — the verifier checks the
 pins in that section and ignores its other bullets. Every search goes under `## Searches`

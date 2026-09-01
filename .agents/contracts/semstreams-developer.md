@@ -76,7 +76,7 @@ pins that drifted; refresh them rather than re-sweeping.
 Most defects in this repository's record entered as ADDITIONS duplicating something nobody had inventoried — a
 second pub-ack detector beside the gateway's existing one, a resolver re-deriving a classification FlowGraph already
 performed, a bool spelling a fact an existing port type already carried. Before adding ANY new symbol, field,
-channel, resolver, classifier, port, subject, bucket, or config key — exported or not — answer three questions with
+channel, resolver, classifier, port, subject, bucket, or config key — exported or not — answer five questions with
 evidence, and carry the evidence into the handoff:
 
 1. **Who owns this responsibility today?** Search the concept under every plausible spelling: exported and
@@ -92,6 +92,12 @@ evidence, and carry the evidence into the handoff:
    "remember to call X first" hands the caller a fact the framework already holds; they will get it wrong, and
    silently. Prefer acting and handling the real outcome over making them compute it in advance. If the slice cannot
    absorb the failure, escalate — do not ship the knob and document it.
+5. **Am I establishing a pattern other planes should adopt?** If question 1 found *no* present owner and what you are
+   adding is a named primitive intended for reuse across planes — a validator, gate, authority, classified-error
+   family, dispatcher, or lifecycle shape — the change owes an **adoption sweep**: one line per plane that should
+   adopt it, pinned at `file:line`, filed as issues or one tracking issue. It is an **enumeration obligation, never a
+   migration obligation** — you fix none of them, and the number found never blocks your PR. Worked case and the
+   reason the bound matters: `docs/contributing/07-pattern-adoption.md`.
 
 The architect's surface and adopter seam inventories answer these at design time. This check is the
 implementation-time re-run, scoped to the slice you touch — slices grow symbols the design never named.
