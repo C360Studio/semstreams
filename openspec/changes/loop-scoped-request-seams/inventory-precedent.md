@@ -1,5 +1,5 @@
 # Inventory: existing framework admission/authority precedent
-base: 0a40ddf3
+base: 0a40ddf347db325c8fc34924b61260f3dc316e68
 
 Third axis, written by the orchestrating session alongside the two explorer sweeps
 (`inventory-carriers.md`, `inventory-attach.md`). Those two enumerate what the agentic plane does.
