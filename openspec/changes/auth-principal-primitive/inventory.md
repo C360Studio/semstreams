@@ -357,13 +357,13 @@ is not what any of them needs; filed as **#1253**.
 
 Stated rather than left for the reviewer to infer:
 
-- **`task inventory:verify` covers a subset of this file, by design of the checker, not by drift.** It now runs
-  (the `base:` line is in the grammar it requires) and reports `pins=27 ok=10 moved=0 ambiguous=0 drift=0` over the bullet
-  pins (17 `MALFORMED`, 10 `UNPARSED` — all prose bullets, see below). It does **not** see the ~40 pins carried in markdown tables — the parser reads bullets only — and it reports
-  this file's prose bullets as `UNPARSED`, because under any `## ` heading other than `## Searches` or
-  `## Adjacent claims` it requires every bullet to be a pin. The architect contract's five-category inventory format
-  produces prose and tables, so that mismatch is structural rather than specific to this file; filed separately.
-  Every table pin in this file was re-checked by hand during the 2026-09-02 revision.
+- **`task inventory:verify` covers a subset of this file, by design of the checker, not by drift.** It now runs (the
+  `base:` line is in the grammar it requires) and reports `pins=27 ok=10 moved=0 ambiguous=0 drift=0` over the bullet
+  pins (17 MALFORMED, 10 UNPARSED — all prose bullets). It does not see the ~40 pins carried in markdown tables,
+  because the parser reads bullets only; and under any second-level heading other than `Searches` or `Adjacent
+  claims` it requires every bullet to be a pin, which the architect contract's five-category format does not produce.
+  That mismatch is structural rather than specific to this file and is filed separately. Every table pin here was
+  re-checked by hand during the 2026-09-02 revision.
 - The sister pass was **one bounded pass** (greenfield ruling: it sizes the migration note, it does not gate
   design). Repos with zero hits: semops, semmachina, semdev, semboids, semmem, semembed, semlink (Go), semsummarize,
   servicesim, semstreams-ui. semconnect's Go hit was its own local identity type.
