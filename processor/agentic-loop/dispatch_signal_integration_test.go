@@ -40,6 +40,13 @@ import (
 // is asked to cancel exists only in the durable AGENT_LOOPS record — this
 // process never tracked it — so the gate's merged read is exercised too.
 //
+// The requester is deliberately NOT the owner: a cancel_any operator cancels
+// a loop owned by someone else. That is what makes the identity assertion
+// discriminating — with requester == owner the two candidate sources for the
+// signal's user field are indistinguishable, and a mutation swapping the
+// requester for the owner survives (measured: it did, before this fixture
+// separated them).
+//
 // Before this change the endpoint published a dispatch-local payload the loop's
 // handler dropped as an unexpected type, answered 200, and cancelled nothing.
 // What fails here if that returns is the completion assertion, not a type
@@ -74,7 +81,7 @@ func TestHTTPSignalEndpointCancelsTheLoop(t *testing.T) {
 	kv, err := tc.GetKVBucket(ctx, "AGENT_LOOPS")
 	require.NoError(t, err)
 	record, err := json.Marshal(agentic.LoopEntity{
-		ID: loopID, TaskID: "task-1", UserID: "user-a",
+		ID: loopID, TaskID: "task-1", UserID: "loop-owner",
 		ChannelType: "http", ChannelID: "session-1",
 		State: agentic.LoopStateExecuting, MaxIterations: 5,
 	})
@@ -88,10 +95,11 @@ func TestHTTPSignalEndpointCancelsTheLoop(t *testing.T) {
 
 	body := strings.NewReader(`{"type":"cancel","reason":"operator asked"}`)
 	req := httptest.NewRequest(http.MethodPost, "/loops/"+loopID+"/signal", body)
-	req = req.WithContext(agenticdispatch.WithIdentity(ctx, "user-a"))
+	req = req.WithContext(agenticdispatch.WithIdentity(ctx, "cancel-operator"))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code, "the owner's signal is admitted: %s", rec.Body.String())
+	require.Equal(t, http.StatusOK, rec.Code,
+		"a cancel_any holder is admitted on a loop they do not own: %s", rec.Body.String())
 
 	// The exact bytes dispatch put on the subject — not a reconstruction.
 	data := fetchOne(t, ctx, tc, "AGENT", "signal-e2e", "agent.signal."+loopID)
@@ -109,8 +117,9 @@ func TestHTTPSignalEndpointCancelsTheLoop(t *testing.T) {
 	require.Truef(t, ok, "expected *agentic.LoopCancelledEvent, got %T", decoded.Payload())
 	assert.Equal(t, loopID, cancelled.LoopID)
 	assert.Equal(t, agentic.OutcomeCancelled, cancelled.Outcome)
-	assert.Equal(t, "user-a", cancelled.CancelledBy,
-		"the requester identity travelled from the HTTP request to the cancellation record")
+	assert.Equal(t, "cancel-operator", cancelled.CancelledBy,
+		"the REQUESTER travelled from the HTTP request to the cancellation record — "+
+			"not the loop's owner, which is loop-owner")
 }
 
 // dispatchHTTPHandlers builds a dispatch component through its own constructor
@@ -118,7 +127,9 @@ func TestHTTPSignalEndpointCancelsTheLoop(t *testing.T) {
 // if the endpoint's wiring changes, this fails at the route, which is the point.
 func dispatchHTTPHandlers(t *testing.T, tc *natsclient.TestClient, mux *http.ServeMux) {
 	t.Helper()
-	rawConfig, err := json.Marshal(agenticdispatch.DefaultConfig())
+	config := agenticdispatch.DefaultConfig()
+	config.Permissions.CancelAny = []string{"cancel-operator"}
+	rawConfig, err := json.Marshal(config)
 	require.NoError(t, err)
 	dispatch, err := agenticdispatch.NewComponent(rawConfig, component.Dependencies{
 		NATSClient:      tc.Client,

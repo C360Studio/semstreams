@@ -99,8 +99,13 @@ func TestSignalSubjectCarriesExactlyOnePayloadType(t *testing.T) {
 	c := newSignalWireComponent(t, tc)
 	c.config.Ports.Outputs = signalPortsOnStream(t, c.config.Ports.Outputs, "AGENT_SIGNAL")
 
-	// Lane 1 — the chat command.
+	// Lane 1 — the chat command. The requester arrives on a DIFFERENT channel
+	// from the loop's own route, which is what makes the route assertion below
+	// discriminating: with the two equal, taking the route from the request
+	// instead of from the gate's merged facts is unobservable.
 	msg := seamUserMessage("user-a")
+	msg.ChannelType = "slack"
+	msg.ChannelID = "C-999"
 	resp, err := c.handleCancelCommand(ctx, msg, []string{signalWireLoopID}, "")
 	require.NoError(t, err, "the chat lane must reach the subject")
 	require.Equal(t, agentic.ResponseTypeStatus, resp.Type)
@@ -125,6 +130,10 @@ func TestSignalSubjectCarriesExactlyOnePayloadType(t *testing.T) {
 			"the retired signal_message category must not appear on this subject")
 		assert.Equal(t, signalWireLoopID, signal.LoopID)
 		assert.Equal(t, "user-a", signal.UserID, "the signal records the requester")
+		assert.Equal(t, "http", signal.ChannelType,
+			"the route is the LOOP's, taken from the gate's merged facts — the chat "+
+				"requester arrived on slack")
+		assert.Equal(t, "session-1", signal.ChannelID)
 		verbs[signal.Type] = true
 	}
 	assert.Equal(t, map[string]bool{"cancel": true, "pause": true}, verbs,
@@ -145,16 +154,20 @@ func TestIntegrationRefusedSignalPublishesNothingOnTheSubject(t *testing.T) {
 
 	rec := seamHTTPCall(t, c.handleLoopSignal, http.MethodPost,
 		"/loops/"+signalWireLoopID+"/signal", signalWireLoopID, `{"type":"cancel"}`, "user-b")
-	require.Equal(t, http.StatusForbidden, rec.Code)
 
-	assert.Empty(t, signalSubjectMessages(t, ctx, tc, "refusal-check"),
-		"a refused request puts nothing on the loop's signal subject")
-
+	// The wire is asserted BEFORE the status, and with assert rather than
+	// require, so the count is the assertion that reports a publish-then-refuse
+	// rather than being skipped by an earlier fatal on the status code.
 	stream, err := tc.Client.GetStream(ctx, "AGENT_SIGNAL")
 	require.NoError(t, err)
 	info, err := stream.Info(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, uint64(0), info.State.Msgs, "the stream is empty, not merely the filtered view")
+	assert.Equal(t, uint64(0), info.State.Msgs,
+		"a refused request puts nothing on the loop's signal subject")
+	assert.Empty(t, signalSubjectMessages(t, ctx, tc, "refusal-check"),
+		"nor anything the subject filter would pick up")
+
+	assert.Equal(t, http.StatusForbidden, rec.Code, "and the caller is told why")
 }
 
 // signalPortsOnStream rebinds the declared signal output port to the
