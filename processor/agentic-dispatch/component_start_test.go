@@ -32,7 +32,7 @@ func TestComponent_Start_NilContext(t *testing.T) {
 	deps := component.Dependencies{
 		NATSClient:      nil, // Not needed for this test
 		ModelRegistry:   newTestRegistry(),
-		PayloadRegistry: payloadregistry.NewWithSubset(t, agentic.RegisterPayloads, RegisterPayloads),
+		PayloadRegistry: payloadregistry.NewWithSubset(t, agentic.RegisterPayloads),
 	}
 
 	comp, err := NewComponent(rawConfig, deps)
@@ -56,7 +56,7 @@ func TestComponent_Start_CancelledContext(t *testing.T) {
 	deps := component.Dependencies{
 		NATSClient:      nil, // Not needed for this test
 		ModelRegistry:   newTestRegistry(),
-		PayloadRegistry: payloadregistry.NewWithSubset(t, agentic.RegisterPayloads, RegisterPayloads),
+		PayloadRegistry: payloadregistry.NewWithSubset(t, agentic.RegisterPayloads),
 	}
 
 	comp, err := NewComponent(rawConfig, deps)

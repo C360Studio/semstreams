@@ -28,6 +28,11 @@ already imports `payloadregistry` through `message.NewDecoder(deps.PayloadRegist
 `agentic/research/register.go:10-14`: "intentionally absent from the unconditional payloadbuiltins registry"); a floor derived
 from registrations is therefore per-binary for those six.
 
+> **Superseded in part, 2026-09-01 (`loop-scoped-request-seams`).** `agentic.signal_message.v1` and the whole of
+> `processor/agentic-dispatch/payload_registry.go` were RETIRED: the type had one producer and zero consumers, and
+> both lanes that signal a loop now publish `agentic.signal.v1`. The count above reads 21, not 22, and the
+> dispatch registration this row cites no longer exists. The measurement itself stands as of the date it was taken.
+
 `EntityState.MessageType` (`graph/types.go:38-40`): "records the original message type … Provides provenance and enables
 filtering by message source." Persisted verbatim by the canonical codec; copied by `Clone` `:105`.
 

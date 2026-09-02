@@ -69,7 +69,7 @@ func TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart(t *
 			natsclient.TestStreamConfig{Name: "USER_TERMINAL", Subjects: []string{"user.>"}},
 		),
 	)
-	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads, RegisterPayloads)
+	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads)
 	c := &Component{
 		config: DefaultConfig(), decoder: message.NewDecoder(reg), natsClient: tc.Client,
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)), loopTracker: NewLoopTracker(), metrics: getMetrics(nil),
@@ -151,7 +151,7 @@ func TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort(t *testi
 			natsclient.TestStreamConfig{Name: "USER_TERMINAL", Subjects: []string{"user.>"}},
 		),
 	)
-	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads, RegisterPayloads)
+	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads)
 	c := &Component{
 		config: dispatchConfigWithAgentLoopsBucket(t, altBucket), decoder: message.NewDecoder(reg),
 		natsClient: tc.Client, logger: slog.New(slog.NewTextHandler(io.Discard, nil)),

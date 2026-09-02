@@ -70,7 +70,7 @@ func terminalTestComponentWithLog(t *testing.T) (*Component, *bytes.Buffer) {
 	t.Helper()
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads, RegisterPayloads)
+	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads)
 	return &Component{
 		config:      DefaultConfig(),
 		logger:      logger,

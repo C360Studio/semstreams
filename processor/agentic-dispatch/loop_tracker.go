@@ -9,9 +9,11 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/google/uuid"
 )
 
 // LoopInfo contains information about an active loop
@@ -582,66 +584,94 @@ func isTerminalState(state string) bool {
 	}
 }
 
-// SignalMessage represents a control signal sent to a loop.
-type SignalMessage struct {
-	LoopID    string    `json:"loop_id"`
-	Type      string    `json:"type"`   // pause, resume, cancel
-	Reason    string    `json:"reason"` // optional reason
-	Timestamp time.Time `json:"timestamp"`
+// loopSignalRequest is one control signal the signal seam asks the tracker to
+// publish. Its parts are correlated — the verb, who asked for it, the free-text
+// reason, and the loop's route as the admission gate merged it — so they travel
+// as a struct rather than as five positional strings that drift apart at the
+// call site.
+type loopSignalRequest struct {
+	// Facts is the gate's merged observation of the loop. The published
+	// signal's loop token and channel route are read from HERE and never
+	// recomputed: the gate already fetched both, and a second derivation is a
+	// second spelling of one fact.
+	Facts loopFacts
+	// Requester is who asked for the signal, and it is what the published
+	// signal records as its user — NOT the loop's owner. A control signal
+	// records who acted, and the loop attributes the action to that field
+	// (processor/agentic-loop/component.go:2127 builds "loop cancelled by %s"
+	// from it).
+	Requester string
+	// Type is the verb. The seam validates it against the set the endpoint
+	// admits before calling; agentic.UserSignal.Validate then checks it against
+	// the payload's own closed verb set at marshal time.
+	Type string
+	// Reason is the endpoint's optional free text. It rides the signal's
+	// existing Payload field — no consumer reads it today, and it is carried
+	// rather than dropped because the endpoint already accepts it.
+	Reason string
+	// Ports are the component's declared output ports. The signal subject is
+	// resolved from them, so a deployment that renames the port's subject moves
+	// this lane with it.
+	Ports []component.PortDefinition
 }
 
-// Validate implements message.Payload
-func (s *SignalMessage) Validate() error {
-	return nil
-}
-
-// Schema implements message.Payload
-func (s *SignalMessage) Schema() message.Type {
-	return message.Type{Domain: agentic.Domain, Category: agentic.CategorySignalMessage, Version: agentic.SchemaVersion}
-}
-
-// MarshalJSON implements json.Marshaler
-func (s *SignalMessage) MarshalJSON() ([]byte, error) {
-	type Alias SignalMessage
-	return json.Marshal((*Alias)(s))
-}
-
-// UnmarshalJSON implements json.Unmarshaler
-func (s *SignalMessage) UnmarshalJSON(data []byte) error {
-	type Alias SignalMessage
-	return json.Unmarshal(data, (*Alias)(s))
-}
-
-// SendSignal publishes a control signal to a loop via NATS.
-func (t *LoopTracker) SendSignal(ctx context.Context, nc *natsclient.Client, loopID, signalType, reason string) error {
+// SendSignal builds and publishes ONE control signal to a loop.
+//
+// The payload is agentic.UserSignal, wrapped in a message.BaseMessage envelope,
+// because that is what the loop's signal handler decodes and type-asserts
+// (processor/agentic-loop/component.go:2082-2091). It is the only payload type
+// on this subject: the dispatch-local SignalMessage that used to travel here had
+// one producer and zero consumers, so the loop dropped every message this seam
+// sent and the endpoint still answered 200.
+//
+// It publishes nothing it cannot address: the subject is resolved from the
+// declared port before the marshal, and an unresolvable port is an error rather
+// than a concatenated guess.
+func (t *LoopTracker) SendSignal(ctx context.Context, nc *natsclient.Client, req loopSignalRequest) error {
 	if nc == nil {
 		return ErrNATSClientNil
 	}
 
-	signal := SignalMessage{
-		LoopID:    loopID,
-		Type:      signalType,
-		Reason:    reason,
-		Timestamp: time.Now(),
+	loopID := req.Facts.LoopID
+	subject, err := component.ResolveSubject(req.Ports, signalOutputPortName, loopID)
+	if err != nil {
+		return errs.WrapInvalid(err, "LoopTracker", "SendSignal",
+			fmt.Sprintf("resolve signal subject for loop %s", loopID))
 	}
 
-	signalMsg := message.NewBaseMessage(signal.Schema(), &signal, "agentic-dispatch")
-	data, err := json.Marshal(signalMsg)
+	signal := &agentic.UserSignal{
+		SignalID:    uuid.New().String(),
+		Type:        req.Type,
+		LoopID:      loopID,
+		UserID:      req.Requester,
+		ChannelType: req.Facts.ChannelType,
+		ChannelID:   req.Facts.ChannelID,
+		Timestamp:   time.Now(),
+	}
+	// Set only when present: Payload is an interface with omitempty, so an
+	// empty string would serialize as "payload":"" rather than disappear.
+	if req.Reason != "" {
+		signal.Payload = req.Reason
+	}
+
+	// NewBaseMessage's MarshalJSON validates the payload, so a signal that
+	// would fail agentic.UserSignal.Validate never reaches the subject.
+	data, err := json.Marshal(message.NewBaseMessage(signal.Schema(), signal, "agentic-dispatch"))
 	if err != nil {
 		return errs.Wrap(err, "LoopTracker", "SendSignal", fmt.Sprintf("marshal signal for loop %s", loopID))
 	}
 
-	subject := "agent.signal." + loopID
 	if err := nc.PublishToStream(ctx, subject, data); err != nil {
-		return errs.WrapTransient(err, "LoopTracker", "SendSignal", fmt.Sprintf("publish signal %s to loop %s on subject %s", signalType, loopID, subject))
+		return errs.WrapTransient(err, "LoopTracker", "SendSignal", fmt.Sprintf("publish signal %s to loop %s on subject %s", req.Type, loopID, subject))
 	}
 
 	if t.logger != nil {
 		t.logger.Debug("signal published",
 			slog.String("loop_id", loopID),
-			slog.String("signal_type", signalType),
+			slog.String("signal_id", signal.SignalID),
+			slog.String("signal_type", req.Type),
 			slog.String("subject", subject),
-			slog.String("reason", reason))
+			slog.String("reason", req.Reason))
 	}
 
 	return nil

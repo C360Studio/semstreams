@@ -21,7 +21,6 @@ const (
 	CategoryLoopFailed       = "loop_failed"
 	CategoryLoopCancelled    = "loop_cancelled"
 	CategoryContextEvent     = "context_event"
-	CategorySignalMessage    = "signal_message"
 	CategoryApprovalPending  = "approval_pending"
 	CategoryApprovalResponse = "approval_response"
 )

@@ -746,8 +746,21 @@ func (c *Component) handleLoopSignal(w http.ResponseWriter, r *http.Request) {
 		slog.String("reason", req.Reason),
 		slog.String("owner", facts.UserID))
 
-	// Send signal via NATS
-	if err := c.loopTracker.SendSignal(ctx, c.natsClient, loopID, req.Type, req.Reason); err != nil {
+	// Publish the signal. Every refusal happened above, BEFORE this: the gate
+	// ran before the body was read, and the verb was checked before anything
+	// was published, so a refused request puts nothing on the loop's signal
+	// subject (I11).
+	//
+	// The route travels from the gate's merged facts, and the published signal
+	// records the REQUESTER, not the loop's owner — the loop attributes the
+	// cancellation to that field.
+	if err := c.loopTracker.SendSignal(ctx, c.natsClient, loopSignalRequest{
+		Facts:     facts,
+		Requester: requester,
+		Type:      req.Type,
+		Reason:    req.Reason,
+		Ports:     c.outputPortDefs(),
+	}); err != nil {
 		c.logger.ErrorContext(ctx, "failed to send signal",
 			slog.String("request_id", requestID),
 			slog.String("loop_id", loopID),

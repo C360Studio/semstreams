@@ -44,6 +44,13 @@ type PermissionConfig struct {
 // every terminal route without saying so.
 const agentLoopsPortName = "agent_loops"
 
+// signalOutputPortName is the declared output port carrying control signals to
+// agentic-loop. Both lanes that signal a loop — the /cancel chat command and
+// the HTTP signal endpoint — resolve their subject through THIS name, so a
+// deployment that renames the port's subject moves both, and neither can drift
+// onto a subject the other does not use.
+const signalOutputPortName = "agent.signal"
+
 // loopsBucketFromPorts resolves the loops bucket from a declared port set
 // through the canonical port projection, so the name is OBSERVED from
 // configuration. It is the only place the bucket is obtained; readers carry

@@ -44,7 +44,8 @@ would leave every in-tree birth unchecked.
 
 Extending an existing surface (A) rather than adding a channel beside it: the registry already exists per binary
 (`component/dependencies.go:74`), graph-ingest already holds it (`component.go:692`), and every one of the 22 floor keys is
-already a registration (inventory §0).
+already a registration (inventory §0). *(21 since 2026-09-01: `agentic.signal_message.v1` was retired with its whole
+registration by `loop-scoped-request-seams`. The argument is unaffected — see the inventory's supersession note.)*
 
 ## 3. `Registration` shape
 

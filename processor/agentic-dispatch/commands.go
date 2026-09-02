@@ -10,6 +10,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/google/uuid"
 )
@@ -142,23 +143,30 @@ func (c *Component) handleCancelCommand(ctx context.Context, msg agentic.UserMes
 		}, nil
 	}
 
-	// Send cancel signal
-	signal := agentic.UserSignal{
+	// Send cancel signal. The route comes from the gate's merged facts for the
+	// same reason the HTTP lane's does — the gate already read it — but the
+	// signal's user is the REQUESTER, so a cancel_any operator cancelling
+	// someone else's loop is attributed to the operator.
+	signal := &agentic.UserSignal{
 		SignalID:    uuid.New().String(),
 		Type:        agentic.SignalCancel,
 		LoopID:      targetLoopID,
 		UserID:      msg.UserID,
-		ChannelType: msg.ChannelType,
-		ChannelID:   msg.ChannelID,
+		ChannelType: facts.ChannelType,
+		ChannelID:   facts.ChannelID,
 		Timestamp:   time.Now(),
 	}
 
-	signalData, err := json.Marshal(signal)
+	// The BaseMessage envelope is REQUIRED, not decorative: the loop's signal
+	// handler decodes wire bytes through the payload registry
+	// (processor/agentic-loop/component.go:2083) and a bare payload fails at the
+	// wire-format unmarshal, so this lane published cancels the loop never saw.
+	signalData, err := json.Marshal(message.NewBaseMessage(signal.Schema(), signal, "agentic-dispatch"))
 	if err != nil {
 		return agentic.UserResponse{}, errs.Wrap(err, "Component", "handleCancelCommand", "marshal signal")
 	}
 
-	subject, err := component.ResolveSubject(c.outputPortDefs(), "agent.signal", targetLoopID)
+	subject, err := component.ResolveSubject(c.outputPortDefs(), signalOutputPortName, targetLoopID)
 	if err != nil {
 		return agentic.UserResponse{}, errs.WrapInvalid(err, "Component", "handleCancelCommand", "resolve signal subject")
 	}
