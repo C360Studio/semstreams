@@ -648,3 +648,50 @@ func TestEveryRefusalCodeMapsToAnHTTPStatus(t *testing.T) {
 	_, ok := loopRefusalHTTPStatus(assert.AnError)
 	assert.False(t, ok, "an unclassified error is not one of this package's refusals")
 }
+
+// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
+// The two read seams do not contradict their own admission. Before the gate,
+// each decided existence from the tracker alone, so a loop that outlived the
+// process that started it answered "not found" — the shape P2 measures. Now
+// existence is merged, and the answer has to come from somewhere.
+func TestReadSeamsAnswerFromTheDurableRecordAfterReplacement(t *testing.T) {
+	arrange := func(c *Component) {
+		// An empty tracker, as after a process replacement, and a live durable
+		// record.
+		withPersistedLoops(c, map[string]*agentic.LoopEntity{seamTestLoopA: {
+			ID: seamTestLoopA, TaskID: "task-x", UserID: "user-a", Role: "assistant",
+			ChannelType: "http", ChannelID: "session-1",
+			State: agentic.LoopStateExecuting, MaxIterations: 7, Iterations: 3,
+		}})
+	}
+
+	t.Run("status command", func(t *testing.T) {
+		c, _, _ := newSeamTestComponent(t)
+		arrange(c)
+
+		resp, err := c.handleStatusCommand(context.Background(),
+			seamUserMessage("user-a"), []string{seamTestLoopA}, "")
+
+		require.NoError(t, err)
+		assert.Equal(t, agentic.ResponseTypeStatus, resp.Type)
+		assert.Contains(t, resp.Content, seamTestLoopA)
+		assert.Contains(t, resp.Content, "user-a")
+		assert.NotContains(t, resp.Content, "names no loop")
+	})
+
+	t.Run("GET /loops/{id}", func(t *testing.T) {
+		c, _, _ := newSeamTestComponent(t)
+		arrange(c)
+
+		rec := seamHTTPCall(t, c.handleGetLoop, http.MethodGet,
+			"/loops/"+seamTestLoopA, seamTestLoopA, "", "user-a")
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		var loop Loop
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &loop))
+		assert.Equal(t, seamTestLoopA, loop.LoopID)
+		assert.Equal(t, "executing", loop.State)
+		assert.Equal(t, 3, loop.Iterations)
+		assert.Equal(t, "user-a", loop.UserID)
+	})
+}

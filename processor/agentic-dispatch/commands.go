@@ -69,6 +69,14 @@ func commandRefusalResponse(msg agentic.UserMessage, refusal error) agentic.User
 	}
 }
 
+// loopStatusFromTracker renders the live status line: this process is running
+// the loop, so iteration counts and age exist.
+func loopStatusFromTracker(info *LoopInfo) string {
+	age := time.Since(info.CreatedAt).Truncate(time.Second)
+	return fmt.Sprintf("Loop: %s\nState: %s\nIterations: %d/%d\nAge: %s\nUser: %s",
+		info.LoopID, info.State, info.Iterations, info.MaxIterations, age, info.UserID)
+}
+
 // loopStatusFromFacts renders what /status can say about a loop the gate
 // admitted from the durable record alone — this process never tracked it, so
 // iteration counts and age do not exist here. Naming the fields it does have
@@ -211,14 +219,7 @@ func (c *Component) handleStatusCommand(ctx context.Context, msg agentic.UserMes
 
 	content := loopStatusFromFacts(facts)
 	if loopInfo := c.loopTracker.Get(targetLoopID); loopInfo != nil {
-		age := time.Since(loopInfo.CreatedAt).Truncate(time.Second)
-		content = fmt.Sprintf("Loop: %s\nState: %s\nIterations: %d/%d\nAge: %s\nUser: %s",
-			loopInfo.LoopID,
-			loopInfo.State,
-			loopInfo.Iterations,
-			loopInfo.MaxIterations,
-			age,
-			loopInfo.UserID)
+		content = loopStatusFromTracker(loopInfo)
 	}
 
 	return agentic.UserResponse{

@@ -40,18 +40,18 @@ the two `state.go` edits are reviewed together rather than re-derived.
 
 ## 4. Adopt the gate at every seam
 
-- [ ] 4.1 Channel submission (`component.go:920-931`) and HTTP submission (`http.go:296-311`): replace
+- [x] 4.1 Channel submission (`component.go:920-931`) and HTTP submission (`http.go:296-311`): replace
       `refuseNonCanonicalLoopTokens` with the gate on the resolved continuation token; keep the typed
       field-naming response on both lanes
-- [ ] 4.2 `/cancel` (`commands.go:53-96`) and `/status` (`commands.go:148-172`): route through the gate; delete
+- [x] 4.2 `/cancel` (`commands.go:53-96`) and `/status` (`commands.go:148-172`): route through the gate; delete
       `canUserControlLoop` (`component.go:1204-1216`), whose only caller is `commands.go:73`
-- [ ] 4.3 `GET /loops/{id}` (`http.go:602-621`): form + existence only, no ownership — record it in the
+- [x] 4.3 `GET /loops/{id}` (`http.go:602-621`): form + existence only, no ownership — record it in the
       carve-out list, not as an omission
-- [ ] 4.4 `POST /loops/{id}/signal` (`http.go:642-658`) and `POST /loops/{id}/approval` (`http.go:739-757`):
+- [x] 4.4 `POST /loops/{id}/signal` (`http.go:642-658`) and `POST /loops/{id}/approval` (`http.go:739-757`):
       gate the URL-path token before the existence check; enforce `Permissions.Approve` on the approval
       endpoint with ownership NOT consulted
-- [ ] 4.5 Map refusals to HTTP status: 400 malformed, 404 absent, 403 not permitted / not owned, 409 terminal
-- [ ] 4.6 Test each seam refuses through the gate and emits exactly one counted refusal (I3)
+- [x] 4.5 Map refusals to HTTP status: 400 malformed, 404 absent, 403 not permitted / not owned, 409 terminal
+- [x] 4.6 Test each seam refuses through the gate and emits exactly one counted refusal (I3)
 
 ## 5. Form enforcement at the remaining carriers (#1228)
 
@@ -90,10 +90,10 @@ the two `state.go` edits are reviewed together rather than re-derived.
 
 ## 8. #1225's ordering and answer
 
-- [ ] 8.1 Move `Track` and `recordLoopStarted` after the task marshal on both submission paths
+- [x] 8.1 Move `Track` and `recordLoopStarted` after the task marshal on both submission paths
       (`component.go:957,971,975`; `http.go:336,349,353`)
-- [ ] 8.2 Answer the submitter with a typed error naming the offending field on both lanes; count the refusal
-- [ ] 8.3 Test I5: a submission that publishes no task leaves the tracker and the gauge unchanged
+- [x] 8.2 Answer the submitter with a typed error naming the offending field on both lanes; count the refusal
+- [x] 8.3 Test I5: a submission that publishes no task leaves the tracker and the gauge unchanged
 
 ## 9. One control-signal payload (folded in by owner ruling R3)
 
