@@ -46,13 +46,43 @@ unknown/not-confirmed and SHALL NOT prove settlement or redelivery.
 - **THEN** the semantic and method errors remain observable
 - **AND** the framework makes no claim whether the server retained or settled the delivery
 
-### Requirement: replay-unsafe bindings remain unchanged
+### Requirement: replay follows the binding's durable authority
 
-A direct binding whose external effect cannot safely replay SHALL remain on characterized legacy behavior until its
-named evidence gate is reviewed and accepted. JetStream redelivery alone SHALL NOT be claimed as effect idempotency.
+Every migrated binding SHALL define the durable consequence that permits positive settlement and the evidence checked
+before repeating work on redelivery. JetStream delivery number and redelivery alone SHALL NOT be claimed as proof that
+a prior invocation ran, that an external effect committed, or that replay is idempotent.
 
-#### Scenario: paid model effect is ambiguous
+#### Scenario: external effect has an ambiguous prior outcome
 
-- **WHEN** no accepted provider-outcome or provider-idempotency design exists
-- **THEN** the model binding remains non-authorizing and unchanged
-- **AND** Stage A does not claim paid-execution restart safety
+- **WHEN** redelivery follows an external effect whose prior commit cannot be proved or disproved
+- **THEN** the binding follows its accepted ambiguity decision rather than mechanically ACKing or retrying
+- **AND** JetStream redelivery is not treated as provider-outcome authority
+
+### Requirement: no staged compatibility surface becomes current truth
+
+Temporary coexistence of typed and legacy settlement on a non-default integration branch SHALL NOT be archived as
+current capability truth or merged to the default branch. Final current truth SHALL contain only the permanent typed
+surface and its migrated production bindings.
+
+JetStream remains the delivery and redelivery authority. This staging rule adds no supervisor, checkpoint, outbox,
+receipt ledger, state-machine runtime, or new durable primitive.
+
+#### Scenario: default branch receives one settlement surface
+
+- **GIVEN** typed and legacy settlement coexist temporarily on the non-default integration branch
+- **WHEN** the semantic-settlement change reaches the default branch
+- **THEN** only the permanent typed settlement surface and migrated bindings are present
+- **AND** no temporary compatibility state is archived as current truth
+
+## REMOVED Requirements
+
+### Requirement: Heartbeat consumption SHALL expose settlement failure
+
+**Reason**: This requirement names the removed `ConsumeWithHeartbeat` export and its inferred nil/error settlement
+contract. Final current truth has one typed semantic-settlement surface and preserves semantic, heartbeat-control, and
+terminal-method evidence through `DeliveryResult`.
+
+**Migration**: Define an owner-specific `DeliveryWork` decision matrix, validate `HeartbeatDeliveryPolicy` from the
+exact acquisition configuration, call `ConsumeDeliveryWithHeartbeat`, inspect every `DeliveryResult`, and stop the
+exact retained consumer owner outside the callback when `OwnerStopRequired` is true. ACK, Retry, Terminate, and
+Quarantine replace inferred success/error handling; the removed helper has no alias.

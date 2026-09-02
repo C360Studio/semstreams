@@ -70,25 +70,36 @@ retain the exact native handle.
 
 ## ADDED Requirements
 
-### Requirement: typed semantic heartbeat settlement is additive during held migration
+### Requirement: semantic heartbeat settlement has one permanent exported surface
 
-The framework SHALL expose `ConsumeDeliveryWithHeartbeat` as the permanent typed entry point. Stage A tools and
-dispatch SHALL use it. Legacy `ConsumeWithHeartbeat` SHALL remain source- and behavior-compatible only for the exact
-held model, loop, and AgentRun allowlist. New production legacy callers SHALL fail repository conformance.
+The framework SHALL expose `ConsumeDeliveryWithHeartbeat` with validated `HeartbeatDeliveryPolicy`,
+`DeliveryAttempt`, `DeliveryDecision`, and `DeliveryResult`.
 
-#### Scenario: Stage A compiles with held callers
+`ConsumeWithHeartbeat` and `NewDurableHandler` SHALL NOT exist or have aliases. Every original model, tools, dispatch,
+loop, and AgentRun heartbeat binding SHALL use the permanent typed surface with its owner-specific durable definition
+of done.
 
-- **WHEN** tools and dispatch migrate to the typed entry point
-- **THEN** binding-local wrappers accept `DeliveryAttempt` and delegate unchanged bytes to transport-agnostic domain
-  handlers
-- **AND** held model, loop, and AgentRun continue to compile against legacy
-- **AND** their configuration and runtime behavior remain unchanged
+No final capability SHALL describe a production legacy allowlist. Any exact caller list used before final integration
+is branch-staging conformance only and SHALL be zero before archive.
 
-#### Scenario: final legacy removal
+#### Scenario: final public surface
 
-- **WHEN** every held binding has accepted addenda and replay proof and the allowlist is zero
-- **THEN** legacy is removed without alias after separate owner approval
-- **AND** the permanent typed API remains unchanged
+- **WHEN** the semantic-settlement change is archived
+- **THEN** the permanent typed API exists
+- **AND** `ConsumeWithHeartbeat`, `NewDurableHandler`, and every alias are absent
+- **AND** production callers of those removed symbols are zero
+
+#### Scenario: binding migration requires semantic authority
+
+- **WHEN** a durable binding migrates
+- **THEN** its decision matrix names the exact durable positive and negative consequences
+- **AND** nil/error callback behavior alone does not authorize ACK or Retry
+
+#### Scenario: fast lane lacks an admitted settlement route
+
+- **WHEN** an inventoried fast no-heartbeat lane cannot use an existing owner path
+- **THEN** migration stops for a separately reviewed capability delta
+- **AND** no raw message settlement or exported no-heartbeat interpreter is introduced
 
 ### Requirement: delivery work returns a validated decision/error tuple
 
@@ -291,36 +302,32 @@ handle outside callback and join the observer during Stop.
 
 ### Requirement: current crash redelivery declarations are preserved
 
-Tools SHALL retain BackOff 15s/60s and use heartbeat 5s. Each loop binding SHALL retain BackOff 30s/120s and use
-heartbeat 15s only when its hold lifts. BackOff SHALL remain missing-settlement policy, not semantic retry timing.
+Tools SHALL retain BackOff 15s/60s and use heartbeat 5s. Dispatch SHALL retain its accepted 10-second heartbeat and
+30-second effective acknowledgement interval. Every later staged binding SHALL preserve or deliberately replace its
+crash schedule under its owner-reviewed migration contract. BackOff SHALL remain missing-settlement policy, not
+semantic retry timing.
 
 #### Scenario: process stops without settlement
 
 - **WHEN** heartbeat and settlement stop
 - **THEN** tools redelivery follows its 15s/60s BackOff classes
-- **AND** an admitted loop follows its 30s/120s classes rather than AckWait
+- **AND** it does not silently fall back to AckWait or semantic retry timing
 
-### Requirement: unsafe direct bindings remain non-authorizing
+#### Scenario: a staged binding keeps an explicit crash schedule
 
-Model, each loop binding, and each AgentRun binding SHALL require a then-current line-addressable addendum, independent
-inventory/design reviews, and named owner acceptance before migration. Their current done rows SHALL NOT authorize
-durable state, rehydration, handler ledgers, or decision mapping.
-
-#### Scenario: an implementer reaches a held binding
-
-- **WHEN** no named accepted addendum exists for that physical binding
-- **THEN** its production legacy call and behavior remain unchanged
-- **AND** implementation does not infer a settlement policy
+- **WHEN** model, loop, or AgentRun migrates on the integration branch
+- **THEN** its accepted contract names the resulting AckWait, BackOff, and heartbeat behavior
+- **AND** semantic retry timing remains independent of that crash schedule
 
 ### Requirement: shared settlement remains stateless and heartbeat-specific
 
-The typed and legacy paths MAY share only a private terminal-method executor. The no-heartbeat interpreter SHALL remain
-private. #759 SHALL add no exported pull settlement operation and SHALL not modify OTEL production settlement.
+The typed path SHALL use only a private terminal-method executor. The no-heartbeat interpreter SHALL remain private.
+#759 SHALL add no exported pull settlement operation and SHALL not modify OTEL production settlement.
 
 #### Scenario: terminal execution is shared privately
 
-- **WHEN** typed and legacy heartbeat paths attempt a terminal JetStream method
-- **THEN** they may call the same private terminal-method executor
+- **WHEN** typed heartbeat settlement attempts a terminal JetStream method
+- **THEN** it calls the private terminal-method executor
 - **AND** no shared helper owns admission, a native handle, health, shutdown, or restart
 
 ## REMOVED Requirements

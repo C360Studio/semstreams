@@ -85,13 +85,20 @@ acknowledgement interval before acquisition. When `BackOff` is nonempty, its sho
 otherwise positive `AckWait` is effective, with a 30-second default for zero. Equality at half is valid.
 
 The work callback defines its owner-specific durable consequence and returns ACK, Retry, Terminate, or Quarantine.
+There is no universal nil-means-done contract. A component may ACK only after the durable consequence named by its
+reviewed domain contract is committed; its replay path must consult that same authority before repeating effects.
 `ConsumeDeliveryWithHeartbeat` owns payload extraction, `DeliveryAttempt` observation, InProgress, cancellation,
 work join, and the one terminal settlement attempt. Inspect every `DeliveryResult`: preserve its semantic, heartbeat,
 and settlement evidence in existing health/log surfaces. If `OwnerStopRequired` is true, close admission and stop the
 exact retained consume handle outside the callback. A terminal-method error alone does not authorize owner shutdown.
 
-`ConsumeWithHeartbeat` is deprecated and contained to the temporarily held SemStreams model, loop, and AgentRun
-bindings. New integrations use only the typed API above.
+The non-default #759 integration branch temporarily retains `ConsumeWithHeartbeat` only as a removal boundary while
+#1146 migrates model and loop and #1249 migrates AgentRun. Its three-file zero-growth guard is not an API allowlist,
+compatibility promise, current capability, or merge authority. No new integration may call it.
+
+Final #759 conformance requires every production caller and the exported symbol to be absent without alias. The typed
+surface and removal reach `main` together in one breaking pre-v1 cutover; no accepted default-branch interval exposes
+both APIs. New and migrated integrations use only the typed API above.
 
 ## Removed Client lifecycle authority
 
@@ -157,9 +164,15 @@ SemStreams records migration surfaces but does not edit sister repositories.
 
 Known old-signature port consumers exist in SemSpec, SemDev, and SemDragon. Known `ConsumeDurable` consumers exist in
 SemMachina, SemSpec, and SemDragon. Those owners must compile their current checkout, retain the returned
-`jetstream.ConsumeContext`, replace `ConsumeDurable` with the permanent typed policy/API composition above, and remove
-Client-wide shutdown calls. A read-only 2026-08-29 scan of active C360 sister checkouts found no `NewDurableHandler`
-adopters, so its removal requires no separate source migration.
+`jetstream.ConsumeContext`, replace `ConsumeDurable` with the permanent typed policy/API composition above, define
+their own durable done/replay matrix, and remove Client-wide shutdown calls. Gated-DAG's measured SemSpec and
+SemDragon seams are recorded separately in
+[Gated-DAG semantic-settlement migration](migration-gated-dag-semantic-settlement.md). A read-only 2026-08-29 scan of
+active C360 sister checkouts found no `NewDurableHandler` adopters, so its removal requires no separate source
+migration.
+
+A fast consumer does not receive raw `jetstream.Msg` settlement authority or an exported no-heartbeat interpreter as
+a migration shortcut. It uses an existing reviewed owner path or stops for a separate capability design.
 
 Generated schema copies containing `delete_consumer_on_stop` exist in SemStreams UI, SemSpec, SemTeams, and SemDragon.
 Their owners regenerate or remove those copies and validate their products.

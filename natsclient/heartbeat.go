@@ -72,8 +72,10 @@ func nonCancellationWorkError(err error) error {
 // Cancellation and heartbeat failure wait for work to exit before returning
 // delivery control.
 //
-// Deprecated: new production bindings use ConsumeDeliveryWithHeartbeat. This
-// legacy contract remains only for the held model, loop, and AgentRun bindings.
+// Deprecated: use ConsumeDeliveryWithHeartbeat. This export exists only on the
+// non-default #759 integration branch while model, loop, and AgentRun migrate.
+// It admits no new production caller and is removed before the branch reaches
+// main; its staging caller set is not a compatibility promise.
 func ConsumeWithHeartbeat(
 	ctx context.Context,
 	msg jetstream.Msg,
