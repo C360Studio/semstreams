@@ -4,7 +4,7 @@
 inventory and the adopter seam inventory and stops there. No target state, options, recommendation, spec delta, or
 task list is in this file; those exist in draft and are held pending `INVENTORY PASS` (step 3).
 
-```
+```text
 architect base: 78813ec77fa78a8e942a41bf01d42d8caa742244
 branched from:  6733814c (main advanced during the pass — #1245 merged)
 ```
@@ -32,7 +32,7 @@ Every reference in the epic re-checked. **Three had drifted.**
 
 `git grep -n "Principal" -- '*.go'` returns exactly one hit, and it is prose asserting the same absence:
 
-```
+```text
 processor/agentic-tools/executors/predicate_authority_contract_test.go:22:
 // principal to bear — NATS auth is connection-level and no Principal/Actor
 ```
@@ -63,7 +63,7 @@ Seven in-tree spellings. More than one home for one fact is a defect to consolid
 | 3 | `loopAdmissionRequest.Requester` | `processor/agentic-dispatch/loop_admission.go:150`, `:296`, `:306` | the value a **shipped authorization check** compares | No — see §4 |
 | 4 | `agentic.UserMessage.UserID` / `ApprovalResponse.ApprovedBy` / `ToolCall.ApprovedBy` | tabulated `docs/adr/030-*.md:25-32` | wire fields | No — forgeable by any NATS publisher, per ADR-030's own table |
 | 5 | `message.Meta.Source()` | `message/meta.go` — *"Used for debugging, tracing, and access control."* | originator string | No |
-| 6 | `component.PortConfig.Import` (JetStream) | `component/port_jetstream.go:50-61` — *"Nothing on the wire is authenticated; the recorded provenance is this declaration plus the envelope `source` string."* | operator trust declaration | Declared, not verified — deliberately |
+| 6 | `component.PortConfig.Import` (JetStream) | `component/port_jetstream.go:50-61` — nothing on the wire is authenticated; provenance is the declaration plus the envelope `source` | operator trust declaration | Declared, not verified — deliberately |
 | 7 | `agentic/identity` — `AgentIdentity`, `DID`, `VerifiableCredential`, `LocalProvider` | `agentic/identity/agent_identity.go:10`, `credential.go:11`, `did.go:11`, `local_provider.go:17` | a DID/VC identity subsystem, ed25519-signing | **Zero importers** — `git grep -ln "agentic/identity" -- '*.go'` excluding the package itself is empty |
 
 **Item 7 disposition — RULED since this inventory was produced.** Owner, 2026-09-02: retire and remove; filed as
@@ -86,7 +86,7 @@ package. It is **not** part of this change and **not** a migration source for a 
 `chainMiddleware` wraps `m.diagnosticMux` **and** `m.httpRoutes` (`service/service_manager.go:1111-1125`), so a
 Manager-level middleware wraps all of:
 
-```
+```text
 gateway/graph-gateway/component.go:974     gateway/http/http.go:168
 gateway/lifecycle-gateway/component.go:504 graph/inference/http_handlers.go:33
 processor/agentic-dispatch/http.go:85      service/component_manager_http.go:59
@@ -103,7 +103,8 @@ port. **A naive global auth middleware breaks the e2e tier's own container healt
 
 Landed 2026-09-02 (`openspec/changes/archive/2026-09-02-loop-scoped-request-seams/`, closing #1227):
 
-- `processor/agentic-dispatch/loop_admission.go:296` — `if facts.UserID == "" || facts.UserID != req.Requester { … codeLoopNotOwned }`
+- `processor/agentic-dispatch/loop_admission.go:296` —
+  `if facts.UserID == "" || facts.UserID != req.Requester { … codeLoopNotOwned }`
 - `processor/agentic-dispatch/http.go:633` — `Requester: IdentityFromRequest(r, "")`
 - `processor/agentic-dispatch/http.go:336`, `component.go:916`, `commands.go:130,228` — `Requester: msg.UserID`
 
