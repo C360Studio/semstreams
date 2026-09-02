@@ -66,27 +66,32 @@ the two `state.go` edits are reviewed together rather than re-derived.
 
 ## 6. The create-vs-exists fence (#1227)
 
-- [ ] 6.1 `LoopManager.CreateLoopWithID` (`state.go:151-183`): already-exists refusal before the three map
+- [x] 6.1 `LoopManager.CreateLoopWithID` (`state.go:151-183`): already-exists refusal before the three map
       writes, form check still first; sentinel shaped on `pkg/lifecycle/errors.go:44-50`
-- [ ] 6.2 `HandleTask` (`handlers.go:800-841`): branch on already-exists and ATTACH — reuse the existing
+- [x] 6.2 `HandleTask` (`handlers.go:800-841`): branch on already-exists and ATTACH — reuse the existing
       context manager, append the new turn, do not re-seed the system prompt, do not clear pending tools
-- [ ] 6.3 Refuse a continuation whose existing loop is terminal; do not mint a replacement under the token
-- [ ] 6.4 Preserve redelivery dedup across an attach (I6 does not cover this; it needs its own test)
-- [ ] 6.5 Test I6 and I7: context-manager identity unchanged across a continuation; a refused create mutates
+- [x] 6.3 Refuse a continuation whose existing loop is terminal; do not mint a replacement under the token
+- [x] 6.4 Preserve redelivery dedup across an attach (I6 does not cover this; it needs its own test)
+- [x] 6.5 Test I6 and I7: context-manager identity unchanged across a continuation; a refused create mutates
       none of the three maps
 
 ## 7. Terminal release of per-loop state (#1233)
 
-- [ ] 7.1 Extend `releaseLoopTransientState` (`trajectory_handler_wiring.go:52-55`) to release every per-loop
+- [x] 7.1 Extend `releaseLoopTransientState` (`trajectory_handler_wiring.go:52-55`) to release every per-loop
       map `DeleteLoop` clears (`state.go:344-354`); keep it idempotent and keep it the ONLY release site
-- [ ] 7.2 Make the three late-arrival readers treat an absent loop as an expected settled-drop, not a failure:
+- [x] 7.2 Make the three late-arrival readers treat an absent loop as an expected settled-drop, not a failure:
       `approval_response_handler.go:57-75`, and the late tool-result / late model-response paths
       (`component.go:1806-1817`)
-- [ ] 7.3 Decide `DeleteLoop`'s fate — it becomes either the release's implementation or dead code; do not
+- [x] 7.3 Decide `DeleteLoop`'s fate — it becomes either the release's implementation or dead code; do not
       leave a second, unreferenced release path
-- [ ] 7.4 Test I8 and I9: absence and terminal presence are indistinguishable to every reader; release is
+- [x] 7.4 Test I8 and I9: absence and terminal presence are indistinguishable to every reader; release is
       idempotent; a settled loop's result is still readable through `read_loop_result`
-- [ ] 7.5 Test that release happens after the terminal observation and the terminal graph write
+- [x] 7.5 Test that release happens after the terminal observation and the terminal graph write.
+      `TestTerminalReleaseHappensAfterTerminalReaders` proves the terminal OBSERVATION saw the loop, and
+      that the failure-event build — the graph stamp's input — succeeded. The graph write ITSELF is not
+      observable in a unit test: `Component.graphWriter` is a concrete `*graphWriter`, not an interface, so
+      no double can be injected. What is proved is that its input was built from a live loop and that the
+      stamp call sits upstream of the same function's deferred release.
 
 ## 8. #1225's ordering and answer
 
