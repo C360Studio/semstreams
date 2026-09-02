@@ -216,4 +216,7 @@ chat lane — now travels `agent.signal.*`.
       **Sister sweep recorded 2026-09-01: zero references to any retired symbol across thirteen trees.** Two
       sisters publish `agentic.UserSignal` directly and are unaffected (`semdragon/processor/questdagexec/handler.go:1190`,
       `semsage/processor/ui-api/http.go:195`).
-- [ ] 10.5 Archive/spec sync as the last content commit, reviewed with the code
+- [x] 10.5 Archive/spec sync as the last content commit, reviewed with the code. `openspec archive` 2026-09-02:
+      `agentic-dispatch` created (+7 scenarios), `agentic-loop` updated (+2), `entity-id-contract` modified (~1).
+      `openspec validate --all --strict`: 53 passed, 0 failed. The seeded `agentic-dispatch` spec carries its
+      Purpose at creation, not deferred.
