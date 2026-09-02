@@ -28,12 +28,6 @@ func TestValidateResultsRequiresTargetTrajectory(t *testing.T) {
 	s := NewScenario(nil, DefaultConfig())
 
 	if err := s.validateResults(context.Background(), &scenarios.Result{
-		Details: map[string]any{"completion_method": "target_trajectory"},
-	}); err != nil {
-		t.Fatalf("validateResults() error = %v, want nil", err)
-	}
-
-	if err := s.validateResults(context.Background(), &scenarios.Result{
 		Details: map[string]any{"completion_method": "metrics"},
 	}); err == nil {
 		t.Fatal("validateResults() error = nil for aggregate metric completion")

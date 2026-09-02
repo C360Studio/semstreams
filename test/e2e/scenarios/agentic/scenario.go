@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -48,10 +49,19 @@ type Scenario struct {
 	// Client URLs (clients created during Setup)
 	natsURL string
 
-	// Clients (created during Setup)
+	// Clients (created during Setup, except http which needs no connection)
 	nats    *client.NATSValidationClient
 	metrics *client.MetricsClient
 	obs     *client.ObservabilityClient
+	http    *http.Client
+
+	// decoder carries the shipped payload registrations. Reads that route
+	// through it — the terminal-derived user response, and every payload the
+	// approval and signal walks read back — fail here for the same reason the
+	// framework would fail to decode them. It is not universal: the primary
+	// walk's own AGENT-stream terminal read predates it and still casts an
+	// anonymous shape (verifyTerminalResponse).
+	decoder *message.Decoder
 
 	// useMock indicates Docker compose provides mock-llm
 	useMock bool
@@ -67,6 +77,10 @@ type Config struct {
 
 	// Metrics URL for checking completion
 	MetricsURL string `json:"metrics_url"`
+
+	// HTTPURL is the deployment's HTTP API root. The dispatch component's
+	// approval and message routes hang off it under dispatchRoutePrefix.
+	HTTPURL string `json:"http_url"`
 
 	// LLM endpoint URL (default: start mock server)
 	LLMEndpointURL string `json:"llm_endpoint_url"`
@@ -84,6 +98,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		NATSURL:            "nats://localhost:34222",
 		MetricsURL:         "http://localhost:39090",
+		HTTPURL:            e2econfig.DefaultEndpoints.HTTP,
 		LLMEndpointURL:     "", // Empty means use mock
 		TaskTimeout:        30 * time.Second,
 		CompleteTimeout:    60 * time.Second,
@@ -104,6 +119,9 @@ func NewScenario(
 	if envURL := os.Getenv("AGENTIC_LLM_URL"); envURL != "" {
 		config.LLMEndpointURL = envURL
 	}
+	if config.HTTPURL == "" {
+		config.HTTPURL = e2econfig.DefaultEndpoints.HTTP
+	}
 
 	return &Scenario{
 		name:        "agentic",
@@ -112,6 +130,7 @@ func NewScenario(
 		obs:         obs,
 		config:      config,
 		useMock:     config.LLMEndpointURL == "",
+		http:        &http.Client{Timeout: 15 * time.Second},
 	}
 }
 
@@ -148,6 +167,14 @@ func (s *Scenario) Setup(ctx context.Context) error {
 	// Create metrics client
 	s.metrics = client.NewMetricsClient(s.config.MetricsURL)
 
+	// Build the production payload registry once. Every wire payload this
+	// scenario reads back decodes through it.
+	registry := payloadregistry.New()
+	if err := payloadbuiltins.Register(registry); err != nil {
+		return errors.Join(fmt.Errorf("register production payloads: %w", err), natsClient.Close(ctx))
+	}
+	s.decoder = message.NewDecoder(registry)
+
 	// Docker compose provides mock-llm at http://mock-llm:8080 (within Docker network)
 	// and http://localhost:38180 (from host). The semstreams container uses the Docker-internal
 	// URL, so we don't need to start a mock server here.
@@ -156,6 +183,69 @@ func (s *Scenario) Setup(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// agenticStage is one verification the tier performs. asserts marks the stages
+// whose completion is a proof: a stage that only records a baseline and
+// tolerates its own failure is not one, and counting it would report a
+// verification that cannot fail.
+type agenticStage struct {
+	name    string
+	fn      func(context.Context, *scenarios.Result) error
+	asserts bool
+}
+
+// assertingStageCount is how many stages a complete run must count. One unit of
+// the runner's assertions_run= line therefore reads as "one verification stage
+// that ran to completion" — the tier's green stops resting on stage durations
+// alone (#1238).
+//
+// It is DERIVED from stages() rather than carried as a constant beside it,
+// because a hand-carried number is one edit away from agreeing with a list it
+// no longer describes. That makes Execute's comparison a check on the counting,
+// not on the list: what holds the LIST is
+// TestStagesAreExactlyThisOrderedList, which pins every stage's name and
+// asserts flag in order, so a deleted stage fails in plain `go test` with no
+// live stack.
+func (s *Scenario) assertingStageCount() int {
+	count := 0
+	for _, stage := range s.stages() {
+		if stage.asserts {
+			count++
+		}
+	}
+	return count
+}
+
+// stages returns the tier's verification stages in execution order.
+//
+// The approval and signal walks come last on purpose. Every stage above them
+// asserts on counters and stream contents that additional loops would perturb,
+// and verify-durable-tool-replay installs (and restores) a TOOL-stream
+// admission fault that nothing else may be in flight across.
+func (s *Scenario) stages() []agenticStage {
+	return []agenticStage{
+		{name: "verify-components", fn: s.verifyComponents, asserts: true},
+		// capture-baseline records metric baselines and downgrades its own
+		// failure to a warning, so it proves nothing and is not counted.
+		{name: "capture-baseline", fn: s.captureBaseline},
+		// inject-task publishes the primary task; it performs no verification
+		// of its own, so it is an action stage rather than a counted one.
+		{name: "inject-task", fn: s.injectTask},
+		{name: "wait-for-completion", fn: s.waitForCompletion, asserts: true},
+		{name: "verify-terminal-response", fn: s.verifyTerminalResponse, asserts: true},
+		{name: "validate-trajectory", fn: s.validateTrajectory, asserts: true},
+		{name: "verify-graph-triples", fn: s.verifyGraphTriples, asserts: true},
+		{name: "verify-tool-execution", fn: s.verifyToolExecution, asserts: true},
+		{name: "verify-durable-tool-replay", fn: s.verifyDurableToolReplay, asserts: true},
+		{name: "verify-streaming-metrics", fn: s.verifyStreamingMetrics, asserts: true},
+		{name: "verify-tool-call-governance", fn: s.verifyToolCallGovernance, asserts: true},
+		{name: "walk-approval-path", fn: s.walkApprovalPath, asserts: true},
+		{name: "refuse-non-canonical-approval", fn: s.refuseNonCanonicalApproval, asserts: true},
+		{name: "walk-signal-path", fn: s.walkSignalPath, asserts: true},
+		{name: "refuse-non-canonical-signal", fn: s.refuseNonCanonicalSignal, asserts: true},
+		{name: "validate-results", fn: s.validateResults, asserts: true},
+	}
 }
 
 // Execute runs the agentic scenario.
@@ -178,26 +268,7 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 		result.Details["llm_endpoint"] = s.config.LLMEndpointURL
 	}
 
-	// Execute stages
-	stages := []struct {
-		name string
-		fn   func(context.Context, *scenarios.Result) error
-	}{
-		{"verify-components", s.verifyComponents},
-		{"capture-baseline", s.captureBaseline},
-		{"inject-task", s.injectTask},
-		{"wait-for-completion", s.waitForCompletion},
-		{"verify-terminal-response", s.verifyTerminalResponse},
-		{"validate-trajectory", s.validateTrajectory},
-		{"verify-graph-triples", s.verifyGraphTriples},
-		{"verify-tool-execution", s.verifyToolExecution},
-		{"verify-durable-tool-replay", s.verifyDurableToolReplay},
-		{"verify-streaming-metrics", s.verifyStreamingMetrics},
-		{"verify-tool-call-governance", s.verifyToolCallGovernance},
-		{"validate-results", s.validateResults},
-	}
-
-	for _, stage := range stages {
+	for _, stage := range s.stages() {
 		stageStart := time.Now()
 
 		if err := stage.fn(ctx, result); err != nil {
@@ -209,6 +280,21 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 		}
 
 		result.Metrics[fmt.Sprintf("%s_duration_ms", stage.name)] = time.Since(stageStart).Milliseconds()
+		if stage.asserts {
+			result.AssertionsRun++
+		}
+	}
+
+	// The denominator check: the number printed is the number the stage list
+	// says a complete run owes. It catches an increment that did not happen —
+	// a stage list held together only by a number nobody compares is how
+	// assertions_run=0 shipped green in the first place (#1238).
+	if want := s.assertingStageCount(); result.AssertionsRun != want {
+		result.Error = fmt.Sprintf("assertions_run = %d, want %d", result.AssertionsRun, want)
+		result.Errors = append(result.Errors, result.Error)
+		result.EndTime = time.Now()
+		result.Duration = result.EndTime.Sub(result.StartTime)
+		return result, nil
 	}
 
 	result.Success = true
@@ -590,11 +676,7 @@ func (s *Scenario) verifyTerminalResponse(ctx context.Context, result *scenarios
 	if got := stored.Header.Get(nats.MsgIdHdr); got != wantID {
 		return fmt.Errorf("terminal response Nats-Msg-Id = %q, want %q", got, wantID)
 	}
-	registry := payloadregistry.New()
-	if err := payloadbuiltins.Register(registry); err != nil {
-		return fmt.Errorf("register production payloads for terminal response proof: %w", err)
-	}
-	decoded, err := message.NewDecoder(registry).Decode(stored.Data)
+	decoded, err := s.decoder.Decode(stored.Data)
 	if err != nil {
 		return fmt.Errorf("decode terminal-derived response through production registry: %w", err)
 	}
@@ -1026,11 +1108,27 @@ func (s *Scenario) verifyToolCallGovernance(ctx context.Context, result *scenari
 	return nil
 }
 
-// validateResults validates the scenario results
+// validateResults validates the scenario results.
+//
+// It re-reads the details each lane recorded rather than trusting that its
+// stage returned nil: a stage that silently skipped its own work leaves no
+// detail behind, and this is where that shows up.
 func (s *Scenario) validateResults(_ context.Context, result *scenarios.Result) error {
 	completionMethod, _ := result.Details["completion_method"].(string)
 	if completionMethod != "target_trajectory" {
 		return fmt.Errorf("target loop completion was not verified, method=%q", completionMethod)
+	}
+	if outcome, _ := result.Details["approval_outcome"].(string); outcome != agentic.OutcomeSuccess {
+		return fmt.Errorf("approval walk outcome = %q, want %q", outcome, agentic.OutcomeSuccess)
+	}
+	if outcome, _ := result.Details["signal_outcome"].(string); outcome != agentic.OutcomeCancelled {
+		return fmt.Errorf("signal walk outcome = %q, want %q", outcome, agentic.OutcomeCancelled)
+	}
+	if status, _ := result.Details["approval_refusal_non_canonical_status"].(int); status != http.StatusBadRequest {
+		return fmt.Errorf("non-canonical approval refusal status = %d, want %d", status, http.StatusBadRequest)
+	}
+	if count, _ := result.Details["signal_refusal_non_canonical_count"].(float64); count < 1 {
+		return fmt.Errorf("non-canonical cancel refusal counter = %v, want at least 1", count)
 	}
 
 	result.Details["validation_passed"] = true
