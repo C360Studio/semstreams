@@ -464,7 +464,8 @@
       "config": {
         "stream_name": "TOOL",
         "timeout": "10s",
-        "allowed_tools": ["query_entity"],
+        "allowed_tools": ["query_entity", "query_by_type"],
+        "approval_required": ["query_by_type"],
         "ports": {
           "inputs": [
             {

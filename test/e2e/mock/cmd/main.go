@@ -29,6 +29,13 @@ func main() {
 	openaiAddr := fmt.Sprintf(":%d", *port)
 	openaiServer := mock.NewOpenAIServer().
 		WithToolArgs("query_entity", `{"entity_id": "c360.logistics.sensor.environmental.temperature.temp-sensor-001"}`).
+		// query_by_type is the agentic tier's APPROVAL-GATED tool
+		// (configs/agentic.json approval_required). Its args are pinned here
+		// so the call re-dispatched after a human approve executes for real
+		// instead of failing schema validation — the approved execution is
+		// what proves the approval unblocked the loop rather than just
+		// resolving the pending state.
+		WithToolArgs("query_by_type", `{"entity_type": "temperature", "limit": 5}`).
 		WithCompletionContent(`{"valid": true, "summary": "Analysis complete. Temperature sensor reading exceeds threshold. Recommend monitoring HVAC system."}`)
 
 	applyScenarioPreset(openaiServer, *scenario)
