@@ -719,26 +719,32 @@ func TestApprovalRejectionAtIterationCapRecordsTerminalBeforeAdjacentSurfaces(t 
 	}
 	c.handleApprovalResponseMessage(ctx, data)
 
-	entity, err = handler.GetLoop(loopID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if entity.State != agentic.LoopStateFailed {
-		t.Fatalf("approval rejection state = %q, want failed at iteration cap", entity.State)
-	}
 	if len(bucket.created) < 2 {
 		t.Fatalf("created facts = %d, want rejection observation and terminal", len(bucket.created))
 	}
 	var kinds []agentic.TrajectoryKind
+	var facts []agentic.TrajectoryFactV1
 	for _, encoded := range bucket.created {
 		var fact agentic.TrajectoryFactV1
 		if err := json.Unmarshal(encoded, &fact); err != nil {
 			t.Fatal(err)
 		}
 		kinds = append(kinds, fact.Kind)
+		facts = append(facts, fact)
 	}
 	if kinds[len(kinds)-1] != agentic.TrajectoryKindLoopTerminal {
 		t.Fatalf("approval fact order = %v, terminal must be last before persistence/publication", kinds)
+	}
+	// The terminal outcome is read from the fact the terminal observation
+	// emitted, not from the in-process map: a settled loop's per-loop state is
+	// released at terminal (#1233), so the map is the wrong place to ask. The
+	// fact is also the stronger evidence — it proves the observation ran while
+	// the loop was still failed, ahead of the release.
+	if got := facts[len(facts)-1].Status; got != agentic.TrajectoryStatusFailed {
+		t.Fatalf("terminal fact status = %q, want failed at iteration cap", got)
+	}
+	if _, err := handler.GetLoop(loopID); err == nil {
+		t.Fatal("settled loop still held in process memory after the terminal path released it")
 	}
 }
 

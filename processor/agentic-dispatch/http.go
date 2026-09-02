@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -98,7 +99,6 @@ func (c *Component) RegisterHTTPHandlers(prefix string, mux *http.ServeMux) {
 	// Loop management endpoints
 	mux.HandleFunc("GET "+prefix+"loops", c.handleListLoops)
 	mux.HandleFunc("GET "+prefix+"loops/{id}", c.handleGetLoop)
-	mux.HandleFunc("POST "+prefix+"loops/{id}/signal", c.handleLoopSignal)
 	mux.HandleFunc("POST "+prefix+"loops/{id}/approval", c.handleLoopApproval)
 
 	// Real-time activity stream (SSE)
@@ -277,6 +277,25 @@ func (c *Component) processCommandSync(ctx context.Context, msg agentic.UserMess
 	return resp
 }
 
+// refusedSubmissionResponse is the HTTP submission lane's typed answer to a
+// refusal. The content is the refusal's own message, which names the field the
+// caller can act on; the previous "Please try again." named nothing and was
+// wrong about the remedy for half the failures it covered (#1225).
+//
+// It never counts anything: the refusal it is handed was already metered and
+// logged exactly once, where it was built.
+func refusedSubmissionResponse(msg agentic.UserMessage, refusal error) agentic.UserResponse {
+	return agentic.UserResponse{
+		ResponseID:  uuid.New().String(),
+		ChannelType: msg.ChannelType,
+		ChannelID:   msg.ChannelID,
+		UserID:      msg.UserID,
+		Type:        agentic.ResponseTypeError,
+		Content:     refusal.Error(),
+		Timestamp:   time.Now(),
+	}
+}
+
 // processTaskSubmissionSync processes a task submission and returns acknowledgment.
 // The actual task execution happens asynchronously via NATS.
 func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.UserMessage) agentic.UserResponse {
@@ -293,7 +312,10 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 		}
 	}
 
-	// Determine loop ID (continue existing or create new)
+	// Determine loop ID (continue existing or create new). The mint decision is
+	// made HERE, before the gate: an unresolved continuation is the signal to
+	// start a conversation, not a malformed token, and the gate refuses an empty
+	// token as malformed.
 	loopID := ""
 	if msg.ReplyTo != "" {
 		loopID = msg.ReplyTo
@@ -301,30 +323,22 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 		loopID = c.loopTracker.GetActiveLoop(msg.UserID, msg.ChannelID)
 	}
 
-	// Validate every loop token this submission carries — the RESOLVED
-	// continuation token (after auto-continue resolution, before the mint) and the
-	// client-authored run_id / in_reply_to resume anchors. The client hears about
-	// it here, synchronously, in the response it is already waiting on, naming the
-	// field — rather than "Task submitted" followed by an async TERM it never
-	// sees, or a marshal-time "please try again" that names nothing (ADR-105,
-	// #1192).
-	if err := c.refuseNonCanonicalLoopTokens(msg, loopID); err != nil {
-		return agentic.UserResponse{
-			ResponseID:  uuid.New().String(),
-			ChannelType: msg.ChannelType,
-			ChannelID:   msg.ChannelID,
-			UserID:      msg.UserID,
-			Type:        agentic.ResponseTypeError,
-			Content:     err.Error(),
-			Timestamp:   time.Now(),
-		}
-	}
-
-	// Create new loop if needed. The token is framework-minted and full: a
-	// truncated one carried 32 bits, and a collision merged two conversations
-	// silently (ADR-105, #1192).
 	if loopID == "" {
+		// Create new loop. The token is framework-minted and full: a truncated
+		// one carried 32 bits, and a collision merged two conversations silently
+		// (ADR-105, #1192).
 		loopID = uuid.New().String()
+	} else if _, err := c.admitLoopRequest(ctx, loopAdmissionRequest{
+		Seam:      seamHTTPSubmission,
+		Field:     "reply_to",
+		Operation: loopOpContinue,
+		LoopID:    loopID,
+		Requester: msg.UserID,
+	}); err != nil {
+		// The client hears about it here, synchronously, in the response it is
+		// already waiting on, naming the field — rather than "Task submitted"
+		// followed by an async TERM it never sees (ADR-105, #1192).
+		return refusedSubmissionResponse(msg, err)
 	}
 
 	taskID := uuid.New().String()
@@ -332,7 +346,28 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 	// Create task message (shared builder — see buildTaskMessage; gh#256).
 	task := c.buildTaskMessage(ctx, msg, loopID, taskID)
 
-	// Track the loop
+	// Wrap task in BaseMessage envelope (required by agentic-loop). The marshal
+	// is where TaskMessage.Validate runs, so it is the last thing that can
+	// refuse this submission on its own content — including the client-authored
+	// run_id / in_reply_to resume anchors, which never pass through the
+	// continuation branch above. Nothing is tracked or counted until it returns
+	// (#1225).
+	baseMsg := message.NewBaseMessage(task.Schema(), &task, "agentic-dispatch-http")
+	taskData, err := json.Marshal(baseMsg)
+	if err != nil {
+		return refusedSubmissionResponse(msg,
+			c.refuseSubmission(seamHTTPSubmission, loopID, codeSubmissionInvalid, err))
+	}
+
+	subject, err := component.ResolveSubject(c.outputPortDefs(), "agent.task", taskID)
+	if err != nil {
+		return refusedSubmissionResponse(msg,
+			c.refuseSubmission(seamHTTPSubmission, loopID, codeSubmissionUndeliverable, err))
+	}
+
+	// Track the loop and count it started — after the task is assembled and
+	// addressable, before the publish. See the channel path for why this window
+	// is the safe one (#1225).
 	c.loopTracker.Track(&LoopInfo{
 		LoopID:           loopID,
 		TaskID:           taskID,
@@ -344,42 +379,11 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 		ContextRequestID: msg.ContextRequestID,
 		CreatedAt:        time.Now(),
 	})
-
-	// Record loop started
 	c.metrics.recordLoopStarted()
 
-	// Wrap task in BaseMessage envelope (required by agentic-loop)
-	baseMsg := message.NewBaseMessage(task.Schema(), &task, "agentic-dispatch-http")
-	taskData, err := json.Marshal(baseMsg)
-	if err != nil {
-		c.logger.Error("Failed to marshal task", slog.String("error", err.Error()))
-		return agentic.UserResponse{
-			ResponseID:  uuid.New().String(),
-			ChannelType: msg.ChannelType,
-			ChannelID:   msg.ChannelID,
-			UserID:      msg.UserID,
-			Type:        agentic.ResponseTypeError,
-			Content:     "Failed to create task. Please try again.",
-			Timestamp:   time.Now(),
-		}
-	}
-
-	subject, err := component.ResolveSubject(c.outputPortDefs(), "agent.task", taskID)
-	if err != nil {
-		c.logger.Error("Failed to resolve task subject", slog.String("error", err.Error()))
-		return agentic.UserResponse{ResponseID: uuid.New().String(), ChannelType: msg.ChannelType, ChannelID: msg.ChannelID, UserID: msg.UserID, Type: agentic.ResponseTypeError, Content: "Failed to submit task. Please try again.", Timestamp: time.Now()}
-	}
 	if err := c.natsClient.PublishToStream(ctx, subject, taskData); err != nil {
-		c.logger.Error("Failed to publish task", slog.String("error", err.Error()))
-		return agentic.UserResponse{
-			ResponseID:  uuid.New().String(),
-			ChannelType: msg.ChannelType,
-			ChannelID:   msg.ChannelID,
-			UserID:      msg.UserID,
-			Type:        agentic.ResponseTypeError,
-			Content:     "Failed to submit task. Please try again.",
-			Timestamp:   time.Now(),
-		}
+		return refusedSubmissionResponse(msg,
+			c.refuseSubmission(seamHTTPSubmission, loopID, codeSubmissionUndeliverable, err))
 	}
 
 	// Record task submitted
@@ -478,21 +482,6 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
-}
-
-// SignalRequest represents a control signal request for a loop.
-type SignalRequest struct {
-	Type   string `json:"type"`   // pause, resume, cancel
-	Reason string `json:"reason"` // optional reason
-}
-
-// SignalResponse represents the response to a signal request.
-type SignalResponse struct {
-	LoopID    string `json:"loop_id"`
-	Signal    string `json:"signal"`
-	Accepted  bool   `json:"accepted"`
-	Message   string `json:"message,omitempty"`
-	Timestamp string `json:"timestamp"`
 }
 
 // ApprovalRequest is the body of POST /loops/{id}/approval. Drives
@@ -598,6 +587,25 @@ func (c *Component) handleListLoops(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// answerLoopRefusal writes an admission refusal as this endpoint's answer and
+// records the request under the status it chose. The status mapping has one
+// home (loopRefusalHTTPStatus) so three endpoints cannot disagree about what
+// "not owned" answers; an error this package did not classify is a bug here,
+// not a caller problem, and answers 500.
+//
+// It counts no refusal of its own — the gate already metered and logged it
+// exactly once. The HTTP series it moves is the endpoint's existing
+// request-by-status counter, which is why the new statuses need no new series.
+func (c *Component) answerLoopRefusal(w http.ResponseWriter, path, method string, start time.Time, refusal error) {
+	status, ok := loopRefusalHTTPStatus(refusal)
+	if !ok {
+		status = http.StatusInternalServerError
+	}
+	c.metrics.recordHTTPRequest(path, method, strconv.Itoa(status))
+	c.metrics.recordHTTPDuration(path, method, time.Since(start).Seconds())
+	c.writeJSONError(w, status, refusal.Error())
+}
+
 // handleGetLoop returns a single loop by ID.
 func (c *Component) handleGetLoop(w http.ResponseWriter, r *http.Request) {
 	ctx, requestID := c.withRequestID(w, r)
@@ -614,19 +622,41 @@ func (c *Component) handleGetLoop(w http.ResponseWriter, r *http.Request) {
 		slog.String("request_id", requestID),
 		slog.String("loop_id", loopID))
 
-	loop := c.loopTracker.Get(loopID)
-	if loop == nil {
-		c.metrics.recordHTTPRequest("/loops/{id}", "GET", "404")
+	// Form and existence, through the one gate. Ownership is deliberately NOT
+	// consulted on a read — that carve-out is recorded in the capability spec's
+	// ungated-seam list, not left for a reader to infer from its absence here.
+	if _, err := c.admitLoopRequest(ctx, loopAdmissionRequest{
+		Seam:      seamHTTPLoopRead,
+		Field:     "id",
+		Operation: loopOpRead,
+		LoopID:    loopID,
+		Requester: IdentityFromRequest(r, ""),
+	}); err != nil {
+		c.answerLoopRefusal(w, "/loops/{id}", "GET", startTime, err)
+		return
+	}
+
+	// Existence is merged, so an admitted loop may live only in the durable
+	// record. Answering 404 here would contradict the admission that just
+	// succeeded, so the durable record is projected onto the same wire type.
+	wireLoop, projectErr := c.loopWireByID(ctx, loopID)
+	if projectErr != nil {
+		// The one failure this endpoint answers without refusing through the
+		// gate, so it names its cause here or the cause is lost: 503 alone does
+		// not distinguish an unreachable bucket from a malformed record from a
+		// record that vanished between admission and this read.
+		c.logger.ErrorContext(ctx, "agentic-dispatch: admitted loop could not be projected",
+			slog.String("request_id", requestID),
+			slog.String("loop_id", loopID),
+			slog.String("error", projectErr.Error()))
+		c.metrics.recordHTTPRequest("/loops/{id}", "GET", "503")
 		c.metrics.recordHTTPDuration("/loops/{id}", "GET", time.Since(startTime).Seconds())
-		c.writeJSONError(w, http.StatusNotFound, "loop not found")
+		c.writeJSONError(w, http.StatusServiceUnavailable, "loop record is not readable right now")
 		return
 	}
 
 	c.metrics.recordHTTPRequest("/loops/{id}", "GET", "200")
 	c.metrics.recordHTTPDuration("/loops/{id}", "GET", time.Since(startTime).Seconds())
-
-	// Project to the canonical wire type before encoding.
-	wireLoop := loopFromInfo(loop)
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(wireLoop); err != nil {
@@ -638,95 +668,35 @@ func (c *Component) handleGetLoop(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleLoopSignal sends a control signal to a loop.
-func (c *Component) handleLoopSignal(w http.ResponseWriter, r *http.Request) {
-	ctx, requestID := c.withRequestID(w, r)
-	startTime := time.Now()
-
-	loopID := r.PathValue("id")
-	if loopID == "" {
-		c.metrics.recordHTTPRequest("/loops/{id}/signal", "POST", "400")
-		c.writeJSONError(w, http.StatusBadRequest, "loop ID is required")
-		return
+// loopWireByID projects an ADMITTED loop onto the canonical wire type. The
+// tracker is preferred because it is the live record; a loop the gate admitted
+// from the durable record alone is re-read and projected from there.
+//
+// It returns the CAUSE rather than a bare ok, because the caller answers a
+// single transient status for three different failures — the bucket was
+// unreachable, the record did not decode, or it vanished between admission and
+// this read — and a 503 that names none of them is the one swallowed failure
+// beside a gate whose whole argument is that unread and absent are different
+// answers. Absence was already ruled out by admission, so a vanished record is
+// still answered as transient; it is just no longer silent.
+func (c *Component) loopWireByID(ctx context.Context, loopID string) (Loop, error) {
+	if tracked := c.loopTracker.Get(loopID); tracked != nil {
+		return loopFromInfo(tracked), nil
 	}
-
-	// Check if loop exists
-	loop := c.loopTracker.Get(loopID)
-	if loop == nil {
-		c.metrics.recordHTTPRequest("/loops/{id}/signal", "POST", "404")
-		c.metrics.recordHTTPDuration("/loops/{id}/signal", "POST", time.Since(startTime).Seconds())
-		c.writeJSONError(w, http.StatusNotFound, "loop not found")
-		return
+	persisted, err := c.loadPersistedLoop(ctx, loopID)
+	if err != nil {
+		return Loop{}, fmt.Errorf("read loop %q from the durable record: %w", loopID, err)
 	}
-
-	// Parse signal request
-	var req SignalRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		c.metrics.recordHTTPRequest("/loops/{id}/signal", "POST", "400")
-		c.writeJSONError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
-		return
+	if persisted == nil {
+		return Loop{}, fmt.Errorf("loop %q vanished between admission and read", loopID)
 	}
-
-	// Validate signal type
-	switch req.Type {
-	case "pause", "resume", "cancel":
-		// Valid signal types
-	default:
-		c.metrics.recordHTTPRequest("/loops/{id}/signal", "POST", "400")
-		c.writeJSONError(w, http.StatusBadRequest, "invalid signal type: must be pause, resume, or cancel")
-		return
-	}
-
-	c.logger.DebugContext(ctx, "sending signal to loop",
-		slog.String("request_id", requestID),
-		slog.String("loop_id", loopID),
-		slog.String("signal", req.Type),
-		slog.String("reason", req.Reason),
-		slog.String("user_id", loop.UserID))
-
-	// Send signal via NATS
-	if err := c.loopTracker.SendSignal(ctx, c.natsClient, loopID, req.Type, req.Reason); err != nil {
-		c.logger.ErrorContext(ctx, "failed to send signal",
-			slog.String("request_id", requestID),
-			slog.String("loop_id", loopID),
-			slog.String("signal", req.Type),
-			slog.String("error", err.Error()))
-		c.metrics.recordHTTPRequest("/loops/{id}/signal", "POST", "500")
-		c.metrics.recordLoopSignal(req.Type, false)
-		c.writeJSONError(w, http.StatusInternalServerError, "failed to send signal: "+err.Error())
-		return
-	}
-
-	c.metrics.recordHTTPRequest("/loops/{id}/signal", "POST", "200")
-	c.metrics.recordHTTPDuration("/loops/{id}/signal", "POST", time.Since(startTime).Seconds())
-	c.metrics.recordLoopSignal(req.Type, true)
-
-	c.logger.DebugContext(ctx, "signal sent to loop",
-		slog.String("request_id", requestID),
-		slog.String("loop_id", loopID),
-		slog.String("signal", req.Type))
-
-	// Return success response
-	resp := SignalResponse{
-		LoopID:    loopID,
-		Signal:    req.Type,
-		Accepted:  true,
-		Message:   fmt.Sprintf("Signal '%s' sent to loop %s", req.Type, loopID),
-		Timestamp: time.Now().Format(time.RFC3339),
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		c.logger.ErrorContext(ctx, "failed to encode signal response",
-			slog.String("request_id", requestID),
-			slog.String("error", err.Error()))
-	}
+	return loopFromEntity(persisted, c.deps.Platform.Org, c.deps.Platform.Platform), nil
 }
 
 // handleLoopApproval drives the beta.19 approval flow over HTTP.
-// Mirrors handleLoopSignal's shape: path-param extraction, loop
-// existence check, JSON body decode, validation, NATS publish,
-// JSON success response. Identity resolves via IdentityFromRequest
+// Path-param extraction, gate admission, JSON body decode,
+// validation, NATS publish, JSON success response. Identity resolves
+// via IdentityFromRequest
 // (ctx > body > "http-user" default) so middleware can authenticate
 // without handler edits.
 //
@@ -747,22 +717,30 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Loop must exist in dispatch's tracker. A 404 here means we
-	// either never saw the loop (e.g., process restart lost the
-	// in-memory tracker before this request) or the loop has been
-	// removed.
-	if c.loopTracker.Get(loopID) == nil {
-		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "404")
-		c.metrics.recordHTTPDuration("/loops/{id}/approval", "POST", time.Since(startTime).Seconds())
-		c.writeJSONError(w, http.StatusNotFound, "loop not found")
-		return
-	}
-
-	// Decode body.
+	// Decode body BEFORE the gate: the approve permission is checked against
+	// the resolved identity, and the body is one of the three places that
+	// identity can come from (IdentityFromRequest: ctx > body > default).
 	var req ApprovalRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "400")
 		c.writeJSONError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	approver := IdentityFromRequest(r, req.UserID)
+
+	// Form, existence, and the approve permission, through the one gate.
+	// Ownership is deliberately NOT consulted: a second-party reviewer is the
+	// entire point of an approval. The permission's default admits everyone, so
+	// no default deployment changes behaviour.
+	if _, err := c.admitLoopRequest(ctx, loopAdmissionRequest{
+		Seam:      seamHTTPLoopApproval,
+		Field:     "id",
+		Operation: loopOpApprove,
+		LoopID:    loopID,
+		Requester: approver,
+	}); err != nil {
+		c.answerLoopRefusal(w, "/loops/{id}/approval", "POST", startTime, err)
 		return
 	}
 
@@ -798,8 +776,6 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 		c.writeJSONError(w, http.StatusConflict, "loop not awaiting approval")
 		return
 	}
-
-	approver := IdentityFromRequest(r, req.UserID)
 
 	c.logger.DebugContext(ctx, "submitting approval response for loop",
 		slog.String("request_id", requestID),
@@ -860,8 +836,8 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 // marshal or publish. Extracted from handleLoopApproval to keep the
 // HTTP handler under revive's function-length budget.
 //
-// Defensive nil-check on the NATS client mirrors LoopTracker.SendSignal —
-// production wiring always has a client, but unit tests construct
+// Defensive nil-check on the NATS client: production wiring always has
+// a client, but unit tests construct
 // Components with natsClient nil and we surface a clean error rather
 // than letting the underlying client.PublishToStream NPE.
 func (c *Component) publishApprovalResponse(ctx context.Context, loopID, callID string, req *ApprovalRequest, approver string) (string, error) {
@@ -1086,35 +1062,17 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 							ContentType: "application/json",
 							SchemaRef:   "#/components/schemas/Loop",
 						},
-						"404": {
-							Description: "Loop not found",
-						},
-					},
-				},
-			},
-			"/loops/{id}/signal": {
-				POST: &service.OperationSpec{
-					Summary:     "Send control signal to loop",
-					Description: "Sends a control signal (pause, resume, cancel) to an active loop.",
-					Tags:        []string{"AgenticDispatch"},
-					RequestBody: &service.RequestBodySpec{
-						Description: "Control signal to send",
-						Required:    true,
-						SchemaRef:   "#/components/schemas/SignalRequest",
-					},
-					Parameters: []service.ParameterSpec{
-						{Name: "id", In: "path", Description: "Loop ID", Required: true},
-					},
-					Responses: map[string]service.ResponseSpec{
-						"200": {
-							Description: "Signal accepted",
-							ContentType: "application/json",
-						},
 						"400": {
-							Description: "Invalid signal type",
+							Description: "Loop ID is missing or is not a framework-minted loop token",
 						},
 						"404": {
 							Description: "Loop not found",
+						},
+						"500": {
+							Description: "The tracker and the durable record disagree about this loop's route; no caller action resolves it",
+						},
+						"503": {
+							Description: "Loop state is not readable right now; retry",
 						},
 					},
 				},
@@ -1138,7 +1096,10 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 							ContentType: "application/json",
 						},
 						"400": {
-							Description: "Invalid request body or decision value",
+							Description: "Invalid request body or decision value, or a loop ID that is not a framework-minted loop token",
+						},
+						"403": {
+							Description: "Requester is not in the approve permission list (default admits everyone)",
 						},
 						"404": {
 							Description: "Loop not found",
@@ -1148,6 +1109,9 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 						},
 						"500": {
 							Description: "Failed to publish approval (NATS error)",
+						},
+						"503": {
+							Description: "Loop state is not readable right now; retry",
 						},
 					},
 				},
@@ -1183,13 +1147,11 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 			reflect.TypeOf(Loop{}),
 			reflect.TypeOf(LoopInfo{}),
 			reflect.TypeOf(HTTPMessageResponse{}),
-			reflect.TypeOf(SignalResponse{}),
 			reflect.TypeOf(ActivityEvent{}),
 			reflect.TypeOf(ApprovalAcceptResponse{}),
 		},
 		RequestBodyTypes: []reflect.Type{
 			reflect.TypeOf(HTTPMessageRequest{}),
-			reflect.TypeOf(SignalRequest{}),
 			reflect.TypeOf(ApprovalRequest{}),
 		},
 	}

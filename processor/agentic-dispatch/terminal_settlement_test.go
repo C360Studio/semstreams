@@ -32,7 +32,7 @@ func agentterminalEvent(userID, channelType, channelID string) agentterminal.Eve
 func terminalTestComponent(t *testing.T) *Component {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads, RegisterPayloads)
+	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads)
 	return &Component{
 		config:      DefaultConfig(),
 		logger:      logger,

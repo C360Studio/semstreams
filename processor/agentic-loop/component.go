@@ -1186,6 +1186,17 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 	// Handle the task using the message handler
 	result, err := c.handler.HandleTask(ctx, *task)
 	if err != nil {
+		// A continuation refused because its loop is still working is ordinary
+		// user behaviour — someone typed while the agent was thinking — not an
+		// operator-actionable fault, and this path became common the moment
+		// intake started attaching (#1227). ERROR here would manufacture a
+		// false-alarm class out of a refusal that is working as designed. Every
+		// other handler failure keeps ERROR.
+		if errors.Is(err, ErrLoopBusy) {
+			c.logger.Warn("Task refused — the loop it names still has work in flight",
+				"error", err, "task_id", task.TaskID, "loop_id", task.LoopID)
+			return nil
+		}
 		c.logger.Error("Failed to handle task", "error", err, "task_id", task.TaskID)
 		return nil
 	}
@@ -1426,9 +1437,18 @@ func (c *Component) extractAgentResponse(data []byte) (*agentic.AgentResponse, s
 		return nil, "", false
 	}
 
+	// No loop for this request is an EXPECTED settled-drop, not a fault. A
+	// terminal loop's per-loop state is released (#1233), which takes its
+	// request routing with it, so a model response that arrives after the loop
+	// settled — or after a process replacement — resolves nothing. Warn and
+	// drop: absence here must look the same as a terminal loop still present,
+	// and neither is an error the operator can act on.
 	loopID := c.findLoopIDForRequest(responsePtr.RequestID)
 	if loopID == "" {
 		c.logger.Warn("No loop found for request", "request_id", responsePtr.RequestID)
+		if c.metrics != nil {
+			c.metrics.recordModelResponseDropped("stale_request_id")
+		}
 		return nil, "", false
 	}
 
@@ -1771,12 +1791,18 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) {
 	}
 	toolResult := *toolResultPtr
 
-	// Find loop ID for this tool call. Empty here means either we drained the
-	// CallID at the previous turn boundary (GetAndClearToolResults evicts the
-	// routing entry to drop late re-deliveries) or we never tracked it.
+	// Find loop ID for this tool call. Empty here means we drained the CallID at
+	// the previous turn boundary (GetAndClearToolResults evicts the routing
+	// entry to drop late re-deliveries), the loop settled and released its
+	// per-loop state (#1233), or we never tracked it. All three are expected
+	// settled-drops, counted and warned, never errors.
 	// Returning here is load-bearing — proceeding would land the late result
 	// in PendingToolResults and surface as a duplicate tool message in the
-	// next turn's request.
+	// next turn's request. It is also what keeps a released loop
+	// indistinguishable from a present terminal one: DeleteLoop clears the
+	// routing entry for model-authored call IDs as well as structured ones, so
+	// recovery cannot resolve a loop that is gone and hand it to
+	// HandleToolResult, which would fail instead of dropping.
 	loopID := c.findLoopIDForToolCall(toolResult.CallID)
 	if loopID == "" {
 		c.logger.Warn("No loop found for tool call", "call_id", toolResult.CallID)

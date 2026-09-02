@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -20,7 +19,7 @@ import (
 func newTestComponent(t *testing.T) *Component {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return &Component{
+	comp := &Component{
 		config:      DefaultConfig(),
 		loopTracker: NewLoopTrackerWithLogger(logger),
 		registry:    NewCommandRegistry(),
@@ -28,6 +27,12 @@ func newTestComponent(t *testing.T) *Component {
 		metrics:     getMetrics(nil), // Use default metrics for tests
 		natsClient:  nil,             // Will be nil for unit tests
 	}
+	// The admission gate reads AGENT_LOOPS. With no NATS client that read fails
+	// as UNREADABLE, which is a different answer from "this loop does not
+	// exist" — so these handler tests declare an empty durable store and a
+	// tracker miss means absence, as it does in production when the key is gone.
+	withPersistedLoops(comp, nil)
+	return comp
 }
 
 func TestHandleListLoops(t *testing.T) {
@@ -35,7 +40,7 @@ func TestHandleListLoops(t *testing.T) {
 
 	// Add some test loops
 	comp.loopTracker.Track(&LoopInfo{
-		LoopID:      "loop-1",
+		LoopID:      seamTestLoopA,
 		TaskID:      "task-1",
 		UserID:      "user-1",
 		ChannelType: "http",
@@ -45,7 +50,7 @@ func TestHandleListLoops(t *testing.T) {
 		CreatedAt:   time.Now(),
 	})
 	comp.loopTracker.Track(&LoopInfo{
-		LoopID:      "loop-2",
+		LoopID:      seamTestLoopB,
 		TaskID:      "task-2",
 		UserID:      "user-2",
 		ChannelType: "http",
@@ -135,7 +140,7 @@ func TestHandleGetLoop(t *testing.T) {
 
 	// Add a test loop
 	comp.loopTracker.Track(&LoopInfo{
-		LoopID:        "loop-1",
+		LoopID:        seamTestLoopA,
 		TaskID:        "task-1",
 		UserID:        "user-1",
 		ChannelType:   "http",
@@ -147,8 +152,8 @@ func TestHandleGetLoop(t *testing.T) {
 	})
 
 	t.Run("get existing loop", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/loops/loop-1", nil)
-		req.SetPathValue("id", "loop-1")
+		req := httptest.NewRequest(http.MethodGet, "/loops/"+seamTestLoopA, nil)
+		req.SetPathValue("id", seamTestLoopA)
 		rec := httptest.NewRecorder()
 
 		comp.handleGetLoop(rec, req)
@@ -159,15 +164,15 @@ func TestHandleGetLoop(t *testing.T) {
 		var loop LoopInfo
 		err := json.Unmarshal(rec.Body.Bytes(), &loop)
 		require.NoError(t, err)
-		assert.Equal(t, "loop-1", loop.LoopID)
+		assert.Equal(t, seamTestLoopA, loop.LoopID)
 		assert.Equal(t, "task-1", loop.TaskID)
 		assert.Equal(t, "executing", loop.State)
 		assert.Equal(t, 3, loop.Iterations)
 	})
 
 	t.Run("loop not found", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/loops/nonexistent", nil)
-		req.SetPathValue("id", "nonexistent")
+		req := httptest.NewRequest(http.MethodGet, "/loops/"+seamTestLoopAbsent, nil)
+		req.SetPathValue("id", seamTestLoopAbsent)
 		rec := httptest.NewRecorder()
 
 		comp.handleGetLoop(rec, req)
@@ -178,7 +183,8 @@ func TestHandleGetLoop(t *testing.T) {
 		err := json.Unmarshal(rec.Body.Bytes(), &resp)
 		require.NoError(t, err)
 		assert.Equal(t, "error", resp.Type)
-		assert.Contains(t, resp.Content, "not found")
+		assert.Contains(t, resp.Content, "names no loop",
+			"the endpoint answers with the gate's own refusal")
 	})
 
 	t.Run("missing loop ID", func(t *testing.T) {
@@ -190,110 +196,6 @@ func TestHandleGetLoop(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
 	})
-}
-
-func TestHandleLoopSignal(t *testing.T) {
-	comp := newTestComponent(t)
-
-	// Add a test loop
-	comp.loopTracker.Track(&LoopInfo{
-		LoopID:      "loop-1",
-		TaskID:      "task-1",
-		UserID:      "user-1",
-		ChannelType: "http",
-		ChannelID:   "chan-1",
-		State:       "executing",
-		CreatedAt:   time.Now(),
-	})
-
-	t.Run("loop not found", func(t *testing.T) {
-		body := `{"type":"cancel","reason":"test"}`
-		req := httptest.NewRequest(http.MethodPost, "/loops/nonexistent/signal", strings.NewReader(body))
-		req.SetPathValue("id", "nonexistent")
-		rec := httptest.NewRecorder()
-
-		comp.handleLoopSignal(rec, req)
-
-		assert.Equal(t, http.StatusNotFound, rec.Code)
-	})
-
-	t.Run("invalid request body", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/loops/loop-1/signal", strings.NewReader("invalid json"))
-		req.SetPathValue("id", "loop-1")
-		rec := httptest.NewRecorder()
-
-		comp.handleLoopSignal(rec, req)
-
-		assert.Equal(t, http.StatusBadRequest, rec.Code)
-	})
-
-	t.Run("invalid signal type", func(t *testing.T) {
-		body := `{"type":"invalid","reason":"test"}`
-		req := httptest.NewRequest(http.MethodPost, "/loops/loop-1/signal", strings.NewReader(body))
-		req.SetPathValue("id", "loop-1")
-		rec := httptest.NewRecorder()
-
-		comp.handleLoopSignal(rec, req)
-
-		assert.Equal(t, http.StatusBadRequest, rec.Code)
-
-		var resp HTTPMessageResponse
-		err := json.Unmarshal(rec.Body.Bytes(), &resp)
-		require.NoError(t, err)
-		assert.Contains(t, resp.Content, "invalid signal type")
-	})
-
-	t.Run("missing loop ID", func(t *testing.T) {
-		body := `{"type":"cancel"}`
-		req := httptest.NewRequest(http.MethodPost, "/loops//signal", strings.NewReader(body))
-		req.SetPathValue("id", "")
-		rec := httptest.NewRecorder()
-
-		comp.handleLoopSignal(rec, req)
-
-		assert.Equal(t, http.StatusBadRequest, rec.Code)
-	})
-}
-
-func TestSignalRequestValidation(t *testing.T) {
-	tests := []struct {
-		name         string
-		signal       string
-		expectBadReq bool // Expect 400 Bad Request (validation error)
-		expectIntErr bool // Expect 500 Internal Error (NATS error, meaning validation passed)
-	}{
-		{"pause is valid", "pause", false, true},       // Valid signal, but no NATS client
-		{"resume is valid", "resume", false, true},     // Valid signal, but no NATS client
-		{"cancel is valid", "cancel", false, true},     // Valid signal, but no NATS client
-		{"empty is invalid", "", true, false},          // Validation fails
-		{"unknown is invalid", "stop", true, false},    // Validation fails
-		{"uppercase is invalid", "PAUSE", true, false}, // Validation fails
-	}
-
-	comp := newTestComponent(t)
-	comp.loopTracker.Track(&LoopInfo{
-		LoopID: "loop-1",
-		State:  "executing",
-	})
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			body := `{"type":"` + tt.signal + `"}`
-			req := httptest.NewRequest(http.MethodPost, "/loops/loop-1/signal", strings.NewReader(body))
-			req.SetPathValue("id", "loop-1")
-			rec := httptest.NewRecorder()
-
-			comp.handleLoopSignal(rec, req)
-
-			if tt.expectBadReq {
-				assert.Equal(t, http.StatusBadRequest, rec.Code)
-			} else if tt.expectIntErr {
-				// Valid signals will fail with 500 due to no NATS client in test
-				// but this proves validation passed
-				assert.Equal(t, http.StatusInternalServerError, rec.Code)
-			}
-		})
-	}
 }
 
 func TestHandleActivityStream_NoClient(t *testing.T) {
@@ -567,25 +469,4 @@ func TestActivityEventLoopIDCorrelation(t *testing.T) {
 		assert.Empty(t, decoded.Data.State,
 			"data.state must remain empty after JSON round-trip")
 	})
-}
-
-func TestSignalResponseSerialization(t *testing.T) {
-	resp := SignalResponse{
-		LoopID:    "loop-123",
-		Signal:    "cancel",
-		Accepted:  true,
-		Message:   "Signal accepted",
-		Timestamp: "2024-01-15T10:30:00Z",
-	}
-
-	data, err := json.Marshal(resp)
-	require.NoError(t, err)
-
-	var decoded SignalResponse
-	err = json.Unmarshal(data, &decoded)
-	require.NoError(t, err)
-
-	assert.Equal(t, "loop-123", decoded.LoopID)
-	assert.Equal(t, "cancel", decoded.Signal)
-	assert.True(t, decoded.Accepted)
 }

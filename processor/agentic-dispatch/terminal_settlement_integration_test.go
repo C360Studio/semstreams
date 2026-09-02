@@ -29,7 +29,7 @@ func TestIntegrationTerminalSettlementRestartRouteStableDedupAndUnlimitedAttempt
 			natsclient.TestStreamConfig{Name: "USER_TERMINAL", Subjects: []string{"user.>"}},
 		),
 	)
-	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads, RegisterPayloads)
+	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads)
 	c := &Component{
 		config: DefaultConfig(), decoder: message.NewDecoder(reg), natsClient: tc.Client,
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)), loopTracker: NewLoopTracker(), metrics: getMetrics(nil),
@@ -347,7 +347,7 @@ func startProductionTerminalDispatch(
 	config.Ports.Outputs[2].Config = response
 	raw, err := json.Marshal(config)
 	require.NoError(t, err)
-	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads, RegisterPayloads)
+	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads)
 	discoverable, err := NewComponent(raw, component.Dependencies{
 		NATSClient: tc.Client, ModelRegistry: newTestRegistry(), PayloadRegistry: reg,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),

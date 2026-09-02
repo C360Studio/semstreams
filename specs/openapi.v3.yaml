@@ -366,8 +366,14 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/Loop'
+                "400":
+                    description: Loop ID is missing or is not a framework-minted loop token
                 "404":
                     description: Loop not found
+                "500":
+                    description: The tracker and the durable record disagree about this loop's route; no caller action resolves it
+                "503":
+                    description: Loop state is not readable right now; retry
     /loops/{id}/approval:
         post:
             summary: Submit human approval response for a gated tool call
@@ -395,43 +401,17 @@ paths:
                             schema:
                                 type: object
                 "400":
-                    description: Invalid request body or decision value
+                    description: Invalid request body or decision value, or a loop ID that is not a framework-minted loop token
+                "403":
+                    description: Requester is not in the approve permission list (default admits everyone)
                 "404":
                     description: Loop not found
                 "409":
                     description: Loop exists but is not awaiting approval
                 "500":
                     description: Failed to publish approval (NATS error)
-    /loops/{id}/signal:
-        post:
-            summary: Send control signal to loop
-            description: Sends a control signal (pause, resume, cancel) to an active loop.
-            tags:
-                - AgenticDispatch
-            parameters:
-                - name: id
-                  in: path
-                  required: true
-                  description: Loop ID
-                  schema: {}
-            requestBody:
-                description: Control signal to send
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            $ref: '#/components/schemas/SignalRequest'
-            responses:
-                "200":
-                    description: Signal accepted
-                    content:
-                        application/json:
-                            schema:
-                                type: object
-                "400":
-                    description: Invalid signal type
-                "404":
-                    description: Loop not found
+                "503":
+                    description: Loop state is not readable right now; retry
     /mcp:
         post:
             summary: MCP endpoint
@@ -1583,34 +1563,6 @@ components:
                     type: string
             required:
                 - decision
-            type: object
-        SignalRequest:
-            properties:
-                reason:
-                    type: string
-                type:
-                    type: string
-            required:
-                - type
-                - reason
-            type: object
-        SignalResponse:
-            properties:
-                accepted:
-                    type: boolean
-                loop_id:
-                    type: string
-                message:
-                    type: string
-                signal:
-                    type: string
-                timestamp:
-                    type: string
-            required:
-                - loop_id
-                - signal
-                - accepted
-                - timestamp
             type: object
         StatePatchRequest:
             additionalProperties: {}

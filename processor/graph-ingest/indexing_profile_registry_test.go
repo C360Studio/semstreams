@@ -14,7 +14,6 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/payloadregistry"
-	agenticdispatch "github.com/c360studio/semstreams/processor/agentic-dispatch"
 	"github.com/c360studio/semstreams/vocabulary"
 )
 
@@ -24,12 +23,14 @@ import (
 // acts on it); these tests lock the registered values + the metric semantics —
 // every expectation the retired string-keyed table carried is kept.
 
-// floorTestRegistry holds the three registration sets whose floors the
-// retired table enumerated: agentic (15 + the mutation-lane types), the
-// dispatch signal message, and graph research.
+// floorTestRegistry holds the registration sets whose floors the retired table
+// enumerated: agentic (15 + the mutation-lane types) and graph research. The
+// dispatch-local control-signal type the table also carried was retired with
+// its whole registration — one producer, zero consumers — so the floor is 21
+// keys, not 22.
 func floorTestRegistry(t *testing.T) *payloadregistry.Registry {
 	t.Helper()
-	return payloadregistry.NewWithSubset(t, agentic.RegisterPayloads, research.RegisterPayloads, agenticdispatch.RegisterPayloads)
+	return payloadregistry.NewWithSubset(t, agentic.RegisterPayloads, research.RegisterPayloads)
 }
 
 // floorTestComponent is a Component holding only the floor registry, for the
@@ -104,7 +105,6 @@ func TestIndexingProfileRegistry_KeysTrackDomainVersionConstants(t *testing.T) {
 		{key(agentic.Domain, agentic.CategoryApprovalResponse, agentic.SchemaVersion), vocabulary.IndexingProfileControl},
 		{key(research.Domain, research.CategoryIntent, research.SchemaVersion), vocabulary.IndexingProfileControl},
 		{key(agentic.Domain, agentic.CategorySignal, agentic.SchemaVersion), vocabulary.IndexingProfileSignal},
-		{key(agentic.Domain, agentic.CategorySignalMessage, agentic.SchemaVersion), vocabulary.IndexingProfileSignal},
 		{key(agentic.Domain, agentic.CategoryRequest, agentic.SchemaVersion), vocabulary.IndexingProfileTrace},
 		{key(agentic.Domain, agentic.CategoryResponse, agentic.SchemaVersion), vocabulary.IndexingProfileTrace},
 		{key(agentic.Domain, agentic.CategoryToolCall, agentic.SchemaVersion), vocabulary.IndexingProfileTrace},
@@ -115,7 +115,7 @@ func TestIndexingProfileRegistry_KeysTrackDomainVersionConstants(t *testing.T) {
 		{key(research.Domain, research.CategoryExecutionOutput, research.SchemaVersion), vocabulary.IndexingProfileTrace},
 		{key(research.Domain, research.CategoryAssessmentOutput, research.SchemaVersion), vocabulary.IndexingProfileTrace},
 	}
-	require.Len(t, cases, 22, "the retired table carried 22 keys")
+	require.Len(t, cases, 21, "the retired table carried 22 keys; the retired dispatch control-signal key leaves 21")
 	for _, tc := range cases {
 		got, registered := reg.IndexingProfileFor(tc.key)
 		assert.True(t, registered, "registry must hold %q (rebuilt from domain constants — drift if missing)", tc.key)

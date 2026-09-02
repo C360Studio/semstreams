@@ -1,8 +1,6 @@
 package agenticdispatch
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -418,69 +416,14 @@ func TestIsTerminalState(t *testing.T) {
 	}
 }
 
-func TestSignalMessage_Serialization(t *testing.T) {
-	signal := SignalMessage{
-		LoopID:    "loop-123",
-		Type:      "cancel",
-		Reason:    "user requested",
-		Timestamp: time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
-	}
-
-	// Test marshaling
-	data, err := json.Marshal(signal)
-	require.NoError(t, err)
-
-	// Test unmarshaling
-	var decoded SignalMessage
-	err = json.Unmarshal(data, &decoded)
-	require.NoError(t, err)
-
-	assert.Equal(t, "loop-123", decoded.LoopID)
-	assert.Equal(t, "cancel", decoded.Type)
-	assert.Equal(t, "user requested", decoded.Reason)
-	assert.Equal(t, signal.Timestamp, decoded.Timestamp)
-}
-
-func TestSignalMessage_Types(t *testing.T) {
-	tests := []struct {
-		signalType string
-		valid      bool
-	}{
-		{"pause", true},
-		{"resume", true},
-		{"cancel", true},
-		{"", false},
-		{"stop", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.signalType, func(t *testing.T) {
-			signal := SignalMessage{
-				LoopID:    "loop-1",
-				Type:      tt.signalType,
-				Timestamp: time.Now(),
-			}
-
-			data, err := json.Marshal(signal)
-			require.NoError(t, err)
-
-			var decoded SignalMessage
-			err = json.Unmarshal(data, &decoded)
-			require.NoError(t, err)
-			assert.Equal(t, tt.signalType, decoded.Type)
-		})
-	}
-}
-
-func TestLoopTracker_SendSignal_NoClient(t *testing.T) {
-	tracker := NewLoopTracker()
-	ctx := context.Background()
-
-	// With nil NATS client, SendSignal should return ErrNATSClientNil
-	err := tracker.SendSignal(ctx, nil, "loop-1", "cancel", "test reason")
-	assert.Error(t, err)
-	assert.Equal(t, ErrNATSClientNil, err)
-}
+// spec: agentic-dispatch / One control-signal payload travels the loop signal subject
+// TestSignalMessage_Serialization, TestSignalMessage_Types and
+// TestLoopTracker_SendSignal_NoClient were retired with the surface they
+// pinned: the dispatch-local control-signal type, and the tracker publish path
+// the deleted POST /loops/{id}/signal endpoint was its only caller of. The one
+// control signal dispatch still sends is the /cancel command's, and it is
+// pinned end to end by TestSignalSubjectCarriesExactlyOnePayloadType and
+// TestCancelCommandCancelsTheLoop.
 
 func TestLoopTracker_UpdateCompletion(t *testing.T) {
 	tests := []struct {

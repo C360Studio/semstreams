@@ -134,6 +134,12 @@ func TestUserMessage_JSONRoundTrip(t *testing.T) {
 	assert.Equal(t, original.Attachments[0].Name, decoded.Attachments[0].Name)
 }
 
+// signalFixtureLoopID is a canonical framework-minted loop token. Every
+// UserSignal fixture below carries one: since #1228 a control signal's loop_id
+// is refused unless it is canonical, so a fixture spelling "loop-abc" would be
+// asserting a shape the framework no longer accepts (ADR-105).
+const signalFixtureLoopID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+
 func TestUserSignal_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -145,7 +151,7 @@ func TestUserSignal_Validate(t *testing.T) {
 			signal: UserSignal{
 				SignalID:    "sig-123",
 				Type:        SignalCancel,
-				LoopID:      "loop-abc",
+				LoopID:      signalFixtureLoopID,
 				UserID:      "user-1",
 				ChannelType: "cli",
 				ChannelID:   "session-1",
@@ -158,7 +164,7 @@ func TestUserSignal_Validate(t *testing.T) {
 			signal: UserSignal{
 				SignalID:    "sig-123",
 				Type:        SignalReject,
-				LoopID:      "loop-abc",
+				LoopID:      signalFixtureLoopID,
 				UserID:      "user-1",
 				ChannelType: "cli",
 				ChannelID:   "session-1",
@@ -171,7 +177,7 @@ func TestUserSignal_Validate(t *testing.T) {
 			name: "missing signal_id",
 			signal: UserSignal{
 				Type:   SignalCancel,
-				LoopID: "loop-abc",
+				LoopID: signalFixtureLoopID,
 				UserID: "user-1",
 			},
 			wantErr: "signal_id required",
@@ -180,7 +186,7 @@ func TestUserSignal_Validate(t *testing.T) {
 			name: "missing type",
 			signal: UserSignal{
 				SignalID: "sig-123",
-				LoopID:   "loop-abc",
+				LoopID:   signalFixtureLoopID,
 				UserID:   "user-1",
 			},
 			wantErr: "type required",
@@ -190,7 +196,7 @@ func TestUserSignal_Validate(t *testing.T) {
 			signal: UserSignal{
 				SignalID: "sig-123",
 				Type:     "invalid",
-				LoopID:   "loop-abc",
+				LoopID:   signalFixtureLoopID,
 				UserID:   "user-1",
 			},
 			wantErr: "type must be one of: cancel, pause, resume, approve, reject, feedback, retry",
@@ -209,7 +215,7 @@ func TestUserSignal_Validate(t *testing.T) {
 			signal: UserSignal{
 				SignalID: "sig-123",
 				Type:     SignalCancel,
-				LoopID:   "loop-abc",
+				LoopID:   signalFixtureLoopID,
 			},
 			wantErr: "user_id required",
 		},
@@ -227,11 +233,36 @@ func TestUserSignal_Validate(t *testing.T) {
 	}
 }
 
+// spec: entity-id-contract / A loop instance token is a framework-minted UUID
+// Scenario: every remaining loop-token carrier refuses a non-canonical token.
+//
+// A control signal is the one lane on which a client-authored token used to
+// reach the loop's cancel/pause/resume handlers unchecked (#1228).
+func TestUserSignalRefusesNonCanonicalLoopID(t *testing.T) {
+	signal := UserSignal{
+		SignalID:  "sig-123",
+		Type:      SignalCancel,
+		LoopID:    "loop_ab12cd34",
+		UserID:    "user-1",
+		Timestamp: time.Now(),
+	}
+
+	err := signal.Validate()
+	require.Error(t, err, "a non-canonical loop_id must be refused")
+	require.ErrorContains(t, err, "loop_id", "the refusal names the offending field")
+	require.ErrorContains(t, err, "loop_ab12cd34", "the refusal quotes the offending value")
+
+	// Form is refused BEFORE the fields validated after it, so a signal with two
+	// problems is answered on the token rather than on user_id.
+	signal.UserID = ""
+	require.ErrorContains(t, signal.Validate(), "loop_ab12cd34")
+}
+
 func TestUserSignal_JSONRoundTrip(t *testing.T) {
 	original := UserSignal{
 		SignalID:    "sig-123",
 		Type:        SignalReject,
-		LoopID:      "loop-abc",
+		LoopID:      signalFixtureLoopID,
 		UserID:      "user-1",
 		ChannelType: "slack",
 		ChannelID:   "C12345",

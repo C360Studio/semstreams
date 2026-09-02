@@ -67,6 +67,13 @@ func (e *ApprovalPendingEvent) Validate() error {
 	if e.LoopID == "" {
 		return fmt.Errorf("loop_id required")
 	}
+	// The event names an existing loop, so its token carries the same form
+	// refusal every other carrier does (#1228). It is an OUTBOUND event rather
+	// than an intake, so this is the boundary that keeps a malformed token from
+	// leaving the framework, not one that admits a request.
+	if err := validateLoopTokenField("loop_id", e.LoopID); err != nil {
+		return err
+	}
 	if e.CallID == "" {
 		return fmt.Errorf("call_id required")
 	}
@@ -122,6 +129,13 @@ func (r *ApprovalResponse) Schema() message.Type {
 func (r *ApprovalResponse) Validate() error {
 	if r.LoopID == "" {
 		return fmt.Errorf("loop_id required")
+	}
+	// An approval response names an existing loop and is authored outside the
+	// framework by a product approval UI — the carrier most likely to be handed
+	// a token a client composed. Same form refusal as every other carrier
+	// (#1228).
+	if err := validateLoopTokenField("loop_id", r.LoopID); err != nil {
+		return err
 	}
 	if r.CallID == "" {
 		return fmt.Errorf("call_id required")

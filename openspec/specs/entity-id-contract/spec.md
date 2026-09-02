@@ -660,14 +660,16 @@ MUST live module-internal with no exported surface.
 supplied token is a canonical UUID. It does not, and with a form predicate cannot, detect who minted it: a client
 that authors a fresh canonical UUID and supplies it as `reply_to` is ACCEPTED. "Author no token" is therefore the
 contract asked of adopters, not a property any seam verifies. Two consequences a reader MUST NOT infer away.
-First, possession of a loop token confers control of that loop to any holder, so a multi-tenant deployment MUST
-NOT rely on loop tokens for isolation until attach-seam authorization lands (#1227) — the gap is authorization at
-the seam that ATTACHES to a loop, not provenance at the seam that MINTS one, and perfect mint-provenance would
-close none of it. Second, the backstop against adopting a token this deployment did not mint is `agentrun.Mint`'s
-origin-entity-ID mismatch refusal, not the form predicate.
+First, form alone confers no isolation: what a party may DO with a token it holds is decided by the agentic-dispatch
+admission gate, which checks existence and ownership at every seam that attaches to a loop — and those checks are
+correctness and accident-prevention guards, not authorization, because caller identity on that plane is asserted by
+the caller. A multi-tenant deployment MUST NOT rely on loop tokens, or on that gate, for isolation between mutually
+untrusted parties; authorization is a separate contract (epic #1205). Second, the backstop against adopting a token
+this deployment did not mint is `agentrun.Mint`'s origin-entity-ID mismatch refusal, not the form predicate.
 
-Exactly four seams enforce the form refusal, each with a classified invalid error — a declared refusal, counted
-where an intake counter exists, never a silent skip or truncated fallback:
+Every seam that accepts a supplied loop token enforces the form refusal with a classified invalid error — a
+declared refusal, counted where an intake counter exists, never a silent skip or truncated fallback. The census is
+complete and closed; a new carrier of a loop token joins it rather than validating non-emptiness of its own:
 
 - `TaskMessage.Validate` MUST refuse a task carrying ANY loop-token field — `loop_id`, `parent_loop_id`,
   `in_reply_to`, or `run_id` — that is present and non-canonical (enforced by the rule engine before publishing,
@@ -683,11 +685,16 @@ where an intake counter exists, never a silent skip or truncated fallback:
   and an auto-continued value pass one check.
 - `agentrun.Mint` MUST refuse a non-canonical firing-loop instance (its scenario lives in the graph-ingest
   capability, which owns Mint's refusal behavior).
+- Every remaining payload that carries a loop token MUST refuse a non-canonical one in its own `Validate`:
+  the user control signal, the approval response, and the approval-pending event. A fourth carrier existed —
+  dispatch's own control-signal message, whose `Validate` returned nil unconditionally — and is RETIRED rather
+  than repaired: it had one producer, zero consumers, and no identity fields, and the seam that produced it,
+  `POST /loops/{id}/signal`, is itself deleted. A carrier with no reader is deleted, not validated.
+- Every loop-scoped HTTP endpoint MUST refuse a non-canonical loop id taken from its URL path, before the
+  existence check, so a malformed token is answered as malformed rather than as not found.
 
-Other payloads carrying a loop token — `UserSignal`, `ApprovalResponse`, and any control or query request whose
-census is not yet taken — validate only non-emptiness and are OUTSIDE this requirement; extending the refusal to
-them is #1228. Seam validation checks canonical form, not the version bits; that a framework mint is v4 is
-asserted at the mint sites, not at the accepting seams.
+Seam validation checks canonical form, not the version bits; that a framework mint is v4 is asserted at the mint
+sites, not at the accepting seams.
 
 #### Scenario: a new conversation mints a full canonical UUID on every dispatch intake path
 
@@ -731,10 +738,13 @@ asserted at the mint sites, not at the accepting seams.
 #### Scenario: a canonical token is accepted on its form alone, whoever authored it
 
 - **GIVEN** a client submitting a message whose `reply_to` is a canonical UUID that this framework never minted
-- **WHEN** dispatch handles it
-- **THEN** it is ACCEPTED and continues that loop token — form is the whole check, and provenance is not verified
-  at any seam
-- **AND** the test that verifies this is `TestCanonicalReplyToContinuesTheLoop`
+- **WHEN** the form check runs
+- **THEN** it PASSES — form is the whole of this requirement, and provenance is not verified at any seam
+- **AND WHEN** the admission gate then runs
+- **THEN** the submission is refused as naming no such loop, because a token this framework never minted names no
+  loop to continue — the refusal comes from existence, not from form, and the two are different axes
+- **AND** the tests that verify this are `TestCanonicalReplyToPassesFormCheck` and
+  `TestUnmintedCanonicalReplyToIsRefusedAsNotFound`
 
 #### Scenario: a task carrying any non-canonical loop-token field is refused
 
@@ -752,4 +762,24 @@ asserted at the mint sites, not at the accepting seams.
 - **THEN** the loop token is a canonical UUID (no `rg_` prefix), in the AGENT_LOOPS key, the trigger key, and the
   loop-execution entity instance alike — the generator-injection option is deleted, so no path can author one
 - **AND** the test that verifies this is `TestResearchLoopIDIsCanonicalUUID`
+
+#### Scenario: every remaining loop-token carrier refuses a non-canonical token
+
+- **GIVEN** a user control signal, an approval response, and an approval-pending event, each carrying the loop
+  token `loop_ab12cd34`
+- **WHEN** each is validated
+- **THEN** each is refused with a classified invalid error naming its loop-token field, and none is published or
+  acted on
+- **AND** no payload type carrying a loop token remains whose validation accepts every input
+- **AND** the tests that verify this are `TestUserSignalRefusesNonCanonicalLoopID`,
+  `TestApprovalResponseRefusesNonCanonicalLoopID`, `TestApprovalPendingEventRefusesNonCanonicalLoopID`, and
+  `TestNoLoopTokenCarrierAcceptsEveryInput`
+
+#### Scenario: a non-canonical loop id in a URL path is refused before the existence check
+
+- **GIVEN** requests to the loop read and loop approval HTTP endpoints whose path loop id is `loop_ab12cd34`
+- **WHEN** each handler runs
+- **THEN** each answers with a bad-request refusal naming the token form, not a not-found answer, and no
+  approval is published
+- **AND** the test that verifies this is `TestLoopEndpointsRefuseNonCanonicalPathToken`
 

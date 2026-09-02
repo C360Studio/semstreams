@@ -1,16 +1,12 @@
 package agenticdispatch
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
-	"github.com/c360studio/semstreams/message"
-	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -580,71 +576,6 @@ func isTerminalState(state string) bool {
 	default:
 		return false
 	}
-}
-
-// SignalMessage represents a control signal sent to a loop.
-type SignalMessage struct {
-	LoopID    string    `json:"loop_id"`
-	Type      string    `json:"type"`   // pause, resume, cancel
-	Reason    string    `json:"reason"` // optional reason
-	Timestamp time.Time `json:"timestamp"`
-}
-
-// Validate implements message.Payload
-func (s *SignalMessage) Validate() error {
-	return nil
-}
-
-// Schema implements message.Payload
-func (s *SignalMessage) Schema() message.Type {
-	return message.Type{Domain: agentic.Domain, Category: agentic.CategorySignalMessage, Version: agentic.SchemaVersion}
-}
-
-// MarshalJSON implements json.Marshaler
-func (s *SignalMessage) MarshalJSON() ([]byte, error) {
-	type Alias SignalMessage
-	return json.Marshal((*Alias)(s))
-}
-
-// UnmarshalJSON implements json.Unmarshaler
-func (s *SignalMessage) UnmarshalJSON(data []byte) error {
-	type Alias SignalMessage
-	return json.Unmarshal(data, (*Alias)(s))
-}
-
-// SendSignal publishes a control signal to a loop via NATS.
-func (t *LoopTracker) SendSignal(ctx context.Context, nc *natsclient.Client, loopID, signalType, reason string) error {
-	if nc == nil {
-		return ErrNATSClientNil
-	}
-
-	signal := SignalMessage{
-		LoopID:    loopID,
-		Type:      signalType,
-		Reason:    reason,
-		Timestamp: time.Now(),
-	}
-
-	signalMsg := message.NewBaseMessage(signal.Schema(), &signal, "agentic-dispatch")
-	data, err := json.Marshal(signalMsg)
-	if err != nil {
-		return errs.Wrap(err, "LoopTracker", "SendSignal", fmt.Sprintf("marshal signal for loop %s", loopID))
-	}
-
-	subject := "agent.signal." + loopID
-	if err := nc.PublishToStream(ctx, subject, data); err != nil {
-		return errs.WrapTransient(err, "LoopTracker", "SendSignal", fmt.Sprintf("publish signal %s to loop %s on subject %s", signalType, loopID, subject))
-	}
-
-	if t.logger != nil {
-		t.logger.Debug("signal published",
-			slog.String("loop_id", loopID),
-			slog.String("signal_type", signalType),
-			slog.String("subject", subject),
-			slog.String("reason", reason))
-	}
-
-	return nil
 }
 
 // ErrNATSClientNil is returned when NATS client is nil.

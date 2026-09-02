@@ -134,6 +134,13 @@ func (s UserSignal) Validate() error {
 	if s.LoopID == "" {
 		return fmt.Errorf("loop_id required")
 	}
+	// A control signal names a loop that already exists, so its token gets the
+	// same form refusal every other carrier gets (#1228). Before this, a signal
+	// was the one lane on which a client-authored token reached the loop's
+	// handler unchecked.
+	if err := validateLoopTokenField("loop_id", s.LoopID); err != nil {
+		return err
+	}
 	if s.UserID == "" {
 		return fmt.Errorf("user_id required")
 	}
@@ -417,17 +424,32 @@ func (t TaskMessage) validateLoopTokens() error {
 		{"run_id", t.RunID},
 	}
 	for _, token := range tokens {
-		if token.value == "" {
-			continue
-		}
-		if !looptoken.Valid(token.value) {
-			return fmt.Errorf(
-				"%s %q is not a framework-minted loop token: a loop instance token is a canonical UUID "+
-					"(36 bytes, lowercase, hyphenated) the framework mints and the client echoes",
-				token.field, token.value)
+		if err := validateLoopTokenField(token.field, token.value); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// validateLoopTokenField is the ONE home of the loop-token form refusal for
+// every payload in this package that carries one (ADR-105, #1192, #1228). Four
+// carriers use it — the task message's four token fields, the user control
+// signal, the approval response, and the approval-pending event — and a fifth
+// joins this call rather than growing a fifth spelling of the refusal text.
+//
+// Empty is not refused here. Whether a token is REQUIRED is each carrier's own
+// question and is asked before this one: a task's tokens are optional (an unset
+// one is the ordinary submission and the framework mints downstream), while a
+// signal, an approval response, and an approval-pending event each name a loop
+// that must already exist and reject an empty token on their own line.
+func validateLoopTokenField(field, value string) error {
+	if value == "" || looptoken.Valid(value) {
+		return nil
+	}
+	return fmt.Errorf(
+		"%s %q is not a framework-minted loop token: a loop instance token is a canonical UUID "+
+			"(36 bytes, lowercase, hyphenated) the framework mints and the client echoes",
+		field, value)
 }
 
 func validateRelatedLoopsMetadata(raw any) error {

@@ -909,3 +909,134 @@ verbatim; delete any test fixture that fabricates a non-UUID loop token and subm
 - An operator dashboard that told research-pipeline loops apart by the `rg_` prefix loses that affordance. The
   loop's `role` field and the `research.*` predicates carry the distinction; the e2e scenario now discriminates on
   the `research.request.received.<loopID>` trigger key rather than the token's shape.
+
+## One admission gate for every loop-naming request (#1227, #1228, #1225, #1233) — `POST /loops/{id}/signal` is removed
+
+Every request that names an existing loop — continue, cancel, approve, read — now passes one admission gate before
+anything acts on it: form, then existence, then ownership, with a classified refusal and exactly one counted metric.
+Sister repositories are **read-only** to SemStreams agents; every obligation is recorded here. Sweeps below were run
+against each sister's working tree on 2026-09-01.
+
+### 1. `POST /loops/{id}/signal` is deleted — lead with this one
+
+The route is gone. The same call now returns **404**.
+
+**It has never worked.** It published `agenticdispatch.SignalMessage`, while agentic-loop's handler for that subject
+asserts `*agentic.UserSignal` and logs *"Unexpected payload type"* for anything else. It answered
+`200 {"accepted": true}` and the loop was never paused, resumed, or cancelled. Anyone who concluded from the `200`
+that it worked was reading a lie the framework told.
+
+**What to use instead — it has worked the whole time.** Cancel through the message lane:
+
+```
+POST <prefix>message   {"content": "/cancel <loop_id>", "user_id": "<the loop's owner>"}
+```
+
+That routes through the command registry and publishes a correct `agentic.UserSignal`. Same HTTP surface, same
+component, already permissioned.
+
+**Publishing `agentic.UserSignal` on `agent.signal.<loop_id>` yourself also still works and is untouched.** Two
+sisters already do exactly that — `semdragon/processor/questdagexec/handler.go:1190` and
+`semsage/processor/ui-api/http.go:195`. Neither is affected by this removal.
+
+**`pause` and `resume` have no replacement, because they never had an implementation.** `handlePauseSignal` sets
+`entity.PauseRequested`, and nothing in the tree reads that field. Tracked as **#1239**; do not build on the
+assumption that pausing a loop is available.
+
+### 2. Newly enforced: the `approve` permission
+
+`Permissions.Approve` has been advertised in configuration and read by no call site. `POST /loops/{id}/approval` now
+enforces it. **Its default is `["*"]`, which admits everyone, so no default deployment changes behaviour** — this
+matters only if you narrowed the list, in which case callers outside it now get 403 where they were previously
+admitted.
+
+Ownership is deliberately **not** consulted for approval: a second-party reviewer is the entire point, so a reviewer
+who did not start the loop can still approve it. That is a decision, not an oversight.
+
+### 3. `reply_to` on a live loop now CONTINUES the conversation — read this one even if you send no `reply_to`
+
+**This is the largest behavioural change in the release, and it needs no configuration to reach you.**
+
+A submission whose `reply_to` names a loop this process is still running used to mint a **fresh** loop over that
+token: `CreateLoopWithID` overwrote the loop entity, its pending-tool set, and its context manager, so the
+conversation accumulated under that token was destroyed and the next request went to the model with a brand-new
+context. It now **attaches**: the loop's existing context manager is reused, the new user turn is appended after
+the prior turns, the system prompt is not re-seeded, and the request carries the whole accumulated conversation.
+
+If you were relying on `reply_to` to reset a conversation, it no longer does. **Omit `reply_to` to start a fresh
+loop** — that is, and always was, the way to ask for a new conversation. Auto-continue (a submission with no
+`reply_to` that resolves onto your most recent non-terminal loop) reaches the same attach.
+
+**A continuation is refused while the loop has work in flight.** "Live" is not "idle". If the loop has outstanding
+tool calls, or is `awaiting_approval` waiting on a human decision, the continuation is refused rather than
+attached, because attaching there would send the provider an assistant turn carrying `tool_calls` whose `tool`
+results have not arrived yet, run two rounds over one conversation, and — in the approval case — move the loop off
+the state the human's decision resolves, silently abandoning the gated call. Practically: **wait for the turn to
+finish, or for the approval to be answered, then send your next message.** The turn is not queued; you get a
+refusal, and it is answerable once the round finishes. There is no configuration for this.
+
+A continuation by `reply_to` must also name a loop you own: it is refused unless the requester equals the loop's
+recorded owner. Previously a second holder of the token took over the tracker entry, and the original user's
+completion was delivered to the second user. So send the same `user_id` when you continue a loop that you sent when
+you created it. And a `reply_to` naming a **settled** loop is refused rather than silently minting a fresh loop
+under the same token; auto-continue is unaffected there, because it never resolves a terminal loop.
+
+These are correctness guards, **not authorization**. Identity remains caller-asserted until the beta.166 auth wave
+(epic #1205); the gate refuses a caller who contradicts recorded state, and cannot verify who anyone is.
+
+### 4. Removed exported Go surface
+
+| Symbol | Note |
+|---|---|
+| `agenticdispatch.SignalMessage` + its four methods | the retired payload type |
+| `agentic.CategorySignalMessage` | its category token |
+| `agenticdispatch.RegisterPayloads` | its only registration was that type |
+| `LoopTracker.SendSignal` | its only caller was the deleted handler |
+| `SignalRequest`, `SignalResponse` | the deleted endpoint's request and response types |
+
+**Verified: no sister repository references any of them.** A sweep across thirteen sister trees for
+`SignalMessage`, `CategorySignalMessage`, `agenticdispatch.RegisterPayloads`, `SendSignal`, and the retired metric
+returned zero hits. If you carry a fork that does, the replacement is `agentic.UserSignal` published on
+`agent.signal.<loop_id>`.
+
+Exactly one payload type now travels that subject.
+
+### 5. Operational surface that changed
+
+- **Removed metric:** `semstreams_router_loop_signals_sent_total`. Its only producer was the deleted handler, so
+  left in place it could only ever read zero. Remove it from dashboards and alerts.
+- **New metric:** `semstreams_router_loop_admission_refusals_total{seam,reason}` — one series for every refusal the
+  gate issues, labelled by which seam the request arrived on and why it was refused. The reason set is closed.
+- **New metric:** `semstreams_agentic_loop_model_responses_dropped_total{reason}` — a model response that arrived
+  with no loop mapping for its `RequestID`. Expected after a loop settles and releases its per-loop state, or after
+  a process replacement; a sustained rate against live loops points at NATS redelivery. It is the sibling of the
+  existing `semstreams_agentic_loop_tool_results_dropped_total{reason}`, which the same drop class already had.
+- **`/status` reports the state it read.** For a loop this process is not running — after dispatch was replaced,
+  say — `/status` used to print `State: running` for anything not settled, so a loop actually sitting in
+  `awaiting_approval` told the user to wait for an agent that was waiting for them. It now prints the recorded
+  state (`executing`, `paused`, `awaiting_approval`, `complete`, …), or `unknown` when the record carries none.
+  Anything parsing that text for the literal `running` needs updating.
+- **A NATS outage now answers 503, not 404.** When a loop's durable state cannot be read, the loop endpoints answer
+  `503` with a transient classification. Previously an unreadable record was indistinguishable from an absent one,
+  so an outage looked like *"your loop does not exist"*. An alert that keyed on 404 to mean "gone" should now treat
+  503 as "ask again".
+- **`POST /loops/{id}/approval` decodes its body before checking existence**, so a malformed body is `400` even for
+  a loop that does not exist (previously `404`). This is required: the approve permission is checked against an
+  identity the body can supply.
+- **`/cancel`'s refusal text changed.** It no longer answers *"Permission denied: cannot cancel this loop"* for a
+  loop that simply does not exist; it answers the gate's own classified message, which distinguishes malformed,
+  absent, terminal, and not-owned.
+
+### 6. One configuration obligation
+
+The gate reads the loop's durable record through the component's declared `agent_loops` KV read port. That port is
+`Required: false` in the default configuration, and a named port override **replaces** the default set rather than
+merging with it. Before this change, dropping it broke only terminal settlement; now it refuses **every** loop-naming
+request as transient. If you override ports on agentic-dispatch, keep the `agent_loops` read port in the set.
+
+### 7. Memory behaviour worth knowing about
+
+A settled loop now releases its in-process footprint — conversation context, pending tools, and the per-loop routing
+maps. Long-running processes no longer retain every loop they have ever run. A late tool result, approval response,
+or model response arriving for an already-settled loop is now an expected, logged and counted drop rather than an
+error.

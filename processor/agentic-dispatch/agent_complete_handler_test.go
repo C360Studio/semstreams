@@ -22,7 +22,7 @@ func newCompletionTestComponent(t *testing.T) (*Component, *captureSink) {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	sink := &captureSink{}
-	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads, RegisterPayloads)
+	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads)
 	c := &Component{
 		logger:      logger,
 		loopTracker: NewLoopTrackerWithLogger(logger),

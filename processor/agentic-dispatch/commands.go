@@ -10,6 +10,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/google/uuid"
 )
@@ -49,6 +50,54 @@ func (c *Component) registerBuiltinCommands() {
 	}, c.handleHelpCommand)
 }
 
+// commandRefusalResponse turns a gate refusal into the chat lane's answer. The
+// content is the refusal's own message, which names the field and says what was
+// wrong; the previous "Permission denied: cannot cancel this loop" said
+// "permission" for a loop that did not exist and for a token that was never a
+// loop id.
+//
+// It never counts anything: the refusal was metered and logged exactly once
+// where it was built.
+func commandRefusalResponse(msg agentic.UserMessage, refusal error) agentic.UserResponse {
+	return agentic.UserResponse{
+		ResponseID:  uuid.New().String(),
+		ChannelType: msg.ChannelType,
+		ChannelID:   msg.ChannelID,
+		UserID:      msg.UserID,
+		Type:        agentic.ResponseTypeError,
+		Content:     refusal.Error(),
+		Timestamp:   time.Now(),
+	}
+}
+
+// loopStatusFromTracker renders the live status line: this process is running
+// the loop, so iteration counts and age exist.
+func loopStatusFromTracker(info *LoopInfo) string {
+	age := time.Since(info.CreatedAt).Truncate(time.Second)
+	return fmt.Sprintf("Loop: %s\nState: %s\nIterations: %d/%d\nAge: %s\nUser: %s",
+		info.LoopID, info.State, info.Iterations, info.MaxIterations, age, info.UserID)
+}
+
+// loopStatusFromFacts renders what /status can say about a loop the gate
+// admitted from the durable record alone — this process never tracked it, so
+// iteration counts and age do not exist here. Naming the fields it does have
+// beats the "Loop %s not found" this seam answered before existence was merged,
+// which contradicted the admission that had just succeeded.
+//
+// The state is the one the gate READ, never one derived from terminality. This
+// seam used to print a hardcoded "running" for anything not settled, so a user
+// asking about an awaiting_approval loop after dispatch was replaced was told to
+// wait for an agent that was waiting for them — a fabricated fact, and worse
+// than the "not found" it replaced. An unread state says so.
+func loopStatusFromFacts(facts loopFacts) string {
+	state := string(facts.State)
+	if state == "" {
+		state = "unknown"
+	}
+	return fmt.Sprintf("Loop: %s\nState: %s (from the durable record; this process is not running it)\nUser: %s",
+		facts.LoopID, state, facts.UserID)
+}
+
 // handleCancelCommand handles the /cancel command
 func (c *Component) handleCancelCommand(ctx context.Context, msg agentic.UserMessage, args []string, loopID string) (agentic.UserResponse, error) {
 	// Use provided loop ID or active loop
@@ -69,62 +118,61 @@ func (c *Component) handleCancelCommand(ctx context.Context, msg agentic.UserMes
 		}, nil
 	}
 
-	// Check permission to control this loop
-	if !c.canUserControlLoop(msg.UserID, targetLoopID) {
-		return agentic.UserResponse{
-			ResponseID:  uuid.New().String(),
-			ChannelType: msg.ChannelType,
-			ChannelID:   msg.ChannelID,
-			UserID:      msg.UserID,
-			Type:        agentic.ResponseTypeError,
-			Content:     "Permission denied: cannot cancel this loop",
-			Timestamp:   time.Now(),
-		}, nil
+	// Form, existence, and ownership in one place. The command's own declared
+	// permission (cancel_own) was already checked by the dispatcher before this
+	// handler ran and keeps that single home; the gate never consults it
+	// (owner ruling R2).
+	facts, err := c.admitLoopRequest(ctx, loopAdmissionRequest{
+		Seam:      seamCancelCommand,
+		Field:     "loop_id",
+		Operation: loopOpCancel,
+		LoopID:    targetLoopID,
+		Requester: msg.UserID,
+	})
+	if err != nil {
+		return commandRefusalResponse(msg, err), nil
 	}
 
-	// Check if loop exists and is not already terminal
-	loopInfo := c.loopTracker.Get(targetLoopID)
-	if loopInfo == nil {
-		return agentic.UserResponse{
-			ResponseID:  uuid.New().String(),
-			ChannelType: msg.ChannelType,
-			ChannelID:   msg.ChannelID,
-			UserID:      msg.UserID,
-			Type:        agentic.ResponseTypeError,
-			Content:     fmt.Sprintf("Loop %s not found", targetLoopID),
-			Timestamp:   time.Now(),
-		}, nil
-	}
-
-	if isTerminalState(loopInfo.State) {
+	// A settled loop is not a refusal on this operation — cancelling something
+	// already finished is a no-op the caller should simply be told about. The
+	// gate reports terminality from BOTH sources, so this answers correctly for
+	// a loop this process never tracked.
+	if facts.Terminal {
 		return agentic.UserResponse{
 			ResponseID:  uuid.New().String(),
 			ChannelType: msg.ChannelType,
 			ChannelID:   msg.ChannelID,
 			UserID:      msg.UserID,
 			Type:        agentic.ResponseTypeStatus,
-			Content:     fmt.Sprintf("Loop %s already in terminal state: %s", targetLoopID, loopInfo.State),
+			Content:     fmt.Sprintf("Loop %s has already settled", targetLoopID),
 			Timestamp:   time.Now(),
 		}, nil
 	}
 
-	// Send cancel signal
-	signal := agentic.UserSignal{
+	// Send cancel signal. The route comes from the gate's merged facts for the
+	// same reason the HTTP lane's does — the gate already read it — but the
+	// signal's user is the REQUESTER, so a cancel_any operator cancelling
+	// someone else's loop is attributed to the operator.
+	signal := &agentic.UserSignal{
 		SignalID:    uuid.New().String(),
 		Type:        agentic.SignalCancel,
 		LoopID:      targetLoopID,
 		UserID:      msg.UserID,
-		ChannelType: msg.ChannelType,
-		ChannelID:   msg.ChannelID,
+		ChannelType: facts.ChannelType,
+		ChannelID:   facts.ChannelID,
 		Timestamp:   time.Now(),
 	}
 
-	signalData, err := json.Marshal(signal)
+	// The BaseMessage envelope is REQUIRED, not decorative: the loop's signal
+	// handler decodes wire bytes through the payload registry
+	// (processor/agentic-loop/component.go:2083) and a bare payload fails at the
+	// wire-format unmarshal, so this lane published cancels the loop never saw.
+	signalData, err := json.Marshal(message.NewBaseMessage(signal.Schema(), signal, "agentic-dispatch"))
 	if err != nil {
 		return agentic.UserResponse{}, errs.Wrap(err, "Component", "handleCancelCommand", "marshal signal")
 	}
 
-	subject, err := component.ResolveSubject(c.outputPortDefs(), "agent.signal", targetLoopID)
+	subject, err := component.ResolveSubject(c.outputPortDefs(), signalOutputPortName, targetLoopID)
 	if err != nil {
 		return agentic.UserResponse{}, errs.WrapInvalid(err, "Component", "handleCancelCommand", "resolve signal subject")
 	}
@@ -168,27 +216,25 @@ func (c *Component) handleStatusCommand(ctx context.Context, msg agentic.UserMes
 		}, nil
 	}
 
-	loopInfo := c.loopTracker.Get(targetLoopID)
-	if loopInfo == nil {
-		return agentic.UserResponse{
-			ResponseID:  uuid.New().String(),
-			ChannelType: msg.ChannelType,
-			ChannelID:   msg.ChannelID,
-			UserID:      msg.UserID,
-			Type:        agentic.ResponseTypeError,
-			Content:     fmt.Sprintf("Loop %s not found", targetLoopID),
-			Timestamp:   time.Now(),
-		}, nil
+	// Reading is gated for form and existence only — ownership is deliberately
+	// not consulted, exactly as GET /loops/{id} is not (the ownership model's
+	// read row). Existence is merged, so a loop this process never tracked is
+	// still found.
+	facts, err := c.admitLoopRequest(ctx, loopAdmissionRequest{
+		Seam:      seamStatusCommand,
+		Field:     "loop_id",
+		Operation: loopOpRead,
+		LoopID:    targetLoopID,
+		Requester: msg.UserID,
+	})
+	if err != nil {
+		return commandRefusalResponse(msg, err), nil
 	}
 
-	age := time.Since(loopInfo.CreatedAt).Truncate(time.Second)
-	content := fmt.Sprintf("Loop: %s\nState: %s\nIterations: %d/%d\nAge: %s\nUser: %s",
-		loopInfo.LoopID,
-		loopInfo.State,
-		loopInfo.Iterations,
-		loopInfo.MaxIterations,
-		age,
-		loopInfo.UserID)
+	content := loopStatusFromFacts(facts)
+	if loopInfo := c.loopTracker.Get(targetLoopID); loopInfo != nil {
+		content = loopStatusFromTracker(loopInfo)
+	}
 
 	return agentic.UserResponse{
 		ResponseID:  uuid.New().String(),
