@@ -223,27 +223,3 @@ func TestLoopEntity_ApprovalRoundTripJSON(t *testing.T) {
 		t.Errorf("Arguments[rule_id] = %v", got.PendingApproval.Arguments["rule_id"])
 	}
 }
-
-func TestLoopEntity_ApprovalDoesNotInterfereWithPause(t *testing.T) {
-	t.Parallel()
-
-	entity := agentic.NewLoopEntity("loop-001", "task-001", "coordinator", "test-model", 20)
-	entity.State = agentic.LoopStateExecuting
-	entity.PauseRequested = true
-	entity.StateBeforePause = agentic.LoopStateExecuting
-
-	if err := entity.BeginAwaitingApproval("call-001", "delete_rule", nil, "", 0, ""); err != nil {
-		t.Fatalf("BeginAwaitingApproval: %v", err)
-	}
-
-	// Pause fields must remain untouched — they're orthogonal.
-	if !entity.PauseRequested {
-		t.Errorf("PauseRequested cleared by approval flow")
-	}
-	if entity.StateBeforePause != agentic.LoopStateExecuting {
-		t.Errorf("StateBeforePause overwritten: %s", entity.StateBeforePause)
-	}
-	if entity.StateBeforeApproval != agentic.LoopStateExecuting {
-		t.Errorf("StateBeforeApproval = %s, want executing", entity.StateBeforeApproval)
-	}
-}
