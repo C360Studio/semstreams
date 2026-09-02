@@ -83,10 +83,16 @@ func loopStatusFromTracker(info *LoopInfo) string {
 // iteration counts and age do not exist here. Naming the fields it does have
 // beats the "Loop %s not found" this seam answered before existence was merged,
 // which contradicted the admission that had just succeeded.
+//
+// The state is the one the gate READ, never one derived from terminality. This
+// seam used to print a hardcoded "running" for anything not settled, so a user
+// asking about an awaiting_approval loop after dispatch was replaced was told to
+// wait for an agent that was waiting for them — a fabricated fact, and worse
+// than the "not found" it replaced. An unread state says so.
 func loopStatusFromFacts(facts loopFacts) string {
-	state := "running"
-	if facts.Terminal {
-		state = "settled"
+	state := string(facts.State)
+	if state == "" {
+		state = "unknown"
 	}
 	return fmt.Sprintf("Loop: %s\nState: %s (from the durable record; this process is not running it)\nUser: %s",
 		facts.LoopID, state, facts.UserID)

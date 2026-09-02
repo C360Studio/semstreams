@@ -682,6 +682,79 @@ func TestReadSeamsAnswerFromTheDurableRecordAfterReplacement(t *testing.T) {
 	})
 }
 
+// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
+// /status reports the state the gate READ. It used to print a hardcoded
+// "running" for anything the merged facts did not report settled, while
+// persistedLoopFacts had read record.State and thrown it away — so a user asking
+// about an awaiting_approval loop after dispatch was replaced was told to wait
+// for an agent that was waiting for them. A fabricated fact is worse than the
+// "not found" this seam answered before existence was merged.
+func TestStatusReportsTheRecordedStateNotAFabricatedRunning(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state agentic.LoopState
+	}{
+		{"awaiting approval", agentic.LoopStateAwaitingApproval},
+		{"paused", agentic.LoopStatePaused},
+		{"executing", agentic.LoopStateExecuting},
+		{"complete", agentic.LoopStateComplete},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _, _ := newSeamTestComponent(t)
+			// Empty tracker, as after a process replacement.
+			withPersistedLoops(c, map[string]*agentic.LoopEntity{seamTestLoopA: {
+				ID: seamTestLoopA, TaskID: "task-x", UserID: "user-a",
+				ChannelType: "http", ChannelID: "session-1", State: tc.state,
+			}})
+
+			resp, err := c.handleStatusCommand(context.Background(),
+				seamUserMessage("user-a"), []string{seamTestLoopA}, "")
+
+			require.NoError(t, err)
+			assert.Contains(t, resp.Content, string(tc.state),
+				"the recorded state is not in the answer")
+			if tc.state != agentic.LoopStateExecuting {
+				assert.NotContains(t, resp.Content, "State: running",
+					"a state the record did not hold was invented")
+			}
+		})
+	}
+
+	t.Run("a record with no state says unknown", func(t *testing.T) {
+		c, _, _ := newSeamTestComponent(t)
+		withPersistedLoops(c, map[string]*agentic.LoopEntity{seamTestLoopA: {
+			ID: seamTestLoopA, TaskID: "task-x", UserID: "user-a",
+			ChannelType: "http", ChannelID: "session-1",
+		}})
+
+		resp, err := c.handleStatusCommand(context.Background(),
+			seamUserMessage("user-a"), []string{seamTestLoopA}, "")
+
+		require.NoError(t, err)
+		assert.Contains(t, resp.Content, "State: unknown")
+	})
+}
+
+// mergeLoopState resolves a disagreement the same way Terminal does — settled in
+// either source wins — and prefers the tracker below terminal, which is the
+// source the read seams render from when both are present.
+func TestMergeLoopStatePrefersSettledThenTheTracker(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		tracked, persisted agentic.LoopState
+		want               agentic.LoopState
+	}{
+		{"tracker settled wins", agentic.LoopStateComplete, agentic.LoopStateExecuting, agentic.LoopStateComplete},
+		{"record settled wins", agentic.LoopStateExecuting, agentic.LoopStateCancelled, agentic.LoopStateCancelled},
+		{"below terminal the tracker wins", agentic.LoopStateAwaitingApproval, agentic.LoopStateExecuting, agentic.LoopStateAwaitingApproval},
+		{"an empty tracker state yields to the record", "", agentic.LoopStateAwaitingApproval, agentic.LoopStateAwaitingApproval},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, mergeLoopState(tc.tracked, tc.persisted))
+		})
+	}
+}
+
 // The entity-id-contract spec's path-token scenario. Both endpoints that take a
 // loop id from the URL path refuse a non-canonical token for its FORM, ahead of
 // the existence check, so the caller is told the token is malformed rather than

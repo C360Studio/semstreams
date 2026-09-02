@@ -154,6 +154,13 @@ type loopFacts struct {
 	// a tracker that has not yet seen the terminal event must not admit a
 	// continuation the durable record already refuses.
 	Terminal bool
+	// State is the loop's recorded state, carried so a seam that must SAY what
+	// the loop is doing reports what was read instead of inventing a value.
+	// Terminal answers the gate's question — may this be continued — and cannot
+	// answer /status's: "not settled" covers executing, paused, and
+	// awaiting_approval, and telling a user "running" for the last of those
+	// sends them to wait for an agent that is waiting for them.
+	State agentic.LoopState
 	// Tracked and Persisted report which sources held the loop. Both false never
 	// reaches a caller — that is the not-found refusal.
 	Tracked   bool
@@ -379,6 +386,7 @@ func trackerLoopFacts(info *LoopInfo) loopFacts {
 		ChannelType: info.ChannelType,
 		ChannelID:   info.ChannelID,
 		Terminal:    isTerminalState(info.State),
+		State:       agentic.LoopState(info.State),
 		Tracked:     true,
 	}
 }
@@ -391,6 +399,7 @@ func persistedLoopFacts(record *agentic.LoopEntity) loopFacts {
 		ChannelType: record.ChannelType,
 		ChannelID:   record.ChannelID,
 		Terminal:    record.State.IsTerminal(),
+		State:       record.State,
 		Persisted:   true,
 	}
 }
@@ -423,9 +432,31 @@ func mergeLoopFacts(tracked, persisted loopFacts) (loopFacts, error) {
 		ChannelType: channelType,
 		ChannelID:   channelID,
 		Terminal:    tracked.Terminal || persisted.Terminal,
+		State:       mergeLoopState(tracked.State, persisted.State),
 		Tracked:     true,
 		Persisted:   true,
 	}, nil
+}
+
+// mergeLoopState resolves the two observations of one loop's state on the same
+// fail-closed rule Terminal uses: a settled observation in EITHER source is the
+// answer, because settled is the observation a disagreement must not lose.
+//
+// Below terminal the tracker wins, and that is not arbitrary: when both sources
+// are present the read seams render from the tracker anyway, so preferring it
+// here is what keeps the merged facts and the rendered answer from disagreeing.
+// An empty tracker state is not an observation and yields to the record.
+func mergeLoopState(tracked, persisted agentic.LoopState) agentic.LoopState {
+	switch {
+	case tracked.IsTerminal():
+		return tracked
+	case persisted.IsTerminal():
+		return persisted
+	case tracked != "":
+		return tracked
+	default:
+		return persisted
+	}
 }
 
 // refuseLoopRequest builds the classified refusal, meters it once, and logs it
