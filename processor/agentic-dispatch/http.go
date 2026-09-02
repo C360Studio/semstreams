@@ -820,8 +820,8 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 // marshal or publish. Extracted from handleLoopApproval to keep the
 // HTTP handler under revive's function-length budget.
 //
-// Defensive nil-check on the NATS client mirrors LoopTracker.SendSignal —
-// production wiring always has a client, but unit tests construct
+// Defensive nil-check on the NATS client: production wiring always has
+// a client, but unit tests construct
 // Components with natsClient nil and we surface a clean error rather
 // than letting the underlying client.PublishToStream NPE.
 func (c *Component) publishApprovalResponse(ctx context.Context, loopID, callID string, req *ApprovalRequest, approver string) (string, error) {
