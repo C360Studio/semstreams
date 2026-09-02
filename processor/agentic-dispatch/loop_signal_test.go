@@ -1,6 +1,9 @@
 package agenticdispatch
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -34,5 +37,41 @@ func TestRetiredSignalMessageCategoryIsUnregistered(t *testing.T) {
 	for _, registration := range reg.ListByDomain(agentic.Domain) {
 		assert.NotEqual(t, "signal_message", registration.Category,
 			"no registration in the agentic domain still carries the retired category")
+	}
+}
+
+// spec: agentic-dispatch / One control-signal payload travels the loop signal subject
+// The loop signal endpoint is gone, and it is gone from BOTH surfaces an
+// adopter can see: the route table a running process serves, and the OpenAPI
+// document generated from the same declaration. Asserting only one of them
+// would let the other come back — a route with no documented path, or a
+// documented path with no route.
+//
+// It drives the real registrar rather than reading the source, so a
+// reintroduced handler fails here at the status code.
+func TestLoopSignalEndpointIsGone(t *testing.T) {
+	mux := http.NewServeMux()
+	newTestComponent(t).RegisterHTTPHandlers("/", mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/signal",
+		strings.NewReader(`{"type":"cancel"}`))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusNotFound, rec.Code,
+		"no handler is registered for the retired signal endpoint")
+
+	// The route that replaced it is still there: cancelling a loop is a
+	// /cancel command on the message endpoint.
+	_, messagePattern := mux.Handler(httptest.NewRequest(http.MethodPost, "/message", nil))
+	assert.NotEmpty(t, messagePattern, "POST /message is the cancel lane and stays registered")
+
+	spec := agenticDispatchOpenAPISpec()
+	for path := range spec.Paths {
+		assert.NotContains(t, path, "/signal",
+			"the published OpenAPI document declares no signal path")
+	}
+	for _, schemaType := range append(spec.ResponseTypes, spec.RequestBodyTypes...) {
+		assert.NotContains(t, schemaType.Name(), "Signal",
+			"no signal request or response type is published as a component schema")
 	}
 }

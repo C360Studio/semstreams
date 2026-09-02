@@ -149,6 +149,9 @@ chat lane — now travels `agent.signal.*`.
       agentic-loop's real `handleSignalMessage` with a `cancel_any` operator who is NOT the loop's owner
 - [x] 9.10 Rename `TestCancelAnyAdmitsNonOwnerCancelAndSignal` to `TestCancelAnyAdmitsNonOwnerCancel`; the
       `/cancel` command is now the only seam asking for that verb
+- [x] 9.11 Pin the deletion itself on both adopter-visible surfaces — the served route table and the generated
+      OpenAPI document — with `TestLoopSignalEndpointIsGone`, so a reintroduced handler fails at the status
+      code rather than passing unnoticed
 
 ## 10. Gates
 

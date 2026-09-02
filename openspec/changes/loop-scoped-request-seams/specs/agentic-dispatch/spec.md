@@ -271,7 +271,9 @@ its subject MUST be resolved from the declared output port rather than concatena
 - **GIVEN** dispatch's registered HTTP routes and its published OpenAPI document
 - **WHEN** either is inspected
 - **THEN** no `POST /loops/{id}/signal` route, request type, response type, or path entry is present
-- **AND** a caller that wants to cancel a loop uses `POST /message` with `/cancel <loop_id>`
+- **AND** a caller that wants to cancel a loop uses `POST /message` with `/cancel <loop_id>`, which stays
+  registered
+- **AND** the test that verifies this is `TestLoopSignalEndpointIsGone`
 
 #### Scenario: a cancel from a non-owner without cancel-any is refused before publication
 
