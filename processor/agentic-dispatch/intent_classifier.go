@@ -21,7 +21,8 @@ const (
 	IntentNewTask IntentType = "new_task"
 	// IntentContinue continues an existing loop with additional input.
 	IntentContinue IntentType = "continue"
-	// IntentSignal sends a control signal (approve, reject, etc.).
+	// IntentSignal sends a control signal. `cancel` is the whole vocabulary
+	// (#1239); approval travels as ApprovalResponse, not as a signal.
 	IntentSignal IntentType = "signal"
 	// IntentQuestion asks about loop status or system state.
 	IntentQuestion IntentType = "question"
