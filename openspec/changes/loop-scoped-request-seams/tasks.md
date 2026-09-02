@@ -47,9 +47,11 @@ the two `state.go` edits are reviewed together rather than re-derived.
       `canUserControlLoop` (`component.go:1204-1216`), whose only caller is `commands.go:73`
 - [x] 4.3 `GET /loops/{id}` (`http.go:602-621`): form + existence only, no ownership — record it in the
       carve-out list, not as an omission
-- [x] 4.4 `POST /loops/{id}/signal` (`http.go:642-658`) and `POST /loops/{id}/approval` (`http.go:739-757`):
-      gate the URL-path token before the existence check; enforce `Permissions.Approve` on the approval
-      endpoint with ownership NOT consulted
+- [x] 4.4 `POST /loops/{id}/approval` (`http.go:739-757`): gate the URL-path token before the existence check;
+      enforce `Permissions.Approve` on the approval endpoint with ownership NOT consulted.
+      (This task also covered `POST /loops/{id}/signal`, which DID adopt the gate at `660ab88a` and was then
+      deleted outright by owner ruling 12 — see §9. The adoption is not undone work: gating it first is what
+      made the deletion safe to sequence.)
 - [x] 4.5 Map refusals to HTTP status: 400 malformed, 404 absent, 403 not permitted / not owned, 409 terminal
 - [x] 4.6 Test each seam refuses through the gate and emits exactly one counted refusal (I3)
 

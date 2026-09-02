@@ -54,6 +54,8 @@ A third and a fourth were found while verifying the inventories. **The HTTP sign
 *"Unexpected payload type"* otherwise. The chat `/cancel` command publishes the correct type
 (`commands.go:112`). So `POST /loops/{id}/signal` answers `200 {"accepted": true}` and the loop is never
 paused, resumed, or cancelled. Two payload types on one subject is one home per interpreted fact, violated.
+**This finding is what ultimately deleted the endpoint rather than repairing it** — see the behaviour-change
+section below and owner ruling 12.
 
 And **`LoopManager` never releases anything.** `DeleteLoop`
 (`state.go:340-354`) is the only site that clears eleven per-loop maps and has zero production callers — its only
@@ -110,13 +112,15 @@ minting a loop under the client's token. A canonical UUID still passes the FORM 
 unchanged — but a token this framework never minted names no loop to continue.
 `TestCanonicalReplyToContinuesTheLoop` asserts today's behaviour and is replaced.
 
-**BEHAVIOUR CHANGE, not a type cleanup: `POST /loops/{id}/signal` starts working.** Today it returns
-`200 {"accepted": true}` and the loop ignores the message. After this change the same call actually pauses,
-resumes, or cancels the loop. An operator or product shell that has been calling this endpoint — and reasonably
-concluded from the `200` that it worked — will see loops respond for the first time. Anyone who built a
-workaround around its silence (polling, a second cancel path, a rule that force-terminates) now has two things
-cancelling the same loop. This is the single most user-visible effect in the change and it needs to lead the
-migration note, ahead of the `reply_to` refusal.
+**BEHAVIOUR CHANGE, not a type cleanup: `POST /loops/{id}/signal` is GONE.** Today it returns
+`200 {"accepted": true}` and the loop ignores the message; after this change the route does not exist and the
+call is a 404. **This supersedes the repair this proposal originally planned** (owner ruling 12, 2026-09-01):
+the endpoint was to start working, and instead it is deleted. What decided it — `cancel`, its only implemented
+verb, is already served by `POST /message` with `/cancel <loop_id>`, which publishes a correct `UserSignal` and
+has worked the whole time; `pause` and `resume` were never implemented at all, since `PauseRequested` is written
+twice and read nowhere (**#1239**). An operator or product shell that has been calling this endpoint — and
+reasonably concluded from the `200` that it worked — moves to the message lane. This is still the single most
+user-visible effect in the change and still leads the migration note, ahead of the `reply_to` refusal.
 
 **BREAKING, exported Go surface:** `agenticdispatch.SignalMessage` and `agentic.CategorySignalMessage` are
 deleted, and `agenticdispatch.RegisterPayloads` — whose only registration was that type — goes with them, along
@@ -173,7 +177,7 @@ dispatch's HTTP and channel surfaces, who has never opened any file named above.
 ### 1. What must they know?
 
 - **One new operational fact:** a loop belongs to the `user_id` that created it — send the same one when you
-  continue, cancel, or signal it.
+  continue or cancel it.
 - Two facts that are consequences of it rather than separate debts: an approval is checked against the
   approve list and NOT against ownership (so a reviewer who did not start the loop can approve it — that is the
   point); and `reply_to` must name a loop that exists (you can no longer seed your own loop id).
@@ -200,7 +204,7 @@ Traced for someone who learns none of the above:
 | Authors its own `reply_to` UUID | a loop is silently minted under it | typed refusal: no such loop |
 | Resumes by `reply_to` after dispatch was replaced | HTTP endpoints answer 404; the submission path silently forks a NEW loop under the same token | admitted from the durable record and genuinely continued |
 | Approves a tool call without the approve permission | admitted — the permission is advertised and unread | refused, unless the default `["*"]` is in force, which it is |
-| Calls `POST /loops/{id}/signal` to cancel a loop | `200 accepted:true`, loop keeps running | `200`, and the loop actually cancels — see the consequences section |
+| Calls `POST /loops/{id}/signal` to cancel a loop | `200 accepted:true`, loop keeps running | **404** — the route is deleted; cancel via `POST /message` with `/cancel <loop_id>`, which has always worked |
 | Constructs `agenticdispatch.SignalMessage` | compiles | **compile error** — the type is gone; no in-tree or sister caller does this |
 
 Row five is the important one: today the adopter must **predict** whether dispatch still holds their loop in

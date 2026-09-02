@@ -74,8 +74,12 @@ failure is irrelevant, the owner is already known); tracker miss + key absent �
 durable read failing for any other reason ⇒ **transient** refusal, never admit.
 
 **Ownership model — exactly as ruled, no extension.** `continue` requires requester == the loop's owner;
-`cancel` and `signal` require requester == owner OR in `cancel_any`; `approve` requires membership in the
-approve list with **ownership not consulted**; `GET` checks form only. Unknown owner fails closed.
+`cancel` requires requester == owner OR in `cancel_any`; `approve` requires membership in the approve list with
+**ownership not consulted**; `GET` checks form only. Unknown owner fails closed.
+
+> The ruled model also named a `signal` operation, carrying the same rule as `cancel`. It is gone: owner ruling
+> 12 deleted `POST /loops/{id}/signal` rather than repairing it (Piece 5). No other seam ever produced that
+> operation, so the gate's vocabulary retires with the endpoint.
 
 **The two lanes.** The user lane is dispatch. The system lane is the rule engine's `publishAgentOnce`
 (`processor/rule/actions.go:1691`) and graph-research's `agent.task.research_continuation`
@@ -152,13 +156,13 @@ property or fuzz harness; a property authored later by reading the implementatio
 | I2 | For every input, an absent loop is refused with the not-found reason, whatever the requester | same requirement, second scenario |
 | I3 | For every refused request, exactly one refusal counter increment occurs | same requirement, third scenario |
 | I4 | No refused request changes any loop's recorded owner, or any active-loop index | ownership requirement, first scenario |
-| I5 | For every submission that publishes no task, the tracker and the active-loops gauge are unchanged from before it | refused-submission requirement |
+| I5 | For every submission **refused before publication** — form, validation, or addressing — the tracker and the active-loops gauge are unchanged from before it | refused-submission requirement |
 | I6 | For every accepted continuation, the loop's context-manager identity is the same object as before | `agentic-loop` — fence requirement, first scenario |
 | I7 | For every refused create, all three per-loop maps hold the values they held before the call | fence requirement, second scenario |
 | I8 | After terminal release, for every reader, an absent loop and a present terminal loop produce the same observable outcome | `agentic-loop` — release requirement, third scenario |
 | I9 | Terminal release is idempotent: applying it n times equals applying it once | release requirement, first scenario |
 | I10 | Every message published on `agent.signal.<loop_id>`, from any lane, decodes to exactly one payload type | `agentic-dispatch` — control-signal requirement, first scenario |
-| I11 | For every refused signal request, nothing is published on the loop's signal subject | control-signal requirement, third scenario |
+| I11 | For every refused cancel request, nothing is published on the loop's signal subject | control-signal requirement, fourth scenario |
 
 ## Decision skills applied
 
@@ -200,12 +204,19 @@ The ruled model for `cancel`/`signal` is owner OR `cancel_any` and does not ment
 `CancelOwn` is consulted twice: as the `/cancel` command's declared permission (`commands.go:22` →
 `component.go:759` → `component.go:1182`) and again inside `canUserControlLoop` (`component.go:1216`). The
 second consult is deleted with `canUserControlLoop`; the first stays. **Accepted consequence, recorded so it is
-not read later as an oversight:** `CancelOwn: false` still denies the `/cancel` chat command, and does NOT deny
-`POST /loops/{id}/signal`, which has never consulted `CancelOwn` and does not begin to.
+not read later as an oversight:** `CancelOwn: false` still denies the `/cancel` chat command. The second lane
+this sentence originally contrasted it with, `POST /loops/{id}/signal`, no longer exists (ruling 12), so the
+command lane is now the only lane that consults `CancelOwn` at all.
 
 **R3 — the signal payload unification is FOLDED IN.** See Piece 5 below.
 
 ## Piece 5 — one control-signal payload on the loop signal subject (folded in by R3)
+
+> **Superseded in part by owner ruling 12 (2026-09-01): the endpoint is DELETED, not repaired.** The retirement
+> of `SignalMessage` below stands unchanged and is what landed — the defect was always *two payload types on one
+> subject*, and deleting the only producer of the second one fixes it. What did **not** land is the repair of
+> `SendSignal` and the endpoint; see *What replaced the repair* at the end of this piece. The evidence below is
+> kept because it is the measurement the ruling rests on.
 
 Two payload types travel `agent.signal.<loop_id>`:
 
@@ -237,25 +248,35 @@ registration was that type), its call at `payloadbuiltins/register.go:47`, and t
 no `init()` and no singleton to unwind — the registration is one explicit call from one composition root, which
 is exactly why removing it is a three-line change and not a migration.
 
-**What `SendSignal` becomes.** It publishes `agentic.UserSignal`, which needs a signal id (minted), a verb, the
-loop token, and a user id. The user id is the **requester**, resolved by `IdentityFromRequest` — not the loop
-owner — because the loop attributes the action to that field (`component.go:2119` builds
-`"loop cancelled by %s"` from `signal.UserID`). The channel route is taken from the loop's merged facts the gate
-already fetched, not recomputed. The endpoint's `reason` maps onto the existing `Payload` field; no consumer
-reads it today, and it is preserved rather than dropped because the endpoint already accepts it — it is a
-pre-existing zero-consumer field on `SignalRequest` (`http.go:484-487`), not new surface.
+**What replaced the repair.** `SendSignal` was to publish a `UserSignal` built from the requester identity, the
+loop's merged channel route, and the endpoint's `reason`. That work was implemented and pushed
+(`c3998558`, `bec06d23`) before ruling 12 replaced it with deletion, and it is gone again. The reasoning that
+decided it, from the measurement:
 
-**A third interpreter of "which signal verbs exist", left alone deliberately.** The endpoint admits
-`pause|resume|cancel` (`http.go:671-678`); `UserSignal.Validate` admits seven verbs (`user_types.go:139-141`);
-the loop's switch handles three and warns on the rest (`component.go:2091-2103`). These are different layers —
-endpoint policy ⊂ payload grammar ⊇ handler coverage — not three spellings of one fact, and this change does not
-widen the endpoint. Recorded so the next reader does not "unify" them into a behaviour change nobody asked for.
+- **`cancel` was already served.** `POST /message` with `/cancel <loop_id>` routes `processMessageSync` →
+  `processCommandSync` → `handleCancelCommand`, publishing a correct `UserSignal`. Same HTTP surface, already
+  permissioned, working the whole time — which is why nobody noticed the endpoint was dead.
+- **`pause` and `resume` were never implemented.** `handlePauseSignal` sets `entity.PauseRequested = true`; that
+  field is written twice (`component.go:2225,2266`) and read nowhere. Filed as **#1239**.
+- So the endpoint had one real verb with a working alternative, and two that were advertised-absent. Deleting it
+  removes adopter surface instead of adding the `user_id` field the repair would have needed on `SignalRequest`,
+  and dissolves the identity question that field raised.
 
-**Effect on the gate design, which the unification changes.** The signal seam stops being inert and starts
-pausing and cancelling real loops. Three adjustments, all now in the spec: the ownership check on `signal`
-becomes load-bearing rather than decorative; a refusal must happen **before** publication, so no signal reaches
-the subject for a request the gate rejects; and the unification MUST NOT land before the gate, or the seam goes
-live ungated for the length of that window. Sequencing is stated in the requirement, not left to task order.
+`LoopTracker.SendSignal` goes with it (its only production caller was the handler), as do the gate's
+`seamHTTPLoopSignal` and `loopOpSignal` tokens. `TestLoopSignalEndpointIsGone` pins the absence on both the route
+table and the generated OpenAPI document, because a reintroduction can arrive on either surface alone.
+
+**Two interpreters of "which signal verbs exist", left alone deliberately.** `UserSignal.Validate` admits seven
+verbs (`user_types.go:139-141`); the loop's switch handles three and warns on the rest
+(`component.go:2091-2103`). These are different layers — payload grammar ⊇ handler coverage — not two spellings
+of one fact. Recorded so the next reader does not "unify" them into a behaviour change nobody asked for. (A third
+interpreter, the deleted endpoint's own `pause|resume|cancel` allow-list, went with it under ruling 12; of the
+three verbs it named, two are the unimplemented pair now tracked by **#1239**.)
+
+**Effect on the gate design.** The repair would have made the signal seam load-bearing; the deletion removes the
+seam instead. What survives from that analysis is the sequencing rule it produced, and it still governed the work:
+the unification could not land before the gate, or the seam would have gone live ungated for the length of that
+window. §4 landed at `660ab88a`, ahead of both the repair and its replacement.
 
 ## Superseded — the questions as originally raised
 
