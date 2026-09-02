@@ -2,6 +2,23 @@
 
 ## Decisions
 
+### D0 — non-default integration trunk and atomic default-branch cutover
+
+`codex/gh759-semantic-settlement` is the integration trunk and the head of PR #1156. PR #1156 alone targets `main`.
+PR #1159 and the #1249 implementation PR target the #759 branch and are separately claimed, reviewed, archived, and
+squash-merged there.
+
+The #759 branch may temporarily contain both typed and legacy exports only as unmerged staging state. That condition
+is never archived as current framework truth and never reaches `main`. The exact caller list is enforced only as a
+zero-growth test that shrinks after each staged child merge.
+
+After #1146 and #1249 integrate, #759 removes `ConsumeWithHeartbeat`, proves the exported symbol and production caller
+count are zero, and archives the final capability state. The final default-branch squash therefore performs one
+greenfield API cutover rather than accepting a compatibility period.
+
+Non-default child merges do not close their issues. PR #1156 declares the complete closing set before implementation
+and owner-requested cross-agent review of the final integrated claim set and owns default-branch closure.
+
 ### D1 — permanent additive typed API
 
 The permanent typed entry point is:
@@ -15,11 +32,12 @@ func ConsumeDeliveryWithHeartbeat(
 ```
 
 The established `Consume...With...` vocabulary describes one delivered message without reading as a heartbeat-message
-consumer. A separate name allows Stage A to compile while held callers retain the old Go signature. It is not renamed
-at final legacy removal.
+consumer. The permanent name does not change during staging or final cutover. Final current truth exports only this
+typed entry point; `ConsumeWithHeartbeat` and `NewDurableHandler` are absent without aliases.
 
-Legacy remains source- and behavior-compatible only for an exact shrinking allowlist: model, loop, and AgentRun.
-New production callers fail AST conformance. Documentation and examples use only the typed API.
+During non-default integration only, a zero-growth branch-staging guard pins the three current caller files and
+rejects any new production caller or alias. That list is not an API allowlist, compatibility promise, current
+capability, or merge authority. Documentation and examples teach only the permanent typed API.
 
 ### D2 — semantic decision and error-last work contract
 
@@ -133,9 +151,11 @@ invocation receives its current body.
 
 ### D5 — preserve crash schedules and lower heartbeat when admitted
 
-Tools retains BackOff 15s/60s and moves heartbeat 120s→5s in Stage A. Dispatch remains 10s/30s. Model moves 90s→60s
-only if its hold lifts. Each loop lane moves 60s→15s only when its hold lifts and retains BackOff 30s/120s. AgentRun
-remains 10s/30s.
+Tools retains BackOff 15s/60s and moves heartbeat 120s→5s in the foundation. Dispatch remains 10s/30s. Model plus loop
+task, response, and tool-result heartbeat migration is additive to the full accepted #1146 vertical; its rebaseline
+selects the reviewed settlement route and any timing change. #1249 selects AgentRun's reviewed timing only after it
+defines fanout done and replay. The final #759 tree records the resulting explicit crash schedule for every migrated
+binding.
 
 Healthy renewal must prevent overlapping redelivery. Process loss must follow declared BackOff rather than silently
 falling back to AckWait. Tools' 5-second target permits at most 36 InProgress calls/minute at MaxAckPending 3; three
@@ -193,19 +213,19 @@ The existing owner commits the exact acquired handle, observes buffered fatal re
 bounded evidence through existing health/error fields, and shares one private stop/drain-once path with ordinary Stop.
 The observer derives from Start/Run and joins Stop. Shared natsclient owns no lifecycle.
 
-### D9 — private terminal executor and legacy containment
+### D9 — private terminal executor and branch-staging containment
 
-Typed and legacy helpers may share only a private terminal-method executor. Before extraction, characterization
-tests pin every legacy ACK, 30-second Retry, Term, 5-second cancellation, InProgress, and error-chain path. Typed does
-not call legacy; legacy does not translate through the exported DeliveryDecision/DeliveryWork contract. Here legacy
-means only `ConsumeWithHeartbeat`; `TerminateDelivery(error) error` and `PermanentDeliveryError` are not deprecated
-or removed.
+Typed and staged legacy helpers may share only a private terminal-method executor. Before extraction,
+characterization tests pin every old ACK, 30-second Retry, Term, 5-second cancellation, InProgress, and error-chain
+path. Typed does not call legacy; legacy does not translate through the exported DeliveryDecision/DeliveryWork
+contract. `TerminateDelivery(error) error` and `PermanentDeliveryError` retain their exact contracts and are not part
+of the removal gate.
 
-The AST allowlist names only model, loop, and AgentRun production files and shrinks with migration. Legacy receives a
-deprecation comment and is removed without alias only after all held addenda/proofs, zero repository callers, sister
-migration reconciliation or explicit pre-v1 break ruling, complete E2E, and later owner removal approval.
+The zero-growth staging guard names only the model, loop, and AgentRun production files and shrinks after each child
+integration. It permits no new caller and grants no compatibility status. Final conformance replaces it with proof
+that the old declaration, aliases, and every production caller are absent.
 
-### D10 — Stage A and held addenda
+### D10 — staged owner migrations
 
 Stage A migrates tools one and dispatch two. Tools ACKs only after completed outcome authority and result PubAck;
 completed-outcome replay publication may Retry; post-execution outcome-Create ambiguity quarantines. Dispatch retries
@@ -215,16 +235,51 @@ Each of the three policy constructions uses a binding-local `DeliveryWork` closu
 `DeliveryAttempt`, then delegates unchanged bytes to the existing tools or dispatch domain handler. Transport
 observation does not enter those domain handler signatures or their direct tests.
 
-Model, loop task, loop response, loop tool-result, AgentRun complete, and AgentRun failed are six separate
-non-authorizing holds. Each requires a then-current line-addressable inventory/adopter/collision addendum, independent
-inventory pass, options/design, independent design pass, and explicit owner acceptance naming the lifted binding.
-Durable model state additionally requires `entity-or-bucket`. #1148 clears only AgentRun's collision.
+The Stage A tools and dispatch bindings establish the typed foundation but do not authorize PR #1156 to merge.
+
+#1146 retains its full accepted intake, command, model, loop, tools, signal, approval, projection, governance, replay,
+and context/lifecycle scope. Its model and three loop heartbeat migrations are additive. It rebases onto the reviewed
+#759 foundation checkpoint and chooses a reviewed route for every fast no-heartbeat lane. No lane receives raw
+settlement or an exported no-heartbeat API by implication.
+
+#1249 begins from the staged #759 head after #1146 integration so its AgentRun design observes the post-#1146 terminal
+and handler shapes. It defines source identity, handler durable done, replay, panic/error, and partial-success
+semantics before migrating complete or failed.
+
+No migration maps callback return values mechanically. The binding owner returns ACK only after its named durable
+positive or negative consequence and every required downstream acknowledgement.
 
 ### D11 — builder removal
 
 `NewDurableHandler` has zero measured adopters. After the permanent API, direct policy tests, Stage A migration,
-owner review, and #1155 Stage A proof, remove it without alias. Held callers do not use it, so this removal is distinct
-from the final legacy-helper removal.
+owner review, and #1155 Stage A proof, remove it without alias. The remaining branch-staging callers do not use it, so
+this removal precedes the final `ConsumeWithHeartbeat` cutover without creating a current compatibility surface.
+
+### D12 — gated-DAG domain and transport split
+
+`gated-dag-dispatch` owns each adopter's domain definition of done and replay. `jetstream-consumer-policy` owns
+transport settlement, heartbeat, lease, and exact consume-handle mechanics. The domain capability does not prescribe
+a generic nil/error callback or one heartbeat API.
+
+A synchronous publish error is ambiguous because the server may have persisted before the acknowledgement was lost.
+The executor re-arms its durable claim, and repeated attempts use deterministic `Nats-Msg-Id=unitID`, but server
+deduplication is effective only inside the configured `Duplicates` window. Requiring
+`Duplicates >= BackstopInterval` covers ordinary backstop redispatch; it is not an unbounded exactly-once guarantee.
+After a longer interruption, each adopter's durable already-complete or idempotent replay contract is load-bearing.
+
+SemSpec's enabled execution bridge and SemDragon's staged, unregistered `questdag` have different definitions of done
+and replay. SemStreams records exact migration instructions for each checkpoint and mutates neither sister repository.
+
+### D15 — final legacy removal
+
+Final `ConsumeWithHeartbeat` removal belongs to #759. The branch-staging zero-growth guard shrinks as #1146 and #1249
+migrate their callers. After the final staged migration, conformance requires zero production callers and absence of
+the exported declaration and every alias.
+
+Removal, complete replacement proof, migration reconciliation, and the complete closing claim set precede final PR
+#1156 implementation and owner-requested cross-agent review. Archive/spec sync follows accepted fixes and re-review
+and is the final content commit. There is no accepted additive dual-API period. Closed issue #1250 remains closed and
+is not reclaimed.
 
 ## Rejected designs
 
@@ -234,17 +289,26 @@ from the final legacy-helper removal.
 - Derive semantic retry from BackOff: conflates explicit Nak policy with server missing-settlement schedule.
 - Remove BackOff: silently weakens tools/loop crash recovery.
 - Shared gate/supervisor/durable quarantine: duplicates component and JetStream authority.
-- Migrate held callers by implementation judgment: invents definition of done and replay safety.
+- Migrate a binding by mechanical nil-to-ACK/error-to-Retry conversion: invents definition of done and replay safety.
 - Pass `jetstream.Msg`, a settlement-capable view, or per-delivery work closure: leaks settlement authority or weakens
   setup-time validation.
 - Export `DeliveryAttempt` fields or a public constructor: permits inconsistent caller-authored observations and
   turns a framework-observed fact back into caller prediction.
 - Treat redelivery as proof prior work ran: process loss before invocation produces the same later observation.
+- Treat deterministic message-ID deduplication as unbounded exactly-once: the server forgets IDs after `Duplicates`.
+- Put generic settlement, heartbeat, lease, or handle mechanics in gated-DAG domain semantics: adopters have different
+  durable consequences and replay checks.
 
 ## Verification gates
 
 - Focused natsclient/tools/dispatch race tests and real-NATS heartbeat/BackOff tests.
-- AST legacy allowlist and same-config validation/acquisition conformance.
-- #1155 Stage A process replacement with one tools effect and no duplicate dispatch response.
+- AST zero-growth staging guard and same-config validation/acquisition conformance.
+- #1155 Stage A process replacement with one tools effect and no duplicate dispatch response, followed by every
+  remaining replacement-proof row before final landing.
 - `task e2e:agentic` after Stage A and every later admitted stage.
-- No final legacy removal until the approved zero-caller gate and separate owner approval.
+- During staging, exact AST zero-growth guard: legacy remains only in model, loop, and AgentRun with no new production
+  caller or alias. Before archive, zero production callers and no exported declaration or alias.
+- Gated-DAG capability validation and a reproducible, SemStreams-owned sister migration record.
+- Separate implementation and archive/spec-sync review for #1146 and #1249 on the non-default integration trunk.
+- Final integrated implementation review, owner-requested cross-agent review, then final-content archive and narrow
+  archive/spec-sync review.

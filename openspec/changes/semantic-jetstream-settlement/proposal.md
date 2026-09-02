@@ -2,70 +2,78 @@
 
 ## Why
 
-Five direct owners represent nine heartbeat delivery bindings. The current helper infers settlement from nil/error,
+Five direct owners represent nine heartbeat delivery bindings. The legacy helper infers settlement from nil/error,
 uses hidden fixed retry delays, lets cancellation replace a joined work result, and cannot tell the exact delivery
 owner when heartbeat control has become unsafe.
 
-The bindings also do not share one definition of done. Tools and dispatch have bounded durable consequences that can
-be encoded now. Model, loop, and AgentRun erase or lack evidence needed to prove restart-safe replay, so implementation
-must not invent their policy.
+The bindings do not share one definition of done. Tools and dispatch have bounded durable consequences that can be
+encoded in the foundation. Model, loop, and AgentRun require owner-specific restart and fanout contracts before they
+can migrate. JetStream already owns durable delivery and restart redelivery, and components already own exact native
+handles; a shared supervisor, state-machine runtime, lifecycle gate, or durable quarantine store would duplicate
+those authorities.
 
-JetStream already owns durable delivery and restart redelivery. Components already own exact native handles. A shared
-supervisor, lifecycle gate, or durable quarantine store would duplicate those authorities.
+SemStreams is pre-v1 and greenfield. The permanent typed API and removal of the old export must reach `main` in one
+atomic transition rather than establish a compatibility period as accepted framework surface.
 
 ## What changes
 
-- Add a validated ACK, Retry, Terminate, or Quarantine decision plus error-last work contract.
-- Add explicit immediate or fixed-delay semantic retry policy, independent of consumer BackOff.
+- Add validated ACK, Retry, Terminate, and Quarantine decisions plus an error-last work contract.
+- Observe the delivery number without exposing native settlement authority.
+- Separate semantic retry timing from the consumer's AckWait and BackOff lease policy.
 - Validate heartbeat policy from the exact consumer configuration before acquisition.
-- Add an inspectable result that preserves semantic, heartbeat-control, and local settlement evidence.
-- Observe JetStream delivery number at the native-message boundary and pass an immutable,
-  settlement-authority-free `DeliveryAttempt` to typed work.
-- Fail closed before payload access or work when delivery metadata is unavailable, using typed
-  `delivery_metadata_unavailable` quarantine and the existing exact-owner stop path.
-- Make heartbeat control loss require exact-owner shutdown without moving lifecycle into natsclient.
-- Add permanent `ConsumeDeliveryWithHeartbeat` while held callers retain characterized legacy behavior.
-- Migrate tools and dispatch first; require process-replacement proof in #1155.
-- Keep model, each loop binding, and each AgentRun binding non-authorizing until fresh reviewed addenda receive named
-  owner acceptance.
-- Remove the zero-adopter builder after Stage A proof; remove the legacy helper only at the approved zero-caller gate.
+- Preserve semantic, heartbeat-control, and local-settlement evidence in an inspectable result.
+- Stop the exact existing owner after heartbeat control loss or quarantine.
+- Migrate tools, dispatch complete/failed, model, loop task/response/tool-result, and AgentRun complete/failed through
+  separately accepted owner-specific definitions of done.
+- Prove all nine bindings across SemStreams process replacement while retaining NATS.
+- Remove `NewDurableHandler` and `ConsumeWithHeartbeat` without aliases.
+- Correct gated-DAG publish ambiguity and bounded deduplication claims, while keeping adopter-specific done/replay in
+  `gated-dag-dispatch` and generic transport mechanics in `jetstream-consumer-policy`.
+- Document the message-pump and lease-watchdog pattern and the measured gated-DAG adopter migration seams.
 
-## Scope
+## Atomic public landing
 
-#759 owns the shared foundation and exactly nine heartbeat bindings:
+#759 owns the complete public API transaction: introduce the permanent typed settlement surface, integrate the nine
+owner-specific migrations, and remove exported `ConsumeWithHeartbeat` without alias. PR #1156 remains draft and does
+not merge until the old symbol and every production caller are absent.
 
-- model: one;
-- tools: one;
-- dispatch complete/failed: two;
-- loop task/response/tool-result: three; and
-- AgentRun complete/failed: two.
+#1146 retains its full accepted restart-safety scope and implements model plus loop task/response/tool-result against
+the staged #759 foundation through PR #1159. #1249 independently designs and implements AgentRun complete/failed
+fanout settlement against the post-#1146 staged foundation. Both PRs target the non-default #759 branch and receive
+their own reviews. Their work reaches `main` only through the final reviewed #1156 squash merge.
 
-Stage A is the foundation, tools, and dispatch. The remaining six bindings stay in scope but are not executable work
-until their individual evidence gates pass. PR #1148 clears only AgentRun's file collision.
+The three current production caller files form a zero-growth branch-staging guard only. They are not an API
+allowlist, compatibility promise, current capability, or merge gate.
 
-The other 22 production raw bindings and two examples remain #1145 production scope. OTEL remains unchanged and no
-pull settlement API is proposed.
+No binding migration is a mechanical nil-to-ACK/error-to-Retry conversion. Each ACK requires its accepted
+owner-specific durable definition of done. A fast lane does not gain raw settlement authority or an exported
+no-heartbeat workaround.
 
 ## Impact
 
-- Modified capabilities: `jetstream-consumer-policy`, `nats-streaming`.
-- Additive pre-v1 natsclient API plus later removal of two zero/contained-adopter exports.
-- Tools heartbeat default changes from 120 seconds to 5 seconds while BackOff remains 15/60 seconds.
-- Model and loop defaults change only when their separately held migrations are approved.
-- Required breaking gate: `task e2e:agentic` after every admitted stage plus #1155 process-replacement evidence.
-- Two measured SemDev legacy callers require a SemStreams-owned migration record before final legacy removal.
-- `DeliveryWork` gains one value argument. The three Stage A policy bindings and focused tests migrate together;
-  measured external typed adopters are zero.
+- Breaking pre-v1 API replacement: the default branch receives `ConsumeDeliveryWithHeartbeat` and removal of
+  `ConsumeWithHeartbeat` in one final PR.
+- No accepted default-branch interval exposes both APIs.
+- #1146 and #1249 are separately claimed and reviewed on the non-default #759 integration branch.
+- Final PR #1156 carries default-branch closing authority for #759, #1146, #1249, and, only after complete proof,
+  #1155.
+- `NewDurableHandler` and `ConsumeWithHeartbeat` are both absent from final current truth.
+- Tools heartbeat changes from 120 seconds to 5 seconds while BackOff remains 15/60 seconds.
+- SemStreams records SemSpec and SemDragon migration requirements without mutating either sister repository.
+- Deterministic `Nats-Msg-Id` deduplication is claimed only within the configured `Duplicates` window. Beyond that
+  horizon, each adopter's durable already-complete or idempotent replay check is authoritative.
 
 ## Non-goals
 
-- No exported `SettleDelivery` or OTEL/pull settlement API.
-- No shared admission gate, handle owner, supervisor, rule, workflow, or state machine.
-- No durable quarantine bucket, stream, subject, payload, entity, or ObjectStore record.
-- No inference of semantic retry timing from consumer AckWait or BackOff.
-- No universal `DoubleAck` contract or claim of server confirmation.
-- No production migration of the other 22 bindings or two examples.
+- No merge of PR #1156 while exported `ConsumeWithHeartbeat` or any production caller remains.
+- No API allowlist or compatibility status derived from the branch-staging zero-growth guard.
+- No mechanical ACK conversion.
+- No raw-message settlement escape or unreviewed exported no-heartbeat API.
+- No child-PR merge directly to `main` and no intermediate accepted dual-API state.
+- No shared admission gate, handle owner, supervisor, rule, workflow, state-machine runtime, checkpoint, outbox,
+  CQRS layer, or event-sourced loop.
+- No durable quarantine bucket, stream, subject, payload, entity, ObjectStore record, or unapproved AgentRun receipt
+  ledger.
+- No generic gated-DAG nil/error definition of done or universal heartbeat API in the domain capability.
+- No claim that deterministic message-ID deduplication provides unbounded exactly-once delivery.
 - No sister-repository mutation.
-- No native message, header, reply, stream sequence, consumer sequence, stream identity, consumer identity, or
-  settlement method escapes through `DeliveryAttempt`.
-- Delivery number is an observation, not proof that a prior invocation started or committed an effect.

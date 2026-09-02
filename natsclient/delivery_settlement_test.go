@@ -146,6 +146,152 @@ func TestValidateHeartbeatDeliveryPolicy(t *testing.T) {
 	}
 }
 
+// spec: jetstream-consumer-policy / heartbeat policy validates the actual consumer lease
+func FuzzValidateHeartbeatDeliveryPolicy(f *testing.F) {
+	const (
+		second = int64(time.Second)
+		minute = int64(time.Minute)
+	)
+	maxDuration := int64(^uint64(0) >> 1)
+	seeds := [][10]int64{
+		// Live context, default 30-second acknowledgement interval, equality.
+		{0, 0, 15 * second, 0, 0, 0, 0, 1, 0, 0},
+		// Heartbeat duration boundaries and an extreme positive duration.
+		{0, 30 * second, 0, 0, 0, 0, 0, 1, 0, 0},
+		{0, 30 * second, -1, 0, 0, 0, 0, 1, 0, 0},
+		{0, 30 * second, 15*second + 1, 0, 0, 0, 0, 1, 0, 0},
+		{0, 30 * second, maxDuration, 0, 0, 0, 0, 1, 0, 0},
+		// BackOff shape, shortest-entry equality, and invalid entries.
+		{0, 60 * minute, 2500 * int64(time.Millisecond), 2, 20 * second, 5 * second, 0, 1, 0, 0},
+		{0, 60 * minute, second, 1, 0, 0, 0, 1, 0, 0},
+		{0, 60 * minute, second, 3, 20 * second, -1, 5 * second, 1, 0, 0},
+		{0, -1, second, 0, 0, 0, 0, 1, 0, 0},
+		// Nil/ended context, invalid retry, delayed retry, and nil work.
+		{1, 0, second, 0, 0, 0, 0, 1, 0, 0},
+		{2, 0, second, 0, 0, 0, 0, 1, 0, 0},
+		{0, 0, second, 0, 0, 0, 0, 0, 0, 0},
+		{0, 0, second, 0, 0, 0, 0, 2, second, 0},
+		{0, 0, second, 0, 0, 0, 0, 1, 0, 1},
+	}
+	for _, seed := range seeds {
+		f.Add(seed[0], seed[1], seed[2], seed[3], seed[4], seed[5], seed[6], seed[7], seed[8], seed[9])
+	}
+
+	f.Fuzz(func(t *testing.T, contextKind, ackWaitNS, heartbeatNS, backOffCount,
+		backOff0NS, backOff1NS, backOff2NS, retryKind, retryDelayNS, workKind int64,
+	) {
+		ctx, contextValid := fuzzHeartbeatPolicyContext(t, contextKind)
+		backOffValues := [...]time.Duration{
+			time.Duration(backOff0NS),
+			time.Duration(backOff1NS),
+			time.Duration(backOff2NS),
+		}
+		count := normalizedFuzzSelector(backOffCount, len(backOffValues)+1)
+		cfg := StreamConsumerConfig{AckWait: time.Duration(ackWaitNS)}
+		cfg.BackOff = append(cfg.BackOff, backOffValues[:count]...)
+
+		retrySelector := normalizedFuzzSelector(retryKind, 4)
+		retry, retryValid := fuzzDeliveryRetryPolicy(retrySelector, time.Duration(retryDelayNS))
+		workValid := normalizedFuzzSelector(workKind, 2) == 0
+		var work DeliveryWork
+		if workValid {
+			work = func(context.Context, DeliveryAttempt, []byte) (DeliveryDecision, error) {
+				return DeliveryDecisionAck, nil
+			}
+		}
+
+		heartbeat := time.Duration(heartbeatNS)
+		effective, timingValid := expectedHeartbeatEffectiveAckWait(cfg)
+		wantValid := contextValid && retryValid && workValid && timingValid &&
+			heartbeat > 0 && effective/2 > 0 && heartbeat <= effective/2
+
+		policy, err := ValidateHeartbeatDeliveryPolicy(ctx, cfg, heartbeat, retry, work)
+		if (err == nil) != wantValid {
+			t.Fatalf("ValidateHeartbeatDeliveryPolicy() error = %v, want valid %v for cfg=%+v heartbeat=%s",
+				err, wantValid, cfg, heartbeat)
+		}
+		if err != nil {
+			return
+		}
+
+		if policy.heartbeat <= 0 || policy.heartbeat > effective/2 {
+			t.Fatalf("accepted heartbeat %s outside (0,%s]", policy.heartbeat, effective/2)
+		}
+		if policy.heartbeat != heartbeat || policy.ackWait != cfg.AckWait {
+			t.Fatalf("accepted policy changed input: heartbeat=%s ackWait=%s", policy.heartbeat, policy.ackWait)
+		}
+		wantBackOff := append([]time.Duration(nil), cfg.BackOff...)
+		if len(cfg.BackOff) > 0 {
+			cfg.BackOff[0] = 0
+		}
+		if !reflect.DeepEqual(policy.backOff, wantBackOff) {
+			t.Fatalf("accepted policy did not defensively preserve BackOff: got %v want %v",
+				policy.backOff, wantBackOff)
+		}
+	})
+}
+
+func normalizedFuzzSelector(value int64, size int) int {
+	selector := value % int64(size)
+	if selector < 0 {
+		selector += int64(size)
+	}
+	return int(selector)
+}
+
+func fuzzHeartbeatPolicyContext(t *testing.T, kind int64) (context.Context, bool) {
+	t.Helper()
+	switch normalizedFuzzSelector(kind, 3) {
+	case 0:
+		return t.Context(), true
+	case 1:
+		return nil, false
+	default:
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		return ctx, false
+	}
+}
+
+func fuzzDeliveryRetryPolicy(kind int, delay time.Duration) (DeliveryRetryPolicy, bool) {
+	switch kind {
+	case 1:
+		return ImmediateDeliveryRetry(), true
+	case 2:
+		policy, err := DelayedDeliveryRetry(delay)
+		return policy, err == nil
+	case 3:
+		return DeliveryRetryPolicy{mode: deliveryRetryDelayed, delay: delay}, delay > 0
+	default:
+		return DeliveryRetryPolicy{}, false
+	}
+}
+
+func expectedHeartbeatEffectiveAckWait(cfg StreamConsumerConfig) (time.Duration, bool) {
+	if cfg.AckWait < 0 {
+		return 0, false
+	}
+	if len(cfg.BackOff) == 0 {
+		if cfg.AckWait > 0 {
+			return cfg.AckWait, true
+		}
+		return 30 * time.Second, true
+	}
+	shortest := cfg.BackOff[0]
+	if shortest <= 0 {
+		return 0, false
+	}
+	for _, interval := range cfg.BackOff[1:] {
+		if interval <= 0 {
+			return 0, false
+		}
+		if interval < shortest {
+			shortest = interval
+		}
+	}
+	return shortest, true
+}
+
 func TestHeartbeatDeliveryPolicyDefensivelyCopiesBackOff(t *testing.T) {
 	cfg := StreamConsumerConfig{BackOff: []time.Duration{10 * time.Second}}
 	policy, err := ValidateHeartbeatDeliveryPolicy(t.Context(), cfg, 5*time.Second,

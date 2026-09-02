@@ -412,7 +412,11 @@ func TestNewDurableHandlerRetirementIgnoresUnrelatedSelector(t *testing.T) {
 	}
 }
 
-func TestLegacyHeartbeatProductionCallAllowlist(t *testing.T) {
+// TestLegacyHeartbeatProductionCallZeroGrowthStagingGuard prevents another
+// production caller while the non-default integration branch stages the final
+// migrations. The expected files are not an API allowlist or merge authority;
+// final #759 conformance replaces this guard with zero callers and no export.
+func TestLegacyHeartbeatProductionCallZeroGrowthStagingGuard(t *testing.T) {
 	files := parseProductionGoFiles(t, filepath.Clean(".."))
 	scan := scanLegacyHeartbeatReferences(files)
 	if len(scan.violations) != 0 {
@@ -442,7 +446,7 @@ func TestLegacyHeartbeatProductionCallAllowlist(t *testing.T) {
 		"processor/agentic-model/component.go": 1,
 	}
 	if !reflect.DeepEqual(scan.directCalls, want) {
-		t.Fatalf("legacy ConsumeWithHeartbeat callers = %#v, want exact held allowlist %#v", scan.directCalls, want)
+		t.Fatalf("legacy ConsumeWithHeartbeat callers = %#v, want exact branch-staging set %#v", scan.directCalls, want)
 	}
 }
 
