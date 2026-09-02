@@ -157,12 +157,22 @@ chat lane — now travels `agent.signal.*`.
 
 ## 10. Gates
 
-- [ ] 10.1 `task lint`, `go test -race ./...`, `go test -tags=integration -race -p 2 ./...`
-- [ ] 10.2 `task schema:generate` and commit any schema/spec drift with the code
-- [ ] 10.3 `task e2e:agentic` green BEFORE the breaking commit lands (the `reply_to`-must-exist change)
-- [ ] 10.4 Migration note in `docs/operations/`, LEADING with the signal-endpoint behaviour change (it starts
-      actually cancelling loops), then the `reply_to` existence refusal, then the newly enforced `approve`
-      permission with the statement that its default admits everyone, then the retired exported surface
-      (`SignalMessage`, `CategorySignalMessage`, `agenticdispatch.RegisterPayloads`, `SendSignal`'s signature)
-      and the recorded finding that no sister constructs any of them
+- [x] 10.1 `task lint`, `go test -race ./...`, `go test -tags=integration -race -p 2 ./...`
+- [x] 10.2 `task schema:generate` and commit any schema/spec drift with the code
+- [x] 10.3 `task e2e:agentic` green BEFORE the breaking commit lands (the `reply_to`-must-exist change).
+      Run 2026-09-01 on the branch: exit 0, "Scenario completed successfully" in 45.26s, with
+      `tool_executions:1 graph_loop_triples:10 trajectory_facts:10 governance_verdicts_total:1
+      durable_tool_replay_executor_invocations:1`. **Caveat, recorded not hidden:** the scenario reports
+      `assertions_run=0` because it never sets `Result.AssertionsRun` — pre-existing, filed as #1238 — so this
+      green rests on the verify-step metrics above, not on an assertion count.
+- [x] 10.4 Migration note appended to `docs/operations/migration-beta162-to-beta163.md`, LEADING with the
+      signal-endpoint change — which under owner ruling 12 is its **deletion**, not the repair this task
+      originally described — then the newly enforced `approve` permission with the statement that its default
+      admits everyone, the `reply_to` existence refusal, the retired exported surface (`SignalMessage`,
+      `CategorySignalMessage`, `agenticdispatch.RegisterPayloads`, `SendSignal`, `SignalRequest`,
+      `SignalResponse`), the operational surface that changed (removed metric, new metric, 503-not-404 on a NATS
+      outage), the `agent_loops` port obligation, and the terminal-release memory behaviour.
+      **Sister sweep recorded 2026-09-01: zero references to any retired symbol across thirteen trees.** Two
+      sisters publish `agentic.UserSignal` directly and are unaffected (`semdragon/processor/questdagexec/handler.go:1190`,
+      `semsage/processor/ui-api/http.go:195`).
 - [ ] 10.5 Archive/spec sync as the last content commit, reviewed with the code

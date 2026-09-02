@@ -944,7 +944,7 @@
           "required": false,
           "connection_id": "kv:AGENT_LOOPS",
           "pattern": "read",
-          "description": "Persisted loop records read for terminal route reconciliation, workflow origin resolution, and the /activity stream",
+          "description": "Persisted loop records read by the loop admission gate on every loop-naming request, and for terminal route reconciliation, workflow origin resolution, and the /activity stream",
           "kind": "kv-read"
         }
       ],

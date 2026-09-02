@@ -45,10 +45,11 @@ type PermissionConfig struct {
 const agentLoopsPortName = "agent_loops"
 
 // signalOutputPortName is the declared output port carrying control signals to
-// agentic-loop. Both lanes that signal a loop — the /cancel chat command and
-// the HTTP signal endpoint — resolve their subject through THIS name, so a
-// deployment that renames the port's subject moves both, and neither can drift
-// onto a subject the other does not use.
+// agentic-loop. The /cancel chat command resolves its subject through THIS
+// name, never a constant, so a deployment that renames the port's subject moves
+// the command with it. It was one of two lanes until the HTTP signal endpoint
+// was deleted; the command lane is now the only publisher dispatch owns on this
+// subject.
 const signalOutputPortName = "agent.signal"
 
 // loopsBucketFromPorts resolves the loops bucket from a declared port set
@@ -135,7 +136,7 @@ func DefaultConfig() Config {
 				},
 				{
 					Name: agentLoopsPortName, Config: component.KVReadPort{Bucket: "AGENT_LOOPS"}, Required: false,
-					Description: "Persisted loop records read for terminal route reconciliation, workflow origin resolution, and the /activity stream",
+					Description: "Persisted loop records read by the loop admission gate on every loop-naming request, and for terminal route reconciliation, workflow origin resolution, and the /activity stream",
 				},
 			},
 			Outputs: []component.PortDefinition{
