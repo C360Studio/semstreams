@@ -27,15 +27,68 @@
 set -uo pipefail
 
 scope="${1:-.}"
+# Normalize the scope to a path, then match on a DIRECTORY BOUNDARY below. A raw string prefix made a typo look like a
+# pass: `pkg/type` matched `pkg/types/...` and exited 0, while the ordinary spelling `./pkg/types` matched nothing and
+# exited 2 — the absent-path case producing the positive signal this script promises to prevent.
+case "$scope" in
+  ./*) scope="${scope#./}" ;;
+esac
+while :; do
+  case "$scope" in
+    */) scope="${scope%/}" ;;
+    *) break ;;
+  esac
+done
+[ -z "$scope" ] && scope="."
 
 if ! git rev-parse --show-toplevel >/dev/null 2>&1; then
   echo "SCAN failed: not inside a git work tree" >&2
   exit 2
 fi
 
-# Every heading text under `### Requirement: ` in a file, one per line, prefix stripped.
-requirement_headings() {
-  sed -n 's/^###[[:space:]]*Requirement:[[:space:]]*//p' "$1"
+# Emit one +text / -text operation per requirement heading in a spec file, honouring the OpenSpec delta sections.
+#
+# A delta does not simply LIST requirements, it changes them, so the union of every `### Requirement:` heading is the
+# wrong set to resolve against. A rename ships as `REMOVED old` + `ADDED new`, and until the change archives the
+# baseline spec still carries `old` — so a union would accept the stale citation, which is precisely the defect this
+# script exists to catch. RENAMED is a different shape again: list items carrying the headings inline in backticks,
+# which no `### ` scan sees at all.
+#
+#   ADDED / MODIFIED  -> +heading   (eligible; MODIFIED restates the requirement in full)
+#   REMOVED           -> -heading   (suppressed, and never itself a valid target)
+#   RENAMED           -> -FROM +TO
+#   anything else     -> +heading   (a baseline spec under openspec/specs/ has no delta sections)
+heading_ops() {
+  awk '
+    /^##[ \t]+ADDED Requirements/    { s="add"; next }
+    /^##[ \t]+MODIFIED Requirements/ { s="add"; next }
+    /^##[ \t]+REMOVED Requirements/  { s="del"; next }
+    /^##[ \t]+RENAMED Requirements/  { s="ren"; next }
+    /^##[ \t]/                       { s="base"; next }
+    /^###[ \t]*Requirement:/ {
+      t=$0; sub(/^###[ \t]*Requirement:[ \t]*/, "", t)
+      print (s == "del" ? "-" : "+") t; next
+    }
+    s == "ren" && /^[ \t]*-[ \t]*(FROM|TO):/ {
+      op = (/FROM:/ ? "-" : "+")
+      if (match($0, /`###[ \t]*Requirement:[^`]*`/)) {
+        t = substr($0, RSTART, RLENGTH)
+        sub(/^`###[ \t]*Requirement:[ \t]*/, "", t); sub(/`$/, "", t)
+        print op t
+      }
+      next
+    }
+  ' "$1"
+}
+
+# The effective set of valid requirement headings for a capability: the baseline, then each active delta applied in
+# order. Later operations win, so an active REMOVED suppresses the baseline heading it names.
+effective_headings() {
+  for f in $1; do heading_ops "$f"; done | awk '
+    /^\+/ { set[substr($0, 2)] = 1; next }
+    /^-/  { delete set[substr($0, 2)]; next }
+    END   { for (k in set) print k }
+  '
 }
 
 # Resolve a capability to the spec files that may carry its requirements: current truth first, then any ACTIVE change
@@ -90,17 +143,13 @@ while IFS= read -r hit; do
     bad=$((bad + 1)); continue
   fi
 
+  eff=$(effective_headings "$files")
   found=""
-  while IFS= read -r f; do
-    [ -z "$f" ] && continue
-    while IFS= read -r heading; do
-      if [ "$heading" = "$req" ]; then found="$f"; break; fi
-    done <<EOF
-$(requirement_headings "$f")
-EOF
-    [ -n "$found" ] && break
+  while IFS= read -r heading; do
+    [ -z "$heading" ] && continue
+    if [ "$heading" = "$req" ]; then found=1; break; fi
   done <<EOF
-$files
+$eff
 EOF
 
   if [ -n "$found" ]; then
@@ -113,19 +162,25 @@ EOF
   while IFS= read -r f; do
     [ -z "$f" ] && continue
     add "            in:     $f"
-    while IFS= read -r heading; do
-      add "            exists: $heading"
-    done <<EOF
-$(requirement_headings "$f")
-EOF
   done <<EOF
 $files
 EOF
+  if [ -z "$eff" ]; then
+    add "            (no live requirement headings — every one is REMOVED by an active delta)"
+  else
+    while IFS= read -r heading; do
+      [ -z "$heading" ] && continue
+      add "            exists: $heading"
+    done <<EOF
+$eff
+EOF
+  fi
   bad=$((bad + 1))
 done <<EOF
 $(git grep -n -e '// spec:' -- '*_test.go' 2>/dev/null | awk -v s="$scope" '
     s == "." { print; next }
-    { p = $0; sub(/:.*/, "", p); if (index(p, s) == 1) print }
+    { p = $0; sub(/:.*/, "", p)
+      if (p == s || index(p, s "/") == 1) print }
   ')
 EOF
 
