@@ -434,7 +434,7 @@ func TestLateToolResultForSettledLoopIsExpectedDrop(t *testing.T) {
 // it is that the drop is DECLARED — a warn AND a counter, the same pair its
 // sibling one function away already emits — not merely quiet.
 //
-// spec: agentic-loop / Requirement: Per-loop in-process state is released at terminal, through the one release point
+// spec: agentic-loop / Per-loop in-process state is released at terminal, through the one release point
 func TestLateModelResponseForSettledLoopIsExpectedDrop(t *testing.T) {
 	ctx := context.Background()
 	h := NewMessageHandler(DefaultConfig())
