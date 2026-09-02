@@ -138,14 +138,16 @@ Users can send control signals to affect running loops:
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
 │  cancel  ──▶  Stop execution immediately (→ cancelled)      │
-│  approve ──▶  Approve pending result (→ complete)           │
-│  reject  ──▶  Reject with reason (→ failed)                 │
-│  retry   ──▶  Retry failed loop (→ exploring)               │
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-Signals are published to `agent.signal.{loop_id}` and processed by the loop orchestrator.
+Signals are published to `agent.signal.{loop_id}` and processed by the loop orchestrator. `cancel` is the
+entire vocabulary — a `UserSignal` carrying any other verb fails `Validate()`.
+
+**Approval and rejection are not signals.** They travel as `ApprovalResponse` on
+`agent.approval_response.*` (ADR-039), a different payload with a real handler. `feedback` and `retry` were
+advertised on this subject and never implemented; they are gone (#1239).
 
 ### Tool Abstraction
 
