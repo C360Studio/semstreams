@@ -158,11 +158,11 @@ func projectionCases() []projectionCase {
 		{
 			name: "UserSignal",
 			payload: &UserSignal{
-				SignalID: "s1", Type: SignalReject, LoopID: "l1", UserID: "u1",
+				SignalID: "s1", Type: SignalCancel, LoopID: "l1", UserID: "u1",
 				ChannelType: "cli", ChannelID: "c1", Payload: "rejection prose",
 				Timestamp: now,
 			},
-			expose:   map[string]any{"type": SignalReject, "loop_id": "l1"},
+			expose:   map[string]any{"type": SignalCancel, "loop_id": "l1"},
 			withhold: []string{"payload"},
 		},
 		{

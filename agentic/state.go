@@ -27,7 +27,10 @@ const (
 	LoopStateCancelled LoopState = "cancelled" // Cancelled by user signal
 
 	// Signal-related states
-	LoopStatePaused           LoopState = "paused"            // Paused by user signal
+	// LoopStatePaused is unreachable: #1239 deleted the pause signal, so no code
+	// path sets this state. The constant survives because isValidLoopState still
+	// has to accept a persisted record written before that removal.
+	LoopStatePaused           LoopState = "paused"
 	LoopStateAwaitingApproval LoopState = "awaiting_approval" // Waiting for user approval
 )
 
@@ -63,11 +66,8 @@ type LoopEntity struct {
 	MaxDepth int `json:"max_depth,omitempty"` // Maximum allowed depth for spawned agents
 
 	// Signal support fields
-	PauseRequested   bool      `json:"pause_requested,omitempty"`    // Pause requested, will pause at next checkpoint
-	PauseRequestedBy string    `json:"pause_requested_by,omitempty"` // User who requested pause
-	StateBeforePause LoopState `json:"state_before_pause,omitempty"` // State before pause (for resume)
-	CancelledBy      string    `json:"cancelled_by,omitempty"`       // User who cancelled the loop
-	CancelledAt      time.Time `json:"cancelled_at,omitempty"`       // When the loop was cancelled
+	CancelledBy string    `json:"cancelled_by,omitempty"` // User who cancelled the loop
+	CancelledAt time.Time `json:"cancelled_at,omitempty"` // When the loop was cancelled
 
 	// Approval-gating fields (set when a tool call is rejected by the
 	// agentic-tools approval filter). The loop transitions to

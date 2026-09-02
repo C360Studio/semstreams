@@ -115,7 +115,8 @@ durably:
 - Tool calls flow through governance rules (ADR-039) before
   execution.
 - The loop is a Lifecycle Participant (ADR-049): current-state restart hydration,
-  operator-visible trajectory, and writable pause/resume/cancel controls. Repair
+  operator-visible trajectory, and a writable cancel control (pause/resume were
+  advertised and never implemented; deleted in #1239). Repair
   and audit retention require an explicit owner design.
 - Multiple loops run concurrently in the same service; each has its
   own entity-ID; cross-loop reasoning is graph-native.

@@ -287,9 +287,9 @@ func (t *TaskMessage) RuleFields() map[string]any {
 //
 // Withheld: Payload — signal-specific data typed `any`, which carries a
 // rejection reason or whatever else the sending channel chose. Unclassifiable
-// by construction, so it fails closed. `type` is the closed signal vocabulary
-// (cancel/pause/resume/approve/reject/feedback/retry) and is what a rule
-// branches on.
+// by construction, so it fails closed. `type` is the closed signal vocabulary —
+// `cancel` alone — and is what a rule branches on. A rule that wants to fire on
+// an approval decision reads ApprovalResponse (ADR-039), not this.
 func (s *UserSignal) RuleFields() map[string]any {
 	fields := map[string]any{
 		"signal_id":    s.SignalID,
