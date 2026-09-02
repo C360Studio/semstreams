@@ -101,6 +101,27 @@ reuses the loop's existing context manager rather than the freshly constructed o
 preserved; it does not re-add the system prompt (`handlers.go:876-881`) and does not clear the pending-tool set.
 A terminal existing loop is refused, not attached.
 
+**A loop with work in flight is also refused** (owner ruling, 2026-09-02). Non-terminal is not the same as
+idle. `IsTerminal()` is `complete|failed|cancelled` (`agentic/state.go:39-41`), so `executing` and
+`awaiting_approval` reach the attach, and auto-continue reaches it with no `reply_to` at all
+(`loop_tracker.go:205-225` returns any non-terminal loop) — which is exactly "the user sends a second message
+while the agent is running". A continuation sets `messages = cm.GetContext()` (`handlers.go:971-975`), and
+`GetContext` performs no tool-pair repair (`context_manager.go:175-198`): the assistant turn carrying
+`tool_calls` is appended at `handlers.go:1228` and the matching `tool` results only at `:2502`, immediately
+before `RepairToolPairs()` at `:2510`, so between those points the context holds orphan `tool_calls`. Three
+consequences: a request the provider 400s; two concurrent rounds appending to one KV-persisted context manager;
+and an attach to an `awaiting_approval` loop moving it off that state, so the human's later approval takes the
+stale-drop path and the gated call is silently abandoned.
+
+In flight means **outstanding tool calls, or `LoopStateAwaitingApproval`**, and the refusal goes at
+`attachContinuation` (`state.go:248`) beside the terminal one, not at the dispatch gate. The gate cannot observe
+the first half: outstanding tool calls live in `LoopManager.pendingTools`, which is in-process to agentic-loop;
+dispatch's `LoopInfo` has no such field, and the durable record's `PendingToolResults` is the accumulated
+RESULTS map, drained at each turn boundary (`state.go:903-908`), not the outstanding-call set. Reading it at the
+gate would mean inventing a dispatch→loop read that does not exist. The gate keeps the seam-level answer it
+already gives, and the loop plane — which holds the fact — owns the refusal. Queuing the turn instead of
+refusing it was considered and deliberately not chosen: a queued turn is new semantics, and is filed separately.
+
 **Redelivery dedup must survive.** Intake dedupes on `TaskID` via `HasActiveLoopForTask` (`state.go:187-198`),
 and dispatch mints a fresh `TaskID` per submission (`component.go:951`, `http.go:330`), so the dedup cannot fire
 across two distinct submissions naming one loop — which is why the fence is needed at all. After an attach, the
@@ -159,6 +180,7 @@ property or fuzz harness; a property authored later by reading the implementatio
 | I5 | For every submission **refused before publication** — form, validation, or addressing — the tracker and the active-loops gauge are unchanged from before it | refused-submission requirement |
 | I6 | For every accepted continuation, the loop's context-manager identity is the same object as before | `agentic-loop` — fence requirement, first scenario |
 | I7 | For every refused create, all three per-loop maps hold the values they held before the call | fence requirement, second scenario |
+| I7a | For every continuation naming a loop with outstanding tool calls or awaiting approval, the task is refused and the loop's conversation, pending-tool set, and recorded state are unchanged | fence requirement, in-flight scenarios |
 | I8 | After terminal release, for every reader, an absent loop and a present terminal loop produce the same observable outcome | `agentic-loop` — release requirement, third scenario |
 | I9 | Terminal release is idempotent: applying it n times equals applying it once | release requirement, first scenario |
 | I10 | Every message published on `agent.signal.<loop_id>`, from any lane, decodes to exactly one payload type | `agentic-dispatch` — control-signal requirement, first scenario |

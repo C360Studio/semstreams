@@ -20,6 +20,18 @@ NOT re-seed the conversation with a fresh system prompt, and MUST NOT clear the 
 A continuation whose existing loop is in a terminal state MUST be refused rather than attached, and MUST NOT
 mint a replacement loop under the same token.
 
+A continuation whose existing loop has **work in flight** MUST also be refused rather than attached. Work is in
+flight when the loop holds outstanding tool calls, or when the loop is awaiting a human approval decision.
+Attaching in that window is not a continuation of the conversation, it is a second round on top of a half-written
+one: the assistant turn carrying `tool_calls` is already in the conversation and the matching `tool` results are
+not, so the assembled request carries orphan `tool_calls`; two rounds then advance the one loop and the one
+context manager concurrently; and an attach to a loop awaiting approval moves it off that state, so the human's
+later decision is dropped as stale and the gated call is abandoned. The refusal MUST be distinguishable from the
+terminal refusal, because the two mean opposite things to the caller — terminal is final, in-flight is answerable
+once the round finishes — and it MUST leave the loop's conversation, its pending-tool set, and its recorded state
+exactly as it found them. Queuing the turn for later delivery is deliberately NOT the answer: a queued turn is new
+semantics this capability does not have.
+
 Attaching MUST preserve the redelivery-dedup property that intake already relies on: after a continuation is
 accepted, a redelivery of that same continuation MUST be recognised as a duplicate rather than processed twice.
 
@@ -29,11 +41,11 @@ a conversation whose process was replaced is explicitly NOT in scope and is clai
 #### Scenario: a continuation preserves the conversation instead of discarding it
 
 - **GIVEN** a running loop whose conversation already holds a system prompt, a user turn, an assistant turn, and
-  a tool result
+  a completed tool pair, and which holds no outstanding tool call
 - **WHEN** a task carrying that loop's token arrives
 - **THEN** the loop's existing context manager is the one used, the prior turns are still present, and the new
   prompt is appended after them
-- **AND** no second system prompt is added and the pending-tool set is not cleared
+- **AND** no second system prompt is added and no other per-loop state is replaced
 - **AND** the tests that verify this are `TestContinuationReusesContextManager` and
   `TestContinuationDoesNotReseedSystemPrompt`
 
@@ -59,6 +71,24 @@ a conversation whose process was replaced is explicitly NOT in scope and is clai
 - **THEN** the task is refused, no new loop is minted under that token, and the terminal loop's recorded outcome
   is unchanged
 - **AND** the test that verifies this is `TestContinuationOfTerminalLoopIsRefused`
+
+#### Scenario: a continuation naming a loop with an outstanding tool call is refused
+
+- **GIVEN** a running loop that has dispatched a tool call whose result has not arrived, so its conversation holds
+  an assistant turn with `tool_calls` and no matching `tool` result
+- **WHEN** a task carrying that loop's token arrives at intake
+- **THEN** the task is refused with the in-flight condition, which is distinguishable from the terminal refusal
+- **AND** no user turn is appended to the conversation, no request is published, and the outstanding tool call is
+  still outstanding
+- **AND** the test that verifies this is `TestContinuationOfLoopWithToolsInFlightIsRefused`
+
+#### Scenario: a continuation naming a loop awaiting a human approval is refused
+
+- **GIVEN** a registered loop in `awaiting_approval` holding a pending approval for a gated tool call
+- **WHEN** a task carrying that loop's token arrives at intake
+- **THEN** the task is refused with the in-flight condition and the loop is still `awaiting_approval`, so the
+  human's later decision still resolves the gated call rather than being dropped as stale
+- **AND** the test that verifies this is `TestContinuationOfLoopAwaitingApprovalIsRefused`
 
 #### Scenario: a redelivered continuation is deduplicated
 
@@ -122,8 +152,9 @@ window before release.
 - **THEN** it is dropped as stale with the same observability a stale response for a still-present terminal loop
   produces, and not reported as an unexpected failure
 - **AND** the same holds for a late tool result and a late model response
-- **AND** the tests that verify this are `TestLateApprovalResponseForSettledLoopIsExpectedDrop` and
-  `TestLateToolResultForSettledLoopIsExpectedDrop`
+- **AND** the tests that verify this are `TestLateApprovalResponseForSettledLoopIsExpectedDrop`,
+  `TestLateToolResultForSettledLoopIsExpectedDrop`, and
+  `TestLateModelResponseForSettledLoopIsExpectedDrop`
 
 #### Scenario: a settled loop's result is still readable from the durable record
 

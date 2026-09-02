@@ -37,6 +37,18 @@ var (
 	// for that token.
 	ErrLoopTerminal = errors.New("agentic-loop: loop is terminal")
 
+	// ErrLoopBusy is returned when a continuation names a loop that has work
+	// in flight: outstanding tool calls, or a human approval decision it is
+	// waiting on. It is deliberately distinct from ErrLoopTerminal because the
+	// two mean opposite things to the caller — terminal is final, busy is
+	// answerable once the round finishes. Attaching in that window appends the
+	// new user turn to a half-written round (an assistant turn carrying
+	// tool_calls whose tool results have not arrived), sends orphan tool_calls
+	// to the provider, runs two rounds concurrently over one context manager,
+	// and moves an approval-gated loop off the state its human decision
+	// resolves. Owner ruling 2026-09-02: refuse; do not queue the turn.
+	ErrLoopBusy = errors.New("agentic-loop: loop has work in flight")
+
 	// ErrLoopNotFound is returned when an operation names a loop the manager
 	// does not hold. After a loop settles its per-loop state is released
 	// (releaseLoopTransientState), so absence is the ordinary steady state
@@ -236,6 +248,13 @@ func (m *LoopManager) CreateLoopWithID(loopID, taskID, role, model string, maxIt
 //   - A settled loop is REFUSED with ErrLoopTerminal. A terminal loop cannot be
 //     advanced, and minting a replacement under its token would make the
 //     recorded outcome unreachable for the token that names it.
+//   - A loop with work IN FLIGHT is REFUSED with ErrLoopBusy. Non-terminal is
+//     not idle: between the assistant turn that carries tool_calls and the
+//     turn boundary that appends the matching tool results, the conversation is
+//     half-written, and a continuation sends it as-is. See ErrLoopBusy for the
+//     three consequences. The check reads the pending-tool map directly rather
+//     than calling GetPendingTools: the write lock is already held here and
+//     sync.RWMutex is not reentrant.
 //   - The loop's task association is rebound to the continuation's task ID.
 //     This is what keeps redelivery dedup working across an attach: intake
 //     dedupes on TaskID via HasActiveLoopForTask, so a redelivery of THIS task
@@ -259,6 +278,16 @@ func (m *LoopManager) attachContinuation(loopID, taskID string) (agentic.LoopEnt
 		return agentic.LoopEntity{}, errs.WrapInvalid(
 			fmt.Errorf("loop %s is %s: %w", loopID, entity.State, ErrLoopTerminal),
 			"agentic-loop", "attachContinuation", "refuse continuation of a settled loop")
+	}
+	if pending := len(m.pendingTools[loopID]); pending > 0 {
+		return agentic.LoopEntity{}, errs.WrapTransient(
+			fmt.Errorf("loop %s has %d tool call(s) still outstanding: %w", loopID, pending, ErrLoopBusy),
+			"agentic-loop", "attachContinuation", "refuse continuation of a loop with work in flight")
+	}
+	if entity.State == agentic.LoopStateAwaitingApproval {
+		return agentic.LoopEntity{}, errs.WrapTransient(
+			fmt.Errorf("loop %s is awaiting a human approval decision: %w", loopID, ErrLoopBusy),
+			"agentic-loop", "attachContinuation", "refuse continuation of a loop with work in flight")
 	}
 
 	entity.TaskID = taskID

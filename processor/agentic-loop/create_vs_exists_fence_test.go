@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -193,9 +194,10 @@ func TestContinuationReusesContextManager(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed tool result: %v", err)
 	}
-	if err := h.loopManager.AddPendingTool(loopID, "call-in-flight"); err != nil {
-		t.Fatalf("AddPendingTool: %v", err)
-	}
+	// No outstanding tool call: the seeded pair is COMPLETE. A loop with work
+	// in flight refuses the continuation outright — see
+	// TestContinuationOfLoopWithToolsInFlightIsRefused — so seeding one here
+	// would test the refusal, not the preservation this test is about.
 
 	second, err := h.HandleTask(ctx, TaskMessage{
 		TaskID: "task-2", LoopID: loopID, Role: "general", Model: "model-a", Prompt: "second turn",
@@ -228,10 +230,11 @@ func TestContinuationReusesContextManager(t *testing.T) {
 		t.Fatalf("new prompt not appended after the prior turns: %+v", msgs)
 	}
 
-	// The pending-tool set survives the attach.
-	pending := h.loopManager.GetPendingTools(loopID)
-	if len(pending) != 1 || pending[0] != "call-in-flight" {
-		t.Fatalf("pending tools after attach = %v, want [call-in-flight]", pending)
+	// The attach touched no other per-loop state: the pending-tool set is still
+	// the empty set the live loop left, not a freshly minted map under a
+	// replacement entity.
+	if pending := h.loopManager.GetPendingTools(loopID); len(pending) != 0 {
+		t.Fatalf("pending tools after attach = %v, want none", pending)
 	}
 
 	// The observable half: the request published for the continuation carries
@@ -394,4 +397,137 @@ func countContent(msgs []agentic.ChatMessage, content string) int {
 		}
 	}
 	return n
+}
+
+// TestContinuationOfLoopWithToolsInFlightIsRefused: non-terminal is not idle.
+// Between the assistant turn that carries tool_calls and the turn boundary that
+// appends the matching tool results, the conversation is half-written, and a
+// continuation would send it — orphan tool_calls to the provider, two rounds
+// over one context manager. Owner ruling 2026-09-02: refuse (do not queue).
+//
+// spec: agentic-loop / Requirement: Creating a loop that already exists is refused; a continuation attaches to it
+func TestContinuationOfLoopWithToolsInFlightIsRefused(t *testing.T) {
+	ctx := context.Background()
+	h := fenceHandler(t)
+
+	first, err := h.HandleTask(ctx, TaskMessage{
+		TaskID: "task-1", Role: "general", Model: "model-a", Prompt: "first turn",
+	})
+	if err != nil {
+		t.Fatalf("HandleTask (first): %v", err)
+	}
+	loopID := first.LoopID
+
+	// The half-written round: the assistant turn carrying tool_calls is in the
+	// conversation, the matching tool result has not arrived, and the call is
+	// outstanding in the pending-tool set.
+	cm := h.loopManager.GetContextManager(loopID)
+	if err := cm.AddMessage(RegionRecentHistory, agentic.ChatMessage{
+		Role: "assistant",
+		ToolCalls: []agentic.ToolCall{{
+			ID: "call-in-flight", Name: "search", Arguments: map[string]any{},
+		}},
+	}); err != nil {
+		t.Fatalf("seed assistant tool_calls turn: %v", err)
+	}
+	if err := h.loopManager.AddPendingTool(loopID, "call-in-flight"); err != nil {
+		t.Fatalf("AddPendingTool: %v", err)
+	}
+	before, err := h.loopManager.GetLoop(loopID)
+	if err != nil {
+		t.Fatalf("GetLoop: %v", err)
+	}
+	turnsBefore := len(cm.GetContext())
+
+	result, err := h.HandleTask(ctx, TaskMessage{
+		TaskID: "task-2", LoopID: loopID, Role: "general", Model: "model-a", Prompt: "second turn",
+	})
+	if err == nil {
+		t.Fatalf("continuation of a loop with an outstanding tool call accepted: %+v", result)
+	}
+	if !errors.Is(err, ErrLoopBusy) {
+		t.Fatalf("refusal = %v, want errors.Is ErrLoopBusy", err)
+	}
+	// Busy and terminal mean opposite things to the caller; the refusal must not
+	// collapse into the terminal one.
+	if errors.Is(err, ErrLoopTerminal) {
+		t.Fatalf("in-flight refusal also reports terminal: %v", err)
+	}
+	if len(result.PublishedMessages) != 0 {
+		t.Fatalf("refused continuation published %d messages", len(result.PublishedMessages))
+	}
+
+	// Nothing moved: no user turn appended, the call is still outstanding, and
+	// the loop's own task association still names the round in flight.
+	if got := len(cm.GetContext()); got != turnsBefore {
+		t.Fatalf("conversation length after refusal = %d, want %d (a turn was appended)", got, turnsBefore)
+	}
+	if idx := indexOfContent(cm.GetContext(), "second turn"); idx >= 0 {
+		t.Fatalf("refused continuation appended its prompt at index %d", idx)
+	}
+	pending := h.loopManager.GetPendingTools(loopID)
+	if len(pending) != 1 || pending[0] != "call-in-flight" {
+		t.Fatalf("pending tools after refusal = %v, want [call-in-flight]", pending)
+	}
+	after, err := h.loopManager.GetLoop(loopID)
+	if err != nil {
+		t.Fatalf("GetLoop after refusal: %v", err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("loop mutated by a refused continuation:\n before %+v\n after  %+v", before, after)
+	}
+	if after.TaskID != "task-1" {
+		t.Fatalf("task association rebound by a refused continuation: %q", after.TaskID)
+	}
+}
+
+// TestContinuationOfLoopAwaitingApprovalIsRefused: attaching to a loop waiting
+// on a human moves it off awaiting_approval, and the decision that arrives
+// afterwards then takes the stale-drop path — the gated call is abandoned with
+// nobody told. Refuse instead, and the human's answer still resolves it.
+//
+// spec: agentic-loop / Requirement: Creating a loop that already exists is refused; a continuation attaches to it
+func TestContinuationOfLoopAwaitingApprovalIsRefused(t *testing.T) {
+	ctx := context.Background()
+	h := fenceHandler(t)
+
+	loopID := setUpAwaitingLoop(t, h, time.Minute, time.Second)
+	before, err := h.loopManager.GetLoop(loopID)
+	if err != nil {
+		t.Fatalf("GetLoop: %v", err)
+	}
+	if before.State != agentic.LoopStateAwaitingApproval {
+		t.Fatalf("fixture state = %s, want awaiting_approval", before.State)
+	}
+	// The other half of the in-flight rule must not be what refuses this one.
+	if pending := h.loopManager.GetPendingTools(loopID); len(pending) != 0 {
+		t.Fatalf("fixture holds outstanding tool calls %v; this case must isolate awaiting_approval", pending)
+	}
+
+	result, err := h.HandleTask(ctx, TaskMessage{
+		TaskID: "task-2", LoopID: loopID, Role: "general", Model: "model-a", Prompt: "second turn",
+	})
+	if err == nil {
+		t.Fatalf("continuation of a loop awaiting approval accepted: %+v", result)
+	}
+	if !errors.Is(err, ErrLoopBusy) {
+		t.Fatalf("refusal = %v, want errors.Is ErrLoopBusy", err)
+	}
+	if len(result.PublishedMessages) != 0 {
+		t.Fatalf("refused continuation published %d messages", len(result.PublishedMessages))
+	}
+
+	after, err := h.loopManager.GetLoop(loopID)
+	if err != nil {
+		t.Fatalf("GetLoop after refusal: %v", err)
+	}
+	if after.State != agentic.LoopStateAwaitingApproval {
+		t.Fatalf("loop moved off awaiting_approval to %s; the human's decision would now be dropped", after.State)
+	}
+	if after.PendingApproval == nil || after.PendingApproval.CallID != "call-gated" {
+		t.Fatalf("pending approval lost by a refused continuation: %+v", after.PendingApproval)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("loop mutated by a refused continuation:\n before %+v\n after  %+v", before, after)
+	}
 }

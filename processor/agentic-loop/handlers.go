@@ -855,8 +855,10 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 		case errors.Is(err, ErrLoopAlreadyExists):
 			entity, err = h.loopManager.attachContinuation(task.LoopID, task.TaskID)
 			if err != nil {
-				// A settled loop refuses the continuation outright; nothing has
-				// been registered, so there is nothing to roll back.
+				// A settled loop (ErrLoopTerminal) and a loop with work in
+				// flight (ErrLoopBusy) both refuse the continuation outright;
+				// nothing has been registered, so there is nothing to roll back
+				// and the live loop's own round is untouched.
 				return HandlerResult{}, err
 			}
 			loopID = task.LoopID
