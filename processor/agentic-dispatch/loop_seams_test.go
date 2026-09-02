@@ -681,3 +681,42 @@ func TestReadSeamsAnswerFromTheDurableRecordAfterReplacement(t *testing.T) {
 		assert.Equal(t, "user-a", loop.UserID)
 	})
 }
+
+// The entity-id-contract spec's path-token scenario. Both endpoints that take a
+// loop id from the URL path refuse a non-canonical token for its FORM, ahead of
+// the existence check, so the caller is told the token is malformed rather than
+// that the loop does not exist.
+//
+// The not-found answer is the bug this pins, not a nicety: `loop_ab12cd34` is a
+// token this framework could never have minted, so answering 404 sends the
+// caller hunting for a loop that no state could ever have held, and hides a
+// client that is authoring loop ids instead of echoing them back.
+//
+// This test is named by the spec delta and was missing when section 5 was
+// ticked; the citation named it before anything wrote it.
+func TestLoopEndpointsRefuseNonCanonicalPathToken(t *testing.T) {
+	t.Run("GET /loops/{id}", func(t *testing.T) {
+		c, _, rec := newSeamTestComponent(t)
+
+		resp := seamHTTPCall(t, c.handleGetLoop, http.MethodGet,
+			"/loops/"+seamTestMalformed, seamTestMalformed, "", "user-a")
+
+		require.Equal(t, http.StatusBadRequest, resp.Code,
+			"the form refusal answers 400, never the 404 an absent loop earns")
+		assert.Contains(t, resp.Body.String(), "not a loop ID this framework minted")
+		assert.NotContains(t, resp.Body.String(), "names no loop")
+		requireSeamRefusal(t, c, rec, seamHTTPLoopRead, reasonFormMalformed)
+	})
+
+	t.Run("POST /loops/{id}/approval", func(t *testing.T) {
+		c, _, rec := newSeamTestComponent(t)
+
+		resp := seamHTTPCall(t, c.handleLoopApproval, http.MethodPost,
+			"/loops/"+seamTestMalformed+"/approval", seamTestMalformed,
+			`{"decision":"approve"}`, "user-a")
+
+		require.Equal(t, http.StatusBadRequest, resp.Code)
+		assert.Contains(t, resp.Body.String(), "not a loop ID this framework minted")
+		requireSeamRefusal(t, c, rec, seamHTTPLoopApproval, reasonFormMalformed)
+	})
+}
