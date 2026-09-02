@@ -408,7 +408,7 @@ func countContent(msgs []agentic.ChatMessage, content string) int {
 // continuation would send it — orphan tool_calls to the provider, two rounds
 // over one context manager. Owner ruling 2026-09-02: refuse (do not queue).
 //
-// spec: agentic-loop / Requirement: Creating a loop that already exists is refused; a continuation attaches to it
+// spec: agentic-loop / Creating a loop that already exists is refused; a continuation attaches to it
 func TestContinuationOfLoopWithToolsInFlightIsRefused(t *testing.T) {
 	ctx := context.Background()
 	h := fenceHandler(t)
@@ -489,7 +489,7 @@ func TestContinuationOfLoopWithToolsInFlightIsRefused(t *testing.T) {
 // afterwards then takes the stale-drop path — the gated call is abandoned with
 // nobody told. Refuse instead, and the human's answer still resolves it.
 //
-// spec: agentic-loop / Requirement: Creating a loop that already exists is refused; a continuation attaches to it
+// spec: agentic-loop / Creating a loop that already exists is refused; a continuation attaches to it
 func TestContinuationOfLoopAwaitingApprovalIsRefused(t *testing.T) {
 	ctx := context.Background()
 	h := fenceHandler(t)
