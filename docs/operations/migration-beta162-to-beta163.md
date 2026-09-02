@@ -935,13 +935,99 @@ POST <prefix>message   {"content": "/cancel <loop_id>", "user_id": "<the loop's 
 That routes through the command registry and publishes a correct `agentic.UserSignal`. Same HTTP surface, same
 component, already permissioned.
 
-**Publishing `agentic.UserSignal` on `agent.signal.<loop_id>` yourself also still works and is untouched.** Two
-sisters already do exactly that — `semdragon/processor/questdagexec/handler.go:1190` and
-`semsage/processor/ui-api/http.go:195`. Neither is affected by this removal.
+**Publishing `agentic.UserSignal` on `agent.signal.<loop_id>` yourself still works and the lane is untouched.**
+Two sisters do exactly that. Their exposure to *this* removal differs, and the earlier blanket "neither is
+affected" was written for the #1231 endpoint deletion — it does not hold for #1239:
 
-**`pause` and `resume` have no replacement, because they never had an implementation.** `handlePauseSignal` sets
-`entity.PauseRequested`, and nothing in the tree reads that field. Tracked as **#1239**; do not build on the
-assumption that pausing a loop is available.
+| Sister | Site | Affected by #1239? |
+|---|---|---|
+| semdragon | `processor/questdagexec/handler.go:1190` | **No** — publishes `SignalCancel` only |
+| semsage | `processor/ui-api/http.go:182` | **YES — will not compile** |
+
+### semsage MUST act before it bumps SemStreams
+
+Measured against semsage `4d28b4dc` (2026-03-05). `processor/ui-api/http.go:165` declares
+*"handleLoopSignal publishes a pause/resume/cancel signal for a loop"* and `:182` switches on
+`case agentic.SignalPause, agentic.SignalResume, agentic.SignalCancel:`. **`agentic.SignalPause` and
+`agentic.SignalResume` no longer exist, so that file fails to compile on the next bump** — a build break, not
+a behaviour change, so it cannot be missed.
+
+The migration is semsage's to implement, in its own repository:
+
+1. Remove `agentic.SignalPause` and `agentic.SignalResume` from the `:182` case. Keep `agentic.SignalCancel`
+   if the endpoint survives.
+2. Correct the `:186` operator-facing error text, which currently reads *"must be pause, resume, or cancel"*.
+3. Correct the `:165` doc comment.
+4. Decide the endpoint's disposition. Note that its pause and resume arms **never worked** — they published a
+   signal SemStreams accepted and ignored — so removing them takes away nothing an operator was getting.
+
+SemStreams does not make this change; sister repositories are read-only from here. This section is the
+record of the obligation.
+
+**`pause` and `resume` have no replacement, because they never had an implementation — and as of this release
+they are gone.** `handlePauseSignal` set `entity.PauseRequested`, and nothing in the tree ever read that field.
+Owner ruling on **#1239** (2026-09-02) deleted the surface rather than implement it. Pause is not wanted pre-v1.
+
+What was removed:
+
+- Signal verbs `pause` and `resume` (`agentic.SignalPause`, `agentic.SignalResume`).
+- `LoopEntity` fields `PauseRequested`, `PauseRequestedBy`, `StateBeforePause` — and with them the persisted
+  JSON keys `pause_requested`, `pause_requested_by`, `state_before_pause`.
+- The handlers `handlePauseSignal` / `handleResumeSignal`.
+
+**What you must do.** Nothing, if you never sent `pause` or `resume` — and nothing could have worked if you did.
+If you *do* still publish an `agentic.UserSignal` with `type: "pause"` or `"resume"`, the behaviour changes
+from *silently accepted and ignored* to **rejected by `UserSignal.Validate()`**. That is deliberate: an
+unimplemented verb that answers `200` is how this defect survived unnoticed for months. Remove the call; there
+is nothing to migrate it to.
+
+**Persisted records.** The three JSON keys were written only by the deleted handlers — but `handlePauseSignal`
+set `PauseRequested = true` and persisted the loop, so **an existing `AGENT_LOOPS` record may well carry
+non-zero values for them**, not merely absent or falsy ones. That is the case the compatibility test uses.
+Decoding ignores unknown keys —
+no `DisallowUnknownFields` sits on the `LoopEntity` decode path — so old records load unchanged and no backfill
+or migration job is required.
+
+`LoopState` `paused` deliberately remains in the vocabulary, with nothing able to set it. The reason is
+**validation, not deserialization**: `LoopState` is a plain string type with no `UnmarshalJSON`, so a persisted
+`"state":"paused"` would decode either way. But `LoopEntity.Validate()` rejects any state that
+`isValidLoopState` does not list (`agentic/state.go:106,116`), so dropping the constant would make every
+pre-existing `paused` record invalid. Keeping it is what makes this migration a no-op for your data.
+
+### `cancel` is now the entire signal vocabulary
+
+Removing pause/resume exposed that the same measurement had never been applied to the rest of the list.
+`agentic.UserSignal` advertised seven verbs. The loop's signal consumer
+(`processor/agentic-loop/component.go`) switches on **`cancel` alone**; every other verb fell to the default
+arm, logged `"Unsupported signal type"`, and — because the handler returns nothing and the consumer ACKs on
+a nil return — **was acknowledged as successfully delivered**. A caller sending `approve` got a valid signal,
+a successful publish, a successful ack, and no effect. That is the #1239 defect, four more times.
+
+Owner ruling (2026-09-02): reconcile the vocabulary with the handler rather than carry the advertisement.
+**`SignalApprove`, `SignalReject`, `SignalFeedback` and `SignalRetry` are removed**, alongside
+`SignalPause`/`SignalResume`. `SignalCancel` remains.
+
+**Approval and rejection are not affected, because they were never really here.** The working approval lane is
+`ApprovalResponse` on `agent.approval_response.*` (ADR-039), a different payload with a real handler. If you
+approve or reject tool calls today, you are already using it and nothing changes.
+
+**What you must do.** Nothing, if you only ever published `cancel` — which is the only verb that ever did
+anything. If you publish any of the other six, `UserSignal.Validate()` now refuses it and names it as removed.
+Delete the call; there is no replacement, because there was never an implementation. If the intent was
+approval, move to `ApprovalResponse`.
+
+**No sister publishes the four.** Swept read-only across `/Users/coby/Code/c360`: no sister references
+`SignalApprove`, `SignalReject`, `SignalFeedback` or `SignalRetry`. The only sister break from this release is
+semsage's pause/resume compile failure, recorded above.
+
+**Recorded residual — `ResponseAction.Signal`.** The interactive-affordance field on `UserResponse` is a
+free-form string and is deliberately not validated against the signal vocabulary: an affordance may map to a
+signal, to an `ApprovalResponse`, or to something the framework has never heard of, so validating it would be
+the framework predicting a value it does not own. An existing payload still round-trips. The consequence,
+stated rather than hidden: an adopter who sets `Signal: "approve"` gets no compile error, no runtime error,
+and a button that silently does nothing. Nothing in this tree produces one, so the defect is dormant rather
+than live — but point approval affordances at `ApprovalResponse`, and revisit this the moment a production
+producer appears.
 
 ### 2. Newly enforced: the `approve` permission
 

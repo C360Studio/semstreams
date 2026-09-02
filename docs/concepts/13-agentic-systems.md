@@ -115,7 +115,7 @@ Agentic systems use a state machine to track progress through well-defined phase
 | `complete` | Yes | Successfully finished |
 | `failed` | Yes | Failed due to error or max iterations |
 | `cancelled` | Yes | Cancelled by user signal |
-| `paused` | No | Paused by user signal, can resume |
+| `paused` | No | Unreachable — the pause signal was deleted (#1239); no code path sets this state |
 | `awaiting_approval` | No | Waiting for user approval |
 
 **Why states matter:**
@@ -138,8 +138,6 @@ Users can send control signals to affect running loops:
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
 │  cancel  ──▶  Stop execution immediately (→ cancelled)      │
-│  pause   ──▶  Pause at next checkpoint (→ paused)           │
-│  resume  ──▶  Continue paused loop (→ previous state)       │
 │  approve ──▶  Approve pending result (→ complete)           │
 │  reject  ──▶  Reject with reason (→ failed)                 │
 │  retry   ──▶  Retry failed loop (→ exploring)               │
@@ -383,7 +381,7 @@ The agentic-loop manages its own state machine internally. State transitions hap
 │                                                                      │
 │   All Tools Complete ─────────────▶  Increment iteration, continue  │
 │   Max Iterations     ─────────────▶  Mark failed                    │
-│   User Signal        ─────────────▶  Handle cancel/pause/resume     │
+│   User Signal        ─────────────▶  Handle cancel                  │
 │                                                                      │
 │   No rules required. No external state machine driver.              │
 │                                                                      │

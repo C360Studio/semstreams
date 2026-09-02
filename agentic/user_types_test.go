@@ -160,10 +160,10 @@ func TestUserSignal_Validate(t *testing.T) {
 			wantErr: "",
 		},
 		{
-			name: "valid reject signal with payload",
+			name: "valid cancel signal with payload",
 			signal: UserSignal{
 				SignalID:    "sig-123",
-				Type:        SignalReject,
+				Type:        SignalCancel,
 				LoopID:      signalFixtureLoopID,
 				UserID:      "user-1",
 				ChannelType: "cli",
@@ -199,7 +199,44 @@ func TestUserSignal_Validate(t *testing.T) {
 				LoopID:   signalFixtureLoopID,
 				UserID:   "user-1",
 			},
-			wantErr: "type must be one of: cancel, pause, resume, approve, reject, feedback, retry",
+			wantErr: "type must be one of: cancel",
+		},
+		{
+			// spec: agentic-dispatch / One control-signal payload travels the loop signal subject
+			// A removed verb is refused, and the refusal names it rather than
+			// handing back a list that silently omits what was sent (#1239).
+			name: "removed verb pause is refused and named",
+			signal: UserSignal{
+				SignalID: "sig-123",
+				Type:     "pause",
+				LoopID:   signalFixtureLoopID,
+				UserID:   "user-1",
+			},
+			wantErr: `type "pause" was removed in #1239 (advertised but never implemented); type must be one of: cancel`,
+		},
+		{
+			// approve and reject are the only removed verbs with a real
+			// destination, so the refusal must carry it. Without this the adopter
+			// most likely to be affected is told "removed" and left to infer that
+			// approval is gone, which is false.
+			name: "removed verb approve is redirected to the approval lane",
+			signal: UserSignal{
+				SignalID: "sig-123",
+				Type:     "approve",
+				LoopID:   signalFixtureLoopID,
+				UserID:   "user-1",
+			},
+			wantErr: `type "approve" was removed in #1239 (advertised but never implemented) — publish an ApprovalResponse on agent.approval_response.* instead (ADR-039); type must be one of: cancel`,
+		},
+		{
+			name: "removed verb resume is refused and named",
+			signal: UserSignal{
+				SignalID: "sig-123",
+				Type:     "resume",
+				LoopID:   signalFixtureLoopID,
+				UserID:   "user-1",
+			},
+			wantErr: `type "resume" was removed in #1239 (advertised but never implemented); type must be one of: cancel`,
 		},
 		{
 			name: "missing loop_id",
@@ -237,7 +274,7 @@ func TestUserSignal_Validate(t *testing.T) {
 // Scenario: every remaining loop-token carrier refuses a non-canonical token.
 //
 // A control signal is the one lane on which a client-authored token used to
-// reach the loop's cancel/pause/resume handlers unchecked (#1228).
+// reach the loop's signal handlers unchecked (#1228).
 func TestUserSignalRefusesNonCanonicalLoopID(t *testing.T) {
 	signal := UserSignal{
 		SignalID:  "sig-123",
@@ -261,12 +298,12 @@ func TestUserSignalRefusesNonCanonicalLoopID(t *testing.T) {
 func TestUserSignal_JSONRoundTrip(t *testing.T) {
 	original := UserSignal{
 		SignalID:    "sig-123",
-		Type:        SignalReject,
+		Type:        SignalCancel,
 		LoopID:      signalFixtureLoopID,
 		UserID:      "user-1",
 		ChannelType: "slack",
 		ChannelID:   "C12345",
-		Payload:     "rejection reason",
+		Payload:     "cancellation reason",
 		Timestamp:   time.Now().UTC().Truncate(time.Millisecond),
 	}
 
@@ -311,9 +348,12 @@ func TestUserResponse_Validate(t *testing.T) {
 				UserID:      "U67890",
 				Type:        ResponseTypePrompt,
 				Content:     "Ready for review",
+				// ResponseAction.Signal is a free-form UI affordance, not a validated
+				// UserSignal type. An approve/reject affordance publishes an
+				// ApprovalResponse (ADR-039), not a UserSignal — only cancel is a
+				// signal the loop handles.
 				Actions: []ResponseAction{
-					{ID: "approve", Type: "button", Label: "Approve", Signal: SignalApprove, Style: "primary"},
-					{ID: "reject", Type: "button", Label: "Reject", Signal: SignalReject, Style: "danger"},
+					{ID: "cancel", Type: "button", Label: "Cancel", Signal: SignalCancel, Style: "danger"},
 				},
 				Timestamp: time.Now(),
 			},
@@ -392,7 +432,7 @@ func TestUserResponse_JSONRoundTrip(t *testing.T) {
 			{Type: "code", Content: "fmt.Println(\"hello\")", Lang: "go"},
 		},
 		Actions: []ResponseAction{
-			{ID: "retry", Type: "button", Label: "Retry", Signal: SignalRetry},
+			{ID: "cancel", Type: "button", Label: "Cancel", Signal: SignalCancel},
 		},
 		Timestamp: time.Now().UTC().Truncate(time.Millisecond),
 	}
@@ -410,19 +450,15 @@ func TestUserResponse_JSONRoundTrip(t *testing.T) {
 	assert.Len(t, decoded.Blocks, 1)
 	assert.Equal(t, "go", decoded.Blocks[0].Lang)
 	assert.Len(t, decoded.Actions, 1)
-	assert.Equal(t, SignalRetry, decoded.Actions[0].Signal)
+	assert.Equal(t, SignalCancel, decoded.Actions[0].Signal)
 }
 
 func TestSignalTypeConstants(t *testing.T) {
 	// Verify all signal types are valid
+	// Cancel is the whole vocabulary: it is the only verb the loop's signal
+	// consumer handles. See the const block in user_types.go.
 	validTypes := []string{
 		SignalCancel,
-		SignalPause,
-		SignalResume,
-		SignalApprove,
-		SignalReject,
-		SignalFeedback,
-		SignalRetry,
 	}
 
 	for _, sigType := range validTypes {
@@ -432,6 +468,15 @@ func TestSignalTypeConstants(t *testing.T) {
 	// Verify invalid types
 	assert.False(t, isValidSignalType("invalid"))
 	assert.False(t, isValidSignalType(""))
+
+	// Every verb this package once advertised and never handled must fail
+	// Validate, so a caller that still sends one is told, rather than getting a
+	// warning log and a successful ACK. pause/resume under #1239; approve,
+	// reject, feedback and retry under the same ruling once the identical shape
+	// was found in them.
+	for _, removed := range []string{"pause", "resume", "approve", "reject", "feedback", "retry"} {
+		assert.False(t, isValidSignalType(removed), "expected %s to be invalid", removed)
+	}
 }
 
 func TestResponseTypeConstants(t *testing.T) {
