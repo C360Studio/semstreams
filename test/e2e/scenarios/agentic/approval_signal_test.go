@@ -10,36 +10,68 @@ import (
 	"github.com/c360studio/semstreams/test/e2e/scenarios"
 )
 
-func TestAgenticAssertingStagesMatchesStageList(t *testing.T) {
-	stages := NewScenario(nil, DefaultConfig()).stages()
+// TestStagesAreExactlyThisOrderedList is the guard on the stage list itself.
+//
+// A count alone cannot carry it: deleting a stage and decrementing the number
+// beside it agrees with itself and stays green, which is the shape of a
+// coverage claim that quietly shrinks. Naming every stage in order, with the
+// asserts flag that decides whether it is counted, makes a removal, a rename,
+// a reorder, or a silently-uncounted stage fail in plain `go test`.
+//
+// The order is load-bearing, not decorative: the approval and signal walks
+// spawn loops whose metrics and stream traffic would perturb the counter
+// assertions above them, and verify-durable-tool-replay faults the TOOL stream
+// for the duration of its own stage.
+func TestStagesAreExactlyThisOrderedList(t *testing.T) {
+	want := []struct {
+		name    string
+		asserts bool
+	}{
+		{"verify-components", true},
+		{"capture-baseline", false},
+		{"inject-task", false},
+		{"wait-for-completion", true},
+		{"verify-terminal-response", true},
+		{"validate-trajectory", true},
+		{"verify-graph-triples", true},
+		{"verify-tool-execution", true},
+		{"verify-durable-tool-replay", true},
+		{"verify-streaming-metrics", true},
+		{"verify-tool-call-governance", true},
+		{"walk-approval-path", true},
+		{"refuse-non-canonical-approval", true},
+		{"walk-signal-path", true},
+		{"refuse-non-canonical-signal", true},
+		{"validate-results", true},
+	}
 
-	counted := 0
-	for _, stage := range stages {
+	scenario := NewScenario(nil, DefaultConfig())
+	got := scenario.stages()
+	if len(got) != len(want) {
+		names := make([]string, len(got))
+		for i, stage := range got {
+			names[i] = stage.name
+		}
+		t.Fatalf("stages() ran %d stages %v, want %d", len(got), names, len(want))
+	}
+	for i := range want {
+		if got[i].name != want[i].name || got[i].asserts != want[i].asserts {
+			t.Errorf("stage %d = %s(asserts=%v), want %s(asserts=%v)",
+				i, got[i].name, got[i].asserts, want[i].name, want[i].asserts)
+		}
+	}
+
+	// The number Execute pins assertions_run against is derived from the same
+	// list, so this holds the derivation against the expectation above rather
+	// than against a second hand-maintained number.
+	wantCounted := 0
+	for _, stage := range want {
 		if stage.asserts {
-			counted++
+			wantCounted++
 		}
 	}
-	if counted != agenticAssertingStages {
-		t.Fatalf("stages() has %d asserting stages, agenticAssertingStages = %d", counted, agenticAssertingStages)
-	}
-}
-
-func TestStagesWalkApprovalAndSignalLanes(t *testing.T) {
-	want := map[string]bool{
-		"walk-approval-path":            false,
-		"refuse-non-canonical-approval": false,
-		"walk-signal-path":              false,
-		"refuse-non-canonical-signal":   false,
-	}
-	for _, stage := range NewScenario(nil, DefaultConfig()).stages() {
-		if _, ok := want[stage.name]; ok {
-			want[stage.name] = true
-		}
-	}
-	for name, present := range want {
-		if !present {
-			t.Errorf("stages() does not run %s", name)
-		}
+	if got := scenario.assertingStageCount(); got != wantCounted {
+		t.Errorf("assertingStageCount() = %d, want %d", got, wantCounted)
 	}
 }
 
@@ -92,7 +124,7 @@ func TestValidateResultsRequiresBothWalks(t *testing.T) {
 			"approval_outcome":                      agentic.OutcomeSuccess,
 			"signal_outcome":                        agentic.OutcomeCancelled,
 			"approval_refusal_non_canonical_status": http.StatusBadRequest,
-			"signal_refusal_non_canonical_reason":   "form_malformed",
+			"signal_refusal_non_canonical_count":    float64(1),
 		}
 	}
 	s := NewScenario(nil, DefaultConfig())
@@ -105,7 +137,7 @@ func TestValidateResultsRequiresBothWalks(t *testing.T) {
 		"approval_outcome",
 		"signal_outcome",
 		"approval_refusal_non_canonical_status",
-		"signal_refusal_non_canonical_reason",
+		"signal_refusal_non_canonical_count",
 	} {
 		details := complete()
 		delete(details, missing)

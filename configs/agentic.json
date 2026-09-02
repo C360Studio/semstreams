@@ -306,6 +306,7 @@
       "config": {
         "max_iterations": 5,
         "timeout": "30s",
+        "approval_timeout": "5m",
         "stream_name": "AGENT",
         "loops_bucket": "AGENT_LOOPS",
         "tool_call_governance": {

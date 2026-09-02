@@ -68,10 +68,23 @@ const (
 	// mapped reason (processor/agentic-dispatch/metrics.go).
 	loopAdmissionRefusalsMetric = "semstreams_router_loop_admission_refusals_total"
 
-	// toolExecutionsMetric counts executor invocations by tool name. For
-	// approvalGatedTool it can only be nonzero via an approved re-dispatch:
+	// approvalTrackerWindow bounds the retry on a 409 from the approval
+	// endpoint — see submitApproval for why that status is a race rather than
+	// an answer.
+	approvalTrackerWindow = 10 * time.Second
+
+	// toolExecutionsMetric counts executor invocations by tool name AND status.
+	// For approvalGatedTool it can only be nonzero via an approved re-dispatch:
 	// the approval filter refuses every un-approved call to it.
-	toolExecutionsMetric = "semstreams_agentic_tools_executions_total"
+	//
+	// The status label is never omitted from a filter on this series. The e2e
+	// metrics client matches a label map as a SUBSET, so {tool_name} alone also
+	// counts status="error" — and query_by_type answers exactly that when its
+	// arguments are missing, which is what the mock would send if its pinned
+	// args were dropped. Filtering on success is what keeps this assertion
+	// about an execution that WORKED.
+	toolExecutionsMetric   = "semstreams_agentic_tools_executions_total"
+	toolExecutionSucceeded = "success"
 )
 
 // nonCanonicalToken returns the uppercase spelling of a loop token: 36 bytes
@@ -124,14 +137,17 @@ func newApprovalGatedTask(now time.Time, suffix, userID string) agentic.TaskMess
 // approval seam admits a second-party approver and publishes ApprovalResponse,
 // and the re-dispatched call actually executes.
 func (s *Scenario) walkApprovalPath(ctx context.Context, result *scenarios.Result) error {
-	executionsBefore, err := s.metricWithLabels(ctx, toolExecutionsMetric,
-		map[string]string{"tool_name": approvalGatedTool})
+	executionLabels := map[string]string{
+		"tool_name": approvalGatedTool,
+		"status":    toolExecutionSucceeded,
+	}
+	executionsBefore, err := s.metricWithLabels(ctx, toolExecutionsMetric, executionLabels)
 	if err != nil {
 		return fmt.Errorf("read gated tool execution baseline: %w", err)
 	}
 	if executionsBefore != 0 {
-		return fmt.Errorf("%s{tool_name=%q} = %v before any approval; the gated tool ran without one",
-			toolExecutionsMetric, approvalGatedTool, executionsBefore)
+		return fmt.Errorf("%s%v = %v before any approval; the gated tool ran without one",
+			toolExecutionsMetric, executionLabels, executionsBefore)
 	}
 
 	task := newApprovalGatedTask(time.Now(), "approval", approvalLoopOwner)
@@ -168,10 +184,12 @@ func (s *Scenario) walkApprovalPath(ctx context.Context, result *scenarios.Resul
 	}
 
 	// The approved re-dispatch carries ApprovedBy, which is the only way a call
-	// to this tool reaches an executor at all.
+	// to this tool reaches an executor at all — and it must land on the SUCCESS
+	// status, so a call that reached the executor and was refused by it cannot
+	// satisfy this.
 	if err := s.waitMetricWithLabels(ctx, toolExecutionsMetric,
-		map[string]string{"tool_name": approvalGatedTool}, executionsBefore+1, 30*time.Second); err != nil {
-		return fmt.Errorf("approved tool call did not execute: %w", err)
+		executionLabels, executionsBefore+1, 30*time.Second); err != nil {
+		return fmt.Errorf("approved tool call did not execute successfully: %w", err)
 	}
 	outcome, err := s.awaitTerminalOutcome(ctx, task.LoopID)
 	if err != nil {
@@ -308,6 +326,14 @@ func (s *Scenario) walkSignalPath(ctx context.Context, result *scenarios.Result)
 	if !strings.Contains(response.Content, task.LoopID) {
 		return fmt.Errorf("/cancel response %q does not name loop %s", response.Content, task.LoopID)
 	}
+	// Only the branch that PUBLISHED a signal sets in_reply_to; the
+	// already-settled answer carries the same status type and names the same
+	// loop, and this is what tells them apart
+	// (processor/agentic-dispatch/commands.go handleCancelCommand).
+	if response.InReplyTo != task.LoopID {
+		return fmt.Errorf("/cancel response in_reply_to = %q, want %q — the loop was answered, not signalled",
+			response.InReplyTo, task.LoopID)
+	}
 
 	baseMsg, err := s.awaitStreamPayload(ctx, "agent.signal."+task.LoopID, 20*time.Second)
 	if err != nil {
@@ -355,8 +381,8 @@ func (s *Scenario) refuseNonCanonicalSignal(ctx context.Context, result *scenari
 		{name: "absent", loopID: uuid.NewString(), seam: "cancel_command", reason: "existence_absent"},
 	}
 	for _, refusal := range refusals {
-		before, err := s.metricWithLabels(ctx, loopAdmissionRefusalsMetric,
-			map[string]string{"seam": refusal.seam, "reason": refusal.reason})
+		labels := map[string]string{"seam": refusal.seam, "reason": refusal.reason}
+		before, err := s.metricWithLabels(ctx, loopAdmissionRefusalsMetric, labels)
 		if err != nil {
 			return fmt.Errorf("read %s cancel refusal baseline: %w", refusal.name, err)
 		}
@@ -369,11 +395,17 @@ func (s *Scenario) refuseNonCanonicalSignal(ctx context.Context, result *scenari
 				refusal.name, response.Type, response.Content, agentic.ResponseTypeError)
 		}
 		if err := s.waitMetricWithLabels(ctx, loopAdmissionRefusalsMetric,
-			map[string]string{"seam": refusal.seam, "reason": refusal.reason},
-			before+1, 15*time.Second); err != nil {
+			labels, before+1, 15*time.Second); err != nil {
 			return fmt.Errorf("%s cancel refusal was not counted: %w", refusal.name, err)
 		}
-		result.Details["signal_refusal_"+refusal.name+"_reason"] = refusal.reason
+		// The OBSERVED counter, not the label that was asked for: recording the
+		// expectation would make validate-results re-read its own input and
+		// assert nothing.
+		observed, err := s.metricWithLabels(ctx, loopAdmissionRefusalsMetric, labels)
+		if err != nil {
+			return fmt.Errorf("read %s cancel refusal counter: %w", refusal.name, err)
+		}
+		result.Details["signal_refusal_"+refusal.name+"_count"] = observed
 	}
 	return nil
 }
@@ -394,8 +426,11 @@ func (s *Scenario) publishTask(ctx context.Context, subject string, task agentic
 
 // awaitApprovalPending waits for the loop's ApprovalPendingEvent and decodes it
 // through the production payload registry.
+// The gated call is refused on the loop's FIRST tool round, so the event owes
+// its arrival within the task budget — waiting the completion budget for it
+// only delays a failure whose cause is already decided.
 func (s *Scenario) awaitApprovalPending(ctx context.Context, loopID string) (*agentic.ApprovalPendingEvent, error) {
-	baseMsg, err := s.awaitStreamPayload(ctx, "agent.approval_pending."+loopID, s.config.CompleteTimeout)
+	baseMsg, err := s.awaitStreamPayload(ctx, "agent.approval_pending."+loopID, s.config.TaskTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("read approval-pending event for loop %s: %w", loopID, err)
 	}
@@ -495,18 +530,15 @@ func (s *Scenario) awaitTerminalOutcome(ctx context.Context, loopID string) (str
 	for {
 		stored, getErr := stream.GetLastMsgForSubject(ctx, "agent.complete."+loopID)
 		if getErr == nil {
-			var terminal struct {
-				Payload struct {
-					Outcome string `json:"outcome"`
-				} `json:"payload"`
+			decoded, err := s.decoder.Decode(stored.Data)
+			if err != nil {
+				return "", fmt.Errorf("decode terminal for loop %s through the production registry: %w", loopID, err)
 			}
-			if err := json.Unmarshal(stored.Data, &terminal); err != nil {
-				return "", fmt.Errorf("decode terminal for loop %s: %w", loopID, err)
+			outcome, err := terminalOutcome(decoded.Payload())
+			if err != nil {
+				return "", fmt.Errorf("loop %s: %w", loopID, err)
 			}
-			if terminal.Payload.Outcome == "" {
-				return "", fmt.Errorf("terminal for loop %s declares no outcome", loopID)
-			}
-			return terminal.Payload.Outcome, nil
+			return outcome, nil
 		}
 		if !isMsgNotFound(getErr) {
 			return "", fmt.Errorf("read terminal for loop %s: %w", loopID, getErr)
@@ -522,25 +554,66 @@ func (s *Scenario) awaitTerminalOutcome(ctx context.Context, loopID string) (str
 	}
 }
 
+// terminalOutcome reads the verdict off whichever settlement payload ended the
+// loop. The three are separate registered types, so this is a type switch and
+// not a field cast: an envelope that is not a settlement event is an error
+// here, where an anonymous shape would have read a zero-valued outcome out of
+// it and compared that to what the caller expected.
+func terminalOutcome(payload message.Payload) (string, error) {
+	var outcome string
+	switch settled := payload.(type) {
+	case *agentic.LoopCompletedEvent:
+		outcome = settled.Outcome
+	case *agentic.LoopFailedEvent:
+		outcome = settled.Outcome
+	case *agentic.LoopCancelledEvent:
+		outcome = settled.Outcome
+	default:
+		return "", fmt.Errorf("terminal payload type %T is not a loop settlement event", payload)
+	}
+	if outcome == "" {
+		return "", fmt.Errorf("terminal payload %T declares no outcome", payload)
+	}
+	return outcome, nil
+}
+
 // submitApproval answers a pending approval over the production HTTP seam.
+//
+// A 409 is retried inside a bounded window instead of being failed on. The
+// endpoint answers 409 for "this loop is not awaiting approval", and the
+// scenario reads the ApprovalPendingEvent off the AGENT stream directly —
+// which can beat dispatch's own subscription delivering the same event into
+// the tracker the endpoint reads. That is a race between two observers of one
+// fact, not a refusal. Every other status is the answer and is reported as
+// one, and a 409 that outlasts the window still fails.
 func (s *Scenario) submitApproval(ctx context.Context, loopID, decision string) error {
-	status, body, err := s.postJSON(ctx,
-		fmt.Sprintf("%s/loops/%s/approval", dispatchRoutePrefix, loopID),
-		agenticdispatch.ApprovalRequest{Decision: decision, UserID: approvalRequester})
-	if err != nil {
-		return fmt.Errorf("post approval for loop %s: %w", loopID, err)
+	deadline := time.Now().Add(approvalTrackerWindow)
+	for {
+		status, body, err := s.postJSON(ctx,
+			fmt.Sprintf("%s/loops/%s/approval", dispatchRoutePrefix, loopID),
+			agenticdispatch.ApprovalRequest{Decision: decision, UserID: approvalRequester})
+		if err != nil {
+			return fmt.Errorf("post approval for loop %s: %w", loopID, err)
+		}
+		if status == http.StatusOK {
+			var accepted agenticdispatch.ApprovalAcceptResponse
+			if err := json.Unmarshal(body, &accepted); err != nil {
+				return fmt.Errorf("decode approval acceptance: %w", err)
+			}
+			if !accepted.Accepted || accepted.LoopID != loopID || accepted.Decision != decision {
+				return fmt.Errorf("approval acceptance = %+v, want accepted %s for loop %s", accepted, decision, loopID)
+			}
+			return nil
+		}
+		if status != http.StatusConflict || !time.Now().Before(deadline) {
+			return fmt.Errorf("approval status = %d, want 200 (body %s)", status, strings.TrimSpace(string(body)))
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
 	}
-	if status != http.StatusOK {
-		return fmt.Errorf("approval status = %d, want 200 (body %s)", status, strings.TrimSpace(string(body)))
-	}
-	var accepted agenticdispatch.ApprovalAcceptResponse
-	if err := json.Unmarshal(body, &accepted); err != nil {
-		return fmt.Errorf("decode approval acceptance: %w", err)
-	}
-	if !accepted.Accepted || accepted.LoopID != loopID || accepted.Decision != decision {
-		return fmt.Errorf("approval acceptance = %+v, want accepted %s for loop %s", accepted, decision, loopID)
-	}
-	return nil
 }
 
 // chatCommand submits a slash command on the dispatch HTTP message endpoint and

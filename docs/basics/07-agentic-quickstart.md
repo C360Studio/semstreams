@@ -91,6 +91,7 @@ The agentic configuration (`configs/agentic.json`) defines the component pipelin
   "config": {
     "max_iterations": 5,        // Maximum tool call rounds
     "timeout": "30s",           // Overall loop timeout
+    "approval_timeout": "5m",   // Auto-reject a gated call after this long; empty = wait forever
     "stream_name": "AGENT",     // NATS JetStream stream
     "loops_bucket": "AGENT_LOOPS",           // KV for loop state
     "trajectory_evidence_storage_instance": "objectstore"
@@ -137,10 +138,18 @@ The agentic configuration (`configs/agentic.json`) defines the component pipelin
   "name": "agentic-tools",
   "config": {
     "timeout": "10s",
-    "allowed_tools": ["query_entity"]  // Empty array = allow all
+    "allowed_tools": ["query_entity", "query_by_type"],  // Empty array = allow all
+    "approval_required": ["query_by_type"]               // These tools need a human first
   }
 }
 ```
+
+A tool named in `approval_required` is not executed when the model calls it.
+The loop parks in `awaiting_approval` and publishes an approval-pending event;
+a human answers over `POST /agentic-dispatch/loops/{loop_id}/approval` with
+`approve`, `reject`, or `modify`, and only then does the call run. Pair it with
+`agentic-loop`'s `approval_timeout` above — with no timeout set, a gated call
+nobody answers waits forever.
 
 ### Rule-Triggered Agents
 

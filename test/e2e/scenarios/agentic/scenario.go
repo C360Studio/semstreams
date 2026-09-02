@@ -55,10 +55,12 @@ type Scenario struct {
 	obs     *client.ObservabilityClient
 	http    *http.Client
 
-	// decoder is THE production payload decoder for this scenario: a registry
-	// carrying the shipped payload registrations. Every wire payload the
-	// scenario reads back goes through it, so a payload the framework would
-	// fail to decode fails here too.
+	// decoder carries the shipped payload registrations. Reads that route
+	// through it — the terminal-derived user response, and every payload the
+	// approval and signal walks read back — fail here for the same reason the
+	// framework would fail to decode them. It is not universal: the primary
+	// walk's own AGENT-stream terminal read predates it and still casts an
+	// anonymous shape (verifyTerminalResponse).
 	decoder *message.Decoder
 
 	// useMock indicates Docker compose provides mock-llm
@@ -193,15 +195,27 @@ type agenticStage struct {
 	asserts bool
 }
 
-// agenticAssertingStages is the number of asserting stages a complete run
-// performs. One unit of the runner's assertions_run= line therefore reads as
-// "one verification stage that ran to completion" — the tier's green stops
-// resting on stage durations alone (#1238).
+// assertingStageCount is how many stages a complete run must count. One unit of
+// the runner's assertions_run= line therefore reads as "one verification stage
+// that ran to completion" — the tier's green stops resting on stage durations
+// alone (#1238).
 //
-// Keep it equal to the number of stages() entries with asserts set;
-// TestAgenticAssertingStagesMatchesStageList holds the two together without a
-// live stack, and Execute refuses a run that does not reach it.
-const agenticAssertingStages = 14
+// It is DERIVED from stages() rather than carried as a constant beside it,
+// because a hand-carried number is one edit away from agreeing with a list it
+// no longer describes. That makes Execute's comparison a check on the counting,
+// not on the list: what holds the LIST is
+// TestStagesAreExactlyThisOrderedList, which pins every stage's name and
+// asserts flag in order, so a deleted stage fails in plain `go test` with no
+// live stack.
+func (s *Scenario) assertingStageCount() int {
+	count := 0
+	for _, stage := range s.stages() {
+		if stage.asserts {
+			count++
+		}
+	}
+	return count
+}
 
 // stages returns the tier's verification stages in execution order.
 //
@@ -271,12 +285,12 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 		}
 	}
 
-	// The denominator check. A tier that reports a count nobody compares can
-	// drop a whole verification and still print a number, which is the failure
-	// mode a zero count had (#1238): green carried by durations alone. The pin
-	// is what makes a deleted or short-circuited stage fail here.
-	if result.AssertionsRun != agenticAssertingStages {
-		result.Error = fmt.Sprintf("assertions_run = %d, want %d", result.AssertionsRun, agenticAssertingStages)
+	// The denominator check: the number printed is the number the stage list
+	// says a complete run owes. It catches an increment that did not happen —
+	// a stage list held together only by a number nobody compares is how
+	// assertions_run=0 shipped green in the first place (#1238).
+	if want := s.assertingStageCount(); result.AssertionsRun != want {
+		result.Error = fmt.Sprintf("assertions_run = %d, want %d", result.AssertionsRun, want)
 		result.Errors = append(result.Errors, result.Error)
 		result.EndTime = time.Now()
 		result.Duration = result.EndTime.Sub(result.StartTime)
@@ -1113,8 +1127,8 @@ func (s *Scenario) validateResults(_ context.Context, result *scenarios.Result) 
 	if status, _ := result.Details["approval_refusal_non_canonical_status"].(int); status != http.StatusBadRequest {
 		return fmt.Errorf("non-canonical approval refusal status = %d, want %d", status, http.StatusBadRequest)
 	}
-	if reason, _ := result.Details["signal_refusal_non_canonical_reason"].(string); reason != "form_malformed" {
-		return fmt.Errorf("non-canonical cancel refusal reason = %q, want form_malformed", reason)
+	if count, _ := result.Details["signal_refusal_non_canonical_count"].(float64); count < 1 {
+		return fmt.Errorf("non-canonical cancel refusal counter = %v, want at least 1", count)
 	}
 
 	result.Details["validation_passed"] = true
