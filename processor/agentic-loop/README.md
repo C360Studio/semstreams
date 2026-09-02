@@ -32,7 +32,7 @@ state, and records append-only observed trajectory facts with separately stored 
 ## Features
 
 - **State Machine**: 10-state lifecycle with signal-related states
-- **Signal Handling**: Cancel and approval signals
+- **Signal Handling**: The `cancel` signal — the entire vocabulary (approval travels as `ApprovalResponse`)
 - **Context Management**: Automatic compaction and GC for long-running loops
 - **Tool Coordination**: Tracks pending tool calls, aggregates results
 - **Trajectory Observations**: Appends bounded attempt facts and content-addressed full evidence

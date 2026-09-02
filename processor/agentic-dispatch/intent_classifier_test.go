@@ -49,8 +49,8 @@ func TestExtractJSON(t *testing.T) {
 		},
 		{
 			name:  "json in markdown code block",
-			input: "```json\n{\"type\": \"signal\", \"signal_type\": \"approve\"}\n```",
-			want:  `{"type": "signal", "signal_type": "approve"}`,
+			input: "```json\n{\"type\": \"signal\", \"signal_type\": \"cancel\"}\n```",
+			want:  `{"type": "signal", "signal_type": "cancel"}`,
 		},
 		{
 			name:  "json with surrounding text",
