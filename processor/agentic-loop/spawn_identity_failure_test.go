@@ -101,6 +101,12 @@ func TestHandleSpawnIdentityFailure_GraphStatePoisonFailsLoopPerEntity(t *testin
 		started:   true,
 		startTime: time.Now(),
 	}
+	// The loop's terminal state is read at the terminal OBSERVATION, not from
+	// the loop manager afterwards: a settled loop's per-loop state is released
+	// at terminal (#1233), so the map is empty by the time this returns. The
+	// probe snapshots the entity as the terminal fact is written, which is
+	// inside the window every terminal reader shares.
+	probe := newTerminalReaderProbe(c, loopID)
 	poison := errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired,
 		&graph.StateContractError{Reason: graph.GraphStateReasonNoncanonicalEntityID})
 
@@ -108,19 +114,24 @@ func TestHandleSpawnIdentityFailure_GraphStatePoisonFailsLoopPerEntity(t *testin
 		t.Fatalf("handleSpawnIdentityFailure() error = %v, want nil (per-loop failure is fully handled)", gotErr)
 	}
 
-	after, err := handler.loopManager.GetLoop(loopID)
-	if err != nil {
-		t.Fatalf("GetLoop() after error = %v", err)
-	}
+	after := probe.terminalLoop(t)
 	if after.State != agentic.LoopStateFailed || after.Outcome != agentic.OutcomeFailed {
 		t.Fatalf("poisoned loop state=%q outcome=%q, want terminal business failure", after.State, after.Outcome)
 	}
 	if !strings.Contains(after.Error, graph.ErrorCodeGraphStateResetRequired) {
 		t.Fatalf("failed loop Error = %q, want the typed %q code preserved", after.Error, graph.ErrorCodeGraphStateResetRequired)
 	}
+	if _, err := handler.loopManager.GetLoop(loopID); err == nil {
+		t.Fatal("settled loop still held in process memory after the terminal path released it")
+	}
 
 	// One poisoned entity must not degrade the component: Health stays
 	// healthy and no component-wide latch blocks subsequent task intake.
+	//
+	// The probe recorder is dropped first. It is a test seam with no store
+	// registry, and Health reports an unavailable evidence provider for exactly
+	// that — a fact about the fixture, not about the poison this asserts on.
+	c.trajectoryRecorder = nil
 	if health := c.Health(); !health.Healthy || health.Status != "running" {
 		t.Fatalf("Health() = %#v, want healthy running (per-entity poison must not degrade the component)", health)
 	}
@@ -174,16 +185,20 @@ func TestHandleSpawnIdentityFailure_OperationalErrorUsesBusinessFailurePath(t *t
 		},
 		logger: logger,
 	}
+	// Same reason as the poison test above: the terminal outcome is read at the
+	// terminal observation, because the release clears the map on return.
+	probe := newTerminalReaderProbe(c, loopID)
+
 	if err := c.handleSpawnIdentityFailure(context.Background(), loopID, entity, errors.New("temporary graph request failure")); err != nil {
 		t.Fatalf("operational birth failure returned consumer error: %v", err)
 	}
 
-	after, err := loopManager.GetLoop(loopID)
-	if err != nil {
-		t.Fatalf("GetLoop() after error = %v", err)
-	}
+	after := probe.terminalLoop(t)
 	if after.State != agentic.LoopStateFailed || after.Outcome != agentic.OutcomeFailed {
 		t.Fatalf("operational error did not use business failure path: state=%q outcome=%q", after.State, after.Outcome)
+	}
+	if _, err := loopManager.GetLoop(loopID); err == nil {
+		t.Fatal("settled loop still held in process memory after the terminal path released it")
 	}
 }
 
@@ -254,20 +269,25 @@ func TestGraphStatePoisonFailsLoopWhileIntakeContinues(t *testing.T) {
 	// Task 1: touches the poisoned entity. The loop fails terminally with
 	// the typed error; the delivery is ACKed per the loop-failure
 	// convention (never held in flight, never Term'd as producer fault).
+	//
+	// The terminal outcome is read at the terminal observation: a settled
+	// loop's per-loop state is released (#1233), so the loop manager no longer
+	// holds it once intake returns.
+	probe := newTerminalReaderProbe(c, poisonedLoopID)
 	first := consumeTask(poisonedLoopID, "task-poisoned-entity")
 	if !first.acked.Load() || first.naked.Load() || first.terminated.Load() {
 		t.Fatalf("poisoned-loop delivery ack state: ack=%v nak=%v term=%v, want ACK only",
 			first.acked.Load(), first.naked.Load(), first.terminated.Load())
 	}
-	failed, err := c.handler.GetLoop(poisonedLoopID)
-	if err != nil {
-		t.Fatalf("GetLoop(%s) error = %v", poisonedLoopID, err)
-	}
+	failed := probe.terminalLoop(t)
 	if failed.State != agentic.LoopStateFailed || failed.Outcome != agentic.OutcomeFailed {
 		t.Fatalf("poisoned loop state=%q outcome=%q, want terminal failure", failed.State, failed.Outcome)
 	}
 	if !strings.Contains(failed.Error, graph.ErrorCodeGraphStateResetRequired) {
 		t.Fatalf("poisoned loop Error = %q, want the typed %q code preserved", failed.Error, graph.ErrorCodeGraphStateResetRequired)
+	}
+	if _, err := c.handler.GetLoop(poisonedLoopID); err == nil {
+		t.Fatal("the settled poisoned loop is still held in process memory; terminal release did not run")
 	}
 
 	// Task 2: a different loop over a different entity processes normally —
@@ -289,7 +309,10 @@ func TestGraphStatePoisonFailsLoopWhileIntakeContinues(t *testing.T) {
 	}
 
 	// Health never degrades for this class: per-entity poison is a loop
-	// outcome, not a component condition.
+	// outcome, not a component condition. The probe recorder is dropped first —
+	// it has no store registry, and Health would report that fixture fact
+	// rather than anything about the poison.
+	c.trajectoryRecorder = nil
 	if health := c.Health(); !health.Healthy || health.Status != "running" {
 		t.Fatalf("Health() = %#v, want healthy running after a poisoned loop", health)
 	}

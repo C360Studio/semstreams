@@ -403,7 +403,15 @@ func (m *LoopManager) ResolveApprovalIfPending(loopID, callID string) (agentic.P
 
 	entity, exists := m.loops[loopID]
 	if !exists {
-		return agentic.PendingApprovalState{}, false, errs.Wrap(fmt.Errorf("loop %s not found", loopID), "LoopManager", "ResolveApprovalIfPending", "find loop")
+		// ErrLoopNotFound, not a bare error: after a loop settles its per-loop
+		// state is released, so a late or duplicate response for a settled loop
+		// finds nothing here. HandleApprovalResponse branches on the sentinel
+		// and drops exactly as it drops a response for a still-present terminal
+		// loop — absence and terminal presence must not be distinguishable to a
+		// late arrival.
+		return agentic.PendingApprovalState{}, false, errs.Wrap(
+			fmt.Errorf("loop %s: %w", loopID, ErrLoopNotFound),
+			"LoopManager", "ResolveApprovalIfPending", "find loop")
 	}
 	if entity.State != agentic.LoopStateAwaitingApproval {
 		return agentic.PendingApprovalState{}, false, nil
@@ -419,7 +427,38 @@ func (m *LoopManager) ResolveApprovalIfPending(loopID, callID string) (agentic.P
 	return pending, true, nil
 }
 
-// DeleteLoop deletes a loop entity and all associated tracking data.
+// DeleteLoop releases every per-loop entry the manager holds for loopID: the
+// loop entity, its context manager, its pending-tool set, its queued tool
+// calls, its cached tool definitions, tool choice, metadata, request timeout
+// and response format, its task prompt, its truncation-retry counter, and the
+// request/call routing and audit entries that belong to it.
+//
+// This is the release Component.releaseLoopTransientState performs when a loop
+// settles, and its only production caller (#1233). Until that wiring it had
+// none, so a process retained every conversation it had ever run — each entry
+// sized by its conversation, growth bounded only by uptime.
+//
+// Idempotent: every deletion is a no-op on an absent key, so competing terminal
+// paths cannot turn release into a failure. The error return is always nil and
+// is retained only because the exported signature predates this caller.
+//
+// Request and call IDs reach the maps by two routes, so each sweep tests both.
+// The PREFIX test catches the framework's structured IDs ({loopID}:req:{short},
+// {loopID}:tool:{short}), and the extra callIDToName pass catches structured
+// call IDs whose routing entry a turn boundary already evicted
+// (GetAndClearToolResults drops toolCallToLoop but keeps the audit metadata).
+// The VALUE test catches IDs the model authored — toolu_…, call_… — which carry
+// no loop prefix at all and which the prefix test alone missed entirely.
+// Missing them was not only a leak: GetLoopForToolCallWithRecovery would still
+// resolve a released loop from the surviving cache entry, and a late tool
+// result would then fail inside HandleToolResult instead of dropping as the
+// settled-drop it is.
+//
+// Known residual, not closed here: a model-authored call ID whose routing entry
+// was evicted at a turn boundary leaves its audit metadata
+// (callIDToArguments/callIDToOrdinal/toolStartTimes) with no surviving link
+// back to this loop. Those maps are outside the per-loop set this release
+// claims; closing them needs a per-loop call-ID index, which is new state.
 func (m *LoopManager) DeleteLoop(loopID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -436,25 +475,34 @@ func (m *LoopManager) DeleteLoop(loopID string) error {
 	delete(m.taskPrompts, loopID)
 	delete(m.truncationRetryAttempts, loopID)
 
-	// Clean up maps keyed by requestID/callID that embed the loopID prefix.
-	// Structured IDs use format: {loopID}:req:{short} or {loopID}:tool:{short}.
 	prefix := loopID + ":"
-	for k := range m.requestToLoop {
-		if strings.HasPrefix(k, prefix) {
+	for k, owner := range m.requestToLoop {
+		if owner == loopID || strings.HasPrefix(k, prefix) {
 			delete(m.requestToLoop, k)
 			delete(m.requestStartTimes, k)
 		}
 	}
-	for k := range m.toolCallToLoop {
+	for k, owner := range m.toolCallToLoop {
+		if owner == loopID || strings.HasPrefix(k, prefix) {
+			m.deleteToolCallEntriesLocked(k)
+		}
+	}
+	for k := range m.callIDToName {
 		if strings.HasPrefix(k, prefix) {
-			delete(m.toolCallToLoop, k)
-			delete(m.callIDToName, k)
-			delete(m.callIDToArguments, k)
-			delete(m.callIDToOrdinal, k)
-			delete(m.toolStartTimes, k)
+			m.deleteToolCallEntriesLocked(k)
 		}
 	}
 	return nil
+}
+
+// deleteToolCallEntriesLocked drops every per-call entry for one call ID. The
+// caller holds m.mu.
+func (m *LoopManager) deleteToolCallEntriesLocked(callID string) {
+	delete(m.toolCallToLoop, callID)
+	delete(m.callIDToName, callID)
+	delete(m.callIDToArguments, callID)
+	delete(m.callIDToOrdinal, callID)
+	delete(m.toolStartTimes, callID)
 }
 
 // GetContextManager retrieves the context manager for a loop
@@ -838,7 +886,11 @@ func (m *LoopManager) StoreToolResult(loopID string, result agentic.ToolResult) 
 // toolStartTimes) are
 // preserved — buildToolMessages's empty-name fallback and the trajectory step
 // builder still read them. They grow O(total-tool-calls-in-loop) and are
-// cleaned up at DeleteLoop along with the rest of the loop's bookkeeping.
+// cleaned up at DeleteLoop, which since #1233 runs on every terminal path.
+// Precisely: DeleteLoop reaches these entries through the routing entry this
+// method evicts, or through the {loopID}: key prefix. A MODEL-authored call ID
+// whose routing entry this method has already dropped has neither, and its
+// metadata outlives the loop — the residual DeleteLoop's doc records.
 func (m *LoopManager) GetAndClearToolResults(loopID string) []agentic.ToolResult {
 	m.mu.Lock()
 	defer m.mu.Unlock()

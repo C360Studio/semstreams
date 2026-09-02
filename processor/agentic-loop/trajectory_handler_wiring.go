@@ -34,24 +34,37 @@ func appendTrajectoryObservation(result *HandlerResult, observation trajectoryOb
 
 // releaseLoopTransientState releases every per-loop in-memory aggregate the
 // component holds once a loop has no more active execution consumers: the
-// trajectory step aggregate and the observed-audit-loss marker.
+// trajectory step aggregate, the observed-audit-loss marker, and — since
+// #1233 — every per-loop map the loop manager holds for it, via DeleteLoop.
 //
 // It is the single terminal-release point so a future terminal path cannot
 // release one and leak the other. Callers defer it (or call it on an early
 // terminal return) AFTER the loop's terminal observation and terminal graph
 // write, both of which read the state this releases. Idempotent.
 //
-// HandleTask's own rollback (handlers.go:854-858) still discards only the
-// trajectory, and correctly so: MessageHandler holds no *Component and no
-// trajectoryRecorder, so reportTrajectoryAuditFailure is unreachable from
-// inside HandleTask, and the loop ID it rolls back was created a few lines
-// earlier (handlers.go:834/:839). There is no audit-loss marker for it to
-// release. Note the deferred discard IS live on every error return in
-// HandleTask — it is unreachability of the reporter, not deadness of the
-// branch, that makes trajectory-only release correct there.
+// The loop-manager release is admissible only under one invariant, which the
+// agentic-loop spec states: after a loop settles, the ABSENCE of its in-process
+// entity is indistinguishable from its PRESENCE in a terminal state. Every
+// reader that can still be handed a message for a settled loop — a late or
+// duplicate approval response, a late tool result, a late model response —
+// drops it as expected rather than reporting a failure. That case was already
+// reachable whenever a process replacement preceded the late message; the
+// release makes it common, which is why it is now a contract rather than an
+// accident. Nothing here reads agent execution evidence, and the durable loop
+// record remains the authority for a settled loop's result.
+//
+// HandleTask's own rollback still discards only the trajectory, and correctly
+// so: MessageHandler holds no *Component and no trajectoryRecorder, so
+// reportTrajectoryAuditFailure is unreachable from inside HandleTask, and there
+// is no audit-loss marker for it to release. It must not release the loop
+// either — since #1227 that loop may be one it ATTACHED to rather than created,
+// and releasing a live conversation on a failed continuation would destroy
+// exactly what the fence exists to preserve.
 func (c *Component) releaseLoopTransientState(loopID string) {
 	c.handler.trajectoryManager.discardTrajectory(loopID)
 	c.trajectoryAuditLoss.release(loopID)
+	// Always nil; the signature predates this, its only production caller.
+	_ = c.handler.loopManager.DeleteLoop(loopID)
 }
 
 func (c *Component) recordTrajectoryObservations(ctx context.Context, result HandlerResult) {

@@ -86,6 +86,16 @@ type HandlerResult struct {
 	// Component's local recorder. They are never published or persisted in the
 	// loop aggregate; large bodies leave the process only through StoreRegistry.
 	trajectoryObservations []trajectoryObservation
+
+	// staleDrop marks a result for a message that arrived too late to act on:
+	// the loop it names is no longer awaiting that call — because it advanced,
+	// because it settled, or because its per-loop state was released at
+	// terminal (#1233). The handler did no work, so the component publishes and
+	// persists nothing for it. That is what makes a settled loop's ABSENCE and
+	// a terminal loop's PRESENCE produce the same outcome for a late arrival;
+	// persisting the absent case would report "failed to get loop for
+	// persistence" for what is an expected drop.
+	staleDrop bool
 }
 
 // SyntheticDecideRequest carries the data needed for graphWriter to stamp

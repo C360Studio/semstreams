@@ -2,6 +2,7 @@ package agenticloop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -55,14 +56,19 @@ func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response ag
 	loopID := response.LoopID
 
 	pending, ok, resolveErr := h.loopManager.ResolveApprovalIfPending(loopID, response.CallID)
-	if resolveErr != nil {
+	if resolveErr != nil && !errors.Is(resolveErr, ErrLoopNotFound) {
 		return HandlerResult{}, resolveErr
 	}
 	if !ok {
-		// Stale or duplicate: loop is no longer awaiting approval, or
-		// the response targets a different call_id than the one
-		// currently pinned. Either way the right move is to log and
-		// drop — never error, never dispatch.
+		// Stale, duplicate, or settled: the loop is no longer awaiting
+		// approval, the response targets a different call_id than the one
+		// currently pinned, or the loop settled and its per-loop state was
+		// released. All three are the same event — a response that arrived too
+		// late to act on — and the right move is to log and drop, never error,
+		// never dispatch. A released loop MUST land here rather than on the
+		// error return above: absence and terminal presence are the same fact
+		// to a late arrival, and reporting one as a fault would make an
+		// expected steady state look like a defect.
 		entity, getErr := h.GetLoop(loopID)
 		state := agentic.LoopState("")
 		if getErr == nil {
@@ -72,7 +78,7 @@ func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response ag
 			slog.String("loop_id", loopID),
 			slog.String("response_call_id", response.CallID),
 			slog.String("loop_state", string(state)))
-		return HandlerResult{LoopID: loopID, State: state}, nil
+		return HandlerResult{LoopID: loopID, State: state, staleDrop: true}, nil
 	}
 
 	// We won the resolve race. Fetch the now-resolved entity so the
@@ -178,6 +184,13 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 			"error", err,
 			"loop_id", response.LoopID,
 			"call_id", response.CallID)
+		return
+	}
+	if result.staleDrop {
+		// The handler dispatched nothing and resolved nothing. Persisting would
+		// re-Put a settled entity, or — once its per-loop state is released —
+		// report a persistence failure for a loop that is supposed to be gone.
+		// Returning here is what makes the two indistinguishable.
 		return
 	}
 

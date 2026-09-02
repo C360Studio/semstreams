@@ -215,8 +215,9 @@ func (b *orphanUnwindBucket) ListKeysFiltered(ctx context.Context, _ ...string) 
 // the same loop ID inherits an `incomplete` that is not its own, breaking
 // "absent on every other loop". Reuse is still reachable: a product cannot
 // author a token any more (ADR-105 — CreateLoopWithID rejects a non-canonical
-// one), but the continuation lane re-enters an existing framework-minted token
-// and CreateLoopWithID overwrites on it by design.
+// one) and since #1227 it no longer overwrites on a live one either, but the
+// continuation lane re-enters an existing framework-minted token and ATTACHES
+// to it, so an orphaned marker still lands on a loop that keeps running.
 //
 // The loss itself is not lost by suppressing the orphan: the budget branch
 // already reported it synchronously, in time to reach the terminal write,

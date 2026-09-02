@@ -1035,8 +1035,9 @@ func TestLoopManager_GetRunID(t *testing.T) {
 // loop-token contract (ADR-105, #1192). TaskMessage.Validate is the gate for
 // everything arriving over the wire; this is the gate for a composed binary
 // calling the LoopManager directly. The refusal must land BEFORE any state is
-// registered, because the overwrite at the end of CreateLoopWithID is exactly
-// what makes a colliding token silently merge two conversations.
+// registered, and it must land BEFORE the already-exists check (#1227) so a
+// hand-authored token is reported as malformed rather than as a collision —
+// TestFormRefusalPrecedesAlreadyExists locks that order.
 func TestCreateLoopWithIDRefusesNonUUIDToken(t *testing.T) {
 	t.Parallel()
 
