@@ -1,0 +1,17 @@
+version: "3"
+
+tasks:
+  compat:
+    desc: Report incompatible API changes in the Tier 1 package set (ADR-106 RC-4 instrument)
+    cmds:
+      - ./scripts/api-compat.sh {{.CLI_ARGS}}
+
+  compat:report:
+    desc: Same as api:compat but exits 0 — the pre-RC posture, where the count is expected to descend
+    cmds:
+      - API_COMPAT_MODE=report ./scripts/api-compat.sh {{.CLI_ARGS}}
+
+  compat:test:
+    desc: Fixture test for the api-compat guard — proves its failure modes fail rather than pass quietly
+    cmds:
+      - ./scripts/api-compat_fixture_test.sh

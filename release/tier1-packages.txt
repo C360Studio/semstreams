@@ -1,0 +1,100 @@
+# Tier 1 — the frozen Go package set (ADR-106).
+#
+# These are the semstreams packages that a sister repository actually imports. They become semver-binding
+# at 1.0: an incompatible change here breaks an adopter's build, and after 1.0 costs a major version.
+#
+# Derived 2026-09-02 from the union of `import` statements across the nine framework consumers in the
+# docs-site stage table (semsource, semteams, semdev, semconnect, semboids, semmachina, semlink, semops,
+# semdragon). It is COMMITTED rather than recomputed: CI has no sister checkouts, and a set that silently
+# shrinks when a sister is unavailable would relax the freeze exactly when it matters.
+#
+# Adding a line is a deliberate widening of the 1.0 compatibility promise. Removing one needs the same
+# scrutiny as any Tier 1 break: if a sister still imports it, removal IS the break.
+#
+# The other 91 non-internal packages are Tier 2 — explicitly not frozen, and the lane where the pre-RC
+# surface-removal pass continues to work.
+#
+#
+# TWO PACKAGES DELIBERATELY EXCLUDED. The derivation above found them in sister imports, but they do not exist at
+# HEAD, so they are migration debt rather than frozen surface:
+#
+#   pkg/ownership        — deleted 2026-08-05 by dbdc9bd8 (refactor(graph)!: typed mutations and exact reads).
+#                          semops still has 51 import sites and semdragon 3; both are pinned before the deletion,
+#                          so nothing is broken today and both are hard-blocked from migrating until those are
+#                          rewritten. This is the concrete cost behind semops sitting at beta.114.
+#   input/github-webhook — absent at HEAD; semdev has 1 import site.
+#   engine, flowstore,   — retired 2026-08-27 by #1116 (ADR-100 D5, "retirement without aliases"). semteams
+#   flowtemplate           imports all three; the migration is written up in
+#                          docs/operations/migration-beta162-to-beta163.md, which names the exact broken import
+#                          lines at cmd/semteams/main.go:24-26. semteams is pinned at beta.160, i.e. the last tag
+#                          before the retirement, so this is the first thing its migration hits.
+#
+# They are named here, not silently dropped: an excluded line that leaves no trace is how a migration blocker
+# becomes invisible. scripts/api-compat.sh independently reports any listed package that loads at neither end, so
+# re-adding either by accident is caught rather than ignored.
+#
+# NOT covered by this file (guarded elsewhere, see ADR-106): the 33 component schemas in schemas/
+# (task schema:check-changes), the payload envelope, the entity-ID grammar (ADR-102), the subject
+# namespace (ADR-093/098).
+github.com/c360studio/semstreams/agentic
+github.com/c360studio/semstreams/agentic/agentrun
+github.com/c360studio/semstreams/component
+github.com/c360studio/semstreams/component/flowgraph
+github.com/c360studio/semstreams/componentregistry
+github.com/c360studio/semstreams/config
+github.com/c360studio/semstreams/gateway
+github.com/c360studio/semstreams/gateway/graph-gateway
+github.com/c360studio/semstreams/gateway/lifecycle-gateway
+github.com/c360studio/semstreams/graph
+github.com/c360studio/semstreams/graph/clustering
+github.com/c360studio/semstreams/graph/geo/geojson
+github.com/c360studio/semstreams/graph/readiness
+github.com/c360studio/semstreams/input/websocket
+github.com/c360studio/semstreams/message
+github.com/c360studio/semstreams/metric
+github.com/c360studio/semstreams/model
+github.com/c360studio/semstreams/model/wire
+github.com/c360studio/semstreams/natsclient
+github.com/c360studio/semstreams/output/websocket
+github.com/c360studio/semstreams/payloadbuiltins
+github.com/c360studio/semstreams/payloadregistry
+github.com/c360studio/semstreams/persona
+github.com/c360studio/semstreams/pkg/buffer
+github.com/c360studio/semstreams/pkg/context
+github.com/c360studio/semstreams/pkg/errs
+github.com/c360studio/semstreams/pkg/fusion
+github.com/c360studio/semstreams/pkg/fusion/fusionnats
+github.com/c360studio/semstreams/pkg/fusion/fusionvocab
+github.com/c360studio/semstreams/pkg/graphview
+github.com/c360studio/semstreams/pkg/lifecycle
+github.com/c360studio/semstreams/pkg/logging
+github.com/c360studio/semstreams/pkg/projection
+github.com/c360studio/semstreams/pkg/retry
+github.com/c360studio/semstreams/pkg/types
+github.com/c360studio/semstreams/processor/agentic-dispatch
+github.com/c360studio/semstreams/processor/agentic-loop
+github.com/c360studio/semstreams/processor/agentic-loop/lessonmatch
+github.com/c360studio/semstreams/processor/agentic-model
+github.com/c360studio/semstreams/processor/agentic-tools
+github.com/c360studio/semstreams/processor/agentic-tools/executors
+github.com/c360studio/semstreams/processor/agentic-tools/runner
+github.com/c360studio/semstreams/processor/gated-dag
+github.com/c360studio/semstreams/processor/graph-clustering
+github.com/c360studio/semstreams/processor/graph-embedding
+github.com/c360studio/semstreams/processor/graph-index
+github.com/c360studio/semstreams/processor/graph-ingest
+github.com/c360studio/semstreams/processor/graph-query
+github.com/c360studio/semstreams/processor/rule
+github.com/c360studio/semstreams/processor/rule/expression
+github.com/c360studio/semstreams/service
+github.com/c360studio/semstreams/storage
+github.com/c360studio/semstreams/storage/objectstore
+github.com/c360studio/semstreams/storage/storeregistry
+github.com/c360studio/semstreams/test/e2e/mock
+github.com/c360studio/semstreams/types
+github.com/c360studio/semstreams/vocabulary
+github.com/c360studio/semstreams/vocabulary/agentic
+github.com/c360studio/semstreams/vocabulary/bfo
+github.com/c360studio/semstreams/vocabulary/builtins
+github.com/c360studio/semstreams/vocabulary/cco
+github.com/c360studio/semstreams/vocabulary/export
