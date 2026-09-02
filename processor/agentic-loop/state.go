@@ -261,6 +261,12 @@ func (m *LoopManager) CreateLoopWithID(loopID, taskID, role, model string, maxIt
 //     message must find the loop it already produced. Leaving the previous
 //     turn's TaskID in place would let the same continuation be processed
 //     twice, appending the user's turn to the conversation each time.
+//     Residual, known and accepted: the rebind preserves dedup for THIS turn
+//     and drops it for the previous one. A single scalar cannot dedupe more
+//     than one turn — that needs a set or a window. So a redelivery of turn
+//     N-1 arriving after turn N has attached is no longer recognised as
+//     already-seen and appends that prompt a second time. Narrow in practice,
+//     and bounded by the restart-safety work in gh#1159.
 //
 // No other per-loop state is touched: the context manager, the pending-tool
 // set, and every cache stay exactly as the live loop left them.

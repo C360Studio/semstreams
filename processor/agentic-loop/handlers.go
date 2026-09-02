@@ -884,6 +884,16 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 	// accumulating this turn's steps: restarting it would drop them, and the
 	// rollback below must not discard work that belongs to the in-flight loop
 	// rather than to this task.
+	//
+	// Residual, known and accepted: when the aggregate is ABSENT on a
+	// continuation — reachable only after an earlier HandleTask error on this
+	// same loop discarded it — keepTrajectory stays false and the restart drops
+	// the steps already accumulated. The consequence is audit loss, not
+	// execution failure, which is the correct severity ordering under this
+	// capability's rule that audit loss degrades loudly and never fails agent
+	// work. What is missing is the "loudly": ADR-068 treats evidence as
+	// non-regenerable, so this discard should be counted and logged at the
+	// restart rather than passing silently.
 	keepTrajectory := false
 	if continuation {
 		if _, trajErr := h.trajectoryManager.getTrajectory(loopID); trajErr == nil {

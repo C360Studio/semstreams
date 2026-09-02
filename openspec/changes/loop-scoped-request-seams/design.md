@@ -206,6 +206,31 @@ No production struct retains a `context.Context`. Every seam the gate is called 
 handler via `withRequestID(w, r)`. The gate takes `ctx` as its first argument for the durable read. Terminal
 release takes none. No root is created anywhere in this change.
 
+## Declared cost — the gate's read count
+
+Recorded here rather than filed, so that anyone who later measures a latency problem on the loop seams finds
+the known call count first. **No latency measurement is claimed.** The finding is the number of calls, which is
+readable from the code; whether it costs anything is unknown until someone measures it under load.
+
+`lookupLoop` (`processor/agentic-dispatch/loop_admission.go`) calls `loadPersistedLoop` **unconditionally**,
+including on a tracker hit where the owner is already known. That is deliberate, not an oversight: the
+conflicting-owners refusal requires both sources be observed even when the first one answers, which is the
+whole argument of Piece 2. `loadPersistedLoop` in turn calls `GetKeyValueBucket`, and
+`natsclient.Client.GetKeyValueBucket` resolves `js.KeyValue(ctx, name)` fresh on every call — a JetStream round
+trip before the `kv.Get`. No handle is cached.
+
+So a gated request costs two JetStream round trips where one would do, and `GET /loops/{id}` costs four on a
+tracker miss, because `loopWireByID` re-reads the record the gate already loaded. Before this change that ran
+once per **terminal event**; it now runs once per continuation submission — per user chat turn — plus once per
+`/status`, `/cancel`, and approval.
+
+Two corrections would remove it without touching an observable contract, if a measurement ever justifies them.
+Cache the `jetstream.KeyValue` handle on the component (the bucket name is observed from the declared
+`agent_loops` port and is fixed for the component's life, so the cache belongs to the component's lifecycle and
+not to a package-level variable — gh#1094 is what happens when that bucket is predicted instead of observed).
+And have `loopWireByID` take the entity the gate already loaded rather than re-reading it, which also removes a
+real wart: the two reads can disagree if NATS flaps between them.
+
 ## Rulings (owner, 2026-09-01, on #1227) — settled, do not re-litigate
 
 Three questions were raised by this design pass. All three were ruled the same day, verbatim: *"1. confirm
