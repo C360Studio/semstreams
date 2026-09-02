@@ -366,8 +366,12 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/Loop'
+                "400":
+                    description: Loop ID is missing or is not a framework-minted loop token
                 "404":
                     description: Loop not found
+                "503":
+                    description: Loop state is not readable right now; retry
     /loops/{id}/approval:
         post:
             summary: Submit human approval response for a gated tool call
@@ -395,13 +399,17 @@ paths:
                             schema:
                                 type: object
                 "400":
-                    description: Invalid request body or decision value
+                    description: Invalid request body or decision value, or a loop ID that is not a framework-minted loop token
+                "403":
+                    description: Requester is not in the approve permission list (default admits everyone)
                 "404":
                     description: Loop not found
                 "409":
                     description: Loop exists but is not awaiting approval
                 "500":
                     description: Failed to publish approval (NATS error)
+                "503":
+                    description: Loop state is not readable right now; retry
     /loops/{id}/signal:
         post:
             summary: Send control signal to loop
@@ -429,9 +437,13 @@ paths:
                             schema:
                                 type: object
                 "400":
-                    description: Invalid signal type
+                    description: Invalid signal type, or a loop ID that is not a framework-minted loop token
+                "403":
+                    description: Requester does not own the loop and is not in the cancel_any permission list
                 "404":
                     description: Loop not found
+                "503":
+                    description: Loop state is not readable right now; retry
     /mcp:
         post:
             summary: MCP endpoint

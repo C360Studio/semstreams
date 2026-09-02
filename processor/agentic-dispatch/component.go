@@ -13,7 +13,6 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
-	"github.com/c360studio/semstreams/internal/looptoken"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
@@ -856,49 +855,25 @@ func (c *Component) buildTaskMessage(ctx context.Context, msg agentic.UserMessag
 	return task
 }
 
-// refuseNonCanonicalLoopTokens reports why an inbound submission cannot be
-// accepted, or nil when it can. It covers every loop token a submission can
-// carry into the published task (ADR-105, #1192):
+// answerRefusedSubmission publishes the typed refusal to the channel
+// submitter's response subject. The channel lane has no synchronous return, so
+// without this a refusal is a logged bare return and the submitter waits
+// forever (#1225). The content is the refusal's own message, which names the
+// field the caller can act on — reply_to on a refused continuation, the task
+// field TaskMessage.Validate rejected on a refused payload.
 //
-//   - the RESOLVED continuation token, passed as loopID — checked after
-//     auto-continue resolution and before the mint, so one check covers a
-//     client-supplied reply_to and an auto-continued value alike;
-//   - RunID and InReplyTo, the gh#256 resume anchors, which the client authors
-//     and buildTaskMessage copies verbatim — they never pass through the
-//     continuation branch, so the resolved-token check alone let them through.
-//
-// The field names are the client's own: reply_to, run_id, and in_reply_to are
-// what an HTTP submitter sent and what a channel submitter must correct.
-//
-// Both submission paths call this BEFORE loopTracker.Track and
-// recordLoopStarted. TaskMessage.Validate refuses the same tokens one layer
-// lower and stays as defense-in-depth for every other producer, but discovering
-// it there is too late twice over: the loop is already tracked and counted, and
-// the failure surfaces as a marshal error — an unanswered bare return on the
-// channel path, "please try again" on the HTTP path, neither naming a field.
-// Same classification as the rule-engine lane, which validates before it
-// publishes (processor/rule/actions.go publishAgentOnce): invalid, never
-// retryable.
-//
-// An empty token is not a refusal: an unset continuation is the signal to mint
-// a new loop, and unset resume anchors are the ordinary submission.
-func (c *Component) refuseNonCanonicalLoopTokens(msg agentic.UserMessage, loopID string) error {
-	for _, token := range []struct {
-		field string
-		value string
-	}{
-		{"reply_to", loopID},
-		{"run_id", msg.RunID},
-		{"in_reply_to", msg.InReplyTo},
-	} {
-		if token.value == "" || looptoken.Valid(token.value) {
-			continue
-		}
-		return fmt.Errorf(
-			"%s %q is not a loop ID this framework minted: a loop ID is an opaque token you receive "+
-				"and echo back verbatim, never one you author", token.field, token.value)
-	}
-	return nil
+// It never counts anything: the refusal it is handed was already metered and
+// logged exactly once, where it was built.
+func (c *Component) answerRefusedSubmission(ctx context.Context, msg agentic.UserMessage, refusal error) {
+	c.sendResponse(ctx, agentic.UserResponse{
+		ResponseID:  uuid.New().String(),
+		ChannelType: msg.ChannelType,
+		ChannelID:   msg.ChannelID,
+		UserID:      msg.UserID,
+		Type:        agentic.ResponseTypeError,
+		Content:     refusal.Error(),
+		Timestamp:   time.Now(),
+	})
 }
 
 // handleTaskSubmission creates a new agent task
@@ -917,7 +892,10 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		return
 	}
 
-	// Determine loop ID (continue existing or create new)
+	// Determine loop ID (continue existing or create new). The mint decision is
+	// made HERE, before the gate: an unresolved continuation is the signal to
+	// start a conversation, not a malformed token, and the gate refuses an empty
+	// token as malformed.
 	loopID := ""
 	if msg.ReplyTo != "" {
 		loopID = msg.ReplyTo
@@ -925,27 +903,22 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		loopID = c.loopTracker.GetActiveLoop(msg.UserID, msg.ChannelID)
 	}
 
-	// Same loop-token check as the HTTP path (ADR-105, #1192). This path has
-	// no synchronous return, so its answer goes out on the response subject —
-	// same refusal, same named field, different delivery.
-	if err := c.refuseNonCanonicalLoopTokens(msg, loopID); err != nil {
-		c.sendResponse(ctx, agentic.UserResponse{
-			ResponseID:  uuid.New().String(),
-			ChannelType: msg.ChannelType,
-			ChannelID:   msg.ChannelID,
-			UserID:      msg.UserID,
-			Type:        agentic.ResponseTypeError,
-			Content:     err.Error(),
-			Timestamp:   time.Now(),
-		})
-		return
-	}
-
-	// Create new loop if needed. The token is framework-minted and full: a
-	// truncated one carried 32 bits, and a collision merged two conversations
-	// silently (ADR-105, #1192).
 	if loopID == "" {
+		// Create new loop. The token is framework-minted and full: a truncated
+		// one carried 32 bits, and a collision merged two conversations silently
+		// (ADR-105, #1192).
 		loopID = uuid.New().String()
+	} else if _, err := c.admitLoopRequest(ctx, loopAdmissionRequest{
+		Seam:      seamChannelSubmission,
+		Field:     "reply_to",
+		Operation: loopOpContinue,
+		LoopID:    loopID,
+		Requester: msg.UserID,
+	}); err != nil {
+		// This path has no synchronous return, so its answer goes out on the
+		// response subject — same refusal, same named field, different delivery.
+		c.answerRefusedSubmission(ctx, msg, err)
+		return
 	}
 
 	taskID := uuid.New().String()
@@ -953,7 +926,32 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 	// Create task message (shared builder — see buildTaskMessage; gh#256).
 	task := c.buildTaskMessage(ctx, msg, loopID, taskID)
 
-	// Track the loop
+	// Wrap task in BaseMessage envelope (required by agentic-loop). The marshal
+	// is where TaskMessage.Validate runs, so it is the last thing that can
+	// refuse this submission on its own content — including the client-authored
+	// run_id / in_reply_to resume anchors, which never pass through the
+	// continuation branch above. Nothing is tracked or counted until it returns
+	// (#1225).
+	baseMsg := message.NewBaseMessage(task.Schema(), &task, "agentic-dispatch")
+	taskData, err := json.Marshal(baseMsg)
+	if err != nil {
+		c.answerRefusedSubmission(ctx, msg,
+			c.refuseSubmission(seamChannelSubmission, loopID, codeSubmissionInvalid, err))
+		return
+	}
+
+	subject, err := component.ResolveSubject(c.outputPortDefs(), "agent.task", taskID)
+	if err != nil {
+		c.answerRefusedSubmission(ctx, msg,
+			c.refuseSubmission(seamChannelSubmission, loopID, codeSubmissionUndeliverable, err))
+		return
+	}
+
+	// Track the loop and count it started. This is after the task is assembled
+	// and addressable and before the publish: the approval-pending arrival
+	// buffer that Track drains exists to absorb exactly this window, and the
+	// alternative — track first, untrack on failure — is a compensating action a
+	// later branch can skip.
 	c.loopTracker.Track(&LoopInfo{
 		LoopID:           loopID,
 		TaskID:           taskID,
@@ -966,34 +964,11 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		ContextRequestID: msg.ContextRequestID,
 		CreatedAt:        time.Now(),
 	})
-
-	// Record loop started
 	c.metrics.recordLoopStarted()
 
-	// Wrap task in BaseMessage envelope (required by agentic-loop)
-	baseMsg := message.NewBaseMessage(task.Schema(), &task, "agentic-dispatch")
-	taskData, err := json.Marshal(baseMsg)
-	if err != nil {
-		c.logger.Error("Failed to marshal task", slog.String("error", err.Error()))
-		return
-	}
-
-	subject, err := component.ResolveSubject(c.outputPortDefs(), "agent.task", taskID)
-	if err != nil {
-		c.logger.Error("Failed to resolve task subject", slog.String("error", err.Error()))
-		return
-	}
 	if err := c.natsClient.PublishToStream(ctx, subject, taskData); err != nil {
-		c.logger.Error("Failed to publish task", slog.String("error", err.Error()))
-		c.sendResponse(ctx, agentic.UserResponse{
-			ResponseID:  uuid.New().String(),
-			ChannelType: msg.ChannelType,
-			ChannelID:   msg.ChannelID,
-			UserID:      msg.UserID,
-			Type:        agentic.ResponseTypeError,
-			Content:     "Failed to submit task. Please try again.",
-			Timestamp:   time.Now(),
-		})
+		c.answerRefusedSubmission(ctx, msg,
+			c.refuseSubmission(seamChannelSubmission, loopID, codeSubmissionUndeliverable, err))
 		return
 	}
 
@@ -1198,22 +1173,6 @@ func (c *Component) inList(userID string, list []string) bool {
 		}
 	}
 	return false
-}
-
-// canUserControlLoop checks if a user can control a specific loop
-func (c *Component) canUserControlLoop(userID, loopID string) bool {
-	// Can always control if has cancel_any
-	if c.inList(userID, c.config.Permissions.CancelAny) {
-		return true
-	}
-
-	// Check if user owns the loop
-	loopInfo := c.loopTracker.Get(loopID)
-	if loopInfo == nil {
-		return false
-	}
-
-	return loopInfo.UserID == userID && c.config.Permissions.CancelOwn
 }
 
 // CommandRegistry returns the command registry for external registration

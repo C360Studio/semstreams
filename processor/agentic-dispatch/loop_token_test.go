@@ -37,6 +37,10 @@ func newLoopTokenTestComponent() (*Component, *captureSink) {
 		natsClient: &natsclient.Client{},
 	}
 	c.sendResponseFn = sink.add
+	// An empty durable store: the admission gate reads AGENT_LOOPS, and without
+	// this the zero-value client makes every read UNREADABLE rather than
+	// reporting the absence these tests mean.
+	withPersistedLoops(c, nil)
 	return c, sink
 }
 
@@ -180,7 +184,11 @@ func TestAutoContinuedNonUUIDTokenIsRefused(t *testing.T) {
 
 // TestCanonicalReplyToContinuesTheLoop is the positive control on the refusal:
 // it rejects the shape, not continuation itself. A framework-minted token
-// echoed back must still route to its loop.
+// echoed back by its own owner must still route to its loop.
+//
+// The loop is seeded because the admission gate now decides EXISTENCE too: a
+// canonical token naming no loop is refused as absent, which is the silent-fork
+// defect #1227 reports, not a regression here.
 func TestCanonicalReplyToContinuesTheLoop(t *testing.T) {
 	t.Parallel()
 	c, _ := newLoopTokenTestComponent()
@@ -188,6 +196,7 @@ func TestCanonicalReplyToContinuesTheLoop(t *testing.T) {
 	existing := uuid.NewString()
 	msg := newLoopTokenUserMessage()
 	msg.ReplyTo = existing
+	trackLoopOwnedBy(c, existing, msg.UserID)
 
 	resp := c.processTaskSubmissionSync(context.Background(), msg)
 

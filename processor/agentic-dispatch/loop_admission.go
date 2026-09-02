@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/internal/looptoken"
@@ -36,6 +37,37 @@ const (
 	// codeLoopNotPermitted: the requester lacks the permission the operation
 	// declares, or named an operation this gate does not know.
 	codeLoopNotPermitted = "loop_not_permitted"
+	// codeSubmissionInvalid: the submission assembled a task the framework
+	// refuses to serialize. It is not a decision about a loop the caller named
+	// — it is the payload's own validation, surfaced at the seam instead of
+	// disappearing into a marshal error. The cause names the offending field.
+	codeSubmissionInvalid = "submission_invalid"
+	// codeSubmissionUndeliverable: the task validated but could not be put on
+	// the wire — its subject would not resolve, or the publish failed.
+	codeSubmissionUndeliverable = "submission_undeliverable"
+)
+
+// The seam tokens. Seam is a Prometheus label value, so the set is CLOSED and
+// declared here: a seam that invents its own string at the call site is an
+// unbounded label the gate cannot defend against. Every call to the gate, and
+// every submission-path refusal, names one of these.
+const (
+	// seamChannelSubmission: a task submission arriving on the user-message
+	// stream, answered on the response subject.
+	seamChannelSubmission = "channel_submission"
+	// seamHTTPSubmission: a task submission arriving on POST /message,
+	// answered synchronously.
+	seamHTTPSubmission = "http_submission"
+	// seamCancelCommand: the /cancel chat command, on either lane.
+	seamCancelCommand = "cancel_command"
+	// seamStatusCommand: the /status chat command, on either lane.
+	seamStatusCommand = "status_command"
+	// seamHTTPLoopRead: GET /loops/{id}.
+	seamHTTPLoopRead = "http_loop_read"
+	// seamHTTPLoopSignal: POST /loops/{id}/signal.
+	seamHTTPLoopSignal = "http_loop_signal"
+	// seamHTTPLoopApproval: POST /loops/{id}/approval.
+	seamHTTPLoopApproval = "http_loop_approval"
 )
 
 // The Detail keys a refusal carries. The spec requires the seam and the failing
@@ -60,6 +92,8 @@ const (
 	reasonStateTerminal         = "state_terminal"
 	reasonOwnershipNotOwner     = "ownership_not_owner"
 	reasonOwnershipNotPermitted = "ownership_not_permitted"
+	reasonSubmissionInvalid     = "submission_invalid"
+	reasonSubmissionUndeliver   = "submission_undeliverable"
 )
 
 // loopAdmissionRefusalLogMessage is the single WARN a refused request produces
@@ -89,6 +123,12 @@ const (
 	loopOpApprove = "approve"
 	// loopOpRead: reading a loop's record (/status, GET /loops/{id}).
 	loopOpRead = "read"
+	// loopOpSubmit: the submission itself. It is NEVER passed to
+	// admitLoopRequest — a submission that names no existing loop mints one and
+	// has nothing to admit. It labels the submission-path refusals that happen
+	// after admission, so a refused submission is countable in the same series
+	// as everything else this package refuses.
+	loopOpSubmit = "submit"
 )
 
 // loopAdmissionRequest is what a seam hands the gate. Seam and Field are the
@@ -406,13 +446,67 @@ func (c *Component) refuseLoopRequest(req loopAdmissionRequest, code string, cau
 }
 
 // refusalClass maps a refusal code to its error class. Only an unread durable
-// record is transient — the request is answerable later, and a caller may retry
-// it. Every other refusal is a bad precondition that retrying cannot fix.
+// record and an undelivered task are transient — the request is answerable
+// later, and a caller may retry it. Every other refusal is a bad precondition
+// that retrying cannot fix.
 func refusalClass(code string) errs.ErrorClass {
-	if code == codeLoopUnreadable {
+	if code == codeLoopUnreadable || code == codeSubmissionUndeliverable {
 		return errs.ErrorTransient
 	}
 	return errs.ErrorInvalid
+}
+
+// refuseSubmission is the submission path's refusal. It is deliberately the
+// same construction, the same counter, and the same log line as a gate refusal:
+// a submission that answers no one and moves no series is exactly the silent
+// drop #1225 reports, and a second mechanism for "dispatch refused this" is a
+// second place an operator has to look.
+//
+// It carries no Field, because the offending field belongs to the task payload
+// rather than to a loop token the caller named; the cause names it, and that
+// message is what the submitter receives.
+func (c *Component) refuseSubmission(seam, loopID, code string, cause error) error {
+	return c.refuseLoopRequest(loopAdmissionRequest{
+		Seam:      seam,
+		Operation: loopOpSubmit,
+		LoopID:    loopID,
+	}, code, cause)
+}
+
+// loopRefusalHTTPStatus maps a refusal to the status an HTTP seam answers with,
+// or ok=false for anything that is not one of this package's refusals. One home,
+// so three endpoints cannot disagree about what "not owned" answers.
+//
+// The design names four (400 malformed, 404 absent, 403 not permitted or not
+// owned, 409 terminal). The two remaining codes are decided here on the same
+// rule — what can the caller do about it:
+//
+//   - unreadable: nothing now, something later. 503, matching the transient
+//     class the refusal already carries.
+//   - owner conflict: nothing, ever. The framework's two records of one loop
+//     disagree; no caller action resolves it, so it is a server fault (500) and
+//     not a 409 the caller could be expected to reconcile.
+func loopRefusalHTTPStatus(err error) (int, bool) {
+	var classified *errs.ClassifiedError
+	if !errors.As(err, &classified) {
+		return 0, false
+	}
+	switch classified.Code {
+	case codeLoopTokenInvalid:
+		return http.StatusBadRequest, true
+	case codeLoopNotFound:
+		return http.StatusNotFound, true
+	case codeLoopNotOwned, codeLoopNotPermitted:
+		return http.StatusForbidden, true
+	case codeLoopTerminal:
+		return http.StatusConflict, true
+	case codeLoopUnreadable:
+		return http.StatusServiceUnavailable, true
+	case codeLoopOwnerConflict:
+		return http.StatusInternalServerError, true
+	default:
+		return 0, false
+	}
 }
 
 // loopAdmissionMetricReason maps an admission refusal to its
@@ -439,6 +533,10 @@ func loopAdmissionMetricReason(err error) (string, bool) {
 		return reasonOwnershipNotOwner, true
 	case codeLoopNotPermitted:
 		return reasonOwnershipNotPermitted, true
+	case codeSubmissionInvalid:
+		return reasonSubmissionInvalid, true
+	case codeSubmissionUndeliverable:
+		return reasonSubmissionUndeliver, true
 	default:
 		return "", false
 	}
@@ -466,7 +564,9 @@ func (c *Component) recordLoopAdmissionRefusal(req loopAdmissionRequest, code st
 		slog.String("seam", req.Seam),
 		slog.String("operation", req.Operation),
 		slog.String("reason", reason),
-		slog.String("field", req.Field),
+	}
+	if req.Field != "" {
+		attrs = append(attrs, slog.String("field", req.Field))
 	}
 	if code != codeLoopTokenInvalid {
 		attrs = append(attrs, slog.String("loop_id", req.LoopID))

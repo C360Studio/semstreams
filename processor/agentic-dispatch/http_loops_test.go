@@ -20,7 +20,7 @@ import (
 func newTestComponent(t *testing.T) *Component {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return &Component{
+	comp := &Component{
 		config:      DefaultConfig(),
 		loopTracker: NewLoopTrackerWithLogger(logger),
 		registry:    NewCommandRegistry(),
@@ -28,6 +28,12 @@ func newTestComponent(t *testing.T) *Component {
 		metrics:     getMetrics(nil), // Use default metrics for tests
 		natsClient:  nil,             // Will be nil for unit tests
 	}
+	// The admission gate reads AGENT_LOOPS. With no NATS client that read fails
+	// as UNREADABLE, which is a different answer from "this loop does not
+	// exist" — so these handler tests declare an empty durable store and a
+	// tracker miss means absence, as it does in production when the key is gone.
+	withPersistedLoops(comp, nil)
+	return comp
 }
 
 func TestHandleListLoops(t *testing.T) {
@@ -35,7 +41,7 @@ func TestHandleListLoops(t *testing.T) {
 
 	// Add some test loops
 	comp.loopTracker.Track(&LoopInfo{
-		LoopID:      "loop-1",
+		LoopID:      seamTestLoopA,
 		TaskID:      "task-1",
 		UserID:      "user-1",
 		ChannelType: "http",
@@ -45,7 +51,7 @@ func TestHandleListLoops(t *testing.T) {
 		CreatedAt:   time.Now(),
 	})
 	comp.loopTracker.Track(&LoopInfo{
-		LoopID:      "loop-2",
+		LoopID:      seamTestLoopB,
 		TaskID:      "task-2",
 		UserID:      "user-2",
 		ChannelType: "http",
@@ -135,7 +141,7 @@ func TestHandleGetLoop(t *testing.T) {
 
 	// Add a test loop
 	comp.loopTracker.Track(&LoopInfo{
-		LoopID:        "loop-1",
+		LoopID:        seamTestLoopA,
 		TaskID:        "task-1",
 		UserID:        "user-1",
 		ChannelType:   "http",
@@ -147,8 +153,8 @@ func TestHandleGetLoop(t *testing.T) {
 	})
 
 	t.Run("get existing loop", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/loops/loop-1", nil)
-		req.SetPathValue("id", "loop-1")
+		req := httptest.NewRequest(http.MethodGet, "/loops/"+seamTestLoopA, nil)
+		req.SetPathValue("id", seamTestLoopA)
 		rec := httptest.NewRecorder()
 
 		comp.handleGetLoop(rec, req)
@@ -159,15 +165,15 @@ func TestHandleGetLoop(t *testing.T) {
 		var loop LoopInfo
 		err := json.Unmarshal(rec.Body.Bytes(), &loop)
 		require.NoError(t, err)
-		assert.Equal(t, "loop-1", loop.LoopID)
+		assert.Equal(t, seamTestLoopA, loop.LoopID)
 		assert.Equal(t, "task-1", loop.TaskID)
 		assert.Equal(t, "executing", loop.State)
 		assert.Equal(t, 3, loop.Iterations)
 	})
 
 	t.Run("loop not found", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/loops/nonexistent", nil)
-		req.SetPathValue("id", "nonexistent")
+		req := httptest.NewRequest(http.MethodGet, "/loops/"+seamTestLoopAbsent, nil)
+		req.SetPathValue("id", seamTestLoopAbsent)
 		rec := httptest.NewRecorder()
 
 		comp.handleGetLoop(rec, req)
@@ -178,7 +184,8 @@ func TestHandleGetLoop(t *testing.T) {
 		err := json.Unmarshal(rec.Body.Bytes(), &resp)
 		require.NoError(t, err)
 		assert.Equal(t, "error", resp.Type)
-		assert.Contains(t, resp.Content, "not found")
+		assert.Contains(t, resp.Content, "names no loop",
+			"the endpoint answers with the gate's own refusal")
 	})
 
 	t.Run("missing loop ID", func(t *testing.T) {
@@ -195,11 +202,13 @@ func TestHandleGetLoop(t *testing.T) {
 func TestHandleLoopSignal(t *testing.T) {
 	comp := newTestComponent(t)
 
-	// Add a test loop
+	// Add a test loop. The owner is the identity an unauthenticated HTTP caller
+	// resolves to, because signalling is owner-or-cancel_any and the default
+	// cancel_any list is empty.
 	comp.loopTracker.Track(&LoopInfo{
-		LoopID:      "loop-1",
+		LoopID:      seamTestLoopA,
 		TaskID:      "task-1",
-		UserID:      "user-1",
+		UserID:      DefaultIdentity,
 		ChannelType: "http",
 		ChannelID:   "chan-1",
 		State:       "executing",
@@ -208,8 +217,8 @@ func TestHandleLoopSignal(t *testing.T) {
 
 	t.Run("loop not found", func(t *testing.T) {
 		body := `{"type":"cancel","reason":"test"}`
-		req := httptest.NewRequest(http.MethodPost, "/loops/nonexistent/signal", strings.NewReader(body))
-		req.SetPathValue("id", "nonexistent")
+		req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopAbsent+"/signal", strings.NewReader(body))
+		req.SetPathValue("id", seamTestLoopAbsent)
 		rec := httptest.NewRecorder()
 
 		comp.handleLoopSignal(rec, req)
@@ -218,8 +227,8 @@ func TestHandleLoopSignal(t *testing.T) {
 	})
 
 	t.Run("invalid request body", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/loops/loop-1/signal", strings.NewReader("invalid json"))
-		req.SetPathValue("id", "loop-1")
+		req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/signal", strings.NewReader("invalid json"))
+		req.SetPathValue("id", seamTestLoopA)
 		rec := httptest.NewRecorder()
 
 		comp.handleLoopSignal(rec, req)
@@ -229,8 +238,8 @@ func TestHandleLoopSignal(t *testing.T) {
 
 	t.Run("invalid signal type", func(t *testing.T) {
 		body := `{"type":"invalid","reason":"test"}`
-		req := httptest.NewRequest(http.MethodPost, "/loops/loop-1/signal", strings.NewReader(body))
-		req.SetPathValue("id", "loop-1")
+		req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/signal", strings.NewReader(body))
+		req.SetPathValue("id", seamTestLoopA)
 		rec := httptest.NewRecorder()
 
 		comp.handleLoopSignal(rec, req)
@@ -272,15 +281,16 @@ func TestSignalRequestValidation(t *testing.T) {
 
 	comp := newTestComponent(t)
 	comp.loopTracker.Track(&LoopInfo{
-		LoopID: "loop-1",
+		LoopID: seamTestLoopA,
+		UserID: DefaultIdentity,
 		State:  "executing",
 	})
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			body := `{"type":"` + tt.signal + `"}`
-			req := httptest.NewRequest(http.MethodPost, "/loops/loop-1/signal", strings.NewReader(body))
-			req.SetPathValue("id", "loop-1")
+			req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/signal", strings.NewReader(body))
+			req.SetPathValue("id", seamTestLoopA)
 			rec := httptest.NewRecorder()
 
 			comp.handleLoopSignal(rec, req)

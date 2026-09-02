@@ -55,8 +55,8 @@ func TestHandleLoopApproval_LoopNotFound(t *testing.T) {
 	comp := newTestComponent(t)
 
 	body := `{"decision":"approve"}`
-	req := httptest.NewRequest(http.MethodPost, "/loops/ghost/approval", strings.NewReader(body))
-	req.SetPathValue("id", "ghost")
+	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopAbsent+"/approval", strings.NewReader(body))
+	req.SetPathValue("id", seamTestLoopAbsent)
 	rec := httptest.NewRecorder()
 
 	comp.handleLoopApproval(rec, req)
@@ -65,10 +65,10 @@ func TestHandleLoopApproval_LoopNotFound(t *testing.T) {
 }
 
 func TestHandleLoopApproval_InvalidBody(t *testing.T) {
-	comp := trackedLoopWithApproval(t, "loop-1", "call-001")
+	comp := trackedLoopWithApproval(t, seamTestLoopA, "call-001")
 
-	req := httptest.NewRequest(http.MethodPost, "/loops/loop-1/approval", strings.NewReader("not json"))
-	req.SetPathValue("id", "loop-1")
+	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", strings.NewReader("not json"))
+	req.SetPathValue("id", seamTestLoopA)
 	rec := httptest.NewRecorder()
 
 	comp.handleLoopApproval(rec, req)
@@ -77,11 +77,11 @@ func TestHandleLoopApproval_InvalidBody(t *testing.T) {
 }
 
 func TestHandleLoopApproval_UnknownDecision(t *testing.T) {
-	comp := trackedLoopWithApproval(t, "loop-1", "call-001")
+	comp := trackedLoopWithApproval(t, seamTestLoopA, "call-001")
 
 	body := `{"decision":"abstain"}`
-	req := httptest.NewRequest(http.MethodPost, "/loops/loop-1/approval", strings.NewReader(body))
-	req.SetPathValue("id", "loop-1")
+	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", strings.NewReader(body))
+	req.SetPathValue("id", seamTestLoopA)
 	rec := httptest.NewRecorder()
 
 	comp.handleLoopApproval(rec, req)
@@ -102,7 +102,7 @@ func TestHandleLoopApproval_UnknownDecision(t *testing.T) {
 func TestHandleLoopApproval_NotAwaitingApproval(t *testing.T) {
 	comp := newTestComponent(t)
 	comp.loopTracker.Track(&LoopInfo{
-		LoopID:      "loop-noapproval",
+		LoopID:      seamTestLoopB,
 		UserID:      "user-1",
 		ChannelType: "http",
 		State:       "executing",
@@ -111,8 +111,8 @@ func TestHandleLoopApproval_NotAwaitingApproval(t *testing.T) {
 	// No SetPendingApproval — loop is tracked but not awaiting approval.
 
 	body := `{"decision":"approve"}`
-	req := httptest.NewRequest(http.MethodPost, "/loops/loop-noapproval/approval", strings.NewReader(body))
-	req.SetPathValue("id", "loop-noapproval")
+	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopB+"/approval", strings.NewReader(body))
+	req.SetPathValue("id", seamTestLoopB)
 	rec := httptest.NewRecorder()
 
 	comp.handleLoopApproval(rec, req)
@@ -144,11 +144,11 @@ func TestHandleLoopApproval_DecisionValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			comp := trackedLoopWithApproval(t, "loop-1", "call-001")
+			comp := trackedLoopWithApproval(t, seamTestLoopA, "call-001")
 
 			body := `{"decision":"` + tt.decision + `"}`
-			req := httptest.NewRequest(http.MethodPost, "/loops/loop-1/approval", strings.NewReader(body))
-			req.SetPathValue("id", "loop-1")
+			req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", strings.NewReader(body))
+			req.SetPathValue("id", seamTestLoopA)
 			rec := httptest.NewRecorder()
 
 			comp.handleLoopApproval(rec, req)
@@ -164,12 +164,12 @@ func TestHandleLoopApproval_DecisionValidation(t *testing.T) {
 // handler reaches the publish step (500 because no NATS client),
 // proving identity was resolved successfully.
 func TestHandleLoopApproval_BodyIdentityFallback(t *testing.T) {
-	comp := trackedLoopWithApproval(t, "loop-1", "call-001")
+	comp := trackedLoopWithApproval(t, seamTestLoopA, "call-001")
 
 	// No user_id in body.
 	body := `{"decision":"approve"}`
-	req := httptest.NewRequest(http.MethodPost, "/loops/loop-1/approval", strings.NewReader(body))
-	req.SetPathValue("id", "loop-1")
+	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", strings.NewReader(body))
+	req.SetPathValue("id", seamTestLoopA)
 	rec := httptest.NewRecorder()
 
 	comp.handleLoopApproval(rec, req)
@@ -187,12 +187,12 @@ func TestHandleLoopApproval_BodyIdentityFallback(t *testing.T) {
 // the helper was consulted; the actual approver value is captured
 // indirectly via the identity helper unit tests.
 func TestHandleLoopApproval_CtxIdentityWinsOverBody(t *testing.T) {
-	comp := trackedLoopWithApproval(t, "loop-1", "call-001")
+	comp := trackedLoopWithApproval(t, seamTestLoopA, "call-001")
 
 	body := `{"decision":"approve","user_id":"body-user"}`
-	req := httptest.NewRequest(http.MethodPost, "/loops/loop-1/approval", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", strings.NewReader(body))
 	req = req.WithContext(WithIdentity(req.Context(), "ctx-authenticated-user"))
-	req.SetPathValue("id", "loop-1")
+	req.SetPathValue("id", seamTestLoopA)
 	rec := httptest.NewRecorder()
 
 	comp.handleLoopApproval(rec, req)
@@ -207,11 +207,11 @@ func TestHandleLoopApproval_CtxIdentityWinsOverBody(t *testing.T) {
 // ModifiedArguments populated) is verified by the agentic package's
 // payload tests; this test just confirms the handler accepts the body.
 func TestHandleLoopApproval_ModifiedArgumentsAccepted(t *testing.T) {
-	comp := trackedLoopWithApproval(t, "loop-1", "call-001")
+	comp := trackedLoopWithApproval(t, seamTestLoopA, "call-001")
 
 	body := `{"decision":"modify","modified_arguments":{"path":"/tmp/safe"},"reason":"narrowed scope"}`
-	req := httptest.NewRequest(http.MethodPost, "/loops/loop-1/approval", strings.NewReader(body))
-	req.SetPathValue("id", "loop-1")
+	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", strings.NewReader(body))
+	req.SetPathValue("id", seamTestLoopA)
 	rec := httptest.NewRecorder()
 
 	comp.handleLoopApproval(rec, req)
@@ -228,11 +228,11 @@ func TestHandleLoopApproval_ModifiedArgumentsAccepted(t *testing.T) {
 // client → 500) must NOT clear the cache, leaving subsequent retries
 // able to succeed once NATS is available.
 func TestHandleLoopApproval_FailedPublishPreservesPendingApproval(t *testing.T) {
-	comp := trackedLoopWithApproval(t, "loop-1", "call-001")
+	comp := trackedLoopWithApproval(t, seamTestLoopA, "call-001")
 
 	body := `{"decision":"approve"}`
-	req := httptest.NewRequest(http.MethodPost, "/loops/loop-1/approval", strings.NewReader(body))
-	req.SetPathValue("id", "loop-1")
+	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", strings.NewReader(body))
+	req.SetPathValue("id", seamTestLoopA)
 	rec := httptest.NewRecorder()
 
 	comp.handleLoopApproval(rec, req)
@@ -240,7 +240,7 @@ func TestHandleLoopApproval_FailedPublishPreservesPendingApproval(t *testing.T) 
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
 
 	// Cache must remain populated for retry.
-	callID, ok := comp.loopTracker.GetPendingApprovalCallID("loop-1")
+	callID, ok := comp.loopTracker.GetPendingApprovalCallID(seamTestLoopA)
 	assert.True(t, ok, "failed publish must NOT clear PendingApproval — caller should be able to retry")
 	assert.Equal(t, "call-001", callID)
 }

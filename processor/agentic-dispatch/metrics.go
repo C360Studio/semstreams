@@ -29,9 +29,11 @@ type routerMetrics struct {
 	// HTTP /loops/{id}/approval endpoint by decision and outcome.
 	loopApprovalsSubmitted *prometheus.CounterVec
 
-	// Loop admission metrics — every request naming an existing loop that
-	// the one admission gate refused, by the seam it arrived on and the
-	// single mapped refusal reason (loopAdmissionMetricReason).
+	// Loop admission metrics — every request the package refused, by the seam
+	// it arrived on and the single mapped refusal reason
+	// (loopAdmissionMetricReason). Requests naming an existing loop are refused
+	// by the admission gate; a submission that never became a task is refused
+	// by the submission path, through the same one home.
 	loopAdmissionRefusals *prometheus.CounterVec
 
 	// SSE metrics
@@ -171,7 +173,7 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 			Namespace: "semstreams",
 			Subsystem: "router",
 			Name:      "loop_admission_refusals_total",
-			Help:      "Requests naming an existing loop refused by the admission gate, by seam and reason (form_malformed, existence_absent, existence_unreadable, existence_conflict, state_terminal, ownership_not_owner, ownership_not_permitted)",
+			Help:      "Requests dispatch refused, by the seam they arrived on and the single mapped reason (form_malformed, existence_absent, existence_unreadable, existence_conflict, state_terminal, ownership_not_owner, ownership_not_permitted, submission_invalid, submission_undeliverable)",
 		}, []string{"seam", "reason"}),
 
 		// SSE metrics
