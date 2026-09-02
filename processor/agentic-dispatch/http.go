@@ -99,7 +99,6 @@ func (c *Component) RegisterHTTPHandlers(prefix string, mux *http.ServeMux) {
 	// Loop management endpoints
 	mux.HandleFunc("GET "+prefix+"loops", c.handleListLoops)
 	mux.HandleFunc("GET "+prefix+"loops/{id}", c.handleGetLoop)
-	mux.HandleFunc("POST "+prefix+"loops/{id}/signal", c.handleLoopSignal)
 	mux.HandleFunc("POST "+prefix+"loops/{id}/approval", c.handleLoopApproval)
 
 	// Real-time activity stream (SSE)
@@ -485,21 +484,6 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-// SignalRequest represents a control signal request for a loop.
-type SignalRequest struct {
-	Type   string `json:"type"`   // pause, resume, cancel
-	Reason string `json:"reason"` // optional reason
-}
-
-// SignalResponse represents the response to a signal request.
-type SignalResponse struct {
-	LoopID    string `json:"loop_id"`
-	Signal    string `json:"signal"`
-	Accepted  bool   `json:"accepted"`
-	Message   string `json:"message,omitempty"`
-	Timestamp string `json:"timestamp"`
-}
-
 // ApprovalRequest is the body of POST /loops/{id}/approval. Drives
 // the beta.19 approval flow from an HTTP caller — the framework's
 // approval-response handler subscribes on
@@ -693,115 +677,10 @@ func (c *Component) loopWireByID(ctx context.Context, loopID string) (Loop, bool
 	return loopFromEntity(persisted, c.deps.Platform.Org, c.deps.Platform.Platform), true
 }
 
-// handleLoopSignal sends a control signal to a loop.
-func (c *Component) handleLoopSignal(w http.ResponseWriter, r *http.Request) {
-	ctx, requestID := c.withRequestID(w, r)
-	startTime := time.Now()
-
-	loopID := r.PathValue("id")
-	if loopID == "" {
-		c.metrics.recordHTTPRequest("/loops/{id}/signal", "POST", "400")
-		c.writeJSONError(w, http.StatusBadRequest, "loop ID is required")
-		return
-	}
-
-	// Form, existence, and ownership before anything is read from the body.
-	// Signalling is owner-or-cancel_any (the ruled model); with the default
-	// empty cancel_any list this endpoint is owner-only.
-	requester := IdentityFromRequest(r, "")
-	facts, err := c.admitLoopRequest(ctx, loopAdmissionRequest{
-		Seam:      seamHTTPLoopSignal,
-		Field:     "id",
-		Operation: loopOpSignal,
-		LoopID:    loopID,
-		Requester: requester,
-	})
-	if err != nil {
-		c.answerLoopRefusal(w, "/loops/{id}/signal", "POST", startTime, err)
-		return
-	}
-
-	// Parse signal request
-	var req SignalRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		c.metrics.recordHTTPRequest("/loops/{id}/signal", "POST", "400")
-		c.writeJSONError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
-		return
-	}
-
-	// Validate signal type
-	switch req.Type {
-	case "pause", "resume", "cancel":
-		// Valid signal types
-	default:
-		c.metrics.recordHTTPRequest("/loops/{id}/signal", "POST", "400")
-		c.writeJSONError(w, http.StatusBadRequest, "invalid signal type: must be pause, resume, or cancel")
-		return
-	}
-
-	c.logger.DebugContext(ctx, "sending signal to loop",
-		slog.String("request_id", requestID),
-		slog.String("loop_id", loopID),
-		slog.String("signal", req.Type),
-		slog.String("reason", req.Reason),
-		slog.String("owner", facts.UserID))
-
-	// Publish the signal. Every refusal happened above, BEFORE this: the gate
-	// ran before the body was read, and the verb was checked before anything
-	// was published, so a refused request puts nothing on the loop's signal
-	// subject (I11).
-	//
-	// The route travels from the gate's merged facts, and the published signal
-	// records the REQUESTER, not the loop's owner — the loop attributes the
-	// cancellation to that field.
-	if err := c.loopTracker.SendSignal(ctx, c.natsClient, loopSignalRequest{
-		Facts:     facts,
-		Requester: requester,
-		Type:      req.Type,
-		Reason:    req.Reason,
-		Ports:     c.outputPortDefs(),
-	}); err != nil {
-		c.logger.ErrorContext(ctx, "failed to send signal",
-			slog.String("request_id", requestID),
-			slog.String("loop_id", loopID),
-			slog.String("signal", req.Type),
-			slog.String("error", err.Error()))
-		c.metrics.recordHTTPRequest("/loops/{id}/signal", "POST", "500")
-		c.metrics.recordLoopSignal(req.Type, false)
-		c.writeJSONError(w, http.StatusInternalServerError, "failed to send signal: "+err.Error())
-		return
-	}
-
-	c.metrics.recordHTTPRequest("/loops/{id}/signal", "POST", "200")
-	c.metrics.recordHTTPDuration("/loops/{id}/signal", "POST", time.Since(startTime).Seconds())
-	c.metrics.recordLoopSignal(req.Type, true)
-
-	c.logger.DebugContext(ctx, "signal sent to loop",
-		slog.String("request_id", requestID),
-		slog.String("loop_id", loopID),
-		slog.String("signal", req.Type))
-
-	// Return success response
-	resp := SignalResponse{
-		LoopID:    loopID,
-		Signal:    req.Type,
-		Accepted:  true,
-		Message:   fmt.Sprintf("Signal '%s' sent to loop %s", req.Type, loopID),
-		Timestamp: time.Now().Format(time.RFC3339),
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		c.logger.ErrorContext(ctx, "failed to encode signal response",
-			slog.String("request_id", requestID),
-			slog.String("error", err.Error()))
-	}
-}
-
 // handleLoopApproval drives the beta.19 approval flow over HTTP.
-// Mirrors handleLoopSignal's shape: path-param extraction, loop
-// existence check, JSON body decode, validation, NATS publish,
-// JSON success response. Identity resolves via IdentityFromRequest
+// Path-param extraction, gate admission, JSON body decode,
+// validation, NATS publish, JSON success response. Identity resolves
+// via IdentityFromRequest
 // (ctx > body > "http-user" default) so middleware can authenticate
 // without handler edits.
 //
@@ -1179,39 +1058,6 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 					},
 				},
 			},
-			"/loops/{id}/signal": {
-				POST: &service.OperationSpec{
-					Summary:     "Send control signal to loop",
-					Description: "Sends a control signal (pause, resume, cancel) to an active loop.",
-					Tags:        []string{"AgenticDispatch"},
-					RequestBody: &service.RequestBodySpec{
-						Description: "Control signal to send",
-						Required:    true,
-						SchemaRef:   "#/components/schemas/SignalRequest",
-					},
-					Parameters: []service.ParameterSpec{
-						{Name: "id", In: "path", Description: "Loop ID", Required: true},
-					},
-					Responses: map[string]service.ResponseSpec{
-						"200": {
-							Description: "Signal accepted",
-							ContentType: "application/json",
-						},
-						"400": {
-							Description: "Invalid signal type, or a loop ID that is not a framework-minted loop token",
-						},
-						"403": {
-							Description: "Requester does not own the loop and is not in the cancel_any permission list",
-						},
-						"404": {
-							Description: "Loop not found",
-						},
-						"503": {
-							Description: "Loop state is not readable right now; retry",
-						},
-					},
-				},
-			},
 			"/loops/{id}/approval": {
 				POST: &service.OperationSpec{
 					Summary:     "Submit human approval response for a gated tool call",
@@ -1282,13 +1128,11 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 			reflect.TypeOf(Loop{}),
 			reflect.TypeOf(LoopInfo{}),
 			reflect.TypeOf(HTTPMessageResponse{}),
-			reflect.TypeOf(SignalResponse{}),
 			reflect.TypeOf(ActivityEvent{}),
 			reflect.TypeOf(ApprovalAcceptResponse{}),
 		},
 		RequestBodyTypes: []reflect.Type{
 			reflect.TypeOf(HTTPMessageRequest{}),
-			reflect.TypeOf(SignalRequest{}),
 			reflect.TypeOf(ApprovalRequest{}),
 		},
 	}

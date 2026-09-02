@@ -302,11 +302,11 @@ func TestConflictingOwnersAcrossSourcesAreRefused(t *testing.T) {
 	}})
 
 	_, err := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
-		Seam: "http_signal", Field: "id", Operation: loopOpSignal,
+		Seam: seamCancelCommand, Field: "loop_id", Operation: loopOpCancel,
 		LoopID: admissionLoopA, Requester: "user-a",
 	})
 
-	requireRefusal(t, c, err, codeLoopOwnerConflict, reasonExistenceConflict, "http_signal")
+	requireRefusal(t, c, err, codeLoopOwnerConflict, reasonExistenceConflict, seamCancelCommand)
 }
 
 // The gate's ownership model, exercised directly on an EXISTING loop. The seam
@@ -331,8 +331,6 @@ func TestGateOwnershipModel(t *testing.T) {
 		{name: "owner cancels", operation: loopOpCancel, requester: owner, loopOwner: owner},
 		{name: "non-owner cannot cancel", operation: loopOpCancel, requester: "user-b", loopOwner: owner, wantCode: codeLoopNotOwned},
 		{name: "cancel_any cancels another user's loop", operation: loopOpCancel, requester: "ops", loopOwner: owner, cancelAny: []string{"ops"}},
-		{name: "cancel_any signals another user's loop", operation: loopOpSignal, requester: "ops", loopOwner: owner, cancelAny: []string{"ops"}},
-		{name: "non-owner cannot signal", operation: loopOpSignal, requester: "user-b", loopOwner: owner, wantCode: codeLoopNotOwned},
 
 		// Approval is deliberately NOT owner-scoped: a second-party reviewer is
 		// the entire point.
@@ -346,7 +344,6 @@ func TestGateOwnershipModel(t *testing.T) {
 		// Unknown owner fails closed for every operation that consults it.
 		{name: "ownerless loop refuses continue", operation: loopOpContinue, requester: owner, loopOwner: "", wantCode: codeLoopNotOwned},
 		{name: "ownerless loop refuses cancel", operation: loopOpCancel, requester: owner, loopOwner: "", wantCode: codeLoopNotOwned},
-		{name: "ownerless loop refuses signal", operation: loopOpSignal, requester: owner, loopOwner: "", wantCode: codeLoopNotOwned},
 		// ... but approve and read never consult the owner, so an autonomously
 		// spawned loop's tool call is still approvable and its record readable.
 		{name: "ownerless loop still approvable", operation: loopOpApprove, requester: "reviewer-b", loopOwner: "", approve: []string{"reviewer-b"}},
@@ -385,7 +382,7 @@ func TestGateOwnershipModel(t *testing.T) {
 
 // Permissions.CancelOwn keeps exactly one home — the /cancel command's declared
 // permission — and this gate is not it (owner ruling R2). With CancelOwn false,
-// the gate still admits the owner's own cancel and signal.
+// the gate still admits the owner's own cancel.
 func TestGateDoesNotConsultCancelOwn(t *testing.T) {
 	c := admissionTestComponent(t)
 	c.config.Permissions.CancelOwn = false
@@ -393,18 +390,16 @@ func TestGateDoesNotConsultCancelOwn(t *testing.T) {
 		ID: admissionLoopA, UserID: "user-a", State: agentic.LoopStateExecuting, MaxIterations: 5,
 	}})
 
-	for _, operation := range []string{loopOpCancel, loopOpSignal} {
-		_, err := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
-			Seam: "seam_under_test", Field: "id", Operation: operation,
-			LoopID: admissionLoopA, Requester: "user-a",
-		})
-		require.NoError(t, err, operation)
-	}
+	_, err := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
+		Seam: "seam_under_test", Field: "id", Operation: loopOpCancel,
+		LoopID: admissionLoopA, Requester: "user-a",
+	})
+	require.NoError(t, err)
 }
 
 // Terminality is fail-closed across the two sources: either one reporting a
-// settled state refuses a continuation, and neither refuses a cancel, a signal,
-// an approval, or a read — settled loops stay readable and controllable.
+// settled state refuses a continuation, and neither refuses a cancel, an
+// approval, or a read — settled loops stay readable and controllable.
 func TestGateTerminalRefusesContinuationFromEitherSource(t *testing.T) {
 	cases := []struct {
 		name        string

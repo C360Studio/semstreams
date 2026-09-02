@@ -1,12 +1,10 @@
 package agenticdispatch
 
 import (
-	"net/http"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/payloadbuiltins"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -37,35 +35,4 @@ func TestRetiredSignalMessageCategoryIsUnregistered(t *testing.T) {
 		assert.NotEqual(t, "signal_message", registration.Category,
 			"no registration in the agentic domain still carries the retired category")
 	}
-}
-
-// spec: agentic-dispatch / One control-signal payload travels the loop signal subject
-// I11 at the unit level: a non-owner without cancel_any is refused, and the
-// refusal happens BEFORE anything is published.
-//
-// The 403 is the proof, not a proxy for it. This component's NATS client is a
-// disconnected zero value, so any publish attempt fails and the endpoint
-// answers 500 — reaching SendSignal at all is therefore observable as a
-// different status. A request that both refused and published would be a 500
-// here, and this assertion is what fails if the gate is ever moved below the
-// publish. The wire-level form of the same invariant, which counts the messages
-// actually on the subject, is
-// TestIntegrationRefusedSignalPublishesNothingOnTheSubject.
-func TestSignalFromNonOwnerIsRefusedBeforePublish(t *testing.T) {
-	c, _, rec := newSeamTestComponent(t)
-	trackLoopOwnedBy(c, seamTestLoopA, "user-a")
-
-	recorder := seamHTTPCall(t, c.handleLoopSignal, http.MethodPost,
-		"/loops/"+seamTestLoopA+"/signal", seamTestLoopA, `{"type":"cancel"}`, "user-b")
-
-	require.Equal(t, http.StatusForbidden, recorder.Code,
-		"a non-owner is refused; a 500 would mean the publish was attempted first")
-	assert.Contains(t, seamErrorContent(t, recorder), "does not own")
-	requireSeamRefusal(t, c, rec, seamHTTPLoopSignal, reasonOwnershipNotOwner)
-	assert.Equal(t, 0, testutil.CollectAndCount(c.metrics.loopSignalsSent),
-		"the signal outcome series never moved, because no signal was sent")
-
-	info := c.loopTracker.Get(seamTestLoopA)
-	require.NotNil(t, info, "the refused request leaves the loop alone")
-	assert.Equal(t, "executing", info.State)
 }

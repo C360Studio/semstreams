@@ -40,8 +40,8 @@ complete and closed; a new carrier of a loop token joins it rather than validati
 - Every remaining payload that carries a loop token MUST refuse a non-canonical one in its own `Validate`:
   the user control signal, the approval response, and the approval-pending event. A fourth carrier existed —
   dispatch's own control-signal message, whose `Validate` returned nil unconditionally — and is RETIRED rather
-  than repaired: it had one producer, zero consumers, and no identity fields, so the seam that produced it now
-  publishes the user control signal instead. A carrier with no reader is deleted, not validated.
+  than repaired: it had one producer, zero consumers, and no identity fields, and the seam that produced it,
+  `POST /loops/{id}/signal`, is itself deleted. A carrier with no reader is deleted, not validated.
 - Every loop-scoped HTTP endpoint MUST refuse a non-canonical loop id taken from its URL path, before the
   existence check, so a malformed token is answered as malformed rather than as not found.
 
@@ -129,9 +129,8 @@ sites, not at the accepting seams.
 
 #### Scenario: a non-canonical loop id in a URL path is refused before the existence check
 
-- **GIVEN** requests to the loop read, loop signal, and loop approval HTTP endpoints whose path loop id is
-  `loop_ab12cd34`
+- **GIVEN** requests to the loop read and loop approval HTTP endpoints whose path loop id is `loop_ab12cd34`
 - **WHEN** each handler runs
-- **THEN** each answers with a bad-request refusal naming the token form, not a not-found answer, and no signal or
+- **THEN** each answers with a bad-request refusal naming the token form, not a not-found answer, and no
   approval is published
 - **AND** the test that verifies this is `TestLoopEndpointsRefuseNonCanonicalPathToken`

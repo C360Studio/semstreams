@@ -25,16 +25,18 @@ import (
 )
 
 // spec: agentic-dispatch / One control-signal payload travels the loop signal subject
-// The endpoint actually stops the loop.
+// The cancel lane actually stops the loop.
 //
-// This is the joint the unification exists to close, so it is driven end to
-// end and nothing at the seam is reconstructed:
+// POST /loops/{id}/signal is deleted; the /cancel chat command over the same
+// HTTP surface is the one path that cancels a loop, so it is driven end to end
+// and nothing at the seam is reconstructed:
 //
-//	POST /loops/{id}/signal  →  dispatch's REAL route (RegisterHTTPHandlers)
-//	                         →  a REAL NATS subject
-//	                         →  the exact bytes off the wire
-//	                         →  agentic-loop's REAL handleSignalMessage
-//	                         →  the loop's cancellation event on agent.complete
+//	POST /message  {"content": "/cancel <loop_id>"}
+//	               →  dispatch's REAL route (RegisterHTTPHandlers)
+//	               →  a REAL NATS subject
+//	               →  the exact bytes off the wire
+//	               →  agentic-loop's REAL handleSignalMessage
+//	               →  the loop's cancellation event on agent.complete
 //
 // The dispatch component is built through its own NewComponent, and the loop it
 // is asked to cancel exists only in the durable AGENT_LOOPS record — this
@@ -47,11 +49,11 @@ import (
 // requester for the owner survives (measured: it did, before this fixture
 // separated them).
 //
-// Before this change the endpoint published a dispatch-local payload the loop's
-// handler dropped as an unexpected type, answered 200, and cancelled nothing.
-// What fails here if that returns is the completion assertion, not a type
-// assertion on a struct nobody put on a wire.
-func TestHTTPSignalEndpointCancelsTheLoop(t *testing.T) {
+// Before this change this lane published a BARE agentic.UserSignal that failed
+// at the wire-format unmarshal, so the loop dropped it. What fails here if that
+// returns is the completion assertion, not a type assertion on a struct nobody
+// put on a wire.
+func TestCancelCommandCancelsTheLoop(t *testing.T) {
 	ctx := t.Context()
 	const loopID = "44444444-4444-4444-8444-444444444444"
 
@@ -93,13 +95,20 @@ func TestHTTPSignalEndpointCancelsTheLoop(t *testing.T) {
 	mux := http.NewServeMux()
 	dispatchHTTPHandlers(t, tc, mux)
 
-	body := strings.NewReader(`{"type":"cancel","reason":"operator asked"}`)
-	req := httptest.NewRequest(http.MethodPost, "/loops/"+loopID+"/signal", body)
+	body := strings.NewReader(`{"content":"/cancel ` + loopID + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/message", body)
 	req = req.WithContext(agenticdispatch.WithIdentity(ctx, "cancel-operator"))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusOK, rec.Code,
-		"a cancel_any holder is admitted on a loop they do not own: %s", rec.Body.String())
+	require.Equal(t, http.StatusOK, rec.Code, "the message route answered: %s", rec.Body.String())
+
+	var answer struct {
+		Type    string `json:"type"`
+		Content string `json:"content"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &answer))
+	require.Equalf(t, agentic.ResponseTypeStatus, answer.Type,
+		"a cancel_any holder is admitted on a loop they do not own: %s", answer.Content)
 
 	// The exact bytes dispatch put on the subject — not a reconstruction.
 	data := fetchOne(t, ctx, tc, "AGENT", "signal-e2e", "agent.signal."+loopID)
@@ -124,7 +133,7 @@ func TestHTTPSignalEndpointCancelsTheLoop(t *testing.T) {
 
 // dispatchHTTPHandlers builds a dispatch component through its own constructor
 // and registers its real routes. Nothing here reaches into dispatch internals:
-// if the endpoint's wiring changes, this fails at the route, which is the point.
+// if the route's wiring changes, this fails at the route, which is the point.
 func dispatchHTTPHandlers(t *testing.T, tc *natsclient.TestClient, mux *http.ServeMux) {
 	t.Helper()
 	config := agenticdispatch.DefaultConfig()

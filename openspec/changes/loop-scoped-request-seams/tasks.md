@@ -100,31 +100,55 @@ the two `state.go` edits are reviewed together rather than re-derived.
 - [x] 8.2 Answer the submitter with a typed error naming the offending field on both lanes; count the refusal
 - [x] 8.3 Test I5: a submission that publishes no task leaves the tracker and the gauge unchanged
 
-## 9. One control-signal payload (folded in by owner ruling R3)
+## 9. The loop signal endpoint is deleted (owner ruling 2026-09-01, superseding R3's repair)
 
-Sequencing: 9.4 MUST NOT land before section 4 — the seam goes live here, and it must be gated first.
+Why the history matters: `POST /loops/{id}/signal` never worked. It published `agenticdispatch.SignalMessage`
+while agentic-loop's only handler for `agent.signal.*` asserts `*agentic.UserSignal`, so it answered
+`200 {"accepted": true}` and the loop was never signalled. R3 folded a repair into this change and that repair
+landed (`c3998558`, `bec06d23`). The owner then ruled DELETION instead, on three grounds: its only
+genuinely-implemented verb — cancel — is already served on the same HTTP surface by `POST /message` with
+`/cancel <loop_id>` (`processMessageSync` → `processCommandSync` → `handleCancelCommand`, which publishes a
+correct `agentic.UserSignal`); **pause and resume were never implemented** — `handlePauseSignal` sets
+`entity.PauseRequested` and nothing in the tree reads that field, which is #1239's subject and is NOT touched
+here; and deleting removes adopter surface rather than adding a `user_id` field to keep it.
 
-- [x] 9.1 Change `LoopTracker.SendSignal` (`loop_tracker.go:615-648`) to build and publish
-      `agentic.UserSignal`: minted signal id, the verb, the loop token, the **requester** identity from
-      `IdentityFromRequest`, the loop's channel route from the gate's merged facts, and the endpoint's `reason`
-      on the existing `Payload` field
-- [x] 9.2 Resolve the subject through `component.ResolveSubject` as the chat lane does (`commands.go:127`)
-      rather than the hardcoded `"agent.signal." + loopID` (`loop_tracker.go:634`)
-- [x] 9.3 Delete `SignalMessage` and its four methods (`loop_tracker.go:585-613`), `buildSignalMessage` and
-      `RegisterPayloads` (`processor/agentic-dispatch/payload_registry.go` — the whole file; its only
-      registration was that type), the `track(agenticdispatch.RegisterPayloads(reg))` call
-      (`payloadbuiltins/register.go:47`) and its import (`:21`), and `agentic.CategorySignalMessage`
-      (`agentic/constants.go:24`)
-- [x] 9.4 Wire `handleLoopSignal` (`http.go:642-733`) to the gate and to the new `SendSignal` signature;
-      refuse BEFORE publication
-- [x] 9.5 Retire the tests that pin the deleted type: `loop_tracker_test.go:421-473`
-      (`TestSignalMessage_Serialization`, `TestSignalMessage_Types`), `loop_tracker_test.go:475-481`
-      (`TestLoopTracker_SendSignal_NoClient`, signature change), and the registry-floor assertion at
-      `processor/graph-ingest/indexing_profile_registry_test.go:107`
-- [x] 9.6 Sweep prose for the retired category: `docs/proposals/gh1100-type-authority-inventory.md:25` names
-      `agentic.signal_message.v1` in a registered-type count
-- [x] 9.7 Test that the endpoint now actually cancels a running loop end to end, and that exactly one payload
-      type appears on `agent.signal.*` (I10, I11)
+What section 9 keeps from the repair: the real defect was **two payload types on one subject**, and deletion
+still fixes it. `agenticdispatch.SignalMessage`, `buildSignalMessage`,
+`processor/agentic-dispatch/payload_registry.go`, the `payloadbuiltins.Register` call that ran it, and
+`agentic.CategorySignalMessage` stay deleted. Exactly one payload type — `agentic.UserSignal`, published by the
+chat lane — now travels `agent.signal.*`.
+
+- [x] 9.1 Delete the route registration (`http.go:102`) and `handleLoopSignal` with its whole
+      request/response path
+- [x] 9.2 Delete `SignalRequest` / `SignalResponse`, the `/loops/{id}/signal` OpenAPI path entry and its two
+      `SchemaRef` type registrations; regenerate `specs/openapi.v3.yaml`
+- [x] 9.3 `SignalMessage` and its four methods, `buildSignalMessage`,
+      `processor/agentic-dispatch/payload_registry.go` in whole, the
+      `track(agenticdispatch.RegisterPayloads(reg))` call in `payloadbuiltins/register.go` and its import, and
+      `agentic.CategorySignalMessage` are RETIRED — deleted in `c3998558` and left deleted here (task 5.4
+      points at this task; keeping its number is why it is numbered 9.3)
+- [x] 9.4 Delete `LoopTracker.SendSignal` and `loopSignalRequest` — verified `http.go:757` was the only
+      production caller (`git grep -n SendSignal`)
+- [x] 9.5 Delete the now-unused gate vocabulary — `seamHTTPLoopSignal`, `loopOpSignal`, and the
+      `case loopOpCancel, loopOpSignal:` arm, which collapses to `loopOpCancel` alone
+- [x] 9.6 Delete the endpoint's own metric, which the deletion leaves with zero producers:
+      `recordLoopSignal`, the `loopSignalsSent` counter, both of its registrations, and its row in
+      `docs/advanced/08-agentic-components.md`
+- [x] 9.7 Retire the endpoint's tests: `TestSignalFromNonOwnerIsRefusedBeforePublish`,
+      `TestIntegrationRefusedSignalPublishesNothingOnTheSubject`, `TestHandleLoopSignal`,
+      `TestSignalRequestValidation`, `TestSignalResponseSerialization`,
+      `TestLoopTracker_SendSignal_NoClient`, and the signal driver in the every-seam table
+- [x] 9.8 Keep the invariants the deletion does not retire, repointed to the surviving chat lane:
+      `TestRetiredSignalMessageCategoryIsUnregistered` (the retired category is absent from the composed
+      registry), `TestSignalSubjectCarriesExactlyOnePayloadType` (I10 — every byte on `agent.signal.*` decodes
+      to `agentic.UserSignal` through the production decoder), and
+      `TestIntegrationRefusedCancelPublishesNothingOnTheSubject` (I11 — a refused request publishes nothing)
+- [x] 9.9 Repoint the end-to-end proof that a cancel actually stops a loop from the deleted endpoint to
+      `POST /message` + `/cancel <loop_id>`: `TestCancelCommandCancelsTheLoop`
+      (`processor/agentic-loop/dispatch_cancel_integration_test.go`), driving dispatch's real route table into
+      agentic-loop's real `handleSignalMessage` with a `cancel_any` operator who is NOT the loop's owner
+- [x] 9.10 Rename `TestCancelAnyAdmitsNonOwnerCancelAndSignal` to `TestCancelAnyAdmitsNonOwnerCancel`; the
+      `/cancel` command is now the only seam asking for that verb
 
 ## 10. Gates
 

@@ -207,16 +207,6 @@ func seamRefusalDrivers() []seamRefusalDriver {
 			},
 		},
 		{
-			seam: seamHTTPLoopSignal,
-			drive: func(t *testing.T, c *Component, _ *captureSink, loopID, requester string) string {
-				t.Helper()
-				rec := seamHTTPCall(t, c.handleLoopSignal, http.MethodPost,
-					"/loops/"+loopID+"/signal", loopID, `{"type":"cancel"}`, requester)
-				require.NotEqual(t, http.StatusOK, rec.Code)
-				return seamErrorContent(t, rec)
-			},
-		},
-		{
 			seam: seamHTTPLoopApproval,
 			drive: func(t *testing.T, c *Component, _ *captureSink, loopID, requester string) string {
 				t.Helper()
@@ -327,15 +317,16 @@ func TestRefusedContinuationDoesNotRepointOwnership(t *testing.T) {
 }
 
 // spec: agentic-dispatch / The ownership model binds the user lane, and approval is deliberately not owner-scoped
-// cancel and signal admit a non-owner on the cancel-any list. The default list
-// is empty, so this is the configured-operator case, and it is the ONLY way a
-// non-owner reaches either verb.
-func TestCancelAnyAdmitsNonOwnerCancelAndSignal(t *testing.T) {
-	c, _, _ := newSeamTestComponent(t)
+// cancel admits a non-owner on the cancel-any list. The default list is empty,
+// so this is the configured-operator case, and it is the ONLY way a non-owner
+// cancels someone else's loop. The /cancel command is the one seam that asks
+// for this verb: the signal endpoint that used to share it is deleted.
+func TestCancelAnyAdmitsNonOwnerCancel(t *testing.T) {
+	c, _, rec := newSeamTestComponent(t)
 	c.config.Permissions.CancelAny = []string{"operator"}
 	trackLoopOwnedBy(c, seamTestLoopA, "user-a")
 
-	t.Run("cancel command", func(t *testing.T) {
+	t.Run("the operator is admitted", func(t *testing.T) {
 		_, err := c.handleCancelCommand(context.Background(),
 			seamUserMessage("operator"), []string{seamTestLoopA}, "")
 		// Admission passed and the handler went on to publish, which fails on
@@ -347,18 +338,13 @@ func TestCancelAnyAdmitsNonOwnerCancelAndSignal(t *testing.T) {
 			"nothing was refused")
 	})
 
-	t.Run("signal endpoint", func(t *testing.T) {
-		rec := seamHTTPCall(t, c.handleLoopSignal, http.MethodPost,
-			"/loops/"+seamTestLoopA+"/signal", seamTestLoopA, `{"type":"cancel"}`, "operator")
-		assert.NotEqual(t, http.StatusForbidden, rec.Code,
-			"a cancel_any holder is admitted; the publish then fails on the test client")
-		assert.NotEqual(t, http.StatusNotFound, rec.Code)
-	})
-
 	t.Run("a non-owner without cancel_any is refused", func(t *testing.T) {
-		rec := seamHTTPCall(t, c.handleLoopSignal, http.MethodPost,
-			"/loops/"+seamTestLoopA+"/signal", seamTestLoopA, `{"type":"cancel"}`, "stranger")
-		assert.Equal(t, http.StatusForbidden, rec.Code)
+		resp, err := c.handleCancelCommand(context.Background(),
+			seamUserMessage("stranger"), []string{seamTestLoopA}, "")
+		require.NoError(t, err, "a refusal is answered, not returned as an error")
+		assert.Equal(t, agentic.ResponseTypeError, resp.Type)
+		assert.Contains(t, resp.Content, "does not own")
+		requireSeamRefusal(t, c, rec, seamCancelCommand, reasonOwnershipNotOwner)
 	})
 }
 

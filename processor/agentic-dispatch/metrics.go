@@ -22,9 +22,6 @@ type routerMetrics struct {
 	httpRequestsTotal   *prometheus.CounterVec
 	httpRequestDuration *prometheus.HistogramVec
 
-	// Loop signal metrics
-	loopSignalsSent *prometheus.CounterVec
-
 	// Loop approval metrics — counts approval submissions through the
 	// HTTP /loops/{id}/approval endpoint by decision and outcome.
 	loopApprovalsSubmitted *prometheus.CounterVec
@@ -152,14 +149,6 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 10), // 1ms to ~1s
 		}, []string{"endpoint", "method"}),
 
-		// Loop signal metrics
-		loopSignalsSent: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "semstreams",
-			Subsystem: "router",
-			Name:      "loop_signals_sent_total",
-			Help:      "Total number of loop control signals sent",
-		}, []string{"signal_type", "accepted"}),
-
 		// Loop approval metrics
 		loopApprovalsSubmitted: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "semstreams",
@@ -260,7 +249,6 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 		_ = registry.RegisterCounterVec("router", "terminal_settlement_total", m.terminalSettlements)
 		_ = registry.RegisterCounterVec("router", "http_requests_total", m.httpRequestsTotal)
 		_ = registry.RegisterHistogramVec("router", "http_request_duration_seconds", m.httpRequestDuration)
-		_ = registry.RegisterCounterVec("router", "loop_signals_sent_total", m.loopSignalsSent)
 		_ = registry.RegisterCounterVec("router", "loop_approvals_submitted_total", m.loopApprovalsSubmitted)
 		_ = registry.RegisterCounterVec("router", "loop_admission_refusals_total", m.loopAdmissionRefusals)
 		_ = registry.RegisterGauge("router", "sse_connections_active", m.sseConnectionsActive)
@@ -284,7 +272,6 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 		_ = prometheus.DefaultRegisterer.Register(m.terminalSettlements)
 		_ = prometheus.DefaultRegisterer.Register(m.httpRequestsTotal)
 		_ = prometheus.DefaultRegisterer.Register(m.httpRequestDuration)
-		_ = prometheus.DefaultRegisterer.Register(m.loopSignalsSent)
 		_ = prometheus.DefaultRegisterer.Register(m.loopApprovalsSubmitted)
 		_ = prometheus.DefaultRegisterer.Register(m.loopAdmissionRefusals)
 		_ = prometheus.DefaultRegisterer.Register(m.sseConnectionsActive)
@@ -349,15 +336,6 @@ func (m *routerMetrics) recordHTTPRequest(endpoint, method, status string) {
 // recordHTTPDuration records the duration of an HTTP request.
 func (m *routerMetrics) recordHTTPDuration(endpoint, method string, seconds float64) {
 	m.httpRequestDuration.WithLabelValues(endpoint, method).Observe(seconds)
-}
-
-// recordLoopSignal records a loop signal attempt.
-func (m *routerMetrics) recordLoopSignal(signalType string, accepted bool) {
-	acceptedStr := "false"
-	if accepted {
-		acceptedStr = "true"
-	}
-	m.loopSignalsSent.WithLabelValues(signalType, acceptedStr).Inc()
 }
 
 // recordLoopApproval records an HTTP approval submission attempt.

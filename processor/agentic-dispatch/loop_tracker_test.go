@@ -1,7 +1,6 @@
 package agenticdispatch
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -418,27 +417,13 @@ func TestIsTerminalState(t *testing.T) {
 }
 
 // spec: agentic-dispatch / One control-signal payload travels the loop signal subject
-// TestSignalMessage_Serialization and TestSignalMessage_Types were retired with
-// the dispatch-local control-signal type they pinned: it had one producer and
-// zero consumers, and their round-trip through encoding/json never touched the
-// registry decode the loop actually performs. What replaced them is
-// TestSignalSubjectCarriesExactlyOnePayloadType, which decodes through the
-// production decoder.
-
-func TestLoopTracker_SendSignal_NoClient(t *testing.T) {
-	tracker := NewLoopTracker()
-	ctx := context.Background()
-
-	// With nil NATS client, SendSignal should return ErrNATSClientNil
-	err := tracker.SendSignal(ctx, nil, loopSignalRequest{
-		Facts:     loopFacts{LoopID: "11111111-1111-4111-8111-111111111111"},
-		Requester: "user-a",
-		Type:      "cancel",
-		Reason:    "test reason",
-	})
-	assert.Error(t, err)
-	assert.Equal(t, ErrNATSClientNil, err)
-}
+// TestSignalMessage_Serialization, TestSignalMessage_Types and
+// TestLoopTracker_SendSignal_NoClient were retired with the surface they
+// pinned: the dispatch-local control-signal type, and the tracker publish path
+// the deleted POST /loops/{id}/signal endpoint was its only caller of. The one
+// control signal dispatch still sends is the /cancel command's, and it is
+// pinned end to end by TestSignalSubjectCarriesExactlyOnePayloadType and
+// TestCancelCommandCancelsTheLoop.
 
 func TestLoopTracker_UpdateCompletion(t *testing.T) {
 	tests := []struct {

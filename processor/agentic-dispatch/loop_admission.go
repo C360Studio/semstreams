@@ -64,8 +64,6 @@ const (
 	seamStatusCommand = "status_command"
 	// seamHTTPLoopRead: GET /loops/{id}.
 	seamHTTPLoopRead = "http_loop_read"
-	// seamHTTPLoopSignal: POST /loops/{id}/signal.
-	seamHTTPLoopSignal = "http_loop_signal"
 	// seamHTTPLoopApproval: POST /loops/{id}/approval.
 	seamHTTPLoopApproval = "http_loop_approval"
 )
@@ -117,8 +115,6 @@ const (
 	loopOpContinue = "continue"
 	// loopOpCancel: the /cancel chat command.
 	loopOpCancel = "cancel"
-	// loopOpSignal: a control signal posted to the loop signal endpoint.
-	loopOpSignal = "signal"
 	// loopOpApprove: an approval decision on a gated tool call.
 	loopOpApprove = "approve"
 	// loopOpRead: reading a loop's record (/status, GET /loops/{id}).
@@ -296,7 +292,7 @@ func (c *Component) authorizeLoopOperation(req loopAdmissionRequest, facts loopF
 		}
 		return nil
 
-	case loopOpCancel, loopOpSignal:
+	case loopOpCancel:
 		if c.inList(req.Requester, c.config.Permissions.CancelAny) {
 			return nil
 		}

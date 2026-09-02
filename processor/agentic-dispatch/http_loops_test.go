@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -197,113 +196,6 @@ func TestHandleGetLoop(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
 	})
-}
-
-func TestHandleLoopSignal(t *testing.T) {
-	comp := newTestComponent(t)
-
-	// Add a test loop. The owner is the identity an unauthenticated HTTP caller
-	// resolves to, because signalling is owner-or-cancel_any and the default
-	// cancel_any list is empty.
-	comp.loopTracker.Track(&LoopInfo{
-		LoopID:      seamTestLoopA,
-		TaskID:      "task-1",
-		UserID:      DefaultIdentity,
-		ChannelType: "http",
-		ChannelID:   "chan-1",
-		State:       "executing",
-		CreatedAt:   time.Now(),
-	})
-
-	t.Run("loop not found", func(t *testing.T) {
-		body := `{"type":"cancel","reason":"test"}`
-		req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopAbsent+"/signal", strings.NewReader(body))
-		req.SetPathValue("id", seamTestLoopAbsent)
-		rec := httptest.NewRecorder()
-
-		comp.handleLoopSignal(rec, req)
-
-		assert.Equal(t, http.StatusNotFound, rec.Code)
-	})
-
-	t.Run("invalid request body", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/signal", strings.NewReader("invalid json"))
-		req.SetPathValue("id", seamTestLoopA)
-		rec := httptest.NewRecorder()
-
-		comp.handleLoopSignal(rec, req)
-
-		assert.Equal(t, http.StatusBadRequest, rec.Code)
-	})
-
-	t.Run("invalid signal type", func(t *testing.T) {
-		body := `{"type":"invalid","reason":"test"}`
-		req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/signal", strings.NewReader(body))
-		req.SetPathValue("id", seamTestLoopA)
-		rec := httptest.NewRecorder()
-
-		comp.handleLoopSignal(rec, req)
-
-		assert.Equal(t, http.StatusBadRequest, rec.Code)
-
-		var resp HTTPMessageResponse
-		err := json.Unmarshal(rec.Body.Bytes(), &resp)
-		require.NoError(t, err)
-		assert.Contains(t, resp.Content, "invalid signal type")
-	})
-
-	t.Run("missing loop ID", func(t *testing.T) {
-		body := `{"type":"cancel"}`
-		req := httptest.NewRequest(http.MethodPost, "/loops//signal", strings.NewReader(body))
-		req.SetPathValue("id", "")
-		rec := httptest.NewRecorder()
-
-		comp.handleLoopSignal(rec, req)
-
-		assert.Equal(t, http.StatusBadRequest, rec.Code)
-	})
-}
-
-func TestSignalRequestValidation(t *testing.T) {
-	tests := []struct {
-		name         string
-		signal       string
-		expectBadReq bool // Expect 400 Bad Request (validation error)
-		expectIntErr bool // Expect 500 Internal Error (NATS error, meaning validation passed)
-	}{
-		{"pause is valid", "pause", false, true},       // Valid signal, but no NATS client
-		{"resume is valid", "resume", false, true},     // Valid signal, but no NATS client
-		{"cancel is valid", "cancel", false, true},     // Valid signal, but no NATS client
-		{"empty is invalid", "", true, false},          // Validation fails
-		{"unknown is invalid", "stop", true, false},    // Validation fails
-		{"uppercase is invalid", "PAUSE", true, false}, // Validation fails
-	}
-
-	comp := newTestComponent(t)
-	comp.loopTracker.Track(&LoopInfo{
-		LoopID: seamTestLoopA,
-		UserID: DefaultIdentity,
-		State:  "executing",
-	})
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			body := `{"type":"` + tt.signal + `"}`
-			req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/signal", strings.NewReader(body))
-			req.SetPathValue("id", seamTestLoopA)
-			rec := httptest.NewRecorder()
-
-			comp.handleLoopSignal(rec, req)
-
-			if tt.expectBadReq {
-				assert.Equal(t, http.StatusBadRequest, rec.Code)
-			} else if tt.expectIntErr {
-				// Valid signals will fail with 500 due to no NATS client in test
-				// but this proves validation passed
-				assert.Equal(t, http.StatusInternalServerError, rec.Code)
-			}
-		})
-	}
 }
 
 func TestHandleActivityStream_NoClient(t *testing.T) {
@@ -577,25 +469,4 @@ func TestActivityEventLoopIDCorrelation(t *testing.T) {
 		assert.Empty(t, decoded.Data.State,
 			"data.state must remain empty after JSON round-trip")
 	})
-}
-
-func TestSignalResponseSerialization(t *testing.T) {
-	resp := SignalResponse{
-		LoopID:    "loop-123",
-		Signal:    "cancel",
-		Accepted:  true,
-		Message:   "Signal accepted",
-		Timestamp: "2024-01-15T10:30:00Z",
-	}
-
-	data, err := json.Marshal(resp)
-	require.NoError(t, err)
-
-	var decoded SignalResponse
-	err = json.Unmarshal(data, &decoded)
-	require.NoError(t, err)
-
-	assert.Equal(t, "loop-123", decoded.LoopID)
-	assert.Equal(t, "cancel", decoded.Signal)
-	assert.True(t, decoded.Accepted)
 }

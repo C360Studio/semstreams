@@ -2,8 +2,8 @@
 
 `agentic-dispatch` governs **admitting a request that names a loop**. Dispatch is the one plane where a party
 outside the framework — a chat channel, an HTTP client, a product shell — hands the framework a loop instance
-token and asks it to do something with the loop that token names: continue it, cancel it, signal it, approve a
-tool call inside it, read it. This capability owns the single gate every one of those seams passes through, the
+token and asks it to do something with the loop that token names: continue it, cancel it, approve a tool
+call inside it, read it. This capability owns the single gate every one of those seams passes through, the
 order its checks run in, the classified vocabulary a refusal carries, the one metric-reason mapping and the one
 log line a refusal produces, and the explicit list of seams deliberately left ungated.
 
@@ -63,7 +63,7 @@ execution evidence stays write-only from execution's side; nothing in the admiss
 #### Scenario: every seam refuses through the one gate with one counted reason
 
 - **GIVEN** the channel submission path, the HTTP submission path, the `/cancel` and `/status` commands, and the
-  `GET`, `signal`, and `approval` loop endpoints
+  `GET` and `approval` loop endpoints
 - **WHEN** each is given a non-canonical loop token
 - **THEN** each refuses through the shared gate, each emits the single named refusal log constant, and the
   refusal counter records one increment labelled with that seam
@@ -122,8 +122,7 @@ The gate MUST apply exactly this ownership model to requests arriving on the use
 
 - **continue** — a submission resolving to an existing loop, whether by explicit `reply_to` or by auto-continue:
   the requester MUST equal the loop's recorded owner.
-- **cancel** and **signal**: the requester MUST equal the loop's recorded owner OR appear in the configured
-  cancel-any list.
+- **cancel**: the requester MUST equal the loop's recorded owner OR appear in the configured cancel-any list.
 - **approve**: the requester MUST appear in the configured approve list. **Ownership is deliberately NOT
   consulted.** A second-party reviewer is the entire point of an approval, and a future change that "fixes" this
   by adding an owner check removes the capability. The approve list has been advertised in configuration and
@@ -152,12 +151,12 @@ having no owner.
 - **AND** the tests that verify this are `TestSecondHolderCannotContinueAnotherUsersLoop` and
   `TestRefusedContinuationDoesNotRepointOwnership`
 
-#### Scenario: a non-owner on the cancel-any list may cancel and signal
+#### Scenario: a non-owner on the cancel-any list may cancel
 
 - **GIVEN** a loop created by `user-a` and an operator in the cancel-any list
-- **WHEN** the operator cancels it by command and signals it over HTTP
-- **THEN** both are admitted
-- **AND** the test that verifies this is `TestCancelAnyAdmitsNonOwnerCancelAndSignal`
+- **WHEN** the operator cancels it by command
+- **THEN** it is admitted, and a requester on neither the cancel-any list nor the loop's ownership is refused
+- **AND** the test that verifies this is `TestCancelAnyAdmitsNonOwnerCancel`
 
 #### Scenario: an approver who does not own the loop is admitted
 
@@ -227,36 +226,35 @@ MUST increment a counter. A logged bare return is not an acceptable outcome on a
 
 ### Requirement: One control-signal payload travels the loop signal subject
 
-Dispatch MUST publish `agentic.UserSignal` for every control signal it sends to a loop, on every lane, and the
-duplicate control-signal payload it declared for the HTTP lane MUST be retired along with its payload-registry
-category. Two payload types share the `agent.signal.<loop_id>` subject today — the chat command lane publishes
-the user control signal, and the HTTP lane publishes a dispatch-local type — while the loop's only handler for
-that subject accepts the first and drops anything else as an unexpected payload type. The HTTP signal endpoint
-therefore reports success and the loop never pauses, resumes, or cancels.
+Exactly one payload type MUST travel `agent.signal.<loop_id>`: `agentic.UserSignal`, wrapped in the standard
+`BaseMessage` envelope, published by the `/cancel` command lane. Two types shared that subject before this
+change — the chat command lane published the user control signal, the HTTP `POST /loops/{id}/signal` endpoint
+published a dispatch-local type — while the loop's only handler for the subject accepts the first and drops
+anything else as an unexpected payload type. Both halves are closed here, and neither by repair:
 
-Retirement, not repair, is required, and the reason is a rule rather than a preference: the dispatch-local type
-has one producer and **zero consumers**, so nothing reads what would be repaired. It also carries no requester
-identity, no channel route, and no signal id, so it cannot satisfy the ownership model this capability requires
-of the signal seam — keeping it would mean either growing it into a copy of the user control signal or exempting
-the signal seam from ownership, and neither is admissible.
+- The dispatch-local control-signal payload, its registry category, and the composition-root registration that
+  installed it MUST be retired. It had one producer and **zero consumers**, so nothing reads what would be
+  repaired; and it carried no requester identity, no channel route, and no signal id, so it could never satisfy
+  this capability's ownership model.
+- **`POST /loops/{id}/signal` MUST NOT exist.** It never worked: it answered `200 {"accepted": true}` and the
+  loop was never signalled. Of its three verbs, only cancel was ever implemented on the loop side, and cancel is
+  already served on the same HTTP surface by `POST /message` with `/cancel <loop_id>`; pause and resume set a
+  loop field no code reads. Deleting the endpoint therefore removes an adopter-facing surface that promised an
+  outcome it never delivered, rather than growing it to carry an identity it never had.
 
-The published signal MUST carry the **requester's** identity as its user, not the loop owner's: a control signal
-records who acted, and the loop's cancellation path attributes the action to that field. Its channel route MUST
-be taken from the loop's merged facts rather than recomputed by the caller. The signal verbs the HTTP endpoint
-admits remain a property of the endpoint and MUST NOT be widened by this unification.
+The control signal dispatch does publish MUST carry the **requester's** identity as its user, not the loop
+owner's: a control signal records who acted, and the loop's cancellation path attributes the action to that
+field. Its channel route MUST be taken from the loop's merged facts rather than recomputed by the caller, and
+its subject MUST be resolved from the declared output port rather than concatenated.
 
-Sequencing is part of the requirement: this seam becomes live — it begins actually pausing, resuming, and
-cancelling loops — and MUST NOT become live before the admission gate governs it. Unification and the gate land
-together, never the unification first.
+#### Scenario: the cancel lane actually stops the loop
 
-#### Scenario: the HTTP signal endpoint actually stops the loop
-
-- **GIVEN** a running loop and its owner
-- **WHEN** the owner posts a cancel signal to the loop signal endpoint
-- **THEN** a user control signal naming the requester is published on the loop's signal subject, the loop's
-  handler accepts it, and the loop transitions to cancelled
+- **GIVEN** a running loop owned by `loop-owner`, and an operator on the cancel-any list
+- **WHEN** the operator posts `/cancel <loop_id>` to the message endpoint
+- **THEN** a user control signal naming the **requester** is published on the loop's signal subject, the loop's
+  handler accepts it, and the loop transitions to cancelled with the operator recorded as who cancelled it
 - **AND** no payload is dropped as an unexpected type on that subject
-- **AND** the tests that verify this are `TestHTTPSignalEndpointCancelsTheLoop` and
+- **AND** the tests that verify this are `TestCancelCommandCancelsTheLoop` and
   `TestSignalSubjectCarriesExactlyOnePayloadType`
 
 #### Scenario: the retired control-signal payload is gone from the registry
@@ -268,12 +266,19 @@ together, never the unification first.
 - **AND** no composition root still calls a dispatch payload registration that registers nothing
 - **AND** the test that verifies this is `TestRetiredSignalMessageCategoryIsUnregistered`
 
-#### Scenario: a signal from a non-owner without cancel-any is refused before publication
+#### Scenario: the loop signal endpoint is gone
+
+- **GIVEN** dispatch's registered HTTP routes and its published OpenAPI document
+- **WHEN** either is inspected
+- **THEN** no `POST /loops/{id}/signal` route, request type, response type, or path entry is present
+- **AND** a caller that wants to cancel a loop uses `POST /message` with `/cancel <loop_id>`
+
+#### Scenario: a cancel from a non-owner without cancel-any is refused before publication
 
 - **GIVEN** a running loop owned by `user-a` and a requester `user-b` absent from the cancel-any list
-- **WHEN** `user-b` posts a cancel signal to the loop signal endpoint
+- **WHEN** `user-b` asks to cancel that loop
 - **THEN** the gate refuses it, nothing is published on the loop's signal subject, and the loop keeps running
-- **AND** the test that verifies this is `TestSignalFromNonOwnerIsRefusedBeforePublish`
+- **AND** the test that verifies this is `TestIntegrationRefusedCancelPublishesNothingOnTheSubject`
 
 ### Requirement: The ungated seams are named, with the reason each is exempt
 

@@ -6,7 +6,6 @@ import (
 	"context"
 	"io"
 	"log/slog"
-	"net/http"
 	"testing"
 	"time"
 
@@ -76,21 +75,22 @@ func signalSubjectMessages(t *testing.T, ctx context.Context, tc *natsclient.Tes
 // I10: every message on agent.signal.<loop_id>, FROM ANY LANE, decodes to
 // exactly one payload type.
 //
-// It enumerates the class rather than the motivating instance: both lanes that
-// publish on this subject in this tree — the /cancel chat command and the HTTP
-// signal endpoint — are driven, and every byte slice that lands is decoded
-// through the production decoder built from payloadbuiltins.Register, which is
-// the same decode agentic-loop's signal handler performs. A third producer
-// added later without a driver here shows up as a message this test never
-// counted, not as a passing test.
+// It enumerates the class rather than the motivating instance: every lane that
+// publishes on this subject in this tree is driven, and every byte slice that
+// lands is decoded through the production decoder built from
+// payloadbuiltins.Register, which is the same decode agentic-loop's signal
+// handler performs. Since the HTTP signal endpoint was deleted, the /cancel
+// chat command is the only such lane; a second producer added later without a
+// driver here shows up as a message this test never counted, not as a passing
+// test.
 //
 // This is also what catches the envelope half of the invariant. Before this
 // change the chat lane published a BARE agentic.UserSignal — the right payload
 // type with no BaseMessage envelope — which fails at the wire-format unmarshal
 // with "cannot unmarshal string into Go struct field wireFormat.type", so the
-// loop dropped it exactly as it dropped the HTTP lane's message. A test that
-// only asserted the Go type of the struct being published would have passed
-// over both defects.
+// loop dropped it exactly as it dropped the deleted endpoint's message. A test
+// that only asserted the Go type of the struct being published would have
+// passed over both defects.
 func TestSignalSubjectCarriesExactlyOnePayloadType(t *testing.T) {
 	ctx := t.Context()
 	tc := natsclient.NewTestClient(t, natsclient.WithStreams(
@@ -99,8 +99,8 @@ func TestSignalSubjectCarriesExactlyOnePayloadType(t *testing.T) {
 	c := newSignalWireComponent(t, tc)
 	c.config.Ports.Outputs = signalPortsOnStream(t, c.config.Ports.Outputs, "AGENT_SIGNAL")
 
-	// Lane 1 — the chat command. The requester arrives on a DIFFERENT channel
-	// from the loop's own route, which is what makes the route assertion below
+	// The chat command. The requester arrives on a DIFFERENT channel from the
+	// loop's own route, which is what makes the route assertion below
 	// discriminating: with the two equal, taking the route from the request
 	// instead of from the gate's merged facts is unobservable.
 	msg := seamUserMessage("user-a")
@@ -110,41 +110,31 @@ func TestSignalSubjectCarriesExactlyOnePayloadType(t *testing.T) {
 	require.NoError(t, err, "the chat lane must reach the subject")
 	require.Equal(t, agentic.ResponseTypeStatus, resp.Type)
 
-	// Lane 2 — the HTTP signal endpoint.
-	rec := seamHTTPCall(t, c.handleLoopSignal, http.MethodPost,
-		"/loops/"+signalWireLoopID+"/signal", signalWireLoopID, `{"type":"pause","reason":"operator asked"}`, "user-a")
-	require.Equal(t, http.StatusOK, rec.Code, "the endpoint must reach the subject")
-
 	messages := signalSubjectMessages(t, ctx, tc, "one-type-check")
-	require.Len(t, messages, 2, "both lanes published on the loop's signal subject")
+	require.Len(t, messages, 1, "the one remaining lane published on the loop's signal subject")
 
 	decoder := payloadbuiltins.NewTestDecoder(t)
-	verbs := map[string]bool{}
-	for i, data := range messages {
-		decoded, err := decoder.Decode(data)
-		require.NoErrorf(t, err, "message %d must decode through the production decoder: %s", i, data)
-		signal, ok := decoded.Payload().(*agentic.UserSignal)
-		require.Truef(t, ok, "message %d is %T, not *agentic.UserSignal", i, decoded.Payload())
-		assert.Equal(t, agentic.Domain, decoded.Type().Domain)
-		assert.Equal(t, agentic.CategorySignal, decoded.Type().Category,
-			"the retired signal_message category must not appear on this subject")
-		assert.Equal(t, signalWireLoopID, signal.LoopID)
-		assert.Equal(t, "user-a", signal.UserID, "the signal records the requester")
-		assert.Equal(t, "http", signal.ChannelType,
-			"the route is the LOOP's, taken from the gate's merged facts — the chat "+
-				"requester arrived on slack")
-		assert.Equal(t, "session-1", signal.ChannelID)
-		verbs[signal.Type] = true
-	}
-	assert.Equal(t, map[string]bool{"cancel": true, "pause": true}, verbs,
-		"one message per lane, carrying the verb that lane asked for")
+	decoded, err := decoder.Decode(messages[0])
+	require.NoErrorf(t, err, "the message must decode through the production decoder: %s", messages[0])
+	signal, ok := decoded.Payload().(*agentic.UserSignal)
+	require.Truef(t, ok, "the message is %T, not *agentic.UserSignal", decoded.Payload())
+	assert.Equal(t, agentic.Domain, decoded.Type().Domain)
+	assert.Equal(t, agentic.CategorySignal, decoded.Type().Category,
+		"the retired signal_message category must not appear on this subject")
+	assert.Equal(t, signalWireLoopID, signal.LoopID)
+	assert.Equal(t, "user-a", signal.UserID, "the signal records the requester")
+	assert.Equal(t, "http", signal.ChannelType,
+		"the route is the LOOP's, taken from the gate's merged facts — the chat "+
+			"requester arrived on slack")
+	assert.Equal(t, "session-1", signal.ChannelID)
+	assert.Equal(t, agentic.SignalCancel, signal.Type)
 }
 
-// spec: agentic-dispatch / One control-signal payload travels the loop signal subject
-// I11 on the wire: for a refused signal request, NOTHING is published on the
-// loop's signal subject. The unit form asserts the status that proves the
-// ordering; this one counts the messages that actually arrived.
-func TestIntegrationRefusedSignalPublishesNothingOnTheSubject(t *testing.T) {
+// spec: agentic-dispatch / The ownership model binds the user lane, and approval is deliberately not owner-scoped
+// I11 on the wire: for a refused cancel, NOTHING is published on the loop's
+// signal subject. The unit form asserts the answer the requester gets; this one
+// counts the messages that actually arrived.
+func TestIntegrationRefusedCancelPublishesNothingOnTheSubject(t *testing.T) {
 	ctx := t.Context()
 	tc := natsclient.NewTestClient(t, natsclient.WithStreams(
 		natsclient.TestStreamConfig{Name: "AGENT_SIGNAL", Subjects: []string{"agent.signal.>"}},
@@ -152,12 +142,12 @@ func TestIntegrationRefusedSignalPublishesNothingOnTheSubject(t *testing.T) {
 	c := newSignalWireComponent(t, tc)
 	c.config.Ports.Outputs = signalPortsOnStream(t, c.config.Ports.Outputs, "AGENT_SIGNAL")
 
-	rec := seamHTTPCall(t, c.handleLoopSignal, http.MethodPost,
-		"/loops/"+signalWireLoopID+"/signal", signalWireLoopID, `{"type":"cancel"}`, "user-b")
+	resp, err := c.handleCancelCommand(ctx, seamUserMessage("user-b"), []string{signalWireLoopID}, "")
+	require.NoError(t, err)
 
-	// The wire is asserted BEFORE the status, and with assert rather than
+	// The wire is asserted BEFORE the answer, and with assert rather than
 	// require, so the count is the assertion that reports a publish-then-refuse
-	// rather than being skipped by an earlier fatal on the status code.
+	// rather than being skipped by an earlier fatal on the response.
 	stream, err := tc.Client.GetStream(ctx, "AGENT_SIGNAL")
 	require.NoError(t, err)
 	info, err := stream.Info(ctx)
@@ -167,7 +157,8 @@ func TestIntegrationRefusedSignalPublishesNothingOnTheSubject(t *testing.T) {
 	assert.Empty(t, signalSubjectMessages(t, ctx, tc, "refusal-check"),
 		"nor anything the subject filter would pick up")
 
-	assert.Equal(t, http.StatusForbidden, rec.Code, "and the caller is told why")
+	assert.Equal(t, agentic.ResponseTypeError, resp.Type, "and the caller is told why")
+	assert.Contains(t, resp.Content, "does not own")
 }
 
 // signalPortsOnStream rebinds the declared signal output port to the
