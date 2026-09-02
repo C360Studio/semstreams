@@ -1,6 +1,7 @@
 package agenticloop
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -13,6 +14,35 @@ import (
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/google/uuid"
+)
+
+// Package error sentinels for loop-token admission. Callers compare with
+// errors.Is — the same shape pkg/lifecycle uses for create-versus-exists
+// (pkg/lifecycle/errors.go), and consumed the same way.
+var (
+	// ErrLoopAlreadyExists is returned by CreateLoopWithID when the supplied
+	// framework-minted token already names a registered loop. It is a
+	// distinguishable condition rather than a generic invalid error because
+	// task intake branches on it: a task naming a live loop is a
+	// CONTINUATION of that loop, and the right move is to attach to the
+	// conversation already under that token, never to mint a second loop
+	// over it (#1227). A caller that cannot attach may still treat it as a
+	// refusal; what it must not do is proceed as if it created the loop.
+	ErrLoopAlreadyExists = errors.New("agentic-loop: loop already exists")
+
+	// ErrLoopTerminal is returned when a continuation names a loop that has
+	// already settled. A settled loop cannot be advanced and its token must
+	// not be recycled into a replacement loop, so the task is refused rather
+	// than attached — the terminal loop's recorded outcome stays the answer
+	// for that token.
+	ErrLoopTerminal = errors.New("agentic-loop: loop is terminal")
+
+	// ErrLoopNotFound is returned when an operation names a loop the manager
+	// does not hold. After a loop settles its per-loop state is released
+	// (releaseLoopTransientState), so absence is the ordinary steady state
+	// for a settled loop, not a failure: readers of late-arriving messages
+	// branch on this to drop quietly instead of reporting a fault.
+	ErrLoopNotFound = errors.New("agentic-loop: loop not found")
 )
 
 // LoopManager manages loop entity lifecycle and state
@@ -144,10 +174,17 @@ func (m *LoopManager) GenerateLoopID() string {
 // The supplied ID must be a framework-minted loop token — a canonical UUID
 // (ADR-105, #1192). TaskMessage.Validate is the gate for everything arriving
 // over the wire; this refusal is the gate for a composed binary calling the
-// LoopManager directly, and it lands before any state is registered because the
-// map write below OVERWRITES an existing record and its context manager. That
-// overwrite is what made a colliding 32-bit token merge two conversations
-// silently, and it is why the shape check cannot live downstream of it.
+// LoopManager directly, and it lands before any state is registered.
+//
+// Two refusals, in a fixed order (#1227). The token FORM check runs first, so a
+// non-canonical token is always reported as malformed and never as a collision.
+// The already-exists check runs second, before the three map writes below,
+// because those writes OVERWRITE an existing record, its pending-tool set, and
+// its context manager: creating over a live token silently destroyed the
+// conversation accumulated under it, which is a create where the caller meant a
+// continuation. Callers that mean a continuation branch on ErrLoopAlreadyExists
+// and attach; callers that meant a create get a refusal that left every map
+// exactly as it found it.
 func (m *LoopManager) CreateLoopWithID(loopID, taskID, role, model string, maxIterations ...int) (string, error) {
 	if !looptoken.Valid(loopID) {
 		return "", errs.WrapInvalid(
@@ -158,6 +195,12 @@ func (m *LoopManager) CreateLoopWithID(loopID, taskID, role, model string, maxIt
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if _, exists := m.loops[loopID]; exists {
+		return "", errs.WrapInvalid(
+			fmt.Errorf("loop %s: %w", loopID, ErrLoopAlreadyExists),
+			"agentic-loop", "CreateLoopWithID", "refuse create over a registered loop token")
+	}
 
 	// Determine max iterations
 	maxIter := 20 // default
@@ -180,6 +223,46 @@ func (m *LoopManager) CreateLoopWithID(loopID, taskID, role, model string, maxIt
 	m.contextManagers[loopID] = NewContextManager(loopID, model, m.contextConfig, opts...)
 
 	return loopID, nil
+}
+
+// attachContinuation binds a continuation task to the loop already registered
+// under loopID and returns that loop's current entity.
+//
+// It is the second half of the create-versus-exists fence: CreateLoopWithID
+// refuses the token, and intake calls this to join the live loop instead of
+// minting over it. Two things happen here and nowhere else, both under the one
+// lock so a concurrent settle cannot slip between them:
+//
+//   - A settled loop is REFUSED with ErrLoopTerminal. A terminal loop cannot be
+//     advanced, and minting a replacement under its token would make the
+//     recorded outcome unreachable for the token that names it.
+//   - The loop's task association is rebound to the continuation's task ID.
+//     This is what keeps redelivery dedup working across an attach: intake
+//     dedupes on TaskID via HasActiveLoopForTask, so a redelivery of THIS task
+//     message must find the loop it already produced. Leaving the previous
+//     turn's TaskID in place would let the same continuation be processed
+//     twice, appending the user's turn to the conversation each time.
+//
+// No other per-loop state is touched: the context manager, the pending-tool
+// set, and every cache stay exactly as the live loop left them.
+func (m *LoopManager) attachContinuation(loopID, taskID string) (agentic.LoopEntity, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entity, exists := m.loops[loopID]
+	if !exists {
+		return agentic.LoopEntity{}, errs.Wrap(
+			fmt.Errorf("loop %s: %w", loopID, ErrLoopNotFound),
+			"agentic-loop", "attachContinuation", "find loop")
+	}
+	if entity.State.IsTerminal() {
+		return agentic.LoopEntity{}, errs.WrapInvalid(
+			fmt.Errorf("loop %s is %s: %w", loopID, entity.State, ErrLoopTerminal),
+			"agentic-loop", "attachContinuation", "refuse continuation of a settled loop")
+	}
+
+	entity.TaskID = taskID
+	return *entity, nil
 }
 
 // HasActiveLoopForTask returns true if a non-terminal loop already exists for the

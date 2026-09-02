@@ -824,15 +824,38 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 		return HandlerResult{LoopID: existingID}, nil
 	}
 
-	// Use provided loop_id if present, otherwise create new one
+	// Use provided loop_id if present, otherwise create new one.
+	//
+	// A supplied token that already names a registered loop is a CONTINUATION,
+	// not a second loop under one name (#1227): CreateLoopWithID refuses it and
+	// intake attaches to the live loop instead of minting over its
+	// conversation. `continuation` carries that fact through the rest of this
+	// function, which otherwise seeds a brand-new loop.
 	var loopID string
 	var err error
+	continuation := false
+	entity := agentic.LoopEntity{}
 
 	effectiveMaxIterations := effectiveLoopMaxIterations(task, h.config.MaxIterations)
 
 	if task.LoopID != "" {
 		loopID, err = h.loopManager.CreateLoopWithID(task.LoopID, task.TaskID, task.Role, task.Model, effectiveMaxIterations)
-		if err != nil {
+		switch {
+		case err == nil:
+		case errors.Is(err, ErrLoopAlreadyExists):
+			entity, err = h.loopManager.attachContinuation(task.LoopID, task.TaskID)
+			if err != nil {
+				// A settled loop refuses the continuation outright; nothing has
+				// been registered, so there is nothing to roll back.
+				return HandlerResult{}, err
+			}
+			loopID = task.LoopID
+			continuation = true
+			h.logger.Info("Continuation attached to live loop",
+				slog.String("loop_id", loopID),
+				slog.String("task_id", task.TaskID),
+				slog.String("loop_state", string(entity.State)))
+		default:
 			return HandlerResult{}, err
 		}
 	} else {
@@ -845,20 +868,31 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 	// Configure optional loop metadata (depth, workflow context, user context, etc.)
 	h.configureLoopMetadata(loopID, task)
 
-	// Start trajectory
-	_, err = h.trajectoryManager.startTrajectory(loopID)
-	if err != nil {
-		return HandlerResult{}, err
-	}
+	// Start trajectory. A continuation joins a loop whose aggregate is still
+	// accumulating this turn's steps: restarting it would drop them, and the
+	// rollback below must not discard work that belongs to the in-flight loop
+	// rather than to this task.
 	keepTrajectory := false
+	if continuation {
+		if _, trajErr := h.trajectoryManager.getTrajectory(loopID); trajErr == nil {
+			keepTrajectory = true
+		}
+	}
+	if !keepTrajectory {
+		if _, err = h.trajectoryManager.startTrajectory(loopID); err != nil {
+			return HandlerResult{}, err
+		}
+	}
 	defer func() {
 		if !keepTrajectory {
 			h.trajectoryManager.discardTrajectory(loopID)
 		}
 	}()
 
-	// Get loop entity
-	entity, err := h.loopManager.GetLoop(loopID)
+	// Get loop entity. attachContinuation already returned it for a
+	// continuation, but configureLoopMetadata has run since, so re-read either
+	// way rather than carrying a stale copy.
+	entity, err = h.loopManager.GetLoop(loopID)
 	if err != nil {
 		return HandlerResult{}, err
 	}
@@ -868,10 +902,20 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 	// Without this, the assembled persona is absent from the context manager and
 	// omitted from all continuation requests — real LLMs lose their instructions
 	// and the mock's marker-based preset doesn't fire after the first tool round.
-	assembled := h.assembleSystemPrompt(ctx, task)
+	//
+	// A continuation must NOT re-seed it: the live loop's RegionSystemPrompt
+	// already holds the persona it has been running under, and a second copy
+	// would be sent alongside the first on every subsequent iteration.
+	assembled := ""
+	if !continuation {
+		assembled = h.assembleSystemPrompt(ctx, task)
+	}
 
 	// Add user prompt to context manager and cache for recovery.
 	// If GC/repair later empties the context, we re-inject this prompt.
+	//
+	// On a continuation this is the loop's EXISTING manager — the conversation
+	// accumulated so far is still in it, and the new turn is appended after it.
 	cm := h.loopManager.GetContextManager(loopID)
 	if assembled != "" {
 		_ = cm.AddMessage(RegionSystemPrompt, agentic.ChatMessage{
@@ -898,12 +942,28 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 			slog.Int("entity_count", len(task.Context.Entities)))
 	}
 
-	// Build messages for initial request with iteration budget. Pass the
+	// Build messages for the request with iteration budget. Pass the
 	// already-assembled system prompt so we avoid assembling a second time.
 	// prependIterationContext also injects the working-list block from
 	// write_todos when the loop has any todos (ADR-036 Stage 4).
-	messages := h.buildInitialMessagesWithPrompt(task, assembled)
-	messages = h.prependIterationContext(ctx, loopID, 1, entity.MaxIterations, messages)
+	//
+	// A continuation takes the loop's whole accumulated context instead — the
+	// same source every other continuation iteration uses (buildRetryRequest,
+	// handleToolsComplete). Reusing the context manager and then sending the
+	// model only the new turn would preserve the conversation nowhere it can be
+	// observed. The iteration ordinal is the loop's own, not 1, so the budget
+	// message the model reads is the budget it is actually spending.
+	iteration := 1
+	if continuation && entity.Iterations > iteration {
+		iteration = entity.Iterations
+	}
+	var messages []agentic.ChatMessage
+	if continuation {
+		messages = cm.GetContext()
+	} else {
+		messages = h.buildInitialMessagesWithPrompt(task, assembled)
+	}
+	messages = h.prependIterationContext(ctx, loopID, iteration, entity.MaxIterations, messages)
 
 	// Per-task tools: if the spawner set task.Tools (including an explicit
 	// empty slice from e.g. `"default_tools": []`), respect it. Only fall
