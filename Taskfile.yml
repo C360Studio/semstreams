@@ -44,6 +44,8 @@ includes:
   openspec:
     taskfile: ./taskfiles/openspec.yml
     aliases: [os]
+  api:
+    taskfile: ./taskfiles/apicompat.yml
 
   # E2E test taskfiles
   e2e:

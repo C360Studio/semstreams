@@ -204,10 +204,43 @@ jobs:
           fi
           echo "✅ All schemas and OpenAPI spec are up to date"
 
+  api-compat:
+    name: Tier 1 API Compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        # fetch-depth: 0 is load-bearing. api-compat.sh resolves its baseline with
+        # `git tag --list 'v1.0.0-*' --merged HEAD`, and the default shallow checkout carries no tags — the script
+        # would exit 2 ("no base version") on every run, which is a broken gate rather than a passing one.
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install task
+        run: |
+          sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+
+      # Hermetic and fast: proves the guard's failure modes still fail. This step BLOCKS — a release gate that
+      # cannot detect its own broken input is worse than no gate.
+      - name: Guard fixture test
+        run: task api:compat:test
+
+      # Reporting posture until RC (ADR-106 RC-4). The count is expected to be non-zero and to descend; at RC this
+      # step drops `continue-on-error` and `:report`, and any incompatible Tier 1 change fails the build.
+      - name: Tier 1 API compatibility report
+        continue-on-error: true
+        run: task api:compat:report
+
   status-check:
     name: CI Status Check
     runs-on: ubuntu-latest
-    needs: [lint, test, build, schema-validation]
+    needs: [lint, test, build, schema-validation, api-compat]
     if: always()
     steps:
       - name: Check if all jobs succeeded
@@ -215,7 +248,8 @@ jobs:
           if [[ "${{ needs.lint.result }}" != "success" ]] || \
              [[ "${{ needs.test.result }}" != "success" ]] || \
              [[ "${{ needs.build.result }}" != "success" ]] || \
-             [[ "${{ needs.schema-validation.result }}" != "success" ]]; then
+             [[ "${{ needs.schema-validation.result }}" != "success" ]] || \
+             [[ "${{ needs.api-compat.result }}" != "success" ]]; then
             echo "One or more CI jobs failed"
             exit 1
           fi
