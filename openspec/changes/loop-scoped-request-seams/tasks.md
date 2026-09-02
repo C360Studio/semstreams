@@ -54,6 +54,15 @@ the two `state.go` edits are reviewed together rather than re-derived.
       made the deletion safe to sequence.)
 - [x] 4.5 Map refusals to HTTP status: 400 malformed, 404 absent, 403 not permitted / not owned, 409 terminal
 - [x] 4.6 Test each seam refuses through the gate and emits exactly one counted refusal (I3)
+- [x] 4.7 (review round, 2026-09-02) Carry `State` on `loopFacts` and render it: `persistedLoopFacts` read
+      `record.State` and discarded it, so `/status` on a tracker miss printed a hardcoded "running" — a user
+      asking about an `awaiting_approval` loop was told to wait for an agent waiting for them. Merged
+      fail-closed like `Terminal`; an unread state renders "unknown".
+      `TestStatusReportsTheRecordedStateNotAFabricatedRunning`, `TestMergeLoopStatePrefersSettledThenTheTracker`
+- [x] 4.8 (review round, 2026-09-02) `loopWireByID` returns its CAUSE instead of a bare ok, and
+      `GET /loops/{id}` logs it before answering 503 — unreachable, malformed, and vanished were one silent
+      answer beside a gate whose argument is that unread and absent differ. Its 500
+      (`codeLoopOwnerConflict`) is now declared in the OpenAPI responses, as the approval endpoint's already was
 
 ## 5. Form enforcement at the remaining carriers (#1228)
 
@@ -76,6 +85,17 @@ the two `state.go` edits are reviewed together rather than re-derived.
 - [x] 6.4 Preserve redelivery dedup across an attach (I6 does not cover this; it needs its own test)
 - [x] 6.5 Test I6 and I7: context-manager identity unchanged across a continuation; a refused create mutates
       none of the three maps
+- [x] 6.6 (owner ruling 2026-09-02, review round) Refuse a continuation while the loop has work IN FLIGHT —
+      outstanding tool calls, or `LoopStateAwaitingApproval`. Non-terminal is not idle: `IsTerminal()` is only
+      `complete|failed|cancelled`, so a second user message while the agent is running attached, sent orphan
+      `tool_calls` (`GetContext` does no pair repair), ran two rounds over one context manager, and moved an
+      approval-gated loop off the state its human decision resolves. `ErrLoopBusy` at `attachContinuation`,
+      deliberately distinct from `ErrLoopTerminal`. NOT at the dispatch gate: outstanding calls live in
+      `LoopManager.pendingTools`, in-process to agentic-loop, and the durable record's `PendingToolResults` is
+      the drained RESULTS map — reading it at the gate means inventing a cross-plane read that does not exist.
+      Queuing the turn was considered and deliberately not chosen. I7a;
+      `TestContinuationOfLoopWithToolsInFlightIsRefused`, `TestContinuationOfLoopAwaitingApprovalIsRefused`,
+      both mutation-checked one condition at a time
 
 ## 7. Terminal release of per-loop state (#1233)
 
@@ -87,7 +107,13 @@ the two `state.go` edits are reviewed together rather than re-derived.
 - [x] 7.3 Decide `DeleteLoop`'s fate — it becomes either the release's implementation or dead code; do not
       leave a second, unreferenced release path
 - [x] 7.4 Test I8 and I9: absence and terminal presence are indistinguishable to every reader; release is
-      idempotent; a settled loop's result is still readable through `read_loop_result`
+      idempotent; a settled loop's result is still readable through `read_loop_result`. One test per reader:
+      `TestLateApprovalResponseForSettledLoopIsExpectedDrop`,
+      `TestLateToolResultForSettledLoopIsExpectedDrop`, and — added in the 2026-09-02 review round, where the
+      scenario claimed the model-response reader while naming only the other two —
+      `TestLateModelResponseForSettledLoopIsExpectedDrop`, which also pins the counter that reader was missing
+      (`model_responses_dropped_total{reason="stale_request_id"}`, the sibling of
+      `recordToolResultDropped("stale_callid")`); §7 made that drop common
 - [x] 7.5 Test that release happens after the terminal observation and the terminal graph write.
       `TestTerminalReleaseHappensAfterTerminalReaders` proves the terminal OBSERVATION saw the loop, and
       that the failure-event build — the graph stamp's input — succeeded. The graph write ITSELF is not

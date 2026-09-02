@@ -370,6 +370,8 @@ paths:
                     description: Loop ID is missing or is not a framework-minted loop token
                 "404":
                     description: Loop not found
+                "500":
+                    description: The tracker and the durable record disagree about this loop's route; no caller action resolves it
                 "503":
                     description: Loop state is not readable right now; retry
     /loops/{id}/approval:

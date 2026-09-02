@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // terminalReaderProbe is a trajectory fact bucket that snapshots the loop's
@@ -424,6 +425,62 @@ func TestLateToolResultForSettledLoopIsExpectedDrop(t *testing.T) {
 	// The loop must stay gone: a late arrival never resurrects per-loop state.
 	if held := perLoopMapCount(h.loopManager, loopID); len(held) != 0 {
 		t.Fatalf("a late arrival re-registered per-loop state: %v", held)
+	}
+}
+
+// TestLateModelResponseForSettledLoopIsExpectedDrop is I8 for the model-response
+// reader on its own, and it is the reader's own test rather than a line inside
+// the tool-result one: §7 made this drop common, and the claim being made about
+// it is that the drop is DECLARED — a warn AND a counter, the same pair its
+// sibling one function away already emits — not merely quiet.
+//
+// spec: agentic-loop / Requirement: Per-loop in-process state is released at terminal, through the one release point
+func TestLateModelResponseForSettledLoopIsExpectedDrop(t *testing.T) {
+	ctx := context.Background()
+	h := NewMessageHandler(DefaultConfig())
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	c := releaseTestComponent(t, h)
+	// AFTER releaseTestComponent, which installs its own discarding logger.
+	h.logger = logger
+	c.logger = logger
+	c.metrics = getMetrics(nil)
+	before := testutil.ToFloat64(c.metrics.modelResponsesDropped.WithLabelValues("stale_request_id"))
+
+	loopID := populatedLoop(t, h)
+	requestID := h.loopManager.GenerateRequestID(loopID)
+	h.loopManager.TrackRequest(requestID, loopID)
+
+	if err := h.loopManager.TransitionLoop(loopID, agentic.LoopStateComplete); err != nil {
+		t.Fatalf("TransitionLoop: %v", err)
+	}
+	c.releaseLoopTransientState(loopID)
+
+	response := agentic.AgentResponse{
+		RequestID: requestID, Status: agentic.StatusComplete,
+		Message: agentic.ChatMessage{Role: "assistant", Content: "late answer"},
+	}
+	respEnvelope := message.NewBaseMessage(response.Schema(), &response, "test")
+	respData, err := json.Marshal(respEnvelope)
+	if err != nil {
+		t.Fatalf("marshal agent response: %v", err)
+	}
+	c.handleResponseMessage(ctx, respData)
+
+	out := logs.String()
+	if strings.Contains(out, "ERROR") {
+		t.Fatalf("a late model response for a settled loop was reported as a failure:\n%s", out)
+	}
+	if !strings.Contains(out, "No loop found for request") {
+		t.Fatalf("late model response was not declared as a drop:\n%s", out)
+	}
+	after := testutil.ToFloat64(c.metrics.modelResponsesDropped.WithLabelValues("stale_request_id"))
+	if d := after - before; d != 1 {
+		t.Fatalf("model_responses_dropped_total{reason=stale_request_id} delta = %v, want 1 — "+
+			"the drop is logged but not counted, so an operator cannot see it", d)
+	}
+	if held := perLoopMapCount(h.loopManager, loopID); len(held) != 0 {
+		t.Fatalf("a late model response re-registered per-loop state: %v", held)
 	}
 }
 

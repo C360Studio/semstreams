@@ -953,15 +953,33 @@ admitted.
 Ownership is deliberately **not** consulted for approval: a second-party reviewer is the entire point, so a reviewer
 who did not start the loop can still approve it. That is a decision, not an oversight.
 
-### 3. A continuation by `reply_to` must name a loop you own
+### 3. `reply_to` on a live loop now CONTINUES the conversation — read this one even if you send no `reply_to`
 
-A submission whose `reply_to` names an existing loop is refused unless the requester equals the loop's recorded
-owner. Previously a second holder of the token took over the tracker entry, and the original user's completion was
-delivered to the second user.
+**This is the largest behavioural change in the release, and it needs no configuration to reach you.**
 
-Two consequences: send the same `user_id` when you continue a loop that you sent when you created it; and a
-`reply_to` naming a **settled** loop is refused rather than silently minting a fresh loop under the same token.
-Auto-continue is unaffected — it never resolves a terminal loop.
+A submission whose `reply_to` names a loop this process is still running used to mint a **fresh** loop over that
+token: `CreateLoopWithID` overwrote the loop entity, its pending-tool set, and its context manager, so the
+conversation accumulated under that token was destroyed and the next request went to the model with a brand-new
+context. It now **attaches**: the loop's existing context manager is reused, the new user turn is appended after
+the prior turns, the system prompt is not re-seeded, and the request carries the whole accumulated conversation.
+
+If you were relying on `reply_to` to reset a conversation, it no longer does. **Omit `reply_to` to start a fresh
+loop** — that is, and always was, the way to ask for a new conversation. Auto-continue (a submission with no
+`reply_to` that resolves onto your most recent non-terminal loop) reaches the same attach.
+
+**A continuation is refused while the loop has work in flight.** "Live" is not "idle". If the loop has outstanding
+tool calls, or is `awaiting_approval` waiting on a human decision, the continuation is refused rather than
+attached, because attaching there would send the provider an assistant turn carrying `tool_calls` whose `tool`
+results have not arrived yet, run two rounds over one conversation, and — in the approval case — move the loop off
+the state the human's decision resolves, silently abandoning the gated call. Practically: **wait for the turn to
+finish, or for the approval to be answered, then send your next message.** The turn is not queued; you get a
+refusal, and it is answerable once the round finishes. There is no configuration for this.
+
+A continuation by `reply_to` must also name a loop you own: it is refused unless the requester equals the loop's
+recorded owner. Previously a second holder of the token took over the tracker entry, and the original user's
+completion was delivered to the second user. So send the same `user_id` when you continue a loop that you sent when
+you created it. And a `reply_to` naming a **settled** loop is refused rather than silently minting a fresh loop
+under the same token; auto-continue is unaffected there, because it never resolves a terminal loop.
 
 These are correctness guards, **not authorization**. Identity remains caller-asserted until the beta.166 auth wave
 (epic #1205); the gate refuses a caller who contradicts recorded state, and cannot verify who anyone is.
@@ -989,6 +1007,15 @@ Exactly one payload type now travels that subject.
   left in place it could only ever read zero. Remove it from dashboards and alerts.
 - **New metric:** `semstreams_router_loop_admission_refusals_total{seam,reason}` — one series for every refusal the
   gate issues, labelled by which seam the request arrived on and why it was refused. The reason set is closed.
+- **New metric:** `semstreams_agentic_loop_model_responses_dropped_total{reason}` — a model response that arrived
+  with no loop mapping for its `RequestID`. Expected after a loop settles and releases its per-loop state, or after
+  a process replacement; a sustained rate against live loops points at NATS redelivery. It is the sibling of the
+  existing `semstreams_agentic_loop_tool_results_dropped_total{reason}`, which the same drop class already had.
+- **`/status` reports the state it read.** For a loop this process is not running — after dispatch was replaced,
+  say — `/status` used to print `State: running` for anything not settled, so a loop actually sitting in
+  `awaiting_approval` told the user to wait for an agent that was waiting for them. It now prints the recorded
+  state (`executing`, `paused`, `awaiting_approval`, `complete`, …), or `unknown` when the record carries none.
+  Anything parsing that text for the literal `running` needs updating.
 - **A NATS outage now answers 503, not 404.** When a loop's durable state cannot be read, the loop endpoints answer
   `503` with a transient classification. Previously an unreadable record was indistinguishable from an absent one,
   so an outage looked like *"your loop does not exist"*. An alert that keyed on 404 to mean "gone" should now treat
@@ -1010,5 +1037,6 @@ request as transient. If you override ports on agentic-dispatch, keep the `agent
 ### 7. Memory behaviour worth knowing about
 
 A settled loop now releases its in-process footprint — conversation context, pending tools, and the per-loop routing
-maps. Long-running processes no longer retain every loop they have ever run. A late tool result or approval response
-arriving for an already-settled loop is now an expected, logged drop rather than an error.
+maps. Long-running processes no longer retain every loop they have ever run. A late tool result, approval response,
+or model response arriving for an already-settled loop is now an expected, logged and counted drop rather than an
+error.

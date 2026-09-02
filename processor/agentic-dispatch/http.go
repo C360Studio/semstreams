@@ -639,8 +639,16 @@ func (c *Component) handleGetLoop(w http.ResponseWriter, r *http.Request) {
 	// Existence is merged, so an admitted loop may live only in the durable
 	// record. Answering 404 here would contradict the admission that just
 	// succeeded, so the durable record is projected onto the same wire type.
-	wireLoop, ok := c.loopWireByID(ctx, loopID)
-	if !ok {
+	wireLoop, projectErr := c.loopWireByID(ctx, loopID)
+	if projectErr != nil {
+		// The one failure this endpoint answers without refusing through the
+		// gate, so it names its cause here or the cause is lost: 503 alone does
+		// not distinguish an unreachable bucket from a malformed record from a
+		// record that vanished between admission and this read.
+		c.logger.ErrorContext(ctx, "agentic-dispatch: admitted loop could not be projected",
+			slog.String("request_id", requestID),
+			slog.String("loop_id", loopID),
+			slog.String("error", projectErr.Error()))
 		c.metrics.recordHTTPRequest("/loops/{id}", "GET", "503")
 		c.metrics.recordHTTPDuration("/loops/{id}", "GET", time.Since(startTime).Seconds())
 		c.writeJSONError(w, http.StatusServiceUnavailable, "loop record is not readable right now")
@@ -662,19 +670,27 @@ func (c *Component) handleGetLoop(w http.ResponseWriter, r *http.Request) {
 
 // loopWireByID projects an ADMITTED loop onto the canonical wire type. The
 // tracker is preferred because it is the live record; a loop the gate admitted
-// from the durable record alone is re-read and projected from there. ok=false
-// means the record vanished between admission and this read — rare, and
-// answered as transient rather than as absence, because absence was already
-// ruled out.
-func (c *Component) loopWireByID(ctx context.Context, loopID string) (Loop, bool) {
+// from the durable record alone is re-read and projected from there.
+//
+// It returns the CAUSE rather than a bare ok, because the caller answers a
+// single transient status for three different failures — the bucket was
+// unreachable, the record did not decode, or it vanished between admission and
+// this read — and a 503 that names none of them is the one swallowed failure
+// beside a gate whose whole argument is that unread and absent are different
+// answers. Absence was already ruled out by admission, so a vanished record is
+// still answered as transient; it is just no longer silent.
+func (c *Component) loopWireByID(ctx context.Context, loopID string) (Loop, error) {
 	if tracked := c.loopTracker.Get(loopID); tracked != nil {
-		return loopFromInfo(tracked), true
+		return loopFromInfo(tracked), nil
 	}
 	persisted, err := c.loadPersistedLoop(ctx, loopID)
-	if err != nil || persisted == nil {
-		return Loop{}, false
+	if err != nil {
+		return Loop{}, fmt.Errorf("read loop %q from the durable record: %w", loopID, err)
 	}
-	return loopFromEntity(persisted, c.deps.Platform.Org, c.deps.Platform.Platform), true
+	if persisted == nil {
+		return Loop{}, fmt.Errorf("loop %q vanished between admission and read", loopID)
+	}
+	return loopFromEntity(persisted, c.deps.Platform.Org, c.deps.Platform.Platform), nil
 }
 
 // handleLoopApproval drives the beta.19 approval flow over HTTP.
@@ -1051,6 +1067,9 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 						},
 						"404": {
 							Description: "Loop not found",
+						},
+						"500": {
+							Description: "The tracker and the durable record disagree about this loop's route; no caller action resolves it",
 						},
 						"503": {
 							Description: "Loop state is not readable right now; retry",

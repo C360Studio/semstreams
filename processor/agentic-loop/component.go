@@ -1435,6 +1435,9 @@ func (c *Component) extractAgentResponse(data []byte) (*agentic.AgentResponse, s
 	loopID := c.findLoopIDForRequest(responsePtr.RequestID)
 	if loopID == "" {
 		c.logger.Warn("No loop found for request", "request_id", responsePtr.RequestID)
+		if c.metrics != nil {
+			c.metrics.recordModelResponseDropped("stale_request_id")
+		}
 		return nil, "", false
 	}
 
