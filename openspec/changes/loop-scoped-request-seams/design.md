@@ -206,6 +206,36 @@ No production struct retains a `context.Context`. Every seam the gate is called 
 handler via `withRequestID(w, r)`. The gate takes `ctx` as its first argument for the durable read. Terminal
 release takes none. No root is created anywhere in this change.
 
+## Declared residual — what ruling 13's in-flight refusal does and does not admit
+
+Ruling 13 refuses a continuation when the loop has tool calls outstanding or is `awaiting_approval`
+(`processor/agentic-loop/state.go:288, 293`). Two things it still admits, both established by judge passes on
+2026-09-02 and recorded here so the next reader does not re-derive them.
+
+**1. The mid-round race — residual, deliberately not closed.** Between publishing a model request and the
+response arriving, `pendingTools` is empty and the state is not `awaiting_approval`, so a continuation is
+admitted and produces two concurrent rounds appending to one `ContextManager`. The provider-400 half of the
+original defect *is* fully closed — the assistant `tool_calls` turn has not been appended yet, so no orphan
+`tool_calls` can reach the provider. The window is seconds wide and requires the user to type while the model
+is generating; the ruled refusal already covers the far wider tool-execution and approval windows.
+
+The obvious fix is wrong today and must not be attempted first. `TrackRequest` runs at `handlers.go:2563`
+*before* the publish, and `requestToLoop` is cleared only in `DeleteLoop` (`state.go:516`), so those maps hold
+every request the loop ever issued rather than the outstanding ones. A third busy-arm reading them would refuse
+every continuation forever — and would specifically wedge the loops described next, whose only recovery is a
+successful attach. Closing this properly needs response-side untracking plus an expiry policy, which is a
+design cycle, not a third `if`.
+
+**2. The revival of stalled loops — desirable, do not remove.** A dropped `agent.request` publish
+(`component.go:1879-1881`) and a post-registration `HandleTask` error (`component.go:1200-1201`) both ack and
+leave a registered, non-terminal, idle loop. A later continuation attaches and revives it, which is currently
+the *only* recovery for either. So the guard's admit-set contains the system's only stall recovery; it is not
+vacuous. Those two silent exits are filed as gh#1244 (adopt the `StopAll` exit contract for loop state).
+
+**The two interact, and the order matters.** gh#1244 eliminates both stall states. Only after it lands does
+this refusal's admit-set reduce to the race window alone — and only then does the outstanding-request arm
+become the right fix rather than the wedging one.
+
 ## Declared cost — the gate's read count
 
 Recorded here rather than filed, so that anyone who later measures a latency problem on the loop seams finds
