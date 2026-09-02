@@ -96,6 +96,11 @@ the two `state.go` edits are reviewed together rather than re-derived.
       Queuing the turn was considered and deliberately not chosen. I7a;
       `TestContinuationOfLoopWithToolsInFlightIsRefused`, `TestContinuationOfLoopAwaitingApprovalIsRefused`,
       both mutation-checked one condition at a time
+- [x] 6.7 (review round, 2026-09-02) Log the busy refusal at the intake seam at WARN, not the ERROR every other
+      `HandleTask` failure takes. This is the one consequence of 6.6 the brief did not name: the refusal is
+      ordinary user behaviour — someone typed while the agent was thinking — and 6.6 made it common, so ERROR
+      would manufacture a false-alarm class out of a refusal working as designed.
+      `TestBusyRefusalIsWarnedNotErrored`, mutation-checked
 
 ## 7. Terminal release of per-loop state (#1233)
 

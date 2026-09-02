@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/agentic-loop/prompt"
 )
@@ -529,5 +532,56 @@ func TestContinuationOfLoopAwaitingApprovalIsRefused(t *testing.T) {
 	}
 	if !reflect.DeepEqual(after, before) {
 		t.Fatalf("loop mutated by a refused continuation:\n before %+v\n after  %+v", before, after)
+	}
+}
+
+// TestBusyRefusalIsWarnedNotErrored: the intake seam's error branch logs ERROR,
+// which in this repository means an operator has something to do. A user typing
+// while the agent is still working is not that — and this path became common the
+// moment intake started attaching, so leaving it on ERROR would manufacture a
+// false-alarm class out of a refusal working exactly as designed. Every other
+// handler failure keeps ERROR.
+func TestBusyRefusalIsWarnedNotErrored(t *testing.T) {
+	ctx := context.Background()
+	h := fenceHandler(t)
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	c := releaseTestComponent(t, h)
+	// AFTER releaseTestComponent, which installs its own discarding logger.
+	h.logger = logger
+	c.logger = logger
+
+	first, err := h.HandleTask(ctx, TaskMessage{
+		TaskID: "task-1", Role: "general", Model: "model-a", Prompt: "first turn",
+	})
+	if err != nil {
+		t.Fatalf("HandleTask (first): %v", err)
+	}
+	loopID := first.LoopID
+	if err := h.loopManager.AddPendingTool(loopID, "call-in-flight"); err != nil {
+		t.Fatalf("AddPendingTool: %v", err)
+	}
+	logs.Reset()
+
+	// Drive the real intake seam, not the handler directly: the severity being
+	// asserted belongs to handleTaskMessage's error branch.
+	task := agentic.TaskMessage{
+		TaskID: "task-2", LoopID: loopID, Role: "general", Model: "model-a", Prompt: "second turn",
+	}
+	envelope := message.NewBaseMessage(task.Schema(), &task, "test")
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatalf("marshal task: %v", err)
+	}
+	if err := c.handleTaskMessage(ctx, data); err != nil {
+		t.Fatalf("handleTaskMessage returned %v; a refusal is acked, not redelivered", err)
+	}
+
+	out := logs.String()
+	if strings.Contains(out, "level=ERROR") {
+		t.Fatalf("an ordinary busy refusal was reported as an operator fault:\n%s", out)
+	}
+	if !strings.Contains(out, "still has work in flight") {
+		t.Fatalf("the busy refusal was not declared at the intake seam:\n%s", out)
 	}
 }

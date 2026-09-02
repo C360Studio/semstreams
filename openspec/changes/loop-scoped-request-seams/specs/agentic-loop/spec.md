@@ -30,7 +30,9 @@ later decision is dropped as stale and the gated call is abandoned. The refusal 
 terminal refusal, because the two mean opposite things to the caller — terminal is final, in-flight is answerable
 once the round finishes — and it MUST leave the loop's conversation, its pending-tool set, and its recorded state
 exactly as it found them. Queuing the turn for later delivery is deliberately NOT the answer: a queued turn is new
-semantics this capability does not have.
+semantics this capability does not have. The refusal is ordinary user behaviour — someone typed while the agent
+was still working — and MUST NOT be reported at a severity reserved for operator-actionable faults; the other
+intake failures keep theirs.
 
 Attaching MUST preserve the redelivery-dedup property that intake already relies on: after a continuation is
 accepted, a redelivery of that same continuation MUST be recognised as a duplicate rather than processed twice.
@@ -89,6 +91,14 @@ a conversation whose process was replaced is explicitly NOT in scope and is clai
 - **THEN** the task is refused with the in-flight condition and the loop is still `awaiting_approval`, so the
   human's later decision still resolves the gated call rather than being dropped as stale
 - **AND** the test that verifies this is `TestContinuationOfLoopAwaitingApprovalIsRefused`
+
+#### Scenario: the in-flight refusal is not reported as an operator fault
+
+- **GIVEN** a running loop with an outstanding tool call
+- **WHEN** a task carrying its token arrives at the intake seam
+- **THEN** the seam declares the refusal without raising it to the severity its other intake failures use, and
+  the message is acknowledged rather than redelivered
+- **AND** the test that verifies this is `TestBusyRefusalIsWarnedNotErrored`
 
 #### Scenario: a redelivered continuation is deduplicated
 

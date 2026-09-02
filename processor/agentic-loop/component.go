@@ -1186,6 +1186,17 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 	// Handle the task using the message handler
 	result, err := c.handler.HandleTask(ctx, *task)
 	if err != nil {
+		// A continuation refused because its loop is still working is ordinary
+		// user behaviour — someone typed while the agent was thinking — not an
+		// operator-actionable fault, and this path became common the moment
+		// intake started attaching (#1227). ERROR here would manufacture a
+		// false-alarm class out of a refusal that is working as designed. Every
+		// other handler failure keeps ERROR.
+		if errors.Is(err, ErrLoopBusy) {
+			c.logger.Warn("Task refused — the loop it names still has work in flight",
+				"error", err, "task_id", task.TaskID, "loop_id", task.LoopID)
+			return nil
+		}
 		c.logger.Error("Failed to handle task", "error", err, "task_id", task.TaskID)
 		return nil
 	}
