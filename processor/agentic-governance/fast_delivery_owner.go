@@ -20,13 +20,14 @@ const (
 type governanceFastDeliveryWork func(context.Context, []byte) (natsclient.DeliveryDecision, error)
 
 type governanceDeliveryLaneAdmission struct {
-	mu    sync.Mutex
-	open  bool
-	fatal chan error
+	mu      sync.Mutex
+	open    bool
+	fatal   chan error
+	onFatal func(error)
 }
 
-func newGovernanceDeliveryLaneAdmission() *governanceDeliveryLaneAdmission {
-	return &governanceDeliveryLaneAdmission{open: true, fatal: make(chan error, 1)}
+func newGovernanceDeliveryLaneAdmission(onFatal func(error)) *governanceDeliveryLaneAdmission {
+	return &governanceDeliveryLaneAdmission{open: true, fatal: make(chan error, 1), onFatal: onFatal}
 }
 
 func (a *governanceDeliveryLaneAdmission) admit() bool {
@@ -43,6 +44,9 @@ func (a *governanceDeliveryLaneAdmission) latchFatal(err error) {
 	}
 	a.open = false
 	a.mu.Unlock()
+	if a.onFatal != nil {
+		a.onFatal(err)
+	}
 	a.fatal <- err
 }
 

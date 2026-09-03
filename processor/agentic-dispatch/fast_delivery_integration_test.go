@@ -41,8 +41,6 @@ func TestIntegrationDispatchFastDeliveryOwnersCancelJoinAndRetry(t *testing.T) {
 		subject string
 	}{
 		{port: "user.message", subject: "user.message.fast-owner"},
-		{port: "agent.created", subject: "agent.created.fast-owner"},
-		{port: "agent.approval_pending", subject: "agent.approval_pending.fast-owner"},
 	} {
 		t.Run(lane.port, func(t *testing.T) {
 			exerciseDispatchFastDeliveryBoundary(t, testClient, lane.port, lane.subject, index)

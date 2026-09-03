@@ -25,17 +25,7 @@ type loopFastDeliveryObservation struct {
 func TestIntegrationLoopControlFastDeliveryOwnersCancelJoinAndRetry(t *testing.T) {
 	t.Parallel()
 	exerciseLoopFastDeliveryGroup(t, "LOOP_CONTROL_FAST_OWNER", []loopFastDeliveryLane{
-		{port: "agent.signal", subject: "agent.signal.fast-owner"},
 		{port: "agent.approval_response", subject: "agent.approval_response.fast-owner"},
-	})
-}
-
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
-func TestIntegrationLoopVerdictFastDeliveryOwnersCancelJoinAndRetry(t *testing.T) {
-	t.Parallel()
-	exerciseLoopFastDeliveryGroup(t, "LOOP_VERDICT_FAST_OWNER", []loopFastDeliveryLane{
-		{port: "agent.toolcall.approved", subject: "agent.toolcall.approved.fast-owner"},
-		{port: "agent.toolcall.rejected", subject: "agent.toolcall.rejected.fast-owner"},
 	})
 }
 

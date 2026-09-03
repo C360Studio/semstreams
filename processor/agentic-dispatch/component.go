@@ -90,18 +90,17 @@ type Component struct {
 	modelRegistry model.RegistryReader // Unified model registry for model selection
 
 	// Lifecycle state
-	mu                 sync.RWMutex
-	lifecycleMu        sync.Mutex
-	lifecycleUsed      bool
-	terminal           bool
-	stopping           bool
-	cleanupPending     bool
-	startDone          chan struct{}
-	cancel             context.CancelFunc
-	started            bool
-	startTime          time.Time
-	agentCompleteFatal error
-	agentFailedFatal   error
+	mu               sync.RWMutex
+	lifecycleMu      sync.Mutex
+	lifecycleUsed    bool
+	terminal         bool
+	stopping         bool
+	cleanupPending   bool
+	startDone        chan struct{}
+	cancel           context.CancelFunc
+	started          bool
+	startTime        time.Time
+	deliveryFatalErr error
 
 	// Ports
 	inputPorts  []component.Port
@@ -301,7 +300,7 @@ func (c *Component) Health() component.HealthStatus {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	healthy := c.started && c.agentCompleteFatal == nil && c.agentFailedFatal == nil
+	healthy := c.started && c.deliveryFatalErr == nil
 	uptime := time.Duration(0)
 	if c.started {
 		uptime = time.Since(c.startTime)
@@ -310,20 +309,12 @@ func (c *Component) Health() component.HealthStatus {
 	status := "stopped"
 	lastError := ""
 	errorCount := 0
-	if c.agentCompleteFatal != nil {
-		lastError = c.agentCompleteFatal.Error()
-		errorCount++
-	}
-	if c.agentFailedFatal != nil {
-		if lastError == "" {
-			lastError = c.agentFailedFatal.Error()
-		} else {
-			lastError += "; " + c.agentFailedFatal.Error()
-		}
+	if c.deliveryFatalErr != nil {
+		lastError = c.deliveryFatalErr.Error()
 		errorCount++
 	}
 	if c.started && errorCount > 0 {
-		status = "terminal delivery ownership lost"
+		status = "delivery ownership lost"
 	} else if healthy {
 		status = "running"
 	}
@@ -555,7 +546,7 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		MessageTimeout: dispatchFastDeliveryAckWait,
 		AutoCreate:     false,
 	}
-	userMessageAdmission := newDeliveryLaneAdmission(nil)
+	userMessageAdmission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
 	handle, err := c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.userMessage.portName}, userMsgCfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		decision, admitted, deliveryErr := consumeAdmittedDispatchFastDelivery(msgCtx, msg, c.handleUserMessage, userMessageAdmission)
 		if admitted && decision != natsclient.DeliveryDecisionQuarantine && deliveryErr != nil {
@@ -591,7 +582,7 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	if err != nil {
 		return errs.WrapInvalid(err, "Component", "setupSubscriptions", "validate agent.complete delivery policy")
 	}
-	agentCompleteAdmission := newDeliveryLaneAdmission(c.recordAgentCompleteFatal)
+	agentCompleteAdmission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
 	handle, err = c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.agentComplete.portName}, agentCompleteCfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		result, admitted := consumeAdmittedDelivery(msgCtx, msg, agentCompletePolicy, agentCompleteAdmission)
 		if admitted && !result.OwnerStopRequired() {
@@ -623,7 +614,7 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		MessageTimeout: dispatchFastDeliveryAckWait,
 		AutoCreate:     false,
 	}
-	agentCreatedAdmission := newDeliveryLaneAdmission(nil)
+	agentCreatedAdmission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
 	handle, err = c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.agentCreated.portName}, agentCreatedCfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		decision, admitted, deliveryErr := consumeAdmittedDispatchFastDelivery(msgCtx, msg, c.handleAgentCreated, agentCreatedAdmission)
 		if admitted && decision != natsclient.DeliveryDecisionQuarantine && deliveryErr != nil {
@@ -659,7 +650,7 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	if err != nil {
 		return errs.WrapInvalid(err, "Component", "setupSubscriptions", "validate agent.failed delivery policy")
 	}
-	agentFailedAdmission := newDeliveryLaneAdmission(c.recordAgentFailedFatal)
+	agentFailedAdmission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
 	handle, err = c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.agentFailed.portName}, agentFailedCfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		result, admitted := consumeAdmittedDelivery(msgCtx, msg, agentFailedPolicy, agentFailedAdmission)
 		if admitted && !result.OwnerStopRequired() {
@@ -704,7 +695,7 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		MessageTimeout: dispatchFastDeliveryAckWait,
 		AutoCreate:     false,
 	}
-	approvalPendingAdmission := newDeliveryLaneAdmission(nil)
+	approvalPendingAdmission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
 	handle, err = c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.approvalPending.portName}, agentApprovalPendingCfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		decision, admitted, deliveryErr := consumeAdmittedDispatchFastDelivery(msgCtx, msg, c.handleAgentApprovalPending, approvalPendingAdmission)
 		if admitted && decision != natsclient.DeliveryDecisionQuarantine && deliveryErr != nil {
@@ -729,19 +720,11 @@ func (c *Component) observeTerminalDelivery(err error) {
 	}
 }
 
-func (c *Component) recordAgentCompleteFatal(err error) {
+func (c *Component) recordDeliveryOwnerFatal(err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.agentCompleteFatal == nil {
-		c.agentCompleteFatal = fmt.Errorf("agent.complete delivery ownership lost: %w", err)
-	}
-}
-
-func (c *Component) recordAgentFailedFatal(err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.agentFailedFatal == nil {
-		c.agentFailedFatal = fmt.Errorf("agent.failed delivery ownership lost: %w", err)
+	if c.deliveryFatalErr == nil {
+		c.deliveryFatalErr = err
 	}
 }
 

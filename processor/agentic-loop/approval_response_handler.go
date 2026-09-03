@@ -30,14 +30,10 @@ import (
 // a defensive log + non-error empty result so duplicate or stale UI
 // clicks don't crash the loop.
 func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response agentic.ApprovalResponse) (result HandlerResult, err error) {
-	// Panic recovery — beta.25 mode (f). A panic in the resolve race,
-	// dispatch path, or rejection-synth would otherwise leave the
-	// gated tool_call orphaned (loop stays in awaiting_approval, no
-	// result, no resolution). Recover and return a benign empty
-	// result so the component-level caller logs and continues; the
-	// approval-timeout sweeper picks up the still-awaiting loop on
-	// its next tick and auto-rejects via the timeout path. Loud log
-	// + structured panic value so the underlying bug is debuggable.
+	// A panic in approval handling makes delivery ownership unsafe. Recover so
+	// the process stays diagnosable, but return a fatal-classified error: the
+	// delivery callback quarantines without persistence or settlement and drains
+	// the exact owner instead of turning the panic into a successful ACK.
 	defer func() {
 		if r := recover(); r != nil {
 			h.logger.Error("panic recovered in HandleApprovalResponse",
@@ -46,7 +42,10 @@ func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response ag
 				slog.String("call_id", response.CallID),
 				slog.String("decision", response.Decision))
 			result = HandlerResult{LoopID: response.LoopID}
-			err = nil
+			err = errs.WrapFatal(
+				fmt.Errorf("approval response handler panicked: %v", r),
+				"agentic-loop", "HandleApprovalResponse", "recover panic",
+			)
 		}
 	}()
 
@@ -179,8 +178,15 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 
 	result, err := c.handler.HandleApprovalResponse(ctx, response)
 	if err != nil {
-		return natsclient.DeliveryDecisionRetry,
-			fmt.Errorf("handle approval response for loop %q call %q: %w", response.LoopID, response.CallID, err)
+		wrapped := fmt.Errorf("handle approval response for loop %q call %q: %w", response.LoopID, response.CallID, err)
+		switch {
+		case errs.IsFatal(err):
+			return natsclient.DeliveryDecisionQuarantine, wrapped
+		case errs.IsInvalid(err):
+			return natsclient.DeliveryDecisionTerminate, wrapped
+		default:
+			return natsclient.DeliveryDecisionRetry, wrapped
+		}
 	}
 	if result.staleDrop {
 		// The handler dispatched nothing and resolved nothing. Persisting would

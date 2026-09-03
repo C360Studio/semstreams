@@ -1816,10 +1816,8 @@ func (c *Component) stampLoopFailureWithBudget(ctx context.Context, loopID strin
 	}
 }
 
-// runWithBudget runs fn in a goroutine and waits for it to return,
-// bounded by budget. Returns true if the budget expired before fn
-// returned (the goroutine continues running with a cancelled child
-// context; its inner NATS calls will see ctx.Done and abort cleanly).
+// runWithBudget runs fn synchronously under a bounded child context. The caller
+// never observes completion while delivery-derived work is still live.
 //
 // Extracted so the timeout-vs-completion contract is unit-testable
 // without mocking the natsclient or graphWriter. The function is
@@ -1830,30 +1828,8 @@ func (c *Component) stampLoopFailureWithBudget(ctx context.Context, loopID strin
 func runWithBudget(ctx context.Context, budget time.Duration, fn func(context.Context)) (timedOut bool) {
 	bctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		fn(bctx)
-	}()
-
-	select {
-	case <-done:
-		// fn returned. But "returned" is ambiguous when bctx was
-		// cancelled before/while fn ran — the goroutine may have
-		// observed bctx.Done() and returned promptly, which is the
-		// timed-out (or parent-cancelled) case, NOT a within-budget
-		// completion. When parent ctx is pre-cancelled, bctx is born
-		// cancelled and both channels become ready simultaneously;
-		// Go's select picks one at random, so without this check the
-		// function returns the wrong answer ~50% of the time on the
-		// pre-cancel path (caught by
-		// TestRunWithBudget_ParentContextCancellationPropagates
-		// flaking on CI). Inspect bctx to disambiguate.
-		return bctx.Err() != nil
-	case <-bctx.Done():
-		return true
-	}
+	fn(bctx)
+	return bctx.Err() != nil
 }
 
 // handleToolResultMessage processes incoming tool result messages

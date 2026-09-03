@@ -9,7 +9,26 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/stretchr/testify/require"
 )
+
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// scenario: Approval handler panics
+func TestHandleApprovalResponse_PanicReturnsFatalError(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+	loopID := handler.loopManager.GenerateLoopID()
+	handler.loopManager = nil // deepest controllable production dependency: ResolveApprovalIfPending panics
+
+	result, err := handler.HandleApprovalResponse(t.Context(), agentic.ApprovalResponse{
+		LoopID: loopID, CallID: "call-panic", Decision: agentic.ApprovalDecisionApprove,
+		ApprovedBy: "operator", DecidedAt: time.Now().UTC(),
+	})
+
+	require.Error(t, err)
+	require.True(t, errs.IsFatal(err))
+	require.Empty(t, result.PublishedMessages)
+}
 
 // setUpAwaitingLoop creates a loop, drives it into LoopStateAwaitingApproval
 // with a known timeout, and returns the loop ID. Helper for the

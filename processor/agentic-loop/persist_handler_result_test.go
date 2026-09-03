@@ -26,11 +26,8 @@ func TestRunWithBudget_ReturnsCompletedFalseWhenFnReturnsFast(t *testing.T) {
 	}
 }
 
-// TestRunWithBudget_ReturnsTimedOutTrueWhenFnExceedsBudget asserts the
-// degraded-graph-gateway path: when fn exceeds the budget,
-// runWithBudget returns timedOut=true and the caller proceeds with
-// publishResults. The fn goroutine's bctx is cancelled so its inner
-// NATS request aborts cleanly without leaking.
+// TestRunWithBudget_ReturnsTimedOutTrueWhenFnExceedsBudget asserts that the
+// child context expires and cooperative work joins before timeout is reported.
 func TestRunWithBudget_ReturnsTimedOutTrueWhenFnExceedsBudget(t *testing.T) {
 	var bctxCancelled atomic.Bool
 	timedOut := runWithBudget(context.Background(), 20*time.Millisecond, func(bctx context.Context) {
@@ -44,8 +41,6 @@ func TestRunWithBudget_ReturnsTimedOutTrueWhenFnExceedsBudget(t *testing.T) {
 	if !timedOut {
 		t.Errorf("expected timedOut=true when fn exceeds budget")
 	}
-	// Give the goroutine a beat to observe its bctx cancellation
-	time.Sleep(50 * time.Millisecond)
 	if !bctxCancelled.Load() {
 		t.Errorf("expected fn's bctx to have been cancelled when budget expired")
 	}
@@ -57,10 +52,7 @@ func TestRunWithBudget_ReturnsTimedOutTrueWhenFnExceedsBudget(t *testing.T) {
 // bctx, which cancels fn. timedOut is true (since bctx.Done fired),
 // matching the contract: any reason for not completing returns true.
 //
-// fnObserved is a channel rather than an atomic.Value so the test
-// deterministically waits for the goroutine to record the cancellation
-// before asserting — runWithBudget can return BEFORE the goroutine has
-// run to its bctx-read, which would race a value-based assertion.
+// fnObserved proves the synchronous work saw the exact derived cancellation.
 func TestRunWithBudget_ParentContextCancellationPropagates(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel before runWithBudget so bctx is born cancelled
@@ -82,27 +74,29 @@ func TestRunWithBudget_ParentContextCancellationPropagates(t *testing.T) {
 	}
 }
 
-// TestRunWithBudget_GoroutineDoesNotBlockReturnAfterTimeout asserts the
-// non-leaking property: after timedOut=true, runWithBudget returns
-// immediately even if fn is still running. The lingering goroutine
-// will exit on its own once it hits a bctx-aware syscall. This is the
-// production guarantee: a hung graph write does not block the publish
-// or the next handler iteration.
-func TestRunWithBudget_GoroutineDoesNotBlockReturnAfterTimeout(t *testing.T) {
-	start := time.Now()
-	timedOut := runWithBudget(context.Background(), 10*time.Millisecond, func(_ context.Context) {
-		// Deliberately ignore the bctx — simulates a NATS request that
-		// hasn't yet hit a checkpoint where ctx is observed.
-		time.Sleep(200 * time.Millisecond)
-	})
-	elapsed := time.Since(start)
-	if !timedOut {
-		t.Errorf("expected timedOut=true")
+// spec: agentic-loop / Delivery work joins before settlement
+// scenario: Delivery work exceeds its budget
+func TestRunWithBudget_DoesNotReturnBeforeCooperativeWorkJoins(t *testing.T) {
+	observedCancellation := make(chan struct{})
+	release := make(chan struct{})
+	returned := make(chan bool, 1)
+	go func() {
+		returned <- runWithBudget(t.Context(), 10*time.Millisecond, func(workCtx context.Context) {
+			<-workCtx.Done()
+			close(observedCancellation)
+			<-release
+		})
+	}()
+
+	<-observedCancellation
+	select {
+	case <-returned:
+		t.Fatal("runWithBudget returned before cooperative child joined")
+	default:
 	}
-	// Allow generous slack for CI scheduler noise; the assertion is
-	// "well under 200ms" not "exactly 10ms".
-	if elapsed > 100*time.Millisecond {
-		t.Errorf("runWithBudget blocked %v waiting for slow fn to return; should bound at budget+ε", elapsed)
+	close(release)
+	if timedOut := <-returned; !timedOut {
+		t.Fatal("expected timedOut=true after the work budget expired")
 	}
 }
 

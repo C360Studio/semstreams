@@ -63,6 +63,7 @@ type Component struct {
 	messagesProcessed int64
 	violationsCount   int64
 	errors            int64
+	deliveryFatalErr  error
 	lastActivity      time.Time
 }
 
@@ -499,7 +500,7 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port, hand
 	if c.consumeStream != nil {
 		consume = c.consumeStream
 	}
-	admission := newGovernanceDeliveryLaneAdmission()
+	admission := newGovernanceDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
 	handle, err := consume(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		decision, admitted, deliveryErr := consumeAdmittedGovernanceFastDelivery(msgCtx, msg, handler, admission)
 		if admitted && decision != natsclient.DeliveryDecisionQuarantine && deliveryErr != nil {
@@ -680,21 +681,37 @@ func (c *Component) ConfigSchema() component.ConfigSchema {
 
 // Health returns the current health status
 func (c *Component) Health() component.HealthStatus {
-	errors := atomic.LoadInt64(&c.errors)
-
 	c.mu.RLock()
+	errors := atomic.LoadInt64(&c.errors)
 	running := c.running
 	startTime := c.startTime
 	status := c.getStatus()
+	lastError := ""
+	if c.deliveryFatalErr != nil {
+		running = false
+		status = "delivery ownership lost"
+		lastError = c.deliveryFatalErr.Error()
+	}
 	c.mu.RUnlock()
 
 	return component.HealthStatus{
 		Healthy:    running,
 		LastCheck:  time.Now(),
 		ErrorCount: int(errors),
+		LastError:  lastError,
 		Uptime:     time.Since(startTime),
 		Status:     status,
 	}
+}
+
+func (c *Component) recordDeliveryOwnerFatal(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.deliveryFatalErr != nil {
+		return
+	}
+	c.deliveryFatalErr = err
+	atomic.AddInt64(&c.errors, 1)
 }
 
 // getStatus returns a status string
