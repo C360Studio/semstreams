@@ -134,8 +134,8 @@ func TestGovernanceFatalHealthLatchesBeforeEachExactOwnerDrain(t *testing.T) {
 	firstCause := errors.New("first governance owner lost")
 	secondCause := errors.New("later governance owner lost")
 	healthAtDrain := make(chan component.HealthStatus, 2)
-	firstAdmission := newGovernanceDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
-	secondAdmission := newGovernanceDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
+	firstAdmission := &governanceDeliveryLaneAdmission{open: true, fatal: make(chan error), onFatal: c.recordDeliveryOwnerFatal}
+	secondAdmission := &governanceDeliveryLaneAdmission{open: true, fatal: make(chan error), onFatal: c.recordDeliveryOwnerFatal}
 	firstHandle := &governanceHealthProbeHandle{closed: make(chan struct{}), onDrain: func() { healthAtDrain <- c.Health() }}
 	secondHandle := &governanceHealthProbeHandle{closed: make(chan struct{}), onDrain: func() { healthAtDrain <- c.Health() }}
 	firstBinding := newGovernanceStreamConsumerBinding(firstHandle)

@@ -266,8 +266,8 @@ func TestLoopFatalHealthLatchesBeforeEachExactOwnerDrain(t *testing.T) {
 	firstCause := errors.New("first loop owner lost")
 	secondCause := errors.New("later loop owner lost")
 	healthAtDrain := make(chan component.HealthStatus, 2)
-	firstAdmission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
-	secondAdmission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
+	firstAdmission := &deliveryLaneAdmission{open: true, fatal: make(chan error), onFatal: c.recordDeliveryOwnerFatal}
+	secondAdmission := &deliveryLaneAdmission{open: true, fatal: make(chan error), onFatal: c.recordDeliveryOwnerFatal}
 	firstHandle := &loopHealthProbeHandle{closed: make(chan struct{}), onDrain: func() { healthAtDrain <- c.Health() }}
 	secondHandle := &loopHealthProbeHandle{closed: make(chan struct{}), onDrain: func() { healthAtDrain <- c.Health() }}
 	firstBinding := newStreamConsumerBinding(firstHandle)
