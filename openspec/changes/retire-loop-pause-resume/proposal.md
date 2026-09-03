@@ -43,7 +43,7 @@ MUST. The requirement heading is unchanged — six `// spec:` citations point at
 
 ## Ruling conformance
 
-Nine exported symbols leave the Tier 1 frozen `agentic` package. Two owner rulings on #1239 authorize them.
+Nine exported symbols leave the Tier 1 frozen `agentic` package. Three owner rulings on #1239 authorize them.
 `task api:compat:report` lists a tenth removal, `CategorySignalMessage` — that one is #1231's (`78813ec7`),
 already on `main`, not this change's.
 
@@ -51,6 +51,10 @@ already on `main`, not this change's.
   (2026-09-02). Enumerates `handlePauseSignal`, `handleResumeSignal`, `PauseRequested`, `PauseRequestedBy`.
 - **R2** — the widening, [`issuecomment-5516251150`](https://github.com/C360Studio/semstreams/issues/1239#issuecomment-5516251150)
   (2026-09-02). *"Extend #1251 to delete all four now"* — `cancel` becomes the entire vocabulary.
+- **R3** — complete pause-surface removal,
+  [`issuecomment-5519154352`](https://github.com/C360Studio/semstreams/issues/1239#issuecomment-5519154352)
+  (2026-09-02). Explicitly authorizes removal of `LoopEntity.StateBeforePause` while retaining
+  `LoopStatePaused` as a legacy-valid state accepted by exported transition APIs.
 
 | Removed symbol | Declared on `main` at | Authorized by |
 |---|---|---|
@@ -62,13 +66,11 @@ already on `main`, not this change's.
 | `SignalRetry` | `agentic/user_types.go:22` | R2, by name |
 | `LoopEntity.PauseRequested` | `agentic/state.go:66` | R1, by name |
 | `LoopEntity.PauseRequestedBy` | `agentic/state.go:67` | R1, by name |
-| `LoopEntity.StateBeforePause` | `agentic/state.go:68` | **Named by neither ruling** — see below |
+| `LoopEntity.StateBeforePause` | `agentic/state.go:68` | R3, by name |
 
-**`StateBeforePause` is the one removal no ruling enumerates.** R1 names two of the three pause fields.
-`StateBeforePause` is the third member of the same persisted pause record and exists solely to restore the
-prior state on `resume`; with `resume` deleted, nothing can read it and nothing can write it. It is removed as
-part of the pause record R1 retires rather than as a separate decision. Flagged here rather than folded in
-silently — if the owner intends it kept, it is a one-field restore.
+**`LoopStatePaused` remains.** R3 does not authorize its removal: it remains legacy-valid and the exported
+transition APIs still accept it. This change removes the framework-owned pause/resume signal path and pause
+semantics, not the state vocabulary.
 
 **semsage migration obligation.** semsage `processor/ui-api/http.go:182` cases on `agentic.SignalPause` and
 `agentic.SignalResume` and **will not compile** on its next bump. Sister repositories are read-only to

@@ -173,7 +173,7 @@ exploring → planning → architecting → executing → reviewing → complete
 | `complete` | Yes | Successfully finished |
 | `failed` | Yes | Failed due to error or max iterations |
 | `cancelled` | Yes | Cancelled by user signal |
-| `paused` | No | Unreachable — the pause signal was deleted (#1239); no code path sets this state |
+| `paused` | No | Legacy-valid; exported transitions accept it; no framework-owned pause signal or semantics (#1239) |
 | `awaiting_approval` | No | Waiting for user approval |
 
 States are fluid checkpoints - loops can transition backward except from terminal states.

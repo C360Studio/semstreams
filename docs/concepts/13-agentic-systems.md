@@ -115,7 +115,7 @@ Agentic systems use a state machine to track progress through well-defined phase
 | `complete` | Yes | Successfully finished |
 | `failed` | Yes | Failed due to error or max iterations |
 | `cancelled` | Yes | Cancelled by user signal |
-| `paused` | No | Unreachable — the pause signal was deleted (#1239); no code path sets this state |
+| `paused` | No | Legacy-valid; exported transitions accept it; no framework-owned pause signal or semantics (#1239) |
 | `awaiting_approval` | No | Waiting for user approval |
 
 **Why states matter:**

@@ -988,11 +988,12 @@ Decoding ignores unknown keys —
 no `DisallowUnknownFields` sits on the `LoopEntity` decode path — so old records load unchanged and no backfill
 or migration job is required.
 
-`LoopState` `paused` deliberately remains in the vocabulary, with nothing able to set it. The reason is
-**validation, not deserialization**: `LoopState` is a plain string type with no `UnmarshalJSON`, so a persisted
-`"state":"paused"` would decode either way. But `LoopEntity.Validate()` rejects any state that
-`isValidLoopState` does not list (`agentic/state.go:106,116`), so dropping the constant would make every
-pre-existing `paused` record invalid. Keeping it is what makes this migration a no-op for your data.
+`LoopState` `paused` deliberately remains legacy-valid. The exported transition APIs still accept it; #1239
+removes the framework-owned pause/resume signal path and pause semantics, not the state vocabulary. Preserving
+the state is required for **validation, not deserialization**: `LoopState` is a plain string type with no
+`UnmarshalJSON`, so a persisted `"state":"paused"` would decode either way. But `LoopEntity.Validate()` rejects
+any state that `isValidLoopState` does not list (`agentic/state.go:106,116`), so dropping the constant would make
+every pre-existing `paused` record invalid. Keeping it is what makes this migration a no-op for your data.
 
 ### `cancel` is now the entire signal vocabulary
 
