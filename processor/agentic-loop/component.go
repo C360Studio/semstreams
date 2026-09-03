@@ -897,10 +897,7 @@ func (c *Component) setupSubscriptions(setupCtx, consumerCtx context.Context) er
 		}
 		subject := stream.Subjects()[0]
 
-		var (
-			handler     inputHandler
-			fastHandler loopFastDeliveryWork
-		)
+		var handler inputHandler
 
 		// Route to appropriate handler based on port name
 		switch port.Name {
@@ -911,9 +908,9 @@ func (c *Component) setupSubscriptions(setupCtx, consumerCtx context.Context) er
 		case "tool.result":
 			handler = adaptVoidInputHandler(c.handleToolResultMessage)
 		case "agent.signal":
-			fastHandler = c.handleSignalMessage
+			handler = adaptVoidInputHandler(c.handleSignalMessage)
 		case "agent.approval_response":
-			fastHandler = c.handleApprovalResponseMessage
+			handler = adaptVoidInputHandler(c.handleApprovalResponseMessage)
 		case "agent.toolcall.approved", "agent.toolcall.rejected":
 			// Verdicts from rule-driven tool-call governance (ADR-039).
 			// Both subjects route into the same demux — the dispatcher
@@ -922,13 +919,13 @@ func (c *Component) setupSubscriptions(setupCtx, consumerCtx context.Context) er
 			// no fallback construction); the wildcard subscription is
 			// still cheap to bind but never gets traffic in disabled
 			// mode because nothing publishes to proposed.
-			fastHandler = c.handleToolCallVerdictMessage
+			handler = adaptVoidInputHandler(c.handleToolCallVerdictMessage)
 		default:
 			c.logger.Warn("Unknown input port", "port", port.Name)
 			continue
 		}
 
-		if err := c.setupConsumer(setupCtx, consumerCtx, port, subject, handler, fastHandler); err != nil {
+		if err := c.setupConsumer(setupCtx, consumerCtx, port, subject, handler); err != nil {
 			return errs.Wrap(err, "agentic-loop", "setupSubscriptions", fmt.Sprintf("setup consumer for %s", subject))
 		}
 	}
@@ -937,14 +934,7 @@ func (c *Component) setupSubscriptions(setupCtx, consumerCtx context.Context) er
 }
 
 // setupConsumer sets up a JetStream consumer for an input port.
-func (c *Component) setupConsumer(
-	setupCtx context.Context,
-	consumerCtx context.Context,
-	port component.Port,
-	subject string,
-	handler inputHandler,
-	fastHandler loopFastDeliveryWork,
-) error {
+func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port component.Port, subject string, handler inputHandler) error {
 	facts, err := port.Facts()
 	if err != nil {
 		return err
@@ -1018,10 +1008,10 @@ func (c *Component) setupConsumer(
 		useHeartbeat = true
 		heartbeatInterval = c.config.Consumer.ParsedHeartbeatInterval()
 	default: // agent.signal — fast, advisory
-		ackWait = loopFastDeliveryAckWait
+		ackWait = 30 * time.Second
 		maxAckPending = componentMaxAckPending
 		maxDeliver = consumerCfg.MaxDeliver
-		msgTimeout = loopFastDeliveryAckWait
+		msgTimeout = c.messageTimeout
 		useHeartbeat = false
 	}
 
@@ -1057,17 +1047,14 @@ func (c *Component) setupConsumer(
 			}
 		}
 	} else {
-		if fastHandler == nil {
-			return errs.WrapInvalid(
-				fmt.Errorf("fast input port %q has no typed delivery handler", port.Name),
-				"agentic-loop", "setupConsumer", "missing fast delivery handler",
-			)
-		}
-		admission = newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
 		handlerFn = func(msgCtx context.Context, msg jetstream.Msg) {
-			decision, admitted, deliveryErr := consumeAdmittedLoopFastDelivery(msgCtx, msg, fastHandler, admission)
-			if admitted && decision != natsclient.DeliveryDecisionQuarantine && deliveryErr != nil {
-				c.logger.Error("Fast delivery did not settle cleanly", "port", port.Name, "error", deliveryErr)
+			if err := handler(msgCtx, msg.Data()); err != nil {
+				_ = msg.Nak()
+				c.logger.Error("Message handler error", "port", port.Name, "error", err)
+				return
+			}
+			if ackErr := msg.Ack(); ackErr != nil {
+				c.logger.Error("Failed to ack JetStream message", "error", ackErr)
 			}
 		}
 	}
@@ -1816,8 +1803,10 @@ func (c *Component) stampLoopFailureWithBudget(ctx context.Context, loopID strin
 	}
 }
 
-// runWithBudget runs fn synchronously under a bounded child context. The caller
-// never observes completion while delivery-derived work is still live.
+// runWithBudget runs fn in a goroutine and waits for it to return,
+// bounded by budget. Returns true if the budget expired before fn
+// returned (the goroutine continues running with a cancelled child
+// context; its inner NATS calls will see ctx.Done and abort cleanly).
 //
 // Extracted so the timeout-vs-completion contract is unit-testable
 // without mocking the natsclient or graphWriter. The function is
@@ -1828,8 +1817,30 @@ func (c *Component) stampLoopFailureWithBudget(ctx context.Context, loopID strin
 func runWithBudget(ctx context.Context, budget time.Duration, fn func(context.Context)) (timedOut bool) {
 	bctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
-	fn(bctx)
-	return bctx.Err() != nil
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn(bctx)
+	}()
+
+	select {
+	case <-done:
+		// fn returned. But "returned" is ambiguous when bctx was
+		// cancelled before/while fn ran — the goroutine may have
+		// observed bctx.Done() and returned promptly, which is the
+		// timed-out (or parent-cancelled) case, NOT a within-budget
+		// completion. When parent ctx is pre-cancelled, bctx is born
+		// cancelled and both channels become ready simultaneously;
+		// Go's select picks one at random, so without this check the
+		// function returns the wrong answer ~50% of the time on the
+		// pre-cancel path (caught by
+		// TestRunWithBudget_ParentContextCancellationPropagates
+		// flaking on CI). Inspect bctx to disambiguate.
+		return bctx.Err() != nil
+	case <-bctx.Done():
+		return true
+	}
 }
 
 // handleToolResultMessage processes incoming tool result messages
@@ -2150,16 +2161,17 @@ func (c *Component) findLoopIDForToolCall(callID string) string {
 
 // handleSignalMessage processes incoming signal messages. Cancel is the only
 // loop-control verb; pause/resume were deleted in #1239.
-func (c *Component) handleSignalMessage(ctx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
+func (c *Component) handleSignalMessage(ctx context.Context, data []byte) {
 	baseMsg, err := c.decoder.Decode(data)
 	if err != nil {
-		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("decode signal message: %w", err)
+		c.logger.Error("Failed to unmarshal BaseMessage", "error", err)
+		return
 	}
 
 	signalPtr, ok := baseMsg.Payload().(*agentic.UserSignal)
 	if !ok {
-		return natsclient.DeliveryDecisionTerminate,
-			fmt.Errorf("unexpected signal payload type %T", baseMsg.Payload())
+		c.logger.Error("Unexpected payload type", "type", fmt.Sprintf("%T", baseMsg.Payload()))
+		return
 	}
 	signal := *signalPtr
 
@@ -2172,18 +2184,16 @@ func (c *Component) handleSignalMessage(ctx context.Context, data []byte) (natsc
 	// Handle based on signal type
 	switch signal.Type {
 	case agentic.SignalCancel:
-		if err := c.handleCancelSignal(ctx, signal); err != nil {
-			return natsclient.DeliveryDecisionRetry, err
-		}
-		return natsclient.DeliveryDecisionAck, nil
+		c.handleCancelSignal(ctx, signal)
 	default:
-		return natsclient.DeliveryDecisionTerminate,
-			fmt.Errorf("unsupported signal type %q for loop %q", signal.Type, signal.LoopID)
+		c.logger.Warn("Unsupported signal type",
+			slog.String("type", signal.Type),
+			slog.String("loop_id", signal.LoopID))
 	}
 }
 
 // handleCancelSignal handles a cancel signal for a loop
-func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserSignal) error {
+func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserSignal) {
 	loopID := signal.LoopID
 
 	// Drain any in-flight tool calls into synth-results BEFORE the
@@ -2197,7 +2207,10 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 	// Atomically cancel the loop and get the updated entity
 	entity, err := c.handler.CancelLoop(loopID, signal.UserID)
 	if err != nil {
-		return fmt.Errorf("cancel loop %q: %w", loopID, err)
+		c.logger.Error("Failed to cancel loop",
+			slog.String("error", err.Error()),
+			slog.String("loop_id", loopID))
+		return
 	}
 	// Cancellation has no aggregate token/step consumer. Defer cleanup so all
 	// terminal observation and publication work sees a stable active-loop
@@ -2233,15 +2246,22 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 	completionMsg := message.NewBaseMessage(completion.Schema(), &completion, "agentic-loop")
 	completionData, err := json.Marshal(completionMsg)
 	if err != nil {
-		return fmt.Errorf("marshal cancellation completion for loop %q: %w", loopID, err)
+		c.logger.Error("Failed to marshal completion",
+			slog.String("error", err.Error()),
+			slog.String("loop_id", loopID))
+		return
 	}
 
 	subject, err := component.ResolveSubject(c.config.Ports.Outputs, "agent.complete", loopID)
 	if err != nil {
-		return fmt.Errorf("resolve cancellation completion subject for loop %q: %w", loopID, err)
+		c.logger.Error("Failed to resolve completion subject", slog.String("error", err.Error()))
+		return
 	}
 	if err := c.natsClient.PublishToStream(ctx, subject, completionData); err != nil {
-		return fmt.Errorf("publish cancellation completion for loop %q: %w", loopID, err)
+		c.logger.Error("Failed to publish completion",
+			slog.String("error", err.Error()),
+			slog.String("loop_id", loopID))
+		return
 	}
 
 	// Emit cancellation entity to graph (non-fatal)
@@ -2256,7 +2276,6 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 	c.logger.Info("Loop cancelled",
 		slog.String("loop_id", loopID),
 		slog.String("cancelled_by", signal.UserID))
-	return nil
 }
 
 // handleToolCallVerdictMessage routes inbound verdicts from
@@ -2282,27 +2301,29 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 // No-op when the dispatcher is nil (disabled-mode-without-construction
 // edge case; should not occur in production because NewComponent always
 // constructs a dispatcher).
-func (c *Component) handleToolCallVerdictMessage(_ context.Context, data []byte) (natsclient.DeliveryDecision, error) {
+func (c *Component) handleToolCallVerdictMessage(_ context.Context, data []byte) {
 	dispatcher := c.handler.GovernanceDispatcher()
 	if dispatcher == nil {
-		return natsclient.DeliveryDecisionQuarantine, errors.New("tool-call verdict dispatcher is unavailable")
+		return
 	}
 
 	payload, ok := decodeVerdictPayload(c.decoder, data)
 	if !ok {
-		return natsclient.DeliveryDecisionTerminate,
-			fmt.Errorf("decode tool-call verdict payload of %d bytes", len(data))
+		c.logger.Warn("Failed to decode tool-call verdict payload; ignoring",
+			slog.Int("size", len(data)))
+		return
 	}
 
 	decision := payload.EffectiveDecision()
 	callID := payload.EffectiveCallID()
 	if decision == "" || callID == "" {
-		return natsclient.DeliveryDecisionTerminate,
-			fmt.Errorf("tool-call verdict payload missing decision or call_id (decision=%q call_id=%q)", decision, callID)
+		c.logger.Warn("Tool-call verdict payload missing decision or call_id; ignoring",
+			slog.String("decision", decision),
+			slog.String("call_id", callID))
+		return
 	}
 
 	dispatcher.HandleVerdict(decision, callID, data)
-	return natsclient.DeliveryDecisionAck, nil
 }
 
 // decodeVerdictPayload reads a VerdictPayload from wire bytes,

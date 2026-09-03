@@ -7,7 +7,6 @@ import (
 	"log/slog"
 
 	"github.com/c360studio/semstreams/agentic"
-	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -30,10 +29,14 @@ import (
 // a defensive log + non-error empty result so duplicate or stale UI
 // clicks don't crash the loop.
 func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response agentic.ApprovalResponse) (result HandlerResult, err error) {
-	// A panic in approval handling makes delivery ownership unsafe. Recover so
-	// the process stays diagnosable, but return a fatal-classified error: the
-	// delivery callback quarantines without persistence or settlement and drains
-	// the exact owner instead of turning the panic into a successful ACK.
+	// Panic recovery — beta.25 mode (f). A panic in the resolve race,
+	// dispatch path, or rejection-synth would otherwise leave the
+	// gated tool_call orphaned (loop stays in awaiting_approval, no
+	// result, no resolution). Recover and return a benign empty
+	// result so the component-level caller logs and continues; the
+	// approval-timeout sweeper picks up the still-awaiting loop on
+	// its next tick and auto-rejects via the timeout path. Loud log
+	// + structured panic value so the underlying bug is debuggable.
 	defer func() {
 		if r := recover(); r != nil {
 			h.logger.Error("panic recovered in HandleApprovalResponse",
@@ -42,10 +45,7 @@ func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response ag
 				slog.String("call_id", response.CallID),
 				slog.String("decision", response.Decision))
 			result = HandlerResult{LoopID: response.LoopID}
-			err = errs.WrapFatal(
-				fmt.Errorf("approval response handler panicked: %v", r),
-				"agentic-loop", "HandleApprovalResponse", "recover panic",
-			)
+			err = nil
 		}
 	}()
 
@@ -158,15 +158,17 @@ func (h *MessageHandler) handleRejectedApproval(ctx context.Context, loopID stri
 // handleApprovalResponseMessage is the component-level entry point
 // that decodes the wire envelope and hands the typed payload to the
 // MessageHandler. Mirrors handleSignalMessage's shape.
-func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
+func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []byte) {
 	baseMsg, err := c.decoder.Decode(data)
 	if err != nil {
-		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("decode approval response: %w", err)
+		c.logger.Error("Failed to decode approval response", "error", err)
+		return
 	}
 	respPtr, ok := baseMsg.Payload().(*agentic.ApprovalResponse)
 	if !ok {
-		return natsclient.DeliveryDecisionTerminate,
-			fmt.Errorf("unexpected approval response payload type %T", baseMsg.Payload())
+		c.logger.Error("Unexpected approval response payload type",
+			"type", fmt.Sprintf("%T", baseMsg.Payload()))
+		return
 	}
 	response := *respPtr
 
@@ -178,27 +180,22 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 
 	result, err := c.handler.HandleApprovalResponse(ctx, response)
 	if err != nil {
-		wrapped := fmt.Errorf("handle approval response for loop %q call %q: %w", response.LoopID, response.CallID, err)
-		switch {
-		case errs.IsFatal(err):
-			return natsclient.DeliveryDecisionQuarantine, wrapped
-		case errs.IsInvalid(err):
-			return natsclient.DeliveryDecisionTerminate, wrapped
-		default:
-			return natsclient.DeliveryDecisionRetry, wrapped
-		}
+		c.logger.Error("Failed to handle approval response",
+			"error", err,
+			"loop_id", response.LoopID,
+			"call_id", response.CallID)
+		return
 	}
 	if result.staleDrop {
 		// The handler dispatched nothing and resolved nothing. Persisting would
 		// re-Put a settled entity, or — once its per-loop state is released —
 		// report a persistence failure for a loop that is supposed to be gone.
 		// Returning here is what makes the two indistinguishable.
-		return natsclient.DeliveryDecisionAck, nil
+		return
 	}
 
 	// Approval responses use the same persistence boundary as every other
 	// handler result. This keeps a rejection that reaches the iteration cap from
 	// bypassing the ordinary-observations-then-terminal audit ordering.
 	c.persistHandlerResult(ctx, result)
-	return natsclient.DeliveryDecisionAck, nil
 }

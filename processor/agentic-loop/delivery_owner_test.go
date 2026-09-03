@@ -2,7 +2,6 @@ package agenticloop
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -10,11 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
-	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
@@ -27,41 +23,7 @@ type loopDeliveryOwnerMsg struct {
 	settlement  atomic.Int32
 	metadata    atomic.Int32
 	metadataErr error
-	acks        atomic.Int32
-	naks        atomic.Int32
-	terms       atomic.Int32
 }
-
-type capturedVerdict struct {
-	decision string
-	callID   string
-}
-
-type capturingGovernanceDispatcher struct {
-	verdicts chan capturedVerdict
-}
-
-type loopHealthProbeHandle struct {
-	drains  atomic.Int32
-	closed  chan struct{}
-	onDrain func()
-}
-
-func (*loopHealthProbeHandle) Stop() {}
-func (h *loopHealthProbeHandle) Drain() {
-	if h.drains.Add(1) == 1 && h.onDrain != nil {
-		h.onDrain()
-	}
-}
-func (h *loopHealthProbeHandle) Closed() <-chan struct{} { return h.closed }
-
-func (*capturingGovernanceDispatcher) Propose(context.Context, string, string, []agentic.ToolCall) (DispatcherResult, error) {
-	return DispatcherResult{}, nil
-}
-func (d *capturingGovernanceDispatcher) HandleVerdict(decision, callID string, _ []byte) {
-	d.verdicts <- capturedVerdict{decision: decision, callID: callID}
-}
-func (*capturingGovernanceDispatcher) Mode() string { return ToolCallGovernanceModeDisabled }
 
 func (m *loopDeliveryOwnerMsg) Data() []byte       { m.dataCalls.Add(1); return m.data }
 func (*loopDeliveryOwnerMsg) Subject() string      { return "agent.task.test" }
@@ -74,63 +36,13 @@ func (m *loopDeliveryOwnerMsg) Metadata() (*jetstream.MsgMetadata, error) {
 	}
 	return &jetstream.MsgMetadata{NumDelivered: 1}, nil
 }
-func (m *loopDeliveryOwnerMsg) Ack() error {
-	m.settlement.Add(1)
-	m.acks.Add(1)
-	return nil
-}
-func (*loopDeliveryOwnerMsg) DoubleAck(context.Context) error { return nil }
-func (m *loopDeliveryOwnerMsg) Nak() error {
-	m.settlement.Add(1)
-	m.naks.Add(1)
-	return nil
-}
-func (m *loopDeliveryOwnerMsg) NakWithDelay(time.Duration) error { return m.Nak() }
+func (m *loopDeliveryOwnerMsg) Ack() error                       { m.settlement.Add(1); return nil }
+func (*loopDeliveryOwnerMsg) DoubleAck(context.Context) error    { return nil }
+func (m *loopDeliveryOwnerMsg) Nak() error                       { m.settlement.Add(1); return nil }
+func (m *loopDeliveryOwnerMsg) NakWithDelay(time.Duration) error { m.settlement.Add(1); return nil }
 func (m *loopDeliveryOwnerMsg) InProgress() error                { m.heartbeats.Add(1); return nil }
-func (m *loopDeliveryOwnerMsg) Term() error {
-	m.settlement.Add(1)
-	m.terms.Add(1)
-	return nil
-}
-func (m *loopDeliveryOwnerMsg) TermWithReason(string) error { return m.Term() }
-
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
-func TestLoopFastOwnerInvalidTupleQuarantinesAndDrainsExactHandle(t *testing.T) {
-	admission := newDeliveryLaneAdmission(nil)
-	msg := &loopDeliveryOwnerMsg{data: []byte("work")}
-	decision, admitted, err := consumeAdmittedLoopFastDelivery(
-		t.Context(), msg,
-		func(context.Context, []byte) (natsclient.DeliveryDecision, error) {
-			return natsclient.DeliveryDecisionAck, errors.New("ack cannot carry an error")
-		},
-		admission,
-	)
-	require.True(t, admitted)
-	require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
-	require.ErrorContains(t, err, "invalid loop fast delivery decision")
-	require.Zero(t, msg.settlement.Load(), "invalid tuples must not settle an unsafe delivery")
-
-	handle := &loopPolicyHandle{closed: make(chan struct{})}
-	binding := newStreamConsumerBinding(handle)
-	ctx, cancel := context.WithCancel(t.Context())
-	c := &Component{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	c.observeDeliveryLane(ctx, &binding, admission, "agent.signal")
-	require.Eventually(t, func() bool { return handle.drains.Load() == 1 }, time.Second, time.Millisecond)
-
-	_, admitted, _ = consumeAdmittedLoopFastDelivery(
-		t.Context(), msg,
-		func(context.Context, []byte) (natsclient.DeliveryDecision, error) {
-			return natsclient.DeliveryDecisionAck, nil
-		},
-		admission,
-	)
-	require.False(t, admitted)
-	require.Equal(t, int32(1), msg.dataCalls.Load(), "closed admission must refuse work before reading payload")
-	binding.drain()
-	require.Equal(t, int32(1), handle.drains.Load())
-	cancel()
-	<-binding.observerDone
-}
+func (m *loopDeliveryOwnerMsg) Term() error                      { m.settlement.Add(1); return nil }
+func (m *loopDeliveryOwnerMsg) TermWithReason(string) error      { m.settlement.Add(1); return nil }
 
 // spec: agentic-loop / All six loop input classes settle after owner-specific durable done
 func TestLoopUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner(t *testing.T) {
@@ -213,7 +125,7 @@ func TestLoopSetupWiresMetadataFailureToAcquiredOwner(t *testing.T) {
 			ctx, ctx, port, portName+".>", func(context.Context, []byte) error {
 				workCalls.Add(1)
 				return nil
-			}, nil,
+			},
 		))
 	}
 	require.Len(t, callbacks, 2)
@@ -252,197 +164,6 @@ func TestLoopSetupWiresMetadataFailureToAcquiredOwner(t *testing.T) {
 		require.Zero(t, msg.settlement.Load(), "message %d must not settle", index)
 		require.Equal(t, int32(1), handles[index].drains.Load(), "only the exact owner handle drains once")
 	}
-
-	cancel()
-	for _, binding := range c.consumers {
-		<-binding.observerDone
-	}
-}
-
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
-func TestLoopFatalHealthLatchesBeforeEachExactOwnerDrain(t *testing.T) {
-	c := &Component{started: true, startTime: time.Now(), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	c.trajectoryAuditHealth.latch("prior trajectory business error")
-	firstCause := errors.New("first loop owner lost")
-	secondCause := errors.New("later loop owner lost")
-	healthAtDrain := make(chan component.HealthStatus, 2)
-	firstHealthLatched := make(chan struct{})
-	secondHealthLatched := make(chan struct{})
-	firstAdmission := &deliveryLaneAdmission{open: true, fatal: make(chan error), onFatal: func(err error) {
-		c.recordDeliveryOwnerFatal(err)
-		close(firstHealthLatched)
-	}}
-	secondAdmission := &deliveryLaneAdmission{open: true, fatal: make(chan error), onFatal: func(err error) {
-		c.recordDeliveryOwnerFatal(err)
-		close(secondHealthLatched)
-	}}
-	firstHandle := &loopHealthProbeHandle{closed: make(chan struct{}), onDrain: func() {
-		health := c.Health()
-		if health.Healthy || health.Status != "delivery ownership lost" || health.LastError != firstCause.Error() || health.ErrorCount != 2 {
-			t.Errorf("health at first drain = %+v, want first fatal cause after prior trajectory error", health)
-		}
-		healthAtDrain <- health
-	}}
-	secondHandle := &loopHealthProbeHandle{closed: make(chan struct{}), onDrain: func() {
-		health := c.Health()
-		if health.Healthy || health.Status != "delivery ownership lost" || health.LastError != firstCause.Error() || health.ErrorCount != 2 {
-			t.Errorf("health at second drain = %+v, want sticky first fatal cause and count", health)
-		}
-		healthAtDrain <- health
-	}}
-	firstBinding := newStreamConsumerBinding(firstHandle)
-	secondBinding := newStreamConsumerBinding(secondHandle)
-	ctx, cancel := context.WithCancel(t.Context())
-
-	firstLatchDone := make(chan struct{})
-	go func() {
-		firstAdmission.latchFatal(firstCause)
-		close(firstLatchDone)
-	}()
-	select {
-	case <-firstHealthLatched:
-	case <-time.After(time.Second):
-		c.observeDeliveryLane(ctx, &firstBinding, firstAdmission, "agent.signal")
-		<-firstLatchDone
-		cancel()
-		<-firstBinding.observerDone
-		t.Fatal("first fatal health was not latched before owner notification")
-	}
-	c.observeDeliveryLane(ctx, &firstBinding, firstAdmission, "agent.signal")
-	firstHealth := <-healthAtDrain
-	<-firstLatchDone
-	require.False(t, firstHealth.Healthy)
-	require.Equal(t, "delivery ownership lost", firstHealth.Status)
-	require.Equal(t, firstCause.Error(), firstHealth.LastError)
-	require.Equal(t, 2, firstHealth.ErrorCount)
-	require.Equal(t, int32(1), firstHandle.drains.Load())
-	require.Zero(t, secondHandle.drains.Load())
-
-	secondLatchDone := make(chan struct{})
-	go func() {
-		secondAdmission.latchFatal(secondCause)
-		close(secondLatchDone)
-	}()
-	select {
-	case <-secondHealthLatched:
-	case <-time.After(time.Second):
-		c.observeDeliveryLane(ctx, &secondBinding, secondAdmission, "agent.approval_response")
-		<-secondLatchDone
-		cancel()
-		<-firstBinding.observerDone
-		<-secondBinding.observerDone
-		t.Fatal("later fatal health callback did not finish before owner notification")
-	}
-	c.observeDeliveryLane(ctx, &secondBinding, secondAdmission, "agent.approval_response")
-	secondHealth := <-healthAtDrain
-	<-secondLatchDone
-	require.Equal(t, firstHealth.LastError, secondHealth.LastError)
-	require.Equal(t, firstHealth.ErrorCount, secondHealth.ErrorCount)
-	require.Equal(t, int32(1), firstHandle.drains.Load())
-	require.Equal(t, int32(1), secondHandle.drains.Load())
-
-	cancel()
-	<-firstBinding.observerDone
-	<-secondBinding.observerDone
-}
-
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
-func TestLoopVerdictProductionBindingsUseDeclaredOwner(t *testing.T) {
-	discoverable, err := NewComponent([]byte(`{}`), component.Dependencies{
-		NATSClient: &natsclient.Client{}, PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
-	})
-	require.NoError(t, err)
-	c := discoverable.(*Component)
-	verdicts := &capturingGovernanceDispatcher{verdicts: make(chan capturedVerdict, 2)}
-	c.handler.SetGovernanceDispatcher(verdicts)
-	c.waitForStreamInput = func(context.Context, string) error { return nil }
-	type capturedBinding struct {
-		cfg      natsclient.StreamConsumerConfig
-		callback func(context.Context, jetstream.Msg)
-	}
-	captured := make(map[string]capturedBinding)
-	c.consumeStream = func(_ context.Context, _ context.Context, owner natsclient.PortConsumerContext, cfg natsclient.StreamConsumerConfig, callback func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
-		captured[owner.Port] = capturedBinding{cfg: cfg, callback: callback}
-		return &loopPolicyHandle{closed: make(chan struct{})}, nil
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	require.NoError(t, c.setupSubscriptions(ctx, ctx))
-
-	for _, port := range []string{"agent.toolcall.approved", "agent.toolcall.rejected"} {
-		binding, ok := captured[port]
-		require.True(t, ok, "production setup did not bind %s", port)
-		require.Equal(t, loopFastDeliveryAckWait, binding.cfg.AckWait)
-		require.Equal(t, loopFastDeliveryAckWait, binding.cfg.MessageTimeout)
-		var data []byte
-		switch port {
-		case "agent.toolcall.approved":
-			data = []byte(`{"decision":"approved","call_id":"call-approved"}`)
-		case "agent.toolcall.rejected":
-			data = []byte(`{"decision":"rejected","call_id":"call-rejected"}`)
-		}
-		msg := &loopDeliveryOwnerMsg{data: data}
-		binding.callback(ctx, msg)
-		require.Equal(t, int32(1), msg.dataCalls.Load(), "%s must execute its production handler", port)
-		require.Equal(t, int32(1), msg.acks.Load(), "%s delivered verdict must ACK", port)
-		require.Zero(t, msg.naks.Load())
-		require.Zero(t, msg.terms.Load())
-	}
-	require.Equal(t, capturedVerdict{decision: "approved", callID: "call-approved"}, <-verdicts.verdicts)
-	require.Equal(t, capturedVerdict{decision: "rejected", callID: "call-rejected"}, <-verdicts.verdicts)
-
-	cancel()
-	for _, binding := range c.consumers {
-		<-binding.observerDone
-	}
-}
-
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
-// scenario: Approval handler panics
-func TestLoopApprovalPanicProductionCallbackQuarantinesExactOwner(t *testing.T) {
-	discoverable, err := NewComponent([]byte(`{}`), component.Dependencies{
-		NATSClient: &natsclient.Client{}, PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
-	})
-	require.NoError(t, err)
-	c := discoverable.(*Component)
-	c.started = true
-	c.startTime = time.Now()
-	loopID := c.handler.loopManager.GenerateLoopID()
-	c.handler.loopManager = nil // panic at the deepest controllable production dependency
-	c.waitForStreamInput = func(context.Context, string) error { return nil }
-	callbacks := make(map[string]func(context.Context, jetstream.Msg))
-	handles := make(map[string]*loopPolicyHandle)
-	c.consumeStream = func(_ context.Context, _ context.Context, owner natsclient.PortConsumerContext, _ natsclient.StreamConsumerConfig, callback func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
-		handle := &loopPolicyHandle{closed: make(chan struct{})}
-		callbacks[owner.Port] = callback
-		handles[owner.Port] = handle
-		return handle, nil
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	require.NoError(t, c.setupSubscriptions(ctx, ctx))
-
-	response := &agentic.ApprovalResponse{
-		LoopID: loopID, CallID: "call-panic", Decision: agentic.ApprovalDecisionApprove,
-		ApprovedBy: "operator", DecidedAt: time.Now().UTC(),
-	}
-	envelope := message.NewBaseMessage(response.Schema(), response, "test")
-	data, err := json.Marshal(envelope)
-	require.NoError(t, err)
-	msg := &loopDeliveryOwnerMsg{data: data}
-	callbacks["agent.approval_response"](ctx, msg)
-
-	require.Zero(t, msg.settlement.Load(), "panic must not ACK, NAK, or terminate the source")
-	require.Eventually(t, func() bool {
-		return handles["agent.approval_response"].drains.Load() == 1
-	}, time.Second, time.Millisecond)
-	for port, handle := range handles {
-		if port != "agent.approval_response" {
-			require.Zero(t, handle.drains.Load(), "panic drained unrelated owner %s", port)
-		}
-	}
-	health := c.Health()
-	require.False(t, health.Healthy)
-	require.Equal(t, "delivery ownership lost", health.Status)
-	require.Contains(t, health.LastError, "approval response handler panicked")
 
 	cancel()
 	for _, binding := range c.consumers {

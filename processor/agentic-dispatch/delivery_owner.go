@@ -12,12 +12,12 @@ import (
 type deliveryLaneAdmission struct {
 	mu      sync.Mutex
 	open    bool
-	fatal   chan error
-	onFatal func(error)
+	fatal   chan natsclient.DeliveryResult
+	onFatal func(natsclient.DeliveryResult)
 }
 
-func newDeliveryLaneAdmission(onFatal func(error)) *deliveryLaneAdmission {
-	return &deliveryLaneAdmission{open: true, fatal: make(chan error, 1), onFatal: onFatal}
+func newDeliveryLaneAdmission(onFatal func(natsclient.DeliveryResult)) *deliveryLaneAdmission {
+	return &deliveryLaneAdmission{open: true, fatal: make(chan natsclient.DeliveryResult, 1), onFatal: onFatal}
 }
 
 func (a *deliveryLaneAdmission) admit() bool {
@@ -30,10 +30,6 @@ func (a *deliveryLaneAdmission) latch(result natsclient.DeliveryResult) {
 	if !result.OwnerStopRequired() {
 		return
 	}
-	a.latchFatal(result.Err())
-}
-
-func (a *deliveryLaneAdmission) latchFatal(err error) {
 	a.mu.Lock()
 	if !a.open {
 		a.mu.Unlock()
@@ -42,9 +38,9 @@ func (a *deliveryLaneAdmission) latchFatal(err error) {
 	a.open = false
 	a.mu.Unlock()
 	if a.onFatal != nil {
-		a.onFatal(err)
+		a.onFatal(result)
 	}
-	a.fatal <- err
+	a.fatal <- result
 }
 
 func consumeAdmittedDelivery(
@@ -82,9 +78,9 @@ func (c *Component) observeDeliveryLane(
 	go func() {
 		defer close(done)
 		select {
-		case err := <-admission.fatal:
-			c.observeTerminalDelivery(err)
-			c.logger.Error("Delivery ownership lost", slog.Any("error", err))
+		case result := <-admission.fatal:
+			c.observeTerminalDelivery(result.Err())
+			c.logger.Error("Terminal delivery ownership lost", slog.Any("error", result.Err()))
 			binding.drain()
 		case <-ctx.Done():
 		}
