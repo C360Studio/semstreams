@@ -132,7 +132,72 @@ func TestLoopDefaultConsumerDeclaresValidHeartbeatPolicy(t *testing.T) {
 	consumer := DefaultConsumerConfig()
 	require.Equal(t, "90s", consumer.AckWait)
 	require.Equal(t, "15s", consumer.HeartbeatInterval)
+	require.Equal(t, 2, consumer.MaxDeliver)
 	require.Equal(t, 15*time.Second, consumer.ParsedHeartbeatInterval())
+
+	omitted := ConsumerConfig{}
+	omitted.EnsureDefaults()
+	require.Equal(t, 2, omitted.MaxDeliver)
+}
+
+// spec: agentic-loop / Long-running loop heartbeat policy is valid before acquisition
+func TestLoopMaxDeliverCoversFixedBackOffBeforeConsumerAcquisition(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		maxDeliver int
+		wantErr    bool
+	}{
+		{name: "single delivery refused", maxDeliver: 1, wantErr: true},
+		{name: "two deliveries acquired", maxDeliver: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			port, err := (component.PortDefinition{
+				Name:     "agent.task",
+				Config:   component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.task.>"}},
+				Required: true,
+			}).Resolve(component.DirectionInput)
+			require.NoError(t, err)
+
+			config := DefaultConfig()
+			config.Consumer.MaxDeliver = test.maxDeliver
+			validationErr := config.Validate()
+			if test.wantErr {
+				require.Error(t, validationErr)
+				require.True(t, errs.IsInvalid(validationErr))
+				require.Contains(t, validationErr.Error(), "max_deliver")
+			} else {
+				require.NoError(t, validationErr)
+			}
+			var acquired atomic.Int32
+			var acquiredConfig natsclient.StreamConsumerConfig
+			c := &Component{
+				config: config, logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+				waitForStreamInput: func(context.Context, string) error { return nil },
+				consumeStream: func(_ context.Context, _ context.Context, _ natsclient.PortConsumerContext, cfg natsclient.StreamConsumerConfig, _ func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
+					acquired.Add(1)
+					acquiredConfig = cfg
+					return &loopPolicyHandle{closed: make(chan struct{})}, nil
+				},
+			}
+
+			err = c.setupConsumer(
+				t.Context(), t.Context(), port, "agent.task.>", func(context.Context, []byte) error { return nil },
+			)
+			if test.wantErr {
+				require.Error(t, err)
+				require.True(t, errs.IsInvalid(err))
+				require.Contains(t, err.Error(), "max_deliver")
+				require.Contains(t, err.Error(), "1")
+				require.Contains(t, err.Error(), "2")
+				require.Zero(t, acquired.Load(), "invalid retry floor must fail before allocation")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, int32(1), acquired.Load())
+			require.Equal(t, 2, acquiredConfig.MaxDeliver)
+			require.Equal(t, []time.Duration{30 * time.Second, 2 * time.Minute}, acquiredConfig.BackOff)
+		})
+	}
 }
 
 // spec: agentic-loop / Long-running loop heartbeat policy is valid before acquisition
@@ -165,6 +230,7 @@ func TestShippedLoopFixturesResolveValidHeartbeatPolicy(t *testing.T) {
 			heartbeat := config.Consumer.ParsedHeartbeatInterval()
 			require.Positive(t, heartbeat)
 			require.LessOrEqual(t, heartbeat, 15*time.Second)
+			require.Equal(t, 2, config.Consumer.MaxDeliver)
 		})
 	}
 }
