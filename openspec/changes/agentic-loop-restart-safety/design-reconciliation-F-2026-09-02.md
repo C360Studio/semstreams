@@ -9,6 +9,10 @@ frozen staged parent is `F=417beae5552f8f15ad3540edd7d8504c87174c13`. Those acti
 the normative target-state authority. The exact amendment blocks below remain review provenance only, MUST NOT be
 applied a second time, and independently authorize no implementation.
 
+Owner ruling #1146 comment `5530950829` later withdrew this artifact's universal 30s/25s/5s work-deadline design
+and its prohibition on the narrow stateless `SettleDelivery` transport interpreter. The canonical active artifacts
+contain the replacement contract; this file remains unchanged provenance below this supersession note.
+
 The post-#1251 surface refresh is preserved separately as
 `inventory-rebaseline-2026-09-03-post-1251.md`, reviewed SHA-256
 `2888e28a7439ff4dc62345bf9a1e476054c292326ac291ab1d4519f9c0600a73`, `INVENTORY PASS`, 181/181 pins. It confirms

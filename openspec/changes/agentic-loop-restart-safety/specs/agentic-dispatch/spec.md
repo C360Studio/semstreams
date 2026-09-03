@@ -12,11 +12,18 @@ after projection update or exact proof from `AGENT_LOOPS`. Terminal events SHALL
 read-through, and deterministic response contract. No void, log-only, or core-NATS publication failure SHALL become
 ACK.
 
-The `user.message`, `agent.created`, and `agent.approval_pending` subscriptions SHALL each acquire with explicit
-AckWait 30s and enforce a 25s cancellation-and-join work budget, leaving a positive 5s margin. Budget expiry SHALL
-return Retry without ACK. If one physical subscription cannot prove this bound using legitimate context-cooperative
-work, that subscription alone SHALL move to the admitted typed heartbeat owner with bounded work timeout 30s and
-heartbeat 10s. Its proof-group siblings SHALL not migrate solely because it did.
+The `user.message`, `agent.created`, and `agent.approval_pending` subscriptions SHALL invoke their typed business
+handlers using the callback installed by each production setup branch. All delivery-derived work SHALL join before
+the private callback passes its decision and cause to `natsclient.SettleDelivery`. JetStream consumer configuration
+owns AckWait and redelivery; dispatch SHALL NOT derive a universal work deadline from AckWait. An operation MAY use
+an ordinary business timeout. A physical subscription SHALL move to the existing heartbeat owner only after measured
+legitimate work can exceed its configured acknowledgement interval.
+
+The first owner-fatal result from any dispatch delivery owner SHALL synchronously latch before the exact handle is
+drained. Existing Health SHALL report `Healthy=false`, status `delivery ownership lost`, the exact first cause in
+`LastError`, and exactly one owner-loss error count. Later owner-fatal results SHALL neither overwrite nor recount
+the first cause. This replaces per-lane fatal aggregation and adds no metric family, public state, durable state, or
+communication path.
 
 #### Scenario: Task publication succeeds but user response fails
 
@@ -44,11 +51,11 @@ heartbeat 10s. Its proof-group siblings SHALL not migrate solely because it did.
 - **THEN** its terminal source is not positively acknowledged
 - **AND** replay uses the same source-derived response identity
 
-#### Scenario: Fast dispatch work reaches its budget
+#### Scenario: Dispatch business work reaches its own deadline
 
-- **WHEN** one fast dispatch dependency remains incomplete at 25 seconds
-- **THEN** that owner cancels and joins work before AckWait 30s expires
-- **AND** returns Retry without positive settlement or concurrent delivery
+- **WHEN** a delivery-owned dispatch operation reaches a timeout required by that operation
+- **THEN** its context is cancelled
+- **AND** all operation work joins before the callback settles or returns
 
 ### Requirement: Dispatch process state is a reconstructable projection
 

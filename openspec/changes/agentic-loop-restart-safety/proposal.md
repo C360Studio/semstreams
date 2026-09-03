@@ -31,20 +31,22 @@ AgentRun complete/failed fanout is transferred intact to #1249 from the exact po
 
 - The remote #759 parent remains frozen at exact `F` while #1159 implements, proves, and receives review.
   Any unexpected parent advance requires a new pin, rebase, inventory verification, test, and re-review.
-- Ten physical fast subscriptions begin with strict per-subscription AckWait 30s, work budget 25s, and join margin
-  5s. Only a subscription whose legitimate context-cooperative work fails that boundary proof may migrate to the
-  admitted typed heartbeat owner. Proof-group membership never authorizes sibling migration.
-- Dispatch fallback is bounded work 30s / heartbeat 10s. Loop fast fallback is bounded work 120s / heartbeat 15s.
-  Governance fallback is bounded work 30s; accepted evidence proves only a heartbeat ceiling of 15s, so a concrete
-  value requires review if and only if a governance subscription triggers fallback.
-- Native messages and settlement methods remain inside private binding owners. No exported no-heartbeat settlement
-  API or raw settlement escape is added.
+- Ten physical non-heartbeat subscriptions return typed decisions from business work and settle only through their
+  existing private binding callbacks. JetStream consumer configuration owns AckWait and redelivery; the framework
+  derives no universal work deadline from AckWait.
+- Components may apply an ordinary `context.WithTimeout` where their actual operation requires a business timeout.
+  All delivery-derived work joins before settlement. A subscription moves to the existing heartbeat owner only when
+  measured legitimate work can exceed its configured acknowledgement interval.
+- Native messages and settlement methods remain outside business work. The narrow shared `SettleDelivery` transport
+  helper validates an already-computed decision and attempts its terminal method; it invokes no work and owns no
+  context, deadline, heartbeat, consumer handle, or lifecycle.
 - Model uses AckWait 120s / heartbeat 60s. Loop task/response/tool-result use heartbeat 15s against shortest BackOff
   30s. Loop MaxDeliver is at least the fixed two-entry BackOff length, so omitted/zero defaults to 2 and explicit 1
   refuses before allocation. Exact acquisition configuration is validated before consumer allocation.
-- The first model or loop delivery-owner fatal result latches into the existing negative health/error-count surface
-  before exact-handle drain. Metadata loss performs no work, heartbeat, or settlement, and later fatal observations
-  neither overwrite the first cause nor recount it. No new health surface or state authority is added.
+- The first dispatch, governance, model, or loop delivery-owner fatal result latches into the existing negative
+  health/error-count surface before exact-handle drain. Metadata loss performs no work, heartbeat, or settlement,
+  and later fatal observations neither overwrite the first cause nor recount it. No new health surface or state
+  authority is added.
 - Each recovery-dependent agentic component validates only its own resolved stream facts and local typed requirement
   before its dependent allocation. Non-agentic components perform no admission lookup.
 - A rule processor whose resolved local outputs declare the AGENT task family uses the same internal admission

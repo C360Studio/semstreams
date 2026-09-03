@@ -43,18 +43,25 @@ design-section shorthand is not a valid citation. Every implementation slice fol
   policy requirements from 1.2. Model metadata/attempt tests cite
   `// spec: agentic-model / Model request settlement is bound to a durable response`; loop metadata/owner-health tests
   cite `// spec: agentic-loop / All six loop input classes settle after owner-specific durable done`.
-- [ ] 1.5 RED: for each of ten physical fast subscriptions add a real-NATS 30s AckWait/25s cooperative-work/5s
-  cancellation-and-join boundary test. Cite its exact owner requirement:
+- [ ] 1.5 RED: add the `natsclient` settlement truth table for valid Ack, Retry, Terminate, Quarantine, every invalid
+  decision/error tuple, nil message, and each terminal-method error. Capture callbacks from all ten actual production
+  non-heartbeat setup branches and prove each reaches its typed business handler and observable business/settlement
+  effect. Add focused approval-panic, first-fatal Health, exact-handle drain, and terminal graph-write join tests. Use
+  no synthetic AckWait-derived deadline or wall-clock lease-margin run. Cite its exact owner requirement:
+  `// spec: jetstream-consumer-policy / settlement-only delivery decisions use one shared interpreter` for the shared
+  truth table, and
   `// spec: agentic-dispatch / Every dispatch durable input settles through its owner`,
   `// spec: agentic-governance / Governance validation settles after its declared consequence`, or
   `// spec: agentic-loop / All six loop input classes settle after owner-specific durable done`.
-- [ ] 1.6 Implement each fast business handler as `DeliveryDecision, error` through its existing private native owner.
-  Add no native settlement escape or exported no-heartbeat API. Migrate only an individually failing legitimate
-  cooperative subscription: dispatch 30s/10s; loop 120s/15s; governance bounded work 30s with separately reviewed
-  concrete heartbeat `<=15s`.
-- [ ] 1.7 GREEN: prove Retry/no ACK/no concurrent delivery and all joins for each subscription independently. Four
-  parallel proof groups only bound wall-clock and never authorize sibling fallback. Cancellation-ignoring or
-  non-returning work fails lifecycle review under both routes.
+- [ ] 1.6 Implement `natsclient.SettleDelivery` as the shared tuple interpreter and immediate terminal-method mapper.
+  Route each non-heartbeat production callback through its typed handler and this helper after work joins. Retain work
+  invocation, callback context, panic recovery, admission, health latch, and exact-handle drain in the existing
+  private binding. Retain approval panic as a non-nil fatal result and make `runWithBudget` synchronous. Add no
+  `DeliveryPolicy`, deadline validator, owner framework, test-only API, metric family, goroutine, or durable state.
+- [ ] 1.7 GREEN: prove the shared settlement truth table and each captured production branch's real handler/effect.
+  Prove invalid or quarantined outcomes perform no terminal method, approval panic performs no persistence or
+  settlement and drains only its exact owner, the first fatal cause reaches existing negative Health exactly once,
+  and terminal approval rejection cannot settle while graph-write work remains live.
 
 ## 2. Stable identity and exact reconciliation
 
@@ -258,8 +265,8 @@ design-section shorthand is not a valid citation. Every implementation slice fol
 
 ## 10. Context and lifecycle closure
 
-- [ ] 10.1 RED: add active-callback Stop races for dispatch, governance, model, loop, and tools, plus
-  `runWithBudget` and trajectory-batch cancellation tests. Cite exactly the applicable requirement:
+- [ ] 10.1 RED: add active-callback Stop races for dispatch, governance, model, loop, and tools, plus trajectory-batch
+  cancellation tests. Cite exactly the applicable requirement:
   `// spec: agentic-dispatch / Dispatch shutdown closes every delivery owner`,
   `// spec: agentic-governance / Governance shutdown closes every delivery owner`,
   `// spec: agentic-model / Model shutdown closes its delivery owner`,
@@ -276,7 +283,7 @@ design-section shorthand is not a valid citation. Every implementation slice fol
 ## 11. Complete proof, documentation, and landing
 
 - [ ] 11.1 Run the #1146-owned tranche of #1155's real-NATS process-replacement matrix across every #1146 durable
-  boundary and all ten fast physical subscriptions. Property/fuzz tests cite exact active requirement headings;
+  boundary and all ten non-heartbeat production callbacks. Property/fuzz tests cite exact active requirement headings;
   unknown decisions cannot ACK. Leave #1155 open until #1249 supplies AgentRun complete/failed proof and the later
   combined gate passes.
 - [ ] 11.2 Run focused race and integration tests, lint, build, schema generation, contract tests, and serialized

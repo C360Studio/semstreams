@@ -5,14 +5,15 @@
 Agentic-loop SHALL classify task, response, tool-result, cancel-signal, approval-response, and governance-verdict
 deliveries through their existing binding owners. Task, response, and tool-result SHALL use the permanent typed
 heartbeat owner. Cancel signal, approval response, approved verdict, and rejected verdict SHALL retain native
-settlement only in their four private binding owners and SHALL expose no native message or exported no-heartbeat
+settlement only in their four private binding owners and SHALL expose no native message or work-owning no-heartbeat
 adapter.
 
-Each fast physical subscription SHALL acquire with AckWait 30s and enforce a 25s cancellation-and-join work budget,
-leaving a positive 5s margin. Budget expiry SHALL return Retry without ACK. If one subscription cannot prove this
-bound using legitimate context-cooperative work, that subscription alone SHALL move to the typed heartbeat owner with
-bounded work timeout 120s and heartbeat 15s. A sibling in either loop proof group SHALL not migrate solely because
-another did. Cancellation-ignoring or non-returning work SHALL fail lifecycle review under both routes.
+Each non-heartbeat physical subscription SHALL invoke its typed business handler using the callback installed by its
+production setup branch. All delivery-derived work SHALL join before the private callback passes its decision and
+cause to `natsclient.SettleDelivery`. JetStream consumer configuration owns AckWait and redelivery; agentic-loop SHALL
+NOT derive a universal work deadline from AckWait. An operation MAY use an ordinary business timeout. A physical
+subscription SHALL move to the existing heartbeat owner only after measured legitimate work can exceed its
+configured acknowledgement interval. Cancellation-ignoring or non-returning work SHALL fail lifecycle review.
 
 Decode, correlation, KV, Store, transition, and required publication failures SHALL NOT become successful callback
 completion. ACK means the lane-specific durable transition or defined refusal and every required PubAck completed;
@@ -92,7 +93,9 @@ durable state, or communication path.
 #### Scenario: Approval handler panics
 
 - **WHEN** approval work panics
-- **THEN** the delivery quarantines and stops the exact owner
+- **THEN** handler recovery returns a non-nil fatal-classified error
+- **AND** the production delivery callback returns Quarantine without persistence or settlement
+- **AND** the exact owner stops and drains
 - **AND** the panic is never rewritten to nil
 
 #### Scenario: Loop delivery metadata is unavailable
@@ -109,11 +112,11 @@ durable state, or communication path.
 - **THEN** its retained identity remains recoverable for response replay
 - **AND** missing or full process channel is not completed log-and-drop
 
-#### Scenario: Fast loop work reaches its budget
+#### Scenario: Loop business work reaches its own deadline
 
-- **WHEN** cancel, approval-response, approved-verdict, or rejected-verdict work remains incomplete at 25 seconds
-- **THEN** that private owner cancels and joins before AckWait 30s expires
-- **AND** returns Retry without ACK or concurrent delivery
+- **WHEN** a delivery-owned loop operation reaches a timeout required by that operation
+- **THEN** its context is cancelled
+- **AND** all operation work joins before the callback settles or returns
 
 ### Requirement: Loop recovery is lane-specific and read-through
 
@@ -338,6 +341,12 @@ SHALL NOT authorize return while work remains live.
 
 - **WHEN** bounded work reaches its deadline
 - **THEN** the owner cancels and joins before callback return
+
+#### Scenario: Terminal approval rejection reaches a bounded graph write
+
+- **WHEN** an approval rejection produces a terminal result and its bounded graph write reaches cancellation
+- **THEN** graph-write work observes the delivery-derived context and joins before the callback returns
+- **AND** the approval source is not settled while that work remains live
 
 ### Requirement: Loop shutdown closes every delivery owner
 

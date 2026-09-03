@@ -44,8 +44,9 @@ reinventory before implementation.
   durable `agent.signal.*` settlement.
 - Governance policy content remains #1140; framework-wide pattern generalization remains #1145; #1244 follows #1146
   and designs declared transitions against the settled handler exits.
-- No native settlement escapes a private owner, no exported no-heartbeat API is added, and no production work begins
-  before this active materialization passes pre-implementation design review.
+- No native settlement enters business work. The only non-heartbeat transport export is the narrow shared
+  `SettleDelivery` interpreter; no work-owning adapter, deadline policy, consumer owner, or lifecycle API is added.
+  No production work begins before this active materialization passes pre-implementation design review.
 - The framework-owned rule `publish_agent` producer that feeds row 15 is part of this vertical. Its six configured
   classifier surfaces and four statically loaded producer configurations use the existing rule publisher plus the
   same repo-internal AGENT admission validator; no second gate or exported API is introduced.
@@ -95,10 +96,12 @@ PubAck have completed. Replacement recovery uses:
 The change adds no generic supervisor, recovery state machine, checkpoint or outbox bucket, CQRS path, or
 event-sourced loop.
 
-The owner also accepted strict completion-before-lease as the first route for each physical fast subscription:
-AckWait 30s, enforced cancellation-and-join work budget 25s, and positive margin 5s. A legitimate
-context-cooperative operation measured beyond 25s compels heartbeat fallback only for that subscription.
-Cancellation-ignoring or non-returning work is a lifecycle failure under both routes and is never heartbeat evidence.
+The owner withdrew a universal work deadline derived from AckWait in #1146 comment `5530950829`. JetStream consumer
+configuration owns AckWait and redelivery. A component may apply an ordinary `context.WithTimeout` only where its
+actual operation requires a business timeout. Every delivery-derived task joins before settlement. A physical
+subscription uses the existing heartbeat owner only when measured legitimate work can exceed its configured
+acknowledgement interval. Cancellation-ignoring or non-returning work remains a lifecycle failure and is never
+heartbeat evidence.
 
 The shared decision skills resolve as follows:
 
@@ -353,8 +356,9 @@ lookup and response redelivery are insufficient. Policy content and feature expa
 
 ## Per-lane definition of done
 
-`fast owner` means the existing binding callback retains native settlement and business work returns a typed
-decision; no message or settlement closure escapes. `heartbeat owner` means staged
+`non-heartbeat binding` means the existing private callback retains the native message, business work returns a typed
+decision, and the callback passes that completed decision to `SettleDelivery` only after work joins. No message or
+settlement closure enters business work. `heartbeat owner` means staged
 `ConsumeDeliveryWithHeartbeat` owns metadata, renewal, and the terminal method. Every owner stops admission, drains
 its retained handle, awaits exact `Closed`, then cancels and joins its own observer and work goroutines.
 
@@ -381,23 +385,18 @@ its retained handle, awaits exact `Closed`, then cancels and joins its own obser
 AgentRun complete/failed subscriptions are not rows 18/19 here. #1249 owns their separate post-#1146 contract and
 replacement proof from checkpoint `A`.
 
-### Fast-subscription lease boundary
+### Non-heartbeat settlement boundary
 
-The ten physical fast subscriptions are organized into four parallel proof groups only to bound test wall-clock:
-dispatch, governance, loop signal/approval, and loop verdict. Boundary proof and fallback apply to each physical
-subscription independently and never to a whole group.
+The ten-row production-binding matrix captures the callback installed by every actual setup branch and exercises it
+through its real business handler and deepest controllable dependency. A lane label or generic settlement test is not
+branch proof. Business work uses the callback context, applies only its own operation-specific timeout, and joins all
+delivery-derived work before returning a decision. The private callback then calls `SettleDelivery` and reacts to
+`OwnerStopRequired` through its existing admission, health, and exact-handle drain path.
 
-| Physical subscriptions | Strict AckWait/work/join margin | Evidence-triggered fallback |
-|---|---|---|
-| dispatch rows 1-3 | 30s / 25s / 5s | bounded work 30s / heartbeat 10s |
-| governance rows 4-6 | 30s / 25s / 5s | bounded work 30s / concrete reviewed heartbeat `<=15s` |
-| loop rows 7-10 | 30s / 25s / 5s | bounded work 120s / heartbeat 15s |
-
-Every blocking NATS, KV, Store, provider, and filter operation receives the exact delivery context. Budget expiry is
-Retry without ACK, and cancellation plus all joins complete within the work budget. Legitimate context-cooperative
-work measured beyond 25s compels fallback only for that subscription. Cancellation-ignoring or non-returning work is
-a lifecycle blocker under both routes. Governance has no accepted concrete heartbeat default; only the policy ceiling
-is proven, so implementation stops for review if a governance subscription actually needs fallback.
+`SettleDelivery` validates the closed decision/error tuple and attempts Ack, immediate Nak, Term, or no settlement.
+It reads no payload or metadata, invokes no work, creates no context or goroutine, derives no deadline, sends no
+heartbeat, and owns no consumer lifecycle. AckWait, BackOff, MaxDeliver, and missing-settlement redelivery remain
+JetStream consumer configuration. Heartbeat adoption requires measured evidence for that physical subscription.
 
 ### Heartbeat-policy migration
 
@@ -526,7 +525,7 @@ Property and fuzz tests cite these normative delta requirements rather than reco
 | observed DiscardOld cannot satisfy strong recovery | `agentic-loop / Restart-safe replay observes and admits local stream bounds` |
 | every delivery task joins before result and Stop | `agentic-loop / Delivery work joins before settlement`; owner-specific shutdown requirements |
 | first-party rule task output is durable before row 15 | `rule-agent-publishing / Publish-agent classification uses canonical wildcard coverage and durable publication` |
-| fatal delivery-owner loss is visible and drains only its exact handle | model durable-response and loop all-six-input requirements |
+| fatal delivery-owner loss is visible and drains only its exact handle | dispatch, governance, model, and loop owner requirements |
 | fixed loop BackOff is admitted only when MaxDeliver covers every entry | `agentic-loop / Long-running loop heartbeat policy is valid before acquisition` |
 
 ## Context and lifecycle
@@ -545,11 +544,14 @@ Audit remains nonblocking as specified. Nonblocking does not authorize an abando
 
 ### Fatal delivery-owner loss
 
-Model and loop reuse the existing agentic-tools problem shape. The first fatal delivery-owner result is latched
-synchronously before the owner-stop observer can drain its exact consume handle. Existing component health reports
+Dispatch, governance, model, and loop reuse the existing agentic-tools problem shape. The first fatal delivery-owner
+result is latched synchronously before the owner-stop observer can drain its exact consume handle. Existing component
+health reports
 `Healthy=false`, status `delivery ownership lost`, the exact cause in `LastError`, and exactly one increment of the
-existing error count. Later fatal results neither overwrite nor recount the first cause. Loop owner loss takes status
-precedence over trajectory-audit degradation while both facts retain their existing meanings.
+existing error count. Later fatal results neither overwrite nor recount the first cause. Dispatch replaces per-lane
+fatal aggregation with one component-wide first cause. Governance counts owner loss once independently of prior
+business-error counts. Loop owner loss takes status precedence over trajectory-audit degradation while both facts
+retain their existing meanings.
 
 Unavailable delivery metadata invokes no business work and makes no heartbeat or settlement call. It quarantines,
 latches negative health, and drains only the exact owner through the existing `drainOnce`. This adds no public state,
@@ -698,10 +700,12 @@ every next publication; tool-result persistence, continuation verification, next
 approval decision, tool PubAck, and pending clear; cancel state/`COMPLETE_`/terminal PubAck; governance proposal,
 verdict, and tool publication; projection hydration; and representative NATS restart.
 
-Four parallel proof groups cover all ten physical fast subscriptions, but each subscription independently blocks its
-last legitimate cooperative dependency through 25s, proves cancellation and all joins before 30s, proves Retry/no
-ACK and no concurrent delivery, then exercises its exact fallback only if cooperative work truly exceeds 25s. A
-sibling never migrates because it shares a group.
+The ten-row production-binding matrix proves each physical non-heartbeat subscription's actual setup branch,
+callback, business handler, and deepest controllable dependency. A shared settlement truth table proves every valid
+decision, invalid tuple, nil message, and terminal-method error without wall-clock timing. Focused tests prove
+approval panic, first-fatal health, exact-handle drain, and synchronous graph-write join. Heartbeat adoption remains
+separate and requires measured evidence that the physical subscription can cross its configured acknowledgement
+interval.
 
 Additional proof covers exact acquisition-config validation, affected-closure admission, non-agentic zero lookup,
 resolved-stream overrides, DiscardNew capacity refusal, loop-bucket absence/match/races/drift/status failures,
@@ -754,8 +758,8 @@ The design is rejected or revised if any premise fails:
     checkpoint `A` and receives separate inventory, design, implementation, and replacement review.
 13. The post-#1251 signal surface contains cancel only; ApprovalResponse remains separate, while
     `ResponseAction.Signal` and `ClassifiedIntent.SignalType` do not own durable signal settlement.
-14. Each of ten physical fast subscriptions independently proves 30s AckWait / 25s work-and-join / 5s margin or only
-    that subscription migrates to its accepted heartbeat fallback.
+14. The production-binding matrix proves each of ten physical non-heartbeat subscriptions and the shared settlement
+    truth table proves its transport mapping. No deadline is inferred from AckWait; heartbeat requires measured need.
 15. `AGENT_LOOPS` is observed as exact History 10, TTL 24h, and non-binding MaxBytes before loop work starts.
 16. At P, `agentic/constants.go:11-25` has no `approval_continuation` category, while
     `agentic/payload_registry.go:26-55` is the single agentic registration owner and already assigns control floors
@@ -785,9 +789,8 @@ The design is rejected or revised if any premise fails:
 - `AGENT_LOOPS` matching/race/drift behavior is target state. Its existing create literal is not observed authority;
   a retained sibling creator is a collision to prove through the foreign-config race test, not a reason to reconcile.
 - The approval Store failpoint has not yet proved deliberate AGENT eviction recovery end to end.
-- The 25s work/5s join boundary has not yet passed real-NATS proof. A failing physical subscription must use its
-  admitted bounded fallback; no sibling inherits that result. Governance has only an accepted heartbeat ceiling of
-  15s, so a concrete interval requires conditional review if a governance subscription triggers fallback.
+- No physical non-heartbeat subscription has measured evidence that legitimate work crosses its configured AckWait.
+  Heartbeat migration remains unavailable without that evidence and a reviewed lane-specific policy.
 - Affected-closure admission, canonical continuation equality, and all new exact replay lookups are target state,
   not current behavior.
 - The six rule-publisher classifier surfaces currently use exact equality and the four static producer configurations
@@ -799,9 +802,10 @@ Implementation or review stops if:
 
 - the remote staged parent is not exact `F`, implementation does not begin from exact `P`, an inventory verification
   drifts, or the active artifacts regain merge-first or #1148 AgentRun language;
-- a fast physical subscription lacks explicit AckWait 30s, enforced 25s cancellation-and-join budget, and positive
-  5s margin, or fails its real-NATS boundary proof without migrating only that subscription to an admitted fallback;
-- a fast lane exposes native settlement outside its private owner or adds an exported no-heartbeat API;
+- a non-heartbeat physical subscription fails production-binding proof, settles before its work joins, derives a
+  universal work deadline from AckWait, or migrates to heartbeat without measured lane-specific need;
+- a binding exposes native settlement to business work or adds a work-owning settlement policy, owner, or lifecycle
+  API beyond the narrow stateless `SettleDelivery` interpreter;
 - model does not ship heartbeat 60s against AckWait 120s, loop does not ship heartbeat 15s against shortest BackOff
   30s, or validation observes a configuration other than the exact one passed to acquisition;
 - an affected component allocates dependent work before its own resolved-stream admission, reads another component's
@@ -837,8 +841,8 @@ Implementation or review stops if:
 - Framework-wide restart generalization owned by #1145.
 - Exactly-once provider or arbitrary external tool effects.
 - A universal replay ledger or full AGENT stream replay.
-- A core-NATS fallback for declared JetStream output, raw native settlement outside a private owner, or a new exported
-  no-heartbeat settlement API.
+- A core-NATS fallback for declared JetStream output, native settlement inside business work, or a work-owning
+  non-heartbeat settlement API.
 
 ## Binding ruling conformance
 
@@ -850,8 +854,8 @@ is not required to interpret or complete any row. There are no deviations.
 | Build and review on staged #759; do not require merge-first | `proposal.md:10`; `tasks.md:22` | exact `P`, frozen parent `F`, re-review on drift |
 | Preserve all 17 physical subscriptions; transfer only AgentRun H.1/H.2 to #1249 checkpoint A | `proposal.md:21`; `proposal.md:27`; `tasks.md:295` | full scope remains additive |
 | Remove paused state completely; support cancel, durable approval wait, restart from durable boundary, and lifecycle quiesce | `proposal.md:54`; `design.md:501`; `specs/agentic-loop/spec.md:23`; `tasks.md:165` | comment 5526837992 supersedes compatibility premise; no shim/migration/reserved enum |
-| Keep immutable `DeliveryAttempt`; expose neither native settlement nor no-heartbeat API | `design.md:164`; `tasks.md:32`; `tasks.md:41` | private owners only |
-| Start every fast physical subscription at 30s/25s/5s; fallback only the subscription whose cooperative proof fails | `proposal.md:34`; `specs/agentic-dispatch/spec.md:16`; `specs/agentic-governance/spec.md:9`; `specs/agentic-loop/spec.md:11` | owner-accepted choice is normative |
+| Keep immutable `DeliveryAttempt`; expose no native settlement to business work | `design.md:164`; `tasks.md:32`; `tasks.md:41` | private callbacks only; narrow `SettleDelivery` is transport-level |
+| Derive no universal work deadline from AckWait; heartbeat only after measured lane-specific need | `proposal.md:34`; `specs/agentic-dispatch/spec.md:16`; `specs/agentic-governance/spec.md:9`; `specs/agentic-loop/spec.md:11` | owner ruling `5530950829` |
 | Ship model 60s/120s and loop 15s against shortest BackOff 30s; validate before allocation | `tasks.md:26`; `specs/agentic-model/spec.md:176`; `specs/agentic-loop/spec.md:407` | invalid defaults fail setup |
 | Default provider ambiguity to `fail_commit_unknown`; expose exact config/wire contract; refuse unsupported reconciliation before start | `design.md:180`; `specs/agentic-model/spec.md:48`; `specs/agentic-model/spec.md:134`; `tasks.md:74` | no second default-policy call; no unsupported start |
 | Replace stale current-spec semantics through full MODIFIED blocks | `design.md:141`; `specs/agentic-dispatch/spec.md:135`; `specs/agentic-tools/spec.md:67`; `specs/agentic-loop/spec.md:419` | unaffected scenarios/citations preserved; no additive conflict |

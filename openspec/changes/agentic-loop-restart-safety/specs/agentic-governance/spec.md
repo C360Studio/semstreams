@@ -4,19 +4,25 @@
 
 The task, request, and response validation subscriptions SHALL return classified outcomes through their three
 existing private binding owners. Native messages and settlement methods SHALL NOT enter filter business logic or an
-exported no-heartbeat adapter.
+exported work-owning no-heartbeat adapter.
 
-Each physical subscription SHALL acquire with AckWait 30s and enforce a 25s cancellation-and-join work budget,
-leaving a positive 5s margin. Budget expiry SHALL return Retry without ACK. If one subscription cannot prove this
-bound using legitimate context-cooperative work, that subscription alone SHALL move to the admitted typed heartbeat
-owner with bounded work timeout 30s. Accepted evidence derives only a heartbeat ceiling of 15s; one concrete value at
-or below that ceiling SHALL receive review before fallback is enabled. Proof-group siblings SHALL not migrate solely
-because one did. Cancellation-ignoring or non-returning work SHALL fail lifecycle review under either route.
+Each physical subscription SHALL invoke its typed business handler using the callback installed by its production
+setup branch. All delivery-derived work SHALL join before the private callback passes its decision and cause to
+`natsclient.SettleDelivery`. JetStream consumer configuration owns AckWait and redelivery; governance SHALL NOT
+derive a universal work deadline from AckWait. An operation MAY use an ordinary business timeout. A physical
+subscription SHALL move to the existing heartbeat owner only after measured legitimate work can exceed its
+configured acknowledgement interval. Cancellation-ignoring or non-returning work SHALL fail lifecycle review.
 
 For an allowed message, done SHALL require deterministic publication through the declared JetStream output and
 synchronous PubAck. For a blocked message, done SHALL be the completed policy decision and deliberate
 non-forwarding. The existing audit contract remains nonblocking, but decode, filter, output-subject, marshal, and
 required publication failures SHALL NOT become ACK.
+
+The first owner-fatal result across governance validation owners SHALL synchronously latch before exact-handle drain.
+Existing Health SHALL report `Healthy=false`, status `delivery ownership lost`, and the exact first cause in
+`LastError`. The existing cumulative error count SHALL increase exactly once for owner loss, independently of prior
+business-error counts; later owner-fatal results SHALL not increment it again. No new metric family, public state,
+durable state, or communication path is added.
 
 #### Scenario: Allowed output publication fails
 
@@ -41,11 +47,11 @@ required publication failures SHALL NOT become ACK.
 - **WHEN** validation panics or observes a semantic identity collision
 - **THEN** the delivery quarantines and the exact owner stops
 
-#### Scenario: Governance work reaches its budget
+#### Scenario: Governance business work reaches its own deadline
 
-- **WHEN** one validation dependency remains incomplete at 25 seconds
-- **THEN** that private owner cancels and joins before AckWait 30s expires
-- **AND** returns Retry without ACK or concurrent delivery
+- **WHEN** a delivery-owned governance operation reaches a timeout required by that operation
+- **THEN** its context is cancelled
+- **AND** all operation work joins before the callback settles or returns
 
 ### Requirement: Governance verdict correlation survives process replacement
 
