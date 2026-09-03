@@ -2,9 +2,7 @@ package agenticgovernance
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"sync/atomic"
@@ -22,6 +20,9 @@ type governanceFastOwnerMsg struct {
 	data       []byte
 	dataCalls  atomic.Int32
 	settlement atomic.Int32
+	acks       atomic.Int32
+	naks       atomic.Int32
+	terms      atomic.Int32
 }
 
 func (m *governanceFastOwnerMsg) Data() []byte {
@@ -37,18 +38,44 @@ func (*governanceFastOwnerMsg) Headers() nats.Header { return nil }
 func (*governanceFastOwnerMsg) Metadata() (*jetstream.MsgMetadata, error) {
 	return &jetstream.MsgMetadata{NumDelivered: 1}, nil
 }
-func (m *governanceFastOwnerMsg) Ack() error                       { m.settlement.Add(1); return nil }
-func (*governanceFastOwnerMsg) DoubleAck(context.Context) error    { return nil }
-func (m *governanceFastOwnerMsg) Nak() error                       { m.settlement.Add(1); return nil }
-func (m *governanceFastOwnerMsg) NakWithDelay(time.Duration) error { m.settlement.Add(1); return nil }
+func (m *governanceFastOwnerMsg) Ack() error {
+	m.settlement.Add(1)
+	m.acks.Add(1)
+	return nil
+}
+func (*governanceFastOwnerMsg) DoubleAck(context.Context) error { return nil }
+func (m *governanceFastOwnerMsg) Nak() error {
+	m.settlement.Add(1)
+	m.naks.Add(1)
+	return nil
+}
+func (m *governanceFastOwnerMsg) NakWithDelay(time.Duration) error { return m.Nak() }
 func (*governanceFastOwnerMsg) InProgress() error                  { return nil }
-func (m *governanceFastOwnerMsg) Term() error                      { m.settlement.Add(1); return nil }
-func (m *governanceFastOwnerMsg) TermWithReason(string) error      { m.settlement.Add(1); return nil }
+func (m *governanceFastOwnerMsg) Term() error {
+	m.settlement.Add(1)
+	m.terms.Add(1)
+	return nil
+}
+func (m *governanceFastOwnerMsg) TermWithReason(string) error { return m.Term() }
 
 type governanceFastOwnerHandle struct {
 	drains atomic.Int32
 	closed chan struct{}
 }
+
+type governanceHealthProbeHandle struct {
+	drains  atomic.Int32
+	closed  chan struct{}
+	onDrain func()
+}
+
+func (*governanceHealthProbeHandle) Stop() {}
+func (h *governanceHealthProbeHandle) Drain() {
+	if h.drains.Add(1) == 1 && h.onDrain != nil {
+		h.onDrain()
+	}
+}
+func (h *governanceHealthProbeHandle) Closed() <-chan struct{} { return h.closed }
 
 func (h *governanceFastOwnerHandle) Stop() { h.Drain() }
 func (h *governanceFastOwnerHandle) Drain() {
@@ -101,43 +128,39 @@ func TestGovernanceFastOwnerPanicQuarantinesAndDrainsExactHandle(t *testing.T) {
 }
 
 // spec: agentic-governance / Governance validation settles after its declared consequence
-func TestGovernanceProductionBindingsUseDeclaredOwner(t *testing.T) {
-	discoverable, err := NewComponent([]byte(`{}`), component.Dependencies{NATSClient: &natsclient.Client{}})
-	require.NoError(t, err)
-	c := discoverable.(*Component)
-	c.waitForStreamInput = func(context.Context, string) error { return nil }
-	type capturedBinding struct {
-		cfg      natsclient.StreamConsumerConfig
-		callback func(context.Context, jetstream.Msg)
-	}
-	captured := make(map[string]capturedBinding)
-	c.consumeStream = func(_ context.Context, owner natsclient.PortConsumerContext, cfg natsclient.StreamConsumerConfig, callback func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
-		captured[owner.Port] = capturedBinding{cfg: cfg, callback: callback}
-		return &governanceFastOwnerHandle{closed: make(chan struct{})}, nil
-	}
+func TestGovernanceFatalHealthLatchesBeforeEachExactOwnerDrain(t *testing.T) {
+	c := &Component{running: true, startTime: time.Now(), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	atomic.StoreInt64(&c.errors, 4)
+	firstCause := errors.New("first governance owner lost")
+	secondCause := errors.New("later governance owner lost")
+	healthAtDrain := make(chan component.HealthStatus, 2)
+	firstAdmission := newGovernanceDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
+	secondAdmission := newGovernanceDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
+	firstHandle := &governanceHealthProbeHandle{closed: make(chan struct{}), onDrain: func() { healthAtDrain <- c.Health() }}
+	secondHandle := &governanceHealthProbeHandle{closed: make(chan struct{}), onDrain: func() { healthAtDrain <- c.Health() }}
+	firstBinding := newGovernanceStreamConsumerBinding(firstHandle)
+	secondBinding := newGovernanceStreamConsumerBinding(secondHandle)
 	ctx, cancel := context.WithCancel(t.Context())
-	require.NoError(t, c.setupInputConsumers(ctx))
-	// Setup has captured the production owners; nil suppresses only optional
-	// output publication so each real filter-chain branch remains synchronous.
-	c.natsClient = nil
+	c.observeGovernanceDeliveryLane(ctx, &firstBinding, firstAdmission, "task_validation")
+	c.observeGovernanceDeliveryLane(ctx, &secondBinding, secondAdmission, "request_validation")
 
-	for index, port := range []string{"task_validation", "request_validation", "response_validation"} {
-		binding, ok := captured[port]
-		require.True(t, ok, "production setup did not bind %s", port)
-		require.Equal(t, governanceFastDeliveryAckWait, binding.cfg.AckWait)
-		require.Equal(t, governanceFastDeliveryAckWait, binding.cfg.MessageTimeout)
-		data, marshalErr := json.Marshal(Message{ID: fmt.Sprintf("message-%d", index), Content: Content{Text: "clean"}})
-		require.NoError(t, marshalErr)
-		msg := &governanceFastOwnerMsg{}
-		msgData := data
-		msg.data = msgData
-		binding.callback(ctx, msg)
-		require.Equal(t, int32(1), msg.dataCalls.Load(), "%s must execute its production handler", port)
-		require.Equal(t, int32(1), msg.settlement.Load(), "%s must settle exactly once", port)
-	}
+	firstAdmission.latchFatal(firstCause)
+	firstHealth := <-healthAtDrain
+	require.False(t, firstHealth.Healthy)
+	require.Equal(t, "delivery ownership lost", firstHealth.Status)
+	require.Equal(t, firstCause.Error(), firstHealth.LastError)
+	require.Equal(t, 5, firstHealth.ErrorCount)
+	require.Equal(t, int32(1), firstHandle.drains.Load())
+	require.Zero(t, secondHandle.drains.Load())
+
+	secondAdmission.latchFatal(secondCause)
+	secondHealth := <-healthAtDrain
+	require.Equal(t, firstHealth.LastError, secondHealth.LastError)
+	require.Equal(t, firstHealth.ErrorCount, secondHealth.ErrorCount)
+	require.Equal(t, int32(1), firstHandle.drains.Load())
+	require.Equal(t, int32(1), secondHandle.drains.Load())
 
 	cancel()
-	for _, binding := range c.consumers {
-		<-binding.observerDone
-	}
+	<-firstBinding.observerDone
+	<-secondBinding.observerDone
 }

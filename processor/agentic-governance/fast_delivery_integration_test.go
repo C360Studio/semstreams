@@ -4,16 +4,93 @@ package agenticgovernance
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
 )
+
+type governancePublishedMessage struct {
+	subject string
+	message Message
+}
+
+// spec: agentic-governance / Governance validation settles after its declared consequence
+func TestIntegrationGovernanceProductionBindingsPublishDeclaredConsequences(t *testing.T) {
+	testClient := natsclient.NewTestClient(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	outputs := make(chan governancePublishedMessage, 3)
+	sub, err := testClient.Client.Subscribe(ctx, "agent.*.validated.*", func(_ context.Context, msg *nats.Msg) {
+		var decoded Message
+		if decodeErr := json.Unmarshal(msg.Data, &decoded); decodeErr != nil {
+			return
+		}
+		outputs <- governancePublishedMessage{subject: msg.Subject, message: decoded}
+	})
+	require.NoError(t, err)
+
+	discoverable, err := NewComponent([]byte(`{}`), component.Dependencies{NATSClient: testClient.Client})
+	require.NoError(t, err)
+	c := discoverable.(*Component)
+	c.waitForStreamInput = func(context.Context, string) error { return nil }
+	type capturedBinding struct {
+		cfg      natsclient.StreamConsumerConfig
+		callback func(context.Context, jetstream.Msg)
+	}
+	captured := make(map[string]capturedBinding)
+	c.consumeStream = func(_ context.Context, owner natsclient.PortConsumerContext, cfg natsclient.StreamConsumerConfig, callback func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
+		captured[owner.Port] = capturedBinding{cfg: cfg, callback: callback}
+		return &governanceFastOwnerHandle{closed: make(chan struct{})}, nil
+	}
+	require.NoError(t, c.setupInputConsumers(ctx))
+
+	rows := []struct {
+		port      string
+		msgType   MessageType
+		subject   string
+		messageID string
+	}{
+		{port: "task_validation", msgType: MessageTypeTask, subject: "agent.task.validated.message-0", messageID: "message-0"},
+		{port: "request_validation", msgType: MessageTypeRequest, subject: "agent.request.validated.message-1", messageID: "message-1"},
+		{port: "response_validation", msgType: MessageTypeResponse, subject: "agent.response.validated.message-2", messageID: "message-2"},
+	}
+	for _, row := range rows {
+		binding, ok := captured[row.port]
+		require.True(t, ok, "production setup did not bind %s", row.port)
+		require.Equal(t, governanceFastDeliveryAckWait, binding.cfg.AckWait)
+		require.Equal(t, governanceFastDeliveryAckWait, binding.cfg.MessageTimeout)
+		data, marshalErr := json.Marshal(Message{ID: row.messageID, Content: Content{Text: "clean"}})
+		require.NoError(t, marshalErr)
+		msg := &governanceFastOwnerMsg{data: data}
+		binding.callback(ctx, msg)
+		require.Equal(t, int32(1), msg.acks.Load(), "%s validated publication must precede ACK", row.port)
+		require.Zero(t, msg.naks.Load())
+		require.Zero(t, msg.terms.Load())
+		select {
+		case published := <-outputs:
+			require.Equal(t, row.subject, published.subject)
+			require.Equal(t, row.msgType, published.message.Type)
+			require.Equal(t, row.messageID, published.message.ID)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s did not publish its required validated output", row.port)
+		}
+	}
+
+	require.NoError(t, sub.Drain(t.Context()))
+	cancel()
+	for _, binding := range c.consumers {
+		<-binding.observerDone
+	}
+}
 
 type governanceFastDeliveryObservation struct {
 	attempt  uint64

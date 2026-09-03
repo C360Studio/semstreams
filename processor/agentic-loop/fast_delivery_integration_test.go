@@ -4,16 +4,211 @@ package agenticloop
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/component"
+	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadbuiltins"
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
 )
+
+// spec: agentic-loop / Delivery work joins before settlement
+// scenario: Terminal approval rejection reaches a bounded graph write
+func TestIntegrationApprovalRejectionWaitsForGraphWriteJoinBeforeAck(t *testing.T) {
+	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithStreams(
+		natsclient.TestStreamConfig{Name: "AGENT", Subjects: []string{"agent.>", "tool.>"}},
+	))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	graphStarted := make(chan struct{})
+	graphRelease := make(chan struct{})
+	graphJoined := make(chan struct{})
+	_, err := testClient.Client.SubscribeForRequests(ctx, "graph.mutation.triple.append", func(_ context.Context, data []byte) ([]byte, error) {
+		var request gtypes.AppendTriplesRequest
+		if decodeErr := json.Unmarshal(data, &request); decodeErr != nil {
+			return nil, decodeErr
+		}
+		close(graphStarted)
+		<-graphRelease
+		results := make([]gtypes.AppendSubjectResult, 0, len(request.Triples))
+		seen := make(map[string]struct{})
+		for _, triple := range request.Triples {
+			if _, exists := seen[triple.Subject]; exists {
+				continue
+			}
+			seen[triple.Subject] = struct{}{}
+			results = append(results, gtypes.AppendSubjectResult{
+				EntityID: triple.Subject, Outcome: gtypes.MutationApplied, KVRevision: 1,
+			})
+		}
+		encoded, encodeErr := json.Marshal(gtypes.AppendTriplesResponse{Results: results})
+		close(graphJoined)
+		return encoded, encodeErr
+	})
+	require.NoError(t, err)
+
+	discoverable, err := NewComponent([]byte(`{}`), component.Dependencies{
+		NATSClient: testClient.Client, PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+		Platform: component.PlatformMeta{Org: "acme", Platform: "ops"},
+	})
+	require.NoError(t, err)
+	c := discoverable.(*Component)
+	c.waitForStreamInput = func(context.Context, string) error { return nil }
+	callbacks := make(map[string]func(context.Context, jetstream.Msg))
+	c.consumeStream = func(_ context.Context, _ context.Context, owner natsclient.PortConsumerContext, _ natsclient.StreamConsumerConfig, callback func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
+		callbacks[owner.Port] = callback
+		return &loopPolicyHandle{closed: make(chan struct{})}, nil
+	}
+	require.NoError(t, c.setupSubscriptions(ctx, ctx))
+
+	loopID := setUpAwaitingLoop(t, c.handler, time.Minute, 0)
+	entity, err := c.handler.GetLoop(loopID)
+	require.NoError(t, err)
+	entity.Iterations = entity.MaxIterations
+	require.NoError(t, c.handler.UpdateLoop(entity))
+	response := &agentic.ApprovalResponse{
+		LoopID: loopID, CallID: "call-gated", Decision: agentic.ApprovalDecisionReject,
+		Reason: "policy", DecidedAt: time.Now().UTC(),
+	}
+	data, err := json.Marshal(message.NewBaseMessage(response.Schema(), response, "test"))
+	require.NoError(t, err)
+	msg := &loopDeliveryOwnerMsg{data: data}
+	callbackReturned := make(chan struct{})
+	go func() {
+		callbacks["agent.approval_response"](ctx, msg)
+		close(callbackReturned)
+	}()
+
+	select {
+	case <-graphStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("terminal rejection did not reach its production graph-write dependency")
+	}
+	require.Zero(t, msg.settlement.Load(), "source settled while graph-write work was live")
+	select {
+	case <-callbackReturned:
+		t.Fatal("production callback returned while graph-write work was live")
+	default:
+	}
+	close(graphRelease)
+	select {
+	case <-graphJoined:
+	case <-time.After(2 * time.Second):
+		t.Fatal("graph-write dependency did not join after release")
+	}
+	select {
+	case <-callbackReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("production callback did not return after graph-write join")
+	}
+	require.Equal(t, int32(1), msg.acks.Load(), "terminal rejection must ACK only after graph-write join")
+	require.Zero(t, msg.naks.Load())
+	require.Zero(t, msg.terms.Load())
+	_, err = c.handler.GetLoop(loopID)
+	require.ErrorContains(t, err, "not found", "joined terminal persistence must release the settled loop")
+
+	cancel()
+	for _, binding := range c.consumers {
+		<-binding.observerDone
+	}
+}
+
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+func TestIntegrationLoopSignalAndApprovalProductionBindingsCommitConsequences(t *testing.T) {
+	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithStreams(
+		natsclient.TestStreamConfig{Name: "AGENT", Subjects: []string{"agent.>", "tool.>"}},
+	))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	completed := make(chan string, 1)
+	toolCalls := make(chan string, 1)
+	completeSub, err := testClient.Client.Subscribe(ctx, "agent.complete.>", func(_ context.Context, msg *nats.Msg) {
+		completed <- msg.Subject
+	})
+	require.NoError(t, err)
+	toolSub, err := testClient.Client.Subscribe(ctx, "tool.execute.>", func(_ context.Context, msg *nats.Msg) {
+		toolCalls <- msg.Subject
+	})
+	require.NoError(t, err)
+
+	discoverable, err := NewComponent([]byte(`{}`), component.Dependencies{
+		NATSClient: testClient.Client, PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+	})
+	require.NoError(t, err)
+	c := discoverable.(*Component)
+	c.graphWriter = nil // cancellation graph projection is optional; stream consequence is required
+	c.waitForStreamInput = func(context.Context, string) error { return nil }
+	callbacks := make(map[string]func(context.Context, jetstream.Msg))
+	c.consumeStream = func(_ context.Context, _ context.Context, owner natsclient.PortConsumerContext, cfg natsclient.StreamConsumerConfig, callback func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
+		if owner.Port == "agent.signal" || owner.Port == "agent.approval_response" {
+			require.Equal(t, loopFastDeliveryAckWait, cfg.AckWait, owner.Port)
+			require.Equal(t, loopFastDeliveryAckWait, cfg.MessageTimeout, owner.Port)
+		}
+		callbacks[owner.Port] = callback
+		return &loopPolicyHandle{closed: make(chan struct{})}, nil
+	}
+	require.NoError(t, c.setupSubscriptions(ctx, ctx))
+
+	cancelLoopID, err := c.handler.loopManager.CreateLoop("task-cancel", "general", "m", 3)
+	require.NoError(t, err)
+	signal := &agentic.UserSignal{
+		SignalID: "signal-1", Type: agentic.SignalCancel, LoopID: cancelLoopID,
+		UserID: "operator", Timestamp: time.Now().UTC(),
+	}
+	signalData, err := json.Marshal(message.NewBaseMessage(signal.Schema(), signal, "test"))
+	require.NoError(t, err)
+	signalMsg := &loopDeliveryOwnerMsg{data: signalData}
+	callbacks["agent.signal"](ctx, signalMsg)
+	require.Equal(t, int32(1), signalMsg.acks.Load(), "durable cancel consequence must precede ACK")
+	require.Zero(t, signalMsg.naks.Load())
+	require.Zero(t, signalMsg.terms.Load())
+	select {
+	case subject := <-completed:
+		require.Equal(t, "agent.complete."+cancelLoopID, subject)
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancel did not publish its terminal consequence")
+	}
+
+	approvalLoopID := setUpAwaitingLoop(t, c.handler, time.Minute, 0)
+	response := &agentic.ApprovalResponse{
+		LoopID: approvalLoopID, CallID: "call-gated", Decision: agentic.ApprovalDecisionApprove,
+		ApprovedBy: "operator", DecidedAt: time.Now().UTC(),
+	}
+	responseData, err := json.Marshal(message.NewBaseMessage(response.Schema(), response, "test"))
+	require.NoError(t, err)
+	responseMsg := &loopDeliveryOwnerMsg{data: responseData}
+	callbacks["agent.approval_response"](ctx, responseMsg)
+	require.Equal(t, int32(1), responseMsg.acks.Load(), "approval consequence must precede ACK")
+	require.Zero(t, responseMsg.naks.Load())
+	require.Zero(t, responseMsg.terms.Load())
+	entity, err := c.handler.GetLoop(approvalLoopID)
+	require.NoError(t, err)
+	require.NotEqual(t, agentic.LoopStateAwaitingApproval, entity.State)
+	require.Nil(t, entity.PendingApproval)
+	select {
+	case subject := <-toolCalls:
+		require.Equal(t, "tool.execute.delete_rule", subject)
+	case <-time.After(2 * time.Second):
+		t.Fatal("approved response did not publish its tool consequence")
+	}
+
+	require.NoError(t, completeSub.Drain(t.Context()))
+	require.NoError(t, toolSub.Drain(t.Context()))
+	cancel()
+	for _, binding := range c.consumers {
+		<-binding.observerDone
+	}
+}
 
 type loopFastDeliveryObservation struct {
 	attempt  uint64

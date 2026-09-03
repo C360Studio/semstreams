@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
@@ -23,7 +24,24 @@ type dispatchFastOwnerMsg struct {
 	data       []byte
 	dataCalls  atomic.Int32
 	settlement atomic.Int32
+	acks       atomic.Int32
+	naks       atomic.Int32
+	terms      atomic.Int32
 }
+
+type dispatchHealthProbeHandle struct {
+	drains  atomic.Int32
+	closed  chan struct{}
+	onDrain func()
+}
+
+func (*dispatchHealthProbeHandle) Stop() {}
+func (h *dispatchHealthProbeHandle) Drain() {
+	if h.drains.Add(1) == 1 && h.onDrain != nil {
+		h.onDrain()
+	}
+}
+func (h *dispatchHealthProbeHandle) Closed() <-chan struct{} { return h.closed }
 
 func (m *dispatchFastOwnerMsg) Data() []byte {
 	m.dataCalls.Add(1)
@@ -38,13 +56,25 @@ func (*dispatchFastOwnerMsg) Headers() nats.Header { return nil }
 func (*dispatchFastOwnerMsg) Metadata() (*jetstream.MsgMetadata, error) {
 	return &jetstream.MsgMetadata{NumDelivered: 1}, nil
 }
-func (m *dispatchFastOwnerMsg) Ack() error                       { m.settlement.Add(1); return nil }
-func (*dispatchFastOwnerMsg) DoubleAck(context.Context) error    { return nil }
-func (m *dispatchFastOwnerMsg) Nak() error                       { m.settlement.Add(1); return nil }
-func (m *dispatchFastOwnerMsg) NakWithDelay(time.Duration) error { m.settlement.Add(1); return nil }
+func (m *dispatchFastOwnerMsg) Ack() error {
+	m.settlement.Add(1)
+	m.acks.Add(1)
+	return nil
+}
+func (*dispatchFastOwnerMsg) DoubleAck(context.Context) error { return nil }
+func (m *dispatchFastOwnerMsg) Nak() error {
+	m.settlement.Add(1)
+	m.naks.Add(1)
+	return nil
+}
+func (m *dispatchFastOwnerMsg) NakWithDelay(time.Duration) error { return m.Nak() }
 func (*dispatchFastOwnerMsg) InProgress() error                  { return nil }
-func (m *dispatchFastOwnerMsg) Term() error                      { m.settlement.Add(1); return nil }
-func (m *dispatchFastOwnerMsg) TermWithReason(string) error      { m.settlement.Add(1); return nil }
+func (m *dispatchFastOwnerMsg) Term() error {
+	m.settlement.Add(1)
+	m.terms.Add(1)
+	return nil
+}
+func (m *dispatchFastOwnerMsg) TermWithReason(string) error { return m.Term() }
 
 // spec: agentic-dispatch / Every dispatch durable input settles through its owner
 func TestDispatchFastOwnerPanicQuarantinesAndDrainsExactHandle(t *testing.T) {
@@ -137,6 +167,43 @@ func TestDeliveryOwnerFatalHealthKeepsFirstCauseAcrossLanes(t *testing.T) {
 }
 
 // spec: agentic-dispatch / Every dispatch durable input settles through its owner
+func TestDispatchFatalHealthLatchesBeforeEachExactOwnerDrain(t *testing.T) {
+	c := &Component{started: true, startTime: time.Now(), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	firstCause := errors.New("first dispatch owner lost")
+	secondCause := errors.New("later dispatch owner lost")
+	healthAtDrain := make(chan component.HealthStatus, 2)
+	firstAdmission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
+	secondAdmission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
+	firstHandle := &dispatchHealthProbeHandle{closed: make(chan struct{}), onDrain: func() { healthAtDrain <- c.Health() }}
+	secondHandle := &dispatchHealthProbeHandle{closed: make(chan struct{}), onDrain: func() { healthAtDrain <- c.Health() }}
+	firstBinding := newStreamConsumerBinding(firstHandle)
+	secondBinding := newStreamConsumerBinding(secondHandle)
+	ctx, cancel := context.WithCancel(t.Context())
+	c.observeDeliveryLane(ctx, &firstBinding, firstAdmission)
+	c.observeDeliveryLane(ctx, &secondBinding, secondAdmission)
+
+	firstAdmission.latchFatal(firstCause)
+	firstHealth := <-healthAtDrain
+	require.False(t, firstHealth.Healthy)
+	require.Equal(t, "delivery ownership lost", firstHealth.Status)
+	require.Equal(t, firstCause.Error(), firstHealth.LastError)
+	require.Equal(t, 1, firstHealth.ErrorCount)
+	require.Equal(t, int32(1), firstHandle.drains.Load())
+	require.Zero(t, secondHandle.drains.Load())
+
+	secondAdmission.latchFatal(secondCause)
+	secondHealth := <-healthAtDrain
+	require.Equal(t, firstHealth.LastError, secondHealth.LastError)
+	require.Equal(t, firstHealth.ErrorCount, secondHealth.ErrorCount)
+	require.Equal(t, int32(1), firstHandle.drains.Load())
+	require.Equal(t, int32(1), secondHandle.drains.Load())
+
+	cancel()
+	<-firstBinding.observerDone
+	<-secondBinding.observerDone
+}
+
+// spec: agentic-dispatch / Every dispatch durable input settles through its owner
 func TestDispatchFastProductionBindingsUseDeclaredOwner(t *testing.T) {
 	deps := componentDependenciesForCausalTest()
 	deps.PayloadRegistry = payloadbuiltins.NewTestRegistry(t)
@@ -144,6 +211,8 @@ func TestDispatchFastProductionBindingsUseDeclaredOwner(t *testing.T) {
 	require.NoError(t, err)
 	c := discoverable.(*Component)
 	c.waitForStreamInput = func(context.Context, string) error { return nil }
+	responses := make([]agentic.UserResponse, 0, 1)
+	c.sendResponseFn = func(response agentic.UserResponse) { responses = append(responses, response) }
 	type capturedBinding struct {
 		cfg      natsclient.StreamConsumerConfig
 		callback func(context.Context, jetstream.Msg)
@@ -166,6 +235,12 @@ func TestDispatchFastProductionBindingsUseDeclaredOwner(t *testing.T) {
 		require.Equal(t, dispatchFastDeliveryAckWait, binding.cfg.MessageTimeout)
 		data := []byte("{")
 		switch port {
+		case "user.message":
+			userMessage := &agentic.UserMessage{
+				MessageID: "message-1", ChannelType: "cli", ChannelID: "channel-1",
+				UserID: "user-1", Content: "/help", Timestamp: time.Now().UTC(),
+			}
+			data = mustMarshalDispatchPayload(t, userMessage)
 		case "agent.created":
 			created := &agentic.LoopCreatedEvent{
 				LoopID: "00000000-0000-4000-8000-000000000001", TaskID: "task-1",
@@ -182,9 +257,14 @@ func TestDispatchFastProductionBindingsUseDeclaredOwner(t *testing.T) {
 		msg := &dispatchFastOwnerMsg{data: data}
 		binding.callback(ctx, msg)
 		require.Equal(t, int32(1), msg.dataCalls.Load(), "%s must execute its production handler", port)
-		require.Equal(t, int32(1), msg.settlement.Load(), "%s must settle exactly once", port)
+		require.Equal(t, int32(1), msg.acks.Load(), "%s successful consequence must ACK", port)
+		require.Zero(t, msg.naks.Load(), "%s must not retry successful work", port)
+		require.Zero(t, msg.terms.Load(), "%s must not terminate valid work", port)
 	}
 	tracked := c.loopTracker.Get("00000000-0000-4000-8000-000000000001")
+	require.Len(t, responses, 1, "user.message command must produce its required user response")
+	require.Equal(t, agentic.ResponseTypeText, responses[0].Type)
+	require.Contains(t, responses[0].Content, "/help")
 	require.NotNil(t, tracked, "agent.created callback must update the production tracker")
 	require.NotNil(t, tracked.PendingApproval, "approval callback must update the production tracker")
 	require.Equal(t, "call-1", tracked.PendingApproval.CallID)

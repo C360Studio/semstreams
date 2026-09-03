@@ -27,6 +27,9 @@ type loopDeliveryOwnerMsg struct {
 	settlement  atomic.Int32
 	metadata    atomic.Int32
 	metadataErr error
+	acks        atomic.Int32
+	naks        atomic.Int32
+	terms       atomic.Int32
 }
 
 type capturedVerdict struct {
@@ -37,6 +40,20 @@ type capturedVerdict struct {
 type capturingGovernanceDispatcher struct {
 	verdicts chan capturedVerdict
 }
+
+type loopHealthProbeHandle struct {
+	drains  atomic.Int32
+	closed  chan struct{}
+	onDrain func()
+}
+
+func (*loopHealthProbeHandle) Stop() {}
+func (h *loopHealthProbeHandle) Drain() {
+	if h.drains.Add(1) == 1 && h.onDrain != nil {
+		h.onDrain()
+	}
+}
+func (h *loopHealthProbeHandle) Closed() <-chan struct{} { return h.closed }
 
 func (*capturingGovernanceDispatcher) Propose(context.Context, string, string, []agentic.ToolCall) (DispatcherResult, error) {
 	return DispatcherResult{}, nil
@@ -57,13 +74,25 @@ func (m *loopDeliveryOwnerMsg) Metadata() (*jetstream.MsgMetadata, error) {
 	}
 	return &jetstream.MsgMetadata{NumDelivered: 1}, nil
 }
-func (m *loopDeliveryOwnerMsg) Ack() error                       { m.settlement.Add(1); return nil }
-func (*loopDeliveryOwnerMsg) DoubleAck(context.Context) error    { return nil }
-func (m *loopDeliveryOwnerMsg) Nak() error                       { m.settlement.Add(1); return nil }
-func (m *loopDeliveryOwnerMsg) NakWithDelay(time.Duration) error { m.settlement.Add(1); return nil }
+func (m *loopDeliveryOwnerMsg) Ack() error {
+	m.settlement.Add(1)
+	m.acks.Add(1)
+	return nil
+}
+func (*loopDeliveryOwnerMsg) DoubleAck(context.Context) error { return nil }
+func (m *loopDeliveryOwnerMsg) Nak() error {
+	m.settlement.Add(1)
+	m.naks.Add(1)
+	return nil
+}
+func (m *loopDeliveryOwnerMsg) NakWithDelay(time.Duration) error { return m.Nak() }
 func (m *loopDeliveryOwnerMsg) InProgress() error                { m.heartbeats.Add(1); return nil }
-func (m *loopDeliveryOwnerMsg) Term() error                      { m.settlement.Add(1); return nil }
-func (m *loopDeliveryOwnerMsg) TermWithReason(string) error      { m.settlement.Add(1); return nil }
+func (m *loopDeliveryOwnerMsg) Term() error {
+	m.settlement.Add(1)
+	m.terms.Add(1)
+	return nil
+}
+func (m *loopDeliveryOwnerMsg) TermWithReason(string) error { return m.Term() }
 
 // spec: agentic-loop / All six loop input classes settle after owner-specific durable done
 func TestLoopFastOwnerInvalidTupleQuarantinesAndDrainsExactHandle(t *testing.T) {
@@ -231,7 +260,45 @@ func TestLoopSetupWiresMetadataFailureToAcquiredOwner(t *testing.T) {
 }
 
 // spec: agentic-loop / All six loop input classes settle after owner-specific durable done
-func TestLoopFastProductionBindingsUseDeclaredOwner(t *testing.T) {
+func TestLoopFatalHealthLatchesBeforeEachExactOwnerDrain(t *testing.T) {
+	c := &Component{started: true, startTime: time.Now(), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	c.trajectoryAuditHealth.latch("prior trajectory business error")
+	firstCause := errors.New("first loop owner lost")
+	secondCause := errors.New("later loop owner lost")
+	healthAtDrain := make(chan component.HealthStatus, 2)
+	firstAdmission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
+	secondAdmission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
+	firstHandle := &loopHealthProbeHandle{closed: make(chan struct{}), onDrain: func() { healthAtDrain <- c.Health() }}
+	secondHandle := &loopHealthProbeHandle{closed: make(chan struct{}), onDrain: func() { healthAtDrain <- c.Health() }}
+	firstBinding := newStreamConsumerBinding(firstHandle)
+	secondBinding := newStreamConsumerBinding(secondHandle)
+	ctx, cancel := context.WithCancel(t.Context())
+	c.observeDeliveryLane(ctx, &firstBinding, firstAdmission, "agent.signal")
+	c.observeDeliveryLane(ctx, &secondBinding, secondAdmission, "agent.approval_response")
+
+	firstAdmission.latchFatal(firstCause)
+	firstHealth := <-healthAtDrain
+	require.False(t, firstHealth.Healthy)
+	require.Equal(t, "delivery ownership lost", firstHealth.Status)
+	require.Equal(t, firstCause.Error(), firstHealth.LastError)
+	require.Equal(t, 2, firstHealth.ErrorCount)
+	require.Equal(t, int32(1), firstHandle.drains.Load())
+	require.Zero(t, secondHandle.drains.Load())
+
+	secondAdmission.latchFatal(secondCause)
+	secondHealth := <-healthAtDrain
+	require.Equal(t, firstHealth.LastError, secondHealth.LastError)
+	require.Equal(t, firstHealth.ErrorCount, secondHealth.ErrorCount)
+	require.Equal(t, int32(1), firstHandle.drains.Load())
+	require.Equal(t, int32(1), secondHandle.drains.Load())
+
+	cancel()
+	<-firstBinding.observerDone
+	<-secondBinding.observerDone
+}
+
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+func TestLoopVerdictProductionBindingsUseDeclaredOwner(t *testing.T) {
 	discoverable, err := NewComponent([]byte(`{}`), component.Dependencies{
 		NATSClient: &natsclient.Client{}, PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	})
@@ -252,12 +319,12 @@ func TestLoopFastProductionBindingsUseDeclaredOwner(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	require.NoError(t, c.setupSubscriptions(ctx, ctx))
 
-	for _, port := range []string{"agent.signal", "agent.approval_response", "agent.toolcall.approved", "agent.toolcall.rejected"} {
+	for _, port := range []string{"agent.toolcall.approved", "agent.toolcall.rejected"} {
 		binding, ok := captured[port]
 		require.True(t, ok, "production setup did not bind %s", port)
 		require.Equal(t, loopFastDeliveryAckWait, binding.cfg.AckWait)
 		require.Equal(t, loopFastDeliveryAckWait, binding.cfg.MessageTimeout)
-		data := []byte("{")
+		var data []byte
 		switch port {
 		case "agent.toolcall.approved":
 			data = []byte(`{"decision":"approved","call_id":"call-approved"}`)
@@ -267,7 +334,9 @@ func TestLoopFastProductionBindingsUseDeclaredOwner(t *testing.T) {
 		msg := &loopDeliveryOwnerMsg{data: data}
 		binding.callback(ctx, msg)
 		require.Equal(t, int32(1), msg.dataCalls.Load(), "%s must execute its production handler", port)
-		require.Equal(t, int32(1), msg.settlement.Load(), "%s must settle exactly once", port)
+		require.Equal(t, int32(1), msg.acks.Load(), "%s delivered verdict must ACK", port)
+		require.Zero(t, msg.naks.Load())
+		require.Zero(t, msg.terms.Load())
 	}
 	require.Equal(t, capturedVerdict{decision: "approved", callID: "call-approved"}, <-verdicts.verdicts)
 	require.Equal(t, capturedVerdict{decision: "rejected", callID: "call-rejected"}, <-verdicts.verdicts)
