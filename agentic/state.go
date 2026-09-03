@@ -27,9 +27,9 @@ const (
 	LoopStateCancelled LoopState = "cancelled" // Cancelled by user signal
 
 	// Signal-related states
-	// LoopStatePaused is unreachable: #1239 deleted the pause signal, so no code
-	// path sets this state. The constant survives because isValidLoopState still
-	// has to accept a persisted record written before that removal.
+	// LoopStatePaused remains legacy-valid and is accepted by the exported
+	// transition APIs. #1239 removes the framework-owned pause/resume signal path
+	// and pause semantics; callers may still explicitly transition a loop to it.
 	LoopStatePaused           LoopState = "paused"
 	LoopStateAwaitingApproval LoopState = "awaiting_approval" // Waiting for user approval
 )

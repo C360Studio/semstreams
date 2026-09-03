@@ -69,7 +69,8 @@
 //   - complete: Successfully finished (terminal)
 //   - failed: Failed due to error or max iterations (terminal)
 //   - cancelled: Cancelled by user signal (terminal)
-//   - paused: Unreachable — #1239 deleted the pause signal; nothing sets this
+//   - paused: Legacy-valid and accepted by transition APIs; #1239 removes the
+//     framework-owned signal path and pause semantics
 //   - awaiting_approval: Waiting for user approval
 //
 // States are fluid checkpoints - the loop can transition backward (e.g., from
