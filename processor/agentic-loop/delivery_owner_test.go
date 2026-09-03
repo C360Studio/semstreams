@@ -266,18 +266,51 @@ func TestLoopFatalHealthLatchesBeforeEachExactOwnerDrain(t *testing.T) {
 	firstCause := errors.New("first loop owner lost")
 	secondCause := errors.New("later loop owner lost")
 	healthAtDrain := make(chan component.HealthStatus, 2)
-	firstAdmission := &deliveryLaneAdmission{open: true, fatal: make(chan error), onFatal: c.recordDeliveryOwnerFatal}
-	secondAdmission := &deliveryLaneAdmission{open: true, fatal: make(chan error), onFatal: c.recordDeliveryOwnerFatal}
-	firstHandle := &loopHealthProbeHandle{closed: make(chan struct{}), onDrain: func() { healthAtDrain <- c.Health() }}
-	secondHandle := &loopHealthProbeHandle{closed: make(chan struct{}), onDrain: func() { healthAtDrain <- c.Health() }}
+	firstHealthLatched := make(chan struct{})
+	secondHealthLatched := make(chan struct{})
+	firstAdmission := &deliveryLaneAdmission{open: true, fatal: make(chan error), onFatal: func(err error) {
+		c.recordDeliveryOwnerFatal(err)
+		close(firstHealthLatched)
+	}}
+	secondAdmission := &deliveryLaneAdmission{open: true, fatal: make(chan error), onFatal: func(err error) {
+		c.recordDeliveryOwnerFatal(err)
+		close(secondHealthLatched)
+	}}
+	firstHandle := &loopHealthProbeHandle{closed: make(chan struct{}), onDrain: func() {
+		health := c.Health()
+		if health.Healthy || health.Status != "delivery ownership lost" || health.LastError != firstCause.Error() || health.ErrorCount != 2 {
+			t.Errorf("health at first drain = %+v, want first fatal cause after prior trajectory error", health)
+		}
+		healthAtDrain <- health
+	}}
+	secondHandle := &loopHealthProbeHandle{closed: make(chan struct{}), onDrain: func() {
+		health := c.Health()
+		if health.Healthy || health.Status != "delivery ownership lost" || health.LastError != firstCause.Error() || health.ErrorCount != 2 {
+			t.Errorf("health at second drain = %+v, want sticky first fatal cause and count", health)
+		}
+		healthAtDrain <- health
+	}}
 	firstBinding := newStreamConsumerBinding(firstHandle)
 	secondBinding := newStreamConsumerBinding(secondHandle)
 	ctx, cancel := context.WithCancel(t.Context())
-	c.observeDeliveryLane(ctx, &firstBinding, firstAdmission, "agent.signal")
-	c.observeDeliveryLane(ctx, &secondBinding, secondAdmission, "agent.approval_response")
 
-	firstAdmission.latchFatal(firstCause)
+	firstLatchDone := make(chan struct{})
+	go func() {
+		firstAdmission.latchFatal(firstCause)
+		close(firstLatchDone)
+	}()
+	select {
+	case <-firstHealthLatched:
+	case <-time.After(time.Second):
+		c.observeDeliveryLane(ctx, &firstBinding, firstAdmission, "agent.signal")
+		<-firstLatchDone
+		cancel()
+		<-firstBinding.observerDone
+		t.Fatal("first fatal health was not latched before owner notification")
+	}
+	c.observeDeliveryLane(ctx, &firstBinding, firstAdmission, "agent.signal")
 	firstHealth := <-healthAtDrain
+	<-firstLatchDone
 	require.False(t, firstHealth.Healthy)
 	require.Equal(t, "delivery ownership lost", firstHealth.Status)
 	require.Equal(t, firstCause.Error(), firstHealth.LastError)
@@ -285,8 +318,24 @@ func TestLoopFatalHealthLatchesBeforeEachExactOwnerDrain(t *testing.T) {
 	require.Equal(t, int32(1), firstHandle.drains.Load())
 	require.Zero(t, secondHandle.drains.Load())
 
-	secondAdmission.latchFatal(secondCause)
+	secondLatchDone := make(chan struct{})
+	go func() {
+		secondAdmission.latchFatal(secondCause)
+		close(secondLatchDone)
+	}()
+	select {
+	case <-secondHealthLatched:
+	case <-time.After(time.Second):
+		c.observeDeliveryLane(ctx, &secondBinding, secondAdmission, "agent.approval_response")
+		<-secondLatchDone
+		cancel()
+		<-firstBinding.observerDone
+		<-secondBinding.observerDone
+		t.Fatal("later fatal health callback did not finish before owner notification")
+	}
+	c.observeDeliveryLane(ctx, &secondBinding, secondAdmission, "agent.approval_response")
 	secondHealth := <-healthAtDrain
+	<-secondLatchDone
 	require.Equal(t, firstHealth.LastError, secondHealth.LastError)
 	require.Equal(t, firstHealth.ErrorCount, secondHealth.ErrorCount)
 	require.Equal(t, int32(1), firstHandle.drains.Load())

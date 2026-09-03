@@ -134,18 +134,51 @@ func TestGovernanceFatalHealthLatchesBeforeEachExactOwnerDrain(t *testing.T) {
 	firstCause := errors.New("first governance owner lost")
 	secondCause := errors.New("later governance owner lost")
 	healthAtDrain := make(chan component.HealthStatus, 2)
-	firstAdmission := &governanceDeliveryLaneAdmission{open: true, fatal: make(chan error), onFatal: c.recordDeliveryOwnerFatal}
-	secondAdmission := &governanceDeliveryLaneAdmission{open: true, fatal: make(chan error), onFatal: c.recordDeliveryOwnerFatal}
-	firstHandle := &governanceHealthProbeHandle{closed: make(chan struct{}), onDrain: func() { healthAtDrain <- c.Health() }}
-	secondHandle := &governanceHealthProbeHandle{closed: make(chan struct{}), onDrain: func() { healthAtDrain <- c.Health() }}
+	firstHealthLatched := make(chan struct{})
+	secondHealthLatched := make(chan struct{})
+	firstAdmission := &governanceDeliveryLaneAdmission{open: true, fatal: make(chan error), onFatal: func(err error) {
+		c.recordDeliveryOwnerFatal(err)
+		close(firstHealthLatched)
+	}}
+	secondAdmission := &governanceDeliveryLaneAdmission{open: true, fatal: make(chan error), onFatal: func(err error) {
+		c.recordDeliveryOwnerFatal(err)
+		close(secondHealthLatched)
+	}}
+	firstHandle := &governanceHealthProbeHandle{closed: make(chan struct{}), onDrain: func() {
+		health := c.Health()
+		if health.Healthy || health.Status != "delivery ownership lost" || health.LastError != firstCause.Error() || health.ErrorCount != 5 {
+			t.Errorf("health at first drain = %+v, want first fatal cause after four business errors", health)
+		}
+		healthAtDrain <- health
+	}}
+	secondHandle := &governanceHealthProbeHandle{closed: make(chan struct{}), onDrain: func() {
+		health := c.Health()
+		if health.Healthy || health.Status != "delivery ownership lost" || health.LastError != firstCause.Error() || health.ErrorCount != 5 {
+			t.Errorf("health at second drain = %+v, want sticky first fatal cause and count", health)
+		}
+		healthAtDrain <- health
+	}}
 	firstBinding := newGovernanceStreamConsumerBinding(firstHandle)
 	secondBinding := newGovernanceStreamConsumerBinding(secondHandle)
 	ctx, cancel := context.WithCancel(t.Context())
-	c.observeGovernanceDeliveryLane(ctx, &firstBinding, firstAdmission, "task_validation")
-	c.observeGovernanceDeliveryLane(ctx, &secondBinding, secondAdmission, "request_validation")
 
-	firstAdmission.latchFatal(firstCause)
+	firstLatchDone := make(chan struct{})
+	go func() {
+		firstAdmission.latchFatal(firstCause)
+		close(firstLatchDone)
+	}()
+	select {
+	case <-firstHealthLatched:
+	case <-time.After(time.Second):
+		c.observeGovernanceDeliveryLane(ctx, &firstBinding, firstAdmission, "task_validation")
+		<-firstLatchDone
+		cancel()
+		<-firstBinding.observerDone
+		t.Fatal("first fatal health was not latched before owner notification")
+	}
+	c.observeGovernanceDeliveryLane(ctx, &firstBinding, firstAdmission, "task_validation")
 	firstHealth := <-healthAtDrain
+	<-firstLatchDone
 	require.False(t, firstHealth.Healthy)
 	require.Equal(t, "delivery ownership lost", firstHealth.Status)
 	require.Equal(t, firstCause.Error(), firstHealth.LastError)
@@ -153,8 +186,24 @@ func TestGovernanceFatalHealthLatchesBeforeEachExactOwnerDrain(t *testing.T) {
 	require.Equal(t, int32(1), firstHandle.drains.Load())
 	require.Zero(t, secondHandle.drains.Load())
 
-	secondAdmission.latchFatal(secondCause)
+	secondLatchDone := make(chan struct{})
+	go func() {
+		secondAdmission.latchFatal(secondCause)
+		close(secondLatchDone)
+	}()
+	select {
+	case <-secondHealthLatched:
+	case <-time.After(time.Second):
+		c.observeGovernanceDeliveryLane(ctx, &secondBinding, secondAdmission, "request_validation")
+		<-secondLatchDone
+		cancel()
+		<-firstBinding.observerDone
+		<-secondBinding.observerDone
+		t.Fatal("later fatal health callback did not finish before owner notification")
+	}
+	c.observeGovernanceDeliveryLane(ctx, &secondBinding, secondAdmission, "request_validation")
 	secondHealth := <-healthAtDrain
+	<-secondLatchDone
 	require.Equal(t, firstHealth.LastError, secondHealth.LastError)
 	require.Equal(t, firstHealth.ErrorCount, secondHealth.ErrorCount)
 	require.Equal(t, int32(1), firstHandle.drains.Load())
