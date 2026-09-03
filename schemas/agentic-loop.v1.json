@@ -23,8 +23,8 @@
         },
         "heartbeat_interval": {
           "type": "string",
-          "description": "InProgress heartbeat interval (e.g. 60s or 2m). Must be less than ack_wait",
-          "default": "60s",
+          "description": "InProgress heartbeat interval for long-running consumers. Must be no more than half the shortest configured BackOff interval",
+          "default": "15s",
           "category": "advanced"
         },
         "max_deliver": {
