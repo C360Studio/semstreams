@@ -63,7 +63,7 @@ func TestNonUUIDLoopIDIsTerminatedAtIntake(t *testing.T) {
 	beforeCreated := testutil.ToFloat64(comp.metrics.loopsCreated)
 
 	msg := &inputAckMsg{data: data}
-	err = consumeLongRunningInput(context.Background(), msg, time.Hour,
+	err = consumeTypedLongRunningInput(context.Background(), msg, time.Hour,
 		comp.taskInputHandler(time.Minute))
 	if err == nil || !errs.IsInvalid(err) {
 		t.Fatalf("consume error = %v, want typed invalid rejection", err)

@@ -34,11 +34,13 @@ type inputAckMsg struct {
 	progress   chan struct{}
 }
 
-func (m *inputAckMsg) Data() []byte                              { return m.data }
-func (m *inputAckMsg) Subject() string                           { return "agent.task.test" }
-func (m *inputAckMsg) Reply() string                             { return "" }
-func (m *inputAckMsg) Headers() nats.Header                      { return nil }
-func (m *inputAckMsg) Metadata() (*jetstream.MsgMetadata, error) { return nil, nil }
+func (m *inputAckMsg) Data() []byte         { return m.data }
+func (m *inputAckMsg) Subject() string      { return "agent.task.test" }
+func (m *inputAckMsg) Reply() string        { return "" }
+func (m *inputAckMsg) Headers() nats.Header { return nil }
+func (m *inputAckMsg) Metadata() (*jetstream.MsgMetadata, error) {
+	return &jetstream.MsgMetadata{NumDelivered: 1}, nil
+}
 func (m *inputAckMsg) Ack() error {
 	m.acked.Store(true)
 	return nil
@@ -259,7 +261,7 @@ func TestGraphStatePoisonFailsLoopWhileIntakeContinues(t *testing.T) {
 			t.Fatal(err)
 		}
 		msg := &inputAckMsg{data: data}
-		if err := consumeLongRunningInput(context.Background(), msg, time.Hour,
+		if err := consumeTypedLongRunningInput(context.Background(), msg, time.Hour,
 			c.taskInputHandler(time.Minute)); err != nil {
 			t.Fatalf("consume(%s) error = %v, want nil", taskID, err)
 		}
