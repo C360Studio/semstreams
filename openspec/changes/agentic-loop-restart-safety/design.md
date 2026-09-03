@@ -526,6 +526,8 @@ Property and fuzz tests cite these normative delta requirements rather than reco
 | observed DiscardOld cannot satisfy strong recovery | `agentic-loop / Restart-safe replay observes and admits local stream bounds` |
 | every delivery task joins before result and Stop | `agentic-loop / Delivery work joins before settlement`; owner-specific shutdown requirements |
 | first-party rule task output is durable before row 15 | `rule-agent-publishing / Publish-agent classification uses canonical wildcard coverage and durable publication` |
+| fatal delivery-owner loss is visible and drains only its exact handle | model durable-response and loop all-six-input requirements |
+| fixed loop BackOff is admitted only when MaxDeliver covers every entry | `agentic-loop / Long-running loop heartbeat policy is valid before acquisition` |
 
 ## Context and lifecycle
 
@@ -540,6 +542,23 @@ each exact `Closed` signal, then cancel and join owner-stop observers and work. 
 shutdown clauses; this paragraph is explanation rather than the sole authority.
 
 Audit remains nonblocking as specified. Nonblocking does not authorize an abandoned goroutine.
+
+### Fatal delivery-owner loss
+
+Model and loop reuse the existing agentic-tools problem shape. The first fatal delivery-owner result is latched
+synchronously before the owner-stop observer can drain its exact consume handle. Existing component health reports
+`Healthy=false`, status `delivery ownership lost`, the exact cause in `LastError`, and exactly one increment of the
+existing error count. Later fatal results neither overwrite nor recount the first cause. Loop owner loss takes status
+precedence over trajectory-audit degradation while both facts retain their existing meanings.
+
+Unavailable delivery metadata invokes no business work and makes no heartbeat or settlement call. It quarantines,
+latches negative health, and drains only the exact owner through the existing `drainOnce`. This adds no public state,
+metric family, bucket, communication path, or supervisor. Task 10 still owns the broader stop-admission, await-Closed,
+cancel, and join proof.
+
+The loop's fixed BackOff `[30s,2m]` requires `MaxDeliver >= len(BackOff)`, currently at least 2. Omitted or zero
+MaxDeliver defaults to 2; explicit 1 refuses before allocation. BackOff is never truncated and restart-safe loop work
+does not advertise a single-delivery posture.
 
 ## Observed AGENT replay admissibility
 

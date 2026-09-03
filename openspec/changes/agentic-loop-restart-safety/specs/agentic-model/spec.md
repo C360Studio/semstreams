@@ -9,6 +9,12 @@ already committed matching response before invoking a provider.
 Agentic-model SHALL receive immutable delivery-attempt observation from the accepted settlement adapter. It SHALL
 NOT receive or retain native message or settlement authority.
 
+The first fatal result from the model delivery owner SHALL synchronously latch into the component's existing health
+surface before owner-stop observation can drain the handle. Health SHALL report `Healthy=false`, status
+`delivery ownership lost`, the exact cause in `LastError`, and exactly one increment of the existing error count.
+Later fatal results SHALL neither overwrite the first cause nor increment the count again. This adds no metric family,
+public state, durable state, or communication path.
+
 #### Scenario: Response publication succeeds
 
 - **WHEN** a provider returns an `AgentResponse` for a valid `AgentRequest`
@@ -44,6 +50,15 @@ outside an admitted retention horizon is unknown and SHALL NOT prove that a prov
 - **THEN** it does not invoke agentic-model work
 - **AND** quarantines with `delivery_metadata_unavailable`
 - **AND** stops the exact delivery owner
+- **AND** performs no heartbeat or settlement call
+- **AND** drains the exact consume handle
+- **AND** component health becomes negative with the exact cause and one error-count increment
+
+#### Scenario: Delivery attempt observation is immutable and bounded
+
+- **WHEN** agentic-model receives delivery-attempt observation
+- **THEN** it may observe only `Number`, `MetadataAvailable`, and `IsRedelivery`
+- **AND** it cannot access a native message, settlement method, sequence, consumer identity, header, or mutable state
 
 ### Requirement: Provider commit-unknown behavior is explicit
 

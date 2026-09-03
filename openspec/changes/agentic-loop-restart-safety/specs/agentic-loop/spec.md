@@ -26,6 +26,13 @@ compatibility shim, alias, reserved enum, migration, checkpoint, supervisor, or 
 added. `ResponseAction.Signal` and `ClassifiedIntent.SignalType` SHALL remain outside ownership of durable
 `agent.signal.*` settlement.
 
+The first fatal result from any loop delivery owner SHALL synchronously latch into the component's existing health
+surface before owner-stop observation drains the exact handle. Owner loss SHALL take status precedence over
+trajectory-audit degradation without reclassifying either condition: health SHALL report `Healthy=false`, status
+`delivery ownership lost`, the exact cause in `LastError`, and exactly one increment of the existing error count.
+Later fatal results SHALL neither overwrite nor recount the first cause. This adds no metric family, public state,
+durable state, or communication path.
+
 #### Scenario: Paused state is refused everywhere
 
 - **GIVEN** an exported transition input, decoded persisted loop, or schema-validated document carries `paused`
@@ -87,6 +94,14 @@ added. `ResponseAction.Signal` and `ClassifiedIntent.SignalType` SHALL remain ou
 - **WHEN** approval work panics
 - **THEN** the delivery quarantines and stops the exact owner
 - **AND** the panic is never rewritten to nil
+
+#### Scenario: Loop delivery metadata is unavailable
+
+- **WHEN** a loop settlement adapter cannot observe native delivery metadata
+- **THEN** it invokes no loop work and makes no heartbeat or settlement call
+- **AND** quarantines with `delivery_metadata_unavailable`
+- **AND** drains the exact consume handle
+- **AND** loop health becomes negative with the exact cause and one error-count increment
 
 #### Scenario: Verdict arrives without a waiter
 
@@ -408,13 +423,27 @@ It SHALL refuse retained drift without reconciliation and validate approval time
 
 Task, response, and tool-result consumers SHALL default to heartbeat 15s against BackOff `[30s,2m]`. They SHALL
 validate the exact acquisition config before consumer allocation; heartbeat SHALL be no greater than half the
-shortest positive BackOff.
+shortest positive BackOff. MaxDeliver SHALL be at least the number of BackOff entries, so the fixed two-entry BackOff
+requires MaxDeliver at least 2. Omitted or zero MaxDeliver SHALL default to 2. An explicit value below 2 SHALL be
+refused before consumer allocation; the owner SHALL NOT truncate BackOff or admit a single-delivery posture.
 
 #### Scenario: Legacy loop default is refused before allocation
 
 - **WHEN** setup observes heartbeat 60s and BackOff `[30s,2m]`
 - **THEN** it returns a typed error naming the values and 15s ceiling
 - **AND** allocates no consumer
+
+#### Scenario: Single delivery is refused before allocation
+
+- **WHEN** setup observes MaxDeliver 1 with BackOff `[30s,2m]`
+- **THEN** it returns a typed policy error naming observed 1 and required minimum 2
+- **AND** allocates no consumer
+
+#### Scenario: Minimum valid delivery count reaches acquisition
+
+- **WHEN** setup observes MaxDeliver 2, heartbeat 15s, and BackOff `[30s,2m]`
+- **THEN** heartbeat and delivery-count validation pass
+- **AND** setup may allocate the consumer with the unchanged two-entry BackOff
 
 ## MODIFIED Requirements
 

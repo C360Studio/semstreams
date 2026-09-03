@@ -40,7 +40,11 @@ AgentRun complete/failed fanout is transferred intact to #1249 from the exact po
 - Native messages and settlement methods remain inside private binding owners. No exported no-heartbeat settlement
   API or raw settlement escape is added.
 - Model uses AckWait 120s / heartbeat 60s. Loop task/response/tool-result use heartbeat 15s against shortest BackOff
-  30s. Exact acquisition configuration is validated before consumer allocation.
+  30s. Loop MaxDeliver is at least the fixed two-entry BackOff length, so omitted/zero defaults to 2 and explicit 1
+  refuses before allocation. Exact acquisition configuration is validated before consumer allocation.
+- The first model or loop delivery-owner fatal result latches into the existing negative health/error-count surface
+  before exact-handle drain. Metadata loss performs no work, heartbeat, or settlement, and later fatal observations
+  neither overwrite the first cause nor recount it. No new health surface or state authority is added.
 - Each recovery-dependent agentic component validates only its own resolved stream facts and local typed requirement
   before its dependent allocation. Non-agentic components perform no admission lookup.
 - A rule processor whose resolved local outputs declare the AGENT task family uses the same internal admission

@@ -15,23 +15,34 @@ design-section shorthand is not a valid citation. Every implementation slice fol
 - [x] 0.5 Receive publisher-addendum `INVENTORY PASS`, SHA-256
   `0adba4f0092017d84f1ef181ebaf3299323f5cc75b999825bd1e16d6e292930f`, 226/226 pins.
 - [x] 0.6 Materialize the accepted target into proposal, canonical design, tasks, and six capability deltas.
-- [ ] 0.7 Receive independent pre-implementation design review of the complete active OpenSpec.
+- [x] 0.7 Receive independent pre-implementation design review of the complete active OpenSpec.
 
 ## 1. Settlement foundation and lease policy
 
-- [ ] 1.1 Verify PR #1159 still targets `codex/gh759-semantic-settlement`, the remote parent remains exact
+- [x] 1.1 Verify PR #1159 still targets `codex/gh759-semantic-settlement`, the remote parent remains exact
   `F=417beae5552f8f15ad3540edd7d8504c87174c13`, and implementation begins from exact post-#1251 checkpoint
   `P=09ba38b1de5e7200e72281c8e4b8941d81be1da2`. Any parent advance or inventory drift stops work for rebase,
   reinventory, retest, and re-review.
-- [ ] 1.2 RED: add setup-failure tests for model heartbeat 90s/AckWait 120s and loop heartbeat 60s/BackOff
+- [x] 1.2 RED: add setup-failure tests for model heartbeat 90s/AckWait 120s and loop heartbeat 60s/BackOff
   `[30s,2m]`, plus passing 60s/120s and 15s/`[30s,2m]` cases. Cite exactly
   `// spec: agentic-model / Model heartbeat policy is valid before acquisition` and
   `// spec: agentic-loop / Long-running loop heartbeat policy is valid before acquisition`.
-- [ ] 1.3 Implement model default 60s and loop default/schema 15s; reconcile typed configuration, defaults, generated
-  schemas, docs, and every fixture. Validate the exact acquisition config before allocating a consumer.
-- [ ] 1.4 GREEN: prove invalid policy allocates zero consumers, valid policy reaches acquisition, unavailable delivery
+- [x] 1.2a RED: add model and loop owner-fatal health tests plus loop MaxDeliver 1 rejection and MaxDeliver 2
+  acquisition tests. Prove exact-handle drain, no work/heartbeat/settlement, first-cause retention, and exactly one
+  existing error-count increment. Cite exactly
+  `// spec: agentic-model / Model request settlement is bound to a durable response`,
+  `// spec: agentic-loop / All six loop input classes settle after owner-specific durable done`, and
+  `// spec: agentic-loop / Long-running loop heartbeat policy is valid before acquisition` as applicable.
+- [x] 1.3 Implement model default 60s and loop default/schema 15s; require loop MaxDeliver at least the fixed BackOff
+  length 2 and reject explicit 1 before allocation without truncating BackOff. Reconcile typed configuration,
+  defaults, generated schemas, docs, and every fixture. Latch the first model/loop delivery-owner fatal result into
+  existing negative health and one error-count increment before draining the exact handle; add no health surface.
+- [x] 1.4 GREEN: prove invalid policy allocates zero consumers, valid policy reaches acquisition, unavailable delivery
   metadata quarantines and stops the exact heartbeat owner, and immutable `DeliveryAttempt` exposes no native message,
-  settlement method, sequence, consumer identity, header, or mutable state under the citations from 1.2.
+  settlement method, sequence, consumer identity, header, or mutable state. Lease-math tests cite the two heartbeat-
+  policy requirements from 1.2. Model metadata/attempt tests cite
+  `// spec: agentic-model / Model request settlement is bound to a durable response`; loop metadata/owner-health tests
+  cite `// spec: agentic-loop / All six loop input classes settle after owner-specific durable done`.
 - [ ] 1.5 RED: for each of ten physical fast subscriptions add a real-NATS 30s AckWait/25s cooperative-work/5s
   cancellation-and-join boundary test. Cite its exact owner requirement:
   `// spec: agentic-dispatch / Every dispatch durable input settles through its owner`,
