@@ -26,7 +26,7 @@ func consumeTypedLongRunningInput(
 		natsclient.StreamConsumerConfig{AckWait: 2 * heartbeatInterval},
 		heartbeatInterval,
 		retry,
-		func(workCtx context.Context, _ natsclient.DeliveryAttempt, data []byte) (natsclient.DeliveryDecision, error) {
+		func(workCtx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
 			handlerErr := handler(workCtx, data)
 			if handlerErr == nil {
 				return natsclient.DeliveryDecisionAck, nil

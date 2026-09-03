@@ -5,8 +5,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"reflect"
-	"sort"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -54,7 +52,7 @@ func TestModelUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner(t *testin
 		natsclient.StreamConsumerConfig{AckWait: 2 * time.Minute},
 		60*time.Second,
 		natsclient.ImmediateDeliveryRetry(),
-		func(context.Context, natsclient.DeliveryAttempt, []byte) (natsclient.DeliveryDecision, error) {
+		func(context.Context, []byte) (natsclient.DeliveryDecision, error) {
 			workCalls.Add(1)
 			return natsclient.DeliveryDecisionAck, nil
 		},
@@ -162,26 +160,4 @@ func TestModelSetupWiresMetadataFailureToAcquiredOwner(t *testing.T) {
 	for _, binding := range c.consumers {
 		<-binding.observerDone
 	}
-}
-
-// spec: agentic-model / Model request settlement is bound to a durable response
-func TestDeliveryAttemptExposesOnlyImmutableAttemptObservation(t *testing.T) {
-	typeOfAttempt := reflect.TypeOf(natsclient.DeliveryAttempt{})
-	require.Equal(t, 1, typeOfAttempt.NumField())
-	field := typeOfAttempt.Field(0)
-	require.NotEmpty(t, field.PkgPath, "attempt storage must remain unexported")
-	require.Equal(t, reflect.Uint64, field.Type.Kind(), "attempt storage must be scalar and immutable by callers")
-
-	methods := make([]string, 0, typeOfAttempt.NumMethod())
-	for i := 0; i < typeOfAttempt.NumMethod(); i++ {
-		methods = append(methods, typeOfAttempt.Method(i).Name)
-	}
-	sort.Strings(methods)
-	require.Equal(t, []string{"IsRedelivery", "MetadataAvailable", "Number"}, methods)
-	for _, forbidden := range []string{"Message", "Ack", "Nak", "Term", "Sequence", "Consumer", "Headers"} {
-		_, found := typeOfAttempt.MethodByName(forbidden)
-		require.False(t, found, "DeliveryAttempt must not expose %s", forbidden)
-	}
-	require.Equal(t, typeOfAttempt.NumMethod(), reflect.PointerTo(typeOfAttempt).NumMethod(),
-		"pointer-only methods would expose mutable attempt state")
 }
