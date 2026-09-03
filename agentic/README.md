@@ -165,7 +165,7 @@ The state machine supports these states:
 | `complete` | Successfully finished (terminal) |
 | `failed` | Failed execution (terminal) |
 | `cancelled` | Cancelled by user (terminal) |
-| `paused` | Unreachable — the pause signal was deleted (#1239); no code path sets this state |
+| `paused` | Legacy-valid; exported transitions accept it; no framework-owned pause signal or semantics (#1239) |
 | `awaiting_approval` | Waiting for user approval |
 
 States are fluid checkpoints. The loop can move backward except from terminal states.
