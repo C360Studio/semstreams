@@ -141,6 +141,25 @@ func TestLoopDefaultConsumerDeclaresValidHeartbeatPolicy(t *testing.T) {
 }
 
 // spec: agentic-loop / Long-running loop heartbeat policy is valid before acquisition
+func TestResolveConfigAppliesLoopMaxDeliverFloor(t *testing.T) {
+	t.Run("explicit one reports observed and required values", func(t *testing.T) {
+		_, _, _, err := resolveConfig(json.RawMessage(`{"consumer":{"max_deliver":1}}`))
+
+		require.Error(t, err)
+		require.True(t, errs.IsInvalid(err))
+		require.Contains(t, err.Error(), "max_deliver 1")
+		require.Contains(t, err.Error(), "required minimum 2")
+	})
+
+	t.Run("explicit zero resolves to default two", func(t *testing.T) {
+		config, _, _, err := resolveConfig(json.RawMessage(`{"consumer":{"max_deliver":0}}`))
+
+		require.NoError(t, err)
+		require.Equal(t, 2, config.Consumer.MaxDeliver)
+	})
+}
+
+// spec: agentic-loop / Long-running loop heartbeat policy is valid before acquisition
 func TestLoopMaxDeliverCoversFixedBackOffBeforeConsumerAcquisition(t *testing.T) {
 	for _, test := range []struct {
 		name       string
