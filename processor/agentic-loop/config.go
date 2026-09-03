@@ -311,7 +311,10 @@ func (c ConsumerConfig) Validate() error {
 		}
 	}
 	if c.MaxDeliver != 0 && c.MaxDeliver < 2 {
-		return errs.WrapInvalid(fmt.Errorf("max_deliver must be at least 2 when set"), "ConsumerConfig", "Validate", "check max_deliver")
+		return errs.WrapInvalid(
+			fmt.Errorf("max_deliver %d is below required minimum %d", c.MaxDeliver, 2),
+			"ConsumerConfig", "Validate", "check max_deliver",
+		)
 	}
 	return nil
 }
