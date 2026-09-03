@@ -107,6 +107,7 @@ func TestLongRunningLoopHeartbeatPolicyValidatedBeforeConsumerAcquisition(t *tes
 
 				err = c.setupConsumer(
 					t.Context(), t.Context(), port, portName+".>", func(context.Context, []byte) error { return nil },
+					nil,
 				)
 				if test.wantErr {
 					require.Error(t, err)
@@ -201,6 +202,7 @@ func TestLoopMaxDeliverCoversFixedBackOffBeforeConsumerAcquisition(t *testing.T)
 
 			err = c.setupConsumer(
 				t.Context(), t.Context(), port, "agent.task.>", func(context.Context, []byte) error { return nil },
+				nil,
 			)
 			if test.wantErr {
 				require.Error(t, err)

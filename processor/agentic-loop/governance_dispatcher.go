@@ -56,6 +56,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/natsclient"
 )
 
 // VerdictPublisher is the minimum surface the governance dispatcher
@@ -211,7 +212,7 @@ type GovernanceDispatcher interface {
 	// (audit mode, late arrivals, verdicts for other components'
 	// loops on a shared stream). Data is retained for audit logging
 	// only — routing decisions are made from decision + callID.
-	HandleVerdict(decision, callID string, data []byte)
+	HandleVerdict(decision, callID string, data []byte) (natsclient.DeliveryDecision, error)
 
 	// Mode returns the configured mode for inspection. Useful for
 	// observability gauges and conditional logging in the handler.
@@ -263,13 +264,14 @@ func (d *disabledDispatcher) Propose(_ context.Context, _, _ string, calls []age
 	return DispatcherResult{Approved: calls}, nil
 }
 
-func (d *disabledDispatcher) HandleVerdict(decision, callID string, _ []byte) {
+func (d *disabledDispatcher) HandleVerdict(decision, callID string, _ []byte) (natsclient.DeliveryDecision, error) {
 	// No-op: in disabled mode the loop didn't publish a proposed call,
 	// so any verdict arriving is from another flow (or a misconfigured
 	// rule). Log at Debug only — not actionable.
 	d.logger.Debug("Verdict received in disabled-mode governance dispatcher; ignoring",
 		slog.String("decision", decision),
 		slog.String("call_id", callID))
+	return natsclient.DeliveryDecisionAck, nil
 }
 
 func (d *disabledDispatcher) Mode() string { return ToolCallGovernanceModeDisabled }
@@ -299,7 +301,7 @@ func (d *auditDispatcher) Propose(ctx context.Context, loopID, parentLoopID stri
 	return DispatcherResult{Approved: calls}, nil
 }
 
-func (d *auditDispatcher) HandleVerdict(decision, callID string, data []byte) {
+func (d *auditDispatcher) HandleVerdict(decision, callID string, data []byte) (natsclient.DeliveryDecision, error) {
 	// Audit mode logs verdicts for visibility but takes no action.
 	// Operators developing rules see their verdicts firing without
 	// gating real traffic.
@@ -316,6 +318,7 @@ func (d *auditDispatcher) HandleVerdict(decision, callID string, data []byte) {
 		// histogram is still useful for verdict-arrival rate visualisation.
 		d.metrics.RecordGovernanceVerdict(decision, ToolCallGovernanceModeAudit, 0)
 	}
+	return natsclient.DeliveryDecisionAck, nil
 }
 
 func (d *auditDispatcher) Mode() string { return ToolCallGovernanceModeAudit }
@@ -465,12 +468,12 @@ func (d *enforceDispatcher) awaitVerdict(ctx context.Context, ch chan verdictArr
 	}
 }
 
-func (d *enforceDispatcher) HandleVerdict(decision, callID string, data []byte) {
+func (d *enforceDispatcher) HandleVerdict(decision, callID string, data []byte) (natsclient.DeliveryDecision, error) {
 	if decision == "" || callID == "" {
 		d.logger.Warn("Verdict missing decision or call_id; ignoring",
 			slog.String("decision", decision),
 			slog.String("call_id", callID))
-		return
+		return natsclient.DeliveryDecisionTerminate, errors.New("verdict missing decision or call_id")
 	}
 
 	// Payload is optional audit context — routing relies on the
@@ -491,7 +494,7 @@ func (d *enforceDispatcher) HandleVerdict(decision, callID string, data []byte) 
 		if d.metrics != nil {
 			d.metrics.RecordGovernanceVerdictMissingWaiter()
 		}
-		return
+		return natsclient.DeliveryDecisionRetry, fmt.Errorf("no active governance waiter for call_id %q", callID)
 	}
 
 	// Non-blocking send via the buffered channel. If somehow a second
@@ -500,9 +503,11 @@ func (d *enforceDispatcher) HandleVerdict(decision, callID string, data []byte) 
 	// first wins. Same as the natsclient request/response convention.
 	select {
 	case ch <- verdictArrival{decision: decision, reason: payload.EffectiveReason(), ruleID: payload.RuleID}:
+		return natsclient.DeliveryDecisionAck, nil
 	default:
 		d.logger.Debug("Verdict channel already full (duplicate verdict?); dropping",
 			slog.String("call_id", callID))
+		return natsclient.DeliveryDecisionQuarantine, fmt.Errorf("governance waiter for call_id %q is full", callID)
 	}
 }
 

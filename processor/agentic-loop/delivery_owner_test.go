@@ -2,6 +2,7 @@ package agenticloop
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -9,8 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
@@ -21,6 +25,9 @@ type loopDeliveryOwnerMsg struct {
 	dataCalls   atomic.Int32
 	heartbeats  atomic.Int32
 	settlement  atomic.Int32
+	acks        atomic.Int32
+	naks        atomic.Int32
+	terms       atomic.Int32
 	metadata    atomic.Int32
 	metadataErr error
 }
@@ -36,13 +43,75 @@ func (m *loopDeliveryOwnerMsg) Metadata() (*jetstream.MsgMetadata, error) {
 	}
 	return &jetstream.MsgMetadata{NumDelivered: 1}, nil
 }
-func (m *loopDeliveryOwnerMsg) Ack() error                       { m.settlement.Add(1); return nil }
-func (*loopDeliveryOwnerMsg) DoubleAck(context.Context) error    { return nil }
-func (m *loopDeliveryOwnerMsg) Nak() error                       { m.settlement.Add(1); return nil }
-func (m *loopDeliveryOwnerMsg) NakWithDelay(time.Duration) error { m.settlement.Add(1); return nil }
-func (m *loopDeliveryOwnerMsg) InProgress() error                { m.heartbeats.Add(1); return nil }
-func (m *loopDeliveryOwnerMsg) Term() error                      { m.settlement.Add(1); return nil }
-func (m *loopDeliveryOwnerMsg) TermWithReason(string) error      { m.settlement.Add(1); return nil }
+func (m *loopDeliveryOwnerMsg) Ack() error                    { m.acks.Add(1); m.settlement.Add(1); return nil }
+func (*loopDeliveryOwnerMsg) DoubleAck(context.Context) error { return nil }
+func (m *loopDeliveryOwnerMsg) Nak() error                    { m.naks.Add(1); m.settlement.Add(1); return nil }
+func (m *loopDeliveryOwnerMsg) NakWithDelay(time.Duration) error {
+	m.naks.Add(1)
+	m.settlement.Add(1)
+	return nil
+}
+func (m *loopDeliveryOwnerMsg) InProgress() error           { m.heartbeats.Add(1); return nil }
+func (m *loopDeliveryOwnerMsg) Term() error                 { m.terms.Add(1); m.settlement.Add(1); return nil }
+func (m *loopDeliveryOwnerMsg) TermWithReason(string) error { return m.Term() }
+
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
+	newPolicy := func(t *testing.T, port string, handler inputHandler) natsclient.HeartbeatDeliveryPolicy {
+		t.Helper()
+		policy, err := newLoopHeartbeatDeliveryPolicy(t.Context(), natsclient.StreamConsumerConfig{
+			AckWait: 2 * time.Minute, BackOff: []time.Duration{30 * time.Second, 2 * time.Minute}, MaxDeliver: 2,
+		}, 15*time.Second, port, handler)
+		require.NoError(t, err)
+		return policy
+	}
+
+	t.Run("agent response", func(t *testing.T) {
+		handler := NewMessageHandler(DefaultConfig())
+		loopID, err := handler.loopManager.CreateLoop("task-response", "general", "model", 3)
+		require.NoError(t, err)
+		requestID := handler.loopManager.GenerateRequestID(loopID)
+		handler.loopManager.TrackRequest(requestID, loopID)
+		c := releaseTestComponent(t, handler)
+		c.loopsBucket = failingLoopBucket{err: errors.New("kv unavailable")}
+		response := &agentic.AgentResponse{
+			RequestID: requestID, Status: agentic.StatusComplete,
+			Message: agentic.ChatMessage{Role: "assistant", Content: "done"},
+		}
+		data, err := json.Marshal(message.NewBaseMessage(response.Schema(), response, "test"))
+		require.NoError(t, err)
+		msg := &loopDeliveryOwnerMsg{data: data}
+		result, admitted := consumeAdmittedDelivery(t.Context(), msg, newPolicy(t, "agent.response", c.handleResponseMessage), newDeliveryLaneAdmission(nil))
+		require.True(t, admitted)
+		require.Equal(t, natsclient.DeliveryDecisionRetry, result.Decision())
+		require.Zero(t, msg.acks.Load()+msg.terms.Load())
+		require.Equal(t, int32(1), msg.naks.Load())
+		require.Contains(t, result.Err().Error(), "persist loop state")
+	})
+
+	t.Run("tool result", func(t *testing.T) {
+		handler := NewMessageHandler(DefaultConfig())
+		loopID, err := handler.loopManager.CreateLoop("task-tool", "general", "model", 3)
+		require.NoError(t, err)
+		_, err = handler.HandleModelResponse(t.Context(), loopID, agentic.AgentResponse{
+			RequestID: "request-tool", Status: "tool_call",
+			Message: agentic.ChatMessage{Role: "assistant", ToolCalls: []agentic.ToolCall{{ID: "call-tool", Name: "search"}}},
+		})
+		require.NoError(t, err)
+		c := releaseTestComponent(t, handler)
+		c.loopsBucket = failingLoopBucket{err: errors.New("kv unavailable")}
+		toolResult := &agentic.ToolResult{CallID: "call-tool", Name: "search", Content: "result"}
+		data, err := json.Marshal(message.NewBaseMessage(toolResult.Schema(), toolResult, "test"))
+		require.NoError(t, err)
+		msg := &loopDeliveryOwnerMsg{data: data}
+		result, admitted := consumeAdmittedDelivery(t.Context(), msg, newPolicy(t, "tool.result", c.handleToolResultMessage), newDeliveryLaneAdmission(nil))
+		require.True(t, admitted)
+		require.Equal(t, natsclient.DeliveryDecisionRetry, result.Decision())
+		require.Zero(t, msg.acks.Load()+msg.terms.Load())
+		require.Equal(t, int32(1), msg.naks.Load())
+		require.Contains(t, result.Err().Error(), "persist loop state")
+	})
+}
 
 // spec: agentic-loop / All six loop input classes settle after owner-specific durable done
 func TestLoopUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner(t *testing.T) {
@@ -126,6 +195,7 @@ func TestLoopSetupWiresMetadataFailureToAcquiredOwner(t *testing.T) {
 				workCalls.Add(1)
 				return nil
 			},
+			nil,
 		))
 	}
 	require.Len(t, callbacks, 2)
@@ -170,3 +240,186 @@ func TestLoopSetupWiresMetadataFailureToAcquiredOwner(t *testing.T) {
 		<-binding.observerDone
 	}
 }
+
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+func TestLoopProductionCallbacksTerminateMalformedNonHeartbeatInputs(t *testing.T) {
+	discoverable, err := NewComponent([]byte(`{}`), component.Dependencies{
+		NATSClient: &natsclient.Client{}, PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+	})
+	require.NoError(t, err)
+	c := discoverable.(*Component)
+	verdicts := &settlementVerdictDispatcher{received: make(chan string, 2)}
+	c.handler.SetGovernanceDispatcher(verdicts)
+	c.waitForStreamInput = func(context.Context, string) error { return nil }
+	callbacks := make(map[string]func(context.Context, jetstream.Msg))
+	c.consumeStream = func(_ context.Context, _ context.Context, owner natsclient.PortConsumerContext, _ natsclient.StreamConsumerConfig, callback func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
+		callbacks[owner.Port] = callback
+		return &loopPolicyHandle{closed: make(chan struct{})}, nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	require.NoError(t, c.setupSubscriptions(ctx, ctx))
+
+	for _, port := range []string{"agent.signal", "agent.approval_response", "agent.toolcall.approved", "agent.toolcall.rejected"} {
+		callback, ok := callbacks[port]
+		require.True(t, ok, "production setup did not bind %s", port)
+		msg := &loopSettlementMsg{data: []byte("{")}
+		callback(ctx, msg)
+		require.Zero(t, msg.acks.Load(), "%s must not ACK malformed input", port)
+		require.Zero(t, msg.naks.Load(), "%s immutable malformed input must not retry", port)
+		require.Equal(t, int32(1), msg.terms.Load(), "%s immutable malformed input must terminate", port)
+	}
+	for _, row := range []struct {
+		port     string
+		decision string
+		callID   string
+	}{
+		{port: "agent.toolcall.approved", decision: "approved", callID: "call-approved"},
+		{port: "agent.toolcall.rejected", decision: "rejected", callID: "call-rejected"},
+	} {
+		data := []byte(`{"decision":"` + row.decision + `","call_id":"` + row.callID + `"}`)
+		msg := &loopSettlementMsg{data: data}
+		callbacks[row.port](ctx, msg)
+		require.Equal(t, int32(1), msg.acks.Load())
+		require.Zero(t, msg.naks.Load()+msg.terms.Load())
+		require.Equal(t, row.decision+":"+row.callID, <-verdicts.received)
+	}
+
+	cancel()
+	for _, binding := range c.consumers {
+		if binding.observerDone != nil {
+			<-binding.observerDone
+		}
+	}
+}
+
+type settlementVerdictDispatcher struct{ received chan string }
+
+func (*settlementVerdictDispatcher) Propose(context.Context, string, string, []agentic.ToolCall) (DispatcherResult, error) {
+	return DispatcherResult{}, nil
+}
+func (d *settlementVerdictDispatcher) HandleVerdict(decision, callID string, _ []byte) (natsclient.DeliveryDecision, error) {
+	d.received <- decision + ":" + callID
+	return natsclient.DeliveryDecisionAck, nil
+}
+func (*settlementVerdictDispatcher) Mode() string { return "enforce" }
+
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// scenario: Approval handler panics
+func TestLoopApprovalPanicProductionCallbackQuarantinesExactOwner(t *testing.T) {
+	discoverable, err := NewComponent([]byte(`{}`), component.Dependencies{
+		NATSClient: &natsclient.Client{}, PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+	})
+	require.NoError(t, err)
+	c := discoverable.(*Component)
+	c.started = true
+	c.startTime = time.Now()
+	loopID := c.handler.loopManager.GenerateLoopID()
+	c.handler.loopManager = nil
+	c.waitForStreamInput = func(context.Context, string) error { return nil }
+	callbacks := make(map[string]func(context.Context, jetstream.Msg))
+	handles := make(map[string]*loopPolicyHandle)
+	c.consumeStream = func(_ context.Context, _ context.Context, owner natsclient.PortConsumerContext, _ natsclient.StreamConsumerConfig, callback func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
+		handle := &loopPolicyHandle{closed: make(chan struct{})}
+		callbacks[owner.Port] = callback
+		handles[owner.Port] = handle
+		return handle, nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	require.NoError(t, c.setupSubscriptions(ctx, ctx))
+
+	response := &agentic.ApprovalResponse{
+		LoopID: loopID, CallID: "call-panic", Decision: agentic.ApprovalDecisionApprove,
+		ApprovedBy: "operator", DecidedAt: time.Now().UTC(),
+	}
+	data, err := json.Marshal(message.NewBaseMessage(response.Schema(), response, "test"))
+	require.NoError(t, err)
+	msg := &loopSettlementMsg{data: data}
+	callbacks["agent.approval_response"](ctx, msg)
+
+	require.Zero(t, msg.acks.Load()+msg.naks.Load()+msg.terms.Load())
+	require.Eventually(t, func() bool { return handles["agent.approval_response"].drains.Load() == 1 }, time.Second, time.Millisecond)
+	for port, handle := range handles {
+		if port != "agent.approval_response" {
+			require.Zero(t, handle.drains.Load(), "approval panic drained unrelated owner %s", port)
+		}
+	}
+	health := c.Health()
+	require.False(t, health.Healthy)
+	require.Equal(t, "delivery ownership lost", health.Status)
+	require.Contains(t, health.LastError, "approval response handler panicked")
+
+	cancel()
+	for _, binding := range c.consumers {
+		<-binding.observerDone
+	}
+}
+
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+func TestLoopCancellationUnknownPublicationQuarantinesWithoutReleasingTransientState(t *testing.T) {
+	discoverable, err := NewComponent([]byte(`{}`), component.Dependencies{
+		NATSClient: &natsclient.Client{}, PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+	})
+	require.NoError(t, err)
+	c := discoverable.(*Component)
+	c.started = true
+	c.startTime = time.Now()
+	loopID, err := c.handler.loopManager.CreateLoop("task-cancel", "general", "model", 3)
+	require.NoError(t, err)
+	_, err = c.handler.trajectoryManager.startTrajectory(loopID)
+	require.NoError(t, err)
+	c.waitForStreamInput = func(context.Context, string) error { return nil }
+	callbacks := make(map[string]func(context.Context, jetstream.Msg))
+	handles := make(map[string]*loopPolicyHandle)
+	c.consumeStream = func(_ context.Context, _ context.Context, owner natsclient.PortConsumerContext, _ natsclient.StreamConsumerConfig, callback func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
+		handle := &loopPolicyHandle{closed: make(chan struct{})}
+		callbacks[owner.Port] = callback
+		handles[owner.Port] = handle
+		return handle, nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	require.NoError(t, c.setupSubscriptions(ctx, ctx))
+	signal := &agentic.UserSignal{
+		SignalID: "signal-cancel", Type: agentic.SignalCancel, LoopID: loopID,
+		UserID: "operator", Timestamp: time.Now().UTC(),
+	}
+	data, err := json.Marshal(message.NewBaseMessage(signal.Schema(), signal, "test"))
+	require.NoError(t, err)
+	msg := &loopSettlementMsg{data: data}
+	callbacks["agent.signal"](ctx, msg)
+
+	require.Zero(t, msg.acks.Load()+msg.naks.Load()+msg.terms.Load())
+	require.Eventually(t, func() bool { return handles["agent.signal"].drains.Load() == 1 }, time.Second, time.Millisecond)
+	_, err = c.handler.trajectoryManager.getTrajectory(loopID)
+	require.NoError(t, err, "unknown terminal publication released the loop trajectory")
+	require.Contains(t, c.Health().LastError, "unknown durability")
+	for port, handle := range handles {
+		if port != "agent.signal" {
+			require.Zero(t, handle.drains.Load(), "cancellation failure drained unrelated owner %s", port)
+		}
+	}
+
+	cancel()
+	for _, binding := range c.consumers {
+		<-binding.observerDone
+	}
+}
+
+type loopSettlementMsg struct {
+	data  []byte
+	acks  atomic.Int32
+	naks  atomic.Int32
+	terms atomic.Int32
+}
+
+func (m *loopSettlementMsg) Data() []byte                            { return m.data }
+func (*loopSettlementMsg) Subject() string                           { return "loop.test" }
+func (*loopSettlementMsg) Reply() string                             { return "" }
+func (*loopSettlementMsg) Headers() nats.Header                      { return nil }
+func (*loopSettlementMsg) Metadata() (*jetstream.MsgMetadata, error) { return nil, nil }
+func (m *loopSettlementMsg) Ack() error                              { m.acks.Add(1); return nil }
+func (*loopSettlementMsg) DoubleAck(context.Context) error           { return nil }
+func (m *loopSettlementMsg) Nak() error                              { m.naks.Add(1); return nil }
+func (m *loopSettlementMsg) NakWithDelay(time.Duration) error        { m.naks.Add(1); return nil }
+func (*loopSettlementMsg) InProgress() error                         { return nil }
+func (m *loopSettlementMsg) Term() error                             { m.terms.Add(1); return nil }
+func (m *loopSettlementMsg) TermWithReason(string) error             { return m.Term() }

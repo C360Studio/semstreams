@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/natsclient"
 )
 
 type contextCapturingGovernanceDispatcher struct {
@@ -25,8 +26,10 @@ func (d *contextCapturingGovernanceDispatcher) Propose(
 	return DispatcherResult{Approved: calls}, ctx.Err()
 }
 
-func (*contextCapturingGovernanceDispatcher) HandleVerdict(string, string, []byte) {}
-func (*contextCapturingGovernanceDispatcher) Mode() string                         { return "enforce" }
+func (*contextCapturingGovernanceDispatcher) HandleVerdict(string, string, []byte) (natsclient.DeliveryDecision, error) {
+	return natsclient.DeliveryDecisionAck, nil
+}
+func (*contextCapturingGovernanceDispatcher) Mode() string { return "enforce" }
 
 func TestHandleModelResponsePropagatesContextToGovernance(t *testing.T) {
 	handler := NewMessageHandler(DefaultConfig())

@@ -17,7 +17,7 @@ design-section shorthand is not a valid citation. Every implementation slice fol
 - [x] 0.6 Materialize the accepted target into proposal, canonical design, tasks, and six capability deltas.
 - [x] 0.7 Receive independent pre-implementation design review of the complete active OpenSpec.
 
-## 1. Settlement foundation and lease policy
+## 1. Settlement foundation and consumer authority
 
 - [x] 1.1 Verify PR #1159 still targets `codex/gh759-semantic-settlement`, the remote parent remains exact
   `F=417beae5552f8f15ad3540edd7d8504c87174c13`, and implementation begins from exact post-#1251 checkpoint
@@ -43,25 +43,32 @@ design-section shorthand is not a valid citation. Every implementation slice fol
   policy requirements from 1.2. Model metadata/attempt tests cite
   `// spec: agentic-model / Model request settlement is bound to a durable response`; loop metadata/owner-health tests
   cite `// spec: agentic-loop / All six loop input classes settle after owner-specific durable done`.
-- [ ] 1.5 RED: add the `natsclient` settlement truth table for valid Ack, Retry, Terminate, Quarantine, every invalid
+- [x] 1.5 RED: add the `natsclient` settlement truth table for valid Ack, Retry, Terminate, Quarantine, every invalid
   decision/error tuple, nil message, and each terminal-method error. Capture callbacks from all ten actual production
   non-heartbeat setup branches and prove each reaches its typed business handler and observable business/settlement
-  effect. Add focused approval-panic, first-fatal Health, exact-handle drain, and terminal graph-write join tests. Use
-  no synthetic AckWait-derived deadline or wall-clock lease-margin run. Cite its exact owner requirement:
+  effect. Prove governance publication without PubAck, failed dispatch task publication, a rejected pending-approval
+  projection, required loop KV/publication failure, and a missing or full verdict waiter cannot become Ack. Add
+  focused approval-panic, first-fatal Health, exact-handle drain, and terminal graph-write join tests. Use no
+  synthetic AckWait-derived deadline or wall-clock lease-margin run. Cite its exact owner requirement:
   `// spec: jetstream-consumer-policy / settlement-only delivery decisions use one shared interpreter` for the shared
   truth table, and
   `// spec: agentic-dispatch / Every dispatch durable input settles through its owner`,
   `// spec: agentic-governance / Governance validation settles after its declared consequence`, or
   `// spec: agentic-loop / All six loop input classes settle after owner-specific durable done`.
-- [ ] 1.6 Implement `natsclient.SettleDelivery` as the shared tuple interpreter and immediate terminal-method mapper.
+- [x] 1.6 Implement `natsclient.SettleDelivery` as the shared tuple interpreter and immediate terminal-method mapper.
   Route each non-heartbeat production callback through its typed handler and this helper after work joins. Retain work
   invocation, callback context, panic recovery, admission, health latch, and exact-handle drain in the existing
-  private binding. Retain approval panic as a non-nil fatal result and make `runWithBudget` synchronous. Add no
-  `DeliveryPolicy`, deadline validator, owner framework, test-only API, metric family, goroutine, or durable state.
-- [ ] 1.7 GREEN: prove the shared settlement truth table and each captured production branch's real handler/effect.
+  private binding. Propagate required JetStream PubAck and loop-state KV failures; until later identity and
+  reconciliation tasks prove replay safe, classify partial or commit-unknown outcomes as Quarantine without
+  inventing recovery state. Retain approval panic as a non-nil fatal result and make `runWithBudget` synchronous.
+  Add no `DeliveryPolicy`, deadline validator, owner framework, test-only API, metric family, goroutine, or durable
+  state.
+- [x] 1.7 GREEN: prove the shared settlement truth table and each captured production branch's real handler/effect.
   Prove invalid or quarantined outcomes perform no terminal method, approval panic performs no persistence or
   settlement and drains only its exact owner, the first fatal cause reaches existing negative Health exactly once,
-  and terminal approval rejection cannot settle while graph-write work remains live.
+  and terminal approval rejection cannot settle while graph-write work remains live. This proves the absence of
+  false-positive settlement and the exact owner reaction; it does not claim deterministic replay or convergence,
+  which remain owned by tasks 2, 6, 7, and 8.
 
 ## 2. Stable identity and exact reconciliation
 

@@ -2,11 +2,26 @@ package agenticloop
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go/jetstream"
 )
+
+func runLoopDeliveryWork(
+	ctx context.Context,
+	data []byte,
+	work func(context.Context, []byte) (natsclient.DeliveryDecision, error),
+) (decision natsclient.DeliveryDecision, cause error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			decision = natsclient.DeliveryDecisionQuarantine
+			cause = fmt.Errorf("loop delivery work panicked: %v", recovered)
+		}
+	}()
+	return work(ctx, data)
+}
 
 // deliveryLaneAdmission is private to this component owner. JetStream retains
 // delivery authority; this latch only prevents new local work after ownership
