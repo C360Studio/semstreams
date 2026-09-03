@@ -544,26 +544,31 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	// Subscribe to user messages via JetStream
 	// Use "last" policy to catch messages sent just before consumer starts
 	userMsgCfg := natsclient.StreamConsumerConfig{
-		StreamName:    bindings.userMessage.streamName,
-		ConsumerName:  c.consumerName("agentic-dispatch-user-message"),
-		FilterSubject: bindings.userMessage.subject,
-		DeliverPolicy: "last",
-		AckPolicy:     "explicit",
-		MaxDeliver:    3,
-		MaxAckPending: bindings.userMessage.consumerConfig.MaxAckPending,
-		AutoCreate:    false,
+		StreamName:     bindings.userMessage.streamName,
+		ConsumerName:   c.consumerName("agentic-dispatch-user-message"),
+		FilterSubject:  bindings.userMessage.subject,
+		DeliverPolicy:  "last",
+		AckPolicy:      "explicit",
+		AckWait:        dispatchFastDeliveryAckWait,
+		MaxDeliver:     3,
+		MaxAckPending:  bindings.userMessage.consumerConfig.MaxAckPending,
+		MessageTimeout: dispatchFastDeliveryAckWait,
+		AutoCreate:     false,
 	}
+	userMessageAdmission := newDeliveryLaneAdmission(nil)
 	handle, err := c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.userMessage.portName}, userMsgCfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		c.handleUserMessage(msgCtx, msg.Data())
-		if ackErr := msg.Ack(); ackErr != nil {
-			c.logger.Error("Failed to ack user message", slog.String("error", ackErr.Error()))
+		decision, admitted, deliveryErr := consumeAdmittedDispatchFastDelivery(msgCtx, msg, c.handleUserMessage, userMessageAdmission)
+		if admitted && decision != natsclient.DeliveryDecisionQuarantine && deliveryErr != nil {
+			c.logger.Error("User message delivery did not settle cleanly", slog.Any("error", deliveryErr))
 		}
 	})
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupSubscriptions", "subscribe to user.message")
 	}
+	userMessageBinding := newStreamConsumerBinding(handle)
+	c.observeDeliveryLane(ctx, &userMessageBinding, userMessageAdmission)
 	c.lifecycleMu.Lock()
-	c.consumers = append(c.consumers, newStreamConsumerBinding(handle))
+	c.consumers = append(c.consumers, userMessageBinding)
 	c.lifecycleMu.Unlock()
 
 	// Subscribe to agent completions via JetStream
@@ -607,26 +612,31 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 
 	// Subscribe to loop created events for workflow context sync
 	agentCreatedCfg := natsclient.StreamConsumerConfig{
-		StreamName:    bindings.agentCreated.streamName,
-		ConsumerName:  c.consumerName("agentic-dispatch-agent-created"),
-		FilterSubject: bindings.agentCreated.subject,
-		DeliverPolicy: "new",
-		AckPolicy:     "explicit",
-		MaxDeliver:    3,
-		MaxAckPending: bindings.agentCreated.consumerConfig.MaxAckPending,
-		AutoCreate:    false,
+		StreamName:     bindings.agentCreated.streamName,
+		ConsumerName:   c.consumerName("agentic-dispatch-agent-created"),
+		FilterSubject:  bindings.agentCreated.subject,
+		DeliverPolicy:  "new",
+		AckPolicy:      "explicit",
+		AckWait:        dispatchFastDeliveryAckWait,
+		MaxDeliver:     3,
+		MaxAckPending:  bindings.agentCreated.consumerConfig.MaxAckPending,
+		MessageTimeout: dispatchFastDeliveryAckWait,
+		AutoCreate:     false,
 	}
+	agentCreatedAdmission := newDeliveryLaneAdmission(nil)
 	handle, err = c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.agentCreated.portName}, agentCreatedCfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		c.handleAgentCreated(msgCtx, msg.Data())
-		if ackErr := msg.Ack(); ackErr != nil {
-			c.logger.Error("Failed to ack agent created message", slog.String("error", ackErr.Error()))
+		decision, admitted, deliveryErr := consumeAdmittedDispatchFastDelivery(msgCtx, msg, c.handleAgentCreated, agentCreatedAdmission)
+		if admitted && decision != natsclient.DeliveryDecisionQuarantine && deliveryErr != nil {
+			c.logger.Error("Agent-created delivery did not settle cleanly", slog.Any("error", deliveryErr))
 		}
 	})
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupSubscriptions", "subscribe to agent.created")
 	}
+	agentCreatedBinding := newStreamConsumerBinding(handle)
+	c.observeDeliveryLane(ctx, &agentCreatedBinding, agentCreatedAdmission)
 	c.lifecycleMu.Lock()
-	c.consumers = append(c.consumers, newStreamConsumerBinding(handle))
+	c.consumers = append(c.consumers, agentCreatedBinding)
 	c.lifecycleMu.Unlock()
 
 	// Subscribe to loop failed events
@@ -683,26 +693,31 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	// buffer (drains on the matching agent.created), 10 retries gives
 	// generous slack for race resolution without unbounded redelivery.
 	agentApprovalPendingCfg := natsclient.StreamConsumerConfig{
-		StreamName:    bindings.approvalPending.streamName,
-		ConsumerName:  c.consumerName("agentic-dispatch-agent-approval-pending"),
-		FilterSubject: bindings.approvalPending.subject,
-		DeliverPolicy: "new",
-		AckPolicy:     "explicit",
-		MaxDeliver:    10,
-		MaxAckPending: bindings.approvalPending.consumerConfig.MaxAckPending,
-		AutoCreate:    false,
+		StreamName:     bindings.approvalPending.streamName,
+		ConsumerName:   c.consumerName("agentic-dispatch-agent-approval-pending"),
+		FilterSubject:  bindings.approvalPending.subject,
+		DeliverPolicy:  "new",
+		AckPolicy:      "explicit",
+		AckWait:        dispatchFastDeliveryAckWait,
+		MaxDeliver:     10,
+		MaxAckPending:  bindings.approvalPending.consumerConfig.MaxAckPending,
+		MessageTimeout: dispatchFastDeliveryAckWait,
+		AutoCreate:     false,
 	}
+	approvalPendingAdmission := newDeliveryLaneAdmission(nil)
 	handle, err = c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.approvalPending.portName}, agentApprovalPendingCfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		c.handleAgentApprovalPending(msgCtx, msg.Data())
-		if ackErr := msg.Ack(); ackErr != nil {
-			c.logger.Error("Failed to ack agent approval-pending message", slog.String("error", ackErr.Error()))
+		decision, admitted, deliveryErr := consumeAdmittedDispatchFastDelivery(msgCtx, msg, c.handleAgentApprovalPending, approvalPendingAdmission)
+		if admitted && decision != natsclient.DeliveryDecisionQuarantine && deliveryErr != nil {
+			c.logger.Error("Approval-pending delivery did not settle cleanly", slog.Any("error", deliveryErr))
 		}
 	})
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupSubscriptions", "subscribe to agent.approval_pending")
 	}
+	approvalPendingBinding := newStreamConsumerBinding(handle)
+	c.observeDeliveryLane(ctx, &approvalPendingBinding, approvalPendingAdmission)
 	c.lifecycleMu.Lock()
-	c.consumers = append(c.consumers, newStreamConsumerBinding(handle))
+	c.consumers = append(c.consumers, approvalPendingBinding)
 	c.lifecycleMu.Unlock()
 
 	return nil
@@ -714,19 +729,19 @@ func (c *Component) observeTerminalDelivery(err error) {
 	}
 }
 
-func (c *Component) recordAgentCompleteFatal(result natsclient.DeliveryResult) {
+func (c *Component) recordAgentCompleteFatal(err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.agentCompleteFatal == nil {
-		c.agentCompleteFatal = fmt.Errorf("agent.complete delivery ownership lost: %w", result.Err())
+		c.agentCompleteFatal = fmt.Errorf("agent.complete delivery ownership lost: %w", err)
 	}
 }
 
-func (c *Component) recordAgentFailedFatal(result natsclient.DeliveryResult) {
+func (c *Component) recordAgentFailedFatal(err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.agentFailedFatal == nil {
-		c.agentFailedFatal = fmt.Errorf("agent.failed delivery ownership lost: %w", result.Err())
+		c.agentFailedFatal = fmt.Errorf("agent.failed delivery ownership lost: %w", err)
 	}
 }
 
@@ -778,20 +793,22 @@ func (c *Component) waitForStream(ctx context.Context, streamName string) error 
 	return errs.WrapTransient(fmt.Errorf("stream %s not found after %d retries", streamName, maxRetries), "Component", "waitForStream", "find stream")
 }
 
-// handleUserMessage processes incoming user messages
-func (c *Component) handleUserMessage(ctx context.Context, data []byte) {
+// handleUserMessage processes incoming user messages.
+func (c *Component) handleUserMessage(ctx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
 	startTime := time.Now()
+	defer func() {
+		c.metrics.recordRoutingDuration(time.Since(startTime).Seconds())
+	}()
 
 	baseMsg, err := c.decoder.Decode(data)
 	if err != nil {
-		c.logger.Error("Failed to unmarshal BaseMessage", slog.String("error", err.Error()))
-		return
+		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("decode user message: %w", err)
 	}
 
 	userMsg, ok := baseMsg.Payload().(*agentic.UserMessage)
 	if !ok {
-		c.logger.Error("Unexpected payload type", slog.String("type", fmt.Sprintf("%T", baseMsg.Payload())))
-		return
+		return natsclient.DeliveryDecisionTerminate,
+			fmt.Errorf("unexpected user message payload type %T", baseMsg.Payload())
 	}
 	msg := *userMsg
 
@@ -805,22 +822,22 @@ func (c *Component) handleUserMessage(ctx context.Context, data []byte) {
 
 	// Check if it's a command
 	if strings.HasPrefix(msg.Content, "/") {
-		c.handleCommand(ctx, msg)
+		err = c.handleCommand(ctx, msg)
 	} else {
 		// It's a task submission
-		c.handleTaskSubmission(ctx, msg)
+		err = c.handleTaskSubmission(ctx, msg)
 	}
-
-	// Record routing duration
-	duration := time.Since(startTime).Seconds()
-	c.metrics.recordRoutingDuration(duration)
+	if err != nil {
+		return natsclient.DeliveryDecisionRetry, err
+	}
+	return natsclient.DeliveryDecisionAck, nil
 }
 
 // handleCommand processes command messages
-func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) {
+func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) error {
 	name, cmd, args, found := c.registry.Match(msg.Content)
 	if !found {
-		c.sendResponse(ctx, agentic.UserResponse{
+		return c.sendResponse(ctx, agentic.UserResponse{
 			ResponseID:  uuid.New().String(),
 			ChannelType: msg.ChannelType,
 			ChannelID:   msg.ChannelID,
@@ -829,12 +846,11 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 			Content:     "Unknown command. Type /help for available commands.",
 			Timestamp:   time.Now(),
 		})
-		return
 	}
 
 	// Check permission
 	if cmd.Config.Permission != "" && !c.hasPermission(msg.UserID, cmd.Config.Permission) {
-		c.sendResponse(ctx, agentic.UserResponse{
+		return c.sendResponse(ctx, agentic.UserResponse{
 			ResponseID:  uuid.New().String(),
 			ChannelType: msg.ChannelType,
 			ChannelID:   msg.ChannelID,
@@ -843,7 +859,6 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 			Content:     fmt.Sprintf("Permission denied: requires '%s'", cmd.Config.Permission),
 			Timestamp:   time.Now(),
 		})
-		return
 	}
 
 	// Resolve loop ID
@@ -856,7 +871,7 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 
 	// Check if loop is required
 	if cmd.Config.RequireLoop && loopID == "" {
-		c.sendResponse(ctx, agentic.UserResponse{
+		return c.sendResponse(ctx, agentic.UserResponse{
 			ResponseID:  uuid.New().String(),
 			ChannelType: msg.ChannelType,
 			ChannelID:   msg.ChannelID,
@@ -865,13 +880,12 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 			Content:     "No active loop. Specify a loop_id or start a task first.",
 			Timestamp:   time.Now(),
 		})
-		return
 	}
 
 	// Execute handler
 	resp, err := cmd.Handler(ctx, msg, args, loopID)
 	if err != nil {
-		c.sendResponse(ctx, agentic.UserResponse{
+		return c.sendResponse(ctx, agentic.UserResponse{
 			ResponseID:  uuid.New().String(),
 			ChannelType: msg.ChannelType,
 			ChannelID:   msg.ChannelID,
@@ -880,10 +894,11 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 			Content:     fmt.Sprintf("Command failed: %s", err.Error()),
 			Timestamp:   time.Now(),
 		})
-		return
 	}
 
-	c.sendResponse(ctx, resp)
+	if err := c.sendResponse(ctx, resp); err != nil {
+		return err
+	}
 
 	// Record command executed
 	c.metrics.recordCommandExecuted(name)
@@ -891,6 +906,7 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 	c.logger.Debug("Command executed",
 		slog.String("command", name),
 		slog.String("user_id", msg.UserID))
+	return nil
 }
 
 // resolveModel returns the default model from the model registry.
@@ -942,8 +958,8 @@ func (c *Component) buildTaskMessage(ctx context.Context, msg agentic.UserMessag
 //
 // It never counts anything: the refusal it is handed was already metered and
 // logged exactly once, where it was built.
-func (c *Component) answerRefusedSubmission(ctx context.Context, msg agentic.UserMessage, refusal error) {
-	c.sendResponse(ctx, agentic.UserResponse{
+func (c *Component) answerRefusedSubmission(ctx context.Context, msg agentic.UserMessage, refusal error) error {
+	return c.sendResponse(ctx, agentic.UserResponse{
 		ResponseID:  uuid.New().String(),
 		ChannelType: msg.ChannelType,
 		ChannelID:   msg.ChannelID,
@@ -955,10 +971,10 @@ func (c *Component) answerRefusedSubmission(ctx context.Context, msg agentic.Use
 }
 
 // handleTaskSubmission creates a new agent task
-func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMessage) {
+func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMessage) error {
 	// Check submit permission
 	if !c.hasPermission(msg.UserID, "submit_task") {
-		c.sendResponse(ctx, agentic.UserResponse{
+		return c.sendResponse(ctx, agentic.UserResponse{
 			ResponseID:  uuid.New().String(),
 			ChannelType: msg.ChannelType,
 			ChannelID:   msg.ChannelID,
@@ -967,7 +983,6 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 			Content:     "Permission denied: cannot submit tasks",
 			Timestamp:   time.Now(),
 		})
-		return
 	}
 
 	// Determine loop ID (continue existing or create new). The mint decision is
@@ -995,8 +1010,7 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 	}); err != nil {
 		// This path has no synchronous return, so its answer goes out on the
 		// response subject — same refusal, same named field, different delivery.
-		c.answerRefusedSubmission(ctx, msg, err)
-		return
+		return c.answerRefusedSubmission(ctx, msg, err)
 	}
 
 	taskID := uuid.New().String()
@@ -1013,16 +1027,14 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 	baseMsg := message.NewBaseMessage(task.Schema(), &task, "agentic-dispatch")
 	taskData, err := json.Marshal(baseMsg)
 	if err != nil {
-		c.answerRefusedSubmission(ctx, msg,
+		return c.answerRefusedSubmission(ctx, msg,
 			c.refuseSubmission(seamChannelSubmission, loopID, codeSubmissionInvalid, err))
-		return
 	}
 
 	subject, err := component.ResolveSubject(c.outputPortDefs(), "agent.task", taskID)
 	if err != nil {
-		c.answerRefusedSubmission(ctx, msg,
+		return c.answerRefusedSubmission(ctx, msg,
 			c.refuseSubmission(seamChannelSubmission, loopID, codeSubmissionUndeliverable, err))
-		return
 	}
 
 	// Track the loop and count it started. This is after the task is assembled
@@ -1045,16 +1057,15 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 	c.metrics.recordLoopStarted()
 
 	if err := c.natsClient.PublishToStream(ctx, subject, taskData); err != nil {
-		c.answerRefusedSubmission(ctx, msg,
+		return c.answerRefusedSubmission(ctx, msg,
 			c.refuseSubmission(seamChannelSubmission, loopID, codeSubmissionUndeliverable, err))
-		return
 	}
 
 	// Record task submitted
 	c.metrics.recordTaskSubmitted()
 
 	// Send acknowledgment
-	c.sendResponse(ctx, agentic.UserResponse{
+	if err := c.sendResponse(ctx, agentic.UserResponse{
 		ResponseID:  uuid.New().String(),
 		ChannelType: msg.ChannelType,
 		ChannelID:   msg.ChannelID,
@@ -1063,12 +1074,15 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		Type:        agentic.ResponseTypeStatus,
 		Content:     fmt.Sprintf("Task submitted. Loop: %s", loopID),
 		Timestamp:   time.Now(),
-	})
+	}); err != nil {
+		return err
+	}
 
 	c.logger.Debug("Task submitted",
 		slog.String("loop_id", loopID),
 		slog.String("task_id", taskID),
 		slog.String("user_id", msg.UserID))
+	return nil
 }
 
 // handleAgentComplete is the focused-test entry point for the shared terminal
@@ -1080,19 +1094,18 @@ func (c *Component) handleAgentComplete(ctx context.Context, data []byte) {
 }
 
 // handleAgentCreated processes loop creation events for workflow context sync
-func (c *Component) handleAgentCreated(_ context.Context, data []byte) {
+func (c *Component) handleAgentCreated(_ context.Context, data []byte) (natsclient.DeliveryDecision, error) {
 	// Parse BaseMessage envelope
 	baseMsg, err := c.decoder.Decode(data)
 	if err != nil {
-		c.logger.Error("Failed to unmarshal BaseMessage", slog.String("error", err.Error()))
-		return
+		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("decode agent-created event: %w", err)
 	}
 
 	// Extract LoopCreatedEvent from payload
 	createdPtr, ok := baseMsg.Payload().(*agentic.LoopCreatedEvent)
 	if !ok {
-		c.logger.Error("Unexpected payload type", slog.String("type", fmt.Sprintf("%T", baseMsg.Payload())))
-		return
+		return natsclient.DeliveryDecisionTerminate,
+			fmt.Errorf("unexpected agent-created payload type %T", baseMsg.Payload())
 	}
 	created := *createdPtr
 
@@ -1102,7 +1115,7 @@ func (c *Component) handleAgentCreated(_ context.Context, data []byte) {
 		c.loopTracker.UpdateWorkflowContext(created.LoopID, created.WorkflowSlug, created.WorkflowStep)
 		// Atomically update context request ID if missing
 		c.loopTracker.UpdateContextRequestID(created.LoopID, created.ContextRequestID)
-		return
+		return natsclient.DeliveryDecisionAck, nil
 	}
 
 	// New loop we didn't originate - track it
@@ -1126,6 +1139,7 @@ func (c *Component) handleAgentCreated(_ context.Context, data []byte) {
 		slog.String("loop_id", created.LoopID),
 		slog.String("workflow_slug", created.WorkflowSlug),
 		slog.String("workflow_step", created.WorkflowStep))
+	return natsclient.DeliveryDecisionAck, nil
 }
 
 // handleAgentFailed processes loop failure events
@@ -1142,25 +1156,21 @@ func (c *Component) handleAgentFailed(ctx context.Context, data []byte) {
 // call hits config.approval_required and the loop transitions to
 // LoopStateAwaitingApproval; dispatch is one of several subscribers
 // (the others being product-layer approval UIs).
-func (c *Component) handleAgentApprovalPending(_ context.Context, data []byte) {
+func (c *Component) handleAgentApprovalPending(_ context.Context, data []byte) (natsclient.DeliveryDecision, error) {
 	baseMsg, err := c.decoder.Decode(data)
 	if err != nil {
-		c.logger.Error("Failed to unmarshal BaseMessage", slog.String("error", err.Error()))
-		return
+		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("decode approval-pending event: %w", err)
 	}
 
 	pending, ok := baseMsg.Payload().(*agentic.ApprovalPendingEvent)
 	if !ok {
-		c.logger.Error("Unexpected payload type",
-			slog.String("type", fmt.Sprintf("%T", baseMsg.Payload())))
-		return
+		return natsclient.DeliveryDecisionTerminate,
+			fmt.Errorf("unexpected approval-pending payload type %T", baseMsg.Payload())
 	}
 
 	if pending.LoopID == "" || pending.CallID == "" {
-		c.logger.Warn("approval-pending event missing required fields",
-			slog.String("loop_id", pending.LoopID),
-			slog.String("call_id", pending.CallID))
-		return
+		return natsclient.DeliveryDecisionTerminate,
+			fmt.Errorf("approval-pending event missing required loop_id or call_id")
 	}
 
 	// SetPendingApproval handles the unknown-loop race internally by
@@ -1175,29 +1185,29 @@ func (c *Component) handleAgentApprovalPending(_ context.Context, data []byte) {
 		RequestedAt: pending.RequestedAt,
 		TraceID:     pending.TraceID,
 	})
+	return natsclient.DeliveryDecisionAck, nil
 }
 
 // sendResponse publishes a response to the user's channel
-func (c *Component) sendResponse(ctx context.Context, resp agentic.UserResponse) {
+func (c *Component) sendResponse(ctx context.Context, resp agentic.UserResponse) error {
 	if c.sendResponseFn != nil {
 		c.sendResponseFn(resp)
-		return
+		return nil
 	}
 	respMsg := message.NewBaseMessage(resp.Schema(), &resp, "agentic-dispatch")
 	data, err := json.Marshal(respMsg)
 	if err != nil {
-		c.logger.Error("Failed to marshal response", slog.String("error", err.Error()))
-		return
+		return fmt.Errorf("marshal user response: %w", err)
 	}
 
 	subject, err := component.ResolveSubject(c.outputPortDefs(), "user.response", resp.ChannelType+"."+resp.ChannelID)
 	if err != nil {
-		c.logger.Error("Failed to resolve response subject", slog.String("error", err.Error()))
-		return
+		return fmt.Errorf("resolve user response subject: %w", err)
 	}
 	if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {
-		c.logger.Error("Failed to publish response", slog.String("error", err.Error()))
+		return fmt.Errorf("publish user response: %w", err)
 	}
+	return nil
 }
 
 // sendUserResponseForLoop sends a response only if the loop has a user channel.

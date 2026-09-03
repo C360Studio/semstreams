@@ -45,6 +45,44 @@ func (m *loopDeliveryOwnerMsg) Term() error                      { m.settlement.
 func (m *loopDeliveryOwnerMsg) TermWithReason(string) error      { m.settlement.Add(1); return nil }
 
 // spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+func TestLoopFastOwnerInvalidTupleQuarantinesAndDrainsExactHandle(t *testing.T) {
+	admission := newDeliveryLaneAdmission(nil)
+	msg := &loopDeliveryOwnerMsg{data: []byte("work")}
+	decision, admitted, err := consumeAdmittedLoopFastDelivery(
+		t.Context(), msg,
+		func(context.Context, []byte) (natsclient.DeliveryDecision, error) {
+			return natsclient.DeliveryDecisionAck, errors.New("ack cannot carry an error")
+		},
+		admission,
+	)
+	require.True(t, admitted)
+	require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
+	require.ErrorContains(t, err, "invalid loop fast delivery decision")
+	require.Zero(t, msg.settlement.Load(), "invalid tuples must not settle an unsafe delivery")
+
+	handle := &loopPolicyHandle{closed: make(chan struct{})}
+	binding := newStreamConsumerBinding(handle)
+	ctx, cancel := context.WithCancel(t.Context())
+	c := &Component{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	c.observeDeliveryLane(ctx, &binding, admission, "agent.signal")
+	require.Eventually(t, func() bool { return handle.drains.Load() == 1 }, time.Second, time.Millisecond)
+
+	_, admitted, _ = consumeAdmittedLoopFastDelivery(
+		t.Context(), msg,
+		func(context.Context, []byte) (natsclient.DeliveryDecision, error) {
+			return natsclient.DeliveryDecisionAck, nil
+		},
+		admission,
+	)
+	require.False(t, admitted)
+	require.Equal(t, int32(1), msg.dataCalls.Load(), "closed admission must refuse work before reading payload")
+	binding.drain()
+	require.Equal(t, int32(1), handle.drains.Load())
+	cancel()
+	<-binding.observerDone
+}
+
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
 func TestLoopUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner(t *testing.T) {
 	retry, err := natsclient.DelayedDeliveryRetry(30 * time.Second)
 	require.NoError(t, err)
@@ -125,7 +163,7 @@ func TestLoopSetupWiresMetadataFailureToAcquiredOwner(t *testing.T) {
 			ctx, ctx, port, portName+".>", func(context.Context, []byte) error {
 				workCalls.Add(1)
 				return nil
-			},
+			}, nil,
 		))
 	}
 	require.Len(t, callbacks, 2)

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -158,17 +159,15 @@ func (h *MessageHandler) handleRejectedApproval(ctx context.Context, loopID stri
 // handleApprovalResponseMessage is the component-level entry point
 // that decodes the wire envelope and hands the typed payload to the
 // MessageHandler. Mirrors handleSignalMessage's shape.
-func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []byte) {
+func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
 	baseMsg, err := c.decoder.Decode(data)
 	if err != nil {
-		c.logger.Error("Failed to decode approval response", "error", err)
-		return
+		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("decode approval response: %w", err)
 	}
 	respPtr, ok := baseMsg.Payload().(*agentic.ApprovalResponse)
 	if !ok {
-		c.logger.Error("Unexpected approval response payload type",
-			"type", fmt.Sprintf("%T", baseMsg.Payload()))
-		return
+		return natsclient.DeliveryDecisionTerminate,
+			fmt.Errorf("unexpected approval response payload type %T", baseMsg.Payload())
 	}
 	response := *respPtr
 
@@ -180,22 +179,20 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 
 	result, err := c.handler.HandleApprovalResponse(ctx, response)
 	if err != nil {
-		c.logger.Error("Failed to handle approval response",
-			"error", err,
-			"loop_id", response.LoopID,
-			"call_id", response.CallID)
-		return
+		return natsclient.DeliveryDecisionRetry,
+			fmt.Errorf("handle approval response for loop %q call %q: %w", response.LoopID, response.CallID, err)
 	}
 	if result.staleDrop {
 		// The handler dispatched nothing and resolved nothing. Persisting would
 		// re-Put a settled entity, or — once its per-loop state is released —
 		// report a persistence failure for a loop that is supposed to be gone.
 		// Returning here is what makes the two indistinguishable.
-		return
+		return natsclient.DeliveryDecisionAck, nil
 	}
 
 	// Approval responses use the same persistence boundary as every other
 	// handler result. This keeps a rejection that reaches the iteration cap from
 	// bypassing the ordinary-observations-then-terminal audit ordering.
 	c.persistHandlerResult(ctx, result)
+	return natsclient.DeliveryDecisionAck, nil
 }
