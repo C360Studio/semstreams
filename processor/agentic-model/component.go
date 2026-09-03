@@ -392,7 +392,7 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port) erro
 		cfg,
 		heartbeatInterval,
 		natsclient.ImmediateDeliveryRetry(),
-		func(workCtx context.Context, _ natsclient.DeliveryAttempt, data []byte) (natsclient.DeliveryDecision, error) {
+		func(workCtx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
 			c.handleRequest(workCtx, data)
 			return natsclient.DeliveryDecisionAck, nil
 		},

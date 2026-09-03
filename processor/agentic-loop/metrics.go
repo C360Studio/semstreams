@@ -232,7 +232,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "graph_write_publish_timeout_total",
-				Help:      "Total times the graph-write-before-publish budget expired before WriteLoopCompletion/WriteLoopFailure returned. The agent.complete.* event was published anyway (best-effort preserved), but the loop entity's graph triples may not yet be visible to subscribers walking ancestry. Sustained non-zero rate points at graph-gateway latency or NATS subscription propagation issues; a tightenable budget is at graphWritePublishBudget in component.go.",
+				Help:      "Total times the graph-write-before-publish budget expired before WriteLoopCompletion/WriteLoopFailure returned. The agent.complete.* event is withheld and the joined delivery fails closed. Sustained non-zero rate points at graph-gateway latency or NATS subscription propagation issues; a tightenable budget is at graphWritePublishBudget in component.go.",
 			}, []string{"state"}),
 
 			taskIntakeRejections: prometheus.NewCounterVec(prometheus.CounterOpts{

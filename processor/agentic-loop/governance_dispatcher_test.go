@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,6 +22,44 @@ type mockVerdictPublisher struct {
 	mu        sync.Mutex
 	published []publishedVerdict
 	err       error
+}
+
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+func TestGovernanceDispatcherHandleVerdictDeclaresDeliveryOutcome(t *testing.T) {
+	t.Parallel()
+
+	disabled := NewGovernanceDispatcher(ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeDisabled}, nil, slog.Default(), nil)
+	decision, err := disabled.HandleVerdict("approved", "call-disabled", nil)
+	require.NoError(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+
+	audit := NewGovernanceDispatcher(ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeAudit}, nil, slog.Default(), nil)
+	decision, err = audit.HandleVerdict("approved", "call-audit", nil)
+	require.NoError(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+
+	enforce := NewGovernanceDispatcher(
+		ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeEnforce, Timeout: "1s"},
+		nil, slog.Default(), nil,
+	).(*enforceDispatcher)
+
+	decision, err = enforce.HandleVerdict("approved", "missing", nil)
+	require.Error(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
+
+	delivered := enforce.registerWaiter("delivered")
+	decision, err = enforce.HandleVerdict("approved", "delivered", nil)
+	require.NoError(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+	require.Equal(t, "approved", (<-delivered).decision)
+	enforce.releaseWaiter("delivered")
+
+	full := enforce.registerWaiter("full")
+	full <- verdictArrival{decision: "approved"}
+	decision, err = enforce.HandleVerdict("rejected", "full", nil)
+	require.Error(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
+	enforce.releaseWaiter("full")
 }
 
 type publishedVerdict struct {
