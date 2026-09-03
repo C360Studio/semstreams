@@ -432,6 +432,8 @@
               "config": {
                 "kind": "jetstream",
                 "stream_name": "AGENT",
+                "ack_wait": "120s",
+                "heartbeat_interval": "60s",
                 "subjects": [
                   "agent.request.>"
                 ]

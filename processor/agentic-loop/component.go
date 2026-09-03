@@ -113,8 +113,9 @@ type Component struct {
 }
 
 type streamConsumerBinding struct {
-	handle      jetstream.ConsumeContext
-	drainIssued bool
+	handle       jetstream.ConsumeContext
+	drainOnce    *sync.Once
+	observerDone <-chan struct{}
 }
 type requestSubscription interface{ Drain(context.Context) error }
 
@@ -723,10 +724,7 @@ func (c *Component) cleanup(ctx context.Context) error {
 	}
 	for i := range c.consumers {
 		binding := &c.consumers[i]
-		if !binding.drainIssued {
-			binding.handle.Drain()
-			binding.drainIssued = true
-		}
+		binding.drain()
 		closed := binding.handle.Closed()
 		if c.waitConsumerClosed != nil {
 			cleanupErr = errors.Join(cleanupErr, c.waitConsumerClosed(ctx, closed))
@@ -743,6 +741,15 @@ func (c *Component) cleanup(ctx context.Context) error {
 	}
 	if c.cancel != nil {
 		c.cancel()
+	}
+	for i := range c.consumers {
+		if observerDone := c.consumers[i].observerDone; observerDone != nil {
+			select {
+			case <-observerDone:
+			case <-ctx.Done():
+				cleanupErr = errors.Join(cleanupErr, ctx.Err())
+			}
+		}
 	}
 	if done != nil {
 		select {
@@ -1021,11 +1028,42 @@ func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port co
 	}
 
 	var handlerFn func(context.Context, jetstream.Msg)
+	var admission *deliveryLaneAdmission
 	if useHeartbeat {
-		hi := heartbeatInterval
+		retryPolicy, retryErr := natsclient.DelayedDeliveryRetry(30 * time.Second)
+		if retryErr != nil {
+			return errs.WrapInvalid(retryErr, "agentic-loop", "setupConsumer", "construct delivery retry policy")
+		}
+		policy, policyErr := natsclient.ValidateHeartbeatDeliveryPolicy(
+			setupCtx,
+			cfg,
+			heartbeatInterval,
+			retryPolicy,
+			func(workCtx context.Context, _ natsclient.DeliveryAttempt, data []byte) (natsclient.DeliveryDecision, error) {
+				handlerErr := handler(workCtx, data)
+				if handlerErr == nil {
+					return natsclient.DeliveryDecisionAck, nil
+				}
+				var permanent *natsclient.PermanentDeliveryError
+				if errors.As(handlerErr, &permanent) {
+					return natsclient.DeliveryDecisionTerminate, handlerErr
+				}
+				return natsclient.DeliveryDecisionRetry, handlerErr
+			},
+		)
+		if policyErr != nil {
+			return errs.WrapInvalid(
+				policyErr,
+				"agentic-loop",
+				"setupConsumer",
+				fmt.Sprintf("validate heartbeat delivery policy for port %s", port.Name),
+			)
+		}
+		admission = newDeliveryLaneAdmission()
 		handlerFn = func(msgCtx context.Context, msg jetstream.Msg) {
-			if err := consumeLongRunningInput(msgCtx, msg, hi, handler); err != nil {
-				c.logger.Error("Message handler error", "port", port.Name, "error", err)
+			result, admitted := consumeAdmittedDelivery(msgCtx, msg, policy, admission)
+			if admitted && result.Err() != nil && !result.OwnerStopRequired() {
+				c.logger.Error("Message handler error", "port", port.Name, "error", result.Err())
 			}
 		}
 	} else {
@@ -1050,9 +1088,13 @@ func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port co
 		return errs.Wrap(err, "agentic-loop", "setupConsumer", fmt.Sprintf("setup consumer for stream %s", streamName))
 	}
 
+	binding := newStreamConsumerBinding(handle)
+	if admission != nil {
+		c.observeDeliveryLane(consumerCtx, &binding, admission, port.Name)
+	}
 	// Track consumer for cleanup in Stop()
 	c.lifecycleMu.Lock()
-	c.consumers = append(c.consumers, streamConsumerBinding{handle: handle})
+	c.consumers = append(c.consumers, binding)
 	c.lifecycleMu.Unlock()
 	c.mu.Lock()
 	c.consumerInfos = append(c.consumerInfos, consumerInfo{
@@ -1085,17 +1127,6 @@ func agenticLoopConsumerPolicy(port component.Port) (component.ConsumerConfig, i
 			"agentic-loop", "consumerPolicy", "component-owned consumer policy")
 	}
 	return consumerConfig, fixed, nil
-}
-
-func consumeLongRunningInput(
-	ctx context.Context,
-	msg jetstream.Msg,
-	heartbeatInterval time.Duration,
-	handler inputHandler,
-) error {
-	return natsclient.ConsumeWithHeartbeat(ctx, msg, heartbeatInterval, func(workCtx context.Context) error {
-		return handler(workCtx, msg.Data())
-	})
 }
 
 // waitForStream waits for a JetStream stream to be available

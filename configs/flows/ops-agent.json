@@ -170,7 +170,7 @@
         "loops_bucket": "AGENT_LOOPS",
         "consumer": {
           "ack_wait": "120s",
-          "heartbeat_interval": "60s",
+          "heartbeat_interval": "15s",
           "max_deliver": 2
         },
         "ports": {
@@ -279,6 +279,8 @@
               "config": {
                 "kind": "jetstream",
                 "stream_name": "AGENT",
+                "ack_wait": "120s",
+                "heartbeat_interval": "60s",
                 "subjects": [
                   "agent.request.>"
                 ]
