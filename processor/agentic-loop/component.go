@@ -91,7 +91,8 @@ type Component struct {
 	sweeperDone   chan struct{}
 
 	// Metrics
-	metrics *loopMetrics
+	metrics          *loopMetrics
+	deliveryFatalErr error
 
 	// Graph writer for model endpoint and loop execution entities
 	graphWriter *graphWriter
@@ -432,7 +433,12 @@ func (c *Component) Health() component.HealthStatus {
 		status = "running"
 	}
 	errorCount, lastError := c.trajectoryAuditHealth.snapshot()
-	if healthy && (!c.trajectoryProviderAvailable() || errorCount > 0) {
+	if c.deliveryFatalErr != nil {
+		healthy = false
+		status = "delivery ownership lost"
+		errorCount++
+		lastError = c.deliveryFatalErr.Error()
+	} else if healthy && (!c.trajectoryProviderAvailable() || errorCount > 0) {
 		healthy = false
 		status = "degraded"
 		if !c.trajectoryProviderAvailable() && lastError == "" {
@@ -1026,40 +1032,14 @@ func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port co
 		// the single authority on task-work timeout attribution.
 		DisableMessageTimeout: port.Name == "agent.task",
 	}
-
 	var handlerFn func(context.Context, jetstream.Msg)
 	var admission *deliveryLaneAdmission
 	if useHeartbeat {
-		retryPolicy, retryErr := natsclient.DelayedDeliveryRetry(30 * time.Second)
-		if retryErr != nil {
-			return errs.WrapInvalid(retryErr, "agentic-loop", "setupConsumer", "construct delivery retry policy")
-		}
-		policy, policyErr := natsclient.ValidateHeartbeatDeliveryPolicy(
-			setupCtx,
-			cfg,
-			heartbeatInterval,
-			retryPolicy,
-			func(workCtx context.Context, _ natsclient.DeliveryAttempt, data []byte) (natsclient.DeliveryDecision, error) {
-				handlerErr := handler(workCtx, data)
-				if handlerErr == nil {
-					return natsclient.DeliveryDecisionAck, nil
-				}
-				var permanent *natsclient.PermanentDeliveryError
-				if errors.As(handlerErr, &permanent) {
-					return natsclient.DeliveryDecisionTerminate, handlerErr
-				}
-				return natsclient.DeliveryDecisionRetry, handlerErr
-			},
-		)
+		policy, policyErr := newLoopHeartbeatDeliveryPolicy(setupCtx, cfg, heartbeatInterval, port.Name, handler)
 		if policyErr != nil {
-			return errs.WrapInvalid(
-				policyErr,
-				"agentic-loop",
-				"setupConsumer",
-				fmt.Sprintf("validate heartbeat delivery policy for port %s", port.Name),
-			)
+			return policyErr
 		}
-		admission = newDeliveryLaneAdmission()
+		admission = newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
 		handlerFn = func(msgCtx context.Context, msg jetstream.Msg) {
 			result, admitted := consumeAdmittedDelivery(msgCtx, msg, policy, admission)
 			if admitted && result.Err() != nil && !result.OwnerStopRequired() {
@@ -1127,6 +1107,62 @@ func agenticLoopConsumerPolicy(port component.Port) (component.ConsumerConfig, i
 			"agentic-loop", "consumerPolicy", "component-owned consumer policy")
 	}
 	return consumerConfig, fixed, nil
+}
+
+func validateLoopRetryPolicy(portName string, cfg natsclient.StreamConsumerConfig) error {
+	if cfg.MaxDeliver >= len(cfg.BackOff) {
+		return nil
+	}
+	return errs.WrapInvalid(
+		fmt.Errorf("max_deliver %d is below required minimum %d for fixed BackOff", cfg.MaxDeliver, len(cfg.BackOff)),
+		"agentic-loop",
+		"setupConsumer",
+		fmt.Sprintf("validate delivery policy for port %s", portName),
+	)
+}
+
+func newLoopHeartbeatDeliveryPolicy(
+	ctx context.Context,
+	cfg natsclient.StreamConsumerConfig,
+	heartbeatInterval time.Duration,
+	portName string,
+	handler inputHandler,
+) (natsclient.HeartbeatDeliveryPolicy, error) {
+	if err := validateLoopRetryPolicy(portName, cfg); err != nil {
+		return natsclient.HeartbeatDeliveryPolicy{}, err
+	}
+	retryPolicy, err := natsclient.DelayedDeliveryRetry(30 * time.Second)
+	if err != nil {
+		return natsclient.HeartbeatDeliveryPolicy{}, errs.WrapInvalid(
+			err, "agentic-loop", "setupConsumer", "construct delivery retry policy",
+		)
+	}
+	policy, err := natsclient.ValidateHeartbeatDeliveryPolicy(
+		ctx,
+		cfg,
+		heartbeatInterval,
+		retryPolicy,
+		func(workCtx context.Context, _ natsclient.DeliveryAttempt, data []byte) (natsclient.DeliveryDecision, error) {
+			handlerErr := handler(workCtx, data)
+			if handlerErr == nil {
+				return natsclient.DeliveryDecisionAck, nil
+			}
+			var permanent *natsclient.PermanentDeliveryError
+			if errors.As(handlerErr, &permanent) {
+				return natsclient.DeliveryDecisionTerminate, handlerErr
+			}
+			return natsclient.DeliveryDecisionRetry, handlerErr
+		},
+	)
+	if err != nil {
+		return natsclient.HeartbeatDeliveryPolicy{}, errs.WrapInvalid(
+			err,
+			"agentic-loop",
+			"setupConsumer",
+			fmt.Sprintf("validate heartbeat delivery policy for port %s", portName),
+		)
+	}
+	return policy, nil
 }
 
 // waitForStream waits for a JetStream stream to be available

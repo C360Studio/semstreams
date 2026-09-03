@@ -46,7 +46,7 @@ func (m *modelDeliveryOwnerMsg) InProgress() error                { m.heartbeats
 func (m *modelDeliveryOwnerMsg) Term() error                      { m.settlement.Add(1); return nil }
 func (m *modelDeliveryOwnerMsg) TermWithReason(string) error      { m.settlement.Add(1); return nil }
 
-// spec: agentic-model / Model heartbeat policy is valid before acquisition
+// spec: agentic-model / Model request settlement is bound to a durable response
 func TestModelUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner(t *testing.T) {
 	var workCalls atomic.Int32
 	policy, err := natsclient.ValidateHeartbeatDeliveryPolicy(
@@ -60,7 +60,7 @@ func TestModelUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner(t *testin
 		},
 	)
 	require.NoError(t, err)
-	admission := newDeliveryLaneAdmission()
+	admission := newDeliveryLaneAdmission(nil)
 	metadataCause := errors.New("metadata unavailable")
 	msg := &modelDeliveryOwnerMsg{data: []byte("must-not-run"), metadataErr: metadataCause}
 
@@ -93,7 +93,7 @@ func TestModelUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner(t *testin
 	<-binding.observerDone
 }
 
-// spec: agentic-model / Model heartbeat policy is valid before acquisition
+// spec: agentic-model / Model request settlement is bound to a durable response
 func TestModelSetupWiresMetadataFailureToAcquiredOwner(t *testing.T) {
 	port, err := (component.PortDefinition{
 		Name: "agent.request",
@@ -105,35 +105,66 @@ func TestModelSetupWiresMetadataFailureToAcquiredOwner(t *testing.T) {
 	}).Resolve(component.DirectionInput)
 	require.NoError(t, err)
 
-	handle := &modelPolicyHandle{closed: make(chan struct{})}
-	var callback func(context.Context, jetstream.Msg)
+	handles := []*modelPolicyHandle{
+		{closed: make(chan struct{})},
+		{closed: make(chan struct{})},
+	}
+	callbacks := make([]func(context.Context, jetstream.Msg), 0, len(handles))
 	c := &Component{
-		name: "agentic-model", config: DefaultConfig(),
+		name: "agentic-model", config: DefaultConfig(), running: true, startTime: time.Now(),
 		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
 		waitForStreamInput: func(context.Context, string) error { return nil },
 		consumeStream: func(_ context.Context, _ natsclient.PortConsumerContext, _ natsclient.StreamConsumerConfig, handler func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
-			callback = handler
-			return handle, nil
+			index := len(callbacks)
+			callbacks = append(callbacks, handler)
+			return handles[index], nil
 		},
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	require.NoError(t, c.setupConsumer(ctx, port))
-	require.NotNil(t, callback)
-	require.Len(t, c.consumers, 1)
+	require.NoError(t, c.setupConsumer(ctx, port))
+	require.Len(t, callbacks, 2)
+	require.Len(t, c.consumers, 2)
 
-	msg := &modelDeliveryOwnerMsg{metadataErr: errors.New("metadata unavailable")}
-	callback(ctx, msg)
-	require.Eventually(t, func() bool { return handle.drains.Load() == 1 }, time.Second, time.Millisecond)
-	callback(ctx, msg)
-	require.Equal(t, int32(1), msg.metadata.Load(), "closed owner must refuse another delivery before metadata access")
-	require.Zero(t, msg.dataCalls.Load())
-	require.Zero(t, msg.settlement.Load())
+	firstCause := errors.New("first metadata unavailable")
+	first := &modelDeliveryOwnerMsg{metadataErr: firstCause}
+	callbacks[0](ctx, first)
+	firstHealth := c.Health()
+	require.False(t, firstHealth.Healthy)
+	require.Equal(t, "delivery ownership lost", firstHealth.Status)
+	require.Equal(t, "delivery_metadata_unavailable: "+firstCause.Error(), firstHealth.LastError)
+	require.Equal(t, 1, firstHealth.ErrorCount)
+	require.Eventually(t, func() bool { return handles[0].drains.Load() == 1 }, time.Second, time.Millisecond)
+	require.Zero(t, handles[1].drains.Load(), "first fatal must not drain another owner")
+
+	secondCause := errors.New("later metadata unavailable")
+	second := &modelDeliveryOwnerMsg{metadataErr: secondCause}
+	callbacks[1](ctx, second)
+	require.Eventually(t, func() bool { return handles[1].drains.Load() == 1 }, time.Second, time.Millisecond)
+	secondHealth := c.Health()
+	require.False(t, secondHealth.Healthy)
+	require.Equal(t, "delivery ownership lost", secondHealth.Status)
+	require.Equal(t, firstHealth.LastError, secondHealth.LastError, "the first fatal cause must remain sticky")
+	require.NotContains(t, secondHealth.LastError, secondCause.Error())
+	require.Equal(t, 1, secondHealth.ErrorCount, "later fatal owner loss must not recount")
+	require.Equal(t, int32(1), handles[0].drains.Load(), "later fatal must not redrain the first owner")
+
+	callbacks[0](ctx, first)
+	require.Equal(t, int32(1), first.metadata.Load(), "closed owner must refuse another delivery before metadata access")
+	for index, msg := range []*modelDeliveryOwnerMsg{first, second} {
+		require.Zero(t, msg.dataCalls.Load(), "message %d must not expose data to work", index)
+		require.Zero(t, msg.heartbeats.Load(), "message %d must not heartbeat", index)
+		require.Zero(t, msg.settlement.Load(), "message %d must not settle", index)
+		require.Equal(t, int32(1), handles[index].drains.Load(), "only the exact owner handle drains once")
+	}
 
 	cancel()
-	<-c.consumers[0].observerDone
+	for _, binding := range c.consumers {
+		<-binding.observerDone
+	}
 }
 
-// spec: agentic-model / Model heartbeat policy is valid before acquisition
+// spec: agentic-model / Model request settlement is bound to a durable response
 func TestDeliveryAttemptExposesOnlyImmutableAttemptObservation(t *testing.T) {
 	typeOfAttempt := reflect.TypeOf(natsclient.DeliveryAttempt{})
 	require.Equal(t, 1, typeOfAttempt.NumField())

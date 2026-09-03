@@ -168,7 +168,7 @@ const defaultLoopHeartbeatInterval = 15 * time.Second
 type ConsumerConfig struct {
 	AckWait           string `json:"ack_wait,omitempty" schema:"type:string,description:AckWait duration for long-running consumers (e.g. 90s or 5m),default:90s,category:advanced"`
 	HeartbeatInterval string `json:"heartbeat_interval,omitempty" schema:"type:string,description:InProgress heartbeat interval for long-running consumers. Must be no more than half the shortest configured BackOff interval,default:15s,category:advanced"`
-	MaxDeliver        int    `json:"max_deliver,omitempty" schema:"type:int,description:Maximum redelivery attempts for long-running consumers,default:2,min:1,max:10,category:advanced"`
+	MaxDeliver        int    `json:"max_deliver,omitempty" schema:"type:int,description:Maximum redelivery attempts for long-running consumers. Must cover the fixed two-entry BackOff,default:2,min:2,max:10,category:advanced"`
 }
 
 // ContextConfig represents configuration for context memory management.
@@ -310,8 +310,8 @@ func (c ConsumerConfig) Validate() error {
 			return errs.WrapInvalid(fmt.Errorf("heartbeat_interval must be at least 5s"), "ConsumerConfig", "Validate", "check heartbeat_interval")
 		}
 	}
-	if c.MaxDeliver < 0 {
-		return errs.WrapInvalid(fmt.Errorf("max_deliver must be non-negative"), "ConsumerConfig", "Validate", "check max_deliver")
+	if c.MaxDeliver != 0 && c.MaxDeliver < 2 {
+		return errs.WrapInvalid(fmt.Errorf("max_deliver must be at least 2 when set"), "ConsumerConfig", "Validate", "check max_deliver")
 	}
 	return nil
 }
