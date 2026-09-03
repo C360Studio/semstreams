@@ -118,7 +118,7 @@ Provider replay follows the model settlement and ambiguity policy rather than in
 ```yaml
 # agentic-loop consumer
 ack_wait: 300s          # retained setting; loop BackOff still controls the effective lease intervals
-max_deliver: 1          # no redelivery, ever
+max_deliver: 2          # fixed [30s, 2m] BackOff requires both delivery entries
 max_ack_pending: 1
 heartbeat_interval: 15s # validated against component-owned [30s, 2m] BackOff
 
@@ -143,10 +143,10 @@ ports:
 #   saves provider tokens past the cancel point.
 ```
 
-The tradeoff: any consumer-side network blip or restart that exceeds
-`ack_wait` becomes a permanent task failure. For paid LLMs with
-$0.X/1K-token charges, that's the right tradeoff. For local llama.cpp
-or hobbyist deployments, posture A is cheaper.
+The tradeoff applies at the paid model boundary: its `max_deliver: 1` avoids an automatic second provider attempt.
+The loop remains restart-recoverable with `max_deliver: 2`, because its fixed two-entry BackOff cannot truthfully
+advertise a single-delivery posture. Provider ambiguity is handled by the model settlement policy, not by disabling
+loop recovery.
 
 ## What happens when a heartbeat fails
 

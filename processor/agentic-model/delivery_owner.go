@@ -12,13 +12,16 @@ import (
 // delivery authority; this latch only prevents new local work after ownership
 // control becomes unsafe.
 type deliveryLaneAdmission struct {
-	mu    sync.Mutex
-	open  bool
-	fatal chan natsclient.DeliveryResult
+	mu      sync.Mutex
+	open    bool
+	fatal   chan natsclient.DeliveryResult
+	onFatal func(natsclient.DeliveryResult)
 }
 
-func newDeliveryLaneAdmission() *deliveryLaneAdmission {
-	return &deliveryLaneAdmission{open: true, fatal: make(chan natsclient.DeliveryResult, 1)}
+func newDeliveryLaneAdmission(onFatal func(natsclient.DeliveryResult)) *deliveryLaneAdmission {
+	return &deliveryLaneAdmission{
+		open: true, fatal: make(chan natsclient.DeliveryResult, 1), onFatal: onFatal,
+	}
 }
 
 func (a *deliveryLaneAdmission) admit() bool {
@@ -38,7 +41,20 @@ func (a *deliveryLaneAdmission) latch(result natsclient.DeliveryResult) {
 	}
 	a.open = false
 	a.mu.Unlock()
+	if a.onFatal != nil {
+		a.onFatal(result)
+	}
 	a.fatal <- result
+}
+
+func (c *Component) recordDeliveryOwnerFatal(result natsclient.DeliveryResult) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.deliveryFatalErr != nil {
+		return
+	}
+	c.deliveryFatalErr = result.Err()
+	c.errors++
 }
 
 func consumeAdmittedDelivery(

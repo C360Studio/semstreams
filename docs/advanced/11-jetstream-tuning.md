@@ -182,7 +182,8 @@ cfg := natsclient.StreamConsumerConfig{
 ```
 
 The loop uses a 15-second heartbeat because its shortest BackOff interval is 30 seconds. Policy validation refuses
-larger values before allocating the consumer.
+larger values before allocating the consumer. Its fixed two-entry BackOff also requires `MaxDeliver >= 2`; an
+explicit value of 1 is refused rather than silently truncating the retry schedule.
 
 ### agentic-model — LLM Calls
 

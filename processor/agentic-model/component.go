@@ -72,6 +72,7 @@ type Component struct {
 	errors            int64
 	lastActivity      time.Time
 	metrics           *modelMetrics
+	deliveryFatalErr  error
 }
 
 // Option configures optional Component behavior at construction time.
@@ -404,7 +405,7 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port) erro
 			fmt.Sprintf("validate heartbeat delivery policy for port %s", port.Name),
 		)
 	}
-	admission := newDeliveryLaneAdmission()
+	admission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
 
 	consume := c.natsClient.ConsumeStreamWithConfig
 	if c.consumeStream != nil {
@@ -1134,10 +1135,16 @@ func (c *Component) Health() component.HealthStatus {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
+	healthy := c.running && c.deliveryFatalErr == nil
+	lastError := ""
+	if c.deliveryFatalErr != nil {
+		lastError = c.deliveryFatalErr.Error()
+	}
 	return component.HealthStatus{
-		Healthy:    c.running,
+		Healthy:    healthy,
 		LastCheck:  time.Now(),
 		ErrorCount: int(c.errors),
+		LastError:  lastError,
 		Uptime:     time.Since(c.startTime),
 		Status:     c.getStatus(),
 	}
@@ -1145,6 +1152,9 @@ func (c *Component) Health() component.HealthStatus {
 
 // getStatus returns a status string
 func (c *Component) getStatus() string {
+	if c.deliveryFatalErr != nil {
+		return "delivery ownership lost"
+	}
 	if c.running {
 		return "running"
 	}

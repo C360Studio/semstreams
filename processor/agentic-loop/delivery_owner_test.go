@@ -44,7 +44,7 @@ func (m *loopDeliveryOwnerMsg) InProgress() error                { m.heartbeats.
 func (m *loopDeliveryOwnerMsg) Term() error                      { m.settlement.Add(1); return nil }
 func (m *loopDeliveryOwnerMsg) TermWithReason(string) error      { m.settlement.Add(1); return nil }
 
-// spec: agentic-loop / Long-running loop heartbeat policy is valid before acquisition
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
 func TestLoopUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner(t *testing.T) {
 	retry, err := natsclient.DelayedDeliveryRetry(30 * time.Second)
 	require.NoError(t, err)
@@ -60,7 +60,7 @@ func TestLoopUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner(t *testing
 		},
 	)
 	require.NoError(t, err)
-	admission := newDeliveryLaneAdmission()
+	admission := newDeliveryLaneAdmission(nil)
 	metadataCause := errors.New("metadata unavailable")
 	msg := &loopDeliveryOwnerMsg{data: []byte("must-not-run"), metadataErr: metadataCause}
 
@@ -93,40 +93,80 @@ func TestLoopUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner(t *testing
 	<-binding.observerDone
 }
 
-// spec: agentic-loop / Long-running loop heartbeat policy is valid before acquisition
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
 func TestLoopSetupWiresMetadataFailureToAcquiredOwner(t *testing.T) {
-	port, err := (component.PortDefinition{
-		Name:     "agent.task",
-		Config:   component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.task.>"}},
-		Required: true,
-	}).Resolve(component.DirectionInput)
-	require.NoError(t, err)
-
-	handle := &loopPolicyHandle{closed: make(chan struct{})}
-	var callback func(context.Context, jetstream.Msg)
+	handles := []*loopPolicyHandle{
+		{closed: make(chan struct{})},
+		{closed: make(chan struct{})},
+	}
+	callbacks := make([]func(context.Context, jetstream.Msg), 0, len(handles))
+	var workCalls atomic.Int32
 	c := &Component{
-		config: DefaultConfig(), logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		config: DefaultConfig(), logger: slog.New(slog.NewTextHandler(io.Discard, nil)), started: true, startTime: time.Now(),
 		waitForStreamInput: func(context.Context, string) error { return nil },
 		consumeStream: func(_ context.Context, _ context.Context, _ natsclient.PortConsumerContext, _ natsclient.StreamConsumerConfig, handler func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
-			callback = handler
-			return handle, nil
+			index := len(callbacks)
+			callbacks = append(callbacks, handler)
+			return handles[index], nil
 		},
 	}
-	ctx, cancel := context.WithCancel(t.Context())
-	require.NoError(t, c.setupConsumer(
-		ctx, ctx, port, "agent.task.>", func(context.Context, []byte) error { return nil },
-	))
-	require.NotNil(t, callback)
-	require.Len(t, c.consumers, 1)
+	c.trajectoryAuditHealth.latch("trajectory audit degraded")
+	require.Equal(t, 1, c.Health().ErrorCount)
 
-	msg := &loopDeliveryOwnerMsg{metadataErr: errors.New("metadata unavailable")}
-	callback(ctx, msg)
-	require.Eventually(t, func() bool { return handle.drains.Load() == 1 }, time.Second, time.Millisecond)
-	callback(ctx, msg)
-	require.Equal(t, int32(1), msg.metadata.Load(), "closed owner must refuse another delivery before metadata access")
-	require.Zero(t, msg.dataCalls.Load())
-	require.Zero(t, msg.settlement.Load())
+	ctx, cancel := context.WithCancel(t.Context())
+	for _, portName := range []string{"agent.task", "agent.response"} {
+		port, err := (component.PortDefinition{
+			Name:     portName,
+			Config:   component.JetStreamPort{StreamName: "AGENT", Subjects: []string{portName + ".>"}},
+			Required: true,
+		}).Resolve(component.DirectionInput)
+		require.NoError(t, err)
+		require.NoError(t, c.setupConsumer(
+			ctx, ctx, port, portName+".>", func(context.Context, []byte) error {
+				workCalls.Add(1)
+				return nil
+			},
+		))
+	}
+	require.Len(t, callbacks, 2)
+	require.Len(t, c.consumers, 2)
+
+	firstCause := errors.New("first metadata unavailable")
+	first := &loopDeliveryOwnerMsg{metadataErr: firstCause}
+	callbacks[0](ctx, first)
+	firstHealth := c.Health()
+	require.False(t, firstHealth.Healthy)
+	require.Equal(t, "delivery ownership lost", firstHealth.Status,
+		"owner loss must take precedence over trajectory degradation")
+	require.Equal(t, "delivery_metadata_unavailable: "+firstCause.Error(), firstHealth.LastError)
+	require.NotContains(t, firstHealth.LastError, "trajectory audit degraded")
+	require.Equal(t, 2, firstHealth.ErrorCount, "owner loss adds exactly one error to existing trajectory degradation")
+	require.Eventually(t, func() bool { return handles[0].drains.Load() == 1 }, time.Second, time.Millisecond)
+	require.Zero(t, handles[1].drains.Load(), "first fatal must not drain another owner")
+
+	secondCause := errors.New("later metadata unavailable")
+	second := &loopDeliveryOwnerMsg{metadataErr: secondCause}
+	callbacks[1](ctx, second)
+	require.Eventually(t, func() bool { return handles[1].drains.Load() == 1 }, time.Second, time.Millisecond)
+	secondHealth := c.Health()
+	require.Equal(t, "delivery ownership lost", secondHealth.Status)
+	require.Equal(t, firstHealth.LastError, secondHealth.LastError, "the first fatal cause must remain sticky")
+	require.NotContains(t, secondHealth.LastError, secondCause.Error())
+	require.Equal(t, 2, secondHealth.ErrorCount, "later fatal owner loss must not recount")
+	require.Equal(t, int32(1), handles[0].drains.Load(), "later fatal must not redrain the first owner")
+
+	callbacks[0](ctx, first)
+	require.Equal(t, int32(1), first.metadata.Load(), "closed owner must refuse another delivery before metadata access")
+	require.Zero(t, workCalls.Load())
+	for index, msg := range []*loopDeliveryOwnerMsg{first, second} {
+		require.Zero(t, msg.dataCalls.Load(), "message %d must not expose data to work", index)
+		require.Zero(t, msg.heartbeats.Load(), "message %d must not heartbeat", index)
+		require.Zero(t, msg.settlement.Load(), "message %d must not settle", index)
+		require.Equal(t, int32(1), handles[index].drains.Load(), "only the exact owner handle drains once")
+	}
 
 	cancel()
-	<-c.consumers[0].observerDone
+	for _, binding := range c.consumers {
+		<-binding.observerDone
+	}
 }

@@ -29,9 +29,9 @@
         },
         "max_deliver": {
           "type": "integer",
-          "description": "Maximum redelivery attempts for long-running consumers",
+          "description": "Maximum redelivery attempts for long-running consumers. Must cover the fixed two-entry BackOff",
           "default": 2,
-          "minimum": 1,
+          "minimum": 2,
           "maximum": 10,
           "category": "advanced"
         }
