@@ -1,128 +1,296 @@
 # Tasks: agentic-loop restart-safe settlement
 
+Every behavior test added by this change SHALL carry a source comment in the exact form
+`// spec: <capability> / <Requirement heading>`. The capability and heading SHALL match an active delta exactly;
+design-section shorthand is not a valid citation. Every implementation slice follows RED → implementation → GREEN.
+
 ## 0. Accepted gates
 
-- [x] 0.1 Complete the file:line surface, lane, state, lifecycle, and adopter inventory.
-- [x] 0.2 Receive independent `INVENTORY PASS` for SHA-256
-  `70603493e56887c3e355dcf9087891e03cf7ea7764454fcf528e0686b1bdfe9d`.
-- [x] 0.3 Receive independent `DESIGN REVIEW PASS` at `b8e2c031` and explicit owner acceptance on #1146.
-- [x] 0.4 Remove `skip_specs: true` and materialize draft capability deltas.
+- [x] 0.1 Complete the original file:line surface, lane, state, lifecycle, and adopter inventory.
+- [x] 0.2 Receive independent `INVENTORY PASS` for the exact #759 foundation inventory, SHA-256
+  `3b53c6d3d4f3298d63ffc2231b209aa8e1f4379a6c1bf75b7aa5edc6a4f65ffb`, 555/555 pins.
+- [x] 0.3 Receive independent design review and owner acceptance of the two choices on #1146 comment `5516511726`.
+- [x] 0.4 Integrate nested PR #1251 and receive post-integration `INVENTORY PASS`, SHA-256
+  `2888e28a7439ff4dc62345bf9a1e476054c292326ac291ab1d4519f9c0600a73`, 181/181 pins.
+- [x] 0.5 Receive publisher-addendum `INVENTORY PASS`, SHA-256
+  `0adba4f0092017d84f1ef181ebaf3299323f5cc75b999825bd1e16d6e292930f`, 226/226 pins.
+- [x] 0.6 Materialize the accepted target into proposal, canonical design, tasks, and six capability deltas.
+- [ ] 0.7 Receive independent pre-implementation design review of the complete active OpenSpec.
 
-## 1. Blocking settlement foundation
+## 1. Settlement foundation and lease policy
 
-- [ ] 1.1 Hold implementation until #759 merges.
-- [ ] 1.2 Confirm every touched consumer uses #759's accepted `DeliveryResult` contract and native delivery owner.
-- [ ] 1.3 Confirm #1155 real-NATS replacement proof is available and reusable.
-- [ ] 1.4 Reconcile the design against merged #759; stop for reinventory if the surface differs materially.
-- [ ] 1.5 Add immutable `DeliveryAttempt` observation to #759 without exposing native message or settlement methods.
-- [x] 1.6 Obtain design review and owner acceptance for the #759 addendum before #1146 model work.
-- [ ] 1.7 Quarantine and stop the exact owner when delivery metadata is unavailable.
-- [ ] 1.8 Test first delivery, second delivery, crash-before-call false unknown, and unavailable metadata.
+- [ ] 1.1 Verify PR #1159 still targets `codex/gh759-semantic-settlement`, the remote parent remains exact
+  `F=417beae5552f8f15ad3540edd7d8504c87174c13`, and implementation begins from exact post-#1251 checkpoint
+  `P=09ba38b1de5e7200e72281c8e4b8941d81be1da2`. Any parent advance or inventory drift stops work for rebase,
+  reinventory, retest, and re-review.
+- [ ] 1.2 RED: add setup-failure tests for model heartbeat 90s/AckWait 120s and loop heartbeat 60s/BackOff
+  `[30s,2m]`, plus passing 60s/120s and 15s/`[30s,2m]` cases. Cite exactly
+  `// spec: agentic-model / Model heartbeat policy is valid before acquisition` and
+  `// spec: agentic-loop / Long-running loop heartbeat policy is valid before acquisition`.
+- [ ] 1.3 Implement model default 60s and loop default/schema 15s; reconcile typed configuration, defaults, generated
+  schemas, docs, and every fixture. Validate the exact acquisition config before allocating a consumer.
+- [ ] 1.4 GREEN: prove invalid policy allocates zero consumers, valid policy reaches acquisition, unavailable delivery
+  metadata quarantines and stops the exact heartbeat owner, and immutable `DeliveryAttempt` exposes no native message,
+  settlement method, sequence, consumer identity, header, or mutable state under the citations from 1.2.
+- [ ] 1.5 RED: for each of ten physical fast subscriptions add a real-NATS 30s AckWait/25s cooperative-work/5s
+  cancellation-and-join boundary test. Cite its exact owner requirement:
+  `// spec: agentic-dispatch / Every dispatch durable input settles through its owner`,
+  `// spec: agentic-governance / Governance validation settles after its declared consequence`, or
+  `// spec: agentic-loop / All six loop input classes settle after owner-specific durable done`.
+- [ ] 1.6 Implement each fast business handler as `DeliveryDecision, error` through its existing private native owner.
+  Add no native settlement escape or exported no-heartbeat API. Migrate only an individually failing legitimate
+  cooperative subscription: dispatch 30s/10s; loop 120s/15s; governance bounded work 30s with separately reviewed
+  concrete heartbeat `<=15s`.
+- [ ] 1.7 GREEN: prove Retry/no ACK/no concurrent delivery and all joins for each subscription independently. Four
+  parallel proof groups only bound wall-clock and never authorize sibling fallback. Cancellation-ignoring or
+  non-returning work fails lifecycle review under both routes.
 
-## 2. Stable identity and replay helpers
+## 2. Stable identity and exact reconciliation
 
-- [ ] 2.1 Define deterministic TaskID, LoopID, RequestID, execution identity, output identity, and fingerprints.
-- [ ] 2.2 Preserve provider CallID; add framework RequestID and execution correlation.
-- [ ] 2.3 Evolve `TOOL_CALL_OUTCOMES` identity without adding a second outcome authority.
-- [ ] 2.4 Add exact committed-message lookup and collision validation for requests, responses, and verdicts.
-- [ ] 2.5 Add deterministic `Nats-Msg-Id` to every required output.
+- [ ] 2.1 RED: add deterministic identity, canonical collision, uncertain-PubAck retry, and exact committed-output
+  tests for every required dispatch, model, loop, governance, and tool publication. Cite exactly the applicable
+  requirement among `// spec: agentic-dispatch / Dispatch publication identity is deterministic and reconcilable`,
+  `// spec: agentic-model / Model response identity and publication are deterministic`,
+  `// spec: agentic-loop / Loop and required-output identities are deterministic and reconcilable`,
+  `// spec: agentic-governance / Governance publication identity is deterministic and reconcilable`, and
+  `// spec: agentic-tools / Tool-result publication identity is deterministic and reconcilable`.
+- [ ] 2.2 Implement deterministic TaskID, LoopID, RequestID, framework execution identity, output identity,
+  fingerprints, and `Nats-Msg-Id` on every required publication. Preserve provider CallID as conversation data.
+  Add operation-specific exact lookups for requests, responses, validated governance outputs, proposals, verdicts,
+  terminal outputs, and completed tool outcomes; add no general stream scan or query front door.
+- [ ] 2.3 GREEN: prove exact match avoids duplicate work, different canonical content quarantines, and server dedupe is
+  treated only as a bounded optimization while semantic reconciliation remains load-bearing after the duplicate
+  window.
 
 ## 3. Provider settlement
 
-- [ ] 3.1 Add `fail_commit_unknown`, `at_least_once`, and admitted `provider_reconcile` policies.
-- [ ] 3.2 Default to `fail_commit_unknown` and publish a typed machine-readable `AgentResponse` failure.
-- [ ] 3.3 Reconcile an existing committed matching response before provider invocation.
-- [ ] 3.4 Return explicit settlement for parse, resolution, invocation, error-response, and publication paths.
-- [ ] 3.5 Add real-NATS replacement failpoints around invocation, return, response commit, and source ACK.
-- [ ] 3.6 Add closed `AgentResponseFailureKind` validation.
-- [ ] 3.7 Emit `provider_commit_unknown` only with error status.
-- [ ] 3.8 Reject unknown enum values and prohibit classification through error-string parsing.
+- [ ] 3.1 RED: add first-delivery, matching-response replay, pre-call replacement, post-return/pre-PubAck replacement,
+  uncertain publication, unavailable metadata, collision, config omission/invalid-enum, unsupported reconciliation,
+  and policy-table tests. Cite exactly
+  `// spec: agentic-model / Model request settlement is bound to a durable response`,
+  `// spec: agentic-model / Provider commit-unknown behavior is explicit`,
+  `// spec: agentic-model / Provider commit-unknown is machine-readable`, and
+  `// spec: agentic-model / Started markers do not claim invocation certainty` as applicable.
+- [ ] 3.2 Implement `fail_commit_unknown`, `at_least_once`, and admitted `provider_reconcile`; default to
+  `fail_commit_unknown` through exact JSON key `provider_ambiguity_policy`; omission/empty defaults to that value and
+  the only other values are `at_least_once` and `provider_reconcile`. Reconcile exact committed matching response
+  before invocation. Add exact optional `AgentResponse.failure_kind` JSON string with closed
+  `AgentResponseFailureKind=provider_commit_unknown` only for error status; never infer it from error text or use a
+  pre-call started marker as invocation proof. Add the package-private `providerCommitReconciler` exact method/result
+  seam; enumerate every endpoint reachable through direct/default/capability routing and refuse unsupported
+  `provider_reconcile` before consumer allocation. Reconcile config struct/defaults/validation, generated schema,
+  shipped fixtures, and model docs.
+- [ ] 3.3 GREEN: prove by counter that matching-response replay and default unresolved redelivery invoke the provider
+  zero times; prove `at_least_once` repeats only by explicit opt-in, every required response gets PubAck before source
+  ACK, and replacement at every call/return/publication boundary follows the selected policy.
 
 ## 4. Loop task and response settlement
 
-- [ ] 4.1 Replace void task and response adapters with typed delivery work.
-- [ ] 4.2 Add direct `LoopEntity` read-through by LoopID.
-- [ ] 4.3 Settle task birth, initial request, created event, and terminal failures at the delivery boundary.
-- [ ] 4.4 Reconstruct response context and configuration from committed request material.
-- [ ] 4.5 Classify exact duplicate, proven applied, missing, and conflicting response identities.
-- [ ] 4.6 Route every required KV, Store, and publication failure into settlement.
+- [ ] 4.1 RED: add task-birth, post-registration failure, dropped initial-request publication, response cold-read,
+  proven duplicate, conflict, missing retained evidence, and every KV/Store/publication failure test. Cite exactly
+  `// spec: agentic-loop / All six loop input classes settle after owner-specific durable done`,
+  `// spec: agentic-loop / Loop recovery is lane-specific and read-through`, and
+  `// spec: agentic-loop / Loop and required-output identities are deterministic and reconcilable`.
+- [ ] 4.2 Migrate task, response, and tool-result bindings from the legacy helper to the permanent typed heartbeat
+  owner. Add direct LoopEntity read-through by LoopID; reconstruct response configuration from committed request;
+  settle loop/graph birth, lineage, initial request, created event, and terminal failure at the delivery boundary.
+  Preserve every exit for #1244 as a declared transition or refusal and never encode log-and-ACK as success.
+- [ ] 4.3 GREEN: prove no provider double-call, no response/tool-result log-and-ACK, no stale-correlation loss, and no
+  replay beyond admitted evidence across real process replacement.
 
-## 5. Tool-result continuation
+## 5. Tool result and completed outcome
 
-- [ ] 5.1 Stamp RequestID and framework execution identity on `ToolCall` and `ToolResult`.
-- [ ] 5.2 Reconstruct ordered tool batches from committed request, response, and pending results.
-- [ ] 5.3 Replace `stale_callid` log-and-drop with proven ACK, Retry, Terminate, or Quarantine.
-- [ ] 5.4 Persist each accepted result before publishing the next tool or request.
-- [ ] 5.5 Prove replacement between every result persistence and downstream PubAck boundary.
-- [ ] 5.6 Reuse `TOOL_CALL_OUTCOMES`; add no claimed or in-progress tool ledger.
+- [ ] 5.1 RED: add repeated provider CallID, completed replay, partial batch, missing/colliding execution identity,
+  persistence-before-next-output, and post-effect ambiguity tests. Cite exactly
+  `// spec: agentic-tools / Tool outcomes preserve framework execution correlation`,
+  `// spec: agentic-tools / Completed tool outcome identity is globally unambiguous`,
+  `// spec: agentic-tools / Tool replay remains the sole tool-effect recovery authority`, and
+  `// spec: agentic-tools / Tool delivery retains the permanent typed owner contract`,
+  `// spec: agentic-tools / Tool-call completion SHALL be durable before request acknowledgement`,
+  `// spec: agentic-tools / Tool-result bounds SHALL be observed rather than predicted`, and
+  `// spec: agentic-tools / Executor panic and ambiguous pre-completion effects SHALL be explicit`.
+- [ ] 5.2 Stamp RequestID/execution identity on every ToolCall/ToolResult path, evolve `TOOL_CALL_OUTCOMES` identity,
+  reconstruct ordered batches from committed request/response/results, replace `stale_callid` log-and-drop with a
+  classified outcome, and persist each result before the next publication. Reconcile current requirements
+  `Tool-call completion SHALL be durable before request acknowledgement`,
+  `Tool-result bounds SHALL be observed rather than predicted`, and
+  `Executor panic and ambiguous pre-completion effects SHALL be explicit` so provider CallID/surrogate/effectful
+  idempotency claims use framework execution identity and operation-specific effect authority. Add no claimed/in-
+  progress ledger.
+- [ ] 5.3 GREEN: prove exact completed replay publishes the deterministic result without executor invocation and every
+  result-persistence/downstream-PubAck replacement boundary converges.
 
-## 6. Approval continuation and dispatch
+## 6. Approval continuation and dispatch projection
 
-- [ ] 6.1 Define and register `ApprovalContinuationV1` using the payload-registry checklist.
-- [ ] 6.2 Wire every required composition root and add production-decoder round-trip coverage.
-- [ ] 6.3 Store and verify continuation through `StoreRegistry` before ACKing approval-required results.
-- [ ] 6.4 Add typed continuation reference and applied-decision fingerprint to `PendingApprovalState`.
-- [ ] 6.5 Keep approve or modify evidence until the approved `ToolResult` arrives.
-- [ ] 6.6 Reconstruct configured approval deadlines from current `AGENT_LOOPS` after replacement.
-- [ ] 6.7 Rebuild dispatch `LoopTracker` from `AGENT_LOOPS` and add exact HTTP read-through.
-- [ ] 6.8 Test pending, approve, modify, reject, timeout, duplicate, and conflicting decisions across replacement.
-- [x] 6.9 Record owner choice for finite approval timeout rather than a new reference authority.
-- [ ] 6.10 If finite is selected, reject zero, empty, and over-retention approval timeout when gating is enabled.
-- [x] 6.11 Record the owner-selected 12-hour finite default.
-- [ ] 6.12 Test expired entity and permanently missing continuation behavior.
-- [ ] 6.13 Implement canonical payload digest, deterministic key, get-before-put, and read-back verification.
-- [ ] 6.14 Test matching reuse, malformed and semantic collision, lost Put reply, and transient Get.
-- [ ] 6.15 Add best-effort post-dependency cleanup metrics; add no scanner or reaper.
-- [ ] 6.16 Leave the payload indexing profile empty and projection contracts nil.
-- [ ] 6.17 Census every composition root and document downstream `payloadbuiltins` adoption.
-- [ ] 6.18 Build the dispatch projection off-path and install only after initial snapshot completion.
-- [ ] 6.19 Mark AutoContinue unavailable on initial or live-watch interruption.
-- [ ] 6.20 Preserve explicit LoopID exact reads during incomplete AutoContinue hydration.
-- [ ] 6.21 Test complete-empty, complete-unique, complete-ambiguous, interrupted, and stale-terminal hydration.
+- [ ] 6.1 RED: add production-registry round-trip, absent registration, exact wire-field/identity validation,
+  config omission/default/unresolved Store, canonical fresh-envelope equality, malformed/collision/transient Get/lost
+  Put reply, deliberate AGENT eviction, pending decision variants, deadline, cleanup, projection hydration, and HTTP
+  read-through tests. Cite exactly
+  `// spec: agentic-loop / Approval continuation survives retained-message eviction`,
+  `// spec: agentic-loop / Approval continuation is a registered payload`,
+  `// spec: agentic-loop / Approval continuation storage is content-addressed and verified`,
+  `// spec: agentic-loop / Approval lifetime is bounded by loop-state authority`,
+  `// spec: agentic-loop / Approval deadlines are reconstructed narrowly`, and
+  `// spec: agentic-dispatch / Dispatch process state is a reconstructable projection`, and
+  `// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone` as
+  applicable.
+- [ ] 6.2 Implement registered `ApprovalContinuationV1` with LoopID, TaskID, RequestID, execution identity, provider
+  CallID, positive ordinal, exact request and originating tool-call response under exact wire fields `loop_id`,
+  `task_id`, `request_id`, `execution_id`, `call_id`, `call_ordinal`, `request`, and `response`. Implement exact
+  `agentic.approval_continuation.v1` Schema, own-field alias JSON, validation, `agentic.RegisterPayloads` with control
+  indexing floor/nil projection contracts, and `payloadbuiltins.Register` wiring through `cmd/semstreams`,
+  `cmd/e2e-semstreams`, test helpers, and repeated binary census. Add exact config key
+  `approval_continuation_storage_instance` defaulting to `objectstore`; do not reuse
+  `trajectory_evidence_storage_instance`. Reconcile config/default/validation/schema/fixtures/docs; resolve configured
+  `StoreRegistry`, and perform content-addressed Put/read-back verification. Canonical equality excludes fresh
+  BaseMessage UUID/timestamp but recomputes digest/key and validates every semantic identity. Add no bucket, scanner,
+  reaper, raw decoder, or duplicate registration.
+- [ ] 6.3 Implement pending reference/fingerprint retention through approve/modify ToolResult and through reject/
+  timeout next request or terminal PubAck. Reconstruct only approval deadlines from current AGENT_LOOPS; retain finite
+  nonzero default 12h inside observed bucket retention; make cleanup best-effort and metered.
+- [ ] 6.4 Implement dispatch projection as off-path complete snapshot plus ordered updates, atomically installed only
+  after completion. Incomplete hydration disables AutoContinue while exact explicit LoopID read-through remains.
+  Reconcile current `agentic-dispatch` requirement
+  `Loop existence and ownership are merged facts, never process memory alone`: exact `AGENT_LOOPS` is authority,
+  tracker-only existence never admits, unreadable authority retries, and `paused` is invalid.
+- [ ] 6.5 GREEN: prove fresh envelopes with equal canonical payload reuse one continuation, semantic collisions refuse,
+  approval survives deliberate AGENT eviction, every decision commits before clear, Store failure prevents ACK, and
+  complete-empty/unique/ambiguous/interrupted/stale-terminal projections behave exactly as specified.
 
-## 7. Signals and projections
+## 7. Control vocabulary, cancel, approval-response, and verdict fast lanes
 
-- [ ] 7.1 Convert signal handling to typed settlement with explicit happy and sad definitions.
-- [ ] 7.2 Make cancel wait for `COMPLETE_` state and terminal PubAck.
-- [ ] 7.3 Treat created and approval-pending consumers as reconstructable projections, not authority.
-- [ ] 7.4 Test AutoContinue and approval HTTP after replacement with empty process caches.
+- [x] 7.1 Integrate reviewed PR #1251: pause/resume handlers, persisted request fields, and unused signal verbs are
+  removed. Binding product ruling #1239 comment `5526837992`, linked from #1146 comment `5526837994`, supersedes
+  prior paused-state preservation.
+- [ ] 7.2 RED: add failing tests that `paused` is absent from code and schema vocabulary and refused by exported
+  transitions, persisted-state decoding, configuration/examples, and public documentation. Enumerate and pin
+  `agentic/README.md`, `processor/agentic-loop/README.md`, `docs/concepts/13-agentic-systems.md`,
+  `docs/operations/migration-beta162-to-beta163.md`, and generated `specs/openapi.v3.yaml`. Prove there is no shim,
+  alias, reserved enum, or migration. Cite exactly
+  `// spec: agentic-loop / All six loop input classes settle after owner-specific durable done`.
+- [ ] 7.3 Remove `LoopStatePaused` and wire value `paused` from constants, validation, exported transition APIs,
+  generated schema, examples, fixtures, and docs. Refuse persisted `state:"paused"` without compatibility handling.
+  Add no checkpoint, supervisor, workflow state machine, or suspend placeholder.
+- [ ] 7.4 GREEN: prove complete paused-state removal. Document cancel, durable ApprovalResponse wait, restart/retry
+  from the last durable boundary, and operational quiesce by stop-admission/drain/cooperative-cancel/join. State that
+  future suspend-at-next-durable-boundary requires a new evidence-backed contract.
+- [ ] 7.5 RED: add cancel-only UserSignal vocabulary, durable cancel completion, separate ApprovalResponse, missing
+  waiter, duplicate/conflict, panic, and replacement tests. Cite exactly
+  `// spec: agentic-loop / All six loop input classes settle after owner-specific durable done`.
+- [ ] 7.6 Refactor cancel, approval-response, approved-verdict, and rejected-verdict through their four existing
+  private owners. Unknown UserSignal terminates; cancel waits for current state, `COMPLETE_<loopID>`, and terminal
+  PubAck; missing process correlation never authorizes ACK. Keep `ResponseAction.Signal` and
+  `ClassifiedIntent.SignalType` outside durable `agent.signal.*` ownership.
+- [ ] 7.7 Reconcile current `agentic-loop` requirement
+  `Per-loop in-process state is released at terminal, through the one release point`: preserve single-point release
+  and unaffected scenarios, replace unconditional quiet settled-drop with exact applied proof, Retry on unresolved
+  evidence, and Quarantine on collision/impossible transition. Cite exactly
+  `// spec: agentic-loop / Per-loop in-process state is released at terminal, through the one release point` in the
+  new boundary tests.
+- [ ] 7.8 GREEN: prove all four lanes meet their owner-specific durable-done/refusal contract across replacement.
 
-## 8. Governance correlation proof
+## 8. Governance settlement and correlation
 
-- [ ] 8.1 Add stable proposal identity and fingerprint without changing #1140 policy content.
-- [ ] 8.2 Replace missing-waiter completion with validated retained-verdict recovery.
-- [ ] 8.3 Test replacement before proposal, after proposal, after verdict ACK, and before tool publication.
-- [ ] 8.4 If retained verdict and response redelivery succeed, add no durable governance state.
-- [ ] 8.5 If they fail, stop with the named failpoint for a new owner ruling; do not invent a bucket.
+- [ ] 8.1 RED: add allowed/blocked/filter-failure/panic/budget, missing/full waiter, exact verdict recovery, validated
+  output reconciliation, and every proposal/verdict replacement-boundary test. Cite exactly
+  `// spec: agentic-governance / Governance validation settles after its declared consequence`,
+  `// spec: agentic-governance / Governance verdict correlation survives process replacement`, and
+  `// spec: agentic-governance / Governance publication identity is deterministic and reconcilable`.
+- [ ] 8.2 Convert all three validation handlers from void to classified outcomes through their private owners.
+  Publish allowed messages through declared JetStream outputs with deterministic identity/PubAck; preserve deliberate
+  blocked non-forwarding and nonblocking audit without converting decode/filter/resolve/marshal/publish failure to
+  ACK. Add stable proposal fingerprint and retained-verdict exact read without changing #1140 policy.
+- [ ] 8.3 GREEN: prove replacement before proposal, after proposal, after verdict ACK, and before tool publication.
+  If retained verdict plus response redelivery is insufficient, stop at the named failpoint; do not add a bucket.
 
-## 9. AGENT replay admissibility
+## 9. AGENT admission, first-party publisher, and loop authority
 
-- [x] 9.1 Record owner choice to require observed `DiscardNew` for restart-safe admission.
-- [ ] 9.2 Read actual `StreamInfo` before starting recovery-dependent consumers.
-- [ ] 9.3 Compute the ordinary horizon from framework-owned timeout and consumer policy.
-- [ ] 9.4 If strong admission is selected, reject `DiscardOld` and other early-eviction bounds.
-- [ ] 9.5 Test `DiscardOld`, `DiscardNew`, insufficient MaxAge, full-stream backpressure, and missing evidence.
-- [ ] 9.6 Document migration, capacity, and backpressure cost.
+- [x] 9.1 Preserve the owner-selected strong observed `DiscardNew` and affected-closure contracts.
+- [ ] 9.2 RED: add model/dispatch/governance/loop tests for caller-local requirements, divergent configs, resolved
+  overrides, under-admission, unavailable StreamInfo, queued USER, non-agentic zero lookup, and zero dependent
+  allocation/positive settlement. Cite exactly
+  `// spec: agentic-loop / Restart-safe replay observes and admits local stream bounds`.
+- [ ] 9.3 Implement one pure repo-internal `internal/agentstreamadmission.ObserveAndValidate`. Each affected owner
+  invokes it after its own resolved PortFacts and before its own dependent allocation. Requirements use only local
+  AckWait, BackOff, MaxDeliver, maximum work/replay need, and producer PubAck dependency; no cross-component config,
+  shared maxima, factory/raw-JSON switch, state, watcher, mutation, or exported API. Refuse DiscardOld, insufficient
+  MaxAge, or earlier message bounds with typed `agent_stream_replay_inadmissible` and exact observed/required fields.
+- [ ] 9.4 GREEN: prove each affected closure refuses independently, non-agentic components perform zero lookup,
+  dispatch leaves queued USER unconsumed, and full DiscardNew backpressure retains source work without core-NATS
+  fallback under the citation in 9.2.
+- [ ] 9.5 RED: add all-six-configuration and four-static-producer real-NATS tests, both `agent.task`/`agent_task`
+  names, declaration-only future rule, uncovered dynamic subject, missing publisher, registered non-Graphable task,
+  and malformed/unregistered envelope tests. Cite exactly
+  `// spec: rule-agent-publishing / First-party publish-agent output is admitted before action execution`,
+  `// spec: rule-agent-publishing / Publish-agent classification uses canonical wildcard coverage and durable publication`,
+  and `// spec: rule-agent-publishing / Publish-agent preserves the registered payload boundary`.
+- [ ] 9.6 Implement rule-processor caller-local admission through the same internal validator before evaluator start.
+  Resolve only its own PortFacts, preserve configured names including `agent_task`, and call canonical
+  `component/flowgraph.SubjectCovers(declaredFilter, concreteSubject)` in that exact direction from the existing
+  `actionPublisher`; do not duplicate the matcher. Covered task subjects use `PublishToStream`/PubAck; uncovered/refused
+  output fails before post-send side effects. Require registered `TaskMessage` Payload, never Graphable; add no gate,
+  classifier API, or #1158-wide publisher census.
+- [ ] 9.7 GREEN: prove six classifier surfaces cannot select core NATS for covered task subjects, four static producer
+  configs durably feed row 15, declaration-only configs cannot regress, and non-agentic rule processors pay zero
+  lookup under the citations in 9.5.
+- [ ] 9.8 RED: add fake and real-NATS loop-bucket tests for absent, matching retained, same/foreign-config race,
+  History/TTL/MaxBytes drift, status failure, non-not-found lookup with zero create, and create-exists with exactly one
+  race-get. Cite exactly `// spec: agentic-loop / Loop-state authority is acquired and observed before loop work`.
+- [ ] 9.9 Implement internal `loopbucket.AcquireOwner`: KeyValue first; create only for typed
+  `jetstream.ErrBucketNotFound`; on typed `jetstream.ErrBucketExists`, one KeyValue retry; then observe exact History
+  10, TTL 24h, and non-binding MaxBytes. Publish no handle or dependent consumer/sweeper before success and never
+  reconcile retained drift. Validate approval lifetime here, not in AGENT stream admission.
+- [ ] 9.10 GREEN: prove every fresh-boot/race/drift/error case and zero forbidden mutation under the citation in 9.8.
+- [ ] 9.11 Measure actual USER and TOOL source-stream retention for physical rows 1, 11, and 17. Prove observed bounds
+  sufficient before the complete 17-lane claim or stop for inventory/design amendment; AGENT admission is not proof
+  for another stream.
 
 ## 10. Context and lifecycle closure
 
-- [ ] 10.1 Remove return-before-join behavior from `runWithBudget`.
-- [ ] 10.2 Remove return-before-join behavior from trajectory batch recording.
-- [ ] 10.3 Prove callback cancellation cancels and joins before settlement.
-- [ ] 10.4 Prove `Stop` joins every task spawned by touched deliveries.
+- [ ] 10.1 RED: add active-callback Stop races for dispatch, governance, model, loop, and tools, plus
+  `runWithBudget` and trajectory-batch cancellation tests. Cite exactly the applicable requirement:
+  `// spec: agentic-dispatch / Dispatch shutdown closes every delivery owner`,
+  `// spec: agentic-governance / Governance shutdown closes every delivery owner`,
+  `// spec: agentic-model / Model shutdown closes its delivery owner`,
+  `// spec: agentic-loop / Loop shutdown closes every delivery owner`,
+  `// spec: agentic-loop / Delivery work joins before settlement`, or
+  `// spec: agentic-tools / Tool delivery retains the permanent typed owner contract`.
+- [ ] 10.2 Pass the exact delivery context to every blocking NATS, KV, Store, provider, and filter operation. Remove
+  return-before-join behavior. Every owner stops admission, drains exact retained handles, awaits exact `Closed`, then
+  cancels and joins observers/work; no production struct retains context.
+- [ ] 10.3 GREEN: prove callback cancellation joins before settlement and each Stop returns only after no later ACK,
+  publication, authority mutation, or goroutine activity. A cancellation-ignoring dependency remains a lifecycle
+  blocker rather than heartbeat evidence.
 
-## 11. Verification and documentation
+## 11. Complete proof, documentation, and landing
 
-- [ ] 11.1 Add table-driven unit tests for every lane's happy and sad disposition.
-- [ ] 11.2 Add real-NATS process-replacement tests using #1155.
-- [ ] 11.3 Serialize and run the relevant agentic E2E tier.
-- [ ] 11.4 Correct the false restart claims identified in the accepted inventory.
-- [ ] 11.5 Document provider ambiguity, Store requirements, metrics, and external-executor migration.
-- [ ] 11.6 Obtain SemStreams reviewer approval.
-- [ ] 11.7 Obtain owner-run cross-agent review.
-- [ ] 11.8 Archive as the final content commit and obtain narrow archive and spec-sync review.
+- [ ] 11.1 Run the #1146-owned tranche of #1155's real-NATS process-replacement matrix across every #1146 durable
+  boundary and all ten fast physical subscriptions. Property/fuzz tests cite exact active requirement headings;
+  unknown decisions cannot ACK. Leave #1155 open until #1249 supplies AgentRun complete/failed proof and the later
+  combined gate passes.
+- [ ] 11.2 Run focused race and integration tests, lint, build, schema generation, contract tests, and serialized
+  `task e2e:agentic`. The AGENT DiscardNew cutover and first-party publisher path require covering E2E green.
+- [ ] 11.3 Correct false restart claims in concepts 03, 17, and 27; link concept 33 without duplicating its message-
+  pump explanation. Document provider ambiguity, continuation/Store, AGENT admission and DiscardNew backpressure,
+  loop authority, boot order, metrics, raw external-executor migration, heartbeat defaults, and rule-agent publisher
+  admission. Document the user-facing control contract: cancel, durable ApprovalResponse wait, retry/restart from the
+  last durable boundary, lifecycle quiesce, no arbitrary pause/resume, and future suspension only as a new contract.
+  Reconcile schemas and every example/fixture. Remove paused vocabulary from `agentic/README.md`,
+  `processor/agentic-loop/README.md`, `docs/concepts/13-agentic-systems.md`,
+  `docs/operations/migration-beta162-to-beta163.md`, and generated `specs/openapi.v3.yaml`.
+- [ ] 11.4 Confirm PR #1159 carries the complete #1146 claim set, `implemented-by: Sol`, `Closes #1146`,
+  `Refs #759`, `Refs #1155`, `Refs #1249`, and explicit “#1146-owned tranche; #1155 remains open” wording. It SHALL
+  NOT carry `Closes #1155`. Preserve PR #1251 as #1239's retained authorship/review record and PR #1156 as final
+  default-branch closing authority after #1249 and the combined proof gate.
+- [ ] 11.5 Complete implementation/proof, then obtain SemStreams implementation review of the complete claim set.
+- [ ] 11.6 Obtain owner-requested cross-agent review, apply every finding, and repeat both reviews until accepted.
+- [ ] 11.7 Before archive, reconcile the exact MODIFIED current requirements in `agentic-dispatch`, `agentic-tools`,
+  and `agentic-loop`, then archive `agentic-loop-restart-safety` as the final content commit and sync all six current
+  specs. Preserve every unaffected scenario and citation from the replaced current requirement.
+- [ ] 11.8 Obtain narrow archive/current-spec-sync review. Only afterward run hosted CI, remote-base verification,
+  undraft, and non-default merge. The staged merge creates checkpoint `A` for #1249.
 
-## Hold: AgentRun
+## Transferred: AgentRun
 
-- [ ] H.1 After #1148 merges, reinventory AgentRun against the accepted baseline.
-- [ ] H.2 Add AgentRun only through a separately reviewed and owner-accepted design delta.
+Tasks H.1/H.2 remain removed. #1249 owns post-#1146 inventory, design, complete/failed migration, and replacement
+proof against exact staged checkpoint `A`. This transfer narrows no other #1146 subscription.
