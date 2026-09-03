@@ -1001,7 +1001,7 @@
           "required": false,
           "connection_id": "AGENT",
           "pattern": "stream",
-          "description": "Control signals for loops (cancel, pause, etc.)",
+          "description": "Control signals for loops (cancel)",
           "kind": "jetstream"
         },
         {

@@ -57,7 +57,6 @@
 //	exploring → planning → architecting → executing → reviewing → complete
 //	     ↑          ↑            ↑             ↑           ↑        ↘ failed
 //	     └──────────┴────────────┴─────────────┴───────────┘         ↘ cancelled
-//	                                                                  ↘ paused
 //	                                                                   ↘ awaiting_approval
 //
 // States:
@@ -70,7 +69,8 @@
 //   - complete: Successfully finished (terminal)
 //   - failed: Failed due to error or max iterations (terminal)
 //   - cancelled: Cancelled by user signal (terminal)
-//   - paused: Paused by user signal, can resume
+//   - paused: Legacy-valid and accepted by transition APIs; #1239 removes the
+//     framework-owned signal path and pause semantics
 //   - awaiting_approval: Waiting for user approval
 //
 // States are fluid checkpoints - the loop can transition backward (e.g., from
@@ -85,7 +85,7 @@
 //
 //	signal := agentic.UserSignal{
 //	    SignalID:    "sig_abc123",
-//	    Type:        "cancel",  // cancel, pause, resume, approve, reject, feedback, retry
+//	    Type:        "cancel",  // the only handled verb
 //	    LoopID:      "7c9e6679-7425-40de-944b-e07fc1f90ae7",
 //	    UserID:      "user_789",
 //	    ChannelType: "cli",
@@ -96,12 +96,11 @@
 // Signal types and their effects:
 //
 //   - cancel: Stop execution immediately, transition to cancelled state
-//   - pause: Pause at next checkpoint, transition to paused state
-//   - resume: Continue paused loop, restore previous state
-//   - approve: Approve pending result, transition to complete
-//   - reject: Reject with optional reason, transition to failed
-//   - feedback: Add feedback without decision, no state change
-//   - retry: Retry failed loop, transition to exploring
+//
+// approve, reject, feedback and retry were advertised here and never handled;
+// they were deleted alongside pause/resume (#1239). Approval and rejection are
+// real on a different payload: ApprovalResponse over agent.approval_response.*
+// (ADR-039).
 //
 // # Context Management
 //
@@ -250,7 +249,6 @@
 //	    "iterations": 3,
 //	    "max_iterations": 20,
 //	    "parent_loop_id": "",
-//	    "pause_requested": false,
 //	    "user_id": "user_789",
 //	    "channel_type": "cli",
 //	    "channel_id": "session_001"

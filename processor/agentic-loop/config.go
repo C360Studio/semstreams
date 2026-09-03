@@ -406,7 +406,7 @@ func DefaultConfig() Config {
 				},
 				{
 					Name: "agent.signal", Config: component.JetStreamPort{Subjects: []string{"agent.signal.*"}, StreamName: "AGENT"}, Required: false,
-					Description: "Control signals for loops (cancel, pause, etc.)",
+					Description: "Control signals for loops (cancel)",
 				},
 				{
 					Name: "agent.approval_response", Config: component.JetStreamPort{Subjects: []string{"agent.approval_response.*"}, StreamName: "AGENT"}, Required: false,

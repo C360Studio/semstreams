@@ -32,7 +32,7 @@ state, and records append-only observed trajectory facts with separately stored 
 ## Features
 
 - **State Machine**: 10-state lifecycle with signal-related states
-- **Signal Handling**: Cancel, pause, resume, and approval signals
+- **Signal Handling**: The `cancel` signal — the entire vocabulary (approval travels as `ApprovalResponse`)
 - **Context Management**: Automatic compaction and GC for long-running loops
 - **Tool Coordination**: Tracks pending tool calls, aggregates results
 - **Trajectory Observations**: Appends bounded attempt facts and content-addressed full evidence
@@ -132,7 +132,7 @@ state, and records append-only observed trajectory facts with separately stored 
 | agent.task | jetstream | agent.task.* | Task requests from external systems |
 | agent.response | jetstream | agent.response.> | Model responses from agentic-model |
 | tool.result | jetstream | tool.result.> | Tool results from agentic-tools |
-| agent.signal | jetstream | agent.signal.* | Control signals (cancel, pause, resume) |
+| agent.signal | jetstream | agent.signal.* | Control signals (cancel) |
 | trajectory_query | nats-request | agentic.query.trajectory | Observed fact query (`agentic.query` v1) |
 
 ### Outputs
@@ -158,7 +158,6 @@ state, and records append-only observed trajectory facts with separately stored 
 exploring → planning → architecting → executing → reviewing → complete
      ↑          ↑            ↑             ↑           ↑        ↘ failed
      └──────────┴────────────┴─────────────┴───────────┘         ↘ cancelled
-                                                                  ↘ paused
                                                                    ↘ awaiting_approval
 ```
 
@@ -174,7 +173,7 @@ exploring → planning → architecting → executing → reviewing → complete
 | `complete` | Yes | Successfully finished |
 | `failed` | Yes | Failed due to error or max iterations |
 | `cancelled` | Yes | Cancelled by user signal |
-| `paused` | No | Paused by user signal, can resume |
+| `paused` | No | Legacy-valid; exported transitions accept it; no framework-owned pause signal or semantics (#1239) |
 | `awaiting_approval` | No | Waiting for user approval |
 
 States are fluid checkpoints - loops can transition backward except from terminal states.
@@ -203,12 +202,10 @@ The loop accepts control signals via the `agent.signal.*` input port.
 | Type | Description | Resulting State |
 |------|-------------|-----------------|
 | `cancel` | Stop execution immediately | `cancelled` |
-| `pause` | Pause at next checkpoint | `paused` |
-| `resume` | Continue paused loop | (previous state) |
-| `approve` | Approve pending result | `complete` |
-| `reject` | Reject with optional reason | `failed` |
-| `feedback` | Add feedback without decision | (no change) |
-| `retry` | Retry failed loop | `exploring` |
+
+Approval and rejection are **not** signals. They travel as `ApprovalResponse` on
+`agent.approval_response.*` (ADR-039), which has a real handler. `feedback` and `retry` were advertised here
+and never implemented; they are gone (#1239).
 
 ## Context Management
 
@@ -265,9 +262,6 @@ Stores `LoopEntity` as JSON:
   "started_at": "2024-01-15T10:30:00Z",
   "timeout_at": "2024-01-15T10:32:00Z",
   "parent_loop_id": "",
-  "pause_requested": false,
-  "pause_requested_by": "",
-  "state_before_pause": "",
   "cancelled_by": "",
   "cancelled_at": null,
   "user_id": "user_789",
