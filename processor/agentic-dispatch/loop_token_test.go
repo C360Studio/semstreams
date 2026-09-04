@@ -33,8 +33,9 @@ func newLoopTokenTestComponent() (*Component, *captureSink) {
 		// Per-test registry, not the process-global one: these tests assert that a
 		// refused submission leaves the started-loops gauge alone, which is only
 		// readable when no other test shares the instrument.
-		metrics:    getMetrics(metric.NewMetricsRegistry()),
-		natsClient: &natsclient.Client{},
+		metrics:      getMetrics(metric.NewMetricsRegistry()),
+		natsClient:   &natsclient.Client{},
+		taskEvidence: emptyRetainedTaskEvidenceReader{},
 	}
 	c.sendResponseFn = sink.add
 	// An empty durable store: the admission gate reads AGENT_LOOPS, and without

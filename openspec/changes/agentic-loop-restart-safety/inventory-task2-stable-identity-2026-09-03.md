@@ -6,8 +6,8 @@ frozen-parent: 417beae5552f8f15ad3540edd7d8504c87174c13
 
 ## Claimed gap
 
-- `openspec/changes/agentic-loop-restart-safety/tasks.md:90` — `- [ ] 2.1 RED: prove stable TaskID, random LoopID minting for new work, retained-`TaskMessage` LoopID recovery on`
-- `openspec/changes/agentic-loop-restart-safety/tasks.md:93` — `- [ ] 2.2 Implement the TaskID-to-retained-`TaskMessage` recovery path. Mint LoopID randomly only when exact retained`
+- `openspec/changes/agentic-loop-restart-safety/tasks.md:90` — `- [x] 2.1 RED: prove stable TaskID, random LoopID minting for new work, retained-`TaskMessage` LoopID recovery on`
+- `openspec/changes/agentic-loop-restart-safety/tasks.md:93` — `- [x] 2.2 Implement the TaskID-to-retained-`TaskMessage` recovery path. Mint LoopID randomly only when exact retained`
 - `openspec/changes/agentic-loop-restart-safety/tasks.md:96` — `- [ ] 2.3 RED: prove RequestID distinguishes logical provider work and framework execution identity distinguishes tool`
 - `openspec/changes/agentic-loop-restart-safety/tasks.md:101` — `- [ ] 2.4 Implement RequestID and execution identity only on provider/tool/governance-correlation paths that need`
 - `openspec/changes/agentic-loop-restart-safety/tasks.md:103` — `- [ ] 2.5 RED/GREEN: prove ordinary task/control, created, request, response, approval, terminal, governance, and`
@@ -56,11 +56,22 @@ publications are **committed**, the failing invocation is **commit-unknown**, an
 - `message/base_message.go:124` — `id:      uuid.New().String(),`
 - `agentic/user_types.go:36` — `MessageID`
 - `processor/agentic-dispatch/http.go:148` — `MessageID:   uuid.New().String(),`
-- `agentic/user_types.go:315` — `TaskID string`
-- `processor/agentic-dispatch/component.go:995` — `loopID = uuid.New().String()`
-- `processor/agentic-dispatch/component.go:1008` — `taskID := uuid.New().String()`
-- `processor/agentic-dispatch/http.go:330` — `loopID = uuid.New().String()`
-- `processor/agentic-dispatch/http.go:344` — `taskID := uuid.New().String()`
+- `agentic/user_types.go:315` — `TaskID          string `json:"task_id"``
+- `agentic/user_types.go:316` — `SourceMessageID string `json:"source_message_id,omitempty"``
+- `processor/agentic-dispatch/task_recovery.go:21` — `const dispatchTaskIDPrefix = "dispatch-"`
+- `processor/agentic-dispatch/task_recovery.go:29` — `type vacantDispatchTaskSlot struct {`
+- `processor/agentic-dispatch/task_recovery.go:34` — `type retainedTaskEvidenceReader interface {`
+- `processor/agentic-dispatch/task_recovery.go:42` — `func (r natsRetainedTaskEvidenceReader) ReadRetainedTask(`
+- `processor/agentic-dispatch/task_recovery.go:64` — `func stableDispatchTaskID(msg agentic.UserMessage) string {`
+- `processor/agentic-dispatch/task_recovery.go:75` — `func (c *Component) findRetainedDispatchTask(`
+- `processor/agentic-dispatch/task_recovery.go:79` — `if err := msg.Validate(); err != nil {`
+- `processor/agentic-dispatch/task_recovery.go:82` — `taskID := stableDispatchTaskID(msg)`
+- `processor/agentic-dispatch/task_recovery.go:103` — `func (c *Component) prepareNewDispatchTask(`
+- `processor/agentic-dispatch/task_recovery.go:110` — `loopID = uuid.NewString()`
+- `processor/agentic-dispatch/task_recovery.go:120` — `func dispatchTaskAddress(ports []component.PortDefinition, taskID string) (string, string, error) {`
+- `processor/agentic-dispatch/task_recovery.go:147` — `func (c *Component) readRetainedDispatchTask(`
+- `processor/agentic-dispatch/task_recovery.go:170` — `if err := decoded.Validate(); err != nil {`
+- `processor/agentic-dispatch/task_recovery.go:183` — `func validateRetainedDispatchTask(`
 - `processor/agentic-loop/state.go:180` — `func (m *LoopManager) GenerateLoopID() string {`
 - `processor/agentic-loop/state.go:181` — `return uuid.NewString()`
 - `processor/agentic-loop/state.go:200` — `func (m *LoopManager) CreateLoopWithID(loopID, taskID, role, model string, maxIterations ...int) (string, error) {`
@@ -84,18 +95,48 @@ publications are **committed**, the failing invocation is **commit-unknown**, an
 - `processor/agentic-dispatch/config.go:144` — `Name: "agent.task", Config: component.JetStreamPort{Subjects: []string{"agent.task.*"}, StreamName: "AGENT"}, Description: "Agent task requests",`
 - `processor/agentic-dispatch/config.go:147` — `Name: "agent.signal", Config: component.JetStreamPort{Subjects: []string{"agent.signal.*"}, StreamName: "AGENT"}, Description: "Agent control signals",`
 - `processor/agentic-dispatch/config.go:156` — `Name: "agent.approval_response", Config: component.JetStreamPort{Subjects: []string{"agent.approval_response.*"}, StreamName: "AGENT"}, Description: "Approval responses submitted via the dispatch HTTP /loops/{id}/approval endpoint, consumed by agentic-loop's approval-response handler",`
-- `processor/agentic-dispatch/component.go:1026` — `subject, err := component.ResolveSubject(c.outputPortDefs(), "agent.task", taskID)`
-- `processor/agentic-dispatch/component.go:1051` — `if err := c.natsClient.PublishToStream(ctx, subject, taskData); err != nil {`
-- `processor/agentic-dispatch/component.go:1053` — `fmt.Sprintf("task publication for loop %s has unknown durable state", loopID))`
-- `processor/agentic-dispatch/http.go:344` — `taskID := uuid.New().String()`
-- `processor/agentic-dispatch/http.go:362` — `subject, err := component.ResolveSubject(c.outputPortDefs(), "agent.task", taskID)`
-- `processor/agentic-dispatch/http.go:384` — `if err := c.natsClient.PublishToStream(ctx, subject, taskData); err != nil {`
+- `processor/agentic-dispatch/component.go:972` — `prepared, vacant, found, err := c.findRetainedDispatchTask(ctx, msg)`
+- `processor/agentic-dispatch/component.go:982` — `if !found && !c.hasPermission(msg.UserID, "submit_task") {`
+- `processor/agentic-dispatch/component.go:1020` — `prepared, err = c.prepareNewDispatchTask(ctx, msg, loopID, vacant)`
+- `processor/agentic-dispatch/component.go:1055` — `if err := c.natsClient.PublishToStream(ctx, prepared.subject, prepared.data); err != nil {`
+- `processor/agentic-dispatch/component.go:1057` — `fmt.Sprintf("task publication for loop %s has unknown durable state", loopID))`
+- `processor/agentic-dispatch/http.go:302` — `prepared, vacant, found, err := c.findRetainedDispatchTask(ctx, msg)`
+- `processor/agentic-dispatch/http.go:309` — `if !found && !c.hasPermission(msg.UserID, "submit_task") {`
+- `processor/agentic-dispatch/http.go:348` — `prepared, err = c.prepareNewDispatchTask(ctx, msg, loopID, vacant)`
+- `processor/agentic-dispatch/http.go:356` — `taskID := task.TaskID`
+- `processor/agentic-dispatch/http.go:375` — `if err := c.natsClient.PublishToStream(ctx, prepared.subject, prepared.data); err != nil {`
+- `processor/agentic-dispatch/task_recovery.go:51` — `raw, err := stream.GetLastMsgForSubject(ctx, subject)`
+- `processor/agentic-dispatch/task_recovery.go:94` — `if err := validateRetainedDispatchTask(retained, msg, taskID, msg.ReplyTo); err != nil {`
+- `processor/agentic-dispatch/task_recovery.go:121` — `subject, err := component.ResolveSubject(ports, "agent.task", taskID)`
+- `processor/agentic-dispatch/task_recovery.go:156` — `raw, found, err := reader.ReadRetainedTask(ctx, streamName, subject)`
+- `processor/agentic-dispatch/task_recovery.go:158` — `return agentic.TaskMessage{}, nil, false, errs.WrapTransient(`
+- `processor/agentic-dispatch/component.go:974` — `if errs.IsFatal(err) || errs.IsTransient(err) {`
+- `processor/agentic-dispatch/task_recovery_test.go:25` — `// spec: agentic-dispatch / Dispatch task redelivery recovers the committed LoopID`
+- `processor/agentic-dispatch/task_recovery_test.go:26` — `func TestUnreadableRetainedTaskEvidenceDoesNotMintOrRefuse(t *testing.T) {`
+- `processor/agentic-dispatch/task_recovery_test.go:40` — `require.True(t, errs.IsTransient(err), "unreadable evidence must retry instead of pretending this is new work")`
+- `processor/agentic-dispatch/task_recovery_test.go:42` — `require.Empty(t, prepared.task.LoopID, "a random LoopID requires an exact retained-absence result")`
+- `processor/agentic-dispatch/task_recovery_test.go:45` — `require.True(t, errs.IsTransient(err), "the durable source owner must retry an unreadable evidence check")`
+- `processor/agentic-dispatch/task_recovery_test.go:46` — `require.Empty(t, sink.all(), "a retryable evidence outage is not a permanent user refusal")`
+- `processor/agentic-dispatch/task_recovery_test.go:47` — `require.Empty(t, c.loopTracker.GetAllLoops(), "unreadable evidence must not track newly minted work")`
+- `processor/agentic-dispatch/task_recovery_test.go:50` — `// spec: agentic-dispatch / Dispatch task redelivery recovers the committed LoopID`
+- `processor/agentic-dispatch/task_recovery_test.go:51` — `func TestInvalidUserMessageIdentityIsRejectedBeforeTaskIdentity(t *testing.T) {`
+- `processor/agentic-dispatch/task_recovery_test.go:60` — `prepared, vacant, found, err := c.findRetainedDispatchTask(t.Context(), msg)`
+- `processor/agentic-dispatch/task_recovery_test.go:64` — `require.Empty(t, vacant.taskID, "invalid source identity must not derive a TaskID")`
+- `processor/agentic-dispatch/task_recovery_test.go:65` — `require.Empty(t, prepared.task.LoopID, "invalid source identity must not mint a LoopID")`
+- `processor/agentic-dispatch/restart_identity_integration_test.go:212` — `// Mutable AutoContinue state has moved on while the source was waiting for`
+- `processor/agentic-dispatch/restart_identity_integration_test.go:221` — `decision, cause = replacementDispatch.handleUserMessage(ctx, secondSource.Data())`
+- `processor/agentic-dispatch/restart_identity_integration_test.go:238` — `require.Equal(t, firstTask.LoopID, secondTask.LoopID,`
+- `processor/agentic-dispatch/restart_identity_integration_test.go:245` — `// spec: agentic-dispatch / Dispatch task redelivery recovers the committed LoopID`
+- `processor/agentic-dispatch/restart_identity_integration_test.go:246` — `func TestIntegrationUserMessageTaskMappingConflictQuarantines(t *testing.T) {`
+- `processor/agentic-dispatch/restart_identity_integration_test.go:265` — `name:   "retained TaskMessage is malformed",`
+- `processor/agentic-dispatch/restart_identity_integration_test.go:302` — `require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)`
+- `processor/agentic-dispatch/restart_identity_integration_test.go:309` — `require.Equal(t, uint64(1), info.State.Msgs, "conflict must not publish or overwrite either mapping")`
 - `processor/agentic-dispatch/commands.go:157` — `SignalID:    uuid.New().String(),`
 - `processor/agentic-dispatch/commands.go:179` — `if err := c.natsClient.Publish(ctx, subject, signalData); err != nil {`
-- `processor/agentic-dispatch/http.go:862` — `subject, err := component.ResolveSubject(c.config.Ports.Outputs, "agent.approval_response", loopID)`
-- `processor/agentic-dispatch/http.go:866` — `if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {`
-- `processor/agentic-dispatch/component.go:1195` — `subject, err := component.ResolveSubject(c.outputPortDefs(), "user.response", resp.ChannelType+"."+resp.ChannelID)`
-- `processor/agentic-dispatch/component.go:1199` — `if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {`
+- `processor/agentic-dispatch/http.go:853` — `subject, err := component.ResolveSubject(c.config.Ports.Outputs, "agent.approval_response", loopID)`
+- `processor/agentic-dispatch/http.go:857` — `if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {`
+- `processor/agentic-dispatch/component.go:1199` — `subject, err := component.ResolveSubject(c.outputPortDefs(), "user.response", resp.ChannelType+"."+resp.ChannelID)`
+- `processor/agentic-dispatch/component.go:1203` — `if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {`
 - `processor/agentic-dispatch/terminal_settlement.go:17` — `const terminalResponseIDPrefix = "terminal-user-response:"`
 - `processor/agentic-dispatch/terminal_settlement.go:146` — `ResponseID:  terminalResponseIDPrefix + event.SourceMessageID,`
 - `processor/agentic-dispatch/terminal_settlement.go:173` — `if err := c.natsClient.PublishToStreamWithMsgID(ctx, subject, data, msgID); err != nil {`
@@ -291,7 +332,7 @@ TaskMessage. This is a coupled mint-plus-terminal-subscription migration, not on
 
 ### Structural references
 
-- `processor/agentic-dispatch/component.go:1051` — `if err := c.natsClient.PublishToStream(ctx, subject, taskData); err != nil {`
+- `processor/agentic-dispatch/component.go:1055` — `if err := c.natsClient.PublishToStream(ctx, prepared.subject, prepared.data); err != nil {`
 - `processor/agentic-model/component.go:1069` — `if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {`
 - `processor/agentic-loop/component.go:1956` — `if err := c.natsClient.PublishToStream(ctx, msg.Subject, msg.Data); err != nil {`
 - `processor/agentic-governance/component.go:444` — `if err := c.natsClient.PublishToStream(ctx, outputSubject, outputData); err != nil {`

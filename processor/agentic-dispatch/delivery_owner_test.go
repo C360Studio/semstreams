@@ -36,6 +36,7 @@ func TestDispatchProductionCallbacksDoNotAckFalseDone(t *testing.T) {
 		require.NoError(t, err)
 		c := discoverable.(*Component)
 		c.modelRegistry = newTestRegistry()
+		c.taskEvidence = emptyRetainedTaskEvidenceReader{}
 		withPersistedLoops(c, nil)
 		c.waitForStreamInput = func(context.Context, string) error { return nil }
 		callbacks := make(map[string]func(context.Context, jetstream.Msg))

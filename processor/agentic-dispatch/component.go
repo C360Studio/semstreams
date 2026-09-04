@@ -83,6 +83,7 @@ type Component struct {
 	deps          component.Dependencies
 	decoder       *message.Decoder
 	natsClient    *natsclient.Client
+	taskEvidence  retainedTaskEvidenceReader
 	logger        *slog.Logger
 	loopTracker   *LoopTracker
 	registry      *CommandRegistry
@@ -916,9 +917,13 @@ func (c *Component) buildTaskMessage(ctx context.Context, msg agentic.UserMessag
 	task := agentic.TaskMessage{
 		LoopID:           loopID,
 		TaskID:           taskID,
+		SourceMessageID:  msg.MessageID,
 		Role:             c.config.DefaultRole,
 		Model:            c.resolveModel(),
 		Prompt:           msg.Content,
+		ChannelType:      msg.ChannelType,
+		ChannelID:        msg.ChannelID,
+		UserID:           msg.UserID,
 		ContextRequestID: msg.ContextRequestID,
 		// Resumable-reply anchors (gh#256). Both omitempty and client-set, so an
 		// ordinary submission carries neither: RunID re-attaches the resumed loop
@@ -964,8 +969,17 @@ func (c *Component) answerRefusedSubmission(ctx context.Context, msg agentic.Use
 
 // handleTaskSubmission creates a new agent task
 func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMessage) error {
+	prepared, vacant, found, err := c.findRetainedDispatchTask(ctx, msg)
+	if err != nil {
+		if errs.IsFatal(err) || errs.IsTransient(err) {
+			return err
+		}
+		return c.answerRefusedSubmission(ctx, msg,
+			c.refuseSubmission(seamChannelSubmission, msg.ReplyTo, codeSubmissionInvalid, err))
+	}
+
 	// Check submit permission
-	if !c.hasPermission(msg.UserID, "submit_task") {
+	if !found && !c.hasPermission(msg.UserID, "submit_task") {
 		return c.sendResponse(ctx, agentic.UserResponse{
 			ResponseID:  uuid.New().String(),
 			ChannelType: msg.ChannelType,
@@ -977,57 +991,47 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		})
 	}
 
-	// Determine loop ID (continue existing or create new). The mint decision is
-	// made HERE, before the gate: an unresolved continuation is the signal to
-	// start a conversation, not a malformed token, and the gate refuses an empty
-	// token as malformed.
-	loopID := ""
-	if msg.ReplyTo != "" {
-		loopID = msg.ReplyTo
-	} else if c.config.AutoContinue {
-		loopID = c.loopTracker.GetActiveLoop(msg.UserID, msg.ChannelID)
+	// Resolve a continuation only after exact retained absence. An empty result
+	// means new work; prepareNewDispatchTask mints its LoopID only after any
+	// named continuation passes admission.
+	loopID := prepared.task.LoopID
+	if !found {
+		if msg.ReplyTo != "" {
+			loopID = msg.ReplyTo
+		} else if c.config.AutoContinue {
+			loopID = c.loopTracker.GetActiveLoop(msg.UserID, msg.ChannelID)
+		}
+
+		if loopID != "" {
+			_, err = c.admitLoopRequest(ctx, loopAdmissionRequest{
+				Seam:      seamChannelSubmission,
+				Field:     "reply_to",
+				Operation: loopOpContinue,
+				LoopID:    loopID,
+				Requester: msg.UserID,
+			})
+			if err != nil {
+				// This path has no synchronous return, so its answer goes out on the
+				// response subject — same refusal, same named field, different delivery.
+				return c.answerRefusedSubmission(ctx, msg, err)
+			}
+		}
+
+		prepared, err = c.prepareNewDispatchTask(ctx, msg, loopID, vacant)
+		if err != nil {
+			return c.answerRefusedSubmission(ctx, msg,
+				c.refuseSubmission(seamChannelSubmission, loopID, codeSubmissionInvalid, err))
+		}
+		loopID = prepared.task.LoopID
 	}
 
-	if loopID == "" {
-		// Create new loop. The token is framework-minted and full: a truncated
-		// one carried 32 bits, and a collision merged two conversations silently
-		// (ADR-105, #1192).
-		loopID = uuid.New().String()
-	} else if _, err := c.admitLoopRequest(ctx, loopAdmissionRequest{
-		Seam:      seamChannelSubmission,
-		Field:     "reply_to",
-		Operation: loopOpContinue,
-		LoopID:    loopID,
-		Requester: msg.UserID,
-	}); err != nil {
-		// This path has no synchronous return, so its answer goes out on the
-		// response subject — same refusal, same named field, different delivery.
-		return c.answerRefusedSubmission(ctx, msg, err)
-	}
-
-	taskID := uuid.New().String()
-
-	// Create task message (shared builder — see buildTaskMessage; gh#256).
-	task := c.buildTaskMessage(ctx, msg, loopID, taskID)
-
-	// Wrap task in BaseMessage envelope (required by agentic-loop). The marshal
-	// is where TaskMessage.Validate runs, so it is the last thing that can
-	// refuse this submission on its own content — including the client-authored
-	// run_id / in_reply_to resume anchors, which never pass through the
-	// continuation branch above. Nothing is tracked or counted until it returns
-	// (#1225).
-	baseMsg := message.NewBaseMessage(task.Schema(), &task, "agentic-dispatch")
-	taskData, err := json.Marshal(baseMsg)
-	if err != nil {
-		return c.answerRefusedSubmission(ctx, msg,
-			c.refuseSubmission(seamChannelSubmission, loopID, codeSubmissionInvalid, err))
-	}
-
-	subject, err := component.ResolveSubject(c.outputPortDefs(), "agent.task", taskID)
-	if err != nil {
-		return c.answerRefusedSubmission(ctx, msg,
-			c.refuseSubmission(seamChannelSubmission, loopID, codeSubmissionUndeliverable, err))
-	}
+	// Retained evidence bypasses mutable continuation inference and admission:
+	// the original submission already crossed those gates before its task
+	// committed, and replacement must finish that durable input rather than
+	// reinterpret it against a later active loop.
+	task := prepared.task
+	taskID := task.TaskID
+	loopID = task.LoopID
 
 	// Track the loop and count it started. This is after the task is assembled
 	// and addressable and before the publish: the approval-pending arrival
@@ -1048,7 +1052,7 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 	})
 	c.metrics.recordLoopStarted()
 
-	if err := c.natsClient.PublishToStream(ctx, subject, taskData); err != nil {
+	if err := c.natsClient.PublishToStream(ctx, prepared.subject, prepared.data); err != nil {
 		return errs.WrapFatal(err, "Component", "handleTaskSubmission",
 			fmt.Sprintf("task publication for loop %s has unknown durable state", loopID))
 	}

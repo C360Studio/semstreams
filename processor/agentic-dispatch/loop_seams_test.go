@@ -85,11 +85,22 @@ func newSeamTestComponent(t *testing.T) (*Component, *captureSink, *seamRecorder
 		registry:      NewCommandRegistry(),
 		metrics:       getMetrics(metric.NewMetricsRegistry()),
 		natsClient:    &natsclient.Client{},
+		taskEvidence:  emptyRetainedTaskEvidenceReader{},
 	}
 	c.sendResponseFn = sink.add
 	withPersistedLoops(c, nil)
 	c.registerBuiltinCommands()
 	return c, sink, recorder
+}
+
+type emptyRetainedTaskEvidenceReader struct{}
+
+func (emptyRetainedTaskEvidenceReader) ReadRetainedTask(
+	context.Context,
+	string,
+	string,
+) ([]byte, bool, error) {
+	return nil, false, nil
 }
 
 func seamUserMessage(userID string) agentic.UserMessage {

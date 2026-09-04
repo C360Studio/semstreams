@@ -311,11 +311,12 @@ type ResponseAction struct {
 
 // TaskMessage represents a task to be executed by an agentic loop
 type TaskMessage struct {
-	LoopID string `json:"loop_id,omitempty"` // loop to continue, or empty for new
-	TaskID string `json:"task_id"`
-	Role   string `json:"role"`
-	Model  string `json:"model"`
-	Prompt string `json:"prompt"`
+	LoopID          string `json:"loop_id,omitempty"` // loop to continue, or empty for new
+	TaskID          string `json:"task_id"`
+	SourceMessageID string `json:"source_message_id,omitempty"`
+	Role            string `json:"role"`
+	Model           string `json:"model"`
+	Prompt          string `json:"prompt"`
 
 	// Workflow context (optional, set by workflow commands)
 	WorkflowSlug string `json:"workflow_slug,omitempty"` // e.g., "add-user-auth"

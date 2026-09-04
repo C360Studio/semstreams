@@ -4,13 +4,13 @@ base: 79b0f29f82ce5391013f6c931fae69a28216ac93
 ## Claimed gap
 
 - `openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md:154` — `For a new task, dispatch SHALL supply a stable TaskID and a random LoopID retained with that task. Agentic-loop SHALL`
-- `openspec/changes/agentic-loop-restart-safety/tasks.md:93` — `- [ ] 2.2 Implement the TaskID-to-retained-`TaskMessage` recovery path. Mint LoopID randomly only when exact retained`
+- `openspec/changes/agentic-loop-restart-safety/tasks.md:93` — `- [x] 2.2 Implement the TaskID-to-retained-`TaskMessage` recovery path. Mint LoopID randomly only when exact retained`
 - `processor/agentic-loop/state.go:260` — `//     dedupes on TaskID via HasActiveLoopForTask, so a redelivery of THIS task`
 - `processor/agentic-loop/state.go:264` — `//     Residual, known and accepted: the rebind preserves dedup for THIS turn`
 - `processor/agentic-loop/state.go:266` — `//     than one turn — that needs a set or a window. So a redelivery of turn`
-- `processor/agentic-dispatch/http.go:540` — `// handleListLoops returns all tracked loops with optional filtering.`
-- `processor/agentic-dispatch/http.go:541` — `func (c *Component) handleListLoops(w http.ResponseWriter, r *http.Request) {`
-- `processor/agentic-dispatch/http.go:558` — `loops = c.loopTracker.GetAllLoops()`
+- `processor/agentic-dispatch/http.go:531` — `// handleListLoops returns all tracked loops with optional filtering.`
+- `processor/agentic-dispatch/http.go:532` — `func (c *Component) handleListLoops(w http.ResponseWriter, r *http.Request) {`
+- `processor/agentic-dispatch/http.go:549` — `loops = c.loopTracker.GetAllLoops()`
 
 No `ListTasks`, task `GetTask`, task store/index/bucket/registry, `/tasks`, or dedicated task-to-loop mapping API was located under the searched spellings; see zero-hit searches under Searches.
 
@@ -18,11 +18,12 @@ No `ListTasks`, task `GetTask`, task store/index/bucket/registry, `/tasks`, or d
 
 - `agentic/user_types.go:312` — `// TaskMessage represents a task to be executed by an agentic loop`
 - `agentic/user_types.go:313` — `type TaskMessage struct {`
-- `agentic/user_types.go:314` — `LoopID string `json:"loop_id,omitempty"` // loop to continue, or empty for new`
-- `agentic/user_types.go:315` — `TaskID string `json:"task_id"``
-- `agentic/user_types.go:407` — `if t.TaskID == "" {`
-- `agentic/user_types.go:408` — `return fmt.Errorf("task_id required")`
-- `agentic/user_types.go:530` — `func (t *TaskMessage) Schema() message.Type {`
+- `agentic/user_types.go:314` — `LoopID          string `json:"loop_id,omitempty"` // loop to continue, or empty for new`
+- `agentic/user_types.go:315` — `TaskID          string `json:"task_id"``
+- `agentic/user_types.go:316` — `SourceMessageID string `json:"source_message_id,omitempty"``
+- `agentic/user_types.go:408` — `if t.TaskID == "" {`
+- `agentic/user_types.go:409` — `return fmt.Errorf("task_id required")`
+- `agentic/user_types.go:531` — `func (t *TaskMessage) Schema() message.Type {`
 - `agentic/payload_registry.go:34` — `{Domain: Domain, Category: CategoryTask, Version: SchemaVersion, Description: "Agent task request", Factory: func() any { return &TaskMessage{} }, IndexingProfile: control},`
 - `agentic/state.go:48` — `type LoopEntity struct {`
 - `agentic/state.go:49` — `ID                 string                `json:"id"``
@@ -48,12 +49,27 @@ No `ListTasks`, task `GetTask`, task store/index/bucket/registry, `/tasks`, or d
 - `processor/agentic-loop/handlers.go:852` — `loopID, err = h.loopManager.CreateLoopWithID(task.LoopID, task.TaskID, task.Role, task.Model, effectiveMaxIterations)`
 - `processor/agentic-loop/handlers.go:856` — `entity, err = h.loopManager.attachContinuation(task.LoopID, task.TaskID)`
 - `processor/agentic-loop/handlers.go:874` — `loopID, err = h.loopManager.CreateLoop(task.TaskID, task.Role, task.Model, effectiveMaxIterations)`
-- `processor/agentic-dispatch/component.go:995` — `loopID = uuid.New().String()`
-- `processor/agentic-dispatch/component.go:1008` — `taskID := uuid.New().String()`
-- `processor/agentic-dispatch/component.go:1011` — `task := c.buildTaskMessage(ctx, msg, loopID, taskID)`
-- `processor/agentic-dispatch/http.go:330` — `loopID = uuid.New().String()`
-- `processor/agentic-dispatch/http.go:344` — `taskID := uuid.New().String()`
-- `processor/agentic-dispatch/http.go:347` — `task := c.buildTaskMessage(ctx, msg, loopID, taskID)`
+- `processor/agentic-dispatch/task_recovery.go:21` — `const dispatchTaskIDPrefix = "dispatch-"`
+- `processor/agentic-dispatch/task_recovery.go:29` — `type vacantDispatchTaskSlot struct {`
+- `processor/agentic-dispatch/task_recovery.go:34` — `type retainedTaskEvidenceReader interface {`
+- `processor/agentic-dispatch/task_recovery.go:64` — `func stableDispatchTaskID(msg agentic.UserMessage) string {`
+- `processor/agentic-dispatch/task_recovery.go:75` — `func (c *Component) findRetainedDispatchTask(`
+- `processor/agentic-dispatch/task_recovery.go:79` — `if err := msg.Validate(); err != nil {`
+- `processor/agentic-dispatch/task_recovery.go:82` — `taskID := stableDispatchTaskID(msg)`
+- `processor/agentic-dispatch/task_recovery.go:103` — `func (c *Component) prepareNewDispatchTask(`
+- `processor/agentic-dispatch/task_recovery.go:110` — `loopID = uuid.NewString()`
+- `processor/agentic-dispatch/task_recovery.go:120` — `func dispatchTaskAddress(ports []component.PortDefinition, taskID string) (string, string, error) {`
+- `processor/agentic-dispatch/task_recovery.go:147` — `func (c *Component) readRetainedDispatchTask(`
+- `processor/agentic-dispatch/task_recovery.go:158` — `return agentic.TaskMessage{}, nil, false, errs.WrapTransient(`
+- `processor/agentic-dispatch/task_recovery.go:170` — `if err := decoded.Validate(); err != nil {`
+- `processor/agentic-dispatch/task_recovery.go:183` — `func validateRetainedDispatchTask(`
+- `processor/agentic-dispatch/component.go:972` — `prepared, vacant, found, err := c.findRetainedDispatchTask(ctx, msg)`
+- `processor/agentic-dispatch/component.go:974` — `if errs.IsFatal(err) || errs.IsTransient(err) {`
+- `processor/agentic-dispatch/component.go:982` — `if !found && !c.hasPermission(msg.UserID, "submit_task") {`
+- `processor/agentic-dispatch/component.go:1020` — `prepared, err = c.prepareNewDispatchTask(ctx, msg, loopID, vacant)`
+- `processor/agentic-dispatch/http.go:302` — `prepared, vacant, found, err := c.findRetainedDispatchTask(ctx, msg)`
+- `processor/agentic-dispatch/http.go:309` — `if !found && !c.hasPermission(msg.UserID, "submit_task") {`
+- `processor/agentic-dispatch/http.go:348` — `prepared, err = c.prepareNewDispatchTask(ctx, msg, loopID, vacant)`
 - `processor/rule/actions.go:1710` — `taskID := fmt.Sprintf("rule-%s-%d", entityID, time.Now().UnixNano())`
 - `processor/rule/actions.go:1713` — `task := agentic.TaskMessage{`
 - `processor/rule/actions.go:1714` — `TaskID:       taskID,`
@@ -84,6 +100,25 @@ No `ListTasks`, task `GetTask`, task store/index/bucket/registry, `/tasks`, or d
 - `processor/agentic-dispatch/loop_tracker.go:15` — `LoopID string `json:"loop_id"``
 - `processor/agentic-dispatch/loop_tracker.go:16` — `TaskID string `json:"task_id"``
 - `processor/agentic-dispatch/loop_tracker.go:100` — `loops        map[string]*LoopInfo // loop_id -> LoopInfo`
+- `processor/agentic-dispatch/task_recovery_test.go:25` — `// spec: agentic-dispatch / Dispatch task redelivery recovers the committed LoopID`
+- `processor/agentic-dispatch/task_recovery_test.go:26` — `func TestUnreadableRetainedTaskEvidenceDoesNotMintOrRefuse(t *testing.T) {`
+- `processor/agentic-dispatch/task_recovery_test.go:40` — `require.True(t, errs.IsTransient(err), "unreadable evidence must retry instead of pretending this is new work")`
+- `processor/agentic-dispatch/task_recovery_test.go:42` — `require.Empty(t, prepared.task.LoopID, "a random LoopID requires an exact retained-absence result")`
+- `processor/agentic-dispatch/task_recovery_test.go:45` — `require.True(t, errs.IsTransient(err), "the durable source owner must retry an unreadable evidence check")`
+- `processor/agentic-dispatch/task_recovery_test.go:46` — `require.Empty(t, sink.all(), "a retryable evidence outage is not a permanent user refusal")`
+- `processor/agentic-dispatch/task_recovery_test.go:47` — `require.Empty(t, c.loopTracker.GetAllLoops(), "unreadable evidence must not track newly minted work")`
+- `processor/agentic-dispatch/task_recovery_test.go:50` — `// spec: agentic-dispatch / Dispatch task redelivery recovers the committed LoopID`
+- `processor/agentic-dispatch/task_recovery_test.go:51` — `func TestInvalidUserMessageIdentityIsRejectedBeforeTaskIdentity(t *testing.T) {`
+- `processor/agentic-dispatch/task_recovery_test.go:64` — `require.Empty(t, vacant.taskID, "invalid source identity must not derive a TaskID")`
+- `processor/agentic-dispatch/task_recovery_test.go:65` — `require.Empty(t, prepared.task.LoopID, "invalid source identity must not mint a LoopID")`
+- `processor/agentic-dispatch/restart_identity_integration_test.go:212` — `// Mutable AutoContinue state has moved on while the source was waiting for`
+- `processor/agentic-dispatch/restart_identity_integration_test.go:221` — `decision, cause = replacementDispatch.handleUserMessage(ctx, secondSource.Data())`
+- `processor/agentic-dispatch/restart_identity_integration_test.go:238` — `require.Equal(t, firstTask.LoopID, secondTask.LoopID,`
+- `processor/agentic-dispatch/restart_identity_integration_test.go:245` — `// spec: agentic-dispatch / Dispatch task redelivery recovers the committed LoopID`
+- `processor/agentic-dispatch/restart_identity_integration_test.go:246` — `func TestIntegrationUserMessageTaskMappingConflictQuarantines(t *testing.T) {`
+- `processor/agentic-dispatch/restart_identity_integration_test.go:265` — `name:   "retained TaskMessage is malformed",`
+- `processor/agentic-dispatch/restart_identity_integration_test.go:302` — `require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)`
+- `processor/agentic-dispatch/restart_identity_integration_test.go:309` — `require.Equal(t, uint64(1), info.State.Msgs, "conflict must not publish or overwrite either mapping")`
 - `processor/agentic-dispatch/loop_wire.go:15` — `LoopID        string `json:"loop_id"``
 - `processor/agentic-dispatch/loop_wire.go:16` — `TaskID        string `json:"task_id,omitempty"``
 - `processor/agentic-dispatch/loop_wire.go:82` — `TaskID:        e.TaskID,`
@@ -122,17 +157,17 @@ No `ListTasks`, task `GetTask`, task store/index/bucket/registry, `/tasks`, or d
 - `processor/agentic-loop/handlers.go:1101` — `SourceCorrelation: task.TaskID,`
 - `processor/agentic-loop/handlers.go:2104` — `TaskID:       entity.TaskID,`
 - `processor/agentic-loop/handlers.go:2688` — `TaskID:       entity.TaskID,`
-- `processor/agentic-dispatch/component.go:1039` — `TaskID:           taskID,`
-- `processor/agentic-dispatch/component.go:1115` — `TaskID:           created.TaskID,`
-- `processor/agentic-dispatch/http.go:373` — `TaskID:           taskID,`
+- `processor/agentic-dispatch/component.go:1033` — `taskID := task.TaskID`
+- `processor/agentic-dispatch/component.go:1119` — `TaskID:           created.TaskID,`
+- `processor/agentic-dispatch/http.go:356` — `taskID := task.TaskID`
 - `processor/agentic-dispatch/loop_wire.go:45` — `TaskID:        in.TaskID,`
 - `processor/agentic-dispatch/loop_wire.go:82` — `TaskID:        e.TaskID,`
 - `processor/agentic-dispatch/loop_tracker.go:538` — `// GetUserLoops returns all loops for a specific user`
 - `processor/agentic-dispatch/loop_tracker.go:539` — `func (t *LoopTracker) GetUserLoops(userID string) []*LoopInfo {`
 - `processor/agentic-dispatch/loop_tracker.go:552` — `// GetAllLoops returns all tracked loops`
 - `processor/agentic-dispatch/loop_tracker.go:553` — `func (t *LoopTracker) GetAllLoops() []*LoopInfo {`
-- `processor/agentic-dispatch/http.go:556` — `loops = c.loopTracker.GetUserLoops(userID)`
-- `processor/agentic-dispatch/http.go:558` — `loops = c.loopTracker.GetAllLoops()`
+- `processor/agentic-dispatch/http.go:547` — `loops = c.loopTracker.GetUserLoops(userID)`
+- `processor/agentic-dispatch/http.go:549` — `loops = c.loopTracker.GetAllLoops()`
 - `output/otel/span_collector.go:495` — `spanKey := event.LoopID + ":" + event.TaskID`
 - `output/otel/span_collector.go:506` — `"agent.task_id": event.TaskID,`
 - `output/otel/span_collector.go:523` — `spanKey := event.LoopID + ":" + event.TaskID`

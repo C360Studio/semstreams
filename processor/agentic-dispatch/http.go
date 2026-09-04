@@ -299,8 +299,14 @@ func refusedSubmissionResponse(msg agentic.UserMessage, refusal error) agentic.U
 // processTaskSubmissionSync processes a task submission and returns acknowledgment.
 // The actual task execution happens asynchronously via NATS.
 func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.UserMessage) agentic.UserResponse {
+	prepared, vacant, found, err := c.findRetainedDispatchTask(ctx, msg)
+	if err != nil {
+		return refusedSubmissionResponse(msg,
+			c.refuseSubmission(seamHTTPSubmission, msg.ReplyTo, codeSubmissionInvalid, err))
+	}
+
 	// Check submit permission
-	if !c.hasPermission(msg.UserID, "submit_task") {
+	if !found && !c.hasPermission(msg.UserID, "submit_task") {
 		return agentic.UserResponse{
 			ResponseID:  uuid.New().String(),
 			ChannelType: msg.ChannelType,
@@ -312,58 +318,43 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 		}
 	}
 
-	// Determine loop ID (continue existing or create new). The mint decision is
-	// made HERE, before the gate: an unresolved continuation is the signal to
-	// start a conversation, not a malformed token, and the gate refuses an empty
-	// token as malformed.
-	loopID := ""
-	if msg.ReplyTo != "" {
-		loopID = msg.ReplyTo
-	} else if c.config.AutoContinue {
-		loopID = c.loopTracker.GetActiveLoop(msg.UserID, msg.ChannelID)
+	// Resolve a continuation only after exact retained absence. An empty result
+	// means new work; prepareNewDispatchTask mints its LoopID only after any
+	// named continuation passes admission.
+	loopID := prepared.task.LoopID
+	if !found {
+		if msg.ReplyTo != "" {
+			loopID = msg.ReplyTo
+		} else if c.config.AutoContinue {
+			loopID = c.loopTracker.GetActiveLoop(msg.UserID, msg.ChannelID)
+		}
+
+		if loopID != "" {
+			_, err = c.admitLoopRequest(ctx, loopAdmissionRequest{
+				Seam:      seamHTTPSubmission,
+				Field:     "reply_to",
+				Operation: loopOpContinue,
+				LoopID:    loopID,
+				Requester: msg.UserID,
+			})
+			if err != nil {
+				// The client hears about it here, synchronously, in the response it is
+				// already waiting on, naming the field — rather than "Task submitted"
+				// followed by an async TERM it never sees (ADR-105, #1192).
+				return refusedSubmissionResponse(msg, err)
+			}
+		}
+
+		prepared, err = c.prepareNewDispatchTask(ctx, msg, loopID, vacant)
+		if err != nil {
+			return refusedSubmissionResponse(msg,
+				c.refuseSubmission(seamHTTPSubmission, loopID, codeSubmissionInvalid, err))
+		}
+		loopID = prepared.task.LoopID
 	}
-
-	if loopID == "" {
-		// Create new loop. The token is framework-minted and full: a truncated
-		// one carried 32 bits, and a collision merged two conversations silently
-		// (ADR-105, #1192).
-		loopID = uuid.New().String()
-	} else if _, err := c.admitLoopRequest(ctx, loopAdmissionRequest{
-		Seam:      seamHTTPSubmission,
-		Field:     "reply_to",
-		Operation: loopOpContinue,
-		LoopID:    loopID,
-		Requester: msg.UserID,
-	}); err != nil {
-		// The client hears about it here, synchronously, in the response it is
-		// already waiting on, naming the field — rather than "Task submitted"
-		// followed by an async TERM it never sees (ADR-105, #1192).
-		return refusedSubmissionResponse(msg, err)
-	}
-
-	taskID := uuid.New().String()
-
-	// Create task message (shared builder — see buildTaskMessage; gh#256).
-	task := c.buildTaskMessage(ctx, msg, loopID, taskID)
-
-	// Wrap task in BaseMessage envelope (required by agentic-loop). The marshal
-	// is where TaskMessage.Validate runs, so it is the last thing that can
-	// refuse this submission on its own content — including the client-authored
-	// run_id / in_reply_to resume anchors, which never pass through the
-	// continuation branch above. Nothing is tracked or counted until it returns
-	// (#1225).
-	baseMsg := message.NewBaseMessage(task.Schema(), &task, "agentic-dispatch-http")
-	taskData, err := json.Marshal(baseMsg)
-	if err != nil {
-		return refusedSubmissionResponse(msg,
-			c.refuseSubmission(seamHTTPSubmission, loopID, codeSubmissionInvalid, err))
-	}
-
-	subject, err := component.ResolveSubject(c.outputPortDefs(), "agent.task", taskID)
-	if err != nil {
-		return refusedSubmissionResponse(msg,
-			c.refuseSubmission(seamHTTPSubmission, loopID, codeSubmissionUndeliverable, err))
-	}
+	task := prepared.task
+	taskID := task.TaskID
+	loopID = task.LoopID
 
 	// Track the loop and count it started — after the task is assembled and
 	// addressable, before the publish. See the channel path for why this window
@@ -381,7 +372,7 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 	})
 	c.metrics.recordLoopStarted()
 
-	if err := c.natsClient.PublishToStream(ctx, subject, taskData); err != nil {
+	if err := c.natsClient.PublishToStream(ctx, prepared.subject, prepared.data); err != nil {
 		return refusedSubmissionResponse(msg,
 			c.refuseSubmission(seamHTTPSubmission, loopID, codeSubmissionUndeliverable, err))
 	}

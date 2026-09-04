@@ -87,10 +87,10 @@ design-section shorthand is not a valid citation. Every implementation slice fol
 
 ## 2. Lane-scoped task, request, and tool-work correlation
 
-- [ ] 2.1 RED: prove stable TaskID, random LoopID minting for new work, retained-`TaskMessage` LoopID recovery on
+- [x] 2.1 RED: prove stable TaskID, random LoopID minting for new work, retained-`TaskMessage` LoopID recovery on
   redelivery, and conflicting TaskID-to-LoopID quarantine. Cite exactly
   `// spec: agentic-dispatch / Dispatch task redelivery recovers the committed LoopID`.
-- [ ] 2.2 Implement the TaskID-to-retained-`TaskMessage` recovery path. Mint LoopID randomly only when exact retained
+- [x] 2.2 Implement the TaskID-to-retained-`TaskMessage` recovery path. Mint LoopID randomly only when exact retained
   task evidence proves this is new work; reuse the retained LoopID on redelivery. Add no route-claim state or
   deterministic LoopID derivation.
 - [ ] 2.3 RED: prove RequestID distinguishes logical provider work and framework execution identity distinguishes tool
