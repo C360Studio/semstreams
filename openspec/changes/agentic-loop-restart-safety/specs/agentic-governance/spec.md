@@ -13,8 +13,8 @@ derive a universal work deadline from AckWait. An operation MAY use an ordinary 
 subscription SHALL move to the existing heartbeat owner only after measured legitimate work can exceed its
 configured acknowledgement interval. Cancellation-ignoring or non-returning work SHALL fail lifecycle review.
 
-For an allowed message, done SHALL require deterministic publication through the declared JetStream output and
-synchronous PubAck. For a blocked message, done SHALL be the completed policy decision and deliberate
+For an allowed message, done SHALL require durable at-least-once publication through the declared JetStream output
+and synchronous PubAck. For a blocked message, done SHALL be the completed policy decision and deliberate
 non-forwarding. The existing audit contract remains nonblocking, but decode, filter, output-subject, marshal, and
 required publication failures SHALL NOT become ACK.
 
@@ -28,7 +28,7 @@ durable state, or communication path is added.
 
 - **WHEN** policy allows a message
 - **AND** its declared validated output does not receive PubAck
-- **THEN** the source retries with the same semantic output identity
+- **THEN** the source retries and the validated output may repeat
 - **AND** no core-NATS fallback authorizes ACK
 
 #### Scenario: Policy blocks a message
@@ -42,9 +42,9 @@ durable state, or communication path is added.
 - **WHEN** a transient dependency prevents the filter chain from completing
 - **THEN** source retries and no log-only return becomes ACK
 
-#### Scenario: Governance handler panics
+#### Scenario: Governance handler panics or correlation conflicts
 
-- **WHEN** validation panics or observes a semantic identity collision
+- **WHEN** validation panics or observes conflicting required proposal/verdict correlation
 - **THEN** the delivery quarantines and the exact owner stops
 
 #### Scenario: Governance business work reaches its own deadline
@@ -72,26 +72,28 @@ response redelivery insufficient.
 - **WHEN** retained verdict identity or fingerprint conflicts with the proposal
 - **THEN** the delivery quarantines rather than selecting one value
 
-### Requirement: Governance publication identity is deterministic and reconcilable
+### Requirement: Governance publications are durably at-least-once
 
-Every validated task, request, response, proposal, and verdict publication SHALL derive a stable identity and
-canonical fingerprint from its source identity and SHALL use deterministic `Nats-Msg-Id`. Before repeating an
-allowed validated output or proposal after replacement, governance SHALL perform an operation-specific exact
-committed-output lookup and validate its content. A matching output proves publication; a conflicting identity SHALL
-quarantine; absence outside admitted retention SHALL remain unknown. No general stream scan or new verdict authority
-is introduced.
+Every validated task, request, response, proposal, and verdict publication SHALL carry its lane's required
+correlation and receive PubAck before source ACK. PubAck uncertainty MAY repeat a publication. `Nats-Msg-Id` MAY
+provide bounded duplicate suppression but SHALL NOT be treated as permanent publication identity.
 
-#### Scenario: Validated output already committed
+The exact retained-verdict read exists only at the governance waiter-loss boundary. Ordinary validated outputs and
+proposals require no exact committed-output lookup. Conflicting proposal or verdict correlation SHALL quarantine;
+absence outside admitted retention SHALL remain unknown. No general stream scan or new verdict authority is
+introduced.
 
-- **WHEN** validation input redelivers after its exact validated output committed
-- **THEN** governance verifies the retained identity and canonical fingerprint
-- **AND** acknowledges without producing a differently identified output
+#### Scenario: Validated output may repeat
+
+- **WHEN** validation input redelivers after its validated output was published
+- **THEN** governance may publish the correlated validated output again
+- **AND** acknowledges only after the required publication receives PubAck
 
 #### Scenario: Validated output publication is retried
 
 - **WHEN** the first validated-output PubAck is uncertain
-- **THEN** retry uses the same deterministic `Nats-Msg-Id`
-- **AND** content mismatch quarantines instead of overwriting
+- **THEN** retry may repeat the correlated validated output
+- **AND** source ACK still waits for PubAck
 
 ### Requirement: Governance shutdown closes every delivery owner
 

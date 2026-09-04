@@ -4,12 +4,12 @@
 
 Owner-accepted target state reconciled after nested PR #1251 at exact branch checkpoint
 `P=09ba38b1de5e7200e72281c8e4b8941d81be1da2`, whose merge base with the frozen staged #759 parent is exact
-`F=417beae5552f8f15ad3540edd7d8504c87174c13`. Active OpenSpec materialization requires independent
-pre-implementation design review before production work begins.
+`F=417beae5552f8f15ad3540edd7d8504c87174c13`. The dispatch edge-gateway correction is owner-approved and
+independently reviewed; implementation begins with its evidence gate.
 
 ## Accepted inventory
 
-This design incorporates three accepted evidence checkpoints:
+This design incorporates the accepted evidence checkpoints:
 
 - exact #759 foundation inventory
   `inventory-rebaseline-2026-09-02-F.md`, base
@@ -21,6 +21,14 @@ This design incorporates three accepted evidence checkpoints:
 - first-party publisher addendum `inventory-addendum-first-party-agent-publisher-2026-09-03.md`, base/head
   `09ba38b1de5e7200e72281c8e4b8941d81be1da2`, SHA-256
   `0adba4f0092017d84f1ef181ebaf3299323f5cc75b999825bd1e16d6e292930f`, `INVENTORY PASS`, 226/226 pins.
+- dispatch bridge inventory `inventory-dispatch-bridge-boundary-2026-09-04.md`, base
+  `79b0f29f82ce5391013f6c931fae69a28216ac93`, SHA-256
+  `cf5660a3b4196324a3695dc1174dacfb804cef56e2336536d4a9f7d8f4197daa`, independent `INVENTORY PASS`, 249/249 pins.
+- task/loop cardinality inventory `inventory-task-loop-cardinality-2026-09-04.md`, same base, SHA-256
+  `22d593d5de5eea2d15a94da36162cae8b5a3a36cbfcc7790003c13a52ba7d340`.
+- approved dispatch edge-gateway checkpoint `design-dispatch-edge-gateway-2026-09-04.md`, current SHA-256
+  `aba1202c38856d71d6c551f7cb9f690a03d7eeaa981e6de5e4165b09e0ea938a`, independent `DESIGN REVIEW PASS`.
+  SHA-256 `339cf2b2c734ef48a2898ce6b79c3783577a8b4ae152b65a1078b00445949b76` is superseded provenance.
 
 The standalone `design-reconciliation-F-2026-09-02.md` preserves the reviewed reasoning and owner-ruling record.
 After this materialization it is non-normative evidence: proposal, this design, tasks, and capability deltas are the
@@ -32,10 +40,11 @@ reinventory before implementation.
 - PR #1159 remains stacked on `codex/gh759-semantic-settlement`; #759 does not merge first. The reviewed parent stays
   frozen through #1159 implementation and review. Any advance requires a new pin, rebase, inventory verification,
   test, and re-review.
-- #1146 owns its 17-subscription tranche of #1155's real-NATS process-replacement proof. #1155 remains open until
+- #1146 owns its 15-subscription tranche of #1155's real-NATS process-replacement proof. #1155 remains open until
   #1249 supplies transferred AgentRun complete/failed proof; the combined 19-subscription gate is completed later.
-- The full 17-subscription scope remains intact. AgentRun complete/failed fanout is transferred to #1249 from exact
-  post-#1146 checkpoint `A` and is not implemented or specified here.
+- The 15-subscription scope remains intact. Dispatch `agent.created` and `agent.approval_pending` correctness inputs
+  are removed; their loop outputs and external subscribers remain. AgentRun complete/failed fanout is transferred to
+  #1249 from exact post-#1146 checkpoint `A` and is not implemented or specified here.
 - Nested PR #1251 is integrated: pause/resume handlers, request fields, and unused signal verbs are gone. Binding
   product ruling #1239 comment `5526837992`, linked from #1146 comment `5526837994`, supersedes the earlier review
   premise that `LoopStatePaused` should remain legacy-valid. Cancel and ApprovalResponse remain separate durable
@@ -73,25 +82,26 @@ component state and violates ADR-028's two-layer boundary.
 This avoids a lookup but adds O(batch bytes multiplied by calls and results) NATS cost. It increases max-payload
 failure risk and exposes continuation mechanics to adopters.
 
-### Use streams-first recovery with one narrow continuation exception
+### Use streams-first recovery with an evidence-gated continuation exception
 
-This uses exact reads only after process correlation is missing. It adds one Store write only when entering an
-approval that may outlive stream retention. It preserves the current orchestration layers and is the recommended
+This uses exact reads only after process correlation is missing. Approval storage remains conditional on a real
+replacement proof and second owner ruling. It preserves the current orchestration layers and is the recommended
 design.
 
 ## Decision
 
 Adopt streams-first, lane-specific settlement and replay.
 
-Each consumer holds its source delivery until its exact durable business outcome and every required downstream
-PubAck have completed. Replacement recovery uses:
+Each consumer holds its source delivery until its lane-specific durable business outcome and every required
+downstream PubAck have completed. Replacement recovery uses:
 
 1. source redelivery;
-2. deterministic LoopID, RequestID, and tool execution identity;
-3. exact reads of already committed AGENT messages;
+2. stable TaskID, framework-minted LoopID, RequestID, and tool execution identity;
+3. exact reads only at named provider, tool-effect, governance-waiter, approval-evidence, and terminal-route
+   boundaries;
 4. read-through hydration of current `LoopEntity`;
 5. existing immutable `TOOL_CALL_OUTCOMES`; and
-6. a registered Store reference only for approval continuation whose wait can exceed AGENT retention.
+6. current `LoopEntity.PendingToolResults` plus exact current request/response evidence for the approval gate.
 
 The change adds no generic supervisor, recovery state machine, checkpoint or outbox bucket, CQRS path, or
 event-sourced loop.
@@ -105,59 +115,58 @@ heartbeat evidence.
 
 The shared decision skills resolve as follows:
 
-- `kv-or-stream`: no new communication path. Work remains on JetStream; current loop facts remain in existing KV;
-  bulky approval continuation uses the existing Store.
-- `entity-or-bucket`: continuation is private, bulky, high-churn execution material. Its reference stays in existing
-  `AGENT_LOOPS`; no new bucket or rule-readable graph fact is added.
-- `orchestration-check`: settlement, projection hydration, and approval timer repair are component execution and
+- `kv-or-stream`: no new communication path. Work remains on JetStream; current loop facts remain in existing KV.
+  The evidence gate decides whether the already-approved Store fallback is needed.
+- `entity-or-bucket`: no new fact is added before the evidence gate. If retained, approval continuation remains
+  private Store material referenced by existing `AGENT_LOOPS`, never a graph fact or new bucket.
+- `orchestration-check`: settlement, authority-backed projection, and approval timer repair are component execution and
   lifecycle behavior. Rules still trigger and components execute; there is no third orchestration layer.
-- `new-payload`: `ApprovalContinuationV1` registers through `agentic.RegisterPayloads` and
-  `payloadbuiltins.Register`, uses exact `agentic.approval_continuation.v1`, alias JSON and production decoding, has
-  the control indexing floor and nil projection contracts, and has no `init()` or raw fallback.
 
 ## Cost
 
 - A text-only model turn adds no durable write.
 - An ordinary tool turn adds no bucket or Store write. Cold recovery may use one or two exact AGENT reads.
-- An approval-required turn adds one content-addressed Store `Put` plus verification and one small typed reference.
-- Dispatch performs one bounded `AGENT_LOOPS` projection hydration after replacement.
+- An approval-required turn adds no Store write if the exact-evidence gate passes. If it fails, the approved Store
+  fallback retains its previously reviewed cost.
+- Dispatch maintains one `AGENT_LOOPS` projection rather than a second tracker.
 - Approval timeout performs a bounded hydration of awaiting-approval records when configured.
 - Ordinary delivery recovery never scans all loops or the whole AGENT stream.
 
-## Stable identity
+## Correlation is lane-scoped
 
-- Dispatch derives TaskID and a new LoopID deterministically from validated `UserMessage` identity.
-- Every `AgentRequest` RequestID deterministically identifies the loop and logical turn.
-- Provider `ToolCall.ID` remains the provider conversational identifier.
-- The framework stamps a separate execution identity from RequestID, provider CallID, and call ordinal.
-- Tool result, approval, governance, and completed-outcome correlation use that execution identity.
-- Every required dispatch task/control/user-response, model response, loop request/tool/approval/terminal,
-  governance validated-output/proposal/verdict, and tool-result publication uses deterministic `Nats-Msg-Id`.
-- Before repeating one of those outputs, its owning capability performs an operation-specific exact committed-output
-  lookup and validates canonical content. This explicitly includes validated governance output. Exact match proves
-  commitment, collision quarantines, and absence outside admitted retention remains unknown.
-- Stream-window deduplication is an optimization. Beyond that window, consumers reconcile semantic identity and
-  committed outcomes.
+- Dispatch derives stable TaskID from validated `UserMessage` identity. It mints a random framework LoopID only for
+  new work, retains that mapping in the task, and recovers it by TaskID on redelivery.
+- Every `AgentRequest` carries a stable RequestID for the provider-work boundary.
+- Provider `ToolCall.ID` remains conversational data. The framework stamps a separate execution identity from
+  RequestID, provider CallID, and positive call ordinal for tool completion and approval/governance correlation.
+- Ordinary created, request, approval, continuation, terminal, validated, verdict, ToolResult, and user-response
+  publications are durable at-least-once. Their source ACK waits for required PubAck.
+- `Nats-Msg-Id` is bounded duplicate suppression, not durable identity or long-horizon publication proof.
+- Exact retained reads exist only where a named boundary needs them: provider invocation, completed tool effects,
+  governance waiter loss, approval reconstruction, explicit LoopID/terminal-route lookup, or durable applied-state
+  proof. There is no general exact-output layer or canonical-output fingerprint system.
 
-A different payload under the same semantic identity is an invariant collision and is quarantined.
+A conflicting TaskID-to-LoopID, RequestID, execution identity, or boundary-specific correlation is quarantined. The
+framework does not manufacture identity for every ordinary publication.
 
 ## Current-spec reconciliation
 
-Three current requirements conflict with the accepted restart contract and are replaced in full rather than
-shadowed by additive text:
+Five current requirements across three capabilities conflict with the accepted restart contract and are replaced in
+full rather than shadowed by additive text:
 
 - `agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone` retains its exact
-  heading and unaffected scenarios, but makes `AGENT_LOOPS` authority, `LoopTracker` a projection, tracker-only
-  existence a refusal, and `paused` invalid.
+  heading and unaffected scenarios, but makes `AGENT_LOOPS` authority, removes `LoopTracker`, makes projection-only
+  existence a refusal, and makes `paused` invalid.
 - `agentic-tools / Tool-call completion SHALL be durable before request acknowledgement`,
   `Tool-result bounds SHALL be observed rather than predicted`, and
   `Executor panic and ambiguous pre-completion effects SHALL be explicit` retain observed-bounds and panic behavior
-  while replacing provider CallID keys, surrogate IDs, and blanket external-effect idempotency with framework
-  execution identity, deterministic `Nats-Msg-Id`, exact outcome reconciliation, and operation-specific effect
-  authority.
+  while replacing provider CallID keys and blanket external-effect idempotency with framework execution identity,
+  bounded `Nats-Msg-Id` suppression, exact completed-outcome reads at the executor boundary, and operation-specific
+  effect authority.
 - `agentic-loop / Per-loop in-process state is released at terminal, through the one release point` retains the one
-  idempotent release point and result/sweeper behavior, but replaces unconditional quiet settled-drop with exact
-  applied proof, Retry for unresolved authority, and Quarantine for collision or impossible transition.
+  idempotent release point and result/sweeper behavior, but replaces unconditional quiet settled-drop with
+  lane-specific durable applied proof, Retry for unresolved authority, and Quarantine for conflict or impossible
+  transition.
 
 ## Provider ambiguity
 
@@ -226,8 +235,8 @@ A response, result, signal, or approval response:
 3. initializes only that loop's process indexes;
 4. reconstructs context and configuration from the latest committed `AgentRequest` and exact originating
    `AgentResponse`;
-5. validates the incoming semantic identity against that material; and
-6. performs or replays the next deterministic transition.
+5. validates the incoming lane correlation against that material; and
+6. performs the lane-specific transition and publishes any required output at least once.
 
 A later committed request or terminal state may prove that an older delivery was already applied. Absence of
 process memory alone never proves staleness.
@@ -249,98 +258,107 @@ execution identity without creating another bucket.
 
 ## Approval continuation
 
-### Proven exception
+### Evidence gate before mechanism
 
-A human approval may wait beyond AGENT retention. After replacement, `PendingApprovalState` alone does not contain
-the conversation and model turn needed to continue. This is a named failpoint where source redelivery, stable
-identity, and existing retained outputs are insufficient.
+The already-approved ObjectStore design is not revoked by this design pass. Implementation first proves whether
+retained framework evidence already reconstructs the approval boundary.
 
-Before ACKing an approval-required `ToolResult`, agentic-loop:
+The real-NATS gate settles an approval-required `ToolResult`, persists `PendingToolResults` and awaiting-approval
+state, and obtains PubAck for `ApprovalPendingEvent`. It then replaces agentic-loop and agentic-dispatch, discards all
+process maps and caches, retains `AGENT` and `AGENT_LOOPS`, and independently exercises approve, modify, reject,
+timeout, and redelivery. Every branch proves one declared transition and no duplicate tool execution.
 
-1. builds an `ApprovalContinuationV1` containing the exact originating `AgentRequest`, `AgentResponse` tool batch,
-   and required loop correlation;
-2. wraps it as a registered payload;
-3. writes it content-addressably through the configured registered Store;
-4. reads it back and verifies its digest and identities;
-5. stores the typed `StorageReference` in `PendingApprovalState`;
-6. persists the awaiting-approval `LoopEntity`; and
-7. publishes `ApprovalPendingEvent` with synchronous PubAck.
+Reconstruction uses only current `AGENT_LOOPS/<LoopID>`, latest exact-subject `agent.request.<LoopID>`, and the exact
+`agent.response.<RequestID>` named by that request. It performs no stream list or scan.
 
-No new bucket is introduced. The continuation satisfies private-storage grounds 4 and 5: it is potentially bulky,
-high-churn operational execution material, not a graph fact. `PendingApprovalState` is private operational state in
-the existing `AGENT_LOOPS` authority. It produces no triples and is not directly rule-readable. Rules continue to
-observe their admitted event and graph facts; they do not read continuation references or decision fingerprints.
+A provider-authored CallID is request-scoped, not globally unique. No `tool.result.<CallID>` lookup is admissible.
+The approval-required result was already persisted at
+`LoopEntity.PendingToolResults[PendingApproval.CallID]`. The current response must contain exactly one matching tool
+call. Every envelope and payload validates, and all available loop, task, request, call, tool, argument, and trace
+identities agree.
 
-`ApprovalContinuationV1` contains exact JSON fields `loop_id` string, `task_id` string, `request_id` string,
-`execution_id` string, `call_id` string, `call_ordinal` integer, `request` `AgentRequest`, and `response`
-`AgentResponse`. Validation requires all five IDs, a positive ordinal, valid nested values, matching nested
-RequestIDs, the matching provider call at that ordinal, recomputed execution identity, and LoopID/TaskID agreement
-with the enclosing pending state.
+A same-CallID/different-RequestID proof retains two conflicting responses. Reconstruction follows only the response
+named by the current request and is unaffected by the older response.
 
-It implements `Schema` as exact
-`message.Type{Domain: "agentic", Category: "approval_continuation", Version: "v1"}` through
-`CategoryApprovalContinuation = "approval_continuation"`, `Validate`, and own-field alias JSON marshal/unmarshal.
-`agentic.RegisterPayloads` registers its factory with `vocabulary.IndexingProfileControl` and nil projection
-contracts because it is non-Graphable Store material. `payloadbuiltins.Register` carries the owner registration to
-`cmd/semstreams`, `cmd/e2e-semstreams`, test helpers, and every first-party composition root found by the repeated
-binary census. Production decoder round-trip is mandatory; there is no `init()`, raw fallback, anonymous decoder, or
-duplicate registration site.
+| Evidence result | Settlement |
+|---|---|
+| transport/read failure, unobservable retention, or unresolved visibility | Retry; publish nothing |
+| observed retention confirms required exact evidence should remain, but it is absent | durable `continuation_unavailable` |
+| malformed envelope, duplicate current call, or identity/content conflict | Quarantine |
+| exact validated match with no durable applied-state proof | publish the required branch output at least once, then continue |
+| durable state proves the branch already applied | settle without repeating non-repeatable work |
+| required correlation conflicts with durable state | Quarantine |
 
-Loop config adds exact field `ApprovalContinuationStorageInstance string` with JSON key
-`approval_continuation_storage_instance,omitempty`, schema type string/default `objectstore`/category `advanced`, and
-a description naming the registered Store for approval continuation.
-Omission installs that default; explicit empty after defaults or an unresolved `StoreRegistry` name refuses
-approval-capable setup. The existing `trajectory_evidence_storage_instance` is not reused: repository evidence scopes
-it to full trajectory evidence, whose retention and ownership are independent. No physical bucket key or hidden
-fallback is added.
+No branch clears `PendingApproval` before its required next publication receives PubAck or durable applied-state
+proof exists. If all branches pass without a new durable fact, implementation stops for an owner ruling. Only
+explicit revocation of comment `5463183450` authorizes deletion of `ApprovalContinuationV1` and its Store plan. If
+the proof fails, retain that already-approved plan unchanged. No third mechanism is introduced.
 
-The content key is SHA-256 of canonical payload JSON, encoded lowercase base32 without padding beneath
-`agentic/approval-continuation/v1/`. The digest excludes `BaseMessage` random ID and timestamp. Stored bytes are one
-normal registered `BaseMessage` envelope, and the `StorageReference` records exact Store instance, deterministic key,
-content type, and envelope size.
+## Dispatch edge-gateway boundary
 
-Persistence validates, derives the key, resolves the exact Store, and performs get-before-put. A matching existing
-object is reused only after production decoding to `*ApprovalContinuationV1`, validation, canonical payload equality,
-digest/key recomputation, and equality of LoopID, TaskID, RequestID, execution identity, provider CallID, and ordinal.
-BaseMessage UUID and timestamp are deliberately ignored because retry constructs a fresh normal envelope. Absence
-permits one Put followed by Get and the same verification. An unknown Put result is reconciled by Get: a matching
-canonical payload succeeds, unresolved absence retries, and malformed or conflicting content quarantines. Store
-overwrite behavior is never collision resolution.
+Dispatch is exclusively an edge gateway. It:
 
-A permanently missing referenced object fails the loop durably with `approval_continuation_unavailable`; recovery
-never guesses from partial arguments. The reference remains until the deterministic downstream outcome commits.
-Deletion afterward is best-effort and does not gate settlement. A crash may leave a content-addressed orphan; #1146
-adds metrics but no scanner or reaper. Any later cleanup authority requires measured growth and a separate ruling.
+1. admits external work and publishes task, cancel, and approval messages;
+2. answers explicit LoopID operations from exact `AGENT_LOOPS` authority;
+3. serves reverse lookup, listing, debug, activity, and AutoContinue from one caught-up read-only view; and
+4. translates terminal complete/failed outcomes into durable user responses only when a validated user route exists.
 
-For approve or modify, the pending record retains the applied response fingerprint until the approved `ToolResult`
-arrives. This lets a replacement replay the exact call and reject a conflicting decision. For reject or timeout,
-the pending record is cleared only after the deterministic next request or terminal outcome is committed.
+Agentic-loop exclusively owns loop birth, pending approval, every intermediate transition, and terminal state.
+Dispatch neither consumes created/pending events for correctness nor communicates intermediate loop state. A valid
+system-lane terminal outcome with no user route is settled without inventing a `user.response`.
 
-When approval timeout is configured, agentic-loop performs narrow startup hydration of awaiting-approval records so
-their existing deadlines survive replacement. This is component-owned timer repair, not a general supervisor.
+`LoopTracker`, its approval buffer, and dispatch's `agent.created` and `agent.approval_pending` inputs are removed.
+Those events remain loop outputs for external subscribers. The existing shared graph view becomes the sole local
+projection and adds no storage or retention.
 
-### Reference lifetime
+### Mixed `AGENT_LOOPS` key grammar
 
-The Store object is discoverable only while `PendingApprovalState` remains in `AGENT_LOOPS`, whose current TTL is 24
-hours. Therefore the earlier indefinite claim is false. Approval timeout defaults to 12 hours and must be finite,
-nonzero, and within observed `AGENT_LOOPS` retention after the framework-computed safety margin.
+The view classifies keys before decoding. A bare canonical LoopID must decode as a valid `LoopEntity` whose ID equals
+the key. A canonical `COMPLETE_<LoopID>` is activity-only and validates by payload family. A typed terminal payload's
+LoopID must equal the suffix. A registered `SearchResult` has no LoopID; the suffix supplies it, while the view maps
+complete state, successful outcome, synthesis, and iterations. Aggregate `TokensUsed` never populates directional
+token fields.
 
-Persisting the reference in the graph is rejected because it exposes private execution material. A new bucket is not
-admitted. If truly indefinite approval is required, design stops for a separately reviewed change to the existing
-loop authority or a discoverable reference authority rather than claiming the Store object alone solves it.
+Current research-pipeline namespaces are non-loop records and return `keep=false`:
 
-## Dispatch projection recovery
+- `research.request.received.`
+- `classify.complete.` and `classify.snapshot.`
+- `route.complete.` and `route.snapshot.`
+- `execute.complete.` and `execute.snapshot.`
+- `assess.complete.` and `assess.snapshot.`
+- `search_result.complete.` and `synthesize.snapshot.`
 
-`LoopTracker` remains a cache. Dispatch builds a candidate projection from an all-current `AGENT_LOOPS` watch while
-applying ordered concurrent updates. It exposes that projection to AutoContinue only after the watch's initial
-snapshot completion boundary, then installs it atomically. An interrupted initial or live watch makes AutoContinue
-unavailable until another complete projection is installed. A partial projection is never authoritative.
+Every other key is malformed would-be loop state and becomes poison. Current-loop or unknown-key poison disables
+AutoContinue and authoritative listing until a greater-revision valid write or tombstone heals it. These are current
+bucket grammars consolidated under one declaration, not legacy aliases.
 
-Explicit LoopID operations use exact read-through and may remain available while AutoContinue hydration is
-incomplete. `LoopCreatedEvent` and `ApprovalPendingEvent` update the projection but are not durable authority.
+### AutoContinue
 
-This bounded hydration is required because AutoContinue addresses loops by user and channel rather than LoopID. It
-creates no durable state.
+AutoContinue matches only exact `(UserID, ChannelType, ChannelID)`. Empty or partial matches and cross-channel
+fallback never match. Zero current nonterminal matches creates work, one continues it, and more than one refuses as
+ambiguous. Bootstrap, watcher loss, relevant poison, or unreadable authority retries durable intake and returns 503
+to HTTP.
+
+The gap after task PubAck and before first `LoopEntity` birth remains explicit. A second route-only AutoContinue
+request in that gap may create a second task. Callers requiring continuity use explicit LoopID. No route-claim bucket
+or prediction mechanism is added.
+
+### Command, HTTP, metric, and lifecycle seams
+
+`CommandContext.LoopTracker` becomes the narrow `LookupLoopOwner(context.Context, LoopID)` operation and returns only
+LoopID and UserID with classified invalid, absent, missing-owner, invalid-record, and unavailable outcomes. It exposes
+no raw entity, KV handle, bucket, tracker, or generic query.
+
+`LoopInfo` remains only as an immutable view-derived `/loops` and `/debug/state` DTO. `/debug/state` returns 503 when
+projection truth is unavailable and exposes readiness/poison diagnostics. `router_active_loops` is removed with no
+Prometheus replacement; the loop gauge remains local telemetry, not durable authority.
+
+Exported `graphview.View.Restart()` and its retained context closure are removed without replacement. Dispatch's
+lifecycle-control goroutine stops and recreates a failed view with its active run context and joins it during Stop.
+
+Terminal response reconstruction is bounded by the intersection of complete/failed source retention and exact loop-
+state retention. Route facts must agree. Transient absence retries; deletion, purge, expiry, or eviction reports
+`terminal_route_unavailable`. Process memory never fabricates a route.
 
 ## Governance correlation
 
@@ -364,30 +382,28 @@ its retained handle, awaits exact `Closed`, then cancels and joins its own obser
 
 | # | Physical subscription and owner | Happy-path done | Sad-path settlement | Durable authority and replacement |
 |---:|---|---|---|---|
-| 1 | dispatch `user.message`; fast | Required deterministic task/signal/approval and user-response publications receive PubAck; refusal response receives PubAck without tracker/gauge mutation | permanent invalid after response → Terminate; transient lookup/marshal/publish → Retry; collision/panic → Quarantine | source MessageID, deterministic output IDs, `AGENT_LOOPS` merge; tracker is cache |
-| 2 | dispatch `agent.created`; fast | projection update or exact `AGENT_LOOPS` proof | invalid → Terminate; unreadable authority/interrupted projection → Retry; conflict → Quarantine | LoopID plus current loop authority; replacement installs only a complete snapshot |
-| 3 | dispatch `agent.approval_pending`; fast | projection update or exact matching pending state | invalid → Terminate; unreadable live authority → Retry; identity conflict → Quarantine | `PendingApprovalState` and continuation reference; cache absence proves nothing |
-| 4 | governance `task_validation`; fast | completed policy; allowed output has deterministic JetStream PubAck; blocked means deliberate non-forwarding | invalid → Terminate; filter/resolution/marshal/publish uncertainty → Retry; collision/panic → Quarantine | source MessageID plus deterministic validated-output identity |
-| 5 | governance `request_validation`; fast | same row-4 contract for exact `AgentRequest` | same as row 4; core-NATS publish never proves done | RequestID and validated-output fingerprint |
-| 6 | governance `response_validation`; fast | same row-4 contract for exact `AgentResponse` | same as row 4 | RequestID and validated-output fingerprint |
-| 7 | loop `agent.signal`; fast, cancel-only after #1251 | current cancellation state and `COMPLETE_` commit; deterministic terminal event receives PubAck | invalid/unknown → Terminate; missing live authority/KV/publication → Retry; conflict/panic → Quarantine | LoopID and MessageID; exact loop state distinguishes live missing from terminal duplicate |
-| 8 | loop `agent.approval_response`; fast | approve/modify dispatches exact call and retains fingerprint; reject/timeout commits deterministic next outcome before clear | invalid → Terminate; Store/KV/publication/unreadable authority → Retry; panic/mismatch/conflict → Quarantine | LoopID, CallID, execution identity, pending state, verified Store continuation |
-| 9 | loop `agent.toolcall.approved`; fast | exact verdict reaches waiter or remains durably recoverable for response replay | invalid → Terminate; retained lookup unavailable → Retry; mismatch/panic → Quarantine | execution identity, proposal fingerprint, retained AGENT verdict |
+| 1 | dispatch `user.message`; fast | required task, cancel, approval, or user-response publication receives PubAck; refusal response receives PubAck without projection mutation | permanent invalid after response → Terminate; transient lookup/marshal/publish → Retry; required-correlation conflict/panic → Quarantine | source MessageID; stable TaskID-to-random-LoopID mapping; exact LoopID authority or caught-up AutoContinue view |
+| 4 | governance `task_validation`; fast | completed policy; allowed output receives JetStream PubAck; blocked means deliberate non-forwarding | invalid → Terminate; filter/resolution/marshal/publish uncertainty → Retry; correlation conflict/panic → Quarantine | source correlation; allowed outputs are at-least-once |
+| 5 | governance `request_validation`; fast | same row-4 contract for `AgentRequest` | same as row 4; core-NATS publish never proves done | RequestID; allowed outputs are at-least-once |
+| 6 | governance `response_validation`; fast | same row-4 contract for `AgentResponse` | same as row 4 | RequestID; allowed outputs are at-least-once |
+| 7 | loop `agent.signal`; fast, cancel-only after #1251 | current cancellation state and `COMPLETE_` commit; terminal event receives PubAck | invalid/unknown → Terminate; missing live authority/KV/publication → Retry; conflict/panic → Quarantine | LoopID and exact current loop state distinguish live missing from durable terminal proof |
+| 8 | loop `agent.approval_response`; fast | approve/modify publishes correlated tool work; reject/timeout publishes the next transition; pending clears after PubAck or durable applied proof | invalid → Terminate; evidence/KV/publication/unreadable authority → Retry; panic/mismatch/conflict → Quarantine | current LoopEntity plus exact retained request/response evidence; Store only if the gate fails and the owner retains it |
+| 9 | loop `agent.toolcall.approved`; fast | verdict reaches waiter or remains recoverable for response replay | invalid → Terminate; retained lookup unavailable → Retry; mismatch/panic → Quarantine | execution identity, proposal fingerprint, exact retained verdict at waiter-loss boundary |
 | 10 | loop `agent.toolcall.rejected`; fast | same row-9 contract for rejection | same as row 9 | same as row 9 |
-| 11 | tools `tool.execute`; heartbeat | exact immutable completed outcome exists and exact ToolResult receives PubAck | permanent invalid → Terminate; transient Store/publish → Retry; collision → Quarantine | existing `TOOL_CALL_OUTCOMES`; completed replay invokes no executor |
-| 12 | dispatch `agent.complete`; heartbeat | exact terminal ancestry/read-through and deterministic user response PubAck | invalid → Terminate; unreadable authority/publish → Retry; conflict/unknown publish → Quarantine | SourceMessageID, LoopID, current loop state, deterministic response ID |
+| 11 | tools `tool.execute`; heartbeat | immutable completed outcome exists and ToolResult receives PubAck | permanent invalid → Terminate; transient Store/publish → Retry; collision → Quarantine | `TOOL_CALL_OUTCOMES` is the executor-effect boundary; completed replay invokes no executor; result publication is at-least-once |
+| 12 | dispatch `agent.complete`; heartbeat | retained terminal source and exact current loop route agree; routed user response receives PubAck, or validated no-user-route outcome settles | invalid → Terminate; unreadable authority/publish → Retry; route conflict → Quarantine | SourceMessageID, LoopID, exact loop route; response publication is at-least-once |
 | 13 | dispatch `agent.failed`; heartbeat | same row-12 contract for failure | same as row 12 | same as row 12 |
-| 14 | model `agent.request`; heartbeat | matching durable AgentResponse receives PubAck; replay checks before provider | invalid/endpoint permanent → error response or Terminate; safe transient → Retry; collision/metadata/panic → Quarantine | RequestID and fingerprint; default unresolved redelivery emits commit-unknown with zero provider calls |
-| 15 | loop `agent.task`; heartbeat | loop/graph birth or continuation commits; initial/next request and created/refusal outputs receive PubAck | invalid → Terminate; safely reconcilable dependency failure → Retry; collision/impossible partial birth/panic → Quarantine | TaskID/LoopID, `AGENT_LOOPS`, graph identity, deterministic request/event IDs |
-| 16 | loop `agent.response`; heartbeat | exact turn is hydrated and resulting loop/terminal/next output commits with PubAck | invalid → Terminate; missing correlation/dependency → Retry; conflict/panic → Quarantine; proven duplicate → ACK | RequestID, current loop, originating request/response, committed later output |
-| 17 | loop `tool.result`; heartbeat | exact batch is rebuilt, result persists, continuation is verified when needed, and next output receives PubAck | invalid → Terminate; missing live continuation/dependency → Retry; conflict/permanent missing reference/panic → Quarantine or durable loop failure; proven duplicate → ACK | RequestID, execution identity, current loop, originating request/response, completed outcomes, Store reference |
+| 14 | model `agent.request`; heartbeat | matching AgentResponse receives PubAck; exact retained response is read before provider invocation | invalid/endpoint permanent → error response or Terminate; safe transient → Retry; conflict/metadata/panic → Quarantine | RequestID; default unresolved redelivery emits commit-unknown with zero provider calls; responses are at-least-once |
+| 15 | loop `agent.task`; heartbeat | loop/graph birth or continuation commits; initial/next request and created/refusal outputs receive PubAck | invalid → Terminate; safely repeatable dependency failure → Retry; TaskID/LoopID conflict, impossible partial birth, or panic → Quarantine | stable TaskID-to-random-LoopID mapping, `AGENT_LOOPS`, and graph identity; ordinary events are at-least-once |
+| 16 | loop `agent.response`; heartbeat | turn is hydrated and resulting loop/terminal/next output commits with PubAck | invalid → Terminate; missing correlation/dependency → Retry; conflict/panic → Quarantine; durable applied proof → ACK | RequestID, current loop, originating request/response, and lane-specific applied-state proof |
+| 17 | loop `tool.result`; heartbeat | batch is rebuilt, result persists, approval evidence is verified when needed, and next output receives PubAck | invalid → Terminate; missing live continuation/dependency → Retry; conflict/panic → Quarantine; confirmed retained absence → durable loop failure; durable applied proof → ACK | RequestID, execution identity, current loop, originating request/response, completed outcomes; Store only if the gate retains it |
 
 AgentRun complete/failed subscriptions are not rows 18/19 here. #1249 owns their separate post-#1146 contract and
 replacement proof from checkpoint `A`.
 
 ### Non-heartbeat settlement boundary
 
-The ten-row production-binding matrix captures the callback installed by every actual setup branch and exercises it
+The eight-row production-binding matrix captures the callback installed by every actual setup branch and exercises it
 through its real business handler and deepest controllable dependency. A lane label or generic settlement test is not
 branch proof. Business work uses the callback context, applies only its own operation-specific timeout, and joins all
 delivery-derived work before returning a decision. The private callback then calls `SettleDelivery` and reacts to
@@ -411,8 +427,9 @@ ceiling. Config structs, defaults, generated schemas, docs, and every example/te
 
 ### `user.message` task
 
-Happy-path done is deterministic TaskID and LoopID, `agent.task` PubAck, and deterministic user acknowledgement
-PubAck. Invalid or unauthorized input terminates only after user-error PubAck. Transient publication failure retries.
+Happy-path done is a stable TaskID-to-random-LoopID mapping, `agent.task` PubAck, and user acknowledgement PubAck.
+Invalid or unauthorized input terminates only after user-error PubAck. Transient publication failure retries and an
+ordinary output may repeat.
 
 ### `user.message` command
 
@@ -421,9 +438,10 @@ terminate after user-error PubAck. Dependency failure retries.
 
 ### `agent.task`
 
-Happy-path done is matching `LoopEntity` persistence, required graph birth, and PubAck for deterministic initial
-`AgentRequest` and `LoopCreatedEvent`. Permanent rejection becomes a durable terminal loop outcome once identity
-exists. Transient assembly, storage, or publication failure retries. Identity collision quarantines.
+Happy-path done is matching `LoopEntity` persistence, required graph birth, and PubAck for the initial
+`AgentRequest` and `LoopCreatedEvent`. Permanent rejection becomes a durable terminal loop outcome once the
+TaskID-to-LoopID mapping exists. Transient assembly, storage, or publication failure retries. Mapping conflict
+quarantines. Ordinary request and created-event publication is at-least-once.
 
 ### `agent.request`
 
@@ -439,8 +457,8 @@ committed later output proves prior application.
 ### `agent.response` tool call
 
 Happy-path done is resolved governance where enabled, stable execution identities, persisted current loop state, and
-PubAck for the first tool request or deterministic next request. Store or publication failures retry. Conflicting
-identity or fingerprint quarantines.
+PubAck for the first tool request or next request. Store or publication failures retry. Conflicting required
+correlation quarantines. Ordinary tool and request publication is at-least-once.
 
 ### `tool.execute`
 
@@ -459,27 +477,17 @@ Happy-path done is persisted current-state transition. Cancel additionally requi
 PubAck. Invalid signals terminate. A missing live loop retries within its retention horizon; a terminal duplicate
 ACKs from committed state.
 
-### `agent.created`
-
-Happy-path done is updated dispatch projection or proof that authoritative `LoopEntity` makes it reconstructable.
-Invalid payload terminates. Cache absence is not a business failure.
-
-### `agent.approval_pending`
-
-Happy-path done is updated dispatch projection or an exactly readable `PendingApprovalState` in `AGENT_LOOPS`.
-Invalid payload terminates. Replacement reads authority rather than returning false 404 or 409 from an empty cache.
-
 ### `agent.approval_response` approve or modify
 
-Happy-path done is exact pending-call validation, stable `ToolCall` PubAck, and persisted approval fingerprint until
-the matching `ToolResult` arrives. A same-fingerprint duplicate replays the same call. A conflict quarantines.
-Publication failure retries without clearing pending state.
+Happy-path done is exact pending-call validation, correlated `ToolCall` PubAck, and persisted approval state until
+the matching `ToolResult` arrives. Durable applied-state proof permits settlement; otherwise the tool publication may
+repeat. A conflict quarantines. Publication failure retries without clearing pending state.
 
 ### `agent.approval_response` reject or timeout
 
 Happy-path done is applied synthetic `ToolResult`, PubAck for the resulting request or terminal event, and pending
 state cleared only after that durable outcome. Transient dependency failure retries. A stale response ACKs only when
-the exact downstream outcome proves it was already applied.
+the approval lane's durable state proves it was already applied.
 
 ### Governance verdict
 
@@ -490,7 +498,7 @@ Audit-mode observability remains nonblocking.
 ## Settlement terms
 
 - ACK means the source's required durable transition or result and every required downstream PubAck have completed.
-- Retry means the operation can safely run again using stable identity and reconciliation.
+- Retry means the lane's declared correlation, durable authority, and side-effect policy make another attempt safe.
 - Terminate means the payload is permanently invalid and no useful retry exists.
 - Quarantine means an identity collision, impossible correlation, panic, or invariant failure prevents a safe
   decision.
@@ -500,7 +508,7 @@ No handler converts decode, correlation, KV, Store, provider, or publish failure
 ## User-facing control and quiesce contract
 
 The supported execution controls are cancel and durable ApprovalResponse wait. A safe retry or process replacement
-continues from the last proven durable boundary through redelivery and reconciliation; it does not restore an
+continues from the last proven durable boundary through redelivery and lane-specific recovery; it does not restore an
 arbitrary in-memory instruction pointer. Operational quiesce is lifecycle behavior: stop admission, drain exact
 consumer handles, cooperatively cancel owned work, and join before Stop returns.
 
@@ -515,13 +523,17 @@ Property and fuzz tests cite these normative delta requirements rather than reco
 
 | Invariant | Normative source |
 |---|---|
-| one semantic identity cannot accept different canonical content | `agentic-loop / Loop and required-output identities are deterministic and reconcilable` |
+| one TaskID cannot select two LoopIDs | `agentic-dispatch / Dispatch task redelivery recovers the committed LoopID` |
+| one RequestID cannot select different provider work | `agentic-model / Model request settlement is bound to a durable response` |
+| one framework execution identity cannot select different tool work or completed outcome | `agentic-tools / Completed tool outcome identity is globally unambiguous` |
+| ordinary publications are at-least-once and ACK waits for required PubAck | owner-specific settlement requirements |
+| `Nats-Msg-Id` supplies bounded suppression only | owner-specific publication requirements |
 | missing process state never proves stale or complete | `agentic-loop / All six loop input classes settle after owner-specific durable done` |
 | ACK follows every required durable effect and PubAck | `agentic-loop / All six loop input classes settle after owner-specific durable done` |
 | commit-unknown is closed and error-only | `agentic-model / Provider commit-unknown is machine-readable` |
-| matching response reconciliation makes zero provider calls | `agentic-model / Model request settlement is bound to a durable response` |
-| continuation equality ignores fresh envelope metadata but detects semantic collision | `agentic-loop / Approval continuation storage is content-addressed and verified` |
-| partial projection never licenses AutoContinue | `agentic-dispatch / Dispatch process state is a reconstructable projection` |
+| matching retained response makes zero provider calls | `agentic-model / Model request settlement is bound to a durable response` |
+| approval reconstruction is current-request scoped and conflict detecting | `agentic-loop / Approval continuation after replacement is exact and evidence-bounded` |
+| partial projection never licenses AutoContinue | `agentic-dispatch / Dispatch uses one authority-backed current-state projection` |
 | observed DiscardOld cannot satisfy strong recovery | `agentic-loop / Restart-safe replay observes and admits local stream bounds` |
 | every delivery task joins before result and Stop | `agentic-loop / Delivery work joins before settlement`; owner-specific shutdown requirements |
 | first-party rule task output is durable before row 15 | `rule-agent-publishing / Publish-agent classification uses canonical wildcard coverage and durable publication` |
@@ -587,9 +599,10 @@ It retains no context, starts no goroutine, mutates no stream, and writes no dur
 and allocates or positively settles nothing in it.
 
 `DiscardNew` trades availability under a full stream for non-loss: a capacity refusal from required JetStream
-publication makes the producer Retry and retain its source delivery. There is no core-NATS fallback. Deterministic
-`Nats-Msg-Id` deduplicates only inside the configured server duplicate window; semantic identity and adopter
-idempotency remain load-bearing after longer downtime.
+publication makes the producer Retry and retain its source delivery. There is no core-NATS fallback. `Nats-Msg-Id`
+deduplicates only inside the configured server duplicate window and is never long-horizon publication proof. Beyond
+that window, ordinary publications may repeat; named non-repeatable-effect boundaries use their own durable
+authority and correlation.
 
 The owner selected the strong `DiscardNew` contract. Existing `DiscardOld` deployments require an explicit migration
 before restart-safe admission. Copying every turn to Store is rejected as checkpoint-like material without an
@@ -652,17 +665,22 @@ unrelated publisher migration remain #1158.
 |---|---|---|---|---|
 | Component author | Return the owner-specific domain outcome; do not settle native messages | Void/log-only success can ACK incomplete work and fails review | typed API and compile/test failure | The definition of done only; the private owner handles ACK/Retry/Terminate/Quarantine |
 | Tool executor author | Raw external executors preserve RequestID and execution identity; provider CallID is not globally unique | Replay is refused loudly when correlation is missing | payload validation and migration doc | Hosted executors know nothing; agentic-tools stamps correlation |
-| Approval UI developer | Submit LoopID, execution identity, and decision | Durable read-through resolves replacement; conflicts are typed refusals | HTTP/bus typed error | Public approval input only; no Store, subject, digest, or timeout arithmetic |
+| Approval UI developer | Submit LoopID and decision | Exact pending state resolves CallID; conflicts are typed refusals | HTTP/bus typed error | Public approval input only |
 | Model operator | Set only `provider_ambiguity_policy`; default may conservatively report commit-unknown | Omission safely makes no second call; unsupported reconciliation refuses boot | config/schema validation, typed `failure_kind`, readiness, docs | Semantic policy only; no settlement or recovery-bucket mechanics |
-| Framework operator | Register `approval_continuation_storage_instance` (default `objectstore`) and admissible stream/bucket policy | Affected closure refuses readiness rather than silently degrading | boot error with exact observed/required fields | Supply the Store name and capacity; framework observes horizons and policy |
+| Custom command author | Use `LookupLoopOwner` with LoopID | Old field removal is a compile failure | compile error and migration note | Only LoopID and returned owner |
+| HTTP/UI author | Existing `LoopInfo` wire remains; projection endpoints can return 503 | Ordinary reads continue; false-empty assumptions fail visibly | typed HTTP response and migration note | No bucket, watcher, or cache |
+| AutoContinue caller | Opt into exact user/type/channel matching | No partial or cross-channel fallback | schema/docs and typed ambiguity/unavailable response | Only whether convenience is wanted |
+| Dashboard operator | Remove `router_active_loops` query | Series disappears | metric migration note | Use `/loops` with caught-up signal |
+| graphview caller | Do not call removed `Restart()` | Compile failure | compile error and migration note | Lifecycle owner recreates the view |
+| Framework operator | Configure provider ambiguity and admitted stream/bucket policy | Affected closure refuses readiness rather than silently degrading | boot error with observed/required fields | No recovery Store unless the evidence gate retains it |
 | Governance author | Supply approve/reject policy only | Late verdict remains recoverable; invalid conflict is refused | typed outcome and telemetry | No waiter, subject, or replay mechanics |
 | Rule author | Use `publish_agent` with valid task fields and subject | An uncovered or inadmissible output refuses before send | typed rule-load/runtime error and rule-agent publishing docs | No port spelling, stream policy, wildcard, or PubAck mechanics |
 | Sister-repository developer | Preserve registered envelopes and opaque correlation on raw NATS seams | Old code remains unchanged until its owner performs the recorded migration | SemStreams-owned migration document | Final contract and local migration list, not branch choreography |
 
 ### Approval UI developer
 
-They submit LoopID, framework execution identity, and decision. They do not carry Store references, construct NATS
-subjects, or reconstruct arguments. Existing dispatch calls continue through durable read-through after replacement.
+They submit LoopID and decision. Exact pending state resolves CallID. They do not carry Store references, construct
+NATS subjects, or reconstruct arguments. Existing dispatch calls continue through durable read-through.
 
 ### Tool executor author
 
@@ -682,8 +700,9 @@ or understand replay storage.
 
 ### Framework operator
 
-They register the named Store used for approval continuation and configure provider ambiguity policy. There is no
-supervisor, recovery mode, checkpoint interval, or outbox knob.
+They configure provider ambiguity and admitted stream/bucket policy. No approval Store surface ships unless the
+replacement evidence gate fails and the owner retains the approved fallback. There is no supervisor, recovery mode,
+checkpoint interval, or outbox knob.
 
 ### Governance author
 
@@ -696,11 +715,11 @@ The #1146-owned tranche of #1155's real-NATS matrix kills the process rather tha
 same file-backed NATS,
 and proves convergence plus invocation/publication counts at: dispatch task and response PubAcks; loop/graph birth;
 model before call, during call, after return, after response PubAck, and before source ACK; response persistence and
-every next publication; tool-result persistence, continuation verification, next publication, and source ACK;
+every next publication; tool-result persistence, approval-evidence verification, next publication, and source ACK;
 approval decision, tool PubAck, and pending clear; cancel state/`COMPLETE_`/terminal PubAck; governance proposal,
-verdict, and tool publication; projection hydration; and representative NATS restart.
+verdict, and tool publication; caught-up-view recovery; and representative NATS restart.
 
-The ten-row production-binding matrix proves each physical non-heartbeat subscription's actual setup branch,
+The eight-row production-binding matrix proves each physical non-heartbeat subscription's actual setup branch,
 callback, business handler, and deepest controllable dependency. A shared settlement truth table proves every valid
 decision, invalid tuple, nil message, and terminal-method error without wall-clock timing. Focused tests prove
 approval panic, first-fatal health, exact-handle drain, and synchronous graph-write join. Heartbeat adoption remains
@@ -709,7 +728,7 @@ interval.
 
 Additional proof covers exact acquisition-config validation, affected-closure admission, non-agentic zero lookup,
 resolved-stream overrides, DiscardNew capacity refusal, loop-bucket absence/match/races/drift/status failures,
-registered continuation round trip and canonical equality, Store failures and eviction, lifecycle drain/Closed/join,
+approval replacement evidence and same-CallID isolation, mixed-bucket classification, lifecycle drain/Closed/join,
 focused race/integration/contract tests, schema generation, and serialized `task e2e:agentic`.
 
 PR #1159 keeps `Closes #1146`, `Refs #759`, `Refs #1155`, `Refs #1249`, and `implemented-by: Sol`, and states that
@@ -744,31 +763,30 @@ The design is rejected or revised if any premise fails:
    to merge first.
 2. The #1146-owned tranche of #1155 proves replacement rather than same-process reconstruction; #1155 remains open
    for #1249 AgentRun complete/failed proof and the later combined gate.
-3. Request identity uniquely and deterministically binds LoopID and logical turn.
+3. RequestID stably identifies one logical provider-work turn and retains its LoopID correlation.
 4. Tool execution identity is a digest of RequestID, provider CallID, and ordinal; provider CallID is unchanged.
 5. Cold `ToolResult` handling reconstructs its active batch without scanning.
 6. The observed AGENT admissibility contract requires `DiscardNew` and does not infer a horizon from MaxAge while
    an earlier capacity-eviction bound remains possible.
-7. Approval replacement succeeds after deliberate AGENT eviction by resolving the registered Store reference.
+7. Approval replacement either succeeds from current `LoopEntity` plus exact current request/response evidence for
+   every decision branch, or the approved Store fallback remains unchanged after owner ruling.
 8. Governance replacement reads the exact retained verdict or safely re-obtains it. Failure returns for new design.
 9. `fail_commit_unknown` produces zero second provider calls; `at_least_once` records repeated attempts explicitly.
 10. No process-only map is required to classify a delivered source after replacement.
-11. Only complete dispatch projection and configured approval-deadline repair enumerate current loop state.
+11. One caught-up dispatch view and configured approval-deadline repair observe current loop state; no tracker or
+    second correctness projection exists.
 12. AgentRun complete/failed settlement is transferred to #1249, which begins from exact post-#1146 staged
     checkpoint `A` and receives separate inventory, design, implementation, and replacement review.
 13. The post-#1251 signal surface contains cancel only; ApprovalResponse remains separate, while
     `ResponseAction.Signal` and `ClassifiedIntent.SignalType` do not own durable signal settlement.
-14. The production-binding matrix proves each of ten physical non-heartbeat subscriptions and the shared settlement
+14. The production-binding matrix proves each of eight physical non-heartbeat subscriptions and the shared settlement
     truth table proves its transport mapping. No deadline is inferred from AckWait; heartbeat requires measured need.
 15. `AGENT_LOOPS` is observed as exact History 10, TTL 24h, and non-binding MaxBytes before loop work starts.
-16. At P, `agentic/constants.go:11-25` has no `approval_continuation` category, while
-    `agentic/payload_registry.go:26-55` is the single agentic registration owner and already assigns control floors
-    to approval/control payloads. The new category therefore extends that owner without collision.
+16. Provider CallID is not globally unique. Approval reconstruction performs no CallID-indexed stream lookup and
+    proves same-CallID/different-RequestID isolation.
 17. At P, `agentic/types.go:169-178` has no `failure_kind`; `processor/agentic-model/config.go:13-18` has no provider
     ambiguity key. Both are outward contract additions and must migrate schema, fixtures, and docs atomically.
-18. At P, `processor/agentic-loop/config.go:56` and `processor/agentic-loop/README.md:113` scope
-    `trajectory_evidence_storage_instance` to full trajectory evidence. Approval continuation therefore uses the
-    separate exact key `approval_continuation_storage_instance` rather than borrowing unrelated retention ownership.
+18. `SearchResult.TokensUsed` is aggregate spend and is not projected into directional `TokensIn` or `TokensOut`.
 19. `component/flowgraph/flowgraph.go:381-389` defines the canonical directional matcher as
     `SubjectCovers(filter, pattern)` and identifies graph-level composition as its current caller. Rule publication
     passes declared filter first and concrete substituted subject second; it adds no matcher.
@@ -779,20 +797,20 @@ The design is rejected or revised if any premise fails:
 
 ## Risks and unproven claims
 
-- Exact retained-message lookup APIs and performance are not yet implemented or measured for every AGENT subject.
+- Exact retained-message lookup APIs and performance are not yet implemented or measured at each named boundary.
 - The accepted inventories do not separately admit strong retention for the USER and TOOL source streams used by
   physical rows 1, 11, and 17. Implementation review must measure their actual source-delivery guarantees and prove
-  their observed bounds sufficient for the complete 17-lane horizon. AGENT admission is not proof for another
+  their observed bounds sufficient for the complete 15-lane horizon. AGENT admission is not proof for another
   stream.
 - Model provider adapters have not demonstrated `provider_reconcile`; `fail_commit_unknown` remains the safe default.
-- Governance deterministic output fingerprint and exact committed-output lookup are target state, not current truth.
+- Governance retained-verdict lookup at the waiter-loss boundary is target state, not current truth. Ordinary
+  validated output remains at-least-once.
 - `AGENT_LOOPS` matching/race/drift behavior is target state. Its existing create literal is not observed authority;
   a retained sibling creator is a collision to prove through the foreign-config race test, not a reason to reconcile.
-- The approval Store failpoint has not yet proved deliberate AGENT eviction recovery end to end.
+- The approval evidence gate has not yet proved all four decision branches or same-CallID isolation after replacement.
 - No physical non-heartbeat subscription has measured evidence that legitimate work crosses its configured AckWait.
   Heartbeat migration remains unavailable without that evidence and a reviewed lane-specific policy.
-- Affected-closure admission, canonical continuation equality, and all new exact replay lookups are target state,
-  not current behavior.
+- Affected-closure admission and named boundary-specific exact reads are target state, not current behavior.
 - The six rule-publisher classifier surfaces currently use exact equality and the four static producer configurations
   currently take core NATS. Until the new capability proof passes, composition coverage alone is not PubAck proof.
 
@@ -802,6 +820,12 @@ Implementation or review stops if:
 
 - the remote staged parent is not exact `F`, implementation does not begin from exact `P`, an inventory verification
   drifts, or the active artifacts regain merge-first or #1148 AgentRun language;
+- an ordinary publication is specified or implemented as exactly-once, requires a universal committed-output
+  lookup, or treats `Nats-Msg-Id` as proof beyond the configured duplicate window;
+- TaskID is regenerated on redelivery, LoopID is derived rather than randomly minted for new work, or redelivery
+  fails to recover LoopID from the retained TaskMessage;
+- RequestID or execution identity is imposed on publications that do not need to distinguish provider, tool, or
+  proposal/verdict correlation;
 - a non-heartbeat physical subscription fails production-binding proof, settles before its work joins, derives a
   universal work deadline from AckWait, or migrates to heartbeat without measured lane-specific need;
 - a binding exposes native settlement to business work or adds a work-owning settlement policy, owner, or lifecycle
@@ -819,12 +843,22 @@ Implementation or review stops if:
 - `AGENT_LOOPS` is exposed before actual History/TTL/MaxBytes observation, a lookup error other than typed
   `jetstream.ErrBucketNotFound` creates a bucket, a typed create-exists race is not followed by one get-and-validate,
   or retained drift is silently reconciled;
-- continuation comparison uses raw envelope equality or treats fresh BaseMessage UUID/timestamp as semantic change;
+- approval reconstruction performs a CallID-indexed stream lookup, scans `AGENT`, clears pending state before its
+  required next publication receives PubAck or durable applied-state proof exists, or collapses transient,
+  confirmed-absent, and corrupt evidence into one result;
 - any path ACKs after log-only failure, missing process correlation, panic, or unknown required publication;
 - default model redelivery can invoke the provider twice, AGENT remains `DiscardOld`, or observed AGENT bounds cannot
   prove the caller-local horizon;
 - USER or TOOL source retention is assumed rather than measured from the actual source stream;
-- approval continuation adds a bucket, graph fact, scanner, or unregistered/raw payload;
+- approval continuation implements or removes the Store fallback before the evidence gate and second owner ruling;
+- dispatch retains `LoopTracker`, a pending-approval cache, created/pending correctness inputs, or another current-
+  state authority beside `AGENT_LOOPS`;
+- dispatch owns an intermediate loop transition, retries a validated routeless non-user terminal indefinitely, or
+  hides the AutoContinue birth gap with process memory;
+- the mixed-bucket view treats known research state as loop poison, accepts unknown keys, or maps aggregate research
+  tokens into directional loop-token fields;
+- terminal response routing claims either source or loop-state retention beyond their actual intersection;
+- graphview or dispatch retains context or adds a replacement exported restart lifecycle API;
 - governance treats core-NATS publication as synchronous durable PubAck;
 - a new durable primitive, supervisor, ledger, checkpoint, outbox, state-machine runtime, or CQRS path appears;
 - a delivery goroutine outlives callback return/Stop, a dependency ignores cancellation, or work cannot join under
@@ -851,24 +885,25 @@ is not required to interpret or complete any row. There are no deviations.
 
 | Binding ruling or accepted correction | Exact active target | Conformance |
 |---|---|---|
-| Build and review on staged #759; do not require merge-first | `proposal.md:10`; `tasks.md:22` | exact `P`, frozen parent `F`, re-review on drift |
-| Preserve all 17 physical subscriptions; transfer only AgentRun H.1/H.2 to #1249 checkpoint A | `proposal.md:21`; `proposal.md:27`; `tasks.md:295` | full scope remains additive |
-| Remove paused state completely; support cancel, durable approval wait, restart from durable boundary, and lifecycle quiesce | `proposal.md:54`; `design.md:501`; `specs/agentic-loop/spec.md:23`; `tasks.md:165` | comment 5526837992 supersedes compatibility premise; no shim/migration/reserved enum |
-| Keep immutable `DeliveryAttempt`; expose no native settlement to business work | `design.md:164`; `tasks.md:32`; `tasks.md:41` | private callbacks only; narrow `SettleDelivery` is transport-level |
-| Derive no universal work deadline from AckWait; heartbeat only after measured lane-specific need | `proposal.md:34`; `specs/agentic-dispatch/spec.md:16`; `specs/agentic-governance/spec.md:9`; `specs/agentic-loop/spec.md:11` | owner ruling `5530950829` |
-| Ship model 60s/120s and loop 15s against shortest BackOff 30s; validate before allocation | `tasks.md:26`; `specs/agentic-model/spec.md:176`; `specs/agentic-loop/spec.md:407` | invalid defaults fail setup |
-| Default provider ambiguity to `fail_commit_unknown`; expose exact config/wire contract; refuse unsupported reconciliation before start | `design.md:180`; `specs/agentic-model/spec.md:48`; `specs/agentic-model/spec.md:134`; `tasks.md:74` | no second default-policy call; no unsupported start |
-| Replace stale current-spec semantics through full MODIFIED blocks | `design.md:141`; `specs/agentic-dispatch/spec.md:135`; `specs/agentic-tools/spec.md:67`; `specs/agentic-loop/spec.md:419` | unaffected scenarios/citations preserved; no additive conflict |
-| Use strong observed DiscardNew and refuse only the affected dependency closure | `specs/agentic-loop/spec.md:340`; `tasks.md:209` | no whole-composition/global-maxima gate |
-| Admit first-party rule AGENT output through the same internal validator and existing publisher | `specs/rule-agent-publishing/spec.md:3`; `specs/rule-agent-publishing/spec.md:38` | six classifier surfaces; no duplicate gate/API |
-| Use exact canonical publisher matcher in its existing direction and ownership | `design.md:614`; `specs/rule-agent-publishing/spec.md:38`; `tasks.md:227` | `component/flowgraph.SubjectCovers(declaredFilter, concreteSubject)`; no duplicate matcher |
-| Treat `TaskMessage` as registered Payload, not Graphable | `specs/rule-agent-publishing/spec.md:75` | no graph-interface prediction |
-| Register exact approval-continuation payload with control floor and dedicated Store key | `design.md:277`; `design.md:286`; `specs/agentic-loop/spec.md:186`; `specs/agentic-loop/spec.md:228`; `tasks.md:137` | no trajectory-key reuse, bucket, scanner, reaper, raw decoder, or duplicate registration |
-| Give every required output deterministic identity/`Nats-Msg-Id` and exact reconciliation, including validated governance output | `design.md:128`; `specs/agentic-governance/spec.md:69` | bounded dedupe is not long-horizon proof |
-| Every touched consumer owner stops admission, drains handles, awaits `Closed`, then cancels/joins | `specs/agentic-dispatch/spec.md:123`; `specs/agentic-governance/spec.md:90`; `specs/agentic-model/spec.md:207`; `specs/agentic-loop/spec.md:327`; `specs/agentic-tools/spec.md:36` | lifecycle closure is capability-owned |
-| #1146 settles every handler exit before #1244 declares transitions | `design.md:45`; `tasks.md:91` | no log-and-ACK terminal outcome |
-| Complete only the #1146-owned tranche of #1155 and leave combined gate open for #1249 | `proposal.md:82`; `design.md:674`; `tasks.md:267` | 17 subscriptions here; AgentRun complete/failed later |
-| Add no supervisor, state-machine runtime, ledger, checkpoint, outbox, CQRS path, or new durable primitive | `proposal.md:59`; `design.md:95` | existing Streams/KV/Store remain authority |
-| Preserve #1239 authorship and default-branch closing authority | `proposal.md:78`; `tasks.md:281` | PR #1251 retained; PR #1156 closes |
-| Review implementation, cross-agent review, archive final content, then narrow archive review | `tasks.md:285`; `tasks.md:286`; `tasks.md:287`; `tasks.md:290` | hosted landing follows archive review |
-| Document the semantic-settlement concept and #1146 applications without duplicating normative authority | `tasks.md:273` | concept 33 link plus scoped corrections |
+| Build and review on staged #759; do not require merge-first | `proposal.md / Holds`; `tasks.md / 1.1` | exact `P`, frozen parent `F`, re-review on drift |
+| Remove dispatch created/pending correctness inputs; retain their loop outputs; transfer AgentRun H.1/H.2 to #1249 checkpoint A | `proposal.md / Claim scope`; `tasks.md / 6.9`; `tasks.md / Transferred: AgentRun` | 15 physical subscriptions remain in #1146 |
+| Remove paused state completely; support cancel, durable approval wait, restart from durable boundary, and lifecycle quiesce | `proposal.md / Holds`; `design.md / User-facing control and quiesce contract`; `agentic-loop / All six loop input classes settle after owner-specific durable done`; `tasks.md / 7.1–7.4` | comment 5526837992 supersedes compatibility premise; no shim/migration/reserved enum |
+| Keep immutable `DeliveryAttempt`; expose no native settlement to business work | `design.md / Non-heartbeat settlement boundary`; `tasks.md / 1.4–1.7` | private callbacks only; narrow `SettleDelivery` is transport-level |
+| Derive no universal work deadline from AckWait; heartbeat only after measured lane-specific need | `proposal.md / Holds`; dispatch, governance, and loop owner settlement requirements; `tasks.md / 1.5–1.7` | owner ruling `5530950829` |
+| Ship model 60s/120s and loop 15s against shortest BackOff 30s; validate before allocation | `agentic-model / Model heartbeat policy is valid before acquisition`; `agentic-loop / Long-running loop heartbeat policy is valid before acquisition`; `tasks.md / 1.2–1.4` | invalid defaults fail setup |
+| Default provider ambiguity to `fail_commit_unknown`; expose exact config/wire contract; refuse unsupported reconciliation before start | `design.md / Provider ambiguity`; `agentic-model / Provider commit-unknown behavior is explicit`; `agentic-model / Provider commit-unknown is machine-readable`; `tasks.md / 3.1–3.3` | no second default-policy call; no unsupported start |
+| Replace stale current-spec semantics through full MODIFIED blocks | `design.md / Current-spec reconciliation`; exact MODIFIED requirements in dispatch, tools, and loop deltas; `tasks.md / 5.2, 6.10, 7.7` | unaffected scenarios/citations preserved; no additive conflict |
+| Use strong observed DiscardNew and refuse only the affected dependency closure | `agentic-loop / Restart-safe replay observes and admits local stream bounds`; `tasks.md / 9.1–9.4` | no whole-composition/global-maxima gate |
+| Admit first-party rule AGENT output through the same internal validator and existing publisher | `rule-agent-publishing / First-party publish-agent output is admitted before action execution`; `rule-agent-publishing / Publish-agent classification uses canonical wildcard coverage and durable publication`; `tasks.md / 9.5–9.7` | six classifier surfaces; no duplicate gate/API |
+| Use exact canonical publisher matcher in its existing direction and ownership | `design.md / First-party rule publisher admission`; `rule-agent-publishing / Publish-agent classification uses canonical wildcard coverage and durable publication`; `tasks.md / 9.6` | `component/flowgraph.SubjectCovers(declaredFilter, concreteSubject)`; no duplicate matcher |
+| Treat `TaskMessage` as registered Payload, not Graphable | `rule-agent-publishing / Publish-agent preserves the registered payload boundary`; `tasks.md / 9.5–9.7` | no graph-interface prediction |
+| Evidence-gate approval continuation before choosing the already-approved Store fallback | `design.md / Approval continuation`; `agentic-loop / Approval continuation after replacement is exact and evidence-bounded`; `tasks.md / 6.1–6.6` | no CallID lookup, scan, third mechanism, or Store deletion before the second ruling |
+| Make dispatch exclusively an edge gateway over one authority-backed view | `design.md / Dispatch edge-gateway boundary`; `agentic-dispatch / Dispatch is exclusively an edge gateway`; `agentic-dispatch / Dispatch uses one authority-backed current-state projection`; `tasks.md / 6.7–6.13` | no tracker, pending cache, created/pending correctness inputs, or intermediate-state ownership; routeless terminals settle; the AutoContinue birth gap remains explicit |
+| Keep correlation lane-scoped; make ordinary publications at-least-once; retain exact reads only at named boundaries | `design.md / Correlation is lane-scoped`; corresponding dispatch, loop, model, tools, and governance publication requirements; `tasks.md / 2.1–2.6` | comment `5538906152`; bounded dedupe is not long-horizon proof |
+| Every touched consumer owner stops admission, drains handles, awaits `Closed`, then cancels/joins | dispatch, governance, model, loop, tools, and graph-view lifecycle requirements; `tasks.md / 10.1–10.3` | lifecycle closure is capability-owned |
+| #1146 settles every handler exit before #1244 declares transitions | `design.md / Holds`; `tasks.md / 1.5–1.7` | no log-and-ACK terminal outcome |
+| Complete only the #1146-owned tranche of #1155 and leave combined gate open for #1249 | `proposal.md / Claim scope`; `design.md / Verification and landing sequence`; `tasks.md / 11.1`; `tasks.md / Transferred: AgentRun` | 15 subscriptions here; AgentRun complete/failed later |
+| Add no supervisor, state-machine runtime, ledger, checkpoint, outbox, CQRS path, or new durable primitive | `proposal.md / Holds`; `design.md / Decision`; capability-specific no-new-authority clauses | existing Streams/KV/Store remain authority |
+| Preserve #1239 authorship and default-branch closing authority | `proposal.md / Impact`; `design.md / Verification and landing sequence`; `tasks.md / 11.4` | PR #1251 retained; PR #1156 closes |
+| Review implementation, cross-agent review, archive final content, then narrow archive review | `tasks.md / 11.5–11.8` | hosted landing follows archive review |
+| Document the semantic-settlement concept and #1146 applications without duplicating normative authority | `design.md / Documentation ownership`; `tasks.md / 11.3` | concept 33 link plus scoped corrections |

@@ -3,7 +3,7 @@
 ### Requirement: Model request settlement is bound to a durable response
 
 Agentic-model SHALL not positively acknowledge an `AgentRequest` until a matching `AgentResponse` has received
-synchronous JetStream PubAck. It SHALL use RequestID as the stable logical response identity and SHALL reconcile an
+synchronous JetStream PubAck. It SHALL use RequestID as the stable provider-work correlation and SHALL read an
 already committed matching response before invoking a provider.
 
 Agentic-model SHALL receive immutable delivery-attempt observation from the accepted settlement adapter. It SHALL
@@ -18,7 +18,7 @@ public state, durable state, or communication path.
 #### Scenario: Response publication succeeds
 
 - **WHEN** a provider returns an `AgentResponse` for a valid `AgentRequest`
-- **THEN** agentic-model publishes the response with deterministic identity
+- **THEN** agentic-model publishes the response correlated by RequestID
 - **AND** waits for PubAck
 - **AND** only then positively acknowledges the source request
 
@@ -200,23 +200,32 @@ otherwise no greater than half positive AckWait or the effective 30s server defa
 - **THEN** setup returns a typed policy error naming the observed values and 60s ceiling
 - **AND** allocates no consumer
 
-### Requirement: Model response identity and publication are deterministic
+### Requirement: Model response publication is durably at-least-once
 
-Every required `AgentResponse`, including success, provider error, and commit-unknown, SHALL derive its output
-identity from RequestID and canonical response content and SHALL publish with deterministic `Nats-Msg-Id`.
-Agentic-model SHALL use an operation-specific exact committed-response lookup before provider invocation or
-republication. A matching identity and content proves the output committed; a conflicting fingerprint SHALL
-quarantine; absence outside admitted retention SHALL remain unknown. No general stream scan is admitted.
+Every required `AgentResponse`, including success, provider error, and commit-unknown, SHALL carry the source
+RequestID and receive PubAck before source ACK. PubAck uncertainty MAY repeat the response. `Nats-Msg-Id` MAY provide
+bounded duplicate suppression but SHALL NOT be treated as permanent publication identity.
+
+The operation-specific exact committed-response read exists only at the provider-invocation boundary. A matching
+RequestID and content protects against repeating provider work; a conflict SHALL quarantine; absence outside admitted
+retention SHALL remain unknown. No general stream scan or exact-read requirement for ordinary response publication
+is admitted.
 
 #### Scenario: Commit-unknown publication repeats
 
 - **WHEN** a commit-unknown response publication is retried after an uncertain PubAck
-- **THEN** it uses the same RequestID-derived `Nats-Msg-Id`
-- **AND** exact matching committed output prevents duplicate provider work
+- **THEN** the response may repeat with the same RequestID
+- **AND** source ACK still waits for one response PubAck
+
+#### Scenario: Matching retained response protects provider work
+
+- **WHEN** exact retained response lookup finds matching RequestID and content before provider invocation
+- **THEN** agentic-model does not invoke the provider again
+- **AND** positively acknowledges the redelivered request
 
 #### Scenario: Existing response content conflicts
 
-- **WHEN** exact lookup finds the expected response identity with different canonical content
+- **WHEN** exact lookup finds the expected RequestID with conflicting response content
 - **THEN** agentic-model quarantines before provider invocation
 
 ### Requirement: Model shutdown closes its delivery owner

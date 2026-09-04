@@ -14,8 +14,22 @@ design-section shorthand is not a valid citation. Every implementation slice fol
   `2888e28a7439ff4dc62345bf9a1e476054c292326ac291ab1d4519f9c0600a73`, 181/181 pins.
 - [x] 0.5 Receive publisher-addendum `INVENTORY PASS`, SHA-256
   `0adba4f0092017d84f1ef181ebaf3299323f5cc75b999825bd1e16d6e292930f`, 226/226 pins.
-- [x] 0.6 Materialize the accepted target into proposal, canonical design, tasks, and six capability deltas.
+- [x] 0.6 Materialize the accepted target into proposal, canonical design, tasks, and seven capability deltas.
 - [x] 0.7 Receive independent pre-implementation design review of the complete active OpenSpec.
+- [x] 0.8 Accept `inventory-dispatch-bridge-boundary-2026-09-04.md`, base
+  `79b0f29f82ce5391013f6c931fae69a28216ac93`, SHA-256
+  `cf5660a3b4196324a3695dc1174dacfb804cef56e2336536d4a9f7d8f4197daa`, after independent `INVENTORY PASS` with
+  249/249 pins.
+- [x] 0.9 Accept `inventory-task-loop-cardinality-2026-09-04.md`, SHA-256
+  `22d593d5de5eea2d15a94da36162cae8b5a3a36cbfcc7790003c13a52ba7d340`.
+- [x] 0.10 Accept the independently reviewed dispatch edge-gateway checkpoint
+  `design-dispatch-edge-gateway-2026-09-04.md`, current SHA-256
+  `aba1202c38856d71d6c551f7cb9f690a03d7eeaa981e6de5e4165b09e0ea938a`. The owner-cited pre-final token-
+  projection checkpoint `339cf2b2c734ef48a2898ce6b79c3783577a8b4ae152b65a1078b00445949b76` is provenance only and is superseded.
+- [x] 0.11 Receive independent `DESIGN REVIEW PASS` of the synchronized edge-gateway target state before
+  implementation. The review verified lane-scoped correlation, ordinary at-least-once publication, exclusive
+  dispatch edge ownership, seven capability deltas, corrected checkpoint provenance, exact MODIFIED headings, and
+  graph-view lifecycle preservation.
 
 ## 1. Settlement foundation and consumer authority
 
@@ -44,7 +58,7 @@ design-section shorthand is not a valid citation. Every implementation slice fol
   `// spec: agentic-model / Model request settlement is bound to a durable response`; loop metadata/owner-health tests
   cite `// spec: agentic-loop / All six loop input classes settle after owner-specific durable done`.
 - [x] 1.5 RED: add the `natsclient` settlement truth table for valid Ack, Retry, Terminate, Quarantine, every invalid
-  decision/error tuple, nil message, and each terminal-method error. Capture callbacks from all ten actual production
+  decision/error tuple, nil message, and each terminal-method error. Capture callbacks from all eight actual production
   non-heartbeat setup branches and prove each reaches its typed business handler and observable business/settlement
   effect. Prove governance publication without PubAck, failed dispatch task publication, a rejected pending-approval
   projection, required loop KV/publication failure, and a missing or full verdict waiter cannot become Ack. Add
@@ -59,8 +73,9 @@ design-section shorthand is not a valid citation. Every implementation slice fol
   Route each non-heartbeat production callback through its typed handler and this helper after work joins. Retain work
   invocation, callback context, panic recovery, admission, health latch, and exact-handle drain in the existing
   private binding. Propagate required JetStream PubAck and loop-state KV failures; until later identity and
-  reconciliation tasks prove replay safe, classify partial or commit-unknown outcomes as Quarantine without
-  inventing recovery state. Retain approval panic as a non-nil fatal result and make `runWithBudget` synchronous.
+  lane-specific recovery tasks prove another attempt safe, classify partial or commit-unknown outcomes as Quarantine
+  without inventing recovery state. Retain approval panic as a non-nil fatal result and make `runWithBudget`
+  synchronous.
   Add no `DeliveryPolicy`, deadline validator, owner framework, test-only API, metric family, goroutine, or durable
   state.
 - [x] 1.7 GREEN: prove the shared settlement truth table and each captured production branch's real handler/effect.
@@ -70,29 +85,43 @@ design-section shorthand is not a valid citation. Every implementation slice fol
   false-positive settlement and the exact owner reaction; it does not claim deterministic replay or convergence,
   which remain owned by tasks 2, 6, 7, and 8.
 
-## 2. Stable identity and exact reconciliation
+## 2. Lane-scoped task, request, and tool-work correlation
 
-- [ ] 2.1 RED: add deterministic identity, canonical collision, uncertain-PubAck retry, and exact committed-output
-  tests for every required dispatch, model, loop, governance, and tool publication. Cite exactly the applicable
-  requirement among `// spec: agentic-dispatch / Dispatch publication identity is deterministic and reconcilable`,
-  `// spec: agentic-model / Model response identity and publication are deterministic`,
-  `// spec: agentic-loop / Loop and required-output identities are deterministic and reconcilable`,
-  `// spec: agentic-governance / Governance publication identity is deterministic and reconcilable`, and
-  `// spec: agentic-tools / Tool-result publication identity is deterministic and reconcilable`.
-- [ ] 2.2 Implement deterministic TaskID, LoopID, RequestID, framework execution identity, output identity,
-  fingerprints, and `Nats-Msg-Id` on every required publication. Preserve provider CallID as conversation data.
-  Add operation-specific exact lookups for requests, responses, validated governance outputs, proposals, verdicts,
-  terminal outputs, and completed tool outcomes; add no general stream scan or query front door.
-- [ ] 2.3 GREEN: prove exact match avoids duplicate work, different canonical content quarantines, and server dedupe is
-  treated only as a bounded optimization while semantic reconciliation remains load-bearing after the duplicate
-  window.
+- [ ] 2.1 RED: prove stable TaskID, random LoopID minting for new work, retained-`TaskMessage` LoopID recovery on
+  redelivery, and conflicting TaskID-to-LoopID quarantine. Cite exactly
+  `// spec: agentic-dispatch / Dispatch task redelivery recovers the committed LoopID`.
+- [ ] 2.2 Implement the TaskID-to-retained-`TaskMessage` recovery path. Mint LoopID randomly only when exact retained
+  task evidence proves this is new work; reuse the retained LoopID on redelivery. Add no route-claim state or
+  deterministic LoopID derivation.
+- [ ] 2.3 RED: prove RequestID distinguishes logical provider work and framework execution identity distinguishes tool
+  work across same-CallID/different-RequestID cases. Cite exactly
+  `// spec: agentic-model / Model request settlement is bound to a durable response`,
+  `// spec: agentic-loop / Tool execution has stable framework correlation`, and
+  `// spec: agentic-tools / Completed tool outcome identity is globally unambiguous`.
+- [ ] 2.4 Implement RequestID and execution identity only on provider/tool/governance-correlation paths that need
+  them. Preserve provider CallID as request-scoped conversation data.
+- [ ] 2.5 RED/GREEN: prove ordinary task/control, created, request, response, approval, terminal, governance, and
+  result publications are at-least-once, source ACK waits for required PubAck, and uncertain PubAck may republish.
+  Prove `Nats-Msg-Id` suppresses only within the configured duplicate window and no test treats it as retained
+  commitment evidence. Cite exactly
+  `// spec: agentic-dispatch / Every dispatch durable input settles through its owner`,
+  `// spec: agentic-dispatch / Dispatch task redelivery recovers the committed LoopID`,
+  `// spec: agentic-model / Model response publication is durably at-least-once`,
+  `// spec: agentic-loop / Loop task, request, and tool work use only required correlation`,
+  `// spec: agentic-governance / Governance publications are durably at-least-once`, and
+  `// spec: agentic-tools / Tool-result publication is durably at-least-once`.
+- [ ] 2.6 Remove general exact committed-output lookup and canonical-output fingerprint work. Retain exact reads only
+  for retained `TaskMessage` recovery, provider ambiguity, approval reconstruction, governance verdict recovery,
+  explicit LoopID/terminal routing, durable applied-state proof, and immutable completed tool outcomes at the
+  executor-effect boundary.
 
 ## 3. Provider settlement
 
-- [ ] 3.1 RED: add first-delivery, matching-response replay, pre-call replacement, post-return/pre-PubAck replacement,
-  uncertain publication, unavailable metadata, collision, config omission/invalid-enum, unsupported reconciliation,
-  and policy-table tests. Cite exactly
+- [ ] 3.1 RED: add first-delivery, retained-response provider protection, pre-call replacement, post-return/pre-PubAck
+  replacement, at-least-once response publication, unavailable metadata, correlation conflict, config omission/
+  invalid-enum, unsupported provider reconciliation, and policy-table tests. Cite exactly
   `// spec: agentic-model / Model request settlement is bound to a durable response`,
+  `// spec: agentic-model / Model response publication is durably at-least-once`,
   `// spec: agentic-model / Provider commit-unknown behavior is explicit`,
   `// spec: agentic-model / Provider commit-unknown is machine-readable`, and
   `// spec: agentic-model / Started markers do not claim invocation certainty` as applicable.
@@ -105,9 +134,9 @@ design-section shorthand is not a valid citation. Every implementation slice fol
   seam; enumerate every endpoint reachable through direct/default/capability routing and refuse unsupported
   `provider_reconcile` before consumer allocation. Reconcile config struct/defaults/validation, generated schema,
   shipped fixtures, and model docs.
-- [ ] 3.3 GREEN: prove by counter that matching-response replay and default unresolved redelivery invoke the provider
-  zero times; prove `at_least_once` repeats only by explicit opt-in, every required response gets PubAck before source
-  ACK, and replacement at every call/return/publication boundary follows the selected policy.
+- [ ] 3.3 GREEN: prove by counter that a matching retained response and default unresolved redelivery invoke the
+  provider zero times; prove `at_least_once` repeats only by explicit opt-in, every required response gets PubAck
+  before source ACK, and uncertain response publication may repeat without repeating provider work.
 
 ## 4. Loop task and response settlement
 
@@ -115,7 +144,7 @@ design-section shorthand is not a valid citation. Every implementation slice fol
   proven duplicate, conflict, missing retained evidence, and every KV/Store/publication failure test. Cite exactly
   `// spec: agentic-loop / All six loop input classes settle after owner-specific durable done`,
   `// spec: agentic-loop / Loop recovery is lane-specific and read-through`, and
-  `// spec: agentic-loop / Loop and required-output identities are deterministic and reconcilable`.
+  `// spec: agentic-loop / Loop task, request, and tool work use only required correlation`.
 - [ ] 4.2 Migrate task, response, and tool-result bindings from the legacy helper to the permanent typed heartbeat
   owner. Add direct LoopEntity read-through by LoopID; reconstruct response configuration from committed request;
   settle loop/graph birth, lineage, initial request, created event, and terminal failure at the delivery boundary.
@@ -142,45 +171,74 @@ design-section shorthand is not a valid citation. Every implementation slice fol
   `Executor panic and ambiguous pre-completion effects SHALL be explicit` so provider CallID/surrogate/effectful
   idempotency claims use framework execution identity and operation-specific effect authority. Add no claimed/in-
   progress ledger.
-- [ ] 5.3 GREEN: prove exact completed replay publishes the deterministic result without executor invocation and every
-  result-persistence/downstream-PubAck replacement boundary converges.
+- [ ] 5.3 GREEN: prove exact completed replay reuses the authoritative outcome without executor invocation and
+  republishes its `ToolResult` at least once until PubAck; prove every result-persistence/downstream-PubAck replacement
+  boundary remains safe.
 
-## 6. Approval continuation and dispatch projection
+## 6. Dispatch edge gateway and approval continuation gate
 
-- [ ] 6.1 RED: add production-registry round-trip, absent registration, exact wire-field/identity validation,
-  config omission/default/unresolved Store, canonical fresh-envelope equality, malformed/collision/transient Get/lost
-  Put reply, deliberate AGENT eviction, pending decision variants, deadline, cleanup, projection hydration, and HTTP
-  read-through tests. Cite exactly
-  `// spec: agentic-loop / Approval continuation survives retained-message eviction`,
-  `// spec: agentic-loop / Approval continuation is a registered payload`,
-  `// spec: agentic-loop / Approval continuation storage is content-addressed and verified`,
-  `// spec: agentic-loop / Approval lifetime is bounded by loop-state authority`,
-  `// spec: agentic-loop / Approval deadlines are reconstructed narrowly`, and
-  `// spec: agentic-dispatch / Dispatch process state is a reconstructable projection`, and
-  `// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone` as
-  applicable.
-- [ ] 6.2 Implement registered `ApprovalContinuationV1` with LoopID, TaskID, RequestID, execution identity, provider
-  CallID, positive ordinal, exact request and originating tool-call response under exact wire fields `loop_id`,
-  `task_id`, `request_id`, `execution_id`, `call_id`, `call_ordinal`, `request`, and `response`. Implement exact
-  `agentic.approval_continuation.v1` Schema, own-field alias JSON, validation, `agentic.RegisterPayloads` with control
-  indexing floor/nil projection contracts, and `payloadbuiltins.Register` wiring through `cmd/semstreams`,
-  `cmd/e2e-semstreams`, test helpers, and repeated binary census. Add exact config key
-  `approval_continuation_storage_instance` defaulting to `objectstore`; do not reuse
-  `trajectory_evidence_storage_instance`. Reconcile config/default/validation/schema/fixtures/docs; resolve configured
-  `StoreRegistry`, and perform content-addressed Put/read-back verification. Canonical equality excludes fresh
-  BaseMessage UUID/timestamp but recomputes digest/key and validates every semantic identity. Add no bucket, scanner,
-  reaper, raw decoder, or duplicate registration.
-- [ ] 6.3 Implement pending reference/fingerprint retention through approve/modify ToolResult and through reject/
-  timeout next request or terminal PubAck. Reconstruct only approval deadlines from current AGENT_LOOPS; retain finite
-  nonzero default 12h inside observed bucket retention; make cleanup best-effort and metered.
-- [ ] 6.4 Implement dispatch projection as off-path complete snapshot plus ordered updates, atomically installed only
-  after completion. Incomplete hydration disables AutoContinue while exact explicit LoopID read-through remains.
-  Reconcile current `agentic-dispatch` requirement
-  `Loop existence and ownership are merged facts, never process memory alone`: exact `AGENT_LOOPS` is authority,
-  tracker-only existence never admits, unreadable authority retries, and `paused` is invalid.
-- [ ] 6.5 GREEN: prove fresh envelopes with equal canonical payload reuse one continuation, semantic collisions refuse,
-  approval survives deliberate AGENT eviction, every decision commits before clear, Store failure prevents ACK, and
-  complete-empty/unique/ambiguous/interrupted/stale-terminal projections behave exactly as specified.
+- [ ] 6.1 RED: run the real-NATS approval replacement gate after an approval-required `ToolResult` fully settles.
+  Replace loop and dispatch, discard every process map/cache, retain `AGENT` and `AGENT_LOOPS`, and independently
+  exercise approve, modify, reject, timeout, and redelivery. Cite exactly
+  `// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded`.
+- [ ] 6.2 Prove the settled approval-required `ToolResult` is available from current
+  `LoopEntity.PendingToolResults[PendingApproval.CallID]` and agrees with pending CallID, name, LoopID, trace, and
+  approval-required classification. Perform no `ToolResult` stream lookup. Tests cite exactly
+  `// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded`.
+- [ ] 6.3 Implement only operation-specific exact reads for latest `agent.request.<LoopID>` and exact
+  `agent.response.<RequestID>`. Validate envelopes, payloads, cross-record identities, current-call uniqueness, and
+  canonical arguments. Perform no `AGENT` list or scan. Tests cite exactly
+  `// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded`.
+- [ ] 6.4 Prove same-CallID/different-RequestID isolation with two retained responses carrying conflicting arguments.
+  Reconstruction follows only the RequestID named by the current request. Cite exactly
+  `// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded`.
+- [ ] 6.5 Table-test approve, modify, reject, and timeout across transient/unresolved Retry, confirmed retained
+  absence to durable `continuation_unavailable`, malformed/identity conflict to Quarantine, exact match to continue,
+  and durable current state proving the branch already applied. Ordinary branch publication remains at-least-once.
+  Cite exactly `// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded`.
+- [ ] 6.6 Stop for an owner mechanism ruling after the evidence gate. On PASS, obtain explicit revocation of comment
+  `5463183450`, then remove `ApprovalContinuationV1`, Store config, digest, cleanup, and deliberate AGENT-eviction
+  claims. On FAIL, retain the already-approved ObjectStore plan unchanged. Introduce no third mechanism.
+- [ ] 6.7 Implement one mixed `AGENT_LOOPS` classifier for canonical current `LoopEntity` keys, activity-only
+  `COMPLETE_` keys, and every current research-pipeline namespace. Known research records return `keep=false`;
+  malformed would-be loop keys poison. Tests cite exactly
+  `// spec: agentic-dispatch / The shared loop view classifies the mixed bucket`.
+- [ ] 6.8 Add a real mixed-bucket proof covering valid current `LoopEntity`, typed terminal `COMPLETE_`, registered
+  `SearchResult` `COMPLETE_`, every research namespace, malformed current/unknown keys, malformed completion,
+  tombstone, and healing. Marshal and unmarshal `SearchResult` through the registered production `BaseMessage`
+  envelope; prove the suffix supplies LoopID and the immutable `LoopInfo` projection reports complete, success,
+  synthesis, and iterations while directional token fields remain zero. Regenerate OpenAPI and prove the existing
+  `LoopInfo` JSON/schema is unchanged and contains no aggregate-to-directional token mapping. Cite exactly
+  `// spec: agentic-dispatch / The shared loop view classifies the mixed bucket`.
+- [ ] 6.9 Delete `LoopTracker`, its approval buffer, created/pending dispatch inputs and consumers,
+  `Component.LoopTracker()`, and all tracker-driven correctness. Preserve created/pending loop outputs and external
+  subscribers. Prove dispatch neither creates nor advances intermediate loop state and settles validated routeless
+  non-user terminal events without `user.response`. Cite exactly
+  `// spec: agentic-dispatch / Dispatch is exclusively an edge gateway`.
+- [ ] 6.10 Replace `CommandContext.LoopTracker` with classified `LookupLoopOwner`. Preserve `LoopInfo` only as the
+  immutable view-derived `/loops` and `/debug/state` response DTO and prove its JSON/OpenAPI schema is unchanged.
+  Return 503 instead of false empty state and expose caught-up readiness/current poison diagnostics. Preserve exact
+  recorded-state reporting after replacement. Cite exactly
+  `// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone` and
+  `// spec: agentic-dispatch / Dispatch uses one authority-backed current-state projection`.
+- [ ] 6.11 Serve `/activity`, `/loops`, `/debug/state`, and AutoContinue from one caught-up view. AutoContinue matches
+  exact `(UserID, ChannelType, ChannelID)` with no fallback. Prove the post-task-PubAck/pre-`LoopEntity` birth gap can
+  yield a second loop for route-only input and explicit LoopID provides continuity; add no route claim. Cite exactly
+  `// spec: agentic-dispatch / Dispatch uses one authority-backed current-state projection` and
+  `// spec: agentic-dispatch / Dispatch is exclusively an edge gateway`.
+- [ ] 6.12 Remove `router_active_loops` with no authoritative Prometheus replacement. Delete exported
+  `graphview.View.Restart()` and every retained context/restart closure. Recreate a failed view only inside dispatch's
+  lifecycle-control owner. Prove detach-buffer release, explicit subscriber shutdown, failed-view replacement,
+  shutdown/replacement race, complete join, and no surviving context/provider. Cite exactly
+  `// spec: graph-view-subscription / View lifecycle and ownership` and
+  `// spec: agentic-dispatch / Dispatch shutdown closes every owner without retaining context`.
+- [ ] 6.13 Prove terminal user-response routing only inside source-event intersection loop-state retention, including
+  replacement, route conflict, transient absence, validated routeless non-user terminal, deletion/purge, and expiry.
+  Add migration notes for command, `LoopInfo`/debug behavior, metric removal, graphview `Restart` removal,
+  AutoContinue tuple/birth-gap semantics, and semteams' obsolete signal endpoint; run the relevant agentic E2E before
+  the breaking change lands. Cite exactly
+  `// spec: agentic-dispatch / Terminal user-response routing is retention-intersection bounded` and
+  `// spec: agentic-dispatch / Dispatch is exclusively an edge gateway`.
 
 ## 7. Control vocabulary, cancel, approval-response, and verdict fast lanes
 
@@ -208,25 +266,28 @@ design-section shorthand is not a valid citation. Every implementation slice fol
   `ClassifiedIntent.SignalType` outside durable `agent.signal.*` ownership.
 - [ ] 7.7 Reconcile current `agentic-loop` requirement
   `Per-loop in-process state is released at terminal, through the one release point`: preserve single-point release
-  and unaffected scenarios, replace unconditional quiet settled-drop with exact applied proof, Retry on unresolved
-  evidence, and Quarantine on collision/impossible transition. Cite exactly
+  and unaffected scenarios, replace unconditional quiet settled-drop with lane-specific durable applied proof, Retry
+  on unresolved evidence, and Quarantine on correlation conflict/impossible transition. Cite exactly
   `// spec: agentic-loop / Per-loop in-process state is released at terminal, through the one release point` in the
   new boundary tests.
 - [ ] 7.8 GREEN: prove all four lanes meet their owner-specific durable-done/refusal contract across replacement.
 
 ## 8. Governance settlement and correlation
 
-- [ ] 8.1 RED: add allowed/blocked/filter-failure/panic/budget, missing/full waiter, exact verdict recovery, validated
-  output reconciliation, and every proposal/verdict replacement-boundary test. Cite exactly
+- [ ] 8.1 RED: add allowed/blocked/filter-failure/panic/budget, missing/full waiter, retained-verdict recovery, and
+  proposal/verdict replacement-boundary tests. Prove uncertain ordinary validated-output PubAck retries at-least-once
+  without an exact committed-output lookup. Cite exactly
   `// spec: agentic-governance / Governance validation settles after its declared consequence`,
   `// spec: agentic-governance / Governance verdict correlation survives process replacement`, and
-  `// spec: agentic-governance / Governance publication identity is deterministic and reconcilable`.
+  `// spec: agentic-governance / Governance publications are durably at-least-once`.
 - [ ] 8.2 Convert all three validation handlers from void to classified outcomes through their private owners.
-  Publish allowed messages through declared JetStream outputs with deterministic identity/PubAck; preserve deliberate
-  blocked non-forwarding and nonblocking audit without converting decode/filter/resolve/marshal/publish failure to
-  ACK. Add stable proposal fingerprint and retained-verdict exact read without changing #1140 policy.
+  Publish allowed messages through declared JetStream outputs and wait for PubAck; preserve deliberate blocked
+  non-forwarding and nonblocking audit. Use RequestID, execution identity, and proposal fingerprint only for proposal-
+  verdict correlation. Add retained-verdict exact read; add no exact committed-output lookup for ordinary validated
+  output.
 - [ ] 8.3 GREEN: prove replacement before proposal, after proposal, after verdict ACK, and before tool publication.
-  If retained verdict plus response redelivery is insufficient, stop at the named failpoint; do not add a bucket.
+  Prove a verdict remains recoverable after waiter loss and ordinary publications remain at-least-once. If retained
+  verdict plus response redelivery is insufficient, stop at the named failpoint; do not add a bucket.
 
 ## 9. AGENT admission, first-party publisher, and loop authority
 
@@ -267,14 +328,14 @@ design-section shorthand is not a valid citation. Every implementation slice fol
   reconcile retained drift. Validate approval lifetime here, not in AGENT stream admission.
 - [ ] 9.10 GREEN: prove every fresh-boot/race/drift/error case and zero forbidden mutation under the citation in 9.8.
 - [ ] 9.11 Measure actual USER and TOOL source-stream retention for physical rows 1, 11, and 17. Prove observed bounds
-  sufficient before the complete 17-lane claim or stop for inventory/design amendment; AGENT admission is not proof
+  sufficient before the complete 15-subscription claim or stop for inventory/design amendment; AGENT admission is not proof
   for another stream.
 
 ## 10. Context and lifecycle closure
 
 - [ ] 10.1 RED: add active-callback Stop races for dispatch, governance, model, loop, and tools, plus trajectory-batch
   cancellation tests. Cite exactly the applicable requirement:
-  `// spec: agentic-dispatch / Dispatch shutdown closes every delivery owner`,
+  `// spec: agentic-dispatch / Dispatch shutdown closes every owner without retaining context`,
   `// spec: agentic-governance / Governance shutdown closes every delivery owner`,
   `// spec: agentic-model / Model shutdown closes its delivery owner`,
   `// spec: agentic-loop / Loop shutdown closes every delivery owner`,
@@ -290,7 +351,7 @@ design-section shorthand is not a valid citation. Every implementation slice fol
 ## 11. Complete proof, documentation, and landing
 
 - [ ] 11.1 Run the #1146-owned tranche of #1155's real-NATS process-replacement matrix across every #1146 durable
-  boundary and all ten non-heartbeat production callbacks. Property/fuzz tests cite exact active requirement headings;
+  boundary and all eight non-heartbeat production callbacks. Property/fuzz tests cite exact active requirement headings;
   unknown decisions cannot ACK. Leave #1155 open until #1249 supplies AgentRun complete/failed proof and the later
   combined gate passes.
 - [ ] 11.2 Run focused race and integration tests, lint, build, schema generation, contract tests, and serialized
@@ -309,9 +370,11 @@ design-section shorthand is not a valid citation. Every implementation slice fol
   default-branch closing authority after #1249 and the combined proof gate.
 - [ ] 11.5 Complete implementation/proof, then obtain SemStreams implementation review of the complete claim set.
 - [ ] 11.6 Obtain owner-requested cross-agent review, apply every finding, and repeat both reviews until accepted.
-- [ ] 11.7 Before archive, reconcile the exact MODIFIED current requirements in `agentic-dispatch`, `agentic-tools`,
-  and `agentic-loop`, then archive `agentic-loop-restart-safety` as the final content commit and sync all six current
-  specs. Preserve every unaffected scenario and citation from the replaced current requirement.
+- [ ] 11.7 Before archive, reconcile every exact MODIFIED current requirement, then archive
+  `agentic-loop-restart-safety` as the final content commit and sync all seven current specs: `agentic-dispatch`,
+  `agentic-governance`, `agentic-loop`, `agentic-model`, `agentic-tools`, `graph-view-subscription`, and
+  `rule-agent-publishing`. Preserve every unaffected scenario and valid citation from each replaced current
+  requirement.
 - [ ] 11.8 Obtain narrow archive/current-spec-sync review. Only afterward run hosted CI, remote-base verification,
   undraft, and non-default merge. The staged merge creates checkpoint `A` for #1249.
 

@@ -46,17 +46,20 @@ to executors.
 - **THEN** exact ToolResult replay occurs without executor invocation
 - **AND** provider CallID remains present as conversation data
 
-### Requirement: Tool-result publication identity is deterministic and reconcilable
+### Requirement: Tool-result publication is durably at-least-once
 
-Every required `ToolResult` publication SHALL derive its identity from framework execution identity and canonical
-result content and SHALL use deterministic `Nats-Msg-Id`. On redelivery, agentic-tools SHALL reconcile the exact
-immutable `TOOL_CALL_OUTCOMES` entry before executor invocation or republication. A matching outcome is replayed; a
-conflicting fingerprint quarantines. No general stream scan or second tool authority is introduced.
+Every required `ToolResult` publication SHALL carry framework execution identity and receive PubAck before source
+ACK. PubAck uncertainty MAY repeat a result. `Nats-Msg-Id` MAY provide bounded duplicate suppression but SHALL NOT be
+treated as permanent publication identity.
+
+The exact immutable `TOOL_CALL_OUTCOMES` read exists only at the executor-effect boundary. Before executor invocation,
+a matching outcome is replayed and a conflicting fingerprint quarantines. Ordinary ToolResult republication requires
+no second exact output lookup, general stream scan, or second tool authority.
 
 #### Scenario: Completed result publication repeats
 
 - **WHEN** a completed tool delivery repeats after an uncertain result PubAck
-- **THEN** exact outcome replay uses the same execution-derived `Nats-Msg-Id`
+- **THEN** the stored outcome may be published again with the same framework execution identity
 - **AND** the executor is not invoked again
 
 #### Scenario: Completed outcome content conflicts
@@ -81,16 +84,16 @@ winner-read, or result-publication failure SHALL return Retry. The request SHALL
 synchronous result publication receives PubAck.
 
 An initial `approval_required` result SHALL be nonterminal coordination and SHALL NOT be persisted as COMPLETED. It
-SHALL use a phase-distinct deterministic `Nats-Msg-Id` derived from execution identity. An approved redispatch
-retains RequestID, provider CallID, ordinal, and execution identity; its approved arguments and `ApprovedBy` form the
-terminal fingerprint, and its terminal result uses the stable execution-derived terminal `Nats-Msg-Id`.
+MAY use a phase-distinct `Nats-Msg-Id` for bounded duplicate suppression. An approved redispatch retains RequestID,
+provider CallID, ordinal, and execution identity; its approved arguments and `ApprovedBy` form the terminal
+fingerprint. Its terminal result remains correlated by framework execution identity.
 
 #### Scenario: completed call is redelivered after result publication failure
 
 - **GIVEN** execution completed and its immutable outcome was created
 - **AND** first result publication failed
 - **WHEN** the request is redelivered
-- **THEN** the stored result is published with the same execution-derived deterministic message ID
+- **THEN** the stored result is published again with the same framework execution identity
 - **AND** the executor invocation count remains one
 
 #### Scenario: same provider call ID carries different execution content
@@ -111,10 +114,10 @@ A compact rejection SHALL emit loud bounded telemetry and terminate. The compone
 payload limits or match error text.
 
 If only publication of an already-stored full authority returns typed oversize, the component SHALL preserve that
-authority and make exactly one compact transport-surrogate publication using the same execution-derived
-deterministic `Nats-Msg-Id`. A surrogate PubAck permits request ACK. Surrogate failure SHALL terminate without
-recursion. Redelivery SHALL repeat the full attempt followed by at most one surrogate attempt, after exact completed-
-outcome reconciliation.
+authority and make exactly one compact transport-surrogate publication carrying the same framework execution
+identity. It MAY reuse an execution-derived `Nats-Msg-Id` for bounded duplicate suppression. A surrogate PubAck
+permits request ACK. Surrogate failure SHALL terminate without recursion. Redelivery SHALL repeat the full attempt
+followed by at most one surrogate attempt, after reading the exact completed outcome.
 
 #### Scenario: full outcome exceeds the observed KV transport bound
 

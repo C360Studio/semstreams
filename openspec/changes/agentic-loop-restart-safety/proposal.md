@@ -2,36 +2,59 @@
 
 ## Why
 
-Agentic-loop persists current loop state but retains material execution and correlation state only in process memory.
-Several durable-input handlers also turn missing correlation or downstream failure into a normal callback return. A
-replacement process can therefore ACK an input whose required durable transition, result, or downstream publication
-did not complete, leaving a loop stranded or silently losing the transition.
+Agentic-dispatch currently keeps a second process-local interpretation of agentic-loop state. That state drives
+approval, listing, AutoContinue, custom commands, debug output, and metrics even though `AGENT_LOOPS` is current loop
+authority and dispatch already owns a shared authority-backed view over that bucket. Replacement therefore makes
+valid loops appear absent or incomplete.
 
-This owner-classified critical beta.163 vertical begins implementation from exact post-#1251 checkpoint
-`P=09ba38b1de5e7200e72281c8e4b8941d81be1da2`, whose merge base with the frozen staged #759 parent is exact
-`F=417beae5552f8f15ad3540edd7d8504c87174c13`. PR #1159 targets `codex/gh759-semantic-settlement`; #759 does not
-merge first.
+This change makes dispatch an edge gateway. It admits external requests and publishes task, cancel, and approval
+work; performs exact authority reads for explicit LoopID operations; serves reverse-lookup conveniences from one
+caught-up `AGENT_LOOPS` view; and bridges terminal events to durable user responses. Agentic-loop owns every
+transition between those edges.
 
-The first-party publisher addendum at the same checkpoint is independently accepted at SHA-256
-`0adba4f0092017d84f1ef181ebaf3299323f5cc75b999825bd1e16d6e292930f`, 226/226 pins. It closes the
-framework-owned rule `publish_agent` producer seam that feeds the row-15 `agent.task.*` subscription.
+Approval continuation storage remains evidence-gated. The implementation first proves whether current `LoopEntity`
+plus exact retained request/response evidence reconstructs approve, modify, reject, and timeout after complete process
+replacement. The previously approved ObjectStore design is removed only after that proof and an explicit owner
+revocation; otherwise it remains the approved fallback.
 
 ## Claim scope
 
-The full accepted scope is all 17 physical durable-input subscriptions across user-message intake and commands,
-dispatch projections and terminal routing, governance validation and verdict correlation, model invocation, loop
-task/response/tool-result transitions, cancel signals, approval responses, tool execution, replay admission, and
-context/lifecycle closure. Model plus loop task/response/tool-result migration onto the staged typed settlement
-foundation is additive to that scope.
+The accepted settlement scope is 15 physical durable-input subscriptions across dispatch, governance, model, loop,
+and tools. Dispatch no longer consumes `agent.created` or `agent.approval_pending` as correctness inputs. Those
+agentic-loop outputs and their external subscribers remain unchanged.
+
+The eight non-heartbeat production callbacks and every heartbeat owner retain the settlement-first contract
+established by the earlier accepted design.
 
 AgentRun complete/failed fanout is transferred intact to #1249 from the exact post-#1146 staged checkpoint `A`.
 #1146 neither narrows nor ratifies its partial-fanout behavior.
 
+## What Changes
+
+- Durable agentic inputs settle only after their owner-specific durable consequence. Ordinary publications are
+  durably at-least-once: source ACK waits for every required JetStream PubAck, and `Nats-Msg-Id` supplies only
+  duplicate-window suppression. Exact reconstruction is limited to named task-birth, provider-invocation, approval-
+  continuation, governance-verdict, tool-effect, explicit-LoopID, and terminal-route boundaries.
+- Agentic-dispatch is exclusively an edge gateway. It admits external requests and publishes task, cancel, and
+  approval work; exposes exact reads and one caught-up current-state projection; and bridges terminal complete/failed
+  events to user responses when validated authority carries a user route. Agentic-loop exclusively owns loop birth
+  and every intermediate and terminal transition. `LoopTracker`, its pending cache, and dispatch's created/pending
+  correctness inputs are removed.
+- Approval replacement first proves whether current loop state plus exact current request/response evidence is
+  sufficient. The approved ObjectStore continuation remains a conditional fallback pending that proof and a second
+  owner ruling.
+- AutoContinue uses exact `(UserID, ChannelType, ChannelID)` identity and remains a convenience. During the gap after
+  task PubAck and before first `LoopEntity` birth, a second route-only message may create another loop; callers needing
+  continuity carry the minted LoopID returned by the first task path.
+- Breaking tracker, graphview restart, debug-readiness, and metric migrations are documented and covered by the
+  relevant agentic E2E before landing.
+
 ## Holds
 
-- The remote #759 parent remains frozen at exact `F` while #1159 implements, proves, and receives review.
+- The remote #759 parent remains frozen at exact `F=417beae5552f8f15ad3540edd7d8504c87174c13` while #1159 implements,
+  proves, and receives review.
   Any unexpected parent advance requires a new pin, rebase, inventory verification, test, and re-review.
-- Ten physical non-heartbeat subscriptions return typed decisions from business work and settle only through their
+- Eight physical non-heartbeat subscriptions return typed decisions from business work and settle only through their
   existing private binding callbacks. JetStream consumer configuration owns AckWait and redelivery; the framework
   derives no universal work deadline from AckWait.
 - Components may apply an ordinary `context.WithTimeout` where their actual operation requires a business timeout.
@@ -66,15 +89,27 @@ AgentRun complete/failed fanout is transferred intact to #1249 from the exact po
   exactly-once claim is admitted.
 - Error propagation does not land separately from the durable authority that makes redelivery safe. Any additional
   durable state requires a named replacement failpoint proving existing Streams/KV/Store authority insufficient.
-- Three current-spec truths are replaced through full MODIFIED requirements: dispatch treats `AGENT_LOOPS` as
-  authority and `LoopTracker` only as a projection; tool completion/replay uses framework execution identity rather
-  than provider `ToolCall.ID`; and terminal loop release requires exact applied proof for late deliveries rather than
-  unconditional quiet settled-drop.
+- Current-spec conflicts are replaced through full MODIFIED requirements. `AGENT_LOOPS` becomes dispatch's sole
+  current-state authority and `LoopTracker` is deleted; tool completion/replay uses framework execution identity
+  rather than provider `ToolCall.ID`; terminal loop release requires durable applied-state proof for late deliveries
+  rather than process-memory inference.
 - Model config adds exact `provider_ambiguity_policy` with default `fail_commit_unknown`; unsupported
   `provider_reconcile` refuses before consumer allocation. `AgentResponse.failure_kind` is a closed optional JSON
   string whose only new value is `provider_commit_unknown` on error responses.
-- Approval continuation is registered as `agentic.approval_continuation.v1` with the control indexing floor and uses
-  exact config key `approval_continuation_storage_instance` (default `objectstore`), not the trajectory-evidence key.
+- `AGENT_LOOPS` is the sole current-state authority for loops. Dispatch retains no `LoopTracker` or pending-approval
+  cache.
+- One caught-up authority-backed view serves `/activity`, `/loops`, `/debug/state`, and AutoContinue. Explicit LoopID
+  operations exact-read `AGENT_LOOPS`.
+- AutoContinue matches only exact `(UserID, ChannelType, ChannelID)` and is a convenience over currently authoritative
+  records, not a continuity guarantee during the task-publication-to-`LoopEntity`-birth interval.
+- Dispatch retains complete/failed consumption only to bridge terminal outcomes to durable user responses within the
+  intersection of source-event and loop-state retention.
+- A complete/failed event whose validated loop authority has no user route is a routeless non-user terminal. Dispatch
+  settles it without publishing `user.response`; absence of a user route on a system-lane loop is not a retryable
+  routing failure. Conflicting or unreadable route evidence still refuses settlement.
+- Approval continuation uses no CallID-indexed `ToolResult` lookup. The settled approval-required result already lives
+  in `LoopEntity.PendingToolResults`.
+- The approved ObjectStore continuation plan remains conditional on the replacement evidence gate.
 
 ## Impact
 
@@ -83,8 +118,11 @@ AgentRun complete/failed fanout is transferred intact to #1249 from the exact po
 - AgentRun successor: #1249 from post-#1146 checkpoint `A`; transition-contract successor: #1244.
 - #1239 provenance remains with merged nested PR #1251; default-branch closing authority remains in PR #1156.
 - Blocks restart-safe approval/enforcement claims in #1140.
-- Capability deltas: `agentic-dispatch`, `agentic-loop`, `agentic-model`, `agentic-tools`, `agentic-governance`, and
-  `rule-agent-publishing`.
+- Seven capability deltas: `agentic-dispatch`, `agentic-governance`, `agentic-loop`, `agentic-model`, `agentic-tools`,
+  `graph-view-subscription`, and `rule-agent-publishing`.
 - Verification includes the #1146-owned tranche of #1155's real-NATS process-replacement matrix and serialized
   agentic E2E. #1155 remains open until #1249 supplies transferred AgentRun complete/failed proof; the combined
   matrix gate is completed later.
+- Breaking adopter migrations: `CommandContext.LoopTracker` becomes the narrow `LookupLoopOwner` operation; exported
+  `graphview.View.Restart` is removed; `router_active_loops` is removed with no authoritative Prometheus replacement.
+  `/loops` and `/debug/state` preserve the `LoopInfo` JSON schema through an immutable view-derived DTO.

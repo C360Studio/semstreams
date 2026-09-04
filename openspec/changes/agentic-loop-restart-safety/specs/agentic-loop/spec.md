@@ -17,8 +17,9 @@ configured acknowledgement interval. Cancellation-ignoring or non-returning work
 
 Decode, correlation, KV, Store, transition, and required publication failures SHALL NOT become successful callback
 completion. ACK means the lane-specific durable transition or defined refusal and every required PubAck completed;
-Retry means stable identity and reconciliation make re-execution safe; Terminate means permanently invalid with no
-useful retry; Quarantine means collision, impossible correlation, panic, or invariant failure prevents a safe choice.
+Retry means the lane's declared correlation and durable evidence make re-execution safe; Terminate means permanently
+invalid with no useful retry; Quarantine means collision, impossible correlation, panic, or invariant failure
+prevents a safe choice.
 
 Cancel SHALL remain the entire durable UserSignal vocabulary. ApprovalResponse SHALL remain a separate input.
 `LoopStatePaused` and wire value `paused` SHALL be removed from the valid state vocabulary, exported transition
@@ -72,11 +73,11 @@ durable state, or communication path.
 - **THEN** agentic-loop performs exact durable read-through
 - **AND** does not log-and-drop or ACK solely because memory is empty
 
-#### Scenario: Semantic identity collision quarantines
+#### Scenario: Required correlation conflicts
 
-- **WHEN** one stable semantic identity is observed with different canonical content
+- **WHEN** one stable task, request, or tool-execution identity is observed with conflicting required correlation
 - **THEN** agentic-loop quarantines and stops the exact owner
-- **AND** does not apply either value by preference
+- **AND** does not apply either mapping by preference
 
 #### Scenario: Unknown control signal is permanent
 
@@ -88,7 +89,7 @@ durable state, or communication path.
 
 - **WHEN** an admitted cancel signal is handled
 - **THEN** current cancellation state and `COMPLETE_<loopID>` commit
-- **AND** the deterministic terminal event receives PubAck before source ACK
+- **AND** the terminal event receives PubAck before source ACK
 
 #### Scenario: Approval handler panics
 
@@ -135,7 +136,7 @@ required for that delivery. Ordinary recovery SHALL NOT enumerate or replay the 
 - **WHEN** ToolResult carries RequestID and execution identity
 - **THEN** agentic-loop reads the originating AgentResponse
 - **AND** reconstructs the ordered batch from response and accumulated durable results
-- **AND** deterministically publishes or replays the next output
+- **AND** publishes the next required output at least once and waits for PubAck before source ACK
 
 ### Requirement: Tool execution has stable framework correlation
 
@@ -148,163 +149,80 @@ correlation SHALL use the framework identity.
 - **WHEN** two provider responses use the same CallID under different RequestIDs
 - **THEN** their execution identities differ and their completed outcomes cannot collide
 
-### Requirement: Loop and required-output identities are deterministic and reconcilable
+### Requirement: Loop task, request, and tool work use only required correlation
 
-For a new task, agentic-loop SHALL validate deterministic TaskID and LoopID and SHALL reject a conflicting mapping.
-Every logical turn SHALL use deterministic RequestID. Every created, request, tool-call, approval, continuation,
-terminal, and other required publication SHALL derive a stable output identity from its source identity and
-canonical content and SHALL use deterministic `Nats-Msg-Id`.
+For a new task, dispatch SHALL supply a stable TaskID and a random LoopID retained with that task. Agentic-loop SHALL
+validate their mapping and SHALL reject a conflicting mapping. Provider work SHALL carry a stable RequestID. Tool
+work SHALL carry the framework execution identity derived from RequestID, provider CallID, and positive call ordinal.
 
-Before repeating a required publication after redelivery, agentic-loop SHALL use an operation-specific exact
-committed-output lookup and validate canonical content, including requests, responses, tool results, governance
-proposals/verdicts, and terminal outputs. A match proves the output; a collision quarantines; absence outside admitted
-retention remains unknown. No general stream scan or query front door is admitted.
+Created, request, approval, continuation, and terminal publications are ordinary durable at-least-once outputs.
+Their source ACK SHALL wait for required PubAck. `Nats-Msg-Id` MAY provide bounded duplicate suppression but SHALL NOT
+be treated as permanent identity or proof of publication. Exact retained reads SHALL exist only at named boundaries
+where they prevent repeating non-repeatable work or prove a lane-specific durable transition already applied.
 
-#### Scenario: Task redelivery finds exact loop birth outputs
+#### Scenario: Task mapping is stable across redelivery
 
-- **WHEN** a task redelivers after its LoopEntity and initial request committed
-- **THEN** agentic-loop validates the deterministic TaskID, LoopID, RequestID, and canonical outputs
-- **AND** any required republish uses the same `Nats-Msg-Id`
+- **WHEN** a task redelivers after its LoopEntity or initial request committed
+- **THEN** agentic-loop validates the same TaskID-to-LoopID mapping
+- **AND** any required ordinary publication may repeat and receives PubAck before source ACK
 
-#### Scenario: Required output identity collides
+#### Scenario: Request or execution correlation conflicts
 
-- **WHEN** exact lookup finds a required output identity with different canonical content
+- **WHEN** one RequestID or framework execution identity names conflicting required correlation
 - **THEN** agentic-loop quarantines the source delivery
-- **AND** does not advance the loop or choose either output
+- **AND** does not advance the loop or choose either mapping
 
-### Requirement: Approval continuation survives retained-message eviction
+#### Scenario: Ordinary required publication repeats
 
-Before acknowledging an approval-required ToolResult, agentic-loop SHALL durably store and verify a registered
-`ApprovalContinuationV1` and persist its typed StorageReference in `PendingApprovalState`. This guarantee applies only
-while that authoritative pending loop record remains inside its admitted finite lifetime.
+- **WHEN** PubAck uncertainty causes a created, request, approval, continuation, or terminal publication to repeat
+- **THEN** the duplicate is an admitted at-least-once outcome
+- **AND** consumers use the lane's required correlation and durable transition rules
 
-#### Scenario: Process is replaced while approval waits
+### Requirement: Approval continuation after replacement is exact and evidence-bounded
 
-- **WHEN** AGENT request/response messages expired but the loop remains awaiting approval
-- **THEN** agentic-loop resolves the exact registered Store and reconstructs the reviewed call
-- **AND** can approve, modify, reject, or time out without guessing
+After an approval-required `ToolResult` settles, agentic-loop SHALL persist both awaiting-approval state and the
+result in current `LoopEntity` before source ACK. After replacement, approve, modify, reject, and timeout SHALL
+reconstruct or prove exactly one next transition from validated current state and admitted retained evidence.
 
-#### Scenario: Continuation Store is unavailable
+Reconstruction SHALL use current `LoopEntity`, latest exact `agent.request.<LoopID>`, and exact
+`agent.response.<RequestID>`. It SHALL perform no stream scan and no `ToolResult` lookup by provider CallID.
 
-- **WHEN** continuation cannot be stored and verified
-- **THEN** no successful approval-pending transition is published
-- **AND** ToolResult is not acknowledged and the unresolved Store is named
+Provider CallID SHALL be interpreted only within the current RequestID. An older response carrying the same CallID
+SHALL not participate.
 
-#### Scenario: Conflicting approval responses arrive
+A transient or unresolved read SHALL Retry. Confirmed retained absence SHALL durably fail
+`continuation_unavailable`. Malformed or identity-conflicting evidence SHALL Quarantine. Durable applied-state proof
+SHALL permit settlement; otherwise the required continuation publication MAY repeat and SHALL receive PubAck before
+source ACK.
 
-- **WHEN** a second response for one execution identity has a different semantic fingerprint
-- **THEN** the delivery quarantines and the tool is not dispatched a second way
+The storage mechanism remains gated by the accepted replacement proof. If retained exact evidence satisfies every
+branch, no continuation Store is required. If it does not, the approved content-addressed ObjectStore design remains
+the fallback after owner ruling.
 
-#### Scenario: Pending authority expired
+#### Scenario: Same CallID exists under two requests
 
-- **WHEN** authoritative PendingApprovalState expired
-- **THEN** agentic-loop does not scan Store objects to guess a pending approval
-- **AND** does not advertise indefinite restart safety
+- **GIVEN** an old and current `AgentResponse` share CallID but have different RequestIDs and arguments
+- **WHEN** continuation reconstructs
+- **THEN** only the response named by the current `AgentRequest` participates
+- **AND** the older response cannot change or satisfy the result
 
-### Requirement: Approval continuation is a registered payload
+#### Scenario: Exact approval continuation matches
 
-`ApprovalContinuationV1` SHALL carry exact JSON fields `loop_id` string, `task_id` string, `request_id` string,
-`execution_id` string, `call_id` string, `call_ordinal` integer, `request` `AgentRequest` object, and `response`
-`AgentResponse` object. All five IDs SHALL be non-empty, ordinal SHALL be positive, nested
-`AgentRequest` and `AgentResponse` SHALL validate, their RequestIDs SHALL equal top-level RequestID, the response's
-tool call at that ordinal SHALL match CallID, and execution identity SHALL recompute from RequestID, CallID, and
-ordinal. When attached to pending state, LoopID and TaskID SHALL match that loop authority.
+- **WHEN** current state and retained request/response evidence validate and agree
+- **THEN** approve or modify publishes tool work at least once or proves its durable transition already applied
+- **AND** reject or timeout publishes a rejection transition at least once or proves it already applied
+- **AND** `PendingApproval` clears only after required PubAck or durable applied-state proof
 
-The type SHALL implement Schema as exact
-`message.Type{Domain: "agentic", Category: "approval_continuation", Version: "v1"}` using new constant
-`CategoryApprovalContinuation = "approval_continuation"`, plus Validate and alias-based JSON marshal/unmarshal for
-its own fields. `agentic.RegisterPayloads` SHALL register the factory with
-`vocabulary.IndexingProfileControl` and nil projection contracts. `payloadbuiltins.Register` SHALL carry that owner
-registration into `cmd/semstreams`, `cmd/e2e-semstreams`, test helpers, and every first-party composition root found
-by the implementation-time binary census. The payload is private non-Graphable Store material; control is its
-registry indexing floor, not a claim that graph projection occurs. There SHALL be no init registration, raw fallback,
-anonymous decoder, or duplicate registration site.
+#### Scenario: Required retained evidence is confirmed absent
 
-#### Scenario: Required composition root registers continuation
+- **WHEN** observed retention says required evidence should remain but its exact subject is absent
+- **THEN** the loop durably fails with `continuation_unavailable`
 
-- **WHEN** a binary can host approval recovery
-- **THEN** it explicitly registers ApprovalContinuationV1
-- **AND** production decoding a `message.NewBaseMessage` envelope yields that payload type
+#### Scenario: Approval evidence conflicts
 
-#### Scenario: Registration is absent
-
-- **WHEN** approval recovery encounters an unregistered continuation type
-- **THEN** startup or decode fails loudly without raw JSON fallback
-
-#### Scenario: Registered continuation round-trips through production decoder
-
-- **WHEN** a valid `agentic.approval_continuation.v1` is wrapped by `message.NewBaseMessage`, marshaled, and decoded
-  through the production registry decoder
-- **THEN** the payload is `*ApprovalContinuationV1`
-- **AND** every exact wire field, nested value, and identity validates unchanged
-
-#### Scenario: Continuation identity is inconsistent
-
-- **WHEN** ordinal, nested RequestID, selected provider CallID, or recomputed execution identity differs
-- **THEN** validation fails before Store write or pending-state mutation
-
-### Requirement: Approval continuation storage is content-addressed and verified
-
-Agentic-loop `Config` SHALL add exact field `ApprovalContinuationStorageInstance string` with JSON tag
-`approval_continuation_storage_instance,omitempty` and schema type string, default `objectstore`, category
-`advanced`, and a description naming the registered Store for approval continuation. Omission SHALL install
-`objectstore`; an explicit empty value after defaults or a name unresolved in
-the injected `StoreRegistry` SHALL fail approval-capable setup. The existing
-`trajectory_evidence_storage_instance` SHALL NOT be reused because it owns full trajectory evidence and its retention
-policy is independently configurable. No physical bucket name or hidden fallback SHALL be accepted.
-
-Agentic-loop SHALL derive the key from SHA-256 of canonical ApprovalContinuationV1 payload JSON, lowercase unpadded
-base32 below `agentic/approval-continuation/v1/`, excluding enclosing BaseMessage identity and timestamp. It SHALL use
-get-before-put. Every existing or post-write object SHALL production-decode to `*ApprovalContinuationV1`, validate,
-match canonical payload bytes, recompute digest/key, and match LoopID, TaskID, RequestID, execution identity, provider
-CallID, and ordinal. Store overwrite SHALL NOT resolve collision.
-
-#### Scenario: Matching object already exists
-
-- **WHEN** the expected key contains a valid matching continuation
-- **THEN** agentic-loop reuses it without another write
-
-#### Scenario: Continuation storage key is omitted
-
-- **WHEN** `approval_continuation_storage_instance` is omitted
-- **THEN** setup selects registered Store instance `objectstore`
-- **AND** does not borrow `trajectory_evidence_storage_instance`
-
-#### Scenario: Continuation Store name is unresolved
-
-- **WHEN** the configured continuation Store name is absent from `StoreRegistry`
-- **THEN** approval-capable setup refuses readiness naming the unresolved instance
-- **AND** no approval-required source is positively settled
-
-#### Scenario: Put result is unknown
-
-- **WHEN** Put returns an unknown commit result
-- **THEN** agentic-loop reads the deterministic key
-- **AND** accepts matching content or retries unresolved absence
-
-#### Scenario: Retry constructs a fresh continuation envelope
-
-- **WHEN** the first Put reply is lost and retry wraps the same canonical payload in a new BaseMessage
-- **AND** envelope UUID and timestamp differ
-- **THEN** decoded canonical payload equality, digest, key, and identities accept reuse
-- **AND** transport metadata does not create a semantic collision
-
-#### Scenario: Key contains conflicting content
-
-- **WHEN** the deterministic key contains malformed or semantically different content
-- **THEN** agentic-loop quarantines the collision and fails health loudly
-
-#### Scenario: Referenced continuation is permanently absent
-
-- **WHEN** pending state names a permanently absent continuation
-- **THEN** the loop durably fails with `approval_continuation_unavailable`
-- **AND** does not reconstruct from partial arguments
-
-#### Scenario: Continuation is no longer needed
-
-- **WHEN** the deterministic downstream outcome commits
-- **THEN** deletion is best-effort and cleanup failure is metered
-- **AND** source settlement is not reversed and no scanner is added
+- **WHEN** an identity, call, name, argument, or durable applied-state fact conflicts
+- **THEN** the delivery quarantines
+- **AND** no pending state clears
 
 ### Requirement: Approval lifetime is bounded by loop-state authority
 
@@ -471,11 +389,11 @@ Direct create/attach refusal for a settled token remains owned by durable admiss
 depth only.
 
 A late approval response, tool result, or model response MUST NOT be positively settled merely because process state
-is absent or the loop is terminal. The lane owner MUST read the exact durable loop state and reconcile the exact
-committed output that would prove this semantic input already applied. Exact matching applied proof permits the
-owner's typed already-applied terminal outcome. An unreadable authority or unresolved absence returns Retry. A
-malformed input, identity collision, impossible transition, or contradictory committed output returns Quarantine.
-There is no unconditional quiet settled-drop.
+is absent or the loop is terminal. The lane owner MUST read the exact durable loop state and use only its declared
+lane-specific evidence to prove that input already applied. Durable applied-state proof permits the owner's typed
+already-applied terminal outcome. An unreadable authority or unresolved absence returns Retry. A malformed input,
+required-correlation conflict, impossible transition, or contradictory durable state returns Quarantine. There is no
+unconditional quiet settled-drop.
 
 #### Scenario: a completed loop's per-loop state is released
 
@@ -495,10 +413,10 @@ There is no unconditional quiet settled-drop.
 - **THEN** each observes the loop entity it needs, and release happens after all of them
 - **AND** the test that verifies this is `TestTerminalReleaseHappensAfterTerminalReaders`
 
-#### Scenario: a late approval response has exact applied proof
+#### Scenario: a late approval response has durable applied proof
 
 - **GIVEN** a settled loop whose process state has been released
-- **AND** durable state plus the exact committed downstream output prove the same approval response was applied
+- **AND** the approval lane's declared durable state proves the same approval response was applied
 - **WHEN** that response is redelivered
 - **THEN** the approval owner returns its typed already-applied outcome and positively settles the source
 - **AND** the same proof rule applies to late tool and model responses
@@ -512,9 +430,9 @@ There is no unconditional quiet settled-drop.
 - **THEN** the owner returns Retry without positive settlement
 - **AND** process absence or terminal state alone is not treated as proof
 
-#### Scenario: a late response conflicts with committed identity
+#### Scenario: a late response conflicts with required correlation
 
-- **GIVEN** the expected semantic identity names different canonical committed content or an impossible transition
+- **GIVEN** the expected lane correlation names conflicting durable state or an impossible transition
 - **WHEN** a late approval, tool, or model response arrives
 - **THEN** the owner quarantines it with the typed collision/refusal reason
 - **AND** it does not overwrite or silently drop either value

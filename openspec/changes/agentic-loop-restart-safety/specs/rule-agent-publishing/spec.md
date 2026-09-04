@@ -18,7 +18,7 @@ admission API.
 
 - **GIVEN** each of the six shipped rule processors with its resolved AGENT task output
 - **WHEN** the processor prepares to start its action evaluator
-- **THEN** its exact local output stream is observed and admitted once through the shared validator
+- **THEN** its exact local output stream is observed and admitted through the shared validator
 - **AND** both `agent.task` and `agent_task` port names retain their configured identity
 
 #### Scenario: non-agentic rule processor pays no lookup
