@@ -240,6 +240,7 @@ func (e *countingExecutor) ListTools() []agentic.ToolDefinition {
 	return []agentic.ToolDefinition{{Name: "count", Parameters: map[string]any{"type": "object"}}}
 }
 
+// spec: agentic-tools / Tool-result publication is durably at-least-once
 func TestHandleToolCallPublishFailureReplaysWithoutExecutor(t *testing.T) {
 	store := &memoryOutcomeStore{values: make(map[string][]byte)}
 	executor := &countingExecutor{}

@@ -21,6 +21,7 @@ type governancePublishedMessage struct {
 }
 
 // spec: agentic-governance / Governance validation settles after its declared consequence
+// spec: agentic-governance / Governance publications are durably at-least-once
 func TestIntegrationGovernanceProductionCallbacksPublishBeforeAck(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithStreams(
 		natsclient.TestStreamConfig{Name: "AGENT", Subjects: []string{"agent.>"}},
@@ -60,17 +61,19 @@ func TestIntegrationGovernanceProductionCallbacksPublishBeforeAck(t *testing.T) 
 	for _, row := range rows {
 		data, marshalErr := json.Marshal(Message{ID: row.messageID, Content: Content{Text: "clean"}})
 		require.NoError(t, marshalErr)
-		msg := &governanceSettlementMsg{data: data}
-		callbacks[row.port](ctx, msg)
-		require.Equal(t, int32(1), msg.acks.Load())
-		require.Zero(t, msg.naks.Load()+msg.terms.Load())
-		select {
-		case published := <-outputs:
-			require.Equal(t, row.subject, published.subject)
-			require.Equal(t, row.msgType, published.message.Type)
-			require.Equal(t, row.messageID, published.message.ID)
-		case <-time.After(2 * time.Second):
-			t.Fatalf("%s did not publish its required validated output", row.port)
+		for attempt := range 2 {
+			msg := &governanceSettlementMsg{data: data}
+			callbacks[row.port](ctx, msg)
+			require.Equal(t, int32(1), msg.acks.Load())
+			require.Zero(t, msg.naks.Load()+msg.terms.Load())
+			select {
+			case published := <-outputs:
+				require.Equal(t, row.subject, published.subject)
+				require.Equal(t, row.msgType, published.message.Type)
+				require.Equal(t, row.messageID, published.message.ID)
+			case <-time.After(2 * time.Second):
+				t.Fatalf("%s attempt %d did not publish its required validated output", row.port, attempt+1)
+			}
 		}
 	}
 	require.NoError(t, sub.Drain(t.Context()))

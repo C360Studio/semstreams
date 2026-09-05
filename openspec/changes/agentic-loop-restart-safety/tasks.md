@@ -110,7 +110,7 @@ design-section shorthand is not a valid citation. Every implementation slice fol
   `// spec: agentic-loop / Loop task, request, and tool work use only required correlation`,
   `// spec: agentic-governance / Governance publications are durably at-least-once`, and
   `// spec: agentic-tools / Tool-result publication is durably at-least-once`.
-- [ ] 2.6 Remove general exact committed-output lookup and canonical-output fingerprint work. Retain exact reads only
+- [x] 2.6 Remove general exact committed-output lookup and canonical-output fingerprint work. Retain exact reads only
   for retained `TaskMessage` recovery, provider ambiguity, approval reconstruction, governance verdict recovery,
   explicit LoopID/terminal routing, durable applied-state proof, and immutable completed tool outcomes at the
   executor-effect boundary.

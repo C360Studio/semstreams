@@ -878,6 +878,9 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 	// Execute handler
 	resp, err := cmd.Handler(ctx, msg, args, loopID)
 	if err != nil {
+		if errs.IsFatal(err) || errs.IsTransient(err) {
+			return err
+		}
 		return c.sendResponse(ctx, agentic.UserResponse{
 			ResponseID:  uuid.New().String(),
 			ChannelType: msg.ChannelType,

@@ -240,6 +240,7 @@ func TestIntegrationAckFailureRestartReplaysWithoutSecondExecution(t *testing.T)
 	assert.Equal(t, int32(1), executor.calls.Load(), "ACK failure redelivery must not execute again")
 }
 
+// spec: agentic-tools / Tool-result publication is durably at-least-once
 func TestIntegrationResultPublishFailureRestartReplaysStoredOutcome(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithStreams(
 		natsclient.TestStreamConfig{Name: "TOOL_PUBLISH_REPLAY", Subjects: []string{"tool.execute.>"}},

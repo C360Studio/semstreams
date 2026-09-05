@@ -4,6 +4,7 @@ package agenticdispatch
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
@@ -128,6 +130,42 @@ func TestSignalSubjectCarriesExactlyOnePayloadType(t *testing.T) {
 			"requester arrived on slack")
 	assert.Equal(t, "session-1", signal.ChannelID)
 	assert.Equal(t, agentic.SignalCancel, signal.Type)
+}
+
+// spec: agentic-dispatch / Every dispatch durable input settles through its owner
+func TestIntegrationCancelRequiresJetStreamPubAck(t *testing.T) {
+	ctx := t.Context()
+	tc := natsclient.NewTestClient(t, natsclient.WithJetStream())
+	c := newSignalWireComponent(t, tc)
+
+	_, err := c.handleCancelCommand(ctx, seamUserMessage("user-a"), []string{signalWireLoopID}, "")
+	require.ErrorContains(t, err, "publish signal",
+		"a cancel cannot report done when no JetStream owns the declared output")
+}
+
+// spec: agentic-dispatch / Every dispatch durable input settles through its owner
+func TestIntegrationCancelPublishFailureCannotBecomeSuccessfulCommand(t *testing.T) {
+	ctx := t.Context()
+	tc := natsclient.NewTestClient(t, natsclient.WithStreams(
+		natsclient.TestStreamConfig{Name: "USER", Subjects: []string{"user.response.>"}},
+	))
+	c := newSignalWireComponent(t, tc)
+	msg := seamUserMessage("user-a")
+	msg.Content = "/cancel " + signalWireLoopID
+
+	data, err := json.Marshal(message.NewBaseMessage(msg.Schema(), &msg, "test"))
+	require.NoError(t, err)
+	decision, cause := c.handleUserMessage(ctx, data)
+	require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
+	require.ErrorContains(t, cause, "publish signal",
+		"a published error response cannot turn missing cancel PubAck into source ACK")
+
+	stream, streamErr := tc.Client.GetStream(ctx, "USER")
+	require.NoError(t, streamErr)
+	info, infoErr := stream.Info(ctx)
+	require.NoError(t, infoErr)
+	require.Zero(t, info.State.Msgs,
+		"dispatch must not claim the uncertain cancel failed while its durable outcome is unknown")
 }
 
 // spec: agentic-dispatch / The ownership model binds the user lane, and approval is deliberately not owner-scoped
