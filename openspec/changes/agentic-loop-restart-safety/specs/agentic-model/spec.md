@@ -2,9 +2,15 @@
 
 ### Requirement: Model request settlement is bound to a durable response
 
-Agentic-model SHALL not positively acknowledge an `AgentRequest` until a matching `AgentResponse` has received
-synchronous JetStream PubAck. It SHALL use RequestID as the stable provider-work correlation and SHALL read an
-already committed matching response before invoking a provider.
+Agentic-model SHALL treat provider invocation as durably at-least-once. It SHALL not positively acknowledge an
+`AgentRequest` until a matching `AgentResponse` has received synchronous JetStream PubAck. It SHALL use RequestID as
+the stable provider-work correlation and SHALL perform an operation-specific exact retained-response read before each
+provider invocation.
+
+A validated matching retained response SHALL prevent provider invocation and SHALL satisfy the durable-response
+precondition for source ACK. Conflicting retained correlation SHALL quarantine before invocation. Typed retained
+absence SHALL permit provider invocation with the same RequestID, including on redelivery after ambiguous process
+replacement. A lookup error SHALL NOT be treated as absence.
 
 Agentic-model SHALL receive immutable delivery-attempt observation from the accepted settlement adapter. It SHALL
 NOT receive or retain native message or settlement authority.
@@ -24,16 +30,24 @@ public state, durable state, or communication path.
 
 #### Scenario: Matching response already exists
 
-- **WHEN** a request is redelivered and an exact committed response with matching RequestID and fingerprint exists
+- **WHEN** exact retained lookup finds a validated response matching RequestID and expected response correlation
 - **THEN** agentic-model does not invoke the provider
-- **AND** positively acknowledges the source request
+- **AND** positively acknowledges the source request because the required response is already committed
 
-Exact response lookup SHALL occur only after the model owner's local AGENT replay-admission gate succeeds. Absence
-outside an admitted retention horizon is unknown and SHALL NOT prove that a provider invocation did not occur.
+#### Scenario: No matching response exists
+
+- **WHEN** exact retained lookup returns typed not-found
+- **THEN** agentic-model invokes the provider with the same stable RequestID
+- **AND** this remains true on a redelivered request after ambiguous process replacement
+
+#### Scenario: Retained response lookup fails
+
+- **WHEN** exact retained lookup fails without proving typed absence
+- **THEN** agentic-model retries without invoking the provider
 
 #### Scenario: Response identity collides
 
-- **WHEN** a committed response uses the same RequestID but does not match the request or expected fingerprint
+- **WHEN** a committed response's subject RequestID, payload RequestID, and source request RequestID do not agree
 - **THEN** agentic-model quarantines the delivery
 - **AND** does not invoke the provider
 
@@ -60,123 +74,6 @@ outside an admitted retention horizon is unknown and SHALL NOT prove that a prov
 - **THEN** it may observe only `Number`, `MetadataAvailable`, and `IsRedelivery`
 - **AND** it cannot access a native message, settlement method, sequence, consumer identity, header, or mutable state
 
-### Requirement: Provider commit-unknown behavior is explicit
-
-Agentic-model `Config` SHALL add exact field
-`ProviderAmbiguityPolicy string` with JSON tag `provider_ambiguity_policy,omitempty` and schema enum
-`fail_commit_unknown|at_least_once|provider_reconcile`, default `fail_commit_unknown`, category `advanced`, and a
-description that names paid/effectful duplicate risk. Its closed string values
-SHALL be `fail_commit_unknown`, `at_least_once`, and `provider_reconcile`. Omission or the empty string SHALL default
-to `fail_commit_unknown`; any other value SHALL fail configuration validation before consumer allocation. Generated
-schema, shipped fixtures, and model operator documentation SHALL carry the same enum and default.
-
-`provider_reconcile` SHALL be admitted only when every endpoint reachable by the component's current model registry
-(direct endpoint, capability chain, and default) supplies the package-private `providerCommitReconciler` capability.
-Its exact method SHALL be
-`ReconcileProviderCommit(context.Context, agentic.AgentRequest) (providerReconcileResult, error)`, where the closed
-result kind is `exact_match`, `proven_not_invoked`, `unresolved`, or `collision` and an exact-match result carries the
-validated `AgentResponse`. The method SHALL observe by stable RequestID without invoking the provider. Component
-setup SHALL enumerate `RegistryReader.ListEndpoints`, resolve
-each configured route, construct its internal execution client, and refuse readiness with typed
-`provider_reconcile_unsupported` before allocating the request consumer when any reachable endpoint lacks the
-capability. No shipped provider at checkpoint P declares this capability; therefore selecting `provider_reconcile`
-is a setup refusal until an independently tested backend implements it. Formatting-only `ProviderAdapter` and
-`ResponsesAdapter` SHALL NOT imply reconciliation support.
-
-#### Scenario: Default policy sees unresolved redelivery
-
-- **WHEN** a request is redelivered
-- **AND** no matching durable response exists
-- **AND** the framework cannot prove whether the prior process invoked the provider
-- **THEN** agentic-model does not invoke the provider again
-- **AND** publishes a typed commit-unknown `AgentResponse`
-- **AND** acknowledges only after that response receives PubAck
-
-#### Scenario: Default unresolved redelivery performs no second provider call
-
-- **WHEN** a redelivered request has no matching committed response
-- **AND** policy is `fail_commit_unknown`
-- **THEN** provider invocation count for that delivery is zero
-- **AND** the typed commit-unknown response receives PubAck before source ACK
-
-#### Scenario: Response publication fails after provider return
-
-- **WHEN** a provider returns and response publication receives no PubAck
-- **THEN** the source is not positively acknowledged
-- **AND** replacement applies configured ambiguity policy without assuming the provider did not run
-
-#### Scenario: Replacement occurred before provider invocation
-
-- **WHEN** the first process stops after delivery 1 and before provider invocation
-- **AND** delivery 2 has no matching durable response
-- **AND** policy is `fail_commit_unknown`
-- **THEN** agentic-model publishes `provider_commit_unknown`
-- **AND** does not invoke the provider
-- **AND** records the conservative false-unknown possibility
-
-#### Scenario: At-least-once is selected
-
-- **WHEN** the operator explicitly selects `at_least_once`
-- **AND** an unresolved request is redelivered
-- **THEN** agentic-model may invoke the provider again with the same RequestID
-- **AND** records the repeated-attempt classification
-
-#### Scenario: Provider reconciliation is supported
-
-- **WHEN** every endpoint reachable by configured direct/default/capability routing declares the internal
-  reconciliation capability keyed by RequestID
-- **THEN** agentic-model admits `provider_reconcile` before consumer allocation
-- **AND** on delivery it reconciles before invoking and publishes the reconciled or proven-safe new result with the
-  same stable identity
-
-#### Scenario: Provider reconciliation is unsupported at setup
-
-- **WHEN** `provider_ambiguity_policy` is `provider_reconcile`
-- **AND** any reachable endpoint lacks the internal reconciliation capability
-- **THEN** setup refuses with `provider_reconcile_unsupported` naming that endpoint
-- **AND** no request consumer or provider call is created
-
-#### Scenario: Provider ambiguity policy is omitted
-
-- **WHEN** `provider_ambiguity_policy` is omitted or empty
-- **THEN** validation installs `fail_commit_unknown`
-
-#### Scenario: Provider ambiguity policy is unknown
-
-- **WHEN** `provider_ambiguity_policy` contains any other string
-- **THEN** configuration validation fails before consumer allocation
-
-### Requirement: Provider commit-unknown is machine-readable
-
-`AgentResponse` SHALL expose the exact optional JSON field `failure_kind`. Its Go field SHALL be
-`FailureKind AgentResponseFailureKind` with `json:"failure_kind,omitempty"`. `AgentResponseFailureKind` SHALL encode
-as a JSON string whose only non-empty admitted value in this change is `provider_commit_unknown`. Empty is omitted
-and remains valid for existing ordinary responses. A non-empty failure kind SHALL be valid only when `status` is
-`error`; unknown strings or a non-empty failure kind on another status SHALL fail validation. Consumers SHALL NOT
-infer commit-unknown from free-text `error` content.
-
-#### Scenario: Commit-unknown response validates
-
-- **WHEN** status is error
-- **AND** failure kind is `provider_commit_unknown`
-- **THEN** validation succeeds
-- **AND** consumers classify the outcome without parsing error text
-
-#### Scenario: Unknown failure kind is received
-
-- **WHEN** failure kind is non-empty and outside the closed enumeration
-- **THEN** validation fails permanently
-
-#### Scenario: Failure kind appears on a successful response
-
-- **WHEN** `failure_kind` is non-empty and `status` is not `error`
-- **THEN** validation fails permanently
-
-#### Scenario: Ordinary response omits failure kind
-
-- **WHEN** an ordinary response has an empty failure kind
-- **THEN** JSON omits `failure_kind` and existing response semantics remain unchanged
-
 ### Requirement: Started markers do not claim invocation certainty
 
 Agentic-model SHALL NOT use a pre-call started marker as proof that a provider was invoked or as an exactly-once
@@ -186,7 +83,8 @@ mechanism.
 
 - **WHEN** a process records a pre-call marker and stops before provider invocation
 - **THEN** replacement does not classify the marker as proof of invocation
-- **AND** provider ambiguity follows the configured policy
+- **AND** the ordinary retained-response rule applies
+- **AND** typed absence permits another provider invocation
 
 ### Requirement: Model heartbeat policy is valid before acquisition
 
@@ -202,30 +100,32 @@ otherwise no greater than half positive AckWait or the effective 30s server defa
 
 ### Requirement: Model response publication is durably at-least-once
 
-Every required `AgentResponse`, including success, provider error, and commit-unknown, SHALL carry the source
-RequestID and receive PubAck before source ACK. PubAck uncertainty MAY repeat the response. `Nats-Msg-Id` MAY provide
-bounded duplicate suppression but SHALL NOT be treated as permanent publication identity.
+Every required `AgentResponse`, including success and provider error, SHALL carry the source RequestID and receive
+PubAck before source ACK. PubAck uncertainty MAY repeat the response. `Nats-Msg-Id` MAY provide bounded duplicate
+suppression but SHALL NOT be treated as permanent publication identity.
 
 The operation-specific exact committed-response read exists only at the provider-invocation boundary. A matching
-RequestID and content protects against repeating provider work; a conflict SHALL quarantine; absence outside admitted
-retention SHALL remain unknown. No general stream scan or exact-read requirement for ordinary response publication
-is admitted.
+validated response prevents repeated provider work; conflicting correlation SHALL quarantine; typed absence SHALL
+permit another provider call with the same RequestID. No general stream scan, provider reconciliation capability,
+ambiguity policy, or replay-admission prerequisite is admitted.
 
-#### Scenario: Commit-unknown publication repeats
+#### Scenario: Response publication is uncertain
 
-- **WHEN** a commit-unknown response publication is retried after an uncertain PubAck
-- **THEN** the response may repeat with the same RequestID
-- **AND** source ACK still waits for one response PubAck
+- **WHEN** a provider returns but response publication does not produce an observed PubAck
+- **THEN** the source remains unacknowledged
+- **AND** replacement repeats the retained-response check
+- **AND** typed absence may lead to another provider invocation
 
 #### Scenario: Matching retained response protects provider work
 
-- **WHEN** exact retained response lookup finds matching RequestID and content before provider invocation
+- **WHEN** exact retained-response lookup finds matching validated correlation before provider invocation
 - **THEN** agentic-model does not invoke the provider again
-- **AND** positively acknowledges the redelivered request
+- **AND** positively acknowledges the source request
 
-#### Scenario: Existing response content conflicts
+#### Scenario: Existing response correlation conflicts
 
-- **WHEN** exact lookup finds the expected RequestID with conflicting response content
+- **WHEN** exact lookup finds a response whose subject RequestID, payload RequestID, and source request RequestID do
+  not agree
 - **THEN** agentic-model quarantines before provider invocation
 
 ### Requirement: Model shutdown closes its delivery owner

@@ -93,9 +93,11 @@ AgentRun complete/failed fanout is transferred intact to #1249 from the exact po
   current-state authority and `LoopTracker` is deleted; tool completion/replay uses framework execution identity
   rather than provider `ToolCall.ID`; terminal loop release requires durable applied-state proof for late deliveries
   rather than process-memory inference.
-- Model config adds exact `provider_ambiguity_policy` with default `fail_commit_unknown`; unsupported
-  `provider_reconcile` refuses before consumer allocation. `AgentResponse.failure_kind` is a closed optional JSON
-  string whose only new value is `provider_commit_unknown` on error responses.
+- Provider invocation is durably at-least-once. Before invoking, agentic-model reads the operation-specific retained
+  response by stable RequestID. A matching committed response is reused without another provider call; conflicting
+  response correlation quarantines; typed absence permits another provider call with the same RequestID. Every new
+  response receives PubAck before source ACK. This adds no provider ambiguity config, failure-kind wire field,
+  reconciliation capability, endpoint census, ledger, outbox, or provider dependency on AGENT replay admission.
 - `AGENT_LOOPS` is the sole current-state authority for loops. Dispatch retains no `LoopTracker` or pending-approval
   cache.
 - One caught-up authority-backed view serves `/activity`, `/loops`, `/debug/state`, and AutoContinue. Explicit LoopID

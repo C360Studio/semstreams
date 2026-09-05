@@ -26,6 +26,9 @@ This design incorporates the accepted evidence checkpoints:
   `cf5660a3b4196324a3695dc1174dacfb804cef56e2336536d4a9f7d8f4197daa`, independent `INVENTORY PASS`, 249/249 pins.
 - task/loop cardinality inventory `inventory-task-loop-cardinality-2026-09-04.md`, same base, SHA-256
   `afd93139bc520651c3432fc00df792cab12afc426fb9666439228d15d58be8d1`.
+- provider-settlement inventory `inventory-task3-provider-settlement-2026-09-05.md`, base
+  `78d5498649b09711eecfe77ba3196110ca00eab8`, SHA-256
+  `97a679b79b297796b3ee071a451eaf4e967ebba3afa684ba2ef7d3cd3f4bc668`, independent `INVENTORY PASS`, 144/144 pins.
 - approved dispatch edge-gateway checkpoint `design-dispatch-edge-gateway-2026-09-04.md`, current SHA-256
   `d26c0667692e5b5a6e3950f5b097966c17d2750b90aaeb8e54d2873a564275b5`, independent `DESIGN REVIEW PASS`.
   SHA-256 `339cf2b2c734ef48a2898ce6b79c3783577a8b4ae152b65a1078b00445949b76` is superseded provenance.
@@ -168,12 +171,18 @@ full rather than shadowed by additive text:
   lane-specific durable applied proof, Retry for unresolved authority, and Quarantine for conflict or impossible
   transition.
 
-## Provider ambiguity
+## Provider at-least-once recovery
 
-Before invoking, agentic-model checks for an already committed matching `agent.response.<requestID>` after its local
-AGENT replay-admission gate succeeds.
+Provider invocation is durably at-least-once. Before each provider invocation, agentic-model performs the
+operation-specific exact read for retained `agent.response.<requestID>`.
 
-The staged #759 foundation already supplies immutable `DeliveryAttempt` through `DeliveryWork`. Natsclient constructs
+A validated response matching the stable RequestID and expected response correlation is reused. The provider is not
+called, and the source may be positively acknowledged because the required response already has durable publication
+evidence. A conflicting retained response quarantines before provider invocation. A typed not-found result permits a
+provider call with the same RequestID, including on redelivery after an ambiguous process stop. A lookup failure is
+not absence and retries without invoking.
+
+The staged settlement foundation supplies immutable `DeliveryAttempt` through `DeliveryWork`. Natsclient constructs
 it from native message metadata before invoking work; agentic-model receives delivery number, metadata availability,
 and redelivery classification only. It receives no native message, settlement method, sequence, consumer identity,
 header, or mutable state and adds no model-private wrapper.
@@ -182,47 +191,15 @@ Agentic-model validates `HeartbeatDeliveryPolicy` against the exact acquisition 
 consumer. Missing metadata prevents work, produces typed `delivery_metadata_unavailable`, quarantines without
 positive settlement, and stops the exact owner.
 
-When no response exists after redelivery, the configured provider policy is one of:
+After a provider returns, every required success or provider-error `AgentResponse` receives synchronous JetStream
+PubAck before source ACK. If the process stops before that PubAck becomes durable, replacement repeats the retained
+response check. When no matching response exists, it may call the provider again. This is the accepted duplicate-risk
+boundary; no exactly-once claim is made.
 
-- `fail_commit_unknown`: do not invoke again; publish a typed commit-unknown `AgentResponse`. This is the default.
-- `at_least_once`: invoke again with the same RequestID and record that this is a redelivery attempt. This requires
-  explicit operator opt-in and may duplicate spend or provider effects.
-- `provider_reconcile`: use demonstrated provider idempotency or result lookup keyed by RequestID.
-
-The outward field is exactly `ProviderAmbiguityPolicy string` with JSON key
-`provider_ambiguity_policy,omitempty`; schema enum is
-`fail_commit_unknown|at_least_once|provider_reconcile`, default `fail_commit_unknown`, category `advanced`, and its
-description names paid/effectful duplicate risk. Omission or empty defaults to `fail_commit_unknown`, while every
-other value fails Config validation before consumer allocation. Shipped fixtures and operator docs carry the same
-enum and default.
-
-`provider_reconcile` is not an operator assertion and is not implied by formatting-only `ProviderAdapter` or
-`ResponsesAdapter`. The model package owns a private `providerCommitReconciler` seam with exact method
-`ReconcileProviderCommit(context.Context, agentic.AgentRequest) (providerReconcileResult, error)`. Its closed result
-kinds are `exact_match`, `proven_not_invoked`, `unresolved`, and `collision`; exact-match carries a validated
-`AgentResponse`, and reconciliation observes by RequestID without invoking. Before request-consumer allocation,
-setup enumerates `RegistryReader.ListEndpoints` and validates every endpoint reachable through direct, default, or
-capability routing. If any lacks the internal seam, `provider_reconcile` refuses readiness with typed
-`provider_reconcile_unsupported` naming the endpoint. At checkpoint P no shipped backend declares this capability,
-so the option cannot start until a separately reviewed backend supplies and proves it.
-
-The default avoids a second paid or effectful invocation, but may report commit-unknown when the prior process died
-before invoking. This tradeoff is intentional and must be visible to the operator.
-
-Commit-unknown is machine-readable through this exact field:
-
-```go
-FailureKind AgentResponseFailureKind `json:"failure_kind,omitempty"`
-```
-
-The wire encoding is an optional JSON string;
-its only new non-empty value is `provider_commit_unknown`, valid only when `status:"error"`. Empty is omitted and
-ordinary responses remain valid; every unknown value or non-empty value on another status is invalid. Consumers
-branch on this field and never parse free-text error content.
-
-A pre-invocation started marker is prohibited because it cannot close both sides of the call boundary. A
-completed-result ledger is not introduced because it closes only return-to-publication loss, not invocation
-ambiguity.
+A pre-invocation started marker is prohibited because it cannot prove whether the provider ran. No ambiguity policy,
+commit-unknown response kind, provider reconciliation interface, endpoint-capability enumeration, ledger, outbox,
+supervisor, or replay-admission dependency is introduced. Stable RequestID remains available to provider
+implementations that independently support idempotency.
 
 ## Loop cold recovery
 
@@ -393,7 +370,7 @@ its retained handle, awaits exact `Closed`, then cancels and joins its own obser
 | 11 | tools `tool.execute`; heartbeat | immutable completed outcome exists and ToolResult receives PubAck | permanent invalid → Terminate; transient Store/publish → Retry; collision → Quarantine | `TOOL_CALL_OUTCOMES` is the executor-effect boundary; completed replay invokes no executor; result publication is at-least-once |
 | 12 | dispatch `agent.complete`; heartbeat | retained terminal source and exact current loop route agree; routed user response receives PubAck, or validated no-user-route outcome settles | invalid → Terminate; unreadable authority/publish → Retry; route conflict → Quarantine | SourceMessageID, LoopID, exact loop route; response publication is at-least-once |
 | 13 | dispatch `agent.failed`; heartbeat | same row-12 contract for failure | same as row 12 | same as row 12 |
-| 14 | model `agent.request`; heartbeat | matching AgentResponse receives PubAck; exact retained response is read before provider invocation | invalid/endpoint permanent → error response or Terminate; safe transient → Retry; conflict/metadata/panic → Quarantine | RequestID; default unresolved redelivery emits commit-unknown with zero provider calls; responses are at-least-once |
+| 14 | model `agent.request`; heartbeat | matching retained AgentResponse is reused, or a newly invoked provider response receives PubAck | invalid/endpoint permanent → error response or Terminate; retained lookup failure → Retry; correlation conflict/metadata/panic → Quarantine | RequestID; retained match prevents another call; typed absence permits another call; responses are at-least-once |
 | 15 | loop `agent.task`; heartbeat | loop/graph birth or continuation commits; initial/next request and created/refusal outputs receive PubAck | invalid → Terminate; safely repeatable dependency failure → Retry; TaskID/LoopID conflict, impossible partial birth, or panic → Quarantine | stable TaskID-to-random-LoopID mapping, `AGENT_LOOPS`, and graph identity; ordinary events are at-least-once |
 | 16 | loop `agent.response`; heartbeat | turn is hydrated and resulting loop/terminal/next output commits with PubAck | invalid → Terminate; missing correlation/dependency → Retry; conflict/panic → Quarantine; durable applied proof → ACK | RequestID, current loop, originating request/response, and lane-specific applied-state proof |
 | 17 | loop `tool.result`; heartbeat | batch is rebuilt, result persists, approval evidence is verified when needed, and next output receives PubAck | invalid → Terminate; missing live continuation/dependency → Retry; conflict/panic → Quarantine; confirmed retained absence → durable loop failure; durable applied proof → ACK | RequestID, execution identity, current loop, originating request/response, completed outcomes; Store only if the gate retains it |
@@ -445,8 +422,10 @@ quarantines. Ordinary request and created-event publication is at-least-once.
 
 ### `agent.request`
 
-Happy-path done is PubAck for matching durable `AgentResponse`. Pre-invocation permanent errors become typed error
-responses. Commit-unknown follows configured provider policy. Invalid envelopes terminate. Collisions quarantine.
+Happy-path done is an already committed matching `AgentResponse` or PubAck for a newly produced matching response.
+A retained match prevents provider invocation; a conflicting response quarantines; typed absence invokes the provider
+with the same RequestID, including on redelivery. Pre-invocation permanent errors become typed error responses.
+Invalid envelopes terminate.
 
 ### `agent.response` complete or error
 
@@ -530,8 +509,8 @@ Property and fuzz tests cite these normative delta requirements rather than reco
 | `Nats-Msg-Id` supplies bounded suppression only | owner-specific publication requirements |
 | missing process state never proves stale or complete | `agentic-loop / All six loop input classes settle after owner-specific durable done` |
 | ACK follows every required durable effect and PubAck | `agentic-loop / All six loop input classes settle after owner-specific durable done` |
-| commit-unknown is closed and error-only | `agentic-model / Provider commit-unknown is machine-readable` |
 | matching retained response makes zero provider calls | `agentic-model / Model request settlement is bound to a durable response` |
+| retained response absence permits another provider invocation with the same RequestID | `agentic-model / Model request settlement is bound to a durable response` |
 | approval reconstruction is current-request scoped and conflict detecting | `agentic-loop / Approval continuation after replacement is exact and evidence-bounded` |
 | partial projection never licenses AutoContinue | `agentic-dispatch / Dispatch uses one authority-backed current-state projection` |
 | observed DiscardOld cannot satisfy strong recovery | `agentic-loop / Restart-safe replay observes and admits local stream bounds` |
@@ -666,13 +645,13 @@ unrelated publisher migration remain #1158.
 | Component author | Return the owner-specific domain outcome; do not settle native messages | Void/log-only success can ACK incomplete work and fails review | typed API and compile/test failure | The definition of done only; the private owner handles ACK/Retry/Terminate/Quarantine |
 | Tool executor author | Raw external executors preserve RequestID and execution identity; provider CallID is not globally unique | Replay is refused loudly when correlation is missing | payload validation and migration doc | Hosted executors know nothing; agentic-tools stamps correlation |
 | Approval UI developer | Submit LoopID and decision | Exact pending state resolves CallID; conflicts are typed refusals | HTTP/bus typed error | Public approval input only |
-| Model operator | Set only `provider_ambiguity_policy`; default may conservatively report commit-unknown | Omission safely makes no second call; unsupported reconciliation refuses boot | config/schema validation, typed `failure_kind`, readiness, docs | Semantic policy only; no settlement or recovery-bucket mechanics |
+| Model operator | Know that ambiguous replacement may repeat a provider call | Omission requires no configuration; retained matches are reused and typed absence calls again | model operations documentation | Only the at-least-once duplicate-risk contract; no policy, reconciliation, or failure-kind mechanics |
 | Custom command author | Use `LookupLoopOwner` with LoopID | Old field removal is a compile failure | compile error and migration note | Only LoopID and returned owner |
 | HTTP/UI author | Existing `LoopInfo` wire remains; projection endpoints can return 503 | Ordinary reads continue; false-empty assumptions fail visibly | typed HTTP response and migration note | No bucket, watcher, or cache |
 | AutoContinue caller | Opt into exact user/type/channel matching | No partial or cross-channel fallback | schema/docs and typed ambiguity/unavailable response | Only whether convenience is wanted |
 | Dashboard operator | Remove `router_active_loops` query | Series disappears | metric migration note | Use `/loops` with caught-up signal |
 | graphview caller | Do not call removed `Restart()` | Compile failure | compile error and migration note | Lifecycle owner recreates the view |
-| Framework operator | Configure provider ambiguity and admitted stream/bucket policy | Affected closure refuses readiness rather than silently degrading | boot error with observed/required fields | No recovery Store unless the evidence gate retains it |
+| Framework operator | Configure admitted stream/bucket policy | Affected closure refuses readiness rather than silently degrading | boot error with observed/required fields | No recovery Store unless the evidence gate retains it |
 | Governance author | Supply approve/reject policy only | Late verdict remains recoverable; invalid conflict is refused | typed outcome and telemetry | No waiter, subject, or replay mechanics |
 | Rule author | Use `publish_agent` with valid task fields and subject | An uncovered or inadmissible output refuses before send | typed rule-load/runtime error and rule-agent publishing docs | No port spelling, stream policy, wildcard, or PubAck mechanics |
 | Sister-repository developer | Preserve registered envelopes and opaque correlation on raw NATS seams | Old code remains unchanged until its owner performs the recorded migration | SemStreams-owned migration document | Final contract and local migration list, not branch choreography |
@@ -690,8 +669,9 @@ receives a loud migration failure if it does not.
 
 ### Model adapter operator
 
-They select only the semantic provider ambiguity policy. The default is fail-closed `fail_commit_unknown`. They do
-not configure a recovery bucket, checkpoint interval, or guessed retry count.
+They configure no SemStreams provider-ambiguity policy. Provider invocation is durably at-least-once, and an
+ambiguous replacement may call again when no matching response is retained. The stable RequestID is available for a
+provider implementation's own idempotency support.
 
 ### Component author
 
@@ -700,9 +680,9 @@ or understand replay storage.
 
 ### Framework operator
 
-They configure provider ambiguity and admitted stream/bucket policy. No approval Store surface ships unless the
-replacement evidence gate fails and the owner retains the approved fallback. There is no supervisor, recovery mode,
-checkpoint interval, or outbox knob.
+They configure admitted stream/bucket policy. No approval Store surface ships unless the replacement evidence gate
+fails and the owner retains the approved fallback. There is no supervisor, recovery mode, checkpoint interval, or
+outbox knob.
 
 ### Governance author
 
@@ -745,7 +725,8 @@ final default-branch PR #1156 carries the closing authority.
 ## Documentation ownership
 
 #759 owns `docs/concepts/33-semantic-settlement.md` and its message-pump, lease-watchdog, owner-defined done, replay,
-and disposition explanation. #1146 links it and documents only provider ambiguity, approval continuation, strong
+and disposition explanation. #1146 links it and documents only provider at-least-once recovery and duplicate risk,
+approval continuation, strong
 AGENT admission, loop-state acquisition, metrics, and raw external-executor migration. It corrects false restart
 claims in concepts 03, 17, and 27; reconciles model 60s and loop 15s heartbeat defaults in operator docs, schemas, and
 fixtures; removes paused vocabulary from `agentic/README.md`, `processor/agentic-loop/README.md`,
@@ -771,7 +752,8 @@ The design is rejected or revised if any premise fails:
 7. Approval replacement either succeeds from current `LoopEntity` plus exact current request/response evidence for
    every decision branch, or the approved Store fallback remains unchanged after owner ruling.
 8. Governance replacement reads the exact retained verdict or safely re-obtains it. Failure returns for new design.
-9. `fail_commit_unknown` produces zero second provider calls; `at_least_once` records repeated attempts explicitly.
+9. A matching retained response produces zero provider calls; typed absence permits another call with the same stable
+   RequestID, including after ambiguous replacement.
 10. No process-only map is required to classify a delivered source after replacement.
 11. One caught-up dispatch view and configured approval-deadline repair observe current loop state; no tracker or
     second correctness projection exists.
@@ -784,8 +766,8 @@ The design is rejected or revised if any premise fails:
 15. `AGENT_LOOPS` is observed as exact History 10, TTL 24h, and non-binding MaxBytes before loop work starts.
 16. Provider CallID is not globally unique. Approval reconstruction performs no CallID-indexed stream lookup and
     proves same-CallID/different-RequestID isolation.
-17. At P, `agentic/types.go:169-178` has no `failure_kind`; `processor/agentic-model/config.go:13-18` has no provider
-    ambiguity key. Both are outward contract additions and must migrate schema, fixtures, and docs atomically.
+17. At P, no provider ambiguity config, commit-unknown failure kind, or provider reconciliation seam exists; the
+    simplified target preserves that absence.
 18. `SearchResult.TokensUsed` is aggregate spend and is not projected into directional `TokensIn` or `TokensOut`.
 19. `component/flowgraph/flowgraph.go:381-389` defines the canonical directional matcher as
     `SubjectCovers(filter, pattern)` and identifies graph-level composition as its current caller. Rule publication
@@ -802,7 +784,6 @@ The design is rejected or revised if any premise fails:
   physical rows 1, 11, and 17. Implementation review must measure their actual source-delivery guarantees and prove
   their observed bounds sufficient for the complete 15-lane horizon. AGENT admission is not proof for another
   stream.
-- Model provider adapters have not demonstrated `provider_reconcile`; `fail_commit_unknown` remains the safe default.
 - Governance retained-verdict lookup at the waiter-loss boundary is target state, not current truth. Ordinary
   validated output remains at-least-once.
 - `AGENT_LOOPS` matching/race/drift behavior is target state. Its existing create literal is not observed authority;
@@ -847,8 +828,10 @@ Implementation or review stops if:
   required next publication receives PubAck or durable applied-state proof exists, or collapses transient,
   confirmed-absent, and corrupt evidence into one result;
 - any path ACKs after log-only failure, missing process correlation, panic, or unknown required publication;
-- default model redelivery can invoke the provider twice, AGENT remains `DiscardOld`, or observed AGENT bounds cannot
-  prove the caller-local horizon;
+- a matching retained response still permits provider invocation, conflicting retained correlation does not
+  quarantine, typed absence does not permit another call with the same RequestID, or source ACK can precede required
+  response PubAck;
+- AGENT remains `DiscardOld`, or observed AGENT bounds cannot prove the caller-local horizon;
 - USER or TOOL source retention is assumed rather than measured from the actual source stream;
 - approval continuation implements or removes the Store fallback before the evidence gate and second owner ruling;
 - dispatch retains `LoopTracker`, a pending-approval cache, created/pending correctness inputs, or another current-
@@ -891,9 +874,9 @@ is not required to interpret or complete any row. There are no deviations.
 | Keep immutable `DeliveryAttempt`; expose no native settlement to business work | `design.md / Non-heartbeat settlement boundary`; `tasks.md / 1.4–1.7` | private callbacks only; narrow `SettleDelivery` is transport-level |
 | Derive no universal work deadline from AckWait; heartbeat only after measured lane-specific need | `proposal.md / Holds`; dispatch, governance, and loop owner settlement requirements; `tasks.md / 1.5–1.7` | owner ruling `5530950829` |
 | Ship model 60s/120s and loop 15s against shortest BackOff 30s; validate before allocation | `agentic-model / Model heartbeat policy is valid before acquisition`; `agentic-loop / Long-running loop heartbeat policy is valid before acquisition`; `tasks.md / 1.2–1.4` | invalid defaults fail setup |
-| Default provider ambiguity to `fail_commit_unknown`; expose exact config/wire contract; refuse unsupported reconciliation before start | `design.md / Provider ambiguity`; `agentic-model / Provider commit-unknown behavior is explicit`; `agentic-model / Provider commit-unknown is machine-readable`; `tasks.md / 3.1–3.3` | no second default-policy call; no unsupported start |
+| Make provider invocation durably at-least-once with retained-response reuse and no ambiguity framework | `design.md / Provider at-least-once recovery`; `agentic-model / Model request settlement is bound to a durable response`; `tasks.md / 3.1–3.3` | comment `5550778818`; retained match reuses, conflict quarantines, absence calls again, PubAck precedes source ACK |
 | Replace stale current-spec semantics through full MODIFIED blocks | `design.md / Current-spec reconciliation`; exact MODIFIED requirements in dispatch, tools, and loop deltas; `tasks.md / 5.2, 6.10, 7.7` | unaffected scenarios/citations preserved; no additive conflict |
-| Use strong observed DiscardNew and refuse only the affected dependency closure | `agentic-loop / Restart-safe replay observes and admits local stream bounds`; `tasks.md / 2.7–2.9, 9.1` | no whole-composition/global-maxima gate |
+| Use strong observed DiscardNew and refuse only the affected dependency closure | `agentic-loop / Restart-safe replay observes and admits local stream bounds`; `tasks.md / 9.1–9.4` | no whole-composition/global-maxima gate |
 | Admit first-party rule AGENT output through the same internal validator and existing publisher | `rule-agent-publishing / First-party publish-agent output is admitted before action execution`; `rule-agent-publishing / Publish-agent classification uses canonical wildcard coverage and durable publication`; `tasks.md / 9.5–9.7` | six classifier surfaces; no duplicate gate/API |
 | Use exact canonical publisher matcher in its existing direction and ownership | `design.md / First-party rule publisher admission`; `rule-agent-publishing / Publish-agent classification uses canonical wildcard coverage and durable publication`; `tasks.md / 9.6` | `component/flowgraph.SubjectCovers(declaredFilter, concreteSubject)`; no duplicate matcher |
 | Treat `TaskMessage` as registered Payload, not Graphable | `rule-agent-publishing / Publish-agent preserves the registered payload boundary`; `tasks.md / 9.5–9.7` | no graph-interface prediction |

@@ -111,47 +111,29 @@ design-section shorthand is not a valid citation. Every implementation slice fol
   `// spec: agentic-governance / Governance publications are durably at-least-once`, and
   `// spec: agentic-tools / Tool-result publication is durably at-least-once`.
 - [x] 2.6 Remove general exact committed-output lookup and canonical-output fingerprint work. Retain exact reads only
-  for retained `TaskMessage` recovery, provider ambiguity, approval reconstruction, governance verdict recovery,
+  for retained `TaskMessage` recovery, matching retained provider-response reuse, approval reconstruction,
+  governance verdict recovery,
   explicit LoopID/terminal routing, durable applied-state proof, and immutable completed tool outcomes at the
   executor-effect boundary.
 
-## 2A. Shared caller-local AGENT replay admission
-
-- [ ] 2.7 RED: add model/dispatch/governance/loop tests for caller-local requirements, divergent configs, resolved
-  overrides, under-admission, unavailable StreamInfo, queued USER, non-agentic zero lookup, and zero dependent
-  allocation/positive settlement. Cite exactly
-  `// spec: agentic-loop / Restart-safe replay observes and admits local stream bounds`.
-- [ ] 2.8 Implement one pure repo-internal `internal/agentstreamadmission.ObserveAndValidate`. Each affected owner
-  invokes it after its own resolved PortFacts and before its own dependent allocation. Requirements use only local
-  AckWait, BackOff, MaxDeliver, maximum work/replay need, and producer PubAck dependency; no cross-component config,
-  shared maxima, factory/raw-JSON switch, state, watcher, mutation, or exported API. Refuse DiscardOld, insufficient
-  MaxAge, or earlier message bounds with typed `agent_stream_replay_inadmissible` and exact observed/required fields.
-- [ ] 2.9 GREEN: prove each affected closure refuses independently, non-agentic components perform zero lookup,
-  dispatch leaves queued USER unconsumed, and full DiscardNew backpressure retains source work without core-NATS
-  fallback under the citation in 2.7.
-
 ## 3. Provider settlement
 
-- [ ] 3.1 RED: add first-delivery, retained-response provider protection, pre-call replacement, post-return/pre-PubAck
-  replacement, at-least-once response publication, unavailable metadata, correlation conflict, config omission/
-  invalid-enum, unsupported provider reconciliation, and policy-table tests. Cite exactly
+- [ ] 3.1 RED: add first-delivery, matching-retained-response, typed-absence redelivery, retained-read failure,
+  pre-call replacement, post-return/pre-PubAck replacement, at-least-once response publication, unavailable metadata,
+  and correlation-conflict tests. Cite exactly
   `// spec: agentic-model / Model request settlement is bound to a durable response`,
-  `// spec: agentic-model / Model response publication is durably at-least-once`,
-  `// spec: agentic-model / Provider commit-unknown behavior is explicit`,
-  `// spec: agentic-model / Provider commit-unknown is machine-readable`, and
+  `// spec: agentic-model / Model response publication is durably at-least-once`, and
   `// spec: agentic-model / Started markers do not claim invocation certainty` as applicable.
-- [ ] 3.2 Implement `fail_commit_unknown`, `at_least_once`, and admitted `provider_reconcile`; default to
-  `fail_commit_unknown` through exact JSON key `provider_ambiguity_policy`; omission/empty defaults to that value and
-  the only other values are `at_least_once` and `provider_reconcile`. Reconcile exact committed matching response
-  before invocation. Add exact optional `AgentResponse.failure_kind` JSON string with closed
-  `AgentResponseFailureKind=provider_commit_unknown` only for error status; never infer it from error text or use a
-  pre-call started marker as invocation proof. Add the package-private `providerCommitReconciler` exact method/result
-  seam; enumerate every endpoint reachable through direct/default/capability routing and refuse unsupported
-  `provider_reconcile` before consumer allocation. Reconcile config struct/defaults/validation, generated schema,
-  shipped fixtures, and model docs.
-- [ ] 3.3 GREEN: prove by counter that a matching retained response and default unresolved redelivery invoke the
-  provider zero times; prove `at_least_once` repeats only by explicit opt-in, every required response gets PubAck
-  before source ACK, and uncertain response publication may repeat without repeating provider work.
+- [ ] 3.2 Implement the operation-specific exact retained-response read before provider invocation. Reuse a validated
+  matching response with zero provider calls; quarantine conflicting correlation; treat lookup failure as Retry; and
+  invoke the provider with the same stable RequestID on typed absence, including redelivery after ambiguous process
+  replacement. Publish every required success or provider-error response and wait for PubAck before source ACK. Add
+  no provider ambiguity config, commit-unknown failure kind, provider reconciliation seam or endpoint census,
+  pre-call started marker, ledger, outbox, supervisor, or provider dependency on AGENT replay admission.
+- [ ] 3.3 GREEN: prove by counter that a matching retained response invokes the provider zero times and typed absence
+  invokes once for each delivered attempt. Prove retained-read failure invokes zero times, conflict quarantines,
+  every newly produced response receives PubAck before source ACK, and post-return/pre-PubAck replacement may invoke
+  the provider again when no matching response committed.
 
 ## 4. Loop task and response settlement
 
@@ -164,8 +146,9 @@ design-section shorthand is not a valid citation. Every implementation slice fol
   owner. Add direct LoopEntity read-through by LoopID; reconstruct response configuration from committed request;
   settle loop/graph birth, lineage, initial request, created event, and terminal failure at the delivery boundary.
   Preserve every exit for #1244 as a declared transition or refusal and never encode log-and-ACK as success.
-- [ ] 4.3 GREEN: prove no provider double-call, no response/tool-result log-and-ACK, no stale-correlation loss, and no
-  replay beyond admitted evidence across real process replacement.
+- [ ] 4.3 GREEN: prove matching retained provider response prevents another call and retained absence remains durably
+  at-least-once, no response/tool-result log-and-ACK, no stale-correlation loss, and no replay beyond admitted evidence
+  across real process replacement.
 
 ## 5. Tool result and completed outcome
 
@@ -308,6 +291,18 @@ design-section shorthand is not a valid citation. Every implementation slice fol
 ## 9. AGENT admission, first-party publisher, and loop authority
 
 - [x] 9.1 Preserve the owner-selected strong observed `DiscardNew` and affected-closure contracts.
+- [ ] 9.2 RED: add model/dispatch/governance/loop tests for caller-local requirements, divergent configs, resolved
+  overrides, under-admission, unavailable StreamInfo, queued USER, non-agentic zero lookup, and zero dependent
+  allocation/positive settlement. Cite exactly
+  `// spec: agentic-loop / Restart-safe replay observes and admits local stream bounds`.
+- [ ] 9.3 Implement one pure repo-internal `internal/agentstreamadmission.ObserveAndValidate`. Each affected owner
+  invokes it after its own resolved PortFacts and before its own dependent allocation. Requirements use only local
+  AckWait, BackOff, MaxDeliver, maximum work/replay need, and producer PubAck dependency; no cross-component config,
+  shared maxima, factory/raw-JSON switch, state, watcher, mutation, or exported API. Refuse DiscardOld, insufficient
+  MaxAge, or earlier message bounds with typed `agent_stream_replay_inadmissible` and exact observed/required fields.
+- [ ] 9.4 GREEN: prove each affected closure refuses independently, non-agentic components perform zero lookup,
+  dispatch leaves queued USER unconsumed, and full DiscardNew backpressure retains source work without core-NATS
+  fallback under the citation in 9.2.
 - [ ] 9.5 RED: add all-six-configuration and four-static-producer real-NATS tests, both `agent.task`/`agent_task`
   names, declaration-only future rule, uncovered dynamic subject, missing publisher, registered non-Graphable task,
   and malformed/unregistered envelope tests. Cite exactly
@@ -361,7 +356,8 @@ design-section shorthand is not a valid citation. Every implementation slice fol
 - [ ] 11.2 Run focused race and integration tests, lint, build, schema generation, contract tests, and serialized
   `task e2e:agentic`. The AGENT DiscardNew cutover and first-party publisher path require covering E2E green.
 - [ ] 11.3 Correct false restart claims in concepts 03, 17, and 27; link concept 33 without duplicating its message-
-  pump explanation. Document provider ambiguity, continuation/Store, AGENT admission and DiscardNew backpressure,
+  pump explanation. Document provider at-least-once recovery, retained-response reuse, stable RequestID, and
+  ambiguous-replacement duplicate risk; continuation/Store; AGENT admission and DiscardNew backpressure,
   loop authority, boot order, metrics, raw external-executor migration, heartbeat defaults, and rule-agent publisher
   admission. Document the user-facing control contract: cancel, durable ApprovalResponse wait, retry/restart from the
   last durable boundary, lifecycle quiesce, no arbitrary pause/resume, and future suspension only as a new contract.
