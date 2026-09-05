@@ -9,7 +9,8 @@ OPEN task line as a live caveat; use "pause seam", "barrier", "abort", "does not
 Premises measured on `main@797d294a`: `processor/agentic-tools/executors/graph_query.go:442` (dead `type` compare),
 `:531-540` (stub), `:591-617` (no `IsRelationship`), `:428-431` (silent continue), `graph/types.go:24-47`,
 `natsclient/kv.go:522-547,558-598`, `graph/kvcatalog.go:261`, `pkg/types/entity_id.go:160-164`,
-`release/tier1-packages.txt:79`, `test/e2e/scenarios/agentic/approval_signal.go:36-40,77-88`.
+`release/tier1-packages.txt:79`, `test/e2e/scenarios/agentic/approval_signal.go:36-40,77-88,139-144`,
+`pkg/types/entity_id.go:166-186`, `processor/graph-query/graphrag.go:1570-1592`, `test/e2e/mock/cmd/main.go:38`.
 
 Sequencing: 1.6 governs when sections 3–6 start; the implementation's file set intersects none of the 176 unique
 paths Codex's #759/#1146 stack (PRs #1156/#1159/#1141) holds, and the delta is ADDED-only.
@@ -38,7 +39,15 @@ paths Codex's #759/#1146 stack (PRs #1156/#1159/#1141) holds, and the delta is A
 - [x] 1.3d Architect amendment round 2 folding 1.3c (owner rows added, ADR-036 case-against rewritten on the
       predicate-catalog owner, RC-6 walked path named, pins fixed) plus the external-evidence table from the Cekikj
       restatement (Part 2 § 2.3/§ 2.5, Part 3 § 3.3/§ 3.4/§ 3.8) in `design.md` § Tool-preference premise.
-- [ ] 1.3e Re-review round 3 (`semstreams-reviewer`) recorded on PR #1262.
+- [x] 1.3e Re-review round 3 (`semstreams-reviewer`) recorded on PR #1262 — INVENTORY CHANGES REQUESTED: BLOCKING
+      `graphrag.filterEntityIDsByType` (ADR-071) as the existing type-segment selector; HIGH the approval walk's
+      `status=success` assertion cannot distinguish a served listing from an empty one (RC-6); MEDIUM `:470` in
+      `design.md`; NIT ADR-106 `:81-83`; unrecorded `ENTITY_SUFFIX_INDEX` owner. Round 2 confirmed closed.
+- [x] 1.3f Architect amendment round 3: per-axis same-class sweep recorded (type selection, predicate presence,
+      relationships, ID fragment, neighbor expansion, absence signaling, positional-wildcard listing); the tools'
+      matcher named as `MatchEntityIDPattern` with the ADR-071 divergence stated; the fixture claim corrected (the
+      agentic tier ingests no sensor entity); RC-6 walked path re-based on 4.2 + new 4.5.
+- [ ] 1.3g Re-review round 4 (`semstreams-reviewer`) recorded on PR #1262 — checks the axis sweep for completeness.
 - [ ] 1.4 Owner INVENTORY PASS on the PR; owner rulings on `proposal.md` questions 1–11 recorded on #1261.
 - [ ] 1.5 Owner places the milestone (recommendation: `v1.0.0-beta.165`).
 - [ ] 1.6 HOLD — sections 3–6 do not start until (a) 1.4 is recorded and (b) either Codex's #759/#1146 stack
@@ -55,8 +64,9 @@ paths Codex's #759/#1146 stack (PRs #1156/#1159/#1141) holds, and the delta is A
 
 ## 3. Code
 
-- [ ] 3.1 `graph_query.go`: `KVKeyLister`; type-segment grammar helper shared by `entity_type`/`filter_type`;
-      `queryByType` served; `extractRelationships` typed over `EntityState` with `IsRelationship()`, dead branch
+- [ ] 3.1 `graph_query.go`: `KVKeyLister`; a pattern BUILDER (one or two tokens → six-position pattern, validated by
+      `ValidateEntityIDPattern`) shared by `entity_type`/`filter_type`, matching through `MatchEntityIDPattern` — no
+      new type extractor or matcher; `queryByType` served; `extractRelationships` typed over `EntityState` with `IsRelationship()`, dead branch
       deleted; `predicates_present`/`filter_registered`; neighbors budget, `unresolved`, hints; descriptions rewritten.
 - [ ] 3.2 `register_graph_query.go`: adapter `KeysByPattern` via `natsclient.FilteredKeys`.
 
@@ -66,6 +76,11 @@ paths Codex's #759/#1146 stack (PRs #1156/#1159/#1141) holds, and the delta is A
 - [ ] 4.2 Integration `TestIntegration_QueryByType_ListsFromEntityStates`.
 - [ ] 4.3 Fails-without-fix for the `IsRelationship` filter and the segment match, run against the committed state.
 - [ ] 4.4 `predicate_authority_contract_test.go` unchanged and green.
+- [ ] 4.5 Booted-binary walk for `KVKeyLister` (RC-6): `test/e2e/mock/cmd/main.go:38` pins
+      `{"entity_type":"agent.execution","limit":5}`; `approval_signal.go` prompt text follows; after the success
+      metric, `walkApprovalPath` reads `tool.result.<pending.CallID>`, decodes `ToolResult.Content`, asserts
+      `pattern == "*.*.*.agent.execution.*"`, `matched >= 1`, `entity_ids` ∋ the primary loop's
+      `LoopExecutionEntityID`. Neither file is Codex-held; `scenario.go` (held) is not edited.
 
 ## 5. Docs
 
@@ -77,6 +92,6 @@ paths Codex's #759/#1146 stack (PRs #1156/#1159/#1141) holds, and the delta is A
 - [ ] 6.1 `task lint`; `go test -race ./processor/agentic-tools/...`; `-tags=integration -p 2`;
       `openspec validate --strict`; `task spec:properties`; `task schema:generate` no drift;
       `task api:compat:report` unchanged from baseline; `go run ./cmd/entity-id-audit .` (not in `task lint`).
-- [ ] 6.2 `task e2e:agentic` green (the approval walk executes the served `query_by_type`).
+- [ ] 6.2 `task e2e:agentic` green with 4.5 in place (the approval walk executes the served `query_by_type` and reads its identities).
 - [ ] 6.3 `semstreams-reviewer` implementation pass recorded in section 7.
 - [ ] 6.4 Archive as the final content commit; narrow archive-sync check.

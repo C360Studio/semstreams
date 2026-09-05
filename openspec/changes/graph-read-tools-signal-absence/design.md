@@ -32,6 +32,20 @@ cold-start gap is filled by `query_by_type` (typed entry) and `research_graph`.
 responder already accepts (lists, then caps at 1000). Retire was rejected: it collides with the agentic tier's approval
 proof and with Codex's e2e files (inventory addition 4).
 
+**The matcher on the type axis is `pkg/types.MatchEntityIDPattern`** (`pkg/types/entity_id.go:166-186`; exact
+six-position, byte-exact, both inputs validated) — for `entity_type` on every key the NATS filter returns (R2) and for
+`filter_type` on every neighbor identity (R3). The one/two-token grammar is a pattern BUILDER (`temperature` →
+`*.*.*.*.temperature.*`; `environmental.temperature` → `*.*.*.environmental.temperature.*`) validated by
+`ValidateEntityIDPattern`; no new extractor joins `graphrag.go:258` and `graph/clustering/summarizer.go:18`. The
+existing selector on this axis, `graphrag.filterEntityIDsByType` (`processor/graph-query/graphrag.go:1570-1592`,
+ADR-071), is deliberately NOT reused and the divergence is intentional: it is package-private to graph-query, it
+folds case (admitting a token the canonical alphabet, `entity_id.go:243-249`, would reject), and it widens to the
+unfiltered input when a non-empty set filters to empty (`:1589-1592`) — the right recall choice for classifier guesses
+over a semantic hit list, and exactly the silent substitution a model-requested selection must never make (an absent
+type answers empty + `HintEmpty`, never the whole bucket). Same grammar underneath (`ParseEntityID`), two matchers
+with two stated semantics; `graph/id_prefix.go:19-21`'s one-matcher rule is honoured on the axis it names
+(leading prefix), which this change does not touch.
+
 ## Tier 1 shape
 
 `KVGetter` and `NewGraphQueryExecutor` are unchanged. New exported optional interface
@@ -95,7 +109,8 @@ the next record would exceed the byte budget; the frontier is drained only throu
   `truncated ⇔ matched > limit ⇔ HintTooLarge`; `HintEmpty ⇔ matched == 0`; a token that is not a canonical segment
   yields `invalid_args` and zero lister calls.
 - **R3** (`query_neighbors`): `unresolved ∩ keys(neighbors) = ∅`; every neighbor is the object of an
-  `IsRelationship()` triple on a visited entity; `truncated ⇔ frontier_remaining > 0 ⇔ HintTooLarge`;
+  `IsRelationship()` triple on a visited entity; `filter_type` keeps exactly the identities for which
+  `MatchEntityIDPattern(pattern, id)` is true; `truncated ⇔ frontier_remaining > 0 ⇔ HintTooLarge`;
   Σ neighbor record bytes ≤ budget.
 
 ## Residual (recorded, owner question 4)
@@ -110,7 +125,7 @@ Two bound classes exist on this component and the delta names which one `query_n
 
 | Class | Where | Who owns the number | How it is observed |
 |---|---|---|---|
-| Transport bound | `openspec/specs/agentic-tools/spec.md:467-475` — the component attempts the full record, and a typed oversize rejection yields one compact `too_large` authority; `:470` "SHALL NOT inspect configured payload limits" | NATS (`max_payload`); the framework never reads it | by attempting the real Create |
+| Transport bound | `openspec/specs/agentic-tools/spec.md:467-475` — the component attempts the full record, and a typed oversize rejection yields one compact `too_large` authority; `:473` "SHALL NOT inspect configured payload limits" | NATS (`max_payload`); the framework never reads it | by attempting the real Create |
 | Model-facing content cap | `executors/bash.go:36` `bashMaxOutputBytes = 100 * 1024`; `executors/httprequest.go:23` `httpMaxTextSize = 20000` | the executor, as a constant | by measuring the real bytes of real content while assembling |
 
 The neighbors budget is the second class. It is not a read of a framework-owned limit and does not predict the
@@ -128,20 +143,34 @@ question 1 is the value only.
 
 **Go surface — additive.** `processor/agentic-tools/executors` is Tier 1 (`release/tier1-packages.txt:79`). The change
 adds one exported optional interface (`KVKeyLister`) and changes no existing exported symbol; `KVGetter`,
-`NewGraphQueryExecutor`, and `ListTools` are unchanged. ADR-106 (`docs/adr/106-…md:81-82`): a compatible addition to
-Tier 1 does not reset RC-4 **but must pass the walked-path guard (RC-6) before the tag that ships it** — a spec
-scenario citing the surface and an assertion exercising it on a booted binary. For `KVKeyLister` those are the delta's
-`TestQueryByType_WithoutKeyListerIsLoud` scenario and the agentic e2e approval walk, whose approved re-dispatch
-executes the served `query_by_type` through the adapter's `KeysByPattern` on a booted binary (`tasks.md` 6.2).
-`task api:compat:report` is in the gates (`tasks.md` 6.1), so compatibility is measured, not read from a `!` marker
-(`:114-115`). No payload, schema, subject, or KV key changes.
+`NewGraphQueryExecutor`, and `ListTools` are unchanged. ADR-106 (`docs/adr/106-…md:81-83`): a compatible addition to
+Tier 1 does not reset RC-4 **but must pass the walked-path guard (RC-6) before the tag that ships it** — "a brand-new
+surface with one adopter walking it under time pressure, which is the dominant defect shape being minted live". For
+`KVKeyLister` the walked path is NOT the approval walk as it stands: that walk asserts a counter delta on
+`{tool_name=query_by_type, status=success}` (`test/e2e/scenarios/agentic/approval_signal.go:139-144,186-190`) and never
+reads the result, and a zero-key listing is also `status=success` — so it passes identically over a working listing, an
+empty one, and the stub. The walked path this change supplies is two-part:
+
+1. **Integration** (`tasks.md` 4.2): `TestIntegration_QueryByType_ListsFromEntityStates` against real NATS through the
+   catalog-reader adapter — the first positional-wildcard call of `ListKeysFiltered` in the tree (every existing
+   `FilteredKeys` caller passes `prefix+">"`: `graph/inference/storage.go:312,560`, `graph/clustering/storage.go:243`).
+2. **Booted binary** (`tasks.md` 4.5): the mock's pinned args move from `temperature` (matches nothing in the tier) to
+   `{"entity_type":"agent.execution","limit":5}` (`test/e2e/mock/cmd/main.go:38`; not Codex-held), and
+   `walkApprovalPath` gains one assertion after the success metric: read `tool.result.<pending.CallID>` from the stream
+   (the read `scenario.go:411-452` already performs), decode `agentic.ToolResult.Content`, and assert `pattern ==
+   "*.*.*.agent.execution.*"`, `matched >= 1`, and `entity_ids` contains
+   `agentic.LoopExecutionEntityID(org, platform, <primary loop_id>)` — the entity `verifyGraphTriples` proved present
+   five stages earlier (`scenario.go:238,243`). Lives in `approval_signal.go` (not Codex-held; `scenario.go` is).
+
+Until 4.5 lands, RC-6 is satisfied by the spec scenario plus the integration test only. `task api:compat:report` is in
+the gates (`tasks.md` 6.1), so compatibility is measured, not read from a `!` marker (`:114-115`). No payload, schema, subject, or KV key changes.
 
 **Model-facing result shapes — three tools change what the model reads.** The consumer is the model via
 `buildToolMessages`; the shapes are JSON inside `ToolResult.Result`, not a Go type.
 
 | Tool | Additive | Behaviour that flips | Who reads the old shape today |
 |---|---|---|---|
-| `query_by_type` | `entity_ids`, `pattern`, `matched`, `truncated`, hints | stub `{entities:[], note, suggested_ids}` → served listing; a non-segment `entity_type` → `invalid_args` where the stub accepted anything | nothing pins the stub shape (0 hits for `suggested_ids` outside `graph_query.go`); the agentic e2e approval walk asserts `status="success"` on the executions metric with pinned args `{"entity_type":"temperature","limit":5}` (`test/e2e/mock/cmd/main.go:38`; `test/e2e/scenarios/agentic/approval_signal.go:36-40,77-88`) — a canonical one-token segment the served tool accepts; the tier's temperature entity matches it |
+| `query_by_type` | `entity_ids`, `pattern`, `matched`, `truncated`, hints | stub `{entities:[], note, suggested_ids}` → served listing; a non-segment `entity_type` → `invalid_args` where the stub accepted anything | nothing pins the stub shape (0 hits for `suggested_ids` outside `graph_query.go`); the agentic e2e approval walk asserts `status="success"` on the executions metric with pinned args `{"entity_type":"temperature","limit":5}` (`test/e2e/mock/cmd/main.go:38`; `test/e2e/scenarios/agentic/approval_signal.go:36-40,77-88`) — a canonical one-token segment the served tool accepts, and one that matches NOTHING in this tier: the agentic tier writes only loop-execution and model-endpoint entities to ENTITY_STATES (`scenario.go:884-887`), the sensor ID is a `query_entity` argument (`scenario.go:362`), so the served tool answers `matched: 0` + `HintEmpty` with `status=success` and the walk stays green either way |
 | `query_relationships` | `filter_registered`, `predicates_present`, `HintEmpty` | rows are `IsRelationship()` triples only — literal-object triples reported as relationships today (`:591-617`) disappear; a malformed filter → `invalid_args` where today `count: 0` | the model; prompt text names the tool, never a result key (`processor/agentic-loop/prompt/assembler.go:142`; `configs/personas/fragments/ops/00-identity.md:9`; `configs/flows/ops-agent.json:316`, an `allowed_tools` entry) |
 | `query_neighbors` | `unresolved`, `truncated`, `frontier_remaining`, hints | `filter_type` filters (today ignored, `:442`) — a caller passing it gets a smaller set, possibly empty; the budget truncates where today unbounded; a transient fetch error fails the call where today it is skipped (`:428-431`) | the model; same prompt-text finding |
 | `query_entity`, `query_entities` | — | none | — |
@@ -225,7 +254,7 @@ sorted by id, capped — a grep WITHOUT regex. Mapping to the direct surface aft
 | `get_node` | `query_entity` | covered |
 | `traverse` | `query_neighbors`, `query_relationships` | covered; truthful after this change |
 | `describe_edges` | `predicates_present` on `query_relationships` (entity-scoped) | covered by this change |
-| `find_nodes`, id half (`needle in node_id.lower()`) | served `query_by_type` (type segment) | partly covered by this change |
+| `find_nodes`, id half (`needle in node_id.lower()`) | served `query_by_type` (type segment); adjacent owner `graph.ingest.query.suffix` over `ENTITY_SUFFIX_INDEX` (trailing segments; graph-ingest IS in the agentic tier) | partly covered by this change; the suffix responder is a candidate for the rest, not adopted (owner question 8) |
 | `find_nodes`, props half (substring over property values) | none — `byName` is exact over NAME_INDEX and fusionnats-only (`processor/graph-query/query.go:64`); `searchGraph`/`localSearch` are semantic/statistical and tier-dependent (`:63,65`); `prefix` needs leading segments (`:56`); `summary` is a type distribution (`:62`) | **gap** |
 
 What governs filling it: `openspec/specs/agentic-tools/spec.md:267-291` — the framework SHALL NOT supply
