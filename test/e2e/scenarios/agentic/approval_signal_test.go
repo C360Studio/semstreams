@@ -38,6 +38,7 @@ func TestStagesAreExactlyThisOrderedList(t *testing.T) {
 		{"verify-durable-tool-replay", true},
 		{"verify-streaming-metrics", true},
 		{"verify-tool-call-governance", true},
+		{"verify-stage-a-process-replacement", true},
 		{"walk-approval-path", true},
 		{"refuse-non-canonical-approval", true},
 		{"walk-signal-path", true},

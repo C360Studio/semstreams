@@ -154,7 +154,7 @@ or hobbyist deployments, posture A is cheaper.
 
 The cancellation path is end-to-end and verified in code:
 
-1. `natsclient/heartbeat.go:33` — `ConsumeWithHeartbeat` derives
+1. The held model binding currently enters deprecated `ConsumeWithHeartbeat`, which derives
    `workCtx, workCancel := context.WithCancel(ctx)`.
 2. Ticker fires `msg.InProgress()` every `heartbeat` interval.
 3. On InProgress() failure (NATS connection lost, server flap),
@@ -167,6 +167,9 @@ The cancellation path is end-to-end and verified in code:
    `internal/request_builder.go:44`.
 8. Go's `http.Transport` aborts the in-flight request, closes the TCP
    connection (RST if data was in flight, FIN otherwise).
+
+This list characterizes the temporarily held model path; it is not an integration recommendation. New production
+bindings validate `HeartbeatDeliveryPolicy` and call `ConsumeDeliveryWithHeartbeat`.
 
 The provider sees a closed connection. **Whether the provider stops
 billing depends on the provider's policy** — not something semstreams

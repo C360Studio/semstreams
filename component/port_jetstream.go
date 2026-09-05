@@ -36,8 +36,10 @@ type JetStreamPort struct {
 	// via time.ParseDuration ("60s", "90s"). Empty falls through to a
 	// per-component default. Should be sized comfortably below ack_wait
 	// (typical 1.5x margin) so a single missed heartbeat doesn't trigger
-	// redelivery. Only honored on consumers that wrap their handler in
-	// natsclient.ConsumeWithHeartbeat — pure-ack consumers ignore it.
+	// redelivery. Honored by heartbeat-enabled typed consumers and by the
+	// explicitly held legacy model, loop, and AgentRun bindings; pure-ack
+	// consumers ignore it. New integrations use
+	// natsclient.ConsumeDeliveryWithHeartbeat.
 	HeartbeatInterval string `json:"heartbeat_interval,omitempty"`
 	// MaxAckPending caps the number of delivered-but-unacked messages the
 	// server keeps in flight for this consumer — the consumer-side backpressure

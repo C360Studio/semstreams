@@ -84,6 +84,9 @@ type Config struct {
 
 	// LLM endpoint URL (default: start mock server)
 	LLMEndpointURL string `json:"llm_endpoint_url"`
+	// ComposeFile identifies the agentic stack whose SemStreams service is
+	// replaced while NATS remains running.
+	ComposeFile string `json:"compose_file"`
 
 	// Timeouts
 	TaskTimeout     time.Duration `json:"task_timeout"`
@@ -95,11 +98,16 @@ type Config struct {
 
 // DefaultConfig returns default configuration.
 func DefaultConfig() *Config {
+	composeFile := os.Getenv("AGENTIC_COMPOSE_FILE")
+	if composeFile == "" {
+		composeFile = "../../docker/compose/agentic.yml"
+	}
 	return &Config{
 		NATSURL:            "nats://localhost:34222",
 		MetricsURL:         "http://localhost:39090",
 		HTTPURL:            e2econfig.DefaultEndpoints.HTTP,
 		LLMEndpointURL:     "", // Empty means use mock
+		ComposeFile:        composeFile,
 		TaskTimeout:        30 * time.Second,
 		CompleteTimeout:    60 * time.Second,
 		MinTrajectoryFacts: 1,
@@ -240,6 +248,7 @@ func (s *Scenario) stages() []agenticStage {
 		{name: "verify-durable-tool-replay", fn: s.verifyDurableToolReplay, asserts: true},
 		{name: "verify-streaming-metrics", fn: s.verifyStreamingMetrics, asserts: true},
 		{name: "verify-tool-call-governance", fn: s.verifyToolCallGovernance, asserts: true},
+		{name: "verify-stage-a-process-replacement", fn: s.verifyStageAProcessReplacement, asserts: true},
 		{name: "walk-approval-path", fn: s.walkApprovalPath, asserts: true},
 		{name: "refuse-non-canonical-approval", fn: s.refuseNonCanonicalApproval, asserts: true},
 		{name: "walk-signal-path", fn: s.walkSignalPath, asserts: true},

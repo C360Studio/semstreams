@@ -215,7 +215,7 @@ func handleListCommand(listScenarios bool) bool {
 	fmt.Println("  e2e:structural  - Rules + structural inference (~30s)")
 	fmt.Println("  e2e:statistical - BM25 + community detection (~60s)")
 	fmt.Println("  e2e:semantic    - Neural embeddings + LLM (~90s)")
-	fmt.Println("  e2e:agentic     - Agent loop + tools with mock LLM (~30s)")
+	fmt.Println("  e2e:agentic     - Agent loop + tools + process replacement (~2m)")
 	fmt.Println("  e2e:lessons     - Direct product lesson birth/lifecycle/reader-matcher gate")
 	fmt.Println("  e2e:research-graph - ADR-045 direct + walk_seeds R0-R6 paths (~60s)")
 	fmt.Println("")
