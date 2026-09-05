@@ -167,7 +167,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "tool_results_dropped_total",
-				Help:      "Total tool results dropped at the wire because no loop mapping exists for the CallID and the loop record is absent or terminal. Sustained non-zero rate points at NATS redelivery or executor double-publish. A result for a loop that is live but held by another process is NOT counted here: it is retried, not dropped.",
+				Help:      "Total tool results dropped at the wire because no loop mapping exists for the execution ID and the loop record is absent or terminal. Sustained non-zero rate points at NATS redelivery or executor double-publish. A result for a loop that is live but held by another process is NOT counted here: it is retried, not dropped.",
 			}, []string{"reason"}),
 
 			modelResponsesDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -273,7 +273,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "tool_call_governance_subscribe_before_publish_failures_total",
-				Help:      "Times a verdict arrived for a call_id that no longer had a waiter registered, signalling the subscribe-before-publish race regressing (ADR-039 race-fix option 3). Non-zero rate means investigate immediately — verdicts are being dropped silently.",
+				Help:      "Times a verdict arrived for an execution_id that no longer had a waiter registered, signalling the subscribe-before-publish race regressing (ADR-039 race-fix option 3). Non-zero rate means investigate immediately — verdicts are being dropped silently.",
 			}),
 
 			lessonInjection: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -377,7 +377,7 @@ func (m *loopMetrics) RecordGovernanceVerdict(decision, mode string, duration fl
 // RecordGovernanceVerdictMissingWaiter increments the
 // subscribe-before-publish-failures counter. Implements
 // DispatcherMetrics. Each non-zero increment signals a verdict
-// arrived for a call_id that no longer had a registered waiter —
+// arrived for an execution_id that no longer had a registered waiter —
 // either the race-fix regressed (verdict beat the pre-register) or a
 // verdict arrived after Propose's timeout already fired (benign in
 // audit mode, signal in enforce mode).
@@ -492,9 +492,9 @@ func (m *loopMetrics) recordToolResultReceived(hasError bool) {
 }
 
 // recordToolResultDropped records a tool result that arrived with no loop
-// mapping for its CallID. Reason "stale_callid" is the dominant case after
-// GetAndClearToolResults eviction — a re-delivered result for an already-
-// drained call. A sustained non-zero rate points at NATS redelivery or an
+// mapping for its execution ID. Reason "stale_execution" is the dominant case
+// after GetAndClearToolResults eviction — a re-delivered result for an already-
+// drained execution. A sustained non-zero rate points at NATS redelivery or an
 // executor double-publishing.
 func (m *loopMetrics) recordToolResultDropped(reason string) {
 	m.toolResultsDropped.WithLabelValues(reason).Inc()

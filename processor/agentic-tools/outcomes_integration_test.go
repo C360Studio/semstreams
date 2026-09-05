@@ -31,6 +31,13 @@ type injectedCreateFailureStore struct {
 
 func (s injectedCreateFailureStore) Create(context.Context, string, []byte) error { return s.err }
 
+func correlatedIntegrationToolCall(call agentic.ToolCall) agentic.ToolCall {
+	call.RequestID = "request-" + call.ID
+	call.ExecutionID = "execution-" + call.ID
+	call.CallOrdinal = 1
+	return call
+}
+
 func TestIntegrationPostEffectCreateFailureIsAmbiguousAndLeavesNoAuthority(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithStreams(
 		natsclient.TestStreamConfig{Name: "AMBIGUOUS_CREATE", Subjects: []string{"tool.result.>"}},
@@ -50,7 +57,9 @@ func TestIntegrationPostEffectCreateFailureIsAmbiguousAndLeavesNoAuthority(t *te
 		metrics:       newToolsMetrics(),
 	}
 	require.NoError(t, componentUnderTest.registry.RegisterTool("count", executor))
-	call := agentic.ToolCall{ID: "ambiguous-create", Name: "count", LoopID: "loop", TraceID: "trace"}
+	call := correlatedIntegrationToolCall(agentic.ToolCall{
+		ID: "ambiguous-create", Name: "count", LoopID: "loop", TraceID: "trace",
+	})
 	wireMessage := message.NewBaseMessage(call.Schema(), &call, "integration")
 	wire, err := json.Marshal(wireMessage)
 	require.NoError(t, err)
@@ -58,7 +67,7 @@ func TestIntegrationPostEffectCreateFailureIsAmbiguousAndLeavesNoAuthority(t *te
 	require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Equal(t, int32(1), executor.calls.Load(), "effect occurred before injected Create failure")
-	_, err = bucket.Get(ctx, toolCallOutcomeKey(call.ID))
+	_, err = bucket.Get(ctx, toolCallOutcomeKey(call.ExecutionID))
 	assert.ErrorIs(t, err, jetstream.ErrKeyNotFound, "failed Create must leave no false completion authority")
 	assert.Equal(t, float64(1), testutil.ToFloat64(
 		componentUnderTest.metrics.ambiguousRedeliveries.WithLabelValues(string(ambiguousCauseStoreFailure))))
@@ -78,16 +87,21 @@ func TestIntegrationExecutorPanicCompletesWithCorrelatedInternalResult(t *testin
 		publishStream: testClient.Client.PublishToStreamWithMsgID, metrics: newToolsMetrics(),
 	}
 	require.NoError(t, componentUnderTest.registry.RegisterTool("panic", panicExecutor{}))
-	call := agentic.ToolCall{ID: "panic-integration", Name: "panic", LoopID: "loop", TraceID: "trace"}
+	call := correlatedIntegrationToolCall(agentic.ToolCall{
+		ID: "panic-integration", Name: "panic", LoopID: "loop", TraceID: "trace",
+	})
 	wireMessage := message.NewBaseMessage(call.Schema(), &call, "integration")
 	wire, err := json.Marshal(wireMessage)
 	require.NoError(t, err)
 	require.NoError(t, componentUnderTest.handleToolCall(ctx, wire))
-	entry, err := bucket.Get(ctx, toolCallOutcomeKey(call.ID))
+	entry, err := bucket.Get(ctx, toolCallOutcomeKey(call.ExecutionID))
 	require.NoError(t, err)
 	outcome, err := decodeCompletedOutcome(entry.Value(), call)
 	require.NoError(t, err)
 	assert.Equal(t, call.ID, outcome.Result.CallID)
+	assert.Equal(t, call.RequestID, outcome.Result.RequestID)
+	assert.Equal(t, call.ExecutionID, outcome.Result.ExecutionID)
+	assert.Equal(t, call.CallOrdinal, outcome.Result.CallOrdinal)
 	assert.Equal(t, call.LoopID, outcome.Result.LoopID)
 	assert.Equal(t, call.TraceID, outcome.Result.TraceID)
 	assert.Equal(t, agentic.ToolErrorInternal, outcome.Result.ErrorKind)
@@ -114,7 +128,7 @@ func TestIntegrationConcurrentReplicasConvergeOnOneCompletedOutcome(t *testing.T
 		{outcomes: store, logger: slog.Default()},
 		{outcomes: store, logger: slog.Default()},
 	}
-	call := agentic.ToolCall{ID: "integration-concurrent-call", Name: "external-write"}
+	call := correlatedIntegrationToolCall(agentic.ToolCall{ID: "integration-concurrent-call", Name: "external-write"})
 	start := make(chan struct{})
 	winners := make(chan completedOutcome, len(replicas))
 	errs := make(chan error, len(replicas))
@@ -124,7 +138,7 @@ func TestIntegrationConcurrentReplicasConvergeOnOneCompletedOutcome(t *testing.T
 		go func() {
 			defer wg.Done()
 			<-start
-			candidate := agentic.ToolResult{CallID: call.ID, Name: call.Name, Content: string(rune('a' + i))}
+			candidate := correlateToolResult(call, agentic.ToolResult{Name: call.Name, Content: string(rune('a' + i))})
 			winner, _, persistErr := replica.persistCompletedOutcome(context.Background(), call, candidate, outcomePathNew, false, true)
 			winners <- winner
 			errs <- persistErr
@@ -203,7 +217,9 @@ func TestIntegrationAckFailureRestartReplaysWithoutSecondExecution(t *testing.T)
 		testClient.GetNativeConnection().Close()
 		return nil
 	}
-	call := agentic.ToolCall{ID: "ack-failure-call", Name: "count", LoopID: "loop", TraceID: "trace"}
+	call := correlatedIntegrationToolCall(agentic.ToolCall{
+		ID: "ack-failure-call", Name: "count", LoopID: "loop", TraceID: "trace",
+	})
 	envelope := message.NewBaseMessage(call.Schema(), &call, "integration")
 	wire, err := json.Marshal(envelope)
 	require.NoError(t, err)
@@ -276,7 +292,9 @@ func TestIntegrationResultPublishFailureRestartReplaysStoredOutcome(t *testing.T
 		}
 		return publishErr
 	}
-	call := agentic.ToolCall{ID: "publish-failure-call", Name: "count", LoopID: "loop", TraceID: "trace"}
+	call := correlatedIntegrationToolCall(agentic.ToolCall{
+		ID: "publish-failure-call", Name: "count", LoopID: "loop", TraceID: "trace",
+	})
 	envelope := message.NewBaseMessage(call.Schema(), &call, "integration")
 	wire, err := json.Marshal(envelope)
 	require.NoError(t, err)
@@ -290,7 +308,7 @@ func TestIntegrationResultPublishFailureRestartReplaysStoredOutcome(t *testing.T
 	require.Equal(t, int32(1), executor.calls.Load())
 	bucket, err := graph.EnsureCatalogBucket(ctx, testClient.Client, graph.BucketToolCallOutcomes)
 	require.NoError(t, err)
-	entry, err := bucket.Get(ctx, toolCallOutcomeKey(call.ID))
+	entry, err := bucket.Get(ctx, toolCallOutcomeKey(call.ExecutionID))
 	require.NoError(t, err, "COMPLETED must precede the failed result publication")
 	authority, err := decodeCompletedOutcome(entry.Value(), call)
 	require.NoError(t, err)
@@ -316,7 +334,7 @@ func TestIntegrationResultPublishFailureRestartReplaysStoredOutcome(t *testing.T
 	var replayed agentic.ToolResult
 	decoder := payloadbuiltins.NewTestDecoder(t)
 	require.Eventually(t, func() bool {
-		raw, getErr := resultStream.GetLastMsgForSubject(ctx, "tool.result."+call.ID)
+		raw, getErr := resultStream.GetLastMsgForSubject(ctx, "tool.result."+call.ExecutionID)
 		if getErr != nil {
 			return false
 		}
@@ -358,11 +376,13 @@ func TestIntegrationLowMaxPayloadStoresAndPublishesCompactAuthority(t *testing.T
 		config: DefaultConfig(), logger: slog.Default(), outcomes: jetStreamCompletedOutcomeStore{bucket: bucket},
 		publishStream: client.PublishToStreamWithMsgID,
 	}
-	call := agentic.ToolCall{ID: "low-max-payload", Name: "large", LoopID: "loop", TraceID: "trace"}
-	full := agentic.ToolResult{CallID: call.ID, Name: call.Name, Content: strings.Repeat("sensitive", 1024), LoopID: call.LoopID, TraceID: call.TraceID}
+	call := correlatedIntegrationToolCall(agentic.ToolCall{
+		ID: "low-max-payload", Name: "large", LoopID: "loop", TraceID: "trace",
+	})
+	full := correlateToolResult(call, agentic.ToolResult{Name: call.Name, Content: strings.Repeat("sensitive", 1024)})
 	require.NoError(t, component.persistAndPublishOutcome(ctx, call, full, outcomePathNew, true))
 
-	entry, err := bucket.Get(ctx, toolCallOutcomeKey(call.ID))
+	entry, err := bucket.Get(ctx, toolCallOutcomeKey(call.ExecutionID))
 	require.NoError(t, err)
 	authority, err := decodeCompletedOutcome(entry.Value(), call)
 	require.NoError(t, err)
@@ -372,7 +392,7 @@ func TestIntegrationLowMaxPayloadStoresAndPublishesCompactAuthority(t *testing.T
 	require.NoError(t, err)
 	toolStream, err := stream.Stream(ctx, "LOW_PAYLOAD_TOOL")
 	require.NoError(t, err)
-	raw, err := toolStream.GetLastMsgForSubject(ctx, "tool.result."+call.ID)
+	raw, err := toolStream.GetLastMsgForSubject(ctx, "tool.result."+call.ExecutionID)
 	require.NoError(t, err)
 	var envelope struct {
 		Payload agentic.ToolResult `json:"payload"`
