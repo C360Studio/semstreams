@@ -16,8 +16,8 @@ Sequencing: sections 3–6 start after Codex's #759/#1146 stack (PRs #1156/#1159
 
 ## 1. Claim and design
 
-- [x] 1.1 Draft PR opened with `Closes #1261` on `claude/gh1261-graph-read-tools`, own worktree; the OpenSpec change
-      is its first commit.
+- [x] 1.1 Draft PR #1262 opened with `Closes #1261` on `claude/gh1261-graph-read-tools`, own worktree; the OpenSpec
+      change is its first commit.
 - [x] 1.2 Architect verification pass over the explorer inventory — `inventory-verification.md` (2 strikes, 11 additions).
 - [ ] 1.3 Independent inventory review (`semstreams-reviewer` re-derivation) recorded on the PR.
 - [ ] 1.4 Owner INVENTORY PASS on the PR; owner rulings on `proposal.md` questions 1–5 recorded on #1261.
