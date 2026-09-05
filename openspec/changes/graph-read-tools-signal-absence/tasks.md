@@ -47,7 +47,21 @@ paths Codex's #759/#1146 stack (PRs #1156/#1159/#1141) holds, and the delta is A
       relationships, ID fragment, neighbor expansion, absence signaling, positional-wildcard listing); the tools'
       matcher named as `MatchEntityIDPattern` with the ADR-071 divergence stated; the fixture claim corrected (the
       agentic tier ingests no sensor entity); RC-6 walked path re-based on 4.2 + new 4.5.
-- [ ] 1.3g Re-review round 4 (`semstreams-reviewer`) recorded on PR #1262 — checks the axis sweep for completeness.
+- [x] 1.3g Re-review round 4 (`semstreams-reviewer`) recorded on PR #1262 (comment 4, over `67a921ff`) — INVENTORY
+      CHANGES REQUESTED: BLOCKING an ABSENT AXIS, bounded-result continuation (`ToolDefinition.Paginated` +
+      `MetadataKey{HasMore,NextOffset,NextCursor}`, live producer `read_loop_result` on the same roster, consumer
+      `decorateContentWithPagination`, listing owner `PrefixQueryResponse.NextCursor`) — the design's `truncated`/
+      `too_large`/`frontier_remaining` is a second spelling of "there is more"; HIGH the absence-signaling search
+      was identifier-only and missed three prose-absence producers (`websearch.go:191`, `personas.go:178`,
+      `rules.go:255`); MEDIUM `not_found` vs `unresolved` in the same executor; MEDIUM `filter_registered` vs
+      `vocabulary/namespace_authority.go` delegation policy; MEDIUM Codex-held set is 180 paths, not 176, and 4.5's
+      two files are outside the enumerated set (intersection still empty); NIT `EntitySampleTruncated`. Round 3
+      confirmed closed. The BLOCKING is an absent axis, not a fourth piecemeal owner; the other three are present
+      axes with blind search shapes.
+- [ ] 1.3h Architect amendment round 4: one new axis row (continuation — adopted or refused, with the reason
+      recorded; adoption is an addition, so it lands as an owner question, not design), three search widenings
+      (prose absence enumerated per plane, `not_found`/`unresolved` vocabulary row, predicate-registration authority
+      row), the 180-path re-measure and 4.5's file set, the NIT; then re-review round 5.
 - [ ] 1.4 Owner INVENTORY PASS on the PR; owner rulings on `proposal.md` questions 1–11 recorded on #1261.
 - [ ] 1.5 Owner places the milestone (recommendation: `v1.0.0-beta.165`).
 - [ ] 1.6 HOLD — sections 3–6 do not start until (a) 1.4 is recorded and (b) either Codex's #759/#1146 stack
