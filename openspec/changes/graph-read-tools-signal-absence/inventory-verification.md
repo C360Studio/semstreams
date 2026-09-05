@@ -1,17 +1,21 @@
 # Inventory verification — graph-read-tools-signal-absence (#1261)
 
 Architect verification pass over the explorer inventory (the collapsed comment on #1261, explorer base `5b7c3db3`).
-Design base `main@797d294a`. **Status: awaiting independent inventory review and the owner's INVENTORY PASS.** The
+Design base `main@797d294a`. **Status: independent review returned INVENTORY CHANGES REQUESTED (PR #1262 comment, 2026-09-05); the rows below close its findings; re-review and the owner's INVENTORY PASS are owed.** The
 proposal, design, tasks, and delta beside this file are drafts conditional on that pass; nothing is approved.
 
 **Drift check.** `git diff --stat 5b7c3db3..797d294a` touches only `processor/rule/*`, `openspec/specs/graph-ingest/spec.md`,
-and the archived change `2026-09-04-foreign-firing-skip-reason` — no explorer-pinned file changed, so every pin holds
-by construction. The spot-checks below re-read the line text the design rests on.
+and the archived change `2026-09-04-foreign-firing-skip-reason` — no explorer-pinned file changed, so line numbers cannot
+have moved; that proves nothing about whether a pin was ever right. The rows below were re-read at `797d294a`. Sampled:
+14 hold, 1 wrong (`IsRelationship`, fixed below). The explorer inventory is materialized beside this file as
+`inventory.md`; `task inventory:verify` on it mostly cannot parse its table/range format (#1256), but its five MOVED
+rows in `message/triple.go` are real pin errors at the explorer's own base.
 
 ## Spot-checks
 
 | Explorer claim | `file:line` @797d294a | Verdict |
 |---|---|---|
+| `IsRelationship` | `message/triple.go:133` — `func (t Triple) IsRelationship() bool` | **FIX**: the explorer pinned `:135` |
 | Five tools, `ReadOnly` effect | `processor/agentic-tools/executors/graph_query.go:45,60,76,100,125`; `:47,62,78,102,127` | holds |
 | `depth` clamped 1–3; no frontier cap; fetch failures `continue`d | `:405-407`, `:419-460`, `:428-431` | holds |
 | `query_by_type` stub returns `entities: []`, `note`, `suggested_ids` | `:531-540` | holds; nothing else pins that shape (0 hits for `suggested_ids` outside the file) |
@@ -45,8 +49,9 @@ by construction. The spot-checks below re-read the line text the design rests on
    file list.
 5. **Predicate-authority audit is name-substring based** (`processor/agentic-tools/executors/predicate_authority_contract_test.go:31-36,96-105`);
    `relationship_type` passes; renaming it to anything containing `predicate`/`triple` turns the audit red.
-6. **Records are own-subject only** (`graph/entity_predicate_contract.go:147-150`;
-   `processor/graph-ingest/canonical_mutations.go:242`; `processor/graph-ingest/component.go:2585`) →
+6. **Records are own-subject only** — `processor/graph-ingest/component.go:1752-1757` (`if triple.Subject != entity.ID`
+   → `errs.WrapInvalid(... "does not match Graphable entity")`) and `:2604-2612` (`bySubject := make(map[string][]message.Triple`,
+   the batch split by subject before commit). An earlier revision cited `normalizeProjection`, which does not exist. →
    `direction=incoming|both` read from the record is structurally empty. The incoming home is `graph.query.relationships`
    over INCOMING_INDEX (`processor/graph-query/query.go:53`) — a second home for the "relationships" fact, preserved by
    `openspec/specs/agentic-tools/spec.md:285-287`.
@@ -60,6 +65,19 @@ by construction. The spot-checks below re-read the line text the design rests on
 10. **Description density:** 217 `WithDescription` across 201 `Register` calls; `WithRole` 0 and `WithInverseOf` 2 in
     `vocabulary/agentic/register.go` — a schema read will be description-rich, role/inverse-poor.
 11. Explorer §2 readers missed `agentic/rule_fields.go:396` (`result_hint` reaches rules).
+
+## Rows added after the independent inventory review (2026-09-05; closes both BLOCKING findings)
+
+| Row | Pin @797d294a | Verdict |
+|---|---|---|
+| **Same-class owner: "IDs by type"** | `graph/query_summary_types.go:6-11` — "overview a caller (LLM agent or external dashboard) gets without knowing any entity IDs up-front"; `:22-44` — `SummaryRequest{IncludePredicates, EntitySampleLimit (default 2000), ExamplesPerType (default 2)}`; `:58-71` — `EntityTypeSummary{Type, Count, Examples}`; `processor/graph-query/query.go:62` — operation `summary`, consumers `graph-gateway`; `processor/graph-query/summary.go:52-70` — served by `graph.PrefixQueryRequest{Prefix: "", Limit: req.EntitySampleLimit}` over NATS to graph-ingest; `:196` — `typeKey := parsed.System + "." + parsed.Domain + "." + parsed.Type` | **ADD** (BLOCKING closed). A *sampled type distribution with example IDs*, bucketed on three segments — not a per-type listing. Complement, not substitute (semsource `processor/mcp-gateway/component.go:119-122`, read-only: "summarize_graph works because its roster has query_by_type") |
+| **Same-class: bounds** | `openspec/specs/agentic-tools/spec.md:467-475` — the transport bound; `:470` "The component SHALL NOT inspect configured payload limits or match error text"; `executors/bash.go:36` — `bashMaxOutputBytes = 100 * 1024`; `executors/httprequest.go:23` — `httpMaxTextSize = 20000`; `git grep` of both constants and "content budget" over `openspec/specs/` → 0 | **ADD** (BLOCKING closed). Two classes: the transport bound (specced; observed by attempting) and model-facing content caps (two instances, unspecced). The neighbors budget joins the second — `design.md` § Budget |
+| Codex-held files, complete | PR #1159 is **133 files** — `gh pr view --json files` caps at 100; `gh api repos/:owner/:repo/pulls/N/files --paginate` is the full list. Intersection with this change's candidate set: `configs/flows/ops-agent.json` (#1159), `docs/operations/17-tool-call-governance.md` (#1159), `docs/operations/adopter-tool-effect-metadata.md` (#1141), `processor/agentic-tools/README.md` (#1141, #1159) | **ADD** (MEDIUM closed). None of the four needs a change (next row); the files the implementation edits intersect nothing |
+| Tool names in model-facing text | `configs/personas/fragments/ops/00-identity.md:9`; `processor/agentic-loop/prompt/assembler.go:142` — "Search the knowledge graph ... (query_entity, query_entities, query_relationships)"; `configs/flows/ops-agent.json:316`; `docs/basics/07-agentic-quickstart.md:141`; `docs/operations/17-tool-call-governance.md:169`; `README.md`/`docs/.../08-agentic-components.md` → 0 hits for the five names | **ADD**. Names only; no line depends on a result key; tool names are unchanged, so none must change. No sister doc shows a tool result (`semdocs .../04-first-flow.md:312` is the gateway `/graph/stats` endpoint) |
+| Restriction seams | `processor/agentic-tools/config.go:19` — `AllowedTools []string` (nil/empty allows all); `:94-95`; `metrics.go:156` — `recordToolFiltered`; `agentic/exec_policy.go:63` — `MetadataKeyAdvertisedTools = "agent.tools.advertised"`; `processor/agentic-loop/handlers.go:1684-1689` (stamped from `GetCachedTools`); `processor/agentic-tools/component.go:976-990` (global allowlist, then per-loop set; key present-but-empty fails closed); `docs/operations/17-tool-call-governance.md:161,261` (ADR-039 rules) | **ADD**. Three seams; per-loop = the loop's cached (advertised) definitions, so a persona/flow that lists only graph tools reproduces the cited experiment's condition today |
+| Agentic tier composition | `configs/agentic.json` components: agentic-dispatch, objectstore, graph-ingest, rule-processor, agentic-loop, agentic-model, agentic-tools — **no graph-query, no graph-index** | **ADD**. A `query_by_type` served through `graph.query.summary` has no responder in the tier whose approval proof asserts `status="success"` |
+| Substring-entry candidates | `processor/graph-query/query.go:64` — `byName` (exact, NAME_INDEX `graph/constants.go:16-19`, consumer fusionnats only); `:63,65` — `searchGraph`/`localSearch` (`graphrag.go:160,126`; semantic/statistical, tier-dependent); `:56` — `prefix` (needs leading segments); app-local precedent semsource `graph_search` (`mcp-gateway/component.go:112-125`, read-only) | **ADD**. None is a case-insensitive substring over properties — the cited experiment's `find_nodes` (`code/graph.py:48-55`: `needle in json.dumps(props).lower() or needle in node_id.lower()`; a grep WITHOUT regex) |
+| semteams role split (read-only) | `semteams/docs/adr/041-...md:874-890` — all seven graph tools "Forbidden for chain / Allowed for ops" | **ADD**. In the main adopter the direct tools are an ops-role surface today |
 
 ## Strikes
 

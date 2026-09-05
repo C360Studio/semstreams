@@ -72,11 +72,12 @@ no index or bucket. A binding without key listing SHALL fail the call with a cla
 - **THEN** the result is a classified internal error naming the binding, never an empty listing
 - **AND** the test that verifies this is `TestQueryByType_WithoutKeyListerIsLoud`
 
-### Requirement: query_neighbors observes a content budget and reports unresolved targets
+### Requirement: query_neighbors bounds its content by a model-facing budget and reports unresolved targets
 
 `query_neighbors` SHALL expand only through relationship triples, SHALL stop expanding when the next record would
-exceed the executor's content budget, and SHALL report `truncated`, `frontier_remaining`, and `too_large` when it
-does. A target absent from `ENTITY_STATES` SHALL be listed in `unresolved`, never omitted; a transient read failure
+exceed the executor's model-facing content budget — a fixed executor cap in the class of the bash and HTTP output
+caps, distinct from the transport bound the component observes — and SHALL report `truncated`, `frontier_remaining`,
+and `too_large` when it does. A target absent from `ENTITY_STATES` SHALL be listed in `unresolved`, never omitted; a transient read failure
 SHALL fail the call as a network error. `filter_type` SHALL match the identity's type segment with the same grammar as
 `query_by_type`.
 
@@ -85,6 +86,7 @@ SHALL fail the call as a network error. `filter_type` SHALL match the identity's
 - **GIVEN** a start entity whose neighbors exceed the budget
 - **WHEN** the tool answers
 - **THEN** the returned records fit the budget, `truncated` is true, `ResultHint` is `too_large`
+- **AND** `frontier_remaining` is the count of identities not expanded
 - **AND** the test that verifies this is `TestQueryNeighbors_BudgetTruncatesWithHint`
 
 #### Scenario: missing target is reported
