@@ -118,19 +118,19 @@ design-section shorthand is not a valid citation. Every implementation slice fol
 
 ## 3. Provider settlement
 
-- [ ] 3.1 RED: add first-delivery, matching-retained-response, typed-absence redelivery, retained-read failure,
+- [x] 3.1 RED: add first-delivery, matching-retained-response, typed-absence redelivery, retained-read failure,
   pre-call replacement, post-return/pre-PubAck replacement, at-least-once response publication, unavailable metadata,
   and correlation-conflict tests. Cite exactly
   `// spec: agentic-model / Model request settlement is bound to a durable response`,
   `// spec: agentic-model / Model response publication is durably at-least-once`, and
   `// spec: agentic-model / Started markers do not claim invocation certainty` as applicable.
-- [ ] 3.2 Implement the operation-specific exact retained-response read before provider invocation. Reuse a validated
+- [x] 3.2 Implement the operation-specific exact retained-response read before provider invocation. Reuse a validated
   matching response with zero provider calls; quarantine conflicting correlation; treat lookup failure as Retry; and
   invoke the provider with the same stable RequestID on typed absence, including redelivery after ambiguous process
   replacement. Publish every required success or provider-error response and wait for PubAck before source ACK. Add
   no provider ambiguity config, commit-unknown failure kind, provider reconciliation seam or endpoint census,
   pre-call started marker, ledger, outbox, supervisor, or provider dependency on AGENT replay admission.
-- [ ] 3.3 GREEN: prove by counter that a matching retained response invokes the provider zero times and typed absence
+- [x] 3.3 GREEN: prove by counter that a matching retained response invokes the provider zero times and typed absence
   invokes once for each delivered attempt. Prove retained-read failure invokes zero times, conflict quarantines,
   every newly produced response receives PubAck before source ACK, and post-return/pre-PubAck replacement may invoke
   the provider again when no matching response committed.

@@ -66,6 +66,7 @@ type Component struct {
 	consumeStream      func(context.Context, natsclient.PortConsumerContext, natsclient.StreamConsumerConfig, func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error)
 	waitConsumerClosed func(context.Context, <-chan struct{}) error
 	closeModelClient   func(*Client) error
+	responseEvidence   retainedResponseEvidenceReader
 
 	// Metrics
 	requestsProcessed int64
@@ -393,8 +394,7 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port) erro
 		heartbeatInterval,
 		natsclient.ImmediateDeliveryRetry(),
 		func(workCtx context.Context, _ natsclient.DeliveryAttempt, data []byte) (natsclient.DeliveryDecision, error) {
-			c.handleRequest(workCtx, data)
-			return natsclient.DeliveryDecisionAck, nil
+			return c.handleRequest(workCtx, data)
 		},
 	)
 	if policyErr != nil {
@@ -599,8 +599,9 @@ func (c *Component) cleanup(ctx context.Context) error {
 
 func (c *Component) clearLifecycleHandles() { c.consumers = nil; c.cancel = nil }
 
-// handleRequest processes an agent request
-func (c *Component) handleRequest(ctx context.Context, data []byte) {
+// handleRequest processes an agent request and returns only after its required
+// response is already committed or a newly produced response receives PubAck.
+func (c *Component) handleRequest(ctx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
 	c.mu.Lock()
 	c.lastActivity = time.Now()
 	c.mu.Unlock()
@@ -609,7 +610,22 @@ func (c *Component) handleRequest(ctx context.Context, data []byte) {
 	if err != nil {
 		c.logger.Error("Failed to parse agent request", "error", err)
 		c.incrementErrors()
-		return
+		return natsclient.DeliveryDecisionTerminate, err
+	}
+
+	_, found, err := c.readRetainedAgentResponse(ctx, req.RequestID)
+	if err != nil {
+		if errs.IsFatal(err) {
+			return natsclient.DeliveryDecisionQuarantine, err
+		}
+		c.incrementErrors()
+		return natsclient.DeliveryDecisionRetry, err
+	}
+	if found {
+		c.mu.Lock()
+		c.requestsProcessed++
+		c.mu.Unlock()
+		return natsclient.DeliveryDecisionAck, nil
 	}
 
 	c.logger.Debug("Processing agent request",
@@ -620,9 +636,12 @@ func (c *Component) handleRequest(ctx context.Context, data []byte) {
 	client, endpoint, capability, endpointName, err := c.getClientForRequest(req)
 	if err != nil {
 		c.logger.Error("Failed to resolve endpoint", "error", err, "model", req.Model)
-		c.publishErrorResponse(ctx, req.RequestID, err.Error())
+		publishErr := c.publishErrorResponse(ctx, req.RequestID, err.Error())
 		c.incrementErrors()
-		return
+		if publishErr != nil {
+			return natsclient.DeliveryDecisionRetry, publishErr
+		}
+		return natsclient.DeliveryDecisionAck, nil
 	}
 
 	// Strip tools the served endpoint can't handle. req.Model can be a
@@ -646,12 +665,17 @@ func (c *Component) handleRequest(ctx context.Context, data []byte) {
 
 	if err != nil || resp.Status == "error" {
 		c.recordHealthResult(ctx, endpointName, false, err, resp.Error, latency)
-		c.handleModelError(ctx, req, resp, err, duration)
-		return
+		if publishErr := c.handleModelError(ctx, req, resp, err, duration); publishErr != nil {
+			return natsclient.DeliveryDecisionRetry, publishErr
+		}
+		return natsclient.DeliveryDecisionAck, nil
 	}
 
 	c.recordHealthResult(ctx, endpointName, true, nil, "", latency)
-	c.handleModelSuccess(ctx, req, resp, duration)
+	if publishErr := c.handleModelSuccess(ctx, req, resp, duration); publishErr != nil {
+		return natsclient.DeliveryDecisionRetry, publishErr
+	}
+	return natsclient.DeliveryDecisionAck, nil
 }
 
 // stripUnsupportedTools clears req.Tools when the served endpoint cannot handle
@@ -734,7 +758,7 @@ func (c *Component) parseAgentRequest(data []byte) (agentic.AgentRequest, error)
 
 // handleModelError processes and publishes error responses with metrics.
 // It preserves any partial token usage from the response for cost tracking.
-func (c *Component) handleModelError(ctx context.Context, req agentic.AgentRequest, resp agentic.AgentResponse, err error, duration float64) {
+func (c *Component) handleModelError(ctx context.Context, req agentic.AgentRequest, resp agentic.AgentResponse, err error, duration float64) error {
 	errorMsg := resp.Error
 	if err != nil {
 		errorMsg = err.Error()
@@ -751,10 +775,11 @@ func (c *Component) handleModelError(ctx context.Context, req agentic.AgentReque
 		}
 	}
 
-	errorCtx, cancel := natsclient.DetachContextWithTrace(ctx, 5*time.Second)
+	errorCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	c.publishErrorResponseWithTokens(errorCtx, req.RequestID, errorMsg, resp.TokenUsage)
+	publishErr := c.publishErrorResponseWithTokens(errorCtx, req.RequestID, errorMsg, resp.TokenUsage)
 	c.incrementErrors()
+	return publishErr
 }
 
 // classifyError determines the error type for metrics categorization
@@ -772,7 +797,7 @@ func classifyError(ctx context.Context, errorMsg string) string {
 }
 
 // handleModelSuccess processes successful responses with metrics and publishing
-func (c *Component) handleModelSuccess(ctx context.Context, req agentic.AgentRequest, resp agentic.AgentResponse, duration float64) {
+func (c *Component) handleModelSuccess(ctx context.Context, req agentic.AgentRequest, resp agentic.AgentResponse, duration float64) error {
 	toolCallCount := len(resp.Message.ToolCalls)
 
 	if c.metrics != nil {
@@ -796,12 +821,13 @@ func (c *Component) handleModelSuccess(ctx context.Context, req agentic.AgentReq
 	if err := c.publishResponse(ctx, resp); err != nil {
 		c.logger.Error("Failed to publish response", "error", err)
 		c.incrementErrors()
-		return
+		return err
 	}
 
 	c.mu.Lock()
 	c.requestsProcessed++
 	c.mu.Unlock()
+	return nil
 }
 
 // getClientForRequest resolves an endpoint from the registry and returns a cached or new client.
@@ -1085,12 +1111,12 @@ func (c *Component) outputPortDefs() []component.PortDefinition {
 
 // publishErrorResponse publishes an error response with zero token usage.
 // Used for errors where no model call occurred (e.g., endpoint not found).
-func (c *Component) publishErrorResponse(ctx context.Context, requestID string, errMsg string) {
-	c.publishErrorResponseWithTokens(ctx, requestID, errMsg, agentic.TokenUsage{})
+func (c *Component) publishErrorResponse(ctx context.Context, requestID string, errMsg string) error {
+	return c.publishErrorResponseWithTokens(ctx, requestID, errMsg, agentic.TokenUsage{})
 }
 
 // publishErrorResponseWithTokens publishes an error response preserving partial token usage.
-func (c *Component) publishErrorResponseWithTokens(ctx context.Context, requestID string, errMsg string, tokens agentic.TokenUsage) {
+func (c *Component) publishErrorResponseWithTokens(ctx context.Context, requestID string, errMsg string, tokens agentic.TokenUsage) error {
 	resp := agentic.AgentResponse{
 		RequestID:  requestID,
 		Status:     "error",
@@ -1100,7 +1126,9 @@ func (c *Component) publishErrorResponseWithTokens(ctx context.Context, requestI
 
 	if err := c.publishResponse(ctx, resp); err != nil {
 		c.logger.Error("Failed to publish error response", "error", err)
+		return err
 	}
+	return nil
 }
 
 // Discoverable interface implementation
