@@ -18,11 +18,15 @@ import (
 // dispatched action. Concurrency-safe so the scheduler's goroutine model can
 // exercise it without races.
 type recordingExecutor struct {
-	mu      sync.Mutex
-	calls   []Action
-	errOnce error // returned for the first call only when set; subsequent calls succeed
-	delay   time.Duration
-	panicOn string // panic when action.Subject equals this token
+	mu    sync.Mutex
+	calls []Action
+	// contexts keeps the ExecutionContext handed to each call, so a test can
+	// observe the cron premise the executor relies on — no firing entity,
+	// Schedule alone — rather than hand-build it (#1169).
+	contexts []*ExecutionContext
+	errOnce  error // returned for the first call only when set; subsequent calls succeed
+	delay    time.Duration
+	panicOn  string // panic when action.Subject equals this token
 }
 
 type blockingContextExecutor struct {
@@ -36,7 +40,7 @@ func (e *blockingContextExecutor) Execute(ctx context.Context, _ Action, _ *Exec
 	return nil
 }
 
-func (r *recordingExecutor) Execute(_ context.Context, action Action, _ *ExecutionContext) error {
+func (r *recordingExecutor) Execute(_ context.Context, action Action, ec *ExecutionContext) error {
 	if r.panicOn != "" && action.Subject == r.panicOn {
 		panic("recordingExecutor forced panic")
 	}
@@ -46,12 +50,19 @@ func (r *recordingExecutor) Execute(_ context.Context, action Action, _ *Executi
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, action)
+	r.contexts = append(r.contexts, ec)
 	if r.errOnce != nil {
 		err := r.errOnce
 		r.errOnce = nil
 		return err
 	}
 	return nil
+}
+
+func (r *recordingExecutor) executionContexts() []*ExecutionContext {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]*ExecutionContext(nil), r.contexts...)
 }
 
 func (r *recordingExecutor) callCount() int {
@@ -306,6 +317,24 @@ func TestCronScheduler_FireDispatchesAllActions(t *testing.T) {
 
 	if got := exec.callCount(); got != 2 {
 		t.Errorf("Execute call count = %d, want 2 (one per action)", got)
+	}
+	// The context a cron fire hands the executor carries NO firing entity and
+	// the rule's ID in Schedule alone. publish_agent's skip reason and the
+	// skip line's rule_id fallback both rest on this premise (#1169); it is
+	// observed from the scheduler here rather than assumed by their tests.
+	for i, ec := range exec.executionContexts() {
+		if ec == nil {
+			t.Fatalf("call %d: nil ExecutionContext", i)
+		}
+		if ec.EntityID != "" {
+			t.Errorf("call %d: EntityID = %q, want empty (a cron fire has no firing entity)", i, ec.EntityID)
+		}
+		if ec.State != nil {
+			t.Errorf("call %d: State = %+v, want nil (RuleID() is empty on the cron path)", i, ec.State)
+		}
+		if ec.Schedule == nil || ec.Schedule.ID != rule.ID() {
+			t.Errorf("call %d: Schedule = %+v, want ID %q", i, ec.Schedule, rule.ID())
+		}
 	}
 }
 

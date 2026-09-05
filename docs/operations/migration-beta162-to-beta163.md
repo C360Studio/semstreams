@@ -570,6 +570,12 @@ yourself as well is harmless and changes nothing.
   `rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` rising and one Info line per dispatch whose
   `skipped` field names every write that dispatch declined — under `run_scope=new` that is `agent.loop.run`,
   `agent.run.entity-id` AND `rule.task.spawned`; under `inherit`/`none`, `rule.task.spawned` alone.
+  **The `reason` label is a two-token vocabulary, and only one of them is an import.** `foreign_authority` is a
+  canonical firing entity carrying another deployment's authority. A dispatch with NO establishable firing entity —
+  every cron `publish_agent` fire, which has no firing entity by construction, or a structurally invalid ID — is
+  skipped and counted the same way but under `unresolvable_firing_entity`, and its Info line reads *"no firing
+  entity could be established"* instead. Filter on `reason="foreign_authority"` to read import-boundary activity
+  without cron noise (#1169; before it, the cron case was reported as `foreign_authority`).
   **It counts DISPATCHES, not entities.** One increment is one `publish_agent` dispatch —
   one (firing entity x `for_each` item) — whose framework writes were all declined. The firing entity does not vary
   across a `for_each` fan-out, so an action fanning out over N items on a single imported entity reports N. Do not
