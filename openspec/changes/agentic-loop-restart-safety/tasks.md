@@ -115,6 +115,21 @@ design-section shorthand is not a valid citation. Every implementation slice fol
   explicit LoopID/terminal routing, durable applied-state proof, and immutable completed tool outcomes at the
   executor-effect boundary.
 
+## 2A. Shared caller-local AGENT replay admission
+
+- [ ] 2.7 RED: add model/dispatch/governance/loop tests for caller-local requirements, divergent configs, resolved
+  overrides, under-admission, unavailable StreamInfo, queued USER, non-agentic zero lookup, and zero dependent
+  allocation/positive settlement. Cite exactly
+  `// spec: agentic-loop / Restart-safe replay observes and admits local stream bounds`.
+- [ ] 2.8 Implement one pure repo-internal `internal/agentstreamadmission.ObserveAndValidate`. Each affected owner
+  invokes it after its own resolved PortFacts and before its own dependent allocation. Requirements use only local
+  AckWait, BackOff, MaxDeliver, maximum work/replay need, and producer PubAck dependency; no cross-component config,
+  shared maxima, factory/raw-JSON switch, state, watcher, mutation, or exported API. Refuse DiscardOld, insufficient
+  MaxAge, or earlier message bounds with typed `agent_stream_replay_inadmissible` and exact observed/required fields.
+- [ ] 2.9 GREEN: prove each affected closure refuses independently, non-agentic components perform zero lookup,
+  dispatch leaves queued USER unconsumed, and full DiscardNew backpressure retains source work without core-NATS
+  fallback under the citation in 2.7.
+
 ## 3. Provider settlement
 
 - [ ] 3.1 RED: add first-delivery, retained-response provider protection, pre-call replacement, post-return/pre-PubAck
@@ -293,18 +308,6 @@ design-section shorthand is not a valid citation. Every implementation slice fol
 ## 9. AGENT admission, first-party publisher, and loop authority
 
 - [x] 9.1 Preserve the owner-selected strong observed `DiscardNew` and affected-closure contracts.
-- [ ] 9.2 RED: add model/dispatch/governance/loop tests for caller-local requirements, divergent configs, resolved
-  overrides, under-admission, unavailable StreamInfo, queued USER, non-agentic zero lookup, and zero dependent
-  allocation/positive settlement. Cite exactly
-  `// spec: agentic-loop / Restart-safe replay observes and admits local stream bounds`.
-- [ ] 9.3 Implement one pure repo-internal `internal/agentstreamadmission.ObserveAndValidate`. Each affected owner
-  invokes it after its own resolved PortFacts and before its own dependent allocation. Requirements use only local
-  AckWait, BackOff, MaxDeliver, maximum work/replay need, and producer PubAck dependency; no cross-component config,
-  shared maxima, factory/raw-JSON switch, state, watcher, mutation, or exported API. Refuse DiscardOld, insufficient
-  MaxAge, or earlier message bounds with typed `agent_stream_replay_inadmissible` and exact observed/required fields.
-- [ ] 9.4 GREEN: prove each affected closure refuses independently, non-agentic components perform zero lookup,
-  dispatch leaves queued USER unconsumed, and full DiscardNew backpressure retains source work without core-NATS
-  fallback under the citation in 9.2.
 - [ ] 9.5 RED: add all-six-configuration and four-static-producer real-NATS tests, both `agent.task`/`agent_task`
   names, declaration-only future rule, uncovered dynamic subject, missing publisher, registered non-Graphable task,
   and malformed/unregistered envelope tests. Cite exactly
