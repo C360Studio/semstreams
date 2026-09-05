@@ -38,7 +38,9 @@ contract's first adopter.
    are selected by `message.Triple.IsRelationship()`; the dead `relationships` reader branch is deleted.
 2. **`query_by_type`:** served, not retired — identities listed by the ADR-102 type segment through
    `natsclient.FilteredKeys` on the existing catalog-reader seam (inventory addition 1); `entity_type` is one token
-   (`*.*.*.*.<type>.*`) or `domain.type` (`*.*.*.<domain>.<type>.*`), validated by `pkg/types.ValidateEntityIDPattern`;
+   (`*.*.*.*.<type>.*`) or `domain.type` (`*.*.*.<domain>.<type>.*`), validated by `pkg/types.ValidateEntityIDPattern` and matched
+   per key by `pkg/types.MatchEntityIDPattern` (the existing exact-six-position matcher; no new type extractor —
+   `graphrag.filterEntityIDsByType`'s case folding and empty-set widening are deliberately not reused, `design.md`);
    sorted; `limit` honored; `HintTooLarge` when truncated, `HintEmpty` when none. No new index, no new bucket.
 3. **Schema read:** no new tool. `predicates_present` on `query_relationships` is the experiment's `describe_edges`
    scoped to the entity in hand; the graph-wide predicate catalog already has an owner — `graph.index.query.predicateList`
@@ -48,7 +50,7 @@ contract's first adopter.
 4. **`query_neighbors`:** a content byte budget observed while assembling; `truncated`, `frontier_remaining`,
    `HintTooLarge`; missing targets in `unresolved` (inherits `openspec/specs/graph-query/spec.md:255-263`); transient
    fetch errors fail the call as `query_entity` does; `filter_type` matches the identity's type segment with the same
-   grammar as `entity_type`.
+   grammar as `entity_type`, through `MatchEntityIDPattern`.
 
 No new hint value is needed; all four findings fit `HintEmpty`/`HintTooLarge` plus result fields. `agentic/tools.go`
 and `processor/agentic-loop/result_hint.go` are untouched.
