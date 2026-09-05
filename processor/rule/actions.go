@@ -594,7 +594,48 @@ type ActionExecutor struct {
 // NewActionExecutor takes no authority and cannot write: it holds neither mutator
 // nor publisher and there is no setter for either.
 func (e *ActionExecutor) foreignFiringEntity(entityID string) bool {
-	return semtypes.ValidateEntityIDAuthority(entityID, e.platform.Org, e.platform.Platform, false) != nil
+	return e.foreignFiringSkipReason(entityID) != ""
+}
+
+// foreignFiringSkipReasonUnresolvable is the skip reason for a dispatch on which
+// no firing entity could be established: the ExecutionContext carries none (a
+// cron fire has no firing entity by construction — cron_scheduler.go builds it
+// with Schedule alone) or carries one that fails structural validation. The
+// write is declined for the same fail-closed reason as an import — a subject
+// that cannot be established is not written to — but it is NOT an import, and
+// reporting it as foreign_authority made every cron publish_agent dispatch read
+// as import-boundary activity to an operator filtering the counter (#1169).
+//
+// It is the rule engine's own skip reason, not an entity-ID validation outcome,
+// so it lives here unexported rather than beside the EntityIDReason* tokens in
+// pkg/types. A fixed token: label cardinality never follows the failing ID.
+const foreignFiringSkipReasonUnresolvable = "unresolvable_firing_entity"
+
+// foreignFiringSkipReason classifies the firing entity for the framework writes
+// the executor makes back onto it. It returns "" when the entity carries this
+// deployment's own authority (write), semtypes.EntityIDReasonForeignAuthority
+// when it is canonical and carries another deployment's (skip: an imported
+// read-only mirror), and foreignFiringSkipReasonUnresolvable when no entity
+// could be established at all (skip: nothing to write to).
+//
+// The split reads the classified error's CODE, which pkg/types keeps distinct
+// for exactly this purpose — entity_id_authority_invalid is "not yours",
+// entity_id_invalid is "malformed" — rather than re-parsing the ID here. The
+// validator runs the structural check first, so an authority code is only ever
+// returned for a canonical ID; and with an empty deployment pair every canonical
+// ID differs at position 1 and still reads foreign_authority, which is the
+// fail-closed answer described above and pinned by
+// TestPublishAgentThroughExportedFullConstructorSkipsForeignSpawnedTask.
+func (e *ActionExecutor) foreignFiringSkipReason(entityID string) string {
+	err := semtypes.ValidateEntityIDAuthority(entityID, e.platform.Org, e.platform.Platform, false)
+	if err == nil {
+		return ""
+	}
+	var classified *errs.ClassifiedError
+	if errors.As(err, &classified) && classified.Code == semtypes.ErrorCodeEntityIDAuthorityInvalid {
+		return semtypes.EntityIDReasonForeignAuthority
+	}
+	return foreignFiringSkipReasonUnresolvable
 }
 
 // foreignFiringSkipLogMessage is the single Info line a dispatch emits when the
@@ -602,6 +643,12 @@ func (e *ActionExecutor) foreignFiringEntity(entityID string) bool {
 // the requirement's "ONE Info log per dispatch naming EVERY write that dispatch skipped" matches the
 // production string instead of a copy that can drift away from it.
 const foreignFiringSkipLogMessage = "publish_agent: firing entity carries a foreign authority — framework writes to it skipped"
+
+// unresolvableFiringSkipLogMessage is the counterpart for a dispatch with no
+// established firing entity. A second constant rather than one parameterized
+// message: the foreign line is pinned verbatim by the run-scope tests, and this
+// one must not claim a foreign authority that was never determined.
+const unresolvableFiringSkipLogMessage = "publish_agent: no firing entity could be established — framework writes to it skipped"
 
 // foreignFiringSkipRecorder returns the pair that records the decision to write
 // NOTHING to a foreign firing entity: record accumulates one declined write, and
@@ -631,11 +678,16 @@ const foreignFiringSkipLogMessage = "publish_agent: firing entity carries a fore
 // firing entity — not for the run anchor, because under run_scope inherit|none
 // no anchor is ever in play and only the spawned-task back-reference is
 // skipped. The identity is never logged: it is not this deployment's to publish.
-func (e *ActionExecutor) foreignFiringSkipRecorder(ec *ExecutionContext) (record func(string), flush func()) {
+//
+// reason is the classification foreignFiringSkipReason made for this dispatch
+// and is the ONLY thing that varies between the foreign and the unresolvable
+// line: it is the counter label, the log's reason field, and it selects the
+// message, so the unresolvable case never claims a foreign authority (#1169).
+func (e *ActionExecutor) foreignFiringSkipRecorder(ec *ExecutionContext, reason string) (record func(string), flush func()) {
 	var skipped []string
 	record = func(what string) {
 		if len(skipped) == 0 && e.metrics != nil && e.metrics.foreignFiringWritesSkippedTotal != nil {
-			e.metrics.foreignFiringWritesSkippedTotal.WithLabelValues(semtypes.EntityIDReasonForeignAuthority).Inc()
+			e.metrics.foreignFiringWritesSkippedTotal.WithLabelValues(reason).Inc()
 		}
 		skipped = append(skipped, what)
 	}
@@ -643,10 +695,14 @@ func (e *ActionExecutor) foreignFiringSkipRecorder(ec *ExecutionContext) (record
 		if len(skipped) == 0 || e.logger == nil {
 			return
 		}
-		e.logger.Info(foreignFiringSkipLogMessage,
+		msg := foreignFiringSkipLogMessage
+		if reason == foreignFiringSkipReasonUnresolvable {
+			msg = unresolvableFiringSkipLogMessage
+		}
+		e.logger.Info(msg,
 			slog.String("rule_id", ec.RuleID()),
 			slog.String("skipped", strings.Join(skipped, "; ")),
-			slog.String("reason", semtypes.EntityIDReasonForeignAuthority))
+			slog.String("reason", reason))
 	}
 	return record, flush
 }
@@ -1903,8 +1959,12 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 	// which is why neither the counter's NAME nor the log's MESSAGE is about the
 	// run anchor. The log's `skipped` field names whichever writes this dispatch
 	// actually declined.
-	foreignFiring := e.foreignFiringEntity(entityID)
-	recordForeignSkip, flushForeignSkips := e.foreignFiringSkipRecorder(ec)
+	// A dispatch with NO establishable firing entity — a cron fire, or a
+	// malformed ID — is skipped the same way but reported under its own
+	// reason, so foreign_authority means only an import (#1169).
+	foreignSkipReason := e.foreignFiringSkipReason(entityID)
+	foreignFiring := foreignSkipReason != ""
+	recordForeignSkip, flushForeignSkips := e.foreignFiringSkipRecorder(ec, foreignSkipReason)
 	// Deferred so the one Info line names EVERY write this dispatch declined —
 	// the rule.task.spawned decision is only reached after publication — and so
 	// it is still emitted when a later step returns an error.

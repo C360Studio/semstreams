@@ -58,9 +58,14 @@ type Metrics struct {
 	//
 	// It is a counted skip, never a rejection: no mutation request is sent, so
 	// nothing appears in graph-ingest's mutation_rejections, and without this
-	// counter the omission would be invisible. Labeled by reason only (today the
-	// single value foreign_authority), so cardinality cannot follow entity or
-	// rule count.
+	// counter the omission would be invisible. Labeled by reason only — a closed
+	// two-token vocabulary, so cardinality cannot follow entity or rule count:
+	// foreign_authority when the firing entity is canonical and carries another
+	// deployment's authority (an import), and unresolvable_firing_entity when no
+	// firing entity could be established at all — a cron fire, which has none by
+	// construction, or a structurally invalid ID. Before #1169 the second case
+	// was reported as foreign_authority, so every cron publish_agent dispatch
+	// read as import-boundary activity.
 	foreignFiringWritesSkippedTotal *prometheus.CounterVec
 }
 
@@ -197,7 +202,7 @@ func newRuleMetrics(registry *metric.MetricsRegistry, _ string) *Metrics {
 				Namespace: "semstreams",
 				Subsystem: "rule",
 				Name:      "foreign_firing_writes_skipped_total",
-				Help:      "publish_agent dispatches whose framework writes to the firing entity were deliberately not issued because it carries a foreign authority (ADR-102 d5), by reason",
+				Help:      "publish_agent dispatches whose framework writes to the firing entity were deliberately not issued (ADR-102 d5), by reason: foreign_authority (an imported entity) or unresolvable_firing_entity (no firing entity could be established — a cron fire, or a malformed ID)",
 			}, []string{"reason"}),
 		}
 

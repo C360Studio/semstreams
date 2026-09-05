@@ -66,6 +66,10 @@ The surface is a metric label and a log field, read by an operator, not a Go API
 - Not touching the graph-ingest mutation rejection reasons (`mutation_rejections{reason="authority_foreign"}`),
   which are a different surface with a correct label.
 - No exported symbol added or changed. No config knob.
+- Residual, recorded not fixed: `ExecutionContext.RuleID()` reads `State.RuleID` and returns `""` for a cron
+  context, which carries the rule's ID in `Schedule.ID` instead — so the cron skip line's `rule_id` field is
+  empty, as every other cron-path log line's already is. Widening `RuleID()` touches every caller that keys on
+  it and is not this issue.
 
 ## Consumers
 
