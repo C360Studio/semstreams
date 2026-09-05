@@ -863,8 +863,9 @@ func NewActionExecutorFull(
 // platform is the DEPLOYMENT's own authority (deps.Platform at the composition
 // root). It is a constructor parameter rather than a setter because it is the
 // only input whose absence changes what the guard MEANS rather than what it
-// does: a zero value makes foreignFiringEntity answer TRUE for every entity, so
-// every framework write to a firing entity is skipped — counted and logged, but
+// does: a zero value makes foreignFiringSkipReason answer foreign_authority for
+// every canonical entity, so every framework write to a firing entity is skipped
+// — counted and logged, but
 // skipped for the deployment's own entities as well as for imported mirrors, and
 // a rule chained off $entity.triple.rule.spawned_task stops firing (ADR-102 d5;
 // #1096). That is the safe direction and it is deliberate; it is still an
