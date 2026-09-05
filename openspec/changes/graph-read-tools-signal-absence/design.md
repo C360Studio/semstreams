@@ -16,8 +16,14 @@ in `proposal.md`.** Base `main@797d294a`.
 A `describe_predicates` tool would JOIN the surface (the stub is being served, so a new tool cannot replace it) and
 hand small models a ~200-name list per call. `predicates_present` on `query_relationships` is the experiment's
 `describe_edges` scoped to the entity in hand. Case against the recommendation: an entity-scoped schema gives no answer
-when the model holds no entity; that gap is filled by `query_by_type` (typed entry) and `research_graph`, and the
-registry is process-local anyway, so a global list would still not be "the graph's" vocabulary.
+when the model holds no entity. Why a tool is still not the answer: the graph-wide predicate catalog already has an
+owner — `graph.index.query.predicateList` over `PREDICATE_INDEX` (`processor/graph-index/query.go:59,507-545`), consumed
+today by the gateway's `predicates` field and by `graph.query.summary` (`processor/graph-query/summary.go:100`). A
+`describe_predicates` tool would be a second home for that fact; the admitted route, if the model ever needs the
+catalog, is a typed adapter over that subject — the owner-question-7 shape (a NATS dependency on a component absent
+from the agentic tier). What the catalog does not carry is kind, description, role, and inverse — that is the
+process-local registry's content, and `predicates_present` adds exactly that, scoped to the entity in hand. The
+cold-start gap is filled by `query_by_type` (typed entry) and `research_graph`.
 
 ## `query_by_type`: serve via the filtered key listing
 
@@ -113,24 +119,30 @@ the cap — `truncated`, `frontier_remaining`, `HintTooLarge` report what was ob
 that still trips the transport bound takes spec `:467`'s path unchanged; the two compose, they do not overlap. The
 origin case in `docs/concepts/24-tool-result-hints-and-pagination.md:8-9` (a 102KB graph result retried three times by
 mid-tier models) is this class: the failure was model-facing, not transport. Neither existing cap is specced; the
-delta's `query_neighbors` requirement is the first to state the class. Adopter seam: nothing to configure; owner
+delta's `query_neighbors` requirement is the first to state the class. External support for the class: the Cekikj
+restatement's evidence review (Part 2 § 2.5) cites Microsoft Research's tool-space interference work — over-long tool
+responses cut performance by up to 91% even inside the context window. Adopter seam: nothing to configure; owner
 question 1 is the value only.
 
 ## Break classification and sequencing (owner obligation 1, #1261 note 2026-09-05)
 
 **Go surface — additive.** `processor/agentic-tools/executors` is Tier 1 (`release/tier1-packages.txt:79`). The change
 adds one exported optional interface (`KVKeyLister`) and changes no existing exported symbol; `KVGetter`,
-`NewGraphQueryExecutor`, and `ListTools` are unchanged. ADR-106 (`docs/adr/106-…md:81`): a compatible addition to
-Tier 1 does not reset RC-4; `task api:compat:report` is in the gates (`tasks.md` 6.1) so this is measured, not read
-from a `!` marker (`:114-115`). No payload, schema, subject, or KV key changes.
+`NewGraphQueryExecutor`, and `ListTools` are unchanged. ADR-106 (`docs/adr/106-…md:81-82`): a compatible addition to
+Tier 1 does not reset RC-4 **but must pass the walked-path guard (RC-6) before the tag that ships it** — a spec
+scenario citing the surface and an assertion exercising it on a booted binary. For `KVKeyLister` those are the delta's
+`TestQueryByType_WithoutKeyListerIsLoud` scenario and the agentic e2e approval walk, whose approved re-dispatch
+executes the served `query_by_type` through the adapter's `KeysByPattern` on a booted binary (`tasks.md` 6.2).
+`task api:compat:report` is in the gates (`tasks.md` 6.1), so compatibility is measured, not read from a `!` marker
+(`:114-115`). No payload, schema, subject, or KV key changes.
 
 **Model-facing result shapes — three tools change what the model reads.** The consumer is the model via
 `buildToolMessages`; the shapes are JSON inside `ToolResult.Result`, not a Go type.
 
 | Tool | Additive | Behaviour that flips | Who reads the old shape today |
 |---|---|---|---|
-| `query_by_type` | `entity_ids`, `pattern`, `matched`, `truncated`, hints | stub `{entities:[], note, suggested_ids}` → served listing; a non-segment `entity_type` → `invalid_args` where the stub accepted anything | nothing pins the stub shape (0 hits for `suggested_ids` outside `graph_query.go`); the agentic e2e approval walk asserts `status="success"` on the executions metric with pinned args `{"entity_type":"temperature","limit":5}` (`test/e2e/mock/cmd/main.go:39`; `test/e2e/scenarios/agentic/approval_signal.go:36-40,77-88`) — a canonical one-token segment the served tool accepts; the tier's temperature entity matches it |
-| `query_relationships` | `filter_registered`, `predicates_present`, `HintEmpty` | rows are `IsRelationship()` triples only — literal-object triples reported as relationships today (`:591-617`) disappear; a malformed filter → `invalid_args` where today `count: 0` | the model; prompt text names the tool, never a result key (`processor/agentic-loop/prompt/assembler.go:142`; `configs/personas/fragments/ops/00-identity.md:9`; `configs/flows/ops-agent.json:316`) |
+| `query_by_type` | `entity_ids`, `pattern`, `matched`, `truncated`, hints | stub `{entities:[], note, suggested_ids}` → served listing; a non-segment `entity_type` → `invalid_args` where the stub accepted anything | nothing pins the stub shape (0 hits for `suggested_ids` outside `graph_query.go`); the agentic e2e approval walk asserts `status="success"` on the executions metric with pinned args `{"entity_type":"temperature","limit":5}` (`test/e2e/mock/cmd/main.go:38`; `test/e2e/scenarios/agentic/approval_signal.go:36-40,77-88`) — a canonical one-token segment the served tool accepts; the tier's temperature entity matches it |
+| `query_relationships` | `filter_registered`, `predicates_present`, `HintEmpty` | rows are `IsRelationship()` triples only — literal-object triples reported as relationships today (`:591-617`) disappear; a malformed filter → `invalid_args` where today `count: 0` | the model; prompt text names the tool, never a result key (`processor/agentic-loop/prompt/assembler.go:142`; `configs/personas/fragments/ops/00-identity.md:9`; `configs/flows/ops-agent.json:316`, an `allowed_tools` entry) |
 | `query_neighbors` | `unresolved`, `truncated`, `frontier_remaining`, hints | `filter_type` filters (today ignored, `:442`) — a caller passing it gets a smaller set, possibly empty; the budget truncates where today unbounded; a transient fetch error fails the call where today it is skipped (`:428-431`) | the model; same prompt-text finding |
 | `query_entity`, `query_entities` | — | none | — |
 
@@ -187,6 +199,21 @@ In tree, `configs/agentic.json:468-469` already runs the cited experiment's cond
 ["query_entity","query_by_type"]`, graph-read tools only — and `configs/flows/ops-agent.json:313-328` is the ops
 role's fourteen-tool allowlist with no `bash`. Reproducing the experiment's restriction needs no framework change; it
 is flow and persona configuration today.
+
+**External evidence the owner's restatement collected (Part 2 / Part 3 of the Cekikj evidence review, 2026-09-04),
+and where each lands in this design.**
+
+| Finding (restatement §) | Bears on | Where it lands |
+|---|---|---|
+| § 2.5 — large tool spaces cut performance by up to 85%; flattening a parameter schema improved tool-calling by 47% (Microsoft Research); LiveMCPBench: cutting retrieved tools from five to one dropped success from 78.95% to 64.21% | tool count in both directions: width costs, and over-restriction costs | ADR-036 call above: enrich five, add none; parameters stay flat strings. The LiveMCPBench number is the caution against reading "graph-read tools only" as free — it is a configured restriction with a measured cost, not a default |
+| § 2.5 — over-long tool responses cut performance by up to 91% inside the window; Chroma's context-rot result across 18 models | result size | § Budget (model-facing cap); `HintTooLarge` + `truncated` + `frontier_remaining` on `query_neighbors`; identities-only `query_by_type` (owner question 2) |
+| § 2.3 — tool names, not descriptions, are the primary routing signal (Agent4Science review); SNAILS: identifier naturalness correlates with accuracy | what the model routes on | the five names are unchanged; descriptions are rewritten for truth, never relied on for routing; `predicates_present` shows registry names instead of asking the model to guess them |
+| § 3.3 — the article's ranking is a property of its traversal-only tool surface; distance is cheap when the model sees the whole schema and expensive when it discovers the path one call at a time | which surface the finding applies to | this change is the traversal surface; the whole-schema route stays `research_graph` and the graph-query/gateway operations (`summary`, `predicateList`, `hierarchyStats`) — none re-homed here |
+| § 3.4 — the tool layer is the cheaper lever: a single `get_schema` or one query-writing tool would have removed most of the flat graph's 18 false refusals; GitHub Copilot cut its tool count from 40 to 13 with measurable improvement | schema exposure vs ontology change; tool count | `predicates_present` is the entity-scoped `get_schema`; the global catalog has an owner already (ADR-036 call); no tool added |
+| § 3.8 — a fan of typed edges lost to one readable property on aggregation (0.17 vs 0.76) | graph shape, not tool shape | #1260 (`edge-or-property` heuristic), out of scope here |
+
+These are cited as the restatement reports them; none was re-run here, and the restatement's own Part 3 § 3.6 caution
+(small synthetic benchmarks) applies to every number in the table.
 
 **Is the experiment's `find_nodes` a gap in the direct surface?** Its roster is four tools (`code/graph.py`, read
 from the cited repository: `find_nodes` `:47-65`, `get_node` `:67`, `traverse` `:73`, `describe_edges` `:98`).

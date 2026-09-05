@@ -31,13 +31,21 @@ paths Codex's #759/#1146 stack (PRs #1156/#1159/#1141) holds, and the delta is A
       (`graph.query.summary` as the same-class owner; the budget classified as a model-facing cap distinct from spec
       `:467`), pins fixed, six rows added; `design.md` gained § Budget, § Break classification and sequencing, and § Tool-preference premise;
       owner questions renumbered 1–11.
-- [ ] 1.3c Re-review of the amended inventory (`semstreams-reviewer`) recorded on PR #1262.
+- [x] 1.3c Re-review of the amended inventory (`semstreams-reviewer`) recorded on PR #1262 — INVENTORY CHANGES
+      REQUESTED (round 2): BLOCKING `graph.index.query.predicateList` as the same-class owner of "which predicates
+      exist"; HIGH `hierarchyStats` as a second owner of "which types exist"; four pin corrections; the ADR-106 `:81`
+      half-quote (RC-6); two premise pins inside Codex-held files. Round 1's six findings confirmed closed.
+- [x] 1.3d Architect amendment round 2 folding 1.3c (owner rows added, ADR-036 case-against rewritten on the
+      predicate-catalog owner, RC-6 walked path named, pins fixed) plus the external-evidence table from the Cekikj
+      restatement (Part 2 § 2.3/§ 2.5, Part 3 § 3.3/§ 3.4/§ 3.8) in `design.md` § Tool-preference premise.
+- [ ] 1.3e Re-review round 3 (`semstreams-reviewer`) recorded on PR #1262.
 - [ ] 1.4 Owner INVENTORY PASS on the PR; owner rulings on `proposal.md` questions 1–11 recorded on #1261.
 - [ ] 1.5 Owner places the milestone (recommendation: `v1.0.0-beta.165`).
 - [ ] 1.6 HOLD — sections 3–6 do not start until (a) 1.4 is recorded and (b) either Codex's #759/#1146 stack
       (PRs #1156/#1159/#1141) has landed or owner question 11 relaxes this to archive-order coordination. Re-check
       the file list against the PAGINATED Codex file lists (`gh api repos/:owner/:repo/pulls/N/files --paginate`)
-      before 3.1.
+      before 3.1, and re-pin the two premises that live inside held files (`executors/httprequest.go:23`,
+      `component.go:974-994`).
 
 ## 2. Spec delta
 
