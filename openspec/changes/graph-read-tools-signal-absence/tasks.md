@@ -19,7 +19,14 @@ Sequencing: sections 3–6 start after Codex's #759/#1146 stack (PRs #1156/#1159
 - [x] 1.1 Draft PR #1262 opened with `Closes #1261` on `claude/gh1261-graph-read-tools`, own worktree; the OpenSpec
       change is its first commit.
 - [x] 1.2 Architect verification pass over the explorer inventory — `inventory-verification.md` (2 strikes, 11 additions).
-- [ ] 1.3 Independent inventory review (`semstreams-reviewer` re-derivation) recorded on the PR.
+- [x] 1.3 Independent inventory review (`semstreams-reviewer` re-derivation) recorded on PR #1262 — INVENTORY CHANGES
+      REQUESTED (2 blocking rows: `graph.query.summary` as the same-class owner of "IDs by type"; the neighbors budget vs
+      spec `:467`). Architect amendment in progress; re-review follows.
+- [x] 1.3a Explorer inventory materialized as `inventory.md` with a parseable `base:` line. `task inventory:verify` on it:
+      119 pins, 15 ok, 5 moved, 34 drift, 65 malformed, 44 unparsed — the explorer's table/range format does not fit the
+      verifier grammar (#1256), so the malformed/unparsed counts are grammar, not drift; the 5 MOVED rows in
+      `message/triple.go` (`:56→58`, `:61→63`, `:70→74`) are real pin errors at the explorer's own base and confirm the
+      reviewer's HIGH. Re-pin the rows the design rests on; do not treat the verifier's exit as a gate here.
 - [ ] 1.4 Owner INVENTORY PASS on the PR; owner rulings on `proposal.md` questions 1–5 recorded on #1261.
 - [ ] 1.5 Owner places the milestone (recommendation: `v1.0.0-beta.165`).
 - [ ] 1.6 HOLD — sections 3–6 do not start until (a) Codex's #759/#1146 stack (PRs #1156/#1159/#1141) has landed
