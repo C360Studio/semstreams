@@ -560,9 +560,29 @@ type ActionExecutor struct {
 	metrics *Metrics
 }
 
-// foreignFiringEntity reports whether the firing entity carries an authority
-// other than this deployment's — an imported read-only mirror the framework
-// must not write to (ADR-102 d5, ruled O-12(a)).
+// foreignFiringEntity is the bool form of foreignFiringSkipReason, kept for the
+// platform-wiring integration tests; production reads the reason directly.
+func (e *ActionExecutor) foreignFiringEntity(entityID string) bool {
+	return e.foreignFiringSkipReason(entityID) != ""
+}
+
+// foreignFiringSkipReasonUnresolvable is the skip reason for a dispatch on which
+// no firing entity could be established: the ExecutionContext carries none (a
+// cron fire has no firing entity by construction — cron_scheduler.go builds it
+// with Schedule alone) or carries one that fails structural validation. The
+// write is declined for the same fail-closed reason as an import — a subject
+// that cannot be established is not written to — but it is NOT an import, and
+// reporting it as foreign_authority made every cron publish_agent dispatch read
+// as import-boundary activity to an operator filtering the counter (#1169).
+//
+// It is the rule engine's own skip reason, not an entity-ID validation outcome,
+// so it lives here unexported rather than beside the EntityIDReason* tokens in
+// pkg/types. A fixed token: label cardinality never follows the failing ID.
+const foreignFiringSkipReasonUnresolvable = "unresolvable_firing_entity"
+
+// foreignFiringSkipReason decides whether the framework may write back onto the
+// firing entity — an imported read-only mirror it must not write to (ADR-102
+// d5, ruled O-12(a)) is the case the guard exists for.
 //
 // It fails CLOSED, and it does so by asking the validator rather than by
 // short-circuiting. An executor holding no deployment authority cannot establish
@@ -593,26 +613,9 @@ type ActionExecutor struct {
 //
 // NewActionExecutor takes no authority and cannot write: it holds neither mutator
 // nor publisher and there is no setter for either.
-func (e *ActionExecutor) foreignFiringEntity(entityID string) bool {
-	return e.foreignFiringSkipReason(entityID) != ""
-}
-
-// foreignFiringSkipReasonUnresolvable is the skip reason for a dispatch on which
-// no firing entity could be established: the ExecutionContext carries none (a
-// cron fire has no firing entity by construction — cron_scheduler.go builds it
-// with Schedule alone) or carries one that fails structural validation. The
-// write is declined for the same fail-closed reason as an import — a subject
-// that cannot be established is not written to — but it is NOT an import, and
-// reporting it as foreign_authority made every cron publish_agent dispatch read
-// as import-boundary activity to an operator filtering the counter (#1169).
 //
-// It is the rule engine's own skip reason, not an entity-ID validation outcome,
-// so it lives here unexported rather than beside the EntityIDReason* tokens in
-// pkg/types. A fixed token: label cardinality never follows the failing ID.
-const foreignFiringSkipReasonUnresolvable = "unresolvable_firing_entity"
-
-// foreignFiringSkipReason classifies the firing entity for the framework writes
-// the executor makes back onto it. It returns "" when the entity carries this
+// It classifies the firing entity for the framework writes the executor makes
+// back onto it. It returns "" when the entity carries this
 // deployment's own authority (write), semtypes.EntityIDReasonForeignAuthority
 // when it is canonical and carries another deployment's (skip: an imported
 // read-only mirror), and foreignFiringSkipReasonUnresolvable when no entity
@@ -624,7 +627,7 @@ const foreignFiringSkipReasonUnresolvable = "unresolvable_firing_entity"
 // validator runs the structural check first, so an authority code is only ever
 // returned for a canonical ID; and with an empty deployment pair every canonical
 // ID differs at position 1 and still reads foreign_authority, which is the
-// fail-closed answer described above and pinned by
+// fail-closed answer the first paragraphs describe, pinned by
 // TestPublishAgentThroughExportedFullConstructorSkipsForeignSpawnedTask.
 func (e *ActionExecutor) foreignFiringSkipReason(entityID string) string {
 	err := semtypes.ValidateEntityIDAuthority(entityID, e.platform.Org, e.platform.Platform, false)
@@ -699,8 +702,16 @@ func (e *ActionExecutor) foreignFiringSkipRecorder(ec *ExecutionContext, reason 
 		if reason == foreignFiringSkipReasonUnresolvable {
 			msg = unresolvableFiringSkipLogMessage
 		}
+		// A cron ExecutionContext carries no MatchState, so RuleID() is empty
+		// there while the rule's ID sits in Schedule.ID. The counter carries no
+		// rule label by design, so this line is the operator's only attribution;
+		// it must not be blank in the one case the unresolvable reason exists for.
+		ruleID := ec.RuleID()
+		if ruleID == "" && ec.Schedule != nil {
+			ruleID = ec.Schedule.ID
+		}
 		e.logger.Info(msg,
-			slog.String("rule_id", ec.RuleID()),
+			slog.String("rule_id", ruleID),
 			slog.String("skipped", strings.Join(skipped, "; ")),
 			slog.String("reason", reason))
 	}

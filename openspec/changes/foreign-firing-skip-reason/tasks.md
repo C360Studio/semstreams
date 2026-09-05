@@ -18,7 +18,7 @@ recorder hardcoding the reason), `processor/rule/cron_scheduler.go:650-656` (the
 ## 2. Spec delta
 
 - [x] 2.1 MODIFIED `Framework-minted runtime state carries the deployment's own authority and never writes to an
-      imported firing entity` — full restatement of all eight current scenarios; the counter paragraph names the
+      imported firing entity` — full restatement of all seven current scenarios (eight after the delta); the counter paragraph names the
       two-token `reason` vocabulary; one scenario added for the cron/no-entity case, pinned by
       `TestPublishAgentSkipReasonSeparatesUnresolvableFromForeign`.
 
@@ -58,3 +58,21 @@ recorder hardcoding the reason), `processor/rule/cron_scheduler.go:650-656` (the
       with no entry from this change.
 - [ ] 6.2 `semstreams-reviewer` pass; findings addressed.
 - [ ] 6.3 Archive as the final content commit after review.
+
+## 7. Review round (`semstreams-reviewer`, APPROVE with three MEDIUMs, all taken)
+
+- [x] 7.1 MEDIUM: the skip line's `rule_id` was empty on the cron path (`ec.RuleID()` reads `State`, nil for cron).
+      `flush` now falls back to `Schedule.ID`; the unit test asserts `rule_id` per case. `RuleID()` itself unchanged.
+- [x] 7.2 MEDIUM: the fail-closed rationale documented the bool wrapper production no longer calls. Moved onto
+      `foreignFiringSkipReason`; the wrapper keeps a one-line comment naming its two integration-test callers.
+- [x] 7.3 MEDIUM: the cron premise was hand-built only. `recordingExecutor` now keeps each `ExecutionContext`, and
+      `TestCronScheduler_FireDispatchesAllActions` asserts `EntityID == ""`, `State == nil`, `Schedule.ID == rule.ID()`
+      as the scheduler hands it over.
+- [x] 7.4 NITs: scenario count corrected; wrapper wording corrected; `graph/inference/hierarchy.go:217` enumerated in
+      non-goals.
+- [x] 7.5 CI on `11e20e87` was red on ONE Lint step `task lint` does not run — the entity-ID corpus audit — for the
+      test's intentionally malformed literal. Classified in-file (the graph-query precedent); the audit passes locally.
+- [x] 7.6 Owner question answered on the classifier's pattern: no shared code accessor exists in `pkg/errs`; the
+      `errors.As` + `Code ==` read is the repo idiom at ten production sites (graph-query, graph-clustering,
+      agentic-tools, agentic-loop, graph-ingest); graph-ingest's `entityIDContractReason` reads the `reason` detail
+      because it answers a different question. Recorded in the proposal.

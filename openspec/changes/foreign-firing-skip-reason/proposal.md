@@ -29,9 +29,17 @@ structural ones (`entity_id_invalid`) "so a caller can tell 'malformed' from 'no
   the dispatch carries none (cron) or carries one that fails structural validation. It is an unexported constant in
   `processor/rule`, not an `EntityIDReason*` export: it is not an entity-ID validation outcome, it is the rule
   engine's own skip reason, and `processor/rule` is a Tier 1 package that gains no exported symbol from this.
-- `foreignFiringEntity` becomes a classification that reads the classified error's code: authority code →
-  `foreign_authority`; anything else → `unresolvable_firing_entity`; nil → local. The bool form stays as a wrapper
-  for its callers and tests.
+- `foreignFiringSkipReason` classifies by the classified error's code: authority code → `foreign_authority`;
+  anything else → `unresolvable_firing_entity`; nil → local. The bool `foreignFiringEntity` stays as a one-line
+  wrapper for the two platform-wiring integration tests that call it; production reads the reason directly.
+  **Pattern check:** `pkg/errs` exports constructors and a class accessor but no code reader; reading a
+  `*errs.ClassifiedError` through `errors.As` and comparing `Code` is the repo idiom at ten production sites
+  (graph-query, graph-clustering, agentic-tools, agentic-loop, graph-ingest's `mutation_runtime.go:61`), so
+  there was nothing to reuse. graph-ingest's `entityIDContractReason` (`mutation_runtime.go:120-135`) reads the
+  `reason` detail instead because it answers a different question — WHICH structural reason — and its
+  default-to-unknown shape is the one this classifier mirrors with default-to-unresolvable.
+- The skip line's `rule_id` falls back to `Schedule.ID` when `RuleID()` is empty, so the cron line — the only
+  attribution the operator gets, since the counter carries no rule label by design — names its rule.
 - The recorder takes the reason and uses it for the label and the log field; the unresolvable case logs a message
   that does not claim a foreign authority. Still ONE Info line per dispatch, still one increment per dispatch.
 - The fail-closed empty-authority answer is unchanged: a canonical firing entity under an empty pair still reads as
@@ -67,9 +75,12 @@ The surface is a metric label and a log field, read by an operator, not a Go API
   which are a different surface with a correct label.
 - No exported symbol added or changed. No config knob.
 - Residual, recorded not fixed: `ExecutionContext.RuleID()` reads `State.RuleID` and returns `""` for a cron
-  context, which carries the rule's ID in `Schedule.ID` instead — so the cron skip line's `rule_id` field is
-  empty, as every other cron-path log line's already is. Widening `RuleID()` touches every caller that keys on
-  it and is not this issue.
+  context, which carries the rule's ID in `Schedule.ID` instead. The skip line this change owns falls back to
+  `Schedule.ID` on its own line; every OTHER cron-path log line that reads `RuleID()` still logs an empty
+  `rule_id`. Widening the accessor touches every caller that keys on it and is not this issue.
+- Not adopted by `graph/inference/hierarchy.go:217`, the one other production reader of
+  `ValidateEntityIDAuthority` that collapses any error to "foreign": it emits no reason label, so there is
+  nothing to mislabel and no adoption owed.
 
 ## Consumers
 
