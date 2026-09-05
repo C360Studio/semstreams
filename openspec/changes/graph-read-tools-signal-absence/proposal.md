@@ -41,8 +41,10 @@ contract's first adopter.
    (`*.*.*.*.<type>.*`) or `domain.type` (`*.*.*.<domain>.<type>.*`), validated by `pkg/types.ValidateEntityIDPattern`;
    sorted; `limit` honored; `HintTooLarge` when truncated, `HintEmpty` when none. No new index, no new bucket.
 3. **Schema read:** no new tool. `predicates_present` on `query_relationships` is the experiment's `describe_edges`
-   scoped to the entity in hand; the global list is `research_graph`'s job
-   (`frameworkcapabilities/graphresearch/executor.go:151-156`). ADR-036 call and the case against it are in `design.md`.
+   scoped to the entity in hand; the graph-wide predicate catalog already has an owner — `graph.index.query.predicateList`
+   (`processor/graph-index/query.go:59,507-545`; consumed by the gateway's `predicates` field and by `graph.query.summary`) —
+   and open questions are `research_graph`'s job (`frameworkcapabilities/graphresearch/executor.go:151-156`). ADR-036
+   call and the case against it are in `design.md`.
 4. **`query_neighbors`:** a content byte budget observed while assembling; `truncated`, `frontier_remaining`,
    `HintTooLarge`; missing targets in `unresolved` (inherits `openspec/specs/graph-query/spec.md:255-263`); transient
    fetch errors fail the call as `query_entity` does; `filter_type` matches the identity's type segment with the same
@@ -106,9 +108,11 @@ Renumbered 2026-09-05 after the independent inventory review and the owner note 
    `system.domain.type` bucket key pastes into `entity_type` as-is. Recommend yes (one grammar, one more arity; the
    delta's R2 gains one sentence and one scenario if accepted — not pre-applied). Against: a third arity for the model
    to hold; summary is unreachable in tiers without graph-query.
-7. **"Which types exist" entry** (omitted `entity_type` → the summary operation's type distribution). Recommend **no**
-   in this change: a NATS dependency on graph-query, unreachable in the agentic tier, needs a typed adapter. Against:
-   cold-start type discovery then has no direct-surface home; `research_graph` is async and heavier.
+7. **"Which types exist" entry** (omitted `entity_type` → a type listing). Two owners exist already, both on
+   graph-query and both absent from the agentic tier: `summary` (flat `system.domain.type` buckets with example IDs) and
+   `hierarchyStats`/`entityIdHierarchy` (level-by-level drill, `processor/graph-query/query.go:55,518-528`). Recommend
+   **no** in this change: either is a NATS dependency on graph-query and needs a typed adapter. Against: cold-start type
+   discovery then has no direct-surface home; `research_graph` is async and heavier.
 8. **A `find_nodes`-shaped substring tool.** Recommend **no**: re-opens `agentic-tools/spec.md:267-291`, ADR-036 width,
    an O(N) value scan; app-local registration is the sanctioned route (semsource's `graph_search`). Against: the cited
    experiment's whole condition rested on it.
