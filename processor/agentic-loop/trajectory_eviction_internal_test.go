@@ -101,7 +101,8 @@ func TestTimedOutToolResultEvictsActiveTrajectory(t *testing.T) {
 	require.NoError(t, handler.loopManager.SetTimeout(loopID, -time.Second))
 
 	const callID = "timed-out-call"
-	handler.loopManager.TrackToolCall(callID, loopID)
+	const executionID = "execution-timed-out"
+	handler.loopManager.TrackToolCall(executionID, loopID)
 	registry := payloadbuiltins.NewTestRegistry(t)
 	component := &Component{
 		config:  config,
@@ -109,7 +110,7 @@ func TestTimedOutToolResultEvictsActiveTrajectory(t *testing.T) {
 		decoder: message.NewDecoder(registry),
 		logger:  discardLogger(),
 	}
-	toolResult := agentic.ToolResult{CallID: callID, Name: "search", Content: "late result"}
+	toolResult := agentic.ToolResult{ExecutionID: executionID, CallID: callID, Name: "search", Content: "late result"}
 	envelope := message.NewBaseMessage(toolResult.Schema(), &toolResult, "test")
 	data, err := json.Marshal(envelope)
 	require.NoError(t, err)

@@ -917,7 +917,7 @@ func (c *Component) setupSubscriptions(setupCtx, consumerCtx context.Context) er
 		case "agent.toolcall.approved", "agent.toolcall.rejected":
 			// Verdicts from rule-driven tool-call governance (ADR-039).
 			// Both subjects route into the same demux — the dispatcher
-			// uses the subject path to extract decision + call_id.
+			// reads decision + execution_id from the verdict payload.
 			// Skip if no dispatcher is configured (disabled mode with
 			// no fallback construction); the wildcard subscription is
 			// still cheap to bind but never gets traffic in disabled
@@ -1960,7 +1960,7 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 	}
 	toolResult := *toolResultPtr
 
-	// Find loop ID for this tool call. Empty here means we drained the CallID at
+	// Find loop ID for this tool execution. Empty here means we drained the execution ID at
 	// the previous turn boundary (GetAndClearToolResults evicts the routing
 	// entry to drop late re-deliveries), the loop settled and released its
 	// per-loop state (#1233), or we never tracked it. All three are expected
@@ -1968,14 +1968,16 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 	// Returning here is load-bearing — proceeding would land the late result
 	// in PendingToolResults and surface as a duplicate tool message in the
 	// next turn's request. It is also what keeps a released loop
-	// indistinguishable from a present terminal one: DeleteLoop clears the
-	// routing entry for model-authored call IDs as well as structured ones, so
-	// recovery cannot resolve a loop that is gone and hand it to
+	// indistinguishable from a present terminal one: DeleteLoop clears opaque
+	// execution routing entries by their mapped owner, so the direct lookup
+	// cannot resolve a loop that is gone and hand it to
 	// HandleToolResult, which would fail instead of dropping.
 	// The fourth case the comment above did not name: the loop is live and
 	// this process is simply not the one holding it. Memory reads identically
-	// to the three expected drops, so the loops bucket decides.
-	loopID := c.findLoopIDForToolCall(toolResult.CallID)
+	// to the three expected drops, so the loops bucket decides. The lookup key
+	// is the framework execution identity, not the provider call id — the
+	// routing entry is minted under it.
+	loopID := c.findLoopIDForToolCall(toolResult.ExecutionID)
 	if loopID == "" {
 		return c.settleToolResultWithoutLoop(ctx, toolResult)
 	}
@@ -2045,14 +2047,18 @@ func (c *Component) settleToolResultWithoutLoop(ctx context.Context, toolResult 
 	}
 	switch c.classifyMissingLoop(ctx, loopID) {
 	case loopPresenceStale:
-		c.logger.Warn("No loop found for tool call", "call_id", toolResult.CallID)
+		// Named for the identity the lookup actually failed on: the routing
+		// entry is keyed by execution identity, so a miss is a stale
+		// execution, not a stale call id. metrics.go documents the same word.
+		c.logger.Warn("No loop found for tool execution",
+			"execution_id", toolResult.ExecutionID, "call_id", toolResult.CallID)
 		if c.metrics != nil {
-			c.metrics.recordToolResultDropped("stale_callid")
+			c.metrics.recordToolResultDropped("stale_execution")
 		}
 		return nil
 	default:
 		c.logger.Warn("Tool result names a loop this process does not hold",
-			"call_id", toolResult.CallID, "loop_id", loopID)
+			"execution_id", toolResult.ExecutionID, "call_id", toolResult.CallID, "loop_id", loopID)
 		if c.metrics != nil {
 			c.metrics.recordToolResultDropped("loop_held_elsewhere")
 		}
@@ -2276,10 +2282,11 @@ func (c *Component) findLoopIDForRequest(requestID string) string {
 	return loopID
 }
 
-// findLoopIDForToolCall finds the loop ID associated with a tool call ID,
-// attempting recovery from structured ID if not found in cache.
-func (c *Component) findLoopIDForToolCall(callID string) string {
-	loopID, exists := c.handler.loopManager.GetLoopForToolCallWithRecovery(callID)
+// findLoopIDForToolCall finds the loop ID associated with a framework tool
+// execution ID. Provider CallID is request-scoped conversation data and is
+// never used as a routing fallback.
+func (c *Component) findLoopIDForToolCall(executionID string) string {
+	loopID, exists := c.handler.loopManager.GetLoopForToolCallWithRecovery(executionID)
 	if !exists {
 		return ""
 	}
@@ -2433,7 +2440,7 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 
 // handleToolCallVerdictMessage routes inbound verdicts from
 // agent.toolcall.approved.> and agent.toolcall.rejected.> into the
-// governance dispatcher (ADR-039). The dispatcher demuxes by call_id
+// governance dispatcher (ADR-039). The dispatcher demuxes by execution_id
 // to per-call waiter channels.
 //
 // Both wildcard subjects share this single handler because the
@@ -2466,38 +2473,42 @@ func (c *Component) handleToolCallVerdictMessage(ctx context.Context, data []byt
 	}
 
 	decision := payload.EffectiveDecision()
-	callID := payload.EffectiveCallID()
-	if decision == "" || callID == "" {
+	executionID := payload.effectiveExecutionID()
+	if decision == "" || executionID == "" {
 		return natsclient.DeliveryDecisionTerminate,
-			fmt.Errorf("tool-call verdict payload missing decision or call_id (decision=%q call_id=%q)", decision, callID)
+			fmt.Errorf("tool-call verdict payload missing decision or execution_id (decision=%q execution_id=%q)", decision, executionID)
 	}
 
-	settled, err := dispatcher.HandleVerdict(decision, callID, data)
+	settled, err := dispatcher.HandleVerdict(decision, executionID, data)
 	if errors.Is(err, ErrNoGovernanceWaiter) {
-		return c.settleVerdictWithoutWaiter(ctx, callID, err)
+		return c.settleVerdictWithoutWaiter(ctx, payload, executionID, err)
 	}
 	return settled, err
 }
 
-// settleVerdictWithoutWaiter decides a verdict whose call_id has no waiter
-// here. The dispatcher's own doc comment says such verdicts are expected in
-// normal operation — audit mode, late arrivals, verdicts for other components'
-// loops on a shared stream — and the RecordGovernanceVerdictMissingWaiter
-// counter exists for exactly that, so Retrying them made a documented-normal
-// input a hot redelivery loop. But the fourth case is real: after process
-// replacement the loop is still waiting and the verdict is still owed. The
-// call_id grammar carries the loop ID, so the record decides which it is.
+// settleVerdictWithoutWaiter decides a verdict whose execution identity has no
+// waiter here. The dispatcher's own doc comment says such verdicts are expected
+// in normal operation — audit mode, late arrivals, verdicts for other
+// components' loops on a shared stream — and the
+// RecordGovernanceVerdictMissingWaiter counter exists for exactly that, so
+// Retrying them made a documented-normal input a hot redelivery loop. But the
+// fourth case is real: after process replacement the loop is still waiting and
+// the verdict is still owed, so the record decides which it is.
+//
+// The execution identity cannot answer that question — it is an opaque digest
+// with no loop in it — so the loop comes from the payload's own loop_id, or
+// from the RequestID grammar when a rule echoes only that.
 func (c *Component) settleVerdictWithoutWaiter(
-	ctx context.Context, callID string, cause error,
+	ctx context.Context, payload VerdictPayload, executionID string, cause error,
 ) (natsclient.DeliveryDecision, error) {
-	loopID := loopIDFromStructuredID(callID, ":tool:")
+	loopID := payload.effectiveLoopID()
 	if c.classifyMissingLoop(ctx, loopID) == loopPresenceStale {
 		c.logger.Debug("Verdict has no waiter and its loop is finished or foreign; acknowledging",
-			slog.String("call_id", callID), slog.String("loop_id", loopID))
+			slog.String("execution_id", executionID), slog.String("loop_id", loopID))
 		return natsclient.DeliveryDecisionAck, nil
 	}
 	c.logger.Warn("Verdict names a live loop this process does not hold",
-		slog.String("call_id", callID), slog.String("loop_id", loopID))
+		slog.String("execution_id", executionID), slog.String("loop_id", loopID))
 	return natsclient.DeliveryDecisionRetry, cause
 }
 
@@ -2549,6 +2560,15 @@ func verdictPayloadFromMap(data map[string]any) VerdictPayload {
 	}
 	if v, ok := data["loop_id"].(string); ok {
 		p.LoopID = v
+	}
+	if v, ok := data["request_id"].(string); ok {
+		p.RequestID = v
+	}
+	if v, ok := data["execution_id"].(string); ok {
+		p.ExecutionID = v
+	}
+	if v, ok := data["proposal_fingerprint"].(string); ok {
+		p.ProposalFingerprint = v
 	}
 	if v, ok := data["rule_id"].(string); ok {
 		p.RuleID = v

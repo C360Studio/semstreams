@@ -590,9 +590,12 @@ func TestHandlerProducesFullEvidenceBeforeOperationalTruncation(t *testing.T) {
 	}
 
 	toolResult, err := handler.HandleToolResult(context.Background(), loopID, agentic.ToolResult{
-		CallID:  callID,
-		Name:    "inspect",
-		Content: fullContent,
+		CallID:      callID,
+		Name:        "inspect",
+		Content:     fullContent,
+		RequestID:   request.RequestID,
+		ExecutionID: deriveToolExecutionID(request.RequestID, callID, 1),
+		CallOrdinal: 1,
 	})
 	if err != nil {
 		t.Fatal(err)

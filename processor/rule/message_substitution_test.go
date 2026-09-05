@@ -180,13 +180,12 @@ func TestSubstituteVariables_Message_VerdictSubject(t *testing.T) {
 
 	ec := &ExecutionContext{
 		MessageData: map[string]any{
-			"loop_id": "loop-abc",
-			"call_id": "call-001",
+			"execution_id": "tool-exec-001",
 		},
 	}
 
-	in := "agent.toolcall.rejected.$message.loop_id.$message.call_id"
-	want := "agent.toolcall.rejected.loop-abc.call-001"
+	in := "agent.toolcall.rejected.$message.execution_id"
+	want := "agent.toolcall.rejected.tool-exec-001"
 
 	if got := ec.SubstituteVariables(context.Background(), in); got != want {
 		t.Errorf("got  %q\nwant %q", got, want)

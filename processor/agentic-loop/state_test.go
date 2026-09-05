@@ -576,16 +576,16 @@ func TestLoopManager_GetAndClearToolResults_EvictsToolCallToLoop(t *testing.T) {
 
 	// Simulate dispatch: register A and B as in-flight tool calls plus their
 	// metadata (mirrors what dispatchToolCall populates).
-	manager.TrackToolCall("call-A", loopID)
+	manager.TrackToolCall("execution-A", loopID)
 	manager.TrackToolName("call-A", "graph_search")
-	manager.TrackToolCall("call-B", loopID)
+	manager.TrackToolCall("execution-B", loopID)
 	manager.TrackToolName("call-B", "http_request")
 
 	// Both results land.
-	if err := manager.StoreToolResult(loopID, agentic.ToolResult{CallID: "call-A", Name: "graph_search", Content: "a"}); err != nil {
+	if err := manager.StoreToolResult(loopID, agentic.ToolResult{ExecutionID: "execution-A", CallID: "call-A", Name: "graph_search", Content: "a"}); err != nil {
 		t.Fatalf("StoreToolResult(A) error = %v", err)
 	}
-	if err := manager.StoreToolResult(loopID, agentic.ToolResult{CallID: "call-B", Name: "http_request", Content: "b"}); err != nil {
+	if err := manager.StoreToolResult(loopID, agentic.ToolResult{ExecutionID: "execution-B", CallID: "call-B", Name: "http_request", Content: "b"}); err != nil {
 		t.Fatalf("StoreToolResult(B) error = %v", err)
 	}
 
@@ -598,10 +598,10 @@ func TestLoopManager_GetAndClearToolResults_EvictsToolCallToLoop(t *testing.T) {
 	// Routing must be evicted so a late re-delivery has no loop to attach to —
 	// findLoopIDForToolCall reads this map and a non-empty result would let
 	// the duplicate flow through HandleToolResult into the next turn's drain.
-	if _, ok := manager.GetLoopForToolCall("call-A"); ok {
+	if _, ok := manager.GetLoopForToolCall("execution-A"); ok {
 		t.Errorf("GetLoopForToolCall(call-A) still resolves after drain — a re-delivered result would leak into the next turn")
 	}
-	if _, ok := manager.GetLoopForToolCall("call-B"); ok {
+	if _, ok := manager.GetLoopForToolCall("execution-B"); ok {
 		t.Errorf("GetLoopForToolCall(call-B) still resolves after drain — a re-delivered result would leak into the next turn")
 	}
 
@@ -625,8 +625,8 @@ func TestLoopManager_GetAndClearToolResults_EvictsToolCallToLoop(t *testing.T) {
 	// approval-approve flow, where dispatchApprovedCall re-issues the same
 	// CallID via dispatchToolCall after the human says yes. If eviction
 	// blocked re-track, approval-after-drain would silently lose the result.
-	manager.TrackToolCall("call-A", loopID)
-	if got, ok := manager.GetLoopForToolCall("call-A"); !ok || got != loopID {
+	manager.TrackToolCall("execution-A", loopID)
+	if got, ok := manager.GetLoopForToolCall("execution-A"); !ok || got != loopID {
 		t.Errorf("GetLoopForToolCall(call-A) after re-track = (%q, %v), want (%q, true)", got, ok, loopID)
 	}
 }

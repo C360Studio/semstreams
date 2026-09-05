@@ -59,23 +59,23 @@ var (
 
 // LoopManager manages loop entity lifecycle and state
 type LoopManager struct {
-	loops                map[string]*agentic.LoopEntity
-	contextManagers      map[string]*ContextManager          // loopID -> ContextManager
-	pendingTools         map[string]map[string]bool          // loopID -> map[callID]bool
-	queuedToolCalls      map[string][]agentic.ToolCall       // loopID -> remaining calls to dispatch serially
-	cachedTools          map[string][]agentic.ToolDefinition // loopID -> tools (runtime cache, not persisted)
-	cachedToolChoice     map[string]*agentic.ToolChoice      // loopID -> tool choice (runtime cache, not persisted)
-	cachedMetadata       map[string]map[string]any           // loopID -> metadata (domain context, not persisted)
-	cachedRequestTimeout map[string]string                   // loopID -> request timeout (from TaskMessage.Timeout, not persisted)
-	cachedResponseFormat map[string]*agentic.ResponseFormat  // loopID -> response_format (from TaskMessage.ResponseFormat, not persisted)
-	taskPrompts          map[string]string                   // loopID -> original task prompt (for context recovery)
-	requestToLoop        map[string]string                   // requestID -> loopID
-	toolCallToLoop       map[string]string                   // callID -> loopID
-	callIDToName         map[string]string                   // callID -> function name (for Gemini tool result name field)
-	callIDToArguments    map[string]map[string]any           // callID -> tool arguments (for trajectory audit)
-	callIDToOrdinal      map[string]uint32                   // callID -> model response order (for trajectory audit)
-	requestStartTimes    map[string]time.Time                // requestID -> start time (for duration measurement)
-	toolStartTimes       map[string]time.Time                // callID -> start time (for duration measurement)
+	loops                  map[string]*agentic.LoopEntity
+	contextManagers        map[string]*ContextManager          // loopID -> ContextManager
+	pendingTools           map[string]map[string]bool          // loopID -> map[callID]bool
+	queuedToolCalls        map[string][]agentic.ToolCall       // loopID -> remaining calls to dispatch serially
+	cachedTools            map[string][]agentic.ToolDefinition // loopID -> tools (runtime cache, not persisted)
+	cachedToolChoice       map[string]*agentic.ToolChoice      // loopID -> tool choice (runtime cache, not persisted)
+	cachedMetadata         map[string]map[string]any           // loopID -> metadata (domain context, not persisted)
+	cachedRequestTimeout   map[string]string                   // loopID -> request timeout (from TaskMessage.Timeout, not persisted)
+	cachedResponseFormat   map[string]*agentic.ResponseFormat  // loopID -> response_format (from TaskMessage.ResponseFormat, not persisted)
+	taskPrompts            map[string]string                   // loopID -> original task prompt (for context recovery)
+	requestToLoop          map[string]string                   // requestID -> loopID
+	toolCallToLoop         map[string]string                   // executionID -> loopID
+	executionIDToName      map[string]string                   // executionID -> function name (for Gemini tool result name field)
+	executionIDToArguments map[string]map[string]any           // executionID -> tool arguments (for trajectory audit)
+	executionIDToOrdinal   map[string]uint32                   // executionID -> model response order (for trajectory audit)
+	requestStartTimes      map[string]time.Time                // requestID -> start time (for duration measurement)
+	executionStartTimes    map[string]time.Time                // executionID -> start time (for duration measurement)
 	// truncationRetryAttempts counts consecutive within-iteration retries
 	// driven by length-truncation responses. Reset to 0 whenever the loop
 	// makes forward progress (StatusComplete or StatusToolCall response).
@@ -123,11 +123,11 @@ func NewLoopManager(opts ...LoopManagerOption) *LoopManager {
 		taskPrompts:             make(map[string]string),
 		requestToLoop:           make(map[string]string),
 		toolCallToLoop:          make(map[string]string),
-		callIDToName:            make(map[string]string),
-		callIDToArguments:       make(map[string]map[string]any),
-		callIDToOrdinal:         make(map[string]uint32),
+		executionIDToName:       make(map[string]string),
+		executionIDToArguments:  make(map[string]map[string]any),
+		executionIDToOrdinal:    make(map[string]uint32),
 		requestStartTimes:       make(map[string]time.Time),
-		toolStartTimes:          make(map[string]time.Time),
+		executionStartTimes:     make(map[string]time.Time),
 		truncationRetryAttempts: make(map[string]int),
 		contextConfig:           DefaultContextConfig(),
 		logger:                  slog.Default(),
@@ -153,11 +153,11 @@ func NewLoopManagerWithConfig(contextConfig ContextConfig, opts ...LoopManagerOp
 		taskPrompts:             make(map[string]string),
 		requestToLoop:           make(map[string]string),
 		toolCallToLoop:          make(map[string]string),
-		callIDToName:            make(map[string]string),
-		callIDToArguments:       make(map[string]map[string]any),
-		callIDToOrdinal:         make(map[string]uint32),
+		executionIDToName:       make(map[string]string),
+		executionIDToArguments:  make(map[string]map[string]any),
+		executionIDToOrdinal:    make(map[string]uint32),
 		requestStartTimes:       make(map[string]time.Time),
-		toolStartTimes:          make(map[string]time.Time),
+		executionStartTimes:     make(map[string]time.Time),
 		truncationRetryAttempts: make(map[string]int),
 		contextConfig:           contextConfig,
 		logger:                  slog.Default(),
@@ -477,23 +477,18 @@ func (m *LoopManager) ResolveApprovalIfPending(loopID, callID string) (agentic.P
 // paths cannot turn release into a failure. The error return is always nil and
 // is retained only because the exported signature predates this caller.
 //
-// Request and call IDs reach the maps by two routes, so each sweep tests both.
-// The PREFIX test catches the framework's structured IDs ({loopID}:req:{short},
-// {loopID}:tool:{short}), and the extra callIDToName pass catches structured
-// call IDs whose routing entry a turn boundary already evicted
-// (GetAndClearToolResults drops toolCallToLoop but keeps the audit metadata).
-// The VALUE test catches IDs the model authored — toolu_…, call_… — which carry
-// no loop prefix at all and which the prefix test alone missed entirely.
-// Missing them was not only a leak: GetLoopForToolCallWithRecovery would still
-// resolve a released loop from the surviving cache entry, and a late tool
-// result would then fail inside HandleToolResult instead of dropping as the
-// settled-drop it is.
+// Request routing keys retain a loop prefix and owner value. Framework execution
+// IDs are opaque, so their routing entries are released only by owner value. The
+// request sweep also removes its timing entry. The execution sweep never parses
+// an ID or predicts its loop; it trusts the mapping's owner value. Execution
+// metadata shares that same key and is deleted with a surviving route.
 //
-// Known residual, not closed here: a model-authored call ID whose routing entry
-// was evicted at a turn boundary leaves its audit metadata
-// (callIDToArguments/callIDToOrdinal/toolStartTimes) with no surviving link
-// back to this loop. Those maps are outside the per-loop set this release
-// claims; closing them needs a per-loop call-ID index, which is new state.
+// Known residual, not closed here: a turn boundary evicts completed execution
+// routes before DeleteLoop runs but retains their metadata for conversation and
+// trajectory construction. Once that route is gone, the opaque execution ID has
+// no surviving link to its loop, so its metadata can outlive terminal release.
+// Closing that bounded lifetime leak needs either earlier metadata deletion or a
+// per-loop execution index; this correlation slice adds neither.
 func (m *LoopManager) DeleteLoop(loopID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -517,27 +512,22 @@ func (m *LoopManager) DeleteLoop(loopID string) error {
 			delete(m.requestStartTimes, k)
 		}
 	}
-	for k, owner := range m.toolCallToLoop {
-		if owner == loopID || strings.HasPrefix(k, prefix) {
-			m.deleteToolCallEntriesLocked(k)
-		}
-	}
-	for k := range m.callIDToName {
-		if strings.HasPrefix(k, prefix) {
-			m.deleteToolCallEntriesLocked(k)
+	for executionID, owner := range m.toolCallToLoop {
+		if owner == loopID {
+			delete(m.toolCallToLoop, executionID)
+			m.deleteToolMetadataLocked(executionID)
 		}
 	}
 	return nil
 }
 
-// deleteToolCallEntriesLocked drops every per-call entry for one call ID. The
-// caller holds m.mu.
-func (m *LoopManager) deleteToolCallEntriesLocked(callID string) {
-	delete(m.toolCallToLoop, callID)
-	delete(m.callIDToName, callID)
-	delete(m.callIDToArguments, callID)
-	delete(m.callIDToOrdinal, callID)
-	delete(m.toolStartTimes, callID)
+// deleteToolMetadataLocked drops the execution metadata entries retained for
+// conversation and trajectory construction. The caller holds m.mu.
+func (m *LoopManager) deleteToolMetadataLocked(executionID string) {
+	delete(m.executionIDToName, executionID)
+	delete(m.executionIDToArguments, executionID)
+	delete(m.executionIDToOrdinal, executionID)
+	delete(m.executionStartTimes, executionID)
 }
 
 // GetContextManager retrieves the context manager for a loop
@@ -793,41 +783,41 @@ func (m *LoopManager) GetLoopForRequest(requestID string) (string, bool) {
 	return loopID, exists
 }
 
-// TrackToolCall associates a tool call ID with a loop ID
-func (m *LoopManager) TrackToolCall(callID, loopID string) {
+// TrackToolCall associates a framework tool execution ID with a loop ID.
+func (m *LoopManager) TrackToolCall(executionID, loopID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.toolCallToLoop[callID] = loopID
+	m.toolCallToLoop[executionID] = loopID
 }
 
-// TrackToolName associates a tool call ID with its function name.
+// TrackToolName associates a framework execution ID with its function name.
 // This is used to populate the name field on tool result messages (required by Gemini).
-func (m *LoopManager) TrackToolName(callID, name string) {
+func (m *LoopManager) TrackToolName(executionID, name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.callIDToName[callID] = name
+	m.executionIDToName[executionID] = name
 }
 
-// GetToolName retrieves the function name for a tool call ID.
-func (m *LoopManager) GetToolName(callID string) string {
+// GetToolName retrieves the function name for a framework execution ID.
+func (m *LoopManager) GetToolName(executionID string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.callIDToName[callID]
+	return m.executionIDToName[executionID]
 }
 
-// TrackToolArguments associates a tool call ID with its arguments.
+// TrackToolArguments associates a framework execution ID with its arguments.
 // This is used to populate the ToolArguments field on trajectory steps for audit.
-func (m *LoopManager) TrackToolArguments(callID string, args map[string]any) {
+func (m *LoopManager) TrackToolArguments(executionID string, args map[string]any) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.callIDToArguments[callID] = args
+	m.executionIDToArguments[executionID] = args
 }
 
-// GetToolArguments retrieves a shallow copy of the arguments for a tool call ID.
-func (m *LoopManager) GetToolArguments(callID string) map[string]any {
+// GetToolArguments retrieves arguments for a framework execution ID.
+func (m *LoopManager) GetToolArguments(executionID string) map[string]any {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	orig := m.callIDToArguments[callID]
+	orig := m.executionIDToArguments[executionID]
 	if orig == nil {
 		return nil
 	}
@@ -836,18 +826,18 @@ func (m *LoopManager) GetToolArguments(callID string) map[string]any {
 	return cp
 }
 
-// TrackToolOrdinal records the tool call's order in the model response.
-func (m *LoopManager) TrackToolOrdinal(callID string, ordinal uint32) {
+// TrackToolOrdinal records an execution's order in the model response.
+func (m *LoopManager) TrackToolOrdinal(executionID string, ordinal uint32) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.callIDToOrdinal[callID] = ordinal
+	m.executionIDToOrdinal[executionID] = ordinal
 }
 
-// GetToolOrdinal returns the tool call's order in the model response.
-func (m *LoopManager) GetToolOrdinal(callID string) uint32 {
+// GetToolOrdinal returns an execution's order in the model response.
+func (m *LoopManager) GetToolOrdinal(executionID string) uint32 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.callIDToOrdinal[callID]
+	return m.executionIDToOrdinal[executionID]
 }
 
 // TrackRequestStart records when a model request was sent.
@@ -864,25 +854,25 @@ func (m *LoopManager) GetRequestStart(requestID string) time.Time {
 	return m.requestStartTimes[requestID]
 }
 
-// TrackToolStart records when a tool call was dispatched for execution.
-func (m *LoopManager) TrackToolStart(callID string) {
+// TrackToolStart records when a framework execution was dispatched.
+func (m *LoopManager) TrackToolStart(executionID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.toolStartTimes[callID] = time.Now()
+	m.executionStartTimes[executionID] = time.Now()
 }
 
-// GetToolStart retrieves the start time for a tool call.
-func (m *LoopManager) GetToolStart(callID string) time.Time {
+// GetToolStart retrieves the start time for a framework execution.
+func (m *LoopManager) GetToolStart(executionID string) time.Time {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.toolStartTimes[callID]
+	return m.executionStartTimes[executionID]
 }
 
-// GetLoopForToolCall retrieves the loop ID for a tool call ID
-func (m *LoopManager) GetLoopForToolCall(callID string) (string, bool) {
+// GetLoopForToolCall retrieves the loop ID for a framework tool execution ID.
+func (m *LoopManager) GetLoopForToolCall(executionID string) (string, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	loopID, exists := m.toolCallToLoop[callID]
+	loopID, exists := m.toolCallToLoop[executionID]
 	return loopID, exists
 }
 
@@ -899,33 +889,38 @@ func (m *LoopManager) StoreToolResult(loopID string, result agentic.ToolResult) 
 	if entity.PendingToolResults == nil {
 		entity.PendingToolResults = make(map[string]agentic.ToolResult)
 	}
-	entity.PendingToolResults[result.CallID] = result
+	resultKey := result.ExecutionID
+	if resultKey == "" {
+		// Internal synthetic failures predate framework execution correlation.
+		// They never cross the tool-result routing boundary and remain scoped by
+		// the owning loop's result map.
+		resultKey = result.CallID
+	}
+	entity.PendingToolResults[resultKey] = result
 	return nil
 }
 
 // GetAndClearToolResults retrieves all accumulated tool results and clears them.
-// Also evicts the CallID→loop routing entry for each drained result so a late
+// Also evicts the ExecutionID→loop routing entry for each drained result so a late
 // re-delivery (NATS redelivery, executor retry) lands on an empty mapping at
 // handleToolResultMessage and is dropped at the wire instead of leaking into
 // the next turn's PendingToolResults — which would otherwise produce a
 // duplicate tool message in the message array sent to the model.
 //
-// Eviction effectiveness depends on GetLoopForToolCallWithRecovery NOT
-// resolving an evicted CallID via ExtractLoopIDFromToolCall — true today
-// because model-issued CallIDs (toolu_, call_) don't carry the structured
-// {loopID}:tool:{short} form and GenerateToolCallID is not wired to dispatch.
-// If structured CallIDs ever become the dispatch default, this needs an
-// evicted-set check inside the recovery path or it silently regresses.
+// GetLoopForToolCallWithRecovery performs this same direct ExecutionID lookup
+// without a provider-CallID fallback, so eviction makes late delivery unmapped.
+// There is no stream scan, reconstructed route, tombstone set, or second ledger
+// on this path. The existing map is the sole live demultiplexer, and draining a
+// result removes its one entry. That keeps restart behavior grounded in durable
+// input redelivery rather than an additional routing mechanism.
 //
-// Metadata maps (callIDToName, callIDToArguments, callIDToOrdinal,
-// toolStartTimes) are
+// Metadata maps (executionIDToName, executionIDToArguments,
+// executionIDToOrdinal, executionStartTimes) are
 // preserved — buildToolMessages's empty-name fallback and the trajectory step
 // builder still read them. They grow O(total-tool-calls-in-loop) and are
-// cleaned up at DeleteLoop, which since #1233 runs on every terminal path.
-// Precisely: DeleteLoop reaches these entries through the routing entry this
-// method evicts, or through the {loopID}: key prefix. A MODEL-authored call ID
-// whose routing entry this method has already dropped has neither, and its
-// metadata outlives the loop — the residual DeleteLoop's doc records.
+// cleaned up at DeleteLoop while their execution route survives. Metadata whose
+// route this method evicts has no remaining loop link and can outlive terminal
+// release — the bounded residual DeleteLoop's doc records.
 func (m *LoopManager) GetAndClearToolResults(loopID string) []agentic.ToolResult {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -936,9 +931,9 @@ func (m *LoopManager) GetAndClearToolResults(loopID string) []agentic.ToolResult
 	}
 
 	results := make([]agentic.ToolResult, 0, len(entity.PendingToolResults))
-	for callID, r := range entity.PendingToolResults {
+	for executionID, r := range entity.PendingToolResults {
 		results = append(results, r)
-		delete(m.toolCallToLoop, callID)
+		delete(m.toolCallToLoop, executionID)
 	}
 	entity.PendingToolResults = nil
 	return results
@@ -1131,11 +1126,10 @@ func (m *LoopManager) SetMetadata(loopID string, metadata map[string]any) error 
 }
 
 // GenerateRequestID creates a structured request ID that embeds the loop ID.
-// Format: loopID:req:shortUUID
+// Format: loopID:req:UUID
 // This allows recovery of loop ID from request ID if in-memory maps are lost.
 func (m *LoopManager) GenerateRequestID(loopID string) string {
-	shortID := uuid.New().String()[:8]
-	return fmt.Sprintf("%s:req:%s", loopID, shortID)
+	return fmt.Sprintf("%s:req:%s", loopID, uuid.NewString())
 }
 
 // GenerateToolCallID creates a structured tool call ID that embeds the loop ID.
@@ -1190,28 +1184,11 @@ func (m *LoopManager) GetLoopForRequestWithRecovery(requestID string) (string, b
 	return "", false
 }
 
-// GetLoopForToolCallWithRecovery retrieves the loop ID for a tool call ID,
-// attempting recovery from structured ID if not found in cache.
-func (m *LoopManager) GetLoopForToolCallWithRecovery(toolCallID string) (string, bool) {
-	// Try cache first
-	if loopID, exists := m.GetLoopForToolCall(toolCallID); exists {
-		return loopID, true
-	}
-
-	// Try to extract from structured ID
-	if loopID := m.ExtractLoopIDFromToolCall(toolCallID); loopID != "" {
-		// Verify loop exists
-		m.mu.RLock()
-		_, exists := m.loops[loopID]
-		m.mu.RUnlock()
-		if exists {
-			// Re-establish the mapping
-			m.TrackToolCall(toolCallID, loopID)
-			return loopID, true
-		}
-	}
-
-	return "", false
+// GetLoopForToolCallWithRecovery retrieves the loop ID for a framework tool
+// execution ID. Durable recovery is added at the committed response/result
+// boundary; provider CallID is never a routing fallback.
+func (m *LoopManager) GetLoopForToolCallWithRecovery(executionID string) (string, bool) {
+	return m.GetLoopForToolCall(executionID)
 }
 
 // UpdateCompletion updates a loop with completion data (outcome, result, error).
