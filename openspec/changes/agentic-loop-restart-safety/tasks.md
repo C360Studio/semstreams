@@ -21,10 +21,10 @@ design-section shorthand is not a valid citation. Every implementation slice fol
   `cf5660a3b4196324a3695dc1174dacfb804cef56e2336536d4a9f7d8f4197daa`, after independent `INVENTORY PASS` with
   249/249 pins.
 - [x] 0.9 Accept `inventory-task-loop-cardinality-2026-09-04.md`, SHA-256
-  `22d593d5de5eea2d15a94da36162cae8b5a3a36cbfcc7790003c13a52ba7d340`.
+  `afd93139bc520651c3432fc00df792cab12afc426fb9666439228d15d58be8d1`.
 - [x] 0.10 Accept the independently reviewed dispatch edge-gateway checkpoint
   `design-dispatch-edge-gateway-2026-09-04.md`, current SHA-256
-  `aba1202c38856d71d6c551f7cb9f690a03d7eeaa981e6de5e4165b09e0ea938a`. The owner-cited pre-final token-
+  `d26c0667692e5b5a6e3950f5b097966c17d2750b90aaeb8e54d2873a564275b5`. The owner-cited pre-final token-
   projection checkpoint `339cf2b2c734ef48a2898ce6b79c3783577a8b4ae152b65a1078b00445949b76` is provenance only and is superseded.
 - [x] 0.11 Receive independent `DESIGN REVIEW PASS` of the synchronized edge-gateway target state before
   implementation. The review verified lane-scoped correlation, ordinary at-least-once publication, exclusive
@@ -93,12 +93,12 @@ design-section shorthand is not a valid citation. Every implementation slice fol
 - [x] 2.2 Implement the TaskID-to-retained-`TaskMessage` recovery path. Mint LoopID randomly only when exact retained
   task evidence proves this is new work; reuse the retained LoopID on redelivery. Add no route-claim state or
   deterministic LoopID derivation.
-- [ ] 2.3 RED: prove RequestID distinguishes logical provider work and framework execution identity distinguishes tool
+- [x] 2.3 RED: prove RequestID distinguishes logical provider work and framework execution identity distinguishes tool
   work across same-CallID/different-RequestID cases. Cite exactly
   `// spec: agentic-model / Model request settlement is bound to a durable response`,
   `// spec: agentic-loop / Tool execution has stable framework correlation`, and
   `// spec: agentic-tools / Completed tool outcome identity is globally unambiguous`.
-- [ ] 2.4 Implement RequestID and execution identity only on provider/tool/governance-correlation paths that need
+- [x] 2.4 Implement RequestID and execution identity only on provider/tool/governance-correlation paths that need
   them. Preserve provider CallID as request-scoped conversation data.
 - [ ] 2.5 RED/GREEN: prove ordinary task/control, created, request, response, approval, terminal, governance, and
   result publications are at-least-once, source ACK waits for required PubAck, and uncertain PubAck may republish.
@@ -182,8 +182,9 @@ design-section shorthand is not a valid citation. Every implementation slice fol
   exercise approve, modify, reject, timeout, and redelivery. Cite exactly
   `// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded`.
 - [ ] 6.2 Prove the settled approval-required `ToolResult` is available from current
-  `LoopEntity.PendingToolResults[PendingApproval.CallID]` and agrees with pending CallID, name, LoopID, trace, and
-  approval-required classification. Perform no `ToolResult` stream lookup. Tests cite exactly
+  `LoopEntity.PendingToolResults[PendingApproval.ExecutionID]` and agrees with pending RequestID, ExecutionID,
+  ordinal, provider CallID, name, LoopID, trace, and approval-required classification. Match provider CallID only
+  within the current response and perform no `ToolResult` stream lookup. Tests cite exactly
   `// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded`.
 - [ ] 6.3 Implement only operation-specific exact reads for latest `agent.request.<LoopID>` and exact
   `agent.response.<RequestID>`. Validate envelopes, payloads, cross-record identities, current-call uniqueness, and

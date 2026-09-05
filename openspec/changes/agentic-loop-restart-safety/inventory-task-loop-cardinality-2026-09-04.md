@@ -28,9 +28,9 @@ No `ListTasks`, task `GetTask`, task store/index/bucket/registry, `/tasks`, or d
 - `agentic/state.go:48` — `type LoopEntity struct {`
 - `agentic/state.go:49` — `ID                 string                `json:"id"``
 - `agentic/state.go:50` — `TaskID             string                `json:"task_id"``
-- `agentic/state.go:235` — `func NewLoopEntity(id, taskID, role, model string, maxIterations ...int) LoopEntity {`
-- `agentic/state.go:241` — `ID:            id,`
-- `agentic/state.go:242` — `TaskID:        taskID,`
+- `agentic/state.go:238` — `func NewLoopEntity(id, taskID, role, model string, maxIterations ...int) LoopEntity {`
+- `agentic/state.go:244` — `ID:            id,`
+- `agentic/state.go:245` — `TaskID:        taskID,`
 - `processor/agentic-loop/state.go:172` — `func (m *LoopManager) CreateLoop(taskID, role, model string, maxIterations ...int) (string, error) {`
 - `processor/agentic-loop/state.go:173` — `loopID := m.GenerateLoopID()`
 - `processor/agentic-loop/state.go:174` — `return m.CreateLoopWithID(loopID, taskID, role, model, maxIterations...)`
@@ -70,10 +70,10 @@ No `ListTasks`, task `GetTask`, task store/index/bucket/registry, `/tasks`, or d
 - `processor/agentic-dispatch/http.go:302` — `prepared, vacant, found, err := c.findRetainedDispatchTask(ctx, msg)`
 - `processor/agentic-dispatch/http.go:309` — `if !found && !c.hasPermission(msg.UserID, "submit_task") {`
 - `processor/agentic-dispatch/http.go:348` — `prepared, err = c.prepareNewDispatchTask(ctx, msg, loopID, vacant)`
-- `processor/rule/actions.go:1710` — `taskID := fmt.Sprintf("rule-%s-%d", entityID, time.Now().UnixNano())`
-- `processor/rule/actions.go:1713` — `task := agentic.TaskMessage{`
-- `processor/rule/actions.go:1714` — `TaskID:       taskID,`
-- `processor/rule/actions.go:1734` — `task.ParentLoopID = parentLoopID`
+- `processor/rule/actions.go:1709` — `taskID := fmt.Sprintf("rule-%s-%d", entityID, time.Now().UnixNano())`
+- `processor/rule/actions.go:1712` — `task := agentic.TaskMessage{`
+- `processor/rule/actions.go:1713` — `TaskID:       taskID,`
+- `processor/rule/actions.go:1733` — `task.ParentLoopID = parentLoopID`
 - `agentic/loop_execution_entity.go:83` — `Task     *TaskMessage `json:"task,omitempty"``
 - `agentic/loop_execution_entity.go:126` — `if e.Task.TaskID != "" {`
 - `agentic/loop_execution_entity.go:127` — `triples = append(triples, triple(agvocab.LoopTask, e.Task.TaskID))`
@@ -155,8 +155,8 @@ No `ListTasks`, task `GetTask`, task store/index/bucket/registry, `/tasks`, or d
 - `processor/agentic-loop/component.go:1288` — `pending, ok := c.pendingTaskResult(task.TaskID, result.LoopID)`
 - `processor/agentic-loop/component.go:1331` — `c.rememberPendingTaskResult(task.TaskID, result)`
 - `processor/agentic-loop/handlers.go:1101` — `SourceCorrelation: task.TaskID,`
-- `processor/agentic-loop/handlers.go:2104` — `TaskID:       entity.TaskID,`
-- `processor/agentic-loop/handlers.go:2688` — `TaskID:       entity.TaskID,`
+- `processor/agentic-loop/handlers.go:2118` — `completion := agentic.LoopCompletedEvent{`
+- `processor/agentic-loop/handlers.go:2705` — `failure := &agentic.LoopFailedEvent{`
 - `processor/agentic-dispatch/component.go:1033` — `taskID := task.TaskID`
 - `processor/agentic-dispatch/component.go:1119` — `TaskID:           created.TaskID,`
 - `processor/agentic-dispatch/http.go:356` — `taskID := task.TaskID`
@@ -242,3 +242,4 @@ No `ListTasks`, task `GetTask`, task store/index/bucket/registry, `/tasks`, or d
 - `git grep -n -E 'Approval continuation and dispatch projection|Approval evidence|projection|AutoContinue|incomplete hydration|explicit LoopID|Loop task, request|lane-scoped|at-least-once|edge gateway|agent.task|TaskID' -- openspec/changes/agentic-loop-restart-safety/tasks.md openspec/changes/agentic-loop-restart-safety/design.md openspec/changes/agentic-loop-restart-safety/specs/agentic-dispatch/spec.md openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md openspec/changes/agentic-loop-restart-safety/specs/agentic-model/spec.md openspec/changes/agentic-loop-restart-safety/specs/agentic-governance/spec.md openspec/changes/agentic-loop-restart-safety/specs/agentic-tools/spec.md` → 113
 - `git grep -n -E 'frozen-parent|Frozen parent|F =|F=|79b0f29|417beae|base:' -- openspec/changes/agentic-loop-restart-safety/proposal.md openspec/changes/agentic-loop-restart-safety/design.md openspec/changes/agentic-loop-restart-safety/tasks.md openspec/changes/agentic-loop-restart-safety/inventory-dispatch-bridge-boundary-2026-09-04.md openspec/changes/agentic-loop-restart-safety/inventory-task-loop-cardinality-2026-09-04.md openspec/changes/agentic-loop-restart-safety/inventory-task2-stable-identity-2026-09-03.md` → 6
 - `shasum -a 256 openspec/changes/agentic-loop-restart-safety/design-dispatch-edge-gateway-2026-09-04.md openspec/changes/agentic-loop-restart-safety/design.md openspec/changes/agentic-loop-restart-safety/proposal.md openspec/changes/agentic-loop-restart-safety/tasks.md` → 4
+- `git grep -n -E 'pins=.*moved=.*ambiguous|inventory.*verif|malformed.*unparsed' -- . ':!openspec/changes/agentic-loop-restart-safety/inventory-*.md'` → 22

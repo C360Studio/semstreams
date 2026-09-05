@@ -8,7 +8,7 @@ base: 79b0f29f82ce5391013f6c931fae69a28216ac93
   `cf5660a3b4196324a3695dc1174dacfb804cef56e2336536d4a9f7d8f4197daa`, independent `INVENTORY PASS`, 249/249
   pins.
 - `inventory-task-loop-cardinality-2026-09-04.md`: SHA-256
-  `22d593d5de5eea2d15a94da36162cae8b5a3a36cbfcc7790003c13a52ba7d340`, 134/134 pins.
+  `afd93139bc520651c3432fc00df792cab12afc426fb9666439228d15d58be8d1`, 169/169 pins.
 
 ## Owner direction being tested
 
@@ -142,10 +142,11 @@ stream record. Approval reconstruction therefore performs no `ToolResult` stream
 durable identifier, mapping, or message type.
 
 The settled approval-required `ToolResult` is already retained in
-`LoopEntity.PendingToolResults[PendingApproval.CallID]` before the awaiting-approval entity is persisted. The latest
-request supplies the current RequestID, conversation, and model request contract. Its exact response must contain
-exactly one tool call matching `PendingApproval.CallID`. The persisted result must be approval-required and agree
-with `PendingApproval` on CallID, tool name, LoopID when present, and trace identity when present. The current
+`LoopEntity.PendingToolResults[PendingApproval.ExecutionID]` before the awaiting-approval entity is persisted. The
+latest request supplies the current RequestID, conversation, and model request contract. Its exact response must
+contain exactly one tool call matching the pending provider CallID. The persisted result must be approval-required
+and agree with `PendingApproval` on RequestID, ExecutionID, CallID, ordinal, tool name, LoopID when present, and trace
+identity when present. The current
 response's call supplies the authoritative original arguments and must agree with `PendingApproval.Arguments`.
 
 An older response carrying the same provider CallID under another RequestID is irrelevant: reconstruction follows
@@ -336,8 +337,9 @@ Replace with:
   dispatch with all process maps discarded, retain `AGENT` and `AGENT_LOOPS`, and independently prove approve,
   modify, reject, timeout, and redelivery.
 - 6.2 Reconstruct from current `LoopEntity`, latest exact `agent.request.<LoopID>`, and exact
-  `agent.response.<RequestID>` only. Validate `PendingToolResults[CallID]` against pending approval and the current
-  response call. Perform no `ToolResult` stream read, CallID index, stream list, or scan.
+  `agent.response.<RequestID>` only. Validate `PendingToolResults[ExecutionID]` against pending approval and match the
+  provider CallID only within the current response. Perform no `ToolResult` stream read, CallID index, stream list,
+  or scan.
 - 6.3 Add a same-CallID/different-RequestID real-NATS fixture with conflicting arguments. Prove reconstruction follows
   the current request's RequestID and neither inspects nor selects the older response.
 - 6.4 Table-test all four decisions across unresolved Retry, confirmed retained absence to durable

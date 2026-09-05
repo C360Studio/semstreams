@@ -1021,7 +1021,7 @@
           "required": false,
           "connection_id": "AGENT",
           "pattern": "stream",
-          "description": "Approve verdicts from rule-driven tool-call governance (ADR-039). Wildcard subscription; demuxed per-call by trailing path segments.",
+          "description": "Approve verdicts from rule-driven tool-call governance (ADR-039). Wildcard subscription; demuxed by execution_id.",
           "kind": "jetstream"
         },
         {
@@ -1031,7 +1031,7 @@
           "required": false,
           "connection_id": "AGENT",
           "pattern": "stream",
-          "description": "Reject verdicts from rule-driven tool-call governance (ADR-039). Wildcard subscription; demuxed per-call by trailing path segments.",
+          "description": "Reject verdicts from rule-driven tool-call governance (ADR-039). Wildcard subscription; demuxed by execution_id.",
           "kind": "jetstream"
         }
       ],

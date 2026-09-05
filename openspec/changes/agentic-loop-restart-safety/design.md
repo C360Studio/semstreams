@@ -25,9 +25,9 @@ This design incorporates the accepted evidence checkpoints:
   `79b0f29f82ce5391013f6c931fae69a28216ac93`, SHA-256
   `cf5660a3b4196324a3695dc1174dacfb804cef56e2336536d4a9f7d8f4197daa`, independent `INVENTORY PASS`, 249/249 pins.
 - task/loop cardinality inventory `inventory-task-loop-cardinality-2026-09-04.md`, same base, SHA-256
-  `22d593d5de5eea2d15a94da36162cae8b5a3a36cbfcc7790003c13a52ba7d340`.
+  `afd93139bc520651c3432fc00df792cab12afc426fb9666439228d15d58be8d1`.
 - approved dispatch edge-gateway checkpoint `design-dispatch-edge-gateway-2026-09-04.md`, current SHA-256
-  `aba1202c38856d71d6c551f7cb9f690a03d7eeaa981e6de5e4165b09e0ea938a`, independent `DESIGN REVIEW PASS`.
+  `d26c0667692e5b5a6e3950f5b097966c17d2750b90aaeb8e54d2873a564275b5`, independent `DESIGN REVIEW PASS`.
   SHA-256 `339cf2b2c734ef48a2898ce6b79c3783577a8b4ae152b65a1078b00445949b76` is superseded provenance.
 
 The standalone `design-reconciliation-F-2026-09-02.md` preserves the reviewed reasoning and owner-ruling record.
@@ -273,9 +273,9 @@ Reconstruction uses only current `AGENT_LOOPS/<LoopID>`, latest exact-subject `a
 
 A provider-authored CallID is request-scoped, not globally unique. No `tool.result.<CallID>` lookup is admissible.
 The approval-required result was already persisted at
-`LoopEntity.PendingToolResults[PendingApproval.CallID]`. The current response must contain exactly one matching tool
-call. Every envelope and payload validates, and all available loop, task, request, call, tool, argument, and trace
-identities agree.
+`LoopEntity.PendingToolResults[PendingApproval.ExecutionID]`. The current response must contain exactly one tool call
+matching the pending provider CallID. Every envelope and payload validates, and all available loop, task, request,
+execution, ordinal, call, tool, argument, and trace identities agree.
 
 A same-CallID/different-RequestID proof retains two conflicting responses. Reconstruction follows only the response
 named by the current request and is unaffected by the older response.

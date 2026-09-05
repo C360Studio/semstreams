@@ -419,11 +419,11 @@ func DefaultConfig() Config {
 				},
 				{
 					Name: "agent.toolcall.approved", Config: component.JetStreamPort{Subjects: []string{"agent.toolcall.approved.>"}, StreamName: "AGENT"}, Required: false,
-					Description: "Approve verdicts from rule-driven tool-call governance (ADR-039). Wildcard subscription; demuxed per-call by trailing path segments.",
+					Description: "Approve verdicts from rule-driven tool-call governance (ADR-039). Wildcard subscription; demuxed by execution_id.",
 				},
 				{
 					Name: "agent.toolcall.rejected", Config: component.JetStreamPort{Subjects: []string{"agent.toolcall.rejected.>"}, StreamName: "AGENT"}, Required: false,
-					Description: "Reject verdicts from rule-driven tool-call governance (ADR-039). Wildcard subscription; demuxed per-call by trailing path segments.",
+					Description: "Reject verdicts from rule-driven tool-call governance (ADR-039). Wildcard subscription; demuxed by execution_id.",
 				},
 			},
 			Outputs: []component.PortDefinition{

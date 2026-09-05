@@ -115,10 +115,13 @@ func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response ag
 // tool.result path takes over from here.
 func (h *MessageHandler) dispatchApprovedCall(loopID string, pending agentic.PendingApprovalState, args map[string]any, approvedBy string, result *HandlerResult) error {
 	tc := agentic.ToolCall{
-		ID:         pending.CallID,
-		Name:       pending.ToolName,
-		Arguments:  args,
-		ApprovedBy: approvedBy,
+		ID:          pending.CallID,
+		Name:        pending.ToolName,
+		Arguments:   args,
+		RequestID:   pending.RequestID,
+		ExecutionID: pending.ExecutionID,
+		CallOrdinal: pending.CallOrdinal,
+		ApprovedBy:  approvedBy,
 	}
 	if err := h.dispatchToolCall(result, loopID, tc); err != nil {
 		return errs.Wrap(err, "agentic-loop", "dispatchApprovedCall", "dispatch approved tool call")
@@ -142,11 +145,14 @@ func (h *MessageHandler) handleRejectedApproval(ctx context.Context, loopID stri
 		reasonSuffix = "no reason provided"
 	}
 	synthetic := agentic.ToolResult{
-		CallID:    pending.CallID,
-		Name:      pending.ToolName,
-		ErrorKind: agentic.ToolErrorPermission,
-		Error:     fmt.Sprintf("%srejected by %s: %s", agentic.ApprovalRejectedPrefix, approver, reasonSuffix),
-		TraceID:   pending.TraceID,
+		RequestID:   pending.RequestID,
+		ExecutionID: pending.ExecutionID,
+		CallID:      pending.CallID,
+		CallOrdinal: pending.CallOrdinal,
+		Name:        pending.ToolName,
+		ErrorKind:   agentic.ToolErrorPermission,
+		Error:       fmt.Sprintf("%srejected by %s: %s", agentic.ApprovalRejectedPrefix, approver, reasonSuffix),
+		TraceID:     pending.TraceID,
 	}
 	return h.HandleToolResult(ctx, loopID, synthetic)
 }

@@ -542,12 +542,12 @@ func (h *MessageHandler) computeRequestDuration(requestID string) int64 {
 }
 
 // computeToolDuration returns the elapsed milliseconds since TrackToolStart was called.
-func (h *MessageHandler) computeToolDuration(callID string) int64 {
-	if start := h.loopManager.GetToolStart(callID); !start.IsZero() {
+func (h *MessageHandler) computeToolDuration(executionID string) int64 {
+	if start := h.loopManager.GetToolStart(executionID); !start.IsZero() {
 		return time.Since(start).Milliseconds()
 	}
 	h.logger.Warn("missing tool start time for duration computation",
-		slog.String("call_id", callID))
+		slog.String("execution_id", executionID))
 	return 0
 }
 
@@ -1247,7 +1247,7 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 		// future truncation can self-heal once.
 		h.loopManager.ResetTruncationRetry(loopID)
 
-		if err := h.handleToolCallResponse(ctx, &result, loopID, response.Message.ToolCalls); err != nil {
+		if err := h.handleToolCallResponse(ctx, &result, loopID, response.RequestID, response.Message.ToolCalls); err != nil {
 			return result, err
 		}
 
@@ -1300,10 +1300,14 @@ func (h *MessageHandler) handleToolCallResponse(
 	ctx context.Context,
 	result *HandlerResult,
 	loopID string,
+	requestID string,
 	toolCalls []agentic.ToolCall,
 ) error {
+	if err := stampToolExecutionCorrelation(requestID, toolCalls); err != nil {
+		return err
+	}
 	for index, toolCall := range toolCalls {
-		h.loopManager.TrackToolOrdinal(toolCall.ID, uint32(index+1))
+		h.loopManager.TrackToolOrdinal(toolCall.ExecutionID, uint32(index+1))
 	}
 	// Reject tool calls with empty names — Gemini sometimes emits these as
 	// acknowledgment non-responses. Store error results so the model gets a
@@ -1315,10 +1319,13 @@ func (h *MessageHandler) handleToolCallResponse(
 				slog.String("loop_id", loopID),
 				slog.String("call_id", tc.ID))
 			errResult := agentic.ToolResult{
-				CallID: tc.ID,
-				Name:   "invalid_tool_call",
-				Error:  "tool call had empty function name — call a specific tool by name or respond with text",
-				LoopID: loopID,
+				CallID:      tc.ID,
+				RequestID:   tc.RequestID,
+				ExecutionID: tc.ExecutionID,
+				CallOrdinal: tc.CallOrdinal,
+				Name:        "invalid_tool_call",
+				Error:       "tool call had empty function name — call a specific tool by name or respond with text",
+				LoopID:      loopID,
 			}
 			if err := h.loopManager.StoreToolResult(loopID, errResult); err != nil {
 				return err
@@ -1351,12 +1358,15 @@ func (h *MessageHandler) handleToolCallResponse(
 			return gErr
 		}
 		for _, rejection := range govResult.Rejected {
-			h.loopManager.TrackToolName(rejection.Call.ID, rejection.Call.Name)
+			h.loopManager.TrackToolName(rejection.Call.ExecutionID, rejection.Call.Name)
 			errResult := agentic.ToolResult{
-				CallID: rejection.Call.ID,
-				Name:   rejection.Call.Name,
-				Error:  fmt.Sprintf("tool call rejected by governance: %s", rejection.Reason),
-				LoopID: loopID,
+				CallID:      rejection.Call.ID,
+				Name:        rejection.Call.Name,
+				Error:       fmt.Sprintf("tool call rejected by governance: %s", rejection.Reason),
+				LoopID:      loopID,
+				RequestID:   rejection.Call.RequestID,
+				ExecutionID: rejection.Call.ExecutionID,
+				CallOrdinal: rejection.Call.CallOrdinal,
 			}
 			if err := h.loopManager.StoreToolResult(loopID, errResult); err != nil {
 				return err
@@ -1447,24 +1457,29 @@ func (h *MessageHandler) handleToolCallResponse(
 // approval_response_handler.go:122). Reason is the diagnostic surfaced
 // to the model so it can decide how to recover.
 //
-// Idempotent at the loopManager.StoreToolResult layer — duplicate
-// call_ids dedupe naturally.
-func (h *MessageHandler) synthesizeToolFailure(loopID, callID, name, reason string) error {
+// Correlated dispatch failures use ExecutionID like ordinary results. The
+// terminal drain is the sole CallID-only fallback because it owns only the
+// provider IDs in one terminating loop and never crosses result routing.
+func (h *MessageHandler) synthesizeToolFailure(loopID string, call agentic.ToolCall, reason string) error {
+	name := call.Name
 	if name == "" {
 		// Best-effort recovery — the call may have been registered via
 		// TrackToolName at dispatch time even if the dispatch later
 		// failed. Falls back to a sentinel only if no name was tracked.
-		if tracked := h.loopManager.GetToolName(callID); tracked != "" {
+		if tracked := h.loopManager.GetToolName(call.ExecutionID); tracked != "" {
 			name = tracked
 		} else {
 			name = "unknown_tool"
 		}
 	}
 	synth := agentic.ToolResult{
-		CallID: callID,
-		Name:   name,
-		Error:  reason,
-		LoopID: loopID,
+		CallID:      call.ID,
+		Name:        name,
+		Error:       reason,
+		LoopID:      loopID,
+		RequestID:   call.RequestID,
+		ExecutionID: call.ExecutionID,
+		CallOrdinal: call.CallOrdinal,
 	}
 	return h.loopManager.StoreToolResult(loopID, synth)
 }
@@ -1480,14 +1495,13 @@ func (h *MessageHandler) synthesizeToolFailure(loopID, callID, name, reason stri
 // individual StoreToolResult calls are logged but don't stop the drain
 // — partial cleanup beats no cleanup.
 //
-// Concurrency note: callers run on the loop's owning goroutine. A
-// concurrent real result on a different goroutine could overwrite a
-// just-written synth via StoreToolResult's CallID-keyed map (state.go
-// PendingToolResults), or be overwritten by it depending on
-// interleaving. The race is benign because the loop is transitioning
-// to terminal — HandleToolResult's AllToolsComplete branch is gated
-// on !entity.State.IsTerminal() at handlers.go:1411, so neither write
-// triggers a new agent.request regardless of which won.
+// Concurrency note: callers run on the loop's owning goroutine. Terminal
+// drainage stores its loop-local synthetic by provider CallID because the
+// pending set has no execution correlation. A concurrent real result stores by
+// ExecutionID, so the entries cannot overwrite one another. The loop is already
+// transitioning to terminal; HandleToolResult's AllToolsComplete branch is
+// gated on !entity.State.IsTerminal(), so neither entry triggers another
+// agent.request.
 func (h *MessageHandler) drainPendingToolFailures(loopID, reason string) {
 	// Drop any queued-but-not-yet-dispatched calls unconditionally —
 	// they'd never get a real result on a terminating loop, and
@@ -1504,7 +1518,7 @@ func (h *MessageHandler) drainPendingToolFailures(loopID, reason string) {
 		slog.Int("count", len(pending)),
 		slog.String("reason", reason))
 	for _, callID := range pending {
-		if err := h.synthesizeToolFailure(loopID, callID, "", reason); err != nil {
+		if err := h.synthesizeToolFailure(loopID, agentic.ToolCall{ID: callID}, reason); err != nil {
 			h.logger.Warn("failed to store synthetic failure during drain",
 				slog.String("loop_id", loopID),
 				slog.String("call_id", callID),
@@ -1546,7 +1560,7 @@ func (h *MessageHandler) tryDispatchOrSynthesize(result *HandlerResult, loopID s
 	// drain helper would later see.
 	_ = h.loopManager.RemovePendingTool(loopID, tc.ID)
 	reason := fmt.Sprintf("tool dispatch failed: %s", err.Error())
-	return false, h.synthesizeToolFailure(loopID, tc.ID, tc.Name, reason)
+	return false, h.synthesizeToolFailure(loopID, tc, reason)
 }
 
 // dispatchedFromQueue drains the loop's queued tool calls until one
@@ -1625,10 +1639,12 @@ func (h *MessageHandler) dispatchToolCall(result *HandlerResult, loopID string, 
 	if err := h.loopManager.AddPendingTool(loopID, tc.ID); err != nil {
 		return err
 	}
-	h.loopManager.TrackToolCall(tc.ID, loopID)
-	h.loopManager.TrackToolName(tc.ID, tc.Name)
-	h.loopManager.TrackToolArguments(tc.ID, tc.Arguments)
-	h.loopManager.TrackToolStart(tc.ID)
+	if tc.ExecutionID != "" {
+		h.loopManager.TrackToolCall(tc.ExecutionID, loopID)
+	}
+	h.loopManager.TrackToolName(tc.ExecutionID, tc.Name)
+	h.loopManager.TrackToolArguments(tc.ExecutionID, tc.Arguments)
+	h.loopManager.TrackToolStart(tc.ExecutionID)
 
 	if tc.LoopID == "" {
 		tc.LoopID = loopID
@@ -1725,7 +1741,7 @@ func (h *MessageHandler) dispatchToolCall(result *HandlerResult, loopID string, 
 		SourceCorrelation: tc.ID,
 		CausalIteration:   positiveUint32(h.loopManager.GetCurrentIteration(loopID)),
 		CausalPhase:       agentic.TrajectoryPhaseToolRequest,
-		CausalOrdinal:     h.loopManager.GetToolOrdinal(tc.ID),
+		CausalOrdinal:     tc.CallOrdinal,
 		Status:            agentic.TrajectoryStatusRequested,
 		ToolPreview:       tc.Name,
 		Evidence:          tc,
@@ -2038,13 +2054,13 @@ func resolveCompletionText(msg agentic.ChatMessage) string {
 }
 
 // resolveToolName resolves the function name of a tool result through the
-// loop's name-fallback chain: the name tracked at dispatch for this call ID
+// loop's name-fallback chain: the name tracked for this execution ID
 // first, then the name carried on the result envelope itself. The fallback
 // is what survives a LoopManager cache loss (process restart) — agentic-tools
 // stamps Name on every result before publishing, so the envelope always
 // carries it. Returns "" only when neither source knows the name.
 func (h *MessageHandler) resolveToolName(toolResult agentic.ToolResult) string {
-	if tracked := h.loopManager.GetToolName(toolResult.CallID); tracked != "" {
+	if tracked := h.loopManager.GetToolName(toolResult.ExecutionID); tracked != "" {
 		return tracked
 	}
 	return toolResult.Name
@@ -2216,15 +2232,15 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 		SourceCorrelation: originalToolResult.CallID,
 		CausalIteration:   positiveUint32(entity.Iterations),
 		CausalPhase:       agentic.TrajectoryPhaseToolResult,
-		CausalOrdinal:     h.loopManager.GetToolOrdinal(originalToolResult.CallID),
-		ElapsedMS:         h.computeToolDuration(originalToolResult.CallID),
+		CausalOrdinal:     h.loopManager.GetToolOrdinal(originalToolResult.ExecutionID),
+		ElapsedMS:         h.computeToolDuration(originalToolResult.ExecutionID),
 		Status:            toolResultStatus(originalToolResult),
 		ToolPreview:       originalToolResult.Name,
 		CapabilityPreview: entity.Role,
 		ErrorCategory:     toolErrorCategory(originalToolResult),
 		Evidence: trajectoryToolCompletionEvidence{
 			Result:            originalToolResult,
-			DispatchArguments: h.loopManager.GetToolArguments(originalToolResult.CallID),
+			DispatchArguments: h.loopManager.GetToolArguments(originalToolResult.ExecutionID),
 		},
 	})
 
@@ -2371,11 +2387,14 @@ func (h *MessageHandler) gateForApproval(loopID string, entity *agentic.LoopEnti
 	// Falls back to the tool name on the result envelope when the
 	// LoopManager cache has been cleared (e.g., process restart).
 	toolName := h.resolveToolName(toolResult)
-	args := h.loopManager.GetToolArguments(toolResult.CallID)
+	args := h.loopManager.GetToolArguments(toolResult.ExecutionID)
 
 	if err := entity.BeginAwaitingApproval(toolResult.CallID, toolName, args, toolResult.Error, h.config.ApprovalTimeout(), toolResult.TraceID); err != nil {
 		return nil, fmt.Errorf("begin awaiting approval: %w", err)
 	}
+	entity.PendingApproval.RequestID = toolResult.RequestID
+	entity.PendingApproval.ExecutionID = toolResult.ExecutionID
+	entity.PendingApproval.CallOrdinal = toolResult.CallOrdinal
 
 	// Clear sibling tool calls queued behind this one. Once the human
 	// responds, the LLM will get a fresh round-trip with the
@@ -2426,15 +2445,15 @@ func (h *MessageHandler) buildToolTrajectoryStep(toolResult agentic.ToolResult, 
 			errCategory = string(agentic.ToolErrorUnknown)
 		}
 	}
-	toolName := h.loopManager.GetToolName(toolResult.CallID)
-	toolArgs := h.loopManager.GetToolArguments(toolResult.CallID)
+	toolName := h.loopManager.GetToolName(toolResult.ExecutionID)
+	toolArgs := h.loopManager.GetToolArguments(toolResult.ExecutionID)
 	return agentic.TrajectoryStep{
 		Timestamp:     time.Now(),
 		StepType:      "tool_call",
 		ToolName:      toolName,
 		ToolArguments: toolArgs,
 		ToolResult:    toolResult.Content,
-		Duration:      h.computeToolDuration(toolResult.CallID),
+		Duration:      h.computeToolDuration(toolResult.ExecutionID),
 		Provider:      h.resolveProvider(entity.Model),
 		Capability:    entity.Role,
 		ToolStatus:    toolStatus,
@@ -2639,7 +2658,7 @@ func (h *MessageHandler) buildToolMessages(results []agentic.ToolResult) []agent
 		content = decorateContentWithPagination(content, r.Metadata)
 		name := r.Name
 		if name == "" {
-			name = h.loopManager.GetToolName(r.CallID)
+			name = h.loopManager.GetToolName(r.ExecutionID)
 		}
 		messages[i] = agentic.ChatMessage{
 			Role:       "tool",

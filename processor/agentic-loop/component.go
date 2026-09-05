@@ -917,7 +917,7 @@ func (c *Component) setupSubscriptions(setupCtx, consumerCtx context.Context) er
 		case "agent.toolcall.approved", "agent.toolcall.rejected":
 			// Verdicts from rule-driven tool-call governance (ADR-039).
 			// Both subjects route into the same demux — the dispatcher
-			// uses the subject path to extract decision + call_id.
+			// reads decision + execution_id from the verdict payload.
 			// Skip if no dispatcher is configured (disabled mode with
 			// no fallback construction); the wildcard subscription is
 			// still cheap to bind but never gets traffic in disabled
@@ -1868,7 +1868,7 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 	}
 	toolResult := *toolResultPtr
 
-	// Find loop ID for this tool call. Empty here means we drained the CallID at
+	// Find loop ID for this tool execution. Empty here means we drained the execution ID at
 	// the previous turn boundary (GetAndClearToolResults evicts the routing
 	// entry to drop late re-deliveries), the loop settled and released its
 	// per-loop state (#1233), or we never tracked it. All three are expected
@@ -1876,15 +1876,16 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 	// Returning here is load-bearing — proceeding would land the late result
 	// in PendingToolResults and surface as a duplicate tool message in the
 	// next turn's request. It is also what keeps a released loop
-	// indistinguishable from a present terminal one: DeleteLoop clears the
-	// routing entry for model-authored call IDs as well as structured ones, so
-	// recovery cannot resolve a loop that is gone and hand it to
+	// indistinguishable from a present terminal one: DeleteLoop clears opaque
+	// execution routing entries by their mapped owner, so the direct lookup
+	// cannot resolve a loop that is gone and hand it to
 	// HandleToolResult, which would fail instead of dropping.
-	loopID := c.findLoopIDForToolCall(toolResult.CallID)
+	loopID := c.findLoopIDForToolCall(toolResult.ExecutionID)
 	if loopID == "" {
-		c.logger.Warn("No loop found for tool call", "call_id", toolResult.CallID)
+		c.logger.Warn("No loop found for tool execution",
+			"execution_id", toolResult.ExecutionID, "call_id", toolResult.CallID)
 		if c.metrics != nil {
-			c.metrics.recordToolResultDropped("stale_callid")
+			c.metrics.recordToolResultDropped("stale_execution")
 		}
 		return nil
 	}
@@ -2158,10 +2159,11 @@ func (c *Component) findLoopIDForRequest(requestID string) string {
 	return loopID
 }
 
-// findLoopIDForToolCall finds the loop ID associated with a tool call ID,
-// attempting recovery from structured ID if not found in cache.
-func (c *Component) findLoopIDForToolCall(callID string) string {
-	loopID, exists := c.handler.loopManager.GetLoopForToolCallWithRecovery(callID)
+// findLoopIDForToolCall finds the loop ID associated with a framework tool
+// execution ID. Provider CallID is request-scoped conversation data and is
+// never used as a routing fallback.
+func (c *Component) findLoopIDForToolCall(executionID string) string {
+	loopID, exists := c.handler.loopManager.GetLoopForToolCallWithRecovery(executionID)
 	if !exists {
 		return ""
 	}
@@ -2285,7 +2287,7 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 
 // handleToolCallVerdictMessage routes inbound verdicts from
 // agent.toolcall.approved.> and agent.toolcall.rejected.> into the
-// governance dispatcher (ADR-039). The dispatcher demuxes by call_id
+// governance dispatcher (ADR-039). The dispatcher demuxes by execution_id
 // to per-call waiter channels.
 //
 // Both wildcard subjects share this single handler because the
@@ -2318,13 +2320,13 @@ func (c *Component) handleToolCallVerdictMessage(_ context.Context, data []byte)
 	}
 
 	decision := payload.EffectiveDecision()
-	callID := payload.EffectiveCallID()
-	if decision == "" || callID == "" {
+	executionID := payload.effectiveExecutionID()
+	if decision == "" || executionID == "" {
 		return natsclient.DeliveryDecisionTerminate,
-			fmt.Errorf("tool-call verdict payload missing decision or call_id (decision=%q call_id=%q)", decision, callID)
+			fmt.Errorf("tool-call verdict payload missing decision or execution_id (decision=%q execution_id=%q)", decision, executionID)
 	}
 
-	return dispatcher.HandleVerdict(decision, callID, data)
+	return dispatcher.HandleVerdict(decision, executionID, data)
 }
 
 // decodeVerdictPayload reads a VerdictPayload from wire bytes,
@@ -2375,6 +2377,15 @@ func verdictPayloadFromMap(data map[string]any) VerdictPayload {
 	}
 	if v, ok := data["loop_id"].(string); ok {
 		p.LoopID = v
+	}
+	if v, ok := data["request_id"].(string); ok {
+		p.RequestID = v
+	}
+	if v, ok := data["execution_id"].(string); ok {
+		p.ExecutionID = v
+	}
+	if v, ok := data["proposal_fingerprint"].(string); ok {
+		p.ProposalFingerprint = v
 	}
 	if v, ok := data["rule_id"].(string); ok {
 		p.RuleID = v

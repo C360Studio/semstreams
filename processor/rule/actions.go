@@ -1094,11 +1094,10 @@ func (e *ActionExecutor) executePublish(ctx context.Context, action Action, ec *
 			"RuleActionExecutor", "executePublish", "reject reserved publish subject")
 	}
 	// Substitute $message.*/$entity.* etc. tokens in string property
-	// values before publish. ADR-039's canonical reject pattern relies
-	// on `properties.call_id = "$message.call_id"` resolving so the
-	// agentic-loop verdict dispatcher can demux via
-	// VerdictPayload.EffectiveCallID (falls back to Properties when
-	// top-level CallID is empty). Pre-fix, the literal template string
+	// values before publish. The tool-governance reject pattern relies
+	// on `properties.execution_id = "$message.execution_id"` resolving so the
+	// agentic-loop verdict dispatcher can demux via its execution-ID fallback
+	// from Properties when top-level ExecutionID is empty. Pre-fix, the literal template string
 	// reached the wire and broke enforce-mode routing.
 	properties := substituteStringPropertiesContext(ctx, action.Properties, ec)
 
@@ -2112,7 +2111,7 @@ func (e *ActionExecutor) executeApprove(ctx context.Context, action Action, ec *
 	e.emitVerdictAudit(ctx, governance.DecisionApprove, ruleID, reason, ec)
 
 	// Publish the verdict payload. The subject itself carries the routing
-	// identity (e.g. `agent.toolcall.approved.<loop_id>.<call_id>`); the
+	// identity (e.g. `agent.toolcall.approved.<execution_id>`); the
 	// payload carries context for audit/ops/replay.
 	if e.publisher == nil {
 		if e.logger != nil {
@@ -2143,6 +2142,11 @@ func (e *ActionExecutor) executeApprove(ctx context.Context, action Action, ec *
 		}
 		if v, ok := ec.MessageData["loop_id"].(string); ok && v != "" {
 			payloadData["loop_id"] = v
+		}
+		for _, field := range []string{"request_id", "execution_id", "proposal_fingerprint"} {
+			if v, ok := ec.MessageData[field].(string); ok && v != "" {
+				payloadData[field] = v
+			}
 		}
 	}
 	// Wrap in a `core.json.v1` BaseMessage so subscribers using the

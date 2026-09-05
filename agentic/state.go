@@ -53,7 +53,7 @@ type LoopEntity struct {
 	Model              string                `json:"model"`
 	Iterations         int                   `json:"iterations"`
 	MaxIterations      int                   `json:"max_iterations"`
-	PendingToolResults map[string]ToolResult `json:"pending_tool_results,omitempty"` // Accumulated tool results by call ID
+	PendingToolResults map[string]ToolResult `json:"pending_tool_results,omitempty"` // ExecutionID; synthetic failures use CallID
 	StartedAt          time.Time             `json:"started_at,omitempty"`           // When the loop was created
 	TimeoutAt          time.Time             `json:"timeout_at,omitempty"`           // When the loop should timeout
 	ParentLoopID       string                `json:"parent_loop_id,omitempty"`       // Parent loop ID for architect->editor relationship
@@ -144,7 +144,10 @@ func (e *LoopEntity) TransitionTo(newState LoopState) error {
 // Persisted on LoopEntity so a process restart mid-approval still
 // remembers what the human is reviewing.
 type PendingApprovalState struct {
+	RequestID   string         `json:"request_id,omitempty"`
+	ExecutionID string         `json:"execution_id,omitempty"`
 	CallID      string         `json:"call_id"`
+	CallOrdinal uint32         `json:"call_ordinal,omitempty"`
 	ToolName    string         `json:"tool_name"`
 	Arguments   map[string]any `json:"arguments,omitempty"`
 	Reason      string         `json:"reason,omitempty"`   // Original "approval_required: ..." rejection reason

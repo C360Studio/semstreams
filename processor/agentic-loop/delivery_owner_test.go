@@ -100,7 +100,10 @@ func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 		require.NoError(t, err)
 		c := releaseTestComponent(t, handler)
 		c.loopsBucket = failingLoopBucket{err: errors.New("kv unavailable")}
-		toolResult := &agentic.ToolResult{CallID: "call-tool", Name: "search", Content: "result"}
+		toolResult := &agentic.ToolResult{
+			RequestID: "request-tool", ExecutionID: deriveToolExecutionID("request-tool", "call-tool", 1),
+			CallID: "call-tool", CallOrdinal: 1, Name: "search", Content: "result",
+		}
 		data, err := json.Marshal(message.NewBaseMessage(toolResult.Schema(), toolResult, "test"))
 		require.NoError(t, err)
 		msg := &loopDeliveryOwnerMsg{data: data}
@@ -276,7 +279,7 @@ func TestLoopProductionCallbacksTerminateMalformedNonHeartbeatInputs(t *testing.
 		{port: "agent.toolcall.approved", decision: "approved", callID: "call-approved"},
 		{port: "agent.toolcall.rejected", decision: "rejected", callID: "call-rejected"},
 	} {
-		data := []byte(`{"decision":"` + row.decision + `","call_id":"` + row.callID + `"}`)
+		data := []byte(`{"decision":"` + row.decision + `","execution_id":"` + row.callID + `"}`)
 		msg := &loopSettlementMsg{data: data}
 		callbacks[row.port](ctx, msg)
 		require.Equal(t, int32(1), msg.acks.Load())

@@ -8,8 +8,8 @@ frozen-parent: 417beae5552f8f15ad3540edd7d8504c87174c13
 
 - `openspec/changes/agentic-loop-restart-safety/tasks.md:90` — `- [x] 2.1 RED: prove stable TaskID, random LoopID minting for new work, retained-`TaskMessage` LoopID recovery on`
 - `openspec/changes/agentic-loop-restart-safety/tasks.md:93` — `- [x] 2.2 Implement the TaskID-to-retained-`TaskMessage` recovery path. Mint LoopID randomly only when exact retained`
-- `openspec/changes/agentic-loop-restart-safety/tasks.md:96` — `- [ ] 2.3 RED: prove RequestID distinguishes logical provider work and framework execution identity distinguishes tool`
-- `openspec/changes/agentic-loop-restart-safety/tasks.md:101` — `- [ ] 2.4 Implement RequestID and execution identity only on provider/tool/governance-correlation paths that need`
+- `openspec/changes/agentic-loop-restart-safety/tasks.md:96` — `- [x] 2.3 RED: prove RequestID distinguishes logical provider work and framework execution identity distinguishes tool`
+- `openspec/changes/agentic-loop-restart-safety/tasks.md:101` — `- [x] 2.4 Implement RequestID and execution identity only on provider/tool/governance-correlation paths that need`
 - `openspec/changes/agentic-loop-restart-safety/tasks.md:103` — `- [ ] 2.5 RED/GREEN: prove ordinary task/control, created, request, response, approval, terminal, governance, and`
 - `openspec/changes/agentic-loop-restart-safety/design.md:135` — `## Correlation is lane-scoped`
 - `openspec/changes/agentic-loop-restart-safety/design.md:137` — `- Dispatch derives stable TaskID from validated `UserMessage` identity. It mints a random framework LoopID only for`
@@ -43,7 +43,7 @@ The synchronous transport produces these currently provable classifications at t
 - `natsclient/client.go:981` — `if err != nil {`
 - `natsclient/client.go:1005` — `_, err = js.PublishMsg(ctx, msg)`
 - `natsclient/client.go:1006` — `if err != nil {`
-- `processor/agentic-loop/component.go:1956` — `if err := c.natsClient.PublishToStream(ctx, msg.Subject, msg.Data); err != nil {`
+- `processor/agentic-loop/component.go:1957` — `if err := c.natsClient.PublishToStream(ctx, msg.Subject, msg.Data); err != nil {`
 
 A failure before `PublishMsg` is **not sent**. A nil return from synchronous `PublishMsg` is **committed** by PubAck.
 An error after invoking `PublishMsg` is **commit-unknown** at this API boundary. In a multi-output sequence, prior nil
@@ -75,20 +75,60 @@ publications are **committed**, the failing invocation is **commit-unknown**, an
 - `processor/agentic-loop/state.go:180` — `func (m *LoopManager) GenerateLoopID() string {`
 - `processor/agentic-loop/state.go:181` — `return uuid.NewString()`
 - `processor/agentic-loop/state.go:200` — `func (m *LoopManager) CreateLoopWithID(loopID, taskID, role, model string, maxIterations ...int) (string, error) {`
-- `processor/agentic-loop/state.go:1136` — `func (m *LoopManager) GenerateRequestID(loopID string) string {`
-- `processor/agentic-loop/state.go:1137` — `shortID := uuid.New().String()[:8]`
-- `processor/agentic-loop/state.go:1138` — `return fmt.Sprintf("%s:req:%s", loopID, shortID)`
+- `processor/agentic-loop/state.go:1131` — `func (m *LoopManager) GenerateRequestID(loopID string) string {`
+- `processor/agentic-loop/state.go:1131` — `func (m *LoopManager) GenerateRequestID(loopID string) string {`
+- `processor/agentic-loop/state.go:1132` — `return fmt.Sprintf("%s:req:%s", loopID, uuid.NewString())`
 - `agentic/types.go:108` — `type AgentRequest struct {`
 - `agentic/types.go:109` — `RequestID`
 - `agentic/types.go:169` — `type AgentResponse struct {`
 - `agentic/types.go:170` — `RequestID`
 - `agentic/tools.go:207` — `type ToolCall struct {`
 - `agentic/tools.go:212` — `LoopID`
-- `agentic/tools.go:626` — `type ToolResult struct {`
-- `agentic/tools.go:627` — `CallID`
-- `agentic/tools.go:634` — `LoopID`
-- `processor/agentic-loop/handlers.go:1306` — `h.loopManager.TrackToolOrdinal(toolCall.ID, uint32(index+1))`
-- `processor/agentic-loop/state.go:840` — `func (m *LoopManager) TrackToolOrdinal(callID string, ordinal uint32) {`
+- `agentic/tools.go:214` — `RequestID   string         `json:"request_id,omitempty"``
+- `agentic/tools.go:215` — `ExecutionID string         `json:"execution_id,omitempty"``
+- `agentic/tools.go:216` — `CallOrdinal uint32         `json:"call_ordinal,omitempty"``
+- `agentic/tools.go:629` — `type ToolResult struct {`
+- `agentic/tools.go:630` — `CallID      string         `json:"call_id"``
+- `agentic/tools.go:637` — `LoopID      string         `json:"loop_id,omitempty"``
+- `agentic/tools.go:639` — `RequestID   string         `json:"request_id,omitempty"``
+- `agentic/tools.go:640` — `ExecutionID string         `json:"execution_id,omitempty"``
+- `agentic/tools.go:641` — `CallOrdinal uint32         `json:"call_ordinal,omitempty"``
+- `processor/agentic-loop/handlers.go:1250` — `if err := h.handleToolCallResponse(ctx, &result, loopID, response.RequestID, response.Message.ToolCalls); err != nil {`
+- `processor/agentic-loop/handlers.go:1306` — `if err := stampToolExecutionCorrelation(requestID, toolCalls); err != nil {`
+- `processor/agentic-loop/handlers.go:1310` — `h.loopManager.TrackToolOrdinal(toolCall.ExecutionID, uint32(index+1))`
+- `processor/agentic-loop/handlers.go:1323` — `RequestID:   tc.RequestID,`
+- `processor/agentic-loop/handlers.go:1324` — `ExecutionID: tc.ExecutionID,`
+- `processor/agentic-loop/handlers.go:1325` — `CallOrdinal: tc.CallOrdinal,`
+- `processor/agentic-loop/handlers.go:1367` — `RequestID:   rejection.Call.RequestID,`
+- `processor/agentic-loop/handlers.go:1368` — `ExecutionID: rejection.Call.ExecutionID,`
+- `processor/agentic-loop/handlers.go:1369` — `CallOrdinal: rejection.Call.CallOrdinal,`
+- `processor/agentic-loop/execution_identity.go:13` — `const toolExecutionIdentityVersion = "v1"`
+- `processor/agentic-loop/execution_identity.go:15` — `func stampToolExecutionCorrelation(requestID string, calls []agentic.ToolCall) error {`
+- `processor/agentic-loop/execution_identity.go:24` — `calls[i].RequestID = requestID`
+- `processor/agentic-loop/execution_identity.go:25` — `calls[i].CallOrdinal = ordinal`
+- `processor/agentic-loop/execution_identity.go:26` — `calls[i].ExecutionID = deriveToolExecutionID(requestID, calls[i].ID, ordinal)`
+- `processor/agentic-loop/execution_identity.go:31` — `func deriveToolExecutionID(requestID, callID string, ordinal uint32) string {`
+- `processor/agentic-loop/execution_identity_test.go:16` — `func TestRequestIDsDistinguishLogicalProviderWork(t *testing.T) {`
+- `processor/agentic-loop/execution_identity_test.go:29` — `require.NoError(t, err, "RequestID must retain a full collision-resistant request token")`
+- `processor/agentic-loop/execution_identity_test.go:34` — `func TestToolExecutionIdentitySeparatesRepeatedProviderCallID(t *testing.T) {`
+- `processor/agentic-loop/execution_identity_test.go:53` — `require.Equal(t, first[0].ExecutionID, firstRedelivery[0].ExecutionID, "redelivery retains execution identity")`
+- `processor/agentic-loop/execution_identity_test.go:54` — `require.NotEqual(t, first[0].ExecutionID, second[0].ExecutionID)`
+- `processor/agentic-loop/execution_identity_test.go:55` — `require.Equal(t, uint32(2), repeatedInRequest[1].CallOrdinal)`
+- `processor/agentic-loop/execution_identity_test.go:56` — `require.NotEqual(t, repeatedInRequest[0].ExecutionID, repeatedInRequest[1].ExecutionID)`
+- `processor/agentic-loop/execution_identity_test.go:81` — `func TestApprovalRedispatchSeparatesRepeatedProviderCallIDAcrossLoops(t *testing.T) {`
+- `processor/agentic-loop/execution_identity_test.go:121` — `require.Equal(t, callsA[0].Name, envelope.Payload.Name)`
+- `processor/agentic-loop/execution_identity_test.go:122` — `require.Equal(t, callsA[0].Arguments, envelope.Payload.Arguments)`
+- `processor/agentic-loop/execution_identity_test.go:123` — `require.Equal(t, callsA[0].RequestID, envelope.Payload.RequestID)`
+- `processor/agentic-loop/execution_identity_test.go:124` — `require.Equal(t, callsA[0].ExecutionID, envelope.Payload.ExecutionID)`
+- `processor/agentic-loop/execution_identity_test.go:125` — `require.Equal(t, callsA[0].CallOrdinal, envelope.Payload.CallOrdinal)`
+- `processor/agentic-loop/execution_identity_test.go:131` — `func TestGovernanceProposalCarriesFrameworkExecutionCorrelation(t *testing.T) {`
+- `processor/agentic-loop/execution_identity_test.go:141` — `require.Equal(t, call.RequestID, payload.RequestID)`
+- `processor/agentic-loop/execution_identity_test.go:142` — `require.Equal(t, call.ExecutionID, payload.ExecutionID)`
+- `processor/agentic-loop/execution_identity_test.go:143` — `require.Equal(t, call.CallOrdinal, payload.CallOrdinal)`
+- `processor/agentic-loop/execution_identity_test.go:144` — `require.NotEmpty(t, payload.ProposalFingerprint)`
+- `processor/agentic-loop/execution_identity_test.go:148` — `func TestGovernanceWaitersSeparateRepeatedProviderCallID(t *testing.T) {`
+- `processor/agentic-loop/execution_identity_test.go:171` — `require.Len(t, result.Approved, 2)`
+- `processor/agentic-loop/state.go:830` — `func (m *LoopManager) TrackToolOrdinal(executionID string, ordinal uint32) {`
 
 ### Dispatch publications
 
@@ -172,7 +212,9 @@ field; the envelope ID is minted by `NewBaseMessage`.
 - `processor/agentic-loop/config.go:413` — `Name: "agent.signal", Config: component.JetStreamPort{Subjects: []string{"agent.signal.*"}, StreamName: "AGENT"}, Required: false,`
 - `processor/agentic-loop/config.go:417` — `Name: "agent.approval_response", Config: component.JetStreamPort{Subjects: []string{"agent.approval_response.*"}, StreamName: "AGENT"}, Required: false,`
 - `processor/agentic-loop/config.go:421` — `Name: "agent.toolcall.approved", Config: component.JetStreamPort{Subjects: []string{"agent.toolcall.approved.>"}, StreamName: "AGENT"}, Required: false,`
+- `processor/agentic-loop/config.go:422` — `Description: "Approve verdicts from rule-driven tool-call governance (ADR-039). Wildcard subscription; demuxed by execution_id.",`
 - `processor/agentic-loop/config.go:425` — `Name: "agent.toolcall.rejected", Config: component.JetStreamPort{Subjects: []string{"agent.toolcall.rejected.>"}, StreamName: "AGENT"}, Required: false,`
+- `processor/agentic-loop/config.go:426` — `Description: "Reject verdicts from rule-driven tool-call governance (ADR-039). Wildcard subscription; demuxed by execution_id.",`
 - `processor/agentic-loop/config.go:444` — `Name: "agent.request", Config: component.JetStreamPort{Subjects: []string{"agent.request.*"}, StreamName: "AGENT"}, Description: "Agent model requests (JetStream)",`
 - `processor/agentic-loop/config.go:447` — `Name: "tool.execute", Config: component.JetStreamPort{Subjects: []string{"tool.execute.*"}, StreamName: "AGENT"}, Description: "Tool execution requests (JetStream)",`
 - `processor/agentic-loop/config.go:450` — `Name: "agent.complete", Config: component.JetStreamPort{Subjects: []string{"agent.complete.*"}, StreamName: "AGENT"}, Description: "Agent task completions (JetStream)",`
@@ -187,17 +229,79 @@ field; the envelope ID is minted by `NewBaseMessage`.
 - `processor/agentic-loop/component.go:1603` — `c.persistFailureState(errorCtx, loopID, failure)`
 - `processor/agentic-loop/component.go:1621` — `if pubErr := c.natsClient.PublishToStream(errorCtx, msg.Subject, msg.Data); pubErr != nil {`
 - `processor/agentic-loop/component.go:1622` — `c.logger.Error("Failed to publish failure event", "error", pubErr, "loop_id", loopID)`
-- `processor/agentic-loop/component.go:1956` — `if err := c.natsClient.PublishToStream(ctx, msg.Subject, msg.Data); err != nil {`
+- `processor/agentic-loop/component.go:1957` — `if err := c.natsClient.PublishToStream(ctx, msg.Subject, msg.Data); err != nil {`
 - `processor/agentic-loop/handlers.go:1072` — `requestSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.request", loopID)`
 - `processor/agentic-loop/handlers.go:1076` — `createdSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.created", loopID)`
-- `processor/agentic-loop/handlers.go:1717` — `toolSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "tool.execute", tc.Name)`
-- `processor/agentic-loop/handlers.go:2177` — `completionSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.complete", loopID)`
-- `processor/agentic-loop/handlers.go:2405` — `subject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.approval_pending", loopID)`
-- `processor/agentic-loop/handlers.go:2739` — `failureSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.failed", loopID)`
-- `processor/agentic-loop/governance_dispatcher.go:575` — `subject := "agent.toolcall.proposed." + loopID`
-- `processor/agentic-loop/governance_dispatcher.go:576` — `if err := publisher.PublishToStream(ctx, subject, data); err != nil {`
+- `processor/agentic-loop/handlers.go:1733` — `toolSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "tool.execute", tc.Name)`
+- `processor/agentic-loop/handlers.go:1744` — `CausalOrdinal:     tc.CallOrdinal,`
+- `processor/agentic-loop/handlers.go:2193` — `completionSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.complete", loopID)`
+- `processor/agentic-loop/handlers.go:2424` — `subject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.approval_pending", loopID)`
+- `processor/agentic-loop/handlers.go:2758` — `failureSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.failed", loopID)`
+- `processor/agentic-loop/state.go:73` — `toolCallToLoop         map[string]string                   // executionID -> loopID`
+- `processor/agentic-loop/handlers.go:1643` — `h.loopManager.TrackToolCall(tc.ExecutionID, loopID)`
+- `processor/agentic-loop/state.go:787` — `func (m *LoopManager) TrackToolCall(executionID, loopID string) {`
+- `processor/agentic-loop/state.go:790` — `m.toolCallToLoop[executionID] = loopID`
+- `processor/agentic-loop/component.go:1883` — `loopID := c.findLoopIDForToolCall(toolResult.ExecutionID)`
+- `processor/agentic-loop/component.go:2163` — `// execution ID. Provider CallID is request-scoped conversation data and is`
+- `processor/agentic-loop/component.go:2164` — `// never used as a routing fallback.`
+- `processor/agentic-loop/component.go:2165` — `func (c *Component) findLoopIDForToolCall(executionID string) string {`
+- `processor/agentic-loop/component.go:2166` — `loopID, exists := c.handler.loopManager.GetLoopForToolCallWithRecovery(executionID)`
+- `processor/agentic-loop/state.go:1188` — `// execution ID. Durable recovery is added at the committed response/result`
+- `processor/agentic-loop/state.go:1189` — `// boundary; provider CallID is never a routing fallback.`
+- `processor/agentic-loop/state.go:1190` — `func (m *LoopManager) GetLoopForToolCallWithRecovery(executionID string) (string, bool) {`
+- `processor/agentic-loop/state.go:1191` — `return m.GetLoopForToolCall(executionID)`
+- `processor/agentic-loop/state.go:934` — `for executionID, r := range entity.PendingToolResults {`
+- `processor/agentic-loop/state.go:936` — `delete(m.toolCallToLoop, executionID)`
+- `processor/agentic-loop/execution_identity_test.go:60` — `func TestToolResultRoutingSeparatesRepeatedProviderCallIDAcrossLoops(t *testing.T) {`
+- `processor/agentic-loop/execution_identity_test.go:75` — `require.Equal(t, loopA, component.findLoopIDForToolCall(callsA[0].ExecutionID))`
+- `processor/agentic-loop/execution_identity_test.go:76` — `require.Equal(t, loopB, component.findLoopIDForToolCall(callsB[0].ExecutionID))`
+- `processor/agentic-loop/execution_identity_test.go:77` — `require.NotEqual(t, callsA[0].ExecutionID, callsB[0].ExecutionID)`
+- `processor/agentic-loop/governance_dispatcher.go:606` — `subject := "agent.toolcall.proposed." + loopID`
+- `processor/agentic-loop/governance_dispatcher.go:607` — `if err := publisher.PublishToStream(ctx, subject, data); err != nil {`
+- `processor/agentic-loop/governance_dispatcher.go:115` — `RequestID           string         `json:"request_id"``
+- `processor/agentic-loop/governance_dispatcher.go:116` — `ExecutionID         string         `json:"execution_id"``
+- `processor/agentic-loop/governance_dispatcher.go:118` — `CallOrdinal         uint32         `json:"call_ordinal"``
+- `processor/agentic-loop/governance_dispatcher.go:119` — `ProposalFingerprint string         `json:"proposal_fingerprint"``
+- `processor/agentic-loop/governance_dispatcher.go:150` — `func (v VerdictPayload) effectiveExecutionID() string {`
+- `processor/agentic-loop/governance_dispatcher.go:401` — `channels[call.ExecutionID] = d.registerWaiter(call.ExecutionID)`
+- `processor/agentic-loop/governance_dispatcher.go:437` — `decision, reason := d.awaitVerdict(ctx, channels[call.ExecutionID], call, loopID)`
+- `processor/agentic-loop/governance_dispatcher.go:491` — `func (d *enforceDispatcher) HandleVerdict(decision, executionID string, data []byte) (natsclient.DeliveryDecision, error) {`
+- `processor/agentic-loop/governance_dispatcher.go:506` — `ch, ok := d.lookupWaiter(executionID)`
+- `processor/agentic-loop/governance_dispatcher.go:548` — `if call.RequestID == "" || call.ExecutionID == "" || call.CallOrdinal == 0 {`
+- `processor/agentic-loop/governance_dispatcher.go:567` — `RequestID:    call.RequestID,`
+- `processor/agentic-loop/governance_dispatcher.go:568` — `ExecutionID:  call.ExecutionID,`
+- `processor/agentic-loop/governance_dispatcher.go:570` — `CallOrdinal:  call.CallOrdinal,`
+- `processor/agentic-loop/governance_dispatcher.go:590` — `payload.ProposalFingerprint = fingerprint`
+- `processor/agentic-loop/governance_dispatcher.go:613` — `func fingerprintProposedToolCall(payload ProposedToolCallPayload) (string, error) {`
+- `processor/agentic-loop/component.go:2323` — `executionID := payload.effectiveExecutionID()`
+- `processor/agentic-loop/component.go:2329` — `return dispatcher.HandleVerdict(decision, executionID, data)`
+- `processor/agentic-loop/component.go:2381` — `if v, ok := data["request_id"].(string); ok {`
+- `processor/agentic-loop/component.go:2384` — `if v, ok := data["execution_id"].(string); ok {`
+- `processor/agentic-loop/component.go:2387` — `if v, ok := data["proposal_fingerprint"].(string); ok {`
+- `processor/rule/actions.go:2146` — `for _, field := range []string{"request_id", "execution_id", "proposal_fingerprint"} {`
+- `processor/rule/actions_test.go:3345` — `Subject: "agent.toolcall.approved.$message.execution_id",`
+- `processor/rule/actions_test.go:3354` — `assert.Equal(t, "agent.toolcall.approved.execution-001", got.subject,`
+- `processor/rule/actions_test.go:3373` — `assert.Equal(t, "request-001", envelope.Payload.Data["request_id"])`
+- `processor/rule/actions_test.go:3374` — `assert.Equal(t, "execution-001", envelope.Payload.Data["execution_id"])`
+- `processor/rule/actions_test.go:3375` — `assert.Equal(t, "sha256:proposal", envelope.Payload.Data["proposal_fingerprint"])`
+- `agentic/state.go:147` — `RequestID   string         `json:"request_id,omitempty"``
+- `agentic/state.go:148` — `ExecutionID string         `json:"execution_id,omitempty"``
+- `agentic/state.go:150` — `CallOrdinal uint32         `json:"call_ordinal,omitempty"``
+- `processor/agentic-loop/handlers.go:2395` — `entity.PendingApproval.RequestID = toolResult.RequestID`
+- `processor/agentic-loop/handlers.go:2396` — `entity.PendingApproval.ExecutionID = toolResult.ExecutionID`
+- `processor/agentic-loop/handlers.go:2397` — `entity.PendingApproval.CallOrdinal = toolResult.CallOrdinal`
+- `processor/agentic-loop/approval_response_handler.go:121` — `RequestID:   pending.RequestID,`
+- `processor/agentic-loop/approval_response_handler.go:122` — `ExecutionID: pending.ExecutionID,`
+- `processor/agentic-loop/approval_response_handler.go:123` — `CallOrdinal: pending.CallOrdinal,`
+- `processor/agentic-loop/approval_integration_test.go:292` — `original := dispatchedCalls[0]`
+- `processor/agentic-loop/approval_integration_test.go:295` — `assert.Equal(t, original.RequestID, approved.RequestID, "re-dispatch must preserve request identity")`
+- `processor/agentic-loop/approval_integration_test.go:296` — `assert.Equal(t, original.ExecutionID, approved.ExecutionID, "re-dispatch must preserve execution identity")`
+- `processor/agentic-loop/approval_integration_test.go:297` — `assert.Equal(t, original.CallOrdinal, approved.CallOrdinal, "re-dispatch must preserve call ordinal")`
+- `processor/agentic-loop/approval_integration_test.go:315` — `assert.Equal(t, approved.RequestID, terminal.RequestID)`
+- `processor/agentic-loop/approval_integration_test.go:316` — `assert.Equal(t, approved.ExecutionID, terminal.ExecutionID)`
+- `processor/agentic-loop/approval_integration_test.go:317` — `assert.Equal(t, approved.CallOrdinal, terminal.CallOrdinal)`
 - `processor/agentic-loop/approval_sweeper.go:151` — `if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {`
-- `processor/agentic-loop/component.go:2261` — `if err := c.natsClient.PublishToStream(ctx, subject, completionData); err != nil {`
+- `processor/agentic-loop/component.go:2263` — `if err := c.natsClient.PublishToStream(ctx, subject, completionData); err != nil {`
 
 Current loop outcome classification: every cited synchronous stream call is **committed** on nil and
 **commit-unknown** on error; unresolved subject, payload, or source state before a call is **not sent**. `PublishedMessage`
@@ -226,31 +330,63 @@ subject suffix uses source envelope ID; no deterministic Msg-Id call or exact va
 
 - `processor/agentic-tools/config.go:127` — `Name: "tool.execute", Config: component.JetStreamPort{Subjects: []string{"tool.execute.>"}, StreamName: "AGENT"}, Required: true,`
 - `processor/agentic-tools/config.go:142` — `Name: "tool.result", Config: component.JetStreamPort{Subjects: []string{"tool.result.*"}, StreamName: "AGENT"}, Required: true,`
-- `processor/agentic-tools/outcomes.go:27` — `CallID`
-- `processor/agentic-tools/outcomes.go:79` — `func toolCallOutcomeKey(callID string) string {`
-- `processor/agentic-tools/outcomes.go:83` — `func toolResultMessageID(callID string) string {`
-- `processor/agentic-tools/outcomes.go:88` — `return toolResultMessageID(callID) + "/approval-required"`
-- `processor/agentic-tools/component.go:813` — `data, err := c.outcomes.Get(ctx, toolCallOutcomeKey(call.ID))`
-- `processor/agentic-tools/component.go:860` — `err = c.outcomes.Create(ctx, toolCallOutcomeKey(call.ID), data)`
-- `processor/agentic-tools/component.go:1192` — `return c.publishResultWithMsgID(ctx, result, toolResultMessageID(result.CallID))`
-- `processor/agentic-tools/component.go:1195` — `func (c *Component) publishResultWithMsgID(ctx context.Context, result agentic.ToolResult, msgID string) error {`
-- `processor/agentic-tools/component.go:1204` — `subject, err := component.ResolveSubject(c.outputPortDefs(), "tool.result", result.CallID)`
-- `processor/agentic-tools/outcomes_test.go:257` — `assert.Equal(t, toolResultMessageID(call.ID), observedMsgID)`
-- `processor/agentic-tools/outcomes_test.go:492` — `assert.Equal(t, []string{toolResultMessageID(call.ID), toolResultMessageID(call.ID)}, msgIDs)`
+- `processor/agentic-tools/README.md:106` — `An effectful executor must use `ToolCall.ExecutionID` as the framework identity supplied to any downstream`
+- `processor/agentic-tools/README.md:107` — `idempotency contract. The provider's `ToolCall.ID` is request-scoped conversation data and may repeat under another`
+- `processor/agentic-tools/README.md:115` — `executor. Reusing one execution ID for different canonical call content is a permanent collision and is terminated;`
+- `processor/agentic-tools/README.md:116` — `reusing a provider CallID under a different RequestID produces a different execution ID.`
+- `processor/agentic-tools/doc.go:243` — `//  6. Publish ToolResult to tool.result.{execution_id}`
+- `processor/agentic-tools/doc.go:271` — `// Every wire response remains correlated to its request, execution, and`
+- `processor/agentic-tools/doc.go:273` — `// coordination: it creates no COMPLETED outcome and leaves the same execution`
+- `processor/agentic-tools/outcomes.go:27` — `ExecutionID string             `json:"execution_id"``
+- `processor/agentic-tools/outcomes.go:28` — `RequestID   string             `json:"request_id"``
+- `processor/agentic-tools/outcomes.go:29` — `CallID      string             `json:"call_id"``
+- `processor/agentic-tools/outcomes.go:30` — `CallOrdinal uint32             `json:"call_ordinal"``
+- `processor/agentic-tools/outcomes.go:82` — `func toolCallOutcomeKey(executionID string) string {`
+- `processor/agentic-tools/outcomes.go:86` — `func toolResultMessageID(executionID string) string {`
+- `processor/agentic-tools/outcomes.go:90` — `func toolApprovalRequiredMessageID(executionID string) string {`
+- `processor/agentic-tools/outcomes.go:118` — `func newCompletedOutcome(call agentic.ToolCall, result agentic.ToolResult) (completedOutcome, error) {`
+- `processor/agentic-tools/outcomes.go:129` — `if result.RequestID != call.RequestID || result.ExecutionID != call.ExecutionID || result.CallOrdinal != call.CallOrdinal {`
+- `processor/agentic-tools/outcomes.go:138` — `func validateToolExecutionCorrelation(call agentic.ToolCall) error {`
+- `processor/agentic-tools/outcomes.go:151` — `func correlateToolResult(call agentic.ToolCall, result agentic.ToolResult) agentic.ToolResult {`
+- `processor/agentic-tools/outcomes.go:177` — `if outcome.ExecutionID != call.ExecutionID {`
+- `processor/agentic-tools/outcomes.go:180` — `if outcome.RequestID != call.RequestID {`
+- `processor/agentic-tools/outcomes.go:186` — `if outcome.CallOrdinal != call.CallOrdinal {`
+- `processor/agentic-tools/component.go:697` — `if err := validateToolExecutionCorrelation(call); err != nil {`
+- `processor/agentic-tools/component.go:750` — `err := c.publishResultWithMsgID(ctx, result, toolApprovalRequiredMessageID(call.ExecutionID))`
+- `processor/agentic-tools/component.go:805` — `data, err := c.outcomes.Get(ctx, toolCallOutcomeKey(call.ExecutionID))`
+- `processor/agentic-tools/component.go:852` — `err = c.outcomes.Create(ctx, toolCallOutcomeKey(call.ExecutionID), data)`
+- `processor/agentic-tools/component.go:1184` — `return c.publishResultWithMsgID(ctx, result, toolResultMessageID(result.ExecutionID))`
+- `processor/agentic-tools/component.go:1187` — `func (c *Component) publishResultWithMsgID(ctx context.Context, result agentic.ToolResult, msgID string) error {`
+- `processor/agentic-tools/component.go:1196` — `subject, err := component.ResolveSubject(c.outputPortDefs(), "tool.result", result.ExecutionID)`
+- `processor/agentic-tools/outcomes_test.go:272` — `assert.Equal(t, toolResultMessageID(call.ExecutionID), observedMsgID)`
+- `processor/agentic-tools/outcomes_test.go:522` — `assert.Equal(t, []string{toolResultMessageID(call.ExecutionID), toolResultMessageID(call.ExecutionID)}, msgIDs)`
+- `processor/agentic-tools/execution_identity_test.go:11` — `func TestCompletedOutcomeIdentitySeparatesRepeatedProviderCallID(t *testing.T) {`
+- `processor/agentic-tools/execution_identity_test.go:20` — `require.NotEqual(t, toolCallOutcomeKey(first.ExecutionID), toolCallOutcomeKey(second.ExecutionID))`
+- `processor/agentic-tools/execution_identity_test.go:35` — `require.Error(t, err, "a different logical request cannot replay this outcome")`
+- `processor/agentic-tools/execution_identity_test.go:39` — `func TestHostedToolResultCorrelationIsFrameworkStamped(t *testing.T) {`
+- `processor/agentic-tools/execution_identity_test.go:49` — `require.Equal(t, call.ID, result.CallID)`
+- `processor/agentic-tools/execution_identity_test.go:50` — `require.Equal(t, call.RequestID, result.RequestID)`
+- `processor/agentic-tools/execution_identity_test.go:51` — `require.Equal(t, call.ExecutionID, result.ExecutionID)`
+- `processor/agentic-tools/execution_identity_test.go:52` — `require.Equal(t, call.CallOrdinal, result.CallOrdinal)`
 
 Current tool outcome classification: exact KV miss leaves no completed-outcome authority; a matching immutable entry
 is replayed without executor work; a mismatching fingerprint is a collision before overwrite; successful result
 publication is **committed**; result publication error is **commit-unknown** while the cited immutable entry remains
-available for exact replay. The key and Msg-Id presently derive from provider CallID.
+available for exact replay. The key and Msg-Id derive from framework ExecutionID.
 
 ### Exact lookup and collision census
 
 - `processor/agentic-loop/create_vs_exists_fence_test.go:76` — `// TestCreateLoopWithIDRefusesExistingTokenWithoutMutation is I7: a refused`
 - `processor/agentic-loop/create_vs_exists_fence_test.go:102` — `_, err = lm.CreateLoopWithID(loopID, "task-second", "reviewer", "model-b", 3)`
-- `processor/agentic-tools/outcomes_integration_test.go:86` — `entry, err := bucket.Get(ctx, toolCallOutcomeKey(call.ID))`
-- `processor/agentic-tools/outcomes_integration_test.go:293` — `entry, err := bucket.Get(ctx, toolCallOutcomeKey(call.ID))`
-- `processor/agentic-tools/outcomes_test.go:359` — `key := toolCallOutcomeKey(call.ID)`
-- `processor/agentic-tools/outcomes_test.go:360` — `assert.Equal(t, "v1."+strings.TrimPrefix(toolResultMessageID(call.ID), "tool-result/v1/"), key)`
+- `processor/agentic-tools/outcomes_integration_test.go:97` — `entry, err := bucket.Get(ctx, toolCallOutcomeKey(call.ExecutionID))`
+- `processor/agentic-tools/outcomes_integration_test.go:102` — `assert.Equal(t, call.RequestID, outcome.Result.RequestID)`
+- `processor/agentic-tools/outcomes_integration_test.go:103` — `assert.Equal(t, call.ExecutionID, outcome.Result.ExecutionID)`
+- `processor/agentic-tools/outcomes_integration_test.go:104` — `assert.Equal(t, call.CallOrdinal, outcome.Result.CallOrdinal)`
+- `processor/agentic-tools/outcomes_integration_test.go:311` — `entry, err := bucket.Get(ctx, toolCallOutcomeKey(call.ExecutionID))`
+- `processor/agentic-tools/outcomes_integration_test.go:312` — `require.NoError(t, err, "COMPLETED must precede the failed result publication")`
+- `processor/agentic-tools/outcomes_integration_test.go:315` — `require.Equal(t, "executed", authority.Result.Content)`
+- `processor/agentic-tools/outcomes_test.go:374` — `key := toolCallOutcomeKey(call.ExecutionID)`
+- `processor/agentic-tools/outcomes_test.go:375` — `assert.Equal(t, "v1."+strings.TrimPrefix(toolResultMessageID(call.ExecutionID), "tool-result/v1/"), key)`
 
 The production exact-stream-lookup search for `GetLastMsgForSubject`, `GetMsg`, `GetMessage`, and `DirectGet` in the
 five scoped components returned zero. Exact current reconciliation was located for completed tool outcomes through
@@ -270,7 +406,7 @@ outputs, proposals, verdicts, or terminal outputs.
 
 The #1168 authority pins describe entity-ID platform authority. The scoped task/request/execution/output identity fields
 do not read `platform.id`. The #1192 pins describe canonical framework-minted loop tokens; current dispatch and loop
-mint full UUID values, while TaskID remains independently random and RequestID still has the random eight-hex suffix.
+mint full UUID values, TaskID remains independently random, and RequestID now retains a full UUID suffix.
 The frozen parent already contains these ADR-104/ADR-105 surfaces; `git diff` from the frozen parent to base contains no
 task-2 identity implementation.
 
@@ -334,9 +470,9 @@ TaskMessage. This is a coupled mint-plus-terminal-subscription migration, not on
 
 - `processor/agentic-dispatch/component.go:1055` — `if err := c.natsClient.PublishToStream(ctx, prepared.subject, prepared.data); err != nil {`
 - `processor/agentic-model/component.go:1069` — `if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {`
-- `processor/agentic-loop/component.go:1956` — `if err := c.natsClient.PublishToStream(ctx, msg.Subject, msg.Data); err != nil {`
+- `processor/agentic-loop/component.go:1957` — `if err := c.natsClient.PublishToStream(ctx, msg.Subject, msg.Data); err != nil {`
 - `processor/agentic-governance/component.go:444` — `if err := c.natsClient.PublishToStream(ctx, outputSubject, outputData); err != nil {`
-- `processor/agentic-tools/component.go:1192` — `return c.publishResultWithMsgID(ctx, result, toolResultMessageID(result.CallID))`
+- `processor/agentic-tools/component.go:1184` — `return c.publishResultWithMsgID(ctx, result, toolResultMessageID(result.ExecutionID))`
 - `agentic/events.go:14` — `TaskID`
 - `agentic/events.go:13` — `LoopID`
 - `agentic/trajectory.go:12` — `RequestID`
@@ -365,9 +501,9 @@ publication-family sections above. The `PublishedMessage` loop container is cons
 - `processor/gated-dag/publisher.go:29` — `// The Nats-Msg-Id is the unitID, so within the stream's Duplicates window the`
 - `processor/gated-dag/publisher.go:44` — `if err := p.nc.PublishToStreamWithMsgID(ctx, p.subject, data, unitID); err != nil {`
 - `docs/operations/migration-gated-dag-semantic-settlement.md:34` — `The dispatch producer uses the logical unit ID as`
-- `processor/agentic-tools/component.go:813` — `data, err := c.outcomes.Get(ctx, toolCallOutcomeKey(call.ID))`
-- `processor/agentic-tools/component.go:860` — `err = c.outcomes.Create(ctx, toolCallOutcomeKey(call.ID), data)`
-- `processor/agentic-tools/component.go:1192` — `return c.publishResultWithMsgID(ctx, result, toolResultMessageID(result.CallID))`
+- `processor/agentic-tools/component.go:805` — `data, err := c.outcomes.Get(ctx, toolCallOutcomeKey(call.ExecutionID))`
+- `processor/agentic-tools/component.go:852` — `err = c.outcomes.Create(ctx, toolCallOutcomeKey(call.ExecutionID), data)`
+- `processor/agentic-tools/component.go:1184` — `return c.publishResultWithMsgID(ctx, result, toolResultMessageID(result.ExecutionID))`
 - `processor/agentic-loop/create_vs_exists_fence_test.go:76` — `// TestCreateLoopWithIDRefusesExistingTokenWithoutMutation is I7: a refused`
 
 ## Same-class collision table
@@ -472,3 +608,4 @@ behavior.
 - `git grep -n -E 'Approval continuation and dispatch projection|Approval evidence|projection|AutoContinue|incomplete hydration|explicit LoopID|Loop task, request|lane-scoped|at-least-once|edge gateway|agent.task|TaskID' -- openspec/changes/agentic-loop-restart-safety/tasks.md openspec/changes/agentic-loop-restart-safety/design.md openspec/changes/agentic-loop-restart-safety/specs/agentic-dispatch/spec.md openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md openspec/changes/agentic-loop-restart-safety/specs/agentic-model/spec.md openspec/changes/agentic-loop-restart-safety/specs/agentic-governance/spec.md openspec/changes/agentic-loop-restart-safety/specs/agentic-tools/spec.md` → 113
 - `git grep -n -E 'frozen-parent|Frozen parent|F =|F=|79b0f29|417beae|base:' -- openspec/changes/agentic-loop-restart-safety/proposal.md openspec/changes/agentic-loop-restart-safety/design.md openspec/changes/agentic-loop-restart-safety/tasks.md openspec/changes/agentic-loop-restart-safety/inventory-dispatch-bridge-boundary-2026-09-04.md openspec/changes/agentic-loop-restart-safety/inventory-task-loop-cardinality-2026-09-04.md openspec/changes/agentic-loop-restart-safety/inventory-task2-stable-identity-2026-09-03.md` → 6
 - `shasum -a 256 openspec/changes/agentic-loop-restart-safety/design-dispatch-edge-gateway-2026-09-04.md openspec/changes/agentic-loop-restart-safety/design.md openspec/changes/agentic-loop-restart-safety/proposal.md openspec/changes/agentic-loop-restart-safety/tasks.md` → 4
+- `git grep -n -E 'pins=.*moved=.*ambiguous|inventory.*verif|malformed.*unparsed' -- . ':!openspec/changes/agentic-loop-restart-safety/inventory-*.md'` → 22

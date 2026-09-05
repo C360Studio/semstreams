@@ -45,17 +45,22 @@ func TestHandleToolResult_ApprovalGated(t *testing.T) {
 			},
 		},
 	}
-	if _, err := handler.HandleModelResponse(ctx, loopID, toolResponse); err != nil {
+	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, toolResponse)
+	if err != nil {
 		t.Fatalf("HandleModelResponse: %v", err)
 	}
+	dispatched := dispatchedToolCallFromResult(t, dispatchResult)
 
 	// Simulate the filter-side rejection: tool result arrives with the
 	// approval_required prefix.
 	toolResult := agentic.ToolResult{
-		CallID:    "call-001",
-		Name:      "delete_rule",
-		ErrorKind: agentic.ToolErrorPermission,
-		Error:     agentic.ApprovalRequiredPrefix + "Tool 'delete_rule' requires human approval before execution",
+		CallID:      dispatched.ID,
+		Name:        dispatched.Name,
+		ErrorKind:   agentic.ToolErrorPermission,
+		Error:       agentic.ApprovalRequiredPrefix + "Tool 'delete_rule' requires human approval before execution",
+		RequestID:   dispatched.RequestID,
+		ExecutionID: dispatched.ExecutionID,
+		CallOrdinal: dispatched.CallOrdinal,
 	}
 	result, err := handler.HandleToolResult(ctx, loopID, toolResult)
 	if err != nil {

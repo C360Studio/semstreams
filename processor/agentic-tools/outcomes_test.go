@@ -27,6 +27,21 @@ type memoryOutcomeStore struct {
 	createErr error
 }
 
+func correlatedOutcomeTestCall(call agentic.ToolCall) agentic.ToolCall {
+	call.RequestID = "request-" + call.ID
+	call.ExecutionID = "execution-" + call.ID
+	call.CallOrdinal = 1
+	return call
+}
+
+func correlatedOutcomeTestResult(call agentic.ToolCall, result agentic.ToolResult) agentic.ToolResult {
+	result.CallID = call.ID
+	result.RequestID = call.RequestID
+	result.ExecutionID = call.ExecutionID
+	result.CallOrdinal = call.CallOrdinal
+	return result
+}
+
 func (s *memoryOutcomeStore) Get(_ context.Context, key string) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -54,8 +69,8 @@ func (s *memoryOutcomeStore) Create(_ context.Context, key string, value []byte)
 }
 
 func TestPersistCompletedOutcomeDispositionTable(t *testing.T) {
-	call := agentic.ToolCall{ID: "call", Name: "write", LoopID: "loop", TraceID: "trace"}
-	result := agentic.ToolResult{CallID: call.ID, Name: call.Name, Content: "winner"}
+	call := correlatedOutcomeTestCall(agentic.ToolCall{ID: "call", Name: "write", LoopID: "loop", TraceID: "trace"})
+	result := correlatedOutcomeTestResult(call, agentic.ToolResult{Name: call.Name, Content: "winner"})
 
 	t.Run("new completion", func(t *testing.T) {
 		store := &memoryOutcomeStore{values: make(map[string][]byte)}
@@ -111,7 +126,7 @@ func (s *oversizeOnceStore) Create(ctx context.Context, key string, value []byte
 func TestPersistCompletedOutcomeConcurrentCASConverges(t *testing.T) {
 	store := &memoryOutcomeStore{values: make(map[string][]byte)}
 	component := &Component{outcomes: store, logger: slog.Default()}
-	call := agentic.ToolCall{ID: "same-call", Name: "write"}
+	call := correlatedOutcomeTestCall(agentic.ToolCall{ID: "same-call", Name: "write"})
 	const replicas = 16
 	results := make(chan agentic.ToolResult, replicas)
 	errs := make(chan error, replicas)
@@ -120,7 +135,7 @@ func TestPersistCompletedOutcomeConcurrentCASConverges(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			candidate := agentic.ToolResult{CallID: call.ID, Name: call.Name, Content: string(rune('a' + i))}
+			candidate := correlatedOutcomeTestResult(call, agentic.ToolResult{Name: call.Name, Content: string(rune('a' + i))})
 			winner, _, err := component.persistCompletedOutcome(context.Background(), call, candidate, outcomePathNew, false, true)
 			errs <- err
 			results <- winner.Result
@@ -153,7 +168,7 @@ func (panicExecutor) ListTools() []agentic.ToolDefinition {
 func TestExecuteWithPanicRecoveryProducesCompactInternalResult(t *testing.T) {
 	component := &Component{registry: NewExecutorRegistry(), logger: slog.Default(), config: DefaultConfig()}
 	require.NoError(t, component.registry.RegisterTool("panic", panicExecutor{}))
-	call := agentic.ToolCall{ID: "call", Name: "panic", LoopID: "loop", TraceID: "trace"}
+	call := correlatedOutcomeTestCall(agentic.ToolCall{ID: "call", Name: "panic", LoopID: "loop", TraceID: "trace"})
 	result, err := component.executeWithPanicRecovery(context.Background(), call)
 	require.NoError(t, err)
 	assert.Equal(t, agentic.ToolErrorInternal, result.ErrorKind)
@@ -197,13 +212,13 @@ func TestApprovalGateSameIDRedispatchExecutesOnceAndPublishesTerminalResult(t *t
 		return data
 	}
 
-	initial := agentic.ToolCall{ID: "same-id", Name: "count", LoopID: "loop", TraceID: "trace"}
+	initial := correlatedOutcomeTestCall(agentic.ToolCall{ID: "same-id", Name: "count", LoopID: "loop", TraceID: "trace"})
 	require.NoError(t, component.handleToolCall(context.Background(), wireCall(initial)))
 	assert.Equal(t, int32(0), executor.calls.Load())
 	assert.Empty(t, store.values, "approval pause must not become a COMPLETED outcome")
 	require.Len(t, publications, 1)
 	assert.True(t, agentic.IsApprovalRequired(publications[0].result.Error))
-	assert.Equal(t, toolApprovalRequiredMessageID(initial.ID), publications[0].msgID)
+	assert.Equal(t, toolApprovalRequiredMessageID(initial.ExecutionID), publications[0].msgID)
 
 	approved := initial
 	approved.ApprovedBy = "alice@example.com"
@@ -211,7 +226,7 @@ func TestApprovalGateSameIDRedispatchExecutesOnceAndPublishesTerminalResult(t *t
 	assert.Equal(t, int32(1), executor.calls.Load())
 	require.Len(t, publications, 2)
 	assert.Equal(t, "executed", publications[1].result.Content)
-	assert.Equal(t, toolResultMessageID(initial.ID), publications[1].msgID)
+	assert.Equal(t, toolResultMessageID(initial.ExecutionID), publications[1].msgID)
 	assert.NotEqual(t, publications[0].msgID, publications[1].msgID,
 		"approval pause dedup identity must not suppress the terminal result")
 	assert.Len(t, store.values, 1, "only the terminal approved result is durable")
@@ -242,7 +257,7 @@ func TestHandleToolCallPublishFailureReplaysWithoutExecutor(t *testing.T) {
 		}
 		return nil
 	}
-	call := agentic.ToolCall{ID: "durable-replay", Name: "count", LoopID: "loop", TraceID: "trace"}
+	call := correlatedOutcomeTestCall(agentic.ToolCall{ID: "durable-replay", Name: "count", LoopID: "loop", TraceID: "trace"})
 	base := message.NewBaseMessage(call.Schema(), &call, "test")
 	data, err := json.Marshal(base)
 	require.NoError(t, err)
@@ -254,7 +269,7 @@ func TestHandleToolCallPublishFailureReplaysWithoutExecutor(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), executor.calls.Load(), "durable replay must not invoke executor")
 	assert.Equal(t, int32(2), publishes.Load())
-	assert.Equal(t, toolResultMessageID(call.ID), observedMsgID)
+	assert.Equal(t, toolResultMessageID(call.ExecutionID), observedMsgID)
 }
 
 func TestHandleToolCallPermanentDispositionTable(t *testing.T) {
@@ -267,12 +282,12 @@ func TestHandleToolCallPermanentDispositionTable(t *testing.T) {
 
 	t.Run("same key mismatched call", func(t *testing.T) {
 		store := &memoryOutcomeStore{values: make(map[string][]byte)}
-		original := agentic.ToolCall{ID: "collision", Name: "original"}
-		record, err := newCompletedOutcome(original, agentic.ToolResult{CallID: original.ID, Name: original.Name})
+		original := correlatedOutcomeTestCall(agentic.ToolCall{ID: "collision", Name: "original"})
+		record, err := newCompletedOutcome(original, correlatedOutcomeTestResult(original, agentic.ToolResult{Name: original.Name}))
 		require.NoError(t, err)
 		data, err := marshalCompletedOutcome(record)
 		require.NoError(t, err)
-		store.values[toolCallOutcomeKey(original.ID)] = data
+		store.values[toolCallOutcomeKey(original.ExecutionID)] = data
 
 		component := &Component{
 			config: DefaultConfig(), registry: NewExecutorRegistry(), decoder: payloadbuiltins.NewTestDecoder(t),
@@ -310,7 +325,7 @@ func TestHandleToolDeliveryDecisionMatrix(t *testing.T) {
 			config: DefaultConfig(), registry: NewExecutorRegistry(), decoder: payloadbuiltins.NewTestDecoder(t),
 			logger: slog.Default(), outcomes: &memoryOutcomeStore{values: make(map[string][]byte), getErr: errors.New("read unavailable")},
 		}
-		decision, err := component.handleToolDelivery(t.Context(), wire(t, agentic.ToolCall{ID: "read", Name: "count"}))
+		decision, err := component.handleToolDelivery(t.Context(), wire(t, correlatedOutcomeTestCall(agentic.ToolCall{ID: "read", Name: "count"})))
 		require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
 		require.Error(t, err)
 	})
@@ -322,7 +337,7 @@ func TestHandleToolDeliveryDecisionMatrix(t *testing.T) {
 			logger: slog.Default(), outcomes: &memoryOutcomeStore{values: make(map[string][]byte), createErr: errors.New("create unknown")},
 		}
 		require.NoError(t, component.registry.RegisterTool("count", executor))
-		decision, err := component.handleToolDelivery(t.Context(), wire(t, agentic.ToolCall{ID: "effect", Name: "count"}))
+		decision, err := component.handleToolDelivery(t.Context(), wire(t, correlatedOutcomeTestCall(agentic.ToolCall{ID: "effect", Name: "count"})))
 		require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
 		require.True(t, isAmbiguousOutcomeCreateError(err))
 		require.Equal(t, int32(1), executor.calls.Load())
@@ -337,7 +352,7 @@ func TestHandleToolDeliveryDecisionMatrix(t *testing.T) {
 		}
 		require.NoError(t, component.registry.RegisterTool("count", executor))
 		component.publishStream = func(context.Context, string, []byte, string) error { return nil }
-		data := wire(t, agentic.ToolCall{ID: "replay", Name: "count"})
+		data := wire(t, correlatedOutcomeTestCall(agentic.ToolCall{ID: "replay", Name: "count"}))
 		decision, err := component.handleToolDelivery(t.Context(), data)
 		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
 		require.NoError(t, err)
@@ -350,14 +365,14 @@ func TestHandleToolDeliveryDecisionMatrix(t *testing.T) {
 }
 
 func TestToolCallOutcomeIdentityV1(t *testing.T) {
-	call := agentic.ToolCall{
+	call := correlatedOutcomeTestCall(agentic.ToolCall{
 		ID: "call-123", Name: "lookup", LoopID: "loop-1", TraceID: "trace-1", ApprovedBy: "operator",
 		Arguments: map[string]any{"z": float64(2), "a": map[string]any{"y": true, "x": "v"}},
 		Metadata:  map[string]any{"b": []any{"x", float64(1)}, "a": "first"},
-	}
+	})
 
-	key := toolCallOutcomeKey(call.ID)
-	assert.Equal(t, "v1."+strings.TrimPrefix(toolResultMessageID(call.ID), "tool-result/v1/"), key)
+	key := toolCallOutcomeKey(call.ExecutionID)
+	assert.Equal(t, "v1."+strings.TrimPrefix(toolResultMessageID(call.ExecutionID), "tool-result/v1/"), key)
 	assert.NotContains(t, key, "=")
 	assert.Equal(t, strings.ToLower(key), key)
 
@@ -378,6 +393,9 @@ func TestToolCallOutcomeIdentityV1(t *testing.T) {
 		func(c *agentic.ToolCall) { c.Metadata = map[string]any{"different": true} },
 		func(c *agentic.ToolCall) { c.LoopID += "x" },
 		func(c *agentic.ToolCall) { c.TraceID += "x" },
+		func(c *agentic.ToolCall) { c.RequestID += "x" },
+		func(c *agentic.ToolCall) { c.ExecutionID += "x" },
+		func(c *agentic.ToolCall) { c.CallOrdinal++ },
 		func(c *agentic.ToolCall) { c.ApprovedBy += "x" },
 	}
 	for i, mutate := range mutations {
@@ -390,8 +408,8 @@ func TestToolCallOutcomeIdentityV1(t *testing.T) {
 }
 
 func TestDecodeCompletedOutcomeValidatesImmutableIdentity(t *testing.T) {
-	call := agentic.ToolCall{ID: "same", Name: "read", Arguments: map[string]any{"x": "y"}}
-	result := agentic.ToolResult{CallID: call.ID, Name: call.Name, Content: "authoritative"}
+	call := correlatedOutcomeTestCall(agentic.ToolCall{ID: "same", Name: "read", Arguments: map[string]any{"x": "y"}})
+	result := correlatedOutcomeTestResult(call, agentic.ToolResult{Name: call.Name, Content: "authoritative"})
 	record, err := newCompletedOutcome(call, result)
 	require.NoError(t, err)
 	data, err := marshalCompletedOutcome(record)
@@ -406,9 +424,15 @@ func TestDecodeCompletedOutcomeValidatesImmutableIdentity(t *testing.T) {
 		mutate func(*completedOutcome)
 	}{
 		{"version", func(o *completedOutcome) { o.Version = "v2" }},
+		{"execution ID", func(o *completedOutcome) { o.ExecutionID = "collision" }},
+		{"request ID", func(o *completedOutcome) { o.RequestID = "collision" }},
 		{"call ID", func(o *completedOutcome) { o.CallID = "collision" }},
+		{"call ordinal", func(o *completedOutcome) { o.CallOrdinal++ }},
 		{"fingerprint", func(o *completedOutcome) { o.Fingerprint = "bad" }},
 		{"result correlation", func(o *completedOutcome) { o.Result.CallID = "other" }},
+		{"result execution ID", func(o *completedOutcome) { o.Result.ExecutionID = "other" }},
+		{"result request ID", func(o *completedOutcome) { o.Result.RequestID = "other" }},
+		{"result call ordinal", func(o *completedOutcome) { o.Result.CallOrdinal++ }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -428,7 +452,7 @@ func TestDecodeCompletedOutcomeValidatesImmutableIdentity(t *testing.T) {
 }
 
 func TestCompactTooLargeResultDropsSensitiveAndSizeFields(t *testing.T) {
-	call := agentic.ToolCall{ID: "call", Name: "huge", LoopID: "loop", TraceID: "trace"}
+	call := correlatedOutcomeTestCall(agentic.ToolCall{ID: "call", Name: "huge", LoopID: "loop", TraceID: "trace"})
 	original := agentic.ToolResult{
 		CallID: call.ID, Name: call.Name, Content: "SECRET-CONTENT", Error: "SECRET-ERROR",
 		Metadata: map[string]any{"size": 123, "nested": "SECRET"}, LoopID: call.LoopID, TraceID: call.TraceID,
@@ -437,6 +461,9 @@ func TestCompactTooLargeResultDropsSensitiveAndSizeFields(t *testing.T) {
 	assert.Equal(t, call.ID, compact.CallID)
 	assert.Equal(t, call.LoopID, compact.LoopID)
 	assert.Equal(t, call.TraceID, compact.TraceID)
+	assert.Equal(t, call.RequestID, compact.RequestID)
+	assert.Equal(t, call.ExecutionID, compact.ExecutionID)
+	assert.Equal(t, call.CallOrdinal, compact.CallOrdinal)
 	assert.Equal(t, agentic.ToolErrorInternal, compact.ErrorKind)
 	assert.Equal(t, "too_large", compact.Error)
 	assert.Empty(t, compact.Content)
@@ -461,8 +488,8 @@ func TestObservedOversizeUsesTypedErrorsOnly(t *testing.T) {
 }
 
 func TestPublicationOversizeUsesOneCompactSurrogateWithoutReplacingAuthority(t *testing.T) {
-	call := agentic.ToolCall{ID: "large-call", Name: "large", LoopID: "loop", TraceID: "trace"}
-	full := agentic.ToolResult{CallID: call.ID, Name: call.Name, Content: strings.Repeat("x", 1024), LoopID: call.LoopID, TraceID: call.TraceID}
+	call := correlatedOutcomeTestCall(agentic.ToolCall{ID: "large-call", Name: "large", LoopID: "loop", TraceID: "trace"})
+	full := correlatedOutcomeTestResult(call, agentic.ToolResult{Name: call.Name, Content: strings.Repeat("x", 1024), LoopID: call.LoopID, TraceID: call.TraceID})
 	decoder := payloadbuiltins.NewTestDecoder(t)
 	component := &Component{config: DefaultConfig(), logger: slog.Default()}
 	var attempts []agentic.ToolResult
@@ -489,7 +516,10 @@ func TestPublicationOversizeUsesOneCompactSurrogateWithoutReplacingAuthority(t *
 	assert.Equal(t, call.ID, attempts[1].CallID)
 	assert.Equal(t, call.LoopID, attempts[1].LoopID)
 	assert.Equal(t, call.TraceID, attempts[1].TraceID)
-	assert.Equal(t, []string{toolResultMessageID(call.ID), toolResultMessageID(call.ID)}, msgIDs)
+	assert.Equal(t, call.RequestID, attempts[1].RequestID)
+	assert.Equal(t, call.ExecutionID, attempts[1].ExecutionID)
+	assert.Equal(t, call.CallOrdinal, attempts[1].CallOrdinal)
+	assert.Equal(t, []string{toolResultMessageID(call.ExecutionID), toolResultMessageID(call.ExecutionID)}, msgIDs)
 
 	component.publishStream = func(context.Context, string, []byte, string) error { return nats.ErrMaxPayload }
 	err := component.publishCompletedResult(context.Background(), call, full, outcomePathReplay)
