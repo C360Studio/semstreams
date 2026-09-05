@@ -11,8 +11,8 @@ Premises measured on `main@797d294a`: `processor/agentic-tools/executors/graph_q
 `natsclient/kv.go:522-547,558-598`, `graph/kvcatalog.go:261`, `pkg/types/entity_id.go:160-164`,
 `release/tier1-packages.txt:79`, `test/e2e/scenarios/agentic/approval_signal.go:36-40,77-88`.
 
-Sequencing: sections 3–6 start after Codex's #759/#1146 stack (PRs #1156/#1159/#1141) lands; the file list in
-`proposal.md` avoids every file those PRs hold, and the delta is ADDED-only.
+Sequencing: 1.6 governs when sections 3–6 start; the implementation's file set intersects none of the 176 unique
+paths Codex's #759/#1146 stack (PRs #1156/#1159/#1141) holds, and the delta is ADDED-only.
 
 ## 1. Claim and design
 
@@ -27,10 +27,17 @@ Sequencing: sections 3–6 start after Codex's #759/#1146 stack (PRs #1156/#1159
       verifier grammar (#1256), so the malformed/unparsed counts are grammar, not drift; the 5 MOVED rows in
       `message/triple.go` (`:56→58`, `:61→63`, `:70→74`) are real pin errors at the explorer's own base and confirm the
       reviewer's HIGH. Re-pin the rows the design rests on; do not treat the verifier's exit as a gate here.
-- [ ] 1.4 Owner INVENTORY PASS on the PR; owner rulings on `proposal.md` questions 1–5 recorded on #1261.
+- [x] 1.3b Architect amendment folding the review and the owner note (#1261, 2026-09-05): both BLOCKING rows closed
+      (`graph.query.summary` as the same-class owner; the budget classified as a model-facing cap distinct from spec
+      `:467`), pins fixed, six rows added; `design.md` gained § Budget, § Break classification and sequencing, and § Tool-preference premise;
+      owner questions renumbered 1–11.
+- [ ] 1.3c Re-review of the amended inventory (`semstreams-reviewer`) recorded on PR #1262.
+- [ ] 1.4 Owner INVENTORY PASS on the PR; owner rulings on `proposal.md` questions 1–11 recorded on #1261.
 - [ ] 1.5 Owner places the milestone (recommendation: `v1.0.0-beta.165`).
-- [ ] 1.6 HOLD — sections 3–6 do not start until (a) Codex's #759/#1146 stack (PRs #1156/#1159/#1141) has landed
-      and (b) 1.4 is recorded. Re-check the file list in `proposal.md` against the landed stack before 3.1.
+- [ ] 1.6 HOLD — sections 3–6 do not start until (a) 1.4 is recorded and (b) either Codex's #759/#1146 stack
+      (PRs #1156/#1159/#1141) has landed or owner question 11 relaxes this to archive-order coordination. Re-check
+      the file list against the PAGINATED Codex file lists (`gh api repos/:owner/:repo/pulls/N/files --paginate`)
+      before 3.1.
 
 ## 2. Spec delta
 

@@ -98,6 +98,125 @@ the next record would exceed the byte budget; the frontier is drained only throu
 inventory addition 6). The incoming home is `graph.query.relationships` over INCOMING_INDEX. This design corrects the
 description; enum narrowing is the owner's call.
 
+## Budget: a model-facing content cap, not the transport bound
+
+Two bound classes exist on this component and the delta names which one `query_neighbors` joins:
+
+| Class | Where | Who owns the number | How it is observed |
+|---|---|---|---|
+| Transport bound | `openspec/specs/agentic-tools/spec.md:467-475` — the component attempts the full record, and a typed oversize rejection yields one compact `too_large` authority; `:470` "SHALL NOT inspect configured payload limits" | NATS (`max_payload`); the framework never reads it | by attempting the real Create |
+| Model-facing content cap | `executors/bash.go:36` `bashMaxOutputBytes = 100 * 1024`; `executors/httprequest.go:23` `httpMaxTextSize = 20000` | the executor, as a constant | by measuring the real bytes of real content while assembling |
+
+The neighbors budget is the second class. It is not a read of a framework-owned limit and does not predict the
+transport outcome: assembly fetches real records, counts their real bytes, and stops before the next one would cross
+the cap — `truncated`, `frontier_remaining`, `HintTooLarge` report what was observed. A result under the executor cap
+that still trips the transport bound takes spec `:467`'s path unchanged; the two compose, they do not overlap. The
+origin case in `docs/concepts/24-tool-result-hints-and-pagination.md:8-9` (a 102KB graph result retried three times by
+mid-tier models) is this class: the failure was model-facing, not transport. Neither existing cap is specced; the
+delta's `query_neighbors` requirement is the first to state the class. Adopter seam: nothing to configure; owner
+question 1 is the value only.
+
+## Break classification and sequencing (owner obligation 1, #1261 note 2026-09-05)
+
+**Go surface — additive.** `processor/agentic-tools/executors` is Tier 1 (`release/tier1-packages.txt:79`). The change
+adds one exported optional interface (`KVKeyLister`) and changes no existing exported symbol; `KVGetter`,
+`NewGraphQueryExecutor`, and `ListTools` are unchanged. ADR-106 (`docs/adr/106-…md:81`): a compatible addition to
+Tier 1 does not reset RC-4; `task api:compat:report` is in the gates (`tasks.md` 6.1) so this is measured, not read
+from a `!` marker (`:114-115`). No payload, schema, subject, or KV key changes.
+
+**Model-facing result shapes — three tools change what the model reads.** The consumer is the model via
+`buildToolMessages`; the shapes are JSON inside `ToolResult.Result`, not a Go type.
+
+| Tool | Additive | Behaviour that flips | Who reads the old shape today |
+|---|---|---|---|
+| `query_by_type` | `entity_ids`, `pattern`, `matched`, `truncated`, hints | stub `{entities:[], note, suggested_ids}` → served listing; a non-segment `entity_type` → `invalid_args` where the stub accepted anything | nothing pins the stub shape (0 hits for `suggested_ids` outside `graph_query.go`); the agentic e2e approval walk asserts `status="success"` on the executions metric with pinned args `{"entity_type":"temperature","limit":5}` (`test/e2e/mock/cmd/main.go:39`; `test/e2e/scenarios/agentic/approval_signal.go:36-40,77-88`) — a canonical one-token segment the served tool accepts; the tier's temperature entity matches it |
+| `query_relationships` | `filter_registered`, `predicates_present`, `HintEmpty` | rows are `IsRelationship()` triples only — literal-object triples reported as relationships today (`:591-617`) disappear; a malformed filter → `invalid_args` where today `count: 0` | the model; prompt text names the tool, never a result key (`processor/agentic-loop/prompt/assembler.go:142`; `configs/personas/fragments/ops/00-identity.md:9`; `configs/flows/ops-agent.json:316`) |
+| `query_neighbors` | `unresolved`, `truncated`, `frontier_remaining`, hints | `filter_type` filters (today ignored, `:442`) — a caller passing it gets a smaller set, possibly empty; the budget truncates where today unbounded; a transient fetch error fails the call where today it is skipped (`:428-431`) | the model; same prompt-text finding |
+| `query_entity`, `query_entities` | — | none | — |
+
+No sister calls the executor directly (inventory addition 8); semteams routes all seven graph tools to ops roles only
+(`semteams/docs/adr/041-mvp-role-compression-and-graph-as-substrate.md:874-890`, read-only); semsource registers
+none of them (`semsource/processor/mcp-gateway/component.go:119-122`, read-only). The served `query_by_type` is
+reachable in the agentic tier through the existing adapter: `graphQueryKVAdapter.bind` returns a
+`graph.CatalogReader` (`register_graph_query.go:65-71`), which carries `ListKeysFiltered` (`graph/kvcatalog.go:261`),
+so the loud no-lister path (`TestQueryByType_WithoutKeyListerIsLoud`) cannot fire there.
+
+**Classification (owner question 9).** Recommend `feat(agentic-tools):` without `!`: the Go surface is compatible,
+nothing on the wire changes, and every flipped behaviour is a tool answering truthfully where it answered wrong or
+nothing. Strongest case against: the three flips (relationship rows filtered, `filter_type` honoured, the budget)
+each shrink a result set a deployment may be reading today, and the owner's note reads the change as a break. The
+decision changes the label and the migration doc's prominence, not the gate: `task e2e:agentic` is green before merge
+either way (`tasks.md` 6.2), and the migration doc (owner question 5) carries before/after JSON for all three flips.
+
+**Sequencing (owner question 11).** Measured with pagination (`gh api repos/:owner/:repo/pulls/N/files --paginate`;
+`gh pr view --json files` caps at 100 and PR #1159 has 133): #1156 holds 54 paths, #1159 133, #1141 7 — 176 unique.
+The implementation's file set (`executors/graph_query.go`, `executors/register_graph_query.go`, their `_test.go`
+siblings, `docs/operations/migration-graph-read-tools.md`, this change directory) intersects none of them. Two
+shared things remain, neither a file conflict:
+
+- `openspec/specs/agentic-tools/spec.md` — Codex's `agentic-loop-restart-safety` delta MODIFIES `:435/:467/:487`;
+  this delta is ADDED-only. Whichever archives second rebases its delta on the other's spec text: archive-order
+  coordination.
+- the agentic e2e tier — #1156 holds `test/e2e/scenarios/agentic/scenario.go` and `approval_signal_test.go`; this
+  change edits no file there but changes what the approval walk observes (stub success → served success). Whichever
+  lands second runs `task e2e:agentic` on its rebase; that is the same gate both already carry.
+
+Recommend relaxing the HOLD to that coordination: the hold was file-list based and the measured lists do not
+intersect. Against: two ADDED deltas landing on one spec and one shared e2e tier in the same window. Milestone is
+owner question 10 (`v1.0.0-beta.165` recommended, landed first in it; an own tag ships the shapes sooner).
+
+## Tool-preference premise (owner obligation 2, #1261 note 2026-09-05)
+
+**The failure, recorded.** Agents preferred `grep`, `bash`, and other training-corpus tools over bespoke graph tools
+(owner note on #1261, verbatim in the docket comment); the framework's own record of the related shape is
+ADR-036 `docs/adr/036-agent-private-observable-state.md:236-244` — semteams smoke #7, "small models drown when the
+tool surface widens", persona-level opt-out as the lever. This design changes what a called tool returns, not whether
+the model calls it. Stated plainly: enriched results do not fix tool preference; they remove the second failure (a
+called tool that answers wrong) so the first (a tool not called) is the only one left to measure. `research_graph`
+exists because of the first failure; the served `query_by_type` gives a restricted agent a second entry beside it.
+
+**Where surface restriction lives today (measured; three seams, none touched by this change).**
+
+| Seam | Pins | Semantics |
+|---|---|---|
+| Component allowlist | `processor/agentic-tools/config.go:19` `AllowedTools` (nil/empty allows all); `component.go:988-994` `isToolAllowed` → `not_allowed`; `metrics.go:156` `recordToolFiltered` | deployment-wide ceiling |
+| Per-loop advertised set | `processor/agentic-dispatch/config.go:28` `default_tools` → `task.Tools` → `processor/agentic-loop/handlers.go:990-1001` (`task.Tools != nil` wins, an explicit empty slice means no tools; nil falls back to discovery) → `CacheTools` → stamped as `agent.tools.advertised` (`agentic/exec_policy.go:63`; `handlers.go:1684-1689`) → enforced at `component.go:974-984` `admitToolCall` (key present-but-empty fails closed) | per-role set, the lever ADR-036 names |
+| Rule-level governance | `docs/operations/17-tool-call-governance.md:161-170` (`auto-approve-readonly-tools` over `agent.toolcall.proposed.>`), `:261` (role-based allowlist with caller context, ADR-041 `when`) | per-call verdicts |
+
+In tree, `configs/agentic.json:468-469` already runs the cited experiment's condition — `allowed_tools:
+["query_entity","query_by_type"]`, graph-read tools only — and `configs/flows/ops-agent.json:313-328` is the ops
+role's fourteen-tool allowlist with no `bash`. Reproducing the experiment's restriction needs no framework change; it
+is flow and persona configuration today.
+
+**Is the experiment's `find_nodes` a gap in the direct surface?** Its roster is four tools (`code/graph.py`, read
+from the cited repository: `find_nodes` `:47-65`, `get_node` `:67`, `traverse` `:73`, `describe_edges` `:98`).
+`find_nodes` is a case-insensitive substring over `json.dumps(props)` and the node id, optional exact-type filter,
+sorted by id, capped — a grep WITHOUT regex. Mapping to the direct surface after this change:
+
+| Experiment | Direct surface | Status |
+|---|---|---|
+| `get_node` | `query_entity` | covered |
+| `traverse` | `query_neighbors`, `query_relationships` | covered; truthful after this change |
+| `describe_edges` | `predicates_present` on `query_relationships` (entity-scoped) | covered by this change |
+| `find_nodes`, id half (`needle in node_id.lower()`) | served `query_by_type` (type segment) | partly covered by this change |
+| `find_nodes`, props half (substring over property values) | none — `byName` is exact over NAME_INDEX and fusionnats-only (`processor/graph-query/query.go:64`); `searchGraph`/`localSearch` are semantic/statistical and tier-dependent (`:63,65`); `prefix` needs leading segments (`:56`); `summary` is a type distribution (`:62`) | **gap** |
+
+What governs filling it: `openspec/specs/agentic-tools/spec.md:267-291` — the framework SHALL NOT supply
+`search_graph`/`summarize_graph`; an application MAY register a component-local executor through the general
+extension seam, subject to the allowlist, per-loop advertised set, and approval; the framework adds no alias or
+special behaviour. The live precedent is semsource's `graph_search` (`mcp-gateway/component.go:112-125`, read-only).
+Owner question 8 recommends no framework substring tool (an O(N) scan over every record's values; ADR-036's width
+cost; re-opens `:267-291`); the strongest case against is that the experiment's whole condition rested on it. A
+framework-owned fill re-opens the spec requirement, which is an owner ruling, not a design choice.
+
+**What `research_graph` remains for.** `frameworkcapabilities/graphresearch/executor.go:145-156`: `Mutating` effect
+(it spawns a loop and writes the trigger key), asynchronous, "classifier → route → multi-tier subqueries →
+sufficiency → synthesis", advertised "for non-trivial questions where you don't already know the entities or
+predicates to query". After this change the split is: the direct tools answer "what is here, and what is absent, by
+ID or by type" synchronously and truthfully; `research_graph` answers "what is this about" when the model holds
+neither an ID nor a type. Its description's "for direct lookups by ID, use query_entity" stays true and could gain
+"by type, use query_by_type"; that file is outside this change's file set — recorded as a residual, not a task.
+
 ## Test plan
 
 Untagged unless marked; fixtures built with `graph.MarshalEntityState`, never hand-written maps (the existing

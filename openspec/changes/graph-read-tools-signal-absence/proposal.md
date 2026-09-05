@@ -2,13 +2,15 @@
 
 Closes #1261. Claim: PR on `claude/gh1261-graph-read-tools`, own worktree. Premises pinned at `main@797d294a` in
 `inventory-verification.md`. **Design status: DRAFT, conditional on the owner's INVENTORY PASS over
-`inventory-verification.md` and on the six owner questions below. Nothing here is approved.** Milestone: none yet —
+`inventory-verification.md` and on the eleven owner questions below. Nothing here is approved.** Milestone: none yet —
 owner places (architect recommendation: `v1.0.0-beta.165`, beside #1212, the same ADR-102 type-segment territory; not
 beta.163, the exit-criteria lane).
 
-**Sequencing:** implementation starts after Codex's #759/#1146 stack (PRs #1156/#1159/#1141) lands. The file list
-below avoids every file those PRs hold, and the delta is ADDED-only because Codex's pending `agentic-tools` delta
-MODIFIES `openspec/specs/agentic-tools/spec.md:435`, `:467`, and `:487`.
+**Sequencing:** implementation is on HOLD behind Codex's #759/#1146 stack (PRs #1156/#1159/#1141) until owner question 11
+is ruled; the implementation's file set intersects none of the 176 unique paths those PRs hold (54 + 133 + 7, paginated — `gh pr view
+--json files` caps at 100 and PR #1159 has 133), and the delta is ADDED-only because Codex's pending `agentic-tools`
+delta MODIFIES `openspec/specs/agentic-tools/spec.md:435`, `:467`, and `:487`. The owner's 2026-09-05 note (on #1261)
+reads this as a break wanted sooner; `design.md` § Break classification answers it.
 
 ## Why
 
@@ -19,7 +21,7 @@ segment, and never rejoined them. Measured at `797d294a`:
 - a filtered `query_relationships` returns `count: 0` for unregistered, absent, typo'd, and present-as-property alike
   (`:595`) — the blind spot the Cekikj experiment counted 112 wasted calls on;
 - every triple is reported as a relationship regardless of `message.Triple.IsRelationship()` (`:591-617`;
-  `message/triple.go:135-147` unused by this file);
+  `message/triple.go:133-147` unused by this file);
 - `query_by_type` is a stub (`:531-540`) — advertised, never served (`class:advertised-absent`, the #1239/#1255 shape);
 - `filter_type` on `query_neighbors` never filters: it compares a `type` key the authority never writes (`:442`) — a
   fifth advertised-absent found by the verification pass, not in the issue's four;
@@ -84,17 +86,38 @@ repo calls the executor directly (addition 8); semdev and semteams reach it thro
 
 ## Owner questions (numbered; each with the recommendation and the strongest case against)
 
-1. **Neighbors budget value.** Recommend reusing the package's 100KB (`executors/bash.go:36`) with a comment naming the
-   sibling. Against: concepts/24's origin case overflowed at 102KB; 64KB is defensible. Value only; the mechanism is not
-   in question.
+Renumbered 2026-09-05 after the independent inventory review and the owner note on #1261. Rulings are recorded on
+#1261; the docket comment there mirrors this list.
+
+1. **Neighbors budget value.** Recommend 100KB (`executors/bash.go:36`, the package precedent) with a comment naming the
+   sibling. Against: `docs/concepts/24`'s failure case was 102KB; 64KB is defensible. Value only — the mechanism (a
+   model-facing content cap, distinct from the transport bound spec `:467` governs) is stated in `design.md`.
 2. **`query_by_type` returns identities only** (hydrate via `query_entities`). Recommend yes. Against: one extra call
    for a small model; but hydrating 100 records is the #839 payload class.
 3. **Fold in the `filter_type` and `IsRelationship` fixes** (inventory additions, not in the issue's four). Recommend
-   yes: both are required for `unresolved` to be truthful (literal objects would otherwise all report as unresolved).
-   Against: scope growth on a design pass; the owner may strike them.
-4. **`direction=incoming|both` is structurally empty from the record** (addition 6). Recommend: correct the description
-   now, record the residual in `design.md`, and the owner decides whether enum narrowing is filed as its own
-   `class:advertised-absent` issue (the #1239 shape). Against: shipping a knowingly empty enum value.
-5. **Migration note home.** `docs/operations/migration-beta162-to-beta163.md` is in PR #1159's file list; recommend a
-   topic-named `docs/operations/migration-graph-read-tools.md` (precedent: `migration-gated-dag-semantic-settlement.md`).
-6. **No new hint value is needed** — stated for the record, not asked.
+   yes: both are required for `unresolved` to be truthful. Against: scope beyond the issue's four.
+4. **`direction=incoming|both` is structurally empty from the record** (records are own-subject only). Recommend:
+   truthful description now, residual recorded, enum narrowing the owner's own `class:advertised-absent` issue.
+   Against: shipping a knowingly empty enum value.
+5. **Migration doc home.** Recommend `docs/operations/migration-graph-read-tools.md` (precedent
+   `migration-gated-dag-semantic-settlement.md`); `migration-beta162-to-beta163.md` is in PR #1159's file list.
+   Against: one more topic doc.
+6. **Accept three right-anchored tokens** (`*.*.<system>.<domain>.<type>.*`) so `graph.query.summary`'s
+   `system.domain.type` bucket key pastes into `entity_type` as-is. Recommend yes (one grammar, one more arity; the
+   delta's R2 gains one sentence and one scenario if accepted — not pre-applied). Against: a third arity for the model
+   to hold; summary is unreachable in tiers without graph-query.
+7. **"Which types exist" entry** (omitted `entity_type` → the summary operation's type distribution). Recommend **no**
+   in this change: a NATS dependency on graph-query, unreachable in the agentic tier, needs a typed adapter. Against:
+   cold-start type discovery then has no direct-surface home; `research_graph` is async and heavier.
+8. **A `find_nodes`-shaped substring tool.** Recommend **no**: re-opens `agentic-tools/spec.md:267-291`, ADR-036 width,
+   an O(N) value scan; app-local registration is the sanctioned route (semsource's `graph_search`). Against: the cited
+   experiment's whole condition rested on it.
+9. **Commit label.** Recommend `feat(agentic-tools):` without `!`, with `task e2e:agentic` green before merge regardless.
+   Against: the owner reads it as a break; the `filter_type` behaviour flip could shrink a deployment's neighbor set.
+10. **Milestone.** Recommend `v1.0.0-beta.165` ("close declaration-to-admission-to-runtime parity"), landed first in it.
+    Against: 29 open there; an own-break tag ships the shapes to semteams' ops role and semsource sooner.
+11. **Relax the HOLD** on the #759/#1146 stack to archive-order coordination on the shared spec file. Recommend yes:
+    the implementation's file set intersects none of the 176 unique Codex-held paths (paginated). Against: two ADDED deltas
+    landing on one spec and one shared e2e tier in the same window.
+
+Stated, not asked: no new hint value is needed; all four findings fit `HintEmpty`/`HintTooLarge` plus result fields.
