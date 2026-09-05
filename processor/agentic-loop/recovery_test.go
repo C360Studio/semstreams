@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/natsclient"
 )
 
 type contextCapturingGovernanceDispatcher struct {
@@ -25,8 +26,10 @@ func (d *contextCapturingGovernanceDispatcher) Propose(
 	return DispatcherResult{Approved: calls}, ctx.Err()
 }
 
-func (*contextCapturingGovernanceDispatcher) HandleVerdict(string, string, []byte) {}
-func (*contextCapturingGovernanceDispatcher) Mode() string                         { return "enforce" }
+func (*contextCapturingGovernanceDispatcher) HandleVerdict(string, string, []byte) (natsclient.DeliveryDecision, error) {
+	return natsclient.DeliveryDecisionAck, nil
+}
+func (*contextCapturingGovernanceDispatcher) Mode() string { return "enforce" }
 
 func TestHandleModelResponsePropagatesContextToGovernance(t *testing.T) {
 	handler := NewMessageHandler(DefaultConfig())
@@ -86,7 +89,10 @@ func TestSynthesizeToolFailure_StoresResultWithProvidedName(t *testing.T) {
 		t.Fatalf("CreateLoop: %v", err)
 	}
 
-	if err := handler.synthesizeToolFailure(loopID, "call-1", "delete_rule", "tool dispatch failed: boom"); err != nil {
+	call := agentic.ToolCall{
+		ID: "call-1", Name: "delete_rule", RequestID: "request-1", ExecutionID: "execution-1", CallOrdinal: 1,
+	}
+	if err := handler.synthesizeToolFailure(loopID, call, "tool dispatch failed: boom"); err != nil {
 		t.Fatalf("synthesizeToolFailure: %v", err)
 	}
 
@@ -100,6 +106,10 @@ func TestSynthesizeToolFailure_StoresResultWithProvidedName(t *testing.T) {
 	}
 	if got.Name != "delete_rule" {
 		t.Errorf("Name = %q, want %q", got.Name, "delete_rule")
+	}
+	if got.RequestID != call.RequestID || got.ExecutionID != call.ExecutionID || got.CallOrdinal != call.CallOrdinal {
+		t.Errorf("synthetic correlation = (%q, %q, %d), want (%q, %q, %d)",
+			got.RequestID, got.ExecutionID, got.CallOrdinal, call.RequestID, call.ExecutionID, call.CallOrdinal)
 	}
 	if !strings.Contains(got.Error, "boom") {
 		t.Errorf("Error = %q, want to contain %q", got.Error, "boom")
@@ -116,9 +126,10 @@ func TestSynthesizeToolFailure_FallsBackToTrackedName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateLoop: %v", err)
 	}
-	handler.loopManager.TrackToolName("call-1", "search_index")
+	handler.loopManager.TrackToolName("execution-1", "search_index")
 
-	if err := handler.synthesizeToolFailure(loopID, "call-1", "", "loop cancelled by signal"); err != nil {
+	call := agentic.ToolCall{ID: "call-1", ExecutionID: "execution-1"}
+	if err := handler.synthesizeToolFailure(loopID, call, "loop cancelled by signal"); err != nil {
 		t.Fatalf("synthesizeToolFailure: %v", err)
 	}
 
@@ -137,7 +148,7 @@ func TestSynthesizeToolFailure_UnknownToolFallback(t *testing.T) {
 		t.Fatalf("CreateLoop: %v", err)
 	}
 
-	if err := handler.synthesizeToolFailure(loopID, "call-orphan", "", "max iterations reached"); err != nil {
+	if err := handler.synthesizeToolFailure(loopID, agentic.ToolCall{ID: "call-orphan"}, "max iterations reached"); err != nil {
 		t.Fatalf("synthesizeToolFailure: %v", err)
 	}
 
@@ -158,16 +169,11 @@ func TestDrainPendingToolFailures_StoresSynthForEveryPending(t *testing.T) {
 		t.Fatalf("CreateLoop: %v", err)
 	}
 
-	// Set up three pending tools with tracked names.
-	for _, tc := range []struct{ id, name string }{
-		{"c1", "search_index"},
-		{"c2", "read_file"},
-		{"c3", "write_kv"},
-	} {
-		if err := handler.loopManager.AddPendingTool(loopID, tc.id); err != nil {
-			t.Fatalf("AddPendingTool %s: %v", tc.id, err)
+	// Terminal drainage owns only the provider IDs retained in pendingTools.
+	for _, callID := range []string{"c1", "c2", "c3"} {
+		if err := handler.loopManager.AddPendingTool(loopID, callID); err != nil {
+			t.Fatalf("AddPendingTool %s: %v", callID, err)
 		}
-		handler.loopManager.TrackToolName(tc.id, tc.name)
 	}
 
 	if pending := handler.loopManager.GetPendingTools(loopID); len(pending) != 3 {
@@ -189,21 +195,17 @@ func TestDrainPendingToolFailures_StoresSynthForEveryPending(t *testing.T) {
 	for _, r := range results {
 		got[r.CallID] = r
 	}
-	for _, tc := range []struct{ id, name string }{
-		{"c1", "search_index"},
-		{"c2", "read_file"},
-		{"c3", "write_kv"},
-	} {
-		r, ok := got[tc.id]
+	for _, callID := range []string{"c1", "c2", "c3"} {
+		r, ok := got[callID]
 		if !ok {
-			t.Errorf("missing synth-result for %s", tc.id)
+			t.Errorf("missing synth-result for %s", callID)
 			continue
 		}
-		if r.Name != tc.name {
-			t.Errorf("Name for %s = %q, want %q", tc.id, r.Name, tc.name)
+		if r.Name != "unknown_tool" {
+			t.Errorf("Name for %s = %q, want unknown_tool", callID, r.Name)
 		}
 		if !strings.Contains(r.Error, "loop cancelled by user-1") {
-			t.Errorf("Error for %s = %q, want to contain %q", tc.id, r.Error, "loop cancelled by user-1")
+			t.Errorf("Error for %s = %q, want to contain %q", callID, r.Error, "loop cancelled by user-1")
 		}
 	}
 }
@@ -570,7 +572,7 @@ func TestHandleToolCallResponse_AllDispatchesFail(t *testing.T) {
 	}
 
 	result := &HandlerResult{}
-	if err := handler.handleToolCallResponse(context.Background(), result, loopID, bad); err != nil {
+	if err := handler.handleToolCallResponse(context.Background(), result, loopID, "request-recovery", bad); err != nil {
 		t.Fatalf("handleToolCallResponse: %v", err)
 	}
 
@@ -578,6 +580,14 @@ func TestHandleToolCallResponse_AllDispatchesFail(t *testing.T) {
 	results := handler.loopManager.GetAndClearToolResults(loopID)
 	if len(results) != 3 {
 		t.Fatalf("synth results = %d, want 3", len(results))
+	}
+	for _, toolResult := range results {
+		if toolResult.RequestID != "request-recovery" || toolResult.ExecutionID == "" || toolResult.CallOrdinal == 0 {
+			t.Errorf("synthetic result lost framework correlation: %+v", toolResult)
+		}
+		if _, exists := handler.loopManager.GetLoopForToolCall(toolResult.ExecutionID); exists {
+			t.Errorf("execution route survived correlated synthetic drain: %s", toolResult.ExecutionID)
+		}
 	}
 	// No pending, no queued — caller can fire AllToolsComplete branch.
 	if !handler.loopManager.AllToolsComplete(loopID) {
@@ -599,10 +609,14 @@ func TestDispatchedFromQueue_AllFailingDispatchesReturnsFalseNoError(t *testing.
 		t.Fatalf("CreateLoop: %v", err)
 	}
 
-	handler.loopManager.QueueToolCalls(loopID, []agentic.ToolCall{
+	queued := []agentic.ToolCall{
 		{ID: "q1", Name: "tool_a", Arguments: map[string]any{"x": make(chan int)}},
 		{ID: "q2", Name: "tool_b", Arguments: map[string]any{"x": make(chan int)}},
-	})
+	}
+	if err := stampToolExecutionCorrelation("request-queued", queued); err != nil {
+		t.Fatalf("stampToolExecutionCorrelation: %v", err)
+	}
+	handler.loopManager.QueueToolCalls(loopID, queued)
 
 	result := &HandlerResult{}
 	dispatched, storeErr := handler.dispatchedFromQueue(result, loopID)
@@ -629,7 +643,7 @@ func TestDispatchedFromQueue_AllFailingDispatchesReturnsFalseNoError(t *testing.
 func TestSynthesizeToolFailure_LoopNotFoundReturnsError(t *testing.T) {
 	handler := NewMessageHandler(DefaultConfig())
 
-	err := handler.synthesizeToolFailure("ghost-loop", "call-1", "tool_x", "test reason")
+	err := handler.synthesizeToolFailure("ghost-loop", agentic.ToolCall{ID: "call-1", Name: "tool_x"}, "test reason")
 	if err == nil {
 		t.Fatal("expected error for non-existent loop, got nil")
 	}

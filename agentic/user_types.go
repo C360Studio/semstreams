@@ -3,7 +3,9 @@ package agentic
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/internal/looptoken"
@@ -11,15 +13,21 @@ import (
 	"github.com/c360studio/semstreams/pkg/types"
 )
 
-// Signal type constants for user control signals
+// Signal type constants for user control signals.
+//
+// Cancel is the whole vocabulary. Five other verbs were advertised here and
+// none was ever handled: the loop's signal consumer switches on cancel alone
+// (processor/agentic-loop/component.go), so every other verb reached the
+// default arm, logged a warning, and was ACKed as delivered — the caller saw
+// success and got nothing. pause/resume were deleted under #1239; approve,
+// reject, feedback and retry followed under the same ruling once the same
+// shape was found in them.
+//
+// Approval and rejection are real, on a different payload: ApprovalResponse
+// over agent.approval_response.* (ADR-039). They were never UserSignal verbs
+// in practice, only in this list.
 const (
-	SignalCancel   = "cancel"   // Stop execution immediately
-	SignalPause    = "pause"    // Pause at next checkpoint
-	SignalResume   = "resume"   // Continue paused loop
-	SignalApprove  = "approve"  // Approve pending result
-	SignalReject   = "reject"   // Reject with optional reason
-	SignalFeedback = "feedback" // Add feedback without decision
-	SignalRetry    = "retry"    // Retry failed loop
+	SignalCancel = "cancel" // Stop execution immediately
 )
 
 // UserMessage represents normalized input from any channel (CLI, Slack, Discord, web)
@@ -111,7 +119,7 @@ type Attachment struct {
 // UserSignal represents a control signal from user to affect loop execution
 type UserSignal struct {
 	SignalID    string    `json:"signal_id"`
-	Type        string    `json:"type"` // cancel, pause, resume, approve, reject, feedback, retry
+	Type        string    `json:"type"` // cancel
 	LoopID      string    `json:"loop_id"`
 	UserID      string    `json:"user_id"`
 	ChannelType string    `json:"channel_type"`
@@ -129,7 +137,11 @@ func (s UserSignal) Validate() error {
 		return fmt.Errorf("type required")
 	}
 	if !isValidSignalType(s.Type) {
-		return fmt.Errorf("type must be one of: cancel, pause, resume, approve, reject, feedback, retry")
+		if redirect, removed := removedSignalTypes[s.Type]; removed {
+			return fmt.Errorf("type %q was removed in #1239 (advertised but never implemented)%s; "+
+				"type must be one of: %s", s.Type, redirect, strings.Join(validSignalTypes, ", "))
+		}
+		return fmt.Errorf("type must be one of: %s", strings.Join(validSignalTypes, ", "))
 	}
 	if s.LoopID == "" {
 		return fmt.Errorf("loop_id required")
@@ -164,13 +176,39 @@ func (s *UserSignal) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*Alias)(s))
 }
 
+// validSignalTypes is the closed signal vocabulary. It is the single source
+// for both isValidSignalType and the refusal message: a rejected verb must
+// never be named as permitted by the error that rejects it. Six verbs were
+// removed under #1239 — every one advertised and never handled; see
+// removedSignalTypes below.
+var validSignalTypes = []string{
+	SignalCancel,
+}
+
+// removedSignalTypes are verbs this package once advertised and never
+// implemented. They are spelled literally because the constants are gone: the
+// point of naming them is to answer an adopter who is still sending one, at
+// the moment their signal is refused, rather than handing them a list that
+// silently omits what they sent. Every other invalid type gets the plain list
+// — an unconditional hint would be noise on unrelated refusals.
+var removedSignalTypes = map[string]string{
+	"pause":    "",
+	"resume":   "",
+	"feedback": "",
+	"retry":    "",
+	"approve":  approvalRedirect,
+	"reject":   approvalRedirect,
+}
+
+// approvalRedirect names the lane that actually carries an approval decision.
+// approve/reject are the only two removed verbs with a real destination, and
+// approve is the one an adopter is most likely to be holding — telling them it
+// was removed without saying where to go would leave the correctness fact
+// discoverable only from a migration document they have no reason to open.
+const approvalRedirect = " — publish an ApprovalResponse on agent.approval_response.* instead (ADR-039)"
+
 func isValidSignalType(t string) bool {
-	switch t {
-	case SignalCancel, SignalPause, SignalResume, SignalApprove, SignalReject, SignalFeedback, SignalRetry:
-		return true
-	default:
-		return false
-	}
+	return slices.Contains(validSignalTypes, t)
 }
 
 // Response type constants
@@ -261,20 +299,24 @@ type ResponseBlock struct {
 
 // ResponseAction represents an interactive action in a response
 type ResponseAction struct {
-	ID     string `json:"id"`
-	Type   string `json:"type"` // button, reaction
-	Label  string `json:"label"`
-	Signal string `json:"signal"` // signal to send if clicked
-	Style  string `json:"style"`  // primary, danger, secondary
+	ID    string `json:"id"`
+	Type  string `json:"type"` // button, reaction
+	Label string `json:"label"`
+	// Signal is the control signal to send if the action is clicked. The only
+	// signal the loop handles is "cancel"; an approval affordance must publish
+	// an ApprovalResponse on agent.approval_response.* instead (ADR-039).
+	Signal string `json:"signal"`
+	Style  string `json:"style"` // primary, danger, secondary
 }
 
 // TaskMessage represents a task to be executed by an agentic loop
 type TaskMessage struct {
-	LoopID string `json:"loop_id,omitempty"` // loop to continue, or empty for new
-	TaskID string `json:"task_id"`
-	Role   string `json:"role"`
-	Model  string `json:"model"`
-	Prompt string `json:"prompt"`
+	LoopID          string `json:"loop_id,omitempty"` // loop to continue, or empty for new
+	TaskID          string `json:"task_id"`
+	SourceMessageID string `json:"source_message_id,omitempty"`
+	Role            string `json:"role"`
+	Model           string `json:"model"`
+	Prompt          string `json:"prompt"`
 
 	// Workflow context (optional, set by workflow commands)
 	WorkflowSlug string `json:"workflow_slug,omitempty"` // e.g., "add-user-auth"

@@ -289,8 +289,12 @@ func TestIntegration_ApprovalFlow_Approve(t *testing.T) {
 
 	dispatchMu.Lock()
 	require.GreaterOrEqual(t, len(dispatchedCalls), 2)
+	original := dispatchedCalls[0]
 	approved := dispatchedCalls[1]
 	assert.Equal(t, callID, approved.ID, "re-dispatch should reuse the original call_id")
+	assert.Equal(t, original.RequestID, approved.RequestID, "re-dispatch must preserve request identity")
+	assert.Equal(t, original.ExecutionID, approved.ExecutionID, "re-dispatch must preserve execution identity")
+	assert.Equal(t, original.CallOrdinal, approved.CallOrdinal, "re-dispatch must preserve call ordinal")
 	assert.Equal(t, "delete_rule", approved.Name)
 	assert.Equal(t, "alice@example.com", approved.ApprovedBy, "re-dispatch must carry the approver token")
 	if v, ok := approved.Arguments["rule_id"].(string); !ok || v != "rule-42" {
@@ -308,6 +312,9 @@ func TestIntegration_ApprovalFlow_Approve(t *testing.T) {
 	terminal := toolResults[len(toolResults)-1]
 	resultsMu.Unlock()
 	assert.Equal(t, callID, terminal.CallID)
+	assert.Equal(t, approved.RequestID, terminal.RequestID)
+	assert.Equal(t, approved.ExecutionID, terminal.ExecutionID)
+	assert.Equal(t, approved.CallOrdinal, terminal.CallOrdinal)
 	assert.Equal(t, "delete_rule", terminal.Name)
 	assert.Equal(t, loopID, terminal.LoopID)
 }
@@ -406,7 +413,7 @@ func TestIntegration_ApprovalTimeoutSweeper_PublishesWireResponse(t *testing.T) 
 	// registered the tool call (TrackToolCall), causing the component to
 	// log "No loop found for tool call" and drop the result — the loop
 	// never reaches awaiting_approval and the sweeper has nothing to fire.
-	var dispatchedCall bool
+	var dispatchedCall *agentic.ToolCall
 	var dispatchMu sync.Mutex
 	_, err = natsClient.Subscribe(ctx, "tool.execute.>", func(_ context.Context, msg *nats.Msg) {
 		baseMsg, decErr := dec.Decode(msg.Data)
@@ -421,7 +428,8 @@ func TestIntegration_ApprovalTimeoutSweeper_PublishesWireResponse(t *testing.T) 
 			return
 		}
 		dispatchMu.Lock()
-		dispatchedCall = true
+		callCopy := *call
+		dispatchedCall = &callCopy
 		dispatchMu.Unlock()
 	})
 	require.NoError(t, err)
@@ -490,17 +498,23 @@ func TestIntegration_ApprovalTimeoutSweeper_PublishesWireResponse(t *testing.T) 
 	require.Eventually(t, func() bool {
 		dispatchMu.Lock()
 		defer dispatchMu.Unlock()
-		return dispatchedCall
+		return dispatchedCall != nil
 	}, 5*time.Second, 50*time.Millisecond, "loop should dispatch tool call to tool.execute before tool.result is sent")
+	dispatchMu.Lock()
+	dispatched := *dispatchedCall
+	dispatchMu.Unlock()
 
 	// Step 3: simulate agentic-tools approval filter rejecting the call.
 	gateResult := &agentic.ToolResult{
-		CallID:    callID,
-		Name:      "delete_rule",
-		ErrorKind: agentic.ToolErrorPermission,
-		Error:     agentic.ApprovalRequiredPrefix + "Tool 'delete_rule' requires human approval",
+		CallID:      callID,
+		RequestID:   dispatched.RequestID,
+		ExecutionID: dispatched.ExecutionID,
+		CallOrdinal: dispatched.CallOrdinal,
+		Name:        "delete_rule",
+		ErrorKind:   agentic.ToolErrorPermission,
+		Error:       agentic.ApprovalRequiredPrefix + "Tool 'delete_rule' requires human approval",
 	}
-	publishToolResultMessage(t, natsClient, "tool.result."+callID, gateResult)
+	publishToolResultMessage(t, natsClient, "tool.result."+dispatched.ExecutionID, gateResult)
 
 	// Step 4: the sweeper fires after the approval timeout (~500ms) and publishes
 	// the ApprovalResponse to agent.approval_response.<loopID>. Wait up to 15s

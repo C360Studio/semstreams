@@ -8,6 +8,11 @@ import (
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
+const (
+	defaultModelAckWait           = 2 * time.Minute
+	defaultModelHeartbeatInterval = 60 * time.Second
+)
+
 // Config holds configuration for agentic-model processor component.
 // Model endpoints are resolved from the unified model registry (component.Dependencies.ModelRegistry).
 type Config struct {
@@ -125,7 +130,10 @@ func (r *RetryConfig) rateLimitDelayDuration(defaultDelay time.Duration) time.Du
 func DefaultConfig() Config {
 	inputDefs := []component.PortDefinition{
 		{
-			Name: "agent.request", Config: component.JetStreamPort{Subjects: []string{"agent.request.>"}, StreamName: "AGENT"}, Required: true,
+			Name: "agent.request", Config: component.JetStreamPort{
+				Subjects: []string{"agent.request.>"}, StreamName: "AGENT",
+				AckWait: defaultModelAckWait.String(), HeartbeatInterval: defaultModelHeartbeatInterval.String(),
+			}, Required: true,
 			Description: "Agent request input (JetStream)",
 		},
 	}

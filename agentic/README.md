@@ -70,7 +70,7 @@ These components communicate over NATS JetStream using the types defined here.
 | Type | Description |
 |------|-------------|
 | `UserMessage` | Normalized input from any channel |
-| `UserSignal` | Control signal (cancel, pause, resume, approve) |
+| `UserSignal` | Control signal — `cancel` only; approve/reject travel as `ApprovalResponse` (ADR-039) |
 | `UserResponse` | Response sent back to user |
 | `TaskMessage` | Task to execute by agentic loop |
 | `Attachment` | File or media attached to a message |
@@ -165,7 +165,7 @@ The state machine supports these states:
 | `complete` | Successfully finished (terminal) |
 | `failed` | Failed execution (terminal) |
 | `cancelled` | Cancelled by user (terminal) |
-| `paused` | Paused by user signal |
+| `paused` | Legacy-valid; exported transitions accept it; no framework-owned pause signal or semantics (#1239) |
 | `awaiting_approval` | Waiting for user approval |
 
 States are fluid checkpoints. The loop can move backward except from terminal states.
@@ -197,12 +197,10 @@ Control signals for user interaction:
 | Signal | Description |
 |--------|-------------|
 | `cancel` | Stop execution immediately |
-| `pause` | Pause at next checkpoint |
-| `resume` | Continue paused loop |
-| `approve` | Approve pending result |
-| `reject` | Reject with optional reason |
-| `feedback` | Add feedback without decision |
-| `retry` | Retry failed loop |
+
+Approval and rejection are **not** signals. They travel as `ApprovalResponse` on
+`agent.approval_response.*` (ADR-039), which has a real handler. `feedback` and `retry` were advertised here
+and never implemented; they are gone (#1239).
 
 ## Thread Safety
 

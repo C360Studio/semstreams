@@ -256,7 +256,14 @@ anything else as an unexpected payload type. Both halves are closed here, and ne
 - **`POST /loops/{id}/signal` MUST NOT exist.** It never worked: it answered `200 {"accepted": true}` and the
   loop was never signalled. Of its three verbs, only cancel was ever implemented on the loop side, and cancel is
   already served on the same HTTP surface by `POST /message` with `/cancel <loop_id>`; pause and resume set a
-  loop field no code reads. Deleting the endpoint therefore removes an adopter-facing surface that promised an
+  loop field no code read, and have since been deleted outright (#1239) rather than implemented. The same
+  measurement then applied to the rest of the vocabulary: `approve`, `reject`, `feedback` and `retry` were
+  admitted by validation and reached no handler either, so the loop logged a warning and **acknowledged the
+  message as delivered** — the caller saw success and got nothing. **`cancel` MUST be the entire signal
+  vocabulary**, because it is the only verb the loop's signal consumer handles, and a control signal carrying
+  any other verb MUST be refused by validation rather than accepted and ignored. Approval and rejection are
+  unaffected: they travel as `ApprovalResponse` on `agent.approval_response.*` (ADR-039) and were never
+  served by this payload. Deleting the endpoint therefore removes an adopter-facing surface that promised an
   outcome it never delivered, rather than growing it to carry an identity it never had.
 
 The control signal dispatch does publish MUST carry the **requester's** identity as its user, not the loop
@@ -291,6 +298,16 @@ its subject MUST be resolved from the declared output port rather than concatena
 - **AND** a caller that wants to cancel a loop uses `POST /message` with `/cancel <loop_id>`, which stays
   registered
 - **AND** the test that verifies this is `TestLoopSignalEndpointIsGone`
+
+#### Scenario: cancel is the whole vocabulary, and a removed verb is refused by name
+
+- **GIVEN** a control signal carrying any verb other than `cancel` — `pause`, `resume`, `approve`, `reject`,
+  `feedback` or `retry`
+- **WHEN** it is validated
+- **THEN** validation MUST refuse it rather than accept it and acknowledge a message no handler reads
+- **AND** the refusal MUST NOT list the rejected verb among the permitted types — it names the verb as removed
+  and lists only `cancel`, so an adopter is not told the fault lies elsewhere
+- **AND** the tests that verify this are `TestUserSignal_Validate` and `TestSignalTypeConstants`
 
 #### Scenario: a cancel from a non-owner without cancel-any is refused before publication
 

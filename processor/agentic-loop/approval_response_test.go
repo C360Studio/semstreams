@@ -31,7 +31,7 @@ func gateLoopAtCall(t *testing.T, handler *agenticloop.MessageHandler, callID, t
 	}
 	loopID := taskResult.LoopID
 
-	_, err = handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
 		RequestID: "req-" + callID,
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
@@ -45,10 +45,14 @@ func gateLoopAtCall(t *testing.T, handler *agenticloop.MessageHandler, callID, t
 		t.Fatalf("HandleModelResponse: %v", err)
 	}
 
+	dispatched := dispatchedToolCallFromResult(t, dispatchResult)
 	gateRes, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
-		CallID: callID,
-		Name:   toolName,
-		Error:  agentic.ApprovalRequiredPrefix + "needs human review",
+		CallID:      dispatched.ID,
+		Name:        dispatched.Name,
+		Error:       agentic.ApprovalRequiredPrefix + "needs human review",
+		RequestID:   dispatched.RequestID,
+		ExecutionID: dispatched.ExecutionID,
+		CallOrdinal: dispatched.CallOrdinal,
 	})
 	if err != nil {
 		t.Fatalf("HandleToolResult (gate): %v", err)

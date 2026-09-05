@@ -12,8 +12,8 @@ recipe for tuning each layer in lockstep.
 ```
 ┌─ NATS JetStream consumer (per port — JetStreamPort) ─────────────────┐
 │  ack_wait              // server reaps unacked work after this        │
-│  heartbeat_interval    // client InProgress() interval — must fit     │
-│                        // inside ack_wait with comfortable margin     │
+│  heartbeat_interval    // client InProgress() interval — at most half │
+│                        // the shortest BackOff, otherwise half AckWait │
 │  max_deliver           // cap on redelivery attempts                  │
 │  deliver_policy        // "new" / "all" / "last"                      │
 │  ack_policy            // "explicit" / "none" / "all"                 │
@@ -75,7 +75,7 @@ has hit at least once.
 
 | # | Constraint | Why |
 |---|---|---|
-| 1 | `ack_wait > heartbeat × 1.5` (margin) | One heartbeat reset per ack window with margin for jitter. Default is 90s/60s for agentic-loop's task port (1.5×) and 120s/90s for agentic-model (1.33× — tighter, intentional). |
+| 1 | `heartbeat ≤ effective acknowledgement wait ÷ 2` | Setup validates the exact consumer configuration before allocation. `BackOff` overrides `AckWait`, so its shortest positive interval is effective; otherwise `AckWait` is effective. The loop defaults to 15s against `[30s,2m]`; agentic-model defaults to 60s against 120s. |
 | 2 | `ack_wait > req.Timeout` (or component fallback) | The LLM call must cancel via context.Done **before** NATS reaps the work. Heartbeats save you in the steady state; the wallclock budget guarantees clean cancel even when heartbeats stop firing. **The 10s gap between agentic-model's 120s ack_wait and the 110s component fallback is load-bearing.** |
 | 3 | `service.http_write_timeout > worst-case LLM wallclock` | Mid-write EOFs killed every LLM-backed handler before beta.49. 120s default covers synthesis (15s) + classification (5s) + headroom; raise it if you raise capability budgets. |
 | 4 | `gateway.query_timeout > inner LLM bounded budget` | If the gateway gives up before the synthesizer's bounded sub-call returns, the client gets a 504 even though the framework's degraded fallback worked. Default 60s; bumping any synthesis/classification budget past 50s combined requires bumping this in lockstep. |
@@ -96,33 +96,31 @@ config-shape implications across the chain, not just one knob.
 ack_wait: 90s
 max_deliver: 2
 max_ack_pending: 1
-heartbeat: 60s
-backoff: [30s, 2m]
+heartbeat_interval: 15s
+# component-owned BackOff: [30s, 2m]
 
 # agentic-model
 timeout: 110s          # framework default
 
 # agentic-model + agentic-tools per-port consumer config
 # ports[].config.ack_wait, .heartbeat_interval, .max_deliver, .deliver_policy,
-# .ack_policy. When unset on the port, components fall back to their
-# historical hardcoded values (agentic-model 120s/90s/3, agentic-tools 5m/2m/3).
+# .ack_policy. When unset on the port, components apply their declared
+# defaults (agentic-model 120s/60s/3, agentic-tools 5m/5s/3).
 ```
 
-A transient consumer hiccup or sidecar pause that exceeds `ack_wait`
-results in a redelivery; the dedup short-circuit at
-`HandleTask` (`processor/agentic-loop/handlers.go`) catches the
-duplicate so no double LLM work fires. The `active_loops` gauge stays
-correct since beta.52.
+A transient consumer hiccup that exceeds the effective acknowledgement interval results in redelivery. The
+`HandleTask` short circuit (`processor/agentic-loop/handlers.go`) deduplicates an already-created loop, but task
+deduplication alone is not proof that a separately delivered model request avoided a second provider invocation.
+Provider replay follows the model settlement and ambiguity policy rather than inferring safety from loop memory.
 
 ### Posture B — fail-loud-once (cost-sensitive paid LLM)
 
 ```yaml
 # agentic-loop consumer
-ack_wait: 300s          # exceed worst-case request budget; never reap working tasks
-max_deliver: 1          # no redelivery, ever
+ack_wait: 300s          # retained setting; loop BackOff still controls the effective lease intervals
+max_deliver: 2          # fixed [30s, 2m] BackOff requires both delivery entries
 max_ack_pending: 1
-heartbeat: 60s
-backoff: []             # empty — no retry-after-Nak schedule
+heartbeat_interval: 15s # validated against component-owned [30s, 2m] BackOff
 
 # agentic-model
 timeout: 270s           # strictly less than ack_wait, leaves 30s for
@@ -145,20 +143,19 @@ ports:
 #   saves provider tokens past the cancel point.
 ```
 
-The tradeoff: any consumer-side network blip or restart that exceeds
-`ack_wait` becomes a permanent task failure. For paid LLMs with
-$0.X/1K-token charges, that's the right tradeoff. For local llama.cpp
-or hobbyist deployments, posture A is cheaper.
+The tradeoff applies at the paid model boundary: its `max_deliver: 1` avoids an automatic second provider attempt.
+The loop remains restart-recoverable with `max_deliver: 2`, because its fixed two-entry BackOff cannot truthfully
+advertise a single-delivery posture. Provider ambiguity is handled by the model settlement policy, not by disabling
+loop recovery.
 
 ## What happens when a heartbeat fails
 
 The cancellation path is end-to-end and verified in code:
 
-1. The held model binding currently enters deprecated `ConsumeWithHeartbeat`, which derives
-   `workCtx, workCancel := context.WithCancel(ctx)`.
+1. The model binding enters `ConsumeDeliveryWithHeartbeat`, which derives a cancellable work context.
 2. Ticker fires `msg.InProgress()` every `heartbeat` interval.
 3. On InProgress() failure (NATS connection lost, server flap),
-   `workCancel()` runs — `heartbeat.go:51`.
+   the work context is cancelled and the exact consumer owner is drained.
 4. `workCtx` cancels.
 5. The work goroutine's `agenticmodel.Client.ChatCompletion(ctx, ...)`
    sees ctx.Done.
@@ -168,8 +165,8 @@ The cancellation path is end-to-end and verified in code:
 8. Go's `http.Transport` aborts the in-flight request, closes the TCP
    connection (RST if data was in flight, FIN otherwise).
 
-This list characterizes the temporarily held model path; it is not an integration recommendation. New production
-bindings validate `HeartbeatDeliveryPolicy` and call `ConsumeDeliveryWithHeartbeat`.
+The delivery is quarantined without terminal settlement because ownership safety is no longer known. New delivery
+admission remains closed for that exact owner until the component is restarted.
 
 The provider sees a closed connection. **Whether the provider stops
 billing depends on the provider's policy** — not something semstreams

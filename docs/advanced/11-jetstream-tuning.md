@@ -124,42 +124,31 @@ For long-running work, ack **InProgress** on a timer to reset the AckWait clock 
 This lets you keep `AckWait` short for failure detection while supporting arbitrarily long processing.
 
 ```go
-func consumeWithHeartbeat(ctx context.Context, msg jetstream.Msg, work func(context.Context) error) error {
-    ackWait := 90 * time.Second           // Set AckWait to this on the consumer
-    heartbeatInterval := 60 * time.Second // Beat before the window expires
-
-    done := make(chan error, 1)
-    go func() {
-        done <- work(ctx)
-    }()
-
-    ticker := time.NewTicker(heartbeatInterval)
-    defer ticker.Stop()
-
-    for {
-        select {
-        case <-ticker.C:
-            if err := msg.InProgress(); err != nil {
-                // Connection issue — work continues but we can't extend the window.
-                // Log and let the timer expire naturally.
-                return fmt.Errorf("failed to send InProgress: %w", err)
-            }
-
-        case err := <-done:
-            if err != nil {
-                // Signal NATS we failed but don't want immediate retry.
-                _ = msg.NakWithDelay(30 * time.Second)
-                return err
-            }
-            return msg.Ack()
-
-        case <-ctx.Done():
-            _ = msg.NakWithDelay(5 * time.Second)
-            return ctx.Err()
+policy, err := natsclient.ValidateHeartbeatDeliveryPolicy(
+    ctx,
+    cfg, // the exact StreamConsumerConfig passed to acquisition
+    heartbeatInterval,
+    natsclient.ImmediateDeliveryRetry(),
+    func(
+        workCtx context.Context,
+        attempt natsclient.DeliveryAttempt,
+        data []byte,
+    ) (natsclient.DeliveryDecision, error) {
+        if err := process(workCtx, attempt, data); err != nil {
+            return natsclient.DeliveryDecisionRetry, err
         }
-    }
+        return natsclient.DeliveryDecisionAck, nil
+    },
+)
+if err != nil {
+    return err // refuse before allocating the consumer
 }
+
+result := natsclient.ConsumeDeliveryWithHeartbeat(messageCtx, msg, policy)
 ```
+
+The component-private binding owner observes `result`. When `OwnerStopRequired` is true, it closes local admission
+and drains that exact consume handle; it does not expose the handle or raw settlement methods to business work.
 
 **How InProgress works:** Sends `+WPI` reply to the server, which resets the AckWait timer for that specific
 message. The message stays in the in-flight set — `MaxAckPending` is not decremented — but the redelivery
@@ -192,7 +181,9 @@ cfg := natsclient.StreamConsumerConfig{
 }
 ```
 
-For the actual handler, wrap long work with the heartbeat pattern above.
+The loop uses a 15-second heartbeat because its shortest BackOff interval is 30 seconds. Policy validation refuses
+larger values before allocating the consumer. Its fixed two-entry BackOff also requires `MaxDeliver >= 2`; an
+explicit value of 1 is refused rather than silently truncating the retry schedule.
 
 ### agentic-model — LLM Calls
 
@@ -206,13 +197,13 @@ cfg := natsclient.StreamConsumerConfig{
     DeliverPolicy: "new",
     AckPolicy:     "explicit",
     AckWait:       2 * time.Minute,     // baseline window
-    MaxDeliver:    2,
+    MaxDeliver:    3,
     MaxAckPending: 1,                   // don't queue multiple LLM calls
     AutoCreate:    false,
 }
 ```
 
-With `InProgress` heartbeats every 90 seconds, a 30-minute model call is fully supported.
+With `InProgress` heartbeats every 60 seconds against the 120-second AckWait, a 30-minute model call is supported.
 
 ### agentic-tools — Tool Calls
 
@@ -381,18 +372,18 @@ not firing.
 | BM25 / algorithm tier           | `60s`            | `5`           | `3`        | No          |
 | Tool call (fast, idempotent)    | `5m`             | `3`           | `3`        | Optional    |
 | Tool call (slow, external API)  | `2m`             | `1`–`2`       | `2`        | Yes         |
-| LLM model call                  | `2m` + heartbeat | `1`           | `2`        | **Yes**     |
-| Agentic loop orchestration      | `2m` + heartbeat | `1`           | `2`        | **Yes**     |
+| LLM model call                  | `2m` + `60s` heartbeat | `1`     | `3`        | **Yes**     |
+| Agentic loop orchestration      | `[30s,2m]` BackOff + `15s` heartbeat | `1` | `2` | **Yes** |
 
 ---
 
 ## Operational checklist
 
-The immediate changes with the most impact, in order of priority:
+The immediate checks with the most impact, in order of priority:
 
-1. **Add `InProgress` heartbeats to LLM handlers (breaks redelivery bug).**
-   Wrap the handler body in all three agentic components with the heartbeat pattern. This is a drop-in change
-   that doesn't require consumer config changes.
+1. **Keep heartbeat-enabled work behind the typed delivery owner.**
+   The model, loop, and tools bindings validate the exact acquired consumer policy before allocation and use
+   `ConsumeDeliveryWithHeartbeat`. An unavailable delivery attempt closes admission and drains that exact owner.
 
 2. **Inspect requested and effective acknowledgement admission.**
    Use the `semstreams_jetstream_consumer_max_ack_pending_{requested,effective,observation_available}` gauges. Ordinary
@@ -407,4 +398,5 @@ The immediate changes with the most impact, in order of priority:
    Wire up an advisory subscriber in the framework's health/telemetry layer so redelivery storms are visible.
 
 5. **Add dedup headers on task submission.**
-   Prevents double-processing during reconnect storms — critical for DDIL environments.
+   This suppresses duplicate publishes within the stream duplicate window. It does not make an external effect
+   exactly once; consumers still need explicit semantic settlement and an ambiguity policy.

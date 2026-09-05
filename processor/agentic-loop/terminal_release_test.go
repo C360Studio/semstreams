@@ -178,9 +178,9 @@ func populatedLoop(t *testing.T, h *MessageHandler) string {
 	h.loopManager.CacheTaskPrompt(loopID, "the original task prompt")
 	h.loopManager.IncrementTruncationRetry(loopID)
 	h.loopManager.TrackRequest(h.loopManager.GenerateRequestID(loopID), loopID)
-	// A MODEL-authored call ID: no loop prefix, so only a value sweep reaches
-	// it. Missing it leaks, and worse, lets recovery resolve a released loop.
-	h.loopManager.TrackToolCall("toolu_model_authored", loopID)
+	// A framework execution ID has no loop prefix, so only the routing owner
+	// value sweep reaches it. Missing it would retain a route to a released loop.
+	h.loopManager.TrackToolCall("execution-model-authored", loopID)
 	h.loopManager.TrackToolName("toolu_model_authored", "search")
 	return loopID
 }
@@ -217,12 +217,12 @@ func TestTerminalReleaseClearsEveryPerLoopMap(t *testing.T) {
 	if held := perLoopMapCount(h.loopManager, loopID); len(held) != 0 {
 		t.Fatalf("per-loop entries surviving release: %v", held)
 	}
-	if _, exists := h.loopManager.GetLoopForToolCall("toolu_model_authored"); exists {
-		t.Fatal("a model-authored call ID still routes to the released loop; " +
-			"recovery would resolve a loop that is gone and HandleToolResult would fail on it")
+	if _, exists := h.loopManager.GetLoopForToolCall("execution-model-authored"); exists {
+		t.Fatal("an execution ID still routes to the released loop; " +
+			"lookup would resolve a loop that is gone and HandleToolResult would fail on it")
 	}
-	if _, exists := h.loopManager.GetLoopForToolCallWithRecovery("toolu_model_authored"); exists {
-		t.Fatal("recovery resolved a released loop")
+	if _, exists := h.loopManager.GetLoopForToolCallWithRecovery("execution-model-authored"); exists {
+		t.Fatal("lookup resolved a released loop")
 	}
 }
 
@@ -393,7 +393,9 @@ func TestLateToolResultForSettledLoopIsExpectedDrop(t *testing.T) {
 	}
 	c.releaseLoopTransientState(loopID)
 
-	toolResult := agentic.ToolResult{CallID: "toolu_model_authored", Name: "search", Content: "late"}
+	toolResult := agentic.ToolResult{
+		ExecutionID: "execution-model-authored", CallID: "toolu_model_authored", Name: "search", Content: "late",
+	}
 	toolEnvelope := message.NewBaseMessage(toolResult.Schema(), &toolResult, "test")
 	toolData, err := json.Marshal(toolEnvelope)
 	if err != nil {
@@ -416,7 +418,7 @@ func TestLateToolResultForSettledLoopIsExpectedDrop(t *testing.T) {
 	if strings.Contains(out, "ERROR") {
 		t.Fatalf("a late arrival for a settled loop was reported as a failure:\n%s", out)
 	}
-	if !strings.Contains(out, "No loop found for tool call") {
+	if !strings.Contains(out, "No loop found for tool execution") {
 		t.Fatalf("late tool result was not declared as a drop:\n%s", out)
 	}
 	if !strings.Contains(out, "No loop found for request") {

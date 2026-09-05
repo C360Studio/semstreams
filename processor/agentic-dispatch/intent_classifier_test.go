@@ -49,8 +49,8 @@ func TestExtractJSON(t *testing.T) {
 		},
 		{
 			name:  "json in markdown code block",
-			input: "```json\n{\"type\": \"signal\", \"signal_type\": \"approve\"}\n```",
-			want:  `{"type": "signal", "signal_type": "approve"}`,
+			input: "```json\n{\"type\": \"signal\", \"signal_type\": \"cancel\"}\n```",
+			want:  `{"type": "signal", "signal_type": "cancel"}`,
 		},
 		{
 			name:  "json with surrounding text",
@@ -135,7 +135,7 @@ func TestMockIntentClassifier_Signal(t *testing.T) {
 		result: &ClassifiedIntent{
 			Type:       IntentSignal,
 			LoopID:     "loop_xyz",
-			SignalType: agentic.SignalApprove,
+			SignalType: agentic.SignalCancel,
 			Confidence: 0.95,
 		},
 	}
@@ -150,7 +150,7 @@ func TestMockIntentClassifier_Signal(t *testing.T) {
 	intent, err := classifier.Classify(context.Background(), msg, nil)
 	require.NoError(t, err)
 	assert.Equal(t, IntentSignal, intent.Type)
-	assert.Equal(t, agentic.SignalApprove, intent.SignalType)
+	assert.Equal(t, agentic.SignalCancel, intent.SignalType)
 	assert.Equal(t, "loop_xyz", intent.LoopID)
 }
 

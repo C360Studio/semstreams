@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -29,14 +30,8 @@ import (
 // a defensive log + non-error empty result so duplicate or stale UI
 // clicks don't crash the loop.
 func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response agentic.ApprovalResponse) (result HandlerResult, err error) {
-	// Panic recovery — beta.25 mode (f). A panic in the resolve race,
-	// dispatch path, or rejection-synth would otherwise leave the
-	// gated tool_call orphaned (loop stays in awaiting_approval, no
-	// result, no resolution). Recover and return a benign empty
-	// result so the component-level caller logs and continues; the
-	// approval-timeout sweeper picks up the still-awaiting loop on
-	// its next tick and auto-rejects via the timeout path. Loud log
-	// + structured panic value so the underlying bug is debuggable.
+	// A panic makes delivery ownership unsafe. Recover for diagnosis but return
+	// a fatal error so the callback quarantines and drains the exact owner.
 	defer func() {
 		if r := recover(); r != nil {
 			h.logger.Error("panic recovered in HandleApprovalResponse",
@@ -45,7 +40,8 @@ func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response ag
 				slog.String("call_id", response.CallID),
 				slog.String("decision", response.Decision))
 			result = HandlerResult{LoopID: response.LoopID}
-			err = nil
+			err = errs.WrapFatal(fmt.Errorf("approval response handler panicked: %v", r),
+				"agentic-loop", "HandleApprovalResponse", "recover panic")
 		}
 	}()
 
@@ -119,10 +115,13 @@ func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response ag
 // tool.result path takes over from here.
 func (h *MessageHandler) dispatchApprovedCall(loopID string, pending agentic.PendingApprovalState, args map[string]any, approvedBy string, result *HandlerResult) error {
 	tc := agentic.ToolCall{
-		ID:         pending.CallID,
-		Name:       pending.ToolName,
-		Arguments:  args,
-		ApprovedBy: approvedBy,
+		ID:          pending.CallID,
+		Name:        pending.ToolName,
+		Arguments:   args,
+		RequestID:   pending.RequestID,
+		ExecutionID: pending.ExecutionID,
+		CallOrdinal: pending.CallOrdinal,
+		ApprovedBy:  approvedBy,
 	}
 	if err := h.dispatchToolCall(result, loopID, tc); err != nil {
 		return errs.Wrap(err, "agentic-loop", "dispatchApprovedCall", "dispatch approved tool call")
@@ -146,11 +145,14 @@ func (h *MessageHandler) handleRejectedApproval(ctx context.Context, loopID stri
 		reasonSuffix = "no reason provided"
 	}
 	synthetic := agentic.ToolResult{
-		CallID:    pending.CallID,
-		Name:      pending.ToolName,
-		ErrorKind: agentic.ToolErrorPermission,
-		Error:     fmt.Sprintf("%srejected by %s: %s", agentic.ApprovalRejectedPrefix, approver, reasonSuffix),
-		TraceID:   pending.TraceID,
+		RequestID:   pending.RequestID,
+		ExecutionID: pending.ExecutionID,
+		CallID:      pending.CallID,
+		CallOrdinal: pending.CallOrdinal,
+		Name:        pending.ToolName,
+		ErrorKind:   agentic.ToolErrorPermission,
+		Error:       fmt.Sprintf("%srejected by %s: %s", agentic.ApprovalRejectedPrefix, approver, reasonSuffix),
+		TraceID:     pending.TraceID,
 	}
 	return h.HandleToolResult(ctx, loopID, synthetic)
 }
@@ -158,17 +160,15 @@ func (h *MessageHandler) handleRejectedApproval(ctx context.Context, loopID stri
 // handleApprovalResponseMessage is the component-level entry point
 // that decodes the wire envelope and hands the typed payload to the
 // MessageHandler. Mirrors handleSignalMessage's shape.
-func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []byte) {
+func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
 	baseMsg, err := c.decoder.Decode(data)
 	if err != nil {
-		c.logger.Error("Failed to decode approval response", "error", err)
-		return
+		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("decode approval response: %w", err)
 	}
 	respPtr, ok := baseMsg.Payload().(*agentic.ApprovalResponse)
 	if !ok {
-		c.logger.Error("Unexpected approval response payload type",
-			"type", fmt.Sprintf("%T", baseMsg.Payload()))
-		return
+		return natsclient.DeliveryDecisionTerminate,
+			fmt.Errorf("unexpected approval response payload type %T", baseMsg.Payload())
 	}
 	response := *respPtr
 
@@ -180,22 +180,30 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 
 	result, err := c.handler.HandleApprovalResponse(ctx, response)
 	if err != nil {
-		c.logger.Error("Failed to handle approval response",
-			"error", err,
-			"loop_id", response.LoopID,
-			"call_id", response.CallID)
-		return
+		wrapped := fmt.Errorf("handle approval response for loop %q call %q: %w", response.LoopID, response.CallID, err)
+		switch {
+		case errs.IsFatal(err):
+			return natsclient.DeliveryDecisionQuarantine, wrapped
+		case errs.IsInvalid(err):
+			return natsclient.DeliveryDecisionTerminate, wrapped
+		default:
+			return natsclient.DeliveryDecisionRetry, wrapped
+		}
 	}
 	if result.staleDrop {
 		// The handler dispatched nothing and resolved nothing. Persisting would
 		// re-Put a settled entity, or — once its per-loop state is released —
 		// report a persistence failure for a loop that is supposed to be gone.
 		// Returning here is what makes the two indistinguishable.
-		return
+		return natsclient.DeliveryDecisionAck, nil
 	}
 
 	// Approval responses use the same persistence boundary as every other
 	// handler result. This keeps a rejection that reaches the iteration cap from
 	// bypassing the ordinary-observations-then-terminal audit ordering.
-	c.persistHandlerResult(ctx, result)
+	if err := c.persistHandlerResult(ctx, result); err != nil {
+		return natsclient.DeliveryDecisionQuarantine,
+			fmt.Errorf("approval result for loop %q has unknown durable state: %w", response.LoopID, err)
+	}
+	return natsclient.DeliveryDecisionAck, nil
 }

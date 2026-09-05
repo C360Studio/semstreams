@@ -60,14 +60,15 @@ func TestTerminalPathsEvictActiveTrajectory(t *testing.T) {
 		require.NoError(t, err)
 
 		component := &Component{handler: handler, config: config, logger: discardLogger()}
-		component.handleCancelSignal(context.Background(), agentic.UserSignal{
+		err = component.handleCancelSignal(context.Background(), agentic.UserSignal{
 			LoopID: loopID,
 			Type:   agentic.SignalCancel,
 			UserID: "operator",
 		})
+		require.Error(t, err, "missing completion output is an unknown terminal side effect")
 
 		_, err = handler.trajectoryManager.getTrajectory(loopID)
-		require.Error(t, err, "cancelled loop retained its active trajectory")
+		require.NoError(t, err, "failed cancellation durability released its active trajectory")
 	})
 }
 
@@ -100,7 +101,8 @@ func TestTimedOutToolResultEvictsActiveTrajectory(t *testing.T) {
 	require.NoError(t, handler.loopManager.SetTimeout(loopID, -time.Second))
 
 	const callID = "timed-out-call"
-	handler.loopManager.TrackToolCall(callID, loopID)
+	const executionID = "execution-timed-out"
+	handler.loopManager.TrackToolCall(executionID, loopID)
 	registry := payloadbuiltins.NewTestRegistry(t)
 	component := &Component{
 		config:  config,
@@ -108,7 +110,7 @@ func TestTimedOutToolResultEvictsActiveTrajectory(t *testing.T) {
 		decoder: message.NewDecoder(registry),
 		logger:  discardLogger(),
 	}
-	toolResult := agentic.ToolResult{CallID: callID, Name: "search", Content: "late result"}
+	toolResult := agentic.ToolResult{ExecutionID: executionID, CallID: callID, Name: "search", Content: "late result"}
 	envelope := message.NewBaseMessage(toolResult.Schema(), &toolResult, "test")
 	data, err := json.Marshal(envelope)
 	require.NoError(t, err)
@@ -227,13 +229,14 @@ func TestTerminalPathsReleaseObservedAuditLoss(t *testing.T) {
 
 		component := &Component{handler: handler, config: config, logger: discardLogger()}
 		observe(t, component, loopID)
-		component.handleCancelSignal(context.Background(), agentic.UserSignal{
+		err = component.handleCancelSignal(context.Background(), agentic.UserSignal{
 			LoopID: loopID,
 			Type:   agentic.SignalCancel,
 			UserID: "operator",
 		})
+		require.Error(t, err, "missing completion output is an unknown terminal side effect")
 
-		require.False(t, component.trajectoryAuditLoss.observed(loopID),
-			"cancelled loop retained its audit-loss marker")
+		require.True(t, component.trajectoryAuditLoss.observed(loopID),
+			"failed cancellation durability released its audit-loss marker")
 	})
 }

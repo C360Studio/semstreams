@@ -2,7 +2,7 @@
 //
 // Tool-call governance rules (ADR-039) need to template verdict subjects
 // and audit reasons with values pulled from the proposed tool-call
-// payload: `agent.toolcall.rejected.$message.loop_id.$message.call_id`,
+// payload: `agent.toolcall.rejected.$message.execution_id`,
 // `Reason: "bash command $message.tool_args.command rejected for $message.tool_name"`.
 // The existing `$entity.*` / `$related.*` / `$state.*` / `$caller.*` /
 // `$schedule.*` namespaces all read from entity-side context; none of

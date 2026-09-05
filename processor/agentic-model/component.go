@@ -66,12 +66,14 @@ type Component struct {
 	consumeStream      func(context.Context, natsclient.PortConsumerContext, natsclient.StreamConsumerConfig, func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error)
 	waitConsumerClosed func(context.Context, <-chan struct{}) error
 	closeModelClient   func(*Client) error
+	responseEvidence   retainedResponseEvidenceReader
 
 	// Metrics
 	requestsProcessed int64
 	errors            int64
 	lastActivity      time.Time
 	metrics           *modelMetrics
+	deliveryFatalErr  error
 }
 
 // Option configures optional Component behavior at construction time.
@@ -99,8 +101,9 @@ func (c *Component) HealthPolicy() model.HealthPolicy { return c.healthPolicy }
 
 // consumerInfo tracks JetStream consumer details for cleanup
 type streamConsumerBinding struct {
-	handle      jetstream.ConsumeContext
-	drainIssued bool
+	handle       jetstream.ConsumeContext
+	drainOnce    *sync.Once
+	observerDone <-chan struct{}
 }
 
 // NewComponent creates a new agentic-model processor component
@@ -353,16 +356,11 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port) erro
 
 	// Per-component defaults for tunables that were previously hardcoded.
 	// Operators tune via JetStreamPort.AckWait / .HeartbeatInterval; the
-	// fallbacks here are the historical hardcoded values, preserved so a
-	// zero-config deployment behaves identically to pre-port-config builds.
+	// fallbacks here keep zero-config deployments on the declared policy.
 	// AckWait must comfortably exceed the longest legitimate per-task
 	// LLM wallclock budget — see docs/operations/14-timeout-chain.md and
 	// resolveTimeout's 110s fallback (10s strictly below the 120s default
 	// here).
-	const (
-		defaultModelAckWait           = 2 * time.Minute
-		defaultModelHeartbeatInterval = 90 * time.Second
-	)
 	ackWait := consumerCfg.AckWait
 	if ackWait == 0 {
 		ackWait = defaultModelAckWait
@@ -390,27 +388,43 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port) erro
 		AutoCreate:     false,
 		MessageTimeout: 30 * time.Minute,
 	}
+	policy, policyErr := natsclient.ValidateHeartbeatDeliveryPolicy(
+		ctx,
+		cfg,
+		heartbeatInterval,
+		natsclient.ImmediateDeliveryRetry(),
+		func(workCtx context.Context, _ natsclient.DeliveryAttempt, data []byte) (natsclient.DeliveryDecision, error) {
+			return c.handleRequest(workCtx, data)
+		},
+	)
+	if policyErr != nil {
+		return errs.WrapInvalid(
+			policyErr,
+			"agentic-model",
+			"setupConsumer",
+			fmt.Sprintf("validate heartbeat delivery policy for port %s", port.Name),
+		)
+	}
+	admission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
 
 	consume := c.natsClient.ConsumeStreamWithConfig
 	if c.consumeStream != nil {
 		consume = c.consumeStream
 	}
 	handle, err := consume(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name, ComponentOwned: true}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		if hbErr := natsclient.ConsumeWithHeartbeat(msgCtx, msg, heartbeatInterval,
-			func(workCtx context.Context) error {
-				c.handleRequest(workCtx, msg.Data())
-				return nil
-			},
-		); hbErr != nil {
-			c.logger.Error("Model handler error", "error", hbErr)
+		result, admitted := consumeAdmittedDelivery(msgCtx, msg, policy, admission)
+		if admitted && result.Err() != nil && !result.OwnerStopRequired() {
+			c.logger.Error("Model handler error", "error", result.Err())
 		}
 	})
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupConsumer", fmt.Sprintf("setup consumer for stream %s", streamName))
 	}
 
+	binding := newStreamConsumerBinding(handle)
+	c.observeDeliveryLane(ctx, &binding, admission)
 	c.lifecycleMu.Lock()
-	c.consumers = append(c.consumers, streamConsumerBinding{handle: handle})
+	c.consumers = append(c.consumers, binding)
 	c.lifecycleMu.Unlock()
 
 	c.logger.Info("Subscribed to agent requests (JetStream)",
@@ -524,10 +538,7 @@ func (c *Component) cleanup(ctx context.Context) error {
 	var cleanupErr error
 	for i := range c.consumers {
 		binding := &c.consumers[i]
-		if !binding.drainIssued {
-			binding.handle.Drain()
-			binding.drainIssued = true
-		}
+		binding.drain()
 		closed := binding.handle.Closed()
 		if c.waitConsumerClosed != nil {
 			cleanupErr = errors.Join(cleanupErr, c.waitConsumerClosed(ctx, closed))
@@ -541,6 +552,15 @@ func (c *Component) cleanup(ctx context.Context) error {
 	}
 	if c.cancel != nil {
 		c.cancel()
+	}
+	for i := range c.consumers {
+		if done := c.consumers[i].observerDone; done != nil {
+			select {
+			case <-done:
+			case <-ctx.Done():
+				cleanupErr = errors.Join(cleanupErr, ctx.Err())
+			}
+		}
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		cleanupErr = errors.Join(cleanupErr, ctxErr)
@@ -579,8 +599,9 @@ func (c *Component) cleanup(ctx context.Context) error {
 
 func (c *Component) clearLifecycleHandles() { c.consumers = nil; c.cancel = nil }
 
-// handleRequest processes an agent request
-func (c *Component) handleRequest(ctx context.Context, data []byte) {
+// handleRequest processes an agent request and returns only after its required
+// response is already committed or a newly produced response receives PubAck.
+func (c *Component) handleRequest(ctx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
 	c.mu.Lock()
 	c.lastActivity = time.Now()
 	c.mu.Unlock()
@@ -589,7 +610,22 @@ func (c *Component) handleRequest(ctx context.Context, data []byte) {
 	if err != nil {
 		c.logger.Error("Failed to parse agent request", "error", err)
 		c.incrementErrors()
-		return
+		return natsclient.DeliveryDecisionTerminate, err
+	}
+
+	_, found, err := c.readRetainedAgentResponse(ctx, req.RequestID)
+	if err != nil {
+		if errs.IsFatal(err) {
+			return natsclient.DeliveryDecisionQuarantine, err
+		}
+		c.incrementErrors()
+		return natsclient.DeliveryDecisionRetry, err
+	}
+	if found {
+		c.mu.Lock()
+		c.requestsProcessed++
+		c.mu.Unlock()
+		return natsclient.DeliveryDecisionAck, nil
 	}
 
 	c.logger.Debug("Processing agent request",
@@ -600,9 +636,12 @@ func (c *Component) handleRequest(ctx context.Context, data []byte) {
 	client, endpoint, capability, endpointName, err := c.getClientForRequest(req)
 	if err != nil {
 		c.logger.Error("Failed to resolve endpoint", "error", err, "model", req.Model)
-		c.publishErrorResponse(ctx, req.RequestID, err.Error())
+		publishErr := c.publishErrorResponse(ctx, req.RequestID, err.Error())
 		c.incrementErrors()
-		return
+		if publishErr != nil {
+			return natsclient.DeliveryDecisionRetry, publishErr
+		}
+		return natsclient.DeliveryDecisionAck, nil
 	}
 
 	// Strip tools the served endpoint can't handle. req.Model can be a
@@ -626,12 +665,17 @@ func (c *Component) handleRequest(ctx context.Context, data []byte) {
 
 	if err != nil || resp.Status == "error" {
 		c.recordHealthResult(ctx, endpointName, false, err, resp.Error, latency)
-		c.handleModelError(ctx, req, resp, err, duration)
-		return
+		if publishErr := c.handleModelError(ctx, req, resp, err, duration); publishErr != nil {
+			return natsclient.DeliveryDecisionRetry, publishErr
+		}
+		return natsclient.DeliveryDecisionAck, nil
 	}
 
 	c.recordHealthResult(ctx, endpointName, true, nil, "", latency)
-	c.handleModelSuccess(ctx, req, resp, duration)
+	if publishErr := c.handleModelSuccess(ctx, req, resp, duration); publishErr != nil {
+		return natsclient.DeliveryDecisionRetry, publishErr
+	}
+	return natsclient.DeliveryDecisionAck, nil
 }
 
 // stripUnsupportedTools clears req.Tools when the served endpoint cannot handle
@@ -714,7 +758,7 @@ func (c *Component) parseAgentRequest(data []byte) (agentic.AgentRequest, error)
 
 // handleModelError processes and publishes error responses with metrics.
 // It preserves any partial token usage from the response for cost tracking.
-func (c *Component) handleModelError(ctx context.Context, req agentic.AgentRequest, resp agentic.AgentResponse, err error, duration float64) {
+func (c *Component) handleModelError(ctx context.Context, req agentic.AgentRequest, resp agentic.AgentResponse, err error, duration float64) error {
 	errorMsg := resp.Error
 	if err != nil {
 		errorMsg = err.Error()
@@ -731,10 +775,11 @@ func (c *Component) handleModelError(ctx context.Context, req agentic.AgentReque
 		}
 	}
 
-	errorCtx, cancel := natsclient.DetachContextWithTrace(ctx, 5*time.Second)
+	errorCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	c.publishErrorResponseWithTokens(errorCtx, req.RequestID, errorMsg, resp.TokenUsage)
+	publishErr := c.publishErrorResponseWithTokens(errorCtx, req.RequestID, errorMsg, resp.TokenUsage)
 	c.incrementErrors()
+	return publishErr
 }
 
 // classifyError determines the error type for metrics categorization
@@ -752,7 +797,7 @@ func classifyError(ctx context.Context, errorMsg string) string {
 }
 
 // handleModelSuccess processes successful responses with metrics and publishing
-func (c *Component) handleModelSuccess(ctx context.Context, req agentic.AgentRequest, resp agentic.AgentResponse, duration float64) {
+func (c *Component) handleModelSuccess(ctx context.Context, req agentic.AgentRequest, resp agentic.AgentResponse, duration float64) error {
 	toolCallCount := len(resp.Message.ToolCalls)
 
 	if c.metrics != nil {
@@ -776,12 +821,13 @@ func (c *Component) handleModelSuccess(ctx context.Context, req agentic.AgentReq
 	if err := c.publishResponse(ctx, resp); err != nil {
 		c.logger.Error("Failed to publish response", "error", err)
 		c.incrementErrors()
-		return
+		return err
 	}
 
 	c.mu.Lock()
 	c.requestsProcessed++
 	c.mu.Unlock()
+	return nil
 }
 
 // getClientForRequest resolves an endpoint from the registry and returns a cached or new client.
@@ -1065,12 +1111,12 @@ func (c *Component) outputPortDefs() []component.PortDefinition {
 
 // publishErrorResponse publishes an error response with zero token usage.
 // Used for errors where no model call occurred (e.g., endpoint not found).
-func (c *Component) publishErrorResponse(ctx context.Context, requestID string, errMsg string) {
-	c.publishErrorResponseWithTokens(ctx, requestID, errMsg, agentic.TokenUsage{})
+func (c *Component) publishErrorResponse(ctx context.Context, requestID string, errMsg string) error {
+	return c.publishErrorResponseWithTokens(ctx, requestID, errMsg, agentic.TokenUsage{})
 }
 
 // publishErrorResponseWithTokens publishes an error response preserving partial token usage.
-func (c *Component) publishErrorResponseWithTokens(ctx context.Context, requestID string, errMsg string, tokens agentic.TokenUsage) {
+func (c *Component) publishErrorResponseWithTokens(ctx context.Context, requestID string, errMsg string, tokens agentic.TokenUsage) error {
 	resp := agentic.AgentResponse{
 		RequestID:  requestID,
 		Status:     "error",
@@ -1080,7 +1126,9 @@ func (c *Component) publishErrorResponseWithTokens(ctx context.Context, requestI
 
 	if err := c.publishResponse(ctx, resp); err != nil {
 		c.logger.Error("Failed to publish error response", "error", err)
+		return err
 	}
+	return nil
 }
 
 // Discoverable interface implementation
@@ -1115,10 +1163,16 @@ func (c *Component) Health() component.HealthStatus {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
+	healthy := c.running && c.deliveryFatalErr == nil
+	lastError := ""
+	if c.deliveryFatalErr != nil {
+		lastError = c.deliveryFatalErr.Error()
+	}
 	return component.HealthStatus{
-		Healthy:    c.running,
+		Healthy:    healthy,
 		LastCheck:  time.Now(),
 		ErrorCount: int(c.errors),
+		LastError:  lastError,
 		Uptime:     time.Since(c.startTime),
 		Status:     c.getStatus(),
 	}
@@ -1126,6 +1180,9 @@ func (c *Component) Health() component.HealthStatus {
 
 // getStatus returns a status string
 func (c *Component) getStatus() string {
+	if c.deliveryFatalErr != nil {
+		return "delivery ownership lost"
+	}
 	if c.running {
 		return "running"
 	}
