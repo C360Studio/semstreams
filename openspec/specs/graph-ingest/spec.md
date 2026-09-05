@@ -1071,9 +1071,18 @@ remains the loud backstop for a copied or replayed token. A stored run carrying 
 carries the deployment's own authority. When the firing entity is a foreign-authority import the rule action MUST
 detect that before any write and MUST issue no mutation request targeting the foreign subject — not even one
 graph-ingest would reject. The decision MUST be recorded once per DISPATCH as
-`rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` with ONE Info log per dispatch naming EVERY
+`rule_foreign_firing_writes_skipped_total{reason=...}` with ONE Info log per dispatch naming EVERY
 write that dispatch skipped, not only the writes decided at the first skip point: a counted skip, never a rejection,
-and one increment for the whole dispatch rather than one per omitted write. The counted unit is one `publish_agent` dispatch — one (firing entity, `for_each` item) pair — and MUST NOT be
+and one increment for the whole dispatch rather than one per omitted write. The `reason` label is a closed
+two-value vocabulary of fixed tokens, never a value derived from the failing identity: `foreign_authority` when the
+firing entity is structurally canonical and its positions 1–2 differ from the deployment's own, and
+`unresolvable_firing_entity` when no firing entity could be established at all — the dispatch carries none (a cron
+fire has no firing entity by construction) or carries one that fails structural validation. The unresolvable case is
+skipped and counted for the same fail-closed reason — a write whose subject cannot be established is not issued — but
+it MUST NOT be reported as `foreign_authority`, so that label means only what it says: an imported entity. Its Info
+line MUST NOT claim a foreign authority either. An executor holding no authority still reports a canonical firing
+entity as `foreign_authority`: with an empty pair every canonical ID differs at position 1, and that remains the
+fail-closed answer above. The counted unit is one `publish_agent` dispatch — one (firing entity, `for_each` item) pair — and MUST NOT be
 read as one distinct declined entity: `publish_agent` fans out over `for_each` with the firing entity held constant,
 so an action fanning out over N items on a single imported firing entity MUST report N skips for that ONE entity.
 The counter is named for the writes it covers rather than for the run anchor, because
@@ -1116,6 +1125,20 @@ skipped.
 - **AND** it names `agent.run.origin-entity-id` as where the linkage went instead, and never names the imported
   identity
 - **AND** the test that verifies this is `TestForeignFiringSkipLogNamesEveryDeclinedWrite`
+
+#### Scenario: a cron dispatch with no firing entity is counted as unresolvable, not as a foreign import
+
+- **GIVEN** a deployment with authority `acme`/`ops` and a cron rule whose action is `publish_agent`
+- **WHEN** the rule fires — the execution context carries `Schedule` and no `EntityID`, because a cron fire has no
+  firing entity by construction
+- **THEN** the task is published, no `rule.task.spawned` write is issued, and
+  `rule_foreign_firing_writes_skipped_total{reason="unresolvable_firing_entity"}` increments exactly once while
+  `rule_foreign_firing_writes_skipped_total{reason="foreign_authority"}` does not move
+- **AND** exactly one Info line is emitted for that dispatch, with reason `unresolvable_firing_entity`, naming
+  `rule.task.spawned` as the declined write and not claiming a foreign authority
+- **AND** a dispatch whose firing entity fails structural validation reports the same reason, and a dispatch on a
+  canonical imported entity still reports `foreign_authority`
+- **AND** the test that verifies this is `TestPublishAgentSkipReasonSeparatesUnresolvableFromForeign`
 
 #### Scenario: a rule firing on a local loop stamps the anchor pair and the origin
 

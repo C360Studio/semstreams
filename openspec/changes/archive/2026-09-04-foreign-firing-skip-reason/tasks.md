@@ -56,8 +56,9 @@ recorder hardcoding the reason), `processor/rule/cron_scheduler.go:650-656` (the
       under `-tags=integration` against real NATS ok (5 PASS, 0 SKIP); `openspec validate --strict` valid;
       `task spec:properties` 48/48; `task schema:generate` no drift; `task api:compat:report` at the baseline's 12
       with no entry from this change.
-- [ ] 6.2 `semstreams-reviewer` pass; findings addressed.
-- [ ] 6.3 Archive as the final content commit after review.
+- [x] 6.2 `semstreams-reviewer` pass: APPROVE with three MEDIUMs and three NITs, all taken (section 7).
+- [x] 6.3 Archived as `2026-09-04-foreign-firing-skip-reason`, the final content commit; the graph-ingest requirement
+      carries eight scenarios on main's spec; `openspec validate --all --strict` 53/53; `task spec:properties` 48/48.
 
 ## 7. Review round (`semstreams-reviewer`, APPROVE with three MEDIUMs, all taken)
 
