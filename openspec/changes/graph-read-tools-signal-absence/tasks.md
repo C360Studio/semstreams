@@ -58,15 +58,25 @@ paths Codex's #759/#1146 stack (PRs #1156/#1159/#1141) holds, and the delta is A
       two files are outside the enumerated set (intersection still empty); NIT `EntitySampleTruncated`. Round 3
       confirmed closed. The BLOCKING is an absent axis, not a fourth piecemeal owner; the other three are present
       axes with blind search shapes.
-- [ ] 1.3h Architect amendment round 4: one new axis row (continuation — adopted or refused, with the reason
-      recorded; adoption is an addition, so it lands as an owner question, not design), three search widenings
-      (prose absence enumerated per plane, `not_found`/`unresolved` vocabulary row, predicate-registration authority
-      row), the 180-path re-measure and 4.5's file set, the NIT; then re-review round 5.
-- [ ] 1.4 Owner INVENTORY PASS on the PR; owner rulings on `proposal.md` questions 1–11 recorded on #1261.
-- [ ] 1.5 Owner places the milestone (recommendation: `v1.0.0-beta.165`).
-- [ ] 1.6 HOLD — sections 3–6 do not start until (a) 1.4 is recorded and (b) either Codex's #759/#1146 stack
-      (PRs #1156/#1159/#1141) has landed or owner question 11 relaxes this to archive-order coordination. Re-check
-      the file list against the PAGINATED Codex file lists (`gh api repos/:owner/:repo/pulls/N/files --paginate`)
+- [ ] 1.3h Architect amendment round 4 (Opus session per owner ruling G1, #1261 comment 7). Inventory: the continuation
+      axis row (owner ruled Q12: adopt on `query_by_type`, refuse on `query_neighbors` with the reason recorded),
+      three search widenings (prose absence enumerated per plane, `not_found`/`unresolved` vocabulary row,
+      predicate-registration authority row), the `processor/research-graph-execute/adapters.go` row (#1261
+      comment 6: parallel reader over graph-query, outgoing only, untouched), the 180-path re-measure and 4.5's
+      file set, the NIT. Design/delta fold-ins of the rulings: Q1 64KB; Q4 `direction` narrowed to `outgoing`
+      (`incoming|both` → `invalid_args` naming the incoming owner, migration row); Q6 three right-anchored tokens
+      (R2 sentence + scenario); Q9 `feat(agentic-tools)!:`; Q12 pagination requirement (`Paginated:true`,
+      `has_more` + opaque `next_cursor` in Metadata, `HintTooLarge` kept, `matched` stays, `truncated` goes); Q7
+      cross-references #1265. Then ONE closure-only re-review round 5 ("did the round-4 rows land", no new
+      sweep); if it finds a new axis, the owner rules on the inventory as it stands.
+- [ ] 1.4 Owner INVENTORY PASS on the PR (asked for after 1.3h + round 5, ruling G2). Owner rulings on questions 1–12
+      RECORDED 2026-09-07 (#1261 comment 7, verbatim; recommendations in comments 5 and 6).
+- [x] 1.5 Milestone `v1.0.0-beta.165` placed on #1261, #1260 and PR #1262 (owner ruling Q10, 2026-09-07).
+- [ ] 1.6 HOLD (relaxed by owner ruling Q11, 2026-09-07, to archive-order coordination) — sections 3–6 do not start
+      until 1.4 INVENTORY PASS is recorded. Coordination rule while Codex's #759/#1146 stack (PRs #1156/#1159/#1141)
+      is open: rebase on `main` after each stack merge; `task e2e:agentic` green before this PR's own merge; the
+      delta stays ADDED-only until the stack's `agentic-tools` delta archives. Re-check the file list against the
+      PAGINATED Codex file lists (`gh api repos/:owner/:repo/pulls/N/files --paginate`; 180 paths at 2026-09-05)
       before 3.1, and re-pin the two premises that live inside held files (`executors/httprequest.go:23`,
       `component.go:974-994`).
 
