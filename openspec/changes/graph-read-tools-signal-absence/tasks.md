@@ -81,9 +81,16 @@ recorded earlier was stale), and the delta is ADDED-only. `approval_signal_test.
       and cross-referenced #1265 (Q7) and #1266. Two premises were measured differently from the round-4 verdict and
       are recorded in `inventory-verification.md`: `natsclient.FilteredKeys` does NOT sort, and a cursor cannot seek
       (each page re-lists and re-sorts). Delta stays ADDED-only; `openspec validate --strict` passes.
-- [ ] 1.3i Closure-only re-review round 5 (`semstreams-reviewer`; brief = "did the round-4 rows land", no new sweep —
-      owner ruling G1). A new axis found anyway is ruled by the owner on the inventory as it stands; there is no
-      round 6.
+- [x] 1.3i Closure-only re-review round 5 (`semstreams-reviewer`, over `ebeacdbf`, owner ruling G1) — **INVENTORY
+      PASS**, recorded on PR #1262. All six round-4 findings confirmed closed with pins; every guard re-measured
+      independently (ADDED-only; `openspec/specs/` untouched; 180 Codex-held paths, intersection empty; no new
+      `ToolResultHint`; `--strict` valid); the twelve rulings landed at the ruled level with no ratchet and no
+      shortfall. No new axis. One MEDIUM — a false "first positional-wildcard `ListKeysFiltered` in the tree" novelty
+      claim in `design.md` and 4.2, which the reviewer judged non-gating — was corrected in the same round rather than
+      deferred, so the owner reads accurate text at 1.4: positional wildcards are `KeysByFilter`'s documented purpose
+      (`natsclient/kv.go:528-530`) with real-NATS precedent at
+      `processor/graph-index/owner_filter_integration_test.go:139-148`, whose cancelled-context rejection 4.2 now
+      mirrors.
 - [ ] 1.4 Owner INVENTORY PASS on the PR (asked for after 1.3h + 1.3i, ruling G2). Owner rulings on questions 1–12
       and gates G1/G2 RECORDED 2026-09-07 (#1261 comment 7; recommendations in comments 5 and 6) and APPLIED by 1.3h.
 - [x] 1.5 Milestone `v1.0.0-beta.165` placed on #1261, #1260 and PR #1262 (owner ruling Q10, 2026-09-07).
@@ -127,8 +134,10 @@ recorded earlier was stale), and the delta is ADDED-only. `approval_signal_test.
 ## 4. Tests
 
 - [ ] 4.1 Unit tests named in `design.md` § Test plan; fixtures via `graph.MarshalEntityState`; `// spec:` citations.
-- [ ] 4.2 Integration `TestIntegration_QueryByType_ListsFromEntityStates` — the first positional-wildcard
-      `ListKeysFiltered` call against real NATS; asserts sorted output and one cursor continuation across two pages.
+- [ ] 4.2 Integration `TestIntegration_QueryByType_ListsFromEntityStates` against real NATS; asserts sorted output
+      and one cursor continuation across two pages, and mirrors the precedent's cancelled-context rejection
+      (`processor/graph-index/owner_filter_integration_test.go:139-148`: a cancelled ctx yields
+      `context.Canceled` and a nil key slice, never a partial list).
 - [ ] 4.3 Fails-without-fix for the `IsRelationship` filter and the segment match, run against the committed state.
 - [ ] 4.4 `predicate_authority_contract_test.go` unchanged and green.
 - [ ] 4.5 Booted-binary walk for `KVKeyLister` (RC-6): `test/e2e/mock/cmd/main.go:38` pins

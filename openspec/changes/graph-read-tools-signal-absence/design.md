@@ -246,8 +246,16 @@ reads the result, and a zero-key listing is also `status=success` — so it pass
 empty one, and the stub. The walked path this change supplies is two-part:
 
 1. **Integration** (`tasks.md` 4.2): `TestIntegration_QueryByType_ListsFromEntityStates` against real NATS through the
-   catalog-reader adapter — the first positional-wildcard call of `ListKeysFiltered` in the tree (every existing
-   `FilteredKeys` caller passes `prefix+">"`: `graph/inference/storage.go:312,560`, `graph/clustering/storage.go:243`).
+   catalog-reader adapter. Fixed-position wildcards are not new to the tree — they are `KeysByFilter`'s documented
+   purpose (`natsclient/kv.go:528-530`, ADR-102 canonical order), already built by
+   `processor/graph-index/predicate_index.go:26-30` and consumed at `processor/graph-index/query.go:428,567` and
+   `incoming_index.go:55`, with real-NATS coverage at `processor/graph-index/owner_filter_integration_test.go:139-148`.
+   What is new is narrower: the first caller of the package-level `natsclient.FilteredKeys` helper to pass a
+   fixed-position pattern — all eight existing non-test callers pass a prefix form (`graph/inference/storage.go:312,560`,
+   `graph/clustering/storage.go:244`, `processor/agentic-loop/trajectory_reader.go:80`,
+   `processor/graph-clustering/anomaly.go:123`, `component.go:2189`, `query.go:321`,
+   `processor/graph-index-temporal/query.go:75`). The precedent to mirror is that test's ctx-expiry boundary, which
+   `FilteredKeys` shares (inventory addition 1: rejects partial lists on ctx expiry).
 2. **Booted binary** (`tasks.md` 4.5): the mock's pinned args move from `temperature` (matches nothing in the tier) to
    `{"entity_type":"agent.execution","limit":5}` (`test/e2e/mock/cmd/main.go:38`; not Codex-held), and
    `walkApprovalPath` gains one assertion after the success metric: read `tool.result.<pending.CallID>` from the stream
@@ -406,8 +414,9 @@ Untagged unless marked; fixtures built with `graph.MarshalEntityState`, never ha
   wildcard is refused; and for any sorted key set and any page size, cursor-continued pages partition that set exactly
   once (R2).
 - `-tags=integration`: `TestIntegration_QueryByType_ListsFromEntityStates` against real NATS via the catalog-reader
-  adapter, in `register_graph_query_integration_test.go` — the first positional-wildcard `ListKeysFiltered` call in
-  the tree, asserting sorted output and one cursor continuation across two pages.
+  adapter, in `register_graph_query_integration_test.go` — asserting sorted output, one cursor continuation across two
+  pages, and the cancelled-context rejection the precedent asserts
+  (`processor/graph-index/owner_filter_integration_test.go:139-148`).
 - Fails-without-fix: revert the `IsRelationship` filter and the segment match separately; each reds its named test.
 - `predicate_authority_contract_test.go` stays green unchanged.
 - E2E: `task e2e:agentic` is the standing proof for the served `query_by_type` (inventory addition 4). The #1117
