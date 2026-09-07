@@ -11,9 +11,20 @@ Premises measured on `main@797d294a`: `processor/agentic-tools/executors/graph_q
 `natsclient/kv.go:522-547,558-598`, `graph/kvcatalog.go:261`, `pkg/types/entity_id.go:160-164`,
 `release/tier1-packages.txt:79`, `test/e2e/scenarios/agentic/approval_signal.go:36-40,77-88,139-144`,
 `pkg/types/entity_id.go:166-186`, `processor/graph-query/graphrag.go:1570-1592`, `test/e2e/mock/cmd/main.go:38`.
+Round-4 additions, measured 2026-09-07: `graph_query.go:325` (`direction` defaults to `both`),
+`agentic/tools.go:44-59,551-555,576-610` (the pagination contract),
+`processor/agentic-tools/loop_result.go:27,55-56,65,78,157-158` (the roster's live producer),
+`processor/agentic-loop/result_hint.go:69-88` + `handlers.go:2639` (the live consumer),
+`graph/query_prefix_types.go:41-44,74,78,84` (cursor codec and its full-scan cost note),
+`processor/graph-ingest/query.go:310-327` (sort-then-cursor), `natsclient/kv.go:582-600` (scan order, no sort),
+`vocabulary/namespace_authority.go:47-54,101-118`, `graph/query_batch_types.go:22-46` (`MissingReason`),
+`processor/research-graph-execute/adapters.go:55-110,156-159,183-185`.
 
-Sequencing: 1.6 governs when sections 3–6 start; the implementation's file set intersects none of the 176 unique
-paths Codex's #759/#1146 stack (PRs #1156/#1159/#1141) holds, and the delta is ADDED-only.
+Sequencing: 1.6 governs when sections 3–6 start; the implementation's file set — including 4.5's
+`test/e2e/mock/cmd/main.go` and `test/e2e/scenarios/agentic/approval_signal.go` — intersects none of the **180**
+unique paths Codex's #759/#1146 stack (PRs #1156/#1159/#1141) holds (54 + 137 + 7, re-measured 2026-09-07; the 176
+recorded earlier was stale), and the delta is ADDED-only. `approval_signal_test.go` IS held by #1156 while 4.5 edits
+`approval_signal.go`: a same-function, not same-file, coordination point.
 
 ## 1. Claim and design
 
@@ -58,46 +69,66 @@ paths Codex's #759/#1146 stack (PRs #1156/#1159/#1141) holds, and the delta is A
       two files are outside the enumerated set (intersection still empty); NIT `EntitySampleTruncated`. Round 3
       confirmed closed. The BLOCKING is an absent axis, not a fourth piecemeal owner; the other three are present
       axes with blind search shapes.
-- [ ] 1.3h Architect amendment round 4 (Opus session per owner ruling G1, #1261 comment 7). Inventory: the continuation
-      axis row (owner ruled Q12: adopt on `query_by_type`, refuse on `query_neighbors` with the reason recorded),
-      three search widenings (prose absence enumerated per plane, `not_found`/`unresolved` vocabulary row,
-      predicate-registration authority row), the `processor/research-graph-execute/adapters.go` row (#1261
-      comment 6: parallel reader over graph-query, outgoing only, untouched), the 180-path re-measure and 4.5's
-      file set, the NIT. Design/delta fold-ins of the rulings: Q1 64KB; Q4 `direction` narrowed to `outgoing`
-      (`incoming|both` → `invalid_args` naming the incoming owner, migration row); Q6 three right-anchored tokens
-      (R2 sentence + scenario); Q9 `feat(agentic-tools)!:`; Q12 pagination requirement (`Paginated:true`,
-      `has_more` + opaque `next_cursor` in Metadata, `HintTooLarge` kept, `matched` stays, `truncated` goes); Q7
-      cross-references #1265. Then ONE closure-only re-review round 5 ("did the round-4 rows land", no new
-      sweep); if it finds a new axis, the owner rules on the inventory as it stands.
-- [ ] 1.4 Owner INVENTORY PASS on the PR (asked for after 1.3h + round 5, ruling G2). Owner rulings on questions 1–12
-      RECORDED 2026-09-07 (#1261 comment 7, verbatim; recommendations in comments 5 and 6).
+- [x] 1.3h Architect amendment round 4 (Opus session, owner ruling G1) LANDED. Inventory gained six rows: the
+      continuation axis (Q12 — adopted on `query_by_type`, refused on `query_neighbors` with the reason recorded),
+      the prose-absence adoption sweep replacing addition 2's withdrawn "no adoption sweep owed" clause, the
+      `not_found`/`unresolved`/`MissingReason` vocabulary row, the predicate-registration authority row, the
+      `processor/research-graph-execute/adapters.go` row (#1261 comment 6), and the 180-path re-measure with 4.5's
+      file set; the `EntitySampleTruncated` NIT landed in the round-1 row it belongs to. Design and delta applied
+      Q1 (64KB), Q4 (`direction` → `outgoing`; explicit `incoming`/`both` → `invalid_args` naming the incoming
+      owner), Q6 (three right-anchored tokens), Q9 (`feat(agentic-tools)!:`), Q12 (`Paginated: true`, `cursor`
+      argument, `has_more` + opaque `next_cursor` through the graph package's existing codec, `truncated` deleted),
+      and cross-referenced #1265 (Q7) and #1266. Two premises were measured differently from the round-4 verdict and
+      are recorded in `inventory-verification.md`: `natsclient.FilteredKeys` does NOT sort, and a cursor cannot seek
+      (each page re-lists and re-sorts). Delta stays ADDED-only; `openspec validate --strict` passes.
+- [ ] 1.3i Closure-only re-review round 5 (`semstreams-reviewer`; brief = "did the round-4 rows land", no new sweep —
+      owner ruling G1). A new axis found anyway is ruled by the owner on the inventory as it stands; there is no
+      round 6.
+- [ ] 1.4 Owner INVENTORY PASS on the PR (asked for after 1.3h + 1.3i, ruling G2). Owner rulings on questions 1–12
+      and gates G1/G2 RECORDED 2026-09-07 (#1261 comment 7; recommendations in comments 5 and 6) and APPLIED by 1.3h.
 - [x] 1.5 Milestone `v1.0.0-beta.165` placed on #1261, #1260 and PR #1262 (owner ruling Q10, 2026-09-07).
 - [ ] 1.6 HOLD (relaxed by owner ruling Q11, 2026-09-07, to archive-order coordination) — sections 3–6 do not start
       until 1.4 INVENTORY PASS is recorded. Coordination rule while Codex's #759/#1146 stack (PRs #1156/#1159/#1141)
       is open: rebase on `main` after each stack merge; `task e2e:agentic` green before this PR's own merge; the
       delta stays ADDED-only until the stack's `agentic-tools` delta archives. Re-check the file list against the
-      PAGINATED Codex file lists (`gh api repos/:owner/:repo/pulls/N/files --paginate`; 180 paths at 2026-09-05)
-      before 3.1, and re-pin the two premises that live inside held files (`executors/httprequest.go:23`,
-      `component.go:974-994`).
+      PAGINATED Codex file lists (`gh api repos/:owner/:repo/pulls/N/files --paginate`; 180 unique paths at
+      2026-09-07, 54 + 137 + 7) before 3.1, and re-pin the two premises that live inside held files
+      (`executors/httprequest.go:23`, `component.go:974-994`).
+
+- [ ] 1.7 File the `HintEmpty` adoption sweep as ONE tracking issue at the owner's placement: three planes enumerated
+      and pinned in `inventory-verification.md` § round-4 rows (`executors/websearch.go:191`, `personas.go:178`,
+      `rules.go:255`). Enumeration only — this change migrates none of them and is not held on the count (architect
+      contract, establishing side; owner ruling 2026-09-01).
 
 ## 2. Spec delta
 
-- [x] 2.1 Three ADDED requirements in `specs/agentic-tools/spec.md`; no MODIFIED block —
-      `openspec/specs/agentic-tools/spec.md:435/:467/:487` are held by PR #1159's pending delta.
-- [ ] 2.2 Delta reconciled against the owner rulings from 1.4.
+- [x] 2.1 ADDED requirements only in `specs/agentic-tools/spec.md` — three at first draft, four after 1.3h; no
+      MODIFIED block, because `openspec/specs/agentic-tools/spec.md:435/:467/:487` are MODIFIED by PR #1159's pending
+      delta (`openspec/changes/agentic-loop-restart-safety/specs/agentic-tools/spec.md`, Codex-held).
+- [x] 2.2 Delta reconciled against the 2026-09-07 owner rulings (applied in 1.3h): a fourth ADDED requirement for the
+      `direction` narrowing (Q4); `query_by_type` gains the three-token arity (Q6), the sort-before-page clause, and
+      the pagination contract while losing `truncated` (Q12); `query_neighbors` gains the explicit refusal to
+      announce continuation without a token (Q12); the first requirement gains the paragraph separating declaration
+      status from minting authority. Still ADDED-only.
 
 ## 3. Code
 
-- [ ] 3.1 `graph_query.go`: `KVKeyLister`; a pattern BUILDER (one or two tokens → six-position pattern, validated by
-      `ValidateEntityIDPattern`) shared by `entity_type`/`filter_type`, matching through `MatchEntityIDPattern` — no
-      new type extractor or matcher; `queryByType` served; `extractRelationships` typed over `EntityState` with `IsRelationship()`, dead branch
-      deleted; `predicates_present`/`filter_registered`; neighbors budget, `unresolved`, hints; descriptions rewritten.
+- [ ] 3.1 `graph_query.go`: `KVKeyLister`; a pattern BUILDER (one to three right-anchored tokens → six-position
+      pattern, validated by `ValidateEntityIDPattern`) shared by `entity_type`/`filter_type`, matching through
+      `MatchEntityIDPattern` — no new type extractor or matcher; `queryByType` served, sorting the lister's output
+      itself and paging through `graph.EncodeCursor`/`graph.DecodeCursor` with `Paginated: true`, a `cursor`
+      argument, and `has_more`/`next_cursor` in `ToolResult.Metadata` (no `truncated` field); `query_relationships`
+      serves `direction: outgoing` only and refuses an explicit `incoming`/`both` as `invalid_args` naming the
+      incoming owner; `extractRelationships` typed over `EntityState` with `IsRelationship()`, dead branch
+      deleted; `predicates_present`/`filter_registered`; neighbors 64KB budget (constant commented beside
+      `bashMaxOutputBytes`), `unresolved`, hints, and NO `has_more`; descriptions rewritten.
 - [ ] 3.2 `register_graph_query.go`: adapter `KeysByPattern` via `natsclient.FilteredKeys`.
 
 ## 4. Tests
 
 - [ ] 4.1 Unit tests named in `design.md` § Test plan; fixtures via `graph.MarshalEntityState`; `// spec:` citations.
-- [ ] 4.2 Integration `TestIntegration_QueryByType_ListsFromEntityStates`.
+- [ ] 4.2 Integration `TestIntegration_QueryByType_ListsFromEntityStates` — the first positional-wildcard
+      `ListKeysFiltered` call against real NATS; asserts sorted output and one cursor continuation across two pages.
 - [ ] 4.3 Fails-without-fix for the `IsRelationship` filter and the segment match, run against the committed state.
 - [ ] 4.4 `predicate_authority_contract_test.go` unchanged and green.
 - [ ] 4.5 Booted-binary walk for `KVKeyLister` (RC-6): `test/e2e/mock/cmd/main.go:38` pins
@@ -108,8 +139,10 @@ paths Codex's #759/#1146 stack (PRs #1156/#1159/#1141) holds, and the delta is A
 
 ## 5. Docs
 
-- [ ] 5.1 `docs/operations/migration-graph-read-tools.md`: result-shape changes for `query_by_type` and
-      `query_relationships` (home per owner question 5).
+- [ ] 5.1 `docs/operations/migration-graph-read-tools.md` (home per owner ruling Q5): before/after JSON for the four
+      model-facing flips — `IsRelationship()` row filtering, `filter_type` honoured on `query_neighbors`, the 64KB
+      budget, and the `direction` narrowing (its own row, ruling Q4) — plus the `query_by_type` stub → served listing
+      and its `truncated` → `has_more`/`next_cursor` continuation.
 
 ## 6. Gates
 

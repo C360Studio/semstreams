@@ -1,16 +1,19 @@
 # Change: Direct graph-read tools signal absence, serve the type segment, and observe their bounds
 
 Closes #1261. Claim: PR on `claude/gh1261-graph-read-tools`, own worktree. Premises pinned at `main@797d294a` in
-`inventory-verification.md`. **Design status: DRAFT, conditional on the owner's INVENTORY PASS over
-`inventory-verification.md` and on the eleven owner questions below. Nothing here is approved.** Milestone: none yet —
-owner places (architect recommendation: `v1.0.0-beta.165`, beside #1212, the same ADR-102 type-segment territory; not
-beta.163, the exit-criteria lane).
+`inventory-verification.md`. **Design status: DRAFT. The owner ruled questions 1–12 and gates G1/G2 on 2026-09-07
+(#1261 comment 7) and this revision applies them; the INVENTORY PASS itself is NOT given — ruling G2 defers it until
+after the closure-only round 5.** Milestone: `v1.0.0-beta.165` (owner ruling Q10), placed on #1261, #1260 and
+PR #1262; the tag range decides what actually ships.
 
-**Sequencing:** implementation is on HOLD behind Codex's #759/#1146 stack (PRs #1156/#1159/#1141) until owner question 11
-is ruled; the implementation's file set intersects none of the 176 unique paths those PRs hold (54 + 133 + 7, paginated — `gh pr view
---json files` caps at 100 and PR #1159 has 133), and the delta is ADDED-only because Codex's pending `agentic-tools`
-delta MODIFIES `openspec/specs/agentic-tools/spec.md:435`, `:467`, and `:487`. The owner's 2026-09-05 note (on #1261)
-reads this as a break wanted sooner; `design.md` § Break classification answers it.
+**Sequencing:** the HOLD is relaxed to archive-order coordination (owner ruling Q11): rebase on `main` after each
+Codex stack merge, `task e2e:agentic` green before this PR's own merge. Sections 3–6 still wait on the INVENTORY PASS
+(`tasks.md` 1.6). The implementation's file set — including task 4.5's two e2e files — intersects none of the **180**
+unique paths Codex's #759/#1146 stack (PRs #1156/#1159/#1141) holds (54 + 137 + 7, re-measured 2026-09-07 with
+`gh api ... --paginate`; `gh pr view --json files` caps at 100), and the delta is ADDED-only because Codex's pending
+`agentic-tools` delta MODIFIES `openspec/specs/agentic-tools/spec.md:435`, `:467`, and `:487`. The owner's 2026-09-05
+note (on #1261) reads this as a break wanted sooner, and ruling Q9 makes it `feat(agentic-tools)!:`; `design.md`
+§ Break classification carries the analysis.
 
 ## Why
 
@@ -32,37 +35,52 @@ contract's first adopter.
 
 ## What changes (per finding)
 
-1. **`query_relationships`:** a malformed filter → `ToolErrorInvalidArgs` before any read; an empty result →
+1. **`query_relationships`:** `direction` narrows to the one the record can carry (owner ruling Q4) — an omitted
+   `direction` answers `outgoing` and echoes it, an explicit `incoming` or `both` is `ToolErrorInvalidArgs` naming
+   `graph.query.relationships` over INCOMING_INDEX as the incoming owner; a malformed filter → `ToolErrorInvalidArgs` before any read; an empty result →
    `ResultHint: HintEmpty` plus fields `filter_registered` and `predicates_present` (every predicate on the entity with
    `kind: relationship|property` and the registry's `description`/`role`/`inverse_of` when registered). Relationships
    are selected by `message.Triple.IsRelationship()`; the dead `relationships` reader branch is deleted.
 2. **`query_by_type`:** served, not retired — identities listed by the ADR-102 type segment through
-   `natsclient.FilteredKeys` on the existing catalog-reader seam (inventory addition 1); `entity_type` is one token
-   (`*.*.*.*.<type>.*`) or `domain.type` (`*.*.*.<domain>.<type>.*`), validated by `pkg/types.ValidateEntityIDPattern` and matched
+   `natsclient.FilteredKeys` on the existing catalog-reader seam (inventory addition 1); `entity_type` is one to
+   three right-anchored tokens (`*.*.*.*.<type>.*`, `*.*.*.<domain>.<type>.*`, `*.*.<system>.<domain>.<type>.*` —
+   owner ruling Q6), validated by `pkg/types.ValidateEntityIDPattern` and matched
    per key by `pkg/types.MatchEntityIDPattern` (the existing exact-six-position matcher; no new type extractor —
    `graphrag.filterEntityIDsByType`'s case folding and empty-set widening are deliberately not reused, `design.md`);
-   sorted; `limit` honored; `HintTooLarge` when truncated, `HintEmpty` when none. No new index, no new bucket.
+   sorted by the executor, because `FilteredKeys` returns KV-scan order (`natsclient/kv.go:582-600`); `limit`
+   honored; `HintEmpty` when none. Continuation uses the framework's pagination contract rather than a bespoke flag
+   (owner ruling Q12): `Paginated: true`, a `cursor` argument, `has_more` on every successful result, an opaque
+   `next_cursor` in `Metadata` through the graph package's existing cursor codec, and `HintTooLarge` still set on a
+   page that leaves matches behind. No new index, no new bucket.
 3. **Schema read:** no new tool. `predicates_present` on `query_relationships` is the experiment's `describe_edges`
    scoped to the entity in hand; the graph-wide predicate catalog already has an owner — `graph.index.query.predicateList`
    (`processor/graph-index/query.go:59,507-545`; consumed by the gateway's `predicates` field and by `graph.query.summary`) —
    and open questions are `research_graph`'s job (`frameworkcapabilities/graphresearch/executor.go:151-156`). ADR-036
    call and the case against it are in `design.md`.
-4. **`query_neighbors`:** a content byte budget observed while assembling; `truncated`, `frontier_remaining`,
-   `HintTooLarge`; missing targets in `unresolved` (inherits `openspec/specs/graph-query/spec.md:255-263`); transient
+4. **`query_neighbors`:** a 64KB content byte budget observed while assembling (owner ruling Q1); `truncated`,
+   `frontier_remaining`, `HintTooLarge` — and deliberately NO `has_more`, because a traversal frontier is not a
+   resumable position (owner ruling Q12, refusal reason recorded in `design.md` § Continuation);
+   missing targets in `unresolved` (inherits `openspec/specs/graph-query/spec.md:255-263`); transient
    fetch errors fail the call as `query_entity` does; `filter_type` matches the identity's type segment with the same
    grammar as `entity_type`, through `MatchEntityIDPattern`.
 
-No new hint value is needed; all four findings fit `HintEmpty`/`HintTooLarge` plus result fields. `agentic/tools.go`
-and `processor/agentic-loop/result_hint.go` are untouched.
+No new hint value is needed; all four findings fit `HintEmpty`/`HintTooLarge` plus result fields. The **pagination
+half** of the same contract is adopted rather than re-spelled: `query_by_type` sets the existing
+`agentic.MetadataKey{HasMore,NextCursor}` and declares `ToolDefinition.Paginated`, which the loop already renders
+(`processor/agentic-loop/result_hint.go:69-88`, called at `handlers.go:2639`). `agentic/tools.go` and
+`processor/agentic-loop/result_hint.go` are still untouched — consumed as they stand, and now considered rather than
+merely unmentioned (round-4 BLOCKING).
 
 ## Adopter seam inventory
 
 The adopter is a component or persona author outside this repo, and the model itself as the reader of these results.
 
-- **What must they know?** Nothing new to call. Model-facing: the `entity_type` grammar (one or two tokens) and the
-  `relationship_type` grammar (`domain.category.property`) — both stated in the parameter descriptions and both
-  enforced with a typed `invalid_args` rather than a silent zero. Two facts; the debt is named in the descriptions and
-  enforced at runtime.
+- **What must they know?** Nothing new to call. Model-facing: the `entity_type` grammar (one to three right-anchored
+  tokens) and the `relationship_type` grammar (`domain.category.property`) — both stated in the parameter descriptions
+  and both enforced with a typed `invalid_args` rather than a silent zero. Two facts; the debt is named in the
+  descriptions and enforced at runtime. The cursor is deliberately NOT a third fact: it is opaque, the framework
+  renders "pass cursor=… to continue" into the model's next message, and the model echoes the token back without ever
+  computing it.
 - **What happens if they do nothing?** Today a filtered zero is indistinguishable from a typo, `filter_type` is
   ignored, and `query_by_type` returns nothing forever. After: every empty result names why, every truncation names
   itself, every listing shows the pattern it matched.
@@ -70,13 +88,21 @@ The adopter is a component or persona author outside this repo, and the model it
   `predicates_present`, `pattern`, `truncated`) > the hint preamble the framework renders. Nothing lands at "doc only".
 - **What SHOULD they have to know?** Nothing about which predicate names or type tokens exist — the result shows them.
   Observation over prediction: the model observes `predicates_present` instead of predicting a name; the tool observes
-  the real key set and the real byte count instead of a knob. The one knob kept is the existing `limit`.
+  the real key set and the real byte count instead of a knob; and the continuation token is OBSERVED from the previous
+  page rather than predicted from a position the model would have to count. The one knob kept is the existing `limit`;
+  the budget and the cursor format belong to the framework, not the caller.
 
 ## Non-goals
 
 - No new tool; no new index or bucket; no `PredicateMetadata` fields; no MCP.
 - No change to `query_entities` (#839 owns its bound).
-- `direction=incoming` is not re-homed (owner question 4).
+- `direction=incoming` is not re-homed — it is refused, naming its owner (owner ruling Q4).
+- No type-listing entry ("which types exist"): filed as #1265 (owner ruling Q7). No substring `find_nodes` tool
+  (owner ruling Q8).
+- No new `ToolResultHint` value and no edit to `agentic/tools.go` or `processor/agentic-loop/result_hint.go`; the
+  pagination contract is consumed exactly as it stands (owner ruling Q12).
+- The three prose-absence executors enumerated by the round-4 adoption sweep (`web_search`, `list_personas`,
+  `list_rules`) are NOT migrated here — enumeration only.
 - Graph-shape guidance for adopters is #1260.
 - The #1117 small-model `e2e:semantic` variant is NOT a standing proof for these tools: nothing in that tier calls
   them (0 hits). Recorded as a residual, not filed.
@@ -84,46 +110,34 @@ The adopter is a component or persona author outside this repo, and the model it
 ## Consumers at birth
 
 `KVKeyLister` (new exported optional interface in a Tier 1 package): `graphQueryKVAdapter` implements it,
-`queryByType` consumes it. `predicates_present`/`filter_registered`/`unresolved`/`truncated`/`pattern`: the model via
-`buildToolMessages`; the agentic e2e approval walk consumes the served `query_by_type` (inventory addition 4). No sister
+`queryByType` consumes it. `predicates_present`/`filter_registered`/`unresolved`/`frontier_remaining`/`pattern`: the
+model via `buildToolMessages`; the agentic e2e approval walk consumes the served `query_by_type` (inventory addition 4
+and `tasks.md` 4.5). `has_more`/`next_cursor`: `decorateContentWithPagination`
+(`processor/agentic-loop/result_hint.go:69-88`, called at `handlers.go:2639`) reads them today for `read_loop_result`
+and reads ours the moment they are set — a present consumer, not a future one. No sister
 repo calls the executor directly (addition 8); semdev and semteams reach it through `RegisterBuiltins`.
 
-## Owner questions (numbered; each with the recommendation and the strongest case against)
+## Owner rulings (recorded 2026-09-07 on #1261, comment 7, adopting the recommendations in comments 5 and 6)
 
-Renumbered 2026-09-05 after the independent inventory review and the owner note on #1261. Rulings are recorded on
-#1261; the docket comment there mirrors this list.
+Questions 1–11 were numbered on 2026-09-05; round 4 added Q12. The owner ruled all twelve plus the two gates in one
+sitting. This section is the record, not a request — nothing in it is re-opened by this change.
 
-1. **Neighbors budget value.** Recommend 100KB (`executors/bash.go:36`, the package precedent) with a comment naming the
-   sibling. Against: `docs/concepts/24`'s failure case was 102KB; 64KB is defensible. Value only — the mechanism (a
-   model-facing content cap, distinct from the transport bound spec `:467` governs) is stated in `design.md`.
-2. **`query_by_type` returns identities only** (hydrate via `query_entities`). Recommend yes. Against: one extra call
-   for a small model; but hydrating 100 records is the #839 payload class.
-3. **Fold in the `filter_type` and `IsRelationship` fixes** (inventory additions, not in the issue's four). Recommend
-   yes: both are required for `unresolved` to be truthful. Against: scope beyond the issue's four.
-4. **`direction=incoming|both` is structurally empty from the record** (records are own-subject only). Recommend:
-   truthful description now, residual recorded, enum narrowing the owner's own `class:advertised-absent` issue.
-   Against: shipping a knowingly empty enum value.
-5. **Migration doc home.** Recommend `docs/operations/migration-graph-read-tools.md` (precedent
-   `migration-gated-dag-semantic-settlement.md`); `migration-beta162-to-beta163.md` is in PR #1159's file list.
-   Against: one more topic doc.
-6. **Accept three right-anchored tokens** (`*.*.<system>.<domain>.<type>.*`) so `graph.query.summary`'s
-   `system.domain.type` bucket key pastes into `entity_type` as-is. Recommend yes (one grammar, one more arity; the
-   delta's R2 gains one sentence and one scenario if accepted — not pre-applied). Against: a third arity for the model
-   to hold; summary is unreachable in tiers without graph-query.
-7. **"Which types exist" entry** (omitted `entity_type` → a type listing). Two owners exist already, both on
-   graph-query and both absent from the agentic tier: `summary` (flat `system.domain.type` buckets with example IDs) and
-   `hierarchyStats`/`entityIdHierarchy` (level-by-level drill, `processor/graph-query/query.go:55,518-528`). Recommend
-   **no** in this change: either is a NATS dependency on graph-query and needs a typed adapter. Against: cold-start type
-   discovery then has no direct-surface home; `research_graph` is async and heavier.
-8. **A `find_nodes`-shaped substring tool.** Recommend **no**: re-opens `agentic-tools/spec.md:267-291`, ADR-036 width,
-   an O(N) value scan; app-local registration is the sanctioned route (semsource's `graph_search`). Against: the cited
-   experiment's whole condition rested on it.
-9. **Commit label.** Recommend `feat(agentic-tools):` without `!`, with `task e2e:agentic` green before merge regardless.
-   Against: the owner reads it as a break; the `filter_type` behaviour flip could shrink a deployment's neighbor set.
-10. **Milestone.** Recommend `v1.0.0-beta.165` ("close declaration-to-admission-to-runtime parity"), landed first in it.
-    Against: 29 open there; an own-break tag ships the shapes to semteams' ops role and semsource sooner.
-11. **Relax the HOLD** on the #759/#1146 stack to archive-order coordination on the shared spec file. Recommend yes:
-    the implementation's file set intersects none of the 176 unique Codex-held paths (paginated). Against: two ADDED deltas
-    landing on one spec and one shared e2e tier in the same window.
+| # | Ruling | Where it lands |
+|---|---|---|
+| G1 | Round-4 amendment (task 1.3h) from an Opus session, then ONE closure-only round 5; a new axis found in round 5 is ruled on the inventory as it stands — no round 6 | `tasks.md` 1.3h, 1.3i |
+| G2 | INVENTORY PASS is asked for after G1 completes | `tasks.md` 1.4 |
+| 1 | Neighbors budget **64KB** | `design.md` § Budget |
+| 2 | `query_by_type` returns identities only | § What changes 2; `design.md` § Result shapes |
+| 3 | Fold in the `filter_type` and `IsRelationship` fixes | § What changes 1 and 4 |
+| 4 | Narrow `direction` to `outgoing` in this change; explicit `incoming` or `both` → `invalid_args` naming the incoming owner; one migration row | `design.md` § `direction`; delta requirement 2; `tasks.md` 5.1 |
+| 5 | Migration doc home `docs/operations/migration-graph-read-tools.md` | `tasks.md` 5.1 |
+| 6 | Accept three right-anchored tokens | § What changes 2; delta requirement 3 |
+| 7 | No type listing here; the typed adapter to `graph.query.summary` filed as **#1265** (`v1.0.0-beta.165`) | `design.md` § ADR-036 call |
+| 8 | No substring `find_nodes` tool | `design.md` § Tool-preference premise |
+| 9 | `feat(agentic-tools)!:`; the changelog line names model-facing result shapes, not the Go surface | `design.md` § Break classification |
+| 10 | Milestone `v1.0.0-beta.165` for #1261 and #1260; the tag range decides what ships | header above |
+| 11 | HOLD relaxed to archive-order coordination: rebase after each Codex stack merge, `task e2e:agentic` green before merge | `tasks.md` 1.6 |
+| 12 | Adopt the pagination contract on `query_by_type` (`Paginated: true`, `has_more` + opaque `next_cursor` in Metadata, `HintTooLarge` kept, `matched` stays, `truncated` goes); refuse on `query_neighbors` with the reason recorded; no new hint value | `design.md` § Continuation; delta requirements 3 and 4 |
 
-Stated, not asked: no new hint value is needed; all four findings fit `HintEmpty`/`HintTooLarge` plus result fields.
+Filed in the same sitting from the same reading, and NOT part of this change: **#1266** (tool-catalog audit — 28
+registered tool names, and discovery advertising the whole roster to any loop without `default_tools`).
