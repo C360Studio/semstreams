@@ -270,15 +270,23 @@ func (m *LoopManager) CreateLoopWithID(loopID, taskID, role, model string, maxIt
 //
 // No other per-loop state is touched: the context manager, the pending-tool
 // set, and every cache stay exactly as the live loop left them.
-func (m *LoopManager) attachContinuation(loopID, taskID string) (agentic.LoopEntity, error) {
+func (m *LoopManager) attachContinuation(task agentic.TaskMessage) (agentic.LoopEntity, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	loopID := task.LoopID
 	entity, exists := m.loops[loopID]
 	if !exists {
 		return agentic.LoopEntity{}, errs.Wrap(
 			fmt.Errorf("loop %s: %w", loopID, ErrLoopNotFound),
 			"agentic-loop", "attachContinuation", "find loop")
+	}
+	// Supplied history belongs to an independent task. Check before any
+	// rebinding under the same lock that owns the existing execution.
+	if len(task.PriorMessages) != 0 && entity.TaskID != task.TaskID {
+		return agentic.LoopEntity{}, errs.WrapInvalid(
+			fmt.Errorf("prior_messages cannot accompany attachment to a different task's execution"),
+			"agentic-loop", "attachContinuation", "conflicting conversation input")
 	}
 	if entity.State.IsTerminal() {
 		return agentic.LoopEntity{}, errs.WrapInvalid(
@@ -296,7 +304,7 @@ func (m *LoopManager) attachContinuation(loopID, taskID string) (agentic.LoopEnt
 			"agentic-loop", "attachContinuation", "refuse continuation of a loop with work in flight")
 	}
 
-	entity.TaskID = taskID
+	entity.TaskID = task.TaskID
 	return *entity, nil
 }
 
@@ -329,6 +337,72 @@ func (m *LoopManager) GetLoop(loopID string) (agentic.LoopEntity, error) {
 	}
 
 	return *entity, nil
+}
+
+// restoreLoopFromRequest rebuilds only the process-local material required to
+// settle one response delivery. AGENT_LOOPS and the exact retained request
+// remain authoritative; this method creates no durable state.
+func (m *LoopManager) restoreLoopFromRequest(entity agentic.LoopEntity, request agentic.AgentRequest) error {
+	if err := entity.Validate(); err != nil {
+		return err
+	}
+	if err := request.Validate(); err != nil {
+		return err
+	}
+	if entity.ID != request.LoopID || entity.Role != request.Role || entity.Model != request.Model {
+		return fmt.Errorf("loop %q and request %q correlation conflicts", entity.ID, request.RequestID)
+	}
+
+	opts := []ContextManagerOption{WithLogger(m.logger)}
+	if m.modelRegistry != nil {
+		opts = append(opts, WithModelRegistry(m.modelRegistry))
+	}
+	cm := NewContextManager(entity.ID, entity.Model, m.contextConfig, opts...)
+	for _, msg := range request.Messages {
+		region := RegionRecentHistory
+		if msg.Role == "system" {
+			region = RegionSystemPrompt
+		} else if msg.Role == "tool" {
+			region = RegionToolResults
+		}
+		if err := cm.AddMessage(region, msg); err != nil {
+			return err
+		}
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if current, exists := m.loops[entity.ID]; exists {
+		if current.TaskID != entity.TaskID || current.Role != entity.Role || current.Model != entity.Model {
+			return fmt.Errorf("loop %q process and durable correlation conflict", entity.ID)
+		}
+		return nil
+	}
+	restored := entity
+	m.loops[entity.ID] = &restored
+	m.contextManagers[entity.ID] = cm
+	m.pendingTools[entity.ID] = make(map[string]bool)
+	m.cachedTools[entity.ID] = append([]agentic.ToolDefinition(nil), request.Tools...)
+	if request.ToolChoice != nil {
+		choice := *request.ToolChoice
+		m.cachedToolChoice[entity.ID] = &choice
+	}
+	if entity.Metadata != nil {
+		metadata := make(map[string]any, len(entity.Metadata))
+		for key, value := range entity.Metadata {
+			metadata[key] = value
+		}
+		m.cachedMetadata[entity.ID] = metadata
+	}
+	if request.Timeout != "" {
+		m.cachedRequestTimeout[entity.ID] = request.Timeout
+	}
+	if request.ResponseFormat != nil {
+		format := *request.ResponseFormat
+		m.cachedResponseFormat[entity.ID] = &format
+	}
+	m.requestToLoop[request.RequestID] = entity.ID
+	return nil
 }
 
 // UpdateLoop updates an existing loop entity
@@ -902,10 +976,10 @@ func (m *LoopManager) StoreToolResult(loopID string, result agentic.ToolResult) 
 
 // GetAndClearToolResults retrieves all accumulated tool results and clears them.
 // Also evicts the ExecutionID→loop routing entry for each drained result so a late
-// re-delivery (NATS redelivery, executor retry) lands on an empty mapping at
-// handleToolResultMessage and is dropped at the wire instead of leaking into
-// the next turn's PendingToolResults — which would otherwise produce a
-// duplicate tool message in the message array sent to the model.
+// re-delivery (NATS redelivery, executor retry) lands on the handler's cold
+// read-through path instead of leaking into the next turn's PendingToolResults —
+// which would otherwise produce a duplicate tool message in the message array
+// sent to the model.
 //
 // GetLoopForToolCallWithRecovery performs this same direct ExecutionID lookup
 // without a provider-CallID fallback, so eviction makes late delivery unmapped.

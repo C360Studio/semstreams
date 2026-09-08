@@ -113,7 +113,7 @@ func (c *Component) handleCancelCommand(ctx context.Context, msg agentic.UserMes
 			ChannelID:   msg.ChannelID,
 			UserID:      msg.UserID,
 			Type:        agentic.ResponseTypeError,
-			Content:     "No loop to cancel. Specify a loop_id or have an active loop.",
+			Content:     "An explicit loop_id is required. Use /cancel <loop_id>.",
 			Timestamp:   time.Now(),
 		}, nil
 	}
@@ -210,8 +210,8 @@ func (c *Component) handleStatusCommand(ctx context.Context, msg agentic.UserMes
 			ChannelType: msg.ChannelType,
 			ChannelID:   msg.ChannelID,
 			UserID:      msg.UserID,
-			Type:        agentic.ResponseTypeStatus,
-			Content:     "No active loop. Start a task or specify a loop_id.",
+			Type:        agentic.ResponseTypeError,
+			Content:     "An explicit loop_id is required. Use /status <loop_id>.",
 			Timestamp:   time.Now(),
 		}, nil
 	}

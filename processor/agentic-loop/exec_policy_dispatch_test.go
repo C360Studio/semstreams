@@ -8,6 +8,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
+	"github.com/google/uuid"
 )
 
 // gateCallWithMetadata drives a loop carrying task Metadata to
@@ -19,6 +20,7 @@ func gateCallWithMetadata(t *testing.T, handler *agenticloop.MessageHandler, cal
 	ctx := context.Background()
 
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID:   uuid.NewString(),
 		TaskID:   "task-" + callID,
 		Role:     "planner",
 		Model:    "qwen-32b",

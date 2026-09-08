@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
@@ -91,6 +92,14 @@ func (c *Component) findRetainedDispatchTask(
 		return preparedDispatchTask{}, vacantDispatchTaskSlot{}, false, err
 	}
 	if found {
+		// Validate supplied history through its existing task owner even when a
+		// retained task wins. Comparing only displayed text must not admit
+		// execution-only fields newly attached to a redelivered source.
+		sourceTask := retained
+		sourceTask.PriorMessages = msg.PriorMessages
+		if err := sourceTask.Validate(); err != nil {
+			return preparedDispatchTask{}, vacantDispatchTaskSlot{}, false, err
+		}
 		if err := validateRetainedDispatchTask(retained, msg, taskID, msg.ReplyTo); err != nil {
 			return preparedDispatchTask{}, vacantDispatchTaskSlot{}, false, errs.WrapFatal(
 				err, "Component", "findRetainedDispatchTask", "task mapping conflict")
@@ -203,6 +212,10 @@ func validateRetainedDispatchTask(
 		return fmt.Errorf("retained user_id %q does not match %q", task.UserID, msg.UserID)
 	case task.Prompt != msg.Content:
 		return fmt.Errorf("retained prompt does not match source content")
+	case !slices.EqualFunc(task.PriorMessages, msg.PriorMessages, func(a, b agentic.ChatMessage) bool {
+		return a.Role == b.Role && a.Content == b.Content
+	}):
+		return fmt.Errorf("retained prior_messages do not match source history")
 	case task.ContextRequestID != msg.ContextRequestID:
 		return fmt.Errorf("retained context_request_id does not match source")
 	case task.RunID != msg.RunID:

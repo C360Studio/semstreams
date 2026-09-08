@@ -166,8 +166,12 @@
 //
 //	handler := NewMessageHandler(config)
 //
+//	// Direct HandleTask validates the TaskMessage and does not marshal it.
+//	// A stream producer mints once before wrapping and marshal, then reuses
+//	// those serialized bytes when retrying that publication.
 //	// Handle incoming task
 //	result, err := handler.HandleTask(ctx, TaskMessage{
+//	    LoopID: uuid.NewString(),
 //	    TaskID: "task_123",
 //	    Role:   "general",
 //	    Model:  "gpt-4",
@@ -329,12 +333,18 @@
 // Publish a task:
 //
 //	task := agenticloop.TaskMessage{
+//	    LoopID: uuid.NewString(),
 //	    TaskID: "analyze_code",
 //	    Role:   "general",
 //	    Model:  "gpt-4",
 //	    Prompt: "Review main.go for security issues",
 //	}
-//	taskData, _ := json.Marshal(task)
+//
+// Production code mints once before marshal and reuses these serialized bytes
+// when retrying this publication.
+//
+//	baseMsg := message.NewBaseMessage(task.Schema(), &task, "example")
+//	taskData, _ := json.Marshal(baseMsg)
 //	natsClient.PublishToStream(ctx, "agent.task.review", taskData)
 //
 // # Thread Safety

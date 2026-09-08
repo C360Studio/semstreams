@@ -8,6 +8,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
+	"github.com/google/uuid"
 )
 
 // TestHandleToolResult_ApprovalGated verifies that when a tool result
@@ -20,6 +21,7 @@ func TestHandleToolResult_ApprovalGated(t *testing.T) {
 	ctx := context.Background()
 
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-approval",
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -143,6 +145,7 @@ func TestHandleToolResult_AwaitingApprovalAbsorbsSiblings(t *testing.T) {
 	ctx := context.Background()
 
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-approval-multi",
 		Role:   "general",
 		Model:  "qwen-32b",

@@ -41,6 +41,9 @@ type UserMessage struct {
 	// Content
 	Content     string       `json:"content"`
 	Attachments []Attachment `json:"attachments,omitempty"`
+	// PriorMessages is the adapter's displayed transcript for an independent turn.
+	// Dispatch validates it at task construction so routable invalid input receives an error response.
+	PriorMessages []ChatMessage `json:"prior_messages,omitempty"`
 
 	// Context
 	ReplyTo          string            `json:"reply_to,omitempty"`           // loop_id if continuing
@@ -311,12 +314,14 @@ type ResponseAction struct {
 
 // TaskMessage represents a task to be executed by an agentic loop
 type TaskMessage struct {
-	LoopID          string `json:"loop_id,omitempty"` // loop to continue, or empty for new
+	LoopID          string `json:"loop_id"` // producer-minted loop identity
 	TaskID          string `json:"task_id"`
 	SourceMessageID string `json:"source_message_id,omitempty"`
 	Role            string `json:"role"`
 	Model           string `json:"model"`
 	Prompt          string `json:"prompt"`
+	// PriorMessages supplies ordered displayed user/assistant text, not prior execution state.
+	PriorMessages []ChatMessage `json:"prior_messages,omitempty"`
 
 	// Workflow context (optional, set by workflow commands)
 	WorkflowSlug string `json:"workflow_slug,omitempty"` // e.g., "add-user-auth"
@@ -405,6 +410,9 @@ type GraphContextSpec = types.GraphContextSpec
 
 // Validate checks if the TaskMessage is valid
 func (t TaskMessage) Validate() error {
+	if t.LoopID == "" {
+		return fmt.Errorf("loop_id required")
+	}
 	if t.TaskID == "" {
 		return fmt.Errorf("task_id required")
 	}
@@ -416,6 +424,9 @@ func (t TaskMessage) Validate() error {
 	}
 	if t.Prompt == "" {
 		return fmt.Errorf("prompt required")
+	}
+	if err := validatePriorMessages(t.PriorMessages); err != nil {
+		return err
 	}
 	if t.MaxIterations != nil && *t.MaxIterations < 1 {
 		return fmt.Errorf("max_iterations must be >= 1, got %d", *t.MaxIterations)
@@ -441,20 +452,39 @@ func (t TaskMessage) Validate() error {
 	return nil
 }
 
-// validateLoopTokens refuses any loop instance token this task carries that the
-// framework did not mint (ADR-105, #1192). Every one of these four fields is a
+// validatePriorMessages owns the narrower task-input subset without changing
+// ChatMessage's provider/tool grammar or imposing transcript ordering policy.
+func validatePriorMessages(messages []ChatMessage) error {
+	for i, msg := range messages {
+		if msg.Role != "user" && msg.Role != "assistant" {
+			return fmt.Errorf("prior_messages[%d].role must be user or assistant", i)
+		}
+		if msg.Content == "" {
+			return fmt.Errorf("prior_messages[%d].content required", i)
+		}
+		if msg.Name != "" || msg.ReasoningContent != "" || len(msg.ToolCalls) != 0 ||
+			msg.ToolCallID != "" || msg.IsError || len(msg.ReasoningRecords) != 0 {
+			return fmt.Errorf("prior_messages[%d] must contain only displayed role and content", i)
+		}
+	}
+	return nil
+}
+
+// validateLoopTokens refuses any loop instance token whose form cannot be one
+// the framework minted (ADR-105, #1192). Every one of these four fields is a
 // loop token, and every one reaches the graph write path: ParentLoopID composes
 // through the PANICKING LoopExecutionEntityID builder, and RunID / InReplyTo —
 // the gh#256 resume anchors, both client-set — are stamped raw into triples with
 // a silent half-write when their derivation fails.
 //
-// Validate is the refusal's one home because it is the gate both sides already
-// run: the rule engine before publishing, and agentic-loop intake on the way in,
-// where a rejection is loud (intake-rejection metric + TerminateDelivery). A
-// failure discovered later inside HandleTask is logged and ACKed with no metric.
+// Validate is the refusal's one home because it is the gate both sides run: the
+// rule engine before publishing, durable agentic-loop intake before state, and
+// direct HandleTask before loop registration. Intake counts and terminates an
+// invalid delivery; the direct boundary returns a typed invalid error.
 //
-// Empty is valid throughout: an unset token is the ordinary case, and the
-// framework mints it downstream. The caller's only verb is echo.
+// LoopID requiredness is checked by Validate before this shared form check.
+// The remaining tokens are optional, but every present token must have the
+// same canonical form.
 func (t TaskMessage) validateLoopTokens() error {
 	tokens := []struct {
 		field string
@@ -480,10 +510,10 @@ func (t TaskMessage) validateLoopTokens() error {
 // joins this call rather than growing a fifth spelling of the refusal text.
 //
 // Empty is not refused here. Whether a token is REQUIRED is each carrier's own
-// question and is asked before this one: a task's tokens are optional (an unset
-// one is the ordinary submission and the framework mints downstream), while a
-// signal, an approval response, and an approval-pending event each name a loop
-// that must already exist and reject an empty token on their own line.
+// question and is asked before this one: TaskMessage requires LoopID but keeps
+// its continuation tokens optional, while a signal, an approval response, and
+// an approval-pending event each name a loop that must already exist and reject
+// an empty token on their own line.
 func validateLoopTokenField(field, value string) error {
 	if value == "" || looptoken.Valid(value) {
 		return nil

@@ -74,11 +74,21 @@ connection owner. This capability SHALL NOT add a second matcher, classifier, ga
 
 ### Requirement: Publish-agent preserves the registered payload boundary
 
-`publish_agent` SHALL construct and validate `agentic.TaskMessage`, wrap it in a registered `BaseMessage`, and publish
-that envelope through the admitted output. `TaskMessage` is a `message.Payload` with the control indexing profile;
+`publish_agent` SHALL mint one random version 4 LoopID locally for each execution producing new loop work, assign it
+before validating `agentic.TaskMessage` and marshaling its registered `BaseMessage`, and publish that envelope through
+the admitted output. Retry of the same already-marshaled publication SHALL reuse its bytes; fresh upstream action
+execution is a separate production attempt. `TaskMessage` is a `message.Payload` with the control indexing profile;
 it is not `graph.Graphable`, and neither publisher admission nor durable publication SHALL require it to implement
 `EntityID` or `Triples`. Repository-wide envelope census and unrelated publisher migrations remain outside this
 capability.
+
+#### Scenario: publish-agent fixes new-loop identity before publication
+
+- **GIVEN** a valid publish_agent action producing new loop work
+- **WHEN** the action constructs its registered TaskMessage
+- **THEN** it mints LoopID once before Validate and envelope marshal
+- **AND** the durably published payload carries that canonical UUID
+- **AND** no loop consumer is responsible for supplying an absent identity
 
 #### Scenario: registered non-Graphable task is accepted
 

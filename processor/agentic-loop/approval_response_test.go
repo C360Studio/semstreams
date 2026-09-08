@@ -10,6 +10,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
+	"github.com/google/uuid"
 )
 
 // gateLoopAtCall sets up a loop, drives it through one tool_call
@@ -21,6 +22,7 @@ func gateLoopAtCall(t *testing.T, handler *agenticloop.MessageHandler, callID, t
 	ctx := context.Background()
 
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-" + callID,
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -197,6 +199,7 @@ func TestHandleApprovalResponse_NotAwaiting(t *testing.T) {
 	ctx := context.Background()
 
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-stale",
 		Role:   "general",
 		Model:  "qwen-32b",

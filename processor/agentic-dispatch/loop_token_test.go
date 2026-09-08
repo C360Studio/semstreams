@@ -158,6 +158,7 @@ func TestNonUUIDReplyToChannelGetsErrorResponse(t *testing.T) {
 func TestAutoContinuedNonUUIDTokenIsRefused(t *testing.T) {
 	t.Parallel()
 	c, _ := newLoopTokenTestComponent()
+	c.config.AutoContinue = true // Explicit opt-in; ordinary chat turns are independent by default.
 	require.True(t, c.config.AutoContinue, "this test exercises the auto-continue branch")
 
 	msg := newLoopTokenUserMessage()

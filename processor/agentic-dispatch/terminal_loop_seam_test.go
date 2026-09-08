@@ -20,6 +20,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,8 +32,8 @@ func loopCompletionEnvelope(t *testing.T, loopAction, loopReason string) []byte 
 	ctx := context.Background()
 
 	task, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
-		TaskID: "seam-task", Role: "coordinator", Model: "qwen-32b", Prompt: "coordinate",
-	})
+		LoopID: uuid.NewString(),
+		TaskID: "seam-task", Role: "coordinator", Model: "qwen-32b", Prompt: "coordinate"})
 	require.NoError(t, err)
 
 	_, err = handler.HandleModelResponse(ctx, task.LoopID, agentic.AgentResponse{

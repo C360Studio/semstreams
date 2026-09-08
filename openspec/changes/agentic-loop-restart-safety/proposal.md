@@ -1,5 +1,20 @@
 # Change: agentic-loop restart-safe settlement
 
+## Current owner direction (2026-09-08)
+
+The next acceptance checkpoint is restart-safe sequential chat through the supported task/dispatch path, using real
+NATS and a deterministic fake model. A bounded execution can finish a turn without ending the conversation; the
+next turn must receive the relevant prior exchange after component replacement. Following inventory and independent
+design review, the owner accepted optional `PriorMessages` on UserMessage, HTTPMessageRequest, and TaskMessage, and
+separately accepted changing the existing AutoContinue default to false. The adapter supplies its displayed transcript;
+the committed task carries that input through execution recovery. Explicit attachment remains supported.
+
+Keep the settlement-first, retained-result-reuse work. Matching durable provider output is reused; confirmed absence
+permits another call; required durable consequences precede ACK. Do not make sequential chat wait for #1244's complete
+transition review. The proposed blanket continuation removal is not accepted. No new bucket, ledger, supervisor,
+conversation runtime, or public API beyond those three optional fields is authorized by this product checkpoint.
+Unfinished scope below remains open.
+
 ## Why
 
 Agentic-dispatch currently keeps a second process-local interpretation of agentic-loop state. That state drives
@@ -31,10 +46,20 @@ AgentRun complete/failed fanout is transferred intact to #1249 from the exact po
 
 ## What Changes
 
+- Independent chat turns accept ordered, text-only prior user/assistant messages on existing registered task inputs.
+  Omitted, null, and empty history are equivalent. The loop generates fresh execution instructions and includes
+  history once before the current prompt, including after replacement and during later tool iterations. Nonempty
+  history conflicts with attachment and commands. Ordinary submissions are independent by default; AutoContinue is
+  opt-in, and commands requiring a target name an explicit loop_id under defaults. No hosted conversation recall is
+  promised; the adapter retains the displayed transcript and supplies it for each follow-up.
 - Durable agentic inputs settle only after their owner-specific durable consequence. Ordinary publications are
   durably at-least-once: source ACK waits for every required JetStream PubAck, and `Nats-Msg-Id` supplies only
   duplicate-window suppression. Exact reconstruction is limited to named task-birth, provider-invocation, approval-
   continuation, governance-verdict, tool-effect, explicit-LoopID, and terminal-route boundaries.
+- Every durable `TaskMessage` carries a nonempty canonical LoopID fixed at its framework task-production seam before
+  validation and marshal. A new-task producer mints one v4 UUID locally with `uuid.NewString()`; a continuation
+  producer echoes the admitted existing token. Agentic-loop validates and observes the supplied identity and never
+  repairs absence with a mint, derivation, scan, map, ledger, bucket, or second owner.
 - Agentic-dispatch is exclusively an edge gateway. It admits external requests and publishes task, cancel, and
   approval work; exposes exact reads and one caught-up current-state projection; and bridges terminal complete/failed
   events to user responses when validated authority carries a user route. Agentic-loop exclusively owns loop birth
@@ -76,6 +101,12 @@ AgentRun complete/failed fanout is transferred intact to #1249 from the exact po
   validator before its action evaluator can publish. Runtime classification calls
   `component/flowgraph.SubjectCovers(declaredFilter, concreteSubject)` in that exact direction, not exact subject
   equality, and publishes registered `TaskMessage` envelopes through JetStream with PubAck.
+- Binding owner ruling #1146 comment `5575482141` accepts producer-local `uuid.NewString()` as the framework
+  task-birth mint seam, makes LoopID required for every `TaskMessage`, and adds no exported helper, constructor,
+  configurable generator, compatibility path, or consumer-side recovery authority. Identity reuse covers retry of
+  the same already-marshaled publication and downstream redelivery of retained AGENT bytes; a fresh execution of
+  upstream `publishAgentOnce` is outside this claim. Tasks 9.5–9.7 retain admission, wildcard coverage, publisher
+  classification, PubAck, and registered-payload ownership.
 - Agentic-loop separately acquires and observes the existing `AGENT_LOOPS` authority before publishing its handle or
   starting dependent consumers and the approval sweeper.
 - The nested #1239 work is already integrated as PR #1251. Pause/resume handlers and dead signal verbs are gone;
@@ -89,7 +120,8 @@ AgentRun complete/failed fanout is transferred intact to #1249 from the exact po
   exactly-once claim is admitted.
 - Error propagation does not land separately from the durable authority that makes redelivery safe. Any additional
   durable state requires a named replacement failpoint proving existing Streams/KV/Store authority insufficient.
-- Current-spec conflicts are replaced through full MODIFIED requirements. `AGENT_LOOPS` becomes dispatch's sole
+- Current-spec conflicts are replaced through full MODIFIED requirements or an explicit ADDED/REMOVED pair when a
+  requirement heading changes. `AGENT_LOOPS` becomes dispatch's sole
   current-state authority and `LoopTracker` is deleted; tool completion/replay uses framework execution identity
   rather than provider `ToolCall.ID`; terminal loop release requires durable applied-state proof for late deliveries
   rather than process-memory inference.
@@ -120,11 +152,12 @@ AgentRun complete/failed fanout is transferred intact to #1249 from the exact po
 - AgentRun successor: #1249 from post-#1146 checkpoint `A`; transition-contract successor: #1244.
 - #1239 provenance remains with merged nested PR #1251; default-branch closing authority remains in PR #1156.
 - Blocks restart-safe approval/enforcement claims in #1140.
-- Seven capability deltas: `agentic-dispatch`, `agentic-governance`, `agentic-loop`, `agentic-model`, `agentic-tools`,
-  `graph-view-subscription`, and `rule-agent-publishing`.
+- Eight capability deltas: `agentic-dispatch`, `agentic-governance`, `agentic-loop`, `agentic-model`, `agentic-tools`,
+  `entity-id-contract`, `graph-view-subscription`, and `rule-agent-publishing`.
 - Verification includes the #1146-owned tranche of #1155's real-NATS process-replacement matrix and serialized
   agentic E2E. #1155 remains open until #1249 supplies transferred AgentRun complete/failed proof; the combined
   matrix gate is completed later.
-- Breaking adopter migrations: `CommandContext.LoopTracker` becomes the narrow `LookupLoopOwner` operation; exported
+- Breaking adopter migrations: every direct `TaskMessage` producer supplies canonical LoopID before validation and
+  marshal; `CommandContext.LoopTracker` becomes the narrow `LookupLoopOwner` operation; exported
   `graphview.View.Restart` is removed; `router_active_loops` is removed with no authoritative Prometheus replacement.
   `/loops` and `/debug/state` preserve the `LoopInfo` JSON schema through an immutable view-derived DTO.

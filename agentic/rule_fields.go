@@ -256,11 +256,11 @@ func (e *ContextEvent) RuleFields() map[string]any {
 // Widen when a real consumer asks, not before.
 func (t *TaskMessage) RuleFields() map[string]any {
 	fields := map[string]any{
+		"loop_id": t.LoopID,
 		"task_id": t.TaskID,
 		"role":    t.Role,
 		"model":   t.Model,
 	}
-	putString(fields, "loop_id", t.LoopID)
 	putString(fields, "workflow_slug", t.WorkflowSlug)
 	putString(fields, "workflow_step", t.WorkflowStep)
 	putString(fields, "channel_type", t.ChannelType)

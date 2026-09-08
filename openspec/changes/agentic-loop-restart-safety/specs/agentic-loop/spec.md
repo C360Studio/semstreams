@@ -1,5 +1,58 @@
 ## ADDED Requirements
 
+### Requirement: A task carries its prior conversational input
+
+TaskMessage SHALL accept optional `PriorMessages []ChatMessage`, serialized as `prior_messages,omitempty`. Missing,
+null, and empty SHALL mean no supplied history. One private validator used by TaskMessage.Validate SHALL require each
+entry to have user or assistant role and nonempty Content, with Name, ReasoningContent, ToolCalls, ToolCallID, IsError,
+and ReasoningRecords empty or zero. It SHALL NOT impose alternation, rewrite text, or change generic ChatMessage or
+direct AgentRequest validation. Prior user text SHALL NOT become system instructions.
+
+Initial request assembly SHALL contain fresh execution instructions, existing embedded context when present, ordered
+prior messages, and the current prompt exactly once. ContextManager SHALL receive the prior history once before the
+prompt so subsequent tool iterations retain it. Cold reconstruction without a retained request SHALL rebuild from
+the durable task including history; matching retained-request restoration SHALL NOT reseed it. A new history-bearing
+task SHALL NOT attach to an existing execution owned by a different TaskID.
+
+Committed task history SHALL suffice for that execution's conversational input without depending on earlier execution
+retention or a new transcript store. Existing context compaction and provider limits remain separate; this input
+boundary SHALL NOT silently trim the supplied history or import prior execution budget/todo instructions.
+
+#### Scenario: Follow-up after replacement
+
+- **GIVEN** a completed turn whose user and delivered assistant text accompany a later independent task
+- **WHEN** started dispatch, loop, and model components are stopped, joined, and replaced with NATS retained
+- **THEN** the later provider request carries that prior exchange and the new prompt in order under a different LoopID
+- **AND** each supplied message occurs once with fresh iteration instructions
+- **AND** a deterministic provider can answer using a fact present only in the prior exchange
+
+#### Scenario: Only displayed text is admissible history
+
+- **WHEN** a task supplies system, developer, or tool roles, empty Content, or nonzero name/tool/reasoning fields
+- **THEN** task validation refuses it before execution work
+- **AND** ordered nonempty user/assistant text is preserved without alternation or deduplication rules
+
+#### Scenario: History survives within-turn tool work
+
+- **GIVEN** an independent task supplies prior user/assistant text
+- **WHEN** its first model response requests a tool and the result produces another model iteration
+- **THEN** that iteration retains prior history and the current prompt once, together with the new tool exchange
+- **AND** its budget instructions are generated for the current execution
+
+#### Scenario: Cold reconstruction and retained-request restoration agree
+
+- **GIVEN** a durable history-bearing task is redelivered after component replacement
+- **WHEN** its initial retained request is absent
+- **THEN** request reconstruction includes the supplied history once
+- **WHEN** the matching retained request exists
+- **THEN** restoration reuses it without seeding the history a second time
+
+#### Scenario: History cannot replace a different task's active execution
+
+- **GIVEN** a loop already belongs to a different TaskID
+- **WHEN** a new history-bearing task targets that LoopID
+- **THEN** it is refused before replacing its context or publishing execution work
+
 ### Requirement: All six loop input classes settle after owner-specific durable done
 
 Agentic-loop SHALL classify task, response, tool-result, cancel-signal, approval-response, and governance-verdict
@@ -151,14 +204,45 @@ correlation SHALL use the framework identity.
 
 ### Requirement: Loop task, request, and tool work use only required correlation
 
-For a new task, dispatch SHALL supply a stable TaskID and a random LoopID retained with that task. Agentic-loop SHALL
-validate their mapping and SHALL reject a conflicting mapping. Provider work SHALL carry a stable RequestID. Tool
-work SHALL carry the framework execution identity derived from RequestID, provider CallID, and positive call ordinal.
+Every TaskMessage producer SHALL supply a nonempty canonical LoopID before validation, envelope marshal, and
+publication. Each execution producing new loop work SHALL mint one random version 4 UUID locally; a continuation
+producer SHALL echo the admitted existing LoopID. Retry of the same already-marshaled publication and downstream
+redelivery of its retained AGENT bytes SHALL reuse those bytes. A fresh execution of an upstream producer is a
+separate production attempt outside this identity-reuse claim. Agentic-loop SHALL validate TaskID-to-LoopID mapping,
+SHALL reject conflict, and SHALL NOT mint, derive, scan for, or separately persist a replacement for absent identity.
+Provider work SHALL carry a stable RequestID. Tool work SHALL carry the framework execution identity derived from
+RequestID, provider CallID, and positive call ordinal.
 
 Created, request, approval, continuation, and terminal publications are ordinary durable at-least-once outputs.
 Their source ACK SHALL wait for required PubAck. `Nats-Msg-Id` MAY provide bounded duplicate suppression but SHALL NOT
 be treated as permanent identity or proof of publication. Exact retained reads SHALL exist only at named boundaries
 where they prevent repeating non-repeatable work or prove a lane-specific durable transition already applied.
+
+For every terminal `LoopEntity` transition, the bare `AGENT_LOOPS/<LoopID>` terminal Put SHALL be the final
+lane-applied marker after all settlement-required terminal effects for that lane, including `COMPLETE_`,
+settlement-required synthetic effects, and terminal-event PubAck where applicable. Best-effort trajectory audit and
+the existing atomic completion/failure graph batch, including evidence-integrity condition evidence, SHALL remain
+nonblocking and are not marker prerequisites. Before the final Put succeeds, the durable bare record remains
+nonterminal. A failed pre-marker attempt SHALL discard speculative process-local terminal state and Retry from exact
+retained evidence. The terminal marker proves application only where the lane's required correlation identifies the
+delivered source; it is not generic tool-execution proof.
+
+#### Scenario: task identity is fixed before durable publication
+
+- **GIVEN** first-party dispatch or rule production of a new TaskMessage
+- **WHEN** the producer validates and marshals the registered envelope
+- **THEN** LoopID is already a random version 4 UUID in canonical form
+- **AND** retry of that same already-marshaled publication and downstream redelivery of its retained AGENT bytes reuse
+  that TaskMessage identity
+- **AND** a fresh execution of the upstream producer is outside this identity-reuse claim
+- **AND** agentic-loop does not mint, derive, scan for, or separately persist a replacement identity
+
+#### Scenario: task mapping is stable across process replacement
+
+- **GIVEN** the exact registered bytes of a rule-produced TaskMessage have been retained
+- **WHEN** agentic-loop is replaced and those bytes redeliver after any earlier loop birth evidence committed
+- **THEN** the task still names exactly the producer-supplied LoopID
+- **AND** recovery validates the same TaskID-to-LoopID mapping and cannot birth a second loop identity
 
 #### Scenario: Task mapping is stable across redelivery
 
@@ -177,6 +261,31 @@ where they prevent repeating non-repeatable work or prove a lane-specific durabl
 - **WHEN** PubAck uncertainty causes a created, request, approval, continuation, or terminal publication to repeat
 - **THEN** the duplicate is an admitted at-least-once outcome
 - **AND** consumers use the lane's required correlation and durable transition rules
+
+#### Scenario: Terminal settlement fails before its applied marker
+
+- **WHEN** a settlement-required `COMPLETE_`, synthetic effect, or terminal publication fails before the final bare
+  `LoopEntity` Put
+- **THEN** the bare durable record remains nonterminal and speculative process-local state is discarded
+- **AND** redelivery reconstructs from exact retained evidence and ordinary terminal effects may repeat
+
+#### Scenario: Terminal publication precedes the applied marker
+
+- **WHEN** terminal publication receives PubAck but the final bare `LoopEntity` Put has not committed
+- **THEN** the lane is not settled and source ACK is withheld
+- **AND** a replacement may repeat the ordinary terminal publication
+
+#### Scenario: Exact model response is proven applied
+
+- **WHEN** the current retained `AgentRequest` matches the delivered `AgentResponse` RequestID and the final terminal
+  `LoopEntity` marker exists
+- **THEN** agentic-loop may acknowledge that model-response duplicate as already applied
+
+#### Scenario: Terminal loop does not prove a tool result applied
+
+- **WHEN** a cold `ToolResult` is durably correlated but only a bare terminal `LoopEntity` is present
+- **THEN** agentic-loop retries until execution-specific applied proof exists
+- **AND** task 4 neither acknowledges the tool result nor reconstructs its ordered batch
 
 ### Requirement: Approval continuation after replacement is exact and evidence-bounded
 

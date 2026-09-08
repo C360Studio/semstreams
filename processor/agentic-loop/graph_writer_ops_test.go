@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
+	"github.com/google/uuid"
 )
 
 const (
@@ -79,7 +80,9 @@ func TestOpsQuery_LoopOutcomeByRole(t *testing.T) {
 		// gh#159: role is now spawn-stamped. Production reads filter
 		// the loop entity from KV which carries BOTH spawn-time and
 		// completion-time triples; simulate the same union here.
-		spawnTask := &agentic.TaskMessage{TaskID: "task-" + r.loopID, Role: r.role}
+		spawnTask := &agentic.TaskMessage{
+			LoopID: uuid.NewString(),
+			TaskID: "task-" + r.loopID, Role: r.role}
 		allTriples = append(allTriples, buildSpawnTriples(entityID, spawnTask, testOrg, testPlatform)...)
 		if r.outcome == "success" {
 			event := &agentic.LoopCompletedEvent{
@@ -153,7 +156,9 @@ func TestOpsQuery_IterationDistribution(t *testing.T) {
 	for _, r := range results {
 		entityID := testLoopEntityID(r.loopID)
 		// gh#159: role is now spawn-stamped; mirror production flow.
-		spawnTask := &agentic.TaskMessage{TaskID: "task-" + r.loopID, Role: r.role}
+		spawnTask := &agentic.TaskMessage{
+			LoopID: uuid.NewString(),
+			TaskID: "task-" + r.loopID, Role: r.role}
 		allTriples = append(allTriples, buildSpawnTriples(entityID, spawnTask, testOrg, testPlatform)...)
 		event := &agentic.LoopCompletedEvent{
 			LoopID:      r.loopID,

@@ -25,6 +25,7 @@ import (
 	"github.com/c360studio/semstreams/processor/rule/expression"
 	"github.com/c360studio/semstreams/types"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
+	"github.com/google/uuid"
 )
 
 // Action type constants define the supported action types for rule execution.
@@ -1710,6 +1711,7 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 
 	// Build the TaskMessage
 	task := agentic.TaskMessage{
+		LoopID:       uuid.NewString(),
 		TaskID:       taskID,
 		Role:         role,
 		Model:        action.Model,

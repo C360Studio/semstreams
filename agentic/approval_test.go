@@ -293,7 +293,7 @@ func TestApprovalResponse_BaseMessageRoundTrip(t *testing.T) {
 	}
 }
 
-// spec: entity-id-contract / A loop instance token is a framework-minted UUID
+// spec: entity-id-contract / A loop instance token is minted at its framework birth seam
 // Scenario: every remaining loop-token carrier refuses a non-canonical token.
 func TestApprovalPendingEventRefusesNonCanonicalLoopID(t *testing.T) {
 	t.Parallel()
@@ -323,7 +323,7 @@ func TestApprovalPendingEventRefusesNonCanonicalLoopID(t *testing.T) {
 	}
 }
 
-// spec: entity-id-contract / A loop instance token is a framework-minted UUID
+// spec: entity-id-contract / A loop instance token is minted at its framework birth seam
 // Scenario: every remaining loop-token carrier refuses a non-canonical token.
 func TestApprovalResponseRefusesNonCanonicalLoopID(t *testing.T) {
 	t.Parallel()
@@ -349,7 +349,7 @@ func TestApprovalResponseRefusesNonCanonicalLoopID(t *testing.T) {
 	}
 }
 
-// spec: entity-id-contract / A loop instance token is a framework-minted UUID
+// spec: entity-id-contract / A loop instance token is minted at its framework birth seam
 // Scenario: every remaining loop-token carrier refuses a non-canonical token —
 // "no payload type carrying a loop token remains whose validation accepts every
 // input".

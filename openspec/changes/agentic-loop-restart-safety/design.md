@@ -6,6 +6,46 @@ Owner-accepted target state reconciled after nested PR #1251 at exact branch che
 `P=09ba38b1de5e7200e72281c8e4b8941d81be1da2`, whose merge base with the frozen staged #759 parent is exact
 `F=417beae5552f8f15ad3540edd7d8504c87174c13`. The dispatch edge-gateway correction is owner-approved and
 independently reviewed; implementation begins with its evidence gate.
+The producer-identity prerequisite is independently reviewed and owner-accepted by #1146 comment `5575482141`.
+
+The sequential-chat addendum is independently reviewed and owner-accepted on 2026-09-08: optional PriorMessages and,
+as a separate product choice, AutoContinue=false. Reviewed draft SHA-256
+`b10470f4a67066f1dc27e3ff19688a3eea2b4352c83b5e1ed105c0d3789ec1cb` is provenance; the contract below and active
+capability deltas are target-state authority. This does not accept the earlier blanket continuation-removal proposal.
+
+## Independent chat turns
+
+UserMessage, HTTPMessageRequest, and TaskMessage gain optional `PriorMessages []ChatMessage`, serialized as
+`prior_messages,omitempty`. Omission, null, and empty mean no history. Each entry has a user or assistant role and
+nonempty text content; name, tool, reasoning, and execution-only fields are absent. Generic ChatMessage and direct
+AgentRequest validation remain unchanged. One private TaskMessage validator owns this subset. Dispatch routes invalid
+history to its existing observable refusal before publishing work; nonempty history on commands is also refused.
+
+AutoContinue defaults to false in typed config and schema. Ordinary no-ReplyTo submissions start an independent
+execution even when another execution is active. Explicit ReplyTo or configured AutoContinue retains existing
+attachment. After attachment admission, supplied nonempty history is conflicting intent and is refused before
+publication or mutation. Commands needing a target require explicit loop_id under defaults; their errors say so.
+Same-source redelivery resolves the committed task before reconsidering attachment and compares ordered role/content
+history, treating nil and empty equally. Conflicting history uses existing correlation quarantine, not overwrite.
+
+The adapter supplies what it displayed: user text and delivered UserResponse.Content, which can differ from raw
+provider Result. Dispatch forwards this history into the existing durable task. Loop initial assembly is fresh
+execution instructions, existing embedded context, prior messages, then the current prompt once. ContextManager
+receives prior history once before the prompt so later tool iterations retain it. Cold reconstruction from TaskMessage
+includes history; matching retained-request restoration reuses the request without reseeding. A history-bearing task
+cannot attach to an execution owned by a different TaskID.
+
+There is no transcript store, automatic recall, new payload type, retrieval API, or recovery owner. Existing transport
+and provider limits apply without silent history trimming or caller-predicted size budgets. Once the task commits,
+execution recovery no longer depends on the adapter or older executions. The adapter owns its displayed transcript
+across its own restart. Adopters find the HTTP example and AutoContinue/command change in the migration guide and
+agentic concepts guide; they need no loop identity or storage knowledge for ordinary independent chat.
+
+Acceptance uses real NATS with started dispatch, loop, and model components and a deterministic fake provider. Turn
+one completes; components stop/join and are replaced; turn two supplies the displayed exchange. A distinct LoopID,
+fresh budget, exactly-once input assembly, and a response dependent on the earlier exchange are asserted. Provider
+post-PubAck/pre-source-ACK replacement reuses a matching response; confirmed absence permits another call and failed
+required publication never ACKs. These remain execution gates, not claims made by this accepted design.
 
 ## Accepted inventory
 
@@ -29,6 +69,12 @@ This design incorporates the accepted evidence checkpoints:
 - provider-settlement inventory `inventory-task3-provider-settlement-2026-09-05.md`, base
   `78d5498649b09711eecfe77ba3196110ca00eab8`, SHA-256
   `97a679b79b297796b3ee071a451eaf4e967ebba3afa684ba2ef7d3cd3f4bc668`, independent `INVENTORY PASS`, 144/144 pins.
+- producer LoopID inventory `inventory-task-producer-loop-id-2026-09-07.md`, base
+  `af829616305afa039dac0550efa78d07e856dd5f`, SHA-256
+  `7b273f91996e71df860226c83d615691e6b08de0fa0153c7c5d4869a53a78c26`, independent `INVENTORY PASS`, 69/69 pins.
+- producer LoopID design checkpoint `design-task-producer-loop-id-2026-09-07.md`, SHA-256
+  `70ca0bb503465c76dce06a08f0be21a88870f184a1d0ebdfc77d88ff14c8818f`, independent `DESIGN REVIEW PASS`, accepted
+  by owner ruling #1146 comment `5575482141`.
 - approved dispatch edge-gateway checkpoint `design-dispatch-edge-gateway-2026-09-04.md`, current SHA-256
   `d26c0667692e5b5a6e3950f5b097966c17d2750b90aaeb8e54d2873a564275b5`, independent `DESIGN REVIEW PASS`.
   SHA-256 `339cf2b2c734ef48a2898ce6b79c3783577a8b4ae152b65a1078b00445949b76` is superseded provenance.
@@ -62,6 +108,11 @@ reinventory before implementation.
 - The framework-owned rule `publish_agent` producer that feeds row 15 is part of this vertical. Its six configured
   classifier surfaces and four statically loaded producer configurations use the existing rule publisher plus the
   same repo-internal AGENT admission validator; no second gate or exported API is introduced.
+- Every `TaskMessage` producer fixes LoopID before validation and marshal. New work mints producer-local v4 UUID;
+  continuation work echoes an admitted existing token. `TaskMessage.Validate` returns an ordinary field-naming error;
+  rule, intake, and direct-handler operation boundaries classify it before side effects. Agentic-loop performs no
+  absent-ID mint or recovery. The change adds no helper API, compatibility path, scan, map, ledger, bucket, or second
+  owner, and does not reopen tasks 9.5–9.7.
 
 ## Options considered
 
@@ -91,6 +142,15 @@ This uses exact reads only after process correlation is missing. Approval storag
 replacement proof and second owner ruling. It preserves the current orchestration layers and is the recommended
 design.
 
+### Fix absent task identity at the producer
+
+Doing nothing permits exact redelivery of one empty-ID task to birth a second loop after replacement. Deterministic
+consumer derivation couples TaskID and LoopID and changes the random-token contract. A consumer scan, mapping, ledger,
+or bucket creates a second owner for a fact that fits in retained bytes. An exported constructor cannot replace raw
+TaskMessage decoding, and a helper wrapping `uuid.NewString()` adds surface without enforcement. The accepted option
+makes each task-production execution mint once before marshal and makes the retained bytes authoritative for their
+own downstream retry/redelivery.
+
 ## Decision
 
 Adopt streams-first, lane-specific settlement and replay.
@@ -108,6 +168,12 @@ downstream PubAck have completed. Replacement recovery uses:
 
 The change adds no generic supervisor, recovery state machine, checkpoint or outbox bucket, CQRS path, or
 event-sourced loop.
+
+For task birth, producer-local `uuid.NewString()` is the framework mint seam. Every TaskMessage has nonempty canonical
+LoopID before publication. The same already-marshaled publication and downstream retained-AGENT redelivery reuse its
+bytes; fresh upstream producer execution is a separate production attempt outside this identity-reuse claim.
+`TaskMessage.Validate` owns ordinary requiredness/form validation; rule publish, loop intake, and direct HandleTask
+boundaries classify failure as invalid before side effects. Task intake never manufactures or recovers absent identity.
 
 The owner withdrew a universal work deadline derived from AckWait in #1146 comment `5530950829`. JetStream consumer
 configuration owns AckWait and redelivery. A component may apply an ordinary `context.WithTimeout` only where its
@@ -137,8 +203,11 @@ The shared decision skills resolve as follows:
 
 ## Correlation is lane-scoped
 
-- Dispatch derives stable TaskID from validated `UserMessage` identity. It mints a random framework LoopID only for
-  new work, retains that mapping in the task, and recovers it by TaskID on redelivery.
+- Every TaskMessage producer supplies LoopID before validation and marshal. For new work, that execution mints a random
+  v4 UUID locally; for continuation, it echoes the admitted existing token. Dispatch derives stable TaskID from
+  validated `UserMessage` identity and already retains the mapping. Rule `publish_agent` joins that shape. Retry of
+  the same marshaled publication and downstream redelivery reuse retained bytes; upstream producer re-execution is
+  outside the reuse claim.
 - Every `AgentRequest` carries a stable RequestID for the provider-work boundary.
 - Provider `ToolCall.ID` remains conversational data. The framework stamps a separate execution identity from
   RequestID, provider CallID, and positive call ordinal for tool completion and approval/governance correlation.
@@ -154,7 +223,7 @@ framework does not manufacture identity for every ordinary publication.
 
 ## Current-spec reconciliation
 
-Five current requirements across three capabilities conflict with the accepted restart contract and are replaced in
+Six current requirements across four capabilities conflict with the accepted restart contract and are replaced in
 full rather than shadowed by additive text:
 
 - `agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone` retains its exact
@@ -170,6 +239,11 @@ full rather than shadowed by additive text:
   idempotent release point and result/sweeper behavior, but replaces unconditional quiet settled-drop with
   lane-specific durable applied proof, Retry for unresolved authority, and Quarantine for conflict or impossible
   transition.
+- `entity-id-contract / A loop instance token is a framework-minted UUID` is removed and replaced by the ADDED
+  `A loop instance token is minted at its framework birth seam` requirement. It preserves form, admission, HTTP,
+  AgentRun,
+  research, and carrier behavior while making the durable TaskMessage producer the birth mint seam and requiring
+  LoopID before accepting-boundary side effects.
 
 ## Provider at-least-once recovery
 
@@ -311,7 +385,8 @@ bucket grammars consolidated under one declaration, not legacy aliases.
 
 ### AutoContinue
 
-AutoContinue matches only exact `(UserID, ChannelType, ChannelID)`. Empty or partial matches and cross-channel
+AutoContinue defaults to false. When explicitly enabled, it matches only exact `(UserID, ChannelType, ChannelID)`.
+Empty or partial matches and cross-channel
 fallback never match. Zero current nonterminal matches creates work, one continues it, and more than one refuses as
 ambiguous. Bootstrap, watcher loss, relevant poison, or unreadable authority retries durable intake and returns 503
 to HTTP.
@@ -429,8 +504,14 @@ Invalid envelopes terminate.
 
 ### `agent.response` complete or error
 
-Happy-path done is committed `LoopEntity` and `COMPLETE_<loopID>` plus required terminal event PubAck. Transient
-writes and publications retry. Permanently malformed responses terminate. Unknown correlation quarantines unless a
+Happy-path done commits every settlement-required terminal effect—`COMPLETE_<loopID>`, required synthetic effects,
+and required terminal-event PubAck—and then the bare terminal `LoopEntity` Put as the final lane-applied marker.
+Best-effort trajectory audit and the existing atomic completion/failure graph batch, including evidence-integrity
+condition evidence, remain nonblocking and are not marker prerequisites. A pre-marker failure discards speculative
+process-local loop state and retries from the prior
+nonterminal `LoopEntity` plus exact retained request. Ordinary terminal effects may repeat. During the brief
+COMPLETE/event-before-terminal-LoopEntity window, the lane is not settled and cross-surface readers must retry rather
+than continue or discard. Permanently malformed responses terminate. Unknown correlation quarantines unless a
 committed later output proves prior application.
 
 ### `agent.response` tool call
@@ -447,8 +528,9 @@ CallID or external-effect ambiguity remains operation-specific; #1146 adds no se
 ### `tool.result`
 
 Happy-path done is hydrated loop, reconstructed originating request and response, persisted result, and PubAck for
-the next queued tool, request, approval event, or terminal event. Missing continuation during a live turn retries. An
-exact late duplicate on a terminal loop ACKs. Conflicting execution identity quarantines and never log-and-drops.
+the next queued tool, request, approval event, or terminal event. Missing continuation during a live turn retries. A
+bare terminal `LoopEntity` does not prove which `ToolResult` applied; cold tool-result delivery retries until task 5
+supplies execution-specific applied proof. Conflicting execution identity quarantines and never log-and-drops.
 
 ### `agent.signal`
 
@@ -633,16 +715,18 @@ configurations prove a future loaded definition cannot regress to core NATS. Com
 connectivity. `component/flowgraph` owns the matcher; graph-level composition is its existing caller and connection
 owner. This change reuses the exact function and adds no competing matcher or composition rule.
 
-`publish_agent` continues to construct and validate registered `agentic.TaskMessage`, wrap it in `BaseMessage`, and
-publish bytes. `TaskMessage` implements `message.Payload`, not `graph.Graphable`; publisher admission requires the
-registered payload contract and SHALL NOT invent a Graphable requirement. Repository-wide wire-envelope census and
-unrelated publisher migration remain #1158.
+`publish_agent` mints one producer-local v4 LoopID before it validates the registered `agentic.TaskMessage`, wraps it
+in `BaseMessage`, and publishes bytes. `TaskMessage` implements `message.Payload`, not `graph.Graphable`; publisher
+admission requires the registered payload contract and SHALL NOT invent a Graphable requirement. This identity step
+does not change admission, subject coverage, publisher classification, PubAck, or registry ownership in tasks
+9.5–9.7. Repository-wide wire-envelope census and unrelated publisher migration remain #1158.
 
 ## Adopter seam
 
 | External person | What they must know | If they do nothing | Discovery | What they should have to know |
 |---|---|---|---|---|
 | Component author | Return the owner-specific domain outcome; do not settle native messages | Void/log-only success can ACK incomplete work and fails review | typed API and compile/test failure | The definition of done only; the private owner handles ACK/Retry/Terminate/Quarantine |
+| Direct TaskMessage producer | New work mints LoopID once before Validate/marshal; continuation echoes admitted LoopID | Missing/noncanonical LoopID is refused before side effects | validation error, classified boundary, migration note | One birth/echo rule; no stream, bucket, scan, or recovery mechanics |
 | Tool executor author | Raw external executors preserve RequestID and execution identity; provider CallID is not globally unique | Replay is refused loudly when correlation is missing | payload validation and migration doc | Hosted executors know nothing; agentic-tools stamps correlation |
 | Approval UI developer | Submit LoopID and decision | Exact pending state resolves CallID; conflicts are typed refusals | HTTP/bus typed error | Public approval input only |
 | Model operator | Know that ambiguous replacement may repeat a provider call | Omission requires no configuration; retained matches are reused and typed absence calls again | model operations documentation | Only the at-least-once duplicate-risk contract; no policy, reconciliation, or failure-kind mechanics |
@@ -678,6 +762,13 @@ provider implementation's own idempotency support.
 They return a typed domain outcome through the subscription's admitted owner. They do not call ACK or NAK directly
 or understand replay storage.
 
+### Direct TaskMessage producer
+
+For new work, it calls `uuid.NewString()` once before Validate and marshal. For continuation, it echoes the admitted
+existing LoopID. It retries the same uncertain publication with the same serialized bytes and does not reconstruct the
+task or regenerate LoopID for that retry. Missing or malformed identity fails before side effects. No exported helper,
+constructor, generator policy, recovery map, or storage concept is exposed.
+
 ### Framework operator
 
 They configure admitted stream/bucket policy. No approval Store surface ships unless the replacement evidence gate
@@ -698,6 +789,10 @@ model before call, during call, after return, after response PubAck, and before 
 every next publication; tool-result persistence, approval-evidence verification, next publication, and source ACK;
 approval decision, tool PubAck, and pending clear; cancel state/`COMPLETE_`/terminal PubAck; governance proposal,
 verdict, and tool publication; caught-up-view recovery; and representative NATS restart.
+
+The task-birth slice retains the exact registered bytes emitted by rule `publish_agent`, replaces agentic-loop, and
+redelivers those same AGENT bytes. It proves one TaskID-to-LoopID mapping and one loop identity. It does not claim
+identity stability across a fresh execution of the upstream rule action.
 
 The eight-row production-binding matrix proves each physical non-heartbeat subscription's actual setup branch,
 callback, business handler, and deepest controllable dependency. A shared settlement truth table proves every valid
@@ -732,7 +827,9 @@ claims in concepts 03, 17, and 27; reconciles model 60s and loop 15s heartbeat d
 fixtures; removes paused vocabulary from `agentic/README.md`, `processor/agentic-loop/README.md`,
 `docs/concepts/13-agentic-systems.md`, `docs/operations/migration-beta162-to-beta163.md`, and generated
 `specs/openapi.v3.yaml`; and documents boot order as resolved AGENT admission → observed `AGENT_LOOPS` acquisition →
-dependent work.
+dependent work. It also documents producer-owned TaskMessage LoopID, same-marshaled-publication retry, downstream
+retained-byte redelivery, the direct sister migrations, and the absence of any empty-ID compatibility path or consumer
+recovery owner.
 
 ## Measurable premises
 
@@ -772,10 +869,11 @@ The design is rejected or revised if any premise fails:
 19. `component/flowgraph/flowgraph.go:381-389` defines the canonical directional matcher as
     `SubjectCovers(filter, pattern)` and identifies graph-level composition as its current caller. Rule publication
     passes declared filter first and concrete substituted subject second; it adds no matcher.
-20. The conflicting current requirements are exactly `openspec/specs/agentic-dispatch/spec.md:72`,
+20. The six conflicting current requirements are exactly `openspec/specs/agentic-dispatch/spec.md:72`,
     `openspec/specs/agentic-tools/spec.md:435`, `openspec/specs/agentic-tools/spec.md:467`,
-    `openspec/specs/agentic-tools/spec.md:487`, and `openspec/specs/agentic-loop/spec.md:788`; their full MODIFIED
-    blocks preserve unaffected scenarios and citations.
+    `openspec/specs/agentic-tools/spec.md:487`, `openspec/specs/agentic-loop/spec.md:788`, and
+    `openspec/specs/entity-id-contract/spec.md:651`; their full modified or replacement deltas preserve unaffected
+    scenarios and citations.
 
 ## Risks and unproven claims
 
@@ -805,6 +903,8 @@ Implementation or review stops if:
   lookup, or treats `Nats-Msg-Id` as proof beyond the configured duplicate window;
 - TaskID is regenerated on redelivery, LoopID is derived rather than randomly minted for new work, or redelivery
   fails to recover LoopID from the retained TaskMessage;
+- a TaskMessage boundary accepts absent LoopID, agentic-loop mints or recovers a missing task identity, a producer
+  exposes a helper/configurable generator, or a scan, map, ledger, bucket, or second owner appears;
 - RequestID or execution identity is imposed on publications that do not need to distinguish provider, tool, or
   proposal/verdict correlation;
 - a non-heartbeat physical subscription fails production-binding proof, settles before its work joins, derives a
@@ -868,6 +968,8 @@ is not required to interpret or complete any row. There are no deviations.
 
 | Binding ruling or accepted correction | Exact active target | Conformance |
 |---|---|---|
+| Optional PriorMessages on three inputs | Independent chat turns | Sequential-chat implementation map below |
+| AutoContinue=false, separately approved | Independent chat turns | Sequential-chat implementation map below |
 | Build and review on staged #759; do not require merge-first | `proposal.md / Holds`; `tasks.md / 1.1` | exact `P`, frozen parent `F`, re-review on drift |
 | Remove dispatch created/pending correctness inputs; retain their loop outputs; transfer AgentRun H.1/H.2 to #1249 checkpoint A | `proposal.md / Claim scope`; `tasks.md / 6.9`; `tasks.md / Transferred: AgentRun` | 15 physical subscriptions remain in #1146 |
 | Remove paused state completely; support cancel, durable approval wait, restart from durable boundary, and lifecycle quiesce | `proposal.md / Holds`; `design.md / User-facing control and quiesce contract`; `agentic-loop / All six loop input classes settle after owner-specific durable done`; `tasks.md / 7.1–7.4` | comment 5526837992 supersedes compatibility premise; no shim/migration/reserved enum |
@@ -875,9 +977,11 @@ is not required to interpret or complete any row. There are no deviations.
 | Derive no universal work deadline from AckWait; heartbeat only after measured lane-specific need | `proposal.md / Holds`; dispatch, governance, and loop owner settlement requirements; `tasks.md / 1.5–1.7` | owner ruling `5530950829` |
 | Ship model 60s/120s and loop 15s against shortest BackOff 30s; validate before allocation | `agentic-model / Model heartbeat policy is valid before acquisition`; `agentic-loop / Long-running loop heartbeat policy is valid before acquisition`; `tasks.md / 1.2–1.4` | invalid defaults fail setup |
 | Make provider invocation durably at-least-once with retained-response reuse and no ambiguity framework | `design.md / Provider at-least-once recovery`; `agentic-model / Model request settlement is bound to a durable response`; `tasks.md / 3.1–3.3` | comment `5550778818`; retained match reuses, conflict quarantines, absence calls again, PubAck precedes source ACK |
+| Persist bare terminal LoopEntity last as the lane-applied marker for every terminal loop outcome | `design.md / Per-lane definition of done`; `agentic-loop / Loop task, request, and tool work use only required correlation`; `tasks.md / 4.2–4.3, 6.5, 7.5–7.7` | comment `5571755835`; settlement-required effects precede the marker; pre-marker failure discards speculative process state and retries; ordinary effects may repeat; bare terminal state is not generic ToolResult proof; no second owner/runtime |
 | Replace stale current-spec semantics through full MODIFIED blocks | `design.md / Current-spec reconciliation`; exact MODIFIED requirements in dispatch, tools, and loop deltas; `tasks.md / 5.2, 6.10, 7.7` | unaffected scenarios/citations preserved; no additive conflict |
 | Use strong observed DiscardNew and refuse only the affected dependency closure | `agentic-loop / Restart-safe replay observes and admits local stream bounds`; `tasks.md / 9.1–9.4` | no whole-composition/global-maxima gate |
 | Admit first-party rule AGENT output through the same internal validator and existing publisher | `rule-agent-publishing / First-party publish-agent output is admitted before action execution`; `rule-agent-publishing / Publish-agent classification uses canonical wildcard coverage and durable publication`; `tasks.md / 9.5–9.7` | six classifier surfaces; no duplicate gate/API |
+| Make the TaskMessage producer the framework birth mint seam; require LoopID and add no helper or recovery owner | `entity-id-contract / A loop instance token is minted at its framework birth seam`; `agentic-loop / Loop task, request, and tool work use only required correlation`; `rule-agent-publishing / Publish-agent preserves the registered payload boundary`; `tasks.md / 3A.1–3A.3` | comment `5575482141`; producer-local v4 before marshal; ordinary validator error plus classified accepting boundaries; same-byte downstream retry/redelivery only; task 9 remains separate |
 | Use exact canonical publisher matcher in its existing direction and ownership | `design.md / First-party rule publisher admission`; `rule-agent-publishing / Publish-agent classification uses canonical wildcard coverage and durable publication`; `tasks.md / 9.6` | `component/flowgraph.SubjectCovers(declaredFilter, concreteSubject)`; no duplicate matcher |
 | Treat `TaskMessage` as registered Payload, not Graphable | `rule-agent-publishing / Publish-agent preserves the registered payload boundary`; `tasks.md / 9.5–9.7` | no graph-interface prediction |
 | Evidence-gate approval continuation before choosing the already-approved Store fallback | `design.md / Approval continuation`; `agentic-loop / Approval continuation after replacement is exact and evidence-bounded`; `tasks.md / 6.1–6.6` | no CallID lookup, scan, third mechanism, or Store deletion before the second ruling |
@@ -890,3 +994,21 @@ is not required to interpret or complete any row. There are no deviations.
 | Preserve #1239 authorship and default-branch closing authority | `proposal.md / Impact`; `design.md / Verification and landing sequence`; `tasks.md / 11.4` | PR #1251 retained; PR #1156 closes |
 | Review implementation, cross-agent review, archive final content, then narrow archive review | `tasks.md / 11.5–11.8` | hosted landing follows archive review |
 | Document the semantic-settlement concept and #1146 applications without duplicating normative authority | `design.md / Documentation ownership`; `tasks.md / 11.3` | concept 33 link plus scoped corrections |
+
+### Sequential-chat implementation map
+
+The owner accepted both choices on 2026-09-08 after independent design review. No additional public surface was added.
+
+| Accepted obligation | Implementation evidence |
+|---|---|
+| User and durable task history fields | `agentic/user_types.go:46`, `agentic/user_types.go:324` |
+| HTTP history field and normalization | `processor/agentic-dispatch/http.go:41`, `http.go:155` |
+| One private task-input subset validator | `agentic/user_types.go:457` |
+| Forward history through existing task producer | `processor/agentic-dispatch/component.go:932` |
+| Validate and compare retained source history | `processor/agentic-dispatch/task_recovery.go:94`, `:215` |
+| History in initial request and ContextManager | `processor/agentic-loop/handlers.go:654`, `:817` |
+| Reject different-task history before rebinding | `processor/agentic-loop/state.go:273` |
+| Default false in typed configuration and schema | `processor/agentic-dispatch/config.go:14`, `:102` |
+| Refuse history on commands and attachment | `processor/agentic-dispatch/http.go:209`, `:354` |
+| Actual replaced-component chat acceptance | `processor/agentic-dispatch/sequential_chat_integration_test.go:35` |
+| Actual post-PubAck provider replacement proof | `processor/agentic-model/provider_post_puback_integration_test.go:39` |

@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/payloadbuiltins"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -101,8 +102,11 @@ func TestTimedOutToolResultEvictsActiveTrajectory(t *testing.T) {
 	require.NoError(t, handler.loopManager.SetTimeout(loopID, -time.Second))
 
 	const callID = "timed-out-call"
-	const executionID = "execution-timed-out"
+	requestID := loopID + ":req:" + uuid.NewString()
+	executionID := deriveToolExecutionID(requestID, callID, 1)
 	handler.loopManager.TrackToolCall(executionID, loopID)
+	handler.loopManager.TrackToolName(executionID, "search")
+	handler.loopManager.TrackToolOrdinal(executionID, 1)
 	registry := payloadbuiltins.NewTestRegistry(t)
 	component := &Component{
 		config:  config,
@@ -110,7 +114,10 @@ func TestTimedOutToolResultEvictsActiveTrajectory(t *testing.T) {
 		decoder: message.NewDecoder(registry),
 		logger:  discardLogger(),
 	}
-	toolResult := agentic.ToolResult{ExecutionID: executionID, CallID: callID, Name: "search", Content: "late result"}
+	toolResult := agentic.ToolResult{
+		LoopID: loopID, RequestID: requestID, ExecutionID: executionID,
+		CallID: callID, CallOrdinal: 1, Name: "search", Content: "late result",
+	}
 	envelope := message.NewBaseMessage(toolResult.Schema(), &toolResult, "test")
 	data, err := json.Marshal(envelope)
 	require.NoError(t, err)

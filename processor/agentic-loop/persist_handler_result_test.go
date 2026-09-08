@@ -3,13 +3,18 @@ package agenticloop
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/types"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,8 +23,27 @@ type failingLoopBucket struct {
 	err error
 }
 
+type finalMarkerFailBucket struct {
+	jetstream.KeyValue
+	loopID string
+	values map[string][]byte
+	err    error
+}
+
+func (b *finalMarkerFailBucket) Put(_ context.Context, key string, value []byte) (uint64, error) {
+	if key == b.loopID {
+		return 0, b.err
+	}
+	b.values[key] = append([]byte(nil), value...)
+	return 1, nil
+}
+
 func (b failingLoopBucket) Put(context.Context, string, []byte) (uint64, error) {
 	return 0, b.err
+}
+
+func (b failingLoopBucket) Get(context.Context, string) (jetstream.KeyValueEntry, error) {
+	return nil, jetstream.ErrKeyNotFound
 }
 
 // TestRunWithBudget_ReturnsCompletedFalseWhenFnReturnsFast asserts the
@@ -41,7 +65,7 @@ func TestRunWithBudget_ReturnsCompletedFalseWhenFnReturnsFast(t *testing.T) {
 }
 
 // spec: agentic-loop / All six loop input classes settle after owner-specific durable done
-func TestPersistHandlerResultReturnsPublicationFailureBeforeTerminalRelease(t *testing.T) {
+func TestPersistHandlerResultReturnsPublicationFailureAndDiscardsSpeculativeTerminalState(t *testing.T) {
 	handler := NewMessageHandler(DefaultConfig())
 	loopID := "publish-failure-loop"
 	_, err := handler.trajectoryManager.startTrajectory(loopID)
@@ -59,7 +83,36 @@ func TestPersistHandlerResultReturnsPublicationFailureBeforeTerminalRelease(t *t
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "publish result")
 	_, err = handler.trajectoryManager.getTrajectory(loopID)
-	require.NoError(t, err, "failed required publication released terminal transient state")
+	require.Error(t, err, "failed terminal attempt retained speculative process state")
+}
+
+// spec: agentic-loop / Loop task, request, and tool work use only required correlation
+func TestTerminalLoopEntityIsFinalAppliedMarker(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+	loopID, err := handler.loopManager.CreateLoop("task-final-marker", "general", "model", 3)
+	require.NoError(t, err)
+	_, err = handler.trajectoryManager.startTrajectory(loopID)
+	require.NoError(t, err)
+	require.NoError(t, handler.loopManager.TransitionLoop(loopID, agentic.LoopStateComplete))
+	require.NoError(t, handler.loopManager.UpdateCompletion(loopID, agentic.OutcomeSuccess, "done", ""))
+	bucket := &finalMarkerFailBucket{
+		loopID: loopID, values: make(map[string][]byte), err: errors.New("final marker unavailable"),
+	}
+	c := &Component{handler: handler, loopsBucket: bucket, logger: slog.Default()}
+	completion := &agentic.LoopCompletedEvent{
+		LoopID: loopID, TaskID: "task-final-marker", Outcome: agentic.OutcomeSuccess,
+		Role: "general", Model: "model", Result: "done",
+	}
+
+	err = c.persistHandlerResult(t.Context(), HandlerResult{
+		LoopID: loopID, State: agentic.LoopStateComplete, CompletionState: completion,
+	})
+
+	require.ErrorIs(t, err, bucket.err)
+	require.Contains(t, bucket.values, "COMPLETE_"+loopID,
+		"settlement-required effects did not run before the final marker")
+	_, lookupErr := handler.GetLoop(loopID)
+	require.Error(t, lookupErr, "failed final marker retained speculative terminal process state")
 }
 
 // spec: agentic-loop / All six loop input classes settle after owner-specific durable done
@@ -76,6 +129,104 @@ func TestRequiredLoopStatePersistenceReturnsErrors(t *testing.T) {
 	require.ErrorIs(t, err, want)
 	err = c.persistCancellationState(t.Context(), loopID, &agentic.LoopCancelledEvent{LoopID: loopID})
 	require.ErrorIs(t, err, want)
+}
+
+// spec: agentic-loop / Observed audit loss MUST be readable from the loop entity as a classified condition
+func TestCompletionGraphWriteFailureRemainsNonblocking(t *testing.T) {
+	failures := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_graph_evidence_failures_total"}, []string{"state", "reason"})
+	c := &Component{
+		logger:  slog.Default(),
+		metrics: &loopMetrics{graphEvidenceFailures: failures},
+		graphWriter: &graphWriter{
+			natsClient: &natsclient.Client{},
+			platform:   types.PlatformMeta{Org: "acme", Platform: "ops"},
+			logger:     slog.Default(),
+		},
+	}
+
+	err := c.stampLoopCompletionWithBudget(t.Context(), "loop-1", &agentic.LoopCompletedEvent{
+		LoopID: "loop-1", Role: "general", Model: "model",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, float64(1), testutil.ToFloat64(failures.WithLabelValues("complete", "write_error")))
+}
+
+// spec: agentic-loop / Observed audit loss MUST be readable from the loop entity as a classified condition
+func TestFailureGraphWriteFailureRemainsNonblocking(t *testing.T) {
+	failures := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_graph_evidence_failures_total"}, []string{"state", "reason"})
+	c := &Component{
+		logger:  slog.Default(),
+		metrics: &loopMetrics{graphEvidenceFailures: failures},
+		graphWriter: &graphWriter{
+			natsClient: &natsclient.Client{},
+			platform:   types.PlatformMeta{Org: "acme", Platform: "ops"},
+			logger:     slog.Default(),
+		},
+	}
+
+	err := c.stampLoopFailureWithBudget(t.Context(), "loop-1", &agentic.LoopFailedEvent{
+		LoopID: "loop-1", Role: "general", Model: "model", Reason: "provider_failure",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, float64(1), testutil.ToFloat64(failures.WithLabelValues("failure", "write_error")))
+}
+
+// spec: agentic-loop / Loop task, request, and tool work use only required correlation
+func TestRequiredSyntheticGraphWriteFailureReturnsError(t *testing.T) {
+	c := &Component{
+		logger: slog.Default(),
+		graphWriter: &graphWriter{
+			natsClient: &natsclient.Client{},
+			platform:   types.PlatformMeta{Org: "acme", Platform: "ops"},
+			logger:     slog.Default(),
+		},
+	}
+
+	err := c.stampSyntheticDecideWithBudget(t.Context(), &SyntheticDecideRequest{
+		LoopID: "loop-1", Reason: "done",
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "synthetic decide graph stamp")
+}
+
+// spec: agentic-loop / Loop task, request, and tool work use only required correlation
+func TestFailureLoopEntityIsFinalAppliedMarker(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+	loopID, err := handler.loopManager.CreateLoop("task-failure-marker", "general", "model", 3)
+	require.NoError(t, err)
+	entity, err := handler.GetLoop(loopID)
+	require.NoError(t, err)
+	bucket := &finalMarkerFailBucket{
+		loopID: loopID, values: make(map[string][]byte), err: errors.New("final marker unavailable"),
+	}
+	c := &Component{handler: handler, loopsBucket: bucket, logger: slog.Default()}
+
+	err = c.handleLoopFailure(t.Context(), loopID, entity, "provider_failure", errors.New("provider unavailable"))
+
+	require.ErrorIs(t, err, bucket.err)
+	require.Contains(t, bucket.values, "COMPLETE_"+loopID,
+		"failure completion did not commit before the final marker")
+	_, lookupErr := handler.GetLoop(loopID)
+	require.Error(t, lookupErr, "failed final marker retained speculative failure state")
+}
+
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+func TestImpossibleFailureTransitionIsQuarantined(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+	loopID, err := handler.loopManager.CreateLoop("task-impossible-transition", "general", "model", 3)
+	require.NoError(t, err)
+	require.NoError(t, handler.loopManager.TransitionLoop(loopID, agentic.LoopStateComplete))
+	entity, err := handler.GetLoop(loopID)
+	require.NoError(t, err)
+	c := &Component{handler: handler, logger: slog.Default()}
+
+	err = c.handleLoopFailure(t.Context(), loopID, entity, "handler_error", errors.New("late failure"))
+
+	require.Error(t, err)
+	require.True(t, errs.IsFatal(err), "impossible transition must map to Quarantine, not Retry")
 }
 
 // TestRunWithBudget_ReturnsTimedOutTrueWhenFnExceedsBudget asserts the
@@ -165,16 +316,15 @@ func TestRunWithBudgetWaitsForCooperativeWorkToJoinAfterCancellation(t *testing.
 	}
 }
 
-// TestGraphWritePublishBudget_IsReasonable is a guard against
-// accidentally setting the budget to zero or to a value so large it
-// defeats the bounded-wait property. 2s is the chosen value (see
-// const doc); this test fires if someone changes the constant without
-// thinking. Tighten/widen here when changing the constant.
+// TestGraphWritePublishBudget_IsReasonable guards the cooperative deadline
+// against zero or a value so large that cancellation is signalled too late.
+// It does not claim a hard return-time cap: runWithBudget joins the dependency,
+// which must honor the supplied context. Tighten/widen with the const doc.
 func TestGraphWritePublishBudget_IsReasonable(t *testing.T) {
 	if graphWritePublishBudget < 100*time.Millisecond {
 		t.Errorf("graphWritePublishBudget too tight (%v); healthy graph-gateway will trip the timeout under normal load", graphWritePublishBudget)
 	}
 	if graphWritePublishBudget > 10*time.Second {
-		t.Errorf("graphWritePublishBudget too wide (%v); defeats the bounded-wait property — publish can be delayed by a degraded graph-gateway", graphWritePublishBudget)
+		t.Errorf("graphWritePublishBudget too wide (%v); cooperative cancellation would be signalled too late", graphWritePublishBudget)
 	}
 }

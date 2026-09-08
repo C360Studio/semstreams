@@ -21,6 +21,7 @@ import (
 	semtypes "github.com/c360studio/semstreams/pkg/types"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/c360studio/semstreams/types"
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -1036,6 +1037,7 @@ func TestAction_PublishAgent(t *testing.T) {
 }
 
 // T050: Test PublishAgent payload format (TaskMessage)
+// spec: rule-agent-publishing / Publish-agent preserves the registered payload boundary
 func TestAction_PublishAgent_PayloadFormat(t *testing.T) {
 	t.Parallel()
 	entityID := semantictest.EntityID(t, "test", "rule", "actions", "payload", "sensor", "001")
@@ -1067,6 +1069,10 @@ func TestAction_PublishAgent_PayloadFormat(t *testing.T) {
 	// Verify TaskMessage fields
 	assert.NotEmpty(t, task.TaskID, "task_id should be set")
 	assert.Contains(t, task.TaskID, "rule-", "task_id should start with 'rule-'")
+	parsedLoopID, err := uuid.Parse(task.LoopID)
+	require.NoError(t, err, "publish_agent must mint loop identity before envelope marshal")
+	assert.Equal(t, uuid.Version(4), parsedLoopID.Version())
+	assert.Equal(t, parsedLoopID.String(), task.LoopID, "loop_id must use canonical UUID text")
 	assert.Equal(t, "general", task.Role)
 	assert.Equal(t, "mock-model", task.Model)
 	assert.Equal(t, "Analyze entity "+entityID+" in location "+relatedID, task.Prompt)
@@ -2136,7 +2142,7 @@ func TestAction_PublishAgent_NonLoopTriggerLeavesParentLoopIDUnset(t *testing.T)
 		{"chain execution", chainID},
 		{name: "non-canonical entity ID", entityID: "e.1"},
 	}
-	// entity-id-audit:classify intentional-malformed "e.1" line=2137 column=47 surface=go-field:.entityID entity_id_invalid:arity verifies noncanonical IDs remain opaque agent payload values
+	// entity-id-audit:classify intentional-malformed "e.1" line=2143 column=47 surface=go-field:.entityID entity_id_invalid:arity verifies noncanonical IDs remain opaque agent payload values
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2954,7 +2960,7 @@ func TestAction_UpdateKV_VariableSubstitution(t *testing.T) {
 		Payload: map[string]any{
 			"status":     "drafting",
 			"updated_at": "$now",
-			"entity_id":  "$entity.id", // entity-id-audit:classify intentional-template "$entity.id" line=2957 column=18 surface=go-field:.entity_id entity_id_invalid:arity runtime entity-ID substitution
+			"entity_id":  "$entity.id", // entity-id-audit:classify intentional-template "$entity.id" line=2963 column=18 surface=go-field:.entity_id entity_id_invalid:arity runtime entity-ID substitution
 		},
 		Merge: false,
 	}

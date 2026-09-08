@@ -828,6 +828,11 @@ func (c *Component) handleUserMessage(ctx context.Context, data []byte) (natscli
 
 // handleCommand processes command messages
 func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) error {
+	if len(msg.PriorMessages) != 0 {
+		return c.answerRefusedSubmission(ctx, msg,
+			c.refuseSubmission(seamChannelSubmission, msg.ReplyTo, codeSubmissionInvalid,
+				fmt.Errorf("prior_messages cannot accompany a command")))
+	}
 	name, cmd, args, found := c.registry.Match(msg.Content)
 	if !found {
 		return c.sendResponse(ctx, agentic.UserResponse{
@@ -870,7 +875,7 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 			ChannelID:   msg.ChannelID,
 			UserID:      msg.UserID,
 			Type:        agentic.ResponseTypeError,
-			Content:     "No active loop. Specify a loop_id or start a task first.",
+			Content:     "An explicit loop_id is required for this command.",
 			Timestamp:   time.Now(),
 		})
 	}
@@ -924,6 +929,7 @@ func (c *Component) buildTaskMessage(ctx context.Context, msg agentic.UserMessag
 		Role:             c.config.DefaultRole,
 		Model:            c.resolveModel(),
 		Prompt:           msg.Content,
+		PriorMessages:    msg.PriorMessages,
 		ChannelType:      msg.ChannelType,
 		ChannelID:        msg.ChannelID,
 		UserID:           msg.UserID,
@@ -1017,6 +1023,11 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 				// This path has no synchronous return, so its answer goes out on the
 				// response subject — same refusal, same named field, different delivery.
 				return c.answerRefusedSubmission(ctx, msg, err)
+			}
+			if len(msg.PriorMessages) != 0 {
+				return c.answerRefusedSubmission(ctx, msg,
+					c.refuseSubmission(seamChannelSubmission, loopID, codeSubmissionInvalid,
+						fmt.Errorf("prior_messages cannot accompany attachment to an existing loop")))
 			}
 		}
 

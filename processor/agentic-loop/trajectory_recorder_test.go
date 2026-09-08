@@ -15,9 +15,11 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/storage"
 	"github.com/c360studio/semstreams/storage/storeregistry"
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -424,17 +426,17 @@ func TestTrajectoryAuditBudgetPreservesUsefulDeliveryContext(t *testing.T) {
 			var transitioned atomic.Bool
 			var published atomic.Bool
 
-			err := consumeTypedLongRunningInput(parent, msg, time.Hour, func(workCtx context.Context, _ []byte) error {
+			err := consumeTypedLongRunningInput(parent, msg, time.Hour, func(workCtx context.Context, _ []byte) (natsclient.DeliveryDecision, error) {
 				c.recordTrajectoryObservations(workCtx, HandlerResult{trajectoryObservations: []trajectoryObservation{{
 					LoopID: "loop-budget", Kind: agentic.TrajectoryKindModelCompleted,
 					CausalPhase: agentic.TrajectoryPhaseModelResult, Evidence: map[string]string{"response": "full"},
 				}}})
 				if workCtx.Err() != nil {
-					return workCtx.Err()
+					return natsclient.DeliveryDecisionRetry, workCtx.Err()
 				}
 				transitioned.Store(true)
 				published.Store(true)
-				return nil
+				return natsclient.DeliveryDecisionAck, nil
 			})
 			if err != nil {
 				t.Fatalf("useful delivery failed after audit timeout: %v", err)
@@ -539,6 +541,7 @@ func TestHandlerProducesFullEvidenceBeforeOperationalTruncation(t *testing.T) {
 	handler := NewMessageHandler(config)
 
 	taskResult, err := handler.HandleTask(context.Background(), agentic.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-full-evidence",
 		Role:   "researcher",
 		Model:  "test-model",
@@ -629,8 +632,8 @@ func trajectoryKinds(observations []trajectoryObservation) []byte {
 func TestResultTerminalObservationIsRecordedAfterKnownHandlerFacts(t *testing.T) {
 	handler := NewMessageHandler(DefaultConfig())
 	result, err := handler.HandleTask(context.Background(), agentic.TaskMessage{
-		TaskID: "task-terminal-order", Role: "reviewer", Model: "test-model", Prompt: "review",
-	})
+		LoopID: uuid.NewString(),
+		TaskID: "task-terminal-order", Role: "reviewer", Model: "test-model", Prompt: "review"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -669,8 +672,8 @@ func TestApprovalRejectionAtIterationCapRecordsTerminalBeforeAdjacentSurfaces(t 
 	handler := NewMessageHandler(config)
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agentic.TaskMessage{
-		TaskID: "task-approval-terminal", Role: "reviewer", Model: "test-model", Prompt: "review",
-	})
+		LoopID: uuid.NewString(),
+		TaskID: "task-approval-terminal", Role: "reviewer", Model: "test-model", Prompt: "review"})
 	if err != nil {
 		t.Fatal(err)
 	}

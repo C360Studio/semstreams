@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,10 +16,21 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
+	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
 )
+
+func task4HeartbeatPolicy(t *testing.T, port string, handler inputHandler) natsclient.HeartbeatDeliveryPolicy {
+	t.Helper()
+	policy, err := newLoopHeartbeatDeliveryPolicy(t.Context(), natsclient.StreamConsumerConfig{
+		AckWait: 2 * time.Minute, BackOff: []time.Duration{30 * time.Second, 2 * time.Minute}, MaxDeliver: 2,
+	}, 15*time.Second, port, handler)
+	require.NoError(t, err)
+	return policy
+}
 
 type loopDeliveryOwnerMsg struct {
 	data        []byte
@@ -74,6 +86,9 @@ func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 		handler.loopManager.TrackRequest(requestID, loopID)
 		c := releaseTestComponent(t, handler)
 		c.loopsBucket = failingLoopBucket{err: errors.New("kv unavailable")}
+		c.settlementEvidence = &settlementEvidence{
+			request: retainedRequest(t, loopID, requestID), requestFound: true,
+		}
 		response := &agentic.AgentResponse{
 			RequestID: requestID, Status: agentic.StatusComplete,
 			Message: agentic.ChatMessage{Role: "assistant", Content: "done"},
@@ -86,22 +101,23 @@ func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 		require.Equal(t, natsclient.DeliveryDecisionRetry, result.Decision())
 		require.Zero(t, msg.acks.Load()+msg.terms.Load())
 		require.Equal(t, int32(1), msg.naks.Load())
-		require.Contains(t, result.Err().Error(), "persist loop state")
+		require.Contains(t, result.Err().Error(), "persist completion state")
 	})
 
 	t.Run("tool result", func(t *testing.T) {
 		handler := NewMessageHandler(DefaultConfig())
 		loopID, err := handler.loopManager.CreateLoop("task-tool", "general", "model", 3)
 		require.NoError(t, err)
+		requestID := loopID + ":req:" + uuid.NewString()
 		_, err = handler.HandleModelResponse(t.Context(), loopID, agentic.AgentResponse{
-			RequestID: "request-tool", Status: "tool_call",
+			RequestID: requestID, Status: "tool_call",
 			Message: agentic.ChatMessage{Role: "assistant", ToolCalls: []agentic.ToolCall{{ID: "call-tool", Name: "search"}}},
 		})
 		require.NoError(t, err)
 		c := releaseTestComponent(t, handler)
 		c.loopsBucket = failingLoopBucket{err: errors.New("kv unavailable")}
 		toolResult := &agentic.ToolResult{
-			RequestID: "request-tool", ExecutionID: deriveToolExecutionID("request-tool", "call-tool", 1),
+			RequestID: requestID, ExecutionID: deriveToolExecutionID(requestID, "call-tool", 1),
 			CallID: "call-tool", CallOrdinal: 1, Name: "search", Content: "result",
 		}
 		data, err := json.Marshal(message.NewBaseMessage(toolResult.Schema(), toolResult, "test"))
@@ -114,6 +130,336 @@ func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 		require.Equal(t, int32(1), msg.naks.Load())
 		require.Contains(t, result.Err().Error(), "persist loop state")
 	})
+}
+
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+func TestTaskPersistenceFailureCannotAck(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+	c := releaseTestComponent(t, handler)
+	c.loopsBucket = failingLoopBucket{err: errors.New("kv unavailable")}
+	task := &agentic.TaskMessage{
+		LoopID: uuid.NewString(), TaskID: "task-kv-failure", Role: "general", Model: "model", Prompt: "work",
+	}
+	data, err := json.Marshal(message.NewBaseMessage(task.Schema(), task, "test"))
+	require.NoError(t, err)
+	msg := &loopDeliveryOwnerMsg{data: data}
+
+	result, admitted := consumeAdmittedDelivery(
+		t.Context(), msg, task4HeartbeatPolicy(t, "agent.task", c.taskInputHandler(time.Minute)), newDeliveryLaneAdmission(nil),
+	)
+
+	require.True(t, admitted)
+	require.Equal(t, natsclient.DeliveryDecisionRetry, result.Decision())
+	require.Zero(t, msg.acks.Load()+msg.terms.Load())
+	require.Equal(t, int32(1), msg.naks.Load())
+	require.Contains(t, result.Err().Error(), "persist loop state")
+}
+
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / Loop task, request, and tool work use only required correlation
+func TestToolTimeoutCommitsTerminalFailureBeforeAck(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+	loopID, err := handler.loopManager.CreateLoop("task-tool-timeout", "general", "model", 3)
+	require.NoError(t, err)
+	entity, err := handler.GetLoop(loopID)
+	require.NoError(t, err)
+	entity.TimeoutAt = time.Now().Add(-time.Second)
+	require.NoError(t, handler.UpdateLoop(entity))
+	executionID := deriveToolExecutionID(loopID+":req:1", "call-timeout", 1)
+	handler.loopManager.TrackToolCall(executionID, loopID)
+	handler.loopManager.TrackToolName(executionID, "search")
+	handler.loopManager.TrackToolOrdinal(executionID, 1)
+	bucket := &settlementBucket{values: make(map[string][]byte)}
+	c := releaseTestComponent(t, handler)
+	c.loopsBucket = bucket
+	toolResult := &agentic.ToolResult{
+		LoopID: loopID, RequestID: loopID + ":req:1", ExecutionID: executionID,
+		CallID: "call-timeout", CallOrdinal: 1, Name: "search", Content: "late",
+	}
+
+	decision, err := c.handleToolResultMessage(t.Context(), settlementEnvelope(t, toolResult))
+
+	require.NoError(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+	require.Contains(t, bucket.values, "COMPLETE_"+loopID)
+	var persisted agentic.LoopEntity
+	require.NoError(t, json.Unmarshal(bucket.values[loopID], &persisted))
+	require.Equal(t, agentic.LoopStateFailed, persisted.State)
+	_, lookupErr := handler.GetLoop(loopID)
+	require.Error(t, lookupErr, "settled terminal tool failure retained process state")
+}
+
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+func TestMalformedLoopWorkTerminatesInsteadOfAcking(t *testing.T) {
+	tests := []struct {
+		name    string
+		port    string
+		handler inputHandler
+	}{
+		{name: "task", port: "agent.task"},
+		{name: "response", port: "agent.response"},
+		{name: "tool result", port: "tool.result"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := releaseTestComponent(t, NewMessageHandler(DefaultConfig()))
+			switch tc.port {
+			case "agent.task":
+				tc.handler = c.taskInputHandler(time.Minute)
+			case "agent.response":
+				tc.handler = c.handleResponseMessage
+			case "tool.result":
+				tc.handler = c.handleToolResultMessage
+			}
+			msg := &loopDeliveryOwnerMsg{data: []byte(`{"not":"a registered envelope"}`)}
+
+			result, admitted := consumeAdmittedDelivery(
+				t.Context(), msg, task4HeartbeatPolicy(t, tc.port, tc.handler), newDeliveryLaneAdmission(nil),
+			)
+
+			require.True(t, admitted)
+			require.Equal(t, natsclient.DeliveryDecisionTerminate, result.Decision())
+			require.Zero(t, msg.acks.Load()+msg.naks.Load())
+			require.Equal(t, int32(1), msg.terms.Load())
+		})
+	}
+}
+
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+func TestRegisteredInvalidLoopPayloadTerminatesBeforeMutation(t *testing.T) {
+	tests := []struct {
+		name    string
+		prepare func(*testing.T, *Component) ([]byte, string)
+		handle  func(*Component) inputHandler
+	}{
+		{
+			name: "response status",
+			prepare: func(t *testing.T, c *Component) ([]byte, string) {
+				loopID, err := c.handler.loopManager.CreateLoop("task-invalid-response", "general", "model", 3)
+				require.NoError(t, err)
+				requestID := loopID + ":req:1"
+				c.handler.loopManager.TrackRequest(requestID, loopID)
+				valid := settlementEnvelope(t, &agentic.AgentResponse{RequestID: requestID, Status: agentic.StatusComplete})
+				return []byte(strings.Replace(string(valid), `"status":"complete"`, `"status":"not-a-status"`, 1)), loopID
+			},
+			handle: func(c *Component) inputHandler { return c.handleResponseMessage },
+		},
+		{
+			name: "tool result call ID",
+			prepare: func(t *testing.T, c *Component) ([]byte, string) {
+				loopID, err := c.handler.loopManager.CreateLoop("task-invalid-tool", "general", "model", 3)
+				require.NoError(t, err)
+				requestID := loopID + ":req:1"
+				executionID := deriveToolExecutionID(requestID, "call-1", 1)
+				c.handler.loopManager.TrackToolCall(executionID, loopID)
+				valid := settlementEnvelope(t, &agentic.ToolResult{
+					LoopID: loopID, RequestID: requestID, ExecutionID: executionID,
+					CallID: "call-1", CallOrdinal: 1, Name: "search", Content: "result",
+				})
+				return []byte(strings.Replace(string(valid), `"call_id":"call-1"`, `"call_id":""`, 1)), loopID
+			},
+			handle: func(c *Component) inputHandler { return c.handleToolResultMessage },
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := releaseTestComponent(t, NewMessageHandler(DefaultConfig()))
+			data, loopID := tc.prepare(t, c)
+			before, err := c.handler.GetLoop(loopID)
+			require.NoError(t, err)
+
+			decision, err := tc.handle(c)(t.Context(), data)
+
+			require.Error(t, err)
+			require.Equal(t, natsclient.DeliveryDecisionTerminate, decision)
+			after, lookupErr := c.handler.GetLoop(loopID)
+			require.NoError(t, lookupErr)
+			require.Equal(t, before, after, "invalid payload mutated loop state")
+		})
+	}
+}
+
+// spec: agentic-loop / Delivery work joins before settlement
+func TestCancelledResponseRetriesWithoutTerminalEffects(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+	loopID, err := handler.loopManager.CreateLoop("task-cancelled-response", "general", "model", 3)
+	require.NoError(t, err)
+	requestID := loopID + ":req:" + uuid.NewString()
+	handler.loopManager.TrackRequest(requestID, loopID)
+	entity, err := handler.GetLoop(loopID)
+	require.NoError(t, err)
+	bucket := &settlementBucket{values: map[string][]byte{loopID: settlementLoopRecord(t, entity)}}
+	c := releaseTestComponent(t, handler)
+	c.loopsBucket = bucket
+	c.settlementEvidence = &settlementEvidence{
+		request: retainedRequest(t, loopID, requestID), requestFound: true,
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	decision, err := c.handleResponseMessage(ctx, settlementEnvelope(t, &agentic.AgentResponse{
+		RequestID: requestID, Status: agentic.StatusComplete,
+	}))
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
+	require.NotContains(t, bucket.values, "COMPLETE_"+loopID)
+	var durable agentic.LoopEntity
+	require.NoError(t, json.Unmarshal(bucket.values[loopID], &durable))
+	require.False(t, durable.State.IsTerminal())
+	_, lookupErr := handler.GetLoop(loopID)
+	require.Error(t, lookupErr, "cancelled response retained process-local loop state")
+}
+
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+func TestImpossibleSpawnFailureTransitionQuarantinesThroughHeartbeatOwner(t *testing.T) {
+	c := releaseTestComponent(t, NewMessageHandler(DefaultConfig()))
+	c.deps.Platform = component.PlatformMeta{Org: "acme", Platform: "ops"}
+	c.graphWriter = &graphWriter{logger: slog.Default()}
+	c.testLineageWriteHook = func(_ context.Context, loopID string, _ map[string]any) error {
+		require.NoError(t, c.handler.loopManager.TransitionLoop(loopID, agentic.LoopStateComplete))
+		return errs.WrapInvalid(errors.New("lineage unavailable"), "agentic-loop", "test", "invalid lineage")
+	}
+	task := &agentic.TaskMessage{
+		LoopID: uuid.NewString(), TaskID: "task-impossible-spawn", Role: "general", Model: "model", Prompt: "work",
+		Metadata: map[string]any{
+			agentic.MetadataKeyRelatedLoops: map[string]any{"researcher": uuid.NewString()},
+		},
+	}
+	msg := &loopDeliveryOwnerMsg{data: settlementEnvelope(t, task)}
+
+	result, admitted := consumeAdmittedDelivery(
+		t.Context(), msg, task4HeartbeatPolicy(t, "agent.task", c.taskInputHandler(time.Minute)), newDeliveryLaneAdmission(nil),
+	)
+
+	require.True(t, admitted)
+	require.Equal(t, natsclient.DeliveryDecisionQuarantine, result.Decision(), "cause: %v", result.Err())
+	require.Zero(t, msg.acks.Load()+msg.naks.Load()+msg.terms.Load())
+}
+
+// spec: agentic-loop / Loop recovery is lane-specific and read-through
+func TestMissingProcessCorrelationRetriesInsteadOfAcking(t *testing.T) {
+	toolLoopID := uuid.NewString()
+	tests := []struct {
+		name    string
+		port    string
+		payload message.Payload
+	}{
+		{
+			name: "response", port: "agent.response",
+			payload: &agentic.AgentResponse{
+				RequestID: uuid.NewString() + ":req:" + uuid.NewString(), Status: agentic.StatusComplete,
+				Message: agentic.ChatMessage{Role: "assistant", Content: "done"},
+			},
+		},
+		{
+			name: "tool result", port: "tool.result",
+			payload: &agentic.ToolResult{
+				LoopID: toolLoopID, RequestID: toolLoopID + ":req:" + uuid.NewString(),
+				CallID: "call-1", ExecutionID: "execution-1", CallOrdinal: 1, Name: "search", Content: "done",
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := releaseTestComponent(t, NewMessageHandler(DefaultConfig()))
+			data, err := json.Marshal(message.NewBaseMessage(tc.payload.Schema(), tc.payload, "test"))
+			require.NoError(t, err)
+			msg := &loopDeliveryOwnerMsg{data: data}
+			var handler inputHandler
+			if tc.port == "agent.response" {
+				handler = c.handleResponseMessage
+			} else {
+				handler = c.handleToolResultMessage
+			}
+
+			result, admitted := consumeAdmittedDelivery(
+				t.Context(), msg, task4HeartbeatPolicy(t, tc.port, handler), newDeliveryLaneAdmission(nil),
+			)
+
+			require.True(t, admitted)
+			require.Equal(t, natsclient.DeliveryDecisionRetry, result.Decision())
+			require.Zero(t, msg.acks.Load()+msg.terms.Load())
+			require.Equal(t, int32(1), msg.naks.Load())
+		})
+	}
+}
+
+// spec: agentic-loop / Loop task, request, and tool work use only required correlation
+func TestTaskAssemblyFailureRollsBackProcessRegistration(t *testing.T) {
+	config := DefaultConfig()
+	config.Ports.Outputs = nil
+	handler := NewMessageHandler(config)
+	loopID := uuid.NewString()
+
+	_, err := handler.HandleTask(t.Context(), TaskMessage{
+		LoopID: loopID, TaskID: "task-assembly-failure", Role: "general", Model: "model", Prompt: "work",
+	})
+
+	require.Error(t, err)
+	_, lookupErr := handler.GetLoop(loopID)
+	require.Error(t, lookupErr, "failed task assembly left a registered loop that redelivery would ACK as a duplicate")
+}
+
+// spec: entity-id-contract / A loop instance token is minted at its framework birth seam
+// spec: agentic-loop / Loop task, request, and tool work use only required correlation
+func TestDirectHandleTaskRefusesMissingLoopIDBeforeState(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+
+	_, err := handler.HandleTask(t.Context(), TaskMessage{
+		TaskID: "task-missing-loop", Role: "general", Model: "model", Prompt: "work",
+	})
+
+	require.Error(t, err)
+	require.True(t, errs.IsInvalid(err))
+	require.ErrorContains(t, err, "loop_id")
+	_, active := handler.loopManager.HasActiveLoopForTask("task-missing-loop")
+	require.False(t, active)
+	require.Empty(t, handler.loopManager.loops)
+}
+
+// spec: agentic-loop / Loop task, request, and tool work use only required correlation
+func TestDirectHandleTaskQuarantinesTaskIDLoopIDConflict(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+	first := TaskMessage{
+		LoopID: uuid.NewString(), TaskID: "task-loop-conflict", Role: "general", Model: "model", Prompt: "work",
+	}
+	_, err := handler.HandleTask(t.Context(), first)
+	require.NoError(t, err)
+
+	conflict := first
+	conflict.LoopID = uuid.NewString()
+	_, err = handler.HandleTask(t.Context(), conflict)
+
+	require.Error(t, err)
+	require.True(t, errs.IsFatal(err), "task correlation conflict must quarantine")
+	require.ErrorContains(t, err, first.LoopID)
+	require.ErrorContains(t, err, conflict.LoopID)
+	require.Len(t, handler.loopManager.loops, 1)
+}
+
+// spec: agentic-loop / Loop task, request, and tool work use only required correlation
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+func TestTaskDeliveryQuarantinesTaskIDLoopIDConflict(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+	first := TaskMessage{
+		LoopID: uuid.NewString(), TaskID: "task-delivery-loop-conflict", Role: "general", Model: "model", Prompt: "work",
+	}
+	_, err := handler.HandleTask(t.Context(), first)
+	require.NoError(t, err)
+
+	conflict := first
+	conflict.LoopID = uuid.NewString()
+	msg := &loopDeliveryOwnerMsg{data: settlementEnvelope(t, &conflict)}
+	c := releaseTestComponent(t, handler)
+	result, admitted := consumeAdmittedDelivery(
+		t.Context(), msg, task4HeartbeatPolicy(t, "agent.task", c.taskInputHandler(time.Minute)), newDeliveryLaneAdmission(nil),
+	)
+
+	require.True(t, admitted)
+	require.Equal(t, natsclient.DeliveryDecisionQuarantine, result.Decision(), "cause: %v", result.Err())
+	require.Zero(t, msg.acks.Load()+msg.naks.Load()+msg.terms.Load())
+	require.Len(t, handler.loopManager.loops, 1)
 }
 
 // spec: agentic-loop / All six loop input classes settle after owner-specific durable done
@@ -194,9 +540,9 @@ func TestLoopSetupWiresMetadataFailureToAcquiredOwner(t *testing.T) {
 		}).Resolve(component.DirectionInput)
 		require.NoError(t, err)
 		require.NoError(t, c.setupConsumer(
-			ctx, ctx, port, portName+".>", func(context.Context, []byte) error {
+			ctx, ctx, port, portName+".>", func(context.Context, []byte) (natsclient.DeliveryDecision, error) {
 				workCalls.Add(1)
-				return nil
+				return natsclient.DeliveryDecisionAck, nil
 			},
 			nil,
 		))

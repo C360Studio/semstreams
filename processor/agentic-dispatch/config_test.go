@@ -8,11 +8,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// spec: agentic-dispatch / Prior messages accompany an independent chat turn
 func TestDefaultConfig(t *testing.T) {
 	config := DefaultConfig()
 
 	assert.Equal(t, "general", config.DefaultRole)
-	assert.True(t, config.AutoContinue)
+	assert.False(t, config.AutoContinue)
 	assert.Equal(t, "USER", config.StreamName)
 
 	// Check permissions

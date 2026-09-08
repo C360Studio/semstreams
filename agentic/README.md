@@ -83,6 +83,11 @@ responses retain the same wire type and use a stable response ID across source
 redelivery; dispatch does not require adopters to synthesize a user identity or
 choose a terminal retry count.
 
+`UserMessage.PriorMessages` and `TaskMessage.PriorMessages` carry optional displayed user/assistant text for an
+independent chat turn. Use the delivered `UserResponse.Content` for assistant entries. Dispatch defaults to independent
+executions; the adapter supplies history for follow-ups and retains its displayed transcript. See
+[Chat turns and context](../docs/concepts/13-agentic-systems.md#context-management) for validation and restart behavior.
+
 ## Usage
 
 ### Creating an Agent Request
@@ -110,8 +115,8 @@ if err := request.Validate(); err != nil {
 ### Managing Loop State
 
 ```go
-// The loop ID is a framework-minted canonical UUID, never an authored token
-// (ADR-105) — agentic-loop mints it; callers echo it.
+// A new TaskMessage producer is the framework birth seam: it mints a canonical
+// v4 UUID before validation and marshal. A continuation echoes its admitted ID.
 // Create with default max iterations (20)
 entity := agentic.NewLoopEntity("7c9e6679-7425-40de-944b-e07fc1f90ae7", "task_456", "general", "gpt-4")
 

@@ -1,5 +1,66 @@
 ## ADDED Requirements
 
+### Requirement: Prior messages accompany an independent chat turn
+
+UserMessage and HTTPMessageRequest SHALL accept optional `prior_messages` using the existing ChatMessage shape.
+Missing, null, and empty history SHALL be equivalent. Valid ordered text-only user/assistant history SHALL be copied
+unchanged into the durable TaskMessage. Invalid routable history SHALL reach the existing observable error response
+before task publication; nonempty history on a command SHALL be refused rather than ignored. Required negative-response
+publication failure SHALL NOT acknowledge its durable source.
+
+AutoContinue SHALL default to false in typed configuration and generated schema. An ordinary submission without
+ReplyTo SHALL create an independent execution under defaults, even if another loop is active. Explicit ReplyTo and
+explicitly configured AutoContinue SHALL retain existing attachment behavior. After attachment admission succeeds,
+nonempty prior history SHALL be refused as conflicting intent before task publication or live-loop mutation.
+Commands requiring a loop SHALL require an explicit loop_id under defaults, with an error that states that remedy.
+
+Same-source redelivery SHALL recover its retained task before consulting current attachment state. Source comparison
+SHALL include ordered prior role/content, with nil and empty equivalent. Different history under the same source
+identity SHALL use existing correlation quarantine, without overwriting the task or minting a replacement LoopID.
+
+The adapter supplies its displayed user text and UserResponse.Content; SemStreams SHALL NOT promise automatic hosted
+conversation recall. Existing transport limits apply without silent history trimming or new caller-computed limits.
+
+#### Scenario: Displayed history crosses the registered task boundary
+
+- **GIVEN** a follow-up contains prior user text and the delivered assistant UserResponse.Content
+- **WHEN** dispatch accepts it through HTTP or a registered UserMessage
+- **THEN** the registered durable TaskMessage contains that ordered history unchanged
+- **AND** this remains true when the displayed Decision.Reason differs from the provider's raw Result
+
+#### Scenario: Independent work is the default
+
+- **GIVEN** another execution is active on the same user and channel route
+- **WHEN** a submission omits ReplyTo and AutoContinue uses its default
+- **THEN** dispatch publishes a task with a fresh LoopID rather than attaching to the active execution
+
+#### Scenario: Empty history has no presence semantics
+
+- **WHEN** otherwise identical inputs omit prior_messages, set it to null, or supply an empty array
+- **THEN** their history validation and routing behavior are equivalent
+- **AND** retained-source correlation treats them as the same history
+
+#### Scenario: History conflicts with admitted attachment
+
+- **GIVEN** ReplyTo or explicitly configured AutoContinue resolves an admitted attachment
+- **WHEN** the input also supplies nonempty prior history
+- **THEN** the caller receives an error without a task publication or live-loop mutation
+- **AND** the same attachment without history retains its existing behavior
+
+#### Scenario: Commands require an explicit default target
+
+- **WHEN** a command requiring a loop omits loop_id under default configuration
+- **THEN** dispatch reports that an explicit loop_id is required
+- **AND** nonempty history on any command is an input error, not ignored data
+- **AND** explicitly configured AutoContinue retains its existing implicit command target behavior
+
+#### Scenario: Redelivery retains the committed conversation input
+
+- **GIVEN** dispatch committed a task and was replaced before settling its source
+- **WHEN** the source redelivers
+- **THEN** dispatch reuses its committed LoopID and history before resolving current attachment state
+- **AND** changed ordered history under the same source identity quarantines rather than overwrites or remints
+
 ### Requirement: Every dispatch durable input settles through its owner
 
 Dispatch SHALL classify `user.message`, `agent.complete`, and `agent.failed` through their owning durable callbacks.

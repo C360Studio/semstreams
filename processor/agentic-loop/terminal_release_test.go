@@ -17,7 +17,6 @@ import (
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/nats-io/nats.go/jetstream"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // terminalReaderProbe is a trajectory fact bucket that snapshots the loop's
@@ -371,10 +370,9 @@ func TestLateApprovalResponseForSettledLoopIsExpectedDrop(t *testing.T) {
 	}
 }
 
-// TestLateToolResultForSettledLoopIsExpectedDrop is I8 for the tool-result and
-// model-response readers. Both resolve a loop from a routing map the release
-// clears; the drop is counted and warned, never an error.
-func TestLateToolResultForSettledLoopIsExpectedDrop(t *testing.T) {
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / Loop recovery is lane-specific and read-through
+func TestLateInputsWithoutDurableEvidenceDoNotAck(t *testing.T) {
 	ctx := context.Background()
 	h := NewMessageHandler(DefaultConfig())
 	var logs strings.Builder
@@ -401,7 +399,7 @@ func TestLateToolResultForSettledLoopIsExpectedDrop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal tool result: %v", err)
 	}
-	c.handleToolResultMessage(ctx, toolData)
+	toolDecision, toolErr := c.handleToolResultMessage(ctx, toolData)
 
 	response := agentic.AgentResponse{
 		RequestID: requestID, Status: agentic.StatusComplete,
@@ -412,17 +410,13 @@ func TestLateToolResultForSettledLoopIsExpectedDrop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal agent response: %v", err)
 	}
-	c.handleResponseMessage(ctx, respData)
+	responseDecision, responseErr := c.handleResponseMessage(ctx, respData)
 
-	out := logs.String()
-	if strings.Contains(out, "ERROR") {
-		t.Fatalf("a late arrival for a settled loop was reported as a failure:\n%s", out)
+	if toolDecision != natsclient.DeliveryDecisionQuarantine || toolErr == nil {
+		t.Fatalf("under-correlated tool result settlement = (%v, %v), want quarantine", toolDecision, toolErr)
 	}
-	if !strings.Contains(out, "No loop found for tool execution") {
-		t.Fatalf("late tool result was not declared as a drop:\n%s", out)
-	}
-	if !strings.Contains(out, "No loop found for request") {
-		t.Fatalf("late model response was not declared as a drop:\n%s", out)
+	if responseDecision != natsclient.DeliveryDecisionRetry || responseErr == nil {
+		t.Fatalf("response without durable evidence settlement = (%v, %v), want retry", responseDecision, responseErr)
 	}
 	// The loop must stay gone: a late arrival never resurrects per-loop state.
 	if held := perLoopMapCount(h.loopManager, loopID); len(held) != 0 {
@@ -430,14 +424,9 @@ func TestLateToolResultForSettledLoopIsExpectedDrop(t *testing.T) {
 	}
 }
 
-// TestLateModelResponseForSettledLoopIsExpectedDrop is I8 for the model-response
-// reader on its own, and it is the reader's own test rather than a line inside
-// the tool-result one: §7 made this drop common, and the claim being made about
-// it is that the drop is DECLARED — a warn AND a counter, the same pair its
-// sibling one function away already emits — not merely quiet.
-//
-// spec: agentic-loop / Requirement: Per-loop in-process state is released at terminal, through the one release point
-func TestLateModelResponseForSettledLoopIsExpectedDrop(t *testing.T) {
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / Loop recovery is lane-specific and read-through
+func TestLateModelResponseWithoutDurableEvidenceRetries(t *testing.T) {
 	ctx := context.Background()
 	h := NewMessageHandler(DefaultConfig())
 	var logs strings.Builder
@@ -447,7 +436,6 @@ func TestLateModelResponseForSettledLoopIsExpectedDrop(t *testing.T) {
 	h.logger = logger
 	c.logger = logger
 	c.metrics = getMetrics(nil)
-	before := testutil.ToFloat64(c.metrics.modelResponsesDropped.WithLabelValues("stale_request_id"))
 
 	loopID := populatedLoop(t, h)
 	requestID := h.loopManager.GenerateRequestID(loopID)
@@ -467,19 +455,10 @@ func TestLateModelResponseForSettledLoopIsExpectedDrop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal agent response: %v", err)
 	}
-	c.handleResponseMessage(ctx, respData)
+	decision, handleErr := c.handleResponseMessage(ctx, respData)
 
-	out := logs.String()
-	if strings.Contains(out, "ERROR") {
-		t.Fatalf("a late model response for a settled loop was reported as a failure:\n%s", out)
-	}
-	if !strings.Contains(out, "No loop found for request") {
-		t.Fatalf("late model response was not declared as a drop:\n%s", out)
-	}
-	after := testutil.ToFloat64(c.metrics.modelResponsesDropped.WithLabelValues("stale_request_id"))
-	if d := after - before; d != 1 {
-		t.Fatalf("model_responses_dropped_total{reason=stale_request_id} delta = %v, want 1 — "+
-			"the drop is logged but not counted, so an operator cannot see it", d)
+	if decision != natsclient.DeliveryDecisionRetry || handleErr == nil {
+		t.Fatalf("late response settlement = (%v, %v), want retry", decision, handleErr)
 	}
 	if held := perLoopMapCount(h.loopManager, loopID); len(held) != 0 {
 		t.Fatalf("a late model response re-registered per-loop state: %v", held)

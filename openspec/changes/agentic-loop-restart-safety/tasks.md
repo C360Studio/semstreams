@@ -4,6 +4,100 @@ Every behavior test added by this change SHALL carry a source comment in the exa
 `// spec: <capability> / <Requirement heading>`. The capability and heading SHALL match an active delta exactly;
 design-section shorthand is not a valid citation. Every implementation slice follows RED → implementation → GREEN.
 
+## Current execution checkpoint — sequential chat and restart (owner accepted 2026-09-08)
+
+The owner accepted the product-level reset: preserve settlement and retained-result reuse work, and make a
+restart-surviving two-turn conversation the next executable checkpoint. One bounded loop execution may complete
+each turn without ending its conversation. Sequential chat does not require mid-flight steering or completion of
+#1244's broader transition review.
+
+The different-TaskID continuation-removal recommendation in
+`design-task4-continuation-response-proof-2026-09-08.md` is **not owner-approved** and SHALL NOT be implemented.
+The owner subsequently approved the reviewed PriorMessages field on three existing inputs and AutoContinue=false.
+No other public API, conversation store, or recovery runtime is authorized. Existing unfinished settlement
+obligations below remain open.
+
+- [x] C.1 Establish the smallest supported task/dispatch history handoff from the existing surface inventory;
+  reconcile its reviewed design and capability delta before implementation.
+- [x] C.1a RED → implementation → GREEN for the approved fields, plain-text history validation, HTTP/channel
+  normalization, retained-source history comparison, loop/context reconstruction, AutoContinue=false, and explicit
+  command targeting. Preserve explicit attachment without supplied history. Verify registered-envelope round trips
+  and fuzz the production input boundary. Independently review code, schema, and migration documentation.
+- [x] C.2 Through real NATS and a deterministic fake model, submit a first turn and observe its answer; replace the
+  relevant components and submit a follow-up through the supported entry point. Assert that the second model request
+  contains the prior exchange, not merely that two answers were produced. Do not seed private process caches.
+- [x] C.3 At the provider boundary, prove that replacement after matching result persistence but before source ACK
+  reuses that result, while replacement before result persistence permits another provider call.
+- [ ] C.4 Prove that required persistence or publication failure never ACKs its source. Retain separate tool-effect
+  and approval proofs; the chat checkpoint does not imply that those unfinished paths are complete.
+
+Verification update, 2026-09-08: C.2 now passes through started dispatch, loop, and model components with real NATS
+and a deterministic HTTP provider. After stop/join and replacement, the follow-up uses a distinct LoopID, fresh
+iteration budget, and the ordered displayed exchange exactly once. The answer requires facts absent from the current
+prompt. The earlier implementation produced `lantern=unknown; token=unknown` (RED); history assembly produces
+`lantern=amber; token=cobalt` (GREEN). A separate supported terminal-stream/HTTP proof confirms Decision.Reason, rather
+than raw Result, supplies the displayed assistant text.
+
+C.3 now uses an actual first provider response and interrupted source ACK, not a preloaded response fixture. The
+test observes retained output and pending source, stops/joins the first component, and observes real redelivery to a
+fresh component with provider calls still 1. Disabling retained-response reuse fails with calls 2; restoration passed
+three consecutive race-enabled runs. Existing absence and failed-publication replacement proofs remain green.
+
+The root reran the final lint-clean implementation with full affected-package unit/race suites (agentic, dispatch,
+loop, model), plus serialized real-NATS/race acceptance and model/loop recovery cases: all passed. Production-input
+fuzzing passed 15 seeds and 1,324 executions in a five-second, single-worker race-enabled run. Schema/OpenAPI generation
+completed; the generator's optional meta-schema check was skipped because that file is absent. Strict OpenSpec
+validation passes. These are component-replacement proofs, not an OS-process kill or graph/evidence E2E claim.
+
+The new acceptance tests are reproducible independently:
+
+```sh
+go test -race -tags=integration ./processor/agentic-dispatch \
+  -run '^TestIntegrationSequentialChat' -count=1
+go test -race -tags=integration ./processor/agentic-model \
+  -run '^TestIntegrationPostResponsePubAckReplacementReusesLiveProviderResult$' -count=1
+```
+
+Independent implementation review returned APPROVE for this field/default slice and its acceptance tests, with no
+blocking/high findings. The reviewer independently reran focused unit/race and grammar seeds, both real-NATS chat
+cases, and the live post-PubAck replacement case; all passed. The conformance-table correction is resolved. Root
+repository lint and contract tests with `-race` also pass. C.4 and the older lane-specific obligations stay open;
+this is not whole-task-4 or whole-PR approval.
+
+The draft-push gate exposed a test-isolation defect: terminal-signal tests assumed the process-wide metrics
+singleton started at zero. Repeating the response test with `-race -count=2` reproduced it. The three adjacent
+tests now assert exact changes from captured baselines, without resetting globals or changing production code.
+Independent narrow review returned APPROVE and reran all three with `-race -count=5`; premature and duplicate
+completion mutations still fail. The next bounded C.4 proof exercises real terminal PubAck followed by a failed
+final bare LoopEntity write, then source redelivery to a fresh component. It adds no recovery mechanism.
+
+The full integration gate also exposed an incomplete simulated ToolResult in `TestIntegration_LoopWithToolCalls`:
+it omitted the dispatched tool name and correctly hit the correlation refusal. The fixture now echoes `call.Name`,
+as the production tool component does; the production guard is unchanged. The focused case reproduced RED and
+passed three race-enabled integration runs after correction.
+
+Draft checkpoint verification after both independently approved fixture corrections: the full canonical
+`scripts/run-integration-tests.sh` passed, including all packages with `-race -tags=integration -count=1`.
+`go test -race ./...`, `task lint`, `go mod tidy -diff`, Linux/amd64 build, schema/OpenAPI no-drift, contract tests,
+entity-ID corpus audit, fixed-port/inventory guard fixtures, API-compatibility guard fixtures, and strict OpenSpec
+validation pass. The reporting-only API check reports 14 incompatible Tier 1 packages against beta.162; it is not a
+compatibility approval. The outstanding agentic E2E gate in 3A.3 and C.4/remaining lane work remain open.
+
+The sequential-chat inventory addendum passed independent review at SHA-256
+`4e4b178db78bc8e41f836e7eae21d3ba461a55a5de5e94edf23425f7047c8fb8` (73/73 pins). The public-input candidate is
+`design-sequential-chat-handoff-2026-09-08.md`, independent DESIGN REVIEW PASS at SHA-256
+`b10470f4a67066f1dc27e3ff19688a3eea2b4352c83b5e1ed105c0d3789ec1cb`. The bounded judge separated the input contract
+from AutoContinue's default choice. The owner accepted both on 2026-09-08; canonical design and both capability deltas
+now carry that target. Implementation, C.2/C.3 acceptance, and scoped independent implementation review are complete.
+Automatic hosted conversation recall is not claimed.
+
+The bounded approval-ACK correction is implemented and independently approved: gate setup errors propagate;
+UpdateLoop retains the newly stored triggering ToolResult; an error-path terminal-state label cannot authorize ACK
+without a constructed terminal outcome. Six focused regressions cover setup, retained result, existing invalid
+classification, durability failure, unsettled cancellation followed by a tool result, and failed timeout-output
+construction. Existing successful timeout settlement remains green. Full loop/model/dispatch unit/race suites pass.
+Repository lint also passes. This is a reviewed slice, not completion of task 4 or approval reconstruction in task 6.
+
 ## 0. Accepted gates
 
 - [x] 0.1 Complete the original file:line surface, lane, state, lifecycle, and adopter inventory.
@@ -30,6 +124,10 @@ design-section shorthand is not a valid citation. Every implementation slice fol
   implementation. The review verified lane-scoped correlation, ordinary at-least-once publication, exclusive
   dispatch edge ownership, seven capability deltas, corrected checkpoint provenance, exact MODIFIED headings, and
   graph-view lifecycle preservation.
+- [x] 0.12 Accept producer LoopID inventory SHA-256
+  `7b273f91996e71df860226c83d615691e6b08de0fa0153c7c5d4869a53a78c26`, independent `INVENTORY PASS`, 69/69 pins;
+  accept design SHA-256 `70ca0bb503465c76dce06a08f0be21a88870f184a1d0ebdfc77d88ff14c8818f`, independent
+  `DESIGN REVIEW PASS`; and record owner acceptance in #1146 comment `5575482141`.
 
 ## 1. Settlement foundation and consumer authority
 
@@ -135,6 +233,30 @@ design-section shorthand is not a valid citation. Every implementation slice fol
   every newly produced response receives PubAck before source ACK, and post-return/pre-PubAck replacement may invoke
   the provider again when no matching response committed.
 
+## 3A. Task producer identity prerequisite
+
+- [x] 3A.1 RED: prove TaskMessage validation returns an ordinary error naming missing LoopID; dispatch and rule produce
+  canonical v4 LoopID before marshal; and rule, direct HandleTask, and durable intake classify invalid before side
+  effects. Cite exactly
+  `// spec: entity-id-contract / A loop instance token is minted at its framework birth seam`,
+  `// spec: agentic-loop / Loop task, request, and tool work use only required correlation`, and
+  `// spec: rule-agent-publishing / Publish-agent preserves the registered payload boundary`.
+- [x] 3A.2 Implement producer-owned task identity. Keep dispatch's retained-byte path; mint rule LoopID once per
+  TaskMessage construction before Validate/marshal; require LoopID in TaskMessage validation and schema; remove
+  TaskMessage-path fallback minting from preflight and HandleTask; and validate/classify the direct HandleTask seam.
+  Add no exported helper, constructor, configurable generator, deterministic derivation, scan, map, ledger, bucket, or
+  second owner. Do not alter tasks 9.5–9.7 admission, subject coverage, classifier, registry, or PubAck contracts.
+- [ ] 3A.3 GREEN: through real NATS, redeliver the exact rule-produced registered bytes across agentic-loop process
+  replacement and prove one TaskID-to-LoopID mapping, one loop identity, no fallback mint, and loud missing-ID refusal.
+  The proof covers retry/redelivery of the same already-marshaled task, not fresh upstream rule-action execution. Run
+  affected unit/race tests and serialized `task e2e:agentic`; update generated schema, examples, ADR-105, and the
+  beta.162-to-beta.163 migration note before task 4 review resumes.
+
+  Blocked 2026-09-08: the real-NATS proof, affected unit/race tests, full test/race suites, schema generation, lint,
+  contract tests, and strict OpenSpec validation pass. Three serialized `task e2e:agentic` attempts stopped before
+  build or test execution because Docker Hub metadata for `golang:1.26-alpine` returned `DeadlineExceeded`; compose
+  cleanup completed after every attempt. Leave this task unchecked until that external gate executes successfully.
+
 ## 4. Loop task and response settlement
 
 - [ ] 4.1 RED: add task-birth, post-registration failure, dropped initial-request publication, response cold-read,
@@ -145,10 +267,14 @@ design-section shorthand is not a valid citation. Every implementation slice fol
 - [ ] 4.2 Migrate task, response, and tool-result bindings from the legacy helper to the permanent typed heartbeat
   owner. Add direct LoopEntity read-through by LoopID; reconstruct response configuration from committed request;
   settle loop/graph birth, lineage, initial request, created event, and terminal failure at the delivery boundary.
-  Preserve every exit for #1244 as a declared transition or refusal and never encode log-and-ACK as success.
+  Preserve every exit for #1244 as a declared transition or refusal and never encode log-and-ACK as success. Persist
+  bare terminal LoopEntity last as the lane-applied marker; discard speculative process-local terminal state on
+  pre-marker failure and add no replay cache, ledger, or second state owner.
 - [ ] 4.3 GREEN: prove matching retained provider response prevents another call and retained absence remains durably
   at-least-once, no response/tool-result log-and-ACK, no stale-correlation loss, and no replay beyond admitted evidence
-  across real process replacement.
+  across real process replacement. Prove the brief COMPLETE/event-before-terminal-LoopEntity window remains
+  unsettled, exact current RequestID plus the final marker proves model-response application, and terminal state alone
+  never proves a particular tool result.
 
 ## 5. Tool result and completed outcome
 
@@ -194,7 +320,10 @@ design-section shorthand is not a valid citation. Every implementation slice fol
 - [ ] 6.5 Table-test approve, modify, reject, and timeout across transient/unresolved Retry, confirmed retained
   absence to durable `continuation_unavailable`, malformed/identity conflict to Quarantine, exact match to continue,
   and durable current state proving the branch already applied. Ordinary branch publication remains at-least-once.
-  Cite exactly `// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded`.
+  Any branch that becomes terminal proves every settlement-required terminal effect before the final bare terminal
+  LoopEntity marker; bare terminal state alone never proves which ToolResult applied. Cite exactly
+  `// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded` and
+  `// spec: agentic-loop / Loop task, request, and tool work use only required correlation` as applicable.
 - [ ] 6.6 Stop for an owner mechanism ruling after the evidence gate. On PASS, obtain explicit revocation of comment
   `5463183450`, then remove `ApprovalContinuationV1`, Store config, digest, cleanup, and deliberate AGENT-eviction
   claims. On FAIL, retain the already-approved ObjectStore plan unchanged. Introduce no third mechanism.
@@ -257,12 +386,16 @@ design-section shorthand is not a valid citation. Every implementation slice fol
   from the last durable boundary, and operational quiesce by stop-admission/drain/cooperative-cancel/join. State that
   future suspend-at-next-durable-boundary requires a new evidence-backed contract.
 - [ ] 7.5 RED: add cancel-only UserSignal vocabulary, durable cancel completion, separate ApprovalResponse, missing
-  waiter, duplicate/conflict, panic, and replacement tests. Cite exactly
-  `// spec: agentic-loop / All six loop input classes settle after owner-specific durable done`.
+  waiter, duplicate/conflict, panic, replacement, terminal-marker ordering, and pre-marker Retry tests. Prove
+  best-effort audit and nonblocking graph evidence remain outside settlement-required effects. Cite exactly
+  `// spec: agentic-loop / All six loop input classes settle after owner-specific durable done` and
+  `// spec: agentic-loop / Loop task, request, and tool work use only required correlation` as applicable.
 - [ ] 7.6 Refactor cancel, approval-response, approved-verdict, and rejected-verdict through their four existing
   private owners. Unknown UserSignal terminates; cancel waits for current state, `COMPLETE_<loopID>`, and terminal
   PubAck; missing process correlation never authorizes ACK. Keep `ResponseAction.Signal` and
-  `ClassifiedIntent.SignalType` outside durable `agent.signal.*` ownership.
+  `ClassifiedIntent.SignalType` outside durable `agent.signal.*` ownership. Every terminal branch persists the bare
+  terminal LoopEntity only after its settlement-required terminal effects; best-effort audit and nonblocking graph
+  evidence remain nonblocking.
 - [ ] 7.7 Reconcile current `agentic-loop` requirement
   `Per-loop in-process state is released at terminal, through the one release point`: preserve single-point release
   and unaffected scenarios, replace unconditional quiet settled-drop with lane-specific durable applied proof, Retry
@@ -364,15 +497,18 @@ design-section shorthand is not a valid citation. Every implementation slice fol
   Reconcile schemas and every example/fixture. Remove paused vocabulary from `agentic/README.md`,
   `processor/agentic-loop/README.md`, `docs/concepts/13-agentic-systems.md`,
   `docs/operations/migration-beta162-to-beta163.md`, and generated `specs/openapi.v3.yaml`.
+  Document required producer-owned TaskMessage LoopID, same-marshaled-publication retry, downstream retained-byte
+  redelivery, direct sister migrations, and the absence of any empty-ID compatibility path or consumer recovery owner.
 - [ ] 11.4 Confirm PR #1159 carries the complete #1146 claim set, `implemented-by: Sol`, `Closes #1146`,
   `Refs #759`, `Refs #1155`, `Refs #1249`, and explicit “#1146-owned tranche; #1155 remains open” wording. It SHALL
   NOT carry `Closes #1155`. Preserve PR #1251 as #1239's retained authorship/review record and PR #1156 as final
   default-branch closing authority after #1249 and the combined proof gate.
 - [ ] 11.5 Complete implementation/proof, then obtain SemStreams implementation review of the complete claim set.
 - [ ] 11.6 Obtain owner-requested cross-agent review, apply every finding, and repeat both reviews until accepted.
-- [ ] 11.7 Before archive, reconcile every exact MODIFIED current requirement, then archive
-  `agentic-loop-restart-safety` as the final content commit and sync all seven current specs: `agentic-dispatch`,
-  `agentic-governance`, `agentic-loop`, `agentic-model`, `agentic-tools`, `graph-view-subscription`, and
+- [ ] 11.7 Before archive, reconcile every exact modified or replaced current requirement, then archive
+  `agentic-loop-restart-safety` as the final content commit and sync all eight current specs: `agentic-dispatch`,
+  `agentic-governance`, `agentic-loop`, `agentic-model`, `agentic-tools`, `entity-id-contract`,
+  `graph-view-subscription`, and
   `rule-agent-publishing`. Preserve every unaffected scenario and valid citation from each replaced current
   requirement.
 - [ ] 11.8 Obtain narrow archive/current-spec-sync review. Only afterward run hosted CI, remote-base verification,

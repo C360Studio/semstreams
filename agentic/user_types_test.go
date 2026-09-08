@@ -270,7 +270,7 @@ func TestUserSignal_Validate(t *testing.T) {
 	}
 }
 
-// spec: entity-id-contract / A loop instance token is a framework-minted UUID
+// spec: entity-id-contract / A loop instance token is minted at its framework birth seam
 // Scenario: every remaining loop-token carrier refuses a non-canonical token.
 //
 // A control signal is the one lane on which a client-authored token used to
@@ -506,6 +506,16 @@ func TestTaskMessage_Validate(t *testing.T) {
 		wantErr string
 	}{
 		{
+			name: "missing loop_id",
+			task: TaskMessage{
+				TaskID: "task-123",
+				Role:   "general",
+				Model:  "qwen2.5-coder:32b",
+				Prompt: "help me write code",
+			},
+			wantErr: "loop_id required",
+		},
+		{
 			name: "valid task message",
 			task: TaskMessage{
 				TaskID: "task-123",
@@ -665,6 +675,9 @@ func TestTaskMessage_Validate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.wantErr != "loop_id required" && tt.task.LoopID == "" {
+				tt.task.LoopID = canonicalLoopToken
+			}
 			err := tt.task.Validate()
 			if tt.wantErr == "" {
 				assert.NoError(t, err)
@@ -676,7 +689,7 @@ func TestTaskMessage_Validate(t *testing.T) {
 }
 
 func TestTaskMessageValidateRelatedLoopsMetadata(t *testing.T) {
-	base := TaskMessage{TaskID: "task-123", Role: "general", Model: "gpt-4", Prompt: "test"}
+	base := TaskMessage{LoopID: canonicalLoopToken, TaskID: "task-123", Role: "general", Model: "gpt-4", Prompt: "test"}
 	tests := []struct {
 		name    string
 		related any
@@ -851,6 +864,7 @@ func TestTaskMessage_ResponseFormat_JSONRoundTrip(t *testing.T) {
 // the LLM client and produce confusing 400s.
 func TestTaskMessage_ResponseFormat_ValidatePropagates(t *testing.T) {
 	task := TaskMessage{
+		LoopID: canonicalLoopToken,
 		TaskID: "task-bad-rf",
 		Role:   "general",
 		Model:  "fast",
@@ -992,19 +1006,20 @@ func nonCanonicalLoopTokens() map[string]string {
 // side) and agentic-loop intake (consume side) already run, so refusing here
 // means no client-authored token reaches loop state or the graph write path.
 //
-// Empty stays valid: an unset LoopID is the ordinary case for a fresh task, and
-// the framework mints the token downstream. The framework observes; the caller
-// never predicts.
+// LoopID is required at the producer boundary; every supplied value must also
+// use the canonical form.
 func TestTaskMessageRefusesNonUUIDLoopID(t *testing.T) {
 	t.Parallel()
 
 	base := func() TaskMessage {
-		return TaskMessage{TaskID: "task-1", Role: "general", Model: "fast", Prompt: "p"}
+		return TaskMessage{LoopID: canonicalLoopToken, TaskID: "task-1", Role: "general", Model: "fast", Prompt: "p"}
 	}
 
-	t.Run("empty loop_id is valid", func(t *testing.T) {
+	t.Run("empty loop_id is required", func(t *testing.T) {
 		t.Parallel()
-		assert.NoError(t, base().Validate())
+		task := base()
+		task.LoopID = ""
+		assert.EqualError(t, task.Validate(), "loop_id required")
 	})
 
 	t.Run("canonical loop_id is valid", func(t *testing.T) {
@@ -1037,7 +1052,7 @@ func TestTaskMessageRefusesNonCanonicalLoopTokenFields(t *testing.T) {
 	t.Parallel()
 
 	base := func() TaskMessage {
-		return TaskMessage{TaskID: "task-1", Role: "general", Model: "fast", Prompt: "p"}
+		return TaskMessage{LoopID: canonicalLoopToken, TaskID: "task-1", Role: "general", Model: "fast", Prompt: "p"}
 	}
 
 	fields := map[string]struct {

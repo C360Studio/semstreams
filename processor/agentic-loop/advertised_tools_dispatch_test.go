@@ -8,6 +8,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
+	"github.com/google/uuid"
 )
 
 // advertisedTestTools is the narrow per-spawn tool set the gh#551 acceptance
@@ -26,6 +27,7 @@ func advertisedTestTools() []agentic.ToolDefinition {
 func startLoopWithTools(t *testing.T, handler *agenticloop.MessageHandler, taskID string, tools []agentic.ToolDefinition) string {
 	t.Helper()
 	taskResult, err := handler.HandleTask(context.Background(), agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: taskID,
 		Role:   "coordinator",
 		Model:  "qwen-32b",

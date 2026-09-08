@@ -37,6 +37,8 @@ type HTTPMessageRequest struct {
 	ChannelID   string            `json:"channel_id,omitempty"`
 	ReplyTo     string            `json:"reply_to,omitempty"`
 	Metadata    map[string]string `json:"metadata,omitempty"`
+	// PriorMessages is the ordered displayed transcript for an independent turn.
+	PriorMessages []agentic.ChatMessage `json:"prior_messages,omitempty" description:"Optional ordered displayed user/assistant messages for an independent turn. Each entry requires nonempty content; name, tool and reasoning fields must be empty. Omitted, null and empty are equivalent. Cannot accompany commands or attachment to an existing loop."`
 
 	// Resumable-reply anchors (gh#256). Distinct from ReplyTo (which routes to
 	// a loop to continue): these let a reply re-enter and resume a paused run.
@@ -145,16 +147,17 @@ func (c *Component) handleHTTPMessage(w http.ResponseWriter, r *http.Request) {
 
 	// Build UserMessage
 	msg := agentic.UserMessage{
-		MessageID:   uuid.New().String(),
-		ChannelType: req.ChannelType,
-		ChannelID:   req.ChannelID,
-		UserID:      req.UserID,
-		Content:     req.Content,
-		ReplyTo:     req.ReplyTo,
-		Metadata:    req.Metadata,
-		RunID:       req.RunID,
-		InReplyTo:   req.InReplyTo,
-		Timestamp:   time.Now(),
+		MessageID:     uuid.New().String(),
+		ChannelType:   req.ChannelType,
+		ChannelID:     req.ChannelID,
+		UserID:        req.UserID,
+		Content:       req.Content,
+		PriorMessages: req.PriorMessages,
+		ReplyTo:       req.ReplyTo,
+		Metadata:      req.Metadata,
+		RunID:         req.RunID,
+		InReplyTo:     req.InReplyTo,
+		Timestamp:     time.Now(),
 	}
 
 	// Record message received metric
@@ -203,6 +206,11 @@ func (c *Component) processMessageSync(ctx context.Context, msg agentic.UserMess
 
 // processCommandSync processes a command and returns the response synchronously.
 func (c *Component) processCommandSync(ctx context.Context, msg agentic.UserMessage) agentic.UserResponse {
+	if len(msg.PriorMessages) != 0 {
+		return refusedSubmissionResponse(msg,
+			c.refuseSubmission(seamHTTPSubmission, msg.ReplyTo, codeSubmissionInvalid,
+				fmt.Errorf("prior_messages cannot accompany a command")))
+	}
 	name, cmd, args, found := c.registry.Match(msg.Content)
 	if !found {
 		return agentic.UserResponse{
@@ -245,7 +253,7 @@ func (c *Component) processCommandSync(ctx context.Context, msg agentic.UserMess
 			ChannelID:   msg.ChannelID,
 			UserID:      msg.UserID,
 			Type:        agentic.ResponseTypeError,
-			Content:     "No active loop. Specify a loop_id or start a task first.",
+			Content:     "An explicit loop_id is required for this command.",
 			Timestamp:   time.Now(),
 		}
 	}
@@ -342,6 +350,11 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 				// already waiting on, naming the field — rather than "Task submitted"
 				// followed by an async TERM it never sees (ADR-105, #1192).
 				return refusedSubmissionResponse(msg, err)
+			}
+			if len(msg.PriorMessages) != 0 {
+				return refusedSubmissionResponse(msg,
+					c.refuseSubmission(seamHTTPSubmission, loopID, codeSubmissionInvalid,
+						fmt.Errorf("prior_messages cannot accompany attachment to an existing loop")))
 			}
 		}
 

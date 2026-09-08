@@ -11,6 +11,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
+	"github.com/google/uuid"
 )
 
 func TestArchitectCompletion_ProducesEnrichedCompletionState(t *testing.T) {
@@ -19,6 +20,7 @@ func TestArchitectCompletion_ProducesEnrichedCompletionState(t *testing.T) {
 	// Create architect loop
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-001",
 		Role:   "architect",
 		Model:  "qwen-32b",
@@ -84,6 +86,7 @@ func TestArchitectCompletion_PublishesAgentComplete(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-001",
 		Role:   "architect",
 		Model:  "qwen-32b",
@@ -154,6 +157,7 @@ func TestEditorCompletion_DoesNotChain(t *testing.T) {
 	// Directly create an editor role loop
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-001",
 		Role:   "editor",
 		Model:  "qwen-32b",
@@ -210,6 +214,7 @@ func TestGeneralRoleCompletion_ProducesCompletionState(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-001",
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -254,6 +259,7 @@ func TestArchitectWithToolCalls_CompletionAfterTools(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-001",
 		Role:   "architect",
 		Model:  "qwen-32b",
@@ -334,6 +340,7 @@ func TestArchitectFailure_NoCompletionState(t *testing.T) {
 
 	ctx := context.Background()
 	architectTask, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-001",
 		Role:   "architect",
 		Model:  "qwen-32b",
@@ -372,6 +379,7 @@ func TestCompletionState_IncludesIterations(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-001",
 		Role:   "architect",
 		Model:  "qwen-32b",

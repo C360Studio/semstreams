@@ -106,7 +106,9 @@ func TestLongRunningLoopHeartbeatPolicyValidatedBeforeConsumerAcquisition(t *tes
 				}
 
 				err = c.setupConsumer(
-					t.Context(), t.Context(), port, portName+".>", func(context.Context, []byte) error { return nil },
+					t.Context(), t.Context(), port, portName+".>", func(context.Context, []byte) (natsclient.DeliveryDecision, error) {
+						return natsclient.DeliveryDecisionAck, nil
+					},
 					nil,
 				)
 				if test.wantErr {
@@ -201,7 +203,9 @@ func TestLoopMaxDeliverCoversFixedBackOffBeforeConsumerAcquisition(t *testing.T)
 			}
 
 			err = c.setupConsumer(
-				t.Context(), t.Context(), port, "agent.task.>", func(context.Context, []byte) error { return nil },
+				t.Context(), t.Context(), port, "agent.task.>", func(context.Context, []byte) (natsclient.DeliveryDecision, error) {
+					return natsclient.DeliveryDecisionAck, nil
+				},
 				nil,
 			)
 			if test.wantErr {

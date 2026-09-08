@@ -19,6 +19,7 @@ import (
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
 	"github.com/c360studio/semstreams/types"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
+	"github.com/google/uuid"
 )
 
 // tripleCollector subscribes to the canonical graph.mutation.triple.append
@@ -501,6 +502,7 @@ func TestWriteSpawnIdentity_Integration(t *testing.T) {
 	w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{Org: "acme", Platform: "ops"})
 
 	task := &agentic.TaskMessage{
+		LoopID:       uuid.NewString(),
 		TaskID:       "task-spawn-int",
 		Role:         "researcher",
 		ParentLoopID: "loop-parent-uuid",
@@ -586,7 +588,9 @@ func TestWriteSpawnIdentity_EntityExistsReturnedToCaller_Integration(t *testing.
 	responder.subscribe(t, ctx, tc.Client)
 
 	w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{Org: "acme", Platform: "ops"})
-	err := w.WriteSpawnIdentity(ctx, "loop-conflict", &agentic.TaskMessage{TaskID: "task-conflict", Role: "researcher"})
+	err := w.WriteSpawnIdentity(ctx, "loop-conflict", &agentic.TaskMessage{
+		LoopID: uuid.NewString(),
+		TaskID: "task-conflict", Role: "researcher"})
 	if err == nil {
 		t.Fatal("expected definite entity.create conflict")
 	}
@@ -609,7 +613,9 @@ func TestWriteSpawnIdentity_ReturnsErrorOnGenuineFailure_Integration(t *testing.
 	responder.subscribe(t, ctx, tc.Client)
 
 	w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{Org: "acme", Platform: "ops"})
-	task := &agentic.TaskMessage{TaskID: "task-fail", Role: "researcher"}
+	task := &agentic.TaskMessage{
+		LoopID: uuid.NewString(),
+		TaskID: "task-fail", Role: "researcher"}
 
 	if err := w.WriteSpawnIdentity(ctx, "loop-fail", task); err == nil {
 		t.Error("WriteSpawnIdentity should return an error on genuine failure, got nil")
@@ -650,7 +656,9 @@ func TestWriteSpawnIdentity_MissingPlatformSkipsWithoutError_Integration(t *test
 
 	// Empty PlatformMeta — no org/platform → no valid entity ID.
 	w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{})
-	task := &agentic.TaskMessage{TaskID: "task-noplat", Role: "researcher"}
+	task := &agentic.TaskMessage{
+		LoopID: uuid.NewString(),
+		TaskID: "task-noplat", Role: "researcher"}
 
 	if err := w.WriteSpawnIdentity(ctx, "loop-noplat", task); err != nil {
 		t.Errorf("missing platform identity must be a graceful skip (nil), got error: %v", err)

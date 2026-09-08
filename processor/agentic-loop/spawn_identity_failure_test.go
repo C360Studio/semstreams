@@ -112,7 +112,7 @@ func TestHandleSpawnIdentityFailure_GraphStatePoisonFailsLoopPerEntity(t *testin
 	poison := errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired,
 		&graph.StateContractError{Reason: graph.GraphStateReasonNoncanonicalEntityID})
 
-	if gotErr := c.handleSpawnIdentityFailure(context.Background(), loopID, before, poison); gotErr != nil {
+	if _, gotErr := c.handleSpawnIdentityFailure(context.Background(), loopID, before, poison); gotErr != nil {
 		t.Fatalf("handleSpawnIdentityFailure() error = %v, want nil (per-loop failure is fully handled)", gotErr)
 	}
 
@@ -158,7 +158,8 @@ func TestGraphStatePoisonRouting_DistinguishesOperationalErrors(t *testing.T) {
 	}
 }
 
-func TestHandleSpawnIdentityFailure_OperationalErrorUsesBusinessFailurePath(t *testing.T) {
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+func TestHandleSpawnIdentityFailure_InvalidSerializationTerminatesAndDiscardsSpeculativeState(t *testing.T) {
 	t.Parallel()
 
 	loopManager := NewLoopManager()
@@ -191,8 +192,9 @@ func TestHandleSpawnIdentityFailure_OperationalErrorUsesBusinessFailurePath(t *t
 	// terminal observation, because the release clears the map on return.
 	probe := newTerminalReaderProbe(c, loopID)
 
-	if err := c.handleSpawnIdentityFailure(context.Background(), loopID, entity, errors.New("temporary graph request failure")); err != nil {
-		t.Fatalf("operational birth failure returned consumer error: %v", err)
+	decision, err := c.handleSpawnIdentityFailure(context.Background(), loopID, entity, errors.New("temporary graph request failure"))
+	if err == nil || decision != natsclient.DeliveryDecisionTerminate {
+		t.Fatalf("serialization failure settlement = (%v, %v), want terminate with error", decision, err)
 	}
 
 	after := probe.terminalLoop(t)
@@ -200,7 +202,7 @@ func TestHandleSpawnIdentityFailure_OperationalErrorUsesBusinessFailurePath(t *t
 		t.Fatalf("operational error did not use business failure path: state=%q outcome=%q", after.State, after.Outcome)
 	}
 	if _, err := loopManager.GetLoop(loopID); err == nil {
-		t.Fatal("settled loop still held in process memory after the terminal path released it")
+		t.Fatal("failed failure serialization retained speculative process state before durable settlement")
 	}
 }
 

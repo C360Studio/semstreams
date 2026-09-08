@@ -18,7 +18,7 @@ The agentic-dispatch component is the central hub for user interaction with the 
 {
   "default_role": "general",
   "default_model": "qwen2.5-coder:32b",
-  "auto_continue": true,
+  "auto_continue": false,
   "stream_name": "USER",
   "permissions": {
     "view": ["*"],
@@ -36,9 +36,25 @@ The agentic-dispatch component is the central hub for user interaction with the 
 |--------|------|---------|-------------|
 | `default_role` | string | "general" | Default role for tasks |
 | `default_model` | string | "" | Default model for tasks |
-| `auto_continue` | bool | true | Auto-continue conversations |
+| `auto_continue` | bool | false | Opt into attachment to an active loop and implicit command targeting |
 | `stream_name` | string | "USER" | JetStream stream for user messages |
 | `permissions` | object | (see above) | Permission configuration |
+
+### Chat turns and explicit attachment
+
+By default, a message without `reply_to` starts an independent loop, even when another loop is active. For sequential
+chat, send the displayed user/assistant transcript in optional `prior_messages` and the new turn in `content`.
+Dispatch commits that history into the task; the loop can reconstruct its input after replacement. No loop ID is
+needed for an independent turn. See [Agentic Systems](../../docs/concepts/13-agentic-systems.md#context-management)
+for the HTTP request example and transcript ownership.
+
+History is ordered, nonempty user/assistant text only. Omitted, null, and empty history are equivalent. Use delivered
+`UserResponse.Content` for assistant entries, which may differ from raw model output. Invalid history returns an
+error; it is not silently dropped.
+
+Explicit `reply_to` and `auto_continue: true` retain their live-loop attachment behavior, but cannot be combined with
+nonempty history. Commands do not accept history. Under defaults, commands that act on a loop require an explicit
+loop ID, such as `/cancel <loop_id>`; enabling AutoContinue also opts into its implicit command target selection.
 
 ### JetStream Integration
 

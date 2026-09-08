@@ -8,7 +8,7 @@
     "auto_continue": {
       "type": "boolean",
       "description": "Automatically continue last active loop",
-      "default": true,
+      "default": false,
       "category": "basic"
     },
     "consumer_name_suffix": {

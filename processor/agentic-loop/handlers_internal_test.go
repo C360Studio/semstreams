@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -38,6 +39,7 @@ func TestBuildInitialMessages_NoRegistry(t *testing.T) {
 	h := NewMessageHandler(DefaultConfig())
 
 	messages := h.buildInitialMessages(context.Background(), TaskMessage{
+		LoopID: uuid.NewString(),
 		Role:   "general",
 		Prompt: "hello",
 	})
@@ -59,6 +61,7 @@ func TestBuildInitialMessages_AssembledSystemPrompt(t *testing.T) {
 	h.SetPromptRegistry(reg)
 
 	messages := h.buildInitialMessages(context.Background(), TaskMessage{
+		LoopID: uuid.NewString(),
 		Role:   "general",
 		Prompt: "do the thing",
 	})
@@ -88,6 +91,7 @@ func TestBuildInitialMessages_SystemBeforeContext(t *testing.T) {
 	h.SetPromptRegistry(reg)
 
 	messages := h.buildInitialMessages(context.Background(), TaskMessage{
+		LoopID: uuid.NewString(),
 		Prompt: "user text",
 		Context: &agentic.ConstructedContext{
 			Content: "embedded-context-body",
@@ -122,6 +126,7 @@ func TestBuildInitialMessages_PersonaOverride(t *testing.T) {
 	h.SetPromptRegistry(reg)
 
 	messages := h.buildInitialMessages(context.Background(), TaskMessage{
+		LoopID: uuid.NewString(),
 		Role:   "researcher",
 		Prompt: "investigate",
 	})
@@ -147,11 +152,14 @@ func TestAssembleSystemPrompt_RespectsContextFields(t *testing.T) {
 	h.SetPromptRegistry(reg)
 
 	// Without a parent, the child-agent constraint is suppressed.
-	out := h.assembleSystemPrompt(context.Background(), TaskMessage{Role: "general", Prompt: "x"})
+	out := h.assembleSystemPrompt(context.Background(), TaskMessage{
+		LoopID: uuid.NewString(),
+		Role:   "general", Prompt: "x"})
 	assert.NotContains(t, out, "child agent")
 
 	// With parent, it appears and names the parent loop.
 	out = h.assembleSystemPrompt(context.Background(), TaskMessage{
+		LoopID:       uuid.NewString(),
 		Role:         "general",
 		Prompt:       "x",
 		ParentLoopID: "loop_parent_999",
@@ -167,7 +175,9 @@ func TestAssembleSystemPrompt_RespectsContextFields(t *testing.T) {
 // and must not emit a stray system message.
 func TestAssembleSystemPrompt_NilRegistryReturnsEmpty(t *testing.T) {
 	h := NewMessageHandler(DefaultConfig())
-	got := h.assembleSystemPrompt(context.Background(), TaskMessage{Role: "general", Prompt: "x"})
+	got := h.assembleSystemPrompt(context.Background(), TaskMessage{
+		LoopID: uuid.NewString(),
+		Role:   "general", Prompt: "x"})
 	assert.Equal(t, "", got)
 }
 
@@ -194,7 +204,9 @@ func TestAssembleSystemPrompt_RefreshesFromPersonaSource(t *testing.T) {
 	}
 	h.SetPersonaFragments(src)
 
-	first := h.assembleSystemPrompt(context.Background(), TaskMessage{Role: "researcher", Prompt: "x"})
+	first := h.assembleSystemPrompt(context.Background(), TaskMessage{
+		LoopID: uuid.NewString(),
+		Role:   "researcher", Prompt: "x"})
 	assert.Contains(t, first, "FIRST researcher override")
 	assert.Equal(t, 1, src.calls, "persona source must be called on assemble")
 
@@ -205,7 +217,9 @@ func TestAssembleSystemPrompt_RefreshesFromPersonaSource(t *testing.T) {
 		Roles:    []string{"researcher"},
 	}}
 
-	second := h.assembleSystemPrompt(context.Background(), TaskMessage{Role: "researcher", Prompt: "x"})
+	second := h.assembleSystemPrompt(context.Background(), TaskMessage{
+		LoopID: uuid.NewString(),
+		Role:   "researcher", Prompt: "x"})
 	assert.Contains(t, second, "SECOND researcher override")
 	assert.NotContains(t, second, "FIRST researcher override")
 	assert.Equal(t, 2, src.calls, "persona source must be called on every assemble, not cached")
@@ -225,7 +239,9 @@ func TestAssembleSystemPrompt_PersonaSourceErrorFallsBack(t *testing.T) {
 	h.SetPersonaFragments(&stubPersonaSource{err: errors.New("kv unavailable")})
 
 	// Should not panic or return empty; default role-general content wins.
-	out := h.assembleSystemPrompt(context.Background(), TaskMessage{Role: "general", Prompt: "x"})
+	out := h.assembleSystemPrompt(context.Background(), TaskMessage{
+		LoopID: uuid.NewString(),
+		Role:   "general", Prompt: "x"})
 	assert.Contains(t, out, "general-purpose agent")
 }
 
@@ -255,7 +271,9 @@ func TestEffectiveLoopMaxIterations(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := effectiveLoopMaxIterations(TaskMessage{MaxIterations: tt.spawn}, tt.componentCeiling)
+			got := effectiveLoopMaxIterations(TaskMessage{
+				LoopID:        uuid.NewString(),
+				MaxIterations: tt.spawn}, tt.componentCeiling)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -284,13 +302,15 @@ func TestAssembleSystemPrompt_UsesEffectiveClampedBudget(t *testing.T) {
 	// Spawn narrows the component's 20-iteration ceiling down to 2. The
 	// rendered prompt must show 2, not the component's 20.
 	out := h.assembleSystemPrompt(context.Background(), TaskMessage{
-		Role: "general", Prompt: "x", MaxIterations: intPtrForTest(2),
-	})
+		LoopID: uuid.NewString(),
+		Role:   "general", Prompt: "x", MaxIterations: intPtrForTest(2)})
 	assert.Contains(t, out, "EFFECTIVE-MAX-ITERATIONS=2")
 	assert.NotContains(t, out, "EFFECTIVE-MAX-ITERATIONS=20")
 
 	// Nil spawn value falls back to the component ceiling unchanged.
-	out = h.assembleSystemPrompt(context.Background(), TaskMessage{Role: "general", Prompt: "x"})
+	out = h.assembleSystemPrompt(context.Background(), TaskMessage{
+		LoopID: uuid.NewString(),
+		Role:   "general", Prompt: "x"})
 	assert.Contains(t, out, "EFFECTIVE-MAX-ITERATIONS=20")
 }
 

@@ -845,7 +845,7 @@ refuses a wire value that disagrees, so it needed no change.
   authority. If you relied on that as a runtime override, it is gone; identity is established at Start and nothing
   moves it afterwards.
 
-## Loop tokens become full UUIDs (ADR-105, #1192) — enforced at the mint seams; no re-key
+## Loop tokens become full UUIDs (ADR-105, #1192) — minted at framework birth seams; no re-key
 
 > **A loop token is NOT an authorization token — read this before enabling multi-user.** Enforcement is canonical
 > FORM, not provenance: the framework cannot tell its own mint from a fresh UUID a client authored, and a client
@@ -865,14 +865,11 @@ refuses a wire value that disagrees, so it needed no change.
   `CreateLoopWithID` overwrites the colliding record and context manager, merging two conversations.
 - Run entity IDs, `run_id`, `ResolveRun`, and the gh#256 echo contract are **UNCHANGED**. The run's instance stays
   the root loop's UUID; nothing is re-keyed.
-- A submission whose `reply_to`, `loop_id`, `parent_loop_id`, `in_reply_to`, or `run_id` is not a canonical UUID is
-  refused: a typed error response naming the field at dispatch — synchronous on the HTTP submit path, published to
-  the response subject on the channel path — and a classified terminated delivery, counted on the
-  intake-rejection metric, at the agentic-loop task-stream intake. Before this, a non-canonical token was adopted
-  silently, or reached the graph write path where the parent/reply stamping composes through a panicking entity-ID
-  builder. Four seams enforce this — `TaskMessage.Validate`, dispatch submission, `LoopManager.CreateLoopWithID`,
-  and `agentrun.Mint`. Other loop-token carriers — `UserSignal`, `ApprovalResponse`, and control requests not yet
-  censused — still accept a non-canonical token; that is **#1228**, not part of this wave.
+- Every `TaskMessage` requires nonempty canonical `loop_id`. `TaskMessage.Validate` returns an ordinary error naming
+  a missing or malformed field; the rule publish boundary, agentic-loop intake, and direct `MessageHandler.HandleTask`
+  boundary classify that error as invalid before side effects. Durable intake terminates and counts the rejection.
+  Dispatch submission, `LoopManager.CreateLoopWithID`, `agentrun.Mint`, every remaining loop-token payload carrier,
+  and loop-scoped HTTP paths likewise refuse noncanonical tokens at their accepting boundaries.
 - Canonical means canonical: 36 bytes, lowercase, hyphenated. The uppercase, braced (`{…}`), and `urn:uuid:`
   spellings parse as UUIDs and are refused, because four spellings of one identity means a token that misses its
   own KV key and its own entity ID.
@@ -882,21 +879,34 @@ refuses a wire value that disagrees, so it needed no change.
 - Pre-v1 fresh storage (ADR-102 d7): no legacy tokens exist after redeploy, and nothing resolves an old-shape ID.
   No alias, no dual format, no legacy reader.
 
-### The obligations (per-sister; measured read-only 2026-08-31 — no production code changes required)
+### Direct TaskMessage producer migration (breaking)
 
-| Repo | SHA read | Finding | Instruction |
-|---|---|---|---|
-| semteams | `8a70b7e76e25` | Zero shape reliance in production. Shape appears only in comments and worked examples: `ui/src/lib/stores/taskRefs.svelte.ts:3`, `ui/src/lib/services/messageLoggerApi.ts:60`, `configs/personas/fragments/researcher-research-synthesize/00-identity.md:40`, and the manual probe commands in `ui/Taskfile.yml:1705,1721,1722,1741,1742` (`loop_70876992`) | Update comments/examples at leisure. The probe commands take a loop ID as an argument — pass the UUID the API returns; nothing in them parses the shape |
-| semsource | `4093d3ce4213` | Zero hits (the near-matches are `org_1` namespace literals) | None |
-| semdev | `ca3956af2ed8` | Reads `loop_id` opaquely from tool calls (`internal/tools/*`) | None |
+Every TaskMessage now requires `loop_id`. For new work, call `uuid.NewString()` once before `Validate` and marshal. For
+continuation work, echo the admitted existing LoopID. When retrying an uncertain publication, reuse the same serialized
+bytes; do not reconstruct the TaskMessage or regenerate LoopID. Missing/noncanonical identity is producer-invalid and
+is refused before loop state. There is no empty-ID compatibility path, legacy reader, scan, mapping, or recovery bucket.
 
-### Downstream action
+| Repository at measured revision | Production seams | Required owner migration |
+|---|---|---|
+| semdev `ca3956af2ed8` | `internal/intake/coordinatortask.go` | Add producer-local v4 LoopID before validation/marshal |
+| semteams `ce22c961d300` | `cmd/semteams/chainpause/decision_handler.go` | Add producer-local v4 LoopID before validation/marshal |
+| semspec `5a9496eecc45` | lesson decomposer, QA reviewer, researcher manager, question tool | Add producer-local v4 LoopID at each new-task construction |
+| semmachina `841c45e8bb01` | `internal/persona/spec.go` | Add LoopID before its existing Validate call |
+| semsage `4d28b4dc1210` | UI API and spawn executor | Add LoopID to UI API; spawn executor already conforms |
+| semdragon `07f4de9b6588` | quest bridge, DAG executor, explore tool | Replace prefixed NUID birth tokens with canonical v4 UUIDs |
+| semops, semsource, semconnect, semboids, semembed, semlink, semmem | No direct production constructor found | No direct code migration found |
 
-**Echo, never author.** A loop token is a value the framework handed you. Keep passing `reply_to` / `loop_id`
-verbatim; delete any test fixture that fabricates a non-UUID loop token and submits it — it will now be refused.
+Rule JSON users in semdev, semteams, and semspec require no sister code change: SemStreams' rule `publish_agent`
+producer mints the new-task LoopID before publishing. Sister repositories remain read-only to SemStreams agents; their
+owners apply and validate these migrations.
+
+Use fresh NATS state only after every direct producer is updated. Add no alias, dual format, online migration, or
+rollback reader. If retained deployed TaskMessage work is discovered, stop for a separate owner-reviewed recovery
+design.
 
 ### Doing nothing
 
+- A direct TaskMessage producer that omits `loop_id` now fails loudly before loop state; apply the migration above.
 - A client that echoes framework-minted IDs sees nothing change but the shape of the string.
 - A client that authors a **non-canonical** continuation token gets a typed error naming `reply_to` in the response
   it is already waiting on — instead of "Task submitted" followed by an async TERM it never sees.
@@ -1050,9 +1060,10 @@ conversation accumulated under that token was destroyed and the next request wen
 context. It now **attaches**: the loop's existing context manager is reused, the new user turn is appended after
 the prior turns, the system prompt is not re-seeded, and the request carries the whole accumulated conversation.
 
-If you were relying on `reply_to` to reset a conversation, it no longer does. **Omit `reply_to` to start a fresh
-loop** — that is, and always was, the way to ask for a new conversation. Auto-continue (a submission with no
-`reply_to` that resolves onto your most recent non-terminal loop) reaches the same attach.
+If you were relying on `reply_to` to reset a conversation, it no longer does. Omit `reply_to` with
+`auto_continue: false` to start a fresh execution. Explicitly enabled AutoContinue (a submission with no `reply_to`
+that resolves onto your most recent non-terminal loop) reaches the same attach. The #1146 change below makes
+AutoContinue opt-in and adds independent follow-up turns with supplied history.
 
 **A continuation is refused while the loop has work in flight.** "Live" is not "idle". If the loop has outstanding
 tool calls, or is `awaiting_approval` waiting on a human decision, the continuation is refused rather than
@@ -1094,14 +1105,17 @@ Exactly one payload type now travels that subject.
   left in place it could only ever read zero. Remove it from dashboards and alerts.
 - **New metric:** `semstreams_router_loop_admission_refusals_total{seam,reason}` — one series for every refusal the
   gate issues, labelled by which seam the request arrived on and why it was refused. The reason set is closed.
-- **New metric:** `semstreams_agentic_loop_model_responses_dropped_total{reason}` — a model response that arrived
-  with no loop mapping for its `RequestID`. Expected after a loop settles and releases its per-loop state, or after
-  a process replacement; a sustained rate against live loops points at NATS redelivery. It is the sibling of the
-  existing `semstreams_agentic_loop_tool_results_dropped_total{reason}`, which the same drop class already had.
+- **Removed metrics:** `semstreams_agentic_loop_model_responses_dropped_total{reason}` and
+  `semstreams_agentic_loop_tool_results_dropped_total{reason}`. Their log-and-ACK producers were removed: missing
+  process correlation now performs lane-specific durable read-through and settles as Retry, Terminate, or Quarantine
+  when application cannot be proven. Remove both series from dashboards and alerts.
+- **New metric:** `semstreams_agentic_loop_graph_evidence_failures_total{state,reason}` — counts nonblocking
+  completion/failure graph-evidence batches that did not commit. `reason` is bounded to `timeout` or `write_error`;
+  terminal settlement continues because this graph evidence is a derived projection, not authoritative loop state.
 - **`/status` reports the state it read.** For a loop this process is not running — after dispatch was replaced,
   say — `/status` used to print `State: running` for anything not settled, so a loop actually sitting in
   `awaiting_approval` told the user to wait for an agent that was waiting for them. It now prints the recorded
-  state (`executing`, `paused`, `awaiting_approval`, `complete`, …), or `unknown` when the record carries none.
+  state (`executing`, `awaiting_approval`, `complete`, …), or `unknown` when the record carries none.
   Anything parsing that text for the literal `running` needs updating.
 - **A NATS outage now answers 503, not 404.** When a loop's durable state cannot be read, the loop endpoints answer
   `503` with a transient classification. Previously an unreadable record was indistinguishable from an absent one,
@@ -1125,5 +1139,45 @@ request as transient. If you override ports on agentic-dispatch, keep the `agent
 
 A settled loop now releases its in-process footprint — conversation context, pending tools, and the per-loop routing
 maps. Long-running processes no longer retain every loop they have ever run. A late tool result, approval response,
-or model response arriving for an already-settled loop is now an expected, logged and counted drop rather than an
-error.
+or model response is not dropped merely because its process-local correlation is gone. The owning lane reads its
+exact durable evidence: a delivery proven already applied is acknowledged, a conflicting correlation is quarantined,
+and a delivery whose application cannot yet be proven is retried.
+
+## Independent chat turns and the AutoContinue default (#1146)
+
+**Default change:** `auto_continue` now defaults to false in code and schema. If you omit it, a normal submission
+without `reply_to` starts a new execution even when another loop is active. Commands needing a loop now require its
+explicit ID, for example `/cancel <loop_id>`. Set `auto_continue: true` explicitly only if you want the existing
+implicit attachment and command targeting behavior. Explicit `reply_to` remains available for admitted live loops;
+it does not reopen completed executions.
+
+**Chat adapter change:** UserMessage, HTTPMessageRequest, and TaskMessage accept optional `prior_messages` using
+the existing ChatMessage shape. For each follow-up, send prior user text and the actual assistant text you displayed
+from `UserResponse.Content`; send only the new turn in `content` (or TaskMessage `prompt`). Do not copy raw provider
+messages, tool exchanges, reasoning, system prompts, or budget instructions. Dispatch can display Decision.Reason
+instead of the raw provider Result, so the delivered response is the correct transcript source.
+
+```json
+{
+  "user_id": "alice",
+  "content": "Which color did I choose?",
+  "prior_messages": [
+    {"role": "user", "content": "I choose blue."},
+    {"role": "assistant", "content": "Blue it is."}
+  ]
+}
+```
+
+Only nonempty user/assistant text is accepted. Missing, null, and empty history mean the same thing: a context-free
+turn. Nonempty history on a command or an admitted attachment is an error, not ignored input. A redelivered input
+must retain the same ordered history; changing it under the same source identity is a correlation conflict.
+
+The adapter retains its displayed transcript, including across its own restart. SemStreams persists the supplied
+history with the task and reconstructs that execution after component replacement; no earlier execution or hosted
+conversation store is required. Existing transport/provider limits apply. Adopters need no new bucket, subject,
+request identity, or retention calculation. If they do nothing, submissions remain valid but have no automatic
+conversation recall, and implicit command targets are no longer selected under defaults.
+
+Downstream owners update and test their own adapters. Verify two completed turns separated by component replacement,
+with the second provider request containing the displayed exchange once and a fresh execution budget. This migration
+does not ask downstreams to preserve beta state or introduce a compatibility layer.

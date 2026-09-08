@@ -1180,6 +1180,78 @@ components:
                     additionalProperties:
                         type: string
                     type: object
+                prior_messages:
+                    description: Optional ordered displayed user/assistant messages for an independent turn. Each entry requires nonempty content; name, tool and reasoning fields must be empty. Omitted, null and empty are equivalent. Cannot accompany commands or attachment to an existing loop.
+                    items:
+                        properties:
+                            content:
+                                type: string
+                            is_error:
+                                type: boolean
+                            name:
+                                type: string
+                            reasoning_content:
+                                type: string
+                            reasoning_records:
+                                items:
+                                    properties:
+                                        carrier_kind:
+                                            type: string
+                                        item_id:
+                                            type: string
+                                        opaque:
+                                            format: byte
+                                            type: string
+                                        provider:
+                                            type: string
+                                        summary_text:
+                                            type: string
+                                        tool_call_id:
+                                            type: string
+                                    required:
+                                        - provider
+                                        - carrier_kind
+                                    type: object
+                                type: array
+                            role:
+                                type: string
+                            tool_call_id:
+                                type: string
+                            tool_calls:
+                                items:
+                                    properties:
+                                        approved_by:
+                                            type: string
+                                        arguments:
+                                            additionalProperties: {}
+                                            type: object
+                                        call_ordinal:
+                                            minimum: 0
+                                            type: integer
+                                        execution_id:
+                                            type: string
+                                        id:
+                                            type: string
+                                        loop_id:
+                                            type: string
+                                        metadata:
+                                            additionalProperties: {}
+                                            type: object
+                                        name:
+                                            type: string
+                                        request_id:
+                                            type: string
+                                        trace_id:
+                                            type: string
+                                    required:
+                                        - id
+                                        - name
+                                    type: object
+                                type: array
+                        required:
+                            - role
+                        type: object
+                    type: array
                 reply_to:
                     type: string
                 run_id:

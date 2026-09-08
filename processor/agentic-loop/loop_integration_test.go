@@ -314,6 +314,7 @@ func TestIntegration_LoopFullCycle(t *testing.T) {
 }
 
 // TestIntegration_LoopWithToolCalls tests loop with tool call handling
+// spec: agentic-loop / Loop task, request, and tool work use only required correlation
 func TestIntegration_LoopWithToolCalls(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
 
@@ -458,6 +459,7 @@ func TestIntegration_LoopWithToolCalls(t *testing.T) {
 	// Simulate tool result
 	toolResult := &agentic.ToolResult{
 		CallID:      call.ID,
+		Name:        call.Name,
 		RequestID:   call.RequestID,
 		ExecutionID: call.ExecutionID,
 		CallOrdinal: call.CallOrdinal,

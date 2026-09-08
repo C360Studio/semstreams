@@ -335,10 +335,10 @@ Store.
 }
 ```
 
-`loop_id` is optional — omit it and the loop mints one. It is never a value you
-author: a present token must be a canonical UUID the framework already minted
-and this message is echoing back, and any other spelling is refused at intake
-(ADR-105). The same holds for `parent_loop_id`, `run_id`, and `in_reply_to`.
+`loop_id` is required. A producer creating new loop work calls `uuid.NewString()` once before validation and marshal;
+a continuation producer echoes the admitted existing token. Retry the same uncertain publication with the same
+serialized bytes. Agentic-loop refuses an absent or noncanonical value before state and never mints a replacement
+(ADR-105).
 
 ### Completion Event (Output)
 

@@ -2,7 +2,6 @@ package agenticloop
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/c360studio/semstreams/natsclient"
@@ -27,15 +26,7 @@ func consumeTypedLongRunningInput(
 		heartbeatInterval,
 		retry,
 		func(workCtx context.Context, _ natsclient.DeliveryAttempt, data []byte) (natsclient.DeliveryDecision, error) {
-			handlerErr := handler(workCtx, data)
-			if handlerErr == nil {
-				return natsclient.DeliveryDecisionAck, nil
-			}
-			var permanent *natsclient.PermanentDeliveryError
-			if errors.As(handlerErr, &permanent) {
-				return natsclient.DeliveryDecisionTerminate, handlerErr
-			}
-			return natsclient.DeliveryDecisionRetry, handlerErr
+			return handler(workCtx, data)
 		},
 	)
 	if err != nil {
