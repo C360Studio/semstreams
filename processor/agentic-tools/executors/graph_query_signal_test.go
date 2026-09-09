@@ -545,16 +545,55 @@ func TestQueryByType_CursorContinuesWithoutRepeats(t *testing.T) {
 // refused, never quietly reset to page one — which would page the model over
 // page one forever.
 //
+// The name says "undecodable" but the scenario's GIVEN is the wider set: NOT A
+// TOKEN THIS TOOL ISSUED. Decoding is not validation — graph.DecodeCursor is
+// base64.RawURLEncoding.DecodeString and nothing else — so the decode-failure
+// arm alone leaves the dangerous half untested. The two decodable cases below
+// are the ones that bite: "MQ" decodes to "1", which sorts BEFORE every
+// canonical key and would return a full page one with a fresh next_cursor
+// forever; "abcd" decodes past every key and would return an empty page
+// alongside a non-zero `matched`, with no hint and no error at all.
+//
 // spec: agentic-tools / query_by_type lists entity identities by the ADR-102 type segment through the existing filtered key listing
 func TestQueryByType_RejectsUndecodableCursor(t *testing.T) {
-	executor, lister := listerFixture(t)
-	result, err := executor.Execute(context.Background(), agentic.ToolCall{
-		ID: "call-badcursor", Name: "query_by_type",
-		Arguments: map[string]any{"entity_type": "temperature", "cursor": "not base64 url!!"},
+	cases := map[string]string{
+		"not base64 at all":                   "not base64 url!!",
+		"decodes, but sorts before every key": "MQ",
+		"decodes, but sorts past every key":   "abcd",
+	}
+	for name, cursor := range cases {
+		t.Run(name, func(t *testing.T) {
+			executor, lister := listerFixture(t)
+			result, err := executor.Execute(context.Background(), agentic.ToolCall{
+				ID: "call-badcursor", Name: "query_by_type",
+				Arguments: map[string]any{"entity_type": "temperature", "cursor": cursor},
+			})
+			require.NoError(t, err)
+			assert.Equal(t, agentic.ToolErrorInvalidArgs, result.ErrorKind,
+				"cursor %q is not a token this tool issued", cursor)
+			assert.Empty(t, result.Content,
+				"a refused cursor answers no page at all — an empty or restarted page is the silent reset")
+			assert.Zero(t, lister.callCount, "a rejected cursor never costs a key scan")
+		})
+	}
+
+	t.Run("the tool's own cursor is still accepted", func(t *testing.T) {
+		executor, _ := listerFixture(t)
+		first, err := executor.Execute(context.Background(), agentic.ToolCall{
+			ID: "call-issued-1", Name: "query_by_type",
+			Arguments: map[string]any{"entity_type": "temperature", "limit": float64(1)},
+		})
+		require.NoError(t, err)
+		issued, ok := first.Metadata[agentic.MetadataKeyNextCursor].(string)
+		require.True(t, ok, "precondition: page one issues a cursor")
+
+		second, err := executor.Execute(context.Background(), agentic.ToolCall{
+			ID: "call-issued-2", Name: "query_by_type",
+			Arguments: map[string]any{"entity_type": "temperature", "limit": float64(1), "cursor": issued},
+		})
+		require.NoError(t, err)
+		assert.Empty(t, second.ErrorKind, "the validation refuses foreign tokens, not this tool's own")
 	})
-	require.NoError(t, err)
-	assert.Equal(t, agentic.ToolErrorInvalidArgs, result.ErrorKind)
-	assert.Zero(t, lister.callCount, "a rejected cursor never costs a key scan")
 }
 
 // TestQueryByType_RejectsNonSegmentTokens: the grammar is enforced with a typed
@@ -683,8 +722,16 @@ func TestQueryNeighbors_FilterTypeReadsIDSegment(t *testing.T) {
 	))
 	kv.Put(fixtureTempOne, entityFixture(t, fixtureTempOne,
 		propertyTriple(fixtureTempOne, "sensor.temperature.celsius", 20.0)))
+	// The drone is filtered OUT of the answer and still carries an edge, so
+	// the walk's expansion through it is observable rather than merely
+	// asserted in a comment: the temperature it holds is two hops past the
+	// filtered node.
 	kv.Put(fixtureDroneOne, entityFixture(t, fixtureDroneOne,
-		propertyTriple(fixtureDroneOne, "robotics.battery.level", 82.5)))
+		propertyTriple(fixtureDroneOne, "robotics.battery.level", 82.5),
+		relationshipTriple(fixtureDroneOne, "robotics.drone.carries", fixtureTempTwo),
+	))
+	kv.Put(fixtureTempTwo, entityFixture(t, fixtureTempTwo,
+		propertyTriple(fixtureTempTwo, "sensor.temperature.celsius", 31.5)))
 	executor := NewGraphQueryExecutor(kv)
 
 	unfiltered, err := executor.Execute(context.Background(), agentic.ToolCall{
@@ -707,6 +754,24 @@ func TestQueryNeighbors_FilterTypeReadsIDSegment(t *testing.T) {
 	assert.Len(t, neighbors, 1)
 	assert.Contains(t, neighbors, fixtureTempOne)
 	assert.NotContains(t, neighbors, fixtureDroneOne)
+
+	t.Run("the walk expands THROUGH a filtered-out neighbor", func(t *testing.T) {
+		// filter_type narrows the answer; it does not shorten the graph. The
+		// drone is excluded from the result and is still traversed, so the
+		// temperature it carries — reachable only through it — comes back.
+		// Depth 3 because the traversal spends hop 0 on the source itself.
+		deep, err := executor.Execute(context.Background(), agentic.ToolCall{
+			ID: "call-through", Name: "query_neighbors",
+			Arguments: map[string]any{"entity_id": fixtureSiteOne, "depth": float64(3), "filter_type": "temperature"},
+		})
+		require.NoError(t, err)
+		reached, ok := decodeContent(t, deep)["neighbors"].(map[string]any)
+		require.True(t, ok)
+		assert.Contains(t, reached, fixtureTempTwo,
+			"the only path to this entity runs through the filtered-out drone; if the walk stopped at "+
+				"the filter it would be unreachable")
+		assert.NotContains(t, reached, fixtureDroneOne, "and the drone itself is still not returned")
+	})
 
 	t.Run("an unusable filter_type is refused", func(t *testing.T) {
 		bad, err := executor.Execute(context.Background(), agentic.ToolCall{
@@ -746,6 +811,48 @@ func TestQueryNeighbors_UnresolvedTargetsAreReported(t *testing.T) {
 	require.True(t, ok)
 	assert.NotContains(t, neighbors, missing, "unresolved and neighbors are disjoint")
 	assert.Contains(t, neighbors, fixtureTempOne, "the resolvable side of the same walk is still returned")
+
+	t.Run("all targets unresolved is not an empty neighborhood", func(t *testing.T) {
+		// Zero neighbors WITH an unresolved list is the third state, and it is
+		// not the empty one: HintEmpty would tell the model "nothing here,
+		// broaden your filter" when the truth is "these targets are not
+		// resident". The edges exist; their records do not.
+		const alsoMissing = "acme.test.gcs.environmental.temperature.vanished"
+		barren := newMockKVGetter()
+		barren.Put(fixtureSiteOne, entityFixture(t, fixtureSiteOne,
+			relationshipTriple(fixtureSiteOne, "facility.site.holds", missing),
+			relationshipTriple(fixtureSiteOne, "facility.site.holds", alsoMissing),
+		))
+		result, err := NewGraphQueryExecutor(barren).Execute(context.Background(), agentic.ToolCall{
+			ID: "call-allmissing", Name: "query_neighbors",
+			Arguments: map[string]any{"entity_id": fixtureSiteOne, "depth": fixtureNeighborDepth},
+		})
+		require.NoError(t, err)
+		content := decodeContent(t, result)
+		assert.Equal(t, float64(0), content["count"], "precondition: no target resolved")
+		assert.ElementsMatch(t, []string{missing, alsoMissing}, stringSlice(t, content["unresolved"]),
+			"precondition: and every one of them is named")
+		assert.NotEqual(t, agentic.HintEmpty, result.ResultHint,
+			"targets that are not resident are not an absence of targets")
+	})
+
+	t.Run("a genuinely empty neighborhood IS empty", func(t *testing.T) {
+		// The counterpart, so the fix above cannot be "never classify empty":
+		// an entity with no outgoing edges at all has an empty neighborhood
+		// and says so.
+		lonely := newMockKVGetter()
+		lonely.Put(fixtureSiteOne, entityFixture(t, fixtureSiteOne,
+			propertyTriple(fixtureSiteOne, "facility.site.label", "west")))
+		result, err := NewGraphQueryExecutor(lonely).Execute(context.Background(), agentic.ToolCall{
+			ID: "call-lonely", Name: "query_neighbors",
+			Arguments: map[string]any{"entity_id": fixtureSiteOne, "depth": fixtureNeighborDepth},
+		})
+		require.NoError(t, err)
+		content := decodeContent(t, result)
+		assert.Equal(t, float64(0), content["count"])
+		assert.Empty(t, stringSlice(t, content["unresolved"]))
+		assert.Equal(t, agentic.HintEmpty, result.ResultHint)
+	})
 
 	t.Run("a transient read failure fails the call", func(t *testing.T) {
 		flaky := &flakyKVGetter{mockKVGetter: kv, failOn: fixtureTempOne, err: errors.New("nats: connection closed")}
@@ -838,13 +945,68 @@ func TestQueryNeighbors_BudgetTruncatesWithHint(t *testing.T) {
 		"a truncated result always names at least the identity it could not fit")
 	assert.Equal(t, float64(len(targets)-len(neighbors)), remaining)
 
-	total := 0
-	for _, raw := range neighbors {
-		encoded, marshalErr := json.Marshal(raw)
-		require.NoError(t, marshalErr)
-		total += len(encoded)
+	assert.LessOrEqual(t, len(result.Content), neighborMaxContentBytes,
+		"the budget bounds the string the model receives")
+}
+
+// neighborWideFixture builds a hub with MANY SMALL neighbor records. Their raw
+// bytes together stay under the budget — so the walk's read bound admits every
+// one of them — and only the emitted, indented result crosses it.
+//
+// That is precisely the shape a proxy meter gets wrong. Indentation is nearly
+// free on one long string (neighborBudgetFixture above) and expensive on many
+// short structural lines, so metering the compact KV values would report this
+// set as comfortably inside a cap the model receives it far outside of.
+func neighborWideFixture(t *testing.T) (*GraphQueryExecutor, []string, int) {
+	t.Helper()
+	const wideRecords = 150
+	kv := newMockKVGetter()
+	targets := make([]string, 0, wideRecords)
+	hubTriples := make([]message.Triple, 0, wideRecords)
+	rawTotal := 0
+	for i := 0; i < wideRecords; i++ {
+		id := fmt.Sprintf("acme.test.gcs.environmental.temperature.small-%03d", i)
+		targets = append(targets, id)
+		hubTriples = append(hubTriples, relationshipTriple(fixtureSiteOne, "facility.site.holds", id))
+		record := entityFixture(t, id, propertyTriple(id, "sensor.temperature.celsius", float64(i)))
+		rawTotal += len(record)
+		kv.Put(id, record)
 	}
-	assert.LessOrEqual(t, total, neighborMaxContentBytes, "the returned records fit the budget")
+	kv.Put(fixtureSiteOne, entityFixture(t, fixtureSiteOne, hubTriples...))
+	require.Less(t, rawTotal, neighborMaxContentBytes,
+		"precondition: the raw records all fit, so any truncation this fixture produces "+
+			"can only have come from measuring the emitted result")
+	return NewGraphQueryExecutor(kv), targets, rawTotal
+}
+
+// TestQueryNeighbors_BudgetMetersTheEmittedResult: the cap bounds the string
+// the model receives, not a proxy for it. The result ships as indented JSON
+// that re-indents every embedded record, so a set measured on its compact
+// bytes can be reported as inside a budget it is ~50% outside of.
+//
+// spec: agentic-tools / query_neighbors bounds its content by a model-facing budget and reports unresolved targets
+func TestQueryNeighbors_BudgetMetersTheEmittedResult(t *testing.T) {
+	executor, targets, rawTotal := neighborWideFixture(t)
+
+	result, err := executor.Execute(context.Background(), agentic.ToolCall{
+		ID: "call-emitted", Name: "query_neighbors",
+		Arguments: map[string]any{"entity_id": fixtureSiteOne, "depth": fixtureNeighborDepth},
+	})
+	require.NoError(t, err)
+
+	assert.LessOrEqual(t, len(result.Content), neighborMaxContentBytes,
+		"%d raw bytes of records — all of which fit the raw budget — emitted %d bytes",
+		rawTotal, len(result.Content))
+
+	content := decodeContent(t, result)
+	neighbors, ok := content["neighbors"].(map[string]any)
+	require.True(t, ok)
+	assert.Less(t, len(neighbors), len(targets),
+		"the emitted measurement gave records back; the raw one would have kept all %d", len(targets))
+	assert.Equal(t, true, content["truncated"])
+	assert.Equal(t, agentic.HintTooLarge, result.ResultHint)
+	assert.Equal(t, float64(len(targets)-len(neighbors)), content["frontier_remaining"],
+		"every record not returned is named as still owed, however it was dropped")
 }
 
 // TestQueryNeighbors_NeverAnnouncesContinuation: a traversal frontier is not a

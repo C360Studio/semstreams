@@ -589,12 +589,13 @@ func describePredicate(predicate, kind string) predicatePresence {
 	return presence
 }
 
-// neighborMaxContentBytes bounds the neighbor records one query_neighbors
-// result carries. It is a MODEL-FACING content cap in the same class as
-// bashMaxOutputBytes (bash.go) and httpMaxTextSize (httprequest.go) — an
-// executor constant measured against the real bytes being assembled — and NOT
-// a prediction of the transport bound. A result under this cap that still
-// trips the NATS payload limit takes the component's existing oversize path
+// neighborMaxContentBytes bounds one query_neighbors result. It is a
+// MODEL-FACING content cap in the same class as bashMaxOutputBytes (bash.go)
+// and httpMaxTextSize (httprequest.go), and like both of those the number it
+// bounds is the length of the string the model receives — len(Content) after
+// marshalling, not the sum of the parts that went into it. It is NOT a
+// prediction of the transport bound: a result under this cap that still trips
+// the NATS payload limit takes the component's existing oversize path
 // unchanged; the two compose.
 //
 // 64KB: the recorded failure this class exists for was a 102KB graph result
@@ -663,21 +664,27 @@ func (e *GraphQueryExecutor) queryNeighbors(ctx context.Context, call agentic.To
 		}, nil
 	}
 
-	response := map[string]any{
-		"source_entity":      entityID,
-		"neighbors":          walk.neighbors,
-		"count":              len(walk.neighbors),
-		"depth":              depth,
-		"unresolved":         walk.unresolved,
-		"truncated":          walk.truncated,
-		"frontier_remaining": walk.frontierRemaining,
-	}
-	if filterType != "" {
-		response["filter_type"] = filterType
-		response["pattern"] = filterPattern
+	// The renderer reads the walk's CURRENT state, so the trim below can
+	// re-render a smaller set whose truncated / frontier_remaining / count
+	// describe that smaller set rather than the one before the trim.
+	render := func() ([]byte, error) {
+		response := map[string]any{
+			"source_entity":      entityID,
+			"neighbors":          walk.neighbors,
+			"count":              len(walk.neighbors),
+			"depth":              depth,
+			"unresolved":         walk.unresolved,
+			"truncated":          walk.truncated,
+			"frontier_remaining": walk.frontierRemaining,
+		}
+		if filterType != "" {
+			response["filter_type"] = filterType
+			response["pattern"] = filterPattern
+		}
+		return json.MarshalIndent(response, "", "  ")
 	}
 
-	content, err := json.MarshalIndent(response, "", "  ")
+	content, err := walk.fitEmitted(render)
 	if err != nil {
 		return agentic.ToolResult{
 			CallID:    call.ID,
@@ -706,7 +713,14 @@ func (e *GraphQueryExecutor) queryNeighbors(ctx context.Context, call agentic.To
 	switch {
 	case walk.truncated:
 		result.ResultHint = agentic.HintTooLarge
-	case len(walk.neighbors) == 0:
+	case len(walk.neighbors) == 0 && len(walk.unresolved) == 0:
+		// Empty means the neighborhood is empty, not that its members could
+		// not be read. A walk whose every target exists as an edge but is
+		// absent from ENTITY_STATES answers zero neighbors WITH an unresolved
+		// list, and HintEmpty over that would tell the model "nothing here,
+		// broaden your filter" when the truth is "the targets are not
+		// resident" — collapsing the three-way split (present / not resident /
+		// genuinely empty) this tool exists to keep apart.
 		result.ResultHint = agentic.HintEmpty
 	}
 	return result, nil
@@ -720,12 +734,21 @@ type neighborWalk struct {
 	sourceID string
 	pattern  string
 
-	neighbors  map[string]json.RawMessage
+	neighbors map[string]json.RawMessage
+	// admitted is the admission ORDER of the keys in neighbors, which a map
+	// cannot carry. The emitted-size trim drops from its tail, so which
+	// records survive an over-budget result is deterministic (breadth-first,
+	// nearest first) rather than whatever the map iterator happened to yield.
+	admitted   []string
 	unresolved []string
 	// truncated and frontierRemaining move together: the walk only stops early
 	// when a record it wanted did not fit, so a truncated result always names
 	// at least one identity it did not expand.
-	truncated         bool
+	truncated bool
+	// pending is every identity the caller is still owed — the frontier the
+	// walk did not reach, plus anything the emitted-size trim gave back.
+	// frontierRemaining is its cardinality, so the two cannot drift.
+	pending           map[string]bool
 	frontierRemaining int
 	// sourceMissing records that the START entity itself was absent, which is
 	// a not-found answer rather than an empty neighborhood.
@@ -739,6 +762,7 @@ func (w *neighborWalk) run(ctx context.Context, call agentic.ToolCall, depth int
 	w.neighbors = make(map[string]json.RawMessage)
 	w.unresolved = []string{}
 	w.visited = make(map[string]bool)
+	w.pending = make(map[string]bool)
 
 	frontier := []string{w.sourceID}
 	for hop := 0; hop < depth && len(frontier) > 0; hop++ {
@@ -800,16 +824,65 @@ func (w *neighborWalk) run(ctx context.Context, call agentic.ToolCall, depth int
 	return nil
 }
 
-// admit adds one neighbor record if it fits the content budget, measuring the
-// real bytes rather than predicting them. It reports false when the record
-// would cross the cap, which is where the walk stops.
+// admit adds one neighbor record if the raw bytes so far are still under the
+// cap. This is the walk's READ bound, not the contract: the emitted result is
+// indented JSON, which is strictly larger than the compact records it embeds,
+// so a raw sum over the cap guarantees an emitted result over it too. That
+// makes this a sound early stop — it never withholds a record the emitted
+// measurement would have kept — while the authoritative check stays on the
+// string that actually reaches the model (fitEmitted).
 func (w *neighborWalk) admit(id string, raw []byte) bool {
 	if w.bytesTaken+len(raw) > neighborMaxContentBytes {
 		return false
 	}
 	w.bytesTaken += len(raw)
 	w.neighbors[id] = json.RawMessage(raw)
+	w.admitted = append(w.admitted, id)
 	return true
+}
+
+// fitEmitted renders the response and, while the EMITTED string is over the
+// model-facing budget, gives back the most recently admitted neighbor and
+// renders again.
+//
+// Metering the assembled raw bytes instead would meter a proxy: the result
+// ships as json.MarshalIndent, which re-indents every embedded record, and a
+// record set measured at 64,740 raw bytes emitted 96,658 — 47% over a cap the
+// caller was told it was under. The house rule is to observe the outcome
+// rather than predict it, so the number checked here is len(content) itself.
+//
+// render reads the walk's CURRENT state on every call, so truncated,
+// frontier_remaining and count in the rendered body always describe the set
+// being measured.
+//
+// Residual, deliberately not policy here: if the envelope alone — a very wide
+// unresolved list — exceeds the cap, the loop runs out of neighbors to give
+// back and returns an over-budget body flagged truncated. Bounding unresolved
+// is a separate model-facing decision this change was not ruled on.
+func (w *neighborWalk) fitEmitted(render func() ([]byte, error)) ([]byte, error) {
+	for {
+		content, err := render()
+		if err != nil {
+			return nil, err
+		}
+		if len(content) <= neighborMaxContentBytes || len(w.admitted) == 0 {
+			return content, nil
+		}
+		w.giveBackLastAdmitted()
+	}
+}
+
+// giveBackLastAdmitted removes the newest neighbor from the answer and moves
+// it into the pending set, so a record dropped for emitted size is reported
+// exactly like one the walk never reached.
+func (w *neighborWalk) giveBackLastAdmitted() {
+	last := w.admitted[len(w.admitted)-1]
+	w.admitted = w.admitted[:len(w.admitted)-1]
+	w.bytesTaken -= len(w.neighbors[last])
+	delete(w.neighbors, last)
+	w.truncated = true
+	w.pending[last] = true
+	w.frontierRemaining = len(w.pending)
 }
 
 // stopAt records the budget stop. stoppedOn is the identity whose record did
@@ -821,13 +894,13 @@ func (w *neighborWalk) admit(id string, raw []byte) bool {
 // `truncated <=> frontier_remaining > 0` hold.
 func (w *neighborWalk) stopAt(stoppedOn string, remainingFrontier, nextFrontier []string) {
 	w.truncated = true
-	pending := map[string]bool{stoppedOn: true}
+	w.pending[stoppedOn] = true
 	for _, id := range append(append([]string{}, remainingFrontier...), nextFrontier...) {
 		if !w.visited[id] {
-			pending[id] = true
+			w.pending[id] = true
 		}
 	}
-	w.frontierRemaining = len(pending)
+	w.frontierRemaining = len(w.pending)
 }
 
 // readNeighborRecord reads one record for the traversal. Absence is a
@@ -1024,9 +1097,10 @@ func (e *GraphQueryExecutor) queryByType(ctx context.Context, call agentic.ToolC
 		}, nil
 	}
 
-	// Both argument checks complete BEFORE the listing: an undecodable cursor
-	// is never quietly reset to page 1, which would page the model over page 1
-	// forever, and a rejected entity_type never costs a full key scan.
+	// Both argument checks complete BEFORE the listing: a cursor this tool did
+	// not issue is never quietly reset to page 1, which would page the model
+	// over page 1 forever, and a rejected entity_type never costs a full key
+	// scan.
 	cursorKey := ""
 	if raw, present := call.Arguments["cursor"]; present {
 		cursor, isString := raw.(string)
@@ -1042,6 +1116,26 @@ func (e *GraphQueryExecutor) queryByType(ctx context.Context, call agentic.ToolC
 			return agentic.ToolResult{
 				CallID:    call.ID,
 				Error:     fmt.Sprintf("cursor is not a token this tool issued: %v", decodeErr),
+				ErrorKind: agentic.ToolErrorInvalidArgs,
+			}, nil
+		}
+		// Decoding is NOT validation. graph.DecodeCursor is
+		// base64.RawURLEncoding.DecodeString and nothing else
+		// (graph/query_prefix_types.go), so without this check any
+		// accidentally-valid base64 becomes a keyset position: "MQ" decodes to
+		// "1", which sorts before every canonical key and would hand back page
+		// one with a fresh next_cursor forever — the silent reset this
+		// argument order exists to prevent. The position is a key in
+		// ENTITY_STATES, and a key in that bucket that is not a canonical
+		// six-part identity is authoritative-state corruption this tool
+		// already refuses on the listing side, so "decodes to a canonical
+		// entity ID" is exactly the set of tokens this tool issues.
+		if validateErr := semtypes.ValidateEntityID(decoded); validateErr != nil {
+			return agentic.ToolResult{
+				CallID: call.ID,
+				Error: fmt.Sprintf(
+					"cursor is not a token this tool issued: it decodes to %q, which is not a canonical entity ID: %v",
+					decoded, validateErr),
 				ErrorKind: agentic.ToolErrorInvalidArgs,
 			}, nil
 		}
