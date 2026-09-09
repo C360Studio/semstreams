@@ -1,23 +1,24 @@
 ## ADDED Requirements
 
-### Requirement: A declared predicate datatype comes from one closed RDF-shaped vocabulary
+### Requirement: A declared predicate datatype comes from one closed pragmatic vocabulary
 
 Every predicate registration MUST either declare its object datatype as one value from a closed, framework-owned
 vocabulary or leave it absent, and the registry MUST normalize a recognized legacy spelling to its canonical value at
 declaration time while refusing an unrecognized one.
 
-The vocabulary names the **RDF/semantic** type of the object, never the Go type of the value. The Go type is something
+The vocabulary names the **pragmatic** type of the object, never the Go type of the value. The Go type is something
 the serializer observes directly; asking a declaring author to predict it produces a value the framework already holds
 and cannot trust, because a value read back through the authoritative JSON round trip no longer carries the Go type
 the author predicted. The vocabulary therefore carries only what observation cannot recover: that an object is an
 entity reference, that a number is semantically an integer after a JSON round trip, that a string holds a structured
 document.
 
-Every value in the closed vocabulary MUST be a spelling the repository already uses for that exact fact — the XSD
-local names the serializer already emits, the framework's own entity-reference marker, and the framework's own
-structured-document marker — so the declaration and the per-triple datatype hint share ONE value space rather than two
-that must be translated. Where a package-import cycle prevents the two homes from sharing a literal Go constant, a
-repository contract check MUST assert their values are identical, so the shared value space is enforced rather than
+Every value in the closed vocabulary MUST be a spelling the declaring authors already use for that exact fact, and
+MUST NOT be a semantic-web term. Semantic-web vocabulary — XSD local names, JSON-LD keywords, RDF datatype IRIs —
+belongs at the export boundary, where interoperability is the job; it MUST NOT appear in the declaration surface an
+adopter writes against. The mapping from a declared value to its RDF datatype IRI therefore lives with the serializer,
+and the registry MUST NOT be required to know it. A declaring author states that an object is an entity reference; the
+exporter, and only the exporter, decides that this means an IRI node rather than a literal.
 assumed.
 
 Normalization is a declaration-time step, NOT a compatibility alias, a deprecated-value table, a dual read/write path,

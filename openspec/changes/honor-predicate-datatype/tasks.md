@@ -6,10 +6,10 @@ never been observed is a hypothesis. Nothing else starts until it is a failing a
 
 ## 0. Gate — BLOCKED on the owner's INVENTORY PASS and the Q1–Q7 rulings
 
-- [ ] 0.1 BLOCKED: no task below starts until the owner records INVENTORY PASS on PR #1269 **and** rules Q1–Q7 in
-      `design.md`. Q1 (RDF-shaped vs Go-shaped axis) is load-bearing for tasks 2–8; Q4 governs whether the spec
-      delta's third requirement is struck; Q2 governs whether the semdragon boot break lands now or is staged.
-      This marker exists so `task openspec:queue` reports the hold instead of reading `0/N — ok`.
+- [ ] 0.1 BLOCKED: **Q1–Q7 were ruled by the owner on 2026-09-09** (#1267 comment 5601338922) and the design, spec
+      delta, tasks and ADR-107 are amended to carry them. The remaining gate is the **INVENTORY PASS on PR #1269**,
+      which has NOT been recorded — no task below starts until it is. This marker exists so `task openspec:queue`
+      reports the hold instead of reading `0/N — ok`.
 - [ ] 0.2 Note for the implementing session: the two consequences task 1 exists to prove were **already reproduced
       empirically** on 2026-09-07 (throwaway in-package probe, removed; evidence recorded on PR #1269). Turtle emits
       `"acme.ops.gcs.robotics.drone.002"^^<@id>` — a relative-reference datatype IRI, invalid RDF — and
@@ -41,15 +41,25 @@ never been observed is a hypothesis. Nothing else starts until it is a failing a
 - [ ] 2.1 Add the seven untyped string constants to `vocabulary/predicates.go`, beside `IndexingProfile*`
       (`:304-319`), which is the in-package prior art for exactly this shape. Untyped, NOT a named type: a named type
       would break `WithDataType(string)` and the `DataType: "..."` struct-literal path the owner's constraint protects.
-- [ ] 2.2 Add the legacy→canonical map and `canonicalDataType(string) (string, error)`. Sixteen of the 42 measured family spellings are accepted —
-      fourteen normalize, and `string`/`boolean` are already canonical; the other 26 (semdragon, 30 sites in
-      `domain/vocab.go`) are refused. The map is a declaration-time normalizer, never a runtime alias table.
+- [ ] 2.2 Add the legacy→canonical map and `canonicalDataType(string) (string, error)`. Sixteen of the 42 measured
+      family spellings are accepted. Under the pragmatic canon (owner ruling Q1) **seven are already canonical and
+      need no change at all** — `string`, `entity_id`, `int`, `float`, `bool`, `datetime`, `json`, which between them
+      cover the overwhelming majority of declarations — and **nine normalize**: `float64`/`number` → `float`,
+      `time.Time`/`timestamp` → `datetime`, `int64` → `int`, `array` → `json`, `entity_ref`/`reference` →
+      `entity_id`, `boolean` → `bool`. The other 26 (semdragon Go payload struct names, 30 sites in
+      `domain/vocab.go`) are refused. Per-spelling counts are in `design.md` §2.3. The map is a declaration-time
+      normalizer, never a runtime alias table.
 - [ ] 2.3 Unit-test normalization idempotence over the whole domain (`canonical(canonical(x)) == canonical(x)`), the
       total-on-legacy-set property, and refusal outside it. This is the invariant that makes amend-registration safe;
       write it from the spec requirement, not from the map's implementation.
-- [ ] 2.4 Add the `test/contract/` guard asserting `vocabulary.DataTypeEntityRef == message.EntityReferenceDatatype`
-      and `vocabulary.DataTypeJSON == agentic.TodoRecordJSONDatatype`. A shared Go constant is impossible: `vocabulary`
-      → `message` → `payloadregistry` → `vocabulary` is a real import cycle (`payloadregistry/registry.go:31`).
+- [ ] 2.4 Add the `test/contract/` guard over the **export mapping**, not over constant equality. Q1 makes the
+      declaration values deliberately distinct from the per-triple markers (`entity_id` is not `@id`; `json` is not
+      `rdf:JSON`), so the invariant to enforce is that every canonical declaration value has exactly one mapping in
+      `vocabulary/export/` and that `entity_id` maps to a resource rather than a literal. **The import cycle no longer
+      binds this design**: only `vocabulary/export/` needs `message.EntityReferenceDatatype`, and it may import
+      `message` freely — the cycle (`vocabulary` → `message` → `payloadregistry` → `vocabulary`,
+      `payloadregistry/registry.go:31`) would only have bound a core `vocabulary` constant, which Q1 removed the need
+      for.
 
 ## 3. Enforce at the one registration seam
 
@@ -106,8 +116,13 @@ never been observed is a hypothesis. Nothing else starts until it is a failing a
 - [ ] 7.4 Add the three-way rendering table (Go type / XSD IRI / JSON Schema) to `vocabulary/README.md` (replacing the
       Go-type-inference table at `:44-53` of `vocabulary/export/README.md` and extending `README.md:136`) and
       `docs/basics/04-vocabulary.md:81-89`.
-- [ ] 7.5 Draft ADR-107 (owner-gated — design Q6): the declared predicate datatype is a closed, RDF-shaped vocabulary
-      and the Go-type axis is retired. Cross-repo contract, therefore an ADR; the mechanics stay in the spec.
+- [ ] 7.5 Land ADR-107 (owner-ruled, Q6, widened): the decision recorded is the **boundary rule** — semantic-web
+      vocabulary lives at the export edge for interop only; the core carries pragmatic triples with RDF*-like
+      statement metadata. The datatype vocabulary and the retirement of the Go-type axis are its first application,
+      not its subject. Cross-references ADR-074 and ADR-106; the mechanics stay in the `predicate-contract` spec. A
+      draft is already on this branch — review it against the final spec text before ticking.
+- [ ] 7.7 File "honor `Units`/`Range`" against #1264 (owner ruling Q4), so the deferred decision has a home rather
+      than remaining an undocumented gap in a Tier 1 frozen struct.
 - [ ] 7.6 Write `docs/operations/migration-predicate-datatype.md`: the closed set, the 16-row mapping table, the 26
       unmappable semdragon spellings with their file, the semsource `data_type` wire-value change, and the note that
       semlink's datatype-free registrations stay legal. SemStreams-owned; sister owners implement.
