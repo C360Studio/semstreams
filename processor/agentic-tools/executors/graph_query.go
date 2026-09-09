@@ -855,6 +855,12 @@ func (w *neighborWalk) admit(id string, raw []byte) bool {
 // frontier_remaining and count in the rendered body always describe the set
 // being measured.
 //
+// The loop is bounded by the number of admitted records, which admit's raw
+// budget already caps: an ENTITY_STATES record carries an identity, a message
+// type and its triples, so 64KB of them is a few hundred at most. Re-rendering
+// beats predicting how many to drop, because the drop count depends on the
+// indentation of the specific records being given back.
+//
 // Residual, deliberately not policy here: if the envelope alone — a very wide
 // unresolved list — exceeds the cap, the loop runs out of neighbors to give
 // back and returns an over-budget body flagged truncated. Bounding unresolved
