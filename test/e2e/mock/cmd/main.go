@@ -35,7 +35,17 @@ func main() {
 		// instead of failing schema validation — the approved execution is
 		// what proves the approval unblocked the loop rather than just
 		// resolving the pending state.
-		WithToolArgs("query_by_type", `{"entity_type": "temperature", "limit": 5}`).
+		//
+		// The type is `agent.execution`, not `temperature`: the agentic tier
+		// writes only loop-execution and model-endpoint entities to
+		// ENTITY_STATES, so `temperature` matches NOTHING here and the walk
+		// would pass identically over a served listing, an empty one, and the
+		// old stub. Two right-anchored segments (domain `agent`, type
+		// `execution`) select the loop-execution entities
+		// verify-graph-triples already proved present, which is what lets
+		// walkApprovalPath assert on the CONTENT of the result rather than
+		// only on a success counter (RC-6 walked path, #1261 task 4.5).
+		WithToolArgs("query_by_type", `{"entity_type": "agent.execution", "limit": 5}`).
 		WithCompletionContent(`{"valid": true, "summary": "Analysis complete. Temperature sensor reading exceeds threshold. Recommend monitoring HVAC system."}`)
 
 	applyScenarioPreset(openaiServer, *scenario)
