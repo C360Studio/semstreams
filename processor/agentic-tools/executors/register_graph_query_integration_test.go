@@ -4,7 +4,11 @@ package executors
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"sort"
 	"testing"
+	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
@@ -12,6 +16,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
@@ -187,5 +192,160 @@ func TestIntegration_EntityStatesHistory_NoLongerDecidedByBootOrder(t *testing.T
 		require.NoError(t, err)
 		require.Equal(t, declared, entityStatesHistory(ctx, t, client),
 			"tool registration must not perturb the owner's declared bucket config")
+	})
+}
+
+// TestIntegration_QueryByType_ListsFromEntityStates is the RC-6 walked path for
+// KVKeyLister: the new exported surface driven end to end against a real NATS
+// through the production registration wire and the production catalog-reader
+// adapter, not a mock.
+//
+// It asserts the three things the unit tests cannot: that a fixed-position
+// wildcard filter is a shape real NATS actually serves over ENTITY_STATES,
+// that the executor's own sort produces a deterministic order over whatever
+// scan order the server hands back, and that a cursor issued by one page
+// continues correctly on the next. The cancelled-context arm mirrors the
+// precedent this listing shares its collector with
+// (processor/graph-index/owner_filter_integration_test.go): a partial key list
+// is never returned as success.
+func TestIntegration_QueryByType_ListsFromEntityStates(t *testing.T) {
+	ctx := context.Background()
+	tc := natsclient.NewTestClient(t, natsclient.WithKV())
+	client := tc.Client
+
+	// The owner provisions ENTITY_STATES the way graph-ingest does.
+	_, err := graph.EnsureCatalogBucket(ctx, client, graph.BucketEntityStates)
+	require.NoError(t, err)
+	bucket, err := client.GetKeyValueBucket(ctx, graph.BucketEntityStates)
+	require.NoError(t, err)
+
+	// Two systems, one domain, two types. Written through MarshalEntityState,
+	// so every fixture is a record the authority would accept.
+	sensors := []string{
+		"acme.itest.gcs.environmental.temperature.s3",
+		"acme.itest.gcs.environmental.temperature.s1",
+		"acme.itest.hvac.environmental.temperature.s2",
+	}
+	others := []string{
+		"acme.itest.gcs.robotics.drone.d1",
+		"acme.itest.gcs.environmental.humidity.h1",
+	}
+	for _, id := range append(append([]string{}, sensors...), others...) {
+		entity := &graph.EntityState{
+			ID: id,
+			Triples: []message.Triple{{
+				Subject: id, Predicate: "sensor.reading.value", Object: 1.0,
+				Source: "itest", Timestamp: time.Unix(0, 0).UTC(), Confidence: 1,
+			}},
+			MessageType: message.Type{Domain: "test", Category: "fixture", Version: "v1"},
+			UpdatedAt:   time.Unix(0, 0).UTC(),
+		}
+		data, marshalErr := graph.MarshalEntityState(entity)
+		require.NoError(t, marshalErr)
+		_, putErr := bucket.Put(ctx, id, data)
+		require.NoError(t, putErr)
+	}
+
+	reg, err := registerGraphQueryTools(ctx, t, client)
+	require.NoError(t, err)
+
+	sortedSensors := append([]string{}, sensors...)
+	sort.Strings(sortedSensors)
+
+	call := func(t *testing.T, id, entityType string, limit int, cursor string) agentic.ToolResult {
+		t.Helper()
+		args := map[string]any{"entity_type": entityType, "limit": float64(limit)}
+		if cursor != "" {
+			args["cursor"] = cursor
+		}
+		result, execErr := reg.Execute(ctx, agentic.ToolCall{ID: id, Name: "query_by_type", Arguments: args})
+		require.NoError(t, execErr)
+		require.Empty(t, result.Error, "query_by_type must succeed against a provisioned bucket")
+		return result
+	}
+
+	page := func(t *testing.T, result agentic.ToolResult) (map[string]any, []string) {
+		t.Helper()
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(result.Content), &parsed))
+		raw, ok := parsed["entity_ids"].([]any)
+		require.True(t, ok, "entity_ids must be an array: %s", result.Content)
+		ids := make([]string, 0, len(raw))
+		for _, item := range raw {
+			ids = append(ids, item.(string))
+		}
+		return parsed, ids
+	}
+
+	t.Run("the type segment selects, and the order is deterministic", func(t *testing.T) {
+		result := call(t, "itest-all", "temperature", 10, "")
+		body, ids := page(t, result)
+		assert.Equal(t, "*.*.*.*.temperature.*", body["pattern"])
+		assert.Equal(t, sortedSensors, ids,
+			"real NATS returns scan order; the sorted order is the executor's own work")
+		assert.Equal(t, float64(len(sensors)), body["matched"])
+		assert.Equal(t, false, result.Metadata[agentic.MetadataKeyHasMore])
+	})
+
+	t.Run("three right-anchored tokens narrow to one system", func(t *testing.T) {
+		result := call(t, "itest-three", "gcs.environmental.temperature", 10, "")
+		body, ids := page(t, result)
+		assert.Equal(t, "*.*.gcs.environmental.temperature.*", body["pattern"])
+		assert.Equal(t, []string{
+			"acme.itest.gcs.environmental.temperature.s1",
+			"acme.itest.gcs.environmental.temperature.s3",
+		}, ids)
+	})
+
+	t.Run("one cursor continuation across two pages", func(t *testing.T) {
+		first := call(t, "itest-p1", "temperature", 2, "")
+		_, firstIDs := page(t, first)
+		require.Equal(t, sortedSensors[:2], firstIDs)
+		require.Equal(t, true, first.Metadata[agentic.MetadataKeyHasMore])
+		require.Equal(t, agentic.HintTooLarge, first.ResultHint)
+		cursor, ok := first.Metadata[agentic.MetadataKeyNextCursor].(string)
+		require.True(t, ok, "an intermediate page must carry a continuation token")
+
+		second := call(t, "itest-p2", "temperature", 2, cursor)
+		secondBody, secondIDs := page(t, second)
+		assert.Equal(t, sortedSensors[2:], secondIDs, "the pages partition the match exactly once")
+		assert.Equal(t, float64(len(sensors)), secondBody["matched"],
+			"matched stays the whole match count on every page")
+		assert.Equal(t, false, second.Metadata[agentic.MetadataKeyHasMore])
+		assert.NotContains(t, second.Metadata, agentic.MetadataKeyNextCursor)
+	})
+
+	t.Run("nothing of that type is classified empty, not absent", func(t *testing.T) {
+		result := call(t, "itest-none", "nonesuch", 10, "")
+		body, ids := page(t, result)
+		assert.Empty(t, ids)
+		assert.Equal(t, float64(0), body["matched"])
+		assert.Equal(t, agentic.HintEmpty, result.ResultHint)
+	})
+
+	t.Run("a cancelled context yields the context error and no partial list", func(t *testing.T) {
+		// The NATS KeyLister closes its channel on cancellation without a
+		// terminal error, so a collector that returned what it had would turn
+		// a partial snapshot into an authoritative answer. This is the arm
+		// processor/graph-index/owner_filter_integration_test.go pins on the
+		// same collector; the adapter inherits it through
+		// natsclient.FilteredKeys.
+		cancelled, cancelNow := context.WithCancel(ctx)
+		cancelNow()
+		adapter := &graphQueryKVAdapter{natsClient: client}
+		keys, listErr := adapter.KeysByPattern(cancelled, "*.*.*.*.temperature.*")
+		require.Error(t, listErr)
+		assert.ErrorIs(t, listErr, context.Canceled)
+		assert.Nil(t, keys, "a partial key list is never returned as success")
+	})
+
+	t.Run("a rejected entity_type never reaches NATS", func(t *testing.T) {
+		result, execErr := reg.Execute(ctx, agentic.ToolCall{
+			ID: "itest-wild", Name: "query_by_type",
+			Arguments: map[string]any{"entity_type": "*"},
+		})
+		require.NoError(t, execErr)
+		assert.Equal(t, agentic.ToolErrorInvalidArgs, result.ErrorKind,
+			fmt.Sprintf("a wildcard entity_type must be refused, got %q", result.Content))
 	})
 }
