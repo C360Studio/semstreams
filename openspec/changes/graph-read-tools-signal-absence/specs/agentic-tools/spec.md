@@ -148,7 +148,8 @@ narrows with `depth` or `filter_type`. No result SHALL announce more results wit
 - **GIVEN** a start entity whose neighbors exceed the budget
 - **WHEN** the tool answers
 - **THEN** the returned records fit the budget, `truncated` is true, `ResultHint` is `too_large`
-- **AND** `frontier_remaining` is the count of identities not expanded
+- **AND** `frontier_remaining` is the count of distinct identities the caller is still owed — frontier the walk never
+  reached, plus any record given back to fit the emitted result
 - **AND** no continuation flag is set, because the traversal has no resumable position
 - **AND** the test that verifies this is `TestQueryNeighbors_BudgetTruncatesWithHint`
 

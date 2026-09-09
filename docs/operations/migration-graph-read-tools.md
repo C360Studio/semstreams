@@ -126,7 +126,11 @@ There was no width bound. A target that failed to read — absent or transient �
 - The result is bounded by a **64KB model-facing content cap** measured on the emitted JSON itself — the length of
   the string you receive, not the compact bytes of the records inside it. Records past the cap are given back, and
   the result reports `truncated` and `frontier_remaining` and sets `ResultHint: "too_large"`. Narrow with `depth` or
-  `filter_type`.
+  `filter_type`. One case sets the hint WITHOUT `truncated`: when every target is an edge whose entity is not
+  resident, nothing is ever admitted and so nothing can be given back, yet the `unresolved` list alone can exceed the
+  cap. `ResultHint: "too_large"` is still set, because an over-budget body is always signalled. The `unresolved` list
+  is not itself bounded — treat a `too_large` with an empty `neighbors` map as "this fan-out is too wide to answer
+  here", and narrow the start entity.
 - A target absent from `ENTITY_STATES` is listed in `unresolved` rather than omitted.
 - **Zero neighbors plus a non-empty `unresolved` is NOT classified `empty`.** `ResultHint: "empty"` means the
   neighborhood is empty; a walk whose targets all exist as edges but are absent from `ENTITY_STATES` reports them

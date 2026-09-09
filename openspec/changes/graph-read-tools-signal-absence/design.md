@@ -179,7 +179,11 @@ is the traversal spelling of "asked for and not readable"; `query_entities`' exi
 - **R3** (`query_neighbors`): `unresolved ∩ keys(neighbors) = ∅`; every neighbor is the object of an
   `IsRelationship()` triple on a visited entity; `filter_type` keeps exactly the identities for which
   `MatchEntityIDPattern(pattern, id)` is true; `truncated ⇔ frontier_remaining > 0 ⇔ HintTooLarge`;
-  Σ neighbor record bytes ≤ budget; the result never carries `has_more` (the delta's neighbors requirement: no result
+  `len(emitted content) ≤ budget` — the length of the JSON string the model receives, NOT the Σ of compact record
+  bytes. An earlier revision of this invariant said "Σ neighbor record bytes", and implementation review measured
+  that proxy at 96,658 emitted bytes against a 64,740-byte meter, ~47% over, because `json.MarshalIndent` re-indents
+  every embedded record. The raw sum is retained only as a cheap READ bound (emitted ≥ raw always, so a raw sum over
+  the cap guarantees an emitted result over it), never as the authority. The result never carries `has_more` (the delta's neighbors requirement: no result
   announces more without a token the caller can pass back).
 - **R4** (`query_relationships` direction, the delta's second requirement): an omitted `direction` answers as
   `outgoing` and echoes it; an explicit `incoming` or `both` yields `invalid_args` naming the incoming owner and
@@ -211,10 +215,11 @@ Two bound classes exist on this component and the delta names which one `query_n
 | Class | Where | Who owns the number | How it is observed |
 |---|---|---|---|
 | Transport bound | `openspec/specs/agentic-tools/spec.md:467-475` — the component attempts the full record, and a typed oversize rejection yields one compact `too_large` authority; `:473` "SHALL NOT inspect configured payload limits" | NATS (`max_payload`); the framework never reads it | by attempting the real Create |
-| Model-facing content cap | `executors/bash.go:36` `bashMaxOutputBytes = 100 * 1024`; `executors/httprequest.go:23` `httpMaxTextSize = 20000`; this change adds the neighbors cap at **64KB** | the executor, as a constant | by measuring the real bytes of real content while assembling |
+| Model-facing content cap | `executors/bash.go:36` `bashMaxOutputBytes = 100 * 1024`; `executors/httprequest.go:23` `httpMaxTextSize = 20000`; this change adds the neighbors cap at **64KB** | the executor, as a constant | by measuring the ASSEMBLED result — render, measure `len(content)`, give back the last admitted record, repeat — never a proxy for it |
 
 The neighbors budget is the second class. It is not a read of a framework-owned limit and does not predict the
-transport outcome: assembly fetches real records, counts their real bytes, and stops before the next one would cross
+transport outcome: assembly fetches real records, renders the result, measures the emitted string, and gives records
+back until it fits — the read-side stop before the next raw record would cross
 the cap — `truncated`, `frontier_remaining`, `HintTooLarge` report what was observed. A result under the executor cap
 that still trips the transport bound takes spec `:467`'s path unchanged; the two compose, they do not overlap. The
 origin case in `docs/concepts/24-tool-result-hints-and-pagination.md:8-9` (a 102KB graph result retried three times by

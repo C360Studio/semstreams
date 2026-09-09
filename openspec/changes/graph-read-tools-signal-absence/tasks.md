@@ -207,7 +207,7 @@ the delta is ADDED-only. `approval_signal_test.go` IS held (as is `scenario.go`)
 
 ## 6. Gates
 
-- [x] 6.1 All green on `92fd2c5e`, each re-run independently of the implementer's report (a subagent's state claim
+- [x] 6.1 All green, re-verified on the FINAL reviewed head after review round 2 (the earlier tick named `92fd2c5e`, three code commits back — a gate ticked over a superseded tree is not evidence for the tree that ships): `task lint` 0 · `go test -race ./...` **153 ok / 20 no-test / 0 FAIL** · `task spec:properties` **71/71** · `go run ./cmd/entity-id-audit .` 0 (**1322** candidates) · `task schema:generate` 0 drift. Each re-run independently of the implementer's report (a subagent's state claim
       goes stale; the denominator is checked, not the exit code alone): `task lint` 0 · `go test -race ./...`
       **153 ok / 20 no-test / 0 FAIL** · integration via `scripts/run-integration-tests.sh` with
       `SEMSTREAMS_INTEGRATION_LOCK_WAIT_SECONDS=1800` **153 ok / 0 FAIL** and confirmed to have actually run (an
@@ -239,5 +239,18 @@ the delta is ADDED-only. `approval_signal_test.go` IS held (as is `scenario.go`)
       reconstructs the meter's own arithmetic instead of measuring `len(result.Content)`. Both mechanisms
       independently re-derived from the code before dispatch. Code findings returned to the implementer; the two
       `openspec/` findings (a delta scenario citing a test that does not verify it; a stale `proposal.md` header
-      declaring the INVENTORY PASS un-given) fixed here. Re-review owed before 6.4.
+      declaring the INVENTORY PASS un-given) fixed here.
+      **Round 2 ran over `1608e711` — CHANGES REQUESTED**, and it caught a defect the round-1 fix created at its own
+      seam ([[feedback_a_fix_creates_the_next_defect_at_its_seam]]): the new canonical-ID validation ran
+      unconditionally on a decode, and `graph.DecodeCursor("")` returns `("", nil)` by documented first-page
+      contract — so `cursor: ""` was refused and the FIRST page became unreachable, with a message telling the model
+      its cursor "decodes to \"\"". It also made `cursor` the only optional string in this executor refused when
+      empty (`direction` at `:500` and `relationship_type` at `:425` both read empty as omitted). Round 2's MEDIUM 1
+      found the second seam: between the emitted-size trim and the unresolved/empty split, an all-unresolved walk
+      admits nothing, so `fitEmitted` returns without setting `truncated` and `HintEmpty` rightly declines — a
+      114KB body against a 64KB cap with no flag, no hint and no error. Both fixed in `09d30ba5` and both
+      mutation-killed (guard removed → the empty-cursor subtest fails; hint arm removed → the over-budget subtest
+      fails). Round 2's three text corrections applied: `design.md`'s R3 invariant and two prose sites still argued
+      for the Σ-record-bytes proxy the fix replaced, the delta's `frontier_remaining` gloss no longer described the
+      field once records could be given back, and the migration doc repeated the over-claim. Round 3 owed before 6.4.
 - [ ] 6.4 Archive as the final content commit; narrow archive-sync check.
