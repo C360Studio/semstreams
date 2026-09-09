@@ -424,13 +424,29 @@ This proves started-component replacement from a seeded checkpoint, not task bir
 kill. The earlier host-lock refusal ran no scenario and is not test evidence. Scoped source/proof review returned
 APPROVE, including the timeout correction. Full repository unit/race, lint, both tagged vet gates, build, contract
 tests, module tidy-diff, schema no-drift, and the staged entity-ID corpus audit pass.
-The canonical full integration run passed the loop package (207.212s), but failed
+The original canonical full integration run passed the loop package (207.212s), but failed
 `TestIntegration_RuleStopAfterAcceptedStartParentCancellation`: `processor/rule/processor.go:1507` clears
-`runtimeWG` while the started sweeper's defer reads it at line 1022. The affected rule files are unchanged by this
-slice or the #1146 diff from its frozen parent; the same code is present on main. The retained trace is
-`/private/tmp/gh1146-terminal-tool-20260909.Djv9m8/integration-all.log`. Push remains held on this rule-lifecycle
-race; no retry-to-green waiver or rule implementation change is included. Mixed task-4/task-5/C.4 and task-6
-obligations remain open.
+`runtimeWG` while the started sweeper's defer reads it at line 1022. At that checkpoint, the affected rule files
+were unchanged by this slice or the #1146 diff from its frozen parent; the same code was present on main.
+The retained failure trace is `/private/tmp/gh1146-terminal-tool-20260909.Djv9m8/integration-all.log`.
+
+The owner approved the separate correction, claimed by #1273 / draft PR #1274. Its reviewed commit `382f7887`
+is integrated here as `b62c66d6`, with all three rule-file hashes unchanged and the frozen parent still exact
+`417beae5552f8f15ad3540edd7d8504c87174c13`. Start registration stays counted in the existing WaitGroup;
+workers retain their exact admitted group/completion/wake handles instead of rereading cleared fields.
+Deterministic regressions reproduced premature completion, a delayed readiness-worker panic, and the coordinator's
+wake-channel race. The correction adds no public surface, state, timeout, join, or rejoin policy; controlled Stop,
+deadline-bounded abort, and failed-Start rollback keep their existing contracts.
+
+The separate correction's full local gates and independent review passed. The combined tree now passes
+`task check:push`, including full unit/race and canonical integration (loop 191.552s; rule 67.846s). Linux/amd64
+build, module tidy-diff, schema/OpenAPI no-drift, contract tests, tagged vet, identity audit, guard fixtures, and
+strict OpenSpec validation also pass. Narrow integration review returned APPROVE with unchanged source hashes;
+its independent focused rule race run passed in 1.385s. Evidence is retained in
+`/private/tmp/gh1146-rule-integration-20260909.BvGL25`.
+This resolves the local rule-race verification hold, not the remaining mixed task-4/task-5/C.4 or task-6 obligations.
+The 15-stage agentic E2E result remains the earlier `5be9b43f` checkpoint's evidence; it was not rerun for these
+internal corrections. No retry-to-green waiver, parent advance, whole-PR approval, archive, or closure is claimed.
 
 Direct-terminal conformance (paths below are under `processor/agentic-loop/`):
 
