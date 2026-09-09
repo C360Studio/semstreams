@@ -10,8 +10,10 @@ this package. `task api:compat` cannot see any of the flips below: they are JSON
 
 So read this if you operate a deployment whose agents call `query_relationships`, `query_neighbors`, or
 `query_by_type`, or if you have a persona, prompt, rule, or downstream consumer that reads those results. Nothing
-requires a code change to keep compiling. Four behaviours produce **different, usually smaller, result sets** than
-they did before, and one previously-inert tool starts answering.
+requires a code change to keep compiling. Five behaviours produce **different result sets** than they did before,
+and one previously-inert tool starts answering. Four of the five return **less** than before. The fifth —
+`query_neighbors`'s `depth` (§3) — returns **more**, and it is the one most likely to be silently compensated for
+in a prompt you already wrote, so read that one even if you skip the rest.
 
 **Nothing to configure.** There is no new knob, no new bucket, no new index, and no new subject.
 
@@ -135,6 +137,20 @@ There was no width bound. A target that failed to read — absent or transient �
 - **Zero neighbors plus a non-empty `unresolved` is NOT classified `empty`.** `ResultHint: "empty"` means the
   neighborhood is empty; a walk whose targets all exist as edges but are absent from `ENTITY_STATES` reports them
   and carries no hint, because "broaden your filter" is the wrong instruction for "these records are not resident".
+- **`depth` now counts hops, so `depth: 1` returns direct neighbors instead of nothing.** The walk seeded its
+  frontier with the start entity and spent a hop on it, so the advertised default — `"Number of hops to traverse
+  (default: 1, max: 3)"` — read the source, queued its targets, and returned before reading any of them:
+  `count: 0` for an entity whose neighbors were one edge away. The documented contract was always the one described
+  here; the code disagreed with it. **This is the one flip that returns MORE than before**, and the only one where
+  doing nothing can leave you worse off than acting:
+  - If you compensated by asking for one hop more than you meant — `depth: 2` to get direct neighbors — you now
+    traverse **two** rings. This is not hypothetical; this repository's own test fixture did exactly that for four
+    review rounds.
+  - On a wide graph that extra ring is where the 64KB cap above starts firing: a call that returned a complete
+    answer can now come back `truncated: true` with `ResultHint: "too_large"`. Nothing is wrong with that result,
+    but it is a different shape than you were getting.
+  - **What to do:** subtract one from any `depth` you were passing to compensate. If you were passing `depth: 1`
+    and getting nothing back, delete the workaround you built around that — it now answers.
 - A **transient** read failure now fails the whole call as a network error, where it was previously skipped —
   producing a smaller graph reported as complete.
 - An **absent start entity** is now `not_found`, where it previously produced `count: 0`. Classifying that zero as
@@ -261,4 +277,9 @@ classified **internal error naming the binding** — never an empty listing, whi
       `predicates_present` with `"kind": "property"`.
 - [ ] Any agent passing `filter_type` to `query_neighbors` and relying on the old (inert) behaviour of getting
       everything — it now filters.
+- [ ] Any prompt, persona, or rule passing `depth: 2` (or 3) to `query_neighbors` to mean "direct neighbors",
+      compensating for the old off-by-one — drop it by one, or accept a walk one ring wider and the `truncated` /
+      `too_large` result that a wide graph will now return.
+- [ ] Any workaround built around `query_neighbors` returning nothing at its default depth — it now answers, so the
+      workaround is dead code at best and a wrong answer at worst.
 - [ ] Nothing to configure.

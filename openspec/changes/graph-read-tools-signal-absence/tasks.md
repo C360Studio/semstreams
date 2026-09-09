@@ -167,9 +167,10 @@ the delta is ADDED-only. `approval_signal_test.go` IS held (as is `scenario.go`)
 
 ## 5. Docs
 
-- [x] 5.1 `docs/operations/migration-graph-read-tools.md` (home per owner ruling Q5): before/after JSON for the four
-      model-facing flips — `IsRelationship()` row filtering, `filter_type` honoured on `query_neighbors`, the 64KB
-      budget, and the `direction` narrowing (its own row, ruling Q4) — plus the `query_by_type` stub → served listing
+- [x] 5.1 `docs/operations/migration-graph-read-tools.md` (home per owner ruling Q5): before/after JSON for the
+      **five** model-facing flips — `IsRelationship()` row filtering, `filter_type` honoured on `query_neighbors`,
+      the 64KB budget, the `direction` narrowing (its own row, ruling Q4), and the `depth` correction the owner
+      added to scope on 2026-09-09 (5b.1) — plus the `query_by_type` stub → served listing
       and its `truncated` → `has_more`/`next_cursor` continuation.
 
 ## 5b. Implementation findings escalated, not absorbed
@@ -193,8 +194,10 @@ the delta is ADDED-only. `approval_signal_test.go` IS held (as is `scenario.go`)
       it, so no tool description, argument schema or exported signature changes and `api:compat` cannot move.
       **The tests stopped agreeing with the defect.** `fixtureNeighborDepth` went 2 → 1, the tool's real default,
       and the "expands THROUGH a filtered-out neighbor" subtest went 3 → 2, the depth its fixture actually needs;
-      the constant's apologia is deleted. Every one of the eleven pre-existing `query_neighbors` tests passes at the
-      honest depth with no assertion touched — they had been written for correct semantics and forced to over-ask.
+      the constant's apologia is deleted. Every pre-existing `query_neighbors` test passes at the honest depth with
+      no assertion touched — **7 top-level functions and 5 subtests**, measured (`go test -run TestQueryNeighbors -v`
+      reports 8 top-level and 5 subtests at this head; one top-level is the new test added below). They had been
+      written for correct semantics and forced to over-ask.
       New `TestQueryNeighbors_DefaultDepthReturnsDirectNeighbors` calls the tool the way its schema documents it,
       with **no `depth` argument at all** — the shape the defect hid in, since every other test passed an explicit
       depth and quietly passing 2 to mean 1 is what let it survive four review rounds.
@@ -223,8 +226,12 @@ the delta is ADDED-only. `approval_signal_test.go` IS held (as is `scenario.go`)
 - [x] 5c.2 The depth fix's first full `go test -race ./...` went RED with **one** failure —
       `TestMaybeStartPProf_Enabled_ServesPprof` (`service/`), `pprof server error: listen tcp :63771: bind: address
       already in use`. Attributed, not re-rolled ([[feedback_no_rerun_to_green_fix_first]]): it is **#1120**, already
-      OPEN with `class:flake` and named precisely — "freePort probe-then-bind race (bind :0, read, close, re-bind
-      later) — ten call sites; fires under host contention". `freePort`
+      OPEN with `class:flake` and naming the mechanism precisely — "freePort probe-then-bind race (bind :0, read,
+      close, re-bind later) … fires under host contention". Its *enumeration* is stale rather than wrong: the issue
+      lists ten call sites across three files, and the site that failed here is `service/pprof_test.go:36`, in a
+      **fourth**. Measured today: `grep -rn "freePort(t)" service/` → **18 sites across 4 files**. The mechanism is
+      identical and the helper is the one #1120 names, so this is that bug reaching a site the issue had not
+      enumerated — a comment on #1120, not a new issue. `freePort`
       (`service/service_manager_health_listener_test.go:277-286`) binds port 0, reads the assigned port, closes the
       listener, and returns the number; `MaybeStartPProf` binds it later, and anything on the host may take it in
       between. Established rather than assumed: this branch changes **zero** files under `service/`
@@ -264,6 +271,12 @@ the delta is ADDED-only. `approval_signal_test.go` IS held (as is `scenario.go`)
       `02414da7` is `feat(agentic-tools)!:`. The reviewer's risk read was near zero (the tier calls `query_by_type`
       without a cursor and never calls `query_neighbors`, so no round-2 or round-3 change touches the proven path)
       and the beta.18 case study in `CLAUDE.md` is exactly a near-zero judgement that was wrong. It is a ~45s tier.
+      **Its limit is now filed, not merely known**: by 6.2's own words the tier never calls `query_neighbors`, so it
+      is real evidence for the `query_by_type` work and none at all for the neighbor walk this change also alters.
+      Review round 4 raised that as MEDIUM 3 (inherited — every `query_neighbors` flip landed in `02414da7` under
+      the same posture and passed three rounds). Filed as **#1278** under the repo's own remedy: "If the tier
+      doesn't cover the path, that's a coverage gap — file it before tagging." The reviewer contract's condition is
+      an e2e stage OR a cited coverage-gap issue; the citation now exists.
       Substrate note: the tier was initially unrunnable because Docker Desktop's `docker-credential-desktop` hangs
       (`docker pull` → `error getting credentials - err: signal: terminated`, exit 124 twice). Cleared WITHOUT
       touching `~/.docker/config.json` by pulling the three base images once through an isolated credsStore-free
@@ -305,5 +318,31 @@ the delta is ADDED-only. `approval_signal_test.go` IS held (as is `scenario.go`)
       comment describing the opposite fixture and the helper bare — invisible to revive, `go vet` and every test —
       and 6.1 had been re-pointed by prepending rather than replacing, so it asserted two values for the same
       measurement. Fixed in `0676c77d` and in this commit respectively.
+
+      **Round 4 ran over `501f7089` — CHANGES REQUESTED, and found NO defect in the code.** Scoped to the owner's
+      widening (`4dbb2080` + `501f7089`, diff `3e574d88..HEAD`); rounds 1–3 not re-reviewed. The reviewer derived
+      the ring semantics from a throwaway probe against the real executor rather than from the brief, and tabulated
+      fixed-vs-mutated behaviour at every admitted depth: `ring <= depth` is correct at 1, 2 and 3 and does NOT
+      over-read — at `depth: 3` ring 4 is queued into the local `next` and discarded when the loop exits. It
+      confirmed no double-admission, no `neighbors`/`unresolved` overlap, and that the round-1/2/3 machinery
+      (`admit`/`fitEmitted`/`stopAt`/`truncated`/`pending`, the hint precedence) survives the extra ring. Its own
+      mutation killed the new test on all three claims and on **five more pre-existing tests than the commit
+      message claimed** — the commit's claim was conservative. One genuinely new fact it established: at `depth: 1`
+      the truncation path was DEAD CODE before this fix (ring 0 never calls `admit`), and is now live at the
+      advertised default; exercised directly at `bodyBytes=64237` and correct.
+      Both HIGHs were record propagation, not code. HIGH 1: the fifth model-facing flip was absent from
+      `docs/operations/migration-graph-read-tools.md`, whose line 13 still said "Four behaviours" and "usually
+      smaller" — and this flip is the only one that returns MORE. The do-nothing path is concrete and this repo
+      walked it: `fixtureNeighborDepth = 2` was that exact compensation for four rounds, and an adopter's `depth: 2`
+      now traverses two rings, which is where the newly-live truncation fires. Fixed with a §3 bullet, two checklist
+      lines, and the count corrected. HIGH 2: the PR body asserted 72/72 and 1322 at a superseded head and still
+      advertised the owner item as owed — already corrected before the round returned, since the body was re-pointed
+      while the reviewer was reading it; verified after the fact rather than re-applied, with the surviving mentions
+      of `0676c77d`/`3e574d88`/`72/72` confirmed to be round-3 history, not live claims. MEDIUM 1 (5.1's "four
+      flips") and both NITs fixed: the test count is now measured (7 pre-existing top-level + 5 subtests, not
+      "eleven"), and 5c.2 no longer quotes #1120's stale "ten call sites" as precise — it is 18 across 4 files, and
+      the failing site is in a fourth file the issue never enumerated, now commented onto #1120. MEDIUM 2 is
+      recorded as a residual in `design.md` (pre-existing, defensible as specified, and narrowing it would be a
+      sixth flip); MEDIUM 3 is filed as #1278.
 
 - [ ] 6.4 Archive as the final content commit; narrow archive-sync check.

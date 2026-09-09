@@ -392,6 +392,26 @@ ID or by type" synchronously and truthfully; `research_graph` answers "what is t
 neither an ID nor a type. Its description's "for direct lookups by ID, use query_entity" stays true and could gain
 "by type, use query_by_type"; that file is outside this change's file set — recorded as a residual, not a task.
 
+**Residual: `frontier_remaining` can count identities beyond the requested depth.** When the budget stop lands on
+the LAST ring, `stopAt(id, frontier[index+1:], next)` folds `next` into `pending`, and `next` at that moment holds
+ring `depth+1` identities the walk was never going to read at this depth. Measured by review round 4: five ring-1
+neighbors of ~20KB each, each with one ring-2 child, called at `depth: 1` → `truncated=true`,
+`frontier_remaining=5`, of which three are ring-2. Only two are actually still owed at that depth. The asymmetry is
+that a NON-truncated `depth: 1` walk over the same graph reports `frontier_remaining: 0` for the same unvisited
+ring-2 set.
+
+It is **pre-existing, not introduced by the depth fix**: under the `ring < depth` mutation the identical shape
+appears one depth later. The fix changes only its reachability — at `depth: 1` the old code produced
+`count: 0, truncated: false, frontier_remaining: 0, hint: "empty"`, so the truncation path was dead code at the
+advertised default and is now live there.
+
+Deliberately NOT fixed here. It is defensible as specified: the delta's own gloss says `frontier_remaining` is
+"frontier the walk never reached", which is literally true of those identities, and the `truncated ⟺
+frontier_remaining > 0` invariant still holds. Narrowing it (have `stopAt` take `next` only when `ring < depth`) is
+a sixth model-facing decision and the owner's ruling widened this change by exactly one. Recorded here rather than
+filed, per [[feedback_record_the_residual_file_the_architecture]] — it costs no judge round to re-derive, because
+this paragraph is the derivation.
+
 ## Test plan
 
 Untagged unless marked; fixtures built with `graph.MarshalEntityState`, never hand-written maps (the existing
