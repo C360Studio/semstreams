@@ -207,28 +207,34 @@ the delta is ADDED-only. `approval_signal_test.go` IS held (as is `scenario.go`)
 
 ## 6. Gates
 
-- [x] 6.1 All green, re-verified on the FINAL reviewed head after review round 2 (the earlier tick named `92fd2c5e`, three code commits back — a gate ticked over a superseded tree is not evidence for the tree that ships): `task lint` 0 · `go test -race ./...` **153 ok / 20 no-test / 0 FAIL** · `task spec:properties` **71/71** · `go run ./cmd/entity-id-audit .` 0 (**1322** candidates) · `task schema:generate` 0 drift. Each re-run independently of the implementer's report (a subagent's state claim
-      goes stale; the denominator is checked, not the exit code alone): `task lint` 0 · `go test -race ./...`
-      **153 ok / 20 no-test / 0 FAIL** · integration via `scripts/run-integration-tests.sh` with
-      `SEMSTREAMS_INTEGRATION_LOCK_WAIT_SECONDS=1800` **153 ok / 0 FAIL** and confirmed to have actually run (an
-      earlier attempt exited 0 having run NOTHING on the `/tmp/semstreams-integration.lock` host lock held by a
-      concurrent session — an exit 0 from that script is not evidence the suite ran, check the `ok` count) ·
-      `openspec validate --strict` valid · `task spec:properties` 70/70 · `task schema:generate` 0 drift in
-      `schemas/ specs/` and 0 lines dirty tree-wide · `task api:compat:report` 12 incompatible, **unchanged** from
-      the beta.162..HEAD baseline, this package's listed breaks being the pre-existing `Flow*` removals and the only
-      delta being `KVKeyLister: added` under Compatible changes · `go run ./cmd/entity-id-audit .` 0 (1317
-      candidates). All twelve test names the delta's scenarios pin exist in the tree.
-- [x] 6.2 `task e2e:agentic` **GREEN 2026-09-09** — exit 0, `assertions_run=14`, and the 4.5 assertion demonstrably
-      fired: `approval_listing_matched:2` in the scenario metrics, i.e. the booted binary executed the served
-      `query_by_type` and the approval walk read two matched identities. This satisfies the repo's hard rule that a
-      commit marked BREAKING has a relevant e2e tier green before it lands (`02414da7` is `feat(agentic-tools)!:`).
-      Substrate note: the tier was initially unrunnable because Docker Desktop's `docker-credential-desktop` helper
-      hangs (`docker pull` → `error getting credentials - err: signal: terminated`, exit 124 twice), so no `golang`
-      base image could be fetched. Cleared WITHOUT touching `~/.docker/config.json`: the three base images
-      (`golang:1.26-alpine`, `alpine:latest`, `nats:2.14-alpine`) were pulled once through an isolated
-      credsStore-free `DOCKER_CONFIG`, after which the normal config builds from cache. The wedged helper is a
-      machine condition, not a repo defect, and is unfixed.
-- [ ] 6.3 `semstreams-reviewer` implementation pass. **Round 1 ran 2026-09-09 over `92fd2c5e` — CHANGES REQUESTED**,
+- [x] 6.1 All green, every item measured on the FINAL reviewed code head **`0676c77d`** — ONE evidence set, deliberately.
+      A gate ticked over a superseded tree is not evidence for the tree that ships, and a line asserting two values for
+      the same measurement is worse than one that is merely stale (see 6.3, round 3 MEDIUM 2). Each gate re-run here
+      independently of the implementer's report — a subagent's state claim goes stale — and the DENOMINATOR is
+      checked, never the exit code alone:
+      `task lint` 0 · `go test -race ./...` **153 ok / 20 no-test / 0 FAIL** ·
+      integration via `scripts/run-integration-tests.sh` with `SEMSTREAMS_INTEGRATION_LOCK_WAIT_SECONDS=1800`
+      **153 ok / 0 FAIL**, banner confirming it ran (an earlier attempt exited 0 having run NOTHING on the
+      `/tmp/semstreams-integration.lock` host lock held by a concurrent session — an exit 0 from that script is not
+      evidence the suite ran, check the `ok` count) · `openspec validate --strict` valid ·
+      `task spec:properties` **72/72** · `go run ./cmd/entity-id-audit .` 0 (**1322** candidates) ·
+      `task schema:generate` 0 drift in `schemas/ specs/` and 0 dirty tree-wide ·
+      `task api:compat:report` **12 incompatible, unchanged from the beta.162..HEAD baseline** — this package's
+      listed breaks are the pre-existing `Flow*` removals and the only delta is `KVKeyLister: added` under
+      Compatible changes. All twelve test names the delta's scenarios pin exist in the tree.
+- [x] 6.2 `task e2e:agentic` **GREEN on the final head `0676c77d`** — exit 0, `assertions_run=14`, and task 4.5's
+      assertion demonstrably fired: `approval_listing_matched:2`, the booted binary executing the served
+      `query_by_type` and the approval walk reading two matched identities. Re-run here deliberately: the first
+      green was at `92fd2c5e`, three code commits back, and the repo's hard rule attaches the tier to what LANDS —
+      `02414da7` is `feat(agentic-tools)!:`. The reviewer's risk read was near zero (the tier calls `query_by_type`
+      without a cursor and never calls `query_neighbors`, so no round-2 or round-3 change touches the proven path)
+      and the beta.18 case study in `CLAUDE.md` is exactly a near-zero judgement that was wrong. It is a ~45s tier.
+      Substrate note: the tier was initially unrunnable because Docker Desktop's `docker-credential-desktop` hangs
+      (`docker pull` → `error getting credentials - err: signal: terminated`, exit 124 twice). Cleared WITHOUT
+      touching `~/.docker/config.json` by pulling the three base images once through an isolated credsStore-free
+      `DOCKER_CONFIG`; the normal config then builds from cache. Do NOT point `DOCKER_CONFIG` at a bare directory —
+      it breaks Compose plugin discovery and context resolution. The wedged helper is a machine condition, unfixed.
+- [x] 6.3 `semstreams-reviewer` implementation pass. **Round 1 ran 2026-09-09 over `92fd2c5e` — CHANGES REQUESTED**,
       recorded on PR #1262. One BLOCKING, one HIGH, four MEDIUM, four NIT; every ruling and A–F found implemented at
       the ruled level with no deviation. BLOCKING: `graph.DecodeCursor` is bare base64
       (`graph/query_prefix_types.go:82-93`), so `graph_query.go:1030-1049` refuses only UNdecodable cursors — a
@@ -253,4 +259,16 @@ the delta is ADDED-only. `approval_signal_test.go` IS held (as is `scenario.go`)
       fails). Round 2's three text corrections applied: `design.md`'s R3 invariant and two prose sites still argued
       for the Σ-record-bytes proxy the fix replaced, the delta's `frontier_remaining` gloss no longer described the
       field once records could be given back, and the migration doc repeated the over-claim. Round 3 owed before 6.4.
+      **Round 3 ran over `4e999b30` — APPROVE.** No blocking or high findings; both round-2 defects verified closed
+      under the reviewer's OWN mutations rather than on the coordinator's report, and the arm-precedence question
+      answered definitively: the size check cannot shadow `HintEmpty`, because the envelope with both `neighbors`
+      and `unresolved` empty is bounded under 1KB by `MaxEntityIDBytes` on `source_entity`/`filter_type`/`pattern`
+      plus three ints and two bools — two orders of magnitude below the cap. It also established that
+      `decoded == "" ⟺ cursor == ""` under `RawURLEncoding` (length 1 is always illegal base64), so the empty-cursor
+      guard opens no path for a non-empty non-token. Its two MEDIUMs were both coordinator errors and are fixed:
+      the new test had been pasted between `neighborWideFixture`'s doc comment and its function, leaving that
+      comment describing the opposite fixture and the helper bare — invisible to revive, `go vet` and every test —
+      and 6.1 had been re-pointed by prepending rather than replacing, so it asserted two values for the same
+      measurement. Fixed in `0676c77d` and in this commit respectively.
+
 - [ ] 6.4 Archive as the final content commit; narrow archive-sync check.
