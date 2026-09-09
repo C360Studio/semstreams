@@ -230,8 +230,7 @@ func (e *GraphQueryExecutor) queryEntity(ctx context.Context, call agentic.ToolC
 	// Query the KV bucket
 	entry, err := e.kvGetter.Get(ctx, entityID)
 	if err != nil {
-		// Check if it's a not found error
-		if err == ErrKeyNotFound || err.Error() == "nats: key not found" {
+		if isKeyNotFound(err) {
 			return agentic.ToolResult{
 				CallID:    call.ID,
 				Error:     fmt.Sprintf("entity not found: %s", entityID),
@@ -316,7 +315,7 @@ func (e *GraphQueryExecutor) queryEntities(ctx context.Context, call agentic.Too
 	for _, entityID := range entityIDs {
 		entry, err := e.kvGetter.Get(ctx, entityID)
 		if err != nil {
-			if err == ErrKeyNotFound || err.Error() == "nats: key not found" {
+			if isKeyNotFound(err) {
 				notFound = append(notFound, entityID)
 				continue
 			}
@@ -650,6 +649,19 @@ func (e *GraphQueryExecutor) queryNeighbors(ctx context.Context, call agentic.To
 	if failure := walk.run(ctx, call, depth); failure != nil {
 		return failure.result, failure.err
 	}
+	// An absent START entity is not an empty neighborhood. Before this change
+	// the traversal skipped the failed read and answered `count: 0`, which was
+	// merely uninformative; classifying that same zero as HintEmpty would make
+	// it actively wrong — "try a broader filter" for an entity that does not
+	// exist. It takes the not-found classification query_entity and
+	// query_relationships already give the same input.
+	if walk.sourceMissing {
+		return agentic.ToolResult{
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("entity not found: %s", entityID),
+			ErrorKind: agentic.ToolErrorNotFound,
+		}, nil
+	}
 
 	response := map[string]any{
 		"source_entity":      entityID,
@@ -715,6 +727,9 @@ type neighborWalk struct {
 	// at least one identity it did not expand.
 	truncated         bool
 	frontierRemaining int
+	// sourceMissing records that the START entity itself was absent, which is
+	// a not-found answer rather than an empty neighborhood.
+	sourceMissing bool
 
 	visited    map[string]bool
 	bytesTaken int
@@ -742,9 +757,11 @@ func (w *neighborWalk) run(ctx context.Context, call agentic.ToolCall, depth int
 				// Absent from ENTITY_STATES: reported, never dropped. A silent
 				// omission reads to the model as "this edge does not exist"
 				// when the truth is "its target is not resident".
-				if id != w.sourceID {
-					w.unresolved = append(w.unresolved, id)
+				if id == w.sourceID {
+					w.sourceMissing = true
+					return nil
 				}
+				w.unresolved = append(w.unresolved, id)
 				continue
 			}
 
@@ -1114,23 +1131,24 @@ func (e *GraphQueryExecutor) queryByType(ctx context.Context, call agentic.ToolC
 		// violation worth a Warn log (agentic/tools.go MetadataKeyHasMore).
 		agentic.MetadataKeyHasMore: hasMore,
 	}
-	result := agentic.ToolResult{
-		CallID:   call.ID,
-		Content:  string(content),
-		Metadata: metadata,
-	}
+	hint := agentic.ToolResultHint("")
 	if hasMore {
 		// Opaque, and encoded by the graph package's own cursor codec so one
 		// format serves keyset continuation over ENTITY_STATES.
 		metadata[agentic.MetadataKeyNextCursor] = graph.EncodeCursor(page[len(page)-1])
 		// too_large composes with the cursor rather than competing with it:
 		// the model is told both to narrow and that it may continue.
-		result.ResultHint = agentic.HintTooLarge
+		hint = agentic.HintTooLarge
 	}
 	if len(matched) == 0 {
-		result.ResultHint = agentic.HintEmpty
+		hint = agentic.HintEmpty
 	}
-	return result, nil
+	return agentic.ToolResult{
+		CallID:     call.ID,
+		Content:    string(content),
+		Metadata:   metadata,
+		ResultHint: hint,
+	}, nil
 }
 
 // JetStreamKVAdapter adapts a jetstream.KeyValue to our KVGetter interface.

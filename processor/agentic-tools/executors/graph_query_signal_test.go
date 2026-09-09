@@ -728,6 +728,26 @@ func TestQueryNeighbors_UnresolvedTargetsAreReported(t *testing.T) {
 	})
 }
 
+// TestQueryNeighbors_AbsentSourceIsNotAnEmptyNeighborhood: classifying the
+// zero this used to answer would have made it actively wrong — HintEmpty says
+// "try a broader filter" for an entity that does not exist. It takes the same
+// not-found classification query_entity and query_relationships give the same
+// input.
+//
+// spec: agentic-tools / query_neighbors bounds its content by a model-facing budget and reports unresolved targets
+func TestQueryNeighbors_AbsentSourceIsNotAnEmptyNeighborhood(t *testing.T) {
+	executor := NewGraphQueryExecutor(newMockKVGetter())
+	result, err := executor.Execute(context.Background(), agentic.ToolCall{
+		ID: "call-nosource", Name: "query_neighbors",
+		Arguments: map[string]any{"entity_id": fixtureSiteOne, "depth": fixtureNeighborDepth},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, agentic.ToolErrorNotFound, result.ErrorKind)
+	assert.NotEqual(t, agentic.HintEmpty, result.ResultHint,
+		"an absent entity is not an empty result set")
+	assert.Empty(t, result.Content)
+}
+
 type flakyKVGetter struct {
 	*mockKVGetter
 	failOn string

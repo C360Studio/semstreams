@@ -129,6 +129,9 @@ There was no width bound. A target that failed to read — absent or transient �
 - A target absent from `ENTITY_STATES` is listed in `unresolved` rather than omitted.
 - A **transient** read failure now fails the whole call as a network error, where it was previously skipped —
   producing a smaller graph reported as complete.
+- An **absent start entity** is now `not_found`, where it previously produced `count: 0`. Classifying that zero as
+  `empty` would have made it actively wrong — "try a broader filter" for an entity that does not exist — so it takes
+  the not-found classification `query_entity` and `query_relationships` already give the same input.
 
 ```jsonc
 // BEFORE
