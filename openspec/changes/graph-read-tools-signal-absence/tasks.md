@@ -21,8 +21,9 @@ Round-4 additions, measured 2026-09-07: `graph_query.go:325` (`direction` defaul
 `processor/research-graph-execute/adapters.go:55-110,156-159,183-185`.
 
 Sequencing: 1.6 governs the Codex coordination and is re-measured, never quoted — the held set moves and this line
-has been stale twice. At **2026-09-09** it is **224** unique paths across PRs #1156/#1159/#1141 (54 + 181 + 7; it was
-180 on 2026-09-07 and a stale 176 at round 2, all of the growth in #1159). The implementation's file set — including
+has been stale twice. Measured twice on 2026-09-09 alone: **224** in the morning and **229** by the
+implementation review (54 + 181 + 7, then higher again; it was 180 on 2026-09-07 and a stale 176 at round 2, all of
+the growth in #1159). Quote none of these — run the command. The implementation's file set — including
 4.5's `test/e2e/mock/cmd/main.go` and `test/e2e/scenarios/agentic/approval_signal.go` — intersects none of them, and
 the delta is ADDED-only. `approval_signal_test.go` IS held (as is `scenario.go`) while 4.5 edits
 `approval_signal.go`: a same-function, not same-file, coordination point.
@@ -210,5 +211,16 @@ the delta is ADDED-only. `approval_signal_test.go` IS held (as is `scenario.go`)
       (`golang:1.26-alpine`, `alpine:latest`, `nats:2.14-alpine`) were pulled once through an isolated
       credsStore-free `DOCKER_CONFIG`, after which the normal config builds from cache. The wedged helper is a
       machine condition, not a repo defect, and is unfixed.
-- [ ] 6.3 `semstreams-reviewer` implementation pass recorded in section 7.
+- [ ] 6.3 `semstreams-reviewer` implementation pass. **Round 1 ran 2026-09-09 over `92fd2c5e` — CHANGES REQUESTED**,
+      recorded on PR #1262. One BLOCKING, one HIGH, four MEDIUM, four NIT; every ruling and A–F found implemented at
+      the ruled level with no deviation. BLOCKING: `graph.DecodeCursor` is bare base64
+      (`graph/query_prefix_types.go:82-93`), so `graph_query.go:1030-1049` refuses only UNdecodable cursors — a
+      decodable non-token like `"MQ"` (→ `"1"`) sorts before every key and returns full page 1 with a fresh cursor,
+      the infinite page-1 loop owner ruling B forbids, contradicting both the code comment at `:1027` and the
+      migration doc. HIGH: the 64KB budget charges compact `len(raw)` while the result ships as
+      `json.MarshalIndent`, measured 96,658 bytes of content against a 64,740-byte meter — ~47% over, and the test
+      reconstructs the meter's own arithmetic instead of measuring `len(result.Content)`. Both mechanisms
+      independently re-derived from the code before dispatch. Code findings returned to the implementer; the two
+      `openspec/` findings (a delta scenario citing a test that does not verify it; a stale `proposal.md` header
+      declaring the INVENTORY PASS un-given) fixed here. Re-review owed before 6.4.
 - [ ] 6.4 Archive as the final content commit; narrow archive-sync check.

@@ -1,17 +1,21 @@
 # Change: Direct graph-read tools signal absence, serve the type segment, and observe their bounds
 
 Closes #1261. Claim: PR on `claude/gh1261-graph-read-tools`, own worktree. Premises pinned at `main@797d294a` in
-`inventory-verification.md`. **Design status: DRAFT. The owner ruled questions 1–12 and gates G1/G2 on 2026-09-07
-(#1261 comment 7) and this revision applies them; the INVENTORY PASS itself is NOT given — ruling G2 defers it until
-after the closure-only round 5.** Milestone: `v1.0.0-beta.165` (owner ruling Q10), placed on #1261, #1260 and
+`inventory-verification.md`. **Design status: ACCEPTED. The owner ruled questions 1–12 and gates G1/G2 on 2026-09-07
+(#1261 comment 7) and questions A–F on 2026-09-09; five independent reviewer rounds ran (1–4 CHANGES REQUESTED, 5
+PASS), and the owner gave the INVENTORY PASS on 2026-09-09, recorded verbatim on PR #1262. Implementation followed
+under `tasks.md` sections 3–6.** Milestone: `v1.0.0-beta.165` (owner ruling Q10), placed on #1261, #1260 and
 PR #1262; the tag range decides what actually ships.
 
 **Sequencing:** the HOLD is relaxed to archive-order coordination (owner ruling Q11): rebase on `main` after each
-Codex stack merge, `task e2e:agentic` green before this PR's own merge. Sections 3–6 still wait on the INVENTORY PASS
-(`tasks.md` 1.6). The implementation's file set — including task 4.5's two e2e files — intersects none of the **180**
-unique paths Codex's #759/#1146 stack (PRs #1156/#1159/#1141) holds (54 + 137 + 7, re-measured 2026-09-07 with
-`gh api ... --paginate`; `gh pr view --json files` caps at 100), and the delta is ADDED-only because Codex's pending
-`agentic-tools` delta MODIFIES `openspec/specs/agentic-tools/spec.md:435`, `:467`, and `:487`. The owner's 2026-09-05
+Codex stack merge, `task e2e:agentic` green before this PR's own merge. The INVENTORY PASS at `tasks.md` 1.4 was
+given 2026-09-09, so sections 3–6 are open and sections 3–5 are complete. The Codex-held set is a MOVING TARGET and
+this paragraph states a measurement, never a remembered number — it has been stale three times now (176 at round 2,
+180 on 2026-09-07, 224 on 2026-09-09). Measure it: `for p in 1156 1159 1141; do gh api
+repos/:owner/:repo/pulls/$p/files --paginate --jq '.[].filename'; done | sort -u` (`gh pr view --json files` caps at
+100 and understates it). At **2026-09-09 it is 229** unique paths, and the implementation's file set — including task
+4.5's two e2e files — intersects none of them. The delta is ADDED-only because Codex's pending `agentic-tools` delta
+MODIFIES `openspec/specs/agentic-tools/spec.md:435`, `:467`, and `:487`. The owner's 2026-09-05
 note (on #1261) reads this as a break wanted sooner, and ruling Q9 makes it `feat(agentic-tools)!:`; `design.md`
 § Break classification carries the analysis.
 

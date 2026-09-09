@@ -33,7 +33,8 @@ namespace delegation, and a registered one can be absent from every entity.
 - **GIVEN** an entity carrying the filtered predicate with a literal object
 - **WHEN** the tool answers
 - **THEN** `count` is 0 and `predicates_present` shows that predicate with kind `property`
-- **AND** the test that verifies this is `TestQueryRelationships_LiteralObjectsAreNotRelationships`
+- **AND** the test that verifies this is the `present only as a property` case of
+  `TestQueryRelationships_FilteredAbsenceIsClassified`
 
 #### Scenario: malformed filter
 
