@@ -22,6 +22,16 @@ import (
 // the exact-integer bound where a float64 stops naming a unique integer, and
 // the non-finite values that have no lexical form at all. A generator that
 // merely strides a bound catches an off-by-one only probabilistically.
+//
+// Two shrunk counterexamples from mutation kills are committed under
+// testdata/rapid/TestPropDeclaredIntegerNeverFabricates/, following the
+// in-tree precedent (pkg/types, service). They are the receipt that the two
+// boundaries below are load-bearing rather than decorative:
+//
+//	0.5                      when the fractional guard is removed, emitted "0"^^xsd:integer
+//	1.7976931348623157e+308  when the 2^53 bound alone is removed, emitted "9223372036854775807"^^xsd:integer
+//
+// Both replay clean against the fixed classifier.
 
 const propIntPred = "prop.declared.int"
 
