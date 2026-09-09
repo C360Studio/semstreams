@@ -88,6 +88,33 @@ func (a *graphQueryKVAdapter) Get(ctx context.Context, key string) (KVEntry, err
 	return entry, nil
 }
 
+// KeysByPattern implements KVKeyLister over the same lazily-bound catalog
+// reader Get uses. natsclient.FilteredKeys is the package-level helper the
+// framework's other filtered listings run on; it returns (nil, nil) for an
+// empty match and rejects a partial list when the context expires, so a
+// truncated scan can never be reported as a complete one.
+//
+// The keys come back in KV scan order — FilteredKeys sorts nothing — and the
+// executor sorts them itself before paging (see queryByType).
+func (a *graphQueryKVAdapter) KeysByPattern(ctx context.Context, pattern string) ([]string, error) {
+	reader, err := a.bind(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return listGraphQueryKeys(ctx, reader, pattern)
+}
+
+func listGraphQueryKeys(ctx context.Context, reader graph.CatalogReader, pattern string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, natsclient.DefaultKVOptions().Timeout)
+	defer cancel()
+
+	keys, err := natsclient.FilteredKeys(ctx, reader, pattern)
+	if err != nil {
+		return nil, fmt.Errorf("kv keys by pattern %s: %w", pattern, err)
+	}
+	return keys, nil
+}
+
 func getGraphQueryEntry(ctx context.Context, reader graph.CatalogReader, key string) (KVEntry, error) {
 	ctx, cancel := context.WithTimeout(ctx, natsclient.DefaultKVOptions().Timeout)
 	defer cancel()
