@@ -52,7 +52,7 @@ never been observed is a hypothesis. Nothing else starts until it is a failing a
 - [x] 2.3 Unit-test normalization idempotence over the whole domain (`canonical(canonical(x)) == canonical(x)`), the
       total-on-legacy-set property, and refusal outside it. This is the invariant that makes amend-registration safe;
       write it from the spec requirement, not from the map's implementation.
-- [ ] 2.4 Add the `test/contract/` guard over the **export mapping**, not over constant equality. Q1 makes the
+- [x] 2.4 Add the `test/contract/` guard over the **export mapping**, not over constant equality. Q1 makes the
       declaration values deliberately distinct from the per-triple markers (`entity_id` is not `@id`; `json` is not
       `rdf:JSON`), so the invariant to enforce is that every canonical declaration value has exactly one mapping in
       `vocabulary/export/` and that `entity_id` maps to a resource rather than a literal. **The import cycle no longer
@@ -77,31 +77,31 @@ never been observed is a hypothesis. Nothing else starts until it is a failing a
       `string` 140, `float64` 17, `int` 14, `time.Time` 10, `timestamp` 8, `bool` 4, `int64` 1, `entity_ref` 1.
 - [x] 4.2 Update the 25 test-file assertions that compare against the legacy spelling (enumerated in the inventory's
       Searches section) — they will fail on the normalized value, which is the guard working.
-- [ ] 4.3 Add the `test/contract/` completeness guard: `ClearRegistry`, `builtins.Register()`, walk
+- [x] 4.3 Add the `test/contract/` completeness guard: `ClearRegistry`, `builtins.Register()`, walk
       `ListRegisteredPredicates()`, assert every framework-declared predicate carries a datatype from the closed set.
       Validation enforces the SET; this guard enforces COMPLETENESS, which validation deliberately does not (empty is
       legal). Show it capable of failing.
 
 ## 5. Export honors the declaration
 
-- [ ] 5.1 Rewrite `classifyObject` (`vocabulary/export/object.go:41`) to the three-step precedence: per-triple
+- [x] 5.1 Rewrite `classifyObject` (`vocabulary/export/object.go:41`) to the three-step precedence: per-triple
       datatype, then `vocabulary.GetPredicateMetadata(t.Predicate).DataType`, then `classifyByGoType`. The registry
       lookup is already done in this package by `resolvePredicateIRI` (`export.go:209`), so no new dependency.
-- [ ] 5.2 Make the entity-reference datatype classify as `objectResource` via `resolveSubjectIRI`, in
+- [x] 5.2 Make the entity-reference datatype classify as `objectResource` via `resolveSubjectIRI`, in
       `classifyWithExplicitDatatype` and in the new declaration branch alike. This closes 1.2.
-- [ ] 5.3 Teach `expandDatatypePrefix` the `rdf:` prefix. This closes 1.3.
-- [ ] 5.4 Implement the never-fabricate rule: a declared integer over an observed value with a fractional part falls
+- [x] 5.3 Teach `expandDatatypePrefix` the `rdf:` prefix. This closes 1.3.
+- [x] 5.4 Implement the never-fabricate rule: a declared integer over an observed value with a fractional part falls
       back to observation. Property-test it — the invariant is "the emitted lexical form always round-trips to the
       observed value", not a list of examples.
-- [ ] 5.5 Flip 1.1/1.2/1.3 to the target assertions.
+- [x] 5.5 Flip 1.1/1.2/1.3 to the target assertions.
 
 ## 6. #1142 rides here
 
-- [ ] 6.1 In `classifyString` (`object.go:118`), classify an absolute IRI (`http://`, `https://`, `urn:` scheme) as
+- [x] 6.1 In `classifyString` (`object.go:118`), classify an absolute IRI (`http://`, `https://`, `urn:` scheme) as
       `objectResource` before the literal fallback. Same function, same decision, same review; the sibling issue's own
       suggested direction, which it marks non-prescriptive.
-- [ ] 6.2 Fixture: an `rdf:type` triple whose object is an absolute IRI emits `<iri>`, not `"iri"`.
-- [ ] 6.3 Confirm no ambiguity with canonical entity IDs — a 6-part dotted ID carries no scheme, so the two branches
+- [x] 6.2 Fixture: an `rdf:type` triple whose object is an absolute IRI emits `<iri>`, not `"iri"`.
+- [x] 6.3 Confirm no ambiguity with canonical entity IDs — a 6-part dotted ID carries no scheme, so the two branches
       cannot both match.
 
 ## 7. Docs, ADR, and the migration note
