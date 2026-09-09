@@ -188,6 +188,23 @@ the delta is ADDED-only. `approval_signal_test.go` IS held (as is `scenario.go`)
       developer's tests run at `fixtureNeighborDepth = 2` with the reasoning recorded at the constant. **Owner ruling
       owed**: widen this change by one flip, or file it and ship the hint knowing it fires wrongly at the default.
 
+## 5c. Substrate observation, attributed and not re-rolled
+
+- [x] 5c.1 One local `scripts/run-integration-tests.sh` run went RED at `9683345d` (`ok: 98 / FAIL: 2`,
+      `TestIntegration_ReplyWithHeaders`, a container-connect EOF at `startNATSContainer` — not an assertion) and
+      green on a re-run of the same tree. **The re-run is not the evidence** ([[feedback_no_rerun_to_green_fix_first]]);
+      the attribution is. Established: the branch changes **zero** files under `natsclient/`
+      (`git diff --name-only origin/main..HEAD -- natsclient/` → 0); the test passes in isolation on the same tree;
+      host load average was 11.22 with a second session running; the script's own banner says "uncapped package
+      parallelism". That is the exact shape of **#736** (OPEN, `class:flake`, `area:ci`, `area:natsclient`,
+      `horizon:pre-v1`) — "The integration suite oversubscribes Docker under package parallelism; sub-second tests
+      time out" — which names `natsclient` and recommends `-p 1`. The `-p 2` form of the gate is green.
+      **This does NOT reach the merge gate's waiver trigger**, which fires on arming auto-merge past a
+      *previously-red required job*: CI's `Test` job runs that same script and has been **green on all seven pushed
+      heads of this branch**, implementation heads included. The red is a laptop-contention observation, not a CI
+      observation. No waiver is sought and none is owed; #736 remains open and unfixed, and a future CI red of this
+      shape on this branch WOULD need one.
+
 ## 6. Gates
 
 - [x] 6.1 All green on `92fd2c5e`, each re-run independently of the implementer's report (a subagent's state claim
