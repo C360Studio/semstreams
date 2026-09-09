@@ -166,14 +166,54 @@ never been observed is a hypothesis. Nothing else starts until it is a failing a
 
 ## 9. Spec sync
 
-- [ ] 9.1 Apply the delta to `openspec/specs/predicate-contract/spec.md` as the last content commit, reviewed with the
-      code. **DELIBERATELY NOT DONE, and it is BLOCKED on an owner ruling, not on effort.** The delta's scenario
-      *the framework's own declarations are complete* is measured FALSE against this repository: 81 framework
-      predicates declare no datatype, and thirteen of them are deliberately bare —
-      `vocabulary/rulepacks/predicates.go:44-61` registers names only, which the same requirement's
-      "An absent datatype MUST remain valid" explicitly permits. The two clauses contradict each other. The shipped
-      guard is therefore a shrink-only RATCHET over a committed, measured exemption set
-      (`test/contract/predicate_datatype_contract_test.go`), which is NOT what the scenario states. Syncing the
-      delta as written would put a false requirement into `openspec/specs/`. The owner rules: amend the scenario to
-      the ratchet, or open the 81-declaration pass as its own change. Everything else in the delta is implemented
-      and tested.
+- [ ] 9.1 BLOCKED on section 10 — apply the delta to `openspec/specs/predicate-contract/spec.md` as the last
+      content commit, reviewed with the code. Not blocked on a ruling any more. The owner ruled 2026-09-09 (PR #1269 comment
+      5606966440): amend the scenario *the framework's own declarations are complete* to the shrink-only ratchet the
+      guard actually ships. The deferred declaration pass is filed as **#1277**. Correct count is **29 of 156 at the
+      composition root** (`ClearRegistry()` + `builtins.Register()`, the walk the scenario's own words name), NOT the
+      81 first escalated — 81 is the guard's ambient-first union, 79 the production binary. Section 10 also rewrites
+      the delta's normalization scenario, so 9.1 runs last or it will be rewritten twice.
+      **Archiving without this sync strands all 27 `// spec:` citations** — `task spec:properties` reports 74/74 only
+      because they resolve against `openspec/changes/`.
+
+## 10. Post-review repairs — HOLD, this change cannot merge until they land
+
+`semstreams-reviewer` returned **CHANGES REQUESTED** on `52bf1add` (1 BLOCKING, 4 HIGH). The owner ruled every open
+question 2026-09-09 (PR #1269 comment 5606966440). Everything below is ruled work, not open design.
+
+- [ ] 10.1 HOLD — merge is blocked until 10.1-10.10 land. **Normalizer → owner option (d), no-legacy.** Delete `dataTypeCanonicalization`
+      (`vocabulary/predicates.go:386-412`) entirely. `validatePredicateMetadataLocked` accepts ONLY the seven
+      canonical values plus absent; everything else is refused. This is stricter than the (a) and (c) options the
+      owner was offered — their words were "i agree with (c) but we do not need to support legacy, we just need
+      migration notes." It resolves the BLOCKING finding at its root: `double`/`boolean` were accepted while
+      `integer`/`dateTime` panicked, an arbitrary split with no owner sign-off. It also dissolves review MEDIUM-8 —
+      with no map there is no undated permanent bridge on a Tier 1 frozen package.
+      Measured bill, family-wide read-only: **809 sister declarations already canonical (92%), 67 need migration** —
+      ~27 semdragon Go struct names already accepted under Q2, plus ~37 additional sites (d) costs over (a).
+      Per repo: semspec 16 · semteams 12 · semsource 6 · semconnect 1 · semboids 1 · semdragon 1. Concentrated in
+      `array` 20 and `number` 13. In-repo sites were migrated under task 4.1, so this repo is unaffected.
+- [ ] 10.2 Rewrite `design.md` §2.3 and the `predicate-contract` delta's normalization scenario — both currently
+      specify normalize-not-refuse, which (d) reverses. The delta's MODIFIED/ADDED block must restate EVERY scenario.
+- [ ] 10.3 **`IsValidDataType` → unexported** (owner: "in package"). No exported addition to Tier 1 under ADR-106;
+      both consumers are contract tests, and `dataTypeCanonicalization` is already visible in-package.
+- [ ] 10.4 **Guard repairs (review HIGH-1).** `frameworkPredicateDataTypes`
+      (`test/contract/predicate_datatype_contract_test.go:286-300`) reads the ambient registry FIRST and lets it win;
+      production is the reverse (`init()` runs, then `main` calls `builtins.Register()`, which amends). Reverse the
+      precedence, and drop the two exemptions that are not bare in production: `agent.loop.role` and
+      `agent.run.origin-entity-id`, both declared `string` at `vocabulary/agentic/register.go:450-452,490-492`.
+- [ ] 10.5 **Guard denominator (review HIGH-2).** The ratchet passes over an EMPTY registry — the only assertions are
+      `len(noncanonical) > 0` and `len(unexpectedlyBare) > 0`, both trivially false over an empty map, and a mutation
+      emptying both collector loops left it green. Assert the denominator beside them.
+- [ ] 10.6 Sweep the 20 retired-spelling `// DataType:` comments in `vocabulary/agentic/predicates.go` (review
+      HIGH-4); the ~40 `// DataType: string (entity ID)` lines are #1275's evidence trail — leave them to that issue.
+- [ ] 10.7 Delete `geo:point` from `message/triple.go:84` (review MEDIUM-6). The doc comment offers adopters a value
+      that emits `^^<geo:point>` — a relative-reference datatype IRI, invalid RDF, the #1272 mechanism one prefix
+      over. Q5 set the precedent for fixing a false doc comment in this change.
+- [ ] 10.8 Refresh `design.md`'s stale status text (review MEDIUM-5): `:15-17`, `:78-79` and the Process note at
+      `:661-666` still say the design is ungated, the INVENTORY PASS not granted, and #1272 unfiled. All three are
+      false and `design.md` is what gets archived.
+- [ ] 10.9 Add the (d) rows to `docs/operations/migration-predicate-datatype.md` — the ~37 additional sites, per
+      repository. Under (d) the migration note is the WHOLE adopter story, not a supporting document: nothing
+      normalizes any more, so an unmigrated sister panics at boot.
+- [ ] 10.10 Re-run every gate in section 8 and re-review. The change is BREAKING for sisters, so `task e2e:core`
+      must be green again before it lands.
