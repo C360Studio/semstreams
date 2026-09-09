@@ -777,8 +777,16 @@ func (w *neighborWalk) run(ctx context.Context, call agentic.ToolCall, depth int
 	w.visited = make(map[string]bool)
 	w.pending = make(map[string]bool)
 
+	// The source occupies ring 0 and is never itself a neighbor, so a walk of
+	// `depth` hops needs depth+1 rings: ring 0 reads the START entity and
+	// queues its targets, ring N reads the entities N hops out. Looping
+	// `hop < depth` spent the whole budget on the seeding ring at the
+	// advertised default and returned an EMPTY neighbor map for an entity
+	// whose neighbors were right there — silent before this change, and a
+	// confident HintEmpty after it, which is why it is fixed here rather
+	// than left (owner ruling 2026-09-09, #1261).
 	frontier := []string{w.sourceID}
-	for hop := 0; hop < depth && len(frontier) > 0; hop++ {
+	for ring := 0; ring <= depth && len(frontier) > 0; ring++ {
 		var next []string
 		for index, id := range frontier {
 			if w.visited[id] {

@@ -132,6 +132,10 @@ not decode SHALL be refused as `invalid_args`.
 
 ### Requirement: query_neighbors bounds its content by a model-facing budget and reports unresolved targets
 
+`depth` SHALL count hops from the start entity, so `depth: 1` — the advertised default — SHALL return the entities
+one relationship edge away rather than an empty neighborhood. The start entity SHALL NOT be returned as its own
+neighbor and SHALL NOT consume a hop.
+
 `query_neighbors` SHALL expand only through relationship triples, SHALL stop expanding when the next record would
 exceed the executor's model-facing content budget — a fixed executor cap in the class of the bash and HTTP output
 caps, distinct from the transport bound the component observes — and SHALL report `truncated`, `frontier_remaining`,
@@ -142,6 +146,14 @@ SHALL fail the call as a network error. `filter_type` SHALL match the identity's
 A traversal frontier is not a stable continuation position, so `query_neighbors` SHALL NOT declare itself paginated
 and SHALL NOT set `has_more`: it reports that more exists through `truncated` and `frontier_remaining`, and the caller
 narrows with `depth` or `filter_type`. No result SHALL announce more results without a token the caller can pass back.
+
+#### Scenario: the advertised default returns direct neighbors
+
+- **GIVEN** an entity with at least one resident neighbor one relationship edge away
+- **WHEN** the tool is called with no `depth` argument
+- **THEN** that neighbor is returned and `count` is not zero
+- **AND** `ResultHint` is NOT `empty`, because an entity with a neighbor is not an empty neighborhood
+- **AND** the test that verifies this is `TestQueryNeighbors_DefaultDepthReturnsDirectNeighbors`
 
 #### Scenario: budget reached
 

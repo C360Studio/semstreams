@@ -713,18 +713,61 @@ func TestQueryByType_NonCanonicalKeyFailsClosed(t *testing.T) {
 // query_neighbors
 // ---------------------------------------------------------------------------
 
-// fixtureNeighborDepth is 2, not the tool's default of 1, and the reason is a
-// PRE-EXISTING defect this change deliberately does NOT touch.
+// fixtureNeighborDepth is the tool's ADVERTISED default, and these tests pass
+// it explicitly so that a future change to the default cannot silently move
+// what they exercise.
 //
-// The traversal loop counts the source's own hop: `for hop := 0; hop < depth`
-// visits the start entity on hop 0, queues its targets, and then exits when
-// depth is 1 — so the advertised default returns an EMPTY neighbor map. That
-// arithmetic is unchanged here (graph_query.go, neighborWalk.run); it is not
-// among the findings the proposal measured, not among the twelve owner
-// rulings, and correcting it would be a fifth model-facing behaviour flip
-// outside the ruled scope. These tests therefore exercise the delta's
-// scenarios at the depth where records actually flow. Recorded for re-ruling.
-const fixtureNeighborDepth = float64(2)
+// It was 2 until the depth off-by-one was fixed (owner ruling 2026-09-09,
+// #1261): the traversal spent ring 0 on the source itself, so the advertised
+// default returned an empty neighbor map and the fixtures had to ask for one
+// more hop than they meant. They no longer do — a test that has to over-ask
+// to see a record is a test agreeing with a defect.
+const fixtureNeighborDepth = float64(1)
+
+// TestQueryNeighbors_DefaultDepthReturnsDirectNeighbors: the walk used to
+// spend its entire budget on the seeding ring, so the ADVERTISED default
+// answered "no neighbors" for an entity whose neighbor was one edge away.
+//
+// This calls the tool the way its schema documents it — with NO depth
+// argument — because that is the shape the defect hid in: every other test
+// here passed an explicit depth, and quietly passing 2 to mean 1 is what let
+// it survive four review rounds.
+//
+// The hint assertion is the reason it was fixed rather than filed. Before
+// this change the empty answer was merely uninformative; classified as
+// HintEmpty it tells the model through a typed contract that the
+// neighborhood is empty and the filter should be broadened. A silent
+// under-answer is recoverable by a model that keeps looking. A confident
+// false negative is not.
+//
+// spec: agentic-tools / query_neighbors bounds its content by a model-facing budget and reports unresolved targets
+func TestQueryNeighbors_DefaultDepthReturnsDirectNeighbors(t *testing.T) {
+	kv := newMockKVGetter()
+	kv.Put(fixtureSiteOne, entityFixture(t, fixtureSiteOne,
+		relationshipTriple(fixtureSiteOne, "facility.site.holds", fixtureTempOne),
+	))
+	kv.Put(fixtureTempOne, entityFixture(t, fixtureTempOne,
+		propertyTriple(fixtureTempOne, "sensor.temperature.celsius", 20.0)))
+	executor := NewGraphQueryExecutor(kv)
+
+	result, err := executor.Execute(context.Background(), agentic.ToolCall{
+		ID: "call-default-depth", Name: "query_neighbors",
+		Arguments: map[string]any{"entity_id": fixtureSiteOne},
+	})
+	require.NoError(t, err)
+	require.Empty(t, result.Error)
+
+	content := decodeContent(t, result)
+	assert.Equal(t, float64(1), content["depth"],
+		"precondition: an omitted depth is the advertised default of 1")
+	assert.Equal(t, float64(1), content["count"])
+	neighbors, ok := content["neighbors"].(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, neighbors, fixtureTempOne,
+		"one edge out from the source is what depth 1 means")
+	assert.NotEqual(t, agentic.HintEmpty, result.ResultHint,
+		"an entity with a neighbor is never an empty neighborhood")
+}
 
 // TestQueryNeighbors_FilterTypeReadsIDSegment: before this, filter_type
 // compared a `type` key the graph authority never writes, so the filter was
@@ -776,10 +819,11 @@ func TestQueryNeighbors_FilterTypeReadsIDSegment(t *testing.T) {
 		// filter_type narrows the answer; it does not shorten the graph. The
 		// drone is excluded from the result and is still traversed, so the
 		// temperature it carries — reachable only through it — comes back.
-		// Depth 3 because the traversal spends hop 0 on the source itself.
+		// Depth 2 is what the graph actually needs: the drone is one hop from
+		// the site and the temperature it carries is two.
 		deep, err := executor.Execute(context.Background(), agentic.ToolCall{
 			ID: "call-through", Name: "query_neighbors",
-			Arguments: map[string]any{"entity_id": fixtureSiteOne, "depth": float64(3), "filter_type": "temperature"},
+			Arguments: map[string]any{"entity_id": fixtureSiteOne, "depth": float64(2), "filter_type": "temperature"},
 		})
 		require.NoError(t, err)
 		reached, ok := decodeContent(t, deep)["neighbors"].(map[string]any)

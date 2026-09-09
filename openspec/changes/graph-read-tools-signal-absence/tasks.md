@@ -174,19 +174,35 @@ the delta is ADDED-only. `approval_signal_test.go` IS held (as is `scenario.go`)
 
 ## 5b. Implementation findings escalated, not absorbed
 
-- [ ] 5b.1 **`query_neighbors` has a pre-existing depth off-by-one, and this change makes it read as authoritative.**
-      `neighborWalk.run` seeds `frontier` with the SOURCE id and loops `for hop := 0; hop < depth`, so at the
-      advertised default `depth: 1` hop 0 consumes the source itself (skipped by the `id != w.sourceID` guard),
-      queues its targets, and the loop exits before reading any of them — `neighbors` comes back EMPTY for an entity
+- [x] 5b.1 **`query_neighbors` had a pre-existing depth off-by-one, and this change would have made it read as
+      authoritative. RULED 2026-09-09: fix it here, before the archive.**
+      `neighborWalk.run` seeded `frontier` with the SOURCE id and looped `for hop := 0; hop < depth`, so at the
+      advertised default `depth: 1` hop 0 consumed the source itself (skipped by the `id != w.sourceID` guard),
+      queued its targets, and the loop exited before reading any of them — `neighbors` came back EMPTY for an entity
       that has neighbors. Verified pre-existing at `origin/main`: identical shape, `frontier := []string{entityID}`
-      and `for d := 0; d < depth`, with `depth := 1` the advertised default (`main:404-417`). **The interaction is the
-      finding**: before this change that call answered `count: 0` with no hint, which was merely uninformative; this
-      change classifies the same zero as `HintEmpty` (`graph_query.go:709-710`), so the model is now told with a
-      typed contract "this succeeded and there is nothing here, broaden your filter" about an entity whose neighbors
-      exist. A silent under-answer becomes a confident false negative, produced by the very hint contract this change
-      introduces. NOT fixed here: correcting it is a fifth model-facing behaviour flip and no ruling covers it — the
-      developer's tests run at `fixtureNeighborDepth = 2` with the reasoning recorded at the constant. **Owner ruling
-      owed**: widen this change by one flip, or file it and ship the hint knowing it fires wrongly at the default.
+      and `for d := 0; d < depth`, with `depth := 1` the advertised default (`main:404-417`). **The interaction was
+      the finding**: before this change that call answered `count: 0` with no hint, which was merely uninformative;
+      this change classifies the same zero as `HintEmpty`, so the model would be told with a typed contract "this
+      succeeded and there is nothing here, broaden your filter" about an entity whose neighbors exist. A silent
+      under-answer becomes a confident false negative, produced by the very hint contract this change introduces.
+      Escalated rather than absorbed (it is a fifth model-facing flip, and no earlier ruling covered it); the owner
+      widened the change by that one flip.
+      **The fix** names the invariant instead of adjusting an index: the source occupies ring 0 and is never its own
+      neighbor, so a walk of `depth` hops needs depth+1 rings — `for ring := 0; ring <= depth`. The advertised
+      contract was already correct (`"Number of hops to traverse (default: 1, max: 3)"`); the code disagreed with
+      it, so no tool description, argument schema or exported signature changes and `api:compat` cannot move.
+      **The tests stopped agreeing with the defect.** `fixtureNeighborDepth` went 2 → 1, the tool's real default,
+      and the "expands THROUGH a filtered-out neighbor" subtest went 3 → 2, the depth its fixture actually needs;
+      the constant's apologia is deleted. Every one of the eleven pre-existing `query_neighbors` tests passes at the
+      honest depth with no assertion touched — they had been written for correct semantics and forced to over-ask.
+      New `TestQueryNeighbors_DefaultDepthReturnsDirectNeighbors` calls the tool the way its schema documents it,
+      with **no `depth` argument at all** — the shape the defect hid in, since every other test passed an explicit
+      depth and quietly passing 2 to mean 1 is what let it survive four review rounds.
+      **Mutation-killed**: restoring `ring < depth` fails the new test on all three of its claims, including
+      `Should not be: "empty"` — the confident false negative itself, reproduced — and fails
+      `TestQueryNeighbors_FilterTypeReadsIDSegment` and its subtest too, so the honest depths are load-bearing and
+      not merely cosmetic. Delta gains a normative `depth` sentence and a `the advertised default returns direct
+      neighbors` scenario; `task spec:properties` 72 → **73/73**.
 
 ## 5c. Substrate observation, attributed and not re-rolled
 
