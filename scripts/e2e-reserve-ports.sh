@@ -14,7 +14,7 @@
 #
 # The reason those sockets can take the port is that 31 of the 41 published
 # host ports across the compose files the e2e taskfiles boot fall inside the
-# default
+# kernel's default
 # net.ipv4.ip_local_port_range (32768-60999). A connect() with no explicit
 # source port draws from that range, so the kernel is free to hand out the
 # very port a tier is about to publish. Nothing has to leak; this is the
@@ -49,7 +49,7 @@ DRY_RUN=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
-    -h|--help) sed -n '2,43p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,44p' "$0"; exit 0 ;;
     *) echo "[ERROR] unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
