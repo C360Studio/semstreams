@@ -123,10 +123,14 @@ There was no width bound. A target that failed to read — absent or transient �
   `query_by_type` (see §4). A caller who was passing it gets a **smaller set, possibly empty**, where it previously
   got everything.
 - A `filter_type` that is not one to three canonical segments is `invalid_args`.
-- Expansion stops when the next record would cross a **64KB model-facing content cap**, measured against the real
-  bytes of the real records being assembled. The result reports `truncated` and `frontier_remaining` and sets
-  `ResultHint: "too_large"`. Narrow with `depth` or `filter_type`.
+- The result is bounded by a **64KB model-facing content cap** measured on the emitted JSON itself — the length of
+  the string you receive, not the compact bytes of the records inside it. Records past the cap are given back, and
+  the result reports `truncated` and `frontier_remaining` and sets `ResultHint: "too_large"`. Narrow with `depth` or
+  `filter_type`.
 - A target absent from `ENTITY_STATES` is listed in `unresolved` rather than omitted.
+- **Zero neighbors plus a non-empty `unresolved` is NOT classified `empty`.** `ResultHint: "empty"` means the
+  neighborhood is empty; a walk whose targets all exist as edges but are absent from `ENTITY_STATES` reports them
+  and carries no hint, because "broaden your filter" is the wrong instruction for "these records are not resident".
 - A **transient** read failure now fails the whole call as a network error, where it was previously skipped —
   producing a smaller graph reported as complete.
 - An **absent start entity** is now `not_found`, where it previously produced `count: 0`. Classifying that zero as
@@ -156,9 +160,9 @@ not a resumable position and this executor holds no server-side traversal state,
 token the caller can pass back would be worse than silence. Width is reported through `truncated` +
 `frontier_remaining`.
 
-The budget is a **model-facing content cap** in the same class as `bashMaxOutputBytes` and `httpMaxTextSize` — not a
-prediction of the NATS transport bound. A result under the cap that still trips the transport bound takes the
-component's existing oversize path unchanged; the two compose.
+The budget is a **model-facing content cap** in the same class as `bashMaxOutputBytes` and `httpMaxTextSize`, and
+like both of those it bounds the emitted string — not a prediction of the NATS transport bound. A result under the
+cap that still trips the transport bound takes the component's existing oversize path unchanged; the two compose.
 
 ---
 
@@ -226,8 +230,10 @@ body-level truncation flag.
 - `ResultHint: "too_large"` is still set on a page that does not exhaust the match, so the model is told both to
   narrow and that it may continue.
 - `matched` is the **whole** match count on every page, never the remainder.
-- A `cursor` that does not decode is `invalid_args` — never a silent reset to page 1, which would page a caller over
-  page 1 forever.
+- A `cursor` that is **not a token this tool issued** is `invalid_args` — never a silent reset to page 1, which would
+  page a caller over page 1 forever. That set is wider than "does not decode": the token must also decode to a
+  canonical six-part entity ID, because arbitrary base64 decodes fine and would land as a keyset position somewhere
+  in or outside the match.
 
 Cost, stated plainly: NATS KV has no ranged scan, so each page is a full filtered key scan that is freshly sorted
 and then sliced. Paging is O(N) per page — the same profile `graph.query.prefix` accepts today, here over identities
