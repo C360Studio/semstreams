@@ -138,7 +138,7 @@ the delta is ADDED-only. `approval_signal_test.go` IS held (as is `scenario.go`)
 
 ## 3. Code
 
-- [ ] 3.1 `graph_query.go`: `KVKeyLister`; a pattern BUILDER (one to three right-anchored tokens → six-position
+- [x] 3.1 `graph_query.go`: `KVKeyLister`; a pattern BUILDER (one to three right-anchored tokens → six-position
       pattern, validated by `ValidateEntityIDPattern`) shared by `entity_type`/`filter_type`, matching through
       `MatchEntityIDPattern` — no new type extractor or matcher; `queryByType` served, sorting the lister's output
       itself and paging through `graph.EncodeCursor`/`graph.DecodeCursor` with `Paginated: true`, a `cursor`
@@ -147,18 +147,18 @@ the delta is ADDED-only. `approval_signal_test.go` IS held (as is `scenario.go`)
       incoming owner; `extractRelationships` typed over `EntityState` with `IsRelationship()`, dead branch
       deleted; `predicates_present`/`filter_registered`; neighbors 64KB budget (constant commented beside
       `bashMaxOutputBytes`), `unresolved`, hints, and NO `has_more`; descriptions rewritten.
-- [ ] 3.2 `register_graph_query.go`: adapter `KeysByPattern` via `natsclient.FilteredKeys`.
+- [x] 3.2 `register_graph_query.go`: adapter `KeysByPattern` via `natsclient.FilteredKeys`.
 
 ## 4. Tests
 
-- [ ] 4.1 Unit tests named in `design.md` § Test plan; fixtures via `graph.MarshalEntityState`; `// spec:` citations.
-- [ ] 4.2 Integration `TestIntegration_QueryByType_ListsFromEntityStates` against real NATS; asserts sorted output
+- [x] 4.1 Unit tests named in `design.md` § Test plan; fixtures via `graph.MarshalEntityState`; `// spec:` citations.
+- [x] 4.2 Integration `TestIntegration_QueryByType_ListsFromEntityStates` against real NATS; asserts sorted output
       and one cursor continuation across two pages, and mirrors the precedent's cancelled-context rejection
       (`processor/graph-index/owner_filter_integration_test.go:139-148`: a cancelled ctx yields
       `context.Canceled` and a nil key slice, never a partial list).
-- [ ] 4.3 Fails-without-fix for the `IsRelationship` filter and the segment match, run against the committed state.
-- [ ] 4.4 `predicate_authority_contract_test.go` unchanged and green.
-- [ ] 4.5 Booted-binary walk for `KVKeyLister` (RC-6): `test/e2e/mock/cmd/main.go:38` pins
+- [x] 4.3 Fails-without-fix for the `IsRelationship` filter and the segment match, run against the committed state.
+- [x] 4.4 `predicate_authority_contract_test.go` unchanged and green.
+- [x] 4.5 Booted-binary walk for `KVKeyLister` (RC-6): `test/e2e/mock/cmd/main.go:38` pins
       `{"entity_type":"agent.execution","limit":5}`; `approval_signal.go` prompt text follows; after the success
       metric, `walkApprovalPath` reads `tool.result.<pending.CallID>`, decodes `ToolResult.Content`, asserts
       `pattern == "*.*.*.agent.execution.*"`, `matched >= 1`, `entity_ids` ∋ the primary loop's
@@ -166,16 +166,41 @@ the delta is ADDED-only. `approval_signal_test.go` IS held (as is `scenario.go`)
 
 ## 5. Docs
 
-- [ ] 5.1 `docs/operations/migration-graph-read-tools.md` (home per owner ruling Q5): before/after JSON for the four
+- [x] 5.1 `docs/operations/migration-graph-read-tools.md` (home per owner ruling Q5): before/after JSON for the four
       model-facing flips — `IsRelationship()` row filtering, `filter_type` honoured on `query_neighbors`, the 64KB
       budget, and the `direction` narrowing (its own row, ruling Q4) — plus the `query_by_type` stub → served listing
       and its `truncated` → `has_more`/`next_cursor` continuation.
+
+## 5b. Implementation findings escalated, not absorbed
+
+- [ ] 5b.1 **`query_neighbors` has a pre-existing depth off-by-one, and this change makes it read as authoritative.**
+      `neighborWalk.run` seeds `frontier` with the SOURCE id and loops `for hop := 0; hop < depth`, so at the
+      advertised default `depth: 1` hop 0 consumes the source itself (skipped by the `id != w.sourceID` guard),
+      queues its targets, and the loop exits before reading any of them — `neighbors` comes back EMPTY for an entity
+      that has neighbors. Verified pre-existing at `origin/main`: identical shape, `frontier := []string{entityID}`
+      and `for d := 0; d < depth`, with `depth := 1` the advertised default (`main:404-417`). **The interaction is the
+      finding**: before this change that call answered `count: 0` with no hint, which was merely uninformative; this
+      change classifies the same zero as `HintEmpty` (`graph_query.go:709-710`), so the model is now told with a
+      typed contract "this succeeded and there is nothing here, broaden your filter" about an entity whose neighbors
+      exist. A silent under-answer becomes a confident false negative, produced by the very hint contract this change
+      introduces. NOT fixed here: correcting it is a fifth model-facing behaviour flip and no ruling covers it — the
+      developer's tests run at `fixtureNeighborDepth = 2` with the reasoning recorded at the constant. **Owner ruling
+      owed**: widen this change by one flip, or file it and ship the hint knowing it fires wrongly at the default.
 
 ## 6. Gates
 
 - [ ] 6.1 `task lint`; `go test -race ./processor/agentic-tools/...`; `-tags=integration -p 2`;
       `openspec validate --strict`; `task spec:properties`; `task schema:generate` no drift;
       `task api:compat:report` unchanged from baseline; `go run ./cmd/entity-id-audit .` (not in `task lint`).
-- [ ] 6.2 `task e2e:agentic` green with 4.5 in place (the approval walk executes the served `query_by_type` and reads its identities).
+- [x] 6.2 `task e2e:agentic` **GREEN 2026-09-09** — exit 0, `assertions_run=14`, and the 4.5 assertion demonstrably
+      fired: `approval_listing_matched:2` in the scenario metrics, i.e. the booted binary executed the served
+      `query_by_type` and the approval walk read two matched identities. This satisfies the repo's hard rule that a
+      commit marked BREAKING has a relevant e2e tier green before it lands (`02414da7` is `feat(agentic-tools)!:`).
+      Substrate note: the tier was initially unrunnable because Docker Desktop's `docker-credential-desktop` helper
+      hangs (`docker pull` → `error getting credentials - err: signal: terminated`, exit 124 twice), so no `golang`
+      base image could be fetched. Cleared WITHOUT touching `~/.docker/config.json`: the three base images
+      (`golang:1.26-alpine`, `alpine:latest`, `nats:2.14-alpine`) were pulled once through an isolated
+      credsStore-free `DOCKER_CONFIG`, after which the normal config builds from cache. The wedged helper is a
+      machine condition, not a repo defect, and is unfixed.
 - [ ] 6.3 `semstreams-reviewer` implementation pass recorded in section 7.
 - [ ] 6.4 Archive as the final content commit; narrow archive-sync check.
