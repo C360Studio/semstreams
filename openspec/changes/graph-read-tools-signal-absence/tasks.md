@@ -20,10 +20,11 @@ Round-4 additions, measured 2026-09-07: `graph_query.go:325` (`direction` defaul
 `vocabulary/namespace_authority.go:47-54,101-118`, `graph/query_batch_types.go:22-46` (`MissingReason`),
 `processor/research-graph-execute/adapters.go:55-110,156-159,183-185`.
 
-Sequencing: 1.6 governs when sections 3–6 start; the implementation's file set — including 4.5's
-`test/e2e/mock/cmd/main.go` and `test/e2e/scenarios/agentic/approval_signal.go` — intersects none of the **180**
-unique paths Codex's #759/#1146 stack (PRs #1156/#1159/#1141) holds (54 + 137 + 7, re-measured 2026-09-07; the 176
-recorded earlier was stale), and the delta is ADDED-only. `approval_signal_test.go` IS held by #1156 while 4.5 edits
+Sequencing: 1.6 governs the Codex coordination and is re-measured, never quoted — the held set moves and this line
+has been stale twice. At **2026-09-09** it is **224** unique paths across PRs #1156/#1159/#1141 (54 + 181 + 7; it was
+180 on 2026-09-07 and a stale 176 at round 2, all of the growth in #1159). The implementation's file set — including
+4.5's `test/e2e/mock/cmd/main.go` and `test/e2e/scenarios/agentic/approval_signal.go` — intersects none of them, and
+the delta is ADDED-only. `approval_signal_test.go` IS held (as is `scenario.go`) while 4.5 edits
 `approval_signal.go`: a same-function, not same-file, coordination point.
 
 ## 1. Claim and design
@@ -91,16 +92,25 @@ recorded earlier was stale), and the delta is ADDED-only. `approval_signal_test.
       (`natsclient/kv.go:528-530`) with real-NATS precedent at
       `processor/graph-index/owner_filter_integration_test.go:139-148`, whose cancelled-context rejection 4.2 now
       mirrors.
-- [ ] 1.4 Owner INVENTORY PASS on the PR (asked for after 1.3h + 1.3i, ruling G2). Owner rulings on questions 1–12
-      and gates G1/G2 RECORDED 2026-09-07 (#1261 comment 7; recommendations in comments 5 and 6) and APPLIED by 1.3h.
+- [x] 1.4 Owner **INVENTORY PASS GIVEN 2026-09-09**, recorded verbatim on PR #1262 ("continue with inventory pass"),
+      over head `202bd97f` after five reviewer rounds (1–4 CHANGES REQUESTED, 5 PASS). It authorizes sections 3–6 and
+      NOT merge; the merge gate is unchanged and separate. Owner rulings on questions 1–12 and gates G1/G2 RECORDED
+      2026-09-07 (#1261 comment 7; recommendations in comments 5 and 6) and APPLIED by 1.3h; questions A–F ruled
+      2026-09-09 (`proposal.md` § Owner rulings, second round).
 - [x] 1.5 Milestone `v1.0.0-beta.165` placed on #1261, #1260 and PR #1262 (owner ruling Q10, 2026-09-07).
-- [ ] 1.6 HOLD (relaxed by owner ruling Q11, 2026-09-07, to archive-order coordination) — sections 3–6 do not start
-      until 1.4 INVENTORY PASS is recorded. Coordination rule while Codex's #759/#1146 stack (PRs #1156/#1159/#1141)
-      is open: rebase on `main` after each stack merge; `task e2e:agentic` green before this PR's own merge; the
-      delta stays ADDED-only until the stack's `agentic-tools` delta archives. Re-check the file list against the
-      PAGINATED Codex file lists (`gh api repos/:owner/:repo/pulls/N/files --paginate`; 180 unique paths at
-      2026-09-07, 54 + 137 + 7) before 3.1, and re-pin the two premises that live inside held files
-      (`executors/httprequest.go:23`, `component.go:974-994`).
+- [x] 1.6 Coordination rule ACTIVE (the hold was relaxed by owner ruling Q11, 2026-09-07, to archive-order
+      coordination; 1.4 INVENTORY PASS given 2026-09-09, so sections 3–6 are open). Standing rule while Codex's
+      #759/#1146 stack (PRs #1156/#1159/#1141) is open: rebase on `main` after each stack merge; `task e2e:agentic`
+      green before this PR's own merge; the delta stays ADDED-only until the stack's `agentic-tools` delta archives.
+      **Pre-3.1 re-check done 2026-09-09**: the paginated Codex set has GROWN to **224** unique paths
+      (54 / 181 / 7 — PR #1159 moved 137 → 181 since 2026-09-07), and the intersection with this change's
+      implementation set is still **empty** — every file sections 3–5 touch is free (`executors/graph_query.go`,
+      `register_graph_query.go`, their tests, `test/e2e/mock/cmd/main.go`,
+      `test/e2e/scenarios/agentic/approval_signal.go`, the migration doc). The same-function coordination point
+      stands and has widened: `approval_signal_test.go` AND `scenario.go` are both held while 4.5 edits
+      `approval_signal.go`, which is not. Both premises inside held files re-pinned and UNCHANGED at this base:
+      `httpMaxTextSize = 20000` is `executors/httprequest.go:23`; `admitToolCall`'s admission seam still opens at
+      `processor/agentic-tools/component.go:974`. Re-run this check after each stack merge, not once.
 
 - [x] 1.7 `HintEmpty` adoption sweep FILED as **#1270** (`v1.0.0-beta.165`, `class:advertised-absent`,
       `horizon:pre-v1`) — owner ruling E, 2026-09-09; same milestone as this change so parent and child sit in one

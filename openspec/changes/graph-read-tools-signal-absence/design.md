@@ -293,9 +293,11 @@ names **model-facing result shapes, not the Go surface**: the Go surface stays a
 that separately (`tasks.md` 6.1). Recorded cost of the label: it adds to the beta.165 break count the tag-range memo
 will report. The architect's earlier recommendation (no `!`) is withdrawn.
 
-**Sequencing (owner ruling Q11: HOLD relaxed to archive-order coordination).** Re-measured 2026-09-07 with pagination
-(`gh api repos/:owner/:repo/pulls/N/files --paginate`; `gh pr view --json files` caps at 100 and PR #1159 has 137):
-#1156 holds 54 paths, #1159 137, #1141 7 — **180 unique**; the 176 this section carried was a stale round-2 count.
+**Sequencing (owner ruling Q11: HOLD relaxed to archive-order coordination).** The held set is a MOVING TARGET and
+this section states a measurement, never a remembered number — it has now been wrong twice by quoting one. Measure it
+(`gh api repos/:owner/:repo/pulls/N/files --paginate`; `gh pr view --json files` caps at 100 and PR #1159 is past
+that). Re-measured **2026-09-09** before 3.1: #1156 holds 54 paths, #1159 **181**, #1141 7 — **224 unique**. It read
+180 on 2026-09-07 (#1159 at 137) and a stale 176 at round 2; the growth is #1159's alone.
 The implementation's file set — `executors/graph_query.go`, `executors/register_graph_query.go`, their `_test.go`
 siblings, `docs/operations/migration-graph-read-tools.md`, this change directory, and task 4.5's two files
 `test/e2e/mock/cmd/main.go` and `test/e2e/scenarios/agentic/approval_signal.go` — intersects none of them (`comm -12`
