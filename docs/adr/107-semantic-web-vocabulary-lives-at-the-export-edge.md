@@ -34,9 +34,12 @@ transcribed the `string` row as 680 and the `number` row as 13 against a measure
 difference touches the decision — every one of those spellings is pragmatic, and all of them map — but the numbers
 here are the measured ones.
 
-`integer`, `double`, `dateTime`, `boolean`, `@id` and `rdf:JSON` are written **zero times** in the declaration
-surface. They appear only inside `vocabulary/export`, which is the boundary. Canonicalizing on them would have
-changed the emitted value of roughly 270 predicates on a wire payload a sister republishes — a break `task
+`integer`, `dateTime`, `@id` and `rdf:JSON` are written **zero times** in the declaration surface, and `double`
+zero times as well; `boolean` is written **once** (semspec `vocabulary/observability/predicates.go:178`). Every
+one of them otherwise appears only inside `vocabulary/export`, which is the boundary. The point the measurement
+carries is not that semantic-web names are literally absent — it is that they are vanishingly rare next to the
+pragmatic spellings, so canonicalizing on them would impose a vocabulary almost no declaring author uses, and would
+have changed the emitted value of roughly 270 predicates on a wire payload a sister republishes — a break `task
 api:compat` cannot detect, because no signature moves — and would have obliged every sister author to learn XSD in
 order to say "this is an int".
 
