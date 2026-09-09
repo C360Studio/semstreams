@@ -422,6 +422,43 @@ func (m *LoopManager) restoreLoopFromRequest(entity agentic.LoopEntity, request 
 	return nil
 }
 
+// validatedToolBatchResults checks the same retained batch for restoration and
+// terminal applied proof. It installs no process state and changes no evidence.
+func validatedToolBatchResults(entity agentic.LoopEntity, requestID string, calls []agentic.ToolCall, incoming agentic.ToolResult) (map[string]agentic.ToolResult, bool, error) {
+	results := make(map[string]agentic.ToolResult)
+	for _, call := range calls {
+		stored, ok := entity.PendingToolResults[call.ExecutionID]
+		if !ok {
+			if call.CallOrdinal < incoming.CallOrdinal {
+				return nil, false, fmt.Errorf("result for preceding execution %q is not yet observable", call.ExecutionID)
+			}
+			continue
+		}
+		if stored.RequestID != call.RequestID || stored.ExecutionID != call.ExecutionID || stored.CallID != call.ID ||
+			stored.CallOrdinal != call.CallOrdinal || (stored.Name != call.Name && call.Name != "") ||
+			(stored.LoopID != "" && stored.LoopID != entity.ID) {
+			return nil, false, errs.WrapFatal(fmt.Errorf("stored result conflicts with execution %q", call.ExecutionID),
+				"LoopManager", "restoreToolBatch", "tool correlation conflict")
+		}
+		results[call.ExecutionID] = stored
+	}
+	for key, stored := range entity.PendingToolResults {
+		if stored.RequestID == requestID {
+			if _, ok := results[key]; !ok {
+				return nil, false, errs.WrapFatal(fmt.Errorf("stored execution %q is absent from current batch", key),
+					"LoopManager", "restoreToolBatch", "tool correlation conflict")
+			}
+		}
+	}
+	ordinaryBatch := true
+	for _, stored := range results {
+		if stored.StopLoop || agentic.IsApprovalRequired(stored.Error) {
+			ordinaryBatch = false
+		}
+	}
+	return results, ordinaryBatch, nil
+}
+
 // restoreToolBatch extends the existing per-loop restoration with the current
 // response's serial queue. Durable results, not provider IDs or process memory,
 // identify the completed prefix. No dispatch or durable write occurs here.
@@ -430,41 +467,14 @@ func (m *LoopManager) restoreToolBatch(entity agentic.LoopEntity, request agenti
 	if err := stampToolExecutionCorrelation(response.RequestID, calls); err != nil {
 		return errs.WrapFatal(err, "LoopManager", "restoreToolBatch", "stamp batch")
 	}
-	results := make(map[string]agentic.ToolResult)
-	for _, call := range calls {
-		stored, ok := entity.PendingToolResults[call.ExecutionID]
-		if !ok {
-			if call.CallOrdinal < incoming.CallOrdinal {
-				return fmt.Errorf("result for preceding execution %q is not yet observable", call.ExecutionID)
-			}
-			continue
-		}
-		if stored.RequestID != call.RequestID || stored.ExecutionID != call.ExecutionID || stored.CallID != call.ID ||
-			stored.CallOrdinal != call.CallOrdinal || (stored.Name != call.Name && call.Name != "") ||
-			(stored.LoopID != "" && stored.LoopID != entity.ID) {
-			return errs.WrapFatal(fmt.Errorf("stored result conflicts with execution %q", call.ExecutionID),
-				"LoopManager", "restoreToolBatch", "tool correlation conflict")
-		}
-		results[call.ExecutionID] = stored
-	}
-	for key, stored := range entity.PendingToolResults {
-		if stored.RequestID == request.RequestID {
-			if _, ok := results[key]; !ok {
-				return errs.WrapFatal(fmt.Errorf("stored execution %q is absent from current batch", key),
-					"LoopManager", "restoreToolBatch", "tool correlation conflict")
-			}
-		}
+	results, ordinaryBatch, err := validatedToolBatchResults(entity, request.RequestID, calls, incoming)
+	if err != nil {
+		return err
 	}
 	// A full persisted ordinary batch is the pre-publication next-turn
 	// checkpoint: handleToolsComplete already incremented the budget, but the
 	// originating request is still current. Replaying that transition must not
 	// spend another iteration. Approval waits never performed that increment.
-	ordinaryBatch := true
-	for _, stored := range results {
-		if stored.StopLoop || agentic.IsApprovalRequired(stored.Error) {
-			ordinaryBatch = false
-		}
-	}
 	if len(results) == len(calls) && ordinaryBatch && entity.PendingApproval == nil && entity.Iterations > 0 {
 		entity.Iterations--
 	}

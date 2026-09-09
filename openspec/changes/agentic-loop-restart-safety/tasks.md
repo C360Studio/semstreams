@@ -327,7 +327,14 @@ Repository lint also passes. This is a reviewed slice, not completion of task 4 
   The final fixture package also passed with `-race -tags=integration` (1.436s). This resolves the 3A.3 gate and
   permits C.4/task-4 review to resume; fixture review is not task-4 approval.
   Hosted E2E Ladder run `34244917179` separately passed slow-consumer attribution
-  and failed statistical HTTP search with `community index is not ready`; attribution/fix remains open.
+  and failed statistical HTTP search with `community index is not ready`. Run `34362908293` passed both jobs,
+  but the relevant statistical/query code is unchanged; this is not fix evidence or a flake waiver.
+  Read-only attribution ties the same stage/error to [#609](https://github.com/C360Studio/semstreams/issues/609).
+  The gateway's one-shot `globalSearch` precedes the later community wait; the earlier search-quality stage uses
+  `semanticSearch` and proves no community-cache readiness. A valid empty cache generation is distinct from no
+  valid generation. The failed run retained no generation diagnostics, so initial replay delay versus later watcher
+  loss remains unproven. Keep that reproduced readiness remainder under #609; do not add generic clustering
+  readiness state or treat moving the raw-KV community wait as proof of query-cache readiness.
 
   Fixture conformance (paths below are under `test/e2e/scenarios/agentic/`):
 
@@ -381,25 +388,61 @@ correction in the existing restoration owner (focused race run 1.641s; full loop
 Scoped re-review returned APPROVE for the corrected seven-file manifest. Current-source lint, integration/live-tag
 vet, full unit/race, Linux build, module tidy-diff, schema no-drift, and the canonical full integration suite pass;
 the integration loop package took 128.572s and includes the corrected started-owner regression. Full agentic E2E
-passes all 15 stages as recorded in 3A.3. The current slice's applied proof uses a later committed
-request; direct-terminal StopLoop/max-iteration and already-awaiting-approval cold-result branches remain Retry.
-They SHALL NOT be claimed complete or replaced by a terminal-state-only ACK; task 6's continuation gate is separate.
+passes all 15 stages as recorded in 3A.3. That ordinary-batch checkpoint proves application through a later committed
+request. The direct-terminal slice below adds StopLoop/max-iteration proof; already-awaiting-approval cold-result
+recovery remains Retry. It SHALL NOT be replaced by a terminal-state-only ACK; task 6's continuation gate is separate.
 
 Bounded implementation conformance (paths below are under `processor/agentic-loop/`):
 
 | Accepted constraint | Implementation and proof |
 |---|---|
-| Exact read-through, same state owner, no new authority | `settlement_recovery.go:408` uses existing exact readers; `state.go:428` extends LoopManager restoration; `component.go:1949` rejoins the normal handler. |
+| Exact read-through, same state owner, no new authority | `settlement_recovery.go:408` uses existing exact readers; `state.go:465` extends LoopManager restoration; `component.go:1949` rejoins the normal handler. |
 | Ordered batch, stable execution identity, preserved conversation | `tool_result_recovery_test.go:17` covers completed prefixes and repeated provider IDs; `settlement_recovery.go:483` uses the stamped batch and ordinal-specific applied result. |
-| Persist results and publish the next request before ACK | `handlers.go:2584` retains batch evidence; `state.go:1113` owns extraction; `tool_result_redelivery_integration_test.go:66` observes KV and required output before native ACK. |
-| Publication retry spends an iteration once | `state.go:458` reconciles the persisted ordinary batch, including already-restored loop memory at `state.go:385`; `tool_result_recovery_test.go:128` checks the budget boundary and `tool_result_redelivery_integration_test.go:221` checks persisted iteration after replacement. |
+| Persist results and publish the next request before ACK | `handlers.go:2590` retains batch evidence; `state.go:1123` owns extraction; `tool_result_redelivery_integration_test.go:66` observes KV and required output before native ACK. |
+| Publication retry spends an iteration once | `state.go:478` reconciles the persisted ordinary batch, including already-restored loop memory at `state.go:385`; `tool_result_recovery_test.go:128` checks the budget boundary and `tool_result_redelivery_integration_test.go:221` checks persisted iteration after replacement. |
 | Preserve earlier tool exchanges in emitted model context | `state.go:364` keeps non-system conversation messages together; `tool_result_recovery_test.go:157` checks the registered next request's complete prior and current exchange order. |
-| Missing evidence retries; conflicts quarantine; no terminal shortcut | `tool_result_recovery_test.go:86` tests absent/conflicting evidence without installed state; `settlement_recovery.go:511` keeps unresolved terminal and approval paths unsettled. |
+| Missing evidence retries; conflicts quarantine; no bare-terminal shortcut | `tool_result_recovery_test.go:86` tests absent/conflicting evidence without installed state; `settlement_recovery.go:512` requires terminal proof and keeps unresolved approval recovery unsettled. |
 
 The final seven-file source manifest, commands, and RED/GREEN logs are retained locally in
 `/private/tmp/gh1146-task5-20260909.UBR3lx/task5-conformance.md`. This evidence covers started-component replacement,
 not an OS-process kill; the full agentic tier separately exercises process replacement. No new production export,
 field, configuration, store, ledger, runtime, or dispatcher responsibility was introduced.
+
+The next bounded slice recognizes exact direct-terminal results from the same retained records. StopLoop requires
+the matching successful result; iteration-limit failure requires the full ordinary batch and the existing persisted
+iteration-limit error. Review reproduced a timeout-at-cap false ACK before the latter check was added: timeout can
+retain the same batch and iteration count, but is not the declared iteration-limit consequence. The handler and
+recovery check now share the handler's existing error formatting; no new durable reason or marker was added.
+
+Both direct-terminal replay regressions first failed with missing applied proof (0.805s). The separate timeout
+regression reproduced the false ACK (0.861s). Corrected loop-package race tests pass (3.202s), as does lint.
+`TestIntegrationTerminalToolResultAppliedAfterReplacement` passes both cases through real started consumers
+(package 62.795s). It seeds a retained request/response/batch checkpoint, withholds the first ACK after the actual
+terminal record commits, replaces the component, and observes the same native source sequence/bytes with increased
+delivery count. Final ACK-floor advancement occurs without another terminal publication or marker revision.
+This proves started-component replacement from a seeded checkpoint, not task birth, executor effects, or OS-process
+kill. The earlier host-lock refusal ran no scenario and is not test evidence. Scoped source/proof review returned
+APPROVE, including the timeout correction. Full repository unit/race, lint, both tagged vet gates, build, contract
+tests, module tidy-diff, schema no-drift, and the staged entity-ID corpus audit pass.
+The canonical full integration run passed the loop package (207.212s), but failed
+`TestIntegration_RuleStopAfterAcceptedStartParentCancellation`: `processor/rule/processor.go:1507` clears
+`runtimeWG` while the started sweeper's defer reads it at line 1022. The affected rule files are unchanged by this
+slice or the #1146 diff from its frozen parent; the same code is present on main. The retained trace is
+`/private/tmp/gh1146-terminal-tool-20260909.Djv9m8/integration-all.log`. Push remains held on this rule-lifecycle
+race; no retry-to-green waiver or rule implementation change is included. Mixed task-4/task-5/C.4 and task-6
+obligations remain open.
+
+Direct-terminal conformance (paths below are under `processor/agentic-loop/`):
+
+| Existing constraint | Implementation and proof |
+| --- | --- |
+| Exact retained execution plus final marker, never terminal state alone | `settlement_recovery.go:532`; `terminal_tool_recovery_test.go:16` drives the normal handler and persistence boundary. |
+| Existing result owner and existing terminal consequence | `state.go:427` shares retained-batch validation; `handlers.go:2526` owns iteration-limit error formatting. |
+| A timeout at the cap is not iteration-limit proof | `terminal_tool_recovery_test.go:114` observes Retry after production response recovery persists the timeout. |
+| Native redelivery settles without repeating terminal outputs | `terminal_tool_redelivery_integration_test.go` verifies both direct terminal cases through the actual started delivery owner. |
+
+The exact source manifest, commands, positive/negative proof, and seeded-checkpoint limits are retained in
+`/private/tmp/gh1146-terminal-tool-20260909.Djv9m8/terminal-tool-conformance.md`.
 
 - [ ] 5.1 RED: add repeated provider CallID, completed replay, partial batch, missing/colliding execution identity,
   persistence-before-next-output, and post-effect ambiguity tests. Cite exactly

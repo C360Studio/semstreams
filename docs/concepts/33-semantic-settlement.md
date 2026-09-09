@@ -80,6 +80,11 @@ response. It keeps the collected results durable until the next request is publi
 the result stays unsettled and redelivery resumes the same transition without spending another iteration. Rebuilding
 loop memory does not call the tool again; the tools component remains the owner of tool-effect recovery.
 
+If a tool asks to finish the loop, or completing its batch reaches the iteration limit, the final loop record retains
+the result as well as the terminal outcome.
+Redelivery checks the exact tool execution and its recorded outcome before acknowledging it as already handled.
+A finished loop alone is not proof that a particular result was consumed; missing evidence leaves the work unsettled.
+
 If the component cannot determine whether an external effect committed, it must not hide that ambiguity behind ACK
 or unlimited Retry. It returns Quarantine, leaves the message without a terminal method, and asks the existing exact
 consumer owner to stop. The next design step is then component-specific reconciliation—not a generic framework state

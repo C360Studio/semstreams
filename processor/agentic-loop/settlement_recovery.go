@@ -404,7 +404,8 @@ func (c *Component) ensureResponseLoop(
 }
 
 // recoverToolResult restores the current batch, or returns an empty loop ID
-// only when a later committed request contains this execution's applied result.
+// only when a later committed request or an exact terminal batch proves this
+// execution's applied result.
 func (c *Component) recoverToolResult(
 	ctx context.Context, result agentic.ToolResult,
 ) (string, error) {
@@ -509,7 +510,7 @@ func (c *Component) recoverToolResult(
 		return "", fmt.Errorf("later request %q lacks execution-specific applied proof for %q", request.RequestID, result.ExecutionID)
 	}
 	if entity.State.IsTerminal() {
-		return "", fmt.Errorf("terminal loop lacks execution-specific applied proof for %q", result.ExecutionID)
+		return "", proveTerminalToolResultApplied(entity, request.RequestID, calls, result)
 	}
 	if entity.State == agentic.LoopStateAwaitingApproval {
 		return "", fmt.Errorf("tool result %q requires task 6's pending-approval continuation proof", result.ExecutionID)
@@ -524,6 +525,41 @@ func (c *Component) recoverToolResult(
 		}
 	}
 	return entity.ID, nil
+}
+
+// proveTerminalToolResultApplied uses the final marker only with the exact
+// retained execution and its direct tool-result terminal consequence.
+func proveTerminalToolResultApplied(entity agentic.LoopEntity, requestID string, calls []agentic.ToolCall, result agentic.ToolResult) error {
+	results, ordinaryBatch, err := validatedToolBatchResults(entity, requestID, calls, result)
+	if err != nil {
+		return err
+	}
+	stored, found := results[result.ExecutionID]
+	if !found {
+		return fmt.Errorf("terminal loop lacks execution-specific retained result for %q", result.ExecutionID)
+	}
+	// LoopID is optional on the input; both forms name the request's loop.
+	if stored.LoopID == "" {
+		stored.LoopID = result.LoopID
+	}
+	if !reflect.DeepEqual(stored, result) {
+		return errs.WrapFatal(fmt.Errorf("terminal retained result conflicts with execution %q", result.ExecutionID),
+			"agentic-loop", "recoverToolResult", "tool correlation conflict")
+	}
+	// The final marker includes this exact result after required terminal
+	// effects. Only the two direct tool-result terminal branches qualify;
+	// a bare terminal state, cancelled loop, or approval wait does not.
+	if entity.PendingApproval == nil && !agentic.IsApprovalRequired(result.Error) &&
+		result.StopLoop && entity.State == agentic.LoopStateComplete &&
+		entity.Outcome == agentic.OutcomeSuccess && entity.Result == result.Content {
+		return nil
+	}
+	if entity.PendingApproval == nil && ordinaryBatch && len(results) == len(calls) &&
+		entity.State == agentic.LoopStateFailed && entity.Outcome == agentic.OutcomeFailed &&
+		entity.Iterations >= entity.MaxIterations && entity.Error == toolIterationLimitError(entity.MaxIterations) {
+		return nil
+	}
+	return fmt.Errorf("terminal loop lacks execution-specific applied proof for %q", result.ExecutionID)
 }
 
 func loopSettlementDecision(err error) natsclient.DeliveryDecision {

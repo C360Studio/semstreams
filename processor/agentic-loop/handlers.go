@@ -2521,6 +2521,12 @@ func (h *MessageHandler) buildToolTrajectoryStep(toolResult agentic.ToolResult, 
 	}
 }
 
+// toolIterationLimitError is the existing persisted tool-drain consequence.
+// Terminal replay must distinguish it from a timeout at the same budget count.
+func toolIterationLimitError(maxIterations int) string {
+	return fmt.Sprintf("max iterations (%d) reached", maxIterations)
+}
+
 // handleToolsComplete handles the case when all pending tools have completed
 func (h *MessageHandler) handleToolsComplete(
 	ctx context.Context,
@@ -2561,7 +2567,7 @@ func (h *MessageHandler) handleToolsComplete(
 		result.MaxIterationsReached = true
 
 		// Update entity with completion data for KV persistence (enables SSE delivery)
-		errorMsg := fmt.Sprintf("max iterations (%d) reached", entity.MaxIterations)
+		errorMsg := toolIterationLimitError(entity.MaxIterations)
 		if updateErr := h.loopManager.UpdateCompletion(loopID, agentic.OutcomeFailed, "", errorMsg); updateErr != nil {
 			h.logger.Warn("failed to update completion for max iterations",
 				slog.String("loop_id", loopID),
