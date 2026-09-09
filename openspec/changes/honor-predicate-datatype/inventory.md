@@ -1,5 +1,11 @@
 # Inventory: honor-predicate-datatype (#1267)
-base: 232b1e7d4efb530b5170facc87de6698ef7af290
+base: 0492f5ccb9f09873aec8fc6346a8f12b939d2f0c
+
+**Pins refreshed 2026-09-09** at implementation time, from the original base `232b1e7d` to `0492f5cc` — 76 pins
+MOVED (line numbers only) and 16 DRIFT + 2 AMBIGUOUS re-derived by hand, the drifted ones because this change
+rewrote the very lines they pin: the validator signature, its two call sites, the `Role` doc comment whose false
+consumer claim addendum A4 recorded, `classifyWithExplicitDatatype`, and the call sites and assertions migrated
+from a legacy spelling to a constant. Verified 150/150 ok, 0 MOVED, 0 AMBIGUOUS, 0 DRIFT.
 
 Scope: `vocabulary.PredicateMetadata.DataType` / `.Units` / `.Range` — declaration, every writer, every reader
 (present and absent), the export path that should honor them, the ingest/storage path for the architect's item-7
@@ -15,14 +21,14 @@ design (only bulleted lines are checked).
 
 Issue #1267's evidence, each line independently re-verified against `base`:
 
-- `vocabulary/predicates.go:360` — `DataType string`
-- `vocabulary/predicates.go:363` — `Units string`
-- `vocabulary/predicates.go:366` — `Range string`
-- `vocabulary/registry.go:114` — `m.DataType = dataType`
-- `vocabulary/registry.go:122` — `m.Units = units`
-- `vocabulary/registry.go:130` — `m.Range = valueRange`
-- `vocabulary/registry.go:287` — `func Register(name string, opts ...Option)`
-- `vocabulary/registry.go:381` — `func validatePredicateMetadataLocked(meta PredicateMetadata) error`
+- `vocabulary/predicates.go:493` — `DataType string`
+- `vocabulary/predicates.go:505` — `Units string`
+- `vocabulary/predicates.go:512` — `Range string`
+- `vocabulary/registry.go:131` — `m.DataType = dataType`
+- `vocabulary/registry.go:144` — `m.Units = units`
+- `vocabulary/registry.go:156` — `m.Range = valueRange`
+- `vocabulary/registry.go:318` — `func Register(name string, opts ...Option)`
+- `vocabulary/registry.go:419` — `func validatePredicateMetadataLocked(meta *PredicateMetadata) error`
 
 Direct read of `validatePredicateMetadataLocked`'s full body (`:382-403`) confirms it checks `InverseOf` parses,
 `IsSymmetric`+`InverseOf` mutual exclusion, `IsAlias`/`AliasType`/`AliasPriority` consistency, and inverse-pointer
@@ -39,8 +45,8 @@ The named contrasting precedent: `Weight` IS read (issue's evidence).
 
 The second named contrasting precedent: `StandardIRI` IS read.
 
-- `vocabulary/export/object.go:106` — `func classifyFloat(f float64) classifiedObject`
-- `vocabulary/export/object.go:113` — `datatype: xsdDouble,`
+- `vocabulary/export/object.go:302` — `func classifyFloat(f float64) classifiedObject`
+- `vocabulary/export/object.go:309` — `datatype: xsdDouble,`
 
 `classifyFloat` is reached from `classifyByGoType` for every `float32`/`float64` Go value with no predicate lookup
 anywhere in this file (confirmed by the full read under Spellings of the fact below) — the unconditional
@@ -60,60 +66,60 @@ and Searches); no pin is possible for an absence, so this is reported as a searc
 
 ### Declaration surface (item 1)
 
-- `vocabulary/predicates.go:351` — `type PredicateMetadata struct`
-- `vocabulary/predicates.go:354` — `Name string`
-- `vocabulary/predicates.go:357` — `Description string`
-- `vocabulary/predicates.go:369` — `Domain string`
-- `vocabulary/predicates.go:372` — `Category string`
-- `vocabulary/predicates.go:379` — `StandardIRI string`
-- `vocabulary/predicates.go:383` — `IsAlias bool`
-- `vocabulary/predicates.go:388` — `AliasType AliasType`
-- `vocabulary/predicates.go:392` — `AliasPriority int`
-- `vocabulary/predicates.go:404` — `InverseOf string`
-- `vocabulary/predicates.go:412` — `IsSymmetric bool`
-- `vocabulary/predicates.go:425` — `RuleOpaque bool`
-- `vocabulary/predicates.go:432` — `Role PredicateRole`
-- `vocabulary/predicates.go:440` — `Weight float64`
+- `vocabulary/predicates.go:472` — `type PredicateMetadata struct`
+- `vocabulary/predicates.go:475` — `Name string`
+- `vocabulary/predicates.go:478` — `Description string`
+- `vocabulary/predicates.go:515` — `Domain string`
+- `vocabulary/predicates.go:518` — `Category string`
+- `vocabulary/predicates.go:525` — `StandardIRI string`
+- `vocabulary/predicates.go:529` — `IsAlias bool`
+- `vocabulary/predicates.go:534` — `AliasType AliasType`
+- `vocabulary/predicates.go:538` — `AliasPriority int`
+- `vocabulary/predicates.go:550` — `InverseOf string`
+- `vocabulary/predicates.go:558` — `IsSymmetric bool`
+- `vocabulary/predicates.go:571` — `RuleOpaque bool`
+- `vocabulary/predicates.go:578` — `Role PredicateRole`
+- `vocabulary/predicates.go:586` — `Weight float64`
 
 16 fields total (the 3 above plus these 13), confirmed by `gopls workspace_symbol PredicateMetadata` against the
 same 16 line numbers independently of the manual read.
 
-- `vocabulary/predicates.go:447` — `type PredicateRole string`
-- `vocabulary/predicates.go:452` — `RoleUnspecified PredicateRole = ""`
+- `vocabulary/predicates.go:593` — `type PredicateRole string`
+- `vocabulary/predicates.go:598` — `RoleUnspecified PredicateRole = ""`
 
 `PredicateRole` is a Go-typed closed set (7 named constants, `:452-464`) with no runtime validator gating it — see
 Problem shape and the Role row under Consumers.
 
 - `vocabulary/registry.go:101` — `type Option func(*PredicateMetadata)`
 - `vocabulary/registry.go:104` — `func WithDescription(desc string) Option`
-- `vocabulary/registry.go:112` — `func WithDataType(dataType string) Option`
-- `vocabulary/registry.go:120` — `func WithUnits(units string) Option`
-- `vocabulary/registry.go:128` — `func WithRange(valueRange string) Option`
-- `vocabulary/registry.go:142` — `func WithIRI(iri string) Option`
-- `vocabulary/registry.go:159` — `func WithAlias(aliasType AliasType, priority int) Option`
-- `vocabulary/registry.go:184` — `func WithInverseOf(inversePredicate string) Option`
-- `vocabulary/registry.go:201` — `func WithRuleOpaque(opaque bool) Option`
-- `vocabulary/registry.go:219` — `func WithSymmetric(symmetric bool) Option`
-- `vocabulary/registry.go:234` — `func WithRole(role PredicateRole) Option`
-- `vocabulary/registry.go:253` — `func WithWeight(weight float64) Option`
-- `vocabulary/registry.go:299` — `meta := predicateRegistry[name]`
-- `vocabulary/registry.go:305` — `for _, opt := range opts`
-- `vocabulary/registry.go:308` — `if err := validatePredicateMetadataLocked(meta); err != nil`
-- `vocabulary/registry.go:353` — `func RegisterPredicate(meta PredicateMetadata)`
+- `vocabulary/registry.go:129` — `func WithDataType(dataType string) Option`
+- `vocabulary/registry.go:142` — `func WithUnits(units string) Option`
+- `vocabulary/registry.go:154` — `func WithRange(valueRange string) Option`
+- `vocabulary/registry.go:168` — `func WithIRI(iri string) Option`
+- `vocabulary/registry.go:185` — `func WithAlias(aliasType AliasType, priority int) Option`
+- `vocabulary/registry.go:210` — `func WithInverseOf(inversePredicate string) Option`
+- `vocabulary/registry.go:227` — `func WithRuleOpaque(opaque bool) Option`
+- `vocabulary/registry.go:245` — `func WithSymmetric(symmetric bool) Option`
+- `vocabulary/registry.go:265` — `func WithRole(role PredicateRole) Option`
+- `vocabulary/registry.go:284` — `func WithWeight(weight float64) Option`
+- `vocabulary/registry.go:330` — `meta := predicateRegistry[name]`
+- `vocabulary/registry.go:336` — `for _, opt := range opts`
+- `vocabulary/registry.go:339` — `if err := validatePredicateMetadataLocked(&meta); err != nil`
+- `vocabulary/registry.go:384` — `func RegisterPredicate(meta PredicateMetadata)`
 
 `Register` (`:287-312`) seeds `meta` from any existing registration (AMEND semantics, gh#410, doc comment
 `:264-277`), applies every option (`:305-307`), then validates (`:308`) before storing (`:312`).
 `RegisterPredicate` (`:353-376`) is the direct-struct entry point ("backward compatibility and testing" per its
 own doc comment, `:349-352`); same validator call at `:371`.
 
-- `vocabulary/registry.go:418` — `func GetPredicateMetadata(predicate string) *PredicateMetadata`
-- `vocabulary/registry.go:433` — `func ListRegisteredPredicates() []string`
+- `vocabulary/registry.go:462` — `func GetPredicateMetadata(predicate string) *PredicateMetadata`
+- `vocabulary/registry.go:477` — `func ListRegisteredPredicates() []string`
 
 Together these ARE the registry's test-time enumeration mechanism — `ListRegisteredPredicates` for names,
 `GetPredicateMetadata` for the full struct per name. No separate iterator is missing.
 
-- `vocabulary/registry.go:593` — `func ClearRegistry()`
-- `vocabulary/registry.go:608` — `func SnapshotRegistry() func()`
+- `vocabulary/registry.go:637` — `func ClearRegistry()`
+- `vocabulary/registry.go:652` — `func SnapshotRegistry() func()`
 
 Test isolation helpers, unrelated to DataType.
 
@@ -147,9 +153,9 @@ DataType literal-value distribution, non-test:
 | `entity_ref` | 1 | 1 | 1 |
 | **total** | **199** | **199** | **195** |
 
-- `vocabulary/registry_test.go:290` — `WithDataType("string"),`
-- `vocabulary/registry_test.go:460` — `WithDataType("string"),`
-- `vocabulary/registry_test.go:466` — `WithDataType("string"))`
+- `vocabulary/registry_test.go:290` — `WithDataType(DataTypeString),`
+- `vocabulary/registry_test.go:460` — `WithDataType(DataTypeString),`
+- `vocabulary/registry_test.go:466` — `WithDataType(DataTypeString))`
 
 The complete set of `WithDataType(` test-file call sites (3, all `"string"`). `WithUnits(`/`WithRange(` never
 appear in any `_test.go` file (0/0, confirmed by search).
@@ -169,7 +175,7 @@ Re-derived the "nothing reads them" claim with the issue's exact search
 underlying claim true — `git grep -E` combined with `-w` and a leading `\.` silently matches nothing even on lines
 that plainly contain a match; direct proof:
 
-- `vocabulary/registry.go:114` — `m.DataType = dataType`
+- `vocabulary/registry.go:131` — `m.DataType = dataType`
 
 `git grep -n -w -E '\.(DataType|Units|Range)' -- vocabulary/registry.go` returns 0 hits against this exact file,
 while the same pattern *without* `-w` returns 3 (the three setter writes). `\b` has the identical failure mode
@@ -182,11 +188,11 @@ three setter writes above.
 but its own Evidence grep deliberately excludes `*_test.go`. Test files DO read `.DataType`/`.Range` (never
 `.Units`) as equality assertions — 25 lines total, for example:
 
-- `examples/processors/iot_sensor/vocabulary_test.go:16` — `if meta.DataType != "string"`
-- `vocabulary/agentic/agentic_test.go:261` — `if meta.DataType != "float64"`
+- `examples/processors/iot_sensor/vocabulary_test.go:16` — `if meta.DataType != vocabulary.DataTypeString`
+- `vocabulary/agentic/agentic_test.go:261` — `if meta.DataType != vocabulary.DataTypeFloat`
 - `vocabulary/agentic/agentic_test.go:265` — `if meta.Range != "0-1"`
-- `vocabulary/hierarchy_test.go:89` — `"string", meta.DataType,`
-- `vocabulary/registry_test.go:297` — `assert.Equal(t, "string", meta.DataType)`
+- `vocabulary/hierarchy_test.go:89` — `DataTypeString, meta.DataType,`
+- `vocabulary/registry_test.go:297` — `assert.Equal(t, DataTypeString, meta.DataType)`
 
 (Full set of 25 lines recorded under Searches; these prove the metadata round-trips through
 `Register`/`GetPredicateMetadata` correctly — they are not production consumers.)
@@ -195,9 +201,9 @@ Every OTHER `PredicateMetadata` field, re-derived via `gopls references` plus `m
 avoids the generic-field-name false-positive noise a bare `.Field` sweep produces — `.Name`/`.Description`/`.Role`
 alone match hundreds of unrelated structs repo-wide, confirmed and discarded, see Searches):
 
-- `vocabulary/registry.go:354` — `parts, err := ParsePredicate(meta.Name)`
-- `vocabulary/registry.go:358` — `if meta.Domain != "" && meta.Domain != parts.Domain`
-- `vocabulary/registry.go:362` — `if meta.Category != "" && meta.Category != parts.Category`
+- `vocabulary/registry.go:385` — `parts, err := ParsePredicate(meta.Name)`
+- `vocabulary/registry.go:389` — `if meta.Domain != "" && meta.Domain != parts.Domain`
+- `vocabulary/registry.go:393` — `if meta.Category != "" && meta.Category != parts.Category`
 
 `Name`/`Domain`/`Category` are read, but only inside `Register`/`RegisterPredicate`'s own validation — own-package
 consistency checks, not an external consumer.
@@ -205,21 +211,21 @@ consistency checks, not an external consumer.
 `Description` has **no production reader anywhere** — write-only, the identical shape to `DataType`/`Units`/`Range`,
 confirmed only by test-assertion reads (`vocabulary/registry_test.go:296`, `hierarchy_test.go:81`).
 
-- `vocabulary/registry.go:457` — `if meta.IsAlias && meta.AliasType.CanResolveToEntityID()`
-- `vocabulary/registry.go:482` — `if meta.IsAlias && meta.AliasType == AliasTypeLabel`
-- `vocabulary/registry.go:458` — `aliasPredicates[name] = meta.AliasPriority`
+- `vocabulary/registry.go:501` — `if meta.IsAlias && meta.AliasType.CanResolveToEntityID()`
+- `vocabulary/registry.go:526` — `if meta.IsAlias && meta.AliasType == AliasTypeLabel`
+- `vocabulary/registry.go:502` — `aliasPredicates[name] = meta.AliasPriority`
 
 `IsAlias`, `AliasType`, and `AliasPriority` are read production-side by `DiscoverAliasPredicates`
 (`:450-463`) and `DiscoverLabelPredicates` (`:475-488`).
 
-- `vocabulary/registry.go:510` — `if meta.IsSymmetric`
-- `vocabulary/registry.go:513` — `return meta.InverseOf`
-- `vocabulary/registry.go:557` — `return meta.IsSymmetric || meta.InverseOf != ""`
+- `vocabulary/registry.go:554` — `if meta.IsSymmetric`
+- `vocabulary/registry.go:557` — `return meta.InverseOf`
+- `vocabulary/registry.go:601` — `return meta.IsSymmetric || meta.InverseOf != ""`
 
 `InverseOf`/`IsSymmetric` are read production-side by `GetInversePredicate` (`:501-514`), `IsSymmetricPredicate`
 (`:536-545`), `HasInverse` (`:549-558`), and `DiscoverInversePredicates` (`:576-589`).
 
-- `vocabulary/registry.go:528` — `return meta.RuleOpaque`
+- `vocabulary/registry.go:572` — `return meta.RuleOpaque`
 
 `RuleOpaque` is read production-side by `IsRuleOpaque` (`:520-529`).
 
@@ -235,14 +241,14 @@ code-level field access) — recorded to rule out a false-positive match, not as
 
 ### Export path (item 4)
 
-- `vocabulary/export/object.go:31` — `type classifiedObject struct`
-- `vocabulary/export/object.go:41` — `func classifyObject(t message.Triple, opts *options) classifiedObject`
-- `vocabulary/export/object.go:47` — `if t.Datatype != ""`
-- `vocabulary/export/object.go:48` — `return classifyWithExplicitDatatype(t, opts)`
-- `vocabulary/export/object.go:57` — `func classifyWithExplicitDatatype(t message.Triple, _ *options) classifiedObject`
-- `vocabulary/export/object.go:66` — `func classifyByGoType(obj any, opts *options) classifiedObject`
-- `vocabulary/export/object.go:118` — `func classifyString(s string, opts *options) classifiedObject`
-- `vocabulary/export/object.go:119` — `if message.IsValidEntityID(s)`
+- `vocabulary/export/object.go:62` — `type classifiedObject struct`
+- `vocabulary/export/object.go:86` — `func classifyObject(t message.Triple, opts *options) classifiedObject`
+- `vocabulary/export/object.go:92` — `if t.Datatype != ""`
+- `vocabulary/export/object.go:93` — `return classifyWithExplicitDatatype(t, opts)`
+- `vocabulary/export/object.go:123` — `func classifyWithExplicitDatatype(t message.Triple, opts *options) classifiedObject`
+- `vocabulary/export/object.go:262` — `func classifyByGoType(obj any, opts *options) classifiedObject`
+- `vocabulary/export/object.go:322` — `func classifyString(s string, opts *options) classifiedObject`
+- `vocabulary/export/object.go:323` — `if message.IsValidEntityID(s)`
 
 `classifyObject` consults `t.Datatype` (the **per-triple** field, distinct from `PredicateMetadata.DataType`) and
 falls through to Go-type inference otherwise; no call anywhere in `object.go` consults
@@ -359,15 +365,15 @@ direct search of the whole file.
 same search discipline. Nothing to pin from either file for this fact, by definition of "silent."
 
 - `vocabulary/README.md:136` — `WithDataType(dataType string)`
-- `vocabulary/README.md:147` — `WithUnits(units string)`
-- `vocabulary/README.md:156` — `WithRange(valueRange string)`
+- `vocabulary/README.md:169` — `WithUnits(units string)`
+- `vocabulary/README.md:179` — `WithRange(valueRange string)`
 
 662 lines total; all three setters documented with worked examples (`:144,153,162`) and combined usage
 (`:78-90,190-192,245,252,259`). **Silent** on any closed set, validation, or export honoring — every example
 treats the three as free-form strings.
 
-- `docs/basics/04-vocabulary.md:81` — `WithDataType("int")`
-- `docs/basics/04-vocabulary.md:88` — `WithDataType("float64")`
+- `docs/basics/04-vocabulary.md:81` — `WithDataType(vocabulary.DataTypeInt)`
+- `docs/basics/04-vocabulary.md:88` — `WithDataType(vocabulary.DataTypeFloat)`
 
 363 lines total; also `:82-83,89` (`WithUnits`/`WithRange` examples), prose on units at `:129,142` (a NAMING
 convention, not a `WithUnits` recommendation), a bare `// Range: 0-100` comment at `:308`. Same silence as
@@ -474,13 +480,13 @@ Every field with a confirmed production reader, and its reader:
 - `pkg/fusion/fusionvocab/signals.go:48` — `return meta.Weight`
 - `vocabulary/export/export.go:209` — `meta := vocabulary.GetPredicateMetadata(predicate)`
 - `vocabulary/export/export.go:211` — `return meta.StandardIRI`
-- `vocabulary/registry.go:358` — `if meta.Domain != "" && meta.Domain != parts.Domain`
-- `vocabulary/registry.go:362` — `if meta.Category != "" && meta.Category != parts.Category`
-- `vocabulary/registry.go:457` — `if meta.IsAlias && meta.AliasType.CanResolveToEntityID()`
-- `vocabulary/registry.go:482` — `if meta.IsAlias && meta.AliasType == AliasTypeLabel`
-- `vocabulary/registry.go:510` — `if meta.IsSymmetric`
-- `vocabulary/registry.go:513` — `return meta.InverseOf`
-- `vocabulary/registry.go:528` — `return meta.RuleOpaque`
+- `vocabulary/registry.go:389` — `if meta.Domain != "" && meta.Domain != parts.Domain`
+- `vocabulary/registry.go:393` — `if meta.Category != "" && meta.Category != parts.Category`
+- `vocabulary/registry.go:501` — `if meta.IsAlias && meta.AliasType.CanResolveToEntityID()`
+- `vocabulary/registry.go:526` — `if meta.IsAlias && meta.AliasType == AliasTypeLabel`
+- `vocabulary/registry.go:554` — `if meta.IsSymmetric`
+- `vocabulary/registry.go:557` — `return meta.InverseOf`
+- `vocabulary/registry.go:572` — `return meta.RuleOpaque`
 
 `Weight` and `StandardIRI` are the only fields read OUTSIDE `vocabulary/**` in production code. `Name`, `Domain`,
 `Category`, `IsAlias`, `AliasType`, `AliasPriority`, `InverseOf`, `IsSymmetric`, and `RuleOpaque` are all read, but
@@ -494,9 +500,9 @@ Three existing instances of the same shape, on this surface and adjacent:
 
 - `vocabulary/registry.go:12` — `type AliasType string`
 - `vocabulary/registry.go:24` — `AliasTypeIdentity AliasType = "identity"`
-- `vocabulary/registry.go:159` — `func WithAlias(aliasType AliasType, priority int) Option`
-- `vocabulary/registry.go:406` — `func validAliasType(aliasType AliasType) bool`
-- `vocabulary/registry.go:408` — `case AliasTypeIdentity, AliasTypeLabel, AliasTypeAlternate, AliasTypeExternal, AliasTypeCommunication:`
+- `vocabulary/registry.go:185` — `func WithAlias(aliasType AliasType, priority int) Option`
+- `vocabulary/registry.go:450` — `func validAliasType(aliasType AliasType) bool`
+- `vocabulary/registry.go:452` — `case AliasTypeIdentity, AliasTypeLabel, AliasTypeAlternate, AliasTypeExternal, AliasTypeCommunication:`
 
 **A closed typed vocabulary validated at Register-time, on the SAME struct, TODAY**: `AliasType` is gated by
 `validAliasType` (closed `switch`/`default: false`), invoked from `validatePredicateMetadataLocked` on every
@@ -505,8 +511,8 @@ option-signature-plus-validator shape scope item 1 describes for `DataType` — 
 field, in the same file.
 
 - `message/triple.go:86` — `Datatype string`
-- `vocabulary/export/object.go:47` — `if t.Datatype != ""`
-- `vocabulary/export/object.go:48` — `return classifyWithExplicitDatatype(t, opts)`
+- `vocabulary/export/object.go:92` — `if t.Datatype != ""`
+- `vocabulary/export/object.go:93` — `return classifyWithExplicitDatatype(t, opts)`
 
 **An explicit per-instance datatype override that already beats Go-type inference, one level down**:
 `message.Triple.Datatype` is honored unconditionally by `classifyObject` → `classifyWithExplicitDatatype`,
@@ -757,11 +763,11 @@ only emitted values do:
 
 ### A2. Both registration entry points already share ONE validation home
 
-- `vocabulary/registry.go:287` — `func Register(name string, opts ...Option) {`
-- `vocabulary/registry.go:353` — `func RegisterPredicate(meta PredicateMetadata) {`
-- `vocabulary/registry.go:308` — `	if err := validatePredicateMetadataLocked(meta); err != nil {`
-- `vocabulary/registry.go:371` — `	if err := validatePredicateMetadataLocked(meta); err != nil {`
-- `vocabulary/registry.go:381` — `func validatePredicateMetadataLocked(meta PredicateMetadata) error {`
+- `vocabulary/registry.go:318` — `func Register(name string, opts ...Option) {`
+- `vocabulary/registry.go:384` — `func RegisterPredicate(meta PredicateMetadata) {`
+- `vocabulary/registry.go:339` — `	if err := validatePredicateMetadataLocked(&meta); err != nil {`
+- `vocabulary/registry.go:402` — `	if err := validatePredicateMetadataLocked(&meta); err != nil {`
+- `vocabulary/registry.go:419` — `func validatePredicateMetadataLocked(meta *PredicateMetadata) error {`
 
 `RegisterPredicate` takes the struct directly, bypassing the `With*` options entirely, and both entry points route
 through the same validator. That validator is the seam scope item 1 needs: a closed-set check added there covers
@@ -774,7 +780,7 @@ writes `metadata.DataType = "string"` as an unconditional default at `internal/v
 
 ### A3. `Register` is amend-not-replace, so a DataType can be inherited from an earlier registration
 
-- `vocabulary/registry.go:299` — `	meta := predicateRegistry[name]`
+- `vocabulary/registry.go:330` — `	meta := predicateRegistry[name]`
 
 Options amend rather than replace (gh#410), so a re-`Register` that omits `WithDataType` keeps the previously
 declared value. A contract test asserting "every registered predicate carries a DataType from the closed set"
@@ -783,8 +789,8 @@ call. Both the guard and the closed-set validation must account for that orderin
 
 ### A4. `Role` is a FOURTH write-only field on the same frozen struct, and its doc comment asserts a reader that does not exist
 
-- `vocabulary/registry.go:227` — `// read PredicateMetadata.Role instead of pattern-matching predicate names.`
-- `vocabulary/registry.go:236` — `		m.Role = role`
+- `vocabulary/registry.go:256` — `// fusion ranker this comment previously named as its consumer reads Weight`
+- `vocabulary/registry.go:267` — `		m.Role = role`
 - `pkg/fusion/fusionvocab/signals.go:48` — `		return meta.Weight`
 
 The doc comment claims consumers read `PredicateMetadata.Role`; the cited consumer reads `Weight` instead. Only

@@ -19,7 +19,6 @@ belongs at the export boundary, where interoperability is the job; it MUST NOT a
 adopter writes against. The mapping from a declared value to its RDF datatype IRI therefore lives with the serializer,
 and the registry MUST NOT be required to know it. A declaring author states that an object is an entity reference; the
 exporter, and only the exporter, decides that this means an IRI node rather than a literal.
-assumed.
 
 Normalization is a declaration-time step, NOT a compatibility alias, a deprecated-value table, a dual read/write path,
 or a runtime escape hatch: the registry MUST store only the canonical value, so no reader ever observes a legacy

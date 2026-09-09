@@ -106,24 +106,24 @@ never been observed is a hypothesis. Nothing else starts until it is a failing a
 
 ## 7. Docs, ADR, and the migration note
 
-- [ ] 7.1 Rewrite the doc comments on `PredicateMetadata.DataType` (`predicates.go:359-360`) and `WithDataType`
+- [x] 7.1 Rewrite the doc comments on `PredicateMetadata.DataType` (`predicates.go:359-360`) and `WithDataType`
       (`registry.go:111-112`). Both currently say "the expected **Go type**", which is the axis this change retires.
-- [ ] 7.2 Rewrite the `Units` and `Range` doc comments to say documentation-only, per the requirement (owner-gated —
+- [x] 7.2 Rewrite the `Units` and `Range` doc comments to say documentation-only, per the requirement (owner-gated —
       see design Q4).
-- [ ] 7.3 Fix the false doc comment at `registry.go:227`: it says consumers read `PredicateMetadata.Role`; the named
+- [x] 7.3 Fix the false doc comment at `registry.go:227`: it says consumers read `PredicateMetadata.Role`; the named
       consumer reads `Weight` (`pkg/fusion/fusionvocab/signals.go:48`). One line, independent of the Role scope
       ruling (design Q5).
-- [ ] 7.4 Add the three-way rendering table (Go type / XSD IRI / JSON Schema) to `vocabulary/README.md` (replacing the
+- [x] 7.4 Add the three-way rendering table (Go type / XSD IRI / JSON Schema) to `vocabulary/README.md` (replacing the
       Go-type-inference table at `:44-53` of `vocabulary/export/README.md` and extending `README.md:136`) and
       `docs/basics/04-vocabulary.md:81-89`.
-- [ ] 7.5 Land ADR-107 (owner-ruled, Q6, widened): the decision recorded is the **boundary rule** — semantic-web
+- [x] 7.5 Land ADR-107 (owner-ruled, Q6, widened): the decision recorded is the **boundary rule** — semantic-web
       vocabulary lives at the export edge for interop only; the core carries pragmatic triples with RDF*-like
       statement metadata. The datatype vocabulary and the retirement of the Go-type axis are its first application,
       not its subject. Cross-references ADR-074 and ADR-106; the mechanics stay in the `predicate-contract` spec. A
       draft is already on this branch — review it against the final spec text before ticking.
-- [ ] 7.7 File "honor `Units`/`Range`" against #1264 (owner ruling Q4), so the deferred decision has a home rather
+- [x] 7.7 File "honor `Units`/`Range`" against #1264 (owner ruling Q4), so the deferred decision has a home rather
       than remaining an undocumented gap in a Tier 1 frozen struct.
-- [ ] 7.6 Write `docs/operations/migration-predicate-datatype.md`: the closed set, the 16-row mapping table, the 26
+- [x] 7.6 Write `docs/operations/migration-predicate-datatype.md`: the closed set, the 16-row mapping table, the 26
       unmappable semdragon spellings with their file, the semsource `data_type` wire-value change, and the note that
       semlink's datatype-free registrations stay legal. SemStreams-owned; sister owners implement.
 

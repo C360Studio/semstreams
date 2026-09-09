@@ -477,13 +477,38 @@ type PredicateMetadata struct {
 	// Description provides human-readable documentation
 	Description string
 
-	// DataType indicates the expected Go type for the object value
+	// DataType declares the pragmatic type of the object value, as one of
+	// the seven canonical DataType* values, or is absent.
+	//
+	// It is NOT the Go type of the value. The serializer observes the Go type
+	// directly, and a value read back through the authoritative ENTITY_STATES
+	// JSON round trip no longer carries the Go type its author predicted — a
+	// declared whole number arrives as float64 every time. The declaration
+	// therefore carries only what observation cannot recover.
+	//
+	// A recognized legacy spelling is normalized to its canonical value at
+	// registration; an unrecognized one is refused there. Absent is legal.
+	// RDF export honors the declaration, and ignores it for any triple whose
+	// observed value contradicts it (gh#1267, ADR-107).
 	DataType string
 
-	// Units specifies the measurement units (if applicable)
+	// Units carries human-readable measurement units, as free-form
+	// DOCUMENTATION on the declaration. Examples: "percent", "celsius".
+	//
+	// No framework path validates, normalizes, interprets, or honors it. That
+	// is stated rather than left implicit because the alternative failure is
+	// silent: a field that looks typed, sits beside DataType which IS honored,
+	// and is frozen into a released surface reads as a promise the system does
+	// not keep. When a consumer is named it arrives with its own change; a
+	// closed vocabulary is deliberately not invented ahead of one (gh#1267 Q4,
+	// tracked on gh#1264).
 	Units string
 
-	// Range describes valid value ranges (if applicable)
+	// Range carries a human-readable description of valid values, as free-form
+	// DOCUMENTATION on the declaration. Examples: "0-100", "-90 to 90",
+	// "positive" — three incompatible grammars, which is why no framework path
+	// validates, normalizes, interprets, or honors it. See Units (gh#1267 Q4,
+	// tracked on gh#1264).
 	Range string
 
 	// Domain identifies which domain owns this predicate

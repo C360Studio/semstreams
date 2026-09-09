@@ -19,15 +19,20 @@ to honor it proposed a closed vocabulary spelled with XSD local names plus JSON-
 every value would then already be a spelling the repository used, and the per-predicate declaration and the
 per-triple datatype hint would share one value space.
 
-The measurement said otherwise. Across the family — this repository and eight sister repositories, 942 declarations —
-the spellings declaring authors actually write are pragmatic:
+The measurement said otherwise. Across the family — 17 c360 Go repositories scanned, six with any hit, 942
+declarations — the spellings declaring authors actually write are pragmatic:
 
 | spelling | uses | | spelling | uses |
 |---|---|---|---|---|
-| `string` | 680 | | `float64` | 21 |
+| `string` | 554 (+34 struct-literal) | | `float64` | 21 |
 | `entity_id` | 126 | | `bool` | 21 |
 | `int` | 70 | | `array` | 20 |
 | `datetime` | 53 | | `json` | 13 |
+
+Measured read-only on 2026-09-09 and re-measured at implementation; the ruling's own restatement of this table
+transcribed the `string` row as 680 and the `number` row as 13 against a measured 1 (4 with struct literals). Neither
+difference touches the decision — every one of those spellings is pragmatic, and all of them map — but the numbers
+here are the measured ones.
 
 `integer`, `double`, `dateTime`, `boolean`, `@id` and `rdf:JSON` are written **zero times** in the declaration
 surface. They appear only inside `vocabulary/export`, which is the boundary. Canonicalizing on them would have
@@ -76,4 +81,5 @@ vocabulary may live.
 ## Related
 
 ADR-074 (canonical predicate contract) · ADR-106 (two-tier surface freeze — `vocabulary` is Tier 1, which is why a
-write-only field had to be decided before the RC clock) · #1267 (the ruling) · #1142 · #219 · #1264
+write-only field had to be decided before the RC clock) · #1267 (the ruling) · #1272 (the `^^<@id>` export defect the
+boundary rule's first application closes) · #1142 · #219 · #1264
