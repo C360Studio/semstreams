@@ -558,6 +558,21 @@ with 14 incompatible packages against beta.162, not compatibility approval. Fina
 `/private/tmp/gh1146-final-gates.KNIdAO`; earlier REDs remain recorded, not waived or rerun away.
 This verifies the bounded first-approve checkpoint; the mixed tasks and task 6.6 remain open.
 
+The next test-only checkpoint extends the same started-owner replacement fixture to modify and reject. Modify
+executes nonnil replacement arguments while retaining the original execution correlation. Reject executes no tool
+and supplies the paired synthetic permission/reason result to the next model request, which completes normally.
+The original approve proof remains intact. A fourth case produces an earlier ordinary tool exchange in the same
+loop, retains both model responses with the same provider CallID but different RequestIDs and arguments, and proves
+replacement follows only the current request's response. This completes task 6.4, not the full decision matrix.
+
+All four cases pass together through the canonical race-enabled real-NATS runner (package 3.966s). Temporary
+Go overlays that ignore modified arguments or lose the rejection reason each make the corresponding test fail;
+these are falsification proofs, not newly discovered production regressions. Production code is unchanged.
+Evidence: `/private/tmp/gh1146-approval-decisions.TANE3j/final-native-green.log`, SHA-256
+`2e6342fe5d5a14a7194342ff05af5db42bfdd16cea0fedee9716e72aa9896517`.
+Timeout, approval/tool-result redelivery, the evidence-error matrix, confirmed-retention absence, and task 6.6's
+explicit owner storage ruling remain open. These component-replacement proofs add no OS-process E2E claim.
+
 - [ ] 6.1 RED: run the real-NATS approval replacement gate after an approval-required `ToolResult` fully settles.
   Replace loop and dispatch, discard every process map/cache, retain `AGENT` and `AGENT_LOOPS`, and independently
   exercise approve, modify, reject, timeout, and redelivery. Cite exactly
@@ -579,7 +594,7 @@ This verifies the bounded first-approve checkpoint; the mixed tasks and task 6.6
   `agent.response.<RequestID>`. Validate envelopes, payloads, cross-record identities, current-call uniqueness, and
   canonical arguments. Perform no `AGENT` list or scan. Tests cite exactly
   `// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded`.
-- [ ] 6.4 Prove same-CallID/different-RequestID isolation with two retained responses carrying conflicting arguments.
+- [x] 6.4 Prove same-CallID/different-RequestID isolation with two retained responses carrying conflicting arguments.
   Reconstruction follows only the RequestID named by the current request. Cite exactly
   `// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded`.
 - [ ] 6.5 Table-test approve, modify, reject, and timeout across transient/unresolved Retry, confirmed retained

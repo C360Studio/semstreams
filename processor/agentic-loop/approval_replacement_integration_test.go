@@ -32,19 +32,62 @@ type approvalReplacementExecutor struct{ calls atomic.Int32 }
 
 func (e *approvalReplacementExecutor) Execute(_ context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
 	e.calls.Add(1)
-	return agentic.ToolResult{CallID: call.ID, Name: call.Name, Content: "approved rule-42"}, nil
+	return agentic.ToolResult{CallID: call.ID, Name: call.Name, Content: fmt.Sprintf("approved %v", call.Arguments["rule_id"])}, nil
 }
 
 func (*approvalReplacementExecutor) ListTools() []agentic.ToolDefinition {
-	return []agentic.ToolDefinition{{Name: "approval_probe", Parameters: map[string]any{"type": "object"}}}
+	return []agentic.ToolDefinition{
+		{Name: "approval_probe", Parameters: map[string]any{"type": "object"}},
+		{Name: "prior_probe", Parameters: map[string]any{"type": "object"}},
+	}
 }
 
 // spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
-// First gate only: approve after the original ToolResult and dispatch events have
-// settled. Real task/model/tools owners produce every retained checkpoint; no
-// process cache or durable loop record is seeded. Graph/evidence E2E, the other
-// decisions, and approval-response redelivery remain separate proofs.
 func TestIntegrationApprovalAfterLoopAndDispatchReplacement(t *testing.T) {
+	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, false)
+}
+
+// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
+func TestIntegrationModifiedApprovalAfterLoopAndDispatchReplacement(t *testing.T) {
+	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{
+		Decision: agentic.ApprovalDecisionModify, ModifiedArguments: map[string]any{"rule_id": "rule-99"},
+	}, false)
+}
+
+// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
+func TestIntegrationRejectedApprovalAfterLoopAndDispatchReplacement(t *testing.T) {
+	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{
+		Decision: agentic.ApprovalDecisionReject, Reason: "retain rule-42 for audit",
+	}, false)
+}
+
+// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
+func TestIntegrationApprovalReplacementIgnoresOlderSameCallIDResponse(t *testing.T) {
+	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, true)
+}
+
+// Real task/model/tools owners produce every retained checkpoint; no process
+// cache or durable loop record is seeded. Graph/evidence E2E, timeout, and
+// approval-response redelivery remain separate proofs.
+func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.ApprovalRequest, retainOlderResponse bool) {
+	t.Helper()
+	wantToolContent := "approved rule-42"
+	wantExecutions := int32(1)
+	wantProviderCalls := int32(2)
+	priorExecutions := int32(0)
+	if retainOlderResponse {
+		priorExecutions = 1
+		wantExecutions++
+		wantProviderCalls++
+	}
+	if approvalRequest.Decision == agentic.ApprovalDecisionModify {
+		require.NotNil(t, approvalRequest.ModifiedArguments)
+		require.NotEqual(t, map[string]any{"rule_id": "rule-42"}, approvalRequest.ModifiedArguments)
+		wantToolContent = "approved rule-99"
+	} else if approvalRequest.Decision == agentic.ApprovalDecisionReject {
+		wantToolContent = "Tool error: " + agentic.ApprovalRejectedPrefix + "rejected by second-party-reviewer: " + approvalRequest.Reason
+		wantExecutions = 0
+	}
 	// This test owns the bounded root so controlled owner cleanup precedes
 	// parent cancellation; testing cancels t.Context before Cleanup callbacks.
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -72,14 +115,23 @@ func TestIntegrationApprovalAfterLoopAndDispatchReplacement(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		toolName, arguments := "approval_probe", `{"rule_id":"rule-42"}`
+		if retainOlderResponse {
+			toolName, arguments = "prior_probe", `{"rule_id":"rule-old"}`
+			for _, msg := range request.Messages {
+				if msg.Role == "tool" && msg.Content == "approved rule-old" {
+					toolName, arguments = "approval_probe", `{"rule_id":"rule-42"}`
+				}
+			}
+		}
 		answer := map[string]any{"role": "assistant", "tool_calls": []map[string]any{{
 			"id": callID, "type": "function", "function": map[string]any{
-				"name": "approval_probe", "arguments": `{"rule_id":"rule-42"}`,
+				"name": toolName, "arguments": arguments,
 			},
 		}}}
 		finish := "tool_calls"
 		for _, msg := range request.Messages {
-			if msg.Role == "tool" && msg.Content == "approved rule-42" {
+			if msg.Role == "tool" && msg.Content == wantToolContent {
 				answer = map[string]any{"role": "assistant", "content": "approval completed"}
 				finish = "stop"
 			}
@@ -270,6 +322,30 @@ func TestIntegrationApprovalAfterLoopAndDispatchReplacement(t *testing.T) {
 	require.NoError(t, json.Unmarshal(submitted.Body.Bytes(), &submission))
 	loopID := submission.InReplyTo
 	require.NotEmpty(t, loopID)
+	var olderResponse *agentic.AgentResponse
+	if retainOlderResponse {
+		prior := wait("tool.result")
+		require.Equal(t, 1, prior.acks)
+		require.Zero(t, prior.naks+prior.terms)
+		base, err := decoder.Decode(prior.Data())
+		require.NoError(t, err)
+		result, ok := base.Payload().(*agentic.ToolResult)
+		require.True(t, ok)
+		require.Empty(t, result.Error)
+		require.Equal(t, "approved rule-old", result.Content)
+		priorCallMsg, err := toolCalls.Next(jetstream.FetchMaxWait(5 * time.Second))
+		require.NoError(t, err)
+		require.NoError(t, priorCallMsg.DoubleAck(ctx))
+		olderRaw, err := stream.GetLastMsgForSubject(ctx, "agent.response."+result.RequestID)
+		require.NoError(t, err)
+		base, err = decoder.Decode(olderRaw.Data)
+		require.NoError(t, err)
+		olderResponse, ok = base.Payload().(*agentic.AgentResponse)
+		require.True(t, ok)
+		require.Len(t, olderResponse.Message.ToolCalls, 1)
+		require.Equal(t, result.CallID, olderResponse.Message.ToolCalls[0].ID)
+		require.Equal(t, map[string]any{"rule_id": "rule-old"}, olderResponse.Message.ToolCalls[0].Arguments)
+	}
 	initial := wait("tool.result")
 	require.Equal(t, 1, initial.acks)
 	require.Zero(t, initial.naks+initial.terms)
@@ -281,8 +357,8 @@ func TestIntegrationApprovalAfterLoopAndDispatchReplacement(t *testing.T) {
 	require.Equal(t, agentic.ToolErrorPermission, gated.ErrorKind)
 	require.True(t, strings.HasPrefix(gated.Error, agentic.ApprovalRequiredPrefix))
 	require.Equal(t, loopID, gated.LoopID)
-	require.Zero(t, executor.calls.Load(), "approval gate must precede the executor")
-	require.Equal(t, int32(1), providerCalls.Load())
+	require.Equal(t, priorExecutions, executor.calls.Load(), "approval gate must precede the gated executor")
+	require.Equal(t, wantProviderCalls-1, providerCalls.Load())
 	originalMsg, err := toolCalls.Next(jetstream.FetchMaxWait(5 * time.Second))
 	require.NoError(t, err)
 	base, err = decoder.Decode(originalMsg.Data())
@@ -329,6 +405,18 @@ func TestIntegrationApprovalAfterLoopAndDispatchReplacement(t *testing.T) {
 	require.Equal(t, original.ID, response.Message.ToolCalls[0].ID)
 	require.Equal(t, original.Arguments, response.Message.ToolCalls[0].Arguments)
 	require.Equal(t, original.TraceID, response.Message.ToolCalls[0].TraceID)
+	if retainOlderResponse {
+		require.NotEqual(t, olderResponse.RequestID, request.RequestID)
+		require.Equal(t, olderResponse.Message.ToolCalls[0].ID, original.ID)
+		require.NotEqual(t, olderResponse.Message.ToolCalls[0].Arguments, original.Arguments)
+		// Both exact subjects remain present; this is not a replaced single
+		// response. The latest request above names only the current response.
+		retainedOld, err := stream.GetLastMsgForSubject(ctx, "agent.response."+olderResponse.RequestID)
+		require.NoError(t, err)
+		require.Less(t, retainedOld.Sequence, responseRaw.Sequence)
+		t.Logf("retained same-CallID responses: older_request=%s older_seq=%d current_request=%s current_seq=%d call=%s",
+			olderResponse.RequestID, retainedOld.Sequence, request.RequestID, responseRaw.Sequence, original.ID)
+	}
 	for _, prefix := range []string{"agent.created.", "agent.approval_pending."} {
 		event, err := stream.GetLastMsgForSubject(ctx, prefix+loopID)
 		require.NoError(t, err)
@@ -349,9 +437,7 @@ func TestIntegrationApprovalAfterLoopAndDispatchReplacement(t *testing.T) {
 	unchanged, err := bucket.Get(ctx, loopID)
 	require.NoError(t, err)
 	require.Equal(t, entry.Value(), unchanged.Value(), "replacement must use retained pending authority")
-	approved := post(replacementMux, "/loops/"+loopID+"/approval", agenticdispatch.ApprovalRequest{
-		Decision: agentic.ApprovalDecisionApprove,
-	}, "second-party-reviewer")
+	approved := post(replacementMux, "/loops/"+loopID+"/approval", approvalRequest, "second-party-reviewer")
 	require.Equal(t, http.StatusOK, approved.Code, "replacement HTTP approval must read retained pending state: %s", approved.Body.String())
 	approval := wait("agent.approval_response")
 	require.Equal(t, 1, approval.acks)
@@ -362,34 +448,77 @@ func TestIntegrationApprovalAfterLoopAndDispatchReplacement(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, loopID, decision.LoopID)
 	require.Equal(t, original.ID, decision.CallID)
-	redispatched, err := toolCalls.Next(jetstream.FetchMaxWait(5 * time.Second))
-	require.NoError(t, err, "fresh loop must resume the exact approved call")
-	base, err = decoder.Decode(redispatched.Data())
+	require.Equal(t, approvalRequest.Decision, decision.Decision)
+	require.Equal(t, approvalRequest.ModifiedArguments, decision.ModifiedArguments)
+	require.Equal(t, approvalRequest.Reason, decision.Reason)
+	require.Equal(t, "second-party-reviewer", decision.ApprovedBy)
+	if approvalRequest.Decision != agentic.ApprovalDecisionReject {
+		redispatched, err := toolCalls.Next(jetstream.FetchMaxWait(5 * time.Second))
+		require.NoError(t, err, "fresh loop must resume the exact approved call")
+		base, err = decoder.Decode(redispatched.Data())
+		require.NoError(t, err)
+		call, ok := base.Payload().(*agentic.ToolCall)
+		require.True(t, ok)
+		want := *original
+		want.ApprovedBy = "second-party-reviewer"
+		if approvalRequest.Decision == agentic.ApprovalDecisionModify {
+			want.Arguments = approvalRequest.ModifiedArguments
+		}
+		require.Equal(t, want, *call, "approval must preserve request/execution/ordinal/call/arguments/trace")
+		require.NoError(t, redispatched.DoubleAck(ctx))
+		terminal := wait("tool.result")
+		require.Equal(t, 1, terminal.acks)
+		require.Zero(t, terminal.naks+terminal.terms)
+		base, err = decoder.Decode(terminal.Data())
+		require.NoError(t, err)
+		result, ok := base.Payload().(*agentic.ToolResult)
+		require.True(t, ok)
+		require.Equal(t, loopID, result.LoopID)
+		require.Equal(t, original.RequestID, result.RequestID)
+		require.Equal(t, original.ExecutionID, result.ExecutionID)
+		require.Equal(t, original.CallOrdinal, result.CallOrdinal)
+		require.Equal(t, original.ID, result.CallID)
+		require.Equal(t, original.Name, result.Name)
+		require.Equal(t, original.TraceID, result.TraceID)
+		require.Equal(t, wantToolContent, result.Content)
+	}
+	// Rejection is a synthetic permission result, not another tool.result
+	// publication. Inspect the production request's paired conversation directly.
+	nextRaw, err := stream.GetLastMsgForSubject(ctx, "agent.request."+loopID)
 	require.NoError(t, err)
-	call, ok := base.Payload().(*agentic.ToolCall)
-	require.True(t, ok)
-	want := *original
-	want.ApprovedBy = "second-party-reviewer"
-	require.Equal(t, want, *call, "approval must preserve request/execution/ordinal/call/arguments/trace")
-	require.NoError(t, redispatched.DoubleAck(ctx))
-	terminal := wait("tool.result")
-	require.Equal(t, 1, terminal.acks)
-	require.Zero(t, terminal.naks+terminal.terms)
-	base, err = decoder.Decode(terminal.Data())
+	base, err = decoder.Decode(nextRaw.Data)
 	require.NoError(t, err)
-	result, ok := base.Payload().(*agentic.ToolResult)
+	next, ok := base.Payload().(*agentic.AgentRequest)
 	require.True(t, ok)
-	require.Equal(t, loopID, result.LoopID)
-	require.Equal(t, original.RequestID, result.RequestID)
-	require.Equal(t, original.ExecutionID, result.ExecutionID)
-	require.Equal(t, original.CallOrdinal, result.CallOrdinal)
-	require.Equal(t, original.ID, result.CallID)
-	require.Equal(t, original.Name, result.Name)
-	require.Equal(t, original.TraceID, result.TraceID)
-	require.Equal(t, "approved rule-42", result.Content)
-	// ToolResult ACK proves the next request's publication, not its eventual
-	// response. Await the exact final marker before inspecting consumer snapshots
-	// or stopping owners; ListConsumers is not an atomic cross-consumer barrier.
+	require.NotEqual(t, original.RequestID, next.RequestID)
+	var toolMessages []agentic.ChatMessage
+	for i, msg := range next.Messages {
+		if msg.Role != "tool" {
+			continue
+		}
+		toolMessages = append(toolMessages, msg)
+		require.Positive(t, i)
+		require.Equal(t, "assistant", next.Messages[i-1].Role)
+		require.Len(t, next.Messages[i-1].ToolCalls, 1)
+		require.Equal(t, original.ID, next.Messages[i-1].ToolCalls[0].ID)
+		if retainOlderResponse && msg.Name == "prior_probe" {
+			require.Equal(t, olderResponse.Message.ToolCalls[0].Arguments, next.Messages[i-1].ToolCalls[0].Arguments)
+		} else {
+			require.Equal(t, original.Arguments, next.Messages[i-1].ToolCalls[0].Arguments)
+		}
+	}
+	wantToolMessages := []agentic.ChatMessage{{Role: "tool", ToolCallID: original.ID,
+		Name: original.Name, Content: wantToolContent, IsError: approvalRequest.Decision == agentic.ApprovalDecisionReject,
+	}}
+	if retainOlderResponse {
+		wantToolMessages = append([]agentic.ChatMessage{{Role: "tool", ToolCallID: original.ID,
+			Name: "prior_probe", Content: "approved rule-old",
+		}}, wantToolMessages...)
+	}
+	require.Equal(t, wantToolMessages, toolMessages)
+	// Source ACK proves the next request's publication, not its eventual response.
+	// Await the exact final marker before inspecting consumer snapshots or stopping
+	// owners; ListConsumers is not an atomic cross-consumer barrier.
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		finalEntry, err := bucket.Get(ctx, loopID)
 		require.NoError(collect, err)
@@ -403,7 +532,12 @@ func TestIntegrationApprovalAfterLoopAndDispatchReplacement(t *testing.T) {
 		require.Nil(collect, final.PendingApproval)
 	}, 10*time.Second, 10*time.Millisecond)
 	waitSettled()
-	require.Equal(t, int32(1), executor.calls.Load())
-	require.Equal(t, int32(2), providerCalls.Load())
+	require.Equal(t, wantExecutions, executor.calls.Load())
+	require.Equal(t, wantProviderCalls, providerCalls.Load())
 	stopReplacement()
+	observerInfo, err := toolCalls.Info(ctx)
+	require.NoError(t, err)
+	require.Zero(t, observerInfo.NumPending, "no unobserved tool redispatch after completion")
+	require.Zero(t, observerInfo.NumAckPending)
+	require.Empty(t, settled["tool.result"], "reject must not publish a synthetic tool.result; other branches settle exactly one result")
 }
