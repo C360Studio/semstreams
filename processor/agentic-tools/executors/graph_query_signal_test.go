@@ -974,6 +974,28 @@ func TestQueryNeighbors_BudgetTruncatesWithHint(t *testing.T) {
 // free on one long string (neighborBudgetFixture above) and expensive on many
 // short structural lines, so metering the compact KV values would report this
 // set as comfortably inside a cap the model receives it far outside of.
+func neighborWideFixture(t *testing.T) (*GraphQueryExecutor, []string, int) {
+	t.Helper()
+	const wideRecords = 150
+	kv := newMockKVGetter()
+	targets := make([]string, 0, wideRecords)
+	hubTriples := make([]message.Triple, 0, wideRecords)
+	rawTotal := 0
+	for i := 0; i < wideRecords; i++ {
+		id := fmt.Sprintf("acme.test.gcs.environmental.temperature.small-%03d", i)
+		targets = append(targets, id)
+		hubTriples = append(hubTriples, relationshipTriple(fixtureSiteOne, "facility.site.holds", id))
+		record := entityFixture(t, id, propertyTriple(id, "sensor.temperature.celsius", float64(i)))
+		rawTotal += len(record)
+		kv.Put(id, record)
+	}
+	kv.Put(fixtureSiteOne, entityFixture(t, fixtureSiteOne, hubTriples...))
+	require.Less(t, rawTotal, neighborMaxContentBytes,
+		"precondition: the raw records all fit, so any truncation this fixture produces "+
+			"can only have come from measuring the emitted result")
+	return NewGraphQueryExecutor(kv), targets, rawTotal
+}
+
 // TestQueryNeighbors_OverBudgetIsAlwaysSignalled covers the seam between the
 // emitted-size trim and the unresolved/empty split. When every target is an
 // edge but none is resident, nothing is ever admitted, so fitEmitted returns
@@ -981,6 +1003,8 @@ func TestQueryNeighbors_BudgetTruncatesWithHint(t *testing.T) {
 // HintEmpty guard rightly declines because unresolved is non-empty. Without an
 // explicit size check that leaves an over-cap body reported as fine — the same
 // failure the budget exists to prevent, at a rarer input.
+//
+// spec: agentic-tools / query_neighbors bounds its content by a model-facing budget and reports unresolved targets
 func TestQueryNeighbors_OverBudgetIsAlwaysSignalled(t *testing.T) {
 	const wideTargets = 2000
 	kv := newMockKVGetter()
@@ -1011,28 +1035,6 @@ func TestQueryNeighbors_OverBudgetIsAlwaysSignalled(t *testing.T) {
 		"an over-budget body is signalled even when nothing was given back")
 	assert.NotEqual(t, agentic.HintEmpty, result.ResultHint,
 		"unresolved targets are not an empty neighborhood")
-}
-
-func neighborWideFixture(t *testing.T) (*GraphQueryExecutor, []string, int) {
-	t.Helper()
-	const wideRecords = 150
-	kv := newMockKVGetter()
-	targets := make([]string, 0, wideRecords)
-	hubTriples := make([]message.Triple, 0, wideRecords)
-	rawTotal := 0
-	for i := 0; i < wideRecords; i++ {
-		id := fmt.Sprintf("acme.test.gcs.environmental.temperature.small-%03d", i)
-		targets = append(targets, id)
-		hubTriples = append(hubTriples, relationshipTriple(fixtureSiteOne, "facility.site.holds", id))
-		record := entityFixture(t, id, propertyTriple(id, "sensor.temperature.celsius", float64(i)))
-		rawTotal += len(record)
-		kv.Put(id, record)
-	}
-	kv.Put(fixtureSiteOne, entityFixture(t, fixtureSiteOne, hubTriples...))
-	require.Less(t, rawTotal, neighborMaxContentBytes,
-		"precondition: the raw records all fit, so any truncation this fixture produces "+
-			"can only have come from measuring the emitted result")
-	return NewGraphQueryExecutor(kv), targets, rawTotal
 }
 
 // TestQueryNeighbors_BudgetMetersTheEmittedResult: the cap bounds the string
