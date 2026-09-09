@@ -679,17 +679,25 @@ func TestApprovalRejectionAtIterationCapRecordsTerminalBeforeAdjacentSurfaces(t 
 	}
 	loopID := taskResult.LoopID
 	const callID = "call-approval-terminal"
-	if _, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+	dispatched, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
 		RequestID: "request-approval-terminal", Status: agentic.StatusToolCall,
 		Message: agentic.ChatMessage{Role: "assistant", ToolCalls: []agentic.ToolCall{{
 			ID: callID, Name: "delete_rule", Arguments: map[string]any{"id": "rule-1"},
 		}}},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
+	decoder := payloadbuiltins.NewTestDecoder(t)
+	toolMessage, err := decoder.Decode(dispatched.PublishedMessages[0].Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := toolMessage.Payload().(*agentic.ToolCall)
 	gateResult, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
 		CallID: callID, Name: "delete_rule", ErrorKind: agentic.ToolErrorPermission,
-		Error: agentic.ApprovalRequiredPrefix + "requires approval",
+		Error:     agentic.ApprovalRequiredPrefix + "requires approval",
+		RequestID: call.RequestID, ExecutionID: call.ExecutionID, CallOrdinal: call.CallOrdinal,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -711,6 +719,7 @@ func TestApprovalRejectionAtIterationCapRecordsTerminalBeforeAdjacentSurfaces(t 
 	registry := payloadbuiltins.NewTestRegistry(t)
 	c := &Component{
 		config: config, handler: handler, decoder: message.NewDecoder(registry),
+		loopsBucket:        &settlementBucket{values: map[string][]byte{loopID: settlementLoopRecord(t, entity)}},
 		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
 		trajectoryRecorder: newTrajectoryRecorder(bucket, nil, "objectstore", func(trajectoryAuditFailure) {}),
 	}
@@ -723,7 +732,10 @@ func TestApprovalRejectionAtIterationCapRecordsTerminalBeforeAdjacentSurfaces(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.handleApprovalResponseMessage(ctx, data)
+	decision, err := c.handleApprovalResponseMessage(ctx, data)
+	if err != nil || decision != natsclient.DeliveryDecisionAck {
+		t.Fatalf("approval settlement = %v, %v; want ACK", decision, err)
+	}
 
 	if len(bucket.created) < 2 {
 		t.Fatalf("created facts = %d, want rejection observation and terminal", len(bucket.created))

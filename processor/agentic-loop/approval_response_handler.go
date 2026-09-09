@@ -2,9 +2,11 @@ package agenticloop
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/natsclient"
@@ -121,6 +123,7 @@ func (h *MessageHandler) dispatchApprovedCall(loopID string, pending agentic.Pen
 		RequestID:   pending.RequestID,
 		ExecutionID: pending.ExecutionID,
 		CallOrdinal: pending.CallOrdinal,
+		TraceID:     pending.TraceID,
 		ApprovedBy:  approvedBy,
 	}
 	if err := h.dispatchToolCall(result, loopID, tc); err != nil {
@@ -171,6 +174,9 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 			fmt.Errorf("unexpected approval response payload type %T", baseMsg.Payload())
 	}
 	response := *respPtr
+	if err := response.Validate(); err != nil {
+		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("validate approval response: %w", err)
+	}
 
 	c.logger.Debug("Processing approval response",
 		slog.String("loop_id", response.LoopID),
@@ -178,8 +184,32 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 		slog.String("decision", response.Decision),
 		slog.String("approved_by", response.ApprovedBy))
 
+	entity, getErr := c.handler.GetLoop(response.LoopID)
+	needsRecovery := getErr != nil || entity.PendingApproval == nil
+	if !needsRecovery {
+		loopID, routed := c.handler.loopManager.GetLoopForToolCall(entity.PendingApproval.ExecutionID)
+		needsRecovery = !routed || loopID != response.LoopID
+	}
+	persisted, revision, err := c.readLoopEntityRevision(ctx, response.LoopID)
+	if err != nil {
+		return loopSettlementDecision(err), err
+	}
+	if revision == 0 || persisted.State != agentic.LoopStateAwaitingApproval {
+		return natsclient.DeliveryDecisionRetry,
+			fmt.Errorf("approval continuation for loop %q has no proven current pending state", response.LoopID)
+	}
+	if !needsRecovery && !reflect.DeepEqual(entity.PendingApproval, persisted.PendingApproval) {
+		return natsclient.DeliveryDecisionQuarantine,
+			fmt.Errorf("approval for loop %q conflicts with the current durable pending identity", response.LoopID)
+	}
+	if needsRecovery {
+		if err := c.recoverApprovalResponse(ctx, response, persisted); err != nil {
+			return loopSettlementDecision(err), err
+		}
+	}
 	result, err := c.handler.HandleApprovalResponse(ctx, response)
 	if err != nil {
+		c.releaseLoopTransientState(response.LoopID)
 		wrapped := fmt.Errorf("handle approval response for loop %q call %q: %w", response.LoopID, response.CallID, err)
 		switch {
 		case errs.IsFatal(err):
@@ -191,19 +221,40 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 		}
 	}
 	if result.staleDrop {
-		// The handler dispatched nothing and resolved nothing. Persisting would
-		// re-Put a settled entity, or — once its per-loop state is released —
-		// report a persistence failure for a loop that is supposed to be gone.
-		// Returning here is what makes the two indistinguishable.
-		return natsclient.DeliveryDecisionAck, nil
+		return natsclient.DeliveryDecisionRetry,
+			fmt.Errorf("approval for loop %q lacks durable branch-applied proof", response.LoopID)
 	}
 
-	// Approval responses use the same persistence boundary as every other
-	// handler result. This keeps a rejection that reaches the iteration cap from
-	// bypassing the ordinary-observations-then-terminal audit ordering.
-	if err := c.persistHandlerResult(ctx, result); err != nil {
-		return natsclient.DeliveryDecisionQuarantine,
-			fmt.Errorf("approval result for loop %q has unknown durable state: %w", response.LoopID, err)
+	if result.State.IsTerminal() {
+		// Rejection terminal effects retain the established final-marker order.
+		if err := c.persistHandlerResult(ctx, result); err != nil {
+			return natsclient.DeliveryDecisionQuarantine,
+				fmt.Errorf("approval result for loop %q has unknown durable state: %w", response.LoopID, err)
+		}
+	} else {
+		// Resolution is speculative until the branch publication has PubAck.
+		// A failed attempt discards process state for a fresh authority read.
+		resolved, err := c.handler.GetLoop(result.LoopID)
+		if err != nil {
+			c.releaseLoopTransientState(response.LoopID)
+			return loopSettlementDecision(err), err
+		}
+		data, err := json.Marshal(resolved)
+		if err != nil {
+			c.releaseLoopTransientState(response.LoopID)
+			return loopSettlementDecision(err), err
+		}
+		c.recordHandlerResultTrajectory(ctx, result)
+		if err := c.publishResults(ctx, result); err != nil {
+			c.releaseLoopTransientState(response.LoopID)
+			return loopSettlementDecision(err), err
+		}
+		// Bind the cleared-pending commit to the checkpoint this approval used.
+		// A faster result owner may already have advanced the durable loop.
+		if _, err := c.loopsBucket.Update(ctx, result.LoopID, data, revision); err != nil {
+			c.releaseLoopTransientState(response.LoopID)
+			return natsclient.DeliveryDecisionRetry, fmt.Errorf("commit approved loop %s: %w", result.LoopID, err)
+		}
 	}
 	return natsclient.DeliveryDecisionAck, nil
 }

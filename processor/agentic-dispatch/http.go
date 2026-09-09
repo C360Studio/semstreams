@@ -766,20 +766,35 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Atomic CallID snapshot. The previous Get→deref pattern read
-	// loop.PendingApproval outside the tracker's lock and races
-	// against concurrent SetPendingApproval / UpdateCompletion /
-	// ClearPendingApproval mutations. Returns ("", false) when the
-	// loop is no longer awaiting approval — the cache divergence
-	// case (process restart, race lost, already resolved). 409
-	// Conflict is the right REST signal for "resource exists but is
-	// in the wrong state for this operation."
-	callID, awaiting := c.loopTracker.GetPendingApprovalCallID(loopID)
-	if !awaiting {
+	// Approval follows current durable authority; this process may never have
+	// received the already-settled pending event.
+	persisted, readErr := c.loadPersistedLoop(ctx, loopID)
+	if readErr == nil {
+		if persisted == nil {
+			readErr = fmt.Errorf("loop %q vanished between admission and approval", loopID)
+		} else if err := persisted.Validate(); err != nil {
+			readErr = fmt.Errorf("validate loop %q for approval: %w", loopID, err)
+		} else if persisted.State == agentic.LoopStateAwaitingApproval &&
+			(persisted.PendingApproval == nil || persisted.PendingApproval.CallID == "") {
+			readErr = fmt.Errorf("loop %q awaits approval without a pending call identity", loopID)
+		}
+	}
+	if readErr != nil {
+		c.logger.ErrorContext(ctx, "agentic-dispatch: admitted approval state could not be read",
+			slog.String("request_id", requestID),
+			slog.String("loop_id", loopID),
+			slog.String("error", readErr.Error()))
+		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "503")
+		c.metrics.recordHTTPDuration("/loops/{id}/approval", "POST", time.Since(startTime).Seconds())
+		c.writeJSONError(w, http.StatusServiceUnavailable, "loop record is not readable right now")
+		return
+	}
+	if persisted.State != agentic.LoopStateAwaitingApproval {
 		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "409")
 		c.writeJSONError(w, http.StatusConflict, "loop not awaiting approval")
 		return
 	}
+	callID := persisted.PendingApproval.CallID
 
 	c.logger.DebugContext(ctx, "submitting approval response for loop",
 		slog.String("request_id", requestID),
@@ -800,13 +815,6 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 		c.writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	// Clear the local cache after a successful publish so a fast-
-	// follow duplicate HTTP request doesn't re-publish for the same
-	// CallID. The framework's ResolveApprovalIfPending arbitrates
-	// duplicates atomically anyway, but clearing here saves a NATS
-	// round-trip + metric noise.
-	c.loopTracker.ClearPendingApproval(loopID)
 
 	c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "200")
 	c.metrics.recordHTTPDuration("/loops/{id}/approval", "POST", time.Since(startTime).Seconds())

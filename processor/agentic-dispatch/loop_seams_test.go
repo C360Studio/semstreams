@@ -367,19 +367,20 @@ func TestApprovalIsNotOwnerScoped(t *testing.T) {
 	c, _, _ := newSeamTestComponent(t)
 	c.config.Permissions.Approve = []string{"reviewer-b"}
 	trackLoopOwnedBy(c, seamTestLoopA, "user-a")
-	c.loopTracker.SetPendingApproval(seamTestLoopA, &PendingApprovalInfo{
-		CallID:      "call-001",
-		ToolName:    "delete_rule",
-		RequestedAt: time.Now().UTC(),
-	})
+	withPersistedLoops(c, map[string]*agentic.LoopEntity{seamTestLoopA: {
+		ID: seamTestLoopA, UserID: "user-a", ChannelType: "http", ChannelID: "session-1",
+		State: agentic.LoopStateAwaitingApproval, MaxIterations: 5,
+		PendingApproval: &agentic.PendingApprovalState{CallID: "call-001", ToolName: "delete_rule"},
+	}})
 
 	rec := seamHTTPCall(t, c.handleLoopApproval, http.MethodPost,
 		"/loops/"+seamTestLoopA+"/approval", seamTestLoopA, `{"decision":"approve"}`, "reviewer-b")
 
 	assert.NotEqual(t, http.StatusForbidden, rec.Code,
 		"an approver who does not own the loop is admitted")
-	assert.NotEqual(t, http.StatusConflict, rec.Code,
-		"the pending approval was found, so the request reached the publish")
+	require.Equal(t, http.StatusInternalServerError, rec.Code,
+		"durable pending approval reached the disconnected client's publication")
+	assert.Contains(t, rec.Body.String(), "publish approval response")
 }
 
 // spec: agentic-dispatch / The ownership model binds the user lane, and approval is deliberately not owner-scoped

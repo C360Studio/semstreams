@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
@@ -51,6 +52,7 @@ func TestIntegrationApprovalRejectionJoinsCancelledGraphRequestBeforeQuarantine(
 	})
 	require.NoError(t, err)
 	c := discoverable.(*Component)
+	require.NoError(t, c.initializeKVBuckets(setupCtx))
 	c.waitForStreamInput = func(context.Context, string) error { return nil }
 	callbacks := make(map[string]func(context.Context, jetstream.Msg))
 	handles := make(map[string]*loopPolicyHandle)
@@ -62,13 +64,15 @@ func TestIntegrationApprovalRejectionJoinsCancelledGraphRequestBeforeQuarantine(
 	}
 	require.NoError(t, c.setupSubscriptions(setupCtx, setupCtx))
 
-	loopID := setUpAwaitingLoop(t, c.handler, time.Minute, 0)
+	call := setUpPersistedApprovalForSettlement(t, setupCtx, c)
+	loopID := call.LoopID
 	entity, err := c.handler.GetLoop(loopID)
 	require.NoError(t, err)
 	entity.Iterations = entity.MaxIterations
 	require.NoError(t, c.handler.UpdateLoop(entity))
+	require.NoError(t, c.persistLoopState(setupCtx, loopID))
 	response := &agentic.ApprovalResponse{
-		LoopID: loopID, CallID: "call-gated", Decision: agentic.ApprovalDecisionReject,
+		LoopID: loopID, CallID: call.ID, Decision: agentic.ApprovalDecisionReject,
 		Reason: "policy", DecidedAt: time.Now().UTC(),
 	}
 	data, err := json.Marshal(message.NewBaseMessage(response.Schema(), response, "test"))
@@ -122,13 +126,13 @@ func TestIntegrationLoopSignalAndApprovalCallbacksCommitBeforeAck(t *testing.T) 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	completed := make(chan string, 1)
-	toolCalls := make(chan string, 1)
+	toolCalls := make(chan *nats.Msg, 1)
 	completeSub, err := testClient.Client.Subscribe(ctx, "agent.complete.>", func(_ context.Context, msg *nats.Msg) {
 		completed <- msg.Subject
 	})
 	require.NoError(t, err)
 	toolSub, err := testClient.Client.Subscribe(ctx, "tool.execute.>", func(_ context.Context, msg *nats.Msg) {
-		toolCalls <- msg.Subject
+		toolCalls <- msg
 	})
 	require.NoError(t, err)
 
@@ -138,6 +142,7 @@ func TestIntegrationLoopSignalAndApprovalCallbacksCommitBeforeAck(t *testing.T) 
 	require.NoError(t, err)
 	c := discoverable.(*Component)
 	c.graphWriter = nil
+	require.NoError(t, c.initializeKVBuckets(ctx))
 	c.waitForStreamInput = func(context.Context, string) error { return nil }
 	callbacks := make(map[string]func(context.Context, jetstream.Msg))
 	c.consumeStream = func(_ context.Context, _ context.Context, owner natsclient.PortConsumerContext, _ natsclient.StreamConsumerConfig, callback func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
@@ -148,6 +153,7 @@ func TestIntegrationLoopSignalAndApprovalCallbacksCommitBeforeAck(t *testing.T) 
 
 	cancelLoopID, err := c.handler.loopManager.CreateLoop("task-cancel", "general", "m", 3)
 	require.NoError(t, err)
+	require.NoError(t, c.persistLoopState(ctx, cancelLoopID))
 	signal := &agentic.UserSignal{
 		SignalID: "signal-1", Type: agentic.SignalCancel, LoopID: cancelLoopID,
 		UserID: "operator", Timestamp: time.Now().UTC(),
@@ -165,9 +171,10 @@ func TestIntegrationLoopSignalAndApprovalCallbacksCommitBeforeAck(t *testing.T) 
 		t.Fatal("cancel did not publish its terminal consequence")
 	}
 
-	approvalLoopID := setUpAwaitingLoop(t, c.handler, time.Minute, 0)
+	original := setUpPersistedApprovalForSettlement(t, ctx, c)
+	approvalLoopID := original.LoopID
 	response := &agentic.ApprovalResponse{
-		LoopID: approvalLoopID, CallID: "call-gated", Decision: agentic.ApprovalDecisionApprove,
+		LoopID: approvalLoopID, CallID: original.ID, Decision: agentic.ApprovalDecisionApprove,
 		ApprovedBy: "operator", DecidedAt: time.Now().UTC(),
 	}
 	responseData, err := json.Marshal(message.NewBaseMessage(response.Schema(), response, "test"))
@@ -180,9 +187,20 @@ func TestIntegrationLoopSignalAndApprovalCallbacksCommitBeforeAck(t *testing.T) 
 	require.NoError(t, err)
 	require.NotEqual(t, agentic.LoopStateAwaitingApproval, entity.State)
 	require.Nil(t, entity.PendingApproval)
+	durable, found, err := c.readLoopEntity(ctx, approvalLoopID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, entity.State, durable.State)
+	require.Nil(t, durable.PendingApproval, "approval ACK requires the cleared pending state to be durable")
 	select {
-	case subject := <-toolCalls:
-		require.Equal(t, "tool.execute.delete_rule", subject)
+	case published := <-toolCalls:
+		require.Equal(t, "tool.execute.delete_rule", published.Subject)
+		base, err := c.decoder.Decode(published.Data)
+		require.NoError(t, err)
+		approved, ok := base.Payload().(*agentic.ToolCall)
+		require.True(t, ok)
+		original.ApprovedBy = "operator"
+		require.Equal(t, original, *approved)
 	case <-time.After(2 * time.Second):
 		t.Fatal("approved response did not publish its tool consequence")
 	}
@@ -193,4 +211,48 @@ func TestIntegrationLoopSignalAndApprovalCallbacksCommitBeforeAck(t *testing.T) 
 	for _, binding := range c.consumers {
 		<-binding.observerDone
 	}
+}
+
+// Build the checkpoint through the existing task/model/tool owners, preserving
+// the actual emitted execution tuple instead of the sweeper's memory-only setup.
+func setUpPersistedApprovalForSettlement(t *testing.T, ctx context.Context, c *Component) agentic.ToolCall {
+	t.Helper()
+	task, err := c.handler.HandleTask(ctx, agentic.TaskMessage{
+		LoopID: uuid.NewString(), TaskID: "approval-settlement-task", Role: "general", Model: "m", Prompt: "review",
+	})
+	require.NoError(t, err)
+	var requestID string
+	for _, published := range task.PublishedMessages {
+		if published.Subject != "agent.request."+task.LoopID {
+			continue
+		}
+		base, err := c.decoder.Decode(published.Data)
+		require.NoError(t, err)
+		request, ok := base.Payload().(*agentic.AgentRequest)
+		require.True(t, ok)
+		requestID = request.RequestID
+	}
+	require.NotEmpty(t, requestID)
+	dispatched, err := c.handler.HandleModelResponse(ctx, task.LoopID, agentic.AgentResponse{
+		RequestID: requestID, Status: agentic.StatusToolCall,
+		Message: agentic.ChatMessage{Role: "assistant", ToolCalls: []agentic.ToolCall{{
+			ID: "call-gated", Name: "delete_rule", Arguments: map[string]any{"rule_id": "rule-42"},
+		}}},
+	})
+	require.NoError(t, err)
+	require.Len(t, dispatched.PublishedMessages, 1)
+	base, err := c.decoder.Decode(dispatched.PublishedMessages[0].Data)
+	require.NoError(t, err)
+	call, ok := base.Payload().(*agentic.ToolCall)
+	require.True(t, ok)
+	require.NotEmpty(t, call.ExecutionID)
+	gate, err := c.handler.HandleToolResult(ctx, task.LoopID, agentic.ToolResult{
+		LoopID: call.LoopID, RequestID: call.RequestID, ExecutionID: call.ExecutionID,
+		CallID: call.ID, CallOrdinal: call.CallOrdinal, Name: call.Name, TraceID: call.TraceID,
+		ErrorKind: agentic.ToolErrorPermission, Error: agentic.ApprovalRequiredPrefix + "review required",
+	})
+	require.NoError(t, err)
+	require.Equal(t, agentic.LoopStateAwaitingApproval, gate.State)
+	require.NoError(t, c.persistHandlerResult(ctx, gate))
+	return *call
 }

@@ -695,7 +695,7 @@ func TestLoopApprovalPanicProductionCallbackQuarantinesExactOwner(t *testing.T) 
 	health := c.Health()
 	require.False(t, health.Healthy)
 	require.Equal(t, "delivery ownership lost", health.Status)
-	require.Contains(t, health.LastError, "approval response handler panicked")
+	require.Contains(t, health.LastError, "loop delivery work panicked")
 
 	cancel()
 	for _, binding := range c.consumers {

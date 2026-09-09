@@ -1,21 +1,112 @@
 package agenticdispatch
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/metric"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// trackedLoopWithApproval seeds a loop in the tracker AND attaches a
-// pending approval. Returns the test component for chained
-// assertions. Used by every test that exercises the success-path
-// validation branches up to (but not including) the NATS publish.
+// spec: agentic-dispatch / Dispatch uses one authority-backed current-state projection
+// An explicit approval reads current durable authority, including when the
+// original created/pending events have settled and the tracker is empty.
+func TestHandleLoopApproval_CurrentAuthority(t *testing.T) {
+	tests := []struct {
+		name      string
+		tracked   bool
+		mutate    func(*agentic.LoopEntity)
+		readError error
+		vanish    bool
+		wantCode  int
+		wantText  string
+	}{
+		{name: "cold pending reaches existing publication", wantCode: http.StatusInternalServerError, wantText: ErrNATSClientNil.Error()},
+		{name: "stale tracker cannot override executing", tracked: true, mutate: func(e *agentic.LoopEntity) {
+			e.State, e.PendingApproval = agentic.LoopStateExecuting, nil
+		}, wantCode: http.StatusConflict, wantText: "loop not awaiting approval"},
+		{name: "stale tracker cannot override terminal", tracked: true, mutate: func(e *agentic.LoopEntity) {
+			e.State, e.PendingApproval = agentic.LoopStateComplete, nil
+		}, wantCode: http.StatusConflict, wantText: "loop not awaiting approval"},
+		{name: "invalid state is unreadable", tracked: true, mutate: func(e *agentic.LoopEntity) {
+			e.State = "invented"
+		}, wantCode: http.StatusServiceUnavailable, wantText: "loop record is not readable right now"},
+		{name: "awaiting without pending is unreadable", tracked: true, mutate: func(e *agentic.LoopEntity) {
+			e.PendingApproval = nil
+		}, wantCode: http.StatusServiceUnavailable, wantText: "loop record is not readable right now"},
+		{name: "pending without call identity is unreadable", tracked: true, mutate: func(e *agentic.LoopEntity) {
+			e.PendingApproval.CallID = ""
+		}, wantCode: http.StatusServiceUnavailable, wantText: "loop record is not readable right now"},
+		{name: "unavailable authority cannot fall back to tracker", tracked: true, readError: errors.New("storage unavailable"),
+			wantCode: http.StatusServiceUnavailable, wantText: "loop record is not readable right now"},
+		{name: "malformed authority cannot fall back to tracker", tracked: true, readError: permanentTerminal("malformed loop JSON"),
+			wantCode: http.StatusServiceUnavailable, wantText: "loop record is not readable right now"},
+		{name: "record vanished after admission is unreadable", vanish: true,
+			wantCode: http.StatusServiceUnavailable, wantText: "loop record is not readable right now"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			comp := newTestComponent(t)
+			if tt.tracked {
+				comp = trackedLoopWithApproval(t, seamTestLoopA, "stale-cache-call")
+			}
+			var logs bytes.Buffer
+			comp.logger = slog.New(slog.NewTextHandler(&logs, nil))
+			comp.metrics = getMetrics(metric.NewMetricsRegistry())
+			record := &agentic.LoopEntity{
+				ID: seamTestLoopA, TaskID: "task-current", UserID: "user-1", ChannelType: "http", ChannelID: "chan-1",
+				State: agentic.LoopStateAwaitingApproval, MaxIterations: 3,
+				PendingApproval: &agentic.PendingApprovalState{CallID: "durable-call", ToolName: "delete_rule"},
+			}
+			if tt.mutate != nil {
+				tt.mutate(record)
+			}
+			before, err := json.Marshal(record)
+			require.NoError(t, err)
+			reads := 0
+			comp.loadPersistedLoopFn = func(_ context.Context, loopID string) (*agentic.LoopEntity, error) {
+				require.Equal(t, seamTestLoopA, loopID)
+				reads++
+				if tt.vanish && reads > 1 {
+					return nil, absentRecord(loopID)
+				}
+				return record, tt.readError
+			}
+			req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", strings.NewReader(`{"decision":"approve"}`))
+			req.SetPathValue("id", seamTestLoopA)
+			req = req.WithContext(WithIdentity(req.Context(), "second-party-reviewer"))
+			rec := httptest.NewRecorder()
+			comp.handleLoopApproval(rec, req)
+			require.Equal(t, tt.wantCode, rec.Code, "%s", rec.Body.String())
+			var response HTTPMessageResponse
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+			require.Contains(t, response.Content, tt.wantText)
+			if tt.wantCode == http.StatusServiceUnavailable {
+				assert.Contains(t, logs.String(), "admitted approval state could not be read")
+				assert.Equal(t, 1.0, testutil.ToFloat64(comp.metrics.httpRequestsTotal.WithLabelValues(
+					"/loops/{id}/approval", "POST", "503")))
+			}
+			after, err := json.Marshal(record)
+			require.NoError(t, err)
+			require.Equal(t, before, after, "HTTP admission/publication must not mutate loop authority")
+		})
+	}
+}
+
+// trackedLoopWithApproval supplies both durable authority and the old tracker
+// fixture. Tests may replace either observation to prove which one controls
+// explicit approval; production authority is never written by the handler.
 func trackedLoopWithApproval(t *testing.T, loopID, callID string) *Component {
 	t.Helper()
 	comp := newTestComponent(t)
@@ -35,6 +126,11 @@ func trackedLoopWithApproval(t *testing.T, loopID, callID string) *Component {
 		Reason:      "approval_required: Tool 'delete_rule' requires human approval",
 		RequestedAt: time.Now().UTC(),
 	})
+	withPersistedLoops(comp, map[string]*agentic.LoopEntity{loopID: {
+		ID: loopID, TaskID: "task-" + loopID, UserID: "user-1", ChannelType: "http", ChannelID: "chan-1",
+		State: agentic.LoopStateAwaitingApproval, MaxIterations: 3,
+		PendingApproval: &agentic.PendingApprovalState{CallID: callID, ToolName: "delete_rule"},
+	}})
 	return comp
 }
 
@@ -93,12 +189,8 @@ func TestHandleLoopApproval_UnknownDecision(t *testing.T) {
 	assert.Contains(t, resp.Content, "invalid decision")
 }
 
-// TestHandleLoopApproval_NotAwaitingApproval is the regression guard
-// for the cache-divergence false-negative: when dispatch's local view
-// of the loop has no PendingApproval (process restart, race lost,
-// approval already resolved), the handler must reject 409 rather
-// than try to publish with an empty CallID. 409 Conflict is the
-// REST-conventional "resource exists, wrong state for this op."
+// TestHandleLoopApproval_NotAwaitingApproval keeps 409 for a current durable
+// record in a nonpending state, not for an empty replacement process cache.
 func TestHandleLoopApproval_NotAwaitingApproval(t *testing.T) {
 	comp := newTestComponent(t)
 	comp.loopTracker.Track(&LoopInfo{
@@ -108,7 +200,9 @@ func TestHandleLoopApproval_NotAwaitingApproval(t *testing.T) {
 		State:       "executing",
 		CreatedAt:   time.Now(),
 	})
-	// No SetPendingApproval — loop is tracked but not awaiting approval.
+	withPersistedLoops(comp, map[string]*agentic.LoopEntity{seamTestLoopB: {
+		ID: seamTestLoopB, UserID: "user-1", ChannelType: "http", State: agentic.LoopStateExecuting, MaxIterations: 3,
+	}})
 
 	body := `{"decision":"approve"}`
 	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopB+"/approval", strings.NewReader(body))
@@ -219,16 +313,14 @@ func TestHandleLoopApproval_ModifiedArgumentsAccepted(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code, "validation should pass and reach publish")
 }
 
-// TestHandleLoopApproval_NotAwaitingApprovalAfterPublishFailure is a
-// regression guard for the clear-on-success contract: after a
-// successful publish, the local PendingApproval cache is cleared so
-// a fast-follow duplicate request gets 409 instead of re-publishing.
-// We can't exercise the success-path publish without NATS, so this
-// test asserts the corollary: a request that fails publish (no NATS
-// client → 500) must NOT clear the cache, leaving subsequent retries
-// able to succeed once NATS is available.
+// A failed ordinary approval publication must leave current pending authority
+// intact. Only the loop owner applies the eventual approval response.
 func TestHandleLoopApproval_FailedPublishPreservesPendingApproval(t *testing.T) {
 	comp := trackedLoopWithApproval(t, seamTestLoopA, "call-001")
+	before, err := comp.loadPersistedLoop(context.Background(), seamTestLoopA)
+	require.NoError(t, err)
+	beforeBytes, err := json.Marshal(before)
+	require.NoError(t, err)
 
 	body := `{"decision":"approve"}`
 	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", strings.NewReader(body))
@@ -239,8 +331,10 @@ func TestHandleLoopApproval_FailedPublishPreservesPendingApproval(t *testing.T) 
 
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
 
-	// Cache must remain populated for retry.
-	callID, ok := comp.loopTracker.GetPendingApprovalCallID(seamTestLoopA)
-	assert.True(t, ok, "failed publish must NOT clear PendingApproval — caller should be able to retry")
-	assert.Equal(t, "call-001", callID)
+	after, err := comp.loadPersistedLoop(context.Background(), seamTestLoopA)
+	require.NoError(t, err)
+	afterBytes, err := json.Marshal(after)
+	require.NoError(t, err)
+	require.Equal(t, beforeBytes, afterBytes)
+	require.Equal(t, "call-001", after.PendingApproval.CallID)
 }

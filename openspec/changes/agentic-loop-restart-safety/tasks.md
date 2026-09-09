@@ -483,10 +483,93 @@ The exact source manifest, commands, positive/negative proof, and seeded-checkpo
 
 ## 6. Dispatch edge gateway and approval continuation gate
 
+The 2026-09-09 local first-approve integration proof reaches the intended RED on production checkpoint
+`8c65dac0`: real task/model/tools owners persist pending approval, the source ToolResult and original dispatch
+notifications settle, loop and dispatch stop/join, and fresh owners retain byte-identical pending state. HTTP
+approval then returns 409 (`loop not awaiting approval`) because the endpoint still consults `LoopTracker`.
+The exact source ACK floor is 6 for ToolResult sequence 6; pending KV revision is 3. The focused race-enabled
+canonical run took 1.468s (test 0.46s), and independent review approved this first-approve test's fidelity.
+This is a component-replacement RED, not an OS-process E2E pass, proof of missing durable evidence, or the
+task 6.6 mechanism ruling. Graph/evidence E2E and the complete decision/error/correlation matrix remain open.
+The narrow explicit-approval authority-read correction is part of 6.9/6.10; it does not complete tracker removal
+or the shared-view work. Earlier trace-expectation failures were test-fixture failures, not restart findings.
+
+The same unchanged production checkpoint then reproduced the 409 in standard `task e2e:agentic` with the
+deterministic local mock and the new `walk-approval-after-restart` stage. The application was killed/restarted
+while NATS stayed up; native source and dispatch-notification settlement, process replacement, and retained
+pending state were checked before the HTTP request. The run failed at that request in 2m41.749s with
+`assertions_run=12`; the tier now declares 16 assertion stages. This is OS-process RED evidence, not E2E success.
+Normal test-stack teardown completed. The full fixture race suite and scoped vet passed, and independent review
+approved the test's fidelity. Missing-report-witness fixture tests are not runtime fault-injection proofs.
+
+The subsequent local explicit-approval endpoint correction uses the existing exact authority reader and typed
+validation, preserves admission/second-party permission and publication, and removes tracker-based approval
+selection/clearing. Independent review approved this endpoint-only slice; the full dispatch package passed with
+`-race` in 2.256s, and the deliberate refusal-log/counter omission failed its tests as intended. The unchanged
+real-NATS replacement test now passes HTTP 200 and observes the exact ApprovalResponse's native ACK, then fails
+because the fresh loop ignores the approval with empty process state and never redispatches the tool (test 5.51s,
+package 8.031s). This exposes the separate 6.3/6.5/7.6 cold-approval false-ACK obligation; it is not a recovery PASS
+or evidence that retained continuation data is missing. That intermediate run preceded the loop correction below.
+
+The bounded first-approve loop correction now restores the existing context/tool owner from current pending
+state and the exact retained request/response. It validates the execution tuple, preserves the pending trace, and
+preserves the live approval gate's discard of queued sibling tools. It adds no new state owner, durable field,
+bucket, public surface, or recovery runtime. Missing process state alone no longer authorizes an approval ACK.
+Review reproduced two fast-result ordering windows. The correction snapshots the resolved approval before
+publication, waits for the existing required PubAck, then uses native KV Update against the revision from the
+original authority read. A conflict retries without overwriting newer state or inventing branch-applied proof.
+The final source and regressions received independent APPROVE; full loop race passed in 3.023s and vet passed.
+
+The unchanged real-NATS replacement test now passes (test 0.47s, package 4.037s): settled original inputs,
+fresh loop/dispatch owners, HTTP 200, exact approved execution, native ACKs, one executor effect, and durable
+successful completion. Independent evidence review returned APPROVE. This fixture deliberately excludes
+graph/trajectory-storage evidence; its logged unavailable audit storage is not success evidence.
+
+Standard `task e2e:agentic` then passed all 16 assertion stages in 2m32.252s using the deterministic local mock.
+The explicit `walk-approval-after-restart` stage passed in 6.506s after real application kill/restart retaining
+NATS, with unchanged pending state, no premature execution, exact approved tool correlation, one executor effect,
+and successful terminal completion. The tier also passed its existing graph/trajectory and replacement stages;
+that does not imply every approval audit consequence has a separate assertion. Normal ephemeral-stack teardown
+completed. Root repository unit/race and lint passed. This is the first approve-path GREEN, not the complete
+decision/error/correlation matrix, confirmed-retention-absence behavior, applied/redelivery proof, sweeper work,
+tracker/shared-view removal, or task 6.6's owner mechanism ruling. All mixed task checkboxes remain open.
+
+The source manifest and native evidence are retained in
+`/private/tmp/gh1146-approval-replacement-20260909.J0xSCQ/loop-approval-first-approve-handoff.md`.
+The standard E2E log is `/private/tmp/gh1146-approval-restart-20260909.GmOOLg/e2e-process-current.log`, SHA-256
+`125ad9a5baa38c41d7786c8256c5a3dab15cfe1c777e29a0eee6af292389c493`. Missing-report-witness negatives remain
+fixture/validator tests, not omitted-restart runtime mutants. No Store removal or third mechanism is authorized.
+
+The first full pre-push gate exposed an older graph-cancellation fixture that supplied only process-local
+approval state. Initializing its existing KV and producing a valid pending checkpoint through the existing
+handlers exposed a real terminal-error regression: the new branch split had changed terminal persistence
+failure from Quarantine to Retry. The terminal branch now restores its original Quarantine and contextual error;
+the new nonterminal snapshot/PubAck/conditional-Update path is unchanged. Neither graph cancellation/join nor
+zero-settlement/exact-owner assertions were weakened. Both native fixture cases pass (0.28s and 0.27s,
+package 2.505s); full loop race passes in 3.209s and integration-tagged vet passes. The original full-gate failure
+and both focused REDs remain retained under `/private/tmp/gh1146-check-push.5RHqVN`.
+
+Final corrected-source `task check:push` passes, including full race-enabled integration (loop 189.757s,
+dispatch 76.129s). Standard deterministic-mock agentic E2E then passes all 16 asserting stages (18 total) in
+2m32.172s; approval after process replacement passes in 6.474s. All Go source hashes remain unchanged across
+these final runs, and schemas/OpenAPI have no drift. Linux/amd64 build, module tidy-diff, identity audit,
+fixed-port/inventory/API guard fixtures, and strict OpenSpec validation pass. API comparison remains reporting-only
+with 14 incompatible packages against beta.162, not compatibility approval. Final gate evidence is retained in
+`/private/tmp/gh1146-final-gates.KNIdAO`; earlier REDs remain recorded, not waived or rerun away.
+This verifies the bounded first-approve checkpoint; the mixed tasks and task 6.6 remain open.
+
 - [ ] 6.1 RED: run the real-NATS approval replacement gate after an approval-required `ToolResult` fully settles.
   Replace loop and dispatch, discard every process map/cache, retain `AGENT` and `AGENT_LOOPS`, and independently
   exercise approve, modify, reject, timeout, and redelivery. Cite exactly
   `// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded`.
+- [ ] 6.1a Add an explicit assertion stage to the standard agentic E2E tier: reach durably settled pending
+  approval, kill and restart the application while retaining NATS, prove process replacement, submit approval
+  through the existing HTTP route, and verify the exact gated tool execution and terminal completion. Reuse the
+  existing process controller and approval helpers; add no production recovery hook or new storage. Keep the
+  full decision/error/correlation matrix in real-NATS integration tests. Prove the stage fails when restart or
+  approval recovery is omitted; count its assertions honestly. Cite the same requirement as 6.1. The existing
+  live approval walk and unrelated process-replacement stage do not satisfy this task. Owner accepted this
+  explicit E2E addition on 2026-09-09; task 6.6's mechanism ruling remains unchanged.
 - [ ] 6.2 Prove the settled approval-required `ToolResult` is available from current
   `LoopEntity.PendingToolResults[PendingApproval.ExecutionID]` and agrees with pending RequestID, ExecutionID,
   ordinal, provider CallID, name, LoopID, trace, and approval-required classification. Match provider CallID only
@@ -669,7 +752,8 @@ The exact source manifest, commands, positive/negative proof, and seeded-checkpo
   unknown decisions cannot ACK. Leave #1155 open until #1249 supplies AgentRun complete/failed proof and the later
   combined gate passes.
 - [ ] 11.2 Run focused race and integration tests, lint, build, schema generation, contract tests, and serialized
-  `task e2e:agentic`. The AGENT DiscardNew cutover and first-party publisher path require covering E2E green.
+  `task e2e:agentic`, including 6.1a's approval-after-process-restart stage. The AGENT DiscardNew cutover and
+  first-party publisher path require covering E2E green.
 - [ ] 11.3 Correct false restart claims in concepts 03, 17, and 27; link concept 33 without duplicating its message-
   pump explanation. Document provider at-least-once recovery, retained-response reuse, stable RequestID, and
   ambiguous-replacement duplicate risk; continuation/Store; AGENT admission and DiscardNew backpressure,

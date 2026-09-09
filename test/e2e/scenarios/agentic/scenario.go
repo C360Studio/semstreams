@@ -251,6 +251,7 @@ func (s *Scenario) stages() []agenticStage {
 		{name: "verify-stage-a-process-replacement", fn: s.verifyStageAProcessReplacement, asserts: true},
 		{name: "walk-approval-path", fn: s.walkApprovalPath, asserts: true},
 		{name: "refuse-non-canonical-approval", fn: s.refuseNonCanonicalApproval, asserts: true},
+		{name: "walk-approval-after-restart", fn: s.walkApprovalAfterRestart, asserts: true},
 		{name: "walk-signal-path", fn: s.walkSignalPath, asserts: true},
 		{name: "refuse-non-canonical-signal", fn: s.refuseNonCanonicalSignal, asserts: true},
 		{name: "validate-results", fn: s.validateResults, asserts: true},
@@ -1172,6 +1173,9 @@ func (s *Scenario) validateResults(_ context.Context, result *scenarios.Result) 
 	}
 	if outcome, _ := result.Details["approval_outcome"].(string); outcome != agentic.OutcomeSuccess {
 		return fmt.Errorf("approval walk outcome = %q, want %q", outcome, agentic.OutcomeSuccess)
+	}
+	if err := validateApprovalRestartEvidence(result.Details); err != nil {
+		return err
 	}
 	if outcome, _ := result.Details["signal_outcome"].(string); outcome != agentic.OutcomeCancelled {
 		return fmt.Errorf("signal walk outcome = %q, want %q", outcome, agentic.OutcomeCancelled)
