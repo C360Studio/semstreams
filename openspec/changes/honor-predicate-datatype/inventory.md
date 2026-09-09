@@ -1,7 +1,7 @@
 # Inventory: honor-predicate-datatype (#1267)
-base: 0492f5ccb9f09873aec8fc6346a8f12b939d2f0c
+base: 40b8bcf7b216de6ed866a0208a72282926e3b2a5
 
-**Pins refreshed 2026-09-09** at implementation time, from the original base `232b1e7d` to `0492f5cc` — 76 pins
+**Pins refreshed 2026-09-09** at implementation time, from the original base `232b1e7d` to `40b8bcf7` — 76 pins
 MOVED (line numbers only) and 16 DRIFT + 2 AMBIGUOUS re-derived by hand, the drifted ones because this change
 rewrote the very lines they pin: the validator signature, its two call sites, the `Role` doc comment whose false
 consumer claim addendum A4 recorded, `classifyWithExplicitDatatype`, and the call sites and assertions migrated

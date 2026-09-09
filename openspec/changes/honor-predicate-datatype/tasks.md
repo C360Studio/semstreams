@@ -129,20 +129,51 @@ never been observed is a hypothesis. Nothing else starts until it is a failing a
 
 ## 8. Gates
 
-- [ ] 8.1 `task lint`, `go test -race ./...`, `go test -tags=integration -race -p 2 ./...`, `task schema:generate` +
-      clean `git diff schemas/ specs/`, `go test ./test/contract/...`.
-- [ ] 8.2 `task api:compat` naming its base explicitly (the default base moves). Expect ADDITION findings for the new
+- [x] 8.1 `task lint`, `go test -race ./...`, `go test -tags=integration -race -p 2 ./...`, `task schema:generate` +
+      clean `git diff schemas/ specs/`, `go test ./test/contract/...`. **All green on `40b8bcf7`**: lint exit 0;
+      `go test -race ./...` exit 0, 153 ok; `go test -race -tags=integration -p 2 ./...` exit 0, 153 ok;
+      `task schema:generate` then `git status --porcelain schemas/ specs/` empty; `go test ./test/contract/...` ok.
+      Also `go run ./cmd/entity-id-audit .` passed (1310 candidates) — `task lint` does NOT run it, CI's Lint job
+      does — and `task spec:properties` 74/74.
+- [x] 8.2 `task api:compat` naming its base explicitly (the default base moves). Expect ADDITION findings for the new
       constants and ZERO REMOVAL findings — no signature moves. Record that this instrument is BLIND to the semsource
-      wire-value change, which is why 7.6 exists.
-- [ ] 8.3 `openspec validate honor-predicate-datatype --strict` and
-      `task inventory:verify -- openspec/changes/honor-predicate-datatype/inventory.md`.
-- [ ] 8.4 Name the e2e tier if the owner rules this BREAKING. The in-repo blast radius is registration-time refusal at
+      wire-value change, which is why 7.6 exists. **Run `API_COMPAT_MODE=report ./scripts/api-compat.sh`, base
+      `v1.0.0-beta.162` → HEAD `40b8bcf7`: 62 Tier 1 packages compared, 50 clean, 12 incompatible, 0 removed,
+      0 added.** `vocabulary` (`release/tier1-packages.txt:95`) and `vocabulary/export` (`:100`) are BOTH in the
+      compared set and BOTH clean — the seven constants and `IsValidDataType` are compatible additions and no
+      signature moved. None of the 12 is a package this change touches; all 12 predate it on `main` since
+      beta.162. As predicted, the instrument reports nothing about the semsource `data_type` wire value, which
+      is why 7.6 exists.
+- [x] 8.3 `openspec validate honor-predicate-datatype --strict` and
+      `task inventory:verify -- openspec/changes/honor-predicate-datatype/inventory.md`. **Both green**: "Change
+      'honor-predicate-datatype' is valid"; inventory `pins=150 ok=150 moved=0 ambiguous=0 drift=0 malformed=0
+      unparsed=0` after refreshing the base `232b1e7d` → `40b8bcf7` (76 MOVED auto-updated, 16 DRIFT + 2 AMBIGUOUS
+      re-derived by hand — this change rewrote the lines they pin).
+- [x] 8.4 Name the e2e tier if the owner rules this BREAKING. The in-repo blast radius is registration-time refusal at
       boot, so `task e2e:core` is the tier that would catch a half-migrated binary; file a coverage gap if the RDF
       export path is genuinely untested end-to-end in this repo (it has zero in-repo callers).
+      **`task e2e:core` GREEN, exit 0, on `40b8bcf7`** — 7/7 ports free, all services healthy, readiness and
+      heartbeat agreeing at 12/12 healthy components, `core-minted-authority` and `core-graph-roundtrip` scenarios
+      both passing. It is the right tier for this change because the containerized binary
+      (`cmd/e2e-semstreams/main.go:48`) imports `vocabulary/builtins`, so it walks the exact registration path a
+      refused datatype panics on; a half-migrated binary could not have reached "healthy".
+      **Coverage gap CONFIRMED and unfiled**: no e2e tier exercises `vocabulary/export` at all — the package has
+      zero in-repo callers, and the family's only production RDF emitter is semconnect's CS API gateway. The four
+      output changes in §5 of the migration note are covered by unit fixtures through the authoritative
+      ENTITY_STATES seam and by nothing end-to-end. Owner decision owed on whether that earns an issue.
 - [x] 8.5 Re-measure the Codex/Claude held-file union before implementation — PR #1262 was 7 files at design time and
       grows.
 
 ## 9. Spec sync
 
 - [ ] 9.1 Apply the delta to `openspec/specs/predicate-contract/spec.md` as the last content commit, reviewed with the
-      code.
+      code. **DELIBERATELY NOT DONE, and it is BLOCKED on an owner ruling, not on effort.** The delta's scenario
+      *the framework's own declarations are complete* is measured FALSE against this repository: 81 framework
+      predicates declare no datatype, and thirteen of them are deliberately bare —
+      `vocabulary/rulepacks/predicates.go:44-61` registers names only, which the same requirement's
+      "An absent datatype MUST remain valid" explicitly permits. The two clauses contradict each other. The shipped
+      guard is therefore a shrink-only RATCHET over a committed, measured exemption set
+      (`test/contract/predicate_datatype_contract_test.go`), which is NOT what the scenario states. Syncing the
+      delta as written would put a false requirement into `openspec/specs/`. The owner rules: amend the scenario to
+      the ratchet, or open the 81-declaration pass as its own change. Everything else in the delta is implemented
+      and tested.
