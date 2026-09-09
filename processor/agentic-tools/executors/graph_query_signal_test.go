@@ -577,6 +577,23 @@ func TestQueryByType_RejectsUndecodableCursor(t *testing.T) {
 		})
 	}
 
+	t.Run("an empty cursor is the first page, not a bad token", func(t *testing.T) {
+		// graph.DecodeCursor returns ("", nil) for the empty cursor by
+		// documented contract, and the advertised description says to omit the
+		// argument for the first page. A caller that sends the optional
+		// argument as "" must get page one, not a refusal telling it the
+		// cursor "decodes to \"\"" — and not a refusal of the FIRST page.
+		executor, lister := listerFixture(t)
+		result, err := executor.Execute(context.Background(), agentic.ToolCall{
+			ID: "call-emptycursor", Name: "query_by_type",
+			Arguments: map[string]any{"entity_type": "temperature", "cursor": ""},
+		})
+		require.NoError(t, err)
+		assert.Empty(t, result.ErrorKind, "an empty cursor is omission, not a bad token")
+		assert.NotEmpty(t, result.Content, "the first page is served")
+		assert.Equal(t, 1, lister.callCount, "serving page one costs exactly one key scan")
+	})
+
 	t.Run("the tool's own cursor is still accepted", func(t *testing.T) {
 		executor, _ := listerFixture(t)
 		first, err := executor.Execute(context.Background(), agentic.ToolCall{
@@ -957,6 +974,45 @@ func TestQueryNeighbors_BudgetTruncatesWithHint(t *testing.T) {
 // free on one long string (neighborBudgetFixture above) and expensive on many
 // short structural lines, so metering the compact KV values would report this
 // set as comfortably inside a cap the model receives it far outside of.
+// TestQueryNeighbors_OverBudgetIsAlwaysSignalled covers the seam between the
+// emitted-size trim and the unresolved/empty split. When every target is an
+// edge but none is resident, nothing is ever admitted, so fitEmitted returns
+// on its "nothing left to give back" arm without setting truncated, and the
+// HintEmpty guard rightly declines because unresolved is non-empty. Without an
+// explicit size check that leaves an over-cap body reported as fine — the same
+// failure the budget exists to prevent, at a rarer input.
+func TestQueryNeighbors_OverBudgetIsAlwaysSignalled(t *testing.T) {
+	const wideTargets = 2000
+	kv := newMockKVGetter()
+	hubTriples := make([]message.Triple, 0, wideTargets)
+	for i := 0; i < wideTargets; i++ {
+		// Named but never Put: an edge whose target is not resident.
+		hubTriples = append(hubTriples, relationshipTriple(fixtureSiteOne, "facility.site.holds",
+			fmt.Sprintf("acme.test.gcs.environmental.temperature.absent-%04d", i)))
+	}
+	kv.Put(fixtureSiteOne, entityFixture(t, fixtureSiteOne, hubTriples...))
+
+	executor := NewGraphQueryExecutor(kv)
+	result, err := executor.Execute(context.Background(), agentic.ToolCall{
+		ID: "call-overbudget", Name: "query_neighbors",
+		Arguments: map[string]any{"entity_id": fixtureSiteOne, "depth": float64(2)},
+	})
+	require.NoError(t, err)
+	require.Empty(t, result.ErrorKind, "the walk succeeded; the source is resident")
+
+	var content map[string]any
+	require.NoError(t, json.Unmarshal([]byte(result.Content), &content))
+	require.Empty(t, content["neighbors"], "precondition: nothing was resident, so nothing was admitted")
+	require.NotEmpty(t, content["unresolved"], "precondition: every target is reported unresolved")
+	require.Greater(t, len(result.Content), neighborMaxContentBytes,
+		"precondition: the unresolved envelope alone exceeds the cap, which is what makes this the seam")
+
+	assert.Equal(t, agentic.HintTooLarge, result.ResultHint,
+		"an over-budget body is signalled even when nothing was given back")
+	assert.NotEqual(t, agentic.HintEmpty, result.ResultHint,
+		"unresolved targets are not an empty neighborhood")
+}
+
 func neighborWideFixture(t *testing.T) (*GraphQueryExecutor, []string, int) {
 	t.Helper()
 	const wideRecords = 150

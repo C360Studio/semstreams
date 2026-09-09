@@ -711,6 +711,19 @@ func (e *GraphQueryExecutor) queryNeighbors(ctx context.Context, call agentic.To
 		},
 	}
 	switch {
+	// An over-budget body is ALWAYS signalled, whether or not anything was
+	// given back. fitEmitted returns early when there is nothing left to give
+	// back, which happens when no record was ever admitted — every target
+	// unresolved, so the envelope alone exceeds the cap. That path sets
+	// neither truncated (nothing was given back) nor HintEmpty (unresolved is
+	// non-empty and the split above is right to decline), and it would
+	// otherwise hand the model an over-cap result reported as fine: the exact
+	// failure the budget exists to prevent, at a rarer input. The residual is
+	// that the unresolved list is unbounded — narrowing it is a model-facing
+	// decision no ruling covers — but the caller is never told the body fits
+	// when it does not.
+	case len(content) > neighborMaxContentBytes:
+		result.ResultHint = agentic.HintTooLarge
 	case walk.truncated:
 		result.ResultHint = agentic.HintTooLarge
 	case len(walk.neighbors) == 0 && len(walk.unresolved) == 0:
@@ -1136,14 +1149,23 @@ func (e *GraphQueryExecutor) queryByType(ctx context.Context, call agentic.ToolC
 		// six-part identity is authoritative-state corruption this tool
 		// already refuses on the listing side, so "decodes to a canonical
 		// entity ID" is exactly the set of tokens this tool issues.
-		if validateErr := semtypes.ValidateEntityID(decoded); validateErr != nil {
-			return agentic.ToolResult{
-				CallID: call.ID,
-				Error: fmt.Sprintf(
-					"cursor is not a token this tool issued: it decodes to %q, which is not a canonical entity ID: %v",
-					decoded, validateErr),
-				ErrorKind: agentic.ToolErrorInvalidArgs,
-			}, nil
+		// An EMPTY cursor is the first page, not a bad token: graph.DecodeCursor
+		// returns ("", nil) for it by documented contract, the advertised
+		// description says "omit it for the first page", and this executor
+		// already reads an empty `direction` and an empty `relationship_type`
+		// as omitted. Validating "" would make `cursor` the one optional
+		// string here that a caller cannot send empty — and would refuse the
+		// FIRST page while telling the model its cursor "decodes to \"\"".
+		if decoded != "" {
+			if validateErr := semtypes.ValidateEntityID(decoded); validateErr != nil {
+				return agentic.ToolResult{
+					CallID: call.ID,
+					Error: fmt.Sprintf(
+						"cursor is not a token this tool issued: it decodes to %q, which is not a canonical entity ID: %v",
+						decoded, validateErr),
+					ErrorKind: agentic.ToolErrorInvalidArgs,
+				}, nil
+			}
 		}
 		cursorKey = decoded
 	}
