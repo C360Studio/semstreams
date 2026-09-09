@@ -625,6 +625,34 @@ func TestQueryByType_ListerFailureIsNotAnEmptyListing(t *testing.T) {
 	assert.NotEqual(t, agentic.HintEmpty, result.ResultHint)
 }
 
+// TestQueryByType_NonCanonicalKeyFailsClosed: a key in ENTITY_STATES that is
+// not a canonical entity ID is authoritative-state corruption, and the listing
+// refuses rather than skipping it. A skip would drop a row from a set the
+// result reports as the complete match.
+//
+// spec: agentic-tools / query_by_type lists entity identities by the ADR-102 type segment through the existing filtered key listing
+func TestQueryByType_NonCanonicalKeyFailsClosed(t *testing.T) {
+	lister := &mockKVLister{
+		mockKVGetter: newMockKVGetter(),
+		// Five segments where a canonical entity ID has six. It carries no
+		// entity-id-audit classify annotation on purpose: the audit extracts no
+		// candidate from a bare slice element (measured 2026-09-09 — the audit
+		// is green at 1317 candidates with this fixture present), and an
+		// annotation that matches no candidate is itself an audit failure.
+		keys: []string{fixtureTempOne, "acme.test.gcs.environmental.temperature"},
+	}
+	executor := NewGraphQueryExecutor(lister)
+
+	result, err := executor.Execute(context.Background(), agentic.ToolCall{
+		ID: "call-badkey", Name: "query_by_type",
+		Arguments: map[string]any{"entity_type": "temperature"},
+	})
+	require.Error(t, err, "the executor contract carries the failure beside the result")
+	assert.Equal(t, agentic.ToolErrorInternal, result.ErrorKind)
+	assert.Empty(t, result.Content, "no partial listing is emitted beside the refusal")
+	assert.NotEqual(t, agentic.HintEmpty, result.ResultHint)
+}
+
 // ---------------------------------------------------------------------------
 // query_neighbors
 // ---------------------------------------------------------------------------
