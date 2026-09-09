@@ -189,9 +189,17 @@ the delta is ADDED-only. `approval_signal_test.go` IS held (as is `scenario.go`)
 
 ## 6. Gates
 
-- [ ] 6.1 `task lint`; `go test -race ./processor/agentic-tools/...`; `-tags=integration -p 2`;
-      `openspec validate --strict`; `task spec:properties`; `task schema:generate` no drift;
-      `task api:compat:report` unchanged from baseline; `go run ./cmd/entity-id-audit .` (not in `task lint`).
+- [x] 6.1 All green on `92fd2c5e`, each re-run independently of the implementer's report (a subagent's state claim
+      goes stale; the denominator is checked, not the exit code alone): `task lint` 0 · `go test -race ./...`
+      **153 ok / 20 no-test / 0 FAIL** · integration via `scripts/run-integration-tests.sh` with
+      `SEMSTREAMS_INTEGRATION_LOCK_WAIT_SECONDS=1800` **153 ok / 0 FAIL** and confirmed to have actually run (an
+      earlier attempt exited 0 having run NOTHING on the `/tmp/semstreams-integration.lock` host lock held by a
+      concurrent session — an exit 0 from that script is not evidence the suite ran, check the `ok` count) ·
+      `openspec validate --strict` valid · `task spec:properties` 70/70 · `task schema:generate` 0 drift in
+      `schemas/ specs/` and 0 lines dirty tree-wide · `task api:compat:report` 12 incompatible, **unchanged** from
+      the beta.162..HEAD baseline, this package's listed breaks being the pre-existing `Flow*` removals and the only
+      delta being `KVKeyLister: added` under Compatible changes · `go run ./cmd/entity-id-audit .` 0 (1317
+      candidates). All twelve test names the delta's scenarios pin exist in the tree.
 - [x] 6.2 `task e2e:agentic` **GREEN 2026-09-09** — exit 0, `assertions_run=14`, and the 4.5 assertion demonstrably
       fired: `approval_listing_matched:2` in the scenario metrics, i.e. the booted binary executed the served
       `query_by_type` and the approval walk read two matched identities. This satisfies the repo's hard rule that a
