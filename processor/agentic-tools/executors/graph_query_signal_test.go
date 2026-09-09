@@ -135,7 +135,8 @@ func TestQueryRelationships_FilteredAbsenceIsClassified(t *testing.T) {
 	kv.Put(fixtureTempOne, entityFixture(t, fixtureTempOne,
 		propertyTriple(fixtureTempOne, "sensor.temperature.celsius", 48.2),
 	))
-	executor := NewGraphQueryExecutor(kv)
+	countingKV := &countingKVGetter{mockKVGetter: kv}
+	executor := NewGraphQueryExecutor(countingKV)
 
 	tests := []struct {
 		name           string
@@ -151,6 +152,7 @@ func TestQueryRelationships_FilteredAbsenceIsClassified(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			countingKV.gets = 0
 			result, err := executor.Execute(context.Background(), agentic.ToolCall{
 				ID:   "call-" + tc.name,
 				Name: "query_relationships",
@@ -163,7 +165,8 @@ func TestQueryRelationships_FilteredAbsenceIsClassified(t *testing.T) {
 
 			if tc.wantErrorKind != "" {
 				assert.Equal(t, tc.wantErrorKind, result.ErrorKind)
-				assert.Empty(t, result.Content, "a refused call must not read the entity or emit a body")
+				assert.Empty(t, result.Content, "a refused call must not emit a body")
+				assert.Zero(t, countingKV.gets, "no entity is read for a filter the tool already knows is malformed")
 				return
 			}
 
