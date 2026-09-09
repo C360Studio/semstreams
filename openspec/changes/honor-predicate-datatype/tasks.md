@@ -157,10 +157,10 @@ never been observed is a hypothesis. Nothing else starts until it is a failing a
       both passing. It is the right tier for this change because the containerized binary
       (`cmd/e2e-semstreams/main.go:48`) imports `vocabulary/builtins`, so it walks the exact registration path a
       refused datatype panics on; a half-migrated binary could not have reached "healthy".
-      **Coverage gap CONFIRMED and unfiled**: no e2e tier exercises `vocabulary/export` at all — the package has
-      zero in-repo callers, and the family's only production RDF emitter is semconnect's CS API gateway. The four
-      output changes in §5 of the migration note are covered by unit fixtures through the authoritative
-      ENTITY_STATES seam and by nothing end-to-end. Owner decision owed on whether that earns an issue.
+      **Coverage gap CONFIRMED and FILED as #1276** (2026-09-09): no e2e tier exercises `vocabulary/export` at all
+      — the package has zero in-repo callers, and the family's only production RDF emitter is semconnect's CS API
+      gateway. The four output changes in §5 of the migration note are covered by unit fixtures through the
+      authoritative ENTITY_STATES seam and by nothing end-to-end. #1276 carries it; it does not gate this change.
 - [x] 8.5 Re-measure the Codex/Claude held-file union before implementation — PR #1262 was 7 files at design time and
       grows.
 
