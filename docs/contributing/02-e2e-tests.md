@@ -246,6 +246,10 @@ lsof -ti:8080 | xargs kill -9
 task e2e:clean
 ```
 
+If the preflight passed and the bind still failed, the port was probably taken by the kernel's ephemeral
+allocator between the two — see [Troubleshooting → Port conflicts](../operations/02-troubleshooting.md) and
+`task e2e:reserve-ports` (gh#1279).
+
 ### Services Not Healthy
 
 ```bash

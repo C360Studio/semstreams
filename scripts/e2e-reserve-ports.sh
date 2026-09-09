@@ -12,8 +12,9 @@
 # on a commit that touched only openspec/ files. Between probe and bind sits a
 # full Go + Docker image build, opening outbound sockets the whole time.
 #
-# The reason those sockets can take the port is that 29 of the 44 published
-# host ports in docker/compose/*.yml fall inside Linux's default
+# The reason those sockets can take the port is that 31 of the 41 published
+# host ports across the compose files the e2e taskfiles boot fall inside the
+# default
 # net.ipv4.ip_local_port_range (32768-60999). A connect() with no explicit
 # source port draws from that range, so the kernel is free to hand out the
 # very port a tier is about to publish. Nothing has to leak; this is the
@@ -48,7 +49,7 @@ DRY_RUN=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
-    -h|--help) sed -n '2,45p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,43p' "$0"; exit 0 ;;
     *) echo "[ERROR] unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -79,16 +80,40 @@ fi
 
 derived=""
 resolved_files=0
+attempted_files=0
+skipped=""
 for f in $union_files; do
-  [ -f "$f" ] || continue
-  # --profile '*' resolves every profile, so a tier-specific service cannot be
-  # missed the way a profile-less `config` would miss it.
-  if ports=$(docker compose -f "$f" --profile '*' config --format json 2>/dev/null \
+  attempted_files=$((attempted_files + 1))
+  if [ ! -f "$f" ]; then
+    skipped="$skipped $f(absent)"
+    continue
+  fi
+  # Enumerate the file's profiles and pass each explicitly. `--profile '*'` is
+  # a newer Compose affordance and, where it is not special-cased, degrades to
+  # an unmatched profile name that silently resolves only the UNPROFILED
+  # services — no error, just a smaller answer. e2e-check-ports.sh:206 already
+  # settled this question portably; this is the same mechanism, not a second
+  # spelling of it.
+  f_profiles=$(docker compose -f "$f" config --profiles 2>/dev/null || true)
+  f_args="-f $f"
+  for fp in $f_profiles; do
+    f_args="$f_args --profile $fp"
+  done
+  # shellcheck disable=SC2086
+  if ports=$(docker compose $f_args config --format json 2>/dev/null \
       | jq -r '.services // {} | to_entries[] | .value.ports // [] | .[]
                | select(.published != null and (.published | tostring) != "")
                | .published | tostring' 2>/dev/null); then
     derived="$derived $ports"
     resolved_files=$((resolved_files + 1))
+  else
+    # Overlay files (tiered.8b.yml, tiered.frontier.yml) do not resolve alone,
+    # and a missing env var resolves nothing either. NAME every skip: a
+    # silently dropped file narrows the reservation while the [OK] line keeps
+    # its confident tone, which is precisely the failure this script exists to
+    # stop happening to the preflight. e2e-check-ports.sh:212-215 says the
+    # same thing about the same files.
+    skipped="$skipped $f"
   fi
 done
 
@@ -145,7 +170,8 @@ at_risk=$(printf '%s\n' $wanted | awk -v lo="$range_lo" -v hi="$range_hi" '$1>=l
 total_derived=$(printf '%s\n' $wanted | wc -l | tr -d ' ')
 total_at_risk=$(printf '%s\n' ${at_risk:-} | grep -c . || true)
 
-echo "[RESERVE] derived $total_derived distinct published host ports across $resolved_files e2e compose file(s); $total_at_risk inside the ephemeral range."
+echo "[RESERVE] derived $total_derived distinct published host ports across $resolved_files of $attempted_files e2e compose file(s); $total_at_risk inside the ephemeral range."
+[ -n "$skipped" ] && echo "[RESERVE] not resolvable standalone, skipped:$skipped"
 
 if [ -z "$at_risk" ]; then
   echo "[OK] no published host port falls inside the ephemeral range — nothing to reserve."
@@ -167,7 +193,11 @@ existing_expanded=$(printf '%s' "$existing" | tr ',' '\n' | while read -r e; do
   fi
 done | sort -un)
 
-merged=$(printf '%s\n%s\n' "$at_risk" "${existing_expanded:-}" | grep -E '^[0-9]+$' | sort -un)
+# `|| true` for the same reason as the union assignment above: a no-match grep
+# under `set -euo pipefail` would abort here with a bare exit 1 and no message.
+# Unreachable today (at_risk is non-empty and numeric by construction), but it
+# is the identical latent trap and costs nothing to close.
+merged=$(printf '%s\n%s\n' "$at_risk" "${existing_expanded:-}" | grep -E '^[0-9]+$' | sort -un || true)
 
 # Collapse runs into ranges — the kernel accepts a bounded string and a long
 # comma list can exceed it.
@@ -193,7 +223,9 @@ fi
 SUDO=""
 [ "$(id -u)" -eq 0 ] || SUDO="sudo"
 if ! $SUDO sysctl -q -w "$SYSCTL_KEY=$value"; then
-  echo "[ERROR] kernel refused the reservation write" >&2
+  # Attribute honestly: off a passwordless-sudo host the refuser is sudo, not
+  # the kernel. sudo's own stderr is not suppressed, so the real cause is above.
+  echo "[ERROR] the reservation write failed (kernel refusal, or ${SUDO:-privilege} denied it) — see the error above" >&2
   exit 1
 fi
 
