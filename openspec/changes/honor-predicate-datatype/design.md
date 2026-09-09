@@ -344,6 +344,14 @@ reconstructs it and proves nothing.
 | I7 | Any object marked as an entity reference — the per-triple `@id` hint or the declared `entity_id` — whose value is a canonical entity ID emits as an IRI, never as a literal. The two spellings produce identical output | same, scenario *an entity reference serializes as a resource* |
 | I8 | An absent declaration leaves export output byte-identical to today | same, scenario *an undeclared predicate serializes by observation* |
 
+> **Implementation-time note (2026-09-09) on I5.** `string` is a *confirmation*, never an override — §2.1's own
+> table says so, and §2.2's export table spells its rendering "`xsd:string` — omitted from the output, exactly as
+> today". So the declared-datatype step of the total order is a no-op for `string` and the classifier falls through
+> to observation. This is load-bearing, not cosmetic: forcing a plain literal would flip seven framework predicates
+> that declare `string` and carry entity IDs — `hierarchy.{domain,system,type}.{member,contains}` and
+> `hierarchy.type.sibling` (`vocabulary/hierarchy.go:23-69`), whose `StandardIRI`s are
+> `skos:broader`/`narrower`/`related` — from IRI objects to string literals.
+
 ---
 
 ## 3. Options considered
@@ -633,6 +641,18 @@ Two different jobs, deliberately not one test:
 A3's amend semantics are why the guard alone is not sufficient evidence: a predicate can pass it by inheriting a
 datatype from an earlier registration call it never declared. The validator is what makes the inherited value
 trustworthy, since normalization is idempotent (I2).
+
+> **Implementation-time correction (2026-09-09).** The completeness half above, and the spec delta scenario *the
+> framework's own declarations are complete* that states it, are **measured false**: **81** framework predicates
+> declare no datatype, and thirteen of them are deliberately bare — `vocabulary/rulepacks/predicates.go:44-61`
+> registers names only, which the same requirement's "An absent datatype MUST remain valid" explicitly permits. The
+> two clauses contradict each other, and no reading of "at its vocabulary composition root" saves it (the count is
+> 81 whether the walk starts from package `init()` or from `builtins.Register()`). What shipped is a shrink-only
+> **ratchet** over a committed, measured exemption set
+> (`test/contract/predicate_datatype_contract_test.go`): a declared datatype must be canonical, and a predicate
+> declaring nothing must be one of the 81. It is shown capable of failing. The spec sync (task 9.1) is held for an
+> owner ruling — amend the scenario to the ratchet, or open the 81-declaration pass as its own change. Recorded
+> here rather than rewritten, because the design's reasoning is the architect's.
 
 ---
 
