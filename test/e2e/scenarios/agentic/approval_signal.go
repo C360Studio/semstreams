@@ -92,12 +92,29 @@ const (
 	// actually answered instead of only that it answered.
 	toolStream = "TOOL"
 
-	// servedTypePattern is the six-position pattern the mock's pinned
-	// entity_type ("agent.execution", two right-anchored segments) must build.
-	// Pinning the pattern rather than only the count is what makes this an
-	// assertion about the ADR-102 type axis instead of about any listing at
-	// all.
-	servedTypePattern = "*.*.*.agent.execution.*"
+	// servedTypeSegments is the entity_type the mock's pinned call carries:
+	// two right-anchored segments (domain `agent`, type `execution`) over the
+	// loop-execution entities this tier actually writes to ENTITY_STATES.
+	//
+	// It is deliberately NOT "temperature", which the tier writes none of — a
+	// pinned type that matches nothing makes a listing assertion pass
+	// identically over a served listing, an empty one, and a stub.
+	servedTypeSegments = "agent.execution"
+
+	// servedTypePattern is the six-position pattern that entity_type must
+	// build (org.platform.system.domain.type.instance, right-anchored on the
+	// type segment). Asserting the pattern rather than only a count is what
+	// makes this an assertion about the ADR-102 type axis instead of about any
+	// listing at all.
+	servedTypePattern = "*.*.*." + servedTypeSegments + ".*"
+
+	// ApprovalGatedToolArgs is the argument JSON the mock LLM sends for the
+	// approval-gated call. It is EXPORTED so the mock binary and this walk read
+	// one source instead of each predicting the other's string — the drift that
+	// let the old pinned "temperature" sit here unnoticed. The mock consumes
+	// scenario constants this way already (crudtools.PersonaMarker,
+	// opsscenario.SeedLoop1ID, researchgraph.ControlledSeedSuffix).
+	ApprovalGatedToolArgs = `{"entity_type": "` + servedTypeSegments + `", "limit": 5}`
 )
 
 // nonCanonicalToken returns the uppercase spelling of a loop token: 36 bytes

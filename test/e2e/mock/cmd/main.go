@@ -16,6 +16,7 @@ import (
 	researchroute "github.com/c360studio/semstreams/processor/research-graph-route"
 	researchsynthesize "github.com/c360studio/semstreams/processor/research-graph-synthesize"
 	"github.com/c360studio/semstreams/test/e2e/mock"
+	agenticscenario "github.com/c360studio/semstreams/test/e2e/scenarios/agentic"
 	crudtools "github.com/c360studio/semstreams/test/e2e/scenarios/crud-tools"
 	opsscenario "github.com/c360studio/semstreams/test/e2e/scenarios/ops"
 	researchgraph "github.com/c360studio/semstreams/test/e2e/scenarios/research-graph"
@@ -36,16 +37,13 @@ func main() {
 		// what proves the approval unblocked the loop rather than just
 		// resolving the pending state.
 		//
-		// The type is `agent.execution`, not `temperature`: the agentic tier
-		// writes only loop-execution and model-endpoint entities to
-		// ENTITY_STATES, so `temperature` matches NOTHING here and the walk
-		// would pass identically over a served listing, an empty one, and the
-		// old stub. Two right-anchored segments (domain `agent`, type
-		// `execution`) select the loop-execution entities
-		// verify-graph-triples already proved present, which is what lets
-		// walkApprovalPath assert on the CONTENT of the result rather than
-		// only on a success counter (RC-6 walked path, #1261 task 4.5).
-		WithToolArgs("query_by_type", `{"entity_type": "agent.execution", "limit": 5}`).
+		// The arguments come FROM the walk that asserts on them
+		// (agenticscenario.ApprovalGatedToolArgs) rather than being written
+		// again here: two files each predicting the other's string is how the
+		// old pinned entity_type "temperature" — a type this tier writes none
+		// of — sat here unnoticed while the walk it fed asserted only a
+		// success counter (RC-6 walked path, #1261 task 4.5).
+		WithToolArgs("query_by_type", agenticscenario.ApprovalGatedToolArgs).
 		WithCompletionContent(`{"valid": true, "summary": "Analysis complete. Temperature sensor reading exceeds threshold. Recommend monitoring HVAC system."}`)
 
 	applyScenarioPreset(openaiServer, *scenario)
