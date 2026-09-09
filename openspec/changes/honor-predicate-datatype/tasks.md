@@ -38,10 +38,10 @@ never been observed is a hypothesis. Nothing else starts until it is a failing a
 
 ## 2. The closed vocabulary and its mapping
 
-- [ ] 2.1 Add the seven untyped string constants to `vocabulary/predicates.go`, beside `IndexingProfile*`
+- [x] 2.1 Add the seven untyped string constants to `vocabulary/predicates.go`, beside `IndexingProfile*`
       (`:304-319`), which is the in-package prior art for exactly this shape. Untyped, NOT a named type: a named type
       would break `WithDataType(string)` and the `DataType: "..."` struct-literal path the owner's constraint protects.
-- [ ] 2.2 Add the legacy→canonical map and `canonicalDataType(string) (string, error)`. Sixteen of the 42 measured
+- [x] 2.2 Add the legacy→canonical map and `canonicalDataType(string) (string, error)`. Sixteen of the 42 measured
       family spellings are accepted. Under the pragmatic canon (owner ruling Q1) **seven are already canonical and
       need no change at all** — `string`, `entity_id`, `int`, `float`, `bool`, `datetime`, `json`, which between them
       cover the overwhelming majority of declarations — and **nine normalize**: `float64`/`number` → `float`,
@@ -49,7 +49,7 @@ never been observed is a hypothesis. Nothing else starts until it is a failing a
       `entity_id`, `boolean` → `bool`. The other 26 (semdragon Go payload struct names, 30 sites in
       `domain/vocab.go`) are refused. Per-spelling counts are in `design.md` §2.3. The map is a declaration-time
       normalizer, never a runtime alias table.
-- [ ] 2.3 Unit-test normalization idempotence over the whole domain (`canonical(canonical(x)) == canonical(x)`), the
+- [x] 2.3 Unit-test normalization idempotence over the whole domain (`canonical(canonical(x)) == canonical(x)`), the
       total-on-legacy-set property, and refusal outside it. This is the invariant that makes amend-registration safe;
       write it from the spec requirement, not from the map's implementation.
 - [ ] 2.4 Add the `test/contract/` guard over the **export mapping**, not over constant equality. Q1 makes the
@@ -63,19 +63,19 @@ never been observed is a hypothesis. Nothing else starts until it is a failing a
 
 ## 3. Enforce at the one registration seam
 
-- [ ] 3.1 Change `validatePredicateMetadataLocked` to take `*PredicateMetadata`, normalize `DataType` in place, and
+- [x] 3.1 Change `validatePredicateMetadataLocked` to take `*PredicateMetadata`, normalize `DataType` in place, and
       refuse an unrecognized value naming both the value and the accepted set. Both entry points already route through
       it (`vocabulary/registry.go:308`, `:371`), so this covers the struct-literal path three sisters use.
-- [ ] 3.2 Confirm empty stays legal — semlink registers `PredicateMetadata{Name: predicate}` at three sites; refusing
+- [x] 3.2 Confirm empty stays legal — semlink registers `PredicateMetadata{Name: predicate}` at three sites; refusing
       empty breaks its boot for no gain.
-- [ ] 3.3 Test the amend path explicitly (gh#410): register with a legacy spelling, re-register without the option,
+- [x] 3.3 Test the amend path explicitly (gh#410): register with a legacy spelling, re-register without the option,
       assert the canonical value survives and re-validation does not refuse it.
 
 ## 4. Migrate the 195 in-repo call sites
 
-- [ ] 4.1 Replace every `WithDataType("...")` string literal with the constant. Distribution to expect:
+- [x] 4.1 Replace every `WithDataType("...")` string literal with the constant. Distribution to expect:
       `string` 140, `float64` 17, `int` 14, `time.Time` 10, `timestamp` 8, `bool` 4, `int64` 1, `entity_ref` 1.
-- [ ] 4.2 Update the 25 test-file assertions that compare against the legacy spelling (enumerated in the inventory's
+- [x] 4.2 Update the 25 test-file assertions that compare against the legacy spelling (enumerated in the inventory's
       Searches section) — they will fail on the normalized value, which is the guard working.
 - [ ] 4.3 Add the `test/contract/` completeness guard: `ClearRegistry`, `builtins.Register()`, walk
       `ListRegisteredPredicates()`, assert every framework-declared predicate carries a datatype from the closed set.
@@ -139,7 +139,7 @@ never been observed is a hypothesis. Nothing else starts until it is a failing a
 - [ ] 8.4 Name the e2e tier if the owner rules this BREAKING. The in-repo blast radius is registration-time refusal at
       boot, so `task e2e:core` is the tier that would catch a half-migrated binary; file a coverage gap if the RDF
       export path is genuinely untested end-to-end in this repo (it has zero in-repo callers).
-- [ ] 8.5 Re-measure the Codex/Claude held-file union before implementation — PR #1262 was 7 files at design time and
+- [x] 8.5 Re-measure the Codex/Claude held-file union before implementation — PR #1262 was 7 files at design time and
       grows.
 
 ## 9. Spec sync

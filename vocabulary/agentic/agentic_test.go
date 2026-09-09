@@ -258,8 +258,8 @@ func TestCapabilityConfidenceMetadata(t *testing.T) {
 		t.Fatal("CapabilityConfidence not registered")
 	}
 
-	if meta.DataType != "float64" {
-		t.Errorf("CapabilityConfidence.DataType = %q, want \"float64\"", meta.DataType)
+	if meta.DataType != vocabulary.DataTypeFloat {
+		t.Errorf("CapabilityConfidence.DataType = %q, want %q", meta.DataType, vocabulary.DataTypeFloat)
 	}
 
 	if meta.Range != "0-1" {
@@ -304,14 +304,14 @@ func TestModelPredicatesRegistered(t *testing.T) {
 		predicate string
 		dataType  string
 	}{
-		{"ModelProvider", agentic.ModelProvider, "string"},
-		{"ModelName", agentic.ModelName, "string"},
-		{"ModelMaxTokens", agentic.ModelMaxTokens, "int"},
-		{"ModelSupportsTools", agentic.ModelSupportsTools, "bool"},
-		{"ModelInputPrice", agentic.ModelInputPrice, "float64"},
-		{"ModelOutputPrice", agentic.ModelOutputPrice, "float64"},
-		{"ModelEndpointURL", agentic.ModelEndpointURL, "string"},
-		{"ModelRateLimit", agentic.ModelRateLimit, "int"},
+		{"ModelProvider", agentic.ModelProvider, vocabulary.DataTypeString},
+		{"ModelName", agentic.ModelName, vocabulary.DataTypeString},
+		{"ModelMaxTokens", agentic.ModelMaxTokens, vocabulary.DataTypeInt},
+		{"ModelSupportsTools", agentic.ModelSupportsTools, vocabulary.DataTypeBool},
+		{"ModelInputPrice", agentic.ModelInputPrice, vocabulary.DataTypeFloat},
+		{"ModelOutputPrice", agentic.ModelOutputPrice, vocabulary.DataTypeFloat},
+		{"ModelEndpointURL", agentic.ModelEndpointURL, vocabulary.DataTypeString},
+		{"ModelRateLimit", agentic.ModelRateLimit, vocabulary.DataTypeInt},
 	}
 
 	for _, tt := range modelPredicates {
@@ -337,24 +337,24 @@ func TestLoopPredicatesRegistered(t *testing.T) {
 		predicate string
 		dataType  string
 	}{
-		{"LoopOutcome", agentic.LoopOutcome, "string"},
-		{"LoopTerminalReason", agentic.LoopTerminalReason, "string"},
-		{"LoopRole", agentic.LoopRole, "string"},
-		{"LoopModelUsed", agentic.LoopModelUsed, "string"},
-		{"LoopIterations", agentic.LoopIterations, "int"},
-		{"LoopTokensIn", agentic.LoopTokensIn, "int"},
-		{"LoopTokensOut", agentic.LoopTokensOut, "int"},
-		{"LoopCostUSD", agentic.LoopCostUSD, "float64"},
-		{"LoopTask", agentic.LoopTask, "string"},
-		{"LoopParent", agentic.LoopParent, "string"},
-		{"LoopWorkflow", agentic.LoopWorkflow, "string"},
-		{"LoopWorkflowStep", agentic.LoopWorkflowStep, "string"},
-		{"LoopEndedAt", agentic.LoopEndedAt, "time.Time"},
-		{"LoopUser", agentic.LoopUser, "string"},
-		{"LoopHasStep", agentic.LoopHasStep, "string"},
-		{"LoopDescription", agentic.LoopDescription, "string"},
-		{"LoopObservedWeb", agentic.LoopObservedWeb, "string"},
-		{"LoopFetchedWeb", agentic.LoopFetchedWeb, "string"},
+		{"LoopOutcome", agentic.LoopOutcome, vocabulary.DataTypeString},
+		{"LoopTerminalReason", agentic.LoopTerminalReason, vocabulary.DataTypeString},
+		{"LoopRole", agentic.LoopRole, vocabulary.DataTypeString},
+		{"LoopModelUsed", agentic.LoopModelUsed, vocabulary.DataTypeString},
+		{"LoopIterations", agentic.LoopIterations, vocabulary.DataTypeInt},
+		{"LoopTokensIn", agentic.LoopTokensIn, vocabulary.DataTypeInt},
+		{"LoopTokensOut", agentic.LoopTokensOut, vocabulary.DataTypeInt},
+		{"LoopCostUSD", agentic.LoopCostUSD, vocabulary.DataTypeFloat},
+		{"LoopTask", agentic.LoopTask, vocabulary.DataTypeString},
+		{"LoopParent", agentic.LoopParent, vocabulary.DataTypeString},
+		{"LoopWorkflow", agentic.LoopWorkflow, vocabulary.DataTypeString},
+		{"LoopWorkflowStep", agentic.LoopWorkflowStep, vocabulary.DataTypeString},
+		{"LoopEndedAt", agentic.LoopEndedAt, vocabulary.DataTypeDateTime},
+		{"LoopUser", agentic.LoopUser, vocabulary.DataTypeString},
+		{"LoopHasStep", agentic.LoopHasStep, vocabulary.DataTypeString},
+		{"LoopDescription", agentic.LoopDescription, vocabulary.DataTypeString},
+		{"LoopObservedWeb", agentic.LoopObservedWeb, vocabulary.DataTypeString},
+		{"LoopFetchedWeb", agentic.LoopFetchedWeb, vocabulary.DataTypeString},
 	}
 
 	for _, tt := range loopPredicates {
@@ -380,21 +380,21 @@ func TestStepPredicatesRegistered(t *testing.T) {
 		predicate string
 		dataType  string
 	}{
-		{"StepType", agentic.StepType, "string"},
-		{"StepIndex", agentic.StepIndex, "int"},
-		{"StepLoop", agentic.StepLoop, "string"},
-		{"StepTimestamp", agentic.StepTimestamp, "time.Time"},
-		{"StepDuration", agentic.StepDuration, "int64"},
-		{"StepToolName", agentic.StepToolName, "string"},
-		{"StepModel", agentic.StepModel, "string"},
-		{"StepTokensIn", agentic.StepTokensIn, "int"},
-		{"StepTokensOut", agentic.StepTokensOut, "int"},
-		{"StepCapability", agentic.StepCapability, "string"},
-		{"StepProvider", agentic.StepProvider, "string"},
-		{"StepRetries", agentic.StepRetries, "int"},
-		{"StepTokensEvicted", agentic.StepTokensEvicted, "int"},
-		{"StepTokensSummarized", agentic.StepTokensSummarized, "int"},
-		{"StepUtilization", agentic.StepUtilization, "float64"},
+		{"StepType", agentic.StepType, vocabulary.DataTypeString},
+		{"StepIndex", agentic.StepIndex, vocabulary.DataTypeInt},
+		{"StepLoop", agentic.StepLoop, vocabulary.DataTypeString},
+		{"StepTimestamp", agentic.StepTimestamp, vocabulary.DataTypeDateTime},
+		{"StepDuration", agentic.StepDuration, vocabulary.DataTypeInt},
+		{"StepToolName", agentic.StepToolName, vocabulary.DataTypeString},
+		{"StepModel", agentic.StepModel, vocabulary.DataTypeString},
+		{"StepTokensIn", agentic.StepTokensIn, vocabulary.DataTypeInt},
+		{"StepTokensOut", agentic.StepTokensOut, vocabulary.DataTypeInt},
+		{"StepCapability", agentic.StepCapability, vocabulary.DataTypeString},
+		{"StepProvider", agentic.StepProvider, vocabulary.DataTypeString},
+		{"StepRetries", agentic.StepRetries, vocabulary.DataTypeInt},
+		{"StepTokensEvicted", agentic.StepTokensEvicted, vocabulary.DataTypeInt},
+		{"StepTokensSummarized", agentic.StepTokensSummarized, vocabulary.DataTypeInt},
+		{"StepUtilization", agentic.StepUtilization, vocabulary.DataTypeFloat},
 	}
 
 	for _, tt := range stepPredicates {
@@ -420,12 +420,12 @@ func TestIdentityPredicatesRegistered(t *testing.T) {
 		predicate string
 		dataType  string
 	}{
-		{"IdentityDID", agentic.IdentityDID, "string"},
-		{"IdentityCredential", agentic.IdentityCredential, "string"},
-		{"IdentityIssuer", agentic.IdentityIssuer, "string"},
-		{"IdentityVerified", agentic.IdentityVerified, "bool"},
-		{"IdentityDisplayName", agentic.IdentityDisplayName, "string"},
-		{"IdentityRole", agentic.IdentityRole, "string"},
+		{"IdentityDID", agentic.IdentityDID, vocabulary.DataTypeString},
+		{"IdentityCredential", agentic.IdentityCredential, vocabulary.DataTypeString},
+		{"IdentityIssuer", agentic.IdentityIssuer, vocabulary.DataTypeString},
+		{"IdentityVerified", agentic.IdentityVerified, vocabulary.DataTypeBool},
+		{"IdentityDisplayName", agentic.IdentityDisplayName, vocabulary.DataTypeString},
+		{"IdentityRole", agentic.IdentityRole, vocabulary.DataTypeString},
 	}
 
 	for _, tt := range identityPredicates {
@@ -452,7 +452,7 @@ func TestTodoPredicatesRegistered(t *testing.T) {
 		dataType   string
 		ruleOpaque bool
 	}{
-		{"TodoRecord", agentic.TodoRecord, "string", true},
+		{"TodoRecord", agentic.TodoRecord, vocabulary.DataTypeString, true},
 	}
 
 	for _, tt := range todoPredicates {
@@ -499,10 +499,10 @@ func TestScratchPredicatesRegistered(t *testing.T) {
 		dataType   string
 		ruleOpaque bool
 	}{
-		{"ScratchID", agentic.ScratchID, "string", false},
-		{"ScratchText", agentic.ScratchText, "string", true},
-		{"ScratchCreatedAt", agentic.ScratchCreatedAt, "time.Time", false},
-		{"ScratchChars", agentic.ScratchChars, "int", false},
+		{"ScratchID", agentic.ScratchID, vocabulary.DataTypeString, false},
+		{"ScratchText", agentic.ScratchText, vocabulary.DataTypeString, true},
+		{"ScratchCreatedAt", agentic.ScratchCreatedAt, vocabulary.DataTypeDateTime, false},
+		{"ScratchChars", agentic.ScratchChars, vocabulary.DataTypeInt, false},
 	}
 
 	for _, tt := range scratchPredicates {
@@ -537,18 +537,18 @@ func TestWebPredicatesRegistered(t *testing.T) {
 		dataType   string
 		ruleOpaque bool
 	}{
-		{"WebURL", agentic.WebURL, "string", false},
-		{"WebTitle", agentic.WebTitle, "string", true},
-		{"WebSnippet", agentic.WebSnippet, "string", true},
-		{"WebText", agentic.WebText, "string", true},
-		{"WebSourceQuery", agentic.WebSourceQuery, "string", true},
-		{"WebObservedAt", agentic.WebObservedAt, "time.Time", false},
-		{"WebFetchedAt", agentic.WebFetchedAt, "time.Time", false},
-		{"WebObservedBy", agentic.WebObservedBy, "string", false},
-		{"WebFetchedBy", agentic.WebFetchedBy, "string", false},
-		{"WebContentType", agentic.WebContentType, "string", false},
-		{"WebStatusCode", agentic.WebStatusCode, "int", false},
-		{"WebTruncated", agentic.WebTruncated, "bool", false},
+		{"WebURL", agentic.WebURL, vocabulary.DataTypeString, false},
+		{"WebTitle", agentic.WebTitle, vocabulary.DataTypeString, true},
+		{"WebSnippet", agentic.WebSnippet, vocabulary.DataTypeString, true},
+		{"WebText", agentic.WebText, vocabulary.DataTypeString, true},
+		{"WebSourceQuery", agentic.WebSourceQuery, vocabulary.DataTypeString, true},
+		{"WebObservedAt", agentic.WebObservedAt, vocabulary.DataTypeDateTime, false},
+		{"WebFetchedAt", agentic.WebFetchedAt, vocabulary.DataTypeDateTime, false},
+		{"WebObservedBy", agentic.WebObservedBy, vocabulary.DataTypeString, false},
+		{"WebFetchedBy", agentic.WebFetchedBy, vocabulary.DataTypeString, false},
+		{"WebContentType", agentic.WebContentType, vocabulary.DataTypeString, false},
+		{"WebStatusCode", agentic.WebStatusCode, vocabulary.DataTypeInt, false},
+		{"WebTruncated", agentic.WebTruncated, vocabulary.DataTypeBool, false},
 	}
 
 	opaqueCount := 0
@@ -600,19 +600,19 @@ func TestLessonPredicatesRegistered(t *testing.T) {
 		dataType   string
 		ruleOpaque bool
 	}{
-		{"LessonCategory", agentic.LessonCategory, "string", false},
-		{"LessonPolarity", agentic.LessonPolarity, "string", false},
-		{"LessonSeverity", agentic.LessonSeverity, "string", false},
-		{"LessonStatus", agentic.LessonStatus, "string", false},
-		{"LessonSummary", agentic.LessonSummary, "string", true},
-		{"LessonDetail", agentic.LessonDetail, "string", true},
-		{"LessonInjectionForm", agentic.LessonInjectionForm, "string", true},
-		{"LessonEvidence", agentic.LessonEvidence, "string", false},
-		{"LessonAppliesTo", agentic.LessonAppliesTo, "string", false},
-		{"LessonObservedRole", agentic.LessonObservedRole, "string", false},
-		{"LessonRetiredAt", agentic.LessonRetiredAt, "time.Time", false},
-		{"LessonSupersededBy", agentic.LessonSupersededBy, "string", false},
-		{"LessonCreatedAt", agentic.LessonCreatedAt, "time.Time", false},
+		{"LessonCategory", agentic.LessonCategory, vocabulary.DataTypeString, false},
+		{"LessonPolarity", agentic.LessonPolarity, vocabulary.DataTypeString, false},
+		{"LessonSeverity", agentic.LessonSeverity, vocabulary.DataTypeString, false},
+		{"LessonStatus", agentic.LessonStatus, vocabulary.DataTypeString, false},
+		{"LessonSummary", agentic.LessonSummary, vocabulary.DataTypeString, true},
+		{"LessonDetail", agentic.LessonDetail, vocabulary.DataTypeString, true},
+		{"LessonInjectionForm", agentic.LessonInjectionForm, vocabulary.DataTypeString, true},
+		{"LessonEvidence", agentic.LessonEvidence, vocabulary.DataTypeString, false},
+		{"LessonAppliesTo", agentic.LessonAppliesTo, vocabulary.DataTypeString, false},
+		{"LessonObservedRole", agentic.LessonObservedRole, vocabulary.DataTypeString, false},
+		{"LessonRetiredAt", agentic.LessonRetiredAt, vocabulary.DataTypeDateTime, false},
+		{"LessonSupersededBy", agentic.LessonSupersededBy, vocabulary.DataTypeString, false},
+		{"LessonCreatedAt", agentic.LessonCreatedAt, vocabulary.DataTypeDateTime, false},
 	}
 
 	opaqueCount := 0

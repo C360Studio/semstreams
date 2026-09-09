@@ -56,7 +56,7 @@
 //
 //	vocabulary.Register("robotics.battery.level",
 //	    vocabulary.WithDescription("Battery charge level percentage"),
-//	    vocabulary.WithDataType("float64"),
+//	    vocabulary.WithDataType(vocabulary.DataTypeFloat),
 //	    vocabulary.WithUnits("percent"),
 //	    vocabulary.WithRange("0-100"),
 //	    vocabulary.WithIRI("http://schema.org/batteryLevel"))
@@ -126,7 +126,7 @@
 //	func init() {
 //	    vocabulary.Register(BatteryLevel,
 //	        vocabulary.WithDescription("Battery charge percentage"),
-//	        vocabulary.WithDataType("float64"),
+//	        vocabulary.WithDataType(vocabulary.DataTypeFloat),
 //	        vocabulary.WithUnits("percent"),
 //	        vocabulary.WithRange("0-100"),
 //	        vocabulary.WithIRI("http://schema.org/batteryLevel"))

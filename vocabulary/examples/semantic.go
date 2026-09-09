@@ -29,26 +29,26 @@ func RegisterSemanticVocabulary() {
 	// Identity aliases - resolvable to entity IDs
 	vocabulary.Register(SemanticIdentityAlias,
 		vocabulary.WithDescription("Alternative entity identifier"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 		vocabulary.WithAlias(vocabulary.AliasTypeIdentity, 0), // Highest priority
 		vocabulary.WithIRI(vocabulary.OwlSameAs))
 
 	vocabulary.Register(SemanticIdentityUUID,
 		vocabulary.WithDescription("Universally unique identifier"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 		vocabulary.WithAlias(vocabulary.AliasTypeIdentity, 1),
 		vocabulary.WithIRI(vocabulary.DcIdentifier))
 
 	// Display labels - NOT resolvable (ambiguous, display only)
 	vocabulary.Register(SemanticLabelPreferred,
 		vocabulary.WithDescription("Preferred human-readable name"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 		vocabulary.WithAlias(vocabulary.AliasTypeLabel, 999),
 		vocabulary.WithIRI(vocabulary.SkosPrefLabel))
 
 	vocabulary.Register(SemanticLabelAlternate,
 		vocabulary.WithDescription("Alternative display name"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 		vocabulary.WithAlias(vocabulary.AliasTypeLabel, 999),
 		vocabulary.WithIRI(vocabulary.SkosAltLabel))
 }

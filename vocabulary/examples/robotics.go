@@ -20,20 +20,20 @@ func RegisterRoboticsVocabulary() {
 	// Communication identifiers - resolvable to entity IDs
 	vocabulary.Register(RoboticsCommunicationCallsign,
 		vocabulary.WithDescription("Radio call sign for air traffic control"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 		vocabulary.WithAlias(vocabulary.AliasTypeCommunication, 0), // Highest for robotics domain
 		vocabulary.WithIRI(vocabulary.FoafAccountName))
 
 	// External identifiers - resolvable to entity IDs
 	vocabulary.Register(RoboticsIdentifierSerial,
 		vocabulary.WithDescription("Manufacturer serial number"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 		vocabulary.WithAlias(vocabulary.AliasTypeExternal, 1),
 		vocabulary.WithIRI(vocabulary.DcIdentifier))
 
 	vocabulary.Register(RoboticsIdentifierRegistration,
 		vocabulary.WithDescription("FAA or regulatory registration number"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 		vocabulary.WithAlias(vocabulary.AliasTypeExternal, 2),
 		vocabulary.WithIRI(vocabulary.SchemaIdentifier))
 }

@@ -196,7 +196,7 @@ func WithInverseOf(inversePredicate string) Option {
 //
 //	Register("agent.todo.record",
 //	    WithDescription("Free-form private todo record"),
-//	    WithDataType("string"),
+//	    WithDataType(DataTypeString),
 //	    WithRuleOpaque(true))
 func WithRuleOpaque(opaque bool) Option {
 	return func(m *PredicateMetadata) {
@@ -280,7 +280,7 @@ func WithWeight(weight float64) Option {
 //
 //	Register("robotics.battery.level",
 //	    WithDescription("Battery charge level percentage"),
-//	    WithDataType("float64"),
+//	    WithDataType(DataTypeFloat),
 //	    WithUnits("percent"),
 //	    WithRange("0-100"),
 //	    WithIRI("http://schema.org/batteryLevel"))
@@ -305,7 +305,7 @@ func Register(name string, opts ...Option) {
 	for _, opt := range opts {
 		opt(&meta)
 	}
-	if err := validatePredicateMetadataLocked(meta); err != nil {
+	if err := validatePredicateMetadataLocked(&meta); err != nil {
 		panic(fmt.Sprintf("register predicate %q: %v", name, err))
 	}
 
@@ -368,7 +368,7 @@ func RegisterPredicate(meta PredicateMetadata) {
 
 	registryMu.Lock()
 	defer registryMu.Unlock()
-	if err := validatePredicateMetadataLocked(meta); err != nil {
+	if err := validatePredicateMetadataLocked(&meta); err != nil {
 		panic(fmt.Sprintf("register predicate %q: %v", meta.Name, err))
 	}
 
@@ -376,9 +376,22 @@ func RegisterPredicate(meta PredicateMetadata) {
 }
 
 // validatePredicateMetadataLocked validates relationships between metadata
-// fields. The caller holds registryMu so an already-declared inverse can be
-// checked without racing another registration.
-func validatePredicateMetadataLocked(meta PredicateMetadata) error {
+// fields and normalizes the declared datatype in place. The caller holds
+// registryMu so an already-declared inverse can be checked without racing
+// another registration.
+//
+// It is the ONE enforcement seam for the closed datatype vocabulary
+// (ADR-107, gh#1267): both registration entry points reach it, so the
+// struct-literal path sister repositories use is covered by the same rule as
+// the functional-option path. Enforcing inside WithDataType would leave the
+// struct-literal path open.
+func validatePredicateMetadataLocked(meta *PredicateMetadata) error {
+	canonical, err := canonicalDataType(meta.DataType)
+	if err != nil {
+		return err
+	}
+	meta.DataType = canonical
+
 	if meta.InverseOf != "" {
 		if _, err := ParsePredicate(meta.InverseOf); err != nil {
 			return fmt.Errorf("inverse predicate %q: %w", meta.InverseOf, err)

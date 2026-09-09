@@ -59,145 +59,145 @@ func RegisterVocabulary() {
 	// Dublin Core metadata predicates (standard vocabulary for metadata)
 	vocabulary.Register(PredicateDCTitle,
 		vocabulary.WithDescription("Document title (Dublin Core)"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 		vocabulary.WithIRI("http://purl.org/dc/terms/title"),
 	)
 
 	vocabulary.Register(PredicateDCCreator,
 		vocabulary.WithDescription("Document creator or author (Dublin Core)"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 		vocabulary.WithIRI("http://purl.org/dc/terms/creator"),
 	)
 
 	vocabulary.Register(PredicateDCSubject,
 		vocabulary.WithDescription("Topic or category of content (Dublin Core)"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 		vocabulary.WithIRI("http://purl.org/dc/terms/subject"),
 	)
 
 	vocabulary.Register(PredicateDCType,
 		vocabulary.WithDescription("Nature or genre of content (Dublin Core)"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 		vocabulary.WithIRI("http://purl.org/dc/terms/type"),
 	)
 
 	vocabulary.Register(PredicateDCDate,
 		vocabulary.WithDescription("Relevant date - creation or publication (Dublin Core)"),
-		vocabulary.WithDataType("timestamp"),
+		vocabulary.WithDataType(vocabulary.DataTypeDateTime),
 		vocabulary.WithIRI("http://purl.org/dc/terms/date"),
 	)
 
 	vocabulary.Register(PredicateDCIdentifier,
 		vocabulary.WithDescription("Unique identifier for the resource (Dublin Core)"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 		vocabulary.WithIRI("http://purl.org/dc/terms/identifier"),
 	)
 
 	vocabulary.Register(PredicateDCFormat,
 		vocabulary.WithDescription("File format or media type (Dublin Core)"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 		vocabulary.WithIRI("http://purl.org/dc/terms/format"),
 	)
 
 	vocabulary.Register(PredicateDCLanguage,
 		vocabulary.WithDescription("Language of content (Dublin Core)"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 		vocabulary.WithIRI("http://purl.org/dc/terms/language"),
 	)
 
 	// Core content predicates - text fields for semantic search (legacy)
 	vocabulary.Register(PredicateContentTitle,
 		vocabulary.WithDescription("Document or entity title"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 	)
 
 	vocabulary.Register(PredicateContentDescription,
 		vocabulary.WithDescription("Document description - primary semantic search field"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 	)
 
 	vocabulary.Register(PredicateContentBody,
 		vocabulary.WithDescription("Full text content of document"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 	)
 
 	vocabulary.Register(PredicateContentSummary,
 		vocabulary.WithDescription("Brief summary of content"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 	)
 
 	// Classification predicates
 	vocabulary.Register(PredicateContentType,
 		vocabulary.WithDescription("Document type (document, maintenance, observation, sensor)"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 	)
 
 	vocabulary.Register(PredicateContentCategory,
 		vocabulary.WithDescription("Category classification (safety, operations, etc.)"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 	)
 
 	vocabulary.Register(PredicateContentTag,
 		vocabulary.WithDescription("Content tag for filtering and search"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 	)
 
 	// Maintenance predicates
 	vocabulary.Register(PredicateMaintenanceTechnician,
 		vocabulary.WithDescription("Technician who performed maintenance"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 	)
 
 	vocabulary.Register(PredicateMaintenanceDate,
 		vocabulary.WithDescription("Date maintenance was completed"),
-		vocabulary.WithDataType("timestamp"),
+		vocabulary.WithDataType(vocabulary.DataTypeDateTime),
 	)
 
 	vocabulary.Register(PredicateMaintenanceStatus,
 		vocabulary.WithDescription("Maintenance work status"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 	)
 
 	// Observation predicates
 	vocabulary.Register(PredicateObservationObserver,
 		vocabulary.WithDescription("Person who made the observation"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 	)
 
 	vocabulary.Register(PredicateObservationSeverity,
 		vocabulary.WithDescription("Severity level of observation (low, medium, high, critical)"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 	)
 
 	vocabulary.Register(PredicateObservationObservedAt,
 		vocabulary.WithDescription("Timestamp when observation was made"),
-		vocabulary.WithDataType("timestamp"),
+		vocabulary.WithDataType(vocabulary.DataTypeDateTime),
 	)
 
 	// Sensor document predicates
 	vocabulary.Register(PredicateSensorLocation,
 		vocabulary.WithDescription("Physical location description of sensor"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 	)
 
 	vocabulary.Register(PredicateSensorReading,
 		vocabulary.WithDescription("Current sensor reading value"),
-		vocabulary.WithDataType("float64"),
+		vocabulary.WithDataType(vocabulary.DataTypeFloat),
 	)
 
 	vocabulary.Register(PredicateSensorUnit,
 		vocabulary.WithDescription("Unit of measurement for sensor"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 	)
 
 	// Time predicates
 	vocabulary.Register(PredicateTimeCreated,
 		vocabulary.WithDescription("Document creation timestamp"),
-		vocabulary.WithDataType("timestamp"),
+		vocabulary.WithDataType(vocabulary.DataTypeDateTime),
 	)
 
 	vocabulary.Register(PredicateTimeUpdated,
 		vocabulary.WithDescription("Document last update timestamp"),
-		vocabulary.WithDataType("timestamp"),
+		vocabulary.WithDataType(vocabulary.DataTypeDateTime),
 	)
 }

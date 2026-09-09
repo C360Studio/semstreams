@@ -1,5 +1,10 @@
 package vocabulary
 
+import (
+	"fmt"
+	"strings"
+)
+
 // Predicate vocabulary using three-level dotted notation: domain.category.property
 // This maintains consistency with the unified semantic architecture.
 //
@@ -328,6 +333,122 @@ func IsValidIndexingProfile(s string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// Predicate Object Datatypes (ADR-107, gh#1267)
+// The closed vocabulary a predicate declares for its object values. It names
+// the PRAGMATIC type of the object, never the Go type of the value: the Go
+// type is something the serializer observes directly, and a value read back
+// through the authoritative ENTITY_STATES JSON round trip no longer carries
+// the Go type its author predicted.
+//
+// Per ADR-107 no semantic-web term appears here. The mapping from these
+// values to XSD/RDF datatype IRIs belongs to the serializer, at the export
+// edge, and lives in vocabulary/export.
+
+const (
+	// DataTypeString declares plain text.
+	DataTypeString = "string"
+	// DataTypeEntityID declares that the object is a canonical 6-part entity
+	// ID rather than text that happens to resemble one.
+	DataTypeEntityID = "entity_id"
+	// DataTypeInt declares that the number is semantically whole, whatever the
+	// JSON round trip left in the Go value.
+	DataTypeInt = "int"
+	// DataTypeFloat declares a real number.
+	DataTypeFloat = "float"
+	// DataTypeBool declares a truth value.
+	DataTypeBool = "bool"
+	// DataTypeDateTime declares an instant, whether carried as a time.Time or
+	// as an RFC 3339 string.
+	DataTypeDateTime = "datetime"
+	// DataTypeJSON declares that the string holds a structured document.
+	DataTypeJSON = "json"
+)
+
+// dataTypeCanonicalization is the complete domain of canonicalDataType: the
+// seven canonical values mapping to themselves, plus every legacy spelling
+// measured across the c360 family that has an unambiguous canonical form.
+//
+// This is a DECLARATION-TIME normalizer, not a compatibility alias table: the
+// registry stores only the canonical value, so no reader ever observes a
+// legacy spelling and no legacy spelling is ever persisted. Canonical rows map
+// to themselves, which is what makes normalization idempotent — required
+// because Register amends rather than replaces (gh#410), so an
+// already-normalized value is re-validated on every later registration of the
+// same predicate.
+//
+// Spellings deliberately absent: semantic-web names (`integer`, `double`,
+// `dateTime`, `@id`, `rdf:JSON`) are written zero times in the family's
+// declaration surface and mapping them would walk export-edge vocabulary back
+// inward through a side door (ADR-107). Go payload struct names are refused;
+// they are not datatypes in any sense the framework can render.
+var dataTypeCanonicalization = map[string]string{
+	// Canonical, unchanged.
+	DataTypeString: DataTypeString,
+	// entity-id-audit:classify unrelated-glob "entity_id" line=391 column=20 surface=go-field:.DataTypeEntityID entity_id_invalid:arity datatype vocabulary value, not an entity ID; the constant name ends in EntityID because it declares that an object is one
+	DataTypeEntityID: DataTypeEntityID,
+	DataTypeInt:      DataTypeInt,
+	DataTypeFloat:    DataTypeFloat,
+	DataTypeBool:     DataTypeBool,
+	DataTypeDateTime: DataTypeDateTime,
+	DataTypeJSON:     DataTypeJSON,
+
+	// Legacy spellings that normalize.
+	"float64":   DataTypeFloat,
+	"number":    DataTypeFloat,
+	"double":    DataTypeFloat,
+	"time.Time": DataTypeDateTime,
+	"timestamp": DataTypeDateTime,
+	"int64":     DataTypeInt,
+	// array -> json is lossy: it loses "this is a list". The objects are JSON
+	// documents in practice, and an `array` datatype with no reader would be a
+	// new exported value with zero consumers at birth.
+	"array":      DataTypeJSON,
+	"entity_ref": DataTypeEntityID,
+	"reference":  DataTypeEntityID,
+	"boolean":    DataTypeBool,
+}
+
+// IsValidDataType reports whether s is one of the seven canonical predicate
+// object datatypes. A legacy spelling is NOT valid — it is normalized to its
+// canonical form at declaration time — and neither is the empty string, which
+// registration accepts as "no datatype declared" rather than as a value.
+func IsValidDataType(s string) bool {
+	canonical, ok := dataTypeCanonicalization[s]
+	return ok && canonical == s
+}
+
+// canonicalDataType normalizes a declared datatype to its canonical spelling.
+// The empty string is returned unchanged: an absent datatype is a legitimate
+// registration shape (three sister repositories register nothing but a
+// predicate name). Any other unrecognized value is an error naming both the
+// offending value and the accepted vocabulary, because the adopter who wrote
+// a Go struct name needs to be told what to write instead.
+func canonicalDataType(declared string) (string, error) {
+	if declared == "" {
+		return "", nil
+	}
+	if canonical, ok := dataTypeCanonicalization[declared]; ok {
+		return canonical, nil
+	}
+	return "", fmt.Errorf("unrecognized data type %q: expected one of %s, a recognized legacy spelling, or none",
+		declared, strings.Join(canonicalDataTypes(), ", "))
+}
+
+// canonicalDataTypes returns the seven canonical values in a stable order, for
+// error messages and for the repository contract guards that walk the closed
+// set rather than a hand-copied list of it.
+func canonicalDataTypes() []string {
+	return []string{
+		DataTypeString,
+		DataTypeEntityID,
+		DataTypeInt,
+		DataTypeFloat,
+		DataTypeBool,
+		DataTypeDateTime,
+		DataTypeJSON,
 	}
 }
 
