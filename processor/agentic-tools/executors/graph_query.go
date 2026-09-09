@@ -754,13 +754,15 @@ func (w *neighborWalk) run(ctx context.Context, call agentic.ToolCall, depth int
 				return failure
 			}
 			if entity == nil {
-				// Absent from ENTITY_STATES: reported, never dropped. A silent
-				// omission reads to the model as "this edge does not exist"
-				// when the truth is "its target is not resident".
+				// The START entity being absent is a not-found answer, not an
+				// empty neighborhood; the caller turns this flag into one.
 				if id == w.sourceID {
 					w.sourceMissing = true
 					return nil
 				}
+				// A TARGET being absent is reported, never dropped. A silent
+				// omission reads to the model as "this edge does not exist"
+				// when the truth is "its target is not resident".
 				w.unresolved = append(w.unresolved, id)
 				continue
 			}
