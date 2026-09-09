@@ -4,12 +4,12 @@ Implementation waits on the owner's INVENTORY PASS recorded on PR #1269. Task 1 
 the `"5.0"^^xsd:double` consequence **inferred from the code path, not reproduced**, and a design premise that has
 never been observed is a hypothesis. Nothing else starts until it is a failing assertion.
 
-## 0. Gate — BLOCKED on the owner's INVENTORY PASS and the Q1–Q7 rulings
+## 0. Gate — CLEARED 2026-09-09
 
-- [ ] 0.1 BLOCKED: **Q1–Q7 were ruled by the owner on 2026-09-09** (#1267 comment 5601338922) and the design, spec
-      delta, tasks and ADR-107 are amended to carry them. The remaining gate is the **INVENTORY PASS on PR #1269**,
-      which has NOT been recorded — no task below starts until it is. This marker exists so `task openspec:queue`
-      reports the hold instead of reading `0/N — ok`.
+- [x] 0.1 GATE CLEARED. Q1–Q7 ruled by the owner 2026-09-09 (#1267 comment 5601338922) and carried by the design,
+      delta, tasks and ADR-107. **INVENTORY PASS granted 2026-09-09** (PR #1269 comment 5603956923). The reproduced
+      `^^<@id>` defect is filed as **#1272** at owner direction and is closed by this PR alongside #1142 (Q7).
+      Implementation is unblocked; no hold remains on this change.
 - [ ] 0.2 Note for the implementing session: the two consequences task 1 exists to prove were **already reproduced
       empirically** on 2026-09-07 (throwaway in-package probe, removed; evidence recorded on PR #1269). Turtle emits
       `"acme.ops.gcs.robotics.drone.002"^^<@id>` — a relative-reference datatype IRI, invalid RDF — and
