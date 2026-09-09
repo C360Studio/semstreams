@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -19,7 +20,7 @@ type retainedLoopMessage struct {
 	data    []byte
 }
 
-// loopSettlementEvidenceReader is private and operation-specific: task 4
+// loopSettlementEvidenceReader is private and operation-specific: settlement
 // needs only the exact current request and originating response. It is not a
 // stream query surface and cannot enumerate or scan AGENT.
 type loopSettlementEvidenceReader interface {
@@ -294,7 +295,7 @@ func (c *Component) recoverTaskDelivery(
 		request = c.handler.newTaskRequest(entity.ID, task, messages, tools)
 	}
 
-	if err := c.handler.loopManager.restoreLoopFromRequest(entity, request); err != nil {
+	if err := c.handler.loopManager.restoreLoopFromRequest(entity, request, nil); err != nil {
 		return HandlerResult{}, errs.WrapFatal(
 			err, "agentic-loop", "recoverTaskDelivery", "restore task correlation",
 		)
@@ -389,7 +390,7 @@ func (c *Component) ensureResponseLoop(
 	if !cold {
 		return entity, loopID, nil
 	}
-	if err = c.handler.loopManager.restoreLoopFromRequest(entity, request); err != nil {
+	if err = c.handler.loopManager.restoreLoopFromRequest(entity, request, nil); err != nil {
 		return agentic.LoopEntity{}, "", errs.WrapFatal(
 			err, "agentic-loop", "ensureResponseLoop", "restore response correlation",
 		)
@@ -402,66 +403,127 @@ func (c *Component) ensureResponseLoop(
 	return entity, loopID, nil
 }
 
-func (c *Component) validateColdToolResult(
+// recoverToolResult restores the current batch, or returns an empty loop ID
+// only when a later committed request contains this execution's applied result.
+func (c *Component) recoverToolResult(
 	ctx context.Context, result agentic.ToolResult,
-) error {
+) (string, error) {
 	if result.RequestID == "" || result.ExecutionID == "" || result.CallOrdinal == 0 {
-		return errs.WrapFatal(
+		return "", errs.WrapFatal(
 			fmt.Errorf("tool result requires request_id, execution_id, and positive call_ordinal"),
-			"agentic-loop", "validateColdToolResult", "tool correlation conflict",
+			"agentic-loop", "recoverToolResult", "tool correlation conflict",
 		)
 	}
 	requestLoopID, err := loopIDFromRequestID(result.RequestID)
 	if err != nil || (result.LoopID != "" && requestLoopID != result.LoopID) {
-		return errs.WrapFatal(
+		return "", errs.WrapFatal(
 			fmt.Errorf("tool result loop %q and request %q conflict", result.LoopID, result.RequestID),
-			"agentic-loop", "validateColdToolResult", "tool correlation conflict",
+			"agentic-loop", "recoverToolResult", "tool correlation conflict",
 		)
 	}
 	result.LoopID = requestLoopID
 	entity, found, err := c.readLoopEntity(ctx, result.LoopID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !found {
-		return fmt.Errorf("loop %q is not yet observable", result.LoopID)
+		return "", fmt.Errorf("loop %q is not yet observable", result.LoopID)
 	}
 	response, found, err := c.readRetainedAgentResponse(ctx, result.RequestID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !found {
-		return fmt.Errorf("originating response %q is not yet observable", result.RequestID)
+		return "", fmt.Errorf("originating response %q is not yet observable", result.RequestID)
 	}
 	if response.Status != agentic.StatusToolCall {
-		return errs.WrapFatal(
+		return "", errs.WrapFatal(
 			fmt.Errorf("originating response %q has status %q, not tool_call", result.RequestID, response.Status),
-			"agentic-loop", "validateColdToolResult", "tool correlation conflict",
+			"agentic-loop", "recoverToolResult", "tool correlation conflict",
 		)
 	}
 	calls := append([]agentic.ToolCall(nil), response.Message.ToolCalls...)
 	if err := stampToolExecutionCorrelation(response.RequestID, calls); err != nil {
-		return errs.WrapFatal(err, "agentic-loop", "validateColdToolResult", "stamp originating execution identity")
+		return "", errs.WrapFatal(err, "agentic-loop", "recoverToolResult", "stamp originating execution identity")
 	}
+	matched := false
 	for _, call := range calls {
 		if call.ExecutionID != result.ExecutionID {
 			continue
 		}
 		if call.ID != result.CallID || call.CallOrdinal != result.CallOrdinal || call.Name != result.Name {
-			return errs.WrapFatal(
+			return "", errs.WrapFatal(
 				fmt.Errorf("execution %q conflicts with retained call correlation", result.ExecutionID),
-				"agentic-loop", "validateColdToolResult", "tool correlation conflict",
+				"agentic-loop", "recoverToolResult", "tool correlation conflict",
 			)
 		}
-		if entity.State.IsTerminal() {
-			return fmt.Errorf("tool result %q is durably correlated but terminal state is not execution-specific applied proof; task 5 owns that proof", result.ExecutionID)
-		}
-		return fmt.Errorf("tool result %q is durably correlated; ordered batch recovery belongs to task 5", result.ExecutionID)
+		matched = true
+		break
 	}
-	return errs.WrapFatal(
-		fmt.Errorf("execution %q is absent from originating response %q", result.ExecutionID, result.RequestID),
-		"agentic-loop", "validateColdToolResult", "tool correlation conflict",
-	)
+	if !matched {
+		return "", errs.WrapFatal(
+			fmt.Errorf("execution %q is absent from originating response %q", result.ExecutionID, result.RequestID),
+			"agentic-loop", "recoverToolResult", "tool correlation conflict")
+	}
+	request, found, err := c.readRetainedAgentRequest(ctx, result.LoopID)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", fmt.Errorf("current request for loop %q is not yet observable", result.LoopID)
+	}
+	if request.Role != entity.Role || request.Model != entity.Model {
+		return "", errs.WrapFatal(fmt.Errorf("current request conflicts with loop role or model"),
+			"agentic-loop", "recoverToolResult", "tool correlation conflict")
+	}
+	// Compare the same bounded content that the normal handler admits to context.
+	if c.config.ToolResultMaxBytes > 0 && len(result.Content) > c.config.ToolResultMaxBytes {
+		result.Content = truncateToolResult(result.Content, c.config.ToolResultMaxBytes)
+	}
+	if request.RequestID != result.RequestID {
+		want := c.handler.buildToolMessages([]agentic.ToolResult{result})[0]
+		for index, msg := range request.Messages {
+			if msg.Role != "assistant" || len(msg.ToolCalls) != len(calls) {
+				continue
+			}
+			batchMatches := true
+			for ordinal, call := range calls {
+				retained := msg.ToolCalls[ordinal]
+				if retained.ExecutionID != call.ExecutionID || retained.RequestID != call.RequestID ||
+					retained.CallOrdinal != call.CallOrdinal || retained.ID != call.ID || retained.Name != call.Name ||
+					!reflect.DeepEqual(retained.Arguments, call.Arguments) {
+					batchMatches = false
+					break
+				}
+			}
+			if !batchMatches {
+				continue
+			}
+			// Provider CallID may repeat even inside a batch. The result's
+			// ordinal must select its own ordered tool message, not a sibling.
+			resultIndex := index + int(result.CallOrdinal)
+			if resultIndex < len(request.Messages) && reflect.DeepEqual(request.Messages[resultIndex], want) {
+				return "", nil
+			}
+		}
+		return "", fmt.Errorf("later request %q lacks execution-specific applied proof for %q", request.RequestID, result.ExecutionID)
+	}
+	if entity.State.IsTerminal() {
+		return "", fmt.Errorf("terminal loop lacks execution-specific applied proof for %q", result.ExecutionID)
+	}
+	if entity.State == agentic.LoopStateAwaitingApproval {
+		return "", fmt.Errorf("tool result %q requires task 6's pending-approval continuation proof", result.ExecutionID)
+	}
+	if err := c.handler.loopManager.restoreToolBatch(entity, request, response, result); err != nil {
+		return "", err
+	}
+	if _, err := c.handler.trajectoryManager.getTrajectory(entity.ID); err != nil {
+		if _, err := c.handler.trajectoryManager.startTrajectory(entity.ID); err != nil {
+			c.releaseLoopTransientState(entity.ID)
+			return "", err
+		}
+	}
+	return entity.ID, nil
 }
 
 func loopSettlementDecision(err error) natsclient.DeliveryDecision {

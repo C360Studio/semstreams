@@ -1942,15 +1942,17 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) (n
 	toolResult := *toolResultPtr
 
 	// Find the process-local route for this tool execution. Empty routes take
-	// the operation-specific cold read-through path: validate exact durable
-	// correlation, then Retry at task 5's ordered-batch reconstruction boundary.
-	// Proceeding without that proof would leak a late result into the next turn.
+	// the operation-specific cold read-through path. Only exact applied evidence
+	// can settle an older result; current results rejoin the normal handler.
 	loopID := c.findLoopIDForToolCall(toolResult.ExecutionID)
 	if loopID == "" {
-		if err := c.validateColdToolResult(ctx, toolResult); err != nil {
+		loopID, err = c.recoverToolResult(ctx, toolResult)
+		if err != nil {
 			return loopSettlementDecision(err), err
 		}
-		return natsclient.DeliveryDecisionAck, nil
+		if loopID == "" {
+			return natsclient.DeliveryDecisionAck, nil
+		}
 	}
 	if toolResult.LoopID != "" && toolResult.LoopID != loopID {
 		err := errs.WrapFatal(

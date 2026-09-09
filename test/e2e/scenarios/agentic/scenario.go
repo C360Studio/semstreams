@@ -313,11 +313,11 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 	return result, nil
 }
 
-// verifyDurableToolReplay injects one test-side TOOL stream admission fault
-// after a completed outcome is durable. There is no production fault knob: the
-// harness pauses the shipped consumer, stores the request, temporarily makes
-// the already-full stream reject new messages, resumes, observes the actual
-// result publication failure, and restores the stream for redelivery.
+// verifyDurableToolReplay forces a result-publication failure after a fresh
+// tool call's outcome becomes durable. The harness pauses the shipped consumer,
+// captures a new loop-produced request, makes the full stream reject new
+// messages, resumes, observes the failure, and restores the stream for replay.
+// spec: agentic-tools / Tool-call completion SHALL be durable before request acknowledgement
 func (s *Scenario) verifyDurableToolReplay(ctx context.Context, result *scenarios.Result) error {
 	const (
 		toolStream   = "TOOL"
@@ -362,22 +362,20 @@ func (s *Scenario) verifyDurableToolReplay(ctx context.Context, result *scenario
 		_, _ = stream.ResumeConsumer(context.Background(), toolConsumer)
 	}()
 
-	call := agentic.ToolCall{
-		ID:      fmt.Sprintf("e2e-durable-replay-%d", time.Now().UnixNano()),
-		Name:    "query_entity",
-		LoopID:  fmt.Sprintf("e2e-durable-loop-%d", time.Now().UnixNano()),
-		TraceID: fmt.Sprintf("e2e-durable-trace-%d", time.Now().UnixNano()),
-		Arguments: map[string]any{
-			"entity_id": "c360.agentic.sensor.environmental.temperature.temp-sensor-001",
-		},
-	}
-	request := message.NewBaseMessage(call.Schema(), &call, "e2e-durable-replay")
+	// The loop owns execution identity. Submit fresh work while tools are paused
+	// instead of authoring correlation or reusing an already-completed call.
+	task := newTestTask(time.Now())
+	request := message.NewBaseMessage(task.Schema(), &task, "e2e-durable-replay")
 	wire, err := json.Marshal(request)
 	if err != nil {
-		return fmt.Errorf("marshal durable replay tool call: %w", err)
+		return fmt.Errorf("marshal durable replay task: %w", err)
 	}
-	if err := s.nats.Publish(ctx, "tool.execute."+call.ID, wire); err != nil {
-		return fmt.Errorf("publish paused durable replay tool call: %w", err)
+	if err := s.nats.Publish(ctx, "agent.task.e2e", wire); err != nil {
+		return fmt.Errorf("publish durable replay task: %w", err)
+	}
+	call, err := s.awaitReplayToolCall(ctx, stream, task.LoopID, "query_entity", originalInfo.State.LastSeq)
+	if err != nil {
+		return err
 	}
 
 	fullInfo, err := stream.Info(ctx)
@@ -412,15 +410,51 @@ func (s *Scenario) verifyDurableToolReplay(ctx context.Context, result *scenario
 		return err
 	}
 	result.Details["durable_tool_replay_call_id"] = call.ID
+	result.Details["durable_tool_replay_request_id"] = call.RequestID
+	result.Details["durable_tool_replay_execution_id"] = call.ExecutionID
 	result.Details["durable_tool_replay_msg_id"] = wantMsgID
 	result.Metrics["durable_tool_replay_executor_invocations"] = executionDelta
 	return nil
 }
 
+// awaitReplayToolCall reads the actual registered request emitted after the
+// consumer was paused. Older retained calls cannot satisfy the fresh-loop proof.
+func (s *Scenario) awaitReplayToolCall(
+	ctx context.Context, stream jetstream.Stream, loopID, toolName string, afterSequence uint64,
+) (agentic.ToolCall, error) {
+	deadline := time.Now().Add(s.config.TaskTimeout)
+	for time.Now().Before(deadline) {
+		stored, err := stream.GetLastMsgForSubject(ctx, "tool.execute."+toolName)
+		if err != nil && !errors.Is(err, jetstream.ErrMsgNotFound) {
+			return agentic.ToolCall{}, fmt.Errorf("read fresh replay tool call: %w", err)
+		}
+		if err == nil && stored.Sequence > afterSequence {
+			decoded, err := s.decoder.Decode(stored.Data)
+			if err != nil {
+				return agentic.ToolCall{}, fmt.Errorf("decode fresh replay tool call: %w", err)
+			}
+			call, ok := decoded.Payload().(*agentic.ToolCall)
+			if !ok {
+				return agentic.ToolCall{}, fmt.Errorf("fresh replay payload = %T, want *agentic.ToolCall", decoded.Payload())
+			}
+			if call.LoopID == loopID {
+				if call.Name != toolName || call.ID == "" || call.RequestID == "" || call.ExecutionID == "" || call.CallOrdinal == 0 {
+					return agentic.ToolCall{}, fmt.Errorf("fresh loop-produced tool call lacks %s execution correlation", toolName)
+				}
+				return *call, nil
+			}
+		}
+		if err := waitDuration(ctx, 200*time.Millisecond); err != nil {
+			return agentic.ToolCall{}, err
+		}
+	}
+	return agentic.ToolCall{}, fmt.Errorf("fresh loop %s did not emit %s within %v", loopID, toolName, s.config.TaskTimeout)
+}
+
 func (s *Scenario) verifyReplayedToolResult(
 	ctx context.Context, stream jetstream.Stream, call agentic.ToolCall, executionsBefore float64,
 ) (string, float64, error) {
-	resultSubject := "tool.result." + call.ID
+	resultSubject := "tool.result." + call.ExecutionID
 	deadline := time.Now().Add(45 * time.Second)
 	var stored *jetstream.RawStreamMsg
 	for time.Now().Before(deadline) {
@@ -441,24 +475,12 @@ func (s *Scenario) verifyReplayedToolResult(
 	if stored == nil {
 		return "", 0, fmt.Errorf("stored result did not replay within 45s")
 	}
-	wantMsgID := "tool-result/v1/" + durableCallDigest(call.ID)
+	wantMsgID := "tool-result/v1/" + durableCallDigest(call.ExecutionID)
 	if got := stored.Header.Get(nats.MsgIdHdr); got != wantMsgID {
 		return "", 0, fmt.Errorf("replayed result Nats-Msg-Id = %q, want %q", got, wantMsgID)
 	}
-	var resultEnvelope struct {
-		Payload agentic.ToolResult `json:"payload"`
-	}
-	if err := json.Unmarshal(stored.Data, &resultEnvelope); err != nil {
-		return "", 0, fmt.Errorf("decode replayed ToolResult: %w", err)
-	}
-	replayed := resultEnvelope.Payload
-	if replayed.CallID != call.ID || replayed.Name != call.Name || replayed.LoopID != call.LoopID || replayed.TraceID != call.TraceID {
-		return "", 0, fmt.Errorf("replayed ToolResult correlation = call:%q name:%q loop:%q trace:%q, want call:%q name:%q loop:%q trace:%q",
-			replayed.CallID, replayed.Name, replayed.LoopID, replayed.TraceID,
-			call.ID, call.Name, call.LoopID, call.TraceID)
-	}
-	if replayed.Content == "" && replayed.Error == "" {
-		return "", 0, fmt.Errorf("replayed ToolResult has neither terminal content nor error")
+	if err := s.validateReplayedToolResult(call, stored.Data); err != nil {
+		return "", 0, err
 	}
 	executionsAfter, err := s.metricWithLabels(ctx, "semstreams_agentic_tools_executions_total", map[string]string{
 		"tool_name": "query_entity",
@@ -471,6 +493,27 @@ func (s *Scenario) verifyReplayedToolResult(
 		return "", 0, fmt.Errorf("durable replay executor invocation delta = %.0f, want exactly 1", executionDelta)
 	}
 	return wantMsgID, executionDelta, nil
+}
+
+func (s *Scenario) validateReplayedToolResult(call agentic.ToolCall, wire []byte) error {
+	decoded, err := s.decoder.Decode(wire)
+	if err != nil {
+		return fmt.Errorf("decode replayed ToolResult: %w", err)
+	}
+	replayed, ok := decoded.Payload().(*agentic.ToolResult)
+	if !ok {
+		return fmt.Errorf("replayed payload = %T, want *agentic.ToolResult", decoded.Payload())
+	}
+	if replayed.CallID != call.ID || replayed.Name != call.Name || replayed.LoopID != call.LoopID || replayed.TraceID != call.TraceID ||
+		replayed.RequestID != call.RequestID || replayed.ExecutionID != call.ExecutionID || replayed.CallOrdinal != call.CallOrdinal {
+		return fmt.Errorf("replayed ToolResult correlation differs: got call:%q request:%q execution:%q ordinal:%d name:%q loop:%q trace:%q; want call:%q request:%q execution:%q ordinal:%d name:%q loop:%q trace:%q",
+			replayed.CallID, replayed.RequestID, replayed.ExecutionID, replayed.CallOrdinal, replayed.Name, replayed.LoopID, replayed.TraceID,
+			call.ID, call.RequestID, call.ExecutionID, call.CallOrdinal, call.Name, call.LoopID, call.TraceID)
+	}
+	if replayed.Content == "" && replayed.Error == "" {
+		return fmt.Errorf("replayed ToolResult has neither terminal content nor error")
+	}
+	return nil
 }
 
 func durableCallDigest(callID string) string {

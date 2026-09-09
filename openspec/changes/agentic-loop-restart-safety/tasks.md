@@ -68,8 +68,24 @@ The draft-push gate exposed a test-isolation defect: terminal-signal tests assum
 singleton started at zero. Repeating the response test with `-race -count=2` reproduced it. The three adjacent
 tests now assert exact changes from captured baselines, without resetting globals or changing production code.
 Independent narrow review returned APPROVE and reran all three with `-race -count=5`; premature and duplicate
-completion mutations still fail. The next bounded C.4 proof exercises real terminal PubAck followed by a failed
-final bare LoopEntity write, then source redelivery to a fresh component. It adds no recovery mechanism.
+completion mutations still fail.
+
+The bounded C.4 terminal-marker proof now passes through real task intake and the actual heartbeat owner: terminal
+PubAck and COMPLETE_ commit, the final bare LoopEntity write fails, the input receives delayed Retry without ACK,
+and the nonterminal KV revision remains unchanged. After Stop/join, a fresh component receives the same stream
+sequence and bytes, recovers the retained request, writes the final marker, and only then ACKs. Production is unchanged.
+The current-source canonical integration suite passes this test with `-race`. The final isolated canonical run also
+passes (test 30.47s, package 32.516s). An overlay-only mutation that ignores the final Put error fails the required
+Retry assertion (test 0.37s, package 1.346s). Fresh logs are retained in
+`/private/tmp/gh1146-task5-20260909.UBR3lx/c4-green.log` and `c4-mutant-red.log`; the original standalone logs were not
+saved and are not evidence for this checkpoint. No worktree source was mutated. This is a component-replacement
+proof, not an OS-process kill. Independent review returned APPROVE for this terminal-marker proof only; the C.4
+checkbox still includes separate tool/approval obligations.
+
+```sh
+go test -race -tags=integration ./processor/agentic-loop \
+  -run '^TestIntegrationTerminalMarkerFailureRedeliversAfterComponentReplacement$' -count=1
+```
 
 The full integration gate also exposed an incomplete simulated ToolResult in `TestIntegration_LoopWithToolCalls`:
 it omitted the dispatched tool name and correctly hit the correlation refusal. The fixture now echoes `call.Name`,
@@ -81,7 +97,7 @@ Draft checkpoint verification after both independently approved fixture correcti
 `go test -race ./...`, `task lint`, `go mod tidy -diff`, Linux/amd64 build, schema/OpenAPI no-drift, contract tests,
 entity-ID corpus audit, fixed-port/inventory guard fixtures, API-compatibility guard fixtures, and strict OpenSpec
 validation pass. The reporting-only API check reports 14 incompatible Tier 1 packages against beta.162; it is not a
-compatibility approval. The outstanding agentic E2E gate in 3A.3 and C.4/remaining lane work remain open.
+compatibility approval. The agentic E2E gate in 3A.3 is now green as recorded below; C.4 and remaining lane work stay open.
 
 The sequential-chat inventory addendum passed independent review at SHA-256
 `4e4b178db78bc8e41f836e7eae21d3ba461a55a5de5e94edf23425f7047c8fb8` (73/73 pins). The public-input candidate is
@@ -246,16 +262,83 @@ Repository lint also passes. This is a reviewed slice, not completion of task 4 
   TaskMessage-path fallback minting from preflight and HandleTask; and validate/classify the direct HandleTask seam.
   Add no exported helper, constructor, configurable generator, deterministic derivation, scan, map, ledger, bucket, or
   second owner. Do not alter tasks 9.5–9.7 admission, subject coverage, classifier, registry, or PubAck contracts.
-- [ ] 3A.3 GREEN: through real NATS, redeliver the exact rule-produced registered bytes across agentic-loop process
-  replacement and prove one TaskID-to-LoopID mapping, one loop identity, no fallback mint, and loud missing-ID refusal.
+- [x] 3A.3 GREEN: through real NATS, redeliver the exact rule-produced registered bytes across agentic-loop process
+  replacement and prove one TaskID-to-LoopID mapping, one loop identity, and no fallback mint. Independently prove
+  loud missing-ID refusal through the registered typed-delivery boundary and direct handler.
   The proof covers retry/redelivery of the same already-marshaled task, not fresh upstream rule-action execution. Run
   affected unit/race tests and serialized `task e2e:agentic`; update generated schema, examples, ADR-105, and the
   beta.162-to-beta.163 migration note before task 4 review resumes.
 
-  Blocked 2026-09-08: the real-NATS proof, affected unit/race tests, full test/race suites, schema generation, lint,
-  contract tests, and strict OpenSpec validation pass. Three serialized `task e2e:agentic` attempts stopped before
-  build or test execution because Docker Hub metadata for `golang:1.26-alpine` returned `DeadlineExceeded`; compose
-  cleanup completed after every attempt. Leave this task unchecked until that external gate executes successfully.
+  Prior blocked attempts, 2026-09-08: the real-NATS proof, affected unit/race tests, full test/race suites, schema generation, lint,
+  contract tests, and strict OpenSpec validation pass. Three earlier serialized `task e2e:agentic` attempts stopped
+  on Docker Hub metadata lookup. The retry on pushed checkpoint `14ae0437` built and started successfully, then failed
+  `verify-durable-tool-replay` after six assertions: its synthetic ToolCall lacked required execution correlation and
+  was rejected before publication. The local fixture correction now captures a fresh actual loop-produced call and
+  verifies its ExecutionID-based result/MsgID plus full correlation. Paired unit/race tests, independent narrow
+  APPROVE, and root lint pass; exactly-one executor invocation remains required. This is fixture-only approval,
+  not task-4 review.
+
+  The first corrected run reached nine assertions, then failed the Stage-A completed-replay barrier because its
+  synthetic calls also lacked execution correlation. The 2026-09-09 fixture-only correction now obtains all three
+  barrier calls from fresh loop tasks, uses ExecutionID for outcome/result reads, supplies canonical terminal UUIDs,
+  and checks source settlement while permitting ordinary repeated dispatch publication. It checks the latest retained
+  response's full correlation; it does not claim to inspect every duplicate. Exactly one completed executor effect
+  and zero replacement executor invocations remain required. Production, mock provider, and barrier harness are unchanged.
+
+  The resulting serialized `task e2e:agentic` run passed `verify-durable-tool-replay` and
+  `verify-stage-a-process-replacement`, then failed `walk-approval-path` after ten completed assertion stages:
+  no approval-pending event appeared within 30 seconds. Total scenario duration was 2m41.033s. Test containers and the
+  disposable NATS volume were removed. The fixture package passes `go test -race ./test/e2e/scenarios/agentic -count=1`;
+  root `task lint` and strict OpenSpec validation also pass. That attempt did not establish full-tier GREEN.
+
+  Independent review returned APPROVE for the four-file fixture checkpoint only; five focused race-enabled checks
+  passed independently. The reviewer's full focused rerun could not bind its HTTP test listener under the sandbox,
+  and its escalation timed out. No whole-PR or C.4 approval is implied.
+
+  Bounded read-only attribution at checkpoint `14ae0437` found an unfinished task-5 path: `validateColdToolResult`
+  returned Retry for matching retained work because ordered batch reconstruction/applied proof was deferred.
+  The tool-result consumer permits only one
+  unacknowledged delivery (`processor/agentic-loop/component.go:1117`), so that cold result can hold later approval
+  results behind it. During this run, the consumer had one pending acknowledgement and two queued results after
+  replacement; the later approval-required executor refusal was observable. This fits the mechanism, but exact
+  pending sequence-to-payload attribution was not retained and is not claimed. No further production correction or
+  rerun was attempted under that fixture-only scope. Full-tier GREEN, push, and C.4 review were held at that point.
+
+  The rule-byte integration proof is now strengthened: normal Start, interrupted first source ACK, bounded Stop/join,
+  and a started replacement receive the same server stream/consumer/source sequence and bytes with increased delivery
+  count, one durable TaskID/LoopID mapping, and final server ACK-floor advancement. Its race-enabled binary passes
+  in 30.55s; forwarding the first ACK makes the pending-acknowledgement assertion fail. Independent proof review
+  returned APPROVE at source SHA-256 `ac6fbc8b062e726c40093829e8e45a3dae575a9ccb5069b5883df25175bebead`.
+  The separate refusal cases are `TestMissingLoopIDIsTerminatedAtIntakeBeforeState`
+  (`processor/agentic-loop/loop_token_intake_test.go:97`, registered malformed envelope, typed owner and refusal
+  metric) and `TestDirectHandleTaskRefusesMissingLoopIDBeforeState`
+  (`processor/agentic-loop/delivery_owner_test.go:406`, direct handler). Those are not live-NATS delivery proofs.
+  The live case is a started-component replacement proof, not an OS-process kill. After the task-5 correction below, a new
+  full-tier run reached nine assertion stages, then failed the Stage-A dispatch quarantine metric wait in 1m49.973s.
+  Retained JSZ shows the injected terminal at stream sequence 87 still queued while dispatch delivery and ACK floor
+  remained at sequence 84; USER held the intended 5/5-message fault. The ten-second metric observation expired before
+  this input reached dispatch. The fixture now captures its native PubAck sequence and waits for dispatch delivery
+  before the unchanged publication/quarantine checks. Its intended no-op RED and focused race GREEN passed review;
+  all original outcome assertions remain. The underlying NATS pause/resume delay is not claimed fixed.
+  Two earlier starts ran no scenario because
+  Docker credential lookup hung; an isolated anonymous client directory resolved that without changing saved settings.
+  Final standard `task e2e:agentic` passed all 15 assertion stages in 2m25.790882542s, including Stage-A process
+  replacement, the approval walk, cancellation, and terminal response. The disposable stack and volume were removed.
+  The final fixture package also passed with `-race -tags=integration` (1.436s). This resolves the 3A.3 gate and
+  permits C.4/task-4 review to resume; fixture review is not task-4 approval.
+  Hosted E2E Ladder run `34244917179` separately passed slow-consumer attribution
+  and failed statistical HTTP search with `community index is not ready`; attribution/fix remains open.
+
+  Fixture conformance (paths below are under `test/e2e/scenarios/agentic/`):
+
+  | Approved constraint | Implementation/evidence |
+  | --- | --- |
+  | Loop owns execution correlation; fixtures do not derive it | `stage_a_process_replacement.go:525`, `scenario.go:422`, `stage_a_fixture_test.go:22` |
+  | Outcome/result lookup uses ExecutionID with full correlation | `stage_a_process_replacement.go:121`, `stage_a_process_replacement.go:599`, `scenario.go:498`, `stage_a_fixture_test.go:46` |
+  | Completed outcome reuse does not repeat the executor effect | `stage_a_process_replacement.go:150`, `stage_a_process_replacement.go:158` |
+  | Terminal fixtures use canonical loop tokens | `stage_a_process_replacement.go:494` |
+  | Observe exact source delivery before fault consequences | `stage_a_process_replacement.go:310`, `stage_a_process_replacement.go:354`, `stage_a_process_replacement.go:764`, `stage_a_fixture_test.go:103` |
+  | Ordinary publication may repeat; source work must settle | `stage_a_process_replacement.go:429`, `stage_a_process_replacement.go:442`, `stage_a_process_replacement.go:790`, `stage_a_fixture_test.go:139`, `stage_a_fixture_test.go:181` |
 
 ## 4. Loop task and response settlement
 
@@ -277,6 +360,46 @@ Repository lint also passes. This is a reviewed slice, not completion of task 4 
   never proves a particular tool result.
 
 ## 5. Tool result and completed outcome
+
+Current bounded slice, owner accepted 2026-09-09: implement the existing cold tool-result recovery path and prove
+it through the started durable consumer, then rerun the full agentic tier. Reuse current LoopEntity and retained
+request/response/result evidence; add no runtime, store, ledger, dispatcher role, configuration, or public surface.
+The regression must observe actual source redelivery after Stop/join/replacement and subsequent approval-required
+work reaching its durable pending state and event. Task 6's separate approval-continuation replacement/mechanism
+ruling is not included. The mixed task-5 checkboxes remain open until their complete wording is proved.
+
+The ordinary cold-result unit regression reproduced the explicit deferred-recovery Retry, then passed after the
+initial correction. The first started-owner attempt instead deadlocked its own pre-handler test gate; its captured
+stack is fixture evidence, not a production recovery RED. The corrected fixture cancels its caller-owned Start
+context after the real result checkpoint commits, then uses bounded Stop/join and actual server redelivery.
+`TestIntegrationColdToolResultRedeliveryUnblocksLaterApproval` passed with race instrumentation in 30.44s; disabling
+only cold recovery in a separately compiled mutant failed its redelivered-source ACK assertion in 30.36s. Those
+integration binaries precede the two subsequent review corrections and are not current-source gate evidence.
+Review reproduced double iteration charging when task recovery restores the loop first, including false budget
+exhaustion, and loss of an earlier assistant/tool exchange from emitted context. Both regressions passed after
+correction in the existing restoration owner (focused race run 1.641s; full loop package race run 3.004s).
+Scoped re-review returned APPROVE for the corrected seven-file manifest. Current-source lint, integration/live-tag
+vet, full unit/race, Linux build, module tidy-diff, schema no-drift, and the canonical full integration suite pass;
+the integration loop package took 128.572s and includes the corrected started-owner regression. Full agentic E2E
+passes all 15 stages as recorded in 3A.3. The current slice's applied proof uses a later committed
+request; direct-terminal StopLoop/max-iteration and already-awaiting-approval cold-result branches remain Retry.
+They SHALL NOT be claimed complete or replaced by a terminal-state-only ACK; task 6's continuation gate is separate.
+
+Bounded implementation conformance (paths below are under `processor/agentic-loop/`):
+
+| Accepted constraint | Implementation and proof |
+|---|---|
+| Exact read-through, same state owner, no new authority | `settlement_recovery.go:408` uses existing exact readers; `state.go:428` extends LoopManager restoration; `component.go:1949` rejoins the normal handler. |
+| Ordered batch, stable execution identity, preserved conversation | `tool_result_recovery_test.go:17` covers completed prefixes and repeated provider IDs; `settlement_recovery.go:483` uses the stamped batch and ordinal-specific applied result. |
+| Persist results and publish the next request before ACK | `handlers.go:2584` retains batch evidence; `state.go:1113` owns extraction; `tool_result_redelivery_integration_test.go:66` observes KV and required output before native ACK. |
+| Publication retry spends an iteration once | `state.go:458` reconciles the persisted ordinary batch, including already-restored loop memory at `state.go:385`; `tool_result_recovery_test.go:128` checks the budget boundary and `tool_result_redelivery_integration_test.go:221` checks persisted iteration after replacement. |
+| Preserve earlier tool exchanges in emitted model context | `state.go:364` keeps non-system conversation messages together; `tool_result_recovery_test.go:157` checks the registered next request's complete prior and current exchange order. |
+| Missing evidence retries; conflicts quarantine; no terminal shortcut | `tool_result_recovery_test.go:86` tests absent/conflicting evidence without installed state; `settlement_recovery.go:511` keeps unresolved terminal and approval paths unsettled. |
+
+The final seven-file source manifest, commands, and RED/GREEN logs are retained locally in
+`/private/tmp/gh1146-task5-20260909.UBR3lx/task5-conformance.md`. This evidence covers started-component replacement,
+not an OS-process kill; the full agentic tier separately exercises process replacement. No new production export,
+field, configuration, store, ledger, runtime, or dispatcher responsibility was introduced.
 
 - [ ] 5.1 RED: add repeated provider CallID, completed replay, partial batch, missing/colliding execution identity,
   persistence-before-next-output, and post-effect ambiguity tests. Cite exactly

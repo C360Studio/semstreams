@@ -2581,7 +2581,7 @@ func (h *MessageHandler) handleToolsComplete(
 	newIteration := h.loopManager.GetCurrentIteration(loopID)
 
 	// Get ALL accumulated tool results
-	allResults := h.loopManager.GetAndClearToolResults(loopID)
+	allResults := h.loopManager.toolResults(loopID, false)
 
 	toolMessages := h.buildToolMessages(allResults)
 

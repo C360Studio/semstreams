@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -340,9 +341,11 @@ func (m *LoopManager) GetLoop(loopID string) (agentic.LoopEntity, error) {
 }
 
 // restoreLoopFromRequest rebuilds only the process-local material required to
-// settle one response delivery. AGENT_LOOPS and the exact retained request
-// remain authoritative; this method creates no durable state.
-func (m *LoopManager) restoreLoopFromRequest(entity agentic.LoopEntity, request agentic.AgentRequest) error {
+// settle one delivery. A current tool batch replaces an already-restored
+// snapshot as well: another lane may have restored this loop without its tool
+// routing or pre-publication iteration adjustment. AGENT_LOOPS and the exact
+// retained request remain authoritative; this method creates no durable state.
+func (m *LoopManager) restoreLoopFromRequest(entity agentic.LoopEntity, request agentic.AgentRequest, batch *agentic.ChatMessage) error {
 	if err := entity.Validate(); err != nil {
 		return err
 	}
@@ -362,10 +365,16 @@ func (m *LoopManager) restoreLoopFromRequest(entity agentic.LoopEntity, request 
 		region := RegionRecentHistory
 		if msg.Role == "system" {
 			region = RegionSystemPrompt
-		} else if msg.Role == "tool" {
-			region = RegionToolResults
 		}
+		// Keep each committed assistant/tool exchange together and in order.
+		// Separating old tool messages into another region would let pair
+		// repair discard their assistants and append orphan results later.
 		if err := cm.AddMessage(region, msg); err != nil {
+			return err
+		}
+	}
+	if batch != nil {
+		if err := cm.AddMessage(RegionRecentHistory, *batch); err != nil {
 			return err
 		}
 	}
@@ -376,12 +385,20 @@ func (m *LoopManager) restoreLoopFromRequest(entity agentic.LoopEntity, request 
 		if current.TaskID != entity.TaskID || current.Role != entity.Role || current.Model != entity.Model {
 			return fmt.Errorf("loop %q process and durable correlation conflict", entity.ID)
 		}
-		return nil
+		if batch == nil {
+			return nil
+		}
 	}
 	restored := entity
 	m.loops[entity.ID] = &restored
 	m.contextManagers[entity.ID] = cm
 	m.pendingTools[entity.ID] = make(map[string]bool)
+	delete(m.queuedToolCalls, entity.ID)
+	for executionID, loopID := range m.toolCallToLoop {
+		if loopID == entity.ID {
+			delete(m.toolCallToLoop, executionID)
+		}
+	}
 	m.cachedTools[entity.ID] = append([]agentic.ToolDefinition(nil), request.Tools...)
 	if request.ToolChoice != nil {
 		choice := *request.ToolChoice
@@ -402,6 +419,86 @@ func (m *LoopManager) restoreLoopFromRequest(entity agentic.LoopEntity, request 
 		m.cachedResponseFormat[entity.ID] = &format
 	}
 	m.requestToLoop[request.RequestID] = entity.ID
+	return nil
+}
+
+// restoreToolBatch extends the existing per-loop restoration with the current
+// response's serial queue. Durable results, not provider IDs or process memory,
+// identify the completed prefix. No dispatch or durable write occurs here.
+func (m *LoopManager) restoreToolBatch(entity agentic.LoopEntity, request agentic.AgentRequest, response agentic.AgentResponse, incoming agentic.ToolResult) error {
+	calls := append([]agentic.ToolCall(nil), response.Message.ToolCalls...)
+	if err := stampToolExecutionCorrelation(response.RequestID, calls); err != nil {
+		return errs.WrapFatal(err, "LoopManager", "restoreToolBatch", "stamp batch")
+	}
+	results := make(map[string]agentic.ToolResult)
+	for _, call := range calls {
+		stored, ok := entity.PendingToolResults[call.ExecutionID]
+		if !ok {
+			if call.CallOrdinal < incoming.CallOrdinal {
+				return fmt.Errorf("result for preceding execution %q is not yet observable", call.ExecutionID)
+			}
+			continue
+		}
+		if stored.RequestID != call.RequestID || stored.ExecutionID != call.ExecutionID || stored.CallID != call.ID ||
+			stored.CallOrdinal != call.CallOrdinal || (stored.Name != call.Name && call.Name != "") ||
+			(stored.LoopID != "" && stored.LoopID != entity.ID) {
+			return errs.WrapFatal(fmt.Errorf("stored result conflicts with execution %q", call.ExecutionID),
+				"LoopManager", "restoreToolBatch", "tool correlation conflict")
+		}
+		results[call.ExecutionID] = stored
+	}
+	for key, stored := range entity.PendingToolResults {
+		if stored.RequestID == request.RequestID {
+			if _, ok := results[key]; !ok {
+				return errs.WrapFatal(fmt.Errorf("stored execution %q is absent from current batch", key),
+					"LoopManager", "restoreToolBatch", "tool correlation conflict")
+			}
+		}
+	}
+	// A full persisted ordinary batch is the pre-publication next-turn
+	// checkpoint: handleToolsComplete already incremented the budget, but the
+	// originating request is still current. Replaying that transition must not
+	// spend another iteration. Approval waits never performed that increment.
+	ordinaryBatch := true
+	for _, stored := range results {
+		if stored.StopLoop || agentic.IsApprovalRequired(stored.Error) {
+			ordinaryBatch = false
+		}
+	}
+	if len(results) == len(calls) && ordinaryBatch && entity.PendingApproval == nil && entity.Iterations > 0 {
+		entity.Iterations--
+	}
+	entity.PendingToolResults = results
+	assistant := response.Message
+	assistant.ToolCalls = calls
+	if err := m.restoreLoopFromRequest(entity, request, &assistant); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, call := range calls {
+		m.executionIDToName[call.ExecutionID] = call.Name
+		m.executionIDToOrdinal[call.ExecutionID] = call.CallOrdinal
+		m.executionIDToArguments[call.ExecutionID] = call.Arguments
+		if call.ExecutionID == incoming.ExecutionID {
+			m.toolCallToLoop[call.ExecutionID] = entity.ID
+			m.pendingTools[entity.ID][call.ID] = true
+			continue
+		}
+		if _, complete := results[call.ExecutionID]; !complete {
+			call.LoopID = entity.ID
+			call.Metadata = maps.Clone(call.Metadata)
+			if call.Metadata == nil {
+				call.Metadata = make(map[string]any)
+			}
+			for key, value := range entity.Metadata {
+				if _, exists := call.Metadata[key]; !exists {
+					call.Metadata[key] = value
+				}
+			}
+			m.queuedToolCalls[entity.ID] = append(m.queuedToolCalls[entity.ID], call)
+		}
+	}
 	return nil
 }
 
@@ -963,6 +1060,17 @@ func (m *LoopManager) StoreToolResult(loopID string, result agentic.ToolResult) 
 	if entity.PendingToolResults == nil {
 		entity.PendingToolResults = make(map[string]agentic.ToolResult)
 	}
+	// A new batch's first result supersedes the prior request's evidence. Old
+	// execution routes were evicted at context extraction, so late deliveries
+	// must prove application through the retained request instead of reaching
+	// this accumulation owner and replacing the current batch.
+	if result.RequestID != "" {
+		for key, stored := range entity.PendingToolResults {
+			if stored.RequestID != "" && stored.RequestID != result.RequestID {
+				delete(entity.PendingToolResults, key)
+			}
+		}
+	}
 	resultKey := result.ExecutionID
 	if resultKey == "" {
 		// Internal synthetic failures predate framework execution correlation.
@@ -996,6 +1104,13 @@ func (m *LoopManager) StoreToolResult(loopID string, result agentic.ToolResult) 
 // route this method evicts has no remaining loop link and can outlive terminal
 // release — the bounded residual DeleteLoop's doc records.
 func (m *LoopManager) GetAndClearToolResults(loopID string) []agentic.ToolResult {
+	return m.toolResults(loopID, true)
+}
+
+// toolResults owns ordered result extraction and route eviction. The next-model
+// transition retains its durable evidence until the new request's first result
+// replaces the batch; explicit drains still clear it immediately.
+func (m *LoopManager) toolResults(loopID string, clearResults bool) []agentic.ToolResult {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -1009,7 +1124,18 @@ func (m *LoopManager) GetAndClearToolResults(loopID string) []agentic.ToolResult
 		results = append(results, r)
 		delete(m.toolCallToLoop, executionID)
 	}
-	entity.PendingToolResults = nil
+	if clearResults {
+		entity.PendingToolResults = nil
+	}
+	slices.SortFunc(results, func(a, b agentic.ToolResult) int {
+		if a.CallOrdinal < b.CallOrdinal {
+			return -1
+		}
+		if a.CallOrdinal > b.CallOrdinal {
+			return 1
+		}
+		return strings.Compare(a.ExecutionID, b.ExecutionID)
+	})
 	return results
 }
 

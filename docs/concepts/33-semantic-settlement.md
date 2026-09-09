@@ -74,6 +74,12 @@ The replacement does not need a supervisor record saying which step ran. It reco
 the component already owns. This is the streams-first restart pattern: settle only after durable done, let unsettled
 work redeliver, and make replay consult the durable consequence before repeating an effect.
 
+Tool execution and consuming its result are separate pieces of work. For an ordinary result that advances the loop
+to another model request, the loop rebuilds its current batch from its existing loop record and retained request and
+response. It keeps the collected results durable until the next request is published. If that publication fails,
+the result stays unsettled and redelivery resumes the same transition without spending another iteration. Rebuilding
+loop memory does not call the tool again; the tools component remains the owner of tool-effect recovery.
+
 If the component cannot determine whether an external effect committed, it must not hide that ambiguity behind ACK
 or unlimited Retry. It returns Quarantine, leaves the message without a terminal method, and asks the existing exact
 consumer owner to stop. The next design step is then component-specific reconciliation—not a generic framework state

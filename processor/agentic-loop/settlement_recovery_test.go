@@ -248,7 +248,7 @@ func TestColdModelResponseCorrelationConflictQuarantines(t *testing.T) {
 
 // spec: agentic-loop / Loop recovery is lane-specific and read-through
 // spec: agentic-loop / Loop task, request, and tool work use only required correlation
-func TestColdToolResultValidatesOriginatingResponseWithoutBatchReconstruction(t *testing.T) {
+func TestColdToolResultRestoresOriginatingBatch(t *testing.T) {
 	loopID := uuid.NewString()
 	requestID := loopID + ":req:" + uuid.NewString()
 	callID := "provider-call"
@@ -268,24 +268,37 @@ func TestColdToolResultValidatesOriginatingResponseWithoutBatchReconstruction(t 
 		c := releaseTestComponent(t, NewMessageHandler(DefaultConfig()))
 		c.loopsBucket = &settlementBucket{values: map[string][]byte{loopID: settlementLoopRecord(t, entity)}}
 		c.settlementEvidence = &settlementEvidence{
+			request: retainedRequest(t, loopID, requestID), requestFound: true,
 			response:      retainedLoopMessage{subject: "agent.response." + requestID, data: settlementEnvelope(t, response)},
 			responseFound: true,
 		}
 		return c
 	}
 
-	t.Run("live turn retries at task 5 boundary", func(t *testing.T) {
-		decision, err := newComponent(t, agentic.LoopStateExecuting).handleToolResultMessage(t.Context(), settlementEnvelope(t, result))
-		require.Error(t, err)
-		require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
-		require.Contains(t, err.Error(), "task 5")
+	t.Run("live turn restores and continues", func(t *testing.T) {
+		c := newComponent(t, agentic.LoopStateExecuting)
+		decision, err := c.handleToolResultMessage(t.Context(), settlementEnvelope(t, result))
+		require.NoError(t, err)
+		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+		entity, err := c.handler.GetLoop(loopID)
+		require.NoError(t, err)
+		require.Equal(t, 1, entity.Iterations)
+		require.Equal(t, *result, entity.PendingToolResults[executionID], "result must remain durable through next request PubAck")
+		var durable agentic.LoopEntity
+		require.NoError(t, json.Unmarshal(c.loopsBucket.(*settlementBucket).values[loopID], &durable))
+		require.Equal(t, *result, durable.PendingToolResults[executionID], "the KV checkpoint must retain result evidence")
+		messages := c.handler.loopManager.GetContextManager(loopID).GetContext()
+		require.Len(t, messages, 3)
+		require.Equal(t, "assistant", messages[1].Role)
+		require.Equal(t, callID, messages[2].ToolCallID)
+		require.Equal(t, result.Content, messages[2].Content)
 	})
 
 	t.Run("terminal marker is not execution-specific proof", func(t *testing.T) {
 		decision, err := newComponent(t, agentic.LoopStateComplete).handleToolResultMessage(t.Context(), settlementEnvelope(t, result))
 		require.Error(t, err)
 		require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
-		require.Contains(t, err.Error(), "task 5")
+		require.Contains(t, err.Error(), "execution-specific")
 	})
 
 	t.Run("lookup failure retries", func(t *testing.T) {
@@ -390,6 +403,7 @@ func TestToolPersistenceRetryDiscardsWarmRoutingBeforeColdRedelivery(t *testing.
 	c := releaseTestComponent(t, handler)
 	c.loopsBucket = bucket
 	c.settlementEvidence = &settlementEvidence{
+		request: retainedRequest(t, loopID, requestID), requestFound: true,
 		response:      retainedLoopMessage{subject: "agent.response." + requestID, data: settlementEnvelope(t, response)},
 		responseFound: true,
 	}
@@ -405,10 +419,10 @@ func TestToolPersistenceRetryDiscardsWarmRoutingBeforeColdRedelivery(t *testing.
 	_, lookupErr := handler.GetLoop(loopID)
 	require.Error(t, lookupErr, "failed tool attempt retained consumed execution routing")
 
+	bucket.putErr = nil
 	decision, err = c.handleToolResultMessage(t.Context(), data)
-	require.Error(t, err)
-	require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
-	require.Contains(t, err.Error(), "task 5", "redelivery did not enter the declared cold recovery boundary")
+	require.NoError(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
 }
 
 // spec: agentic-loop / Loop task, request, and tool work use only required correlation
