@@ -10,10 +10,10 @@ PR #1262; the tag range decides what actually ships.
 **Sequencing:** the HOLD is relaxed to archive-order coordination (owner ruling Q11): rebase on `main` after each
 Codex stack merge, `task e2e:agentic` green before this PR's own merge. The INVENTORY PASS at `tasks.md` 1.4 was
 given 2026-09-09, so sections 3–6 are open and sections 3–5 are complete. The Codex-held set is a MOVING TARGET and
-this paragraph states a measurement, never a remembered number — it has been stale three times now (176 at round 2,
-180 on 2026-09-07, 224 on 2026-09-09). Measure it: `for p in 1156 1159 1141; do gh api
+this paragraph states a measurement, never a remembered number — it has been stale FIVE times now (176 at round 2,
+180 on 2026-09-07, 224 and then 229 on 2026-09-09, 234 at the archive). Measure it: `for p in 1156 1159 1141; do gh api
 repos/:owner/:repo/pulls/$p/files --paginate --jq '.[].filename'; done | sort -u` (`gh pr view --json files` caps at
-100 and understates it). At **2026-09-09 it is 229** unique paths, and the implementation's file set — including task
+100 and understates it). At the archive it is **234** unique paths, and the implementation's file set — including task
 4.5's two e2e files — intersects none of them. The delta is ADDED-only because Codex's pending `agentic-tools` delta
 MODIFIES `openspec/specs/agentic-tools/spec.md:435`, `:467`, and `:487`. The owner's 2026-09-05
 note (on #1261) reads this as a break wanted sooner, and ruling Q9 makes it `feat(agentic-tools)!:`; `design.md`

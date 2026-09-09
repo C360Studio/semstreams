@@ -345,4 +345,17 @@ the delta is ADDED-only. `approval_signal_test.go` IS held (as is `scenario.go`)
       recorded as a residual in `design.md` (pre-existing, defensible as specified, and narrowing it would be a
       sixth flip); MEDIUM 3 is filed as #1278.
 
-- [ ] 6.4 Archive as the final content commit; narrow archive-sync check.
+- [x] 6.4 Archived as the **final content commit**, reviewed with the code per the merge gate. `openspec archive`
+      reported `+ 4 added, ~ 0, - 0` and wrote a **single hunk of 179 pure insertions appended at line 595** of
+      `openspec/specs/agentic-tools/spec.md`. That is what the ADDED-only discipline (owner ruling Q11) was for, and
+      it was verified rather than assumed: Codex's three pinned requirement headers at `:435`, `:467` and `:487` are
+      byte-identical before and after, and the whole first 594 lines `diff` clean — nothing pre-existing was
+      rewritten, so PR #1159's `agentic-tools` delta can still archive into this file in its own order.
+      The Codex-held path set was re-measured at the archive rather than quoted: **234** unique paths, the FIFTH
+      distinct value this change has seen (176 → 180 → 224 → 229 → 234). Its intersection with this change's file
+      set is empty, as it has been at every measurement, and Codex holds a *delta* for `agentic-tools`
+      (`openspec/changes/agentic-loop-restart-safety/specs/agentic-tools/spec.md`) but not the live spec.
+      Post-archive gates on this tree: `openspec validate --specs --strict` **53 passed / 0 failed** ·
+      `task spec:properties` **73/73** · `task lint` 0 · `go test -race ./...` **153 ok / 0 FAIL** ·
+      `task schema:generate` 0 drift. The seeded capability already carries its Purpose, so the archive-seeded-spec
+      rule needs nothing here.
