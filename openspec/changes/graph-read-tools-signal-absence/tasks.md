@@ -220,25 +220,44 @@ the delta is ADDED-only. `approval_signal_test.go` IS held (as is `scenario.go`)
       heads of this branch**, implementation heads included. The red is a laptop-contention observation, not a CI
       observation. No waiver is sought and none is owed; #736 remains open and unfixed, and a future CI red of this
       shape on this branch WOULD need one.
+- [x] 5c.2 The depth fix's first full `go test -race ./...` went RED with **one** failure —
+      `TestMaybeStartPProf_Enabled_ServesPprof` (`service/`), `pprof server error: listen tcp :63771: bind: address
+      already in use`. Attributed, not re-rolled ([[feedback_no_rerun_to_green_fix_first]]): it is **#1120**, already
+      OPEN with `class:flake` and named precisely — "freePort probe-then-bind race (bind :0, read, close, re-bind
+      later) — ten call sites; fires under host contention". `freePort`
+      (`service/service_manager_health_listener_test.go:277-286`) binds port 0, reads the assigned port, closes the
+      listener, and returns the number; `MaybeStartPProf` binds it later, and anything on the host may take it in
+      between. Established rather than assumed: this branch changes **zero** files under `service/`
+      (`git diff --name-only origin/main..HEAD -- service/` → 0), `pprof_test.go`'s last commit is `26b0c2ce` from
+      #299, and the test passes **20/20** in isolation under `-race -count=20`. No new issue filed — filing a
+      duplicate of #1120 would be the noise the filing-discipline rule exists to prevent. **Surfaced for owner
+      placement**: #1120 has NO milestone and is the same "flake that haunts our CI" class as #1268, which was just
+      placed on beta.165; whether it joins it is the owner's call, not this change's.
+
 
 ## 6. Gates
 
-- [x] 6.1 All green, every item measured on the FINAL reviewed code head **`0676c77d`** — ONE evidence set, deliberately.
+- [x] 6.1 All green, every item measured on the FINAL code head **`4dbb2080`** (the depth fix) — ONE evidence set, deliberately.
       A gate ticked over a superseded tree is not evidence for the tree that ships, and a line asserting two values for
       the same measurement is worse than one that is merely stale (see 6.3, round 3 MEDIUM 2). Each gate re-run here
       independently of the implementer's report — a subagent's state claim goes stale — and the DENOMINATOR is
       checked, never the exit code alone:
-      `task lint` 0 · `go test -race ./...` **153 ok / 20 no-test / 0 FAIL** ·
+      `task lint` 0 · `go test -race ./...` **153 ok / 20 no-test / 0 FAIL** (the first run of this head was RED
+      on one unrelated `service/` test — attributed to #1120, not re-rolled; see 5c.2) ·
       integration via `scripts/run-integration-tests.sh` with `SEMSTREAMS_INTEGRATION_LOCK_WAIT_SECONDS=1800`
       **153 ok / 0 FAIL**, banner confirming it ran (an earlier attempt exited 0 having run NOTHING on the
       `/tmp/semstreams-integration.lock` host lock held by a concurrent session — an exit 0 from that script is not
       evidence the suite ran, check the `ok` count) · `openspec validate --strict` valid ·
-      `task spec:properties` **72/72** · `go run ./cmd/entity-id-audit .` 0 (**1322** candidates) ·
+      `task spec:properties` **73/73** · `go run ./cmd/entity-id-audit .` 0 (**1323** candidates) ·
       `task schema:generate` 0 drift in `schemas/ specs/` and 0 dirty tree-wide ·
-      `task api:compat:report` **12 incompatible, unchanged from the beta.162..HEAD baseline** — this package's
-      listed breaks are the pre-existing `Flow*` removals and the only delta is `KVKeyLister: added` under
-      Compatible changes. All twelve test names the delta's scenarios pin exist in the tree.
-- [x] 6.2 `task e2e:agentic` **GREEN on the final head `0676c77d`** — exit 0, `assertions_run=14`, and task 4.5's
+      `task api:compat` summary **`compared: 62 · clean: 50 · incompatible: 12 · FAILING TOTAL: 12`** against base
+      `v1.0.0-beta.162` — the pre-existing baseline exactly, and its exit 201 is the documented pre-RC posture, not a
+      regression (CI's Tier 1 job runs `API_COMPAT_MODE=report`). The strongest form of this evidence is not the
+      count but that `task api:compat:report` is **byte-identical** (`diff` clean) to the report at the previous
+      head: the depth fix changes no signature, so no API surface can have moved. This package's listed breaks stay
+      the pre-existing `Flow*` removals with `KVKeyLister: added` under Compatible changes. All THIRTEEN test names
+      the delta's scenarios pin exist in the tree.
+- [x] 6.2 `task e2e:agentic` **GREEN on the final head `4dbb2080`** — exit 0, `assertions_run=14`, and task 4.5's
       assertion demonstrably fired: `approval_listing_matched:2`, the booted binary executing the served
       `query_by_type` and the approval walk reading two matched identities. Re-run here deliberately: the first
       green was at `92fd2c5e`, three code commits back, and the repo's hard rule attaches the tier to what LANDS —
