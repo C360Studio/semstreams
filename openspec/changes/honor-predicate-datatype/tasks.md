@@ -10,7 +10,7 @@ never been observed is a hypothesis. Nothing else starts until it is a failing a
       delta, tasks and ADR-107. **INVENTORY PASS granted 2026-09-09** (PR #1269 comment 5603956923). The reproduced
       `^^<@id>` defect is filed as **#1272** at owner direction and is closed by this PR alongside #1142 (Q7).
       Implementation is unblocked; no hold remains on this change.
-- [ ] 0.2 Note for the implementing session: the two consequences task 1 exists to prove were **already reproduced
+- [x] 0.2 Note for the implementing session: the two consequences task 1 exists to prove were **already reproduced
       empirically** on 2026-09-07 (throwaway in-package probe, removed; evidence recorded on PR #1269). Turtle emits
       `"acme.ops.gcs.robotics.drone.002"^^<@id>` — a relative-reference datatype IRI, invalid RDF — and
       `"5.0"^^xsd:double` for a declared `int` after the JSON round trip. Task 1 therefore commits a fixture for
@@ -19,21 +19,21 @@ never been observed is a hypothesis. Nothing else starts until it is a failing a
 
 ## 1. Prove the two consequences before changing anything
 
-- [ ] 1.1 Add `vocabulary/export/datatype_roundtrip_test.go`: build a `graph.EntityState` whose triple has
+- [x] 1.1 Add `vocabulary/export/datatype_roundtrip_test.go`: build a `graph.EntityState` whose triple has
       `Object: 5` under a predicate registered `WithDataType("int")`, pass it through `graph.MarshalEntityState` and
       `graph.UnmarshalEntityState`, assert the decoded `Object` is `float64(5)`, then `export.SerializeToString` to
       N-Triples and assert the emitted literal is today's `"5.0"^^<http://www.w3.org/2001/XMLSchema#double>`. This is
       the whole issue in one fixture; it proves the JSON-round-trip half, which is the load-bearing half, not just the
       classifier half.
-- [ ] 1.2 In the same file, assert the second, larger consequence found at design time: a triple carrying
+- [x] 1.2 In the same file, assert the second, larger consequence found at design time: a triple carrying
       `Datatype: message.EntityReferenceDatatype` (`"@id"`) whose object is a canonical entity ID currently serializes
       as a LITERAL with datatype `@id` — not an IRI, and not valid RDF. `@id` is validated at the authoritative
       persistence seam (`graph/entity_predicate_contract.go:168`), so this is reachable production state in the
       family's only RDF emitter.
-- [ ] 1.3 Assert the third: a triple whose `Datatype` is `"rdf:JSON"` (`vocabulary/agentic/predicates.go:962`) emits
+- [x] 1.3 Assert the third: a triple whose `Datatype` is `"rdf:JSON"` (`vocabulary/agentic/predicates.go:962`) emits
       `^^rdf:JSON`, an unexpanded prefix rather than an IRI, because `expandDatatypePrefix`
       (`vocabulary/export/object.go:166-176`) knows only `xsd:`.
-- [ ] 1.4 Commit these as PASSING assertions of current behavior. They flip to the target assertions in task 5; a
+- [x] 1.4 Commit these as PASSING assertions of current behavior. They flip to the target assertions in task 5; a
       fixture written after the fix reconstructs the bug and proves nothing.
 
 ## 2. The closed vocabulary and its mapping
