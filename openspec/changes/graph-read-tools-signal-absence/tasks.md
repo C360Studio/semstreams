@@ -102,10 +102,18 @@ recorded earlier was stale), and the delta is ADDED-only. `approval_signal_test.
       2026-09-07, 54 + 137 + 7) before 3.1, and re-pin the two premises that live inside held files
       (`executors/httprequest.go:23`, `component.go:974-994`).
 
-- [ ] 1.7 File the `HintEmpty` adoption sweep as ONE tracking issue at the owner's placement: three planes enumerated
-      and pinned in `inventory-verification.md` § round-4 rows (`executors/websearch.go:191`, `personas.go:178`,
-      `rules.go:255`). Enumeration only — this change migrates none of them and is not held on the count (architect
-      contract, establishing side; owner ruling 2026-09-01).
+- [x] 1.7 `HintEmpty` adoption sweep FILED as **#1270** (`v1.0.0-beta.165`, `class:advertised-absent`,
+      `horizon:pre-v1`) — owner ruling E, 2026-09-09; same milestone as this change so parent and child sit in one
+      tag range. Three planes enumerated and pinned in `inventory-verification.md` § round-4 rows
+      (`executors/websearch.go:191`, `personas.go:178`, `rules.go:255`), verbatim-confirmed before filing.
+      Enumeration only — this change migrates none of them and is not held on the count (architect contract,
+      establishing side; owner ruling 2026-09-01). #1270 is blocked until this change lands: a contract's first
+      adopter proves the pattern before three more sites copy it.
+- [x] 1.8 Ruling F, 2026-09-09: the release-gate blind spot behind ruling 10's tag-range caveat FILED as **#1271**
+      (`v1.0.0-rc.1`). `processor/agentic-tools/executors` is Tier 1 (`release/tier1-packages.txt:79`), so
+      `task api:compat` covers this package and passed green on this PR while every break in it is model-facing
+      JSON apidiff cannot see. No action inside this change: ruling 9 already makes 5.1's changelog line name the
+      model-facing result shapes.
 
 ## 2. Spec delta
 

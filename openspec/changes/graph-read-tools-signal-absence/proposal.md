@@ -141,3 +141,20 @@ sitting. This section is the record, not a request — nothing in it is re-opene
 
 Filed in the same sitting from the same reading, and NOT part of this change: **#1266** (tool-catalog audit — 28
 registered tool names, and discovery advertising the whole roster to any loop without `default_tools`).
+
+## Owner rulings, second round (recorded 2026-09-09) — the six questions the 1.3h amendment declined to decide
+
+The round-4 amendment recorded six questions rather than deciding them, and round 5 judged that recording rather than
+deciding was correct in all six cases. The owner ruled them together on 2026-09-09.
+
+| # | Question | Ruling | Where it lands |
+|---|---|---|---|
+| A | An omitted `direction` — served as `outgoing`, or refused? | **Served**, and echoed in the result. After ruling 4, `outgoing` is the tool's only supported direction; refusing an omission would make the caller type the sole available value to get the sole available behaviour — an adopter predicting a value the framework owns. The echo is what keeps the narrowing observable rather than silent | already in delta requirement 2 and its `omitted direction` scenario |
+| B | Q12 needs a `cursor` argument its words do not mention | **Keep it.** Without it `next_cursor` is unactionable and `has_more` degenerates into what `HintTooLarge` already says; the argument is the minimum that makes ruling 12 coherent, and it matches `read_loop_result`'s advertised `offset` on the same roster. A cursor that does not decode is refused as `invalid_args` — never a silent reset to page 1, which would page the model over page 1 forever | already in delta requirement 3 and its `unusable cursor refused` scenario |
+| C | Reuse `graph.EncodeCursor`/`DecodeCursor`, or encode locally? | **Reuse.** Both are already exported and consumed by graph-ingest, `executors` already imports `graph`, and no new exported surface means no Tier 1 gate trip. A local encoder would be a second spelling of a fact the `graph` package owns — the defect class round 4's BLOCKING was about | already in delta requirement 3 ("the same encoding as the graph prefix-listing cursor") |
+| D | Should `unresolved` carry a `graph.MissingReason`? | **No.** A closed set with its own producers would want its own inventory row; adopting it here ratchets scope. Recorded as a residual of a deliberate decision, and deliberately NOT filed | `design.md` § Result shapes; `unresolved` stays a list of identities |
+| E | Where does the `HintEmpty` adoption sweep get filed? | Filed as **#1270**, `v1.0.0-beta.165`, `class:advertised-absent` — the same milestone as this change, because the justification is "do not leave the framework half-migrated" and parent and child inside one tag range is what makes it get swept | `tasks.md` 1.7 |
+| F | Nothing enforces ruling 10's tag-range caveat | Filed as **#1271**, `v1.0.0-rc.1`. Sharper than recorded: `processor/agentic-tools/executors` IS Tier 1 (`release/tier1-packages.txt:79`), so `task api:compat` covers this package and passes green — the break is model-facing JSON, which apidiff cannot see. A green check that reads as coverage over the one change class it is blind to | `design.md` § Break classification |
+
+Rulings A–D changed nothing: the 1.3h amendment had already materialised each of them exactly as ruled. Only E and F
+produced new artifacts.
