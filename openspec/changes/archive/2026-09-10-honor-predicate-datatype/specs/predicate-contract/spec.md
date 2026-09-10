@@ -82,12 +82,15 @@ so registration-time refusal is the earliest place the mistake can be caught.
 - **THEN** both refuse it with the same reason
 - **AND** neither path accepts a value the other refuses
 
-#### Scenario: the framework's own declarations are complete
+#### Scenario: the set of framework predicates declaring no datatype can only shrink
 
-- **GIVEN** every predicate the framework itself registers at its vocabulary composition root
+- **GIVEN** every predicate the framework registers — its package `init()` registrations and its explicit
+  composition root — walked in the order a running binary applies them, the composition root amending `init()`
 - **WHEN** the repository contract check walks the registry
-- **THEN** each one carries a datatype from the closed vocabulary
-- **AND** the check is shown capable of failing against a registry seeded with a bare declaration
+- **THEN** every predicate that declares a datatype declares one from the closed vocabulary
+- **AND** every predicate declaring none is named in a recorded exemption set, so that set can only shrink
+- **AND** every recorded exemption names a predicate that is registered and does declare nothing
+- **AND** the check is shown capable of failing, and fails on a walk that examined nothing
 
 ### Requirement: RDF export honors the declared datatype and never fabricates a value
 

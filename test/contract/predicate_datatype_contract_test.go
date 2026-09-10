@@ -171,9 +171,11 @@ func nTriplesObjectTerm(t *testing.T, ntriples string) string {
 // not a defect list — it is a RATCHET: the guard below fails when a predicate
 // outside this set declares nothing, so the set can only shrink.
 //
-// It exists because the completeness scenario the change specifies
+// It exists because the completeness scenario the change originally specified
 // ("the framework's own declarations are complete") was measured false against
-// the code: 79 framework predicates declare nothing, and thirteen of them are
+// the code, and the spec now states the ratchet instead ("the set of framework
+// predicates declaring no datatype can only shrink"): 79 framework predicates
+// declare nothing, and thirteen of them are
 // deliberately bare (vocabulary/rulepacks/predicates.go registers names only).
 // Declaring a datatype for each is a separate pass of 79 semantic judgements
 // (gh#1277), and inventing them here would be the fabrication this change

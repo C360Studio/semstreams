@@ -168,15 +168,28 @@ Nothing else started until it was a failing assertion.
 
 ## 9. Spec sync
 
-- [ ] 9.1 BLOCKED on section 10 — apply the delta to `openspec/specs/predicate-contract/spec.md` as the last
-      content commit, reviewed with the code. Not blocked on a ruling any more. The owner ruled 2026-09-09 (PR #1269 comment
-      5606966440): amend the scenario *the framework's own declarations are complete* to the shrink-only ratchet the
-      guard actually ships. The deferred declaration pass is filed as **#1277**. Correct count is **29 of 156 at the
-      composition root** (`ClearRegistry()` + `builtins.Register()`, the walk the scenario's own words name), NOT the
-      81 first escalated — 81 is the guard's ambient-first union, 79 the production binary. Section 10 also rewrites
-      the delta's normalization scenario, so 9.1 runs last or it will be rewritten twice.
-      **Archiving without this sync strands all 27 `// spec:` citations** — `task spec:properties` reports 74/74 only
-      because they resolve against `openspec/changes/`.
+- [x] 9.1 Spec sync — **DONE, and it carries a second owner ruling.**
+      The 2026-09-09 ruling sized the ratchet scenario at "29 of 156 at the composition root — the walk the
+      scenario's own words name". But task 10.4 (ruled in the same comment) fixed the guard to walk the production
+      union, so the guard ships 218 predicates / 79 bare, not 156 / 29. The two rulings pointed at different walks.
+      Escalated rather than resolved silently. **Owner ruled 2026-09-10: the union walk, 79.** Rationale recorded
+      with the ruling: the union is what a running binary actually holds, and restricting the guard to the
+      composition root would drop the ambient init() set — 77 predicates, 65 of them bare, including every
+      `graph.rel.*`, `lifecycle.transition.*` and `entity.identity.type` — out of ratchet coverage entirely.
+      All three walks were measured before the question was asked, not after: init() only 77/65 bare, composition
+      root only (`ClearRegistry()` + `builtins.Register()`) 156/29, production union 218/79. The ruling's 29 of 156
+      reproduces exactly; it simply names a different walk than the one the guard performs.
+      The scenario is amended to a behavioural shrink-only ratchet — *the set of framework predicates declaring no
+      datatype can only shrink* — with **no count written into the spec**: the count depends on the walk, this
+      effort has produced four different ones (65, 29, 79, and the discredited 81), and a number in a spec drifts
+      the moment the walk changes. The GIVEN names the walk instead.
+      Applied with `openspec archive honor-predicate-datatype -y`: 3 requirements added to
+      `openspec/specs/predicate-contract/spec.md`, change archived as `2026-09-10-honor-predicate-datatype`.
+      **The 27 `// spec:` citations are not stranded** — `task spec:properties` reports **99/99 resolving** after
+      the archive, when they now have to resolve against `openspec/specs/` rather than `openspec/changes/`.
+      `task openspec:validate` 53 passed / 0 failed; `task openspec:queue` empty.
+      The stale prose reference to the old scenario name in `test/contract/predicate_datatype_contract_test.go:175`
+      was updated with it.
 
 ## 10. Post-review repairs — HOLD, this change cannot merge until they land
 
