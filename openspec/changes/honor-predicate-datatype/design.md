@@ -124,7 +124,8 @@ Distinct count family-wide: **42** — 16 datatype spellings plus 26 struct name
 *Reconciliation with the ruling's histogram.* The ruling restates this table with two rows transcribed differently —
 `string` 680 against a measured 554 (588 counting the 34 struct-literal writers of M2), and `number` 13 against a
 measured 1 (4 with struct literals) — and it omits `entity_ref` 1 and `boolean` 1. Neither difference touches the
-ruling: all four spellings map to a canonical value under §2.3, and the ruling's "~27 semdragon Go struct names" is
+ruling: all four spellings are retired spellings under §2.3 that their declaring repository migrates, and the
+ruling's "~27 semdragon Go struct names" is
 the same set measured here as 26 distinct names over 30 sites. The numbers used throughout this design are the
 measured ones, which is why §4.3's residual reads 68 where the ruling's reads ~76.
 
@@ -264,12 +265,15 @@ The spec delta states that convergence as a requirement, so it is a contract rat
 **No cross-package contract test is needed** — the two values are no longer asserted equal, which is what deletes the
 `TestNATSVersionIsConverged`-shaped guard the RDF-shaped draft required (M5).
 
-### 2.3 The legacy mapping — normalize once at declaration, never at read
+### 2.3 The retired spellings — refused at declaration, migrated at the source
 
-Canonical rows are listed too, so the table is the whole domain of `canonicalDataType` rather than only its
-interesting half. "Value changes?" is the column the migration note is written from.
+**Superseded by the owner ruling of 2026-09-09 (option (d), no-legacy).** This section originally specified a
+declaration-time normalizer. There is none: the registry accepts the seven canonical values plus absent and refuses
+everything else. The table below survives the ruling because the measurement is what sizes the migration — it is now
+read as *the migration bill*, not as a mapping the framework performs. "Adopter action" is the column
+`docs/operations/migration-predicate-datatype.md` is written from.
 
-| Legacy spelling | in-repo sites | family sites | → canonical | value changes? |
+| Declared spelling | in-repo sites | family sites | write instead | adopter action |
 |---|---|---|---|---|
 | `string` | 140 | 554 (+34 struct-literal) | `string` | no |
 | `entity_id` | 0 | 126 | `entity_id` | no |
@@ -278,42 +282,47 @@ interesting half. "Value changes?" is the column the migration note is written f
 | `bool` | 4 | 21 | `bool` | no |
 | `json` | 0 | 13 | `json` | no |
 | `float` | 0 | 10 | `float` | no |
-| `float64` | 17 | 21 | `float` | **yes** |
-| `number` | 0 | 1 (+3 struct-literal) | `float` | **yes** |
-| `double` | 0 | **0** | `float` | — |
-| `time.Time` | 10 | 10 | `datetime` | **yes** |
-| `timestamp` | 8 | 8 | `datetime` | **yes** |
-| `int64` | 1 | 2 | `int` | **yes** |
-| `array` | 0 | 20 | `json` | **yes** |
-| `entity_ref` | 1 | 1 | `entity_id` | **yes** |
-| `reference` | 0 | 1 | `entity_id` | **yes** |
-| `boolean` | 0 | 1 | `bool` | **yes** |
-| 26 Go payload struct names (semdragon `domain/vocab.go`) | 0 | 30 | **REFUSED** | — |
-| *(absent)* | — | 3 semlink sites | *(stays absent — legal)* | no |
+| `float64` | 17 | 21 | `float` | **migrate** |
+| `number` | 0 | 1 (+3 struct-literal) | `float` | **migrate** |
+| `double` | 0 | **0** | `float` | — (no measured site) |
+| `time.Time` | 10 | 10 | `datetime` | **migrate** |
+| `timestamp` | 8 | 8 | `datetime` | **migrate** |
+| `int64` | 1 | 2 | `int` | **migrate** |
+| `array` | 0 | 20 | `json` | **migrate** |
+| `entity_ref` | 1 | 1 | `entity_id` | **migrate** |
+| `reference` | 0 | 1 | `entity_id` | **migrate** |
+| `boolean` | 0 | 1 | `bool` | **migrate** |
+| 26 Go payload struct names (semdragon `domain/vocab.go`) | 0 | 30 | *(the pragmatic type of the object)* | **migrate** |
+| *(absent)* | — | 3 semlink sites | *(stays absent — legal)* | none |
 
-Nine legacy rows carry a value change, over **68** sites family-wide; that number is the whole downstream bill (§4.3).
+Ten retired rows now refuse rather than translate. In-repo sites were migrated under task 4.1; family-wide the bill is
+**67 declarations** across six sisters, concentrated in `array` (20) and `number` (13) — the ruling's own measurement,
+recorded on PR #1269 comment 5606966440 and itemized per repository in the migration note.
 
-`double` is the one row with **zero measured sites**. It is carried because it is the spelling an author migrating
-from an XSD-shaped draft reaches for, and one map row is cheaper than one refusal that teaches nothing. Flagged
-explicitly because this design's own rule is that a zero-consumer entry earns its place out loud or not at all —
-strike it and nothing else moves. `integer` and `dateTime` are deliberately **not** mapped: zero sites, and mapping
-them would walk the semweb spellings R0 keeps at the edge back into the declaration surface through a side door.
+`double` has **zero measured sites**. The normalizing draft carried it anyway, as the spelling an author migrating
+from an XSD-shaped draft reaches for. Under (d) that reasoning is gone with the map: it is refused like any other
+non-canonical value, and a refusal that names the accepted vocabulary teaches the migrating author exactly what the
+map row would have silently assumed. `integer` and `dateTime` are refused for the same reason they were never
+mapped — they are the semweb spellings ADR-107 keeps at the export edge.
 
-`array` → `json` loses "it is a list". That is honest: the objects are JSON documents in practice, and inventing an
-`array` datatype with no reader is the category-4 mistake. Named as a lossy mapping so it is not discovered later.
+`array` is the one row where refusal is strictly better than the mapping would have been. `array` → `json` lost "it is
+a list", silently, at declaration time. Refusing it puts that loss in front of the author who declared it: they write
+`json` themselves, having seen what it costs, or they tell us the framework needs a list datatype. A normalizer makes
+that decision on their behalf and never reports it.
 
-**Why this is not the alias table `predicate-contract` already forbids.** Requirement *Canonical predicate enforcement
-is unconditional* (`openspec/specs/predicate-contract/spec.md:102-108`) prohibits "a permissive runtime mode,
-compatibility alias, deprecated predicate table, dual read/write path, or configuration escape hatch". That
-prohibition is about **predicate names**, and it is about **runtime**. This mapping is a declaration-time normalizer:
-the registry stores only the canonical value, nothing persists a legacy spelling, and no reader ever observes one. The
-spec delta states that explicitly so the distinction is a contract rather than a reading. It is the same shape as
-`expandDatatypePrefix` (`export/object.go:166-176`), which normalizes at a boundary and stores nothing.
+**The alias-table question dissolves.** The normalizing draft had to argue that its mapping was not the
+"compatibility alias, deprecated predicate table, dual read/write path" that requirement *Canonical predicate
+enforcement is unconditional* (`openspec/specs/predicate-contract/spec.md:102-108`) forbids — that it was a
+declaration-time normalizer rather than a runtime alias. Under (d) there is no mapping to defend. That is the
+strongest argument for the ruling: an exemption that has to be argued on a Tier 1 frozen package is an exemption that
+outlives everyone who understood the argument.
 
 ### 2.4 Where enforcement lives
 
-`validatePredicateMetadataLocked` (`vocabulary/registry.go:381`), signature changed to take `*PredicateMetadata` so it
-can normalize in place. It is private, so the change costs nothing externally; both entry points already call it
+`validatePredicateMetadataLocked` (`vocabulary/registry.go:381`). The normalizing draft changed its signature to
+`*PredicateMetadata` so it could rewrite the datatype in place; under (d) it rewrites nothing, so it takes the value
+and the pointer is gone with the mapping it existed for. It is private, so neither change costs anything externally;
+both entry points already call it
 (`:308`, `:371`); and that is what makes the struct-literal path — semteams' 34 sites, semmachina's default, semlink's
 three empty registrations — covered by the same rule as the option path. Enforcing inside `WithDataType` would leave
 that path open.
@@ -324,9 +333,12 @@ who wrote `"PeerReviewPayload"` needs to be told what to write instead, not that
 
 **Empty is accepted** (M3).
 
-**Q2 ruled: the refusal lands now, not behind a warn-only phase.** Under Q1 the refusal set is exactly semdragon's 26
-struct-name spellings across 30 sites in one file (M1) — every other measured spelling in the family normalizes. The
-staged alternative would buy a warn-only phase for one file of one sister that pins its semstreams version anyway.
+**Q2 ruled: the refusal lands now, not behind a warn-only phase.** Under Q1 the refusal set was exactly semdragon's
+26 struct-name spellings across 30 sites in one file (M1), every other measured spelling normalizing. Option (d)
+widens it to **67 declarations across six sisters** (§2.3), which is a materially larger bill than Q2 was asked
+about — and the owner ruled it knowing that number, since the measurement was reported with the ruling. The staged
+alternative is still rejected for the same reason: a warn-only phase on a value nothing read until this change is a
+grace period for no one.
 
 ### 2.5 Invariants (the only admissible source for the property harness)
 
@@ -336,9 +348,9 @@ reconstructs it and proves nothing.
 | # | Invariant | Spec home |
 |---|---|---|
 | I1 | For every registered predicate, `DataType ∈ closedSet ∪ {""}`, where `closedSet` is the seven pragmatic values of §2.2 | *A declared predicate datatype comes from one closed, framework-owned vocabulary* |
-| I2 | `canonical` is idempotent: `canonical(canonical(x)) = canonical(x)` — this is what makes amend-registration (A3) safe | same, scenario *an amending re-registration keeps its inherited canonical value* |
-| I3 | `canonical` is total on `closedSet ∪ legacyMap` and errors elsewhere; no third outcome | same, scenario *an unrecognized spelling is refused at declaration* |
-| I4 | `GetPredicateMetadata(p).DataType` never returns a legacy spelling, for any `p`, at any time | same, scenario *a recognized legacy spelling normalizes once at declaration* |
+| I2 | Validation is stable under re-validation: a value the registry accepted once it accepts again — this is what makes amend-registration (A3) safe. (Under the deleted normalizer this was idempotence of `canonical`; with nothing rewritten, stability is the weaker property that survives and the only one A3 needs) | same, scenario *an amending re-registration keeps its inherited canonical value* |
+| I3 | Validation is total on `closedSet ∪ {""}` and errors everywhere else; no third outcome | same, scenario *an unrecognized spelling is refused at declaration* |
+| I4 | `GetPredicateMetadata(p).DataType` returns exactly what was declared, for any `p`, at any time — the registry substitutes nothing | same, scenario *a canonical spelling registers unchanged* |
 | I5 | Export classification is a total order: per-triple datatype ≻ declared datatype ≻ Go-type observation ≻ invalid | *RDF export honors the declared datatype and never fabricates a value* |
 | I6 | The emitted lexical form always round-trips to the observed `Object`; a declaration the observed value contradicts is ignored for that triple | same, scenario *a declaration the value contradicts is ignored, not applied* |
 | I7 | Any object marked as an entity reference — the per-triple `@id` hint or the declared `entity_id` — whose value is a canonical entity ID emits as an IRI, never as a literal. The two spellings produce identical output | same, scenario *an entity reference serializes as a resource* |
@@ -368,13 +380,23 @@ Rejected: the owner ruled honor, and this is the more expensive option anyway.
 scope item 3 explicitly asks for "best practice enforced, not documented". Rejected.
 
 **Option D — closed set, hard reject, no legacy mapping.** Every non-canonical spelling panics. Bill: 41 of 42
-spellings, ~950 call sites across seven repos, all at once. Rejected: it converts a correctness improvement into a
-family-wide flag day for no additional correctness — 16 of the 42 spellings have an unambiguous canonical form, and
-refusing them teaches the adopter nothing the mapping cannot.
+spellings, ~950 call sites across seven repos, all at once. Rejected *at design time*: it converts a correctness
+improvement into a family-wide flag day for no additional correctness — 16 of the 42 spellings have an unambiguous
+canonical form, and refusing them teaches the adopter nothing the mapping cannot.
 
-**Option E (recommended) — closed set, normalize the 16 known spellings at declaration, refuse the rest.** Bill: 26
-spellings in one file of one sister, plus the semsource wire-value change (§4). Everything else keeps compiling and
-booting, and the value it reads back is canonical.
+**Option E (recommended at design time) — closed set, normalize the 16 known spellings at declaration, refuse the
+rest.** Bill: 26 spellings in one file of one sister, plus the semsource wire-value change (§4). Everything else keeps
+compiling and booting, and the value it reads back is canonical.
+
+> **The owner ruled against both, 2026-09-09 — option (d), no-legacy** (PR #1269 comment 5606966440): "we do not need
+> to support legacy, we just need migration notes." That is Option D's *mechanism* — no mapping, refuse everything
+> non-canonical — reached by rejecting Option E's premise rather than its bill. Two things this section got wrong.
+> Its bill for D was ~950 call sites, which is the count of all declarations; the real bill is the **67** that are
+> not already canonical (92% of the family's 876 declarations already are), an order of magnitude less, and it was
+> never measured because the option had already been rejected. And "refusing them teaches the adopter nothing the
+> mapping cannot" inverts the actual relation: the mapping teaches nothing, because it never speaks. Recorded here
+> rather than rewritten away, because the reasoning that made E look cheap is the reasoning worth not repeating —
+> **an unmeasured bill is not a small one.**
 
 **Option F — extend the existing surface instead: reuse `message.Triple.Datatype` and delete
 `PredicateMetadata.DataType` entirely.** Genuinely attractive — one home for one fact, which the contract prefers.
@@ -421,7 +443,7 @@ Ranked honestly (compile error > boot error > typed runtime error > log line > d
 | Path | Rank | Assessment |
 |---|---|---|
 | Unmapped spelling | **boot error** | The best rank available. A compile error is impossible *by the owner's constraint* — `WithDataType` keeps its `string` parameter so 755 sister call sites survive — so registration-time refusal is the earliest surface that exists. |
-| Mapped spelling, in-repo effect | **nowhere** | Deliberate: making normalization loud would panic 729 currently-correct call sites. The effect on the declaring author is nil, so silence is correct *for them*. |
+| Retired spelling | **boot error** | Under (d) there is no quiet path left: a retired spelling refuses exactly like an unrecognized one. The normalizing draft ranked this **nowhere** — deliberately silent, because the declaring author's value was corrected for them. The ruling trades that silence for a migration: every affected author is told, once, at boot, instead of never. |
 | Mapped spelling, **semsource's wire consumer** | **doc** | **This is the finding.** |
 
 **The finding, stated as a finding.** semsource reads `.DataType` at `processor/source-manifest/status.go:219,224` and
@@ -599,8 +621,8 @@ cycle forbids a shared constant. Observation becomes strictly the fallback, neve
 
 ## 10. Problem shape and the adoption sweep
 
-**Shape**: *a closed vocabulary validated at a declaration seam, with recognized legacy spellings normalized once at
-the boundary and never persisted.*
+**Shape**: *a closed vocabulary validated at a declaration seam, with everything outside it refused there.* (The
+normalizing half of this shape was removed by the 2026-09-09 ruling; what remains is the validation seam.)
 
 Both halves have in-repo prior art, so this change **establishes no new pattern and owes no adoption sweep**:
 
@@ -609,8 +631,9 @@ Both halves have in-repo prior art, so this change **establishes no new pattern 
   `payloadregistry/registry.go:144`). This is the shape §2.2 adopts.
 - Closed set validated inside `validatePredicateMetadataLocked` on this exact struct: `validAliasType`
   (`vocabulary/registry.go:406-412`, called from `:394`). This is the seam §2.4 adopts.
-- Normalize-at-a-boundary, store nothing: `expandDatatypePrefix` (`vocabulary/export/object.go:166-176`). This is the
-  shape §2.3 adopts.
+- ~~Normalize-at-a-boundary, store nothing: `expandDatatypePrefix` (`vocabulary/export/object.go:166-176`).~~ Cited as
+  the prior art for §2.3's normalizer; no longer applicable, since (d) leaves no normalizer to justify. The
+  export-edge prefix expansion is unaffected — it is a serializer concern, which is exactly ADR-107's point.
 - Two homes, one asserted value, enforced by a contract test: `TestNATSVersionIsConverged`
   (`test/contract/nats_version_contract_test.go`). This is the shape §2.2's cycle workaround adopts.
 - Mechanical drift guard walking an enumerable registry: `TestCommittedSchemasMatchCode`
@@ -640,7 +663,8 @@ Two different jobs, deliberately not one test:
 
 A3's amend semantics are why the guard alone is not sufficient evidence: a predicate can pass it by inheriting a
 datatype from an earlier registration call it never declared. The validator is what makes the inherited value
-trustworthy, since normalization is idempotent (I2).
+trustworthy — under (d) because it is stable under re-validation (I2): the stored value was accepted when it was
+declared, and re-validating it accepts it again.
 
 > **Implementation-time correction (2026-09-09).** The completeness half above, and the spec delta scenario *the
 > framework's own declarations are complete* that states it, are **measured false**: **81** framework predicates

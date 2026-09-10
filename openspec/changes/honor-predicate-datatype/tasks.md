@@ -207,8 +207,29 @@ question 2026-09-09 (PR #1269 comment 5606966440). Everything below is ruled wor
       **Note for 10.4/10.5**: `test/contract` stayed GREEN under that mutation. Expected — the guard walks the
       framework's own declarations, which are all canonical either way — but it means the contract guard is not a
       second line of defense for the enforcement seam, only for the declaration ratchet.
-- [ ] 10.2 Rewrite `design.md` §2.3 and the `predicate-contract` delta's normalization scenario — both currently
+- [x] 10.2 Rewrite `design.md` §2.3 and the `predicate-contract` delta's normalization scenario — both currently
       specify normalize-not-refuse, which (d) reverses. The delta's MODIFIED/ADDED block must restate EVERY scenario.
+      **DONE.** The delta is an **ADDED** block, not MODIFIED, so it is self-contained and the restate-every-scenario
+      rule had nothing to catch here — verified before editing rather than assumed. Requirement prose now says refuse
+      rather than translate; the normalization paragraph is replaced by store-what-was-declared plus the stability
+      property that A3 actually needs; scenario *a recognized legacy spelling normalizes once at declaration* becomes
+      *a retired legacy spelling is refused at declaration*.
+      `design.md`: §2.3 retitled and reframed as the migration bill (the measurement survives, the mapping does not);
+      §2.4's pointer rationale, §2.5's I2/I3/I4, §4.3's adopter-seam row, §10's problem shape and its
+      `expandDatatypePrefix` prior-art bullet, and §12's idempotence justification all follow the ruling. §9's
+      Options D and E are annotated rather than rewritten — the record of what was weighed is worth keeping, and it
+      contains the lesson: D's bill was quoted at ~950 call sites (all declarations) when the real figure is the 67
+      that are not already canonical, never measured because the option had already been rejected.
+      **Code followed the design, not the reverse**: §2.4 said the `*PredicateMetadata` pointer existed so the
+      validator could normalize in place, so with normalization gone `validatePredicateMetadataLocked` now takes the
+      value. Nothing in it mutated any more; a pointer that exists to mutate, in a function that does not, is the
+      next defect's seam.
+      Green: `openspec validate --strict` exit 0, `go test -race ./vocabulary/... ./test/contract/...` exit 0,
+      `task lint` exit 0, `task spec:properties` 99/99.
+      **`task inventory:verify` is RED and deliberately left so** — `pins=150 ok=105 moved=38 ambiguous=2 drift=5`.
+      All five DRIFT pins are `vocabulary/registry.go:339,402,419`, the exact call sites and signature this task
+      rewrote; the 2 AMBIGUOUS at `:554` are the pre-existing pair task 8.3 re-derived by hand. Refreshing now would
+      be wasted: 10.3-10.7 move pins again. The refresh is 10.10's, against the final head.
 - [ ] 10.3 **`IsValidDataType` → unexported** (owner: "in package"). No exported addition to Tier 1 under ADR-106;
       both consumers are contract tests, and `dataTypeCanonicalization` is already visible in-package.
 - [ ] 10.4 **Guard repairs (review HIGH-1).** `frameworkPredicateDataTypes`

@@ -3,8 +3,8 @@
 ### Requirement: A declared predicate datatype comes from one closed pragmatic vocabulary
 
 Every predicate registration MUST either declare its object datatype as one value from a closed, framework-owned
-vocabulary or leave it absent, and the registry MUST normalize a recognized legacy spelling to its canonical value at
-declaration time while refusing an unrecognized one.
+vocabulary or leave it absent, and the registry MUST refuse any other value at declaration time rather than
+translating it.
 
 The vocabulary names the **pragmatic** type of the object, never the Go type of the value. The Go type is something
 the serializer observes directly; asking a declaring author to predict it produces a value the framework already holds
@@ -20,11 +20,17 @@ adopter writes against. The mapping from a declared value to its RDF datatype IR
 and the registry MUST NOT be required to know it. A declaring author states that an object is an entity reference; the
 exporter, and only the exporter, decides that this means an IRI node rather than a literal.
 
-Normalization is a declaration-time step, NOT a compatibility alias, a deprecated-value table, a dual read/write path,
-or a runtime escape hatch: the registry MUST store only the canonical value, so no reader ever observes a legacy
-spelling and no legacy spelling is ever persisted. Normalization MUST be idempotent — normalizing a canonical value
-returns that same value — because registration amends rather than replaces, so an already-normalized value is
-re-validated on every subsequent registration of the same predicate.
+The registry MUST store exactly the value that was declared. It MUST NOT normalize, alias, or otherwise translate a
+non-canonical spelling into a canonical one: no compatibility alias table, no deprecated-value map, no dual
+read/write path, no runtime escape hatch. Two reasons, and the second is the durable one. A translation layer on a
+frozen package is an undated permanent bridge that nothing ever removes. And translation makes the declaration
+surface lie — a reader observes a value no author wrote, so the registry can no longer be read as a record of what
+adopters declared. An adopter whose declarations use a retired spelling MUST migrate them; the framework's obligation
+is to refuse early, name the accepted vocabulary, and publish the migration, not to guess an intent.
+
+Because nothing is rewritten, validation MUST be stable under re-registration: registration amends rather than
+replaces, so a stored value is re-validated on every subsequent registration of the same predicate and MUST still be
+accepted.
 
 An absent datatype MUST remain valid. Declarations that carry no datatype are a legitimate registration shape, and
 refusing them would fail registrations that declare nothing but a predicate name.
@@ -38,19 +44,19 @@ so registration-time refusal is the earliest place the mistake can be caught.
 - **GIVEN** a predicate registration declaring a datatype already in the closed vocabulary
 - **WHEN** the registry validates the declaration
 - **THEN** registration succeeds
-- **AND** reading the predicate's metadata returns that exact value
+- **AND** reading the predicate's metadata returns that exact value, never a substituted one
 
-#### Scenario: a recognized legacy spelling normalizes once at declaration
+#### Scenario: a retired legacy spelling is refused at declaration
 
-- **GIVEN** a predicate registration declaring a datatype spelled in a recognized legacy form
+- **GIVEN** a predicate registration declaring a datatype in a spelling the framework once translated
 - **WHEN** the registry validates the declaration
-- **THEN** registration succeeds
-- **AND** reading the predicate's metadata returns the canonical value, never the legacy spelling
-- **AND** no reader anywhere observes the legacy spelling
+- **THEN** registration fails, exactly as for any other value outside the closed vocabulary
+- **AND** the failure names both the offending value and the accepted vocabulary
+- **AND** nothing is stored under that predicate
 
 #### Scenario: an unrecognized spelling is refused at declaration
 
-- **GIVEN** a predicate registration declaring a datatype that is neither canonical nor a recognized legacy spelling
+- **GIVEN** a predicate registration declaring a datatype that is not in the closed vocabulary
 - **WHEN** the registry validates the declaration
 - **THEN** registration fails
 - **AND** the failure names both the offending value and the accepted vocabulary
@@ -66,7 +72,7 @@ so registration-time refusal is the earliest place the mistake can be caught.
 
 - **GIVEN** a predicate already registered with a canonical datatype
 - **WHEN** the same predicate is registered again with options that do not mention the datatype
-- **THEN** registration succeeds
+- **THEN** registration succeeds, because the inherited value is re-validated and still accepted
 - **AND** the inherited canonical value is retained unchanged
 
 #### Scenario: both registration entry points enforce the same vocabulary

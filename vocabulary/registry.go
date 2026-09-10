@@ -336,7 +336,7 @@ func Register(name string, opts ...Option) {
 	for _, opt := range opts {
 		opt(&meta)
 	}
-	if err := validatePredicateMetadataLocked(&meta); err != nil {
+	if err := validatePredicateMetadataLocked(meta); err != nil {
 		panic(fmt.Sprintf("register predicate %q: %v", name, err))
 	}
 
@@ -399,7 +399,7 @@ func RegisterPredicate(meta PredicateMetadata) {
 
 	registryMu.Lock()
 	defer registryMu.Unlock()
-	if err := validatePredicateMetadataLocked(&meta); err != nil {
+	if err := validatePredicateMetadataLocked(meta); err != nil {
 		panic(fmt.Sprintf("register predicate %q: %v", meta.Name, err))
 	}
 
@@ -417,8 +417,10 @@ func RegisterPredicate(meta PredicateMetadata) {
 // struct-literal path open.
 //
 // It refuses a non-canonical datatype rather than rewriting one, so what an
-// adopter declared is what the registry stores. Nothing here normalizes.
-func validatePredicateMetadataLocked(meta *PredicateMetadata) error {
+// adopter declared is what the registry stores. Nothing here normalizes, which
+// is why it takes the metadata by value: it has no reason to reach back into
+// the caller's copy, and a pointer would invite one.
+func validatePredicateMetadataLocked(meta PredicateMetadata) error {
 	if err := validateDataType(meta.DataType); err != nil {
 		return err
 	}
