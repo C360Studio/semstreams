@@ -368,7 +368,7 @@ question 2026-09-09 (PR #1269 comment 5606966440). Everything below is ruled wor
       | `API_COMPAT_MODE=report ./scripts/api-compat.sh` | exit 0 — 62 compared, 50 clean, 12 incompatible, **0 removed, 0 added** |
       | `task openspec:validate` | exit 0 — 53 passed, 0 failed |
       | `task spec:properties` | exit 0 — **99/99** citations resolve |
-      | `task inventory:verify` | exit 0 — **150/150**, 0 moved, 0 ambiguous, 0 drift |
+      | `bash scripts/inventory-verify.sh <archive>/inventory.md` | exit 0 — **150/150**, 0 moved, 0 ambiguous, 0 drift, 0 unparsed |
       | `task e2e:core` | **exit 0** |
 
       **API compat: the same 12 as task 8.2**, all pre-existing on `main` since beta.162, none in a package this
@@ -389,4 +389,48 @@ question 2026-09-09 (PR #1269 comment 5606966440). Everything below is ruled wor
       `task e2e:agentic` run from another session on Codex's #1146 branch (mock-llm image `gh1146-phase-…`,
       containers healthy, driver pid 96074 running). Waited for it to exit rather than running `task e2e:clean`,
       which would have killed another agent's tier mid-run.
+
+## 11. Review round 2 (`0d7e46cb`) — CHANGES REQUESTED, repaired
+
+`semstreams-reviewer` re-reviewed the section 10 repairs and confirmed them, including two claims it re-derived
+independently: the collector genuinely reproduces production order (it diffed `go list -deps -test ./test/contract`
+against `go list -deps ./cmd/semstreams` and found no main-only package registers a predicate), and the sister bill
+is **58, not the ruling's 67**. It also killed the guards itself rather than trusting the mutation log.
+
+Findings, all repaired in `127e2ac0`:
+
+- [x] 11.1 **BLOCKING — four surfaces still advertised the deleted normalizer**, all authored by this change:
+      `vocabulary/README.md` (which named all ten retired spellings as safe), `docs/basics/04-vocabulary.md`, and the
+      `WithDataType` and `PredicateMetadata.DataType` godocs. An adopter reading no migration note reaches a godoc,
+      is told `float64` normalizes, writes it, and panics in `init()`.
+      **Why 10.6 missed them, and it is not "the sweep was too narrow":** 10.6 grepped `// DataType: <legacy>` and
+      reported none remaining repo-wide. That pattern cannot match prose *about* normalization — it only matches the
+      annotation shape 10.6 had just fixed. **Grepping for the shape you repaired proves you repaired it, not that
+      the claim is gone.** The re-sweep is on the concept (`normaliz|legacy spelling` across every published
+      surface) and is clean.
+- [x] 11.2 **HIGH — the 10.10 gate table reported `task inventory:verify` exit 0; it exited 1.** The two refresh-note
+      bullets added in the archive commit begin with `-`, which the verifier parses as pins and reports UNPARSED. The
+      claim and the lines that falsified it landed in the same commit: it was written from a run made before the
+      note was added and never re-run. Bullets reflowed as prose, row corrected to the command that reproduces.
+- [x] 11.3 **HIGH — migration §5 claimed four output changes; there are six.** Before this change the serializer
+      never consulted the declaration at all, so `datetime` (53 sister sites) and `json` (13) went from untyped
+      literals to typed ones. Those two are the highest-volume rows and were the two omitted. Added, with the
+      valid-but-untyped versus invalid distinction stated.
+- [x] 11.4 **HIGH — the PR body was stale on the merge-blocking facts** (said 9.1 blocked, quoted an old head, and
+      described the normalizing implementation). Rewritten against the final head.
+- [x] 11.5 MEDIUM — `json` was the only declared branch applying without checking the observed value could carry the
+      type, emitting `"hovering"^^rdf:JSON`. Gated on `json.Valid`, tests both ways, mutation-checked.
+- [x] 11.6 MEDIUM — the synced spec omitted that `string` is a confirmation rather than an override, and claimed any
+      absolute IRI serializes as a resource when only `http://`, `https://` and `urn:` are recognized. Both
+      corrected in `openspec/specs/` (current truth) and in `vocabulary/export/README.md`.
+- [x] 11.7 MEDIUM — migration's "37 SemStreams call sites" overstated what reaches a sister manifest: 20 of the 37
+      are in `examples/processors/*`, absent from `go list -deps ./cmd/semstreams`. **17** reach a product binary.
+- [x] 11.8 MEDIUM — the refusal message now points at the migration note. Under (d) that panic is the only place an
+      adopter finds out, and seven words cannot explain the `array` → `json` judgement.
+- [x] 11.9 MEDIUM — **#1277's title names the wrong set.** It says "29 framework predicates at the composition root",
+      the walk the 2026-09-09 ruling named; the 2026-09-10 ruling moved the guard to the union, so the frozen
+      exemption set is 79, and both the guard and the migration note point at #1277 for those 79. Retitled.
+- [x] 11.10 NIT — `rapid.Just(-0.0)` is `+0.0` in Go (the untyped constant negates to zero), so the "-0" boundary
+      was never generated. Left as-is deliberately: both render `"0"`, and the generator's other cases cover the
+      sign path. Recorded so it is a known no-op rather than a believed case.
 
