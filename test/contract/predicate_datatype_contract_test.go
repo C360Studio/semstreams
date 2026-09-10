@@ -173,17 +173,25 @@ func nTriplesObjectTerm(t *testing.T, ntriples string) string {
 //
 // It exists because the completeness scenario the change specifies
 // ("the framework's own declarations are complete") was measured false against
-// the code: 81 framework predicates declare nothing, and thirteen of them are
+// the code: 79 framework predicates declare nothing, and thirteen of them are
 // deliberately bare (vocabulary/rulepacks/predicates.go registers names only).
-// Declaring a datatype for each is a separate pass of 81 semantic judgements,
-// and inventing them here would be the fabrication this change exists to stop.
+// Declaring a datatype for each is a separate pass of 79 semantic judgements
+// (gh#1277), and inventing them here would be the fabrication this change
+// exists to stop.
+//
+// 79, not the 81 first measured: `agent.loop.role` and
+// `agent.run.origin-entity-id` were never bare in a running binary. They read
+// that way only because the collector below used to let the ambient init()
+// value beat the composition root's, and agentic.Register declares both
+// `string` (vocabulary/agentic/register.go:450-452,490-492). Whenever this
+// number is quoted, say which walk produced it: the union walk here reports
+// 79, while the composition-root-only walk (ClearRegistry + builtins.Register,
+// 156 predicates) reports 29.
 var predicatesDeclaringNoDataType = map[string]bool{
-	"agent.loop.role":                   true,
 	"agent.run.last-transition-at":      true,
 	"agent.run.last-transition-from":    true,
 	"agent.run.last-transition-note":    true,
 	"agent.run.last-transition-source":  true,
-	"agent.run.origin-entity-id":        true,
 	"agent.run.parent-entity-id":        true,
 	"agent.run.phase":                   true,
 	"agentic.checkpoint.completed":      true,
@@ -272,6 +280,36 @@ func TestFrameworkPredicateDataTypesAreCanonicalAndRatcheted(t *testing.T) {
 	declared := frameworkPredicateDataTypes()
 	noncanonical, unexpectedlyBare := auditPredicateDataTypes(declared)
 
+	// DENOMINATOR. Both assertions below are of the form "found nothing
+	// wrong", which an empty walk satisfies trivially — and it did: a mutation
+	// that emptied both collector loops in frameworkPredicateDataTypes left
+	// this test green, because `len(noncanonical) > 0` and
+	// `len(unexpectedlyBare) > 0` are both false over an empty map. These two
+	// checks are what make "nothing wrong" mean something was examined.
+	if len(declared) < 100 {
+		t.Fatalf("the walk found %d framework predicates, which is too few to be the whole registry "+
+			"(218 when this was written). A guard that examines nothing reports no findings.",
+			len(declared))
+	}
+
+	// Every exemption must name a predicate that is really registered and
+	// really bare. This is the check that catches an exemption which is simply
+	// wrong, as opposed to one that is stale: `agent.loop.role` and
+	// `agent.run.origin-entity-id` sat here for a whole review round while
+	// agentic.Register declared both `string`, because the collector used to
+	// invert production's precedence and read the ambient bare value instead.
+	for exempt := range predicatesDeclaringNoDataType {
+		dataType, registered := declared[exempt]
+		switch {
+		case !registered:
+			t.Errorf("%s is exempted as declaring no datatype, but no such predicate is registered; "+
+				"drop the stale exemption", exempt)
+		case dataType != "":
+			t.Errorf("%s is exempted as declaring no datatype, but it declares %q; "+
+				"drop the exemption rather than carrying a false one", exempt, dataType)
+		}
+	}
+
 	if len(noncanonical) > 0 {
 		t.Errorf("predicates carrying a datatype outside the closed vocabulary: %v", noncanonical)
 	}
@@ -296,6 +334,13 @@ func TestPredicateDataTypeRatchetCanFail(t *testing.T) {
 		break
 	}
 
+	// The audit over an empty walk finds nothing — stated here so it is on the
+	// record that this function cannot be the denominator guard. The live test
+	// above is where the walk is proven non-empty.
+	if noncanonical, unexpectedlyBare := auditPredicateDataTypes(nil); len(noncanonical) != 0 || len(unexpectedlyBare) != 0 {
+		t.Errorf("the audit reported findings over an empty walk: %v / %v", noncanonical, unexpectedlyBare)
+	}
+
 	noncanonical, unexpectedlyBare := auditPredicateDataTypes(seeded)
 	if len(noncanonical) != 1 || noncanonical[0] != "contract.probe.noncanonical=float64" {
 		t.Errorf("noncanonical = %v, want exactly [contract.probe.noncanonical=float64]", noncanonical)
@@ -310,18 +355,31 @@ func TestPredicateDataTypeRatchetCanFail(t *testing.T) {
 // from BOTH sources: the package init() registrations present in any binary
 // that imports the vocabulary packages, and the explicit composition root
 // builtins.Register(). The caller holds a registry snapshot.
+//
+// It REPRODUCES the production order rather than approximating it. In a running
+// binary, init() populates the registry and then main calls builtins.Register(),
+// which AMENDS those entries (Register seeds from the existing entry, gh#410) —
+// so where both sources touch a predicate, the composition root's value is the
+// one the binary actually holds.
+//
+// An earlier version walked the ambient registry first, then cleared the
+// registry, re-registered the builtins, and let the ambient value WIN on
+// conflict — the exact reverse of production. Measured, that inverted two
+// predicates: `agent.loop.role` and `agent.run.origin-entity-id` are registered
+// bare by an init() and amended to `string` by agentic.Register, and the guard
+// recorded them as bare, which is how they reached the exemption set below.
+// The clearing step was the other half of the error: Register amends from what
+// is already there, so clearing between the two sources also destroys any
+// datatype a builtins registration inherits rather than restates.
+//
+// Amending on top of the ambient registry is not an approximation of the
+// binary — it is what the binary does.
 func frameworkPredicateDataTypes() map[string]string {
+	builtins.Register()
+
 	declared := make(map[string]string)
 	for _, predicate := range vocabulary.ListRegisteredPredicates() {
 		declared[predicate] = vocabulary.GetPredicateMetadata(predicate).DataType
-	}
-
-	vocabulary.ClearRegistry()
-	builtins.Register()
-	for _, predicate := range vocabulary.ListRegisteredPredicates() {
-		if _, seen := declared[predicate]; !seen {
-			declared[predicate] = vocabulary.GetPredicateMetadata(predicate).DataType
-		}
 	}
 	return declared
 }
