@@ -85,6 +85,36 @@ const (
 	// about an execution that WORKED.
 	toolExecutionsMetric   = "semstreams_agentic_tools_executions_total"
 	toolExecutionSucceeded = "success"
+
+	// toolStream carries tool.execute.> and tool.result.> in this tier
+	// (configs/agentic.json streams.TOOL). The approved call's RESULT lands on
+	// tool.result.<call_id>, which is what lets this walk read what the tool
+	// actually answered instead of only that it answered.
+	toolStream = "TOOL"
+
+	// servedTypeSegments is the entity_type the mock's pinned call carries:
+	// two right-anchored segments (domain `agent`, type `execution`) over the
+	// loop-execution entities this tier actually writes to ENTITY_STATES.
+	//
+	// It is deliberately NOT "temperature", which the tier writes none of — a
+	// pinned type that matches nothing makes a listing assertion pass
+	// identically over a served listing, an empty one, and a stub.
+	servedTypeSegments = "agent.execution"
+
+	// servedTypePattern is the six-position pattern that entity_type must
+	// build (org.platform.system.domain.type.instance, right-anchored on the
+	// type segment). Asserting the pattern rather than only a count is what
+	// makes this an assertion about the ADR-102 type axis instead of about any
+	// listing at all.
+	servedTypePattern = "*.*.*." + servedTypeSegments + ".*"
+
+	// ApprovalGatedToolArgs is the argument JSON the mock LLM sends for the
+	// approval-gated call. It is EXPORTED so the mock binary and this walk read
+	// one source instead of each predicting the other's string — the drift that
+	// let the old pinned "temperature" sit here unnoticed. The mock consumes
+	// scenario constants this way already (crudtools.PersonaMarker,
+	// opsscenario.SeedLoop1ID, researchgraph.ControlledSeedSuffix).
+	ApprovalGatedToolArgs = `{"entity_type": "` + servedTypeSegments + `", "limit": 5}`
 )
 
 // nonCanonicalToken returns the uppercase spelling of a loop token: 36 bytes
@@ -111,13 +141,13 @@ func newApprovalGatedTask(now time.Time, suffix, userID string) agentic.TaskMess
 		TaskID:      taskID,
 		Role:        "general",
 		Model:       "mock",
-		Prompt:      "List the temperature sensors on record. Use the query_by_type tool.",
+		Prompt:      "List the agent execution entities on record. Use the query_by_type tool.",
 		ChannelType: "e2e",
 		ChannelID:   taskID,
 		UserID:      userID,
 		Tools: []agentic.ToolDefinition{{
 			Name:        approvalGatedTool,
-			Description: "Query all entities of a specific type with optional limit.",
+			Description: "List the entity IDs whose identity carries a given type segment.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -199,9 +229,112 @@ func (s *Scenario) walkApprovalPath(ctx context.Context, result *scenarios.Resul
 		return fmt.Errorf("approved loop outcome = %q, want %q", outcome, agentic.OutcomeSuccess)
 	}
 
+	if err := s.verifyServedTypeListing(ctx, result, pending.CallID); err != nil {
+		return err
+	}
+
 	result.Details["approval_call_id"] = pending.CallID
 	result.Details["approval_outcome"] = outcome
 	return nil
+}
+
+// verifyServedTypeListing is the booted-binary half of the RC-6 walked path for
+// KVKeyLister (#1261 task 4.5).
+//
+// The success counter above cannot carry this weight on its own: a zero-key
+// listing is also status="success", so that assertion passes identically over a
+// working listing, an empty one, and the advertised-absent stub the tool used
+// to be. This reads the approved call's actual RESULT off the TOOL stream and
+// asserts the three facts only a served listing can produce — the pattern the
+// ADR-102 type axis built, a non-zero match, and the primary loop's execution
+// entity among the identities returned. That entity is the one
+// verify-graph-triples proved resident five stages earlier, so the assertion
+// closes over a fact this tier already established rather than a new one.
+func (s *Scenario) verifyServedTypeListing(ctx context.Context, result *scenarios.Result, callID string) error {
+	wantID, _ := result.Details["graph_loop_entity_id"].(string)
+	if wantID == "" {
+		return fmt.Errorf("served-listing proof requires the loop entity id verify-graph-triples recorded")
+	}
+
+	toolResult, err := s.awaitToolResult(ctx, callID)
+	if err != nil {
+		return err
+	}
+	if toolResult.Error != "" {
+		return fmt.Errorf("approved %s returned %q (kind %q)", approvalGatedTool, toolResult.Error, toolResult.ErrorKind)
+	}
+
+	var listing struct {
+		EntityType string   `json:"entity_type"`
+		Pattern    string   `json:"pattern"`
+		Matched    int      `json:"matched"`
+		EntityIDs  []string `json:"entity_ids"`
+	}
+	if err := json.Unmarshal([]byte(toolResult.Content), &listing); err != nil {
+		return fmt.Errorf("decode %s content: %w (content %q)", approvalGatedTool, err, toolResult.Content)
+	}
+	if listing.Pattern != servedTypePattern {
+		return fmt.Errorf("%s pattern = %q, want %q — the type axis is not what the tool matched on",
+			approvalGatedTool, listing.Pattern, servedTypePattern)
+	}
+	if listing.Matched < 1 {
+		return fmt.Errorf("%s matched = %d over %q; the tier's loop-execution entities are resident, "+
+			"so a zero match means the listing did not read them", approvalGatedTool, listing.Matched, listing.Pattern)
+	}
+	found := false
+	for _, id := range listing.EntityIDs {
+		if id == wantID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("%s returned %v, which does not contain the loop execution entity %q "+
+			"verify-graph-triples proved present", approvalGatedTool, listing.EntityIDs, wantID)
+	}
+
+	result.Details["approval_listing_pattern"] = listing.Pattern
+	result.Metrics["approval_listing_matched"] = listing.Matched
+	return nil
+}
+
+// awaitToolResult polls the TOOL stream for the result of one tool call and
+// decodes the ToolResult out of its envelope. Absence is retried; any other
+// read failure returns immediately.
+func (s *Scenario) awaitToolResult(ctx context.Context, callID string) (*agentic.ToolResult, error) {
+	js, err := s.nats.Client().JetStream()
+	if err != nil {
+		return nil, fmt.Errorf("open JetStream: %w", err)
+	}
+	stream, err := js.Stream(ctx, toolStream)
+	if err != nil {
+		return nil, fmt.Errorf("open %s stream: %w", toolStream, err)
+	}
+	subject := "tool.result." + callID
+	deadline := time.Now().Add(s.config.TaskTimeout)
+	for {
+		stored, getErr := stream.GetLastMsgForSubject(ctx, subject)
+		if getErr == nil {
+			var envelope struct {
+				Payload agentic.ToolResult `json:"payload"`
+			}
+			if err := json.Unmarshal(stored.Data, &envelope); err != nil {
+				return nil, fmt.Errorf("decode ToolResult on %s: %w", subject, err)
+			}
+			return &envelope.Payload, nil
+		}
+		if !isMsgNotFound(getErr) {
+			return nil, fmt.Errorf("read %s: %w", subject, getErr)
+		}
+		if !time.Now().Before(deadline) {
+			return nil, fmt.Errorf("no tool result on %s within %s", subject, s.config.TaskTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
 }
 
 // verifyApprovalResponsePublished reads back the ApprovalResponse the HTTP seam
