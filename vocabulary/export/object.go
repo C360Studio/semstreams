@@ -1,6 +1,7 @@
 package export
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -175,7 +176,14 @@ func classifyByDeclaredDataType(declared string, obj any, opts *options) (classi
 			return classifiedObject{kind: objectLiteral, lexical: lexical, datatype: xsdDateTime}, true
 		}
 	case vocabulary.DataTypeJSON:
-		if s, ok := obj.(string); ok {
+		// json.Valid, not just a string assertion. Every other branch here
+		// verifies the observed value can carry the declared type — entity_id
+		// checks IsValidEntityID, int checks integerLexical, datetime parses
+		// RFC 3339, bool type-asserts — and the requirement is that export
+		// "MUST NOT emit a lexical form the observed value does not support".
+		// Without this, a predicate declared json whose object is "hovering"
+		// emits "hovering"^^rdf:JSON, an ill-typed literal.
+		if s, ok := obj.(string); ok && json.Valid([]byte(s)) {
 			return classifiedObject{kind: objectLiteral, lexical: s, datatype: rdfJSON}, true
 		}
 	}

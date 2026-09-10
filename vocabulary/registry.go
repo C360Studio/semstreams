@@ -116,10 +116,12 @@ func WithDescription(desc string) Option {
 // observation cannot recover — that an object is an entity reference, that a
 // number is semantically whole, that a string holds a structured document.
 //
-// The parameter stays a plain string so existing call sites keep compiling. A
-// recognized legacy spelling is normalized at registration; an unrecognized
-// one panics there, naming the accepted vocabulary. Declaring nothing is legal
-// (gh#1267, ADR-107).
+// The parameter stays a plain string so existing call sites keep compiling,
+// but any value outside the closed vocabulary panics at registration, naming
+// the accepted set. Nothing is normalized: a legacy spelling is refused like
+// any other non-canonical value, and the adopter migrates
+// (docs/operations/migration-predicate-datatype.md). Declaring nothing is
+// legal (gh#1267, ADR-107).
 //
 // Example:
 //

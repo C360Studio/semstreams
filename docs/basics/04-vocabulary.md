@@ -107,9 +107,9 @@ the registry (ADR-107):
 | `DataTypeDateTime` | `datetime` | `time.Time` or RFC 3339 `string` | `xsd:dateTime` | `{"type":"string","format":"date-time"}` |
 | `DataTypeJSON` | `json` | `string` | `rdf:JSON` | `{"type":"string","contentMediaType":"application/json"}` |
 
-Declaring nothing is legal. A recognized legacy spelling normalizes at registration; anything else **panics at
-registration**, naming the accepted vocabulary — see
-[the migration note](../operations/migration-predicate-datatype.md). `WithUnits` and `WithRange` are free-form
+Declaring nothing is legal. **Anything outside the seven panics at registration**, naming the offending value and
+the accepted vocabulary. Nothing is normalized: a legacy spelling such as `float64` or `array` halts the binary
+rather than being translated — see [the migration note](../operations/migration-predicate-datatype.md). `WithUnits` and `WithRange` are free-form
 documentation: no framework path validates or honors either.
 
 Registration is optional but enables:

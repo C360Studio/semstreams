@@ -58,7 +58,7 @@ it here, at the edge, and out of the registry:
 | Declared (`vocabulary.DataType*`) | RDF Datatype | Output |
 |---|---|---|
 | `entity_id` | Resource | `<iri>` |
-| `string` | `xsd:string` | `"text"` (datatype omitted) |
+| `string` | `xsd:string` | `"text"` (datatype omitted) — a **confirmation, not an override**: the classifier falls through to observation, so an entity-ID-shaped or absolute-IRI value under a `string` declaration still emits as a resource |
 | `int` | `xsd:integer` | `5` |
 | `float` | `xsd:double` | `"85.5"^^xsd:double` |
 | `bool` | `xsd:boolean` | `true` |

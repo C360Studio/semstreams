@@ -374,10 +374,18 @@ RDF export MUST classify a triple's object by the most specific declaration avai
 triple's own datatype hint first, the predicate's declared datatype next, observation of the value's Go type last.
 Export MUST NOT emit a lexical form the observed value does not support.
 
+The `string` declaration is the one exception to that order, and it is a confirmation rather than an override: its
+RDF rendering is `xsd:string`, which is the default and is omitted from output, so a `string`-declared predicate MUST
+fall through to observation. An entity-ID-shaped or absolute-IRI object under a `string` declaration therefore still
+serializes as a resource. Forcing a plain literal instead would turn framework predicates that declare `string` and
+carry entity IDs from IRI objects into string literals.
+
 An object carrying the entity-reference datatype — from either the per-triple hint or the predicate declaration — MUST
-serialize as an IRI resource, never as a literal carrying a non-IRI datatype. An object whose value is an absolute IRI
-MUST serialize as a resource for the same reason: a literal in that position produces invalid RDF for the consumer,
-and the two cases are one decision, not two.
+serialize as an IRI resource, never as a literal carrying a non-IRI datatype. An object whose value carries a scheme
+the serializer recognizes as absolute — `http://`, `https://` and `urn:` — MUST serialize as a resource for the same
+reason: a literal in that position produces invalid RDF for the consumer, and the two cases are one decision, not
+two. Schemes outside that recognized set are not detected and serialize as literals; widening the set is a
+deliberate change, not an accident of the implementation.
 
 Where a declared datatype cannot represent the observed value, observation MUST win for that triple and the
 declaration MUST be ignored rather than applied. Export is a serializer: it renders what is there. A declaration is a

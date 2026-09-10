@@ -403,7 +403,8 @@ func validateDataType(declared string) error {
 	if declared == "" || isValidDataType(declared) {
 		return nil
 	}
-	return fmt.Errorf("unrecognized data type %q: expected one of %s, or none",
+	return fmt.Errorf("unrecognized data type %q: expected one of %s, or none "+
+		"(see docs/operations/migration-predicate-datatype.md)",
 		declared, strings.Join(canonicalDataTypes(), ", "))
 }
 
@@ -456,8 +457,9 @@ type PredicateMetadata struct {
 	// declared whole number arrives as float64 every time. The declaration
 	// therefore carries only what observation cannot recover.
 	//
-	// A recognized legacy spelling is normalized to its canonical value at
-	// registration; an unrecognized one is refused there. Absent is legal.
+	// Any value outside the closed vocabulary is refused at registration, and
+	// nothing is normalized — what is declared here is what every reader
+	// observes. Absent is legal.
 	// RDF export honors the declaration, and ignores it for any triple whose
 	// observed value contradicts it (gh#1267, ADR-107).
 	DataType string

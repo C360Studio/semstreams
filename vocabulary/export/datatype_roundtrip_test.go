@@ -291,6 +291,49 @@ func TestDeclaredDateTimeSurvivesTheRoundTripAsAString(t *testing.T) {
 	mustContain(t, "N-Triples", ntriples, `"2026-09-09T12:00:00Z"^^<`+xsdDateTimeIRI+`>`)
 }
 
+// TestDeclaredJSONRefusesAValueThatIsNotJSON pins that the json declaration is
+// checked against the observed value like every other one. Each declared branch
+// verifies the value can carry the type — entity_id checks IsValidEntityID, int
+// checks the integer lexical form, datetime parses RFC 3339, bool type-asserts —
+// and json was the one branch that applied to any string at all, emitting
+// "hovering"^^rdf:JSON, an ill-typed literal the requirement forbids.
+//
+// spec: predicate-contract / RDF export honors the declared datatype and never fabricates a value
+func TestDeclaredJSONRefusesAValueThatIsNotJSON(t *testing.T) {
+	defer vocabulary.SnapshotRegistry()()
+	vocabulary.Register(roundTripJSONPred, vocabulary.WithDataType(vocabulary.DataTypeJSON))
+
+	decoded := roundTripThroughEntityStates(t, []message.Triple{{
+		Subject:   roundTripEntityID,
+		Predicate: roundTripJSONPred,
+		Object:    "hovering",
+	}})
+
+	_, ntriples := serializeBoth(t, decoded)
+	if strings.Contains(ntriples, rdfJSONIRI) {
+		t.Errorf("a non-JSON string under a json declaration emitted an rdf:JSON literal: %s", ntriples)
+	}
+	mustContain(t, "N-Triples", ntriples, `"hovering"`)
+}
+
+// TestDeclaredJSONAppliesToAValueThatIsJSON is the other half: the guard above
+// must not have disabled the declaration for values that do carry JSON.
+//
+// spec: predicate-contract / RDF export honors the declared datatype and never fabricates a value
+func TestDeclaredJSONAppliesToAValueThatIsJSON(t *testing.T) {
+	defer vocabulary.SnapshotRegistry()()
+	vocabulary.Register(roundTripJSONPred, vocabulary.WithDataType(vocabulary.DataTypeJSON))
+
+	decoded := roundTripThroughEntityStates(t, []message.Triple{{
+		Subject:   roundTripEntityID,
+		Predicate: roundTripJSONPred,
+		Object:    `{"done":true}`,
+	}})
+
+	_, ntriples := serializeBoth(t, decoded)
+	mustContain(t, "N-Triples", ntriples, "^^<"+rdfJSONIRI+">")
+}
+
 // TestUndeclaredPredicateSerializesByObservation pins that a predicate
 // declaring nothing is untouched by this change.
 //

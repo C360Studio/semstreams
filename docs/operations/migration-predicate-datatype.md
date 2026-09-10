@@ -135,8 +135,11 @@ your manifest publishes, at a moment you chose. That is strictly better than the
 wire value would have changed under you at upgrade with no signal anywhere.
 
 The other half stays silent and is the reason this section exists: the **framework** predicates your binary
-registers had their declarations migrated in-repo (37 SemStreams call sites), so their `data_type` values change on
-upgrade without any edit on your side. Nothing in SemStreams can detect a consumer of those.
+registers had their declarations migrated in-repo, so their `data_type` values change on upgrade without any edit on
+your side. **17 of those reach a product binary** — 16 in `vocabulary/agentic/register.go` and 1 in
+`vocabulary/governance/register.go`. The in-repo migration touched 37 sites in total, but 20 are in
+`examples/processors/{iot_sensor,document,weather_station}`, which nothing registers: they are absent from
+`go list -deps ./cmd/semstreams`, so they cannot reach your manifest. Nothing in SemStreams can detect a consumer of those.
 
 ## 5. RDF export output changes
 
@@ -146,15 +149,26 @@ authority — but a declaration the observed value contradicts is **ignored for 
 
 The family's only production RDF emitter is semconnect's CS API gateway
 (`gateway/cs-api/systems.go`, `d0d06e0`), which serializes `ENTITY_STATES` triples through this package. SemStreams
-itself has zero in-repo callers of `vocabulary/export`. Four output changes, each replacing output that was wrong or
-invalid RDF:
+itself has zero in-repo callers of `vocabulary/export`.
+
+Before this change the serializer **never consulted `PredicateMetadata.DataType` at all** — `classifyObject` had no
+declaration branch. So the output changes are not only the broken cases: every declaration whose rendering differs
+from plain observation now emits something different. Six changes, and the two largest are the two that were merely
+untyped rather than invalid:
 
 | Before | After | Why |
 |---|---|---|
 | `"5.0"^^xsd:double` for a predicate declared `int` | `"5"^^xsd:integer` | #1267 — the whole issue |
+| bare `"2026-09-09T12:00:00Z"` for a predicate declared `datetime` | `"2026-09-09T12:00:00Z"^^xsd:dateTime` | **highest volume.** `ENTITY_STATES` marshals `time.Time` to an RFC 3339 *string*, so after the authoritative round trip every `datetime` triple took the string branch and emitted an untyped literal (`xsd:string` is the default and is omitted). 53 sister sites — semspec 50, semsource 3 — plus 10 in-repo |
+| bare `"{…}"` for a predicate declared `json` | `"{…}"^^rdf:JSON` | same shape: an untyped literal became a typed one. 13 sister sites |
 | `"acme.ops.gcs.robotics.drone.002"^^<@id>` | `<…/entities/acme/ops/gcs/robotics/drone/002>` | #1272 — `@id` is a relative reference, not a datatype IRI; a marked object denotes an IRI node |
 | `"{…}"^^<rdf:JSON>` | `"{…}"^^rdf:JSON` (Turtle, with the `rdf:` prefix declared) / the full IRI in N-Triples | the prefix was never expanded |
 | `"http://schema.org/Thing"` as a literal | `<http://schema.org/Thing>` | #1142 — an absolute-IRI object is a resource; a literal there is invalid RDF for a type-bearing predicate |
+
+Rows 1, 4, 5 and 6 replace output that was wrong or invalid RDF. Rows 2 and 3 replace output that was **valid but
+untyped** — no consumer was reading a malformed value, but a consumer that keyed on the absence of a datatype suffix
+will now see one. That is the row a semconnect RDF consumer is most likely to notice, and it is why this section
+enumerates all six rather than only the defects.
 
 Two more consequences worth stating because they are silent:
 

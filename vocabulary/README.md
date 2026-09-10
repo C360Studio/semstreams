@@ -158,10 +158,12 @@ the declaration surface):
 | `DataTypeDateTime` | `datetime` | `time.Time`, or RFC 3339 `string` | `"…Z"^^xsd:dateTime` | `{"type":"string","format":"date-time"}` |
 | `DataTypeJSON` | `json` | `string` | `"…"^^rdf:JSON` | `{"type":"string","contentMediaType":"application/json"}` |
 
-Declaring nothing is legal. A recognized legacy spelling — `float64`, `number`, `double`, `time.Time`, `timestamp`,
-`int64`, `array`, `entity_ref`, `reference`, `boolean` — is normalized to its canonical value at registration;
-anything else **panics at registration**, naming the accepted vocabulary. See
-[`docs/operations/migration-predicate-datatype.md`](../docs/operations/migration-predicate-datatype.md).
+Declaring nothing is legal. **Anything else panics at registration**, naming the offending value and the accepted
+vocabulary. The framework translates nothing — there is no legacy-spelling map, so `float64`, `number`, `double`,
+`time.Time`, `timestamp`, `int64`, `array`, `entity_ref`, `reference` and `boolean` all halt the binary rather than
+becoming their canonical equivalent. If you declare any of them today, see
+[`docs/operations/migration-predicate-datatype.md`](../docs/operations/migration-predicate-datatype.md), which is
+the whole migration.
 
 Export honors the declaration, and **ignores it for any triple whose observed value contradicts it** — a fractional
 value under an `int` declaration serializes as `xsd:double`, not as a rounded integer.

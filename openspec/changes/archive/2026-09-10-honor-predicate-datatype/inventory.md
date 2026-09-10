@@ -12,18 +12,23 @@ rebase onto `29187077`. 40 MOVED applied mechanically; 5 DRIFT re-derived by han
 to `:423` and lost its pointer, and its two call sites at `:339`/`:402` now pass the value.
 
 Two pins needed more than a line number, and both are worth recording because they are failure modes of pin
-refreshing rather than of this change:
+refreshing rather than of this change. Written as prose, not as list items: the verifier parses any line beginning
+with `-` as a pin and reports UNPARSED when it is not one, so a bulleted note here turns the file's own gate red.
+That is exactly what happened on the first attempt at this paragraph.
 
-- **A mechanical MOVED pass can chain.** `450→452` and `452→454` were applied in sorted order, so the pin the first
-  rewrite had just moved to `452` was caught by the second and pushed to `454`. Two pins ended up on one line. Only
-  the verifier's re-run found it. Apply MOVED rewrites against the ORIGINAL text, not the running result.
-- **`vocabulary/registry.go:554` was never uniquely pinnable.** Its text `if meta.IsSymmetric` is a substring of
-  both `if meta.IsSymmetric && meta.InverseOf != ""` (`:433`) and the same statement nested one level deeper
-  (`:628`), and the verifier matches substrings, so it reported AMBIGUOUS at every base. Re-anchored to the
-  enclosing `func GetInversePredicate` (`:547`), which is unique. A pin whose text cannot be unique is a pin on the
-  wrong anchor, not a verifier complaint to re-derive each time.
+First, a mechanical MOVED pass can chain. `450` to `452` and `452` to `454` were applied in sorted order, so the pin
+the first rewrite had just moved to `452` was caught by the second and pushed on to `454`, leaving two pins on one
+line. Only the verifier's re-run found it. Apply MOVED rewrites against the ORIGINAL text, never against the running
+result.
 
-Verified 150/150 ok, 0 MOVED, 0 AMBIGUOUS, 0 DRIFT, exit 0.
+Second, `vocabulary/registry.go:554` was never uniquely pinnable. Its text `if meta.IsSymmetric` is a substring of
+both `if meta.IsSymmetric && meta.InverseOf != ""` at `:433` and the same statement nested one level deeper at
+`:628`, and the verifier matches substrings, so it reported AMBIGUOUS at every base it was checked against.
+Re-anchored to the enclosing `func GetInversePredicate` at `:547`, which is unique. A pin whose text cannot be
+unique is a pin on the wrong anchor, not a verifier complaint to re-derive on every refresh.
+
+Verified 150/150 ok, 0 MOVED, 0 AMBIGUOUS, 0 DRIFT, 0 UNPARSED — `bash scripts/inventory-verify.sh <this file>`
+exit 0.
 
 Scope: `vocabulary.PredicateMetadata.DataType` / `.Units` / `.Range` — declaration, every writer, every reader
 (present and absent), the export path that should honor them, the ingest/storage path for the architect's item-7
