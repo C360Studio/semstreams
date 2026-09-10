@@ -312,9 +312,10 @@ func (s *UserSignal) RuleFields() map[string]any {
 // routing rule needs.
 func (e *ApprovalPendingEvent) RuleFields() map[string]any {
 	fields := map[string]any{
-		"loop_id":   e.LoopID,
-		"call_id":   e.CallID,
-		"tool_name": e.ToolName,
+		"loop_id":      e.LoopID,
+		"call_id":      e.CallID,
+		"execution_id": e.ExecutionID,
+		"tool_name":    e.ToolName,
 	}
 	putString(fields, "trace_id", e.TraceID)
 	if e.Timeout != 0 {
@@ -334,9 +335,10 @@ func (e *ApprovalPendingEvent) RuleFields() map[string]any {
 // (human free text).
 func (r *ApprovalResponse) RuleFields() map[string]any {
 	fields := map[string]any{
-		"loop_id":  r.LoopID,
-		"call_id":  r.CallID,
-		"decision": r.Decision,
+		"loop_id":      r.LoopID,
+		"call_id":      r.CallID,
+		"execution_id": r.ExecutionID,
+		"decision":     r.Decision,
 	}
 	putString(fields, "approved_by", r.ApprovedBy)
 	putTime(fields, "decided_at", r.DecidedAt)

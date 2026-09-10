@@ -144,9 +144,10 @@ func (c *Component) sweepExpiredApprovals(ctx context.Context) {
 
 	for _, cand := range candidates {
 		response := agentic.ApprovalResponse{
-			LoopID:   cand.LoopID,
-			CallID:   cand.CallID,
-			Decision: agentic.ApprovalDecisionReject,
+			LoopID:      cand.LoopID,
+			CallID:      cand.CallID,
+			ExecutionID: cand.ExecutionID,
+			Decision:    agentic.ApprovalDecisionReject,
 			Reason: fmt.Sprintf("approval timed out after %s",
 				cand.Timeout.Round(time.Second)),
 			ApprovedBy: approvalTimeoutSystemApprover,

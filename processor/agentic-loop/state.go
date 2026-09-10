@@ -535,6 +535,7 @@ func (m *LoopManager) UpdateLoop(entity agentic.LoopEntity) error {
 type ApprovalTimeoutCandidate struct {
 	LoopID      string
 	CallID      string
+	ExecutionID string
 	ToolName    string
 	RequestedAt time.Time
 	Timeout     time.Duration
@@ -569,6 +570,7 @@ func (m *LoopManager) SnapshotExpiredApprovals(now time.Time) []ApprovalTimeoutC
 		out = append(out, ApprovalTimeoutCandidate{
 			LoopID:      id,
 			CallID:      loop.PendingApproval.CallID,
+			ExecutionID: loop.PendingApproval.ExecutionID,
 			ToolName:    loop.PendingApproval.ToolName,
 			RequestedAt: loop.PendingApproval.RequestedAt,
 			Timeout:     loop.PendingApproval.Timeout,
@@ -600,14 +602,14 @@ func (m *LoopManager) ResetTruncationRetry(loopID string) {
 }
 
 // ResolveApprovalIfPending atomically transitions the loop out of
-// LoopStateAwaitingApproval if and only if the supplied call_id
-// matches the currently pinned PendingApproval. Returns a snapshot
+// LoopStateAwaitingApproval if and only if the supplied execution_id and call_id
+// match the currently pinned PendingApproval. Returns a snapshot
 // of the pending state (so the caller has the original tool name +
 // arguments + trace context for re-dispatch) plus a bool indicating
-// whether the resolve actually happened. A false return is the
-// idempotent drop case: the loop is no longer awaiting approval, or
-// the response targets a different call_id (typical when a
-// duplicate UI click races with an automated reject scheduler).
+// whether this process resolved it. A false return means no local matching
+// execution gate, not proof of durable inapplicability. A matching execution
+// with a different CallID is a correlation conflict. This mutex does not
+// establish cross-owner exclusion.
 //
 // This is the only path that should mutate PendingApproval +
 // State out of awaiting_approval after BeginAwaitingApproval. The
@@ -615,7 +617,7 @@ func (m *LoopManager) ResetTruncationRetry(loopID string) {
 // HandleApprovalResponse let two concurrent responses both pass
 // the awaiting-state check and both dispatch — for a safety
 // feature, that double-execution risk is unacceptable.
-func (m *LoopManager) ResolveApprovalIfPending(loopID, callID string) (agentic.PendingApprovalState, bool, error) {
+func (m *LoopManager) ResolveApprovalIfPending(loopID, executionID, callID string) (agentic.PendingApprovalState, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -634,8 +636,13 @@ func (m *LoopManager) ResolveApprovalIfPending(loopID, callID string) (agentic.P
 	if entity.State != agentic.LoopStateAwaitingApproval {
 		return agentic.PendingApprovalState{}, false, nil
 	}
-	if entity.PendingApproval == nil || entity.PendingApproval.CallID != callID {
+	if entity.PendingApproval == nil || entity.PendingApproval.ExecutionID != executionID {
 		return agentic.PendingApprovalState{}, false, nil
+	}
+	if entity.PendingApproval.CallID != callID {
+		return agentic.PendingApprovalState{}, false, errs.WrapFatal(
+			fmt.Errorf("execution %q conflicts with pending call %q", executionID, entity.PendingApproval.CallID),
+			"LoopManager", "ResolveApprovalIfPending", "pending correlation conflict")
 	}
 
 	pending := *entity.PendingApproval

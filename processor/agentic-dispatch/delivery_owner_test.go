@@ -89,6 +89,7 @@ func TestDispatchProductionCallbacksDoNotAckFalseDone(t *testing.T) {
 
 		msg := &dispatchSettlementMsg{data: mustMarshalDispatchSettlementPayload(t, &agentic.ApprovalPendingEvent{
 			LoopID: "00000000-0000-4000-8000-000000000099", CallID: "call-overflow", ToolName: "search", RequestedAt: time.Now().UTC(),
+			ExecutionID: approvalTestExecutionID,
 		})}
 		callbacks["agent.approval_pending"](ctx, msg)
 		require.Zero(t, msg.acks.Load()+msg.terms.Load())
@@ -200,6 +201,7 @@ func TestDispatchProductionCallbacksTerminateMalformedNonHeartbeatInputs(t *test
 		}),
 		"agent.approval_pending": mustMarshalDispatchSettlementPayload(t, &agentic.ApprovalPendingEvent{
 			LoopID: loopID, CallID: "call-1", ToolName: "search", RequestedAt: time.Now().UTC(),
+			ExecutionID: approvalTestExecutionID,
 		}),
 	}
 	for _, port := range []string{"user.message", "agent.created", "agent.approval_pending"} {

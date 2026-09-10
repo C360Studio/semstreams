@@ -267,11 +267,12 @@ func TestIntegration_ApprovalFlow_Approve(t *testing.T) {
 
 	// Step 6: publish ApprovalResponse with decision=approve.
 	approval := &agentic.ApprovalResponse{
-		LoopID:     loopID,
-		CallID:     callID,
-		Decision:   agentic.ApprovalDecisionApprove,
-		ApprovedBy: "alice@example.com",
-		DecidedAt:  time.Now().UTC(),
+		LoopID:      loopID,
+		CallID:      callID,
+		Decision:    agentic.ApprovalDecisionApprove,
+		ExecutionID: pe.ExecutionID,
+		ApprovedBy:  "alice@example.com",
+		DecidedAt:   time.Now().UTC(),
 	}
 	envelope := message.NewBaseMessage(approval.Schema(), approval, "integration-test")
 	envelopeData, err := json.Marshal(envelope)

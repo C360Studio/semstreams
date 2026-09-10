@@ -169,21 +169,23 @@ func projectionCases() []projectionCase {
 			name: "ApprovalPendingEvent",
 			payload: &ApprovalPendingEvent{
 				LoopID: "l1", CallID: "c1", ToolName: "bash",
+				ExecutionID: "observed-execution",
 				Arguments:   map[string]any{"command": "rm -rf /"},
 				Reason:      ApprovalRequiredPrefix + "bash needs approval",
 				RequestedAt: now, Timeout: time.Minute,
 			},
-			expose:   map[string]any{"tool_name": "bash", "call_id": "c1"},
+			expose:   map[string]any{"tool_name": "bash", "call_id": "c1", "execution_id": "observed-execution"},
 			withhold: []string{"arguments", "reason"},
 		},
 		{
 			name: "ApprovalResponse",
 			payload: &ApprovalResponse{
 				LoopID: "l1", CallID: "c1", Decision: ApprovalDecisionApprove,
-				ApprovedBy: "alice", Reason: "looks fine to me",
+				ExecutionID: "observed-execution",
+				ApprovedBy:  "alice", Reason: "looks fine to me",
 				ModifiedArguments: map[string]any{"command": "ls"}, DecidedAt: now,
 			},
-			expose:   map[string]any{"decision": ApprovalDecisionApprove, "approved_by": "alice"},
+			expose:   map[string]any{"decision": ApprovalDecisionApprove, "approved_by": "alice", "execution_id": "observed-execution"},
 			withhold: []string{"reason", "modified_arguments"},
 		},
 		{

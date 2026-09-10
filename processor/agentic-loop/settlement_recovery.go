@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"strings"
 
@@ -413,44 +414,44 @@ func (c *Component) ensureResponseLoop(
 // execution's applied result.
 func (c *Component) recoverToolResult(
 	ctx context.Context, result agentic.ToolResult,
-) (string, error) {
+) (string, uint64, error) {
 	if result.RequestID == "" || result.ExecutionID == "" || result.CallOrdinal == 0 {
-		return "", errs.WrapFatal(
+		return "", 0, errs.WrapFatal(
 			fmt.Errorf("tool result requires request_id, execution_id, and positive call_ordinal"),
 			"agentic-loop", "recoverToolResult", "tool correlation conflict",
 		)
 	}
 	requestLoopID, err := loopIDFromRequestID(result.RequestID)
 	if err != nil || (result.LoopID != "" && requestLoopID != result.LoopID) {
-		return "", errs.WrapFatal(
+		return "", 0, errs.WrapFatal(
 			fmt.Errorf("tool result loop %q and request %q conflict", result.LoopID, result.RequestID),
 			"agentic-loop", "recoverToolResult", "tool correlation conflict",
 		)
 	}
 	result.LoopID = requestLoopID
-	entity, found, err := c.readLoopEntity(ctx, result.LoopID)
+	entity, revision, err := c.readLoopEntityRevision(ctx, result.LoopID)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
-	if !found {
-		return "", fmt.Errorf("loop %q is not yet observable", result.LoopID)
+	if revision == 0 {
+		return "", 0, fmt.Errorf("loop %q is not yet observable", result.LoopID)
 	}
 	response, found, err := c.readRetainedAgentResponse(ctx, result.RequestID)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	if !found {
-		return "", fmt.Errorf("originating response %q is not yet observable", result.RequestID)
+		return "", 0, fmt.Errorf("originating response %q is not yet observable", result.RequestID)
 	}
 	if response.Status != agentic.StatusToolCall {
-		return "", errs.WrapFatal(
+		return "", 0, errs.WrapFatal(
 			fmt.Errorf("originating response %q has status %q, not tool_call", result.RequestID, response.Status),
 			"agentic-loop", "recoverToolResult", "tool correlation conflict",
 		)
 	}
 	calls := append([]agentic.ToolCall(nil), response.Message.ToolCalls...)
 	if err := stampToolExecutionCorrelation(response.RequestID, calls); err != nil {
-		return "", errs.WrapFatal(err, "agentic-loop", "recoverToolResult", "stamp originating execution identity")
+		return "", 0, errs.WrapFatal(err, "agentic-loop", "recoverToolResult", "stamp originating execution identity")
 	}
 	matched := false
 	for _, call := range calls {
@@ -458,33 +459,54 @@ func (c *Component) recoverToolResult(
 			continue
 		}
 		if call.ID != result.CallID || call.CallOrdinal != result.CallOrdinal || call.Name != result.Name {
-			return "", errs.WrapFatal(
+			return "", 0, errs.WrapFatal(
 				fmt.Errorf("execution %q conflicts with retained call correlation", result.ExecutionID),
 				"agentic-loop", "recoverToolResult", "tool correlation conflict",
 			)
+		}
+		// Gate-phase proof follows the pending-approval optional-field policy:
+		// omitted producer fields are allowed, but present identities must agree.
+		if agentic.IsApprovalRequired(result.Error) &&
+			((call.LoopID != "" && call.LoopID != entity.ID) || (call.TraceID != "" && call.TraceID != result.TraceID)) {
+			return "", 0, errs.WrapFatal(fmt.Errorf("execution %q conflicts with retained call loop or trace", result.ExecutionID),
+				"agentic-loop", "recoverToolResult", "tool correlation conflict")
 		}
 		matched = true
 		break
 	}
 	if !matched {
-		return "", errs.WrapFatal(
+		return "", 0, errs.WrapFatal(
 			fmt.Errorf("execution %q is absent from originating response %q", result.ExecutionID, result.RequestID),
 			"agentic-loop", "recoverToolResult", "tool correlation conflict")
 	}
 	request, found, err := c.readRetainedAgentRequest(ctx, result.LoopID)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	if !found {
-		return "", fmt.Errorf("current request for loop %q is not yet observable", result.LoopID)
+		return "", 0, fmt.Errorf("current request for loop %q is not yet observable", result.LoopID)
 	}
 	if request.Role != entity.Role || request.Model != entity.Model {
-		return "", errs.WrapFatal(fmt.Errorf("current request conflicts with loop role or model"),
+		return "", 0, errs.WrapFatal(fmt.Errorf("current request conflicts with loop role or model"),
 			"agentic-loop", "recoverToolResult", "tool correlation conflict")
 	}
 	// Compare the same bounded content that the normal handler admits to context.
 	if c.config.ToolResultMaxBytes > 0 && len(result.Content) > c.config.ToolResultMaxBytes {
 		result.Content = truncateToolResult(result.Content, c.config.ToolResultMaxBytes)
+	}
+	if agentic.IsApprovalRequired(result.Error) {
+		superseded, err := approvalRequiredResultSuperseded(entity, calls, result)
+		if err != nil {
+			return "", 0, err
+		}
+		if superseded {
+			c.logger.InfoContext(ctx, "approval-required tool status superseded by observed execution phase",
+				slog.String("loop_id", result.LoopID), slog.String("execution_id", result.ExecutionID))
+			if c.metrics != nil {
+				c.metrics.approvalStatusesSuperseded.Inc()
+			}
+			return "", 0, nil
+		}
 	}
 	if request.RequestID != result.RequestID {
 		want := c.handler.buildToolMessages([]agentic.ToolResult{result})[0]
@@ -509,27 +531,95 @@ func (c *Component) recoverToolResult(
 			// ordinal must select its own ordered tool message, not a sibling.
 			resultIndex := index + int(result.CallOrdinal)
 			if resultIndex < len(request.Messages) && reflect.DeepEqual(request.Messages[resultIndex], want) {
-				return "", nil
+				return "", 0, nil
 			}
 		}
-		return "", fmt.Errorf("later request %q lacks execution-specific applied proof for %q", request.RequestID, result.ExecutionID)
+		return "", 0, fmt.Errorf("later request %q lacks execution-specific applied proof for %q", request.RequestID, result.ExecutionID)
 	}
 	if entity.State.IsTerminal() {
-		return "", proveTerminalToolResultApplied(entity, request.RequestID, calls, result)
+		return "", 0, proveTerminalToolResultApplied(entity, request.RequestID, calls, result)
 	}
 	if entity.State == agentic.LoopStateAwaitingApproval {
-		return "", fmt.Errorf("tool result %q requires task 6's pending-approval continuation proof", result.ExecutionID)
+		return "", 0, c.republishPendingApproval(ctx, entity, request, calls, result)
 	}
 	if err := c.handler.loopManager.restoreToolBatch(entity, request, response, result); err != nil {
-		return "", err
+		return "", 0, err
 	}
 	if _, err := c.handler.trajectoryManager.getTrajectory(entity.ID); err != nil {
 		if _, err := c.handler.trajectoryManager.startTrajectory(entity.ID); err != nil {
 			c.releaseLoopTransientState(entity.ID)
-			return "", err
+			return "", 0, err
 		}
 	}
-	return entity.ID, nil
+	return entity.ID, revision, nil
+}
+
+// republishPendingApproval validates and echoes the retained gate without restoring or rewriting it.
+func (c *Component) republishPendingApproval(
+	ctx context.Context, entity agentic.LoopEntity, request agentic.AgentRequest, calls []agentic.ToolCall, result agentic.ToolResult,
+) error {
+	if !agentic.IsApprovalRequired(result.Error) {
+		return fmt.Errorf("tool result %q requires pending-approval continuation proof", result.ExecutionID)
+	}
+	if _, err := validatePendingApprovalEvidence(entity, request, calls); err != nil {
+		return err
+	}
+	prompt, err := c.handler.buildApprovalPendingMessage(entity.ID, entity.PendingApproval)
+	if err != nil {
+		return err
+	}
+	return c.publishResults(ctx, HandlerResult{LoopID: entity.ID,
+		State: entity.State, PublishedMessages: []PublishedMessage{*prompt}})
+}
+
+// approvalRequiredResultSuperseded inspects retained execution evidence only.
+// It must run before a new result can enter the accumulator: unseen gated
+// siblings cannot become false consumed-gate evidence after another gate closes.
+func approvalRequiredResultSuperseded(entity agentic.LoopEntity, calls []agentic.ToolCall, result agentic.ToolResult) (bool, error) {
+	pending := entity.PendingApproval
+	if (entity.State == agentic.LoopStateAwaitingApproval) != (pending != nil) ||
+		(pending == nil && entity.StateBeforeApproval != "") {
+		return false, errs.WrapFatal(fmt.Errorf("loop %q has incoherent approval state", entity.ID),
+			"agentic-loop", "recoverToolResult", "approval phase conflict")
+	}
+	if pending != nil && (pending.ExecutionID == "" || pending.RequestID == "" ||
+		pending.CallID == "" || pending.CallOrdinal == 0 || pending.ToolName == "") {
+		return false, errs.WrapFatal(fmt.Errorf("loop %q has incomplete pending execution identity", entity.ID),
+			"agentic-loop", "recoverToolResult", "approval phase conflict")
+	}
+	results, _, err := validatedToolBatchResults(entity, result.RequestID, calls, result)
+	if err != nil {
+		return false, err
+	}
+	stored, found := results[result.ExecutionID]
+	if found {
+		if err := stored.Validate(); err != nil {
+			return false, errs.WrapFatal(err, "agentic-loop", "recoverToolResult", "validate retained tool status")
+		}
+		if stored.TraceID != result.TraceID {
+			return false, errs.WrapFatal(fmt.Errorf("execution %q conflicts with retained trace", result.ExecutionID),
+				"agentic-loop", "recoverToolResult", "tool correlation conflict")
+		}
+		// Normalize the optional LoopID exactly as ordinary final-result proof does.
+		if stored.LoopID == "" {
+			stored.LoopID = result.LoopID
+		}
+		if pending == nil && reflect.DeepEqual(stored, result) {
+			return true, nil
+		}
+		if !agentic.IsApprovalRequired(stored.Error) && (pending == nil || pending.ExecutionID != result.ExecutionID) {
+			return true, nil
+		}
+		if !reflect.DeepEqual(stored, result) {
+			return false, errs.WrapFatal(fmt.Errorf("retained gate status conflicts with execution %q", result.ExecutionID),
+				"agentic-loop", "recoverToolResult", "approval phase conflict")
+		}
+	}
+	if pending != nil && pending.ExecutionID != result.ExecutionID {
+		return false, fmt.Errorf("approval-required execution %q cannot accumulate while execution %q awaits approval",
+			result.ExecutionID, pending.ExecutionID)
+	}
+	return false, nil
 }
 
 // proveTerminalToolResultApplied uses the final marker only with the exact
@@ -572,24 +662,10 @@ func proveTerminalToolResultApplied(entity agentic.LoopEntity, requestID string,
 // Confirmed-retention absence and branch-applied proofs remain separate gates.
 func (c *Component) recoverApprovalResponse(ctx context.Context, approval agentic.ApprovalResponse, entity agentic.LoopEntity) error {
 	pending := entity.PendingApproval
-	if pending == nil || pending.CallID != approval.CallID || pending.RequestID == "" ||
+	if pending == nil || pending.ExecutionID != approval.ExecutionID || pending.CallID != approval.CallID || pending.RequestID == "" ||
 		pending.ExecutionID == "" || pending.CallOrdinal == 0 || pending.ToolName == "" {
 		return errs.WrapFatal(fmt.Errorf("approval for loop %q conflicts with pending identity", entity.ID),
 			"agentic-loop", "recoverApprovalResponse", "pending correlation conflict")
-	}
-	result, found := entity.PendingToolResults[pending.ExecutionID]
-	if !found {
-		return fmt.Errorf("pending approval result %q is not yet observable", pending.ExecutionID)
-	}
-	if err := result.Validate(); err != nil {
-		return errs.WrapFatal(err, "agentic-loop", "recoverApprovalResponse", "validate gated result")
-	}
-	if result.RequestID != pending.RequestID || result.ExecutionID != pending.ExecutionID ||
-		result.CallID != pending.CallID || result.CallOrdinal != pending.CallOrdinal || result.Name != pending.ToolName ||
-		(result.LoopID != "" && result.LoopID != entity.ID) || result.TraceID != pending.TraceID ||
-		result.ErrorKind != agentic.ToolErrorPermission || !agentic.IsApprovalRequired(result.Error) {
-		return errs.WrapFatal(fmt.Errorf("stored result %q conflicts with pending approval", pending.ExecutionID),
-			"agentic-loop", "recoverApprovalResponse", "gated result correlation conflict")
 	}
 	request, found, err := c.readRetainedAgentRequest(ctx, entity.ID)
 	if err != nil {
@@ -597,10 +673,6 @@ func (c *Component) recoverApprovalResponse(ctx context.Context, approval agenti
 	}
 	if !found {
 		return fmt.Errorf("current approval request for loop %q is not yet observable", entity.ID)
-	}
-	if request.RequestID != pending.RequestID || request.Role != entity.Role || request.Model != entity.Model {
-		return errs.WrapFatal(fmt.Errorf("current request %q conflicts with pending approval", request.RequestID),
-			"agentic-loop", "recoverApprovalResponse", "request correlation conflict")
 	}
 	response, found, err := c.readRetainedAgentResponse(ctx, request.RequestID)
 	if err != nil {
@@ -617,24 +689,9 @@ func (c *Component) recoverApprovalResponse(ctx context.Context, approval agenti
 	if err := stampToolExecutionCorrelation(request.RequestID, calls); err != nil {
 		return errs.WrapFatal(err, "agentic-loop", "recoverApprovalResponse", "stamp originating execution identity")
 	}
-	matches := 0
-	for _, call := range calls {
-		if call.ID != pending.CallID {
-			continue
-		}
-		matches++
-		originalArgs, originalErr := json.Marshal(call.Arguments)
-		pendingArgs, pendingErr := json.Marshal(pending.Arguments)
-		if originalErr != nil || pendingErr != nil || string(originalArgs) != string(pendingArgs) ||
-			call.ExecutionID != pending.ExecutionID || call.CallOrdinal != pending.CallOrdinal || call.Name != pending.ToolName ||
-			(call.LoopID != "" && call.LoopID != entity.ID) || (call.TraceID != "" && call.TraceID != pending.TraceID) {
-			return errs.WrapFatal(fmt.Errorf("current call %q conflicts with pending approval", call.ID),
-				"agentic-loop", "recoverApprovalResponse", "call correlation conflict")
-		}
-	}
-	if matches != 1 {
-		return errs.WrapFatal(fmt.Errorf("current approval response has %d calls matching %q", matches, pending.CallID),
-			"agentic-loop", "recoverApprovalResponse", "current call is not unique")
+	result, err := validatePendingApprovalEvidence(entity, request, calls)
+	if err != nil {
+		return err
 	}
 	if err := c.handler.loopManager.restoreToolBatch(entity, request, response, result); err != nil {
 		return err
@@ -649,6 +706,49 @@ func (c *Component) recoverApprovalResponse(ctx context.Context, approval agenti
 		}
 	}
 	return nil
+}
+
+// validatePendingApprovalEvidence shares exact gate correlation for recovery and prompt replay.
+func validatePendingApprovalEvidence(entity agentic.LoopEntity, request agentic.AgentRequest, calls []agentic.ToolCall) (agentic.ToolResult, error) {
+	pending := entity.PendingApproval
+	result, found := entity.PendingToolResults[pending.ExecutionID]
+	if !found {
+		return agentic.ToolResult{}, fmt.Errorf("pending approval result %q is not yet observable", pending.ExecutionID)
+	}
+	if err := result.Validate(); err != nil {
+		return agentic.ToolResult{}, errs.WrapFatal(err, "agentic-loop", "recoverApprovalResponse", "validate gated result")
+	}
+	if result.RequestID != pending.RequestID || result.ExecutionID != pending.ExecutionID ||
+		result.CallID != pending.CallID || result.CallOrdinal != pending.CallOrdinal || result.Name != pending.ToolName ||
+		(result.LoopID != "" && result.LoopID != entity.ID) || result.TraceID != pending.TraceID ||
+		result.ErrorKind != agentic.ToolErrorPermission || !agentic.IsApprovalRequired(result.Error) {
+		return agentic.ToolResult{}, errs.WrapFatal(fmt.Errorf("stored result %q conflicts with pending approval", pending.ExecutionID),
+			"agentic-loop", "recoverApprovalResponse", "gated result correlation conflict")
+	}
+	if request.RequestID != pending.RequestID || request.Role != entity.Role || request.Model != entity.Model {
+		return agentic.ToolResult{}, errs.WrapFatal(fmt.Errorf("current request %q conflicts with pending approval", request.RequestID),
+			"agentic-loop", "recoverApprovalResponse", "request correlation conflict")
+	}
+	matches := 0
+	for _, call := range calls {
+		if call.ID != pending.CallID {
+			continue
+		}
+		matches++
+		originalArgs, originalErr := json.Marshal(call.Arguments)
+		pendingArgs, pendingErr := json.Marshal(pending.Arguments)
+		if originalErr != nil || pendingErr != nil || string(originalArgs) != string(pendingArgs) ||
+			call.ExecutionID != pending.ExecutionID || call.CallOrdinal != pending.CallOrdinal || call.Name != pending.ToolName ||
+			(call.LoopID != "" && call.LoopID != entity.ID) || (call.TraceID != "" && call.TraceID != pending.TraceID) {
+			return agentic.ToolResult{}, errs.WrapFatal(fmt.Errorf("current call %q conflicts with pending approval", call.ID),
+				"agentic-loop", "recoverApprovalResponse", "call correlation conflict")
+		}
+	}
+	if matches != 1 {
+		return agentic.ToolResult{}, errs.WrapFatal(fmt.Errorf("current approval response has %d calls matching %q", matches, pending.CallID),
+			"agentic-loop", "recoverApprovalResponse", "current call is not unique")
+	}
+	return result, nil
 }
 
 func loopSettlementDecision(err error) natsclient.DeliveryDecision {

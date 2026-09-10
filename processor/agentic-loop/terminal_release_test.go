@@ -308,6 +308,10 @@ func TestLateApprovalResponseForSettledLoopIsExpectedDrop(t *testing.T) {
 		h.logger = logger
 		c.logger = logger
 		loopID := populatedLoop(t, h)
+		calls := []agentic.ToolCall{{ID: "toolu_model_authored", Name: "search"}}
+		if err := stampToolExecutionCorrelation(loopID+":req:released", calls); err != nil {
+			t.Fatal(err)
+		}
 		if err := h.loopManager.TransitionLoop(loopID, agentic.LoopStateFailed); err != nil {
 			t.Fatalf("TransitionLoop: %v", err)
 		}
@@ -325,7 +329,8 @@ func TestLateApprovalResponseForSettledLoopIsExpectedDrop(t *testing.T) {
 
 		response := agentic.ApprovalResponse{
 			LoopID: loopID, CallID: "toolu_model_authored",
-			Decision: agentic.ApprovalDecisionApprove, ApprovedBy: "operator",
+			ExecutionID: calls[0].ExecutionID,
+			Decision:    agentic.ApprovalDecisionApprove, ApprovedBy: "operator",
 			DecidedAt: time.Now().UTC(),
 		}
 		envelope := message.NewBaseMessage(response.Schema(), &response, "test")
@@ -358,10 +363,15 @@ func TestLateApprovalResponseForSettledLoopIsExpectedDrop(t *testing.T) {
 		t.Fatalf("a late approval response was reported as a failure:\n present: %s\n absent: %s",
 			presentLogs, absentLogs)
 	}
-	const dropLine = "approval response ignored: not awaiting or call_id mismatch"
+	// This direct-handler probe observes local nonapplication, not an ACK
+	// authorized by durable applicability (covered by the callback tests).
+	const dropLine = "approval response ignored: no local matching execution gate"
 	if !strings.Contains(presentLogs, dropLine) || !strings.Contains(absentLogs, dropLine) {
 		t.Fatalf("the two cases do not produce the same declared drop:\n present: %s\n absent: %s",
 			presentLogs, absentLogs)
+	}
+	if !strings.Contains(presentLogs, "execution_id=") || !strings.Contains(absentLogs, "execution_id=") {
+		t.Fatal("local nonapplication diagnostic must identify the submitted execution")
 	}
 	if presentFacts != 0 || absentFacts != 0 || presentFacts != absentFacts {
 		t.Fatalf("a stale drop re-entered the persistence-and-observation path: "+

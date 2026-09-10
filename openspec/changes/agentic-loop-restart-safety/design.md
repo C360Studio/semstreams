@@ -8,6 +8,18 @@ Owner-accepted target state reconciled after nested PR #1251 at exact branch che
 independently reviewed; implementation begins with its evidence gate.
 The producer-identity prerequisite is independently reviewed and owner-accepted by #1146 comment `5575482141`.
 
+The bounded approval-gate correction is independently reviewed and owner-accepted on 2026-09-10 by
+[comment 5618375806](https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5618375806).
+Reviewed design SHA-256 `92a19372c2fe2f19ac30264b3525654b5b68a005847f3435681dc0e991322fc4` and inventory SHA-256
+`6640c375572e2171790d7910de7663cf5928ea2b8aab99dd5c3d68ce50f197cb` remain immutable provenance. The approval
+contract below and capability deltas materialize that acceptance; task 6.6's separate Store ruling remains open.
+
+The approval-required ToolResult phase-supersession amendment is owner-approved by
+[comment 5619622099](https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5619622099).
+It admits an exact pre-mutation authority read on that path even with a warm route, and effect-free superseded
+settlement only from positive execution-specific later-phase evidence. The initial reviewed artifacts remain
+unchanged; this amendment does not revoke task 6.6 or change ordinary final-result content proofs.
+
 The sequential-chat addendum is independently reviewed and owner-accepted on 2026-09-08: optional PriorMessages and,
 as a separate product choice, AutoContinue=false. Reviewed draft SHA-256
 `b10470f4a67066f1dc27e3ff19688a3eea2b4352c83b5e1ed105c0d3789ec1cb` is provenance; the contract below and active
@@ -237,8 +249,10 @@ full rather than shadowed by additive text:
   effect authority.
 - `agentic-loop / Per-loop in-process state is released at terminal, through the one release point` retains the one
   idempotent release point and result/sweeper behavior, but replaces unconditional quiet settled-drop with
-  lane-specific durable applied proof, Retry for unresolved authority, and Quarantine for conflict or impossible
-  transition.
+  lane-specific durable applied proof for ordinary final-tool/model responses, positive phase-supersession proof
+  for approval-required statuses, and observable, effect-free settlement of approval decisions whose gate is no
+  longer current. Process absence proves none of these outcomes. Unresolved authority retries; required-correlation
+  conflicts retain their existing refusal classification.
 - `entity-id-contract / A loop instance token is a framework-minted UUID` is removed and replaced by the ADDED
   `A loop instance token is minted at its framework birth seam` requirement. It preserves form, admission, HTTP,
   AgentRun,
@@ -279,7 +293,8 @@ implementations that independently support idempotency.
 
 Ordinary deliveries do not enumerate all loops.
 
-A response, result, signal, or approval response:
+A response, result, or signal follows the sequence below. An approval response first validates its echoed
+ExecutionID against exact current loop authority; only a matching pending gate proceeds to reconstruction.
 
 1. derives or reads LoopID from its typed identity;
 2. loads the exact `AGENT_LOOPS/<loopID>` record;
@@ -290,7 +305,8 @@ A response, result, signal, or approval response:
 6. performs the lane-specific transition and publishes any required output at least once.
 
 A later committed request or terminal state may prove that an older delivery was already applied. Absence of
-process memory alone never proves staleness.
+process memory alone never proves staleness. Approval's separately defined inapplicable outcome proves only that
+the submitted decision cannot act on the current gate; it does not prove historical application.
 
 Exact retained-message lookup is an admitted, operation-specific recovery seam. It does not introduce a general
 embedded query front door or a whole-stream scan.
@@ -309,6 +325,87 @@ execution identity without creating another bucket.
 
 ## Approval continuation
 
+### The decision names the reviewed execution gate
+
+Use existing framework ExecutionID as the opaque gate identity. `ApprovalPendingEvent` and the existing pending
+HTTP projection expose it; `ApprovalResponse` and HTTP `ApprovalRequest` require `execution_id`. The client echoes
+the value attached to the prompt the human reviewed, never computes it or fetches a replacement identity when an
+old prompt is submitted. The timeout publisher echoes the identity of its expired pending snapshot.
+
+Dispatch exact-reads current authority and compares the echo before publishing; loop compares again when applying.
+Missing HTTP identity returns 400, a noncurrent displayed gate returns 409 without publication, and missing direct
+wire identity terminates as invalid. No omitted or outdated echo is replaced with the current gate's identity.
+The existing durable pending Put precedes pending-prompt publication; a failed Put prevents that publication.
+
+After payload validation and an exact current LoopEntity read, a matching pending ExecutionID enters the existing
+pending/request/response validation and decision branch. Conflicting CallID or other required correlation within
+that matching gate quarantines without clearing pending state. Missing, unreadable, or malformed loop authority
+retains the existing unresolved/absence/poison contract; failed observation never proves inapplicability.
+
+A valid, coherent current loop with another pending ExecutionID or no pending gate makes the decision inapplicable.
+The owner records this through its refusal/skip diagnostic ownership, using a structured log and a narrow private
+loop metric, then ACKs with zero business publications and zero durable authority mutations. LoopID and submitted
+ExecutionID belong in the log, not metric labels; labels remain bounded. This extends private loop diagnostics,
+not a public status, helper, configuration surface, or receipt. It does not claim that the identity existed, the
+decision applied, its approver won, or its requested effect completed. No applied-decision audit event is fabricated.
+
+Applicable approve/modify retains the actual approver and chosen arguments in ToolCall; reject/timeout retains
+existing rejection provenance. Inapplicable input neither overwrites provenance nor changes authority. The retained
+source records a submitted decision, not proof of its successful application.
+
+There is one logical approval gate per execution. Retry reconstructs that gate; replay after closure must not
+reopen it. A new human review after closure requires a new execution. New model requests already produce distinct
+execution identities when providers reuse CallID, preserving ordinary multi-turn chat. This identity condition does
+not itself provide cross-owner exclusion: existing same-gate single-resolution and provenance obligations remain.
+A measured failure of those obligations returns for design before adding coordination or retained decision state.
+
+The existing nested `PendingApprovalInfo` gains `execution_id`, carried from observed pending authority through
+LoopInfo JSON and OpenAPI. All unrelated DTO fields and projection contracts remain unchanged. This correction
+does not authorize tracker retirement or unrelated projection work.
+
+### Approval-required ToolResult phase supersession
+
+This paragraph owns only ToolResults classified `approval_required`, not ordinary final results or ApprovalResponse.
+Before accumulator, pending-tool, trajectory, restoration, or gate mutation, the existing component delivery owner
+uses `readLoopEntityRevision` to exact-read and validate current authority, including on a warm execution route.
+Existing originating-response and latest-request reads remain the only admitted stream evidence; no scan,
+CallID-indexed lookup, receipt, or new authority is added.
+
+Positive later-phase evidence must identify the same RequestID, ExecutionID, ordinal, provider CallID, tool, and
+loop, with existing normalization and correlation checks. Admissible evidence is:
+
+- a coherent closed-gate checkpoint retaining the exact original gated result with pending cleared;
+- a validated post-gate result for that execution retained in current LoopEntity; or
+- a later retained request whose validated originating assistant batch and ordinal-selected tool message record
+  that execution's progression beyond the gate phase.
+
+The first predicate depends on the writer invariant that an unseen gated sibling is never merely accumulated
+under another open gate. Map membership, missing pending state, a different RequestID, or unequal result content
+alone is not positive evidence. A matching open gate or contradictory required correlation prevents supersession.
+Unresolved phase observation retries; malformed or conflicting evidence retains existing refusal classification.
+The existing reconstruction path still durably fails with `continuation_unavailable` when required retained
+evidence is confirmed absent. This amendment does not turn that confirmed-absence outcome into indefinite Retry.
+
+Positive supersession logs the exact execution, increments a private unlabeled counter in the existing loop metrics
+owner, and ACKs without business publication, durable authority mutation, accumulator replacement, or a fabricated
+applied-decision event. This is substrate settlement telemetry; execution identifiers belong only in the log, and
+the approval-decision inapplicability counter is not reused for a ToolResult. It means only that this
+approval-required status has been overtaken by a validated later phase. It proves neither the historical winning
+approver nor completion of every later effect, and never makes arbitrary unequal final results interchangeable.
+
+A matching pending gate still requires its declared prompt publication and PubAck. Reconstruct that publication
+from the persisted pending snapshot without resetting its identity, RequestedAt, or timeout and without rewriting
+the gate merely to replay the prompt. A genuinely new eligible gate retains the existing pending-before-prompt
+ordering. An unseen different approval-required sibling returns Retry/refusal before insertion or other mutation;
+it cannot become false consumed-gate evidence after the current gate closes.
+
+Any new pending-state write is conditional on the exact observed revision, using existing KV Update/CAS before
+publication. A lost revision retries without publishing the speculative gate or falling back to unconditional Put.
+Stale process restoration must not regress committed closure. Reuse existing owner synchronization; any necessary
+local critical section must be explicit, bounded, and tested. No lock registry, coordinator, runtime, or new durable
+state is authorized. If existing primitives cannot satisfy the stale-observation proof, return the exact failing
+boundary before introducing another mechanism.
+
 ### Evidence gate before mechanism
 
 The already-approved ObjectStore design is not revoked by this design pass. Implementation first proves whether
@@ -317,7 +414,8 @@ retained framework evidence already reconstructs the approval boundary.
 The real-NATS gate settles an approval-required `ToolResult`, persists `PendingToolResults` and awaiting-approval
 state, and obtains PubAck for `ApprovalPendingEvent`. It then replaces agentic-loop and agentic-dispatch, discards all
 process maps and caches, retains `AGENT` and `AGENT_LOOPS`, and independently exercises approve, modify, reject,
-timeout, and redelivery. Every branch proves one declared transition and no duplicate tool execution.
+timeout, and redelivery. Matching-gate decisions prove their declared transition and no duplicate tool execution;
+noncurrent-gate decisions prove observable, effect-free settlement, not the historical winning decision.
 
 Reconstruction uses only current `AGENT_LOOPS/<LoopID>`, latest exact-subject `agent.request.<LoopID>`, and the exact
 `agent.response.<RequestID>` named by that request. It performs no stream list or scan.
@@ -328,10 +426,11 @@ The approval-required result was already persisted at
 matching the pending provider CallID. Every envelope and payload validates, and all available loop, task, request,
 execution, ordinal, call, tool, argument, and trace identities agree.
 
-A same-CallID/different-RequestID proof retains two conflicting responses. Reconstruction follows only the response
-named by the current request and is unaffected by the older response.
+A same-CallID/different-RequestID proof retains two conflicting responses. For a matching pending ExecutionID,
+reconstruction follows only the response named by the current request and is unaffected by the older response.
+An older decision carrying another ExecutionID cannot select the current call even when provider CallID is reused.
 
-| Evidence result | Settlement |
+| Matching-gate evidence result | Settlement |
 |---|---|
 | transport/read failure, unobservable retention, or unresolved visibility | Retry; publish nothing |
 | observed retention confirms required exact evidence should remain, but it is absent | durable `continuation_unavailable` |
@@ -340,8 +439,10 @@ named by the current request and is unaffected by the older response.
 | durable state proves the branch already applied | settle without repeating non-repeatable work |
 | required correlation conflicts with durable state | Quarantine |
 
-No branch clears `PendingApproval` before its required next publication receives PubAck or durable applied-state
-proof exists. If all branches pass without a new durable fact, implementation stops for an owner ruling. Only
+No applicable branch clears `PendingApproval` before its required next publication receives PubAck or durable
+applied-state proof exists. An inapplicable decision clears nothing. If all branches pass without a new durable
+fact, implementation stops for an owner ruling. A pass under the revised inapplicable-decision semantics is not
+proof of the superseded historical applied-decision claim. Only
 explicit revocation of comment `5463183450` authorizes deletion of `ApprovalContinuationV1` and its Store plan. If
 the proof fails, retain that already-approved plan unchanged. No third mechanism is introduced.
 
@@ -439,7 +540,7 @@ its retained handle, awaits exact `Closed`, then cancels and joins its own obser
 | 5 | governance `request_validation`; fast | same row-4 contract for `AgentRequest` | same as row 4; core-NATS publish never proves done | RequestID; allowed outputs are at-least-once |
 | 6 | governance `response_validation`; fast | same row-4 contract for `AgentResponse` | same as row 4 | RequestID; allowed outputs are at-least-once |
 | 7 | loop `agent.signal`; fast, cancel-only after #1251 | current cancellation state and `COMPLETE_` commit; terminal event receives PubAck | invalid/unknown → Terminate; missing live authority/KV/publication → Retry; conflict/panic → Quarantine | LoopID and exact current loop state distinguish live missing from durable terminal proof |
-| 8 | loop `agent.approval_response`; fast | approve/modify publishes correlated tool work; reject/timeout publishes the next transition; pending clears after PubAck or durable applied proof | invalid → Terminate; evidence/KV/publication/unreadable authority → Retry; panic/mismatch/conflict → Quarantine | current LoopEntity plus exact retained request/response evidence; Store only if the gate fails and the owner retains it |
+| 8 | loop `agent.approval_response`; fast | matching gate applies its branch and clears pending only after PubAck or durable applied proof; noncurrent gate records log plus metric and ACKs without business publication or authority mutation | invalid including missing ExecutionID → Terminate; unresolved authority/evidence/publication → Retry; panic or matching-gate correlation conflict → Quarantine | exact coherent current LoopEntity decides gate applicability; matching-gate reconstruction uses exact retained request/response; task 6.6 still governs Store |
 | 9 | loop `agent.toolcall.approved`; fast | verdict reaches waiter or remains recoverable for response replay | invalid → Terminate; retained lookup unavailable → Retry; mismatch/panic → Quarantine | execution identity, proposal fingerprint, exact retained verdict at waiter-loss boundary |
 | 10 | loop `agent.toolcall.rejected`; fast | same row-9 contract for rejection | same as row 9 | same as row 9 |
 | 11 | tools `tool.execute`; heartbeat | immutable completed outcome exists and ToolResult receives PubAck | permanent invalid → Terminate; transient Store/publish → Retry; collision → Quarantine | `TOOL_CALL_OUTCOMES` is the executor-effect boundary; completed replay invokes no executor; result publication is at-least-once |
@@ -448,7 +549,7 @@ its retained handle, awaits exact `Closed`, then cancels and joins its own obser
 | 14 | model `agent.request`; heartbeat | matching retained AgentResponse is reused, or a newly invoked provider response receives PubAck | invalid/endpoint permanent → error response or Terminate; retained lookup failure → Retry; correlation conflict/metadata/panic → Quarantine | RequestID; retained match prevents another call; typed absence permits another call; responses are at-least-once |
 | 15 | loop `agent.task`; heartbeat | loop/graph birth or continuation commits; initial/next request and created/refusal outputs receive PubAck | invalid → Terminate; safely repeatable dependency failure → Retry; TaskID/LoopID conflict, impossible partial birth, or panic → Quarantine | stable TaskID-to-random-LoopID mapping, `AGENT_LOOPS`, and graph identity; ordinary events are at-least-once |
 | 16 | loop `agent.response`; heartbeat | turn is hydrated and resulting loop/terminal/next output commits with PubAck | invalid → Terminate; missing correlation/dependency → Retry; conflict/panic → Quarantine; durable applied proof → ACK | RequestID, current loop, originating request/response, and lane-specific applied-state proof |
-| 17 | loop `tool.result`; heartbeat | batch is rebuilt, result persists, approval evidence is verified when needed, and next output receives PubAck | invalid → Terminate; missing live continuation/dependency → Retry; conflict/panic → Quarantine; confirmed retained absence → durable loop failure; durable applied proof → ACK | RequestID, execution identity, current loop, originating request/response, completed outcomes; Store only if the gate retains it |
+| 17 | loop `tool.result`; heartbeat | ordinary result persists and required next output receives PubAck; approval-required status first reads authority and may ACK effect-free on positive phase-supersession proof | invalid → Terminate; unresolved phase observation or unseen gated sibling → Retry before mutation; conflict/panic → Quarantine; confirmed required retained absence → existing durable continuation_unavailable; ordinary final-result proofs unchanged | RequestID, execution identity, exact current loop including warm approval-required delivery, admitted request/response evidence; conditional gate writes; Store remains task 6.6-gated |
 
 AgentRun complete/failed subscriptions are not rows 18/19 here. #1249 owns their separate post-#1146 contract and
 replacement proof from checkpoint `A`.
@@ -532,6 +633,10 @@ the next queued tool, request, approval event, or terminal event. Missing contin
 bare terminal `LoopEntity` does not prove which `ToolResult` applied; cold tool-result delivery retries until task 5
 supplies execution-specific applied proof. Conflicting execution identity quarantines and never log-and-drops.
 
+Approval-required statuses additionally follow the narrow phase-supersession contract above: exact authority is
+read before mutation even on warm delivery, and validated later-phase evidence permits effect-free superseded ACK.
+This does not weaken ordinary final-result content matching or license ACK from bare terminal state.
+
 ### `agent.signal`
 
 Happy-path done is persisted current-state transition. Cancel additionally requires `COMPLETE_` and terminal event
@@ -540,15 +645,18 @@ ACKs from committed state.
 
 ### `agent.approval_response` approve or modify
 
-Happy-path done is exact pending-call validation, correlated `ToolCall` PubAck, and persisted approval state until
-the matching `ToolResult` arrives. Durable applied-state proof permits settlement; otherwise the tool publication may
-repeat. A conflict quarantines. Publication failure retries without clearing pending state.
+For a matching pending ExecutionID, happy-path done is exact pending-call validation, correlated `ToolCall` PubAck,
+and durable approval-state transition. Pending clears only after required PubAck or durable applied-state proof;
+ordinary tool publication may repeat. Preserve the actual approver and chosen arguments. Matching-gate conflict
+quarantines; publication failure retries without clearing pending state. A validated noncurrent gate instead records
+the inapplicable log and metric and ACKs without business publication, authority mutation, or applied-provenance claim.
 
 ### `agent.approval_response` reject or timeout
 
 Happy-path done is applied synthetic `ToolResult`, PubAck for the resulting request or terminal event, and pending
-state cleared only after that durable outcome. Transient dependency failure retries. A stale response ACKs only when
-the approval lane's durable state proves it was already applied.
+state cleared only after that durable outcome, for a matching pending ExecutionID. Preserve existing rejection
+provenance. Transient dependency failure retries. A validated noncurrent gate records the inapplicable log and metric
+and ACKs without business publication, authority mutation, or a claim that this historical decision applied.
 
 ### Governance verdict
 
@@ -594,6 +702,9 @@ Property and fuzz tests cite these normative delta requirements rather than reco
 | matching retained response makes zero provider calls | `agentic-model / Model request settlement is bound to a durable response` |
 | retained response absence permits another provider invocation with the same RequestID | `agentic-model / Model request settlement is bound to a durable response` |
 | approval reconstruction is current-request scoped and conflict detecting | `agentic-loop / Approval continuation after replacement is exact and evidence-bounded` |
+| an approval echoes the reviewed ExecutionID; one execution has one logical gate, never reopened after closure | `agentic-loop / Approval continuation after replacement is exact and evidence-bounded` |
+| a noncurrent approval ACK is observable and effect-free, not historical applied-decision proof | `agentic-loop / Approval continuation after replacement is exact and evidence-bounded`; `agentic-loop / Per-loop in-process state is released at terminal, through the one release point` |
+| HTTP approval never substitutes the current identity for a missing or outdated echo | `agentic-dispatch / Dispatch uses one authority-backed current-state projection` |
 | partial projection never licenses AutoContinue | `agentic-dispatch / Dispatch uses one authority-backed current-state projection` |
 | observed DiscardOld cannot satisfy strong recovery | `agentic-loop / Restart-safe replay observes and admits local stream bounds` |
 | every delivery task joins before result and Stop | `agentic-loop / Delivery work joins before settlement`; owner-specific shutdown requirements |
@@ -728,10 +839,10 @@ does not change admission, subject coverage, publisher classification, PubAck, o
 | Component author | Return the owner-specific domain outcome; do not settle native messages | Void/log-only success can ACK incomplete work and fails review | typed API and compile/test failure | The definition of done only; the private owner handles ACK/Retry/Terminate/Quarantine |
 | Direct TaskMessage producer | New work mints LoopID once before Validate/marshal; continuation echoes admitted LoopID | Missing/noncanonical LoopID is refused before side effects | validation error, classified boundary, migration note | One birth/echo rule; no stream, bucket, scan, or recovery mechanics |
 | Tool executor author | Raw external executors preserve RequestID and execution identity; provider CallID is not globally unique | Replay is refused loudly when correlation is missing | payload validation and migration doc | Hosted executors know nothing; agentic-tools stamps correlation |
-| Approval UI developer | Submit LoopID and decision | Exact pending state resolves CallID; conflicts are typed refusals | HTTP/bus typed error | Public approval input only |
+| Approval UI developer | Submit LoopID, decision, and the opaque ExecutionID attached to the reviewed prompt | Missing echo receives HTTP 400 or invalid wire settlement; a stale HTTP prompt receives 409 | typed HTTP/wire refusal | Echo an observed value; never compute identity or select a replacement gate |
 | Model operator | Know that ambiguous replacement may repeat a provider call | Omission requires no configuration; retained matches are reused and typed absence calls again | model operations documentation | Only the at-least-once duplicate-risk contract; no policy, reconciliation, or failure-kind mechanics |
 | Custom command author | Use `LookupLoopOwner` with LoopID | Old field removal is a compile failure | compile error and migration note | Only LoopID and returned owner |
-| HTTP/UI author | Existing `LoopInfo` wire remains; projection endpoints can return 503 | Ordinary reads continue; false-empty assumptions fail visibly | typed HTTP response and migration note | No bucket, watcher, or cache |
+| HTTP/UI author | Existing `LoopInfo` wire gains only nested pending `execution_id`; projection endpoints can return 503 | Ordinary reads continue; approval inputs without the echo fail visibly | typed HTTP response and schema | No bucket, watcher, or cache |
 | AutoContinue caller | Opt into exact user/type/channel matching | No partial or cross-channel fallback | schema/docs and typed ambiguity/unavailable response | Only whether convenience is wanted |
 | Dashboard operator | Remove `router_active_loops` query | Series disappears | metric migration note | Use `/loops` with caught-up signal |
 | graphview caller | Do not call removed `Restart()` | Compile failure | compile error and migration note | Lifecycle owner recreates the view |
@@ -742,8 +853,9 @@ does not change admission, subject coverage, publisher classification, PubAck, o
 
 ### Approval UI developer
 
-They submit LoopID and decision. Exact pending state resolves CallID. They do not carry Store references, construct
-NATS subjects, or reconstruct arguments. Existing dispatch calls continue through durable read-through.
+They submit LoopID, decision, and the opaque ExecutionID attached to the reviewed prompt. Exact pending state
+resolves CallID only after the echo matches. They do not carry Store references, construct NATS subjects, compute
+execution identity, or reconstruct arguments. Missing echo returns 400; a stale displayed gate returns 409.
 
 ### Tool executor author
 
@@ -847,7 +959,8 @@ The design is rejected or revised if any premise fails:
 6. The observed AGENT admissibility contract requires `DiscardNew` and does not infer a horizon from MaxAge while
    an earlier capacity-eviction bound remains possible.
 7. Approval replacement either succeeds from current `LoopEntity` plus exact current request/response evidence for
-   every decision branch, or the approved Store fallback remains unchanged after owner ruling.
+   every applicable decision branch and observable effect-free settlement of noncurrent gates, or the approved Store
+   fallback remains unchanged after owner ruling. The revised gate does not prove historical decision provenance.
 8. Governance replacement reads the exact retained verdict or safely re-obtains it. Failure returns for new design.
 9. A matching retained response produces zero provider calls; typed absence permits another call with the same stable
    RequestID, including after ambiguous replacement.
@@ -862,7 +975,8 @@ The design is rejected or revised if any premise fails:
     truth table proves its transport mapping. No deadline is inferred from AckWait; heartbeat requires measured need.
 15. `AGENT_LOOPS` is observed as exact History 10, TTL 24h, and non-binding MaxBytes before loop work starts.
 16. Provider CallID is not globally unique. Approval reconstruction performs no CallID-indexed stream lookup and
-    proves same-CallID/different-RequestID isolation.
+    proves same-CallID/different-RequestID isolation. Decision inputs echo existing ExecutionID, and replay must
+    preserve one logical approval gate per execution without reopening a closed gate.
 17. At P, no provider ambiguity config, commit-unknown failure kind, or provider reconciliation seam exists; the
     simplified target preserves that absence.
 18. `SearchResult.TokensUsed` is aggregate spend and is not projected into directional `TokensIn` or `TokensOut`.
@@ -886,7 +1000,9 @@ The design is rejected or revised if any premise fails:
   validated output remains at-least-once.
 - `AGENT_LOOPS` matching/race/drift behavior is target state. Its existing create literal is not observed authority;
   a retained sibling creator is a collision to prove through the foreign-config race test, not a reason to reconcile.
-- The approval evidence gate has not yet proved all four decision branches or same-CallID isolation after replacement.
+- Approval gate-identity propagation, noncurrent-gate diagnostics and settlement, and closed-gate replay remain
+  implementation/acceptance obligations. Historical evidence checkpoints and the separate Store ruling remain in
+  tasks; approval of the correction is not a claim that its tests are green.
 - No physical non-heartbeat subscription has measured evidence that legitimate work crosses its configured AckWait.
   Heartbeat migration remains unavailable without that evidence and a reviewed lane-specific policy.
 - Affected-closure admission and named boundary-specific exact reads are target state, not current behavior.
@@ -927,6 +1043,9 @@ Implementation or review stops if:
 - approval reconstruction performs a CallID-indexed stream lookup, scans `AGENT`, clears pending state before its
   required next publication receives PubAck or durable applied-state proof exists, or collapses transient,
   confirmed-absent, and corrupt evidence into one result;
+- an approval substitutes current identity for a missing/outdated echo, resolves another execution's gate, reopens
+  a closed execution, or settles inapplicable input without its log and metric, with business consequences, or with
+  fabricated applied-decision provenance;
 - any path ACKs after log-only failure, missing process correlation, panic, or unknown required publication;
 - a matching retained response still permits provider invocation, conflicting retained correlation does not
   quarantine, typed absence does not permit another call with the same RequestID, or source ACK can precede required
@@ -985,6 +1104,7 @@ is not required to interpret or complete any row. There are no deviations.
 | Use exact canonical publisher matcher in its existing direction and ownership | `design.md / First-party rule publisher admission`; `rule-agent-publishing / Publish-agent classification uses canonical wildcard coverage and durable publication`; `tasks.md / 9.6` | `component/flowgraph.SubjectCovers(declaredFilter, concreteSubject)`; no duplicate matcher |
 | Treat `TaskMessage` as registered Payload, not Graphable | `rule-agent-publishing / Publish-agent preserves the registered payload boundary`; `tasks.md / 9.5–9.7` | no graph-interface prediction |
 | Evidence-gate approval continuation before choosing the already-approved Store fallback | `design.md / Approval continuation`; `agentic-loop / Approval continuation after replacement is exact and evidence-bounded`; `tasks.md / 6.1–6.6` | no CallID lookup, scan, third mechanism, or Store deletion before the second ruling |
+| Echo the reviewed ExecutionID; settle noncurrent approval gates observably without effects or historical applied claims | `design.md / Approval continuation`; approval-continuation and terminal-release requirements; dispatch current-state projection requirement; `tasks.md / 6.5–6.5b, 6.8, 6.10, 7.7` | owner comment `5618375806`; one gate per execution; narrow pending JSON/OpenAPI addition; tool/model proofs and task 6.6 remain unchanged |
 | Make dispatch exclusively an edge gateway over one authority-backed view | `design.md / Dispatch edge-gateway boundary`; `agentic-dispatch / Dispatch is exclusively an edge gateway`; `agentic-dispatch / Dispatch uses one authority-backed current-state projection`; `tasks.md / 6.7–6.13` | no tracker, pending cache, created/pending correctness inputs, or intermediate-state ownership; routeless terminals settle; the AutoContinue birth gap remains explicit |
 | Keep correlation lane-scoped; make ordinary publications at-least-once; retain exact reads only at named boundaries | `design.md / Correlation is lane-scoped`; corresponding dispatch, loop, model, tools, and governance publication requirements; `tasks.md / 2.1–2.6` | comment `5538906152`; bounded dedupe is not long-horizon proof |
 | Every touched consumer owner stops admission, drains handles, awaits `Closed`, then cancels/joins | dispatch, governance, model, loop, tools, and graph-view lifecycle requirements; `tasks.md / 10.1–10.3` | lifecycle closure is capability-owned |

@@ -168,15 +168,18 @@ func TestHandleToolResult_AwaitingApprovalAbsorbsSiblings(t *testing.T) {
 			},
 		},
 	}
-	if _, err := handler.HandleModelResponse(ctx, loopID, toolResponse); err != nil {
+	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, toolResponse)
+	if err != nil {
 		t.Fatalf("HandleModelResponse: %v", err)
 	}
+	call := dispatchedToolCallFromResult(t, dispatchResult)
 
 	// First arrival: gated rejection.
 	gateRes, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
-		CallID: "call-A",
-		Name:   "delete_rule",
-		Error:  agentic.ApprovalRequiredPrefix + "needs approval",
+		CallID:    "call-A",
+		Name:      "delete_rule",
+		Error:     agentic.ApprovalRequiredPrefix + "needs approval",
+		RequestID: call.RequestID, ExecutionID: call.ExecutionID, CallOrdinal: call.CallOrdinal,
 	})
 	if err != nil {
 		t.Fatalf("first HandleToolResult: %v", err)
@@ -188,10 +191,17 @@ func TestHandleToolResult_AwaitingApprovalAbsorbsSiblings(t *testing.T) {
 	// Second arrival: a normal result for the sibling. Must NOT trigger
 	// the next agent.request even though the model would otherwise
 	// advance.
+	// The ordinary model-response handler stamped the entire batch before
+	// dispatching A; B keeps that observed identity even though it was queued.
+	sibling := toolResponse.Message.ToolCalls[1]
+	if sibling.ExecutionID == "" || sibling.RequestID == "" || sibling.CallOrdinal != 2 {
+		t.Fatalf("model response did not stamp the sibling tuple: %+v", sibling)
+	}
 	siblingRes, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
-		CallID:  "call-B",
-		Name:    "graph_query",
-		Content: "graph data",
+		CallID:    "call-B",
+		Name:      "graph_query",
+		Content:   "graph data",
+		RequestID: sibling.RequestID, ExecutionID: sibling.ExecutionID, CallOrdinal: sibling.CallOrdinal,
 	})
 	if err != nil {
 		t.Fatalf("sibling HandleToolResult: %v", err)

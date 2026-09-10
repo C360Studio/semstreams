@@ -1951,9 +1951,15 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) (n
 	// Find the process-local route for this tool execution. Empty routes take
 	// the operation-specific cold read-through path. Only exact applied evidence
 	// can settle an older result; current results rejoin the normal handler.
-	loopID := c.findLoopIDForToolCall(toolResult.ExecutionID)
+	var loopID string
+	var observedRevision uint64
+	// Gate-phase status needs current durable authority even with a warm route.
+	// Recovery classifies it before restoring or mutating any process state.
+	if !agentic.IsApprovalRequired(toolResult.Error) {
+		loopID = c.findLoopIDForToolCall(toolResult.ExecutionID)
+	}
 	if loopID == "" {
-		loopID, err = c.recoverToolResult(ctx, toolResult)
+		loopID, observedRevision, err = c.recoverToolResult(ctx, toolResult)
 		if err != nil {
 			return loopSettlementDecision(err), err
 		}
@@ -2032,6 +2038,14 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) (n
 		return loopSettlementDecision(err), err
 	}
 
+	if agentic.IsApprovalRequired(toolResult.Error) && result.State == agentic.LoopStateAwaitingApproval {
+		if err := c.persistApprovalGate(ctx, result, observedRevision); err != nil {
+			c.releaseLoopTransientState(loopID)
+			return natsclient.DeliveryDecisionRetry, err
+		}
+		return natsclient.DeliveryDecisionAck, nil
+	}
+
 	// Capture terminal signal inputs before persistence releases process state.
 	// The signal itself fires only after the final marker commits below.
 	var terminalEntity agentic.LoopEntity
@@ -2059,6 +2073,24 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) (n
 		c.recordTerminalState(result, terminalEntity, failureReason)
 	}
 	return natsclient.DeliveryDecisionAck, nil
+}
+
+// persistApprovalGate binds a new gate to its pre-mutation authority observation.
+// No prompt or durable trajectory consequence precedes the conditional commit.
+func (c *Component) persistApprovalGate(ctx context.Context, result HandlerResult, revision uint64) error {
+	entity, err := c.handler.GetLoop(result.LoopID)
+	if err != nil {
+		return fmt.Errorf("get new approval gate: %w", err)
+	}
+	data, err := json.Marshal(entity)
+	if err != nil {
+		return fmt.Errorf("marshal new approval gate: %w", err)
+	}
+	if _, err := c.loopsBucket.Update(ctx, result.LoopID, data, revision); err != nil {
+		return fmt.Errorf("commit new approval gate: %w", err)
+	}
+	c.recordHandlerResultTrajectory(ctx, result)
+	return c.publishResults(ctx, result)
 }
 
 // publishResults publishes all output messages from a handler result using JetStream.

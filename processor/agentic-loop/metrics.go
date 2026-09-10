@@ -17,6 +17,8 @@ type loopMetrics struct {
 	loopsFailed                    *prometheus.CounterVec
 	loopsTimeout                   prometheus.Counter
 	approvalTimeoutPublishFailures prometheus.Counter
+	approvalDecisionsInapplicable  prometheus.Counter
+	approvalStatusesSuperseded     prometheus.Counter
 	activeLoops                    prometheus.Gauge
 
 	// Iterations
@@ -106,6 +108,18 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Subsystem: "agentic_loop",
 				Name:      "approval_timeout_publish_failures_total",
 				Help:      "Timeout decision publication attempts that returned an error; pending approval remains available for retry",
+			}),
+			approvalDecisionsInapplicable: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_loop",
+				Name:      "approval_decisions_inapplicable_total",
+				Help:      "Approval decisions observed as inapplicable because their execution gate is not current",
+			}),
+			approvalStatusesSuperseded: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_loop",
+				Name:      "approval_required_statuses_superseded_total",
+				Help:      "Approval-required tool statuses observed as superseded by the exact execution's later phase",
 			}),
 
 			activeLoops: prometheus.NewGauge(prometheus.GaugeOpts{
@@ -280,6 +294,8 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = registry.RegisterCounterVec("agentic-loop", "loops_failed_total", metrics.loopsFailed)
 			_ = registry.RegisterCounter("agentic-loop", "loops_timeout_total", metrics.loopsTimeout)
 			_ = registry.RegisterCounter("agentic-loop", "approval_timeout_publish_failures_total", metrics.approvalTimeoutPublishFailures)
+			_ = registry.RegisterCounter("agentic-loop", "approval_decisions_inapplicable_total", metrics.approvalDecisionsInapplicable)
+			_ = registry.RegisterCounter("agentic-loop", "approval_required_statuses_superseded_total", metrics.approvalStatusesSuperseded)
 			_ = registry.RegisterGauge("agentic-loop", "active_loops", metrics.activeLoops)
 			_ = registry.RegisterCounter("agentic-loop", "iterations_total", metrics.iterationsTotal)
 			_ = registry.RegisterHistogram("agentic-loop", "iterations_per_loop", metrics.iterationsPerLoop)
@@ -309,6 +325,8 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.loopsFailed)
 			_ = prometheus.DefaultRegisterer.Register(metrics.loopsTimeout)
 			_ = prometheus.DefaultRegisterer.Register(metrics.approvalTimeoutPublishFailures)
+			_ = prometheus.DefaultRegisterer.Register(metrics.approvalDecisionsInapplicable)
+			_ = prometheus.DefaultRegisterer.Register(metrics.approvalStatusesSuperseded)
 			_ = prometheus.DefaultRegisterer.Register(metrics.activeLoops)
 			_ = prometheus.DefaultRegisterer.Register(metrics.iterationsTotal)
 			_ = prometheus.DefaultRegisterer.Register(metrics.iterationsPerLoop)

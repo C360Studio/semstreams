@@ -77,24 +77,34 @@ func loopFromEntity(e *agentic.LoopEntity, org, platform string) Loop {
 			runEntityID = id
 		}
 	}
+	var pending *PendingApprovalInfo
+	if e.PendingApproval != nil {
+		pending = &PendingApprovalInfo{
+			CallID: e.PendingApproval.CallID, ExecutionID: e.PendingApproval.ExecutionID,
+			ToolName: e.PendingApproval.ToolName, Arguments: e.PendingApproval.Arguments,
+			Reason: e.PendingApproval.Reason, RequestedAt: e.PendingApproval.RequestedAt,
+			TraceID: e.PendingApproval.TraceID,
+		}
+	}
 	return Loop{
-		LoopID:        e.ID,
-		TaskID:        e.TaskID,
-		State:         e.State.String(),
-		Role:          e.Role,
-		Iterations:    e.Iterations,
-		MaxIterations: e.MaxIterations,
-		UserID:        e.UserID,
-		ChannelType:   e.ChannelType,
-		ParentLoopID:  e.ParentLoopID,
-		RunID:         e.RunID,
-		RunEntityID:   runEntityID,
-		Outcome:       e.Outcome,
-		Result:        e.Result,
-		Error:         e.Error,
-		Prompt:        "", // not present on live LoopEntity
-		TokensIn:      0,  // not present on live LoopEntity
-		TokensOut:     0,  // not present on live LoopEntity
+		LoopID:          e.ID,
+		TaskID:          e.TaskID,
+		State:           e.State.String(),
+		Role:            e.Role,
+		Iterations:      e.Iterations,
+		MaxIterations:   e.MaxIterations,
+		UserID:          e.UserID,
+		ChannelType:     e.ChannelType,
+		ParentLoopID:    e.ParentLoopID,
+		RunID:           e.RunID,
+		RunEntityID:     runEntityID,
+		Outcome:         e.Outcome,
+		Result:          e.Result,
+		Error:           e.Error,
+		Prompt:          "", // not present on live LoopEntity
+		TokensIn:        0,  // not present on live LoopEntity
+		TokensOut:       0,  // not present on live LoopEntity
+		PendingApproval: pending,
 	}
 }
 

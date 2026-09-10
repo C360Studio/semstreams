@@ -663,6 +663,8 @@ func TestLoopApprovalPanicProductionCallbackQuarantinesExactOwner(t *testing.T) 
 	c.started = true
 	c.startTime = time.Now()
 	loopID := c.handler.loopManager.GenerateLoopID()
+	calls := []agentic.ToolCall{{ID: "call-panic", Name: "search"}}
+	require.NoError(t, stampToolExecutionCorrelation(loopID+":req:panic", calls))
 	c.handler.loopManager = nil
 	c.waitForStreamInput = func(context.Context, string) error { return nil }
 	callbacks := make(map[string]func(context.Context, jetstream.Msg))
@@ -678,7 +680,8 @@ func TestLoopApprovalPanicProductionCallbackQuarantinesExactOwner(t *testing.T) 
 
 	response := &agentic.ApprovalResponse{
 		LoopID: loopID, CallID: "call-panic", Decision: agentic.ApprovalDecisionApprove,
-		ApprovedBy: "operator", DecidedAt: time.Now().UTC(),
+		ExecutionID: calls[0].ExecutionID,
+		ApprovedBy:  "operator", DecidedAt: time.Now().UTC(),
 	}
 	data, err := json.Marshal(message.NewBaseMessage(response.Schema(), response, "test"))
 	require.NoError(t, err)

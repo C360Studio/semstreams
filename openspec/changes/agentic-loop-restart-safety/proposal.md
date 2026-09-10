@@ -123,8 +123,15 @@ AgentRun complete/failed fanout is transferred intact to #1249 from the exact po
 - Current-spec conflicts are replaced through full MODIFIED requirements or an explicit ADDED/REMOVED pair when a
   requirement heading changes. `AGENT_LOOPS` becomes dispatch's sole
   current-state authority and `LoopTracker` is deleted; tool completion/replay uses framework execution identity
-  rather than provider `ToolCall.ID`; terminal loop release requires durable applied-state proof for late deliveries
-  rather than process-memory inference.
+  rather than provider `ToolCall.ID`; terminal loop release requires durable applied-state proof for late ordinary
+  final-tool/model deliveries rather than process-memory inference. For ApprovalResponse, validated exact coherent
+  current authority
+  may establish an observable, effect-free inapplicable ACK when the submitted execution has no matching pending
+  gate. That exception does not claim historical application and cannot be inferred from absent process memory or
+  failed authority observation (owner comment `5618375806`).
+  An approval-required ToolResult additionally permits effect-free superseded ACK from positive execution-specific
+  phase evidence, checked against exact authority before mutation even with a warm route (owner comment
+  `5619622099`). Ordinary final-result proofs and confirmed-retained-absence handling remain unchanged.
 - Provider invocation is durably at-least-once. Before invoking, agentic-model reads the operation-specific retained
   response by stable RequestID. A matching committed response is reused without another provider call; conflicting
   response correlation quarantines; typed absence permits another provider call with the same RequestID. Every new

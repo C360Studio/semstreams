@@ -289,24 +289,64 @@ delivered source; it is not generic tool-execution proof.
 
 ### Requirement: Approval continuation after replacement is exact and evidence-bounded
 
-After an approval-required `ToolResult` settles, agentic-loop SHALL persist both awaiting-approval state and the
-result in current `LoopEntity` before source ACK. After replacement, approve, modify, reject, and timeout SHALL
-reconstruct or prove exactly one next transition from validated current state and admitted retained evidence.
+When an approval-required `ToolResult` first establishes its gate, agentic-loop SHALL persist both awaiting-approval
+state and the result in current `LoopEntity` before source ACK. That durable pending write SHALL precede publication of
+`ApprovalPendingEvent`; a failed write SHALL prevent the prompt publication.
+Replay after phase advancement SHALL follow `Approval-required tool statuses settle by observed execution phase`.
 
-Reconstruction SHALL use current `LoopEntity`, latest exact `agent.request.<LoopID>`, and exact
+`ApprovalPendingEvent` SHALL expose the pending framework ExecutionID as `execution_id`. `ApprovalResponse` SHALL
+require that opaque identity in addition to its existing fields. The response SHALL echo the identity of the gate
+reviewed, not an identity computed by the caller or substituted from a later gate. A timeout response SHALL echo
+the ExecutionID of its expired pending snapshot. Missing response identity SHALL terminate as invalid input.
+
+After payload validation, the owner SHALL exact-read and validate current `LoopEntity` before deciding
+applicability. A matching pending ExecutionID SHALL use the existing pending/request/response validation and
+approve, modify, reject, or timeout branch. A valid, coherent current loop with another pending ExecutionID or
+no pending gate SHALL make the decision inapplicable.
+
+An inapplicable decision SHALL produce a structured refusal/skip log and increment a narrow private loop metric,
+then positively settle without business publication or durable authority mutation. The log SHALL identify LoopID
+and submitted ExecutionID and describe inapplicability, never application or success. Metric labels SHALL remain
+bounded and SHALL NOT contain those identities. This diagnostic extension SHALL introduce no receipt, public
+status, public helper, configuration surface, or applied-decision graph/audit event.
+
+Inapplicable settlement SHALL mean only that the submitted decision cannot act on the gate currently exposed by
+the loop. It SHALL NOT claim that the submitted identity existed, the decision applied, its approver won, or its
+requested effect completed. It SHALL NOT overwrite decision provenance. A missing, unreadable, or malformed
+authority SHALL retain its existing unresolved/absence/poison disposition; failed observation or missing process
+memory SHALL NOT establish inapplicability.
+
+There SHALL be one logical approval gate per execution. Retry SHALL reconstruct the same gate, and replay SHALL
+NOT reopen it after closure. A new human review after closure SHALL require a new execution. Existing same-gate
+single-resolution and provenance obligations SHALL remain unchanged.
+
+Matching-gate reconstruction SHALL use current `LoopEntity`, latest exact `agent.request.<LoopID>`, and exact
 `agent.response.<RequestID>`. It SHALL perform no stream scan and no `ToolResult` lookup by provider CallID.
 
 Provider CallID SHALL be interpreted only within the current RequestID. An older response carrying the same CallID
 SHALL not participate.
 
-A transient or unresolved read SHALL Retry. Confirmed retained absence SHALL durably fail
+A transient or unresolved required read SHALL Retry. Confirmed retained absence of required matching-gate evidence
+SHALL durably fail
 `continuation_unavailable`. Malformed or identity-conflicting evidence SHALL Quarantine. Durable applied-state proof
 SHALL permit settlement; otherwise the required continuation publication MAY repeat and SHALL receive PubAck before
-source ACK.
+source ACK. A matching ExecutionID with conflicting CallID or other required correlation SHALL Quarantine without
+clearing pending state. Different pending ExecutionID SHALL instead follow the inapplicable rule above.
+
+Applicable approve/modify SHALL preserve the actual decision's approver and chosen arguments in the dispatched
+ToolCall. Reject/timeout SHALL preserve existing rejection provenance. `PendingApproval` SHALL clear only after
+required PubAck or durable applied-state proof; an inapplicable delivery SHALL clear nothing.
 
 The storage mechanism remains gated by the accepted replacement proof. If retained exact evidence satisfies every
 branch, no continuation Store is required. If it does not, the approved content-addressed ObjectStore design remains
 the fallback after owner ruling.
+
+The ApprovalResponse amendment SHALL NOT change ordinary final-tool-result or model-response applied-proof
+requirements or revoke the Store fallback. The separately approved approval-required ToolResult requirement below
+admits its pre-mutation exact authority read even on warm routes and its narrow phase-supersession outcome.
+Task 6.6 still requires explicit owner revocation
+of comment `5463183450` before removing that plan. A pass under inapplicable-decision semantics SHALL NOT be
+described as proof of the superseded historical applied-decision claim.
 
 #### Scenario: Same CallID exists under two requests
 
@@ -317,21 +357,161 @@ the fallback after owner ruling.
 
 #### Scenario: Exact approval continuation matches
 
+- **GIVEN** the response ExecutionID matches the current pending gate
 - **WHEN** current state and retained request/response evidence validate and agree
 - **THEN** approve or modify publishes tool work at least once or proves its durable transition already applied
 - **AND** reject or timeout publishes a rejection transition at least once or proves it already applied
 - **AND** `PendingApproval` clears only after required PubAck or durable applied-state proof
+- **AND** applicable approve/modify retains the actual approver and chosen arguments
+- **AND** reject/timeout retains existing rejection provenance
+
+#### Scenario: An old decision arrives during another execution with the same CallID
+
+- **GIVEN** an old decision names execution A
+- **AND** coherent exact current state exposes execution B with the same LoopID and provider CallID
+- **WHEN** the old decision arrives
+- **THEN** the owner logs and counts the decision as inapplicable and positively settles it
+- **AND** it publishes no business output and leaves durable authority and B's pending state unchanged
+- **AND** it neither applies A's approver or arguments to B nor fabricates applied-decision provenance
+
+#### Scenario: A decision is redelivered after its gate closes
+
+- **GIVEN** a valid decision and exact coherent current loop authority with no pending gate
+- **WHEN** the decision is redelivered after replacement
+- **THEN** the owner logs and counts inapplicability and positively settles the source
+- **AND** business publications and durable authority mutations are zero
+- **AND** it claims neither historical application nor a winning approver and emits no applied-decision audit event
+
+#### Scenario: A direct approval omits its gate identity
+
+- **WHEN** an ApprovalResponse omits ExecutionID
+- **THEN** the owner terminates the invalid input
+- **AND** it neither substitutes current identity nor publishes or changes pending authority
+
+#### Scenario: Timeout preserves the expired gate identity
+
+- **GIVEN** the timeout owner snapshots pending execution A
+- **WHEN** it publishes the timeout decision
+- **THEN** the decision carries A's ExecutionID
+- **AND** if current authority has moved to B before delivery, the decision settles as inapplicable without changing B
+
+#### Scenario: Replay cannot reopen a closed execution
+
+- **GIVEN** an execution's logical approval gate has closed
+- **WHEN** its request, approval-required result, or decision is retried or redelivered
+- **THEN** the closed execution does not acquire a new approval gate
+- **AND** a new human review requires a new execution
+- **AND** replay before closure reconstructs the same gate identity
+
+#### Scenario: Competing decisions target the same open gate
+
+- **GIVEN** conflicting decisions carry the same current pending ExecutionID
+- **WHEN** their handling overlaps
+- **THEN** the existing single-resolution and provenance obligations remain satisfied
+- **AND** ExecutionID equality is not treated as proof of cross-owner exclusion
 
 #### Scenario: Required retained evidence is confirmed absent
 
-- **WHEN** observed retention says required evidence should remain but its exact subject is absent
+- **GIVEN** the decision names the current pending execution
+- **WHEN** observed retention says required reconstruction evidence should remain but its exact subject is absent
 - **THEN** the loop durably fails with `continuation_unavailable`
 
 #### Scenario: Approval evidence conflicts
 
-- **WHEN** an identity, call, name, argument, or durable applied-state fact conflicts
+- **GIVEN** the response ExecutionID matches the pending gate
+- **WHEN** CallID or another required identity, name, argument, or durable applied-state fact conflicts
 - **THEN** the delivery quarantines
 - **AND** no pending state clears
+
+### Requirement: Approval-required tool statuses settle by observed execution phase
+
+For a validated `approval_required` ToolResult, the existing loop delivery owner SHALL exact-read and validate
+current LoopEntity with its revision before accumulator, pending-tool, trajectory, restoration, or gate mutation.
+This SHALL apply to warm and cold delivery. Evidence SHALL use only current LoopEntity and the already-admitted
+exact originating-response and latest-request reads; no scan, CallID-indexed lookup, or new authority is admitted.
+
+The owner SHALL positively settle the status as superseded only when validated evidence for the exact execution
+proves progression beyond its approval gate phase. Positive evidence SHALL be a coherent closed-gate checkpoint
+retaining the exact gated result, a correlated post-gate result retained in current LoopEntity, or a correlated
+later-request history entry. History proof SHALL validate the originating stamped assistant batch and the
+execution's ordinal-selected tool message, not provider CallID or a different RequestID alone.
+
+The closed-checkpoint predicate SHALL rely on the invariant that unseen gated siblings are not accumulated under
+another open gate. Map membership, absent pending state, process absence, bare terminal state, or arbitrary unequal
+content SHALL NOT independently prove supersession. A matching open gate SHALL NOT be classified as superseded.
+Contradictory required correlation SHALL retain existing conflict refusal; unresolved evidence SHALL Retry.
+
+Superseded settlement SHALL log the execution, increment a private unlabeled loop counter, and ACK with no business
+publication, durable authority mutation, accumulator replacement, or fabricated applied-decision provenance.
+Execution identifiers SHALL appear only in the log, not metric labels. It SHALL claim only phase supersession, not
+the historical winning decision or completion of every later effect. Ordinary final-result content proofs and
+model-response proofs SHALL remain unchanged.
+
+A matching pending gate SHALL reconstruct any required prompt from its persisted snapshot and receive PubAck
+before source ACK. It SHALL NOT reset gate identity, RequestedAt, or timeout or rewrite pending state merely to
+replay that prompt. A new eligible gate SHALL retain pending-before-prompt durability. An unseen different
+approval-required sibling SHALL Retry or return the existing classified refusal before insertion or other mutation.
+
+Any new gate-state write SHALL be conditional on the observed KV revision and precede its required publication.
+A lost revision SHALL Retry without publishing the speculative gate or using unconditional Put. A stale
+observation or process restoration SHALL NOT regress committed closure. Existing owner synchronization SHALL be
+used; any necessary local critical section SHALL be explicit, bounded, and tested. No new coordination registry,
+runtime, durable state, store, or receipt is authorized.
+
+#### Scenario: Warm replay follows a committed gate close
+
+- **GIVEN** exact current authority proves that the delivered approval-required execution passed its gate
+- **WHEN** the original status redelivers with a warm execution route
+- **THEN** the owner classifies it before handler mutation and ACKs it as superseded
+- **AND** it logs the execution, increments the private counter, publishes no business output, and leaves authority
+  and accumulated results unchanged
+- **AND** it does not reopen the gate or fabricate applied-decision provenance
+
+#### Scenario: A post-gate result supersedes the old gated status
+
+- **GIVEN** current authority retains a correlated final or synthetic rejection result for the exact execution
+- **OR** validated later-request history records that execution's post-gate progression
+- **WHEN** its old approval-required status redelivers
+- **THEN** the owner may ACK that gate-phase status as superseded without replacing the later result
+- **AND** this does not permit two unequal ordinary final results to satisfy each other's applied proof
+
+#### Scenario: Matching pending prompt publication remains required
+
+- **GIVEN** current authority still exposes the matching gate and its retained gated result
+- **WHEN** the approval-required status redelivers after pending persistence but uncertain prompt PubAck
+- **THEN** the owner reconstructs the same pending prompt and awaits required PubAck before ACK
+- **AND** the gate identity and original deadline remain unchanged
+- **AND** a publication failure retries rather than being classified as superseded
+
+#### Scenario: A different unseen gated sibling arrives
+
+- **GIVEN** current authority exposes gate A and does not contain consumed-gate evidence for execution B
+- **WHEN** an approval-required result for B arrives
+- **THEN** the owner retries or returns its existing classified refusal before any insertion or other mutation
+- **AND** closing A cannot turn that refused delivery into a fabricated consumed-gate record for B
+
+#### Scenario: A genuinely new gate remains live
+
+- **GIVEN** exact authority and existing correlation checks admit a first approval gate for the execution
+- **WHEN** its approval-required result arrives without positive supersession evidence
+- **THEN** the owner conditionally persists the new pending snapshot before publishing its prompt
+- **AND** successful required PubAck permits normal source settlement
+
+#### Scenario: The observed revision loses to gate closure
+
+- **GIVEN** gate handling holds an older exact authority revision
+- **WHEN** another owner commits closure before its conditional gate-state write
+- **THEN** the stale write fails and the source retries without speculative gate publication
+- **AND** no unconditional Put or process restoration regresses the committed closure
+
+#### Scenario: Phase evidence is unavailable or conflicting
+
+- **WHEN** phase observation is unresolved, including missing current authority or a transient evidence-read failure
+- **THEN** the owner retries without business or authority mutation
+- **AND** malformed or required-correlation-conflicting evidence retains existing poison/conflict refusal
+- **AND** process state, terminal state, or arbitrary map membership never authorizes quiet ACK
+- **AND** the existing reconstruction path still durably fails with `continuation_unavailable` when required
+  retained evidence is confirmed absent; that confirmed-absence outcome is not converted to indefinite Retry
 
 ### Requirement: Approval lifetime is bounded by loop-state authority
 
@@ -497,12 +677,22 @@ readable without process maps. Approval-timeout sweeping remains limited to nont
 Direct create/attach refusal for a settled token remains owned by durable admission; process memory is defense in
 depth only.
 
-A late approval response, tool result, or model response MUST NOT be positively settled merely because process state
-is absent or the loop is terminal. The lane owner MUST read the exact durable loop state and use only its declared
-lane-specific evidence to prove that input already applied. Durable applied-state proof permits the owner's typed
+A late tool result or model response MUST NOT be positively settled merely because process state is absent or the
+loop is terminal. The lane owner MUST read the exact durable loop state and use only its declared
+lane-specific evidence to prove that input already applied. For an approval-required tool status only,
+`Approval-required tool statuses settle by observed execution phase` also permits positive phase-supersession
+proof; ordinary final-result and model-response proofs remain unchanged. Durable applied-state proof permits the owner's typed
 already-applied terminal outcome. An unreadable authority or unresolved absence returns Retry. A malformed input,
 required-correlation conflict, impossible transition, or contradictory durable state returns Quarantine. There is no
 unconditional quiet settled-drop.
+
+A late approval response MUST follow `Approval continuation after replacement is exact and evidence-bounded`.
+Validated exact coherent current authority with a different pending ExecutionID or no pending gate permits the
+observable, effect-free inapplicable ACK, without historical applied-decision proof. It MUST produce the
+inapplicable structured log and private metric, no business publication or durable authority mutation, and no
+fabricated applied-decision provenance. Process absence alone permits nothing. Missing or unreadable authority
+retries; malformed authority follows existing poison handling. Invalid approval payloads terminate, while
+matching-gate required-correlation conflicts quarantine. Tool/model applied-proof rules are unchanged.
 
 #### Scenario: a completed loop's per-loop state is released
 
@@ -522,29 +712,60 @@ unconditional quiet settled-drop.
 - **THEN** each observes the loop entity it needs, and release happens after all of them
 - **AND** the test that verifies this is `TestTerminalReleaseHappensAfterTerminalReaders`
 
-#### Scenario: a late approval response has durable applied proof
+#### Scenario: a late approval response names no current gate
 
 - **GIVEN** a settled loop whose process state has been released
-- **AND** the approval lane's declared durable state proves the same approval response was applied
-- **WHEN** that response is redelivered
-- **THEN** the approval owner returns its typed already-applied outcome and positively settles the source
-- **AND** the same proof rule applies to late tool and model responses
-- **AND** the tests that verify this are `TestLateApprovalResponseRequiresAppliedProof`,
-  `TestLateToolResultRequiresAppliedProof`, and `TestLateModelResponseRequiresAppliedProof`
+- **AND** a valid approval response and exact coherent current authority with no pending gate
+- **WHEN** the approval response is redelivered
+- **THEN** the approval owner logs and counts inapplicability and positively settles the source
+- **AND** it publishes no business output, changes no durable authority, and fabricates no applied-decision audit event
+- **AND** it does not claim the decision historically applied or its approver won
 
-#### Scenario: a late response lacks applied proof
+#### Scenario: a late ordinary final tool or model response has durable applied proof
+
+- **GIVEN** a settled loop whose process state has been released
+- **AND** the lane's declared durable state proves the same ordinary final tool or model response was applied
+- **WHEN** that response is redelivered
+- **THEN** its owner returns the typed already-applied outcome and positively settles the source
+- **AND** the tests that verify this are `TestLateToolResultRequiresAppliedProof` and
+  `TestLateModelResponseRequiresAppliedProof`
+
+#### Scenario: a late ordinary final tool or model response lacks applied proof
 
 - **GIVEN** process state is absent and durable state is terminal
+- **AND** the input is an ordinary final tool or model response
 - **WHEN** exact required state or output evidence is absent or transiently unreadable
 - **THEN** the owner returns Retry without positive settlement
 - **AND** process absence or terminal state alone is not treated as proof
 
-#### Scenario: a late response conflicts with required correlation
+#### Scenario: a late approval-required status is superseded
+
+- **GIVEN** validated execution-specific evidence proves advancement beyond the input's approval gate phase
+- **WHEN** the old approval-required ToolResult redelivers after process state is released
+- **THEN** the owner follows `Approval-required tool statuses settle by observed execution phase`
+- **AND** it logs and ACKs supersession without business publication, authority mutation, or fabricated application proof
+- **AND** bare terminal state or process absence alone remains insufficient
+
+#### Scenario: a late approval cannot observe current authority
+
+- **GIVEN** process state has been released
+- **WHEN** the exact current loop authority is missing or transiently unreadable
+- **THEN** the approval owner retries without positive settlement
+- **AND** it does not infer a closed gate from failed observation
+
+#### Scenario: a late tool or model response conflicts with required correlation
 
 - **GIVEN** the expected lane correlation names conflicting durable state or an impossible transition
-- **WHEN** a late approval, tool, or model response arrives
+- **WHEN** a late tool or model response arrives
 - **THEN** the owner quarantines it with the typed collision/refusal reason
 - **AND** it does not overwrite or silently drop either value
+
+#### Scenario: a late approval conflicts within the matching gate
+
+- **GIVEN** exact current authority exposes the response's ExecutionID
+- **WHEN** CallID or other required retained correlation conflicts
+- **THEN** the approval owner quarantines the delivery
+- **AND** it leaves pending authority intact rather than treating that conflict as inapplicability
 
 #### Scenario: a settled loop's result is still readable from the durable record
 

@@ -1,16 +1,21 @@
 package agenticloop
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/storage/storeregistry"
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -218,7 +223,7 @@ func newApprovalRecoveryFixture(t *testing.T) approvalRecoveryFixture {
 	c.loopsBucket = &approvalRevisionBucket{settlementBucket: bucket, revisions: make(map[string]uint64)}
 	c.settlementEvidence = evidence
 	return approvalRecoveryFixture{c: c, entity: entity, request: request, response: response, result: result,
-		approval: agentic.ApprovalResponse{LoopID: loopID, CallID: result.CallID, Decision: agentic.ApprovalDecisionApprove,
+		approval: agentic.ApprovalResponse{LoopID: loopID, CallID: result.CallID, ExecutionID: result.ExecutionID, Decision: agentic.ApprovalDecisionApprove,
 			ApprovedBy: "reviewer", DecidedAt: time.Now().UTC()}, bucket: bucket, evidence: evidence}
 }
 
@@ -242,6 +247,154 @@ func TestColdApprovalRestoresCurrentBatch(t *testing.T) {
 	require.Equal(t, wantContext, f.c.handler.GetContextManager(loopID).GetContext())
 	// The component's existing nil-client unit seam does not prove PubAck;
 	// the unchanged started-owner integration is the real publication gate.
+}
+
+// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
+func TestOldApprovalCannotResolveLaterRequestWithSameCallID(t *testing.T) {
+	f := newApprovalRecoveryFixture(t)
+	oldRequestID, oldExecutionID := f.request.RequestID, f.result.ExecutionID
+	oldApproval := settlementEnvelope(t, &f.approval)
+
+	// Seed a later, internally valid checkpoint B only after serializing A's
+	// decision. This measures the production callback, not a native two-gate history.
+	f.request.RequestID = f.entity.ID + ":req:" + uuid.NewString()
+	f.request.Messages[1].Content = "delete rule-current"
+	calls := []agentic.ToolCall{{ID: f.result.CallID, Name: f.result.Name,
+		Arguments: map[string]any{"rule_id": "rule-current"}, TraceID: f.result.TraceID}}
+	require.NoError(t, stampToolExecutionCorrelation(f.request.RequestID, calls))
+	f.response.RequestID, f.response.Message.ToolCalls = f.request.RequestID, calls
+	f.result.RequestID, f.result.ExecutionID, f.result.CallOrdinal = calls[0].RequestID, calls[0].ExecutionID, calls[0].CallOrdinal
+	f.entity.PendingApproval.RequestID = f.result.RequestID
+	f.entity.PendingApproval.ExecutionID = f.result.ExecutionID
+	f.entity.PendingApproval.CallOrdinal = f.result.CallOrdinal
+	f.entity.PendingApproval.Arguments = calls[0].Arguments
+	f.entity.PendingToolResults = map[string]agentic.ToolResult{f.result.ExecutionID: f.result}
+	require.NoError(t, f.entity.Validate())
+	require.NoError(t, f.request.Validate())
+	require.NoError(t, f.response.Validate())
+	require.NoError(t, f.result.Validate())
+	require.NotEqual(t, oldRequestID, f.result.RequestID)
+	require.NotEqual(t, oldExecutionID, f.result.ExecutionID)
+	require.Equal(t, f.approval.CallID, f.result.CallID)
+	f.bucket.values[f.entity.ID] = settlementLoopRecord(t, f.entity)
+	f.evidence.request = retainedLoopMessage{subject: "agent.request." + f.entity.ID, data: settlementEnvelope(t, &f.request)}
+	f.evidence.response = retainedLoopMessage{subject: "agent.response." + f.request.RequestID, data: settlementEnvelope(t, &f.response)}
+	before := append([]byte(nil), f.bucket.values[f.entity.ID]...)
+	require.Empty(t, f.c.handler.loopManager.loops)
+
+	// Existing audit storage observes the same ToolCall value dispatchToolCall
+	// encodes into PublishedMessages. The nil-client seam does not prove PubAck.
+	store := &trajectoryTestStore{values: make(map[string][]byte)}
+	registry := storeregistry.New()
+	require.NoError(t, registry.Register("objectstore", store))
+	f.c.trajectoryRecorder = newTrajectoryRecorder(&trajectoryTestBucket{values: make(map[string][]byte)}, registry, "objectstore", nil)
+	var logs bytes.Buffer
+	f.c.logger = slog.New(slog.NewTextHandler(&logs, nil))
+	f.c.metrics = getMetrics(nil)
+	skipsBefore := testutil.ToFloat64(f.c.metrics.approvalDecisionsInapplicable)
+	decision, callbackErr := f.c.handleApprovalResponseMessage(t.Context(), oldApproval)
+	var dispatched []agentic.ToolCall
+	store.mu.Lock()
+	for _, data := range store.values {
+		var evidence agentic.TrajectoryEvidenceV1
+		require.NoError(t, json.Unmarshal(data, &evidence))
+		if evidence.Kind == agentic.TrajectoryKindToolRequested {
+			var call agentic.ToolCall
+			require.NoError(t, json.Unmarshal(evidence.Body, &call))
+			dispatched = append(dispatched, call)
+		}
+	}
+	store.mu.Unlock()
+	var after agentic.LoopEntity
+	require.NoError(t, json.Unmarshal(f.bucket.values[f.entity.ID], &after))
+	t.Logf("old request=%s execution=%s approval=%s", oldRequestID, oldExecutionID, oldApproval)
+	t.Logf("current request=%s execution=%s callback decision=%v err=%v dispatched=%+v pending_after=%+v",
+		f.result.RequestID, f.result.ExecutionID, decision, callbackErr, dispatched, after.PendingApproval)
+	// A's original opaque execution echo is not B's current gate. This ACK is
+	// inapplicability, not proof that A's decision was historically applied.
+	assert.NoError(t, callbackErr)
+	assert.Equal(t, natsclient.DeliveryDecisionAck, decision)
+	assert.Empty(t, dispatched, "an approval authored for A must not dispatch B's gated execution")
+	assert.Empty(t, store.values, "an inapplicable decision must not record a business audit event")
+	assert.Equal(t, before, f.bucket.values[f.entity.ID], "A's decision must leave B's current pending authority unchanged")
+	assert.Empty(t, f.c.handler.loopManager.loops)
+	assert.Contains(t, logs.String(), "approval response inapplicable: no matching current gate")
+	assert.Contains(t, logs.String(), "loop_id="+f.entity.ID)
+	assert.Contains(t, logs.String(), "execution_id="+oldExecutionID)
+	assert.Equal(t, skipsBefore+1, testutil.ToFloat64(f.c.metrics.approvalDecisionsInapplicable))
+}
+
+// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
+func TestColdApprovalWithoutCurrentGateIsObservableNoop(t *testing.T) {
+	for _, branch := range []string{"approve", "modify", "reject", "timeout"} {
+		t.Run(branch, func(t *testing.T) {
+			f := newApprovalRecoveryFixture(t)
+			switch branch {
+			case "modify":
+				f.approval.Decision = agentic.ApprovalDecisionModify
+				f.approval.ModifiedArguments = map[string]any{"rule_id": "rule-99"}
+			case "reject", "timeout":
+				f.approval.Decision, f.approval.Reason = agentic.ApprovalDecisionReject, "retain rule-42"
+				if branch == "timeout" {
+					f.approval.ApprovedBy = approvalTimeoutSystemApprover
+					f.approval.Reason = "approval timed out after 1h0m0s"
+				}
+			}
+			require.NoError(t, f.approval.Validate())
+			// This is explicitly coherent current authority, not the contradictory
+			// non-awaiting+nonnil-pending record tested in the refusal table.
+			require.NoError(t, f.entity.ResolveApproval())
+			require.Nil(t, f.entity.PendingApproval)
+			require.Empty(t, f.entity.StateBeforeApproval)
+			f.bucket.values[f.entity.ID] = settlementLoopRecord(t, f.entity)
+			before := append([]byte(nil), f.bucket.values[f.entity.ID]...)
+			f.evidence.requestErr = errors.New("inapplicable input must not reconstruct historical requests")
+			f.c.natsClient = &natsclient.Client{} // Any required business publication would fail.
+			store := &trajectoryTestStore{values: make(map[string][]byte)}
+			registry := storeregistry.New()
+			require.NoError(t, registry.Register("objectstore", store))
+			f.c.trajectoryRecorder = newTrajectoryRecorder(&trajectoryTestBucket{values: make(map[string][]byte)}, registry, "objectstore", nil)
+			var logs bytes.Buffer
+			f.c.logger = slog.New(slog.NewTextHandler(&logs, nil))
+			f.c.metrics = getMetrics(nil)
+			skipsBefore := testutil.ToFloat64(f.c.metrics.approvalDecisionsInapplicable)
+			decision, err := f.c.handleApprovalResponseMessage(t.Context(), settlementEnvelope(t, &f.approval))
+			require.NoError(t, err)
+			require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+			require.Equal(t, before, f.bucket.values[f.entity.ID])
+			require.Empty(t, store.values)
+			require.Empty(t, f.c.handler.loopManager.loops)
+			require.Contains(t, logs.String(), "approval response inapplicable: no matching current gate")
+			require.Contains(t, logs.String(), "loop_id="+f.entity.ID)
+			require.Contains(t, logs.String(), "execution_id="+f.approval.ExecutionID)
+			require.Equal(t, skipsBefore+1, testutil.ToFloat64(f.c.metrics.approvalDecisionsInapplicable))
+		})
+	}
+}
+
+// spec: agentic-loop / Approval-required tool statuses settle by observed execution phase
+func TestApprovalRequiredResultReplayCannotReopenClosedGate(t *testing.T) {
+	f := newApprovalRecoveryFixture(t)
+	originalResult := settlementEnvelope(t, &f.result)
+	decision, err := f.c.handleApprovalResponseMessage(t.Context(), settlementEnvelope(t, &f.approval))
+	require.NoError(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+	var resolved agentic.LoopEntity
+	require.NoError(t, json.Unmarshal(f.bucket.values[f.entity.ID], &resolved))
+	require.Nil(t, resolved.PendingApproval)
+	require.Equal(t, agentic.LoopStateExecuting, resolved.State)
+	before := append([]byte(nil), f.bucket.values[f.entity.ID]...)
+
+	// The component callback replays the original, valid approval-required
+	// source after the ordinary approval branch committed gate closure.
+	// This is a unit callback proof; the nil-client seam is not native PubAck.
+	decision, err = f.c.handleToolResultMessage(t.Context(), originalResult)
+	var after agentic.LoopEntity
+	require.NoError(t, json.Unmarshal(f.bucket.values[f.entity.ID], &after))
+	t.Logf("closed execution=%s replay decision=%v err=%v state=%s pending=%+v",
+		f.result.ExecutionID, decision, err, after.State, after.PendingApproval)
+	assert.Nil(t, after.PendingApproval, "a replay must not create a second gate for the same execution")
+	assert.Equal(t, before, f.bucket.values[f.entity.ID], "the closed gate's authority must not be rewritten by the old gated result")
 }
 
 // spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
@@ -273,9 +426,9 @@ func TestColdApprovalUnresolvedOrConflictingEvidenceDoesNotResolve(t *testing.T)
 	}{
 		{"request unavailable", func(f *approvalRecoveryFixture) { f.evidence.requestErr = errors.New("request unavailable") }, natsclient.DeliveryDecisionRetry},
 		{"response visibility unresolved", func(f *approvalRecoveryFixture) { f.evidence.responseFound = false }, natsclient.DeliveryDecisionRetry},
-		{"cold nonpending is not applied proof", func(f *approvalRecoveryFixture) {
-			f.entity.State, f.entity.PendingApproval = agentic.LoopStateExecuting, nil
-		}, natsclient.DeliveryDecisionRetry},
+		{"nonawaiting state contradicts retained pending gate", func(f *approvalRecoveryFixture) {
+			f.entity.State = agentic.LoopStateExecuting
+		}, natsclient.DeliveryDecisionQuarantine},
 		{"gated result missing", func(f *approvalRecoveryFixture) { f.entity.PendingToolResults = nil }, natsclient.DeliveryDecisionRetry},
 		{"pending arguments conflict", func(f *approvalRecoveryFixture) {
 			f.entity.PendingApproval.Arguments = map[string]any{"rule_id": "different"}
@@ -285,16 +438,32 @@ func TestColdApprovalUnresolvedOrConflictingEvidenceDoesNotResolve(t *testing.T)
 		}, natsclient.DeliveryDecisionQuarantine},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newApprovalRecoveryFixture(t)
-			tc.change(&f)
-			f.bucket.values[f.entity.ID] = settlementLoopRecord(t, f.entity)
-			f.evidence.response.data = settlementEnvelope(t, &f.response)
-			before := append([]byte(nil), f.bucket.values[f.entity.ID]...)
-			decision, err := f.c.handleApprovalResponseMessage(t.Context(), settlementEnvelope(t, &f.approval))
-			require.Error(t, err)
-			require.Equal(t, tc.want, decision)
-			require.Equal(t, before, f.bucket.values[f.entity.ID])
-			require.Empty(t, f.c.handler.loopManager.loops, "unproven approval cannot install speculative process state")
+			for _, branch := range []string{"approve", "modify", "reject", "timeout"} {
+				t.Run(branch, func(t *testing.T) {
+					f := newApprovalRecoveryFixture(t)
+					switch branch {
+					case "modify":
+						f.approval.Decision = agentic.ApprovalDecisionModify
+						f.approval.ModifiedArguments = map[string]any{"rule_id": "rule-99"}
+					case "reject":
+						f.approval.Decision, f.approval.Reason = agentic.ApprovalDecisionReject, "retain rule-42 for audit"
+					case "timeout":
+						f.approval.Decision, f.approval.ApprovedBy = agentic.ApprovalDecisionReject, approvalTimeoutSystemApprover
+						f.approval.Reason = "approval timed out after 1h0m0s"
+						f.approval.DecidedAt = f.entity.PendingApproval.RequestedAt.Add(f.entity.PendingApproval.Timeout)
+					}
+					require.NoError(t, f.approval.Validate())
+					tc.change(&f)
+					f.bucket.values[f.entity.ID] = settlementLoopRecord(t, f.entity)
+					f.evidence.response.data = settlementEnvelope(t, &f.response)
+					before := append([]byte(nil), f.bucket.values[f.entity.ID]...)
+					decision, err := f.c.handleApprovalResponseMessage(t.Context(), settlementEnvelope(t, &f.approval))
+					require.Error(t, err)
+					require.Equal(t, tc.want, decision)
+					require.Equal(t, before, f.bucket.values[f.entity.ID])
+					require.Empty(t, f.c.handler.loopManager.loops, "unproven approval cannot install speculative process state")
+				})
+			}
 		})
 	}
 }

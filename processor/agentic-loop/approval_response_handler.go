@@ -20,17 +20,11 @@ import (
 // (reject). The component publishes any messages and persists the
 // loop state.
 //
-// The transition out of awaiting_approval happens atomically inside
-// LoopManager.ResolveApprovalIfPending. Two concurrent responses
-// (e.g., a human approve racing an automated reject scheduler) cannot
-// both pass the awaiting check — exactly one wins; the loser sees ok=
-// false and we treat it as a stale-response idempotent drop. This is
-// load-bearing for the safety claim: a sensitive tool must not
-// dispatch twice off two responses for the same call_id.
-//
-// Other mismatches (loop not found, response.Validate() fails) return
-// a defensive log + non-error empty result so duplicate or stale UI
-// clicks don't crash the loop.
+// LoopManager.ResolveApprovalIfPending serializes matching-execution resolution
+// inside this process. This is not cross-owner exclusion. A local nonmatch
+// returns staleDrop; only the component's exact durable read can authorize an
+// inapplicable ACK. Invalid payloads and same-execution correlation conflicts
+// return errors to the delivery owner.
 func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response agentic.ApprovalResponse) (result HandlerResult, err error) {
 	// A panic makes delivery ownership unsafe. Recover for diagnosis but return
 	// a fatal error so the callback quarantines and drains the exact owner.
@@ -53,27 +47,21 @@ func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response ag
 
 	loopID := response.LoopID
 
-	pending, ok, resolveErr := h.loopManager.ResolveApprovalIfPending(loopID, response.CallID)
+	pending, ok, resolveErr := h.loopManager.ResolveApprovalIfPending(loopID, response.ExecutionID, response.CallID)
 	if resolveErr != nil && !errors.Is(resolveErr, ErrLoopNotFound) {
 		return HandlerResult{}, resolveErr
 	}
 	if !ok {
-		// Stale, duplicate, or settled: the loop is no longer awaiting
-		// approval, the response targets a different call_id than the one
-		// currently pinned, or the loop settled and its per-loop state was
-		// released. All three are the same event — a response that arrived too
-		// late to act on — and the right move is to log and drop, never error,
-		// never dispatch. A released loop MUST land here rather than on the
-		// error return above: absence and terminal presence are the same fact
-		// to a late arrival, and reporting one as a fault would make an
-		// expected steady state look like a defect.
+		// No local matching execution gate: do not dispatch. Missing process
+		// state alone does not prove durable inapplicability or authorize ACK.
 		entity, getErr := h.GetLoop(loopID)
 		state := agentic.LoopState("")
 		if getErr == nil {
 			state = entity.State
 		}
-		h.logger.Warn("approval response ignored: not awaiting or call_id mismatch",
+		h.logger.Warn("approval response ignored: no local matching execution gate",
 			slog.String("loop_id", loopID),
+			slog.String("execution_id", response.ExecutionID),
 			slog.String("response_call_id", response.CallID),
 			slog.String("loop_state", string(state)))
 		return HandlerResult{LoopID: loopID, State: state, staleDrop: true}, nil
@@ -194,9 +182,31 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 	if err != nil {
 		return loopSettlementDecision(err), err
 	}
-	if revision == 0 || persisted.State != agentic.LoopStateAwaitingApproval {
+	if revision == 0 {
 		return natsclient.DeliveryDecisionRetry,
 			fmt.Errorf("approval continuation for loop %q has no proven current pending state", response.LoopID)
+	}
+	pending := persisted.PendingApproval
+	if persisted.State != agentic.LoopStateAwaitingApproval && pending != nil {
+		return natsclient.DeliveryDecisionQuarantine,
+			fmt.Errorf("loop %q has pending approval outside awaiting-approval state", response.LoopID)
+	}
+	if persisted.State == agentic.LoopStateAwaitingApproval && (pending == nil ||
+		pending.ExecutionID == "" || pending.RequestID == "" || pending.CallID == "" || pending.CallOrdinal == 0 || pending.ToolName == "") {
+		return natsclient.DeliveryDecisionQuarantine,
+			fmt.Errorf("loop %q awaits approval without coherent pending execution identity", response.LoopID)
+	}
+	if persisted.State != agentic.LoopStateAwaitingApproval || pending.ExecutionID != response.ExecutionID {
+		c.logger.WarnContext(ctx, "approval response inapplicable: no matching current gate",
+			slog.String("loop_id", response.LoopID), slog.String("execution_id", response.ExecutionID))
+		if c.metrics != nil {
+			c.metrics.approvalDecisionsInapplicable.Inc()
+		}
+		return natsclient.DeliveryDecisionAck, nil
+	}
+	if pending.CallID != response.CallID {
+		return natsclient.DeliveryDecisionQuarantine,
+			fmt.Errorf("approval execution %q conflicts with current call identity", response.ExecutionID)
 	}
 	if !needsRecovery && !reflect.DeepEqual(entity.PendingApproval, persisted.PendingApproval) {
 		return natsclient.DeliveryDecisionQuarantine,

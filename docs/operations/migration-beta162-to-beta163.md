@@ -1140,8 +1140,43 @@ request as transient. If you override ports on agentic-dispatch, keep the `agent
 A settled loop now releases its in-process footprint — conversation context, pending tools, and the per-loop routing
 maps. Long-running processes no longer retain every loop they have ever run. A late tool result, approval response,
 or model response is not dropped merely because its process-local correlation is gone. The owning lane reads its
-exact durable evidence: a delivery proven already applied is acknowledged, a conflicting correlation is quarantined,
-and a delivery whose application cannot yet be proven is retried.
+exact durable evidence. Ordinary final tool/model deliveries still require applied proof before a duplicate is acknowledged;
+conflicting correlation quarantines and unresolved application retries. An approval instead names a particular
+execution: a validated current loop with no matching pending gate permits an observable, effect-free inapplicable
+ACK. That approval-specific outcome does not claim which historical decision won. Failed authority observation is
+not proof of inapplicability.
+
+An earlier `approval_required` ToolResult may instead be acknowledged as superseded when validated existing
+evidence proves that its exact execution advanced beyond approval. That check occurs before mutation, including
+when the loop is already loaded; it must not reopen the gate or overwrite a final result. Tool-result producers
+keep the existing correlation fields and payload contract. No new caller-supplied phase, receipt, or storage is
+required, and ordinary final-result duplicate checks are unchanged.
+
+## Approval decisions require the displayed execution identity (#1146)
+
+**Breaking input change:** `agentic.ApprovalResponse` and the existing HTTP `ApprovalRequest` require `execution_id`.
+`ApprovalPendingEvent` and the nested pending approval in `LoopInfo` expose the existing execution identity.
+There is no new ID generator: keep the opaque value with the prompt shown to the human and echo it unchanged.
+
+- HTTP clients add `execution_id` alongside their existing decision, approver, and optional modified arguments.
+  Missing identity returns 400; a closed or different current gate returns 409 without publication. Do not recover
+  from 409 by fetching a newer identity and applying the old human decision to it.
+- Direct publishers copy `pending.ExecutionID` into `ApprovalResponse.ExecutionID` before validation and registered
+  envelope marshaling. Missing identity is invalid; no old-wire fallback selects the current gate on their behalf.
+- Pending-event consumers and generated API clients retain the new nested identity field. All unrelated `LoopInfo`
+  fields remain unchanged. A client after replacement obtains the existing pending identity, not a newly minted one.
+- A queued decision for a noncurrent gate is acknowledged as an observable no-op with no business publication or
+  durable authority mutation. Source ACK and decision publication do not prove that the decision was applied.
+  Actual execution provenance continues to identify the decision that was used.
+
+Known adopter: SemTeams at `ce22c961d30014c463a09f8f8a2a90044ee1a1cf`,
+`ui/src/lib/services/agentApi.ts:383–417` (`submitApproval`). Its owner must retain the observed prompt identity and
+send it with the decision. The SemTeams publication observer is not an application receipt; this change does not
+make its observation of `ApprovalResponse` proof that the loop resumed. SemStreams makes no edits in sister repos.
+
+Verify a valid approval after restart, refusal of an older prompt while a later gate is open, and replay of an
+already handled decision without reopening the gate or changing its recorded outcome. Approval waits remain
+supported; normal multi-turn chat is unaffected. See [Approval flow](../concepts/17-approval-flow.md).
 
 ## Independent chat turns and the AutoContinue default (#1146)
 

@@ -2461,16 +2461,21 @@ func (h *MessageHandler) gateForApproval(loopID string, entity *agentic.LoopEnti
 	if err := h.loopManager.UpdateLoop(*entity); err != nil {
 		return nil, fmt.Errorf("persist awaiting-approval state: %w", err)
 	}
+	return h.buildApprovalPendingMessage(loopID, entity.PendingApproval)
+}
 
+// buildApprovalPendingMessage echoes the retained gate, including its original deadline.
+func (h *MessageHandler) buildApprovalPendingMessage(loopID string, state *agentic.PendingApprovalState) (*PublishedMessage, error) {
 	pending := &agentic.ApprovalPendingEvent{
 		LoopID:      loopID,
-		CallID:      toolResult.CallID,
-		ToolName:    toolName,
-		Arguments:   args,
-		Reason:      toolResult.Error,
-		RequestedAt: time.Now().UTC(),
-		Timeout:     h.config.ApprovalTimeout(),
-		TraceID:     toolResult.TraceID,
+		CallID:      state.CallID,
+		ExecutionID: state.ExecutionID,
+		ToolName:    state.ToolName,
+		Arguments:   state.Arguments,
+		Reason:      state.Reason,
+		RequestedAt: state.RequestedAt,
+		Timeout:     state.Timeout,
+		TraceID:     state.TraceID,
 	}
 	envelope := message.NewBaseMessage(pending.Schema(), pending, "agentic-loop")
 	data, err := json.Marshal(envelope)

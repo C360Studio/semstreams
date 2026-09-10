@@ -131,7 +131,7 @@ func TestApprovedCall_CarriesAdvertisedTools(t *testing.T) {
 	loopID := startLoopWithTools(t, handler, "task-adv-approve", advertisedTestTools())
 
 	// Drive to awaiting_approval on the call (mirrors gateCallWithMetadata).
-	if _, err := handler.HandleModelResponse(context.Background(), loopID, agentic.AgentResponse{
+	dispatchResult, err := handler.HandleModelResponse(context.Background(), loopID, agentic.AgentResponse{
 		RequestID: "req-call-adv-4",
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
@@ -140,13 +140,16 @@ func TestApprovedCall_CarriesAdvertisedTools(t *testing.T) {
 				{ID: "call-adv-4", Name: "decide", Arguments: map[string]any{"action": "handoff"}},
 			},
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("HandleModelResponse: %v", err)
 	}
+	call := dispatchedToolCallFromResult(t, dispatchResult)
 	gateRes, err := handler.HandleToolResult(context.Background(), loopID, agentic.ToolResult{
-		CallID: "call-adv-4",
-		Name:   "decide",
-		Error:  agentic.ApprovalRequiredPrefix + "needs human review",
+		CallID:    "call-adv-4",
+		Name:      "decide",
+		Error:     agentic.ApprovalRequiredPrefix + "needs human review",
+		RequestID: call.RequestID, ExecutionID: call.ExecutionID, CallOrdinal: call.CallOrdinal,
 	})
 	if err != nil {
 		t.Fatalf("HandleToolResult (gate): %v", err)
@@ -156,11 +159,12 @@ func TestApprovedCall_CarriesAdvertisedTools(t *testing.T) {
 	}
 
 	result, err := handler.HandleApprovalResponse(context.Background(), agentic.ApprovalResponse{
-		LoopID:     loopID,
-		CallID:     "call-adv-4",
-		Decision:   agentic.ApprovalDecisionApprove,
-		ApprovedBy: "alice@example.com",
-		DecidedAt:  time.Now().UTC(),
+		LoopID:      loopID,
+		CallID:      "call-adv-4",
+		ExecutionID: call.ExecutionID,
+		Decision:    agentic.ApprovalDecisionApprove,
+		ApprovedBy:  "alice@example.com",
+		DecidedAt:   time.Now().UTC(),
 	})
 	if err != nil {
 		t.Fatalf("HandleApprovalResponse: %v", err)

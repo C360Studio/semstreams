@@ -110,6 +110,7 @@ func TestApprovalRedispatchSeparatesRepeatedProviderCallIDAcrossLoops(t *testing
 
 	approved, err := handler.HandleApprovalResponse(context.Background(), agentic.ApprovalResponse{
 		LoopID: loopA, CallID: callsA[0].ID, Decision: agentic.ApprovalDecisionApprove, ApprovedBy: "reviewer",
+		ExecutionID: callsA[0].ExecutionID,
 	})
 	require.NoError(t, err)
 	require.Len(t, approved.PublishedMessages, 1)

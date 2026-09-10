@@ -19,6 +19,42 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const approvalTestExecutionID = "observed-pending-execution"
+
+// spec: agentic-dispatch / Dispatch uses one authority-backed current-state projection
+func TestHandleLoopApproval_RequiresCurrentExecutionEcho(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		echo    string
+		want    int
+		message string
+	}{
+		{"missing echo", "", http.StatusBadRequest, "execution_id is required"},
+		{"stale echo", "previous-execution", http.StatusConflict, "approval execution is not current"},
+		{"current echo", approvalTestExecutionID, http.StatusInternalServerError, ErrNATSClientNil.Error()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			comp := trackedLoopWithApproval(t, seamTestLoopA, "call-001")
+			current, err := comp.loadPersistedLoop(t.Context(), seamTestLoopA)
+			require.NoError(t, err)
+			current.PendingApproval.ExecutionID = approvalTestExecutionID
+			before, err := json.Marshal(current)
+			require.NoError(t, err)
+			body, err := json.Marshal(map[string]string{"decision": "approve", "execution_id": tc.echo})
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", bytes.NewReader(body))
+			req.SetPathValue("id", seamTestLoopA)
+			rec := httptest.NewRecorder()
+			comp.handleLoopApproval(rec, req)
+			require.Equal(t, tc.want, rec.Code, "%s", rec.Body.String())
+			require.Contains(t, rec.Body.String(), tc.message)
+			after, err := json.Marshal(current)
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+		})
+	}
+}
+
 // spec: agentic-dispatch / Dispatch uses one authority-backed current-state projection
 // An explicit approval reads current durable authority, including when the
 // original created/pending events have settled and the tracker is empty.
@@ -48,6 +84,12 @@ func TestHandleLoopApproval_CurrentAuthority(t *testing.T) {
 		{name: "pending without call identity is unreadable", tracked: true, mutate: func(e *agentic.LoopEntity) {
 			e.PendingApproval.CallID = ""
 		}, wantCode: http.StatusServiceUnavailable, wantText: "loop record is not readable right now"},
+		{name: "pending without execution identity is unreadable", tracked: true, mutate: func(e *agentic.LoopEntity) {
+			e.PendingApproval.ExecutionID = ""
+		}, wantCode: http.StatusServiceUnavailable, wantText: "loop record is not readable right now"},
+		{name: "nonawaiting with pending is incoherent", tracked: true, mutate: func(e *agentic.LoopEntity) {
+			e.State = agentic.LoopStateExecuting
+		}, wantCode: http.StatusServiceUnavailable, wantText: "loop record is not readable right now"},
 		{name: "unavailable authority cannot fall back to tracker", tracked: true, readError: errors.New("storage unavailable"),
 			wantCode: http.StatusServiceUnavailable, wantText: "loop record is not readable right now"},
 		{name: "malformed authority cannot fall back to tracker", tracked: true, readError: permanentTerminal("malformed loop JSON"),
@@ -67,7 +109,7 @@ func TestHandleLoopApproval_CurrentAuthority(t *testing.T) {
 			record := &agentic.LoopEntity{
 				ID: seamTestLoopA, TaskID: "task-current", UserID: "user-1", ChannelType: "http", ChannelID: "chan-1",
 				State: agentic.LoopStateAwaitingApproval, MaxIterations: 3,
-				PendingApproval: &agentic.PendingApprovalState{CallID: "durable-call", ToolName: "delete_rule"},
+				PendingApproval: &agentic.PendingApprovalState{CallID: "durable-call", ExecutionID: approvalTestExecutionID, ToolName: "delete_rule"},
 			}
 			if tt.mutate != nil {
 				tt.mutate(record)
@@ -83,7 +125,7 @@ func TestHandleLoopApproval_CurrentAuthority(t *testing.T) {
 				}
 				return record, tt.readError
 			}
-			req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", strings.NewReader(`{"decision":"approve"}`))
+			req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", strings.NewReader(`{"decision":"approve","execution_id":"`+approvalTestExecutionID+`"}`))
 			req.SetPathValue("id", seamTestLoopA)
 			req = req.WithContext(WithIdentity(req.Context(), "second-party-reviewer"))
 			rec := httptest.NewRecorder()
@@ -121,6 +163,7 @@ func trackedLoopWithApproval(t *testing.T, loopID, callID string) *Component {
 	})
 	comp.loopTracker.SetPendingApproval(loopID, &PendingApprovalInfo{
 		CallID:      callID,
+		ExecutionID: approvalTestExecutionID,
 		ToolName:    "delete_rule",
 		Arguments:   map[string]any{"rule_id": "rule-42"},
 		Reason:      "approval_required: Tool 'delete_rule' requires human approval",
@@ -129,7 +172,7 @@ func trackedLoopWithApproval(t *testing.T, loopID, callID string) *Component {
 	withPersistedLoops(comp, map[string]*agentic.LoopEntity{loopID: {
 		ID: loopID, TaskID: "task-" + loopID, UserID: "user-1", ChannelType: "http", ChannelID: "chan-1",
 		State: agentic.LoopStateAwaitingApproval, MaxIterations: 3,
-		PendingApproval: &agentic.PendingApprovalState{CallID: callID, ToolName: "delete_rule"},
+		PendingApproval: &agentic.PendingApprovalState{CallID: callID, ExecutionID: approvalTestExecutionID, ToolName: "delete_rule"},
 	}})
 	return comp
 }
@@ -137,7 +180,7 @@ func trackedLoopWithApproval(t *testing.T, loopID, callID string) *Component {
 func TestHandleLoopApproval_MissingLoopID(t *testing.T) {
 	comp := newTestComponent(t)
 
-	body := `{"decision":"approve"}`
+	body := `{"decision":"approve","execution_id":"` + approvalTestExecutionID + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/loops//approval", strings.NewReader(body))
 	req.SetPathValue("id", "")
 	rec := httptest.NewRecorder()
@@ -150,7 +193,7 @@ func TestHandleLoopApproval_MissingLoopID(t *testing.T) {
 func TestHandleLoopApproval_LoopNotFound(t *testing.T) {
 	comp := newTestComponent(t)
 
-	body := `{"decision":"approve"}`
+	body := `{"decision":"approve","execution_id":"` + approvalTestExecutionID + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopAbsent+"/approval", strings.NewReader(body))
 	req.SetPathValue("id", seamTestLoopAbsent)
 	rec := httptest.NewRecorder()
@@ -175,7 +218,7 @@ func TestHandleLoopApproval_InvalidBody(t *testing.T) {
 func TestHandleLoopApproval_UnknownDecision(t *testing.T) {
 	comp := trackedLoopWithApproval(t, seamTestLoopA, "call-001")
 
-	body := `{"decision":"abstain"}`
+	body := `{"decision":"abstain","execution_id":"` + approvalTestExecutionID + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", strings.NewReader(body))
 	req.SetPathValue("id", seamTestLoopA)
 	rec := httptest.NewRecorder()
@@ -204,7 +247,7 @@ func TestHandleLoopApproval_NotAwaitingApproval(t *testing.T) {
 		ID: seamTestLoopB, UserID: "user-1", ChannelType: "http", State: agentic.LoopStateExecuting, MaxIterations: 3,
 	}})
 
-	body := `{"decision":"approve"}`
+	body := `{"decision":"approve","execution_id":"` + approvalTestExecutionID + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopB+"/approval", strings.NewReader(body))
 	req.SetPathValue("id", seamTestLoopB)
 	rec := httptest.NewRecorder()
@@ -240,7 +283,7 @@ func TestHandleLoopApproval_DecisionValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			comp := trackedLoopWithApproval(t, seamTestLoopA, "call-001")
 
-			body := `{"decision":"` + tt.decision + `"}`
+			body := `{"decision":"` + tt.decision + `","execution_id":"` + approvalTestExecutionID + `"}`
 			req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", strings.NewReader(body))
 			req.SetPathValue("id", seamTestLoopA)
 			rec := httptest.NewRecorder()
@@ -261,7 +304,7 @@ func TestHandleLoopApproval_BodyIdentityFallback(t *testing.T) {
 	comp := trackedLoopWithApproval(t, seamTestLoopA, "call-001")
 
 	// No user_id in body.
-	body := `{"decision":"approve"}`
+	body := `{"decision":"approve","execution_id":"` + approvalTestExecutionID + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", strings.NewReader(body))
 	req.SetPathValue("id", seamTestLoopA)
 	rec := httptest.NewRecorder()
@@ -283,7 +326,7 @@ func TestHandleLoopApproval_BodyIdentityFallback(t *testing.T) {
 func TestHandleLoopApproval_CtxIdentityWinsOverBody(t *testing.T) {
 	comp := trackedLoopWithApproval(t, seamTestLoopA, "call-001")
 
-	body := `{"decision":"approve","user_id":"body-user"}`
+	body := `{"decision":"approve","user_id":"body-user","execution_id":"` + approvalTestExecutionID + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", strings.NewReader(body))
 	req = req.WithContext(WithIdentity(req.Context(), "ctx-authenticated-user"))
 	req.SetPathValue("id", seamTestLoopA)
@@ -303,7 +346,7 @@ func TestHandleLoopApproval_CtxIdentityWinsOverBody(t *testing.T) {
 func TestHandleLoopApproval_ModifiedArgumentsAccepted(t *testing.T) {
 	comp := trackedLoopWithApproval(t, seamTestLoopA, "call-001")
 
-	body := `{"decision":"modify","modified_arguments":{"path":"/tmp/safe"},"reason":"narrowed scope"}`
+	body := `{"decision":"modify","modified_arguments":{"path":"/tmp/safe"},"reason":"narrowed scope","execution_id":"` + approvalTestExecutionID + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", strings.NewReader(body))
 	req.SetPathValue("id", seamTestLoopA)
 	rec := httptest.NewRecorder()
@@ -322,7 +365,7 @@ func TestHandleLoopApproval_FailedPublishPreservesPendingApproval(t *testing.T) 
 	beforeBytes, err := json.Marshal(before)
 	require.NoError(t, err)
 
-	body := `{"decision":"approve"}`
+	body := `{"decision":"approve","execution_id":"` + approvalTestExecutionID + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", strings.NewReader(body))
 	req.SetPathValue("id", seamTestLoopA)
 	rec := httptest.NewRecorder()

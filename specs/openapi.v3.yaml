@@ -377,7 +377,7 @@ paths:
     /loops/{id}/approval:
         post:
             summary: Submit human approval response for a gated tool call
-            description: Drives the beta.19 approval flow over HTTP. The loop must be awaiting approval (see config.approval_required). Decision is one of approve, reject, modify; modified_arguments substitutes for the original tool call arguments when decision=modify. Identity comes from X-User-Id-aware middleware via ctx (preferred) or the body user_id field (fallback), defaulting to http-user.
+            description: Submit the opaque execution_id displayed with the pending approval being reviewed; echo it unchanged and never replace it with a newer gate's identity. The loop must still await that execution. A stale or noncurrent execution returns 409, including when another gate awaits approval. Decision is one of approve, reject, modify; modified_arguments substitutes for the original tool call arguments when decision=modify. Identity comes from X-User-Id-aware middleware via ctx (preferred) or the body user_id field (fallback), defaulting to http-user.
             tags:
                 - AgenticDispatch
             parameters:
@@ -387,7 +387,7 @@ paths:
                   description: Loop ID
                   schema: {}
             requestBody:
-                description: Approval decision and optional modifications
+                description: Required displayed execution_id, approval decision, and optional modifications
                 required: true
                 content:
                     application/json:
@@ -401,13 +401,13 @@ paths:
                             schema:
                                 type: object
                 "400":
-                    description: Invalid request body or decision value, or a loop ID that is not a framework-minted loop token
+                    description: Missing execution_id, invalid request body or decision value, or a loop ID that is not a framework-minted loop token
                 "403":
                     description: Requester is not in the approve permission list (default admits everyone)
                 "404":
                     description: Loop not found
                 "409":
-                    description: Loop exists but is not awaiting approval
+                    description: The displayed execution is no longer current, or the loop is not awaiting approval; another pending gate does not make an old prompt applicable
                 "500":
                     description: Failed to publish approval (NATS error)
                 "503":
@@ -895,6 +895,8 @@ components:
                                             type: object
                                         call_id:
                                             type: string
+                                        execution_id:
+                                            type: string
                                         reason:
                                             type: string
                                         requested_at:
@@ -906,6 +908,7 @@ components:
                                             type: string
                                       required:
                                         - call_id
+                                        - execution_id
                                         - tool_name
                                         - requested_at
                                       type: object
@@ -968,6 +971,8 @@ components:
             properties:
                 decision:
                     type: string
+                execution_id:
+                    type: string
                 modified_arguments:
                     additionalProperties: {}
                     type: object
@@ -976,6 +981,7 @@ components:
                 user_id:
                     type: string
             required:
+                - execution_id
                 - decision
             type: object
         ComponentType:
@@ -1305,6 +1311,8 @@ components:
                                 type: object
                             call_id:
                                 type: string
+                            execution_id:
+                                type: string
                             reason:
                                 type: string
                             requested_at:
@@ -1316,6 +1324,7 @@ components:
                                 type: string
                           required:
                             - call_id
+                            - execution_id
                             - tool_name
                             - requested_at
                           type: object
@@ -1378,6 +1387,8 @@ components:
                                 type: object
                             call_id:
                                 type: string
+                            execution_id:
+                                type: string
                             reason:
                                 type: string
                             requested_at:
@@ -1389,6 +1400,7 @@ components:
                                 type: string
                           required:
                             - call_id
+                            - execution_id
                             - tool_name
                             - requested_at
                           type: object

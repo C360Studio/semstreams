@@ -45,8 +45,8 @@ type LoopInfo struct {
 
 	// PendingApproval is populated from agent.approval_pending events
 	// when the loop transitions to LoopStateAwaitingApproval. The
-	// approval HTTP handler reads this to recover the CallID it needs
-	// to publish on agent.approval_response. Cleared on terminal-state
+	// pending projection exposes the reviewed execution for the caller to echo.
+	// HTTP submission validates against current durable authority. Cleared on terminal-state
 	// transitions and on a successful approval response.
 	PendingApproval *PendingApprovalInfo `json:"pending_approval,omitempty"`
 }
@@ -63,6 +63,7 @@ type LoopInfo struct {
 // dispatch consumers to second-guess that authority.
 type PendingApprovalInfo struct {
 	CallID      string         `json:"call_id"`
+	ExecutionID string         `json:"execution_id"`
 	ToolName    string         `json:"tool_name"`
 	Arguments   map[string]any `json:"arguments,omitempty"`
 	Reason      string         `json:"reason,omitempty"`

@@ -1159,9 +1159,9 @@ func (c *Component) handleAgentFailed(ctx context.Context, data []byte) {
 }
 
 // handleAgentApprovalPending records the gated tool-call info on the
-// loop tracker so the HTTP approval handler has the loop's CallID +
-// tool args available locally without a KV.Get round-trip per
-// request. The framework's agentic-loop emits this event when a tool
+// loop tracker so pending projections expose the reviewed execution and
+// tool arguments. HTTP approval admission still reads durable authority.
+// The framework's agentic-loop emits this event when a tool
 // call hits config.approval_required and the loop transitions to
 // LoopStateAwaitingApproval; dispatch is one of several subscribers
 // (the others being product-layer approval UIs).
@@ -1186,6 +1186,7 @@ func (c *Component) handleAgentApprovalPending(_ context.Context, data []byte) (
 	// state is canonical and the HTTP handler degrades gracefully.
 	if accepted := c.loopTracker.SetPendingApproval(pending.LoopID, &PendingApprovalInfo{
 		CallID:      pending.CallID,
+		ExecutionID: pending.ExecutionID,
 		ToolName:    pending.ToolName,
 		Arguments:   pending.Arguments,
 		Reason:      pending.Reason,

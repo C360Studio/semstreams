@@ -34,6 +34,19 @@ what the client observed.
 owns. For example, the tools component is done only after the tool outcome is durable and the result publication
 receives its PubAck. A different component can own a different durable consequence.
 
+Conditional approval has a deliberately narrower definition of done: “apply this decision if its execution is
+still awaiting approval.” A validated exact current loop record can show that no matching gate remains. In that
+case the loop logs and counts an inapplicable decision, changes no authority, publishes no business work, and ACKs.
+That ACK does not claim that this decision was the historical winner. Missing process memory or a failed authority
+read cannot establish this outcome. This is an explicit approval contract, not permission for arbitrary log-and-ACK
+paths or a relaxation of ordinary final tool/model applied-result checks.
+
+The earlier `approval_required` tool status has its own narrow rule: validated durable evidence that the same
+execution advanced beyond its approval phase makes that old status superseded. The owner checks before changing
+state, including on an already-loaded loop, and ACKs a proven superseded status without reopening the gate or
+publishing work. It adds no recovery store and does not treat arbitrary unequal final results as duplicates.
+See [Approval flow](17-approval-flow.md).
+
 ## Happy path
 
 ```text

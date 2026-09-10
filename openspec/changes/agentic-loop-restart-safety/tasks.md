@@ -616,6 +616,179 @@ The subsequent full `task check:push` passes: loop unit/race 4.682s, integration
 `b917ba9a29f60e55f6f650ab19e84f6bf3ecf5e43c0e5e4f2b8489cc6c186428`.
 These local gates do not waive hosted holds, complete the full matrix, or authorize task 6.6's storage decision.
 
+The next test-only checkpoint on base `615997c6` expands the six existing unit callback refusal cases across
+approve, modify, reject, and timeout: all 24 combinations pass with race detection in 1.495s. A temporary Go
+overlay disabling the argument-conflict guard makes all four affected decision cases fail as intended; production
+source is unchanged. This proves branch-independent refusal, not confirmed-retention absence or the full matrix.
+
+The new native applied-approval redelivery proof reaches its intended RED in 30.50s (package 31.488s): the real
+approval completes, its input ACK is withheld, and fresh owners receive identical source bytes at sequence 8 with
+delivery count increasing from 1 to 2. The replacement returns ACK=0/NAK=1/TERM=0 at the existing non-awaiting-state
+guard. Final loop revision 7 and bytes remain unchanged, with one gated execution and two provider calls. Retained
+request/result evidence is logged; this demonstrates an unimplemented applied-proof path, not that a new durable
+fact or Store is necessary. Both test containers terminate normally. Evidence directory:
+`/private/tmp/gh1146-approval-applied.k5BLPg`; native log `native-applied-red.log`, SHA-256
+`f96e5f8a475ef7c1a48ac21030f12af8eb38312b5593644296ef271268ce056e`. The failing regression remains local and
+unpushed; no production change, task completion, mechanism ruling, or frozen-parent advance is claimed.
+Independent review approves the unit expansion and native RED fidelity, not runtime completion. The five existing
+native replacement controls also pass on the changed fixture in 14.309s (timeout 10.51s), with unchanged source
+hashes; log `native-existing-controls.log` in the same directory, SHA-256
+`a68876bd959a2f558208908721892b9db6f884d735f0984aac2df0561fdbdf57`. The known applied-redelivery failure was
+excluded from that control run, not fixed or rerun away.
+
+The separate seeded callback counterexample `TestOldApprovalCannotResolveLaterRequestWithSameCallID` also reaches
+its intended RED (race, package 0.563s). Decision A is serialized before installing an internally consistent B
+checkpoint with the same LoopID/provider CallID but different RequestID, ExecutionID, and arguments. The production
+callback returns Ack/nil, constructs B's ToolCall with A's reviewer, and clears B's pending state in the fake KV.
+Both no-wrong-dispatch and unchanged-authority assertions fail. This proves input-to-execution misassociation at
+the unit seam, not native ACK/PubAck, executor effects, two chronological approval gates, or timestamp authority.
+Independent review approves that limited fidelity. Evidence: `/private/tmp/gh1146-approval-late-identity.zapI1e`,
+log `late-approval-red.log`, SHA-256 `c345f4afa7393044bb3b55f985c35325fe5d63eda3dddd4ccc556ff4d0dd5e89`;
+test source SHA-256 `b2522d6a4d8ff4e805ef6d265a20f0fa25510dc19fbf61b72e754215e89d66b2`.
+This is distinct from the applied-state Retry gap: the current checkpoint identifies B, but the incoming decision
+does not identify its intended execution. No new identity, disposition, persistence mechanism, or task 6.6 ruling
+is selected by this test. Both failing regressions remain local and unpushed.
+
+The bounded approval surface inventory is independently INVENTORY PASS at
+`inventory-approval-applied-boundary-2026-09-10.md`, SHA-256
+`6640c375572e2171790d7910de7663cf5928ea2b8aab99dd5c3d68ce50f197cb` (159/159 pins verified).
+It preserves its earlier test-source checkpoint; the newer counterexample is recorded separately above.
+
+Owner acceptance, 2026-09-10: independently reviewed
+`design-approval-gate-identity-2026-09-10.md`, SHA-256
+`92a19372c2fe2f19ac30264b3525654b5b68a005847f3435681dc0e991322fc4`, is accepted by
+[comment 5618375806](https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5618375806).
+Preserve that design artifact and the accepted inventory unchanged. This accepts required ExecutionID echo,
+observable effect-free noncurrent-gate ACK, one logical gate per execution, and the narrow API/spec amendments.
+It does not mark implementation or acceptance tests complete, prove historical winning-decision provenance, or
+revoke comment `5463183450` and task 6.6's Store fallback. Existing RED evidence remains a historical checkpoint.
+
+Implementation checkpoint, 2026-09-10: required ExecutionID echo, dispatch admission, pending projection, loop
+matching, and observable inapplicable decision settlement pass focused race tests. All six native approval cases
+pass the canonical integration runner (package 46.339s), including exact approval-source redelivery after owner
+replacement: source sequence 8, delivery 2, ACK 1 / NAK 0 / Term 0, executor calls 1, provider calls 2, unchanged
+durable KV revision/bytes, and inapplicability log plus counter. This proves the accepted conditional outcome,
+not historical winning-decision provenance. The native log SHA-256 is
+`2e7276fa080f2d92789d45542701eb4b0cabd44a5300f55eaf6e9cc4428ddfd2`; the frozen 18-source manifest SHA-256 is
+`e4067802ba0308e385b9333d5e6ee222ce3d0442f8170de5902b405fc0a59b3a`. Exact commands and per-ruling evidence are in
+`/private/tmp/gh1146-approval-execution-echo.Rm4ZA5/checkpoint.md`, SHA-256
+`3a0ef0bb343c810d05da2f2cc134e4dfabc065a06a2d908ad027d76febf7895a`.
+
+The distinct `TestApprovalRequiredResultReplayCannotReopenClosedGate` remains RED: replaying the original gated
+ToolResult after ordinary approval closure recreates the same execution's pending gate. No correction or new
+mechanism is authorized by that observation. Its bounded inventory is
+`inventory-approval-required-replay-2026-09-10.md`, SHA-256
+`1f5afffddf5ead0e612127ad053291627887c8d63cd9ea2b25885a7235416a8a` (60/60 pins mechanically verified).
+Scoped implementation review excludes that known blocker and requests HTTP/OpenAPI prose alignment. Remaining
+fixture migration, schema proof, diagnostic mutation, full gates, and breaking-change E2E are not complete.
+No task checkbox, task 6.6 ruling, or merge readiness follows from this checkpoint.
+
+Bounded cleanup completed later on 2026-09-10: endpoint/resolver prose, required approval RuleFields, and existing
+valid-fixture echoes are synchronized. Component schemas are byte-identical; OpenAPI differs only in the approved
+approval identities and endpoint descriptions. Independent cleanup review returned scoped APPROVE. The final
+three-package race run passes agentic (5.163s) and dispatch (2.478s); loop fails solely at the unchanged no-reopen
+test (2.091s). Overall exit remains 1, not a passing push gate. Final log SHA-256:
+`24dc68a241795ac34ba2967b9755b50fa8f53009d4444e22b6cfd980cc373448`. The preserved 32-source manifest
+`/private/tmp/gh1146-approval-execution-echo.Rm4ZA5/final-cleanup-source.sha256` has SHA-256
+`980009110aa821a1be3e195f91cc7d30c3ac712c576a7e7f9c51d785f43a6535`; root verified every entry. These cleanup
+results supersede the fixture/schema/prose holds above, not the earlier native checkpoint's exact source identity.
+The no-reopen correction, remaining proof/mutation gates, breaking-change E2E, and task 6.6 remain open.
+
+The owner accepted the narrow approval-required ToolResult amendment in
+[comment 5619622099](https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5619622099):
+pre-mutation exact authority even on warm routes, and effect-free superseded ACK only from positive validated
+later-phase evidence for the exact execution. Ordinary final-result proofs and task 6.6 remain unchanged.
+Replay inventory SHA-256 `1f5afffddf5ead0e612127ad053291627887c8d63cd9ea2b25885a7235416a8a` was revalidated
+against the final cleanup checkpoint: 49 pins unchanged, 11 moved, all 60 snippets retained. The inventory and
+initial reviewed design remain unchanged; this acceptance completes no implementation or verification task.
+
+The first phase-supersession callback correction passes the original no-reopen regression, warm/cold supersession,
+and warm/cold unseen-sibling refusal (race, package 1.612s). Superseded callbacks leave authority, process results,
+and audit facts unchanged and emit the observed log plus private counter; the sibling is refused before insertion.
+Log: `/private/tmp/gh1146-superseded-gate-runtime.VfFbCr/first-focused.log`, SHA-256
+`20e7ecf7538086faf5cd8b296446828999f0d5a1b32b01a8b99d5a6f50a857aa`. Exact first-GREEN source copies are retained
+alongside it. This is unit callback evidence, not native settlement, prompt PubAck, stale-revision, full matrix,
+confirmed-absence, or E2E completion. Tasks 6.5c, 6.5d, and 6.6 remain open.
+
+The E2E identity fixture fence cleared after #1262 merged and active claims were checked for overlap. Only
+`approval_signal.go` and `approval_restart.go` were migrated; both echo the original displayed/checkpoint execution
+and treat 409 as refusal without replacement identity. Independent fixture review APPROVE and non-Docker package
+race PASS (1.419s) do not constitute a full tier run. Handoff:
+`/private/tmp/gh1146-e2e-approval-echo.ptNlW3/handoff.md`, SHA-256
+`59a992cf5c261d547b2727a2bca8c29c9f3c1ca643503e45675983ba0a297119`.
+
+The subsequent prompt/CAS checkpoint passes 12 focused tests (race, 1.484s): pending replay preserves the original
+snapshot, and a new gate uses the exact observed revision before prompt/audit publication. A cold conflicting
+revision test proves no unconditional Put or speculative output, not a concurrent newer-closure restoration race.
+The broader three-package run then exposed six fixture failures before their intended faults: exact retained
+evidence was missing from the shared warm fixture. Tests now retain that evidence, fail Update behind successful
+Get, and persist their timeout precondition. Cancellation retains no-ACK protection at the authoritative refusal;
+the impossible-JSON channel fault remains direct handler/classifier coverage, not a wire-callback claim.
+
+Independent review separately found an optional originating-call loop/trace correlation hole in the new positive
+supersession proof. Paired conflict controls reached RED before the narrow approval-required guard was added;
+matching and empty optional values remain accepted. The corrected three-package race run passes agentic (5.173s),
+loop (3.367s), and dispatch (2.142s). Log:
+`/private/tmp/gh1146-superseded-gate-runtime.VfFbCr/corrected-three-package-race.log`, SHA-256
+`b460f860af1c408ee07d9c9615a40e908803bee905c9bfbf9e38169fd8414333`. The original package RED remains at
+`/private/tmp/gh1146-phase-checkpoint.ZbBv7C/three-package-race.log`, SHA-256
+`3384535056bf2da1c13a79feeded1cbb8279c97110d2ed866c8367a93b77087c`.
+Later-history proof, concurrent stale-restoration proof, confirmed absence, diagnostic mutations, native/E2E,
+full repository gates, and task 6.6 remain open. No mixed task checkbox is completed by this package checkpoint.
+
+After independent correction/fixture review APPROVE, the existing six native approval controls pass together
+(race, package 46.958s): approve, applied ApprovalResponse redelivery, modify, reject, older same-CallID isolation,
+and original-deadline timeout. Ten pinned Go files remain byte-identical across the canonical run; its shared host
+lock is released. Log: `/private/tmp/gh1146-phase-checkpoint.ZbBv7C/native-six-controls.log`, SHA-256
+`accca76116f869c40af10a5ecd471ceda42645b7f2a678f72fe0dde6bdbd5ff8`; source manifest SHA-256
+`ca2d02866a89ddadd4a80fac1bc7d87c9325952df4da0d4f78e5bc74451d5134`. These are ApprovalResponse controls,
+not the distinct original approval-required ToolResult redelivery proof or a new full E2E tier pass.
+
+The standard agentic E2E tier subsequently passes in 2m32.222s with 16 asserting stages, including approval after
+OS-process restart (6.505s), on frozen production and the reviewed ExecutionID fixture migration. The local mock
+LLM and a new isolated Compose project were used; only its temporary containers/volume/network were cleaned up.
+All 967 pinned non-test Go, module, and relevant configuration files remain unchanged across the run. Log:
+`/private/tmp/gh1146-phase-checkpoint.ZbBv7C/e2e-agentic.log`, SHA-256
+`762441c3f2447c4f877c8a70e7a329aabaa108c8d6ee594e18eb4ea378ca0b5a`; source manifest SHA-256
+`69863eb24e1b1c8e14d33805b0f7e9644c3cd9d2ba8236ca3aa2e1a4ab7a04c6`. The native ToolResult replay test
+extension was being edited separately and is excluded from that non-test source manifest. This E2E pass does not
+prove that new native test, later-history/concurrent-restoration/absence rows, or the full repository push gates.
+
+The distinct native `TestIntegrationApprovalRequiredResultRedeliversAfterClosedGate` now passes in the seven-case
+approval group (race, package 77.061s). It withholds only the original gated ToolResult ACK after the pending/prompt
+witness, commits approval closure on a replacement, and observes source sequence 6 redeliver to a third owner as
+delivery 2: ACK 1 / NAK 0 / Term 0. Before real ACK releases the native `MaxAckPending=1` slot, the test verifies
+unchanged closure revision/bytes, executor/provider counts and pending-prompt sequence plus supersession
+diagnostics. The queued final result then completes normally and all consumers drain. This is closed-gate proof,
+not post-final or later-history proof. The earlier unexecuted test sequencing was rejected in review and corrected
+without changing production policy or AckWait. Independent corrected-fixture review returned APPROVE.
+Log: `/private/tmp/gh1146-phase-checkpoint.ZbBv7C/native-seven-controls.log`; source manifest and verification are
+retained beside it. Remaining history, concurrent-restoration, confirmed-absence, diagnostic-mutation, full-push
+gate, and task 6.6 obligations stay open.
+
+The final pre-push lint correction extracts only the existing matching-pending prompt branch into a private helper;
+validation, refusal text, publication order, and caller return semantics are unchanged. Independent source review
+returned APPROVE at `settlement_recovery.go` SHA-256
+`f2e1133873c0a1232ca82bc478ee56c11952e51a489830eed63bb7a07af3d042`. The original 86-statement and intermediate
+81-statement lint failures remain retained; the limit and tests were not relaxed.
+
+Final corrected-source `task check:push` passes, including full unit/race (loop 3.452s, dispatch 3.177s) and canonical
+integration/race (loop 269.133s, dispatch 77.173s). This integration run includes the new closed-gate native proof.
+The standard agentic E2E then passes all 16 asserting stages in 2m32.155s, including approval after OS-process
+restart (6.540s), using the local deterministic mock. Only the isolated test stack and its temporary data were
+removed. All 2230 pinned Go sources remain unchanged across both final gates; module files and generated outputs
+have no drift from their intended checkpoint. Logs in `/private/tmp/gh1146-phase-checkpoint.ZbBv7C`:
+`check-push-corrected.log` SHA-256 `1ad34a7a386d43d41f2f1b9ccb4e3f845ef41298fff8a8d7901f570313b8ef32`;
+`e2e-agentic-final.log` SHA-256 `d6bef537d2ae97031094b5db2ade248a31a8cb48d753be50a53e1bd419081ae9`;
+`final-gate-source.sha256` SHA-256 `0b9fbd2463c00fef581265537d03b2c5772e3bd94054c64f74a527b0b1e1809e`.
+Linux/amd64 build, read-only module tidy-diff, identity audit (1299 candidates), all three guard fixtures, and
+strict OpenSpec validation (55/55) also pass. The API report's first offline attempt could not fetch its analysis
+tool; the unchanged command with network access completes all 62 comparisons and reports 14 incompatible
+packages against beta.162. That is reporting-only evidence, not compatibility approval or a flake waiver.
+These final-source gates supersede the local push/E2E holds above, not the missing later-history, concurrent
+restoration, confirmed-retention-absence, diagnostic-mutation, broader matrix, or task 6.6 obligations.
+Mixed task checkboxes remain open. This is a bounded draft checkpoint, not archive, merge, closure, or parent cutover.
+
 - [ ] 6.1 RED: run the real-NATS approval replacement gate after an approval-required `ToolResult` fully settles.
   Replace loop and dispatch, discard every process map/cache, retain `AGENT` and `AGENT_LOOPS`, and independently
   exercise approve, modify, reject, timeout, and redelivery. Cite exactly
@@ -641,12 +814,47 @@ These local gates do not waive hosted holds, complete the full matrix, or author
   Reconstruction follows only the RequestID named by the current request. Cite exactly
   `// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded`.
 - [ ] 6.5 Table-test approve, modify, reject, and timeout across transient/unresolved Retry, confirmed retained
-  absence to durable `continuation_unavailable`, malformed/identity conflict to Quarantine, exact match to continue,
-  and durable current state proving the branch already applied. Ordinary branch publication remains at-least-once.
+  matching-gate evidence absence to durable `continuation_unavailable`, malformed/matching-gate identity conflict
+  to Quarantine, exact match to continue or prove the branch already applied, and validated noncurrent gate to
+  observable effect-free ACK. The latter does not prove which historical decision applied. Ordinary applicable
+  branch publication remains at-least-once.
   Any branch that becomes terminal proves every settlement-required terminal effect before the final bare terminal
   LoopEntity marker; bare terminal state alone never proves which ToolResult applied. Cite exactly
   `// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded` and
   `// spec: agentic-loop / Loop task, request, and tool work use only required correlation` as applicable.
+- [ ] 6.5a Carry existing ExecutionID through approval pending output, the existing authority-backed pending HTTP
+  projection, required HTTP ApprovalRequest, ApprovalResponse, and timeout production. Compare the displayed echo
+  at dispatch admission and again at loop application. Return HTTP 400 for omission and 409 for a noncurrent gate
+  without publication; terminate identity-less direct wire input. Implement noncurrent-gate ACK through the
+  existing refusal/skip diagnostic ownership with a structured log and one narrow private loop counter; keep
+  identities out of metric labels. Add no receipt, public status/helper/configuration, authority, or recovery read.
+  This task does not include tracker retirement or unrelated projection work. Tests cite exactly
+  `// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded` and
+  `// spec: agentic-dispatch / Dispatch uses one authority-backed current-state projection`.
+- [ ] 6.5b GREEN: prove the reviewed native applied-approval redelivery and seeded old-A/current-B regressions under
+  the accepted echo semantics without overstating either fixture. Cover HTTP missing/stale echo, post-publication
+  gate change, timeout snapshot identity, all four matching branches, same-gate correlation conflict, and
+  missing/unreadable/malformed authority. For inapplicable delivery assert log plus metric, zero business
+  publications, unchanged durable authority, and no applied-decision audit event. Prove one gate per execution,
+  replay without reopening after closure, preserved approver/arguments and rejection provenance, and existing
+  same-gate contention obligations; return with measured failure before adding coordination. Verify only the
+  declared pending JSON/OpenAPI identity addition, and require the relevant agentic E2E green before breaking
+  changes land. Cite the same requirements as 6.5a and the terminal-release requirement named in 7.7.
+- [ ] 6.5c RED: extend the no-reopen callback regression with warm/cold exact-authority observation before mutation,
+  approve/modify closure, reject/timeout/final-result supersession, and positive later-request history. Cover
+  missing/conflicting evidence, a matching pending prompt with failed PubAck, a genuinely new gate, an unseen
+  different gated sibling, and closure winning after a stale observation. Assert unchanged authority/results and
+  zero business publication on superseded/refused paths; preserve ordinary unequal-final-result refusal tests.
+  Observe the supersession log and private unlabeled counter, and prove diagnostic omission fails the assertions.
+  Cite exactly `// spec: agentic-loop / Approval-required tool statuses settle by observed execution phase`.
+- [ ] 6.5d Implement the narrow approval-required branch in the existing delivery/recovery owner using the existing
+  revision-bearing exact read, admitted correlation evidence, and conditional KV Update before gate publication.
+  Do not infer replay from the accumulator after insertion, replay a matching prompt by reopening its gate, or
+  persist an unseen gated sibling as consumed evidence. Prevent stale restoration/write from regressing closure;
+  document and test any necessary bounded local critical section using existing owner primitives. GREEN the
+  scoped callback/race/replacement tests and required agentic E2E; retain task 6.6 and all unrelated fences.
+  Return an exact failing boundary before adding coordination, storage, or another proof mechanism.
+  Cite exactly `// spec: agentic-loop / Approval-required tool statuses settle by observed execution phase`.
 - [ ] 6.6 Stop for an owner mechanism ruling after the evidence gate. On PASS, obtain explicit revocation of comment
   `5463183450`, then remove `ApprovalContinuationV1`, Store config, digest, cleanup, and deliberate AGENT-eviction
   claims. On FAIL, retain the already-approved ObjectStore plan unchanged. Introduce no third mechanism.
@@ -659,7 +867,9 @@ These local gates do not waive hosted holds, complete the full matrix, or author
   tombstone, and healing. Marshal and unmarshal `SearchResult` through the registered production `BaseMessage`
   envelope; prove the suffix supplies LoopID and the immutable `LoopInfo` projection reports complete, success,
   synthesis, and iterations while directional token fields remain zero. Regenerate OpenAPI and prove the existing
-  `LoopInfo` JSON/schema is unchanged and contains no aggregate-to-directional token mapping. Cite exactly
+  `LoopInfo` JSON/schema is unchanged except for `execution_id` on existing nested `PendingApprovalInfo`, and
+  contains no aggregate-to-directional token mapping. This exception permits no unrelated projection expansion.
+  Cite exactly
   `// spec: agentic-dispatch / The shared loop view classifies the mixed bucket`.
 - [ ] 6.9 Delete `LoopTracker`, its approval buffer, created/pending dispatch inputs and consumers,
   `Component.LoopTracker()`, and all tracker-driven correctness. Preserve created/pending loop outputs and external
@@ -667,7 +877,9 @@ These local gates do not waive hosted holds, complete the full matrix, or author
   non-user terminal events without `user.response`. Cite exactly
   `// spec: agentic-dispatch / Dispatch is exclusively an edge gateway`.
 - [ ] 6.10 Replace `CommandContext.LoopTracker` with classified `LookupLoopOwner`. Preserve `LoopInfo` only as the
-  immutable view-derived `/loops` and `/debug/state` response DTO and prove its JSON/OpenAPI schema is unchanged.
+  immutable view-derived `/loops` and `/debug/state` response DTO and prove its JSON/OpenAPI schema is unchanged
+  except for `execution_id` on existing nested `PendingApprovalInfo`. Preserve all unrelated fields and mappings;
+  the approval correction does not itself authorize this task's tracker retirement or other projection work.
   Return 503 instead of false empty state and expose caught-up readiness/current poison diagnostics. Preserve exact
   recorded-state reporting after replacement. Cite exactly
   `// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone` and
@@ -721,8 +933,15 @@ These local gates do not waive hosted holds, complete the full matrix, or author
   evidence remain nonblocking.
 - [ ] 7.7 Reconcile current `agentic-loop` requirement
   `Per-loop in-process state is released at terminal, through the one release point`: preserve single-point release
-  and unaffected scenarios, replace unconditional quiet settled-drop with lane-specific durable applied proof, Retry
-  on unresolved evidence, and Quarantine on correlation conflict/impossible transition. Cite exactly
+  and unaffected scenarios. Preserve ordinary final-tool/model lane-specific durable applied proof, Retry on
+  unresolved evidence, and Quarantine on correlation conflict/impossible transition. Approval-required statuses
+  additionally use positive phase-supersession proof under the requirement named in 6.5c, with a pre-mutation exact
+  authority read even on warm delivery. Preserve existing confirmed-retained-absence handling. For ApprovalResponse,
+  permit validated coherent exact
+  current authority with another pending ExecutionID or no gate to establish observable effect-free inapplicable
+  ACK, without historical applied-decision proof. Assert log plus metric, no business publication or authority
+  mutation, and no fabricated applied provenance. Process absence or failed authority observation establishes
+  nothing; matching-gate correlation conflict quarantines. Cite exactly
   `// spec: agentic-loop / Per-loop in-process state is released at terminal, through the one release point` in the
   new boundary tests.
 - [ ] 7.8 GREEN: prove all four lanes meet their owner-specific durable-done/refusal contract across replacement.

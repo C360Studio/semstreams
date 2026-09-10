@@ -370,11 +370,11 @@ func TestApprovalIsNotOwnerScoped(t *testing.T) {
 	withPersistedLoops(c, map[string]*agentic.LoopEntity{seamTestLoopA: {
 		ID: seamTestLoopA, UserID: "user-a", ChannelType: "http", ChannelID: "session-1",
 		State: agentic.LoopStateAwaitingApproval, MaxIterations: 5,
-		PendingApproval: &agentic.PendingApprovalState{CallID: "call-001", ToolName: "delete_rule"},
+		PendingApproval: &agentic.PendingApprovalState{CallID: "call-001", ExecutionID: approvalTestExecutionID, ToolName: "delete_rule"},
 	}})
 
 	rec := seamHTTPCall(t, c.handleLoopApproval, http.MethodPost,
-		"/loops/"+seamTestLoopA+"/approval", seamTestLoopA, `{"decision":"approve"}`, "reviewer-b")
+		"/loops/"+seamTestLoopA+"/approval", seamTestLoopA, `{"decision":"approve","execution_id":"`+approvalTestExecutionID+`"}`, "reviewer-b")
 
 	assert.NotEqual(t, http.StatusForbidden, rec.Code,
 		"an approver who does not own the loop is admitted")

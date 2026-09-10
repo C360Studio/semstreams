@@ -73,7 +73,8 @@ func TestIntegrationApprovalRejectionJoinsCancelledGraphRequestBeforeQuarantine(
 	require.NoError(t, c.persistLoopState(setupCtx, loopID))
 	response := &agentic.ApprovalResponse{
 		LoopID: loopID, CallID: call.ID, Decision: agentic.ApprovalDecisionReject,
-		Reason: "policy", DecidedAt: time.Now().UTC(),
+		ExecutionID: call.ExecutionID,
+		Reason:      "policy", DecidedAt: time.Now().UTC(),
 	}
 	data, err := json.Marshal(message.NewBaseMessage(response.Schema(), response, "test"))
 	require.NoError(t, err)
@@ -175,7 +176,8 @@ func TestIntegrationLoopSignalAndApprovalCallbacksCommitBeforeAck(t *testing.T) 
 	approvalLoopID := original.LoopID
 	response := &agentic.ApprovalResponse{
 		LoopID: approvalLoopID, CallID: original.ID, Decision: agentic.ApprovalDecisionApprove,
-		ApprovedBy: "operator", DecidedAt: time.Now().UTC(),
+		ExecutionID: original.ExecutionID,
+		ApprovedBy:  "operator", DecidedAt: time.Now().UTC(),
 	}
 	responseData, err := json.Marshal(message.NewBaseMessage(response.Schema(), response, "test"))
 	require.NoError(t, err)

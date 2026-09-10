@@ -144,19 +144,62 @@ temporarily unreadable route evidence SHALL not be treated as routeless.
 
 Dispatch SHALL use one caught-up graph view over `AGENT_LOOPS` for `/activity`, `/loops`, `/debug/state`, and
 AutoContinue. `LoopTracker` and pending-approval process caches SHALL NOT exist. `/loops` and `/debug/state` SHALL
-preserve the existing immutable `LoopInfo` JSON schema. `/debug/state` SHALL expose the view's caught-up readiness
+preserve the existing immutable `LoopInfo` JSON schema except for `execution_id` on the existing nested
+`PendingApprovalInfo`. That identity SHALL come from observed pending authority and appear in the corresponding
+JSON/OpenAPI schema. All unrelated DTO fields and projection contracts SHALL remain unchanged. This identity
+addition SHALL NOT authorize tracker retirement or unrelated projection expansion as part of the approval correction.
+`/debug/state` SHALL expose the view's caught-up readiness
 and current poison diagnostics rather than reporting a false empty state.
 
 Explicit LoopID approval, read, continuation, cancellation, terminal-route, and command-owner operations SHALL
 exact-read and validate `AGENT_LOOPS/<LoopID>`. A partial, stale, watcher-lost, or relevant-poisoned projection SHALL
 never be treated as empty.
 
+HTTP `ApprovalRequest` SHALL require `execution_id`, echoing the opaque ExecutionID attached to the prompt the human
+reviewed. Dispatch SHALL compare it with exact validated pending authority before publishing `ApprovalResponse`,
+which SHALL carry the same echo. Missing identity SHALL return HTTP 400. A different or no-longer-current gate SHALL
+return HTTP 409 without approval publication. Dispatch SHALL NOT compute the identity for the client, substitute
+current identity for an omitted or outdated echo, or use an old prompt to approve a newly observed gate.
+
+Existing pending HTTP output SHALL expose the pending ExecutionID after replacement without requiring an earlier
+approval-pending event. The loop owner SHALL independently check the echoed identity when applying the decision;
+dispatch's check SHALL NOT stand in for that application-time check.
+
 #### Scenario: Approval follows replacement
 
 - **GIVEN** exact current state is awaiting approval
-- **WHEN** an authorized approval names its canonical LoopID
-- **THEN** dispatch obtains CallID from validated `PendingApproval` state
+- **WHEN** an authorized approval names its canonical LoopID and echoes the displayed pending ExecutionID
+- **THEN** dispatch verifies the echo before obtaining CallID from validated `PendingApproval` state
+- **AND** it publishes the same ExecutionID in ApprovalResponse
 - **AND** requires no earlier approval-pending event
+
+#### Scenario: Pending output carries observed identity after replacement
+
+- **GIVEN** exact validated current authority contains a pending approval
+- **WHEN** the existing pending HTTP projection is read after dispatch replacement
+- **THEN** it carries the pending record's ExecutionID as `execution_id`
+- **AND** the caller need not compute identity or have received the original event
+
+#### Scenario: An older approval client omits the gate echo
+
+- **WHEN** an HTTP approval omits `execution_id`
+- **THEN** dispatch returns 400 without approval publication
+- **AND** it does not fill the omission from current pending authority
+
+#### Scenario: A stale displayed prompt is submitted
+
+- **GIVEN** the displayed prompt names execution A
+- **AND** exact coherent current authority exposes B or no pending gate
+- **WHEN** the client submits A's ExecutionID
+- **THEN** dispatch returns 409 without approval publication or authority mutation
+- **AND** matching LoopID and provider CallID do not substitute B's identity
+
+#### Scenario: The gate changes after dispatch publication
+
+- **GIVEN** dispatch validated and published the submitted ExecutionID
+- **WHEN** another gate becomes current before loop application
+- **THEN** the loop's independent exact-authority check prevents wrong-gate application
+- **AND** the native decision follows the loop's observable, effect-free inapplicable settlement contract
 
 #### Scenario: Projection endpoint is unavailable
 
@@ -169,7 +212,9 @@ never be treated as empty.
 #### Scenario: Loop DTO shape is preserved
 
 - **WHEN** `/loops` or `/debug/state` reports a valid view-derived loop
-- **THEN** it uses the existing immutable `LoopInfo` JSON schema
+- **THEN** it uses the existing immutable `LoopInfo` JSON schema with only the declared nested pending
+  `execution_id` addition
+- **AND** JSON/OpenAPI verification preserves every unrelated field and mapping
 - **AND** no mutable loop entity, tracker state, or projection internals enter the response
 
 #### Scenario: Exact AutoContinue tuple has one match

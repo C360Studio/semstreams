@@ -725,7 +725,8 @@ func TestApprovalRejectionAtIterationCapRecordsTerminalBeforeAdjacentSurfaces(t 
 	}
 	response := agentic.ApprovalResponse{
 		LoopID: loopID, CallID: callID, Decision: agentic.ApprovalDecisionReject,
-		Reason: "policy", DecidedAt: time.Now().UTC(),
+		ExecutionID: call.ExecutionID,
+		Reason:      "policy", DecidedAt: time.Now().UTC(),
 	}
 	envelope := message.NewBaseMessage(response.Schema(), &response, "test")
 	data, err := json.Marshal(envelope)

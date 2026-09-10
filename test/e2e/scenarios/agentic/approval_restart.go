@@ -75,10 +75,10 @@ func (s *Scenario) walkApprovalAfterRestart(ctx context.Context, result *scenari
 	if err != nil || replacementExecutions != 0 {
 		return fmt.Errorf("replacement executed gated tool before approval: count=%v error=%v", replacementExecutions, err)
 	}
-	if err := s.submitApproval(ctx, task.LoopID, agentic.ApprovalDecisionApprove); err != nil {
+	if err := s.submitApproval(ctx, task.LoopID, checkpoint.call.ExecutionID, agentic.ApprovalDecisionApprove); err != nil {
 		return fmt.Errorf("approve after application replacement: %w", err)
 	}
-	if err := s.verifyApprovalResponsePublished(ctx, task.LoopID, checkpoint.call.ID); err != nil {
+	if err := s.verifyApprovalResponsePublished(ctx, task.LoopID, checkpoint.call.ID, checkpoint.call.ExecutionID); err != nil {
 		return err
 	}
 	if err := s.verifyApprovedRestartCall(ctx, checkpoint); err != nil {
@@ -125,6 +125,7 @@ func (s *Scenario) awaitSettledApprovalNotifications(
 			matches = lane.name == "created" && event.LoopID == checkpoint.loop.ID && event.TaskID == checkpoint.loop.TaskID
 		case *agentic.ApprovalPendingEvent:
 			matches = lane.name == "pending" && event.LoopID == checkpoint.loop.ID && event.CallID == checkpoint.call.ID &&
+				event.ExecutionID == checkpoint.call.ExecutionID &&
 				event.ToolName == checkpoint.call.Name && event.TraceID == checkpoint.call.TraceID &&
 				reflect.DeepEqual(event.Arguments, checkpoint.call.Arguments) && agentic.IsApprovalRequired(event.Reason)
 		}
@@ -213,7 +214,7 @@ func (s *Scenario) awaitSettledApprovalCheckpoint(
 	approval := loop.PendingApproval
 	if loop.ID != task.LoopID || loop.TaskID != task.TaskID || loop.UserID != task.UserID || approval == nil ||
 		approval.RequestID == "" || approval.ExecutionID == "" || approval.CallOrdinal == 0 ||
-		approval.CallID != pending.CallID || approval.ToolName != approvalGatedTool ||
+		approval.CallID != pending.CallID || approval.ExecutionID != pending.ExecutionID || approval.ToolName != approvalGatedTool ||
 		pending.ToolName != approval.ToolName || pending.TraceID != approval.TraceID ||
 		!reflect.DeepEqual(pending.Arguments, approval.Arguments) || !agentic.IsApprovalRequired(pending.Reason) {
 		return checkpoint, fmt.Errorf("durable approval checkpoint does not match task and pending event for %s", task.LoopID)

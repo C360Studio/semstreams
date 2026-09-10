@@ -26,6 +26,8 @@ func approvalRegistry(t *testing.T) *payloadregistry.Registry {
 // shape the framework no longer accepts (ADR-105).
 const approvalFixtureLoopID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
 
+const approvalFixtureExecutionID = "tool-exec-v1-6u2uhk4jzh6pewuybtciguuilzrhg4q6n6mms32hxsvqni5nludq"
+
 func TestApprovalPendingEvent_Validate(t *testing.T) {
 	t.Parallel()
 
@@ -73,6 +75,7 @@ func TestApprovalPendingEvent_Validate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
+			tt.event.ExecutionID = approvalFixtureExecutionID
 			err := tt.event.Validate()
 			if tt.wantErr == "" {
 				if err != nil {
@@ -174,6 +177,7 @@ func TestApprovalResponse_Validate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
+			tt.response.ExecutionID = approvalFixtureExecutionID
 			err := tt.response.Validate()
 			if tt.wantErr == "" {
 				if err != nil {
@@ -188,12 +192,71 @@ func TestApprovalResponse_Validate(t *testing.T) {
 	}
 }
 
+func TestApprovalResponseRequiresExecutionIDEcho(t *testing.T) {
+	response := &agentic.ApprovalResponse{
+		LoopID: approvalFixtureLoopID, CallID: "call-001",
+		Decision: agentic.ApprovalDecisionApprove, ApprovedBy: "reviewer",
+	}
+	if err := response.Validate(); err == nil || !strings.Contains(err.Error(), "execution_id required") {
+		t.Errorf("approval without the reviewed execution: want execution_id required, got %v", err)
+	}
+	if _, err := message.NewBaseMessage(response.Schema(), response, "approval-test").MarshalJSON(); err == nil {
+		t.Error("approval missing its execution target must not marshal as valid wire work")
+	}
+}
+
+// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
+func FuzzApprovalExecutionIDEcho(f *testing.F) {
+	f.Add("")
+	f.Add(approvalFixtureExecutionID)
+	f.Add("opaque/identity.\"\\\n雪")
+	f.Fuzz(func(t *testing.T, executionID string) {
+		// JSON strings are Unicode; generate within that input grammar without
+		// imposing an execution-ID generator or format on an opaque echo.
+		executionID = strings.ToValidUTF8(executionID, "\ufffd")
+		for _, payload := range []message.Payload{
+			&agentic.ApprovalResponse{LoopID: approvalFixtureLoopID, CallID: "call-001",
+				ExecutionID: executionID, Decision: agentic.ApprovalDecisionApprove, ApprovedBy: "reviewer"},
+			&agentic.ApprovalPendingEvent{LoopID: approvalFixtureLoopID, CallID: "call-001",
+				ExecutionID: executionID, ToolName: "delete_rule"},
+		} {
+			wire, err := message.NewBaseMessage(payload.Schema(), payload, "approval-test").MarshalJSON()
+			if executionID == "" {
+				if err == nil || !strings.Contains(err.Error(), "execution_id required") {
+					t.Fatalf("missing execution identity on %T: %v", payload, err)
+				}
+				continue
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := message.NewDecoder(approvalRegistry(t)).Decode(wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got string
+			switch value := decoded.Payload().(type) {
+			case *agentic.ApprovalResponse:
+				got = value.ExecutionID
+			case *agentic.ApprovalPendingEvent:
+				got = value.ExecutionID
+			default:
+				t.Fatalf("decoded payload is %T", decoded.Payload())
+			}
+			if got != executionID {
+				t.Fatalf("execution identity changed: got %q, want %q", got, executionID)
+			}
+		}
+	})
+}
+
 func TestApprovalPendingEvent_BaseMessageRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	original := &agentic.ApprovalPendingEvent{
 		LoopID:      approvalFixtureLoopID,
 		CallID:      "call-001",
+		ExecutionID: approvalFixtureExecutionID,
 		ToolName:    "delete_rule",
 		Arguments:   map[string]any{"rule_id": "rule-42"},
 		Reason:      "approval_required: Tool 'delete_rule' requires human approval before execution",
@@ -218,7 +281,7 @@ func TestApprovalPendingEvent_BaseMessageRoundTrip(t *testing.T) {
 		t.Fatalf("payload = %T, want *ApprovalPendingEvent", decoded.Payload())
 	}
 
-	if got.LoopID != original.LoopID || got.CallID != original.CallID ||
+	if got.LoopID != original.LoopID || got.CallID != original.CallID || got.ExecutionID != original.ExecutionID ||
 		got.ToolName != original.ToolName || got.Reason != original.Reason ||
 		got.Timeout != original.Timeout || got.TraceID != original.TraceID {
 		t.Errorf("round-trip mismatch: got=%+v want=%+v", got, original)
@@ -237,6 +300,7 @@ func TestApprovalResponse_BaseMessageRoundTrip(t *testing.T) {
 	original := &agentic.ApprovalResponse{
 		LoopID:            approvalFixtureLoopID,
 		CallID:            "call-001",
+		ExecutionID:       approvalFixtureExecutionID,
 		Decision:          agentic.ApprovalDecisionModify,
 		ModifiedArguments: map[string]any{"path": "/tmp/safe"},
 		Reason:            "narrowed scope before approval",
@@ -260,7 +324,7 @@ func TestApprovalResponse_BaseMessageRoundTrip(t *testing.T) {
 		t.Fatalf("payload = %T, want *ApprovalResponse", decoded.Payload())
 	}
 
-	if got.LoopID != original.LoopID || got.CallID != original.CallID ||
+	if got.LoopID != original.LoopID || got.CallID != original.CallID || got.ExecutionID != original.ExecutionID ||
 		got.Decision != original.Decision || got.Reason != original.Reason ||
 		got.ApprovedBy != original.ApprovedBy {
 		t.Errorf("round-trip mismatch: got=%+v want=%+v", got, original)
@@ -301,6 +365,7 @@ func TestApprovalPendingEventRefusesNonCanonicalLoopID(t *testing.T) {
 	event := agentic.ApprovalPendingEvent{
 		LoopID:      "loop_ab12cd34",
 		CallID:      "call-001",
+		ExecutionID: approvalFixtureExecutionID,
 		ToolName:    "delete_rule",
 		RequestedAt: time.Now(),
 	}
@@ -329,11 +394,12 @@ func TestApprovalResponseRefusesNonCanonicalLoopID(t *testing.T) {
 	t.Parallel()
 
 	response := agentic.ApprovalResponse{
-		LoopID:     "loop_ab12cd34",
-		CallID:     "call-001",
-		Decision:   agentic.ApprovalDecisionApprove,
-		ApprovedBy: "alice@example.com",
-		DecidedAt:  time.Now(),
+		LoopID:      "loop_ab12cd34",
+		CallID:      "call-001",
+		ExecutionID: approvalFixtureExecutionID,
+		Decision:    agentic.ApprovalDecisionApprove,
+		ApprovedBy:  "alice@example.com",
+		DecidedAt:   time.Now(),
 	}
 
 	err := response.Validate()
@@ -395,6 +461,7 @@ func TestNoLoopTokenCarrierAcceptsEveryInput(t *testing.T) {
 			name: "ApprovalPendingEvent",
 			payload: &agentic.ApprovalPendingEvent{
 				LoopID: nonCanonical, CallID: "call-1", ToolName: "delete_rule",
+				ExecutionID: approvalFixtureExecutionID,
 				RequestedAt: time.Now(),
 			},
 		},
@@ -402,7 +469,8 @@ func TestNoLoopTokenCarrierAcceptsEveryInput(t *testing.T) {
 			name: "ApprovalResponse",
 			payload: &agentic.ApprovalResponse{
 				LoopID: nonCanonical, CallID: "call-1",
-				Decision: agentic.ApprovalDecisionApprove, ApprovedBy: "alice",
+				ExecutionID: approvalFixtureExecutionID,
+				Decision:    agentic.ApprovalDecisionApprove, ApprovedBy: "alice",
 				DecidedAt: time.Now(),
 			},
 		},

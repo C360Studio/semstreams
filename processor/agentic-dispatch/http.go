@@ -499,6 +499,7 @@ func truncate(s string, maxLen int) string {
 // "http-user" default) so middleware can authenticate it without
 // handler edits.
 type ApprovalRequest struct {
+	ExecutionID       string         `json:"execution_id"`                 // opaque identity echoed from the reviewed pending approval
 	Decision          string         `json:"decision"`                     // approve | reject | modify
 	ModifiedArguments map[string]any `json:"modified_arguments,omitempty"` // only meaningful for modify
 	Reason            string         `json:"reason,omitempty"`             // optional, free text
@@ -707,9 +708,9 @@ func (c *Component) loopWireByID(ctx context.Context, loopID string) (Loop, erro
 // The framework's agentic-loop subscribes on
 // agent.approval_response.<loop_id>; this handler publishes the
 // agentic.ApprovalResponse wire payload there. Concurrent races
-// against the same call_id are arbitrated by the loop's atomic
-// LoopManager.ResolveApprovalIfPending (beta.19 M1 fix), so dispatch
-// just publishes — no locking needed here.
+// against the same execution use the loop's existing local atomic resolver.
+// Dispatch validates the displayed ExecutionID against current durable authority;
+// the loop consumer repeats that comparison before applying the decision.
 func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 	ctx, requestID := c.withRequestID(w, r)
 	startTime := time.Now()
@@ -766,6 +767,12 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.ExecutionID == "" {
+		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "400")
+		c.writeJSONError(w, http.StatusBadRequest, "execution_id is required")
+		return
+	}
+
 	// Approval follows current durable authority; this process may never have
 	// received the already-settled pending event.
 	persisted, readErr := c.loadPersistedLoop(ctx, loopID)
@@ -774,9 +781,11 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 			readErr = fmt.Errorf("loop %q vanished between admission and approval", loopID)
 		} else if err := persisted.Validate(); err != nil {
 			readErr = fmt.Errorf("validate loop %q for approval: %w", loopID, err)
+		} else if persisted.State != agentic.LoopStateAwaitingApproval && persisted.PendingApproval != nil {
+			readErr = fmt.Errorf("loop %q has pending approval outside awaiting-approval state", loopID)
 		} else if persisted.State == agentic.LoopStateAwaitingApproval &&
-			(persisted.PendingApproval == nil || persisted.PendingApproval.CallID == "") {
-			readErr = fmt.Errorf("loop %q awaits approval without a pending call identity", loopID)
+			(persisted.PendingApproval == nil || persisted.PendingApproval.CallID == "" || persisted.PendingApproval.ExecutionID == "") {
+			readErr = fmt.Errorf("loop %q awaits approval without a pending execution identity", loopID)
 		}
 	}
 	if readErr != nil {
@@ -792,6 +801,11 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 	if persisted.State != agentic.LoopStateAwaitingApproval {
 		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "409")
 		c.writeJSONError(w, http.StatusConflict, "loop not awaiting approval")
+		return
+	}
+	if req.ExecutionID != persisted.PendingApproval.ExecutionID {
+		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "409")
+		c.writeJSONError(w, http.StatusConflict, "approval execution is not current")
 		return
 	}
 	callID := persisted.PendingApproval.CallID
@@ -859,6 +873,7 @@ func (c *Component) publishApprovalResponse(ctx context.Context, loopID, callID 
 	response := &agentic.ApprovalResponse{
 		LoopID:            loopID,
 		CallID:            callID,
+		ExecutionID:       req.ExecutionID,
 		Decision:          req.Decision,
 		ModifiedArguments: req.ModifiedArguments,
 		Reason:            req.Reason,
@@ -1092,10 +1107,10 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 			"/loops/{id}/approval": {
 				POST: &service.OperationSpec{
 					Summary:     "Submit human approval response for a gated tool call",
-					Description: "Drives the beta.19 approval flow over HTTP. The loop must be awaiting approval (see config.approval_required). Decision is one of approve, reject, modify; modified_arguments substitutes for the original tool call arguments when decision=modify. Identity comes from X-User-Id-aware middleware via ctx (preferred) or the body user_id field (fallback), defaulting to http-user.",
+					Description: "Submit the opaque execution_id displayed with the pending approval being reviewed; echo it unchanged and never replace it with a newer gate's identity. The loop must still await that execution. A stale or noncurrent execution returns 409, including when another gate awaits approval. Decision is one of approve, reject, modify; modified_arguments substitutes for the original tool call arguments when decision=modify. Identity comes from X-User-Id-aware middleware via ctx (preferred) or the body user_id field (fallback), defaulting to http-user.",
 					Tags:        []string{"AgenticDispatch"},
 					RequestBody: &service.RequestBodySpec{
-						Description: "Approval decision and optional modifications",
+						Description: "Required displayed execution_id, approval decision, and optional modifications",
 						Required:    true,
 						SchemaRef:   "#/components/schemas/ApprovalRequest",
 					},
@@ -1108,7 +1123,7 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 							ContentType: "application/json",
 						},
 						"400": {
-							Description: "Invalid request body or decision value, or a loop ID that is not a framework-minted loop token",
+							Description: "Missing execution_id, invalid request body or decision value, or a loop ID that is not a framework-minted loop token",
 						},
 						"403": {
 							Description: "Requester is not in the approve permission list (default admits everyone)",
@@ -1117,7 +1132,7 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 							Description: "Loop not found",
 						},
 						"409": {
-							Description: "Loop exists but is not awaiting approval",
+							Description: "The displayed execution is no longer current, or the loop is not awaiting approval; another pending gate does not make an old prompt applicable",
 						},
 						"500": {
 							Description: "Failed to publish approval (NATS error)",
