@@ -181,7 +181,7 @@ never been observed is a hypothesis. Nothing else starts until it is a failing a
 `semstreams-reviewer` returned **CHANGES REQUESTED** on `52bf1add` (1 BLOCKING, 4 HIGH). The owner ruled every open
 question 2026-09-09 (PR #1269 comment 5606966440). Everything below is ruled work, not open design.
 
-- [ ] 10.1 HOLD — merge is blocked until 10.1-10.10 land. **Normalizer → owner option (d), no-legacy.** Delete `dataTypeCanonicalization`
+- [x] 10.1 **Normalizer → owner option (d), no-legacy.** Delete `dataTypeCanonicalization`
       (`vocabulary/predicates.go:386-412`) entirely. `validatePredicateMetadataLocked` accepts ONLY the seven
       canonical values plus absent; everything else is refused. This is stricter than the (a) and (c) options the
       owner was offered — their words were "i agree with (c) but we do not need to support legacy, we just need
@@ -192,6 +192,21 @@ question 2026-09-09 (PR #1269 comment 5606966440). Everything below is ruled wor
       ~27 semdragon Go struct names already accepted under Q2, plus ~37 additional sites (d) costs over (a).
       Per repo: semspec 16 · semteams 12 · semsource 6 · semconnect 1 · semboids 1 · semdragon 1. Concentrated in
       `array` 20 and `number` 13. In-repo sites were migrated under task 4.1, so this repo is unaffected.
+      **DONE `19380b65`.** The map is deleted; `validateDataType` accepts the seven plus absent and refuses the
+      rest, and `validatePredicateMetadataLocked` no longer rewrites `meta.DataType`. Tests inverted with the
+      ruling: the ten retired spellings are now their own refusal corpus (kept apart from the never-accepted
+      samples — these are the values whose treatment REVERSED, so a quietly reintroduced map would still refuse a
+      Go struct name while accepting these), and the normalization-idempotence test, which lost its subject, is
+      replaced by `TestRegistrationStoresTheDeclaredValueUnchanged`.
+      Green: `go test -race ./vocabulary/... ./test/contract/...` exit 0, `task lint` exit 0,
+      `go run ./cmd/entity-id-audit .` exit 0 (1330 candidates) — the audit annotation went out with the map row
+      it pinned. Sweeps for `DataType: "<legacy>"` and `WithDataType("<legacy>")` return none in-repo.
+      **Mutation-checked at the wiring, not the primitive**: deleting the `validateDataType` call from
+      `validatePredicateMetadataLocked` still builds and turns `TestRegistrationRefusesALegacySpellingOnBothPaths`
+      and `TestBothRegistrationEntryPointsRefuseTheSameValue` RED; restored, both green.
+      **Note for 10.4/10.5**: `test/contract` stayed GREEN under that mutation. Expected — the guard walks the
+      framework's own declarations, which are all canonical either way — but it means the contract guard is not a
+      second line of defense for the enforcement seam, only for the declaration ratchet.
 - [ ] 10.2 Rewrite `design.md` §2.3 and the `predicate-contract` delta's normalization scenario — both currently
       specify normalize-not-refuse, which (d) reverses. The delta's MODIFIED/ADDED block must restate EVERY scenario.
 - [ ] 10.3 **`IsValidDataType` → unexported** (owner: "in package"). No exported addition to Tier 1 under ADR-106;
@@ -215,5 +230,9 @@ question 2026-09-09 (PR #1269 comment 5606966440). Everything below is ruled wor
 - [ ] 10.9 Add the (d) rows to `docs/operations/migration-predicate-datatype.md` — the ~37 additional sites, per
       repository. Under (d) the migration note is the WHOLE adopter story, not a supporting document: nothing
       normalizes any more, so an unmigrated sister panics at boot.
-- [ ] 10.10 Re-run every gate in section 8 and re-review. The change is BREAKING for sisters, so `task e2e:core`
+- [ ] 10.10 **HOLD — this change cannot merge until 10.2-10.9 and this task land.** The hold lives here, on
+      the last task in the section, because `scripts/openspec-queue.sh:64,145` matches caveats against
+      UNCHECKED lines only — parked on 10.1 it vanished from the queue the moment 10.1 was ticked, leaving
+      a still-blocked change reading as an ordinary fraction.
+      Re-run every gate in section 8 and re-review. The change is BREAKING for sisters, so `task e2e:core`
       must be green again before it lands.
