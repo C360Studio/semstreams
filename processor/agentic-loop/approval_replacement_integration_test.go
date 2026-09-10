@@ -87,6 +87,13 @@ func TestIntegrationApprovalRequiredResultRedeliversAfterClosedGate(t *testing.T
 	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, false, false, "tool.result")
 }
 
+// spec: agentic-loop / Approval-required tool statuses settle by observed execution phase
+func TestIntegrationApprovalRequiredResultRedeliversAfterLaterHistory(t *testing.T) {
+	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{
+		Decision: agentic.ApprovalDecisionReject, Reason: "retain rule-42 for audit",
+	}, false, false, "tool.result")
+}
+
 // spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
 func TestIntegrationModifiedApprovalAfterLoopAndDispatchReplacement(t *testing.T) {
 	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{
@@ -119,6 +126,8 @@ func TestIntegrationApprovalTimeoutAfterLoopAndDispatchReplacement(t *testing.T)
 // OS-process replacement remain separate proofs.
 func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.ApprovalRequest, retainOlderResponse, timeout bool, redeliverPort string) {
 	t.Helper()
+	laterHistory := redeliverPort == "tool.result" && approvalRequest.Decision == agentic.ApprovalDecisionReject
+	const laterFailureContent = "Tool error: tool call had empty function name — call a specific tool by name or respond with text"
 	approver := "second-party-reviewer"
 	if timeout {
 		approver = approvalTimeoutSystemApprover
@@ -126,6 +135,9 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 	wantToolContent := "approved rule-42"
 	wantExecutions := int32(1)
 	wantProviderCalls := int32(2)
+	if laterHistory {
+		wantProviderCalls++
+	}
 	priorExecutions := int32(0)
 	if retainOlderResponse {
 		priorExecutions = 1
@@ -187,6 +199,19 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 			if msg.Role == "tool" && msg.Content == wantToolContent {
 				answer = map[string]any{"role": "assistant", "content": "approval completed"}
 				finish = "stop"
+				if laterHistory {
+					// The original tool.result holds MaxAckPending=1. An existing
+					// inline malformed-provider-call recovery supplies the newer
+					// batch result without another external tool.result delivery.
+					answer = map[string]any{"role": "assistant", "tool_calls": []map[string]any{{
+						"id": callID, "type": "function", "function": map[string]any{"name": "", "arguments": `{}`},
+					}}}
+					finish = "tool_calls"
+				}
+			}
+			if laterHistory && msg.Role == "tool" && msg.Content == laterFailureContent {
+				answer = map[string]any{"role": "assistant", "content": "approval completed"}
+				finish = "stop"
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -242,6 +267,7 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 	var closedGateBefore jetstream.KeyValueEntry
 	var closedPromptSequence uint64
 	var supersededBefore float64
+	var settledStreamSequence uint64
 	startOwners := func(approvalTimeout, interruptAckPort string) (*http.ServeMux, func()) {
 		t.Helper()
 		loopConfig := DefaultConfig()
@@ -312,7 +338,18 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 									if current.Revision() != closedGateBefore.Revision() || !bytes.Equal(current.Value(), closedGateBefore.Value()) {
 										return errors.New("superseded status changed closed gate authority before ACK")
 									}
-									if executor.calls.Load() != wantExecutions || providerCalls.Load() != wantProviderCalls-1 {
+									wantProviderBeforeAck := wantProviderCalls - 1
+									if laterHistory {
+										wantProviderBeforeAck = wantProviderCalls
+										streamInfo, err := stream.Info(msgCtx)
+										if err != nil {
+											return err
+										}
+										if streamInfo.State.LastSeq != settledStreamSequence || len(perLoopMapCount(c.handler.loopManager, result.LoopID)) != 0 {
+											return errors.New("historical supersession published output or restored process state before ACK")
+										}
+									}
+									if executor.calls.Load() != wantExecutions || providerCalls.Load() != wantProviderBeforeAck {
 										return errors.New("superseded status repeated an executor or model effect before ACK")
 									}
 									if testutil.ToFloat64(getMetrics(nil).approvalStatusesSuperseded) != supersededBefore+1 {
@@ -492,7 +529,7 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 	require.True(t, strings.HasPrefix(gated.Error, agentic.ApprovalRequiredPrefix))
 	require.Equal(t, loopID, gated.LoopID)
 	require.Equal(t, priorExecutions, executor.calls.Load(), "approval gate must precede the gated executor")
-	require.Equal(t, wantProviderCalls-1, providerCalls.Load())
+	require.Equal(t, 1+priorExecutions, providerCalls.Load())
 	originalMsg, err := toolCalls.Next(jetstream.FetchMaxWait(5 * time.Second))
 	require.NoError(t, err)
 	base, err = decoder.Decode(originalMsg.Data())
@@ -761,6 +798,17 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 	}
 	// Rejection is a synthetic permission result, not another tool.result
 	// publication. Inspect the production request's paired conversation directly.
+	if laterHistory {
+		require.EventuallyWithT(t, func(collect *assert.CollectT) {
+			current, err := bucket.Get(ctx, loopID)
+			require.NoError(collect, err)
+			var entity agentic.LoopEntity
+			require.NoError(collect, json.Unmarshal(current.Value(), &entity))
+			require.Equal(collect, agentic.LoopStateComplete, entity.State)
+			_, oldResultRetained := entity.PendingToolResults[original.ExecutionID]
+			require.False(collect, oldResultRetained, "normal newer batch must replace the old accumulator before replay")
+		}, 5*time.Second, 10*time.Millisecond)
+	}
 	nextRaw, err := stream.GetLastMsgForSubject(ctx, "agent.request."+loopID)
 	require.NoError(t, err)
 	base, err = decoder.Decode(nextRaw.Data)
@@ -780,8 +828,22 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 		require.Equal(t, original.ID, next.Messages[i-1].ToolCalls[0].ID)
 		if retainOlderResponse && msg.Name == "prior_probe" {
 			require.Equal(t, olderResponse.Message.ToolCalls[0].Arguments, next.Messages[i-1].ToolCalls[0].Arguments)
+		} else if laterHistory && msg.Name == "invalid_tool_call" {
+			laterCall := next.Messages[i-1].ToolCalls[0]
+			require.Empty(t, laterCall.Name)
+			require.NotEqual(t, original.RequestID, laterCall.RequestID)
+			require.NotEqual(t, original.ExecutionID, laterCall.ExecutionID)
+			require.Equal(t, uint32(1), laterCall.CallOrdinal)
 		} else {
 			require.Equal(t, original.Arguments, next.Messages[i-1].ToolCalls[0].Arguments)
+			if laterHistory {
+				call := next.Messages[i-1].ToolCalls[0]
+				require.Equal(t, original.RequestID, call.RequestID)
+				require.Equal(t, original.ExecutionID, call.ExecutionID)
+				require.Equal(t, original.CallOrdinal, call.CallOrdinal)
+				require.Equal(t, original.Name, call.Name)
+				require.Equal(t, original.TraceID, call.TraceID)
+			}
 		}
 	}
 	wantToolMessages := []agentic.ChatMessage{{Role: "tool", ToolCallID: original.ID,
@@ -791,6 +853,10 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 		wantToolMessages = append([]agentic.ChatMessage{{Role: "tool", ToolCallID: original.ID,
 			Name: "prior_probe", Content: "approved rule-old",
 		}}, wantToolMessages...)
+	}
+	if laterHistory {
+		wantToolMessages = append(wantToolMessages, agentic.ChatMessage{Role: "tool", ToolCallID: original.ID,
+			Name: "invalid_tool_call", Content: laterFailureContent, IsError: true})
 	}
 	require.Equal(t, wantToolMessages, toolMessages)
 	// Source ACK proves the next request's publication, not its eventual response.
@@ -808,10 +874,13 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 		require.Equal(collect, "approval completed", final.Result)
 		require.Nil(collect, final.PendingApproval)
 	}, 10*time.Second, 10*time.Millisecond)
-	if redeliverPort == "agent.approval_response" {
+	if redeliverPort == "agent.approval_response" || laterHistory {
 		// The real branch has completed; the only unsettled input must be the
 		// original source whose ACK was interrupted. Nothing fabricates redelivery.
 		appliedSource := appliedApproval
+		if laterHistory {
+			appliedSource = initial
+		}
 		firstMeta, err := appliedSource.Metadata()
 		require.NoError(t, err)
 		require.Equal(t, uint64(1), firstMeta.NumDelivered)
@@ -836,6 +905,22 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 		stopReplacement()
 		replacementMux = nil
 		skipCounter := getMetrics(nil).approvalDecisionsInapplicable
+		if laterHistory {
+			var final agentic.LoopEntity
+			require.NoError(t, json.Unmarshal(finalBefore.Value(), &final))
+			_, retained := final.PendingToolResults[original.ExecutionID]
+			require.False(t, retained, "old execution must rely on exact history, not the current accumulator")
+			closedGateBefore = finalBefore
+			closedPromptSequence = eventFloors["agent.approval_pending.*"]
+			streamInfo, err := stream.Info(ctx)
+			require.NoError(t, err)
+			settledStreamSequence = streamInfo.State.LastSeq
+			replayLogs.Reset()
+			supersededBefore = testutil.ToFloat64(getMetrics(nil).approvalStatusesSuperseded)
+			skipCounter = getMetrics(nil).approvalStatusesSuperseded
+			t.Logf("native later-history boundary: original_seq=%d latest_request_seq=%d stream_seq=%d old_execution=%s current_results=%v",
+				firstMeta.Sequence.Stream, nextRaw.Sequence, settledStreamSequence, original.ExecutionID, final.PendingToolResults)
+		}
 		skipsBefore := testutil.ToFloat64(skipCounter)
 		_, stopReplay := startOwners(replacementTimeout, "")
 		var replay *approvalReplacementDelivery

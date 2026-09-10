@@ -821,6 +821,41 @@ chronology or PubAck proof. It completes neither mixed task 6.5c/d nor the remai
 retention-absence, broader matrix, or task 6.6 obligations. No new authority, storage, runtime, or public surface
 was added.
 
+The bounded 6.5c/d evidence reconciliation at `5f70c69b` identifies specific remaining gates: old-status replay
+after modify/reject/timeout; actual committed closure racing stale observation/restoration (the existing CAS test
+only advances identical bytes); native matching-prompt replay with PubAck; native later-history replay; and
+separate log/counter omission checks. Confirmed retained request/response absence also still returns Retry in
+`recoverToolResult`; the accepted `continuation_unavailable` consequence remains implementation work, distinct
+from unresolved observation or missing current authority. These are limits of this approval slice, not a new
+mechanism proposal or a claim that the rest of task 6 is complete.
+
+The subsequent test-only continuation covers native reject-driven later-history replay and diagnostic omission.
+`TestIntegrationApprovalRequiredResultRedeliversAfterLaterHistory` uses the existing rejection writer followed by
+the existing inline malformed-provider-call recovery; it does not simulate a successful external-tool chronology.
+Those handlers produce later request sequence 11 and replace the old accumulator while original ToolResult
+sequence 6 remains unsettled under `MaxAckPending=1`. A third component owner receives the same original bytes as
+delivery 2, ACKs once with zero NAK/Term, and preserves KV revision 7, stream sequence 13, prompt, process maps,
+zero executor calls, and three provider calls at the pre-ACK witness. Final native consumer drain also passes.
+The focused race run passed in 30.46s (package 34.038s); complete log SHA-256 is
+`6c60886729264a4983b68e7bc823e6fdebb6e04fa568e3a3855594f2b4adabc6`.
+The unmodified two-test diagnostic run passed in 1.592s. Separate scratch overlays omitting only the supersession
+log or only its counter failed the intended assertions in both tests (0.602s and 0.741s). Their log SHA-256 values
+are `f61731bfba7045217d95de882ade77912359cb030def93cfd794b8bf6382faac` and
+`fdd21550e6d7453efcf48669797358b5766ae190cd15cd1785e0baa547d47663`; live production files never changed.
+Independent source and evidence reviews approved this narrow proof. Native ordinal-2/equal-text, modify/timeout
+old-status replay, native matching-prompt retry, actual stale-closure/restoration, confirmed retained absence,
+the broader matrix, and task 6.6 remain outside this checkpoint. No mixed task checkbox is completed by this slice.
+
+The full pre-push gate passed on the frozen test source, including all eight native approval cases inside loop
+integration (291.820s) and dispatch integration (84.684s). Complete gate log SHA-256 is
+`0ef81218ad24fbb4e4b0b71b9fc15607689754152f70a9b9a09e53bba8290af5`; the unchanged 2,230-file Go manifest is
+`8b752eadfbd1088be61dffaa0cd10f73960ec6547e8773060b564e8713f920e1`.
+Supplemental CI guards, module tidiness, entity-ID audit, and Linux build passed; module and generated schema files
+are unchanged. The API report remains 14/62 incompatible against beta.162, reporting-only. No agentic E2E rerun is
+claimed for this test-only edit: the prior 16-assertion run remains evidence at `5f70c69b`, whose production source
+is unchanged here. Hosted E2E Ladder run `34506687041` also passed both jobs on that prior commit, without waiving
+the #609 residual or replacing the combined landing gate.
+
 - [ ] 6.1 RED: run the real-NATS approval replacement gate after an approval-required `ToolResult` fully settles.
   Replace loop and dispatch, discard every process map/cache, retain `AGENT` and `AGENT_LOOPS`, and independently
   exercise approve, modify, reject, timeout, and redelivery. Cite exactly
