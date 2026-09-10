@@ -673,13 +673,19 @@ declared, and re-validating it accepts it again.
 > framework's own declarations are complete* that states it, are **measured false**: **81** framework predicates
 > declare no datatype, and thirteen of them are deliberately bare — `vocabulary/rulepacks/predicates.go:44-61`
 > registers names only, which the same requirement's "An absent datatype MUST remain valid" explicitly permits. The
-> two clauses contradict each other, and no reading of "at its vocabulary composition root" saves it (the count is
-> 81 whether the walk starts from package `init()` or from `builtins.Register()`). What shipped is a shrink-only
+> two clauses contradict each other. What shipped is a shrink-only
 > **ratchet** over a committed, measured exemption set
 > (`test/contract/predicate_datatype_contract_test.go`): a declared datatype must be canonical, and a predicate
-> declaring nothing must be one of the 81. It is shown capable of failing. The spec sync (task 9.1) is held for an
-> owner ruling — amend the scenario to the ratchet, or open the 81-declaration pass as its own change. Recorded
-> here rather than rewritten, because the design's reasoning is the architect's.
+> declaring nothing must be one of that set. It is shown capable of failing. Recorded here rather than rewritten,
+> because the design's reasoning is the architect's.
+>
+> **Two corrections to this note (2026-09-10).** It asserted "the count is 81 whether the walk starts from package
+> `init()` or from `builtins.Register()`". That is measurably false, and the three walks are three different
+> numbers — `init()` only: 77 predicates, **65** bare; composition root only (`ClearRegistry()` +
+> `builtins.Register()`): 156, **29** bare; the union in production order (`init()`, then `builtins.Register()`
+> amends): 218, **79** bare. The owner's 9.1 ruling names 29 of 156, which reproduces exactly.
+> And 81 was never a walk at all — it was the union walk read with the ambient value winning over the composition
+> root, the inversion task 10.4 fixed. Whenever this number is quoted, name the walk with it.
 
 ---
 
