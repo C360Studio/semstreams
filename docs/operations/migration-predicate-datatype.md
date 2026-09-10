@@ -137,8 +137,10 @@ Two more consequences worth stating because they are silent:
   output, so the declaration confirms observation rather than overriding it. An entity-ID-shaped or absolute-IRI
   object under a `string` declaration is still emitted as a resource.
 
-Only `xsd:` and `rdf:` prefixes are expanded in a per-triple `Datatype`. Any other prefix — the `geo:point` the
-`message.Triple.Datatype` doc comment shows — still reaches the output unexpanded.
+Only `xsd:` and `rdf:` prefixes are expanded in a per-triple `Datatype`; an absolute IRI passes through as written.
+Any other prefix — `geo:point`, say — still reaches the output unexpanded, as a relative reference that is not valid
+RDF. The `message.Triple.Datatype` doc comment used to offer `geo:point` as an example and no longer does; it states
+the rule instead.
 
 Nothing at ingest changed. `message.Triple.Datatype` is not populated from the registry, no stored bytes change, and
 ADR-062 deterministic-fusion edge projection (`pkg/fusion/engine_graph.go`) is untouched.

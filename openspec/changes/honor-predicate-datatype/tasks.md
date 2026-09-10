@@ -277,11 +277,34 @@ question 2026-09-09 (PR #1269 comment 5606966440). Everything below is ruled wor
       **Mutation-checked twice**: emptying the collector → RED on the denominator floor ("the walk found 0 framework
       predicates"); re-adding `agent.loop.role` as a false exemption → RED naming it and the `"string"` it declares.
       Both restored green. Note the first mutation is the one the review reported as leaving the guard GREEN.
-- [ ] 10.6 Sweep the 20 retired-spelling `// DataType:` comments in `vocabulary/agentic/predicates.go` (review
+- [x] 10.6 Sweep the 20 retired-spelling `// DataType:` comments in `vocabulary/agentic/predicates.go` (review
       HIGH-4); the ~40 `// DataType: string (entity ID)` lines are #1275's evidence trail — leave them to that issue.
-- [ ] 10.7 Delete `geo:point` from `message/triple.go:84` (review MEDIUM-6). The doc comment offers adopters a value
+      **DONE.** Exactly 20, and the census says which: `time.Time` 10, `float64` 9, `int64` 1 → `datetime`, `float`,
+      `int`. The `string` (105) and `bool` (4) comments were already canonical and are untouched, so #1275's evidence
+      trail is intact.
+      **Each replacement was cross-checked against the registration rather than mapped blind**: a script walked every
+      one of the 20 comments to the const it documents and looked up that const's `WithDataType` in
+      `vocabulary/agentic/register.go`. **16 of 20 agree exactly** with the canonical value written in. The other 4
+      register no datatype at all — `ops.diagnosis.confidence`, `ops.config.accuracy`, `ops.config.cost-per-task`,
+      `ops.config.p95-latency`, all in the 79-entry exemption set — so for those the comment documents the value's
+      shape and not a declaration; canonical spelling is still what an adopter should write, and **#1277** owns
+      actually declaring them.
+      Repo-wide sweep confirms the review's scoping was right: all 20 retired-spelling `// DataType:` comments were
+      in that one file, and none remain anywhere (`grep -rnE` over `*.go`, exit 1). Green: `go test -race` on
+      `./vocabulary/... ./test/contract/` exit 0.
+- [x] 10.7 Delete `geo:point` from `message/triple.go:84` (review MEDIUM-6). The doc comment offers adopters a value
       that emits `^^<geo:point>` — a relative-reference datatype IRI, invalid RDF, the #1272 mechanism one prefix
       over. Q5 set the precedent for fixing a false doc comment in this change.
+      **DONE.** Deleted, and the comment now states the RULE rather than trading one example for another: only
+      `xsd:` and `rdf:` expand, an absolute IRI passes through, any other prefix lands as a relative reference and is
+      not valid RDF. That is the adopter-seam form — a reader who has never opened `export/object.go` can no longer
+      derive an invalid value from this comment, whichever prefix they reach for. `rdf:JSON` replaces it in the
+      examples, since that one actually expands.
+      Two dependent references followed, because deleting the example without them would have left two documents
+      pointing at something that no longer exists: `vocabulary/export/object_test.go:252` keeps its deliberate
+      `{"geo:point", "geo:point"}` residual pin — it pins real behaviour and is worth keeping — but its comment no
+      longer says the doc comment shows the value; and `docs/operations/migration-predicate-datatype.md:139-140`
+      cited the doc comment as the source of the example, so it now states the rule too.
 - [ ] 10.8 Refresh `design.md`'s stale status text (review MEDIUM-5): `:15-17`, `:78-79` and the Process note at
       `:661-666` still say the design is ungated, the INVENTORY PASS not granted, and #1272 unfiled. All three are
       false and `design.md` is what gets archived.

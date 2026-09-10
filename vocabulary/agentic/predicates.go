@@ -77,7 +77,7 @@ const (
 
 	// CapabilityConfidence is the agent's self-assessed confidence (0.0-1.0).
 	// Example: 0.95 (high confidence in this capability)
-	// DataType: float64
+	// DataType: float
 	// Range: 0-1
 	// IRI: agent-ontology:capabilityConfidence
 	CapabilityConfidence = "agent.capability.confidence"
@@ -134,13 +134,13 @@ const (
 
 	// DelegationValidFrom is when the delegation becomes valid.
 	// Example: "2024-01-15T09:00:00Z"
-	// DataType: time.Time
+	// DataType: datetime
 	// IRI: agent-ontology:validFrom
 	DelegationValidFrom = "agent.delegation.valid-from"
 
 	// DelegationValidUntil is when the delegation expires.
 	// Example: "2024-12-31T23:59:59Z"
-	// DataType: time.Time
+	// DataType: datetime
 	// IRI: agent-ontology:validUntil
 	DelegationValidUntil = "agent.delegation.valid-until"
 
@@ -187,7 +187,7 @@ const (
 
 	// AccountabilityTimestamp is when the accountability event occurred.
 	// Example: "2024-06-15T14:30:00Z"
-	// DataType: time.Time
+	// DataType: datetime
 	AccountabilityTimestamp = "agent.accountability.timestamp"
 )
 
@@ -368,12 +368,12 @@ const (
 
 	// ModelInputPrice is the cost per 1M input tokens in USD.
 	// Example: 3.00
-	// DataType: float64
+	// DataType: float
 	ModelInputPrice = "agent.model.input-price"
 
 	// ModelOutputPrice is the cost per 1M output tokens in USD.
 	// Example: 15.00
-	// DataType: float64
+	// DataType: float
 	ModelOutputPrice = "agent.model.output-price"
 
 	// ModelEndpointURL is the API endpoint URL for the model.
@@ -454,7 +454,7 @@ const (
 
 	// LoopCostUSD is the computed cost in USD for this loop execution.
 	// Example: 0.2754
-	// DataType: float64
+	// DataType: float
 	LoopCostUSD = "agent.loop.cost-usd"
 
 	// LoopTask is the task ID this loop execution served.
@@ -529,7 +529,7 @@ const (
 
 	// LoopEndedAt is the terminal timestamp for this loop (completion, failure, or cancellation).
 	// Example: "2026-03-13T14:22:00Z"
-	// DataType: time.Time
+	// DataType: datetime
 	LoopEndedAt = "agent.loop.ended-at"
 
 	// LoopUser is the user ID who initiated this loop.
@@ -592,12 +592,12 @@ const (
 
 	// StepTimestamp is when this step occurred.
 	// Example: "2026-03-17T14:22:00Z"
-	// DataType: time.Time
+	// DataType: datetime
 	StepTimestamp = "agent.step.timestamp"
 
 	// StepDuration is the execution time of this step in milliseconds.
 	// Example: 1234
-	// DataType: int64
+	// DataType: int
 	StepDuration = "agent.step.duration-ms"
 
 	// StepToolName is the tool function name for tool_call steps.
@@ -651,7 +651,7 @@ const (
 	// StepUtilization is the context utilization ratio (0.0-1.0) at compaction trigger.
 	// Only set on context_compaction steps.
 	// Example: 0.72
-	// DataType: float64
+	// DataType: float
 	StepUtilization = "agent.step.utilization"
 
 	// StepToolStatus is the terminal status of a tool_call step.
@@ -781,7 +781,7 @@ const (
 	// the finding, on a 0.0–1.0 scale. Also used as the triple's graph
 	// Confidence field so confidence-weighted queries reflect agent certainty.
 	// Example: "0.85"
-	// DataType: float64 (serialised as %g string in the triple Object)
+	// DataType: float (serialised as %g string in the triple Object)
 	OpsDiagnosisConfidence = "ops.diagnosis.confidence"
 
 	// OpsDiagnosisEvidence is a citation of an entity ID that supports the
@@ -917,7 +917,7 @@ const (
 	// LessonRetiredAt is the lifecycle timestamp set when a lesson transitions
 	// out of "active". Single-valued — replace, never append.
 	// Example: "2026-07-19T12:00:00Z"
-	// DataType: time.Time
+	// DataType: datetime
 	LessonRetiredAt = "agent.lesson.retired-at"
 
 	// LessonSupersededBy is the entity ID of the lesson that replaces this one
@@ -940,7 +940,7 @@ const (
 	// wins preserves the FIRST emit's created-at) and NOT in any reconcile
 	// lifecycle set. Mirrors agent.scratch.created-at.
 	// Example: "2026-07-19T12:00:00Z"
-	// DataType: time.Time
+	// DataType: datetime
 	LessonCreatedAt = "agent.lesson.created-at"
 )
 
@@ -1007,7 +1007,7 @@ const (
 	// call. Rule-matchable for ordering (no explicit position predicate
 	// needed; sort by created_at) and for age-based rules.
 	// Example: "2026-05-12T09:15:00Z"
-	// DataType: time.Time
+	// DataType: datetime
 	ScratchCreatedAt = "agent.scratch.created-at"
 
 	// ScratchChars is the character count of ScratchText. Rule-matchable
@@ -1083,13 +1083,13 @@ const (
 	// WebObservedAt is the wall-clock timestamp the web_search call saw
 	// this URL. Rule-matchable for age-based predicates.
 	// Example: "2026-05-11T14:22:00Z"
-	// DataType: time.Time
+	// DataType: datetime
 	WebObservedAt = "agent.web.observed-at"
 
 	// WebFetchedAt is the wall-clock timestamp the http_request call pulled
 	// this URL's body. Rule-matchable.
 	// Example: "2026-05-11T14:22:30Z"
-	// DataType: time.Time
+	// DataType: datetime
 	WebFetchedAt = "agent.web.fetched-at"
 
 	// WebObservedBy is the loop entity ID that observed this URL via
@@ -1140,17 +1140,17 @@ const (
 const (
 	// OpsConfigAccuracy is the measured accuracy score for a configuration
 	// variant. Reserved for Phase 3 Pareto-frontier tracking.
-	// DataType: float64
+	// DataType: float
 	OpsConfigAccuracy = "ops.config.accuracy"
 
 	// OpsConfigCostPerTask is the average cost per task for a configuration
 	// variant. Reserved for Phase 3 Pareto-frontier tracking.
-	// DataType: float64
+	// DataType: float
 	OpsConfigCostPerTask = "ops.config.cost-per-task"
 
 	// OpsConfigP95Latency is the p95 latency in milliseconds for a
 	// configuration variant. Reserved for Phase 3 Pareto-frontier tracking.
-	// DataType: float64
+	// DataType: float
 	OpsConfigP95Latency = "ops.config.p95-latency"
 
 	// OpsConfigActive indicates whether a configuration variant is currently
