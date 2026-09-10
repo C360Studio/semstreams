@@ -113,7 +113,7 @@ Create a vocabulary file with your domain predicates:
 func RegisterVocabulary() {
     vocabulary.Register("yourdomain.category.property",
         vocabulary.WithDescription("Description of this predicate"),
-        vocabulary.WithDataType("float64"),
+        vocabulary.WithDataType(vocabulary.DataTypeFloat),
     )
     // ... more predicates
 }

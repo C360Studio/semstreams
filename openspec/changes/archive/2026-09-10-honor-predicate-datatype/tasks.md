@@ -434,3 +434,38 @@ Findings, all repaired in `127e2ac0`:
       was never generated. Left as-is deliberately: both render `"0"`, and the generator's other cases cover the
       sign path. Recorded so it is a known no-op rather than a believed case.
 
+## 12. Review round 3 (`ab967592`) — CHANGES REQUESTED, repaired
+
+A scoped verification round on the section 11 repairs. All six it was asked to confirm held, each re-derived rather
+than accepted — it killed the `json.Valid` gate itself to watch the test go red, re-read the before-state on
+`origin/main` for the two new migration rows, and measured the 37/20/17 split from the diff and the dep closure.
+
+It then found the **same defect class a third time, and worse.**
+
+- [x] 12.1 **BLOCKING — ten copyable code examples still passed a value that now panics the binary.**
+      `vocabulary/README.md` ×3, `docs/basics/05-first-processor.md` ×6, `examples/processors/iot_sensor/README.md`
+      ×1, passing `"float64"`, `"entity_ref"` and `"timestamp"`.
+      **This change is what made them fatal**: `origin/main` has no `validateDataType` at all, so those literals were
+      inert before. The onboarding tutorial and the runnable example it points at had diverged — task 4.1 migrated
+      `examples/processors/iot_sensor/vocabulary.go` to the constants and left the tutorial that mirrors it
+      declaring `entity_ref`/`float64`/`timestamp` for the same four predicates. The half that runs was fixed; the
+      half people read first was not.
+      **Third instance of one failure mode, and the pattern is now explicit.** 10.6 swept the annotation shape it
+      was repairing and reported clean while prose still claimed normalization. 11.1 swept the prose and reported
+      clean while code examples still passed the values. Each sweep matched what the previous fix had touched.
+      **The value is the invariant; the shape is not.** Fixed by moving every doc example to the exported constants
+      — including the seven that were already legal (`"string"`, `"bool"`), because a literal can go stale again and
+      a constant cannot. 18 examples in three files; zero literal datatypes remain in any markdown.
+- [x] 12.2 **The guard that ends this class**: `test/contract/predicate_datatype_docs_contract_test.go` walks every
+      markdown file in the repository and fails on a code example declaring a datatype the registry refuses. Go code
+      is covered by the compiler once constants are used; markdown was covered by nothing, which is why the same
+      defect could ship twice. Carries its own denominator (the walk must find ≥50 markdown files) — **which
+      immediately earned itself**: the first version rooted the walk at `..`, reached 12 files, and the denominator
+      caught it rather than a false pass shipping. Mutation-checked by reintroducing one `"timestamp"` example.
+- [x] 12.3 MEDIUM — the **archived delta** kept the pre-correction wording that 11.6 fixed only in
+      `openspec/specs/`. The archive is what the merge gate reviews, so the two artifacts stated different
+      requirements under the same heading. Both paragraphs applied to the delta.
+- [x] 12.4 NIT — "which nothing registers" for `examples/processors/*` was one binary too strong: `cmd/e2e-semstreams`
+      does pull two of them in. Narrowed to "no product binary", which is the claim that carries the adopter
+      conclusion.
+

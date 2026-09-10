@@ -75,19 +75,19 @@ const (
 func init() {
     vocabulary.Register(BatteryLevel,
         vocabulary.WithDescription("Battery charge level percentage"),
-        vocabulary.WithDataType("float64"),
+        vocabulary.WithDataType(vocabulary.DataTypeFloat),
         vocabulary.WithUnits("percent"),
         vocabulary.WithRange("0-100"),
         vocabulary.WithIRI("http://schema.org/batteryLevel"))
 
     vocabulary.Register(BatteryVoltage,
         vocabulary.WithDescription("Battery voltage"),
-        vocabulary.WithDataType("float64"),
+        vocabulary.WithDataType(vocabulary.DataTypeFloat),
         vocabulary.WithUnits("volts"))
 
     vocabulary.Register(FlightModeArmed,
         vocabulary.WithDescription("Flight mode armed status"),
-        vocabulary.WithDataType("bool"))
+        vocabulary.WithDataType(vocabulary.DataTypeBool))
 }
 ```
 
@@ -213,7 +213,7 @@ vocabulary.Register("robotics.communication.callsign",
 ```go
 vocabulary.Register("robotics.battery.level",
     vocabulary.WithDescription("Battery charge level percentage"),
-    vocabulary.WithDataType("float64"),
+    vocabulary.WithDataType(vocabulary.DataTypeFloat),
     vocabulary.WithUnits("percent"),
     vocabulary.WithRange("0-100"),
     vocabulary.WithIRI("http://schema.org/batteryLevel"))
@@ -268,21 +268,21 @@ Some predicates represent entity aliases (identifiers, labels, call signs). The 
 // Communication identifier - highest priority
 vocabulary.Register("robotics.communication.callsign",
     vocabulary.WithDescription("Radio call sign for ATC"),
-    vocabulary.WithDataType("string"),
+    vocabulary.WithDataType(vocabulary.DataTypeString),
     vocabulary.WithAlias(vocabulary.AliasTypeCommunication, 0),
     vocabulary.WithIRI(vocabulary.FoafAccountName))
 
 // External identifier
 vocabulary.Register("robotics.identifier.serial",
     vocabulary.WithDescription("Manufacturer serial number"),
-    vocabulary.WithDataType("string"),
+    vocabulary.WithDataType(vocabulary.DataTypeString),
     vocabulary.WithAlias(vocabulary.AliasTypeExternal, 1),
     vocabulary.WithIRI(vocabulary.DcIdentifier))
 
 // Display label - NOT used for resolution
 vocabulary.Register("entity.label.display",
     vocabulary.WithDescription("Human-readable display name"),
-    vocabulary.WithDataType("string"),
+    vocabulary.WithDataType(vocabulary.DataTypeString),
     vocabulary.WithAlias(vocabulary.AliasTypeLabel, 10),  // Low priority
     vocabulary.WithIRI(vocabulary.RdfsLabel))
 ```

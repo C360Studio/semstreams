@@ -138,8 +138,9 @@ The other half stays silent and is the reason this section exists: the **framewo
 registers had their declarations migrated in-repo, so their `data_type` values change on upgrade without any edit on
 your side. **17 of those reach a product binary** — 16 in `vocabulary/agentic/register.go` and 1 in
 `vocabulary/governance/register.go`. The in-repo migration touched 37 sites in total, but 20 are in
-`examples/processors/{iot_sensor,document,weather_station}`, which nothing registers: they are absent from
-`go list -deps ./cmd/semstreams`, so they cannot reach your manifest. Nothing in SemStreams can detect a consumer of those.
+`examples/processors/{iot_sensor,document,weather_station}`, which **no product binary** registers: they are absent
+from `go list -deps ./cmd/semstreams`, so they cannot reach your manifest. (The e2e harness binary does pull two of
+them in, which is why "nothing registers them" would be too strong.) Nothing in SemStreams can detect a consumer of those.
 
 ## 5. RDF export output changes
 
