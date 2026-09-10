@@ -355,9 +355,38 @@ question 2026-09-09 (PR #1269 comment 5606966440). Everything below is ruled wor
       the same thing and every one of them depended on the walk.
       The note's own verification snippet was **run against semteams read-only and returns exactly `3 number`**, so
       the command an adopter is told to run reproduces the table's figure.
-- [ ] 10.10 **HOLD — this change cannot merge until every task in this section lands.** The hold lives here, on
-      the last task in the section, because `scripts/openspec-queue.sh:64,145` matches caveats against
-      UNCHECKED lines only — parked on 10.1 it vanished from the queue the moment 10.1 was ticked, leaving
-      a still-blocked change reading as an ordinary fraction.
-      Re-run every gate in section 8 and re-review. The change is BREAKING for sisters, so `task e2e:core`
-      must be green again before it lands.
+- [x] 10.10 **Section 10 complete — the merge hold is discharged.** Every gate in section 8 re-run against the final
+      head, plus the e2e tier this change's BREAKING status requires.
+
+      | Gate | Result |
+      |---|---|
+      | `task lint` | exit 0 |
+      | `go test -race ./...` | exit 0 — **153 ok, 0 FAIL**, 20 no-test-files (denominator stated) |
+      | `scripts/run-integration-tests.sh` (what CI's Test job runs) | exit 0 — **153 ok, 0 FAIL** |
+      | `task schema:generate` + `git status schemas/ specs/` | exit 0, **0 changed files** |
+      | `go run ./cmd/entity-id-audit .` | exit 0 — 1330 structured candidates |
+      | `API_COMPAT_MODE=report ./scripts/api-compat.sh` | exit 0 — 62 compared, 50 clean, 12 incompatible, **0 removed, 0 added** |
+      | `task openspec:validate` | exit 0 — 53 passed, 0 failed |
+      | `task spec:properties` | exit 0 — **99/99** citations resolve |
+      | `task inventory:verify` | exit 0 — **150/150**, 0 moved, 0 ambiguous, 0 drift |
+      | `task e2e:core` | **exit 0** |
+
+      **API compat: the same 12 as task 8.2**, all pre-existing on `main` since beta.162, none in a package this
+      change touches. **0 removed** is the line that matters for 10.3: unexporting `IsValidDataType` removed nothing,
+      because it was added by this change and never appeared in a release.
+
+      **The e2e run was verified to exercise this code, not a cached image.** `assertions_run=0` is the core tier's
+      normal shape, so the scenario count is not the evidence — the boot is. The builder layers actually ran
+      (`COPY . .`, then `go build ./cmd/semstreams` and `./cmd/e2e-semstreams`; no CACHED marker on them), and the
+      compiled binary in `c360studio/semstreams:e2e-production` contains the new `unrecognized data type` refusal
+      string. `cmd/e2e-semstreams/main.go:48` imports `vocabulary/builtins`, so reaching "healthy" means the
+      containerized binary walked the exact registration path a refused datatype panics on. A half-migrated binary
+      could not have got there.
+
+      **Shared-host note.** The first `task e2e:core` attempt failed on 5 held ports, and
+      `scripts/run-integration-tests.sh` first refused on a busy lock. Neither was cleaned: the lock owner (pid
+      79241) was verified dead before retrying with a wait budget, and the ports were held by a **live**
+      `task e2e:agentic` run from another session on Codex's #1146 branch (mock-llm image `gh1146-phase-…`,
+      containers healthy, driver pid 96074 running). Waited for it to exit rather than running `task e2e:clean`,
+      which would have killed another agent's tier mid-run.
+
