@@ -1,8 +1,9 @@
 # Tasks: honor-predicate-datatype (#1267)
 
-Implementation waits on the owner's INVENTORY PASS recorded on PR #1269. Task 1 is deliberately first: the issue marks
-the `"5.0"^^xsd:double` consequence **inferred from the code path, not reproduced**, and a design premise that has
-never been observed is a hypothesis. Nothing else starts until it is a failing assertion.
+The owner's INVENTORY PASS was granted 2026-09-09 (PR #1269 comment 5603956923); implementation is unblocked and the
+remaining hold is section 10. Task 1 was deliberately first: the issue marked the `"5.0"^^xsd:double` consequence
+**inferred from the code path, not reproduced**, and a design premise that has never been observed is a hypothesis.
+Nothing else started until it was a failing assertion.
 
 ## 0. Gate — CLEARED 2026-09-09
 
@@ -189,10 +190,13 @@ question 2026-09-09 (PR #1269 comment 5606966440). Everything below is ruled wor
       migration notes." It resolves the BLOCKING finding at its root: `double`/`boolean` were accepted while
       `integer`/`dateTime` panicked, an arbitrary split with no owner sign-off. It also dissolves review MEDIUM-8 —
       with no map there is no undated permanent bridge on a Tier 1 frozen package.
-      Measured bill, family-wide read-only: **809 sister declarations already canonical (92%), 67 need migration** —
-      ~27 semdragon Go struct names already accepted under Q2, plus ~37 additional sites (d) costs over (a).
-      Per repo: semspec 16 · semteams 12 · semsource 6 · semconnect 1 · semboids 1 · semdragon 1. Concentrated in
-      `array` 20 and `number` 13. In-repo sites were migrated under task 4.1, so this repo is unaffected.
+      Measured bill as quoted in the ruling, family-wide read-only: **809 sister declarations already canonical
+      (92%), 67 need migration** — ~27 semdragon Go struct names already accepted under Q2, plus ~37 additional sites
+      (d) costs over (a). Per repo: semspec 16 · semteams 12 · semsource 6 · semconnect 1 · semboids 1 · semdragon 1.
+      Concentrated in `array` 20 and `number` 13. In-repo sites were migrated under task 4.1, so this repo is
+      unaffected.
+      *(Re-measured under 10.9 at the same SHAs: **58**, not 67 — semteams is 3 rather than 12 and semdragon's struct
+      names are 30 sites over 26 distinct names. Flagged on the migration note; the ruling's decision is unaffected.)*
       **DONE `19380b65`.** The map is deleted; `validateDataType` accepts the seven plus absent and refuses the
       rest, and `validatePredicateMetadataLocked` no longer rewrites `meta.DataType`. Tests inverted with the
       ruling: the ten retired spellings are now their own refusal corpus (kept apart from the never-accepted
@@ -305,12 +309,39 @@ question 2026-09-09 (PR #1269 comment 5606966440). Everything below is ruled wor
       `{"geo:point", "geo:point"}` residual pin — it pins real behaviour and is worth keeping — but its comment no
       longer says the doc comment shows the value; and `docs/operations/migration-predicate-datatype.md:139-140`
       cited the doc comment as the source of the example, so it now states the rule too.
-- [ ] 10.8 Refresh `design.md`'s stale status text (review MEDIUM-5): `:15-17`, `:78-79` and the Process note at
+- [x] 10.8 Refresh `design.md`'s stale status text (review MEDIUM-5): `:15-17`, `:78-79` and the Process note at
       `:661-666` still say the design is ungated, the INVENTORY PASS not granted, and #1272 unfiled. All three are
       false and `design.md` is what gets archived.
-- [ ] 10.9 Add the (d) rows to `docs/operations/migration-predicate-datatype.md` — the ~37 additional sites, per
+      **DONE.** The gate was verified by reading PR #1269 comment 5603956923 itself ("approved for 1 and file 2"),
+      not by trusting task 0.1's summary of it. Status header now says GATED AND IMPLEMENTED and names the later
+      option (d) ruling that changed the design *after* the gate; the ruling-scope bullet and the #1272 bullet are
+      annotated rather than deleted, since they record what that particular ruling did and did not cover.
+      The Process note is kept and reframed as history: the order still deserves recording, and the useful lesson
+      turned out not to be the one it predicted — the gate protects against an inventory that is wrong, and it did
+      not protect against a premise the owner later decided differently.
+      **A fourth site the review did not list**: `tasks.md`'s own header still opened "Implementation waits on the
+      owner's INVENTORY PASS". Same staleness, same fix.
+- [x] 10.9 Add the (d) rows to `docs/operations/migration-predicate-datatype.md` — the ~37 additional sites, per
       repository. Under (d) the migration note is the WHOLE adopter story, not a supporting document: nothing
       normalizes any more, so an unmigrated sister panics at boot.
+      **DONE, and it is a rewrite rather than added rows** — the note was written for the normalizing draft, so §2
+      ("the mapping — what your stored value becomes") was describing something that no longer happens. §2 is now
+      "What you must change" with an Action column; §3's discovery table loses the **nowhere** row entirely, which
+      is the ruling stated as an adopter seam: every affected declaration moves from the worst rank on the scale to
+      the best one available. §4 splits semsource's bill into the half that now announces itself at boot and the
+      half that is still silent. The header says read §2 and §3 before upgrading.
+      **The numbers were re-measured rather than copied, and they disagree with the ruling.** Read-only sweep on
+      2026-09-10 at the SAME SHAs the 2026-09-09 pass used, so it is a reproduction: `git status --porcelain`
+      captured before and after each repo and verified byte-identical, no `go` command run in any sister. Five of
+      seven rows reproduce exactly. **semteams measures 3, not 12**, and semdragon's struct names measure 30 sites
+      over 26 distinct names, not ~27. **Family total 58, not 67**, out of 775 declarations — 92% already canonical.
+      Recorded in the note as a flagged discrepancy, not a silent correction: the ruling turned on the principle and
+      58 is smaller than the bill the owner accepted, so the decision is unaffected, but the owner should know the
+      figure quoted in their own ruling did not reproduce. **The walk is published with the numbers** — all three
+      declaration paths, `*.go` including tests — because this effort has now produced several different counts of
+      the same thing and every one of them depended on the walk.
+      The note's own verification snippet was **run against semteams read-only and returns exactly `3 number`**, so
+      the command an adopter is told to run reproduces the table's figure.
 - [ ] 10.10 **HOLD — this change cannot merge until every task in this section lands.** The hold lives here, on
       the last task in the section, because `scripts/openspec-queue.sh:64,145` matches caveats against
       UNCHECKED lines only — parked on 10.1 it vanished from the queue the moment 10.1 was ticked, leaving

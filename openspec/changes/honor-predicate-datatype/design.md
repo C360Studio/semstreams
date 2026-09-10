@@ -12,9 +12,11 @@ the structural reframe it rests on (§2.1) stands, and the other six were ruled 
 the "Owner questions" section below and are folded into §§1.2, 2, 4, 5–10. Nothing the rulings did not touch was
 rewritten.
 
-**Status: DRAFT, pre-review.** Not approved. Per `.agents/contracts/semstreams-architect.md` §Required workflow this
-design was written before an `INVENTORY PASS` was recorded on PR #1269, at the launching session's direction; the
-gate is still owed and the design is contingent on it. See "Process note" at the end.
+**Status: GATED AND IMPLEMENTED.** The `INVENTORY PASS` was granted by the owner on 2026-09-09 (PR #1269 comment
+5603956923, "approved for 1 and file 2"), discharging the contingency this section used to carry. Implementation
+followed and is under review; one further owner ruling of 2026-09-09 (PR #1269 comment 5606966440) changed the
+design after the gate — **option (d), no-legacy** — and §2.3, §2.4, §2.5, §4.3, §9, §10 and §12 carry it. See
+"Process note" at the end.
 
 ---
 
@@ -73,8 +75,9 @@ Three consequences run through the rest of this design:
 ### Still open — not ruled here
 
 - Whether the reproduced `^^<@id>` export defect (M6) **also** earns its own issue. It is fixed by this change and
-  rides with #1142 either way.
-- The **INVENTORY PASS** on PR #1269. Not granted by this ruling; implementation stays gated behind task 0.1.
+  rides with #1142 either way. *(Ruled: file it. **#1272**, closed by this PR alongside #1142.)*
+- The **INVENTORY PASS** on PR #1269. *(Granted separately the same day — PR #1269 comment 5603956923 — so task
+  0.1's hold is discharged. Kept here as the record of what this particular ruling did and did not cover.)*
 
 ---
 
@@ -684,7 +687,13 @@ declared, and re-validating it accepts it again.
 
 `.agents/contracts/semstreams-architect.md` §Required workflow puts an independent `INVENTORY PASS` between the
 inventory and any target state. This design was written before that gate at the launching session's direction, starting
-from the explorer's inventory under owner ruling A (2026-08-30, #1180). It is therefore a **draft contingent on the
-gate**, not an accepted design, and §1.2's eight new measurements (M1–M8) are additions to the inventory that the
-gate has not seen — M1, M5, and M6 in particular change what the change costs and what it must fix. If the inventory
-review rejects any of them, this design goes back to §1.
+from the explorer's inventory under owner ruling A (2026-08-30, #1180), and §1.2's eight new measurements (M1–M8) were
+additions the gate had not seen — M1, M5 and M6 in particular change what the change costs and what it must fix.
+
+**The gate was granted on 2026-09-09** (PR #1269 comment 5603956923) with those measurements in front of it, so the
+design is no longer contingent and this note is history rather than a caveat.
+
+Kept because the order still deserves recording: writing the target state before the gate meant that if the review
+had rejected any of M1, M5 or M6, the design would have gone back to §1 with implementation already scoped against
+it. It did not, and a later ruling changed the design anyway (option (d)) — which is the more useful lesson. The gate
+protects against an inventory that is wrong; it does not protect against a premise the owner decides differently.

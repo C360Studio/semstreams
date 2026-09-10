@@ -17,7 +17,12 @@ author to predict the *Go type* of the object value — a prediction nobody can 
 back from `ENTITY_STATES` has been through `encoding/json` into an `any` and is `float64` whatever was written.
 Forty-two spellings across the family, twenty-six of them Go struct names, were the measured receipt.
 
-It is now a **closed, seven-value pragmatic vocabulary**, normalized at declaration and honored by RDF export.
+It is now a **closed, seven-value pragmatic vocabulary**, **refused at declaration** if you write anything else, and
+honored by RDF export.
+
+**Read §2 and §3 before upgrading.** The framework translates nothing. If any declaration in your repository uses a
+spelling outside the seven, your binary panics at registration on the version carrying #1267 — this document is the
+whole migration, not a supporting note to it.
 
 ## 1. The closed set
 
@@ -42,39 +47,47 @@ No semantic-web name appears in this list. `xsd:integer`, `@id` and `rdf:JSON` n
 at the export boundary, where interoperability is the job — see
 [ADR-107](../adr/107-semantic-web-vocabulary-lives-at-the-export-edge.md). A declaring author never has to know XSD.
 
-## 2. The mapping — what your stored value becomes
+## 2. What you must change
 
-`Register` and `RegisterPredicate` normalize a recognized legacy spelling to its canonical value at declaration
-time. Nothing persists a legacy spelling and no reader ever observes one. The rightmost column is the whole bill.
+`Register` and `RegisterPredicate` accept the seven canonical values and absence. **Every other spelling is refused
+with a panic**, naming the offending value and the accepted vocabulary. The framework does not translate: an earlier
+draft of this change normalized sixteen known legacy spellings silently, and the owner ruled against it on
+2026-09-09 — a translation table on a frozen package is an undated permanent bridge, and it makes the registry
+report a value no author wrote.
 
-| Declared spelling | → canonical | Value changes? | Family sites measured |
+So the column that matters is the last one. Anything marked **migrate** is a site that stops your binary booting.
+
+| Declared spelling | Write instead | Action | Family sites measured |
 |---|---|---|---|
-| `string` | `string` | no | 554 + 34 struct-literal |
-| `entity_id` | `entity_id` | no | 126 |
-| `int` | `int` | no | 70 |
-| `datetime` | `datetime` | no | 53 |
-| `bool` | `bool` | no | 21 |
-| `json` | `json` | no | 13 |
-| `float` | `float` | no | 10 |
-| `float64` | `float` | **yes** | 21 |
-| `number` | `float` | **yes** | 1 + 3 struct-literal |
-| `double` | `float` | **yes** | 0 (carried for authors migrating from an XSD-shaped draft) |
-| `time.Time` | `datetime` | **yes** | 10 |
-| `timestamp` | `datetime` | **yes** | 8 |
-| `int64` | `int` | **yes** | 2 |
-| `array` | `json` | **yes**, and lossy — it loses "this is a list" | 20 |
-| `entity_ref` | `entity_id` | **yes** | 1 |
-| `reference` | `entity_id` | **yes** | 1 |
-| `boolean` | `bool` | **yes** | 1 |
-| *anything else* | **REFUSED — panic at registration** | — | 30 (semdragon only) |
-| *(absent)* | *(stays absent — legal)* | no | 3 semlink sites |
+| `string` | — | none, already canonical | 554 + 34 struct-literal |
+| `entity_id` | — | none, already canonical | 126 |
+| `int` | — | none, already canonical | 70 |
+| `datetime` | — | none, already canonical | 53 |
+| `bool` | — | none, already canonical | 21 |
+| `json` | — | none, already canonical | 13 |
+| `float` | — | none, already canonical | 10 |
+| `float64` | `float` | **migrate** | 21 |
+| `number` | `float` | **migrate** | 1 + 3 struct-literal |
+| `double` | `float` | **migrate** | 0 measured |
+| `time.Time` | `datetime` | **migrate** | 10 |
+| `timestamp` | `datetime` | **migrate** | 8 |
+| `int64` | `int` | **migrate** | 2 |
+| `array` | `json` — and read the note below | **migrate** | 20 |
+| `entity_ref` | `entity_id` | **migrate** | 1 |
+| `reference` | `entity_id` | **migrate** | 1 |
+| `boolean` | `bool` | **migrate** | 1 |
+| a Go struct name, or anything else | the pragmatic type of the object | **migrate** | 30 (semdragon only) |
+| *(absent)* | — | none — absence stays legal | 3 semlink sites |
 
-`array → json` is named as lossy here so it is not discovered later: the objects are JSON documents in practice, and
-inventing an `array` datatype with no reader would be a new value nothing consumes.
+**`array` is the row worth a moment.** `json` is the honest replacement — the objects are JSON documents in practice
+— but it loses "this is a list", and that loss is now yours to accept rather than ours to perform quietly. If your
+`array` predicates genuinely need list-ness at the export edge, say so on #1267 before you migrate them; a datatype
+invented with no reader would have been worse than the loss, but a reader you can name changes that.
 
 **Absence stays legal.** semlink registers `vocabulary.PredicateMetadata{Name: predicate}` with no datatype at
 `internal/cop/contracts.go:91`, `internal/projector/contracts.go:105` and `internal/rules/contracts.go:46`
-(`985e97d`). Nothing there needs to change. Eighty-one SemStreams framework predicates also declare nothing today.
+(`985e97d`). Nothing there needs to change. Seventy-nine SemStreams framework predicates also declare nothing today
+(#1277 tracks closing that set).
 
 ## 3. What breaks, and where you find out
 
@@ -83,9 +96,15 @@ Ranked honestly — compile error > boot error > typed runtime error > log line 
 | Situation | Where you find out | What to do |
 |---|---|---|
 | You do not upgrade | nothing happens | nothing |
-| Your spelling is one of the 17 mapped ones | **nowhere** on the write path | nothing to compile; see §4 if you republish the value |
-| Your spelling is anything else | **boot error** — panic at registration, naming the value and the accepted vocabulary, before any data moves | replace it with a constant |
+| Every spelling you declare is already canonical | nothing happens | nothing — 92% of the family's declarations are in this row |
+| Any spelling you declare is not canonical | **boot error** — panic at registration, naming the value and the accepted vocabulary, before any data moves | replace it, per §2 |
 | You emit RDF through `vocabulary/export` | **nowhere** — the output changes | read §5 |
+
+The second and third rows are the whole of the ruling. Under the normalizing draft, a retired spelling landed in the
+row above with "**nowhere**" as its discovery rank: your value was corrected for you and you were never told, which
+is the worst rank on the scale. Refusal moves every affected declaration to **boot error** — the best rank available,
+since a compile error is impossible by construction (below). You pay one migration, once, instead of never finding
+out.
 
 A compile error is impossible by construction: `WithDataType` keeps its `string` parameter so 755 sister call sites
 survive, which makes registration-time refusal the earliest surface that exists.
@@ -108,8 +127,16 @@ SemStreams API, who is in no review, and who has no seam at which to find out. `
 blind to it: no signature moves, only emitted values do. That is why this document exists and why it carries the
 value-level table rather than only the constant list.
 
-Semsource's owner: the predicates semsource itself declares change on `array` only (6 sites). The larger part of the
-delta is the framework predicates its binary registers — 37 in-repo SemStreams call sites change value.
+Semsource's owner: two distinct halves, and only one of them is silent.
+
+Your own declarations are 6 `array` sites. Under the refusal rule those **stop your binary booting** until you change
+them to `json`, so you will not miss them — and when you do change them, you are the one changing the `data_type`
+your manifest publishes, at a moment you chose. That is strictly better than the normalizing draft, where the same
+wire value would have changed under you at upgrade with no signal anywhere.
+
+The other half stays silent and is the reason this section exists: the **framework** predicates your binary
+registers had their declarations migrated in-repo (37 SemStreams call sites), so their `data_type` values change on
+upgrade without any edit on your side. Nothing in SemStreams can detect a consumer of those.
 
 ## 5. RDF export output changes
 
@@ -157,21 +184,53 @@ fusion ranker reads `Role`, and the ranker reads `Weight`.
 
 ## Per-repository bill
 
-| Repository | SHA read | Sites that change value | Sites REFUSED | Action |
+Under the refusal rule there is no longer a "changes value silently" column: every non-canonical site is a site that
+must be edited, or the binary does not boot.
+
+| Repository | SHA read | Declarations | **Must migrate** | Action |
 |---|---|---|---|---|
-| **semdragon** | `07f4de9` | 1 (`int64`) | **30**, in `domain/vocab.go` | replace 26 Go struct-name spellings; see below |
-| **semspec** | `5a9496ee` | 16 (`array` 14, `reference` 1, `boolean` 1) | 0 | none required; values change on read |
-| **semsource** | `4093d3c` | 6 (`array`) | 0 | none required; **see §4 — its `data_type` wire value changes** |
-| **semteams** | `ce22c961` | 3 (`number`, struct-literal path) | 0 | none required |
-| **semconnect** | `d0d06e0` | 1 (`float64`) | 0 | none required; **see §5 — its CS API RDF output changes** |
-| **semboids** | `8c03cc5` | 1 (`number`) | 0 | none required |
-| **semlink** | `985e97d` | 0 | 0 | none — its datatype-free registrations stay legal |
-| **semmachina** | — | its `= "string"` default is already canonical | 0 | none required |
+| **semdragon** | `07f4de9` | 56 | **31** — 30 Go struct-name sites (26 distinct) + 1 `int64` | replace all 31; see below |
+| **semspec** | `5a9496ee` | 534 | **16** — `array` 14, `reference` 1, `boolean` 1 | replace all 16 |
+| **semsource** | `4093d3c` | 142 | **6** — `array` | replace all 6; **see §4 — its `data_type` wire value changes** |
+| **semteams** | `ce22c961` | 34 | **3** — `number`, struct-literal path | replace all 3 |
+| **semconnect** | `d0d06e0` | 5 | **1** — `float64` | replace it; **see §5 — its CS API RDF output changes** |
+| **semboids** | `8c03cc5` | 3 | **1** — `number` | replace it |
+| **semlink** | `985e97d` | 0 | **0** | none — its datatype-free registrations stay legal |
+| **semmachina** | `841c45e` | 1 | **0** | none — its `= "string"` default is already canonical |
+| **semsage / semmem / semops / semembed** | `4d28b4d` / `b909cbf` / `602c619` / `7ceb528` | 0 | **0** | none — they declare no datatypes |
 
-### semdragon: the 26 unmappable spellings
+**Family total: 58 sites across six repositories**, out of 775 declarations measured. 92% of the family is already
+canonical and does nothing.
 
-All 30 sites are in **`domain/vocab.go`** (`07f4de9`). Each is a Go payload struct name, which is not a datatype in
-any sense the framework can render into RDF, so none of them maps and all of them are refused at registration.
+### The walk behind those numbers
+
+Stated because this effort has produced several different counts of the same thing, and the number always depends on
+the walk. Re-measured read-only on 2026-09-10 at the SHAs above — the same SHAs the 2026-09-09 pass used, so this is
+a reproduction and not a later snapshot. Each repository's `git status --porcelain` was captured before and after and
+verified byte-identical; no `go` command was run in any sister.
+
+The walk is all three declaration paths, over `*.go` **including `_test.go`**:
+
+```bash
+git grep -h -o -E 'WithDataType\("[^"]*"\)'        -- '*.go'   # functional option
+git grep -h -o -E 'DataType:[[:space:]]*"[^"]*"'    -- '*.go'   # struct literal
+git grep -h -o -E 'DataType[[:space:]]*=[[:space:]]*"[^"]*"' -- '*.go'   # assignment
+```
+
+**This disagrees with the figures quoted in the owner's ruling** (PR #1269 comment 5606966440: 67 sites to migrate,
+per-repo `semspec 16 · semteams 12 · semsource 6 · semconnect 1 · semboids 1 · semdragon 1`, plus ~27 semdragon
+struct names). Five of the seven rows reproduce exactly. Two do not: **semteams measures 3, not 12**, and semdragon's
+struct names measure **30 sites over 26 distinct names**, not ~27. The family total is therefore **58, not 67**.
+
+The ruling's decision is unaffected — it turned on the principle, not the size, and 58 is smaller than the bill the
+owner accepted. The numbers here are the measured ones because they are the ones an adopter can reproduce with the
+commands above. Flagged rather than silently corrected.
+
+### semdragon: the 31 sites
+
+Thirty of them are in **`domain/vocab.go`** (`07f4de9`), each a Go payload struct name — not a datatype in any sense
+the framework can render into RDF, so all are refused at registration. The 31st is a single `int64`, which the
+normalizing draft would have translated to `int` and which now needs the one-word edit.
 
 `ApprovalRequest` · `ApprovalResponse` · `AutonomyEvaluatedPayload` · `AutonomyIdlePayload` · `ClaimIntentPayload` ·
 `EscalationPayload` · `ExecutionCompletedPayload` · `ExecutionFailedPayload` · `ExecutionStartedPayload` ·
@@ -189,10 +248,20 @@ legal and is a valid interim step: it keeps the boot green and costs only the ex
 ## Verifying the upgrade in your repository
 
 ```bash
-# Every spelling you declare today, and whether it survives.
-git grep -h -o -E 'WithDataType\("[^"]*"\)' -- '*.go' | sed -E 's/.*\("(.*)"\).*/\1/' | sort | uniq -c | sort -rn
-git grep -n -E 'DataType:[ ]*"' -- '*.go'   # the struct-literal path a WithDataType sweep misses
+# Every spelling you declare today, across all three declaration paths, with
+# the canonical seven filtered out. Whatever this prints is your migration.
+{ git grep -h -o -E 'WithDataType\("[^"]*"\)'                     -- '*.go' | sed -E 's/.*\("(.*)"\).*/\1/'
+  git grep -h -o -E 'DataType:[[:space:]]*"[^"]*"'                 -- '*.go' | sed -E 's/.*"(.*)"/\1/'
+  git grep -h -o -E 'DataType[[:space:]]*=[[:space:]]*"[^"]*"'     -- '*.go' | sed -E 's/.*"(.*)"/\1/'
+} | grep -vE '^(string|entity_id|int|float|bool|datetime|json)$' | sort | uniq -c | sort -rn
 
-# Then: your binary boots, or it panics naming the offending value. There is no third outcome.
+# Empty output means you have nothing to do. Otherwise fix each one per §2 --
+# a WithDataType sweep alone misses the struct-literal and assignment paths,
+# which is how 34 semteams sites and semmachina's default went unmeasured once
+# already.
+
+# Then: your binary boots, or it panics naming the offending value. There is no
+# third outcome, and there is no mode in which it boots with a value you did
+# not write.
 go test ./...
 ```
