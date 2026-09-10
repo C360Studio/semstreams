@@ -367,73 +367,38 @@ const (
 	DataTypeJSON = "json"
 )
 
-// dataTypeCanonicalization is the complete domain of canonicalDataType: the
-// seven canonical values mapping to themselves, plus every legacy spelling
-// measured across the c360 family that has an unambiguous canonical form.
-//
-// This is a DECLARATION-TIME normalizer, not a compatibility alias table: the
-// registry stores only the canonical value, so no reader ever observes a
-// legacy spelling and no legacy spelling is ever persisted. Canonical rows map
-// to themselves, which is what makes normalization idempotent — required
-// because Register amends rather than replaces (gh#410), so an
-// already-normalized value is re-validated on every later registration of the
-// same predicate.
-//
-// Spellings deliberately absent: semantic-web names (`integer`, `double`,
-// `dateTime`, `@id`, `rdf:JSON`) are written zero times in the family's
-// declaration surface and mapping them would walk export-edge vocabulary back
-// inward through a side door (ADR-107). Go payload struct names are refused;
-// they are not datatypes in any sense the framework can render.
-var dataTypeCanonicalization = map[string]string{
-	// Canonical, unchanged.
-	DataTypeString: DataTypeString,
-	// entity-id-audit:classify unrelated-glob "entity_id" line=391 column=20 surface=go-field:.DataTypeEntityID entity_id_invalid:arity datatype vocabulary value, not an entity ID; the constant name ends in EntityID because it declares that an object is one
-	DataTypeEntityID: DataTypeEntityID,
-	DataTypeInt:      DataTypeInt,
-	DataTypeFloat:    DataTypeFloat,
-	DataTypeBool:     DataTypeBool,
-	DataTypeDateTime: DataTypeDateTime,
-	DataTypeJSON:     DataTypeJSON,
-
-	// Legacy spellings that normalize.
-	"float64":   DataTypeFloat,
-	"number":    DataTypeFloat,
-	"double":    DataTypeFloat,
-	"time.Time": DataTypeDateTime,
-	"timestamp": DataTypeDateTime,
-	"int64":     DataTypeInt,
-	// array -> json is lossy: it loses "this is a list". The objects are JSON
-	// documents in practice, and an `array` datatype with no reader would be a
-	// new exported value with zero consumers at birth.
-	"array":      DataTypeJSON,
-	"entity_ref": DataTypeEntityID,
-	"reference":  DataTypeEntityID,
-	"boolean":    DataTypeBool,
-}
-
 // IsValidDataType reports whether s is one of the seven canonical predicate
-// object datatypes. A legacy spelling is NOT valid — it is normalized to its
-// canonical form at declaration time — and neither is the empty string, which
-// registration accepts as "no datatype declared" rather than as a value.
+// object datatypes. The empty string is not one of them: registration accepts
+// it as "no datatype declared" rather than as a value.
 func IsValidDataType(s string) bool {
-	canonical, ok := dataTypeCanonicalization[s]
-	return ok && canonical == s
+	switch s {
+	case DataTypeString, DataTypeEntityID, DataTypeInt, DataTypeFloat,
+		DataTypeBool, DataTypeDateTime, DataTypeJSON:
+		return true
+	default:
+		return false
+	}
 }
 
-// canonicalDataType normalizes a declared datatype to its canonical spelling.
-// The empty string is returned unchanged: an absent datatype is a legitimate
+// validateDataType reports whether a declared datatype is one the registry
+// accepts: a canonical value, or absent.
+//
+// The framework normalizes nothing (gh#1267, owner ruling 2026-09-09, option
+// (d) no-legacy). There is deliberately no alias or legacy-spelling map here:
+// a normalizer on a Tier 1 frozen package is an undated permanent bridge, and
+// the whole adopter story is migration instead —
+// docs/operations/migration-predicate-datatype.md carries the family-wide
+// site list. So an adopter who declared a legacy spelling or a Go struct name
+// is refused at registration and told what to write.
+//
+// The empty string is accepted: an absent datatype is a legitimate
 // registration shape (three sister repositories register nothing but a
-// predicate name). Any other unrecognized value is an error naming both the
-// offending value and the accepted vocabulary, because the adopter who wrote
-// a Go struct name needs to be told what to write instead.
-func canonicalDataType(declared string) (string, error) {
-	if declared == "" {
-		return "", nil
+// predicate name), and #1277 tracks closing the framework's own bare set.
+func validateDataType(declared string) error {
+	if declared == "" || IsValidDataType(declared) {
+		return nil
 	}
-	if canonical, ok := dataTypeCanonicalization[declared]; ok {
-		return canonical, nil
-	}
-	return "", fmt.Errorf("unrecognized data type %q: expected one of %s, a recognized legacy spelling, or none",
+	return fmt.Errorf("unrecognized data type %q: expected one of %s, or none",
 		declared, strings.Join(canonicalDataTypes(), ", "))
 }
 

@@ -407,21 +407,21 @@ func RegisterPredicate(meta PredicateMetadata) {
 }
 
 // validatePredicateMetadataLocked validates relationships between metadata
-// fields and normalizes the declared datatype in place. The caller holds
-// registryMu so an already-declared inverse can be checked without racing
-// another registration.
+// fields. The caller holds registryMu so an already-declared inverse can be
+// checked without racing another registration.
 //
 // It is the ONE enforcement seam for the closed datatype vocabulary
 // (ADR-107, gh#1267): both registration entry points reach it, so the
 // struct-literal path sister repositories use is covered by the same rule as
 // the functional-option path. Enforcing inside WithDataType would leave the
 // struct-literal path open.
+//
+// It refuses a non-canonical datatype rather than rewriting one, so what an
+// adopter declared is what the registry stores. Nothing here normalizes.
 func validatePredicateMetadataLocked(meta *PredicateMetadata) error {
-	canonical, err := canonicalDataType(meta.DataType)
-	if err != nil {
+	if err := validateDataType(meta.DataType); err != nil {
 		return err
 	}
-	meta.DataType = canonical
 
 	if meta.InverseOf != "" {
 		if _, err := ParsePredicate(meta.InverseOf); err != nil {
