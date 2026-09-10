@@ -46,6 +46,22 @@ tasks:
     cmds:
       - bash scripts/e2e-check-ports_fixture_test.sh
 
+  reserve-ports:
+    desc: "Reserve the e2e host ports against the kernel's ephemeral allocator (Linux; no-op elsewhere). --dry-run to report without applying."
+    silent: false
+    cmds:
+      - scripts/e2e-reserve-ports.sh {{.CLI_ARGS}}
+
+  reserve-ports:test:
+    desc: |
+      Verify the reservation derives a real set and refuses to claim one it
+      could not. gh#1279: a reservation covering zero ports reports success
+      and fails silently — nothing downstream goes red — so the count is
+      asserted, not assumed.
+    silent: false
+    cmds:
+      - bash scripts/e2e-reserve-ports_fixture_test.sh
+
   clean:
     desc: Clean E2E test environment
     silent: false

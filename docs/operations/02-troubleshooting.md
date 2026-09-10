@@ -365,6 +365,21 @@ task e2e:check-ports
 lsof -i :8080
 ```
 
+**If the port was free a moment ago** (gh#1279): 31 of the e2e host ports fall inside Linux's ephemeral range
+(`net.ipv4.ip_local_port_range`, usually 32768–60999), so the kernel can hand one to an ordinary outbound
+connection — a `docker pull`, a `go mod download` — in the gap between the preflight and the bind. `check-ports`
+answers "is this free right now", which is a snapshot, not a reservation.
+
+CI reserves them before each tier. On a Linux workstation you can do the same:
+
+```bash
+task e2e:reserve-ports                # needs sudo; reserves, then verifies by read-back
+task e2e:reserve-ports -- --dry-run   # report only, runs on macOS too
+```
+
+Reserved ports stay explicitly bindable — the reservation only removes them from *automatic* assignment.
+macOS has no equivalent knob, so there the preflight is the only guard.
+
 **Resolution**:
 ```bash
 # Kill processes using the port
