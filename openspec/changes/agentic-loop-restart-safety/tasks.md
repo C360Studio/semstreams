@@ -789,6 +789,38 @@ These final-source gates supersede the local push/E2E holds above, not the missi
 restoration, confirmed-retention-absence, diagnostic-mutation, broader matrix, or task 6.6 obligations.
 Mixed task checkboxes remain open. This is a bounded draft checkpoint, not archive, merge, closure, or parent cutover.
 
+Subsequent clause-by-clause task review confirms 6.5a is fully satisfied at immutable `99fabd2e`: required payload
+identity, pending/HTTP/timeout echo, HTTP 400/409 before publication, independent loop validation, and observable
+effect-free noncurrent-gate ACK with the private unlabeled counter. Supporting behavior tests are in
+`agentic/approval_test.go`, dispatch `approval_handler_test.go` and `loop_wire_test.go`, and loop
+`approval_recovery_test.go`, `approval_sweeper_test.go`, and `approval_replacement_integration_test.go`.
+Identity-less wire termination is established by the existing callback's Validate-to-Terminate path plus the
+payload omission test, not a separate native missing-ID test. Only 6.5a is completed by this review; diagnostic
+mutation and the broader 6.5b/c/d proof obligations remain open, as does task 6.6.
+
+The later-request slice of 6.5c/d now uses the existing batch/ordinal matcher to prove an old approval-required
+status was overtaken. Its 14-row callback test consumes history produced by normal `HandleToolResult`, including
+ordinal 2 with a repeated provider CallID and a legitimate post-gate error whose rendered text equals the old
+gated status. Rendered-content inequality is not phase evidence. The proof validates optional history correlation,
+refuses a matching open gate and present contradictory results, and permits an unrelated newer gate. Historical
+proof may omit the old accumulator prefix; ordinary-result equality and current-batch restoration remain unchanged.
+Independent implementation review approved the two-source correction and test. Focused race passed in 1.716s,
+loop-package race in 3.149s, and lint passed. The full pre-push gate passed, including loop integration in 262.252s
+and dispatch integration in 75.353s. Its complete log SHA-256 is
+`96eccdd0b2c24d57cf5ac129d2a4e9db1b57b3f516f78413e193eb234511b062`.
+The 2,230-file Go source manifest SHA-256 is
+`a08b2cd9bcc79aa0d2308ce1e972426433e881a5a18c2d675d59b6acc9f8cfd8`.
+On that unchanged source, agentic E2E passed all 16 assertions in 2m32.203176209s, including the existing
+approval-after-process-restart walk in 6,496ms. Its complete log SHA-256 is
+`76128c54db3951a1d127aa72179bfcd320f6ad890242cb897d743b239ba756e8`.
+Module tidiness, entity-ID audit, Linux build, CI guard fixtures, and strict OpenSpec validation passed; generated
+schemas and module files are unchanged. The reporting-only API check still finds 14 incompatible packages out
+of 62 compared against beta.162; its zero exit is not a compatibility approval.
+This is writer-backed unit callback evidence over an arranged cold checkpoint, not a native later-history
+chronology or PubAck proof. It completes neither mixed task 6.5c/d nor the remaining diagnostic, concurrency,
+retention-absence, broader matrix, or task 6.6 obligations. No new authority, storage, runtime, or public surface
+was added.
+
 - [ ] 6.1 RED: run the real-NATS approval replacement gate after an approval-required `ToolResult` fully settles.
   Replace loop and dispatch, discard every process map/cache, retain `AGENT` and `AGENT_LOOPS`, and independently
   exercise approve, modify, reject, timeout, and redelivery. Cite exactly
@@ -822,7 +854,7 @@ Mixed task checkboxes remain open. This is a bounded draft checkpoint, not archi
   LoopEntity marker; bare terminal state alone never proves which ToolResult applied. Cite exactly
   `// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded` and
   `// spec: agentic-loop / Loop task, request, and tool work use only required correlation` as applicable.
-- [ ] 6.5a Carry existing ExecutionID through approval pending output, the existing authority-backed pending HTTP
+- [x] 6.5a Carry existing ExecutionID through approval pending output, the existing authority-backed pending HTTP
   projection, required HTTP ApprovalRequest, ApprovalResponse, and timeout production. Compare the displayed echo
   at dispatch admission and again at loop application. Return HTTP 400 for omission and 409 for a noncurrent gate
   without publication; terminate identity-less direct wire input. Implement noncurrent-gate ACK through the

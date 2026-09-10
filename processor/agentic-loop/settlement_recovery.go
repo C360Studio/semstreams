@@ -495,7 +495,7 @@ func (c *Component) recoverToolResult(
 		result.Content = truncateToolResult(result.Content, c.config.ToolResultMaxBytes)
 	}
 	if agentic.IsApprovalRequired(result.Error) {
-		superseded, err := approvalRequiredResultSuperseded(entity, calls, result)
+		superseded, err := c.approvalRequiredResultSuperseded(entity, request, calls, result)
 		if err != nil {
 			return "", 0, err
 		}
@@ -509,28 +509,15 @@ func (c *Component) recoverToolResult(
 		}
 	}
 	if request.RequestID != result.RequestID {
-		want := c.handler.buildToolMessages([]agentic.ToolResult{result})[0]
-		for index, msg := range request.Messages {
-			if msg.Role != "assistant" || len(msg.ToolCalls) != len(calls) {
-				continue
+		// Approval-required history was classified above, with current gate
+		// coherence and the supersession diagnostic. Ordinary results retain
+		// their exact content proof and cannot borrow that phase-only outcome.
+		if !agentic.IsApprovalRequired(result.Error) {
+			applied, err := c.toolResultProvenInLaterRequest(request, calls, result)
+			if err != nil {
+				return "", 0, err
 			}
-			batchMatches := true
-			for ordinal, call := range calls {
-				retained := msg.ToolCalls[ordinal]
-				if retained.ExecutionID != call.ExecutionID || retained.RequestID != call.RequestID ||
-					retained.CallOrdinal != call.CallOrdinal || retained.ID != call.ID || retained.Name != call.Name ||
-					!reflect.DeepEqual(retained.Arguments, call.Arguments) {
-					batchMatches = false
-					break
-				}
-			}
-			if !batchMatches {
-				continue
-			}
-			// Provider CallID may repeat even inside a batch. The result's
-			// ordinal must select its own ordered tool message, not a sibling.
-			resultIndex := index + int(result.CallOrdinal)
-			if resultIndex < len(request.Messages) && reflect.DeepEqual(request.Messages[resultIndex], want) {
+			if applied {
 				return "", 0, nil
 			}
 		}
@@ -554,6 +541,64 @@ func (c *Component) recoverToolResult(
 	return entity.ID, revision, nil
 }
 
+// toolResultProvenInLaterRequest keeps the existing exact batch/ordinal proof.
+// Only gated statuses use structured post-gate provenance instead of content equality.
+func (c *Component) toolResultProvenInLaterRequest(request agentic.AgentRequest, calls []agentic.ToolCall, result agentic.ToolResult) (bool, error) {
+	want := c.handler.buildToolMessages([]agentic.ToolResult{result})[0]
+	for index, msg := range request.Messages {
+		if msg.Role != "assistant" || len(msg.ToolCalls) != len(calls) {
+			continue
+		}
+		batchMatches := true
+		for ordinal, call := range calls {
+			retained := msg.ToolCalls[ordinal]
+			if retained.ExecutionID != call.ExecutionID || retained.RequestID != call.RequestID ||
+				retained.CallOrdinal != call.CallOrdinal || retained.ID != call.ID || retained.Name != call.Name ||
+				!reflect.DeepEqual(retained.Arguments, call.Arguments) {
+				batchMatches = false
+				break
+			}
+		}
+		if !batchMatches {
+			continue
+		}
+		if agentic.IsApprovalRequired(result.Error) {
+			// Check the history copies, not only the originating response.
+			// Optional omissions remain valid; present correlation must agree.
+			for ordinal, call := range calls {
+				retained := msg.ToolCalls[ordinal]
+				traceID := call.TraceID
+				if call.ExecutionID == result.ExecutionID {
+					traceID = result.TraceID
+				}
+				if (retained.LoopID != "" && retained.LoopID != request.LoopID) ||
+					(retained.TraceID != "" && retained.TraceID != traceID) {
+					return false, errs.WrapFatal(fmt.Errorf("history call %q conflicts with loop or trace", call.ExecutionID),
+						"agentic-loop", "recoverToolResult", "tool correlation conflict")
+				}
+			}
+		}
+		// Provider CallID can repeat within a batch. Only this execution's
+		// ordinal selects its tool message; a sibling cannot supply proof.
+		resultIndex := index + int(result.CallOrdinal)
+		if resultIndex >= len(request.Messages) {
+			continue
+		}
+		stored := request.Messages[resultIndex]
+		if agentic.IsApprovalRequired(result.Error) {
+			// The normal handler stops a gated status before the conversation
+			// writer. Structured post-gate provenance establishes progression;
+			// rendering can equal an old gate error and is not phase authority.
+			if stored.Role == "tool" && stored.ToolCallID == result.CallID && stored.Name == result.Name {
+				return true, nil
+			}
+		} else if reflect.DeepEqual(stored, want) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // republishPendingApproval validates and echoes the retained gate without restoring or rewriting it.
 func (c *Component) republishPendingApproval(
 	ctx context.Context, entity agentic.LoopEntity, request agentic.AgentRequest, calls []agentic.ToolCall, result agentic.ToolResult,
@@ -575,7 +620,7 @@ func (c *Component) republishPendingApproval(
 // approvalRequiredResultSuperseded inspects retained execution evidence only.
 // It must run before a new result can enter the accumulator: unseen gated
 // siblings cannot become false consumed-gate evidence after another gate closes.
-func approvalRequiredResultSuperseded(entity agentic.LoopEntity, calls []agentic.ToolCall, result agentic.ToolResult) (bool, error) {
+func (c *Component) approvalRequiredResultSuperseded(entity agentic.LoopEntity, request agentic.AgentRequest, calls []agentic.ToolCall, result agentic.ToolResult) (bool, error) {
 	pending := entity.PendingApproval
 	if (entity.State == agentic.LoopStateAwaitingApproval) != (pending != nil) ||
 		(pending == nil && entity.StateBeforeApproval != "") {
@@ -587,7 +632,9 @@ func approvalRequiredResultSuperseded(entity agentic.LoopEntity, calls []agentic
 		return false, errs.WrapFatal(fmt.Errorf("loop %q has incomplete pending execution identity", entity.ID),
 			"agentic-loop", "recoverToolResult", "approval phase conflict")
 	}
-	results, _, err := validatedToolBatchResults(entity, result.RequestID, calls, result)
+	// A later request may have replaced the old accumulator. Still validate
+	// every present record before trusting history; only completeness differs.
+	results, _, err := validatedToolBatchResults(entity, result.RequestID, calls, result, request.RequestID == result.RequestID)
 	if err != nil {
 		return false, err
 	}
@@ -615,6 +662,14 @@ func approvalRequiredResultSuperseded(entity agentic.LoopEntity, calls []agentic
 				"agentic-loop", "recoverToolResult", "approval phase conflict")
 		}
 	}
+	if request.RequestID != result.RequestID {
+		if pending != nil && pending.ExecutionID == result.ExecutionID {
+			return false, fmt.Errorf("execution %q still awaits approval despite a later retained request", result.ExecutionID)
+		}
+		// Historical progression does not depend on the old batch's current
+		// accumulator prefix, nor on an unrelated execution's newer gate.
+		return c.toolResultProvenInLaterRequest(request, calls, result)
+	}
 	if pending != nil && pending.ExecutionID != result.ExecutionID {
 		return false, fmt.Errorf("approval-required execution %q cannot accumulate while execution %q awaits approval",
 			result.ExecutionID, pending.ExecutionID)
@@ -625,7 +680,7 @@ func approvalRequiredResultSuperseded(entity agentic.LoopEntity, calls []agentic
 // proveTerminalToolResultApplied uses the final marker only with the exact
 // retained execution and its direct tool-result terminal consequence.
 func proveTerminalToolResultApplied(entity agentic.LoopEntity, requestID string, calls []agentic.ToolCall, result agentic.ToolResult) error {
-	results, ordinaryBatch, err := validatedToolBatchResults(entity, requestID, calls, result)
+	results, ordinaryBatch, err := validatedToolBatchResults(entity, requestID, calls, result, true)
 	if err != nil {
 		return err
 	}

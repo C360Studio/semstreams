@@ -426,12 +426,13 @@ func (m *LoopManager) restoreLoopFromRequest(entity agentic.LoopEntity, request 
 
 // validatedToolBatchResults checks the same retained batch for restoration and
 // terminal applied proof. It installs no process state and changes no evidence.
-func validatedToolBatchResults(entity agentic.LoopEntity, requestID string, calls []agentic.ToolCall, incoming agentic.ToolResult) (map[string]agentic.ToolResult, bool, error) {
+// Historical gate proof may omit an old prefix, but still validates present records.
+func validatedToolBatchResults(entity agentic.LoopEntity, requestID string, calls []agentic.ToolCall, incoming agentic.ToolResult, requirePreceding bool) (map[string]agentic.ToolResult, bool, error) {
 	results := make(map[string]agentic.ToolResult)
 	for _, call := range calls {
 		stored, ok := entity.PendingToolResults[call.ExecutionID]
 		if !ok {
-			if call.CallOrdinal < incoming.CallOrdinal {
+			if requirePreceding && call.CallOrdinal < incoming.CallOrdinal {
 				return nil, false, fmt.Errorf("result for preceding execution %q is not yet observable", call.ExecutionID)
 			}
 			continue
@@ -469,7 +470,7 @@ func (m *LoopManager) restoreToolBatch(entity agentic.LoopEntity, request agenti
 	if err := stampToolExecutionCorrelation(response.RequestID, calls); err != nil {
 		return errs.WrapFatal(err, "LoopManager", "restoreToolBatch", "stamp batch")
 	}
-	results, ordinaryBatch, err := validatedToolBatchResults(entity, request.RequestID, calls, incoming)
+	results, ordinaryBatch, err := validatedToolBatchResults(entity, request.RequestID, calls, incoming, true)
 	if err != nil {
 		return err
 	}

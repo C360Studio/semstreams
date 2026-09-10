@@ -44,6 +44,205 @@ func (b *approvalGateCommitBucket) Update(ctx context.Context, key string, data 
 }
 
 // spec: agentic-loop / Approval-required tool statuses settle by observed execution phase
+func TestApprovalRequiredLaterHistoryProvesExactExecutionPhase(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want natsclient.DeliveryDecision
+	}{
+		{"post-gate history", natsclient.DeliveryDecisionAck},
+		{"equal-text post-gate result", natsclient.DeliveryDecisionAck},
+		{"missing batch", natsclient.DeliveryDecisionRetry},
+		{"conflicting batch", natsclient.DeliveryDecisionRetry},
+		{"wrong position", natsclient.DeliveryDecisionRetry},
+		{"unequal ordinary result", natsclient.DeliveryDecisionRetry},
+		{"empty optional fields", natsclient.DeliveryDecisionAck},
+		{"history loop conflict", natsclient.DeliveryDecisionQuarantine},
+		{"history trace conflict", natsclient.DeliveryDecisionQuarantine},
+		{"matching open gate", natsclient.DeliveryDecisionRetry},
+		{"unrelated newer gate", natsclient.DeliveryDecisionAck},
+		{"stored correlation conflict", natsclient.DeliveryDecisionQuarantine},
+		{"stored trace conflict", natsclient.DeliveryDecisionQuarantine},
+		{"stored poison", natsclient.DeliveryDecisionQuarantine},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, batchIndex := approvalLaterHistoryFixture(t, tc.name == "equal-text post-gate result")
+			incoming := alterApprovalLaterHistory(t, &f, batchIndex, tc.name)
+			require.NoError(t, f.entity.Validate())
+			require.NoError(t, f.request.Validate())
+			require.NoError(t, f.response.Validate())
+			require.NoError(t, incoming.Validate())
+			require.NotEqual(t, incoming.RequestID, f.request.RequestID)
+			f.bucket.values[f.entity.ID] = settlementLoopRecord(t, f.entity)
+			f.evidence.request.data = settlementEnvelope(t, &f.request)
+			beforeRequest := append([]byte(nil), f.evidence.request.data...)
+			before, err := json.Marshal(f.bucket.values)
+			require.NoError(t, err)
+			probe := newTerminalReaderProbe(f.c, f.entity.ID)
+			var logs bytes.Buffer
+			f.c.logger = slog.New(slog.NewTextHandler(&logs, nil))
+			f.c.metrics = getMetrics(nil)
+			beforeCounter := testutil.ToFloat64(f.c.metrics.approvalStatusesSuperseded)
+			// Any attempted publication fails at this existing unit seam;
+			// successful callback settlement is not a native PubAck claim.
+			f.c.natsClient = &natsclient.Client{}
+
+			decision, callbackErr := f.c.handleToolResultMessage(t.Context(), settlementEnvelope(t, &incoming))
+
+			t.Logf("evidence=%s old_request=%s current_request=%s execution=%s ordinal=%d decision=%v err=%v",
+				tc.name, incoming.RequestID, f.request.RequestID, incoming.ExecutionID, incoming.CallOrdinal, decision, callbackErr)
+			assert.Equal(t, tc.want, decision)
+			if tc.want == natsclient.DeliveryDecisionAck {
+				assert.NoError(t, callbackErr)
+				assert.Contains(t, logs.String(), "approval-required tool status superseded by observed execution phase")
+				assert.Contains(t, logs.String(), "loop_id="+f.entity.ID)
+				assert.Contains(t, logs.String(), "execution_id="+incoming.ExecutionID)
+				assert.Equal(t, beforeCounter+1, testutil.ToFloat64(f.c.metrics.approvalStatusesSuperseded))
+			} else {
+				assert.Error(t, callbackErr)
+				assert.NotContains(t, logs.String(), "superseded by observed execution phase")
+				assert.Equal(t, beforeCounter, testutil.ToFloat64(f.c.metrics.approvalStatusesSuperseded))
+			}
+			after, err := json.Marshal(f.bucket.values)
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+			assert.Equal(t, beforeRequest, f.evidence.request.data, "earlier conversation and paired history remain intact")
+			assert.Empty(t, f.c.handler.loopManager.loops)
+			assert.Empty(t, perLoopMapCount(f.c.handler.loopManager, f.entity.ID))
+			assert.Empty(t, f.c.handler.loopManager.GetPendingTools(f.entity.ID))
+			assert.Empty(t, f.c.handler.trajectoryManager.trajectories)
+			assert.Empty(t, probe.facts)
+		})
+	}
+}
+
+// approvalLaterHistoryFixture uses the normal tool-result conversation writer,
+// then supplies a later cold checkpoint without the old accumulator. This is a
+// unit callback proof, not a native approval history or publication proof.
+func approvalLaterHistoryFixture(t *testing.T, equalText bool) (approvalRecoveryFixture, int) {
+	t.Helper()
+	f := newApprovalRecoveryFixture(t)
+	prior := append([]agentic.ChatMessage(nil), f.request.Messages...)
+	calls := []agentic.ToolCall{
+		{ID: f.result.CallID, Name: f.result.Name, Arguments: map[string]any{"rule_id": "rule-41"}, LoopID: f.entity.ID, TraceID: f.result.TraceID},
+		{ID: f.result.CallID, Name: f.result.Name, Arguments: map[string]any{"rule_id": "rule-42"}, LoopID: f.entity.ID, TraceID: f.result.TraceID},
+	}
+	require.NoError(t, stampToolExecutionCorrelation(f.request.RequestID, calls))
+	f.response.Message.ToolCalls = calls
+	f.result.ExecutionID, f.result.CallOrdinal = calls[1].ExecutionID, calls[1].CallOrdinal
+	require.Equal(t, uint32(2), f.result.CallOrdinal)
+	require.Equal(t, calls[0].ID, calls[1].ID)
+	require.NotEqual(t, calls[0].ExecutionID, calls[1].ExecutionID)
+	require.NoError(t, f.entity.ResolveApproval())
+	prefix := f.result
+	prefix.ExecutionID, prefix.CallOrdinal, prefix.Content = calls[0].ExecutionID, calls[0].CallOrdinal, "rule-41 deleted"
+	prefix.Error, prefix.ErrorKind = "", ""
+	f.entity.PendingToolResults = map[string]agentic.ToolResult{prefix.ExecutionID: prefix}
+	completed := f.result
+	completed.Error, completed.ErrorKind, completed.Content = "", "", "rule-42 deleted"
+	if equalText {
+		// A valid ordinary error may render exactly like the old gated status.
+		// Error (not Content) determines whether the normal handler gates it.
+		completed.Error, completed.ErrorKind = "execution failed", agentic.ToolErrorInternal
+		completed.Content = "Tool error: " + f.result.Error
+	}
+	require.NoError(t, completed.Validate())
+	require.False(t, agentic.IsApprovalRequired(completed.Error))
+	require.NoError(t, f.c.handler.loopManager.restoreToolBatch(f.entity, f.request, f.response, completed))
+	_, err := f.c.handler.trajectoryManager.startTrajectory(f.entity.ID)
+	require.NoError(t, err)
+	transition, err := f.c.handler.HandleToolResult(t.Context(), f.entity.ID, completed)
+	require.NoError(t, err)
+	for _, publication := range transition.PublishedMessages {
+		decoded, err := f.c.decoder.Decode(publication.Data)
+		require.NoError(t, err)
+		if next, ok := decoded.Payload().(*agentic.AgentRequest); ok {
+			f.request = *next
+		}
+	}
+	require.NotEqual(t, f.response.RequestID, f.request.RequestID, "normal writer must emit the next request")
+	batchIndex := -1
+	for i, msg := range f.request.Messages {
+		if len(msg.ToolCalls) == len(calls) && msg.ToolCalls[0].ExecutionID == calls[0].ExecutionID {
+			batchIndex = i
+		}
+	}
+	require.GreaterOrEqual(t, batchIndex, len(prior))
+	require.Equal(t, prior, f.request.Messages[batchIndex-len(prior):batchIndex], "earlier conversation survives the writer")
+	require.Equal(t, calls, f.request.Messages[batchIndex].ToolCalls)
+	require.Equal(t, prefix.Content, f.request.Messages[batchIndex+1].Content)
+	written := f.request.Messages[batchIndex+int(f.result.CallOrdinal)]
+	require.Equal(t, completed.Content, written.Content)
+	require.Equal(t, equalText, written.IsError)
+	if equalText {
+		require.Equal(t, agentic.ChatMessage{Role: "tool", ToolCallID: f.result.CallID, Name: f.result.Name,
+			Content: "Tool error: " + f.result.Error, IsError: true}, written)
+	}
+	f.entity, err = f.c.handler.GetLoop(f.entity.ID)
+	require.NoError(t, err)
+	require.Nil(t, f.entity.PendingApproval)
+	f.entity.PendingToolResults = nil // Seed the later checkpoint after the old accumulator is no longer current.
+	old := f.c
+	f.c = releaseTestComponent(t, NewMessageHandler(DefaultConfig()))
+	f.c.loopsBucket, f.c.settlementEvidence = old.loopsBucket, old.settlementEvidence
+	f.evidence.response.data = settlementEnvelope(t, &f.response)
+	return f, batchIndex
+}
+
+func alterApprovalLaterHistory(t *testing.T, f *approvalRecoveryFixture, batchIndex int, variant string) agentic.ToolResult {
+	t.Helper()
+	incoming := f.result
+	selected := batchIndex + int(incoming.CallOrdinal)
+	switch variant {
+	case "missing batch":
+		f.request.Messages = append(f.request.Messages[:batchIndex], f.request.Messages[batchIndex+1:]...)
+	case "conflicting batch":
+		f.request.Messages[batchIndex].ToolCalls[0].Arguments = map[string]any{"rule_id": "rule-other"}
+	case "wrong position":
+		// The sibling still has the repeated provider ID, but cannot supply
+		// the selected ordinal's proof when that message is not a tool result.
+		f.request.Messages[selected] = agentic.ChatMessage{Role: "user", Content: "unrelated continuation"}
+	case "unequal ordinary result":
+		incoming.Error, incoming.ErrorKind, incoming.Content = "", "", "different final content"
+	case "empty optional fields":
+		for i := range f.request.Messages[batchIndex].ToolCalls {
+			f.request.Messages[batchIndex].ToolCalls[i].LoopID, f.request.Messages[batchIndex].ToolCalls[i].TraceID = "", ""
+		}
+	case "history loop conflict":
+		f.request.Messages[batchIndex].ToolCalls[1].LoopID = uuid.NewString()
+	case "history trace conflict":
+		f.request.Messages[batchIndex].ToolCalls[1].TraceID = "conflicting-history-trace"
+	case "matching open gate", "unrelated newer gate":
+		call := f.response.Message.ToolCalls[1]
+		if variant == "unrelated newer gate" {
+			calls := []agentic.ToolCall{{ID: call.ID, Name: call.Name, Arguments: map[string]any{"rule_id": "rule-newer"}}}
+			require.NoError(t, stampToolExecutionCorrelation(f.request.RequestID, calls))
+			call = calls[0]
+			require.NotEqual(t, incoming.ExecutionID, call.ExecutionID)
+		}
+		f.entity.State = agentic.LoopStateExecuting
+		require.NoError(t, f.entity.BeginAwaitingApproval(call.ID, call.Name, call.Arguments, incoming.Error, time.Hour, incoming.TraceID))
+		f.entity.PendingApproval.RequestID, f.entity.PendingApproval.ExecutionID = call.RequestID, call.ExecutionID
+		f.entity.PendingApproval.CallOrdinal = call.CallOrdinal
+		gated := incoming
+		gated.RequestID, gated.ExecutionID, gated.CallOrdinal = call.RequestID, call.ExecutionID, call.CallOrdinal
+		f.entity.PendingToolResults = map[string]agentic.ToolResult{gated.ExecutionID: gated}
+	case "stored correlation conflict", "stored trace conflict", "stored poison":
+		stored := incoming
+		switch variant {
+		case "stored correlation conflict":
+			stored.CallID = "conflicting-provider-call"
+		case "stored trace conflict":
+			stored.TraceID = "conflicting-retained-trace"
+		case "stored poison":
+			stored.CallID = ""
+			require.Error(t, stored.Validate(), "poison is invalid under the existing payload validator")
+		}
+		f.entity.PendingToolResults = map[string]agentic.ToolResult{stored.ExecutionID: stored}
+	}
+	return incoming
+}
+
+// spec: agentic-loop / Approval-required tool statuses settle by observed execution phase
 func TestApprovalRequiredMatchingPromptRetriesWithoutRewritingGate(t *testing.T) {
 	for _, route := range []string{"warm", "cold"} {
 		t.Run(route, func(t *testing.T) {
