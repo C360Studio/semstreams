@@ -333,7 +333,7 @@ func (c *Component) recoverTaskDelivery(
 func (c *Component) ensureResponseLoop(
 	ctx context.Context, response agentic.AgentResponse,
 ) (agentic.LoopEntity, string, error) {
-	mappedLoopID := c.findLoopIDForRequest(response.RequestID)
+	mappedLoopID, _ := c.handler.loopManager.GetLoopForRequest(response.RequestID)
 	var (
 		entity agentic.LoopEntity
 		loopID string

@@ -521,12 +521,11 @@ func (c *Component) Start(ctx context.Context) (startErr error) {
 
 	// Initialize KV buckets if NATS client available
 	if c.natsClient != nil {
-		initialize := c.initializeKVBuckets
-		if c.initializeKVBucketsInput != nil {
-			initialize = c.initializeKVBucketsInput
-		}
-		if err := initialize(runCtx); err != nil {
+		if err := c.initializeKVBucketsForStart(runCtx); err != nil {
 			return errs.Wrap(err, "agentic-loop", "Start", "initialize KV buckets")
+		}
+		if err := c.restoreApprovalDeadlines(runCtx); err != nil {
+			return errs.Wrap(err, "agentic-loop", "Start", "restore approval deadlines")
 		}
 
 		// Set up NATS subscriptions for input ports.
@@ -783,7 +782,15 @@ func (c *Component) clearLifecycleHandles() {
 	c.mu.Unlock()
 }
 
-// initializeKVBuckets initializes the KV buckets for loop and trajectory storage
+// initializeKVBucketsForStart preserves the startup injection seam without changing direct initializer calls.
+func (c *Component) initializeKVBucketsForStart(ctx context.Context) error {
+	if c.initializeKVBucketsInput != nil {
+		return c.initializeKVBucketsInput(ctx)
+	}
+	return c.initializeKVBuckets(ctx)
+}
+
+// initializeKVBuckets initializes the KV buckets for loop and trajectory storage.
 func (c *Component) initializeKVBuckets(ctx context.Context) error {
 	js, err := c.natsClient.JetStream()
 	if err != nil {

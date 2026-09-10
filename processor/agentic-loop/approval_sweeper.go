@@ -3,14 +3,87 @@ package agenticloop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/looptoken"
 	"github.com/c360studio/semstreams/message"
+	"github.com/nats-io/nats.go/jetstream"
 )
+
+// restoreApprovalDeadlines hydrates only timer candidates before input admission.
+// The native approval owner restores task and execution context when a decision arrives.
+func (c *Component) restoreApprovalDeadlines(ctx context.Context) (restoreErr error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if c.loopsBucket == nil {
+		return errors.New("AGENT_LOOPS is unavailable")
+	}
+	watcher, err := c.loopsBucket.WatchAll(ctx, jetstream.MetaOnly(), jetstream.IgnoreDeletes())
+	if err != nil {
+		return fmt.Errorf("snapshot approval deadlines: %w", err)
+	}
+	stopped := false
+	defer func() {
+		if !stopped {
+			restoreErr = errors.Join(restoreErr, watcher.Stop())
+		}
+	}()
+	var keys []string
+snapshot:
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case entry, open := <-watcher.Updates():
+			if !open {
+				return errors.New("approval deadline snapshot closed before initial completion")
+			}
+			if entry == nil {
+				break snapshot
+			}
+			if looptoken.Valid(entry.Key()) {
+				keys = append(keys, entry.Key())
+			}
+		}
+	}
+	stopped = true
+	if err := watcher.Stop(); err != nil {
+		return fmt.Errorf("stop approval deadline snapshot: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	slices.Sort(keys)
+	keys = slices.Compact(keys)
+	for _, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		entity, found, err := c.readLoopEntity(ctx, key)
+		if err != nil {
+			return err
+		}
+		if !found || entity.State != agentic.LoopStateAwaitingApproval ||
+			entity.PendingApproval == nil || entity.PendingApproval.Timeout <= 0 {
+			continue
+		}
+		if _, err := c.handler.loopManager.CreateLoopWithID(entity.ID, entity.TaskID, entity.Role,
+			entity.Model, entity.MaxIterations); err != nil {
+			return err
+		}
+		if err := c.handler.UpdateLoop(entity); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // approvalSweepInterval is the cadence at which the component scans
 // loops in LoopStateAwaitingApproval for expired timeouts. Hardcoded
@@ -37,9 +110,8 @@ const approvalTimeoutSystemApprover = "system:approval-timeout"
 // synth-rejection through the existing HandleApprovalResponse path
 // rather than leaving the gated tool_call orphaned indefinitely.
 //
-// Restart-safe: PendingApproval is KV-persisted with RequestedAt and
-// Timeout, so a restored loop's deadline is computed correctly on the
-// first sweep after process restart.
+// Startup restores timed PendingApproval records before input admission;
+// their persisted RequestedAt and Timeout govern the original deadline.
 func (c *Component) runApprovalTimeoutSweeper(ctx context.Context) {
 	ticker := time.NewTicker(approvalSweepInterval)
 	defer ticker.Stop()
@@ -54,11 +126,8 @@ func (c *Component) runApprovalTimeoutSweeper(ctx context.Context) {
 }
 
 // sweepExpiredApprovals snapshots loops with expired approval
-// deadlines and feeds an auto-rejection through the normal approval
-// response path. Each candidate is processed serially under the
-// sweeper goroutine; this is fine because the snapshot is bounded by
-// the loop count and HandleApprovalResponse is fast (no I/O beyond
-// any KV writes the publisher does post-handler).
+// deadlines and publishes rejection work to the existing native approval
+// input. Only that consumer applies and persists the approval decision.
 //
 // Best-effort: a per-candidate failure logs and continues so one
 // stuck loop can't block timeouts on its peers.
@@ -83,24 +152,14 @@ func (c *Component) sweepExpiredApprovals(ctx context.Context) {
 			ApprovedBy: approvalTimeoutSystemApprover,
 			DecidedAt:  time.Now().UTC(),
 		}
-		result, err := c.handler.HandleApprovalResponse(ctx, response)
-		if err != nil {
-			c.logger.Error("approval timeout auto-reject failed",
-				slog.String("loop_id", cand.LoopID),
-				slog.String("call_id", cand.CallID),
-				slog.String("error", err.Error()))
+		if err := c.publishApprovalResponseToWire(ctx, response); err != nil {
+			// The publisher logs the error. Pending stays intact for retry, never a silent skip.
+			if c.metrics != nil {
+				c.metrics.approvalTimeoutPublishFailures.Inc()
+			}
 			continue
 		}
-		c.publishResults(ctx, result)
-		c.persistLoopState(ctx, cand.LoopID)
-		// Publish the ApprovalResponse onto agent.approval_response.<loopID> so
-		// wire observers (sister-repo dashboards, audit consumers) see timeout
-		// auto-rejects the same way they see human responses. The component's
-		// own consumer receives this and drops it as a stale response (the
-		// approval is already resolved by HandleApprovalResponse above), so
-		// there is no double-processing risk.
-		c.publishApprovalResponseToWire(ctx, response)
-		c.logger.Info("approval timed out; auto-rejected",
+		c.logger.Info("approval timeout rejection published",
 			slog.String("loop_id", cand.LoopID),
 			slog.String("call_id", cand.CallID),
 			slog.String("tool_name", cand.ToolName),
@@ -114,21 +173,18 @@ func (c *Component) sweepExpiredApprovals(ctx context.Context) {
 // symmetrically with human approvals.
 //
 // Subject is resolved from the input-port configuration (the same subject
-// external UIs publish to). The component's own consumer safely drops the
-// message as a stale-response idempotent no-op because the approval is
-// already resolved before this publish fires.
+// external UIs publish to). The component's native consumer owns application,
+// required effects, persistence and source settlement.
 //
-// Guards against nil natsClient (unit tests, Stop race) and logs but does
-// not fail on marshal/publish errors — the in-process state transition via
-// HandleApprovalResponse is already committed.
-func (c *Component) publishApprovalResponseToWire(ctx context.Context, response agentic.ApprovalResponse) {
+// Failures are logged and returned; none may imply that pending was resolved.
+func (c *Component) publishApprovalResponseToWire(ctx context.Context, response agentic.ApprovalResponse) error {
 	envelope := message.NewBaseMessage(response.Schema(), &response, "agentic-loop")
 	data, err := json.Marshal(envelope)
 	if err != nil {
 		c.logger.Error("failed to marshal approval response for wire publish",
 			slog.String("loop_id", response.LoopID),
 			slog.String("error", err.Error()))
-		return
+		return err
 	}
 
 	var inputs []component.PortDefinition
@@ -138,20 +194,25 @@ func (c *Component) publishApprovalResponseToWire(ctx context.Context, response 
 	subject, err := component.ResolveSubject(inputs, "agent.approval_response", response.LoopID)
 	if err != nil {
 		c.logger.Error("failed to resolve approval response subject", slog.String("loop_id", response.LoopID), slog.String("error", err.Error()))
-		return
+		return err
 	}
 
 	if c.testPublishHook != nil {
 		c.testPublishHook(subject, data)
-		return
+		return nil
 	}
 	if c.natsClient == nil {
-		return
+		err := errors.New("approval response publisher is unavailable")
+		c.logger.Error("failed to publish approval response to wire",
+			slog.String("loop_id", response.LoopID), slog.String("error", err.Error()))
+		return err
 	}
 	if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {
 		c.logger.Error("failed to publish approval response to wire",
 			slog.String("loop_id", response.LoopID),
 			slog.String("subject", subject),
 			slog.String("error", err.Error()))
+		return err
 	}
+	return nil
 }

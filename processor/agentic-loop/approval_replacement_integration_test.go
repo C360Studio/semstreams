@@ -44,33 +44,45 @@ func (*approvalReplacementExecutor) ListTools() []agentic.ToolDefinition {
 
 // spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
 func TestIntegrationApprovalAfterLoopAndDispatchReplacement(t *testing.T) {
-	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, false)
+	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, false, false)
 }
 
 // spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
 func TestIntegrationModifiedApprovalAfterLoopAndDispatchReplacement(t *testing.T) {
 	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{
 		Decision: agentic.ApprovalDecisionModify, ModifiedArguments: map[string]any{"rule_id": "rule-99"},
-	}, false)
+	}, false, false)
 }
 
 // spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
 func TestIntegrationRejectedApprovalAfterLoopAndDispatchReplacement(t *testing.T) {
 	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{
 		Decision: agentic.ApprovalDecisionReject, Reason: "retain rule-42 for audit",
-	}, false)
+	}, false, false)
 }
 
 // spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
 func TestIntegrationApprovalReplacementIgnoresOlderSameCallIDResponse(t *testing.T) {
-	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, true)
+	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, true, false)
+}
+
+// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
+// spec: agentic-loop / Approval deadlines are reconstructed narrowly
+func TestIntegrationApprovalTimeoutAfterLoopAndDispatchReplacement(t *testing.T) {
+	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{
+		Decision: agentic.ApprovalDecisionReject, Reason: "approval timed out after 8s",
+	}, false, true)
 }
 
 // Real task/model/tools owners produce every retained checkpoint; no process
-// cache or durable loop record is seeded. Graph/evidence E2E, timeout, and
+// cache or durable loop record is seeded. Graph/evidence E2E and
 // approval-response redelivery remain separate proofs.
-func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.ApprovalRequest, retainOlderResponse bool) {
+func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.ApprovalRequest, retainOlderResponse, timeout bool) {
 	t.Helper()
+	approver := "second-party-reviewer"
+	if timeout {
+		approver = approvalTimeoutSystemApprover
+	}
 	wantToolContent := "approved rule-42"
 	wantExecutions := int32(1)
 	wantProviderCalls := int32(2)
@@ -85,7 +97,7 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 		require.NotEqual(t, map[string]any{"rule_id": "rule-42"}, approvalRequest.ModifiedArguments)
 		wantToolContent = "approved rule-99"
 	} else if approvalRequest.Decision == agentic.ApprovalDecisionReject {
-		wantToolContent = "Tool error: " + agentic.ApprovalRejectedPrefix + "rejected by second-party-reviewer: " + approvalRequest.Reason
+		wantToolContent = "Tool error: " + agentic.ApprovalRejectedPrefix + "rejected by " + approver + ": " + approvalRequest.Reason
 		wantExecutions = 0
 	}
 	// This test owns the bounded root so controlled owner cleanup precedes
@@ -103,6 +115,7 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 	decoder := payloadbuiltins.NewTestDecoder(t)
 	toolCalls, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
 		Name: "approval-redispatch-observer", FilterSubject: "tool.execute.>", AckPolicy: jetstream.AckExplicitPolicy,
+		Durable: "approval-redispatch-observer",
 	})
 	require.NoError(t, err)
 	var providerCalls atomic.Int32
@@ -185,14 +198,16 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 		"tool.result":             make(chan *terminalMarkerDelivery, 4),
 		"agent.approval_response": make(chan *terminalMarkerDelivery, 4),
 	}
-	startOwners := func() (*http.ServeMux, func()) {
+	startOwners := func(approvalTimeout string) (*http.ServeMux, func()) {
 		t.Helper()
 		loopConfig := DefaultConfig()
 		loopConfig.ConsumerNameSuffix, loopConfig.MaxIterations = suffix, 3
 		loopConfig.Timeout = "60s"
+		loopConfig.ApprovalTimeoutStr = approvalTimeout
 		loop, err := NewComponent(marshal(loopConfig), deps)
 		require.NoError(t, err)
 		c := loop.(*Component)
+		require.Empty(t, c.handler.loopManager.loops, "replacement must not be seeded with another instance's process state")
 		// Same scope as the existing started-owner proofs: graph evidence is
 		// excluded; settlement-required KV writes and publications stay real.
 		c.graphWriter = nil
@@ -268,7 +283,9 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 			require.NoError(t, owner.Start(runCtx))
 			started = append(started, owner)
 		}
-		require.Empty(t, c.handler.loopManager.loops, "Start must not receive another instance's process state")
+		if !timeout {
+			require.Empty(t, c.handler.loopManager.loops, "Start must not receive another instance's process state")
+		}
 		mux := http.NewServeMux()
 		dispatch.(*agenticdispatch.Component).RegisterHTTPHandlers("/", mux)
 		return mux, stop
@@ -311,9 +328,14 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 			// These ACKed events must not repopulate the replacement tracker.
 			require.True(collect, seen["agent.created.*"])
 			require.True(collect, seen["agent.approval_pending.*"])
+			require.True(collect, seen["agent.approval_response.*"])
 		}, 5*time.Second, 10*time.Millisecond)
 	}
-	firstMux, stopFirst := startOwners()
+	initialTimeout, replacementTimeout := "", ""
+	if timeout {
+		initialTimeout, replacementTimeout = "8s", "1m"
+	}
+	firstMux, stopFirst := startOwners(initialTimeout)
 	submitted := post(firstMux, "/message", agenticdispatch.HTTPMessageRequest{
 		Content: "Run approval_probe on rule-42", ChannelType: "http", ChannelID: "approval-session",
 	}, "task-owner")
@@ -433,25 +455,84 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 	t.Logf("fully settled approval checkpoint: loop=%s request=%s execution=%s tool_result_seq=%d ack_floor=%d kv_revision=%d", loopID, request.RequestID, gated.ExecutionID, metadata.Sequence.Stream, info.AckFloor.Stream, entry.Revision())
 	stopFirst()
 	firstMux = nil
-	replacementMux, stopReplacement := startOwners()
+	if timeout {
+		require.Equal(t, 8*time.Second, pending.PendingApproval.Timeout)
+		require.True(t, time.Now().Before(pending.PendingApproval.RequestedAt.Add(pending.PendingApproval.Timeout)),
+			"first owner must stop before the original deadline; an expired warm owner would not prove replacement")
+		stoppedRequest, err := stream.GetLastMsgForSubject(ctx, "agent.request."+loopID)
+		require.NoError(t, err)
+		require.Equal(t, requestRaw.Sequence, stoppedRequest.Sequence, "first owner must not have published a timeout continuation")
+		t.Logf("retained approval deadline: requested_at=%s timeout=%s deadline=%s replacement_config=%s",
+			pending.PendingApproval.RequestedAt.Format(time.RFC3339Nano), pending.PendingApproval.Timeout,
+			pending.PendingApproval.RequestedAt.Add(pending.PendingApproval.Timeout).Format(time.RFC3339Nano), replacementTimeout)
+	}
+	replacementMux, stopReplacement := startOwners(replacementTimeout)
 	unchanged, err := bucket.Get(ctx, loopID)
 	require.NoError(t, err)
 	require.Equal(t, entry.Value(), unchanged.Value(), "replacement must use retained pending authority")
-	approved := post(replacementMux, "/loops/"+loopID+"/approval", approvalRequest, "second-party-reviewer")
-	require.Equal(t, http.StatusOK, approved.Code, "replacement HTTP approval must read retained pending state: %s", approved.Body.String())
-	approval := wait("agent.approval_response")
-	require.Equal(t, 1, approval.acks)
-	require.Zero(t, approval.naks+approval.terms)
-	base, err = decoder.Decode(approval.Data())
-	require.NoError(t, err)
-	decision, ok := base.Payload().(*agentic.ApprovalResponse)
-	require.True(t, ok)
-	require.Equal(t, loopID, decision.LoopID)
-	require.Equal(t, original.ID, decision.CallID)
-	require.Equal(t, approvalRequest.Decision, decision.Decision)
-	require.Equal(t, approvalRequest.ModifiedArguments, decision.ModifiedArguments)
-	require.Equal(t, approvalRequest.Reason, decision.Reason)
-	require.Equal(t, "second-party-reviewer", decision.ApprovedBy)
+	if timeout {
+		// Exercise the real five-second ticker without an HTTP decision or a
+		// manual handler call. A fifteen-second window allows three cadence
+		// intervals and the original eight-second deadline, not a new minute.
+		continued := assert.EventuallyWithT(t, func(collect *assert.CollectT) {
+			raw, err := stream.GetLastMsgForSubject(ctx, "agent.request."+loopID)
+			require.NoError(collect, err)
+			base, err := decoder.Decode(raw.Data)
+			require.NoError(collect, err)
+			request, ok := base.Payload().(*agentic.AgentRequest)
+			require.True(collect, ok)
+			require.NotEqual(collect, original.RequestID, request.RequestID,
+				"replacement sweeper must publish the timeout continuation using retained pending authority")
+		}, 3*approvalSweepInterval, 20*time.Millisecond)
+		if !continued {
+			current, readErr := bucket.Get(ctx, loopID)
+			if readErr == nil {
+				t.Logf("timeout RED retained state: revision=%d unchanged=%v bytes=%s", current.Revision(),
+					bytes.Equal(entry.Value(), current.Value()), current.Value())
+			}
+			mirror, mirrorErr := stream.GetLastMsgForSubject(ctx, "agent.approval_response."+loopID)
+			t.Logf("timeout mirror observation: message=%v read_error=%v callbacks=%d", mirror, mirrorErr,
+				len(settled["agent.approval_response"]))
+			t.Fatalf("no timeout continuation: authority_read=%v executor_calls=%d provider_calls=%d",
+				readErr, executor.calls.Load(), providerCalls.Load())
+		}
+		require.False(t, time.Now().Before(pending.PendingApproval.RequestedAt.Add(pending.PendingApproval.Timeout)),
+			"timeout must not run before the original persisted deadline")
+		approval := wait("agent.approval_response")
+		require.Equal(t, 1, approval.acks, "the native timeout input owns application and settlement")
+		require.Zero(t, approval.naks+approval.terms)
+		base, err = decoder.Decode(approval.Data())
+		require.NoError(t, err)
+		decision, ok := base.Payload().(*agentic.ApprovalResponse)
+		require.True(t, ok)
+		require.Equal(t, loopID, decision.LoopID)
+		require.Equal(t, original.ID, decision.CallID)
+		require.Equal(t, agentic.ApprovalDecisionReject, decision.Decision)
+		require.Equal(t, approvalRequest.Reason, decision.Reason)
+		require.Equal(t, approvalTimeoutSystemApprover, decision.ApprovedBy)
+		require.False(t, decision.DecidedAt.Before(pending.PendingApproval.RequestedAt.Add(pending.PendingApproval.Timeout)))
+		metadata, err := approval.Metadata()
+		require.NoError(t, err)
+		eventFloors["agent.approval_response.*"] = metadata.Sequence.Stream
+		t.Logf("native timeout source settled: sequence=%d ack=%d nak=%d term=%d", metadata.Sequence.Stream,
+			approval.acks, approval.naks, approval.terms)
+	} else {
+		approved := post(replacementMux, "/loops/"+loopID+"/approval", approvalRequest, approver)
+		require.Equal(t, http.StatusOK, approved.Code, "replacement HTTP approval must read retained pending state: %s", approved.Body.String())
+		approval := wait("agent.approval_response")
+		require.Equal(t, 1, approval.acks)
+		require.Zero(t, approval.naks+approval.terms)
+		base, err = decoder.Decode(approval.Data())
+		require.NoError(t, err)
+		decision, ok := base.Payload().(*agentic.ApprovalResponse)
+		require.True(t, ok)
+		require.Equal(t, loopID, decision.LoopID)
+		require.Equal(t, original.ID, decision.CallID)
+		require.Equal(t, approvalRequest.Decision, decision.Decision)
+		require.Equal(t, approvalRequest.ModifiedArguments, decision.ModifiedArguments)
+		require.Equal(t, approvalRequest.Reason, decision.Reason)
+		require.Equal(t, approver, decision.ApprovedBy)
+	}
 	if approvalRequest.Decision != agentic.ApprovalDecisionReject {
 		redispatched, err := toolCalls.Next(jetstream.FetchMaxWait(5 * time.Second))
 		require.NoError(t, err, "fresh loop must resume the exact approved call")

@@ -385,7 +385,9 @@ func (m *LoopManager) restoreLoopFromRequest(entity agentic.LoopEntity, request 
 		if current.TaskID != entity.TaskID || current.Role != entity.Role || current.Model != entity.Model {
 			return fmt.Errorf("loop %q process and durable correlation conflict", entity.ID)
 		}
-		if batch == nil {
+		// Timer discovery installs the entity without request context. Preserve
+		// warm history only when this exact request is already correlated.
+		if batch == nil && m.requestToLoop[request.RequestID] == entity.ID {
 			return nil
 		}
 	}

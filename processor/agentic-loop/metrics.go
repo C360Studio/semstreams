@@ -12,11 +12,12 @@ import (
 // loopMetrics holds Prometheus metrics for the agentic-loop component.
 type loopMetrics struct {
 	// Loop lifecycle
-	loopsCreated   prometheus.Counter
-	loopsCompleted prometheus.Counter
-	loopsFailed    *prometheus.CounterVec
-	loopsTimeout   prometheus.Counter
-	activeLoops    prometheus.Gauge
+	loopsCreated                   prometheus.Counter
+	loopsCompleted                 prometheus.Counter
+	loopsFailed                    *prometheus.CounterVec
+	loopsTimeout                   prometheus.Counter
+	approvalTimeoutPublishFailures prometheus.Counter
+	activeLoops                    prometheus.Gauge
 
 	// Iterations
 	iterationsTotal   prometheus.Counter
@@ -99,6 +100,12 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Subsystem: "agentic_loop",
 				Name:      "loops_timeout_total",
 				Help:      "Total number of agentic loops that timed out",
+			}),
+			approvalTimeoutPublishFailures: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_loop",
+				Name:      "approval_timeout_publish_failures_total",
+				Help:      "Timeout decision publication attempts that returned an error; pending approval remains available for retry",
 			}),
 
 			activeLoops: prometheus.NewGauge(prometheus.GaugeOpts{
@@ -272,6 +279,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = registry.RegisterCounter("agentic-loop", "loops_completed_total", metrics.loopsCompleted)
 			_ = registry.RegisterCounterVec("agentic-loop", "loops_failed_total", metrics.loopsFailed)
 			_ = registry.RegisterCounter("agentic-loop", "loops_timeout_total", metrics.loopsTimeout)
+			_ = registry.RegisterCounter("agentic-loop", "approval_timeout_publish_failures_total", metrics.approvalTimeoutPublishFailures)
 			_ = registry.RegisterGauge("agentic-loop", "active_loops", metrics.activeLoops)
 			_ = registry.RegisterCounter("agentic-loop", "iterations_total", metrics.iterationsTotal)
 			_ = registry.RegisterHistogram("agentic-loop", "iterations_per_loop", metrics.iterationsPerLoop)
@@ -300,6 +308,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.loopsCompleted)
 			_ = prometheus.DefaultRegisterer.Register(metrics.loopsFailed)
 			_ = prometheus.DefaultRegisterer.Register(metrics.loopsTimeout)
+			_ = prometheus.DefaultRegisterer.Register(metrics.approvalTimeoutPublishFailures)
 			_ = prometheus.DefaultRegisterer.Register(metrics.activeLoops)
 			_ = prometheus.DefaultRegisterer.Register(metrics.iterationsTotal)
 			_ = prometheus.DefaultRegisterer.Register(metrics.iterationsPerLoop)

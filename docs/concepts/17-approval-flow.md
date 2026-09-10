@@ -14,7 +14,7 @@ permission error and let the LLM keep going — the model would see
 the error and could retry or reroute. From beta.19 forward, the
 loop pauses on the first rejection, persists the pending call, and
 emits a NATS event a product-layer approval UI can subscribe to.
-The loop only resumes when an explicit response arrives.
+The loop continues after an approval decision, including a configured timeout rejection.
 
 ## The contract
 
@@ -66,6 +66,23 @@ Key design points:
   AGENT_LOOPS KV bucket. A process restart mid-approval doesn't
   lose the pending state; the new process picks up the same
   `awaiting_approval` loop and waits on the same response subject.
+
+## Timeouts and restart
+
+A timed approval keeps its original request time and timeout in `LoopEntity.PendingApproval`.
+Before accepting work, a replacement loop component reads current loop records and restores the timed approvals
+it must watch. It does not restart their clocks or substitute its new timeout configuration. If required loop
+state cannot be read or validated, startup fails instead of silently dropping those timers.
+
+When a deadline expires, the timer publishes a rejection to the existing approval-response subject. The normal
+approval consumer reconstructs the pending call, publishes the required continuation, persists its outcome, and
+only then settles the decision. A timeout-publication failure leaves the approval pending for a later attempt;
+publishing a decision is not itself proof that the decision has been applied.
+Failed publication attempts emit an error log and increment
+`semstreams_agentic_loop_approval_timeout_publish_failures_total`.
+
+This uses the existing loop state and durable work stream, not a separate restart supervisor. See
+[Semantic settlement](33-semantic-settlement.md) for the receive, work, and settle pattern.
 
 ## Wiring an approval UI
 

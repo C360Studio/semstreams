@@ -570,8 +570,51 @@ Go overlays that ignore modified arguments or lose the rejection reason each mak
 these are falsification proofs, not newly discovered production regressions. Production code is unchanged.
 Evidence: `/private/tmp/gh1146-approval-decisions.TANE3j/final-native-green.log`, SHA-256
 `2e6342fe5d5a14a7194342ff05af5db42bfdd16cea0fedee9716e72aa9896517`.
-Timeout, approval/tool-result redelivery, the evidence-error matrix, confirmed-retention absence, and task 6.6's
-explicit owner storage ruling remain open. These component-replacement proofs add no OS-process E2E claim.
+At that checkpoint, timeout, approval/tool-result redelivery, the evidence-error matrix, confirmed-retention absence,
+and task 6.6's explicit owner storage ruling remained open. These component-replacement proofs add no OS-process E2E claim.
+
+The timeout replacement case first reproduces RED on unchanged production `52064acd`: the original 8s deadline
+survives replacement configured for 1m, but no continuation appears within the allowed 15s observation window.
+The original ToolResult is settled (stream sequence/ACK floor 6/6), both original owners stop before expiry, and
+pending KV revision 3 remains byte-identical. No HTTP approval or manual sweep wakes the replacement; executor
+calls remain zero. This is a missing-deadline-discovery proof, not missing storage or proof of three actual sweeps.
+Independent review approves its test fidelity only. Native test 15.50s, package 16.531s; retained log
+`/private/tmp/gh1146-approval-timeout.DSuKTN/timeout-native-red.log`, SHA-256
+`e9623aec4e56e2190b2e49df8c87b749199219d68c6eb911462de096c26b904f`.
+The sweeper's separate direct-apply and subsequent durable-response publication are not exercised by this RED.
+No successful timeout settlement, full matrix, or task 6.6 ruling is implied by this checkpoint.
+
+The subsequent timeout correction restores positive persisted deadlines before input admission using one initial
+AGENT_LOOPS snapshot and exact current loop reads. The sweeper only publishes the existing ApprovalResponse;
+the native approval consumer owns reconstruction, required effects, persistence, and settlement. Publication
+failure retains pending state and emits the existing error log plus a dedicated counter in the existing metrics
+owner. There is no new durable state, public configuration, supervisor, or continuing startup watcher.
+
+Review exposed a timer-only restoration regression: response replay acknowledged after dropping retained system
+and user history (RED 0.501s). The correction uses actual request-route membership before taking the warm path,
+and requires that exact route before reusing a nil-batch restoration. Cold and fully correlated warm controls
+remain intact. The state guard alone stayed RED; both existing-owner checks are required. Pre-lint focused race
+tests pass in 1.551s, the loop unit/race suite in 3.029s, and tagged vet exits zero.
+
+The pre-lint native approval run passes approve, modify, reject, same-CallID isolation, and timeout in 15.846s.
+The timeout case takes 10.48s, preserves the original 8s deadline under replacement config 1m, executes no gated
+tool, and proves exact rejection, durable completion, source sequence 8 with ACK=1/NAK=0/TERM=0, and drained
+consumers. Its test observer is explicitly durable so inactivity cannot invalidate the final drain assertion.
+Log: `/private/tmp/gh1146-approval-timeout.DSuKTN/timeout-final-native-matrix.log`, SHA-256
+`239f0af1762d6561f22c45267f95cd7c870e3b656fa31aef6b51347c0a6db7b2`; exact source manifest is `final-source.sha256`
+in that directory. The concept guide now explains timer recovery and decision publication versus application.
+This is local bounded-slice evidence, not the full redelivery/error matrix, new E2E proof, or task 6.6's ruling.
+Mixed task checkboxes remain open.
+
+The pre-push lint gate exposed two function-length limits. The correction only extracts the existing startup
+initializer-hook selection and shares an empty test snapshot; acquisition, deadline restoration, and admission
+remain ordered in Start. Post-correction native approval cases pass in 15.900s (timeout 10.47s), with exact source
+in `post-lint-source.sha256` and conformance handoff `timeout-final-handoff.md` in the same evidence directory.
+The subsequent full `task check:push` passes: loop unit/race 4.682s, integration/race 201.061s; dispatch 4.682s and
+75.498s. All 2230 Go file hashes remain unchanged across the gate, with no schema or module drift. Gate log:
+`/private/tmp/gh1146-timeout-checkpoint.ZIukPh/check-push-corrected.log`, SHA-256
+`b917ba9a29f60e55f6f650ab19e84f6bf3ecf5e43c0e5e4f2b8489cc6c186428`.
+These local gates do not waive hosted holds, complete the full matrix, or authorize task 6.6's storage decision.
 
 - [ ] 6.1 RED: run the real-NATS approval replacement gate after an approval-required `ToolResult` fully settles.
   Replace loop and dispatch, discard every process map/cache, retain `AGENT` and `AGENT_LOOPS`, and independently
