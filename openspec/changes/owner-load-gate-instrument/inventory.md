@@ -15,6 +15,12 @@ Analysis and unresolved questions are kept out of the pinned sections, in "Adjac
 - `grep -nE "3 second|10 second|budget|Decision profile" docs/operations/32-predicate-layout-smoke-harness.md`
 - `grep -rn "func.*KeysByFilter" natsclient/` and `grep -rnE "Timeout:\s*[0-9]+\s*\*\s*time\." natsclient/*.go`
 
+- `git grep -nF <pin text> -- <path>` uniqueness check for every pin added in sections 6-7 (each returned exactly 1 hit)
+- `grep -rn "NewKVStore(" processor/graph-index/*.go` (how production graph-index builds its KV stores)
+- `gh run view 34475316237 --log | grep -E "phase=latency|ok .*graph-index"` (a GREEN main run: no `phase=` line is printed)
+- `for d in /Users/coby/Code/c360/*/; do git -C "$d" grep -rn -iE "adr-?077|OwnerFilterLoad|owner.?filter.*(budget|3s)"; done` (read-only sister sweep, 27 checkouts)
+- `git log --all --oneline --diff-filter=A -- 'docs/adr/107*'` (is the next ADR number free)
+
 ## 1. The assertion that fires
 
 - `processor/graph-index/owner_filter_load_integration_test.go:473` — `func measureOwnerLoadFilter(`
@@ -102,6 +108,53 @@ literally; the measurement does run.
 - `docs/adr/065-predicate-index-composite-key-sharding.md:46` — `predicate holding 5,000 — the shape that triggers GH #430) seeded in`
 - `docs/adr/065-predicate-index-composite-key-sharding.md:49` — `of magnitude inside the handler's 10s timeout, confirming the "2 round`
 
+## 6. The measurement environment
+
+- `.github/workflows/ci.yml:132` — `timeout-minutes: 25`
+- `.github/workflows/ci.yml:144` — `run: scripts/run-integration-tests.sh`
+- `scripts/run-integration-tests.sh:304` — `uncapped package parallelism`
+- `scripts/run-integration-tests.sh:311` — `go test -race -failfast -tags=integration -timeout=20m -count=1`
+- `processor/graph-index/owner_filter_load_integration_test.go:125` — `ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)`
+
+The gate measures wall-clock inside one `go test ./...` invocation that caps neither package parallelism nor
+concurrent testcontainer count, under `-race`, on a single shared `ubuntu-latest` runner. The contention is therefore
+in-run and self-inflicted as well as external: up to `GOMAXPROCS` Docker-backed integration packages execute while
+this one measures latency. The harness's own context is 15 minutes and never bounds a call; `natsclient`'s 5s default
+does.
+
+## 7. The other per-repetition gate, the anti-relaxation pins, and production's identical bound
+
+- `processor/graph-index/owner_filter_load_integration_test.go:375` — `require.Equal(t, 1, result.count, result.label)`
+- `processor/graph-index/owner_filter_load_integration_test.go:376` — `require.Less(t, result.duration, profile.operationBudget, result.label)`
+- `processor/graph-index/owner_filter_load_integration_test.go:400` — `assertOwnerLoadLatency(t, label, samples, profile)`
+- `processor/graph-index/owner_filter_budget_contract_test.go:29` — `require.Equal(t, 3*time.Second, ci.operationBudget,`
+- `processor/graph-index/owner_filter_budget_contract_test.go:32` — `require.Equal(t, 3*time.Second, ci.p95Budget`
+- `processor/graph-index/owner_filter_budget_contract_test.go:55` — `require.Len(t, durations, ci.repetitions`
+- `processor/graph-index/owner_filter_budget_contract_test.go:66` — `so the per-rep gate MUST remain`
+- `natsclient/kv.go:70` — `return context.WithTimeout(ctx, kv.options.Timeout)`
+- `processor/graph-index/component.go:927` — `c.nameBucket = c.natsClient.NewKVStore(nameBucket)`
+- `processor/graph-index/component.go:953` — `kvStore := c.natsClient.NewKVStore(bucket)`
+- `processor/graph-index/owner_filter_load_integration_test.go:408` — `require.Eventually(t, func() bool {`
+- `natsclient/kv.go:37` — `MaxRetries:            10, // Increased for high-contention scenarios`
+- `natsclient/kv.go:41` — `UseExponentialBackoff: true,`
+
+`:489` is not the only per-repetition budget assertion. The concurrent phase asserts the same `operationBudget` at
+`:376` over the results channel, and unlike `:489` it does not `FailNow` before an aggregate: `:400` runs after the
+whole channel drains. That gate measures owner filters only (`:375` requires exactly 1 key), which run 2-6ms, and no
+firing in the window came from it. Any change to the per-repetition rule has two homes, not one.
+
+`owner_filter_budget_contract_test.go` is the anti-relaxation pin and is itself a constraint on the target state.
+`:29`/`:32` fail if `operationBudget` or `p95Budget` moves off 3s. `:55` fails if `repetitions` moves off 5, because
+its fixture is a hardcoded five-sample slice. `:66` asserts in prose that the per-repetition gate must remain.
+
+Production graph-index builds its KV stores through the same `NewKVStore(bucket)` call with no option override
+(`:927`, `:953`), so the 5s bound at `natsclient/kv.go:70` is the production bound too, not a test artifact.
+
+The repository's established answer to "a transient makes one observation unreliable" is bounded re-observation, not
+a wider threshold: `natsclient/kv.go:37`/`:41` retry ten times with exponential backoff, and this very harness already
+decides its consumer-return-to-baseline assertion by re-observation at `:408` before the equality check at `:414`.
+The budget gate is the only assertion in the file that decides on a single sample.
+
 ## Adjacent claims
 
 Analysis and unresolved questions. Not pins.
@@ -129,6 +182,28 @@ Analysis and unresolved questions. Not pins.
   `2.14.4-alpine@sha256:f2123f...`, SDK `v1.52.0`.
 - **UNRESOLVED: whether the 3s-5s band is stall-only or contains a real tail of the 5,000-key drain.** Not decided by
   this data, because section 1's discard means no firing has ever recorded its own reps 0..n-1.
+
+- **The activation evidence is invisible on a green run.** `t.Logf` output is emitted only for failing tests unless
+  `-v` is passed, and `scripts/run-integration-tests.sh:311` does not pass it. Measured on run 34475316237 (`main`,
+  green): the only graph-index line is `ok github.com/c360studio/semstreams/processor/graph-index 60.725s`; no
+  `phase=` line appears. ADR-077's Status requires evidence "recorded against the exact implementation revision"
+  (`:8`) and `docs/operations/32-...:75` calls silence a failed evidence run. Today a green CI run records nothing.
+- **The filter that fires most is the one whose distribution has never been logged.** `incoming-forward` accounts for
+  2 of the 4 firings and its `phase=latency` line has never been printed in the window, because it fails before
+  `:492` and a passing run prints nothing.
+- **Cost of an added repetition (arithmetic over section-5 measurements, not a pin).** The sequential measure phase
+  per repetition is the sum of three forward p50s plus three owner p50s: 153ms + 256ms + [`incoming-forward`
+  unmeasured; bracketed 150-390ms by the window's forward range] + ~11ms = **~0.6-0.8s**. The concurrent phase adds
+  three owner-filter operations (~12ms). Raising `repetitions` 5 -> 21 therefore costs **~10-13s** on a harness that
+  ran 35.06s inside a 60.7s package, inside a `Test` job capped at `timeout-minutes: 25`.
+- **Sister repos do not cite the 3s budget.** Read-only sweep of the 27 sibling checkouts under
+  `/Users/coby/Code/c360/`: semboids cites ADR-077's key shape and its LIST traffic
+  (`docs/perf/beta149-migration-2026-07-18.md:52`, `:189`; `internal/boidgraph/neighbor_empty_verify_test.go:159`),
+  semsource cites ADR-077 in an audit (`docs/upstream/semstreams-pre-v1-core-audit.md:299`). No sister cites
+  condition 4, the 3-second figure, or the harness. No sister repository was modified.
+- **ADR-107 is already taken.** `git log --all --diff-filter=A -- 'docs/adr/107*'` -> `bc7d79cc` on the unmerged
+  `claude/gh1267-honor-predicate-datatype` branch (semweb boundary rule). A new ADR filed by this change would be 108
+  and would race that branch's number; the in-place amendment precedent is `docs/adr/046-...:14`.
 
 ### Observed firings
 
