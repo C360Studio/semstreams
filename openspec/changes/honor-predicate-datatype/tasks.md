@@ -141,7 +141,8 @@ never been observed is a hypothesis. Nothing else starts until it is a failing a
       `v1.0.0-beta.162` → HEAD `40b8bcf7`: 62 Tier 1 packages compared, 50 clean, 12 incompatible, 0 removed,
       0 added.** `vocabulary` (`release/tier1-packages.txt:95`) and `vocabulary/export` (`:100`) are BOTH in the
       compared set and BOTH clean — the seven constants and `IsValidDataType` are compatible additions and no
-      signature moved. None of the 12 is a package this change touches; all 12 predate it on `main` since
+      signature moved. *(10.3 later unexported `IsValidDataType`; since it never appeared in a release, that removes
+      nothing from the baseline. 10.10 re-runs this against the final head.)* None of the 12 is a package this change touches; all 12 predate it on `main` since
       beta.162. As predicted, the instrument reports nothing about the semsource `data_type` wire value, which
       is why 7.6 exists.
 - [x] 8.3 `openspec validate honor-predicate-datatype --strict` and
@@ -230,8 +231,22 @@ question 2026-09-09 (PR #1269 comment 5606966440). Everything below is ruled wor
       All five DRIFT pins are `vocabulary/registry.go:339,402,419`, the exact call sites and signature this task
       rewrote; the 2 AMBIGUOUS at `:554` are the pre-existing pair task 8.3 re-derived by hand. Refreshing now would
       be wasted: 10.3-10.7 move pins again. The refresh is 10.10's, against the final head.
-- [ ] 10.3 **`IsValidDataType` → unexported** (owner: "in package"). No exported addition to Tier 1 under ADR-106;
+- [x] 10.3 **`IsValidDataType` → unexported** (owner: "in package"). No exported addition to Tier 1 under ADR-106;
       both consumers are contract tests, and `dataTypeCanonicalization` is already visible in-package.
+      **DONE.** `isValidDataType` is in-package. The `test/contract/` consumers could not simply follow it there —
+      the export-rendering guard needs `vocabulary/export`, so it cannot live inside package `vocabulary` — so the
+      contract file now builds its own oracle, `canonicalDataTypes`, from the seven **exported constants**.
+      That is better than relocating the calls, and the reason is the one already written into
+      `predicate_datatype_test.go`: a guard that asks the implementation "is this canonical?" agrees with whatever
+      the implementation now believes and cannot see a value dropped from the set. The exported constants are what
+      an adopter writes against, so they are the right thing to walk. The hand-copied seven-constant list in the
+      ratchet's failure message collapses into the same variable, and the hard-coded `!= 7` count now checks the
+      oracle's own length as well, so an eighth constant cannot pass silently.
+      Green: `go test -race ./vocabulary/... ./test/contract/...` exit 0, `gofmt -l` clean.
+      Tier 1 compat is unaffected by construction — `IsValidDataType` was added by THIS change and has never
+      appeared in a release, so unexporting it removes nothing the baseline `v1.0.0-beta.162` contains. CI's
+      `Tier 1 API Compatibility` job is the check; task 8.2's note that "the seven constants and `IsValidDataType`
+      are compatible additions" is now stale for the second half.
 - [ ] 10.4 **Guard repairs (review HIGH-1).** `frameworkPredicateDataTypes`
       (`test/contract/predicate_datatype_contract_test.go:286-300`) reads the ambient registry FIRST and lets it win;
       production is the reverse (`init()` runs, then `main` calls `builtins.Register()`, which amends). Reverse the

@@ -367,10 +367,15 @@ const (
 	DataTypeJSON = "json"
 )
 
-// IsValidDataType reports whether s is one of the seven canonical predicate
+// isValidDataType reports whether s is one of the seven canonical predicate
 // object datatypes. The empty string is not one of them: registration accepts
 // it as "no datatype declared" rather than as a value.
-func IsValidDataType(s string) bool {
+//
+// Unexported deliberately (gh#1267 owner ruling: "in package"). ADR-106 freezes
+// this Tier 1 package's surface, so a membership helper adopters never asked
+// for is a permanent bill for a fact the seven exported constants already
+// carry. Callers outside this package compare against those constants.
+func isValidDataType(s string) bool {
 	switch s {
 	case DataTypeString, DataTypeEntityID, DataTypeInt, DataTypeFloat,
 		DataTypeBool, DataTypeDateTime, DataTypeJSON:
@@ -395,7 +400,7 @@ func IsValidDataType(s string) bool {
 // registration shape (three sister repositories register nothing but a
 // predicate name), and #1277 tracks closing the framework's own bare set.
 func validateDataType(declared string) error {
-	if declared == "" || IsValidDataType(declared) {
+	if declared == "" || isValidDataType(declared) {
 		return nil
 	}
 	return fmt.Errorf("unrecognized data type %q: expected one of %s, or none",

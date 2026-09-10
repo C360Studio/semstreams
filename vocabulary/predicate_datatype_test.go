@@ -43,8 +43,8 @@ func TestValidateDataTypeAcceptsTheClosedVocabulary(t *testing.T) {
 		if err := validateDataType(canonical); err != nil {
 			t.Errorf("validateDataType(%q): unexpected error %v", canonical, err)
 		}
-		if !IsValidDataType(canonical) {
-			t.Errorf("IsValidDataType(%q) = false, want true", canonical)
+		if !isValidDataType(canonical) {
+			t.Errorf("isValidDataType(%q) = false, want true", canonical)
 		}
 	}
 	if len(canonicalDataTypeDomain) != 7 {
@@ -69,8 +69,8 @@ func TestValidateDataTypeRefusesEveryRetiredLegacySpelling(t *testing.T) {
 		if !strings.Contains(err.Error(), legacy) {
 			t.Errorf("refusal of %q does not name the offending value: %v", legacy, err)
 		}
-		if IsValidDataType(legacy) {
-			t.Errorf("IsValidDataType(%q) = true, but a legacy spelling is never canonical", legacy)
+		if isValidDataType(legacy) {
+			t.Errorf("isValidDataType(%q) = true, but a legacy spelling is never canonical", legacy)
 		}
 	}
 }
@@ -96,8 +96,8 @@ func TestValidateDataTypeRefusesAnythingOutsideTheClosedVocabulary(t *testing.T)
 				t.Errorf("refusal of %q does not name accepted value %q: %v", refused, canonical, err)
 			}
 		}
-		if IsValidDataType(refused) {
-			t.Errorf("IsValidDataType(%q) = true, want false", refused)
+		if isValidDataType(refused) {
+			t.Errorf("isValidDataType(%q) = true, want false", refused)
 		}
 	}
 }
@@ -111,8 +111,8 @@ func TestValidateDataTypeAcceptsAbsence(t *testing.T) {
 	if err := validateDataType(""); err != nil {
 		t.Fatalf("validateDataType(\"\"): unexpected error %v", err)
 	}
-	if IsValidDataType("") {
-		t.Error("IsValidDataType(\"\") = true; absence is accepted at registration but is not a value")
+	if isValidDataType("") {
+		t.Error("isValidDataType(\"\") = true; absence is accepted at registration but is not a value")
 	}
 }
 

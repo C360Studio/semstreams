@@ -2,6 +2,7 @@ package contract
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -24,6 +25,31 @@ import (
 //   - these guards enforce that the closed set has exactly one RDF rendering
 //     each at the export edge, and that the set of framework predicates
 //     declaring NOTHING can only shrink.
+
+// canonicalDataTypes is the closed declaration vocabulary as the CONTRACT sees
+// it: the seven exported constants, written out here rather than read back from
+// the vocabulary package's own membership check.
+//
+// Two reasons it is spelled out. The membership check is unexported (gh#1267
+// owner ruling "in package": ADR-106 freezes this Tier 1 surface, so a helper
+// no adopter asked for is a permanent bill). And a guard that asked the
+// implementation "is this canonical?" could not see a value dropped from the
+// set — it would agree with whatever the implementation now believes. The
+// exported constants ARE the contract an adopter writes against, so they are
+// the right thing to walk.
+var canonicalDataTypes = []string{
+	vocabulary.DataTypeString,
+	vocabulary.DataTypeEntityID,
+	vocabulary.DataTypeInt,
+	vocabulary.DataTypeFloat,
+	vocabulary.DataTypeBool,
+	vocabulary.DataTypeDateTime,
+	vocabulary.DataTypeJSON,
+}
+
+func isCanonicalDataType(s string) bool {
+	return slices.Contains(canonicalDataTypes, s)
+}
 
 // canonicalDataTypeRenderings is the complete export mapping for the closed
 // declaration vocabulary: one row per canonical value, and the row says what
@@ -73,7 +99,7 @@ func TestEveryCanonicalDataTypeHasExactlyOneExportRendering(t *testing.T) {
 	seenRendering := make(map[string]string, len(canonicalDataTypeRenderings))
 
 	for i, row := range canonicalDataTypeRenderings {
-		if !vocabulary.IsValidDataType(row.declared) {
+		if !isCanonicalDataType(row.declared) {
 			t.Errorf("row %d declares %q, which is not in the closed vocabulary", i, row.declared)
 			continue
 		}
@@ -105,11 +131,16 @@ func TestEveryCanonicalDataTypeHasExactlyOneExportRendering(t *testing.T) {
 		seenRendering[got] = row.declared
 	}
 
-	// The whole closed set is covered. IsValidDataType is the membership
+	// The whole closed set is covered. canonicalDataTypes is the membership
 	// oracle; the count is the tripwire that an eighth constant added without a
 	// rendering cannot pass silently.
-	if len(seenDeclared) != 7 {
-		t.Errorf("the mapping covers %d canonical values; the closed vocabulary has 7", len(seenDeclared))
+	if len(seenDeclared) != len(canonicalDataTypes) {
+		t.Errorf("the mapping covers %d canonical values; the closed vocabulary has %d",
+			len(seenDeclared), len(canonicalDataTypes))
+	}
+	if len(canonicalDataTypes) != 7 {
+		t.Errorf("the closed vocabulary is %d values, not 7 — every guard in this file walks this set "+
+			"and the export mapping above must gain a row with it", len(canonicalDataTypes))
 	}
 
 	// entity_id is the one value whose rendering is not a literal at all.
@@ -248,11 +279,7 @@ func TestFrameworkPredicateDataTypesAreCanonicalAndRatcheted(t *testing.T) {
 		t.Errorf("predicates declaring no datatype that are not in the measured exemption set: %v\n"+
 			"Declare one of %v, or — if absence is genuinely right for it — add it to "+
 			"predicatesDeclaringNoDataType with the reason.",
-			unexpectedlyBare, []string{
-				vocabulary.DataTypeString, vocabulary.DataTypeEntityID, vocabulary.DataTypeInt,
-				vocabulary.DataTypeFloat, vocabulary.DataTypeBool, vocabulary.DataTypeDateTime,
-				vocabulary.DataTypeJSON,
-			})
+			unexpectedlyBare, canonicalDataTypes)
 	}
 }
 
@@ -308,7 +335,7 @@ func auditPredicateDataTypes(declared map[string]string) (noncanonical, unexpect
 			if !predicatesDeclaringNoDataType[predicate] {
 				unexpectedlyBare = append(unexpectedlyBare, predicate)
 			}
-		case !vocabulary.IsValidDataType(dataType):
+		case !isCanonicalDataType(dataType):
 			noncanonical = append(noncanonical, predicate+"="+dataType)
 		}
 	}
