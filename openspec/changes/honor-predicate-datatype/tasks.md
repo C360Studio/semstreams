@@ -247,14 +247,36 @@ question 2026-09-09 (PR #1269 comment 5606966440). Everything below is ruled wor
       appeared in a release, so unexporting it removes nothing the baseline `v1.0.0-beta.162` contains. CI's
       `Tier 1 API Compatibility` job is the check; task 8.2's note that "the seven constants and `IsValidDataType`
       are compatible additions" is now stale for the second half.
-- [ ] 10.4 **Guard repairs (review HIGH-1).** `frameworkPredicateDataTypes`
+- [x] 10.4 **Guard repairs (review HIGH-1).** `frameworkPredicateDataTypes`
       (`test/contract/predicate_datatype_contract_test.go:286-300`) reads the ambient registry FIRST and lets it win;
       production is the reverse (`init()` runs, then `main` calls `builtins.Register()`, which amends). Reverse the
       precedence, and drop the two exemptions that are not bare in production: `agent.loop.role` and
       `agent.run.origin-entity-id`, both declared `string` at `vocabulary/agentic/register.go:450-452,490-492`.
-- [ ] 10.5 **Guard denominator (review HIGH-2).** The ratchet passes over an EMPTY registry — the only assertions are
+      **DONE `122cd7a8`.** Premise measured before implementing, not taken on the review's word — a throwaway probe
+      in `test/contract` printed all three walks: ambient (77 predicates) holds both names present with datatype
+      `""`; `ClearRegistry()`+`builtins.Register()` (156) holds both as `string`; ambient-then-amend (218) holds both
+      as `string`. Exactly 2 predicates differ between ambient-first and production order, and the bare count moves
+      **81 → 79**. The two declarations were also read directly at `vocabulary/agentic/register.go:450-452,490-492`.
+      The fix goes further than reversing precedence, because the clearing step was the second half of the bug:
+      `Register` amends from what is already in the registry (gh#410), so clearing between the two sources destroys
+      any datatype a builtins registration inherits rather than restates. The collector now calls
+      `builtins.Register()` on top of the ambient registry and reads — which is not an approximation of a running
+      binary, it is what the binary does. Exemption set is 79 entries.
+      **Mutation-checked**: restoring ambient-first precedence turns the ratchet RED naming exactly
+      `[agent.loop.role agent.run.origin-entity-id]`; restored, green. The fix and the exemption removal are
+      therefore coupled — neither is green without the other.
+- [x] 10.5 **Guard denominator (review HIGH-2).** The ratchet passes over an EMPTY registry — the only assertions are
       `len(noncanonical) > 0` and `len(unexpectedlyBare) > 0`, both trivially false over an empty map, and a mutation
       emptying both collector loops left it green. Assert the denominator beside them.
+      **DONE `122cd7a8`.** Two checks, not one. The walk must find a plausible registry (floor 100 against a measured
+      218, the measured figure named in the message so a later reader knows what moved). And **every exemption must
+      name a predicate that is really registered and really bare** — which is the stronger of the two, because it
+      would have caught 10.4's two false exemptions on its own, without anyone re-deriving the precedence bug.
+      `TestPredicateDataTypeRatchetCanFail` now also states on the record that `auditPredicateDataTypes(nil)` finds
+      nothing, so it is explicit that the audit function cannot be its own denominator guard.
+      **Mutation-checked twice**: emptying the collector → RED on the denominator floor ("the walk found 0 framework
+      predicates"); re-adding `agent.loop.role` as a false exemption → RED naming it and the `"string"` it declares.
+      Both restored green. Note the first mutation is the one the review reported as leaving the guard GREEN.
 - [ ] 10.6 Sweep the 20 retired-spelling `// DataType:` comments in `vocabulary/agentic/predicates.go` (review
       HIGH-4); the ~40 `// DataType: string (entity ID)` lines are #1275's evidence trail — leave them to that issue.
 - [ ] 10.7 Delete `geo:point` from `message/triple.go:84` (review MEDIUM-6). The doc comment offers adopters a value
@@ -266,7 +288,7 @@ question 2026-09-09 (PR #1269 comment 5606966440). Everything below is ruled wor
 - [ ] 10.9 Add the (d) rows to `docs/operations/migration-predicate-datatype.md` — the ~37 additional sites, per
       repository. Under (d) the migration note is the WHOLE adopter story, not a supporting document: nothing
       normalizes any more, so an unmigrated sister panics at boot.
-- [ ] 10.10 **HOLD — this change cannot merge until 10.2-10.9 and this task land.** The hold lives here, on
+- [ ] 10.10 **HOLD — this change cannot merge until every task in this section lands.** The hold lives here, on
       the last task in the section, because `scripts/openspec-queue.sh:64,145` matches caveats against
       UNCHECKED lines only — parked on 10.1 it vanished from the queue the moment 10.1 was ticked, leaving
       a still-blocked change reading as an ordinary fraction.
