@@ -89,17 +89,19 @@ tolerates; above it, it can never fire. Both defects are in the tree today (`:76
       percentile budgets are a 5k quantity and cannot be derived from a 21k run. **PASS 2.12 s, exit 0.** Worst
       measurement p95 77.861 ms, max 80.068 ms. Both baselines are recorded in `design.md` P25-P26 and parsed with a
       unit-safe regex — 18 of 18 and 9 of 9 rows, after a first parse silently dropped two `µs` rows (§ 11.10).
-- [ ] 3.3 Publish both raw logs as the in-tree evidence appendix the acceptance record points at, alongside
+- [x] 3.3 Publish both raw logs as the in-tree evidence appendix the acceptance record points at, alongside
       `docs/operations/evidence/graph-index-pre-tag-0a7af288.md`. Sources:
       `scratchpad/supervised_baseline.log` and `scratchpad/ci_baseline.log` in this session's scratchpad — copy them
       in rather than re-running, since re-running produces a different measurement. Carry the provenance table shape
       from `docs/operations/32-...:85`-`:95`: revision, worktree state, run timestamp and timezone, host CPU and
       memory, Docker allocation, Docker client/server, NATS server and image digest, Go SDK, evidence capture.
-- [ ] 3.4 Replace the historical latency rows in the owner-filter acceptance record (`docs/operations/32-...:80`+)
+      **DONE — `docs/operations/evidence/graph-index-owner-load-60c79736.md`, 48 harness `phase=` lines preserved verbatim, provenance measured from the run logs themselves (Docker 29.7.2/API 1.51/testcontainers-go v0.40.0, 23,742 MB, pin `2.14.4-alpine@sha256:f2123f53...`, SDK v1.52.0). Testcontainers header lines carrying a local filesystem path were excluded: the repo is public.**
+- [x] 3.4 Replace the historical latency rows in the owner-filter acceptance record (`docs/operations/32-...:80`+)
       with the `60c79736` measurements, and state the unit on every table — the #1286 defect is a unit that was
       stated once, far from the number that was read. Note that the old record's CONTEXT rows have no counterpart:
       that store was retired after `0a7af288`, which is itself evidence the record is stale.
 
+      **DONE — the owner-filter section is now `## Owner-filter acceptance record — revision 60c79736`; every table states its unit in the column header rather than once at the foot (the #1286 defect). CONTEXT is gone from the maximum-key table: `phase=maxima` no longer emits a context key, confirming the store was retired after `0a7af288`. The pinned-environment caveat at `:42` now splits current-pin (owner-filter) from historical (predicate comparison) instead of calling everything below it historical.**
 ## 4. The ruled instrument change
 
 - [x] 4.1 Both per-repetition wall-clock assertions are deleted — the measurement phase's old `:489` and the
@@ -183,11 +185,12 @@ tolerates; above it, it can never fire. Both defects are in the tree today (`:76
       `openspec/specs/graph-index/spec.md` at archive time, not before. It repairs citation defect A at `:184`
       (ADR-065 -> ADR-077 §8 condition 4), names one absolute ceiling observed as a typed error, separates the
       regression guard from the activation evidence, and requires the supervised record's provenance and unit.
-- [ ] 6.2 **UNBLOCKED — Q3 ruled 2026-09-11: in-place amendment note.** Apply the ADR-077 amendment drafted in
+- [x] 6.2 **UNBLOCKED — Q3 ruled 2026-09-11: in-place amendment note.** Apply the ADR-077 amendment drafted in
       `design.md` § 10 as an in-place note after `docs/adr/077-...:139` (NOT a new record), and drop the literal
       "below 3 seconds" from condition 4 in favour of the runbook holding the number. The architect wrote the words
       and did not apply them.
 
+      **DONE — in-place amendment note after ADR-077 condition 4, placed AFTER the numbered list rather than inside it (an inline insert would break the list), matching the `docs/adr/046-...:14` precedent. Condition 4 now reads "evidenced by a supervised run recorded against the current server and SDK pin" and no longer carries "below 3 seconds"; condition 5 is untouched, as ruled.**
 ## 7. Verification
 
 - [x] 7.1 `go test -race -failfast -tags=integration -timeout=20m -count=1 ./processor/graph-index` exit 0,
