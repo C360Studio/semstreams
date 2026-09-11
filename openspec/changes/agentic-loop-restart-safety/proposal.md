@@ -1,8 +1,15 @@
 # Change: agentic-loop restart-safe settlement
 
-## Current owner direction (2026-09-08)
+## Status
 
-The next acceptance checkpoint is restart-safe sequential chat through the supported task/dispatch path, using real
+This proposal records the accepted scope, not implementation completion. Current source, completed checkpoints,
+remaining proof, and landing gates live in [tasks](tasks.md). The combined candidate is not yet accepted.
+The introduced dispatch-to-research dependency correction remains decision-held; the existing mixed-view contract
+is not withdrawn. This documentation reconciliation adds no runtime behavior or approval.
+
+## Approved product direction (2026-09-08)
+
+The accepted product checkpoint is restart-safe sequential chat through the supported task/dispatch path, using real
 NATS and a deterministic fake model. A bounded execution can finish a turn without ending the conversation; the
 next turn must receive the relevant prior exchange after component replacement. Following inventory and independent
 design review, the owner accepted optional `PriorMessages` on UserMessage, HTTPMessageRequest, and TaskMessage, and
@@ -17,10 +24,10 @@ Unfinished scope below remains open.
 
 ## Why
 
-Agentic-dispatch currently keeps a second process-local interpretation of agentic-loop state. That state drives
+At the inventoried baseline, agentic-dispatch kept a second process-local interpretation of agentic-loop state. It drove
 approval, listing, AutoContinue, custom commands, debug output, and metrics even though `AGENT_LOOPS` is current loop
-authority and dispatch already owns a shared authority-backed view over that bucket. Replacement therefore makes
-valid loops appear absent or incomplete.
+authority and dispatch already owned a shared authority-backed view over that bucket. Replacement could therefore
+make valid loops appear absent or incomplete.
 
 This change makes dispatch an edge gateway. It admits external requests and publishes task, cancel, and approval
 work; performs exact authority reads for explicit LoopID operations; serves reverse-lookup conveniences from one

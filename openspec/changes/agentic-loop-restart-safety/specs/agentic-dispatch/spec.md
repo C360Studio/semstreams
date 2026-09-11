@@ -146,7 +146,9 @@ Dispatch SHALL use one caught-up graph view over `AGENT_LOOPS` for `/activity`, 
 AutoContinue. `LoopTracker` and pending-approval process caches SHALL NOT exist. `/loops` and `/debug/state` SHALL
 preserve the existing immutable `LoopInfo` JSON schema except for `execution_id` on the existing nested
 `PendingApprovalInfo`. That identity SHALL come from observed pending authority and appear in the corresponding
-JSON/OpenAPI schema. All unrelated DTO fields and projection contracts SHALL remain unchanged. This identity
+JSON/OpenAPI schema. The existing optional `context_request_id` field SHALL remain empty in the authority-backed
+projection, as accepted by the edge-gateway design; no historical notification lookup SHALL reconstruct it.
+All other unrelated DTO fields and projection contracts SHALL remain unchanged. This identity
 addition SHALL NOT authorize tracker retirement or unrelated projection expansion as part of the approval correction.
 `/debug/state` SHALL expose the view's caught-up readiness
 and current poison diagnostics rather than reporting a false empty state.
@@ -214,7 +216,8 @@ dispatch's check SHALL NOT stand in for that application-time check.
 - **WHEN** `/loops` or `/debug/state` reports a valid view-derived loop
 - **THEN** it uses the existing immutable `LoopInfo` JSON schema with only the declared nested pending
   `execution_id` addition
-- **AND** JSON/OpenAPI verification preserves every unrelated field and mapping
+- **AND** `context_request_id` retains its optional schema but is empty, as accepted for the authority-backed view
+- **AND** JSON/OpenAPI verification preserves every other unrelated field and mapping
 - **AND** no mutable loop entity, tracker state, or projection internals enter the response
 
 #### Scenario: Exact AutoContinue tuple has one match
@@ -279,6 +282,11 @@ lifecycle context. Exported graphview `Restart` is not part of the contract.
 - **AND** Stop returns only after no later ACK, publication, or projection mutation is possible
 
 ### Requirement: The shared loop view classifies the mixed bucket
+
+> Reconciliation status (2026-09-11): this accepted requirement is retained unchanged. Its implementation correction
+> is decision-held under tasks R1 because the introduced core-to-research dependency violates core composition.
+> This note selects no replacement API, decoding shortcut, loss of research activity, or change of completion owner.
+> The inherited research completion/readback defect in #1288 does not resolve this requirement's implementation.
 
 Bare canonical LoopID keys SHALL validate as `LoopEntity` with key/ID equality. `COMPLETE_<canonical LoopID>` SHALL
 validate by completion family and remain activity-only. Known research namespaces SHALL be ignored as non-loop

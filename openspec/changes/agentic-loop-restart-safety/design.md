@@ -2,10 +2,19 @@
 
 ## Status
 
-Owner-accepted target state reconciled after nested PR #1251 at exact branch checkpoint
+This document records the accepted #1146 contracts; it does not certify their complete implementation.
+[Tasks](tasks.md) is the current execution and evidence record. Its completed checkpoints are baseline-scoped;
+the combined candidate, remaining approval proof, and final review/landing gates remain open.
+
+The detailed contracts below remain intact. All dated designs and inventories, and the frozen task journal in
+`history/`, are historical provenance rather than competing execution instructions. They neither revive withdrawn
+proposals nor make historical tests current. Old task IDs resolve through the mapping in `tasks.md`.
+
+The accepted rebaseline followed nested PR #1251 at
 `P=09ba38b1de5e7200e72281c8e4b8941d81be1da2`, whose merge base with the frozen staged #759 parent is exact
-`F=417beae5552f8f15ad3540edd7d8504c87174c13`. The dispatch edge-gateway correction is owner-approved and
-independently reviewed; implementation begins with its evidence gate.
+`F=417beae5552f8f15ad3540edd7d8504c87174c13`. P records implementation ancestry, not the current worktree HEAD.
+The dispatch edge-gateway direction is owner-approved and independently reviewed; its remaining implementation
+and proof obligations, including the decision-held research boundary correction, remain in tasks R1 and R11.
 The producer-identity prerequisite is independently reviewed and owner-accepted by #1146 comment `5575482141`.
 
 The bounded approval-gate correction is independently reviewed and owner-accepted on 2026-09-10 by
@@ -91,10 +100,10 @@ This design incorporates the accepted evidence checkpoints:
   `d26c0667692e5b5a6e3950f5b097966c17d2750b90aaeb8e54d2873a564275b5`, independent `DESIGN REVIEW PASS`.
   SHA-256 `339cf2b2c734ef48a2898ce6b79c3783577a8b4ae152b65a1078b00445949b76` is superseded provenance.
 
-The standalone `design-reconciliation-F-2026-09-02.md` preserves the reviewed reasoning and owner-ruling record.
-After this materialization it is non-normative evidence: proposal, this design, tasks, and capability deltas are the
-only active target-state authority. A baseline or touched-surface change invalidates the checkpoint and requires
-reinventory before implementation.
+The dated artifacts preserve reviewed reasoning, intermediate proposals, owner-ruling records, and evidence at
+their recorded baselines. Proposal, this design, tasks, and the eight capability deltas are the active authority.
+Historical files and their pinned hashes remain unchanged. A changed baseline or touched surface requires refreshing
+the affected inventory before its evidence is reused; historical acceptance is not current implementation proof.
 
 ## Holds
 
@@ -116,7 +125,7 @@ reinventory before implementation.
   and designs declared transitions against the settled handler exits.
 - No native settlement enters business work. The only non-heartbeat transport export is the narrow shared
   `SettleDelivery` interpreter; no work-owning adapter, deadline policy, consumer owner, or lifecycle API is added.
-  No production work begins before this active materialization passes pre-implementation design review.
+  The recorded pre-implementation review does not replace review of subsequent implementation changes.
 - The framework-owned rule `publish_agent` producer that feeds row 15 is part of this vertical. Its six configured
   classifier surfaces and four statically loaded producer configurations use the existing rule publisher plus the
   same repo-internal AGENT admission validator; no second gate or exported API is introduced.
@@ -150,7 +159,7 @@ failure risk and exposes continuation mechanics to adopters.
 
 ### Use streams-first recovery with an evidence-gated continuation exception
 
-This uses exact reads only after process correlation is missing. Approval storage remains conditional on a real
+This uses exact reads at the named recovery and authority boundaries. Approval storage remains conditional on a real
 replacement proof and second owner ruling. It preserves the current orchestration layers and is the recommended
 design.
 
@@ -506,6 +515,10 @@ no raw entity, KV handle, bucket, tracker, or generic query.
 projection truth is unavailable and exposes readiness/poison diagnostics. `router_active_loops` is removed with no
 Prometheus replacement; the loop gauge remains local telemetry, not durable authority.
 
+The accepted edge-gateway checkpoint's value-mapping exception remains explicit: `context_request_id` keeps its
+optional JSON field but is empty because it was never durable or an authority field. This is distinct from the
+later nested pending `execution_id` schema addition. Every other unrelated DTO field and mapping is preserved.
+
 Exported `graphview.View.Restart()` and its retained context closure are removed without replacement. Dispatch's
 lifecycle-control goroutine stops and recreates a failed view with its active run context and joins it during Stop.
 
@@ -749,7 +762,8 @@ does not advertise a single-delivery posture.
 ## Observed AGENT replay admissibility
 
 `MaxAge` alone cannot prove a recovery horizon while `MaxBytes` plus `DiscardOld` may evict required evidence early.
-The current shipped posture therefore cannot advertise bounded restart-safe continuation under capacity pressure.
+The inventoried DiscardOld posture therefore could not support that recovery claim under capacity pressure.
+The accepted observed-admission contract below remains subject to the current proof gates in tasks.
 
 Each recovery-dependent agentic owner calls pure repo-internal
 `internal/agentstreamadmission.ObserveAndValidate` after resolving its own admitted port facts and before its own
@@ -804,9 +818,10 @@ eviction may already have destroyed authority. Approval timeout is validated aga
 
 The publisher addendum proves six enabled rule-processor configurations declare a local JetStream output covering
 `agent.task.*`; five name it `agent.task` and `configs/agentic.json` names it `agent_task`. Four configurations load
-eleven first-party `publish_agent` definitions. The current exact-subject classifier sends every concrete substituted
-subject down core NATS even though composition correctly recognizes that explicit stream `AGENT` subject `agent.>`
-covers the declared wildcard. Static composition connectivity is therefore not durable publication proof.
+eleven first-party `publish_agent` definitions. At that inventory checkpoint, exact-subject classification sent
+concrete substituted subjects down core NATS even though composition recognized that explicit stream `AGENT`
+subject `agent.>` covers the declared wildcard. Static composition connectivity is not durable publication proof;
+the corrected publisher path still requires the complete R8 evidence.
 
 An affected rule processor derives activation and stream identity only from its own resolved `PortFacts`. It locates
 the declared local AGENT task output by its resolved facts and preserves its configured name, including
@@ -948,9 +963,9 @@ recovery owner.
 The design is rejected or revised if any premise fails:
 
 1. Exact frozen parent `F=417beae5552f8f15ad3540edd7d8504c87174c13` supplies the accepted permanent
-   `DeliveryResult` foundation. Implementation begins from exact post-#1251 checkpoint
-   `P=09ba38b1de5e7200e72281c8e4b8941d81be1da2`; PR #1159 targets the non-default parent and does not require #759
-   to merge first.
+   `DeliveryResult` foundation. Exact post-#1251 checkpoint
+   `P=09ba38b1de5e7200e72281c8e4b8941d81be1da2` records the implementation's starting ancestry, not its current
+   HEAD. PR #1159 targets the non-default parent and does not require #759 to merge first.
 2. The #1146-owned tranche of #1155 proves replacement rather than same-process reconstruction; #1155 remains open
    for #1249 AgentRun complete/failed proof and the later combined gate.
 3. RequestID stably identifies one logical provider-work turn and retains its LoopID correlation.
@@ -983,37 +998,50 @@ The design is rejected or revised if any premise fails:
 19. `component/flowgraph/flowgraph.go:381-389` defines the canonical directional matcher as
     `SubjectCovers(filter, pattern)` and identifies graph-level composition as its current caller. Rule publication
     passes declared filter first and concrete substituted subject second; it adds no matcher.
-20. The six conflicting current requirements are exactly `openspec/specs/agentic-dispatch/spec.md:72`,
+20. The previously named current-spec reconciliation set includes `openspec/specs/agentic-dispatch/spec.md:72`,
     `openspec/specs/agentic-tools/spec.md:435`, `openspec/specs/agentic-tools/spec.md:467`,
     `openspec/specs/agentic-tools/spec.md:487`, `openspec/specs/agentic-loop/spec.md:788`, and
     `openspec/specs/entity-id-contract/spec.md:651`; their full modified or replacement deltas preserve unaffected
     scenarios and citations.
 
+That set is not an exhaustive final-sync claim. Current `agentic-terminal-events` also retains tracker, DiscardOld,
+and best-effort-persistence wording. R14 must account for that adjacent wording while preserving unaffected terminal
+validation, response content, routing, ancestry, retention, and telemetry scenarios. This reconciliation selects no
+additional capability delta or behavioral amendment.
+
 ## Risks and unproven claims
 
-- Exact retained-message lookup APIs and performance are not yet implemented or measured at each named boundary.
+The checklist distinguishes implemented slices from complete acceptance. These are remaining proof obligations,
+not assertions that every referenced mechanism is absent:
+
+- Exact retained-message lookup correctness and performance require evidence at each named boundary.
 - The accepted inventories do not separately admit strong retention for the USER and TOOL source streams used by
   physical rows 1, 11, and 17. Implementation review must measure their actual source-delivery guarantees and prove
   their observed bounds sufficient for the complete 15-lane horizon. AGENT admission is not proof for another
   stream.
-- Governance retained-verdict lookup at the waiter-loss boundary is target state, not current truth. Ordinary
+- Governance retained-verdict recovery at the waiter-loss boundary requires the complete R7 evidence. Ordinary
   validated output remains at-least-once.
-- `AGENT_LOOPS` matching/race/drift behavior is target state. Its existing create literal is not observed authority;
-  a retained sibling creator is a collision to prove through the foreign-config race test, not a reason to reconcile.
-- Approval gate-identity propagation, noncurrent-gate diagnostics and settlement, and closed-gate replay remain
-  implementation/acceptance obligations. Historical evidence checkpoints and the separate Store ruling remain in
-  tasks; approval of the correction is not a claim that its tests are green.
+- `AGENT_LOOPS` matching/race/drift behavior requires the complete R8 evidence. A create literal is not observed
+  authority; a retained sibling creator requires the foreign-config race proof, not reconciliation.
+- The complete approval gate-identity, noncurrent-gate, and closed-gate replay matrix remains an acceptance
+  obligation. Historical checkpoints and the separate Store ruling remain in tasks; partial greens do not
+  complete that matrix or revoke the Store decision.
 - No physical non-heartbeat subscription has measured evidence that legitimate work crosses its configured AckWait.
   Heartbeat migration remains unavailable without that evidence and a reviewed lane-specific policy.
-- Affected-closure admission and named boundary-specific exact reads are target state, not current behavior.
-- The six rule-publisher classifier surfaces currently use exact equality and the four static producer configurations
-  currently take core NATS. Until the new capability proof passes, composition coverage alone is not PubAck proof.
+- Affected-closure admission, named exact reads, all six rule-publisher classifier surfaces, and all four static
+  producer configurations require their complete current-candidate evidence. Composition coverage alone is not
+  PubAck proof.
+- The introduced core-to-research dependency/projection correction remains decision-held in R1. The inherited
+  research completion/readback mismatch belongs to #1288; it neither excuses this regression nor changes the
+  accepted mixed-view behavior.
+- The combined candidate has not passed its complete gate. R11–R15 retain verification, documentation,
+  implementation/cross-agent review, archive, current-spec reconciliation, and landing obligations.
 
 ## Stop conditions
 
 Implementation or review stops if:
 
-- the remote staged parent is not exact `F`, implementation does not begin from exact `P`, an inventory verification
+- the remote staged parent is not exact `F`, implementation no longer descends from exact `P`, an inventory verification
   drifts, or the active artifacts regain merge-first or #1148 AgentRun language;
 - an ordinary publication is specified or implemented as exactly-once, requires a universal committed-output
   lookup, or treats `Nats-Msg-Id` as proof beyond the configured duplicate window;
