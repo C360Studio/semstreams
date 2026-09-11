@@ -28,7 +28,10 @@ tolerates; above it, it can never fire. Both defects are in the tree today (`:76
       landed with 2 withdrawals and 6 corrections.
 - [x] 1.4 Owner ruling 2026-09-11, #1284 comment 5635299542. Design revised to a ruled target state (revision 3),
       which voids the sibling A/B that revision 2 had presented as its strongest evidence — `design.md` § 11.1-11.3.
-- [ ] 1.5 Independent review of design revision 3 recorded on PR #1285, covering the ruled state, the re-derived
+- [ ] 1.5 **OPEN — design-revision review was never run separately.** The implementation review (7.5) covered the
+      ruled state and the re-derived numbers at the code level, but revision 3's design artifacts were not
+      independently re-derived after the ruling. Either run it or record the decision not to, with the reason.
+      Original wording: independent review of design revision 3 recorded on PR #1285, covering the ruled state, the re-derived
       percentile numbers in § 2, and the six-item docket.
 
 ## 2. Owner docket — every line below is a HOLD on the task it names
@@ -110,7 +113,7 @@ tolerates; above it, it can never fire. Both defects are in the tree today (`:76
       doctrine, because after task 4.1 the field was read by nothing but the contract test and the full profile's
       value could never be compared (the same 5s deadline fires first). Flagged for review on PR #1285; Q7(b) — the
       full profile's `p95Budget: 3s` / `p99Budget: 5s` — is untouched and still on the docket at task 2.7.
-- [ ] 4.3 **OWNER RULED 2026-09-11: keep `p95Budget`/`p99Budget` at `3 * time.Second` in this change.** The
+- [x] 4.3 **OWNER RULED 2026-09-11: keep `p95Budget`/`p99Budget` at `3 * time.Second` in this change.** The
       re-derivation to `1 * time.Second` is DEFERRED until the task 4.5 recording produces within-filter adjacency
       data. Rationale, in the owner's terms: this change must be strictly flake-reducing, and a 1s percentile gate
       is exposed to a stall that inflates two consecutive repetitions — an exposure the design itself calls real and
@@ -224,8 +227,11 @@ tolerates; above it, it can never fire. Both defects are in the tree today (`:76
       record, so the inventory is left as the design-time artifact it is. Precedent: the inventories of the two most
       recently archived changes (`2026-09-09-graph-read-tools-signal-absence`, `2026-09-01-loop-token-uuid-enforcement`)
       are both exit 1 on `main` today.
-- [ ] 7.5 Independent implementation review by `semstreams-reviewer` recorded on PR #1285.
-- [ ] 7.6 A green CI run after this change proves the guard passes. It is explicitly **not** activation evidence —
+- [x] 7.5 Independent implementation review by `semstreams-reviewer` recorded on PR #1285 — CHANGES REQUESTED at
+      `d9582508`/`49d1ec07` (comment 5639743584); HIGH 1, HIGH 2, MEDIUM 1, MEDIUM 2, NIT 1 and NIT 3 repaired in
+      `720dc50d`. HIGH 1 was that deleting the runner's `GRAPH_INDEX_LATENCY_LOG` export was GREEN; the two new
+      `test/testinfra` tests are mutation-verified to fail on that deletion.
+- [x] 7.6 A green CI run after this change proves the guard passes. It is explicitly **not** activation evidence —
       that is task 3.3-3.4's published record. Do not report one as the other.
 
 ## 8. Archive
