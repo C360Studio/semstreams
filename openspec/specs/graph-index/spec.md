@@ -181,11 +181,30 @@ and clean bucket recreation. Concurrent-mutation correctness MUST be evaluated o
 declared final ENTITY_STATES revision and reconciliation reaches that watermark, with zero false matches,
 omissions, stale survivors, or ownership violations.
 
-Performance MUST be gated by absolute budgets, not comparison: the ADR-065 CI guard (5,000 hot members, each
-operation under 3 seconds) and one sustained-churn run on the 21,000-entity profile at the configured worker shape
-and one stress shape, achieving p95 at most 3 seconds, p99 at most 5 seconds, no operation at the 10-second
-handler bound, temporary consumers returning to baseline, and no unbounded queue growth. The selected worker
-maximum MUST be enforced in validated configuration before activation.
+Performance MUST be gated by absolute budgets, not comparison, and exactly one absolute ceiling MUST apply to a
+directly measured key listing: the framework-enforced KV deadline that every such call already runs under. The proof
+MUST observe that ceiling as the operation's own typed error and MUST NOT restate it as a predicted per-operation
+budget at any value, above or below it. A predicted budget below the enforced deadline fails on stalls the framework
+itself tolerates; a predicted budget above it can never fire. The 10-second handler bound remains the ceiling on the
+query-handler path and MUST NOT be carried as a per-operation budget on a directly measured key listing.
+
+Activation evidence for the owner-filter workload MUST come from a supervised run recorded against the current
+server and SDK pin, not from a shared-runner CI job. The recorded evidence MUST carry the repository revision, host
+CPU and memory, container runtime version, server and SDK pin, run timestamp, and the complete per-filter
+distribution. A supervised record taken under a superseded pin MUST NOT be cited as current evidence, and a run that
+records no distribution is not activation evidence.
+
+Every recorded latency value MUST carry its unit where the value appears, not only in a note elsewhere in the
+document, and any budget derived from the record MUST state its basis in that same unit. A budget whose stated
+justification cannot be checked against a recorded measurement in the same unit is not derived.
+
+The continuously-running CI profile is a regression guard, not activation evidence. It MUST assert exact match-set
+correctness for every owner and forward filter, exact convergence after churn, the typed-error ceiling, p95 and p99
+latency budgets derived from the supervised record, a bounded dispatcher queue, temporary consumers returning to
+every per-store baseline, released temporary subscriptions, zero slow consumers, and the server resident-set bound.
+It MUST NOT assert a per-repetition wall-clock budget.
+
+The selected worker maximum MUST be enforced in validated configuration before activation.
 
 A store that fails correctness or budget MUST defer its cleanup authority to a separately specified bounded
 replacement mechanism; that mechanism becomes a completion dependency of this change, and deferral MUST NOT waive
@@ -204,6 +223,53 @@ the required `[A] -> [B] -> []` result for any query-visible store.
 - **WHEN** production activation is evaluated
 - **THEN** unit arithmetic and representative data do not authorize activation
 - **AND** activation waits for pinned real-NATS maximum key/filter exact-match conformance
+
+#### Scenario: an operation that reaches the framework bound fails as an error
+
+- **GIVEN** a filtered key listing that reaches the framework-enforced KV deadline
+- **WHEN** the guard's repetition completes
+- **THEN** the operation returns a context-deadline error and the guard fails on that error
+- **AND** the failure is not reported as a budget comparison, because the ceiling was observed rather than predicted
+- **AND** no partial key set is accepted as a successful owner snapshot
+
+#### Scenario: a runner stall below the framework deadline does not fail the regression guard
+
+- **GIVEN** a CI run in which one repetition of one filter takes several seconds while the same run's other
+  repetitions of the same filter complete in well under a second
+- **WHEN** the guard evaluates that filter
+- **THEN** no per-repetition wall-clock comparison rejects the run
+- **AND** the guard fails only if the percentile budgets, the match sets, the convergence check, the queue bound, the
+  consumer baselines, the subscription count, the slow-consumer count, or the resident-set bound fail
+- **AND** the measured distribution is recorded so the excursion remains countable
+
+#### Scenario: a layout regression still fails the regression guard
+
+- **GIVEN** a change that makes an owner or forward filter over-match, rescan, or reconstruct a retired catalog
+- **WHEN** the CI profile runs
+- **THEN** the guard fails on the match-set assertion, the convergence assertion, or the percentile budgets
+- **AND** an order-of-magnitude latency regression is visible in the recorded distribution even where a budget does
+  not reject it
+
+#### Scenario: the measured distribution is recorded on a passing run
+
+- **GIVEN** a run in which every filter is inside every budget
+- **WHEN** the guard completes
+- **THEN** every filter's per-repetition durations are recorded in submission order, alongside its p50, p95, p99 and max
+- **AND** a supervised run additionally records the revision, host, runtime, pin and timestamp of its measurement
+
+#### Scenario: a derived budget states a basis that can be checked
+
+- **GIVEN** a latency budget in the regression guard justified by the supervised record
+- **WHEN** its basis is read
+- **THEN** it names the measured value it is a multiple of, in the same unit that value is recorded in
+- **AND** a reader can recompute the multiple from the published record without converting units
+
+#### Scenario: a superseded pin does not carry forward as evidence
+
+- **GIVEN** a recorded supervised run measured under a server or SDK pin that has since moved
+- **WHEN** activation evidence is evaluated
+- **THEN** its latency rows are historical and do not satisfy the activation condition
+- **AND** activation waits for a supervised run recorded on the current pin
 
 ### Requirement: INCOMING rows are retracted by their source owner
 
@@ -559,3 +625,4 @@ added.
 - **WHEN** the existing direct caller starts the clean instance again
 - **THEN** each canonical graph-index query subject has exactly one responder
 - **AND** no responder from the failed attempt remains
+

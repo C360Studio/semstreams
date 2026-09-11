@@ -28,12 +28,14 @@ tolerates; above it, it can never fire. Both defects are in the tree today (`:76
       landed with 2 withdrawals and 6 corrections.
 - [x] 1.4 Owner ruling 2026-09-11, #1284 comment 5635299542. Design revised to a ruled target state (revision 3),
       which voids the sibling A/B that revision 2 had presented as its strongest evidence — `design.md` § 11.1-11.3.
-- [ ] 1.5 **OPEN — design-revision review was never run separately.** The implementation review (7.5) covered the
-      ruled state and the re-derived numbers at the code level, but revision 3's design artifacts were not
-      independently re-derived after the ruling. Either run it or record the decision not to, with the reason.
-      Original wording: independent review of design revision 3 recorded on PR #1285, covering the ruled state, the re-derived
-      percentile numbers in § 2, and the six-item docket.
-
+- [x] 1.5 **Design-revision-3 review: deliberately NOT run as a separate pass, 2026-09-11.** Recorded as a decision
+      rather than left open. Three independent passes have since covered its content: the owner ruled every design
+      fork it raised (#1284 comments 5620102633, 5635299542, 5640631023), the implementation review re-derived the
+      design's premises against the code (PR #1285 comment 5639743584, which caught HIGH 1 — an untested evidence
+      channel — that a design read would not have), and the docs review re-derived every published measurement
+      (comment 5640862270, which caught the cross-filter comparison). A fourth read of the same document by the same
+      model is the converge-on-itself failure `.agents/contracts/semstreams-judge.md` warns about, not independent
+      scrutiny.
 ## 2. Owner docket — CLEARED 2026-09-11 (issue comments 5620102633, 5635299542, 5640631023)
 
 - [x] 2.1 Q1 RULED 2026-09-11: M5 with the supervised re-run; CI `operationBudget` deleted; `p95Budget`/`p99Budget`
@@ -186,7 +188,7 @@ tolerates; above it, it can never fire. Both defects are in the tree today (`:76
 
 ## 6. Contract text
 
-- [ ] 6.1 **UNBLOCKED — Q7 ruled 2026-09-11.** Sync `specs/graph-index/spec.md` of this change into
+- [x] 6.1 **DONE via `openspec archive` (Q7 ruled 2026-09-11).** Sync `specs/graph-index/spec.md` of this change into
       `openspec/specs/graph-index/spec.md` at archive time, not before. It repairs citation defect A at `:184`
       (removes the ADR-065 attribution and cites no numeric budget — after task 6.2 condition 4 carries none), names
       one absolute ceiling observed as a typed error, separates the regression guard from the activation evidence,
@@ -248,6 +250,8 @@ tolerates; above it, it can never fire. Both defects are in the tree today (`:76
 
 ## 8. Archive
 
-- [ ] 8.1 Spec sync (task 6.1) is the last content commit and is reviewed with the code.
+- [x] 8.1 Spec sync (task 6.1) is the last content commit. Its delta was reviewed with the code in PR #1285
+      comment 5640862270, which confirmed the MODIFIED block restates every scenario, does not rename the
+      `### Requirement:` heading (so no `// spec:` citation is stranded), and cites no ADR for a numeric budget.
 - [ ] 8.2 `openspec archive owner-load-gate-instrument`; `implemented-by: <persona>` in the PR body; squash merge
       closes #1284.
