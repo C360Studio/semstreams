@@ -44,16 +44,21 @@ The measured facts that decided the shape:
 
 ## What changes
 
-Test tier, documentation and contract text only. No production code changes.
+Test tier, documentation and contract text only, plus the integration runner script that carries the recorded
+distribution into CI output. No production code changes.
 
 1. **The CI per-operation budget is deleted**, and with it both per-repetition wall-clock assertions — `:489` and
    `:376`. The ceiling becomes the typed error `require.NoError` already raises at `:487` and `:374` when
    `KeysByFilter` reaches its deadline. The framework observes the real bound; the test stops predicting one.
-2. **`p95Budget` and `p99Budget` are kept and re-derived** from a fresh supervised measurement, moving from 3s to
-   **1s**. Basis, in the unit the measurements are in: 12.8x the quiet-box worst healthy p95 (77.861 ms), 5.7x the
-   worst shared-runner healthy p95 (175.4 ms), 2.6x the worst shared-runner healthy sample (389.0 ms). At
-   `repetitions: 5` the percentiles select `durations[3]`, so **two** repetitions must breach — the deleted gate
-   tripped on one, which is why this is not that gate returning.
+2. **`p95Budget` and `p99Budget` are KEPT AT 3s.** *(Corrected after the owner ruling of 2026-09-11; this bullet
+   previously said they moved to 1s, which the ruling declined — see `tasks.md` § 4.3 and `design.md` § 2.)* The
+   re-derivation is deferred until the submission-order recording produces within-filter stall-adjacency data, so
+   that this change is strictly flake-reducing and nothing is tightened on unmeasured exposure. The measured basis
+   is recorded in the profile comment in milliseconds anyway — quiet-box worst healthy p95 77.861 ms, worst
+   shared-runner healthy p95 175.4 ms, worst shared-runner healthy sample 389.0 ms, supervised 21k p95 311.449 ms /
+   p99 320.157 ms — together with the plain statement that 3s is a weak guard at ~38x the quiet-box p95. **#1287**
+   owns the re-derivation. At `repetitions: 5` the percentiles select `durations[3]`, so **two** repetitions must
+   breach, which is why no percentile gate is the deleted per-operation gate returning.
 3. **Condition 4's activation evidence moves to a supervised run**, recorded with its revision, host, runtime, pin,
    timestamp and complete per-filter distribution. That run has been executed at revision `60c79736` on the current
    pin: 21k full PASS 43.17 s, 5k CI PASS 2.12 s, both exit 0. Publishing it in-tree is `tasks.md` § 3.3-3.4.
@@ -73,8 +78,12 @@ Test tier, documentation and contract text only. No production code changes.
 - ADR-065, which says nothing wrong (Q6).
 - `docs/operations/32-...:70`-`:71`. That table describes the **smoke** harness and its staleness belongs with
   **#1286** (Q8).
-- `ownerLoadFullProfile`'s dead `operationBudget: 10 * time.Second` at `:85` — the same deletion logic applies, the
-  resolution is proposed in `design.md` § 9, and it is **not applied** (Q7).
+- `ownerLoadFullProfile`'s dead `operationBudget: 10 * time.Second` at `:85` was scoped out here (Q7) and was
+  **applied after all** at implementation time, under a session-level call layered on the owner ruling rather than
+  an owner ruling of its own: after the CI deletion the field was read by nothing but the contract test, and the
+  full profile's value could never be compared under the same 5s deadline, which is the `class:phantom-config`
+  shape. `tasks.md` § 4.2 records it and PR #1285 flags it for review. Q7(b) — the full profile's percentiles —
+  remains unapplied and open.
 - The two contract tests are rewritten, not removed: the anti-relaxation property has to survive the move
   (`tasks.md` § 4.4).
 

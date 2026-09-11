@@ -102,7 +102,8 @@ func ownerLoadFullProfile() ownerLoadProfile {
 		repetitions: 30, churnPerWriter: 200, workerShapes: []int{4, maxGraphIndexWorkers},
 		// No operationBudget: the same natsclient KV deadline bounds this profile too, so a predicted
 		// 10s ceiling here could never fire (#1284 design P18). The supervised record is this
-		// profile's output; its percentiles are gh#1287's second question.
+		// profile's output. Whether THESE percentiles are also re-derived is #1284 design Q7(b), still
+		// open on the owner docket; gh#1287 covers the CI profile's, not this one's.
 		p95Budget: 3 * time.Second, p99Budget: 5 * time.Second,
 		maxServerRSSBytes: 2 << 30,
 	}
