@@ -34,49 +34,48 @@ tolerates; above it, it can never fire. Both defects are in the tree today (`:76
       Original wording: independent review of design revision 3 recorded on PR #1285, covering the ruled state, the re-derived
       percentile numbers in § 2, and the six-item docket.
 
-## 2. Owner docket — every line below is a HOLD on the task it names
+## 2. Owner docket — CLEARED 2026-09-11 (issue comments 5620102633, 5635299542, 5640631023)
 
 - [x] 2.1 Q1 RULED 2026-09-11: M5 with the supervised re-run; CI `operationBudget` deleted; `p95Budget`/`p99Budget`
       kept and re-derived.
 - [x] 2.2 Q2 is MOOT under the ruling. It asked whether the evidence repair could land independently, because its
       normative sentence voided every CI run as condition-4 evidence. CI runs are no longer condition-4 evidence at
       all, so the sentence scopes to the supervised run, where it is simply correct.
-- [ ] 2.3 **HOLD — Q3, ADR form and what condition 4 says.** In-place amendment note on ADR-077 §8 condition 4
-      (`docs/adr/046-...:14` is the precedent), or a new ADR? ADR-107 is taken by the unmerged
-      `claude/gh1267-honor-predicate-datatype` branch (`bc7d79cc`), so a new record would be 108 and would race it.
-      `design.md` § 10 drafts the M5 wording and also proposes dropping the literal "below 3 seconds" from the ADR in
-      favour of the runbook holding the numbers. Blocks task 6.2.
-- [ ] 2.4 **HOLD — Q4.** Is M4 (the harness in its own CI job) still wanted? The ruling removes its original
-      justification — there is no tight budget left to protect — but the supervised run still has to happen
-      somewhere. File, drop, or fold into the supervised-run question.
+- [x] 2.3 **Q3 RULED — in-place amendment note on ADR-077 § 8 condition 4, NOT a new record** (RULED 2026-09-11, issue comment 5640631023).
+      Precedent `docs/adr/046-...:14`. A new record would be ADR-108 and would race the unmerged
+      `claude/gh1267-honor-predicate-datatype` branch (`bc7d79cc`); the decision has not reversed, only where its
+      activation evidence lives. **The ADR also stops carrying the numeric budget — the runbook holds it**, so the
+      number has one home. Unblocks task 6.2.
+- [x] 2.4 **Q4 RULED — M4 is DROPPED, not filed** (RULED 2026-09-11, issue comment 5640631023). A CI job cannot be the supervised
+      run: CI *is* the contended environment, and excluding contention is the point (measured — the same subtest is
+      2.12 s quiet vs 8.64 s shared, forward p95 78 ms vs 157-175 ms). The supervised run stays a documented manual
+      procedure pinned to a revision, which is what the acceptance record already is.
 - [x] 2.5 Q5 RESOLVED by measurement, and revision 3 corrects revision 2's over-generalization: gh#750's 2.237s is
       genuine seconds, but the sibling's "2.65s" is milliseconds misread as seconds and is a different number
       entirely (#1286).
-- [ ] 2.6 **HOLD — Q6.** Confirm ADR-065 needs no edit; the citation defect is in the spec text, not the ADR.
-- [ ] 2.7 **HOLD — Q7, now load-bearing.** Two parts. (a) `ownerLoadFullProfile`'s `operationBudget: 10 * time.Second`
-      at `:85` is dead code under the same 5s deadline; the proposed resolution — remove `operationBudget` from the
-      `ownerLoadProfile` struct entirely and delete both per-repetition assertions for both profiles — is stated in
-      `design.md` § 9. It touches the supervised profile the ruling just promoted, and ADR-077 condition 5 carries
-      the same "10-second handler bound" phrase. **(a) has now been APPLIED under a session-level call, not an owner
-      ruling** (task 4.2): after task 4.1 the field was read by nothing but the contract test, and the full profile's
-      value could never be compared, so it is the `class:phantom-config` shape. The owner still owns confirming or
-      reversing it, and ADR-077 condition 5 is NOT edited either way. (b) The full profile's `p95Budget: 3s` /
-      `p99Budget: 5s` now sit at 9.6x / 15.6x over the measured 311.449 ms / 320.157 ms — re-derive them too, or
-      leave them? — is untouched and still open. Blocks task 6.1.
-- [ ] 2.8 **HOLD — Q8.** `docs/operations/32-...:70` has asserted "every operation <3s; p95/p99 <=3s" for the CI
-      profile since 2026-07-18 while its own harness reads 10s/8s/9s. That row describes the **smoke** harness (churn
-      column `2 writers x 100` is `predicate_layout_smoke...:96`), so the repair belongs with **#1286**. What this
-      change refreshes is the **owner-filter acceptance record at `:80`+**. Confirm the split.
-- [ ] 2.9 **HOLD — Q9.** Keep `repetitions: 5`, or raise it? More repetitions make the percentile a better detector
-      and harder for a two-repetition stall to move. ~0.6-0.8 s each against a CI subtest that runs 8.64 s today.
-      *(Premise corrected at implementation time: this line was written against a 1s percentile budget, which task
-      4.3's ruling declined — the budget stays at 3s, so the trade-off is now #1287's to weigh, not this change's.
-      The mirror sentence in `design.md` § 9 Q9 carries the same superseded premise.)*
-- [ ] 2.10 **HOLD — Q10.** Two additions the architect did not apply: a p50 floor at 500 ms as the primary,
-      stall-immune regression detector (`durations[2]` needs three of five inflated to move), and per-class budgets
-      so one constant stops spanning a 108x range of healthy values. Offered as additions to the ruled
-      `p95Budget`/`p99Budget`, never substitutions.
-
+- [x] 2.6 **Q6 RULED — confirmed, ADR-065 is NOT edited** (RULED 2026-09-11, issue comment 5640631023). ADR-065 contracts no 3s
+      budget and its own stated bound is the 10 s handler timeout (`docs/adr/065-...:49`); the defect is the spec
+      text citing it at `openspec/specs/graph-index/spec.md:184`, repaired by task 6.1.
+- [x] 2.7 **Q7 RULED, both parts** (RULED 2026-09-11, issue comment 5640631023). **(a) CONFIRMED** — removing `operationBudget`
+      from the `ownerLoadProfile` struct entirely, applied during implementation under a session-level call, is
+      ruled correct: after task 4.1 the field was read by nothing but the contract test, and the full profile's
+      `10 * time.Second` sat *above* the enforced 5 s deadline and could never be compared (`class:phantom-config`).
+      **ADR-077 condition 5 is NOT edited.** **(b) RULED — the full profile stays at `p95Budget: 3s` /
+      `p99Budget: 5s`.** The 9.6x / 15.6x looseness over the measured 311.449 ms / 320.157 ms is accepted
+      deliberately: that run is supervised, quiet, has never fired, and is not a flake source, so tightening it buys
+      nothing and can only introduce a flake. **The ratios are published in the acceptance record** (task 3.4) so the
+      looseness is visible; re-deriving both profiles is #1287's once adjacency data exists. Unblocks task 6.1.
+- [x] 2.8 **Q8 RULED — split confirmed** (RULED 2026-09-11, issue comment 5640631023). The `docs/operations/32-...:70` row describes
+      the **smoke** harness (churn column `2 writers x 100` is `predicate_layout_smoke...:96`), so repairing it
+      belongs with **#1286**. This change refreshes only the **owner-filter acceptance record at `:80`+** (task 3.4).
+- [x] 2.9 **Q9 RULED — `repetitions: 5` is kept; the question folds into #1287** (RULED 2026-09-11, issue comment 5640631023). Its
+      premise is superseded: the line was written against a 1s percentile budget, which task 4.3's ruling declined.
+      At 3s the trade-off belongs to whoever weighs the tightening. (`design.md` § 9 Q9 carries the same superseded
+      premise, left as the design-time record.)
+- [x] 2.10 **Q10 RULED — both additions filed to #1287, neither added here** (RULED 2026-09-11, issue comment 5640631023). The
+      per-class argument is the stronger (one constant spans a 108x range of healthy values — P22 applied inside the
+      profile), but both the p50 floor and the per-class budgets require predicting a constant before within-filter
+      adjacency data exists, which is the predict-instead-of-observe move this ruling retired.
 ## 3. The supervised re-run — ruling 1's evidence
 
 - [x] 3.1 Supervised run executed at revision `60c79736`, worktree clean, on the same host as the `0a7af288` record
@@ -180,13 +179,14 @@ tolerates; above it, it can never fire. Both defects are in the tree today (`:76
 
 ## 6. Contract text
 
-- [ ] 6.1 **HOLD until Q7 is ruled.** Sync `specs/graph-index/spec.md` of this change into
+- [ ] 6.1 **UNBLOCKED — Q7 ruled 2026-09-11.** Sync `specs/graph-index/spec.md` of this change into
       `openspec/specs/graph-index/spec.md` at archive time, not before. It repairs citation defect A at `:184`
       (ADR-065 -> ADR-077 §8 condition 4), names one absolute ceiling observed as a typed error, separates the
       regression guard from the activation evidence, and requires the supervised record's provenance and unit.
-- [ ] 6.2 **HOLD until Q3 is ruled.** Apply the ADR-077 amendment drafted in `design.md` § 10 in the form the owner
-      rules — in-place note after `docs/adr/077-...:139`, or a new ADR — and decide whether condition 4 keeps its
-      literal "below 3 seconds". The architect wrote the words and did not apply them.
+- [ ] 6.2 **UNBLOCKED — Q3 ruled 2026-09-11: in-place amendment note.** Apply the ADR-077 amendment drafted in
+      `design.md` § 10 as an in-place note after `docs/adr/077-...:139` (NOT a new record), and drop the literal
+      "below 3 seconds" from condition 4 in favour of the runbook holding the number. The architect wrote the words
+      and did not apply them.
 
 ## 7. Verification
 
