@@ -25,6 +25,9 @@ Analysis and unresolved questions are kept out of the pinned sections, in "Adjac
 - `gh run list --workflow=ci.yml --status=failure --created '>=2026-08-26' --limit 60` -> 42 failures, every log fetched, 0 fetch errors
 - `gh run list --workflow=ci.yml --status=failure --limit 40` -> a DIFFERENT 40-run slice spanning 2026-05-30..2026-08-26 (38 fetchable, 2 HTTP 410 expired); the bare `--limit` form is not "the most recent failures"
 - `gh run view <id> --log-failed | grep -c "PredicateLayoutSmoke"` and `| grep -c "OwnerFilterLoadHarness"` over all 80 fetched failures, stderr captured to a file rather than discarded
+- `sed -n '470,486p' processor/graph-index/predicate_layout_smoke_integration_test.go` (the sibling's assertion ORDER, which voids the A/B)
+- `grep -n -i "milliseconds" docs/operations/32-predicate-layout-smoke-harness.md` -> `:133`, the unit statement over the owner-filter latency tables
+- `gh api repos/C360Studio/semstreams/issues/comments/5635299542` (the owner ruling, read verbatim)
 
 ## 1. The assertion that fires
 
@@ -173,6 +176,13 @@ The budget gate is the only assertion in the file that decides on a single sampl
 - `docs/operations/32-predicate-layout-smoke-harness.md:77` — `The CI profile is a regression guard, not a source for comparative layout selection.`
 - `docs/operations/32-predicate-layout-smoke-harness.md:80` — `## Pre-tag owner-filter acceptance record`
 - `docs/operations/32-predicate-layout-smoke-harness.md:43` — `recorded below under the OLD pin are historical`
+- `processor/graph-index/predicate_layout_smoke_integration_test.go:208` — `membershipRaw: membershipRaw, membership: nc.NewKVStore(membershipRaw), membershipStream: membershipStream,`
+- `processor/graph-index/predicate_layout_smoke_integration_test.go:479` — `require.NoError(t, err, label)`
+- `processor/graph-index/predicate_layout_smoke_integration_test.go:480` — `require.Less(t, duration, profile.operationBudget, "%s rep %d", label, repetition)`
+- `docs/operations/32-predicate-layout-smoke-harness.md:120` — `| 5k CI | 4 | PREDICATE | 1.857667 | 2.664542 | 2.664542 | 3.100250 | PASS |`
+- `docs/operations/32-predicate-layout-smoke-harness.md:133` — `All latency values above are milliseconds.`
+- `docs/operations/32-predicate-layout-smoke-harness.md:160` — `| Candidate | Operation | p95 ms | p99 ms |`
+- `docs/operations/32-predicate-layout-smoke-harness.md:168` — `| Hash plus catalog | Namespace catalog join | 333.641500 | 336.952084 |`
 
 `git grep -ln operationBudget` returns three code files, not two. The third is the predicate-layout smoke harness:
 same package, same profile-struct shape, same three budget fields — and it hit this identical flake and resolved it
@@ -183,6 +193,19 @@ a third place as well (`service/service_manager_health_listener_test.go:114`, `:
 The runbook already carries the doctrine half at `:77`. Note what `:43` does to the alternative evidence home: the
 owner-filter acceptance record at `:80`+ was measured on `nats:2.12.4-alpine` at revision `0a7af288`, and `:43`
 declares every performance row recorded under that old pin historical.
+
+**The sibling's budget is unreachable dead code, so its silence proves nothing.** `:208` builds its measured store
+with `nc.NewKVStore(membershipRaw)` and no timeout override, so it carries the same 5s deadline. Its loop asserts
+`require.NoError(t, err, label)` at `:479` BEFORE `require.Less(..., profile.operationBudget)` at `:480`, and its
+`operationBudget` is 10s (`:85`, `:97`). A stalled call therefore fails as `context deadline exceeded` at `:479` and
+never reaches the 10-second comparison — structurally the same defect as `owner_filter_load_integration_test.go:85`.
+
+**And the widening that produced it rests on a unit error.** `:90`-`:92` justifies 3s -> 10s/8s/9s with "healthy p95
+already 2.65s". The smoke's own latency table is headed `p95 ms` / `p99 ms` (`docs/operations/32-...:160`) with a
+worst row of 333.641500 ms (`:168`). The value `2.664542` is the **owner-filter** harness's 5k CI PREDICATE p95
+(`:120`) under an explicit `All latency values above are milliseconds` (`:133`) — and it is a single-key owner
+lookup, not a forward filter. That comment read another harness's millisecond value as seconds. Filed as #1286; not
+repaired here.
 
 ## 9. Where the framework bound is actually enforced, and where ordering is destroyed
 
@@ -199,6 +222,19 @@ at `:533`-`:536`.
 `:497` sorts the duration slice before any percentile is computed, so submission order is destroyed before anything
 is recorded. A summary of p50/p95/p99/max cannot answer whether an inflated sample was isolated or adjacent to
 another — which is the discriminator between a single stall and a sustained one.
+
+## 10. What the CI profile asserts besides the per-operation budget
+
+- `processor/graph-index/owner_filter_load_integration_test.go:374` — `require.NoError(t, result.err, result.label)`
+- `processor/graph-index/owner_filter_load_integration_test.go:402` — `require.LessOrEqual(t, queueHighWater, 1000, "dispatcher queue must remain bounded")`
+- `processor/graph-index/owner_filter_load_integration_test.go:443` — `require.Len(t, keys, fixture.wantForward, "%s did not converge", fixture.name)`
+- `docs/operations/evidence/graph-index-pre-tag-0a7af288.md:27` — `GRAPH_INDEX_OWNER_FILTER_FULL=1 go test -race -tags=integration ./processor/graph-index`
+
+Removing the per-repetition budget leaves the guard with: exact match-set correctness (`:488`, `:375`), post-churn
+convergence (`:443`), the typed-error ceiling (`:487`, `:374`), the percentile gates (`:492`, `:400`), bounded
+dispatcher queue (`:402`), temporary consumers returning to every baseline (`:408`, `:414`), released subscriptions
+(`:448`), zero slow consumers (`:450`), and the NATS RSS bound. `:27` of the evidence file records the exact
+supervised command the 2026-07-17 acceptance record was produced with.
 
 ## Adjacent claims
 
@@ -233,8 +269,13 @@ Analysis and unresolved questions. Not pins.
   distribution" (3.356s / 2.9ms ~ 1150x), which compares a 5,000-key drain against a 1-key owner lookup. Against the
   comparator of the same kind - forward filters, same key count - it is 3.356s / 153ms ~ 22x, or ~11.5x against the
   worst forward max in the window (389ms, run 33208133273). The direction holds; the magnitude does not.
-- **RESOLVED (was UNRESOLVED): the gh#750 comment's "same-run max of 2.24s" was a real measurement of a distribution
-  that no longer exists.** #750's body carries the line verbatim:
+- **RESOLVED, and a second number must not be confused with it.** Two "2.2-2.7 second" figures are in play and only
+  one is genuine. gh#750's **2.237s is real seconds**, verified from its run log. The smoke comment's **2.65 is
+  milliseconds misread as seconds** (section 8, #1286) — and it is the owner-filter harness's number, not the
+  smoke's. Revision 2 falsified the millisecond-misread hypothesis on the strength of #750 alone and over-generalized
+  it; the hypothesis was right about the other number.
+- **The gh#750 comment's "same-run max of 2.24s" was a real measurement of a distribution that no longer exists.**
+  #750's body carries the line verbatim:
   `phase=latency filter=predicate-forward reps=5 p50=99.784608ms p95=697.726516ms max=2.23697341s`, and #750 itself
   reads it as "a long tail an order of magnitude past the median" — so it is genuine seconds, not a millisecond
   misread. Three fully-logged runs in the current window show that distribution has collapsed:
@@ -248,10 +289,11 @@ Analysis and unresolved questions. Not pins.
 
   p95 collapsed ~698ms -> ~170ms; max 2.237s -> 166-389ms. The comment at `:73` is therefore **stale evidence, not a
   wrong measurement**, and `docs/operations/32-...:43`'s historical-rows warning is exactly the mechanism.
-- **The budget now carries ~7.7x headroom** (3s / 389ms, the worst forward max observed). gh#220's discipline is
-  >=3x headroom over observed healthy latency, so **gh#220 does not call for widening this harness** — it is already
-  satisfied. The smoke widened at ~1.13x (healthy p95 2.65s against a 3s budget, `predicate_layout_smoke...:90`-`:92`);
-  that is a materially different situation and its numbers do not transfer.
+- **gh#220's >=3x rule was satisfied and was never the problem.** 3s / 389ms = **7.7x**. A stall adds seconds rather
+  than multiplying them, so the load-bearing quantity is **absolute headroom (2.61s)**, not the ratio. A 3x ratio
+  buys a slow assertion many absolute seconds and a fast one almost none — which is why the same discipline protects
+  a harness whose healthy latency is large and leaves this one exposed. That generalizes beyond this harness.
+  (The smoke's own "1.13x" figure is void: its 2.65 is milliseconds misread as seconds — section 8, #1286.)
 - **The firings are excursions far outside the distribution, not its tail.** Against the same run's own
   `predicate-forward` p50: 3.356s is 21.9x (run 34367949188), 4.760s is 30.5x (run 33260659637); against those runs'
   forward maxima, 17.7x and 28.7x. In gh#750's era a 2.24s sample was INSIDE a 22x-spread distribution; today a
@@ -261,11 +303,16 @@ Analysis and unresolved questions. Not pins.
   `claude/gh1010-flowstore-list-current-state`: `:489`, `"4.80475016s" is not less than "3s"`, `name-forward rep 2`,
   package `FAIL ... 34.465s`. It is the largest budget firing observed and it makes `name-forward` a second
   twice-firing label.
-- **Natural experiment: the sibling harness at 10s/8s/9s has never fired.** Two sweeps, every log fetched with stderr
-  captured rather than discarded, 80 CI failures total: 42 failures created on or after 2026-08-26 (0 fetch errors)
-  and a 40-run slice spanning 2026-05-30..2026-08-26 (38 fetchable, 2 HTTP 410). `PredicateLayoutSmoke` appears in
-  **zero** of the 80; `OwnerFilterLoadHarness` appears in 5. No observed stall has pushed a same-package,
-  same-runner, same-workload operation past 10 seconds in that period.
+- **VOID as evidence: the sibling A/B.** The sweep itself is sound — 80 CI failures fetched with stderr captured,
+  42 created on or after 2026-08-26 (0 fetch errors) plus a 40-run slice spanning 2026-05-30..2026-08-26 (38
+  fetchable, 2 HTTP 410); `PredicateLayoutSmoke` appears in **zero**, `OwnerFilterLoadHarness` in **five**. But the
+  inference drawn from it does not hold: section 8 shows the sibling's budget cannot fire at all, because its
+  `require.NoError` at `:479` precedes its `require.Less` at `:480` and its own 5s deadline expires first. **Zero
+  firings is what an unreachable assertion looks like, not what a well-chosen budget looks like.** The only claim the
+  sweep still supports is the count of five owner-harness events. Do not cite the A/B in support of any option.
+- **No budget choice reduces the residual below one event.** Healthy forward max is 389ms; the five observed events
+  imply stalls of ~3.2s, ~3.3s, ~4.6s, ~4.6s and >=4.7s. Absorbing the largest needs ~5s of budget, which is where
+  `KeysByFilter` fails as a typed error instead — and event 4 (run 33208133273) already did exactly that.
 - **A bare `--limit` failure list is not "the most recent failures".** `gh run list --workflow=ci.yml
   --status=failure --limit 40` returned a slice spanning 2026-05-30..2026-08-26 and contained none of the four
   firings the original sweep found. The date-bounded form (`--created '>=2026-08-26'`) returned all four. Any count
@@ -297,6 +344,26 @@ Analysis and unresolved questions. Not pins.
 - **ADR-107 is already taken.** `git log --all --diff-filter=A -- 'docs/adr/107*'` -> `bc7d79cc` on the unmerged
   `claude/gh1267-honor-predicate-datatype` branch (semweb boundary rule). A new ADR filed by this change would be 108
   and would race that branch's number; the in-place amendment precedent is `docs/adr/046-...:14`.
+
+- **Supervised baselines at the current pin (new, 2026-09-11).** Revision `60c79736`, worktree clean, same host as
+  the `0a7af288` record (Apple M3 Pro; 12 CPU; 38,654,705,664 bytes); pin moved to `nats:2.14.4-alpine`, SDK
+  `v1.52.0`, Docker 29.7.2. **21k full: PASS 43.17s, exit 0** — worst measurement p95 311.449ms
+  (`incoming-forward`, 16 workers), worst p99 320.157ms and worst max 396.719ms (`predicate-forward`, 16 workers),
+  worst concurrent-phase p95 55.978ms. **5k CI: PASS 2.12s, exit 0** — worst measurement p95 77.861ms and worst max
+  80.068ms (`name-forward`), worst concurrent-phase p95 4.397ms, fastest filter p95 771.792µs (`predicate-owner`).
+  Raw logs are in this session's scratchpad and must be published in-tree (`tasks.md` 3.3); they are not pinned here
+  because a scratchpad path is not repository content.
+- **The 5k CI budgets cannot be derived from the 21k run.** Worst forward p95 is 311.449ms at 21k against 77.861ms
+  at 5k — 4x apart. Both profiles had to be recorded, which is why `tasks.md` 3.2 exists as its own task.
+- **The contention tax, measured.** Same profile, same workload: subtest 2.12s on the quiet box against 8.64s on the
+  shared runner (run 34367949188, `workers-4`; whole test 11.02s) = 4.1x; forward-filter p95 78ms quiet against
+  157-175ms shared = 2.0-2.2x. This is steady-state contention and is a different quantity from the 3.2-4.8s stalls.
+- **One CI budget spans a 108x range of healthy values.** 771.792µs (`predicate-owner`) to 77.861ms
+  (`name-forward`) under a single `p95Budget` — the absolute-headroom failure mode reproduced inside one profile.
+- **METHOD: a duration regex that silently dropped two rows.** Parsing the baseline logs with `p50=[0-9.]+m?s`
+  returned 16 of 18 `phase=latency` lines and dropped both `name-owner` rows (`p50=876.833µs`), because `m?s` cannot
+  match `µs`. The absence read as "that filter did not run". Go emits `ns`, `µs`, `ms` and `s`; match the unit as a
+  set and check the parsed count against `grep -c` first. Re-parsed: 18 of 18 and 9 of 9.
 
 ### Observed firings
 

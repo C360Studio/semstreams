@@ -1,19 +1,18 @@
 # graph-index — delta
 
-> Delta for #1284. MODIFIES the owner-filter proof requirement so the CI activation guard names one absolute ceiling
-> instead of two, decides a breach in the per-filter measurement phase by corroboration rather than by one
-> shared-runner sample, and records what it measured — in submission order — on every run.
+> Delta for #1284, written to the **owner ruling of 2026-09-11** (#1284 comment 5635299542). The CI owner-filter
+> profile is demoted to a regression guard; ADR-077 condition 4's activation evidence rehomes onto a supervised run
+> that owes a fresh measurement at the current server pin. The CI per-operation budget is **deleted**, not widened:
+> the framework-enforced KV deadline is the ceiling, observed as the operation's own typed error.
 >
-> **Citation repair.** The current text at `openspec/specs/graph-index/spec.md:184` attributes the 3-second CI guard
-> to ADR-065, which contracts no such budget; its stated absolute bound for this operation class is the 10-second
-> handler timeout (`docs/adr/065-...:49`). The 3-second figure is ADR-077 §8 condition 4 (`docs/adr/077-...:139`).
+> **Citation repair.** `openspec/specs/graph-index/spec.md:184` attributes the 3-second CI guard to ADR-065, which
+> contracts no such budget; its stated absolute bound for this operation class is the 10-second handler timeout
+> (`docs/adr/065-...:49`). The 3-second figure is ADR-077 §8 condition 4 (`docs/adr/077-...:139`).
 >
-> **Two knock-ons the owner must rule before this syncs** (`design.md` § 9, Q1 and Q7): the corroboration rule and the
-> amended reading of "each operation"; and the removal of "no operation at the 10-second handler bound" as a
-> per-operation budget on a directly measured key listing. Every measured call is a `KeysByFilter` bounded at 5s by
-> `natsclient`, so a 10-second per-operation budget on it can never fire — it is the query handler's bound, imported
-> onto an operation the KV client bounds first. ADR-077 condition 5 carries the same phrase and is NOT edited by this
-> change.
+> **Still owner-gated before this syncs** (`design.md` § 9): Q7 — the same deletion logic applies to the full
+> profile's `operationBudget: 10 * time.Second` at `owner_filter_load_integration_test.go:85`, which is unreachable
+> under the same deadline; the proposed resolution is stated there and is NOT applied here. Q6 — ADR-065 needs no
+> edit. ADR-077 condition 5 carries the same "10-second handler bound" phrase and is NOT edited by this change.
 >
 > The two existing scenarios are restated verbatim because a MODIFIED block restates every scenario.
 
@@ -31,30 +30,28 @@ omissions, stale survivors, or ownership violations.
 
 Performance MUST be gated by absolute budgets, not comparison, and exactly one absolute ceiling MUST apply to a
 directly measured key listing: the framework-enforced KV deadline that every such call already runs under. The proof
-MUST observe that ceiling as the operation's own typed error and MUST NOT restate it as a second predicted
-per-operation budget. The 10-second handler bound remains the ceiling on the query-handler path; on a directly
-measured key listing it is unreachable and MUST NOT be carried as a per-operation budget there.
+MUST observe that ceiling as the operation's own typed error and MUST NOT restate it as a predicted per-operation
+budget at any value, above or below it. A predicted budget below the enforced deadline fails on stalls the framework
+itself tolerates; a predicted budget above it can never fire. The 10-second handler bound remains the ceiling on the
+query-handler path and MUST NOT be carried as a per-operation budget on a directly measured key listing.
 
-The latency contract is the ADR-077 §8 condition 4 CI guard (5,000 hot members, 20 spread predicates, each operation
-under 3 seconds) together with one sustained-churn run on the 21,000-entity profile at the configured worker shape
-and one stress shape, achieving p95 at most 3 seconds, p99 at most 5 seconds, temporary consumers returning to
-baseline, and no unbounded queue growth. The selected worker maximum MUST be enforced in validated configuration
-before activation.
+Activation evidence for the owner-filter workload MUST come from a supervised run recorded against the current
+server and SDK pin, not from a shared-runner CI job. The recorded evidence MUST carry the repository revision, host
+CPU and memory, container runtime version, server and SDK pin, run timestamp, and the complete per-filter
+distribution. A supervised record taken under a superseded pin MUST NOT be cited as current evidence, and a run that
+records no distribution is not activation evidence.
 
-In the per-filter measurement phase, a repetition at or above the CI guard's per-operation budget MUST NOT decide the
-guard on its own. It MUST be recorded, and it MUST trigger exactly one corroborating measurement set of the same
-filter, taken after the breaching set completes; the guard fails when the corroborating set also breaches, and MUST
-NOT re-measure a third time.
+Every recorded latency value MUST carry its unit where the value appears, not only in a note elsewhere in the
+document, and any budget derived from the record MUST state its basis in that same unit. A budget whose stated
+justification cannot be checked against a recorded measurement in the same unit is not derived.
 
-The concurrent load phase's per-repetition budget assertion is explicitly excluded from that rule and MUST continue to
-decide on a single sample. A corroborating measurement there could only be taken after the churn writers and the
-dispatcher have joined, which is the quiescence the phase exists to exclude; and it measures single-key owner filters
-whose margin against the budget is three orders of magnitude, so a single sample is a safe decision there and is not
-a safe decision in the measurement phase.
+The continuously-running CI profile is a regression guard, not activation evidence. It MUST assert exact match-set
+correctness for every owner and forward filter, exact convergence after churn, the typed-error ceiling, p95 and p99
+latency budgets derived from the supervised record, a bounded dispatcher queue, temporary consumers returning to
+every per-store baseline, released temporary subscriptions, zero slow consumers, and the server resident-set bound.
+It MUST NOT assert a per-repetition wall-clock budget.
 
-The measured durations for every filter MUST be recorded on every run of the guard in submission order, not only as a
-sorted summary, whether or not the guard fires; and a breach MUST be recorded even when the corroborating set passes.
-A run that records no distribution is not activation evidence.
+The selected worker maximum MUST be enforced in validated configuration before activation.
 
 A store that fails correctness or budget MUST defer its cleanup authority to a separately specified bounded
 replacement mechanism; that mechanism becomes a completion dependency of this change, and deferral MUST NOT waive
@@ -74,47 +71,6 @@ the required `[A] -> [B] -> []` result for any query-visible store.
 - **THEN** unit arithmetic and representative data do not authorize activation
 - **AND** activation waits for pinned real-NATS maximum key/filter exact-match conformance
 
-#### Scenario: a single anomalous repetition does not decide the guard
-
-- **GIVEN** a filter in the measurement phase whose repetitions are all far inside the per-operation budget except one
-  that breaches it
-- **WHEN** the guard evaluates that filter
-- **THEN** the breaching repetition is recorded with the whole measured distribution in submission order
-- **AND** one corroborating measurement set of the same filter is taken after the breaching set completes
-- **AND** the guard passes when every repetition of the corroborating set is inside the budget
-- **AND** the recorded breach remains in the run output so its rate is countable across runs
-
-#### Scenario: a sustained breach fails both measurement sets
-
-- **GIVEN** a filter whose latency genuinely exceeds the per-operation budget
-- **WHEN** the guard evaluates that filter in the measurement phase
-- **THEN** the first measurement set breaches
-- **AND** the corroborating set breaches
-- **AND** the guard fails, naming the filter, the breaching repetitions, and both distributions
-
-#### Scenario: a corroborating set is taken exactly once
-
-- **GIVEN** a corroborating measurement set that itself breaches the per-operation budget
-- **WHEN** the guard evaluates the outcome
-- **THEN** it fails immediately
-- **AND** no third measurement set is taken, because a guard that re-measures until green records nothing
-
-#### Scenario: the load-phase gate decides on a single sample
-
-- **GIVEN** the concurrent load phase, whose per-repetition budget assertion measures single-key owner filters while
-  churn writers and dispatcher workers are running
-- **WHEN** one of its repetitions breaches the per-operation budget
-- **THEN** the guard fails on that single sample with no corroborating set
-- **AND** no corroborating measurement is taken after the writers and dispatcher join, because that would measure
-  under quiescence rather than under the load the phase exists to impose
-
-#### Scenario: the measured distribution is recorded on a passing run
-
-- **GIVEN** a run in which every filter is inside every budget
-- **WHEN** the guard completes
-- **THEN** every filter's per-repetition durations are recorded in submission order, alongside its p50, p95, p99 and max
-- **AND** the recorded run is admissible as ADR-077 §8 activation evidence against that revision
-
 #### Scenario: an operation that reaches the framework bound fails as an error
 
 - **GIVEN** a filtered key listing that reaches the framework-enforced KV deadline
@@ -122,3 +78,42 @@ the required `[A] -> [B] -> []` result for any query-visible store.
 - **THEN** the operation returns a context-deadline error and the guard fails on that error
 - **AND** the failure is not reported as a budget comparison, because the ceiling was observed rather than predicted
 - **AND** no partial key set is accepted as a successful owner snapshot
+
+#### Scenario: a runner stall below the framework deadline does not fail the regression guard
+
+- **GIVEN** a CI run in which one repetition of one filter takes several seconds while the same run's other
+  repetitions of the same filter complete in well under a second
+- **WHEN** the guard evaluates that filter
+- **THEN** no per-repetition wall-clock comparison rejects the run
+- **AND** the guard fails only if the percentile budgets, the match sets, the convergence check, the queue bound, the
+  consumer baselines, the subscription count, the slow-consumer count, or the resident-set bound fail
+- **AND** the measured distribution is recorded so the excursion remains countable
+
+#### Scenario: a layout regression still fails the regression guard
+
+- **GIVEN** a change that makes an owner or forward filter over-match, rescan, or reconstruct a retired catalog
+- **WHEN** the CI profile runs
+- **THEN** the guard fails on the match-set assertion, the convergence assertion, or the percentile budgets
+- **AND** an order-of-magnitude latency regression is visible in the recorded distribution even where a budget does
+  not reject it
+
+#### Scenario: the measured distribution is recorded on a passing run
+
+- **GIVEN** a run in which every filter is inside every budget
+- **WHEN** the guard completes
+- **THEN** every filter's per-repetition durations are recorded in submission order, alongside its p50, p95, p99 and max
+- **AND** a supervised run additionally records the revision, host, runtime, pin and timestamp of its measurement
+
+#### Scenario: a derived budget states a basis that can be checked
+
+- **GIVEN** a latency budget in the regression guard justified by the supervised record
+- **WHEN** its basis is read
+- **THEN** it names the measured value it is a multiple of, in the same unit that value is recorded in
+- **AND** a reader can recompute the multiple from the published record without converting units
+
+#### Scenario: a superseded pin does not carry forward as evidence
+
+- **GIVEN** a recorded supervised run measured under a server or SDK pin that has since moved
+- **WHEN** activation evidence is evaluated
+- **THEN** its latency rows are historical and do not satisfy the activation condition
+- **AND** activation waits for a supervised run recorded on the current pin
