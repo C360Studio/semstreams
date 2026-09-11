@@ -17,7 +17,8 @@ import (
 //
 // The ruling demoted this profile to a regression guard. ADR-077 section 8 condition 4
 // (docs/adr/077-bounded-owner-discovery-and-incoming-ownership.md:139) is satisfied by the
-// supervised record at docs/operations/32-predicate-layout-smoke-harness.md:80+, recorded against
+// supervised record in docs/operations/32-predicate-layout-smoke-harness.md, section "Owner-filter acceptance record",
+// recorded against
 // the current server and SDK pin — not by a shared-runner CI job. Its predecessor pinned
 // operationBudget == 3s as a contracted activation gate; that claim is retired, and the assertion
 // it guarded is replaced here rather than dropped with it.
@@ -82,7 +83,7 @@ func TestOwnerLoadCIProfile_ContractedBudgets(t *testing.T) {
 //
 // Its predecessor drew the opposite conclusion from the same arithmetic — that the per-repetition
 // operationBudget "MUST remain". #1284 measured what that gate actually caught: five runner stalls
-// three orders of magnitude off the same run's distribution, and zero layout regressions. The
+// ~22x off the same run's own forward-filter distribution, and zero layout regressions. The
 // arithmetic below is unchanged and still worth pinning; only the conclusion moves.
 //
 // At repetitions=n the percentiles index (n-1)*p/100, which is strictly less than n-1 for every

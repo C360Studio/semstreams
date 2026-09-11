@@ -2,7 +2,7 @@
 
 ## Status
 
-**Accepted (2026-07-17).** This record approves fixed-position owner discovery as the replacement mechanism for
+**Accepted (2026-07-17).** **Amended 2026-09-11 (#1284)** — § 8 condition 4's evidence home; see § 8. This record approves fixed-position owner discovery as the replacement mechanism for
 the bounded graph-index layouts named below and fixes INCOMING ownership on the source assertion. Acceptance of the
 decision does not certify production activation: activation remains blocked until every evidence gate in this ADR
 passes and is recorded against the exact implementation revision.
@@ -155,8 +155,9 @@ Condition 4 is satisfied by a **supervised run recorded against the current serv
 [`Predicate Layout Evidence Runbook`](../operations/32-predicate-layout-smoke-harness.md) alongside condition 5's
 21,000-entity run, with its revision, host, runtime, pin and complete per-filter distribution. The absolute
 ceiling on a directly measured key listing is the framework-enforced `natsclient` KV deadline, observed as the
-operation's own typed error and never restated as a predicted budget. The numeric budgets live in the runbook,
-not here, so that the measured record and the contract cannot drift apart. Activation remains prohibited until
+operation's own typed error and never restated as a predicted budget. **Condition 4's** numeric budget lives in
+the runbook, not here, so that the measured record and the contract cannot drift apart (condition 5 keeps its own,
+unchanged). Activation remains prohibited until
 that supervised record exists on the current pin.
 
 Evidence collection follows the workload and resource-recording conventions in the

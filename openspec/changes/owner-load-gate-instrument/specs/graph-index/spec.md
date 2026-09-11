@@ -7,7 +7,8 @@
 >
 > **Citation repair.** `openspec/specs/graph-index/spec.md:184` attributes the 3-second CI guard to ADR-065, which
 > contracts no such budget; its stated absolute bound for this operation class is the 10-second handler timeout
-> (`docs/adr/065-...:49`). The 3-second figure is ADR-077 §8 condition 4 (`docs/adr/077-...:139`).
+> (`docs/adr/065-...:49`). The 3-second figure came from ADR-077 §8 condition 4 — but the #1284 amendment removed it
+> from that condition, so the repaired text cites no ADR for a numeric budget and states none.
 >
 > **Q7(a) WAS applied** under a recorded session-level call (`tasks.md` § 4.2, `proposal.md`): `operationBudget` is
 > gone from the `ownerLoadProfile` struct entirely, taking the full profile's unreachable `10 * time.Second` with it.
@@ -16,10 +17,11 @@
 > licenses this: it forbids restating the ceiling as a predicted budget **at any value, above or below it**, and is
 > not scoped to the CI profile.
 >
-> **Still owner-gated before this syncs** (`design.md` § 9): Q7(b) — the full profile's own `p95Budget: 3s` /
-> `p99Budget: 5s` now sit at 9.6x/15.6x over the measured 311.449 ms / 320.157 ms, and that profile is the activation
-> evidence now. Q6 — ADR-065 needs no edit. ADR-077 condition 5 carries the same "10-second handler bound" phrase and
-> is NOT edited by this change; the text below keeps that bound on the query-handler path.
+> **Both questions are now RULED** (#1284 comment 5640631023, 2026-09-11). Q7(b) — the full profile keeps
+> `p95Budget: 3s` / `p99Budget: 5s` despite sitting at 9.6x/15.6x over the measured 311.449 ms / 320.157 ms; the
+> looseness is published in the acceptance record rather than tightened, and re-derivation is #1287's. Q6 — ADR-065
+> needs no edit, confirmed. ADR-077 condition 5 carries the same "10-second handler bound" phrase and is NOT edited;
+> the text below keeps that bound on the query-handler path.
 >
 > The two existing scenarios are restated verbatim because a MODIFIED block restates every scenario.
 

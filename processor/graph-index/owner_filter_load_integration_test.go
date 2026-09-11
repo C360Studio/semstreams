@@ -59,7 +59,8 @@ func ownerLoadCIProfile() ownerLoadProfile {
 		// This profile is a REGRESSION GUARD, not activation evidence (#1284, owner ruling
 		// 2026-09-11). ADR-077 section 8 condition 4 —
 		// docs/adr/077-bounded-owner-discovery-and-incoming-ownership.md:139 — is satisfied by the
-		// supervised record at docs/operations/32-predicate-layout-smoke-harness.md:80+, taken on the
+		// supervised record in docs/operations/32-predicate-layout-smoke-harness.md, section "Owner-filter acceptance record",
+		// taken on the
 		// current server and SDK pin, never by a shared-runner CI run. The graph-index spec states the
 		// same split under the requirement "Fixed-position owner filtering is proven before production
 		// reconciliation activates".
@@ -76,12 +77,15 @@ func ownerLoadCIProfile() ownerLoadProfile {
 		// latency check and they are deliberately loose. Measured healthy p95, stated in
 		// MILLISECONDS — the unit discipline #1286 exists for:
 		//
-		//	quiet box, worst filter (name-forward)          p95  77.861 ms
-		//	shared runner, worst filter (predicate-forward)  p95 175.4   ms  (run 33208133273)
+		// Compare like for like: worst forward filter against worst forward filter. Pairing
+		// one filter's p95 with another's is the #1284 magnitude error.
+		//
+		//	quiet box, worst forward (name-forward)          p95  77.861 ms
+		//	shared runner, worst forward (name-forward)      p95 258.039 ms  (run 34367949188)
 		//	shared runner, worst healthy single sample           389.0   ms  (run 33208133273)
 		//	supervised 21k record (rev 60c79736)             p95 311.449 ms, p99 320.157 ms
 		//
-		// 3s is therefore ~38x the quiet-box p95 and ~17x the shared-runner p95: a weak regression
+		// 3s is therefore ~38x the quiet-box p95 and ~11.6x the shared-runner p95: a weak regression
 		// guard that would not notice a 10x regression, against a realistic 5-20x regression class.
 		// Tightening it needs within-filter stall-adjacency data that does not exist yet, which is
 		// exactly what the submission-order recording below starts collecting. gh#1287 owns the

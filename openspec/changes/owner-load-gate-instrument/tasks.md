@@ -76,6 +76,7 @@ tolerates; above it, it can never fire. Both defects are in the tree today (`:76
       per-class argument is the stronger (one constant spans a 108x range of healthy values — P22 applied inside the
       profile), but both the p50 floor and the per-class budgets require predicting a constant before within-filter
       adjacency data exists, which is the predict-instead-of-observe move this ruling retired.
+
 ## 3. The supervised re-run — ruling 1's evidence
 
 - [x] 3.1 Supervised run executed at revision `60c79736`, worktree clean, on the same host as the `0a7af288` record
@@ -93,15 +94,17 @@ tolerates; above it, it can never fire. Both defects are in the tree today (`:76
       `docs/operations/evidence/graph-index-pre-tag-0a7af288.md`. Sources:
       `scratchpad/supervised_baseline.log` and `scratchpad/ci_baseline.log` in this session's scratchpad — copy them
       in rather than re-running, since re-running produces a different measurement. Carry the provenance table shape
-      from `docs/operations/32-...:85`-`:95`: revision, worktree state, run timestamp and timezone, host CPU and
+      from the provenance table in `docs/operations/32-...`, section "Owner-filter acceptance record": revision, worktree state, run timestamp and timezone, host CPU and
       memory, Docker allocation, Docker client/server, NATS server and image digest, Go SDK, evidence capture.
       **DONE — `docs/operations/evidence/graph-index-owner-load-60c79736.md`, 48 harness `phase=` lines preserved verbatim, provenance measured from the run logs themselves (Docker 29.7.2/API 1.51/testcontainers-go v0.40.0, 23,742 MB, pin `2.14.4-alpine@sha256:f2123f53...`, SDK v1.52.0). Testcontainers header lines carrying a local filesystem path were excluded: the repo is public.**
-- [x] 3.4 Replace the historical latency rows in the owner-filter acceptance record (`docs/operations/32-...:80`+)
+- [x] 3.4 Replace the historical latency rows in the owner-filter acceptance record (`docs/operations/32-...`,
+      section "Owner-filter acceptance record")
       with the `60c79736` measurements, and state the unit on every table — the #1286 defect is a unit that was
       stated once, far from the number that was read. Note that the old record's CONTEXT rows have no counterpart:
       that store was retired after `0a7af288`, which is itself evidence the record is stale.
 
       **DONE — the owner-filter section is now `## Owner-filter acceptance record — revision 60c79736`; every table states its unit in the column header rather than once at the foot (the #1286 defect). CONTEXT is gone from the maximum-key table: `phase=maxima` no longer emits a context key, confirming the store was retired after `0a7af288`. The pinned-environment caveat at `:42` now splits current-pin (owner-filter) from historical (predicate comparison) instead of calling everything below it historical.**
+
 ## 4. The ruled instrument change
 
 - [x] 4.1 Both per-repetition wall-clock assertions are deleted — the measurement phase's old `:489` and the
@@ -167,11 +170,13 @@ tolerates; above it, it can never fire. Both defects are in the tree today (`:76
 ## 5. Citation repairs
 
 - [x] 5.1 Repaired. The `docs/operations/32-...:49-50` citation is gone; the comment now points at ADR-077 `:139`
-      and at the owner-filter acceptance record at `docs/operations/32-...:80`+. The `:70`-`:71` budget table is not
+      and at the owner-filter acceptance record (`docs/operations/32-...`, section "Owner-filter acceptance record"). The `:70`-`:71` budget table is not
       cited anywhere — it describes the SMOKE harness and belongs to #1286.
-- [x] 5.2 Narrowed to `docs/adr/077-...:139`. Verified against the file: `:134` is the "all of the following" stem,
-      condition 4 is the single line `:139`, condition 5 spans `:140`-`:142`. Condition 5 is not cited and ADR-077 is
-      not edited by this change.
+- [x] 5.2 Narrowed to `docs/adr/077-...:139`. Verified against the file at the time: `:134` is the "all of the
+      following" stem, condition 4 was the single line `:139`, condition 5 spanned `:140`-`:142`. Condition 5 is not
+      cited. **Superseded in part by task 6.2**, which amends ADR-077 under the Q3 ruling: condition 4 now spans
+      `:139`-`:140` and condition 5 `:141`-`:143`. `:139` still resolves to condition 4's first line, so every
+      in-tree `077-...:139` pin still lands. Condition 5's text is byte-identical.
 - [x] 5.3 The comment now names the requirement by title — "Fixed-position owner filtering is proven before
       production reconciliation activates" — with no line number, so a line shift cannot re-break it.
 - [x] 5.4 The gh#750 note now reads as stale evidence rather than a wrong measurement: it quotes that run's own
@@ -183,14 +188,18 @@ tolerates; above it, it can never fire. Both defects are in the tree today (`:76
 
 - [ ] 6.1 **UNBLOCKED — Q7 ruled 2026-09-11.** Sync `specs/graph-index/spec.md` of this change into
       `openspec/specs/graph-index/spec.md` at archive time, not before. It repairs citation defect A at `:184`
-      (ADR-065 -> ADR-077 §8 condition 4), names one absolute ceiling observed as a typed error, separates the
-      regression guard from the activation evidence, and requires the supervised record's provenance and unit.
+      (removes the ADR-065 attribution and cites no numeric budget — after task 6.2 condition 4 carries none), names
+      one absolute ceiling observed as a typed error, separates the regression guard from the activation evidence,
+      and requires the supervised record's provenance and unit. **Also refresh the delta's preamble**: `:10` still
+      attributes the 3-second figure to condition 4, and `:19`-`:22` still calls Q6/Q7(b) owner-gated. Both were
+      ruled on 2026-09-11.
 - [x] 6.2 **UNBLOCKED — Q3 ruled 2026-09-11: in-place amendment note.** Apply the ADR-077 amendment drafted in
       `design.md` § 10 as an in-place note after `docs/adr/077-...:139` (NOT a new record), and drop the literal
       "below 3 seconds" from condition 4 in favour of the runbook holding the number. The architect wrote the words
       and did not apply them.
 
       **DONE — in-place amendment note after ADR-077 condition 4, placed AFTER the numbered list rather than inside it (an inline insert would break the list), matching the `docs/adr/046-...:14` precedent. Condition 4 now reads "evidenced by a supervised run recorded against the current server and SDK pin" and no longer carries "below 3 seconds"; condition 5 is untouched, as ruled.**
+
 ## 7. Verification
 
 - [x] 7.1 `go test -race -failfast -tags=integration -timeout=20m -count=1 ./processor/graph-index` exit 0,

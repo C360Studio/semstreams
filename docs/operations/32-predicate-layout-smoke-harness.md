@@ -81,10 +81,16 @@ results follow.
 
 ## Owner-filter acceptance record — revision `60c79736`
 
-This is the **supervised record that satisfies ADR-077 § 8 condition 4** under the #1284 amendment. The CI profile is
-a regression guard and asserts no per-operation wall-clock budget; the numbers below come from a quiet supervised box
-and are the uncontended floor, not a CI expectation. The same subtest measures **8.64 s on a shared CI runner against
-2.12 s here**, with forward p95 157–175 ms against 78 ms.
+This is the **supervised record that satisfies ADR-077 § 8 condition 4** under the #1284 amendment. The
+**owner-filter** CI profile — `TestIntegration_OwnerFilterLoadHarness`, not the smoke harness governed by the table
+in § "Profiles and absolute gates" — is a regression guard and asserts no per-operation wall-clock budget. The
+numbers below come from a quiet supervised box and are the uncontended floor, not a CI expectation: the same subtest
+measures **8.64 s on a shared CI runner against 2.12 s here** (run 34367949188).
+
+Compare contention like for like — worst forward filter against worst forward filter, never one filter's p95 against
+another's. On that basis the tax is **~3.3×**: shared-runner `name-forward` p95 reached **258.039 ms** (run
+34367949188) against **77.861 ms** here. Taking `predicate-forward` alone it is ~2.5–2.8× (**157.495–175.414 ms**
+shared across runs 33208133273, 33260659637 and 34367949188, against **62.481 ms** here).
 
 It replaces the owner-filter rows previously recorded at `0a7af288` (2026-07-17, `nats:2.12.4-alpine`, SDK `v1.48.0`),
 which are retained as history in
@@ -99,7 +105,7 @@ drifted from the harness it claimed to describe.
 | Run timestamp and timezone | 2026-09-11 15:44:56–15:46:50 CEST |
 | Host CPU and memory | Apple M3 Pro; 12 CPU; 38,654,705,664 bytes RAM |
 | Docker allocation | 23,742 MB |
-| Docker server / API | 29.7.2; API 1.51; testcontainers-go v0.40.0 |
+| Docker server / API | 29.7.2; API 1.51; testcontainers-go v0.40.0 (the run log records no CLI version) |
 | NATS server and image digest | `nats:2.14.4-alpine` @ `sha256:f2123f533c2b0cada0a5c5ec434fb2b8cfe1cf220215ef9d7517e1372917ad66` |
 | Go SDK | `github.com/nats-io/nats.go v1.52.0` |
 | Evidence capture | [In-tree raw phase appendix](evidence/graph-index-owner-load-60c79736.md) |
@@ -157,7 +163,8 @@ by roughly two orders of magnitude, so comparing a value against one from the ot
 | 21k full | 16 | `predicate` | 30 | 14.998 | 26.783 | 26.836 | 29.631 | PASS |
 | 21k full | 16 | `incoming` | 30 | 27.481 | 55.978 | 56.782 | 58.916 | PASS |
 
-Worst measurement across every row: **p95 311.449 ms, p99 320.157 ms, max 396.719 ms.** The full profile's
+Worst measurement across every row: **p95 311.449 ms** (`incoming-forward`, 21k/16 workers), **p99 320.157 ms** and
+**max 396.719 ms** (both `predicate-forward`, 21k/16 workers). The full profile's
 `p95Budget` of 3 s and `p99Budget` of 5 s therefore sit at **9.6× and 15.6×** over what it measures. That looseness
 is accepted deliberately (#1284 owner ruling, Q7(b)): the supervised run has never fired, is not a flake source, and
 tightening a gate that does not fire can only introduce one. Re-deriving the budgets for both profiles is tracked as
