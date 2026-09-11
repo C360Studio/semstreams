@@ -56,8 +56,10 @@ func TestOwnerLoadCIProfile_ContractedBudgets(t *testing.T) {
 				"typed error and never restated as a predicted per-operation budget", field.Name)
 	}
 
-	// Property 2. 3s is the ruled value, deliberately loose: the worst healthy p95 measured on the
-	// quiet box is 77.861 ms and on a shared runner 175.4 ms, so this is ~38x and ~17x respectively.
+	// Property 2. 3s is the ruled value, deliberately loose. Compare like for like -- worst forward
+	// filter against worst forward filter, never one filter's p95 against another's: name-forward
+	// measured 77.861 ms on the quiet box and 258.039 ms on a shared runner (run 34367949188), so
+	// this is ~38x and ~11.6x respectively.
 	// gh#1287 re-derives it from the recorded submission-order distributions; until that data
 	// exists, tightening here would trade a measured flake for an unmeasured one.
 	require.Equal(t, 3*time.Second, ci.p95Budget,
@@ -83,7 +85,8 @@ func TestOwnerLoadCIProfile_ContractedBudgets(t *testing.T) {
 //
 // Its predecessor drew the opposite conclusion from the same arithmetic — that the per-repetition
 // operationBudget "MUST remain". #1284 measured what that gate actually caught: five runner stalls
-// ~22x off the same run's own forward-filter distribution, and zero layout regressions. The
+// of ~3.2-4.7s against a forward-filter distribution measuring ~150ms p50 on the same runners
+// -- ~22x like-for-like on run 34367949188 -- and zero layout regressions. The
 // arithmetic below is unchanged and still worth pinning; only the conclusion moves.
 //
 // At repetitions=n the percentiles index (n-1)*p/100, which is strictly less than n-1 for every

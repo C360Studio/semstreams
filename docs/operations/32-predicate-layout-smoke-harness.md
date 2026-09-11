@@ -84,13 +84,17 @@ results follow.
 This is the **supervised record that satisfies ADR-077 § 8 condition 4** under the #1284 amendment. The
 **owner-filter** CI profile — `TestIntegration_OwnerFilterLoadHarness`, not the smoke harness governed by the table
 in § "Profiles and absolute gates" — is a regression guard and asserts no per-operation wall-clock budget. The
-numbers below come from a quiet supervised box and are the uncontended floor, not a CI expectation: the same subtest
-measures **8.64 s on a shared CI runner against 2.12 s here** (run 34367949188).
+numbers below come from a quiet supervised box and are the uncontended floor, not a CI expectation. Compare wall
+clock at the same level: subtest `workers-4` took **8.64 s on a shared CI runner against 1.36 s here**, and the whole
+test **11.02 s against 2.12 s** (run 34367949188). The shared subtest is a floor rather than a completed run — it
+aborted at `incoming-forward` repetition 3, having measured 5 of 9 filters — so the real gap is wider than the 6.35x
+those two numbers give.
 
 Compare contention like for like — worst forward filter against worst forward filter, never one filter's p95 against
 another's. On that basis the tax is **~3.3×**: shared-runner `name-forward` p95 reached **258.039 ms** (run
-34367949188) against **77.861 ms** here. Taking `predicate-forward` alone it is ~2.5–2.8× (**157.495–175.414 ms**
-shared across runs 33208133273, 33260659637 and 34367949188, against **62.481 ms** here).
+34367949188) against **77.861 ms** here. Taking `predicate-forward` alone it is ~2.5–2.8× (**157.495 ms** in run
+33260659637 and **175.414 ms** in run 33208133273, against **62.481 ms** here; the same filter measured 169.852 ms in
+run 34367949188).
 
 It replaces the owner-filter rows previously recorded at `0a7af288` (2026-07-17, `nats:2.12.4-alpine`, SDK `v1.48.0`),
 which are retained as history in

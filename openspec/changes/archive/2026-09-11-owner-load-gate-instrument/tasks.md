@@ -49,8 +49,11 @@ tolerates; above it, it can never fire. Both defects are in the tree today (`:76
       activation evidence lives. **The ADR also stops carrying the numeric budget — the runbook holds it**, so the
       number has one home. Unblocks task 6.2.
 - [x] 2.4 **Q4 RULED — M4 is DROPPED, not filed** (RULED 2026-09-11, issue comment 5640631023). A CI job cannot be the supervised
-      run: CI *is* the contended environment, and excluding contention is the point (measured — the same subtest is
-      2.12 s quiet vs 8.64 s shared, forward p95 78 ms vs 157-175 ms). The supervised run stays a documented manual
+      run: CI *is* the contended environment, and excluding contention is the point (measured — subtest `workers-4` is
+      1.36 s quiet vs 8.64 s shared, and worst forward p95 77.861 ms quiet vs 258.039 ms shared, run 34367949188.
+      **Both figures were restated after review**: the ruling's original basis paired a subtest against a whole test,
+      and one filter's p95 against another's. The corrected numbers are larger and argue the same way, so the ruling
+      stands unchanged.). The supervised run stays a documented manual
       procedure pinned to a revision, which is what the acceptance record already is.
 - [x] 2.5 Q5 RESOLVED by measurement, and revision 3 corrects revision 2's over-generalization: gh#750's 2.237s is
       genuine seconds, but the sibling's "2.65s" is milliseconds misread as seconds and is a different number
@@ -129,7 +132,7 @@ tolerates; above it, it can never fire. Both defects are in the tree today (`:76
       from a re-derivation: quiet-box worst healthy p95 77.861 ms; worst shared-runner healthy p95 175.4 ms; worst
       shared-runner healthy sample 389.0 ms; supervised 21k worst p95 311.449 ms / p99 320.157 ms. Note that 3s is a
       weak regression guard at ~38x the quiet-box p95 and that the follow-up exists to fix that.
-      DONE: both budgets are unchanged at `3 * time.Second`; all four measurements, the ~38x/~17x statement and the
+      DONE: both budgets are unchanged at `3 * time.Second`; all four measurements, the ~38x/~11.6x statement and the
       gh#1287 pointer are in the profile comment, and `TestOwnerLoadCIProfile_ContractedBudgets` pins both values.
 - [x] 4.3a Filed as **#1287** (milestone v1.0.0-beta.165, `area:graph-index`, `type:test`): tighten the CI percentile
       budgets from the recorded submission-order distributions. It carries all four measurements in milliseconds, the
@@ -251,7 +254,8 @@ tolerates; above it, it can never fire. Both defects are in the tree today (`:76
 ## 8. Archive
 
 - [x] 8.1 Spec sync (task 6.1) is the last content commit. Its delta was reviewed with the code in PR #1285
-      comment 5640862270, which confirmed the MODIFIED block restates every scenario, does not rename the
-      `### Requirement:` heading (so no `// spec:` citation is stranded), and cites no ADR for a numeric budget.
+      comment 5640862270. Those three properties — the MODIFIED block restates every scenario, the `### Requirement:`
+      heading is not renamed so no `// spec:` citation is stranded, and no ADR is cited for a numeric budget — were
+      verified mechanically by the narrow archive/spec-sync check that followed, not by comment 5640862270 itself.
 - [ ] 8.2 `openspec archive owner-load-gate-instrument`; `implemented-by: <persona>` in the PR body; squash merge
       closes #1284.

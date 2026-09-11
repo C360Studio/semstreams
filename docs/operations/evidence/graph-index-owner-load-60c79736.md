@@ -23,7 +23,7 @@ owner-filter rows of [the 0a7af288 pre-tag record](graph-index-pre-tag-0a7af288.
 | NATS server | `nats:2.14.4-alpine` |
 | NATS image digest | `sha256:f2123f533c2b0cada0a5c5ec434fb2b8cfe1cf220215ef9d7517e1372917ad66` |
 | Go SDK | `github.com/nats-io/nats.go v1.52.0` |
-| Box condition | Quiet — no other test process running. The same subtest measures 8.64 s on a shared CI runner against 2.12 s here; treat every number below as the uncontended floor, not a CI expectation. |
+| Box condition | Quiet — no other test process running. Subtest `workers-4` measures 8.64 s on a shared CI runner against 1.36 s here (whole test 11.02 s against 2.12 s, run 34367949188), and the shared run aborted after 5 of 9 filters, so that gap is a floor. Treat every number below as the uncontended floor, not a CI expectation. |
 
 ## Exact commands
 
