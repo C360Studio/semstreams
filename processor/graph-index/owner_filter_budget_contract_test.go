@@ -34,9 +34,14 @@ import (
 func TestOwnerLoadCIProfile_ContractedBudgets(t *testing.T) {
 	ci := ownerLoadCIProfile()
 
-	// Property 1, enforced over the CLASS rather than the retired field name: every time.Duration
-	// knob on the profile must be one of the two the ruling kept. A rename — perOpBudget,
-	// operationCeiling, maxOperation — trips this just as operationBudget would.
+	// Property 1, enforced over the CLASS rather than the retired field name: every field whose type
+	// IS time.Duration must be one of the two the ruling kept. A rename — perOpBudget,
+	// operationCeiling, maxOperation — trips this just as operationBudget would, and so does a
+	// time.Duration alias, since an alias is the identical type.
+	//
+	// The check is type identity, so it does NOT catch a defined type (`type d time.Duration`) or a
+	// raw int64 of nanoseconds. That is deliberate: the regression this guards is PR #755's shape —
+	// re-adding or widening a named duration knob — not an author deliberately disguising one.
 	allowed := map[string]bool{"p95Budget": true, "p99Budget": true}
 	profileType := reflect.TypeOf(ownerLoadProfile{})
 	for i := range profileType.NumField() {

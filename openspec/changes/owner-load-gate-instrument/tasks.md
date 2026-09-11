@@ -158,7 +158,7 @@ tolerates; above it, it can never fire. Both defects are in the tree today (`:76
       "operationBudget 3s is a CONTRACTED ACTIVATION GATE, not a tunable" — is retired by the ruling. The replacement
       says what the CI profile now is (a regression guard), where condition 4's evidence now lives (the supervised
       record), and what the ceiling now is (the framework deadline, observed as a typed error). DONE; the replacement
-      states all three, and the "CONTRACTED ACTIVATION GATE" sentence does not survive anywhere in the tree.
+      states all three, and the "CONTRACTED ACTIVATION GATE" sentence does not survive anywhere in the CODE (inventory.md:57 still quotes it as a pre-change pin, which is its correct home).
 
 ## 5. Citation repairs
 

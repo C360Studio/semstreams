@@ -9,10 +9,17 @@
 > contracts no such budget; its stated absolute bound for this operation class is the 10-second handler timeout
 > (`docs/adr/065-...:49`). The 3-second figure is ADR-077 §8 condition 4 (`docs/adr/077-...:139`).
 >
-> **Still owner-gated before this syncs** (`design.md` § 9): Q7 — the same deletion logic applies to the full
-> profile's `operationBudget: 10 * time.Second` at `owner_filter_load_integration_test.go:85`, which is unreachable
-> under the same deadline; the proposed resolution is stated there and is NOT applied here. Q6 — ADR-065 needs no
-> edit. ADR-077 condition 5 carries the same "10-second handler bound" phrase and is NOT edited by this change.
+> **Q7(a) WAS applied** under a recorded session-level call (`tasks.md` § 4.2, `proposal.md`): `operationBudget` is
+> gone from the `ownerLoadProfile` struct entirely, taking the full profile's unreachable `10 * time.Second` with it.
+> After the per-repetition assertions were deleted nothing read the field, and the value it held could never be
+> compared, because the framework's 5s KV deadline fails the operation first. The normative text below already
+> licenses this: it forbids restating the ceiling as a predicted budget **at any value, above or below it**, and is
+> not scoped to the CI profile.
+>
+> **Still owner-gated before this syncs** (`design.md` § 9): Q7(b) — the full profile's own `p95Budget: 3s` /
+> `p99Budget: 5s` now sit at 9.6x/15.6x over the measured 311.449 ms / 320.157 ms, and that profile is the activation
+> evidence now. Q6 — ADR-065 needs no edit. ADR-077 condition 5 carries the same "10-second handler bound" phrase and
+> is NOT edited by this change; the text below keeps that bound on the query-handler path.
 >
 > The two existing scenarios are restated verbatim because a MODIFIED block restates every scenario.
 

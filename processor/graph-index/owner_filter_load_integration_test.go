@@ -395,7 +395,7 @@ func runOwnerLoadWorkerShape(
 	// Results arrive in COMPLETION order; the recorded distribution has to be in SUBMISSION order, so
 	// a reader can separate one inflated repetition from two adjacent ones (#1284). Each
 	// (fixture, serial) pair is submitted exactly once and exactly resultCount results are consumed,
-	// so a duplicate or lost result necessarily leaves a zero slot that the check below rejects —
+	// so a duplicate result necessarily leaves a zero slot that the check below rejects (a LOST result does not reach here at all — the drain blocks until the go test timeout, which fails closed with a worse diagnostic) —
 	// a zero-duration sample would otherwise enter the distribution as the fastest observation.
 	durations := make(map[string][]time.Duration, len(fixtures))
 	for _, fixture := range fixtures {
