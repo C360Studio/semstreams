@@ -83,7 +83,7 @@ func ownerLoadCIProfile() ownerLoadProfile {
 		//	quiet box, worst forward (name-forward)          p95  77.861 ms
 		//	shared runner, worst forward (name-forward)      p95 258.039 ms  (run 34367949188)
 		//	shared runner, worst healthy single sample           389.0   ms  (run 33208133273)
-		//	supervised 21k record (rev 60c79736)             p95 311.449 ms, p99 320.157 ms
+		//	supervised 21k record (rev b10671ed)             p95 580.383 ms, p99 591.050 ms
 		//
 		// 3s is therefore ~38x the quiet-box p95 and ~11.6x the shared-runner p95: a weak regression
 		// guard that would not notice a 10x regression, against a realistic 5-20x regression class.
@@ -106,8 +106,10 @@ func ownerLoadFullProfile() ownerLoadProfile {
 		repetitions: 30, churnPerWriter: 200, workerShapes: []int{4, maxGraphIndexWorkers},
 		// No operationBudget: the same natsclient KV deadline bounds this profile too, so a predicted
 		// 10s ceiling here could never fire (#1284 design P18). The supervised record is this
-		// profile's output. Whether THESE percentiles are also re-derived is #1284 design Q7(b), still
-		// open on the owner docket; gh#1287 covers the CI profile's, not this one's.
+		// profile's output. Q7(b) is RULED (#1284 comment 5640631023): these percentiles STAY at 3s/5s
+		// even though the supervised record measures 580.383 ms / 591.050 ms -- 5.2x/8.5x -- because a
+		// gate that has never fired cannot be tightened into anything but a new flake. Re-deriving
+		// BOTH profiles' budgets is gh#1287.
 		p95Budget: 3 * time.Second, p99Budget: 5 * time.Second,
 		maxServerRSSBytes: 2 << 30,
 	}

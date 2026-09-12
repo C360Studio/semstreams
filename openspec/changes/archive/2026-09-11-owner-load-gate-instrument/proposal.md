@@ -1,5 +1,14 @@
 # Change: The owner-filter CI guard becomes a regression guard, and condition 4's evidence moves to a supervised run
 
+> **Post-archive corrections (2026-09-12).** This is a design-time record and two classes of figure in it were
+> corrected after it was archived. **(1)** Every cross-kind latency comparison — a ratio between two measurements
+> that do not do the same work — is repudiated; the like-for-like figures are tabulated in `design.md` § 11.11.
+> **(2)** The `60c79736` supervised record cited throughout predates the submission-order instrument and is
+> superseded by `b10671ed`, whose worst p95/p99 are 580.383 ms / 591.050 ms, making the full profile's 3s/5s
+> **5.2x/8.5x** rather than the 9.6x/15.6x recorded here (`design.md` § 11.12). Current truth for both lives in
+> `docs/operations/32-predicate-layout-smoke-harness.md`, § "Owner-filter acceptance record". No ruling changes.
+
+
 Closes #1284. Claim: draft PR #1285 on `claude/gh1284-owner-load-gate`, own worktree. Premises pinned at
 `main@29187077` in `inventory.md` (92 pins, `task inventory:verify` exit 0). Milestone: `v1.0.0-beta.165`.
 
@@ -55,7 +64,7 @@ distribution into CI output. No production code changes.
    re-derivation is deferred until the submission-order recording produces within-filter stall-adjacency data, so
    that this change is strictly flake-reducing and nothing is tightened on unmeasured exposure. The measured basis
    is recorded in the profile comment in milliseconds anyway — quiet-box worst healthy p95 77.861 ms, worst
-   shared-runner healthy p95 175.4 ms, worst shared-runner healthy sample 389.0 ms, supervised 21k p95 311.449 ms /
+   shared-runner healthy p95 175.4 ms, worst shared-runner healthy sample 389.0 ms, supervised 21k p95 311.449 ms / **[REPUDIATED — see `design.md` § 11.11]**
    p99 320.157 ms — together with the plain statement that 3s is a weak guard at ~38x the quiet-box p95. **#1287**
    owns the re-derivation. At `repetitions: 5` the percentiles select `durations[3]`, so **two** repetitions must
    breach, which is why no percentile gate is the deleted per-operation gate returning.

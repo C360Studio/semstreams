@@ -1,5 +1,14 @@
 # graph-index — delta
 
+> **Post-archive corrections (2026-09-12).** This is a design-time record and two classes of figure in it were
+> corrected after it was archived. **(1)** Every cross-kind latency comparison — a ratio between two measurements
+> that do not do the same work — is repudiated; the like-for-like figures are tabulated in `design.md` § 11.11.
+> **(2)** The `60c79736` supervised record cited throughout predates the submission-order instrument and is
+> superseded by `b10671ed`, whose worst p95/p99 are 580.383 ms / 591.050 ms, making the full profile's 3s/5s
+> **5.2x/8.5x** rather than the 9.6x/15.6x recorded here (`design.md` § 11.12). Current truth for both lives in
+> `docs/operations/32-predicate-layout-smoke-harness.md`, § "Owner-filter acceptance record". No ruling changes.
+
+
 > Delta for #1284, written to the **owner ruling of 2026-09-11** (#1284 comment 5635299542). The CI owner-filter
 > profile is demoted to a regression guard; ADR-077 condition 4's activation evidence rehomes onto a supervised run
 > that owes a fresh measurement at the current server pin. The CI per-operation budget is **deleted**, not widened:

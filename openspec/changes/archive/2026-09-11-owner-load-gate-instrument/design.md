@@ -1,5 +1,14 @@
 # Design — owner-load-gate-instrument (#1284)
 
+> **Post-archive corrections (2026-09-12).** This is a design-time record and two classes of figure in it were
+> corrected after it was archived. **(1)** Every cross-kind latency comparison — a ratio between two measurements
+> that do not do the same work — is repudiated; the like-for-like figures are tabulated in `design.md` § 11.11.
+> **(2)** The `60c79736` supervised record cited throughout predates the submission-order instrument and is
+> superseded by `b10671ed`, whose worst p95/p99 are 580.383 ms / 591.050 ms, making the full profile's 3s/5s
+> **5.2x/8.5x** rather than the 9.6x/15.6x recorded here (`design.md` § 11.12). Current truth for both lives in
+> `docs/operations/32-predicate-layout-smoke-harness.md`, § "Owner-filter acceptance record". No ruling changes.
+
+
 **Status: RULED TARGET STATE.** The owner ruled on 2026-09-11 (#1284 comment 5635299542). This document records the
 decided shape, not a set of options; § 5 keeps the option comparison as rationale, marked decided. Implementation
 follows separately — no production or test file is edited by this change's design phase.
@@ -45,11 +54,11 @@ rule says to delete.
   | Quantity | Measured | 1s is |
   |---|---:|---:|
   | Worst healthy CI p95, quiet box (`name-forward`) | 77.861 ms | 12.8x |
-  | Worst healthy CI p95, shared runner (`predicate-forward`, run 33208133273) | 175.4 ms | 5.7x |
+  | Worst healthy CI p95, shared runner (`predicate-forward`, run 33208133273) | 175.4 ms | 5.7x | **[REPUDIATED — see § 11.11]**
   | Worst healthy CI single sample, shared runner (run 33208133273) | 389.0 ms | 2.6x |
   | Absolute headroom above that worst healthy sample | — | 611 ms |
 
-  **Why not keep 3s.** At 3s the gate is ~38x the quiet-box p95 and ~17x the shared-runner p95: it would not notice a
+  **Why not keep 3s.** At 3s the gate is ~38x the quiet-box p95 and ~17x the shared-runner p95: it would not notice a **[REPUDIATED — see § 11.11]**
   10x regression. The realistic regression class here — a filtered `ListKeys` degrading to a full-bucket scan with
   client-side filtering — is a 5-20x class, which 1s mostly catches and 3s catches none of.
 
@@ -116,7 +125,7 @@ it guarded.
 | **P24** | **The sibling's widening rests on a unit error** | `:90`-`:92` cites "healthy p95 already 2.65s"; the smoke's table is headed `p95 ms`/`p99 ms` (`docs/operations/32-...:160`) with worst row 333.641500 ms (`:168`), and `2.664542` is the *owner-filter* harness's 5k CI PREDICATE p95 in ms (`:120`, under `:133`). Filed as **#1286**; not repaired here |
 | **P25** | **Supervised 21k baseline, current pin** | rev `60c79736`, PASS 43.17 s, exit 0. Worst measurement-phase p95 **311.449 ms** (`incoming-forward`, 16 workers), worst p99 **320.157 ms** and worst max **396.719 ms** (`predicate-forward`, 16 workers). Worst concurrent-phase p95 55.978 ms (`incoming`, 16 workers). Against the current 3s/5s full-profile budgets that is 9.6x / 15.6x headroom |
 | **P26** | **Supervised 5k CI baseline, same quiet box** | PASS 2.12 s, exit 0. Worst measurement-phase p95 **77.861 ms** and worst max **80.068 ms** (`name-forward`); worst concurrent-phase p95 4.397 ms (`name`). Fastest filter's p95 is 771.792 µs (`predicate-owner`) — a **108x spread** under one shared budget |
-| **P27** | **The contention tax, measured** | same profile, same workload: subtest **2.12 s** quiet against **8.64 s** on the shared runner (run 34367949188, `workers-4`; whole test 11.02 s) = **4.1x**; forward-filter p95 **78 ms** quiet against **157-175 ms** shared = **2.0-2.2x**. This is steady-state contention, a different quantity from the 3.2-4.8 s stalls, and it is the measured part of P9 |
+| **P27** | **The contention tax, measured** | same profile, same workload: subtest **2.12 s** quiet against **8.64 s** on the shared runner (run 34367949188, `workers-4`; whole test 11.02 s) = **4.1x**; forward-filter p95 **78 ms** quiet against **157-175 ms** shared = **2.0-2.2x**. This is steady-state contention, a different quantity from the 3.2-4.8 s stalls, and it is the measured part of P9 | **[REPUDIATED — see § 11.11]**
 
 **P22 generalizes past this harness.** A ratio-based headroom rule buys a slow assertion many absolute seconds and a
 fast one almost none. Two assertions can both satisfy ">=3x" while one tolerates a 6-second stall and the other
@@ -335,6 +344,31 @@ Recorded across all three revisions rather than quietly edited.
     structural finding, from a parser. Go's duration formatting emits `ns`, `µs`, `ms` and `s`, so the unit must be
     matched as a set, and the parsed count checked against `grep -c` before anything is concluded. Both baselines in
     P25-P26 were re-parsed that way: 18 of 18 and 9 of 9.
+
+11. **REPUDIATED (post-archive, 2026-09-12) — every cross-kind latency comparison in this document.** Three review
+    rounds found four of them, all the same shape: a ratio taken between two measurements that do not do the same
+    work, which is the defect #1284 was filed about. The corrected, like-for-like figures, all re-derived from the
+    run logs:
+
+    | claim as written here | correct comparison | published |
+    |---|---|---|
+    | quiet whole-test 2.12 s vs shared subtest 8.64 s (P27) | subtest 8.64 s vs 1.42 s = **6.1x**; parent 11.02 s vs 2.24 s = **4.9x** | runbook § "Owner-filter acceptance record" |
+    | quiet `name-forward` p95 77.861 ms vs shared `predicate-forward` p95 157-175 ms (P27, `proposal.md:58`, `inventory.md:360`) | `name-forward` vs `name-forward`: 258.039 ms shared (run 34367949188) vs 83.153 ms quiet = **3.1x** | runbook, same section |
+    | "3s is ~17x the shared-runner p95" (§ 2, `tasks.md:132`) | against the true worst shared forward p95 (258.039 ms) it is **~11.6x** | `owner_filter_budget_contract_test.go` |
+    | "three orders of magnitude" (#1284 body) | like-for-like **~22x** on run 34367949188 | corrected by the owner in comment 5620102633 |
+
+    The shared `workers-4` subtest in run 34367949188 also **aborted** at `incoming-forward` repetition 3 with 5 of
+    9 filters measured, so its 8.64 s is a floor, not a completed run. Every ratio above understated the real gap.
+    Read no ratio in this document without checking both operands name the same filter and the same nesting level.
+
+12. **SUPERSEDED (post-archive, 2026-09-12) — the `60c79736` supervised record.** It was taken before `d9582508`
+    added per-repetition recording, so it carried only p50/p95/p99/max and could not satisfy this change's own
+    requirement that every filter's durations be recorded in submission order. Replaced by a supervised pair at
+    `b10671ed` (`docs/operations/evidence/graph-index-owner-load-b10671ed.md`), which measures worst p95 **580.383
+    ms** / p99 **591.050 ms** — so the full profile's 3s/5s sit at **5.2x/8.5x**, not the 9.6x/15.6x this document
+    and the first acceptance record published. The Q7(b) ruling is unaffected: 5.2x is still loose, and the reason
+    for leaving it (a gate that never fires cannot be tightened into anything but a new flake) does not turn on the
+    multiple.
 
 ## 12. Break classification and gates
 

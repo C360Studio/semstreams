@@ -1,5 +1,14 @@
 # Tasks — owner-load-gate-instrument (#1284)
 
+> **Post-archive corrections (2026-09-12).** This is a design-time record and two classes of figure in it were
+> corrected after it was archived. **(1)** Every cross-kind latency comparison — a ratio between two measurements
+> that do not do the same work — is repudiated; the like-for-like figures are tabulated in `design.md` § 11.11.
+> **(2)** The `60c79736` supervised record cited throughout predates the submission-order instrument and is
+> superseded by `b10671ed`, whose worst p95/p99 are 580.383 ms / 591.050 ms, making the full profile's 3s/5s
+> **5.2x/8.5x** rather than the 9.6x/15.6x recorded here (`design.md` § 11.12). Current truth for both lives in
+> `docs/operations/32-predicate-layout-smoke-harness.md`, § "Owner-filter acceptance record". No ruling changes.
+
+
 **Amend a task line when the work HAPPENS, not only when it succeeds.** A `[~]` is a recorded decision and MUST also
 be noted in the spec delta. No task here asserts a post-merge fact; the merge gate owns CI.
 
@@ -129,7 +138,7 @@ tolerates; above it, it can never fire. Both defects are in the tree today (`:76
       unquantified, whose only supporting evidence is cross-filter. Tightening on unmeasured exposure is the same
       predict-instead-of-observe move that deleting the per-operation budget just retired.
       Record the measured basis in the comment anyway, **in milliseconds**, so the follow-up starts from data and not
-      from a re-derivation: quiet-box worst healthy p95 77.861 ms; worst shared-runner healthy p95 175.4 ms; worst
+      from a re-derivation: quiet-box worst healthy p95 77.861 ms; worst shared-runner healthy p95 175.4 ms; worst **[REPUDIATED — see `design.md` § 11.11]**
       shared-runner healthy sample 389.0 ms; supervised 21k worst p95 311.449 ms / p99 320.157 ms. Note that 3s is a
       weak regression guard at ~38x the quiet-box p95 and that the follow-up exists to fix that.
       DONE: both budgets are unchanged at `3 * time.Second`; all four measurements, the ~38x/~11.6x statement and the
@@ -248,14 +257,21 @@ tolerates; above it, it can never fire. Both defects are in the tree today (`:76
       `d9582508`/`49d1ec07` (comment 5639743584); HIGH 1, HIGH 2, MEDIUM 1, MEDIUM 2, NIT 1 and NIT 3 repaired in
       `720dc50d`. HIGH 1 was that deleting the runner's `GRAPH_INDEX_LATENCY_LOG` export was GREEN; the two new
       `test/testinfra` tests are mutation-verified to fail on that deletion.
-- [x] 7.6 A green CI run after this change proves the guard passes. It is explicitly **not** activation evidence —
-      that is task 3.3-3.4's published record. Do not report one as the other.
+- [x] 7.6 CI green 8/8 on `b10671ed` (checked 2026-09-12; `gh pr checks 1285`), including the `Test` job that runs
+      this harness. A green CI run proves the guard passes and is explicitly **not** activation evidence — that is
+      task 3.3-3.4's published record. Do not report one as the other.
 
 ## 8. Archive
 
-- [x] 8.1 Spec sync (task 6.1) is the last content commit. Its delta was reviewed with the code in PR #1285
-      comment 5640862270. Those three properties — the MODIFIED block restates every scenario, the `### Requirement:`
-      heading is not renamed so no `// spec:` citation is stranded, and no ADR is cited for a numeric budget — were
-      verified mechanically by the narrow archive/spec-sync check that followed, not by comment 5640862270 itself.
-- [ ] 8.2 `openspec archive owner-load-gate-instrument`; `implemented-by: <persona>` in the PR body; squash merge
-      closes #1284.
+- [x] 8.1 Archive and spec sync are the final content state. **The first archive (`bd24e65a`) was NOT the last
+      content commit** — two rounds of review corrections followed it (`b10671ed`, then the cross-agent round's
+      repairs). Per `.agents/protocol.md:35` each re-entered reconciliation, and the last commit on this branch
+      carries the archive, the spec sync and every correction together, re-verified at that commit:
+      `openspec validate --all --strict` 53/53, `task spec:properties` 73/73, `openspec list` empty. The delta's
+      three sync properties — the MODIFIED block restates every scenario, the `### Requirement:` heading is not
+      renamed so no `// spec:` citation is stranded, and no ADR is cited for a numeric budget — were verified
+      mechanically by the narrow archive/spec-sync check (PR #1285), not by comment 5640862270.
+- [x] 8.2a `openspec archive owner-load-gate-instrument` run; `openspec list` empty; `implemented-by: opus` present
+      in the PR body. Both are branch-checkable now.
+- [ ] 8.2b Squash merge closes #1284. Owner-gated and deliberately the only unchecked line here: it is the one fact
+      this file cannot assert about itself, per the header rule at `:4`.

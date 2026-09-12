@@ -1,5 +1,14 @@
 # Inventory — owner-load-gate-instrument (#1284)
 
+> **Post-archive corrections (2026-09-12).** This is a design-time record and two classes of figure in it were
+> corrected after it was archived. **(1)** Every cross-kind latency comparison — a ratio between two measurements
+> that do not do the same work — is repudiated; the like-for-like figures are tabulated in `design.md` § 11.11.
+> **(2)** The `60c79736` supervised record cited throughout predates the submission-order instrument and is
+> superseded by `b10671ed`, whose worst p95/p99 are 580.383 ms / 591.050 ms, making the full profile's 3s/5s
+> **5.2x/8.5x** rather than the 9.6x/15.6x recorded here (`design.md` § 11.12). Current truth for both lives in
+> `docs/operations/32-predicate-layout-smoke-harness.md`, § "Owner-filter acceptance record". No ruling changes.
+
+
 base: 29187077e202784fcd51071f1e467361c8dc958d
 
 Enumeration only, no judgment. Every source claim is a verified pin; every CI claim names its run id.
@@ -357,7 +366,7 @@ Analysis and unresolved questions. Not pins.
   at 5k — 4x apart. Both profiles had to be recorded, which is why `tasks.md` 3.2 exists as its own task.
 - **The contention tax, measured.** Same profile, same workload: subtest 2.12s on the quiet box against 8.64s on the
   shared runner (run 34367949188, `workers-4`; whole test 11.02s) = 4.1x; forward-filter p95 78ms quiet against
-  157-175ms shared = 2.0-2.2x. This is steady-state contention and is a different quantity from the 3.2-4.8s stalls.
+  157-175ms shared = 2.0-2.2x. This is steady-state contention and is a different quantity from the 3.2-4.8s stalls. **[REPUDIATED — see `design.md` § 11.11]**
 - **One CI budget spans a 108x range of healthy values.** 771.792µs (`predicate-owner`) to 77.861ms
   (`name-forward`) under a single `p95Budget` — the absolute-headroom failure mode reproduced inside one profile.
 - **METHOD: a duration regex that silently dropped two rows.** Parsing the baseline logs with `p50=[0-9.]+m?s`

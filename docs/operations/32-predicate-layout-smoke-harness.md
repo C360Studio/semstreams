@@ -42,7 +42,8 @@ was written here**, and both passed:
 Conformance evidence is therefore re-established, not inherited across the version change. Which performance rows
 below are current-pin evidence now differs by section, so check before citing one:
 
-- **Owner-filter acceptance record — current.** Re-measured at `60c79736` on 2026-09-11 against this pin (#1284).
+- **Owner-filter acceptance record — current.** Re-measured at `b10671ed` on 2026-09-12 against this pin (#1284), with per-repetition
+  durations in submission order.
 - **Pre-tag predicate comparison — historical.** Still the `2.12.4-alpine` measurements; a truthful record of what
   was measured then, not claimed as current-pin evidence. Re-measure before citing a latency budget from it.
 
@@ -79,40 +80,41 @@ their baseline. Silence or an omitted resource scrape is a failed evidence run.
 The CI profile is a regression guard, not a source for comparative layout selection. The revision-pinned acceptance
 results follow.
 
-## Owner-filter acceptance record — revision `60c79736`
+## Owner-filter acceptance record — revision `b10671ed`
 
-This is the **supervised record that satisfies ADR-077 § 8 condition 4** under the #1284 amendment. The
-**owner-filter** CI profile — `TestIntegration_OwnerFilterLoadHarness`, not the smoke harness governed by the table
-in § "Profiles and absolute gates" — is a regression guard and asserts no per-operation wall-clock budget. The
-numbers below come from a quiet supervised box and are the uncontended floor, not a CI expectation. Compare wall
-clock at the same level: subtest `workers-4` took **8.64 s on a shared CI runner against 1.36 s here**, and the whole
-test **11.02 s against 2.12 s** (run 34367949188). The shared subtest is a floor rather than a completed run — it
-aborted at `incoming-forward` repetition 3, having measured 5 of 9 filters — so the real gap is wider than the 6.35x
-those two numbers give.
+This is the **supervised record that satisfies ADR-077 § 8 condition 4** under the #1284 amendment, taken at the
+revision that ships the submission-order instrument. The **owner-filter** CI profile —
+`TestIntegration_OwnerFilterLoadHarness`, not the smoke harness governed by the table in § "Profiles and absolute
+gates" — is a regression guard and asserts no per-operation wall-clock budget.
 
-Compare contention like for like — worst forward filter against worst forward filter, never one filter's p95 against
-another's. On that basis the tax is **~3.3×**: shared-runner `name-forward` p95 reached **258.039 ms** (run
-34367949188) against **77.861 ms** here. Taking `predicate-forward` alone it is ~2.5–2.8× (**157.495 ms** in run
-33260659637 and **175.414 ms** in run 33208133273, against **62.481 ms** here; the same filter measured 169.852 ms in
+The numbers below come from a quiet supervised box and are the uncontended floor, not a CI expectation. Compare wall
+clock at the same level: subtest `workers-4` took **8.64 s on a shared CI runner against 1.42 s here**, and the whole
+test **11.02 s against 2.24 s** (run 34367949188). The shared subtest is a floor rather than a completed run — it
+aborted at `incoming-forward` repetition 3, having measured 5 of 9 filters — so the real gap exceeds the 6.1x those
+two numbers give.
+
+Compare latency like for like too — worst forward filter against worst forward filter, never one filter's p95
+against another's. On that basis the tax is **~3.1×**: shared-runner `name-forward` p95 reached **258.039 ms** (run
+34367949188) against **83.153 ms** here. Taking `predicate-forward` alone it is ~2.5–2.7× (**157.495 ms** in run
+33260659637 and **175.414 ms** in run 33208133273, against **64.090 ms** here; the same filter measured 169.852 ms in
 run 34367949188).
 
 It replaces the owner-filter rows previously recorded at `0a7af288` (2026-07-17, `nats:2.12.4-alpine`, SDK `v1.48.0`),
-which are retained as history in
-[the 0a7af288 pre-tag appendix](evidence/graph-index-pre-tag-0a7af288.md). **The old record's CONTEXT rows have no
-counterpart here: that store was retired after `0a7af288`** — which is itself evidence of how far the old record had
-drifted from the harness it claimed to describe.
+retained as history in [the 0a7af288 pre-tag appendix](evidence/graph-index-pre-tag-0a7af288.md). **The old record's
+CONTEXT rows have no counterpart here: that store was retired after `0a7af288`** — itself evidence of how far the old
+record had drifted from the harness it claimed to describe.
 
 | Provenance | Recorded value |
 |---|---|
-| SemStreams revision | `60c79736` |
+| SemStreams revision | `b10671ed` |
 | Worktree state | Clean before both commands |
-| Run timestamp and timezone | 2026-09-11 15:44:56–15:46:50 CEST |
+| Run timestamp and timezone | 2026-09-12 09:59:26–10:00:22 CEST |
 | Host CPU and memory | Apple M3 Pro; 12 CPU; 38,654,705,664 bytes RAM |
 | Docker allocation | 23,742 MB |
 | Docker server / API | 29.7.2; API 1.51; testcontainers-go v0.40.0 (the run log records no CLI version) |
 | NATS server and image digest | `nats:2.14.4-alpine` @ `sha256:f2123f533c2b0cada0a5c5ec434fb2b8cfe1cf220215ef9d7517e1372917ad66` |
 | Go SDK | `github.com/nats-io/nats.go v1.52.0` |
-| Evidence capture | [In-tree raw phase appendix](evidence/graph-index-owner-load-60c79736.md) |
+| Evidence capture | [In-tree raw phase appendix](evidence/graph-index-owner-load-b10671ed.md), with every filter's per-repetition durations in submission order |
 
 Latency rows use the exact output from `TestIntegration_OwnerFilterLoadHarness`. The CI shape is 5,000 entities at
 four workers; the full shape is 21,000 entities at both the configured four-worker shape and the selected maximum of
@@ -130,49 +132,51 @@ The harness emits one `phase=seed` record before exercising either worker shape.
 
 | Profile | Entities | Seed rows | Elapsed (ms) | Throughput (rows/s) | Result |
 |---|---:|---:|---:|---:|---|
-| 5k CI | 5,000 | 15,020 | 347.566 | 43,214.9 | PASS |
-| 21k full | 21,000 | 47,020 | 1,005.461 | 46,764.6 | PASS |
+| 5k CI | 5,000 | 15,020 | 362.402 | 41,445.7 | PASS |
+| 21k full | 21,000 | 47,020 | 1,012.698 | 46,430.4 | PASS |
 
 Each filter is measured in three forms — the bare filter, its `-owner` single-key lookup, and its `-forward` drain
 across the full hot-member set. **Every value in this table is milliseconds.** The owner and forward classes differ
-by roughly two orders of magnitude, so comparing a value against one from the other class is meaningless.
+by roughly two orders of magnitude, so comparing a value against one from the other class is meaningless. The raw
+appendix carries each row's per-repetition durations in submission order; the percentiles here are sorted summaries
+of those sequences.
 
 | Profile | Workers | Filter | Reps | p50 (ms) | p95 (ms) | p99 (ms) | Max (ms) | Result |
 |---|---:|---|---:|---:|---:|---:|---:|---|
-| 5k CI | 4 | `predicate-owner` | 5 | 0.723 | 0.772 | 0.772 | 0.854 | PASS |
-| 5k CI | 4 | `predicate-forward` | 5 | 61.935 | 62.481 | 62.481 | 63.942 | PASS |
-| 5k CI | 4 | `name-owner` | 5 | 1.798 | 2.908 | 2.908 | 3.330 | PASS |
-| 5k CI | 4 | `name-forward` | 5 | 77.363 | 77.861 | 77.861 | 80.068 | PASS |
-| 5k CI | 4 | `incoming-owner` | 5 | 1.919 | 2.512 | 2.512 | 2.801 | PASS |
-| 5k CI | 4 | `incoming-forward` | 5 | 73.378 | 74.622 | 74.622 | 74.958 | PASS |
-| 5k CI | 4 | `incoming` | 5 | 2.384 | 2.793 | 2.793 | 3.952 | PASS |
-| 5k CI | 4 | `predicate` | 5 | 3.311 | 3.341 | 3.341 | 4.360 | PASS |
-| 5k CI | 4 | `name` | 5 | 2.717 | 4.397 | 4.397 | 4.816 | PASS |
-| 21k full | 4 | `predicate-owner` | 30 | 2.393 | 2.771 | 3.261 | 3.418 | PASS |
-| 21k full | 4 | `predicate-forward` | 30 | 262.270 | 265.531 | 265.935 | 291.338 | PASS |
-| 21k full | 4 | `name-owner` | 30 | 0.877 | 2.037 | 2.130 | 2.574 | PASS |
-| 21k full | 4 | `name-forward` | 30 | 77.967 | 81.490 | 81.942 | 83.002 | PASS |
-| 21k full | 4 | `incoming-owner` | 30 | 3.408 | 5.342 | 6.588 | 14.494 | PASS |
-| 21k full | 4 | `incoming-forward` | 30 | 305.529 | 310.303 | 310.509 | 313.098 | PASS |
-| 21k full | 4 | `incoming` | 30 | 7.892 | 14.181 | 15.653 | 18.780 | PASS |
-| 21k full | 4 | `predicate` | 30 | 4.891 | 9.245 | 17.378 | 19.600 | PASS |
-| 21k full | 4 | `name` | 30 | 1.226 | 1.721 | 1.798 | 1.892 | PASS |
-| 21k full | 16 | `predicate-owner` | 30 | 3.076 | 5.647 | 5.815 | 6.012 | PASS |
-| 21k full | 16 | `predicate-forward` | 30 | 261.957 | 284.592 | 320.157 | 396.719 | PASS |
-| 21k full | 16 | `name-owner` | 30 | 0.876 | 1.839 | 2.746 | 2.750 | PASS |
-| 21k full | 16 | `name-forward` | 30 | 78.166 | 81.476 | 81.975 | 82.376 | PASS |
-| 21k full | 16 | `incoming-owner` | 30 | 3.624 | 5.073 | 8.167 | 14.274 | PASS |
-| 21k full | 16 | `incoming-forward` | 30 | 304.683 | 311.449 | 316.090 | 320.545 | PASS |
-| 21k full | 16 | `name` | 30 | 3.740 | 16.375 | 16.699 | 17.396 | PASS |
-| 21k full | 16 | `predicate` | 30 | 14.998 | 26.783 | 26.836 | 29.631 | PASS |
-| 21k full | 16 | `incoming` | 30 | 27.481 | 55.978 | 56.782 | 58.916 | PASS |
+| 5k CI | 4 | `predicate-owner` | 5 | 0.780 | 0.785 | 0.785 | 1.299 | PASS |
+| 5k CI | 4 | `predicate-forward` | 5 | 63.429 | 64.090 | 64.090 | 65.950 | PASS |
+| 5k CI | 4 | `name-owner` | 5 | 2.851 | 2.951 | 2.951 | 4.253 | PASS |
+| 5k CI | 4 | `name-forward` | 5 | 83.036 | 83.153 | 83.153 | 85.520 | PASS |
+| 5k CI | 4 | `incoming-owner` | 5 | 2.665 | 4.111 | 4.111 | 5.297 | PASS |
+| 5k CI | 4 | `incoming-forward` | 5 | 77.346 | 77.618 | 77.618 | 77.987 | PASS |
+| 5k CI | 4 | `predicate` | 5 | 2.816 | 5.123 | 5.123 | 5.193 | PASS |
+| 5k CI | 4 | `name` | 5 | 3.739 | 3.784 | 3.784 | 3.968 | PASS |
+| 5k CI | 4 | `incoming` | 5 | 3.711 | 5.280 | 5.280 | 6.317 | PASS |
+| 21k full | 4 | `predicate-owner` | 30 | 2.530 | 2.666 | 3.458 | 3.575 | PASS |
+| 21k full | 4 | `predicate-forward` | 30 | 265.393 | 269.423 | 269.501 | 270.865 | PASS |
+| 21k full | 4 | `name-owner` | 30 | 0.902 | 2.238 | 2.597 | 2.692 | PASS |
+| 21k full | 4 | `name-forward` | 30 | 81.616 | 84.231 | 85.242 | 85.711 | PASS |
+| 21k full | 4 | `incoming-owner` | 30 | 3.458 | 4.744 | 7.061 | 15.982 | PASS |
+| 21k full | 4 | `incoming-forward` | 30 | 312.240 | 318.445 | 320.467 | 329.644 | PASS |
+| 21k full | 4 | `name` | 30 | 1.392 | 3.190 | 3.346 | 3.711 | PASS |
+| 21k full | 4 | `incoming` | 30 | 7.536 | 12.815 | 21.120 | 27.730 | PASS |
+| 21k full | 4 | `predicate` | 30 | 5.663 | 14.545 | 15.756 | 19.429 | PASS |
+| 21k full | 16 | `predicate-owner` | 30 | 2.795 | 3.541 | 4.170 | 4.650 | PASS |
+| 21k full | 16 | `predicate-forward` | 30 | 266.871 | 479.509 | 483.741 | 508.696 | PASS |
+| 21k full | 16 | `name-owner` | 30 | 4.231 | 7.768 | 8.492 | 8.934 | PASS |
+| 21k full | 16 | `name-forward` | 30 | 151.065 | 173.079 | 174.461 | 176.406 | PASS |
+| 21k full | 16 | `incoming-owner` | 30 | 7.648 | 15.176 | 18.972 | 22.057 | PASS |
+| 21k full | 16 | `incoming-forward` | 30 | 328.092 | 580.383 | 591.050 | 598.767 | PASS |
+| 21k full | 16 | `predicate` | 30 | 18.698 | 30.950 | 30.991 | 31.123 | PASS |
+| 21k full | 16 | `name` | 30 | 4.880 | 18.209 | 18.259 | 19.719 | PASS |
+| 21k full | 16 | `incoming` | 30 | 33.769 | 64.176 | 64.176 | 64.629 | PASS |
 
-Worst measurement across every row: **p95 311.449 ms** (`incoming-forward`, 21k/16 workers), **p99 320.157 ms** and
-**max 396.719 ms** (both `predicate-forward`, 21k/16 workers). The full profile's
-`p95Budget` of 3 s and `p99Budget` of 5 s therefore sit at **9.6× and 15.6×** over what it measures. That looseness
-is accepted deliberately (#1284 owner ruling, Q7(b)): the supervised run has never fired, is not a flake source, and
-tightening a gate that does not fire can only introduce one. Re-deriving the budgets for both profiles is tracked as
-**#1287**, once the harness's per-repetition recording yields within-filter adjacency data.
+Worst measurement across every row: **p95 580.383 ms** and **p99 591.050 ms** (both `incoming-forward`, 21k/16
+workers), **max 598.767 ms** (same row). The full profile's `p95Budget` of 3 s and `p99Budget` of 5 s therefore sit at
+**5.2× and 8.5×** over what it measures. That looseness is accepted deliberately (#1284 owner ruling, Q7(b)): the
+supervised run has never fired, is not a flake source, and tightening a gate that does not fire can only introduce
+one. Re-deriving the budgets for **both** profiles is tracked as **#1287**, once enough submission-order runs exist
+to separate a stalled repetition from a shifted distribution.
 
 The absolute ceiling on a directly measured key listing is the framework-enforced `natsclient` KV deadline
 (`DefaultKVOptions().Timeout`), observed as the operation's own typed error rather than restated as a predicted
@@ -183,15 +187,16 @@ per store.
 
 | Profile | Workers | Operations | Catch-up (ms) | Throughput (ops/s) | Queue high-water | Consumers base/high/after | Result |
 |---|---:|---:|---:|---:|---:|---|---|
-| 5k CI | 4 | 15 | 14.283 | 1,050.2 | 11 | 0/2/0 | PASS |
-| 21k full | 4 | 90 | 123.471 | 728.9 | 86 | 0/4/0 | PASS |
-| 21k full | 16 | 90 | 122.907 | 732.3 | 74 | 0/13/0 | PASS |
+| 5k CI | 4 | 15 | 16.763 | 894.8 | 11 | 0/3/0 | PASS |
+| 21k full | 4 | 90 | 124.452 | 723.2 | 86 | 0/5/0 | PASS |
+| 21k full | 16 | 90 | 133.845 | 672.4 | 74 | 0/14/0 | PASS |
 
 | Profile | Workers | NATS RSS before/after (bytes) | Subscriptions before/after | Slow consumers | Result |
 |---|---:|---|---|---:|---|
-| 5k CI | 4 | 35,860,480/47,923,200 | 80/80 | 0 | PASS |
-| 21k full | 4 | 61,599,744/74,203,136 | 80/80 | 0 | PASS |
-| 21k full | 16 | 74,203,136/74,637,312 | 80/80 | 0 | PASS |
+| 5k CI | 4 | 35,852,288/45,580,288 | 80/80 | 0 | PASS |
+| 21k full | 4 | 63,696,896/72,425,472 | 80/80 | 0 | PASS |
+| 21k full | 16 | 72,425,472/75,530,240 | 80/80 | 0 | PASS |
+
 
 ## Pre-tag predicate comparison
 

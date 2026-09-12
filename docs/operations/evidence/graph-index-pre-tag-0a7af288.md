@@ -5,7 +5,7 @@ This appendix preserves the literal focused-run evidence behind the acceptance t
 audit record, not a new operating contract or a substitute for the remaining product and cutover gates.
 
 **Superseded for owner-filter evidence (#1284, 2026-09-11)** — the current-pin record is
-[`graph-index-owner-load-60c79736.md`](graph-index-owner-load-60c79736.md), taken on `nats:2.14.4-alpine` with SDK
+[`graph-index-owner-load-b10671ed.md`](graph-index-owner-load-b10671ed.md), taken on `nats:2.14.4-alpine` with SDK
 `v1.52.0`. The owner-filter tables below were measured on `2.12.4-alpine` / `v1.48.0` and are retained as history;
 do not cite them as current evidence. The predicate-comparison tables are unaffected.
 
