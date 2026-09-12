@@ -53,9 +53,9 @@ Events → Graphable Interface → Knowledge Graph → Queries
 
 ## Shared work protocol (Claude and Codex)
 
-The canonical protocol — where each kind of shared state lives, the start/take/land/close/tag rituals, worktree
-hygiene — is **`.agents/protocol.md`**. Read it before taking, landing, or closing work; the `pickup` and `handoff`
-rituals read it. Three gates never become a pointer:
+The canonical protocol — where each kind of shared state lives, the start/take/file/land/close/tag rituals,
+worktree hygiene — is **`.agents/protocol.md`**. Read it before filing, taking, landing, or closing work; the
+`pickup` and `handoff` rituals read it. Three gates never become a pointer:
 
 - **Claim:** a draft PR with `Closes #n`, opened before the work, on an agent-prefixed branch in its own worktree
   (`git worktree add ../semstreams-wt/<branch> -b <branch> origin/main`). No draft PR, no claim.

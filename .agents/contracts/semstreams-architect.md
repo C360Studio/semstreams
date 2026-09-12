@@ -97,10 +97,11 @@ being swept only now, in #1234.
 
 **It is an enumeration obligation, never a migration obligation** (owner ruling, 2026-09-01; the heavier form must be
 said explicitly and is never inferred from the word "sweep"). The deliverable is one line per plane that should adopt
-the primitive, each pinned at `file:line`, filed as issues or one tracking issue. The establishing change fixes none
-of them, and the number found never blocks it. That bound is load-bearing: if the sweep implied migrating every plane
-it found, the rational move under time pressure would be to keep the improvement local and never name it a pattern —
-strictly worse than today, where the pattern at least gets written once.
+the primitive, each pinned at `file:line`, filed as one tracking issue or as issues — each placed at filing per the
+protocol's **File** ritual. The establishing change fixes none of them, and the number found never blocks it. That
+bound is load-bearing: if the sweep implied migrating every plane it found, the rational move under time pressure
+would be to keep the improvement local and never name it a pattern — strictly worse than today, where the pattern at
+least gets written once.
 
 ### Inventory mechanics
 

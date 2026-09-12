@@ -303,6 +303,12 @@ until the owner explicitly accepts the reviewed design.
   baseline mutated before its publish succeeds is a blocking finding.
 - An in-PR guarantee "satisfied" by a filed issue is a finding: the guarantee holds here or the
   claim is removed.
+- Every issue this change filed passes the protocol's **File** ritual: it carries a milestone or a
+  `horizon:post-v1` stamp at filing, and its content is architectural — not a residual of a decision
+  the change itself made, not a consequence a ruling already states, not an unmeasured cost. An
+  unplaced filing, or a residual filed as an issue, is a finding; the remedy is placement or
+  relocation into a doc comment / `design.md`, never a milestone guessed by the reviewer. Count the
+  filings against the closes: a change that opens more issues than it closes says why in its body.
 - Review fix commits as adversarially as the original diff — remedies are where new blockers
   enter.
 - **A silent skip, drop, or degrade is a finding at any severity.** Any path that continues
@@ -315,7 +321,8 @@ until the owner explicitly accepts the reviewed design.
 ## Coverage review
 
 - A change adding operator-visible or cross-component behavior must include its e2e stage in
-  the relevant tier or cite a filed coverage-gap issue. Neither present is a finding.
+  the relevant tier or cite a filed coverage-gap issue, placed per the protocol's **File** ritual.
+  Neither present is a finding.
 - A new e2e stage must be falsifiable: RED against the unfixed or absent behavior (revert or
   forced input), and count the assertions that actually ran — a green stage that skipped
   everything proves nothing.
