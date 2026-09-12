@@ -542,12 +542,12 @@ func (h *MessageHandler) computeRequestDuration(requestID string) int64 {
 }
 
 // computeToolDuration returns the elapsed milliseconds since TrackToolStart was called.
-func (h *MessageHandler) computeToolDuration(callID string) int64 {
-	if start := h.loopManager.GetToolStart(callID); !start.IsZero() {
+func (h *MessageHandler) computeToolDuration(executionID string) int64 {
+	if start := h.loopManager.GetToolStart(executionID); !start.IsZero() {
 		return time.Since(start).Milliseconds()
 	}
 	h.logger.Warn("missing tool start time for duration computation",
-		slog.String("call_id", callID))
+		slog.String("execution_id", executionID))
 	return 0
 }
 
@@ -648,6 +648,10 @@ func (h *MessageHandler) buildInitialMessagesWithPrompt(task TaskMessage, assemb
 			Content: fmt.Sprintf("[Context]\n%s", task.Context.Content),
 		})
 	}
+
+	// Supplied conversational text follows this execution's instructions and
+	// embedded context; it never becomes a system message.
+	messages = append(messages, task.PriorMessages...)
 
 	// Add user prompt
 	messages = append(messages, agentic.ChatMessage{
@@ -807,11 +811,54 @@ func effectiveLoopMaxIterations(task TaskMessage, componentCeiling int) int {
 	return componentCeiling
 }
 
+// seedTaskContext appends this task's conversational input to the existing
+// context owner. Fresh instructions and supplied history precede the prompt;
+// a continuation preserves its already-installed instructions and history.
+func (h *MessageHandler) seedTaskContext(cm *ContextManager, task TaskMessage, assembled string) error {
+	if assembled != "" {
+		_ = cm.AddMessage(RegionSystemPrompt, agentic.ChatMessage{
+			Role:    "system",
+			Content: assembled,
+		})
+	}
+	for _, prior := range task.PriorMessages {
+		if err := cm.AddMessage(RegionRecentHistory, prior); err != nil {
+			return fmt.Errorf("seed prior_messages: %w", err)
+		}
+	}
+	_ = cm.AddMessage(RegionRecentHistory, agentic.ChatMessage{
+		Role:    "user",
+		Content: task.Prompt,
+	})
+	h.loopManager.CacheTaskPrompt(task.LoopID, task.Prompt)
+
+	// Embedded context skips hydration, as on the initial request path.
+	if task.Context != nil && task.Context.Content != "" {
+		_ = cm.AddMessage(RegionGraphEntities, agentic.ChatMessage{
+			Role:    "system",
+			Content: task.Context.Content,
+		})
+		h.logger.Debug("Using embedded context",
+			slog.String("loop_id", task.LoopID),
+			slog.Int("token_count", task.Context.TokenCount),
+			slog.Int("entity_count", len(task.Context.Entities)))
+	}
+	return nil
+}
+
 // HandleTask processes an incoming task message and creates a new loop
 func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (HandlerResult, error) {
 	// Check for cancellation before starting work
 	if err := ctx.Err(); err != nil {
 		return HandlerResult{}, err
+	}
+	if err := task.Validate(); err != nil {
+		return HandlerResult{}, errs.WrapInvalid(
+			err,
+			"agentic-loop",
+			"HandleTask",
+			"validate task",
+		)
 	}
 
 	// Check depth limit before creating loop
@@ -828,54 +875,63 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 	// This prevents duplicate LLM work when JetStream redelivers a message
 	// (e.g. after a transient heartbeat failure).
 	if existingID, exists := h.loopManager.HasActiveLoopForTask(task.TaskID); exists {
+		if existingID != task.LoopID {
+			return HandlerResult{}, errs.WrapFatal(
+				fmt.Errorf("task %q is already bound to loop %q; delivery carries loop %q", task.TaskID, existingID, task.LoopID),
+				"agentic-loop",
+				"HandleTask",
+				"task correlation conflict",
+			)
+		}
 		h.logger.Warn("Duplicate task message — loop already active",
 			slog.String("task_id", task.TaskID),
 			slog.String("existing_loop_id", existingID))
 		return HandlerResult{LoopID: existingID}, nil
 	}
 
-	// Use provided loop_id if present, otherwise create new one.
-	//
 	// A supplied token that already names a registered loop is a CONTINUATION,
 	// not a second loop under one name (#1227): CreateLoopWithID refuses it and
 	// intake attaches to the live loop instead of minting over its
 	// conversation. `continuation` carries that fact through the rest of this
 	// function, which otherwise seeds a brand-new loop.
-	var loopID string
-	var err error
-	continuation := false
-	entity := agentic.LoopEntity{}
+	var (
+		loopID         string
+		err            error
+		entity         agentic.LoopEntity
+		continuation   bool
+		registeredHere bool
+	)
 
 	effectiveMaxIterations := effectiveLoopMaxIterations(task, h.config.MaxIterations)
 
-	if task.LoopID != "" {
-		loopID, err = h.loopManager.CreateLoopWithID(task.LoopID, task.TaskID, task.Role, task.Model, effectiveMaxIterations)
-		switch {
-		case err == nil:
-		case errors.Is(err, ErrLoopAlreadyExists):
-			entity, err = h.loopManager.attachContinuation(task.LoopID, task.TaskID)
-			if err != nil {
-				// A settled loop (ErrLoopTerminal) and a loop with work in
-				// flight (ErrLoopBusy) both refuse the continuation outright;
-				// nothing has been registered, so there is nothing to roll back
-				// and the live loop's own round is untouched.
-				return HandlerResult{}, err
-			}
-			loopID = task.LoopID
-			continuation = true
-			h.logger.Info("Continuation attached to live loop",
-				slog.String("loop_id", loopID),
-				slog.String("task_id", task.TaskID),
-				slog.String("loop_state", string(entity.State)))
-		default:
-			return HandlerResult{}, err
-		}
-	} else {
-		loopID, err = h.loopManager.CreateLoop(task.TaskID, task.Role, task.Model, effectiveMaxIterations)
+	loopID, err = h.loopManager.CreateLoopWithID(task.LoopID, task.TaskID, task.Role, task.Model, effectiveMaxIterations)
+	switch {
+	case err == nil:
+		registeredHere = true
+	case errors.Is(err, ErrLoopAlreadyExists):
+		entity, err = h.loopManager.attachContinuation(task)
 		if err != nil {
+			// A settled loop (ErrLoopTerminal) and a loop with work in
+			// flight (ErrLoopBusy) both refuse the continuation outright;
+			// nothing has been registered, so there is nothing to roll back
+			// and the live loop's own round is untouched.
 			return HandlerResult{}, err
 		}
+		loopID = task.LoopID
+		continuation = true
+		h.logger.Info("Continuation attached to live loop",
+			slog.String("loop_id", loopID),
+			slog.String("task_id", task.TaskID),
+			slog.String("loop_state", string(entity.State)))
+	default:
+		return HandlerResult{}, err
 	}
+	keepLoop := false
+	defer func() {
+		if registeredHere && !keepLoop {
+			_ = h.loopManager.DeleteLoop(loopID)
+		}
+	}()
 
 	// Configure optional loop metadata (depth, workflow context, user context, etc.)
 	h.configureLoopMetadata(loopID, task)
@@ -939,29 +995,8 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 	// On a continuation this is the loop's EXISTING manager — the conversation
 	// accumulated so far is still in it, and the new turn is appended after it.
 	cm := h.loopManager.GetContextManager(loopID)
-	if assembled != "" {
-		_ = cm.AddMessage(RegionSystemPrompt, agentic.ChatMessage{
-			Role:    "system",
-			Content: assembled,
-		})
-	}
-
-	_ = cm.AddMessage(RegionRecentHistory, agentic.ChatMessage{
-		Role:    "user",
-		Content: task.Prompt,
-	})
-	h.loopManager.CacheTaskPrompt(loopID, task.Prompt)
-
-	// If embedded context is present, add it directly (skips hydration)
-	if task.Context != nil && task.Context.Content != "" {
-		_ = cm.AddMessage(RegionGraphEntities, agentic.ChatMessage{
-			Role:    "system",
-			Content: task.Context.Content,
-		})
-		h.logger.Debug("Using embedded context",
-			slog.String("loop_id", loopID),
-			slog.Int("token_count", task.Context.TokenCount),
-			slog.Int("entity_count", len(task.Context.Entities)))
+	if err := h.seedTaskContext(cm, task, assembled); err != nil {
+		return HandlerResult{}, err
 	}
 
 	// Build messages for the request with iteration budget. Pass the
@@ -1027,13 +1062,24 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 		return HandlerResult{}, err
 	}
 	keepTrajectory = true
+	keepLoop = true
 	return result, nil
 }
 
 // buildTaskRequest creates the initial agent request, trajectory step, and loop-created
 // event, returning the assembled HandlerResult.
 func (h *MessageHandler) buildTaskRequest(loopID string, task TaskMessage, entity agentic.LoopEntity, messages []agentic.ChatMessage, tools []agentic.ToolDefinition) (HandlerResult, error) {
-	request := agentic.AgentRequest{
+	request := h.newTaskRequest(loopID, task, messages, tools)
+	return h.buildTaskResultFromRequest(loopID, task, entity, request)
+}
+
+func (h *MessageHandler) newTaskRequest(
+	loopID string,
+	task TaskMessage,
+	messages []agentic.ChatMessage,
+	tools []agentic.ToolDefinition,
+) agentic.AgentRequest {
+	return agentic.AgentRequest{
 		RequestID:      h.loopManager.GenerateRequestID(loopID),
 		LoopID:         loopID,
 		Role:           task.Role,
@@ -1044,7 +1090,14 @@ func (h *MessageHandler) buildTaskRequest(loopID string, task TaskMessage, entit
 		Timeout:        task.Timeout,
 		ResponseFormat: task.ResponseFormat,
 	}
+}
 
+func (h *MessageHandler) buildTaskResultFromRequest(
+	loopID string,
+	task TaskMessage,
+	entity agentic.LoopEntity,
+	request agentic.AgentRequest,
+) (HandlerResult, error) {
 	h.loopManager.TrackRequest(request.RequestID, loopID)
 	h.loopManager.TrackRequestStart(request.RequestID)
 
@@ -1247,7 +1300,7 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 		// future truncation can self-heal once.
 		h.loopManager.ResetTruncationRetry(loopID)
 
-		if err := h.handleToolCallResponse(ctx, &result, loopID, response.Message.ToolCalls); err != nil {
+		if err := h.handleToolCallResponse(ctx, &result, loopID, response.RequestID, response.Message.ToolCalls); err != nil {
 			return result, err
 		}
 
@@ -1300,10 +1353,14 @@ func (h *MessageHandler) handleToolCallResponse(
 	ctx context.Context,
 	result *HandlerResult,
 	loopID string,
+	requestID string,
 	toolCalls []agentic.ToolCall,
 ) error {
+	if err := stampToolExecutionCorrelation(requestID, toolCalls); err != nil {
+		return err
+	}
 	for index, toolCall := range toolCalls {
-		h.loopManager.TrackToolOrdinal(toolCall.ID, uint32(index+1))
+		h.loopManager.TrackToolOrdinal(toolCall.ExecutionID, uint32(index+1))
 	}
 	// Reject tool calls with empty names — Gemini sometimes emits these as
 	// acknowledgment non-responses. Store error results so the model gets a
@@ -1315,10 +1372,13 @@ func (h *MessageHandler) handleToolCallResponse(
 				slog.String("loop_id", loopID),
 				slog.String("call_id", tc.ID))
 			errResult := agentic.ToolResult{
-				CallID: tc.ID,
-				Name:   "invalid_tool_call",
-				Error:  "tool call had empty function name — call a specific tool by name or respond with text",
-				LoopID: loopID,
+				CallID:      tc.ID,
+				RequestID:   tc.RequestID,
+				ExecutionID: tc.ExecutionID,
+				CallOrdinal: tc.CallOrdinal,
+				Name:        "invalid_tool_call",
+				Error:       "tool call had empty function name — call a specific tool by name or respond with text",
+				LoopID:      loopID,
 			}
 			if err := h.loopManager.StoreToolResult(loopID, errResult); err != nil {
 				return err
@@ -1351,12 +1411,15 @@ func (h *MessageHandler) handleToolCallResponse(
 			return gErr
 		}
 		for _, rejection := range govResult.Rejected {
-			h.loopManager.TrackToolName(rejection.Call.ID, rejection.Call.Name)
+			h.loopManager.TrackToolName(rejection.Call.ExecutionID, rejection.Call.Name)
 			errResult := agentic.ToolResult{
-				CallID: rejection.Call.ID,
-				Name:   rejection.Call.Name,
-				Error:  fmt.Sprintf("tool call rejected by governance: %s", rejection.Reason),
-				LoopID: loopID,
+				CallID:      rejection.Call.ID,
+				Name:        rejection.Call.Name,
+				Error:       fmt.Sprintf("tool call rejected by governance: %s", rejection.Reason),
+				LoopID:      loopID,
+				RequestID:   rejection.Call.RequestID,
+				ExecutionID: rejection.Call.ExecutionID,
+				CallOrdinal: rejection.Call.CallOrdinal,
 			}
 			if err := h.loopManager.StoreToolResult(loopID, errResult); err != nil {
 				return err
@@ -1447,24 +1510,29 @@ func (h *MessageHandler) handleToolCallResponse(
 // approval_response_handler.go:122). Reason is the diagnostic surfaced
 // to the model so it can decide how to recover.
 //
-// Idempotent at the loopManager.StoreToolResult layer — duplicate
-// call_ids dedupe naturally.
-func (h *MessageHandler) synthesizeToolFailure(loopID, callID, name, reason string) error {
+// Correlated dispatch failures use ExecutionID like ordinary results. The
+// terminal drain is the sole CallID-only fallback because it owns only the
+// provider IDs in one terminating loop and never crosses result routing.
+func (h *MessageHandler) synthesizeToolFailure(loopID string, call agentic.ToolCall, reason string) error {
+	name := call.Name
 	if name == "" {
 		// Best-effort recovery — the call may have been registered via
 		// TrackToolName at dispatch time even if the dispatch later
 		// failed. Falls back to a sentinel only if no name was tracked.
-		if tracked := h.loopManager.GetToolName(callID); tracked != "" {
+		if tracked := h.loopManager.GetToolName(call.ExecutionID); tracked != "" {
 			name = tracked
 		} else {
 			name = "unknown_tool"
 		}
 	}
 	synth := agentic.ToolResult{
-		CallID: callID,
-		Name:   name,
-		Error:  reason,
-		LoopID: loopID,
+		CallID:      call.ID,
+		Name:        name,
+		Error:       reason,
+		LoopID:      loopID,
+		RequestID:   call.RequestID,
+		ExecutionID: call.ExecutionID,
+		CallOrdinal: call.CallOrdinal,
 	}
 	return h.loopManager.StoreToolResult(loopID, synth)
 }
@@ -1480,14 +1548,13 @@ func (h *MessageHandler) synthesizeToolFailure(loopID, callID, name, reason stri
 // individual StoreToolResult calls are logged but don't stop the drain
 // — partial cleanup beats no cleanup.
 //
-// Concurrency note: callers run on the loop's owning goroutine. A
-// concurrent real result on a different goroutine could overwrite a
-// just-written synth via StoreToolResult's CallID-keyed map (state.go
-// PendingToolResults), or be overwritten by it depending on
-// interleaving. The race is benign because the loop is transitioning
-// to terminal — HandleToolResult's AllToolsComplete branch is gated
-// on !entity.State.IsTerminal() at handlers.go:1411, so neither write
-// triggers a new agent.request regardless of which won.
+// Concurrency note: callers run on the loop's owning goroutine. Terminal
+// drainage stores its loop-local synthetic by provider CallID because the
+// pending set has no execution correlation. A concurrent real result stores by
+// ExecutionID, so the entries cannot overwrite one another. The loop is already
+// transitioning to terminal; HandleToolResult's AllToolsComplete branch is
+// gated on !entity.State.IsTerminal(), so neither entry triggers another
+// agent.request.
 func (h *MessageHandler) drainPendingToolFailures(loopID, reason string) {
 	// Drop any queued-but-not-yet-dispatched calls unconditionally —
 	// they'd never get a real result on a terminating loop, and
@@ -1504,7 +1571,7 @@ func (h *MessageHandler) drainPendingToolFailures(loopID, reason string) {
 		slog.Int("count", len(pending)),
 		slog.String("reason", reason))
 	for _, callID := range pending {
-		if err := h.synthesizeToolFailure(loopID, callID, "", reason); err != nil {
+		if err := h.synthesizeToolFailure(loopID, agentic.ToolCall{ID: callID}, reason); err != nil {
 			h.logger.Warn("failed to store synthetic failure during drain",
 				slog.String("loop_id", loopID),
 				slog.String("call_id", callID),
@@ -1546,7 +1613,7 @@ func (h *MessageHandler) tryDispatchOrSynthesize(result *HandlerResult, loopID s
 	// drain helper would later see.
 	_ = h.loopManager.RemovePendingTool(loopID, tc.ID)
 	reason := fmt.Sprintf("tool dispatch failed: %s", err.Error())
-	return false, h.synthesizeToolFailure(loopID, tc.ID, tc.Name, reason)
+	return false, h.synthesizeToolFailure(loopID, tc, reason)
 }
 
 // dispatchedFromQueue drains the loop's queued tool calls until one
@@ -1625,10 +1692,12 @@ func (h *MessageHandler) dispatchToolCall(result *HandlerResult, loopID string, 
 	if err := h.loopManager.AddPendingTool(loopID, tc.ID); err != nil {
 		return err
 	}
-	h.loopManager.TrackToolCall(tc.ID, loopID)
-	h.loopManager.TrackToolName(tc.ID, tc.Name)
-	h.loopManager.TrackToolArguments(tc.ID, tc.Arguments)
-	h.loopManager.TrackToolStart(tc.ID)
+	if tc.ExecutionID != "" {
+		h.loopManager.TrackToolCall(tc.ExecutionID, loopID)
+	}
+	h.loopManager.TrackToolName(tc.ExecutionID, tc.Name)
+	h.loopManager.TrackToolArguments(tc.ExecutionID, tc.Arguments)
+	h.loopManager.TrackToolStart(tc.ExecutionID)
 
 	if tc.LoopID == "" {
 		tc.LoopID = loopID
@@ -1725,7 +1794,7 @@ func (h *MessageHandler) dispatchToolCall(result *HandlerResult, loopID string, 
 		SourceCorrelation: tc.ID,
 		CausalIteration:   positiveUint32(h.loopManager.GetCurrentIteration(loopID)),
 		CausalPhase:       agentic.TrajectoryPhaseToolRequest,
-		CausalOrdinal:     h.loopManager.GetToolOrdinal(tc.ID),
+		CausalOrdinal:     tc.CallOrdinal,
 		Status:            agentic.TrajectoryStatusRequested,
 		ToolPreview:       tc.Name,
 		Evidence:          tc,
@@ -2038,13 +2107,13 @@ func resolveCompletionText(msg agentic.ChatMessage) string {
 }
 
 // resolveToolName resolves the function name of a tool result through the
-// loop's name-fallback chain: the name tracked at dispatch for this call ID
+// loop's name-fallback chain: the name tracked for this execution ID
 // first, then the name carried on the result envelope itself. The fallback
 // is what survives a LoopManager cache loss (process restart) — agentic-tools
 // stamps Name on every result before publishing, so the envelope always
 // carries it. Returns "" only when neither source knows the name.
 func (h *MessageHandler) resolveToolName(toolResult agentic.ToolResult) string {
-	if tracked := h.loopManager.GetToolName(toolResult.CallID); tracked != "" {
+	if tracked := h.loopManager.GetToolName(toolResult.ExecutionID); tracked != "" {
 		return tracked
 	}
 	return toolResult.Name
@@ -2216,15 +2285,15 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 		SourceCorrelation: originalToolResult.CallID,
 		CausalIteration:   positiveUint32(entity.Iterations),
 		CausalPhase:       agentic.TrajectoryPhaseToolResult,
-		CausalOrdinal:     h.loopManager.GetToolOrdinal(originalToolResult.CallID),
-		ElapsedMS:         h.computeToolDuration(originalToolResult.CallID),
+		CausalOrdinal:     h.loopManager.GetToolOrdinal(originalToolResult.ExecutionID),
+		ElapsedMS:         h.computeToolDuration(originalToolResult.ExecutionID),
 		Status:            toolResultStatus(originalToolResult),
 		ToolPreview:       originalToolResult.Name,
 		CapabilityPreview: entity.Role,
 		ErrorCategory:     toolErrorCategory(originalToolResult),
 		Evidence: trajectoryToolCompletionEvidence{
 			Result:            originalToolResult,
-			DispatchArguments: h.loopManager.GetToolArguments(originalToolResult.CallID),
+			DispatchArguments: h.loopManager.GetToolArguments(originalToolResult.ExecutionID),
 		},
 	})
 
@@ -2261,6 +2330,12 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 	if err != nil {
 		return HandlerResult{}, err
 	}
+	// StoreToolResult may allocate the result map. Refresh the snapshot so
+	// approval's UpdateLoop cannot overwrite that required result with nil.
+	entity, err = h.loopManager.GetLoop(loopID)
+	if err != nil {
+		return result, err
+	}
 
 	// Remove from pending tools
 	err = h.loopManager.RemovePendingTool(loopID, toolResult.CallID)
@@ -2284,8 +2359,8 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 
 	// Handle approval gating: pause on first approval_required result,
 	// absorb sibling results that land afterward.
-	if h.checkApprovalGate(loopID, &entity, toolResult, &result) {
-		return result, nil
+	if gated, err := h.checkApprovalGate(loopID, &entity, toolResult, &result); gated || err != nil {
+		return result, err
 	}
 
 	// Tool-initiated loop termination: the tool signals that no further iterations
@@ -2326,11 +2401,11 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 }
 
 // checkApprovalGate implements the awaiting-approval branch logic
-// extracted from HandleToolResult. Returns true when the caller
-// should stop processing this result (either we just paused, or the
-// loop is already paused and this is a sibling result). Mutates
-// result.State and result.PublishedMessages when transitioning.
-func (h *MessageHandler) checkApprovalGate(loopID string, entity *agentic.LoopEntity, toolResult agentic.ToolResult, result *HandlerResult) bool {
+// extracted from HandleToolResult. Returns true when the caller should stop
+// processing this result because approval is required or already pending.
+// Setup errors propagate to the delivery owner; result.State and
+// result.PublishedMessages report an approval wait only after setup succeeds.
+func (h *MessageHandler) checkApprovalGate(loopID string, entity *agentic.LoopEntity, toolResult agentic.ToolResult, result *HandlerResult) (bool, error) {
 	// If the loop is already awaiting approval, store the result and
 	// the trajectory step (done by caller) but stop here. Sibling
 	// tool results from the same batch can land after we paused on
@@ -2338,44 +2413,44 @@ func (h *MessageHandler) checkApprovalGate(loopID string, entity *agentic.LoopEn
 	// loop or trigger the next model request. The pending approval
 	// handler drains PendingToolResults when the loop resumes.
 	if entity.State == agentic.LoopStateAwaitingApproval {
-		return true
+		return true, nil
 	}
 	// Approval-gated rejection: the agentic-tools approval filter
 	// returned an "approval_required: ..." error. Pause the loop,
 	// snapshot the call, and emit ApprovalPendingEvent so a
 	// product-layer UI can surface the request.
 	if !agentic.IsApprovalRequired(toolResult.Error) {
-		return false
+		return false, nil
 	}
 	pubMsg, err := h.gateForApproval(loopID, entity, toolResult)
 	if err != nil {
-		h.logger.Warn("failed to gate loop for approval",
-			slog.String("loop_id", loopID),
-			slog.String("call_id", toolResult.CallID),
-			slog.String("error", err.Error()))
-	} else if pubMsg != nil {
+		return true, err
+	}
+	if pubMsg != nil {
 		result.PublishedMessages = append(result.PublishedMessages, *pubMsg)
 	}
 	result.State = agentic.LoopStateAwaitingApproval
-	return true
+	return true, nil
 }
 
 // gateForApproval transitions the loop into LoopStateAwaitingApproval,
 // persists the pending call on the entity, clears any queued tool
 // calls (they'll be re-deliberated by the LLM after the human
 // responds), and builds the ApprovalPendingEvent for publication.
-// Returns the published message (or nil if event construction fails)
-// alongside any non-fatal error so the caller can decide whether to
-// surface it.
+// Returns the required publication or an error that prevents successful
+// settlement. The delivery owner persists state and awaits the event's PubAck.
 func (h *MessageHandler) gateForApproval(loopID string, entity *agentic.LoopEntity, toolResult agentic.ToolResult) (*PublishedMessage, error) {
 	// Falls back to the tool name on the result envelope when the
 	// LoopManager cache has been cleared (e.g., process restart).
 	toolName := h.resolveToolName(toolResult)
-	args := h.loopManager.GetToolArguments(toolResult.CallID)
+	args := h.loopManager.GetToolArguments(toolResult.ExecutionID)
 
 	if err := entity.BeginAwaitingApproval(toolResult.CallID, toolName, args, toolResult.Error, h.config.ApprovalTimeout(), toolResult.TraceID); err != nil {
 		return nil, fmt.Errorf("begin awaiting approval: %w", err)
 	}
+	entity.PendingApproval.RequestID = toolResult.RequestID
+	entity.PendingApproval.ExecutionID = toolResult.ExecutionID
+	entity.PendingApproval.CallOrdinal = toolResult.CallOrdinal
 
 	// Clear sibling tool calls queued behind this one. Once the human
 	// responds, the LLM will get a fresh round-trip with the
@@ -2386,16 +2461,21 @@ func (h *MessageHandler) gateForApproval(loopID string, entity *agentic.LoopEnti
 	if err := h.loopManager.UpdateLoop(*entity); err != nil {
 		return nil, fmt.Errorf("persist awaiting-approval state: %w", err)
 	}
+	return h.buildApprovalPendingMessage(loopID, entity.PendingApproval)
+}
 
+// buildApprovalPendingMessage echoes the retained gate, including its original deadline.
+func (h *MessageHandler) buildApprovalPendingMessage(loopID string, state *agentic.PendingApprovalState) (*PublishedMessage, error) {
 	pending := &agentic.ApprovalPendingEvent{
 		LoopID:      loopID,
-		CallID:      toolResult.CallID,
-		ToolName:    toolName,
-		Arguments:   args,
-		Reason:      toolResult.Error,
-		RequestedAt: time.Now().UTC(),
-		Timeout:     h.config.ApprovalTimeout(),
-		TraceID:     toolResult.TraceID,
+		CallID:      state.CallID,
+		ExecutionID: state.ExecutionID,
+		ToolName:    state.ToolName,
+		Arguments:   state.Arguments,
+		Reason:      state.Reason,
+		RequestedAt: state.RequestedAt,
+		Timeout:     state.Timeout,
+		TraceID:     state.TraceID,
 	}
 	envelope := message.NewBaseMessage(pending.Schema(), pending, "agentic-loop")
 	data, err := json.Marshal(envelope)
@@ -2426,15 +2506,15 @@ func (h *MessageHandler) buildToolTrajectoryStep(toolResult agentic.ToolResult, 
 			errCategory = string(agentic.ToolErrorUnknown)
 		}
 	}
-	toolName := h.loopManager.GetToolName(toolResult.CallID)
-	toolArgs := h.loopManager.GetToolArguments(toolResult.CallID)
+	toolName := h.loopManager.GetToolName(toolResult.ExecutionID)
+	toolArgs := h.loopManager.GetToolArguments(toolResult.ExecutionID)
 	return agentic.TrajectoryStep{
 		Timestamp:     time.Now(),
 		StepType:      "tool_call",
 		ToolName:      toolName,
 		ToolArguments: toolArgs,
 		ToolResult:    toolResult.Content,
-		Duration:      h.computeToolDuration(toolResult.CallID),
+		Duration:      h.computeToolDuration(toolResult.ExecutionID),
 		Provider:      h.resolveProvider(entity.Model),
 		Capability:    entity.Role,
 		ToolStatus:    toolStatus,
@@ -2444,6 +2524,12 @@ func (h *MessageHandler) buildToolTrajectoryStep(toolResult agentic.ToolResult, 
 		// attribute for citation/audit/governance dashboards.
 		URLsFetched: agentic.BashStepURLs(toolName, toolArgs),
 	}
+}
+
+// toolIterationLimitError is the existing persisted tool-drain consequence.
+// Terminal replay must distinguish it from a timeout at the same budget count.
+func toolIterationLimitError(maxIterations int) string {
+	return fmt.Sprintf("max iterations (%d) reached", maxIterations)
 }
 
 // handleToolsComplete handles the case when all pending tools have completed
@@ -2486,7 +2572,7 @@ func (h *MessageHandler) handleToolsComplete(
 		result.MaxIterationsReached = true
 
 		// Update entity with completion data for KV persistence (enables SSE delivery)
-		errorMsg := fmt.Sprintf("max iterations (%d) reached", entity.MaxIterations)
+		errorMsg := toolIterationLimitError(entity.MaxIterations)
 		if updateErr := h.loopManager.UpdateCompletion(loopID, agentic.OutcomeFailed, "", errorMsg); updateErr != nil {
 			h.logger.Warn("failed to update completion for max iterations",
 				slog.String("loop_id", loopID),
@@ -2506,7 +2592,7 @@ func (h *MessageHandler) handleToolsComplete(
 	newIteration := h.loopManager.GetCurrentIteration(loopID)
 
 	// Get ALL accumulated tool results
-	allResults := h.loopManager.GetAndClearToolResults(loopID)
+	allResults := h.loopManager.toolResults(loopID, false)
 
 	toolMessages := h.buildToolMessages(allResults)
 
@@ -2639,7 +2725,7 @@ func (h *MessageHandler) buildToolMessages(results []agentic.ToolResult) []agent
 		content = decorateContentWithPagination(content, r.Metadata)
 		name := r.Name
 		if name == "" {
-			name = h.loopManager.GetToolName(r.CallID)
+			name = h.loopManager.GetToolName(r.ExecutionID)
 		}
 		messages[i] = agentic.ChatMessage{
 			Role:       "tool",

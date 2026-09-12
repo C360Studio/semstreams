@@ -36,6 +36,14 @@ func setUpAwaitingLoop(t *testing.T, handler *MessageHandler, timeout time.Durat
 		t.Fatalf("BeginAwaitingApproval: %v", err)
 	}
 	// Backdate RequestedAt to simulate elapsed time without sleeping.
+	calls := []agentic.ToolCall{{ID: entity.PendingApproval.CallID, Name: entity.PendingApproval.ToolName,
+		Arguments: entity.PendingApproval.Arguments}}
+	if err := stampToolExecutionCorrelation(loopID+":req:timeout", calls); err != nil {
+		t.Fatalf("stamp timeout fixture execution: %v", err)
+	}
+	entity.PendingApproval.RequestID = calls[0].RequestID
+	entity.PendingApproval.ExecutionID = calls[0].ExecutionID
+	entity.PendingApproval.CallOrdinal = calls[0].CallOrdinal
 	entity.PendingApproval.RequestedAt = time.Now().UTC().Add(-requestedAtOffset)
 	if err := handler.UpdateLoop(entity); err != nil {
 		t.Fatalf("UpdateLoop: %v", err)
@@ -111,6 +119,13 @@ func TestSnapshotExpiredApprovals_CarriesCallIDAndToolName(t *testing.T) {
 	if got.CallID != "call-gated" {
 		t.Errorf("CallID = %q, want %q", got.CallID, "call-gated")
 	}
+	entity, err := handler.GetLoop(expiredID)
+	if err != nil {
+		t.Fatalf("GetLoop: %v", err)
+	}
+	if got.ExecutionID == "" || got.ExecutionID != entity.PendingApproval.ExecutionID {
+		t.Errorf("ExecutionID = %q, want original pending %q", got.ExecutionID, entity.PendingApproval.ExecutionID)
+	}
 	if got.ToolName != "delete_rule" {
 		t.Errorf("ToolName = %q, want %q", got.ToolName, "delete_rule")
 	}
@@ -157,11 +172,12 @@ func TestHandleApprovalResponse_StaleResponseReturnsBenignEmpty(t *testing.T) {
 
 	// Loop is NOT in awaiting_approval; response will be a stale-drop.
 	response := agentic.ApprovalResponse{
-		LoopID:    loopID,
-		CallID:    "call-1",
-		Decision:  agentic.ApprovalDecisionReject,
-		Reason:    "test",
-		DecidedAt: time.Now().UTC(),
+		LoopID:      loopID,
+		CallID:      "call-1",
+		ExecutionID: "closed-execution",
+		Decision:    agentic.ApprovalDecisionReject,
+		Reason:      "test",
+		DecidedAt:   time.Now().UTC(),
 	}
 
 	result, err := handler.HandleApprovalResponse(context.Background(), response)
@@ -186,14 +202,19 @@ func TestApprovalTimeoutAutoReject_DrivesHandleApprovalResponse(t *testing.T) {
 	handler := NewMessageHandler(DefaultConfig())
 	loopID := setUpAwaitingLoop(t, handler, 1*time.Minute, 90*time.Second)
 
-	// Mirror the payload the sweeper builds for an expired candidate.
+	candidates := handler.loopManager.SnapshotExpiredApprovals(time.Now().UTC())
+	if len(candidates) != 1 {
+		t.Fatalf("expired candidates = %d, want 1", len(candidates))
+	}
+	// Mirror the payload the sweeper builds for this exact expired candidate.
 	response := agentic.ApprovalResponse{
-		LoopID:     loopID,
-		CallID:     "call-gated",
-		Decision:   agentic.ApprovalDecisionReject,
-		Reason:     "approval timed out after 1m",
-		ApprovedBy: approvalTimeoutSystemApprover,
-		DecidedAt:  time.Now().UTC(),
+		LoopID:      loopID,
+		CallID:      "call-gated",
+		ExecutionID: candidates[0].ExecutionID,
+		Decision:    agentic.ApprovalDecisionReject,
+		Reason:      "approval timed out after 1m",
+		ApprovedBy:  approvalTimeoutSystemApprover,
+		DecidedAt:   time.Now().UTC(),
 	}
 
 	result, err := handler.HandleApprovalResponse(context.Background(), response)

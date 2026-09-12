@@ -57,14 +57,14 @@ the default with no functional change.
 ## Subject Topology
 
 ```text
-agent.toolcall.proposed.<loop_id>          (out from loop, in to rules)
-agent.toolcall.approved.<loop_id>.<call_id>  (in to loop, out from rules)
-agent.toolcall.rejected.<loop_id>.<call_id>  (in to loop, out from rules)
+agent.toolcall.proposed.<loop_id>       (out from loop, in to rules)
+agent.toolcall.approved.<execution_id>  (in to loop, out from rules)
+agent.toolcall.rejected.<execution_id>  (in to loop, out from rules)
 ```
 
 The loop binds a single wildcard subscription to
 `agent.toolcall.approved.>` and `.rejected.>` at startup, before any
-task arrives. Verdicts demux per-call by the `call_id` field on the
+task arrives. Verdicts demux by the framework `execution_id` on the
 payload — both approve-action (top-level) and publish-action (nested
 `properties`) shapes are supported.
 
@@ -74,7 +74,11 @@ payload — both approve-action (top-level) and publish-action (nested
 {
   "loop_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
   "parent_loop_id": "ee72d8e2-5796-4936-861f-68c673cf1a5a",
+  "request_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7:req:request-uuid",
+  "execution_id": "tool-exec-v1-identity-digest",
   "call_id": "call-001",
+  "call_ordinal": 1,
+  "proposal_fingerprint": "sha256:proposal-digest",
   "tool_name": "bash",
   "command": "ls /tmp",
   "url": "",
@@ -99,6 +103,9 @@ The loop accepts two payload shapes for the verdict:
   "decision": "approved",
   "call_id": "call-001",
   "loop_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "request_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7:req:request-uuid",
+  "execution_id": "tool-exec-v1-identity-digest",
+  "proposal_fingerprint": "sha256:proposal-digest",
   "rule_id": "allow-readonly-tools",
   "reason": "tool is read-only",
   "entity_id": "...",
@@ -109,18 +116,21 @@ The loop accepts two payload shapes for the verdict:
 ```json
 // shape B — emitted by `publish` action (nested under properties)
 {
-  "subject": "agent.toolcall.rejected.abc-123.call-001",
+  "subject": "agent.toolcall.rejected.tool-exec-v1-identity-digest",
   "source": "rule_engine",
   "properties": {
     "decision": "rejected",
+    "request_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7:req:request-uuid",
+    "execution_id": "tool-exec-v1-identity-digest",
     "call_id": "call-001",
+    "proposal_fingerprint": "sha256:proposal-digest",
     "reason": "bash disallowed by policy"
   }
 }
 ```
 
-`VerdictPayload.EffectiveDecision` / `EffectiveCallID` / `EffectiveReason`
-fall through both shapes so consumers don't write the dispatch logic
+The verdict decoder's decision, execution-ID, call-ID, and reason fallbacks
+cover both shapes so consumers don't write the dispatch logic
 twice. The ADR-039 canonical pattern uses `publish` + `deny` for
 rejections; the loop accepts the publish-action shape produced by that
 pair.
@@ -141,10 +151,13 @@ pair.
   "on_enter": [
     {
       "type": "publish",
-      "subject": "agent.toolcall.rejected.$message.loop_id.$message.call_id",
+      "subject": "agent.toolcall.rejected.$message.execution_id",
       "properties": {
         "decision": "rejected",
+        "request_id": "$message.request_id",
+        "execution_id": "$message.execution_id",
         "call_id": "$message.call_id",
+        "proposal_fingerprint": "$message.proposal_fingerprint",
         "reason": "writes outside worktree blocked"
       }
     },
@@ -171,7 +184,7 @@ stream (ADR-055 §3a; subject `governance.verdict.deny.{rule_token}`).
   "on_enter": [
     {
       "type": "approve",
-      "subject": "agent.toolcall.approved.$message.loop_id.$message.call_id",
+      "subject": "agent.toolcall.approved.$message.execution_id",
       "reason": "read-only tool $message.tool_name"
     }
   ]
@@ -203,10 +216,13 @@ access (ADR-041, beta.72+).
     {
       "type": "publish",
       "when": [{"field": "$message.command", "operator": "contains", "value": "cd /workspace"}],
-      "subject": "agent.toolcall.rejected.$message.loop_id.$message.call_id",
+      "subject": "agent.toolcall.rejected.$message.execution_id",
       "properties": {
         "decision": "rejected",
+        "request_id": "$message.request_id",
+        "execution_id": "$message.execution_id",
         "call_id": "$message.call_id",
+        "proposal_fingerprint": "$message.proposal_fingerprint",
         "reason": "bash 'cd /workspace' blocked — stay in worktree"
       }
     },
@@ -218,10 +234,13 @@ access (ADR-041, beta.72+).
     {
       "type": "publish",
       "when": [{"field": "$message.command", "operator": "contains", "value": "> /workspace/"}],
-      "subject": "agent.toolcall.rejected.$message.loop_id.$message.call_id",
+      "subject": "agent.toolcall.rejected.$message.execution_id",
       "properties": {
         "decision": "rejected",
+        "request_id": "$message.request_id",
+        "execution_id": "$message.execution_id",
         "call_id": "$message.call_id",
+        "proposal_fingerprint": "$message.proposal_fingerprint",
         "reason": "bash redirect into /workspace blocked"
       }
     },
@@ -232,10 +251,13 @@ access (ADR-041, beta.72+).
     },
     {
       "type": "publish",
-      "subject": "agent.toolcall.approved.$message.loop_id.$message.call_id",
+      "subject": "agent.toolcall.approved.$message.execution_id",
       "properties": {
         "decision": "approved",
+        "request_id": "$message.request_id",
+        "execution_id": "$message.execution_id",
         "call_id": "$message.call_id",
+        "proposal_fingerprint": "$message.proposal_fingerprint",
         "reason": "bash command passed blocklist"
       }
     }
@@ -273,10 +295,13 @@ multi-rule firing race in enforce mode.
   "on_enter": [
     {
       "type": "publish",
-      "subject": "agent.toolcall.rejected.$message.loop_id.$message.call_id",
+      "subject": "agent.toolcall.rejected.$message.execution_id",
       "properties": {
         "decision": "rejected",
+        "request_id": "$message.request_id",
+        "execution_id": "$message.execution_id",
         "call_id": "$message.call_id",
+        "proposal_fingerprint": "$message.proposal_fingerprint",
         "reason": "$caller.role role cannot use $message.tool_name"
       }
     },
@@ -293,7 +318,10 @@ resolve against the proposed-call payload:
 | Token | Resolves to |
 |---|---|
 | `$message.loop_id` | The loop's bare UUID |
-| `$message.call_id` | The tool-call ID — required for verdict subjects |
+| `$message.request_id` | The provider request identity |
+| `$message.execution_id` | The framework tool-execution identity — required for verdict subjects |
+| `$message.call_id` | The provider's request-scoped tool-call ID |
+| `$message.proposal_fingerprint` | The canonical proposed-call fingerprint verdicts must echo |
 | `$message.tool_name` | The tool name (`bash`, `http_request`, etc.) |
 | `$message.command` | The bash command (top-level convenience) |
 | `$message.url` | The HTTP URL (top-level convenience) |
@@ -341,7 +369,7 @@ The loop is in enforce mode but no rule is firing a verdict. Check:
 2. Does at least one rule's `subscribe` field include
    `agent.toolcall.proposed.>` (or a more specific match)?
 3. Are rule actions writing to
-   `agent.toolcall.approved.$message.loop_id.$message.call_id` or
+   `agent.toolcall.approved.$message.execution_id` or
    `.rejected.…`?
 4. Is the rule's evaluation triggering? Check
    `semstreams_rule_evaluations_total{rule_name=...,result=triggered}`.
@@ -353,7 +381,7 @@ contended NATS).
 
 ### `subscribe_before_publish_failures` rate is non-zero
 
-Verdicts are arriving for `call_id`s that no longer have a registered
+Verdicts are arriving for `execution_id`s that no longer have a registered
 waiter. Either:
 
 - The race-fix regressed (verdict reached the loop before Propose's
@@ -403,10 +431,13 @@ hierarchies. Example:
   "on_enter": [
     {
       "type": "publish",
-      "subject": "agent.toolcall.rejected.$message.loop_id.$message.call_id",
+      "subject": "agent.toolcall.rejected.$message.execution_id",
       "properties": {
         "decision": "rejected",
+        "request_id": "$message.request_id",
+        "execution_id": "$message.execution_id",
         "call_id": "$message.call_id",
+        "proposal_fingerprint": "$message.proposal_fingerprint",
         "reason": "sub-agents cannot execute bash"
       }
     },

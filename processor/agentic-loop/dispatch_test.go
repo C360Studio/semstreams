@@ -8,6 +8,13 @@ import (
 	"github.com/c360studio/semstreams/types"
 )
 
+func correlatedDispatchTestCall(call agentic.ToolCall) agentic.ToolCall {
+	call.RequestID = "request-" + call.ID
+	call.ExecutionID = "execution-" + call.ID
+	call.CallOrdinal = 1
+	return call
+}
+
 // TestDispatchToolCall_StampsLoopID is the regression for the wedge
 // semteams reported against beta.37: dispatchToolCall accepted a
 // loopID argument but never put it on the outgoing ToolCall, so
@@ -23,13 +30,13 @@ func TestDispatchToolCall_StampsLoopID(t *testing.T) {
 		t.Fatalf("CreateLoop: %v", err)
 	}
 
-	good := agentic.ToolCall{
+	good := correlatedDispatchTestCall(agentic.ToolCall{
 		ID:        "call-stamp",
 		Name:      "test_tool",
 		Arguments: map[string]any{"q": "hello"},
 		// Intentionally NO LoopID, NO Metadata — proves dispatch
 		// populates them rather than relying on upstream.
-	}
+	})
 
 	result := &HandlerResult{}
 	dispatched, storeErr := handler.tryDispatchOrSynthesize(result, loopID, good)
@@ -67,13 +74,13 @@ func TestDispatchToolCall_PreservesExplicitMetadata(t *testing.T) {
 	}
 
 	const explicitLoopID = "explicit-routing-id"
-	good := agentic.ToolCall{
+	good := correlatedDispatchTestCall(agentic.ToolCall{
 		ID:        "call-preserve",
 		Name:      "test_tool",
 		Arguments: map[string]any{"q": "hello"},
 		LoopID:    explicitLoopID,
 		Metadata:  map[string]any{"loop_id": explicitLoopID, "extra": "preserved"},
-	}
+	})
 
 	result := &HandlerResult{}
 	if _, storeErr := handler.tryDispatchOrSynthesize(result, loopID, good); storeErr != nil {
@@ -111,8 +118,8 @@ func TestDispatchToolCall_ApprovalRedispatchStampsLoopID(t *testing.T) {
 	}
 
 	pending := agentic.PendingApprovalState{
-		CallID:   "call-approved",
-		ToolName: "test_tool",
+		CallID: "call-approved", ToolName: "test_tool", RequestID: "request-approved",
+		ExecutionID: "execution-approved", CallOrdinal: 1,
 	}
 	args := map[string]any{"q": "from-approval"}
 
@@ -159,12 +166,12 @@ func TestDispatchToolCall_DequeuedCallStampsLoopID(t *testing.T) {
 	// handlers.go:879-880) but Metadata is empty. The dequeue path
 	// MUST stamp Metadata["loop_id"] for sandbox routing to work.
 	queued := []agentic.ToolCall{
-		{
+		correlatedDispatchTestCall(agentic.ToolCall{
 			ID:        "call-queued",
 			Name:      "test_tool",
 			Arguments: map[string]any{"q": "from-queue"},
 			LoopID:    loopID,
-		},
+		}),
 	}
 	handler.loopManager.QueueToolCalls(loopID, queued)
 
@@ -211,11 +218,11 @@ func TestDispatchToolCall_StampsRunAnchor(t *testing.T) {
 		t.Fatalf("SetRunID: %v", err)
 	}
 
-	good := agentic.ToolCall{
+	good := correlatedDispatchTestCall(agentic.ToolCall{
 		ID:        "call-run",
 		Name:      "test_tool",
 		Arguments: map[string]any{"q": "hello"},
-	}
+	})
 
 	result := &HandlerResult{}
 	dispatched, storeErr := handler.tryDispatchOrSynthesize(result, loopID, good)
@@ -260,7 +267,7 @@ func TestDispatchToolCall_StandaloneLoopNoRunAnchor(t *testing.T) {
 	}
 	// Intentionally NO SetRunID — this loop is standalone.
 
-	good := agentic.ToolCall{ID: "call-standalone", Name: "test_tool"}
+	good := correlatedDispatchTestCall(agentic.ToolCall{ID: "call-standalone", Name: "test_tool"})
 	result := &HandlerResult{}
 	if _, storeErr := handler.tryDispatchOrSynthesize(result, loopID, good); storeErr != nil {
 		t.Fatalf("storeErr = %v, want nil", storeErr)
@@ -300,7 +307,7 @@ func TestDispatchToolCall_RunIDWithoutPlatformOmitsEntityID(t *testing.T) {
 		t.Fatalf("SetRunID: %v", err)
 	}
 
-	good := agentic.ToolCall{ID: "call-noplatform", Name: "test_tool"}
+	good := correlatedDispatchTestCall(agentic.ToolCall{ID: "call-noplatform", Name: "test_tool"})
 	result := &HandlerResult{}
 	if _, storeErr := handler.tryDispatchOrSynthesize(result, loopID, good); storeErr != nil {
 		t.Fatalf("storeErr = %v, want nil", storeErr)
@@ -338,7 +345,7 @@ func TestDispatchToolCall_RunAnchorOverwritesCallerValue(t *testing.T) {
 		t.Fatalf("SetRunID: %v", err)
 	}
 
-	good := agentic.ToolCall{
+	good := correlatedDispatchTestCall(agentic.ToolCall{
 		ID:   "call-overwrite",
 		Name: "test_tool",
 		Metadata: map[string]any{
@@ -346,7 +353,7 @@ func TestDispatchToolCall_RunAnchorOverwritesCallerValue(t *testing.T) {
 			agentic.MetadataKeyRunEntityID: "stale.bogus.entity",
 			"extra":                        "preserved",
 		},
-	}
+	})
 
 	result := &HandlerResult{}
 	if _, storeErr := handler.tryDispatchOrSynthesize(result, loopID, good); storeErr != nil {
@@ -388,7 +395,10 @@ func TestDispatchToolCall_ApprovalRedispatchStampsRunAnchor(t *testing.T) {
 		t.Fatalf("SetRunID: %v", err)
 	}
 
-	pending := agentic.PendingApprovalState{CallID: "call-approved-run", ToolName: "test_tool"}
+	pending := agentic.PendingApprovalState{
+		CallID: "call-approved-run", ToolName: "test_tool", RequestID: "request-approved-run",
+		ExecutionID: "execution-approved-run", CallOrdinal: 1,
+	}
 	result := &HandlerResult{}
 	if err := handler.dispatchApprovedCall(loopID, pending, map[string]any{"q": "x"}, "alice@example.com", result); err != nil {
 		t.Fatalf("dispatchApprovedCall: %v", err)
@@ -424,7 +434,7 @@ func TestDispatchToolCall_DequeuedCallStampsRunAnchor(t *testing.T) {
 	}
 
 	handler.loopManager.QueueToolCalls(loopID, []agentic.ToolCall{
-		{ID: "call-queued-run", Name: "test_tool", LoopID: loopID},
+		correlatedDispatchTestCall(agentic.ToolCall{ID: "call-queued-run", Name: "test_tool", LoopID: loopID}),
 	})
 
 	result := &HandlerResult{}

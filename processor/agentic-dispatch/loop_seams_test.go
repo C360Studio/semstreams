@@ -68,8 +68,8 @@ func (h *seamRecorder) countMessage(msg string) int {
 //
 // The NATS client is a zero-value client — it reports Disconnected, so a
 // publish fails cleanly instead of panicking. The durable store starts empty,
-// so a loop absent from the tracker is ABSENT rather than unreadable; tests
-// that want a durable-only loop install their own records.
+// so an unknown loop is ABSENT rather than unreadable; tests that need current
+// authority install explicit persisted records.
 //
 // The metrics registry is per-component, not the process-global one, so
 // CollectAndCount proves that exactly one series moved.
@@ -81,15 +81,25 @@ func newSeamTestComponent(t *testing.T) (*Component, *captureSink, *seamRecorder
 		config:        DefaultConfig(),
 		modelRegistry: newTestRegistry(),
 		logger:        slog.New(recorder),
-		loopTracker:   NewLoopTrackerWithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
 		registry:      NewCommandRegistry(),
 		metrics:       getMetrics(metric.NewMetricsRegistry()),
 		natsClient:    &natsclient.Client{},
+		taskEvidence:  emptyRetainedTaskEvidenceReader{},
 	}
 	c.sendResponseFn = sink.add
 	withPersistedLoops(c, nil)
 	c.registerBuiltinCommands()
 	return c, sink, recorder
+}
+
+type emptyRetainedTaskEvidenceReader struct{}
+
+func (emptyRetainedTaskEvidenceReader) ReadRetainedTask(
+	context.Context,
+	string,
+	string,
+) ([]byte, bool, error) {
+	return nil, false, nil
 }
 
 func seamUserMessage(userID string) agentic.UserMessage {
@@ -102,20 +112,12 @@ func seamUserMessage(userID string) agentic.UserMessage {
 	}
 }
 
-// trackLoopOwnedBy seeds a live loop in the tracker AND in the durable store,
-// which is what a real running loop looks like once persistLoopState has landed.
+// trackLoopOwnedBy seeds only exact persisted loop authority. The historical
+// helper name is retained for callers; it creates no process-local projection.
 func trackLoopOwnedBy(c *Component, loopID, userID string) {
-	c.loopTracker.Track(&LoopInfo{
-		LoopID:      loopID,
-		TaskID:      "task-" + loopID,
-		UserID:      userID,
-		ChannelType: "http",
-		ChannelID:   "session-1",
-		State:       "executing",
-		CreatedAt:   time.Now(),
-	})
 	withPersistedLoops(c, map[string]*agentic.LoopEntity{loopID: {
 		ID:            loopID,
+		TaskID:        "task-" + loopID,
 		UserID:        userID,
 		ChannelType:   "http",
 		ChannelID:     "session-1",
@@ -157,7 +159,7 @@ func seamRefusalDrivers() []seamRefusalDriver {
 				t.Helper()
 				msg := seamUserMessage(requester)
 				msg.ReplyTo = loopID
-				c.handleTaskSubmission(context.Background(), msg)
+				require.NoError(t, c.handleTaskSubmission(context.Background(), msg))
 				responses := sink.all()
 				require.Len(t, responses, 1, "the channel lane answers on the response subject")
 				require.Equal(t, agentic.ResponseTypeError, responses[0].Type)
@@ -170,7 +172,8 @@ func seamRefusalDrivers() []seamRefusalDriver {
 				t.Helper()
 				msg := seamUserMessage(requester)
 				msg.ReplyTo = loopID
-				resp := c.processTaskSubmissionSync(context.Background(), msg)
+				resp, err := c.processTaskSubmissionSync(context.Background(), msg)
+				require.NoError(t, err)
 				require.Equal(t, agentic.ResponseTypeError, resp.Type)
 				return resp.Content
 			},
@@ -296,24 +299,22 @@ func TestSecondHolderCannotContinueAnotherUsersLoop(t *testing.T) {
 }
 
 // spec: agentic-dispatch / The ownership model binds the user lane, and approval is deliberately not owner-scoped
-// I4: a refused continuation leaves the loop's recorded owner and its
-// active-loop indexes pointing where they pointed before — which is what keeps
-// the original user's completion routed to the original user.
+// I4: a refused continuation leaves the exact recorded owner and route unchanged.
 func TestRefusedContinuationDoesNotRepointOwnership(t *testing.T) {
 	c, _, _ := newSeamTestComponent(t)
 	trackLoopOwnedBy(c, seamTestLoopA, "user-a")
+	record, err := c.loadPersistedLoop(t.Context(), seamTestLoopA)
+	require.NoError(t, err)
+	before := *record
 
 	msg := seamUserMessage("user-b")
 	msg.ReplyTo = seamTestLoopA
-	c.processTaskSubmissionSync(context.Background(), msg)
-
-	info := c.loopTracker.Get(seamTestLoopA)
-	require.NotNil(t, info, "the refused request must not remove the loop")
-	assert.Equal(t, "user-a", info.UserID, "the recorded owner is unchanged")
-	assert.Equal(t, seamTestLoopA, c.loopTracker.GetActiveLoop("user-a", "session-1"),
-		"user-a's active-loop index still points at the loop")
-	assert.Empty(t, c.loopTracker.GetUserLoops("user-b"),
-		"the refused requester owns nothing")
+	response, err := c.processTaskSubmissionSync(context.Background(), msg)
+	require.NoError(t, err)
+	require.Equal(t, agentic.ResponseTypeError, response.Type)
+	after, err := c.loadPersistedLoop(t.Context(), seamTestLoopA)
+	require.NoError(t, err)
+	require.Equal(t, before, *after, "a refused request cannot replace the authority's owner or route")
 }
 
 // spec: agentic-dispatch / The ownership model binds the user lane, and approval is deliberately not owner-scoped
@@ -356,19 +357,20 @@ func TestApprovalIsNotOwnerScoped(t *testing.T) {
 	c, _, _ := newSeamTestComponent(t)
 	c.config.Permissions.Approve = []string{"reviewer-b"}
 	trackLoopOwnedBy(c, seamTestLoopA, "user-a")
-	c.loopTracker.SetPendingApproval(seamTestLoopA, &PendingApprovalInfo{
-		CallID:      "call-001",
-		ToolName:    "delete_rule",
-		RequestedAt: time.Now().UTC(),
-	})
+	withPersistedLoops(c, map[string]*agentic.LoopEntity{seamTestLoopA: {
+		ID: seamTestLoopA, UserID: "user-a", ChannelType: "http", ChannelID: "session-1",
+		State: agentic.LoopStateAwaitingApproval, MaxIterations: 5,
+		PendingApproval: &agentic.PendingApprovalState{CallID: "call-001", ExecutionID: approvalTestExecutionID, ToolName: "delete_rule"},
+	}})
 
 	rec := seamHTTPCall(t, c.handleLoopApproval, http.MethodPost,
-		"/loops/"+seamTestLoopA+"/approval", seamTestLoopA, `{"decision":"approve"}`, "reviewer-b")
+		"/loops/"+seamTestLoopA+"/approval", seamTestLoopA, `{"decision":"approve","execution_id":"`+approvalTestExecutionID+`"}`, "reviewer-b")
 
 	assert.NotEqual(t, http.StatusForbidden, rec.Code,
 		"an approver who does not own the loop is admitted")
-	assert.NotEqual(t, http.StatusConflict, rec.Code,
-		"the pending approval was found, so the request reached the publish")
+	require.Equal(t, http.StatusInternalServerError, rec.Code,
+		"durable pending approval reached the disconnected client's publication")
+	assert.Contains(t, rec.Body.String(), "publish approval response")
 }
 
 // spec: agentic-dispatch / The ownership model binds the user lane, and approval is deliberately not owner-scoped
@@ -378,9 +380,6 @@ func TestApprovalRefusedForCallerOutsideApproveList(t *testing.T) {
 	c, _, rec := newSeamTestComponent(t)
 	c.config.Permissions.Approve = []string{"reviewer-b"}
 	trackLoopOwnedBy(c, seamTestLoopA, "user-a")
-	c.loopTracker.SetPendingApproval(seamTestLoopA, &PendingApprovalInfo{
-		CallID: "call-001", ToolName: "delete_rule", RequestedAt: time.Now().UTC(),
-	})
 
 	resp := seamHTTPCall(t, c.handleLoopApproval, http.MethodPost,
 		"/loops/"+seamTestLoopA+"/approval", seamTestLoopA, `{"decision":"approve"}`, "stranger-c")
@@ -397,20 +396,21 @@ func TestApprovalDefaultAdmitsEveryone(t *testing.T) {
 	require.Equal(t, []string{"*"}, c.config.Permissions.Approve,
 		"the shipped default admits everyone")
 	trackLoopOwnedBy(c, seamTestLoopA, "user-a")
-	c.loopTracker.SetPendingApproval(seamTestLoopA, &PendingApprovalInfo{
-		CallID: "call-001", ToolName: "delete_rule", RequestedAt: time.Now().UTC(),
-	})
+	withPersistedLoops(c, map[string]*agentic.LoopEntity{seamTestLoopA: {
+		ID: seamTestLoopA, UserID: "user-a", State: agentic.LoopStateAwaitingApproval, MaxIterations: 5,
+		PendingApproval: &agentic.PendingApprovalState{CallID: "call-001", ExecutionID: approvalTestExecutionID, ToolName: "delete_rule"},
+	}})
 
 	rec := seamHTTPCall(t, c.handleLoopApproval, http.MethodPost,
-		"/loops/"+seamTestLoopA+"/approval", seamTestLoopA, `{"decision":"approve"}`, "anybody")
+		"/loops/"+seamTestLoopA+"/approval", seamTestLoopA, `{"decision":"approve","execution_id":"`+approvalTestExecutionID+`"}`, "anybody")
 
-	assert.NotEqual(t, http.StatusForbidden, rec.Code)
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	require.Contains(t, rec.Body.String(), "publish approval response", "default approval permission reaches publication")
 }
 
 // spec: agentic-dispatch / The ownership model binds the user lane, and approval is deliberately not owner-scoped
 // A settled loop cannot be continued, and no new loop is minted under its
-// token — the silent fork #1227 reports. Terminality is fail-closed across the
-// two sources, so the durable record alone refuses it.
+// token — the silent fork #1227 reports. The exact terminal authority refuses it.
 func TestAttachToTerminalLoopIsRefused(t *testing.T) {
 	c, sink, rec := newSeamTestComponent(t)
 	withPersistedLoops(c, map[string]*agentic.LoopEntity{seamTestLoopA: {
@@ -425,8 +425,7 @@ func TestAttachToTerminalLoopIsRefused(t *testing.T) {
 	require.Len(t, responses, 1)
 	assert.Equal(t, agentic.ResponseTypeError, responses[0].Type)
 	assert.Contains(t, responses[0].Content, "already settled")
-	assert.Empty(t, c.loopTracker.GetAllLoops(),
-		"no loop is minted under a settled loop's token")
+	assert.Zero(t, testutil.ToFloat64(c.metrics.tasksSubmitted), "no task was published under a settled loop's token")
 	requireSeamRefusal(t, c, rec, seamChannelSubmission, reasonStateTerminal)
 }
 
@@ -442,17 +441,16 @@ func TestSystemLaneLoopIsNotOwnerChecked(t *testing.T) {
 		// thing dispatch ever sees is its terminal event. Settling that event
 		// must consult no ownership and refuse nothing.
 		c := terminalTestComponent(t)
-		c.loopTracker.Track(&LoopInfo{
-			LoopID: seamTestLoopA, TaskID: "task-sys", ChannelType: "http",
-			ChannelID: "session-sys", State: "executing", MaxIterations: 3,
-		})
 		c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
 			return &agentic.LoopEntity{
 				ID: seamTestLoopA, TaskID: "task-sys", State: agentic.LoopStateComplete,
-				MaxIterations: 3, ChannelType: "http", ChannelID: "session-sys",
+				MaxIterations: 3,
 			}, nil
 		}
-		c.sendTerminalResponseFn = func(context.Context, agentic.UserResponse, string) error { return nil }
+		c.sendTerminalResponseFn = func(context.Context, agentic.UserResponse, string) error {
+			t.Fatal("a routeless system terminal must not publish a user response")
+			return nil
+		}
 
 		data := completionPayload(t, &agentic.LoopCompletedEvent{
 			LoopID: seamTestLoopA, TaskID: "task-sys", Outcome: agentic.OutcomeSuccess,
@@ -484,22 +482,23 @@ func TestSystemLaneLoopIsNotOwnerChecked(t *testing.T) {
 // client that claims the owner's identity passes every check in the capability.
 // This test exists so the limit is recorded in the suite and not only in prose.
 func TestAssertedIdentityIsNotVerified(t *testing.T) {
-	c, _, _ := newSeamTestComponent(t)
+	c, _, rec := newSeamTestComponent(t)
 	trackLoopOwnedBy(c, seamTestLoopA, "user-a")
 
 	// No authenticating middleware; the claim rides in the body/message.
 	impostor := seamUserMessage("user-a")
 	impostor.ReplyTo = seamTestLoopA
-	resp := c.processTaskSubmissionSync(context.Background(), impostor)
+	resp, err := c.processTaskSubmissionSync(context.Background(), impostor)
+	require.NoError(t, err)
 
 	assert.NotContains(t, resp.Content, "does not own",
 		"the gate matches the claimed identity; it does not verify it")
+	requireSeamRefusal(t, c, rec, seamHTTPSubmission, reasonSubmissionUndeliver)
 	assert.Equal(t, 0.0,
 		testutil.ToFloat64(c.metrics.loopAdmissionRefusals.WithLabelValues(
 			seamHTTPSubmission, reasonOwnershipNotOwner)),
 		"an unverified claim of the owner's identity passes the ownership check")
-	assert.Equal(t, seamTestLoopA, c.loopTracker.Get(seamTestLoopA).LoopID,
-		"the impostor's submission was assembled against the real loop")
+	require.Contains(t, resp.Content, "not connected to NATS", "the asserted owner passed admission and reached task publication")
 }
 
 // spec: agentic-dispatch / A refused or unpublishable submission leaves no tracked loop and no moved gauge
@@ -531,7 +530,8 @@ func TestValidationFailureAnswersHTTPSubmitter(t *testing.T) {
 
 	msg := seamUserMessage("user-a")
 	msg.InReplyTo = "workflow-7"
-	resp := c.processTaskSubmissionSync(context.Background(), msg)
+	resp, err := c.processTaskSubmissionSync(context.Background(), msg)
+	require.NoError(t, err)
 
 	assert.Equal(t, agentic.ResponseTypeError, resp.Type)
 	assert.Contains(t, strings.ToLower(resp.Content), "in_reply_to",
@@ -540,12 +540,11 @@ func TestValidationFailureAnswersHTTPSubmitter(t *testing.T) {
 	requireSeamRefusal(t, c, rec, seamHTTPSubmission, reasonSubmissionInvalid)
 }
 
-// spec: agentic-dispatch / A refused or unpublishable submission leaves no tracked loop and no moved gauge
-// I5: a submission that publishes no task leaves the tracker and the
-// active-loops gauge exactly as it found them. Both refusal classes are covered
+// spec: agentic-dispatch / Dispatch is exclusively an edge gateway
+// I5: a submission that publishes no task leaves authority unchanged. Both refusal classes are covered
 // — refused at the gate, and refused by the task's own validation — because the
 // leak #1225 reports happened between them.
-func TestFailedSubmissionLeavesGaugeAndTrackerUnchanged(t *testing.T) {
+func TestFailedSubmissionLeavesAuthorityAndTaskCountUnchanged(t *testing.T) {
 	cases := []struct {
 		name    string
 		arrange func(*Component)
@@ -572,40 +571,42 @@ func TestFailedSubmissionLeavesGaugeAndTrackerUnchanged(t *testing.T) {
 		for _, lane := range []string{"channel", "http"} {
 			t.Run(tc.name+"/"+lane, func(t *testing.T) {
 				c, _, _ := newSeamTestComponent(t)
+				trackLoopOwnedBy(c, seamTestLoopA, "user-a")
 				tc.arrange(c)
-				before := c.loopTracker.GetAllLoops()
-				gaugeBefore := getGaugeValue(t, c.metrics.activeLoops)
+				record, err := c.loadPersistedLoop(t.Context(), seamTestLoopA)
+				require.NoError(t, err)
+				before := *record
+				tasksBefore := testutil.ToFloat64(c.metrics.tasksSubmitted)
 
 				msg := seamUserMessage("user-b")
 				tc.mutate(&msg)
 				if lane == "channel" {
-					c.handleTaskSubmission(context.Background(), msg)
+					require.NoError(t, c.handleTaskSubmission(context.Background(), msg))
 				} else {
-					c.processTaskSubmissionSync(context.Background(), msg)
+					response, err := c.processTaskSubmissionSync(context.Background(), msg)
+					require.NoError(t, err)
+					require.Equal(t, agentic.ResponseTypeError, response.Type)
 				}
 
-				assert.Len(t, c.loopTracker.GetAllLoops(), len(before),
-					"a submission that published no task tracked no loop")
-				assert.Equal(t, gaugeBefore, getGaugeValue(t, c.metrics.activeLoops),
-					"a submission that published no task moved no gauge")
+				after, err := c.loadPersistedLoop(t.Context(), seamTestLoopA)
+				require.NoError(t, err)
+				require.Equal(t, before, *after, "failed submission cannot mutate current authority")
+				require.Equal(t, tasksBefore, testutil.ToFloat64(c.metrics.tasksSubmitted))
 			})
 		}
 	}
 }
 
-// The publish failure is the one submission failure that still leaves a tracked
-// loop: Track runs before the publish so the approval-pending arrival buffer can
-// absorb an early event, and untracking on failure is a compensating action a
-// later branch can skip. It is still ANSWERED and still COUNTED, which is what
-// #1225 asks for; recorded here so the residual is a known shape and not a
-// surprise.
-func TestPublishFailureAnswersAndCountsButKeepsTheTrackedLoop(t *testing.T) {
+// spec: agentic-dispatch / Dispatch is exclusively an edge gateway
+func TestPublishFailureAnswersAndCountsWithoutClaimingTaskSubmission(t *testing.T) {
 	c, _, rec := newSeamTestComponent(t)
 
-	resp := c.processTaskSubmissionSync(context.Background(), seamUserMessage("user-a"))
+	resp, err := c.processTaskSubmissionSync(context.Background(), seamUserMessage("user-a"))
+	require.NoError(t, err)
 
 	assert.Equal(t, agentic.ResponseTypeError, resp.Type)
-	assert.Len(t, c.loopTracker.GetAllLoops(), 1)
+	require.Empty(t, resp.InReplyTo, "the failed publication does not acknowledge a submitted loop")
+	require.Zero(t, testutil.ToFloat64(c.metrics.tasksSubmitted))
 	requireSeamRefusal(t, c, rec, seamHTTPSubmission, reasonSubmissionUndeliver)
 }
 
@@ -636,14 +637,10 @@ func TestEveryRefusalCodeMapsToAnHTTPStatus(t *testing.T) {
 }
 
 // spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
-// The two read seams do not contradict their own admission. Before the gate,
-// each decided existence from the tracker alone, so a loop that outlived the
-// process that started it answered "not found" — the shape P2 measures. Now
-// existence is merged, and the answer has to come from somewhere.
+// The two read seams answer from the same exact authority as admission.
 func TestReadSeamsAnswerFromTheDurableRecordAfterReplacement(t *testing.T) {
 	arrange := func(c *Component) {
-		// An empty tracker, as after a process replacement, and a live durable
-		// record.
+		// A fresh process can read a live durable record without prior events.
 		withPersistedLoops(c, map[string]*agentic.LoopEntity{seamTestLoopA: {
 			ID: seamTestLoopA, TaskID: "task-x", UserID: "user-a", Role: "assistant",
 			ChannelType: "http", ChannelID: "session-1",
@@ -695,16 +692,15 @@ func TestStatusReportsTheRecordedStateNotAFabricatedRunning(t *testing.T) {
 		state agentic.LoopState
 	}{
 		{"awaiting approval", agentic.LoopStateAwaitingApproval},
-		{"paused", agentic.LoopStatePaused},
 		{"executing", agentic.LoopStateExecuting},
 		{"complete", agentic.LoopStateComplete},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, _, _ := newSeamTestComponent(t)
-			// Empty tracker, as after a process replacement.
+			// No prior process observation is needed after replacement.
 			withPersistedLoops(c, map[string]*agentic.LoopEntity{seamTestLoopA: {
 				ID: seamTestLoopA, TaskID: "task-x", UserID: "user-a",
-				ChannelType: "http", ChannelID: "session-1", State: tc.state,
+				ChannelType: "http", ChannelID: "session-1", State: tc.state, MaxIterations: 5,
 			}})
 
 			resp, err := c.handleStatusCommand(context.Background(),
@@ -720,37 +716,21 @@ func TestStatusReportsTheRecordedStateNotAFabricatedRunning(t *testing.T) {
 		})
 	}
 
-	t.Run("a record with no state says unknown", func(t *testing.T) {
-		c, _, _ := newSeamTestComponent(t)
-		withPersistedLoops(c, map[string]*agentic.LoopEntity{seamTestLoopA: {
-			ID: seamTestLoopA, TaskID: "task-x", UserID: "user-a",
-			ChannelType: "http", ChannelID: "session-1",
-		}})
+	for _, state := range []agentic.LoopState{"", "unknown", agentic.LoopStatePaused} {
+		t.Run("invalid state "+string(state), func(t *testing.T) {
+			c, _, _ := newSeamTestComponent(t)
+			withPersistedLoops(c, map[string]*agentic.LoopEntity{seamTestLoopA: {
+				ID: seamTestLoopA, TaskID: "task-x", UserID: "user-a",
+				ChannelType: "http", ChannelID: "session-1", State: state, MaxIterations: 5,
+			}})
 
-		resp, err := c.handleStatusCommand(context.Background(),
-			seamUserMessage("user-a"), []string{seamTestLoopA}, "")
+			resp, err := c.handleStatusCommand(context.Background(),
+				seamUserMessage("user-a"), []string{seamTestLoopA}, "")
 
-		require.NoError(t, err)
-		assert.Contains(t, resp.Content, "State: unknown")
-	})
-}
-
-// mergeLoopState resolves a disagreement the same way Terminal does — settled in
-// either source wins — and prefers the tracker below terminal, which is the
-// source the read seams render from when both are present.
-func TestMergeLoopStatePrefersSettledThenTheTracker(t *testing.T) {
-	for _, tc := range []struct {
-		name               string
-		tracked, persisted agentic.LoopState
-		want               agentic.LoopState
-	}{
-		{"tracker settled wins", agentic.LoopStateComplete, agentic.LoopStateExecuting, agentic.LoopStateComplete},
-		{"record settled wins", agentic.LoopStateExecuting, agentic.LoopStateCancelled, agentic.LoopStateCancelled},
-		{"below terminal the tracker wins", agentic.LoopStateAwaitingApproval, agentic.LoopStateExecuting, agentic.LoopStateAwaitingApproval},
-		{"an empty tracker state yields to the record", "", agentic.LoopStateAwaitingApproval, agentic.LoopStateAwaitingApproval},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, mergeLoopState(tc.tracked, tc.persisted))
+			require.NoError(t, err)
+			require.Equal(t, agentic.ResponseTypeError, resp.Type)
+			require.Contains(t, resp.Content, "not readable")
+			require.NotContains(t, resp.Content, "State: running")
 		})
 	}
 }

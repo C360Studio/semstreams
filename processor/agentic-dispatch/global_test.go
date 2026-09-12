@@ -345,9 +345,8 @@ func TestCommandExecutor_ExecuteCalledWithCorrectContext(t *testing.T) {
 
 	ctx := context.Background()
 	cmdCtx := &CommandContext{
-		NATSClient:  nil,
-		LoopTracker: NewLoopTracker(),
-		Logger:      nil,
+		NATSClient: nil,
+		Logger:     nil,
 		HasPermission: func(userID, permission string) bool {
 			return true
 		},
@@ -376,9 +375,7 @@ func TestCommandExecutor_ExecuteCalledWithCorrectContext(t *testing.T) {
 func TestCommandExecutor_ExecuteWithNilContext(t *testing.T) {
 	executor := newMockExecutor(`^/test$`, "", false)
 
-	cmdCtx := &CommandContext{
-		LoopTracker: NewLoopTracker(),
-	}
+	cmdCtx := &CommandContext{}
 
 	msg := agentic.UserMessage{
 		MessageID:   "msg-1",
@@ -415,9 +412,7 @@ func TestCommandExecutor_ExecuteReturnsError(t *testing.T) {
 	executor.execErr = assert.AnError
 
 	ctx := context.Background()
-	cmdCtx := &CommandContext{
-		LoopTracker: NewLoopTracker(),
-	}
+	cmdCtx := &CommandContext{}
 
 	msg := agentic.UserMessage{
 		MessageID:   "msg-1",
@@ -522,18 +517,19 @@ func TestGlobalCommands_RegisteredAfterBuiltins(t *testing.T) {
 // TestCommandContext_AllFieldsAvailable tests that CommandContext provides all required services
 func TestCommandContext_AllFieldsAvailable(t *testing.T) {
 	// Create a CommandContext with all fields populated
-	tracker := NewLoopTracker()
 	cmdCtx := &CommandContext{
-		NATSClient:  nil, // Would be real in integration test
-		LoopTracker: tracker,
-		Logger:      nil, // Would be real in integration test
+		NATSClient: nil, // Would be real in integration test
+		LookupLoopOwner: func(_ context.Context, id string) (LoopOwner, error) {
+			return LoopOwner{LoopID: id, UserID: "admin"}, nil
+		},
+		Logger: nil, // Would be real in integration test
 		HasPermission: func(userID, permission string) bool {
 			return userID == "admin"
 		},
 	}
 
 	// Verify all fields are accessible
-	assert.NotNil(t, cmdCtx.LoopTracker)
+	assert.NotNil(t, cmdCtx.LookupLoopOwner)
 	assert.NotNil(t, cmdCtx.HasPermission)
 
 	// Test permission function works
@@ -548,9 +544,7 @@ func TestCommandContext_RespectsContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	cmdCtx := &CommandContext{
-		LoopTracker: NewLoopTracker(),
-	}
+	cmdCtx := &CommandContext{}
 
 	msg := agentic.UserMessage{
 		MessageID:   "msg-1",

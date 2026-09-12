@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+	"time"
+
+	"github.com/c360studio/semstreams/agentic"
 
 	"github.com/c360studio/semstreams/component"
 )
@@ -69,9 +72,7 @@ func TestResolveAndWaitForSubscriptionBindingsUsesOnlyDistinctResolvedStreams(t 
 	definitions := []component.PortDefinition{
 		{Name: "user.message", Config: component.JetStreamPort{StreamName: "TENANT_USER", Subjects: []string{"tenant.user.message.>"}}},
 		{Name: "agent.complete", Config: component.JetStreamPort{StreamName: "TENANT_COMPLETE", Subjects: []string{"tenant.agent.complete.*"}}},
-		{Name: "agent.created", Config: component.JetStreamPort{StreamName: "TENANT_EVENTS", Subjects: []string{"tenant.agent.created.*"}}},
 		{Name: "agent.failed", Config: component.JetStreamPort{StreamName: "TENANT_EVENTS", Subjects: []string{"tenant.agent.failed.*"}}},
-		{Name: "agent.approval_pending", Config: component.JetStreamPort{StreamName: "TENANT_APPROVAL", Subjects: []string{"tenant.agent.approval-pending.*"}}},
 	}
 	c := &Component{}
 	for _, definition := range definitions {
@@ -91,16 +92,14 @@ func TestResolveAndWaitForSubscriptionBindingsUsesOnlyDistinctResolvedStreams(t 
 		t.Fatal(err)
 	}
 
-	want := []string{"TENANT_USER", "TENANT_COMPLETE", "TENANT_EVENTS", "TENANT_APPROVAL"}
+	want := []string{"TENANT_USER", "TENANT_COMPLETE", "TENANT_EVENTS"}
 	if !reflect.DeepEqual(waited, want) {
 		t.Fatalf("waited streams = %v, want distinct resolved streams %v", waited, want)
 	}
 	wantBindings := subscriptionInputBindings{
-		userMessage:     subscriptionInputBinding{portName: "user.message", streamName: "TENANT_USER", subject: "tenant.user.message.>", consumerConfig: component.ConsumerConfig{DeliverPolicy: "new", AckPolicy: "explicit", MaxDeliver: 3}},
-		agentComplete:   subscriptionInputBinding{portName: "agent.complete", streamName: "TENANT_COMPLETE", subject: "tenant.agent.complete.*", consumerConfig: component.ConsumerConfig{DeliverPolicy: "new", AckPolicy: "explicit", MaxDeliver: 3}},
-		agentCreated:    subscriptionInputBinding{portName: "agent.created", streamName: "TENANT_EVENTS", subject: "tenant.agent.created.*", consumerConfig: component.ConsumerConfig{DeliverPolicy: "new", AckPolicy: "explicit", MaxDeliver: 3}},
-		agentFailed:     subscriptionInputBinding{portName: "agent.failed", streamName: "TENANT_EVENTS", subject: "tenant.agent.failed.*", consumerConfig: component.ConsumerConfig{DeliverPolicy: "new", AckPolicy: "explicit", MaxDeliver: 3}},
-		approvalPending: subscriptionInputBinding{portName: "agent.approval_pending", streamName: "TENANT_APPROVAL", subject: "tenant.agent.approval-pending.*", consumerConfig: component.ConsumerConfig{DeliverPolicy: "new", AckPolicy: "explicit", MaxDeliver: 3}},
+		userMessage:   subscriptionInputBinding{portName: "user.message", streamName: "TENANT_USER", subject: "tenant.user.message.>", consumerConfig: component.ConsumerConfig{DeliverPolicy: "new", AckPolicy: "explicit", MaxDeliver: 3}},
+		agentComplete: subscriptionInputBinding{portName: "agent.complete", streamName: "TENANT_COMPLETE", subject: "tenant.agent.complete.*", consumerConfig: component.ConsumerConfig{DeliverPolicy: "new", AckPolicy: "explicit", MaxDeliver: 3}},
+		agentFailed:   subscriptionInputBinding{portName: "agent.failed", streamName: "TENANT_EVENTS", subject: "tenant.agent.failed.*", consumerConfig: component.ConsumerConfig{DeliverPolicy: "new", AckPolicy: "explicit", MaxDeliver: 3}},
 	}
 	if !reflect.DeepEqual(bindings, wantBindings) {
 		t.Fatalf("resolved bindings = %+v, want %+v", bindings, wantBindings)
@@ -141,22 +140,13 @@ func TestUserResponseSubject_OverriddenPort(t *testing.T) {
 	}
 }
 
-// TestLoopInfo_RoleField_PropagatedThroughTrack confirms the Role field
-// survives the Track → Get round-trip. This is what UIs and test harnesses
-// need when listing loops via GET /loops — previously Role lived only on
-// TaskMessage and LoopCompletedEvent, never surfacing through /loops.
-func TestLoopInfo_RoleField_PropagatedThroughTrack(t *testing.T) {
-	tracker := NewLoopTracker()
-	tracker.Track(&LoopInfo{LoopID: "l1", TaskID: "t1", Role: "coordinator", UserID: "u1"})
-	tracker.Track(&LoopInfo{LoopID: "l2", TaskID: "t2", Role: "ops", UserID: "u2"})
-
-	got := tracker.Get("l1")
-	if got == nil || got.Role != "coordinator" {
-		t.Errorf("Get(l1).Role = %v, want coordinator", got)
-	}
-	got = tracker.Get("l2")
-	if got == nil || got.Role != "ops" {
-		t.Errorf("Get(l2).Role = %v, want ops", got)
+// TestLoopInfoRoleFromAuthority checks the existing role projection without a tracker.
+func TestLoopInfoRoleFromAuthority(t *testing.T) {
+	for _, role := range []string{"coordinator", "ops"} {
+		got := loopInfoFromEntity(&agentic.LoopEntity{ID: "l1", TaskID: "t1", Role: role, UserID: "u1"}, time.Time{})
+		if got.Role != role {
+			t.Fatalf("role = %q, want %q", got.Role, role)
+		}
 	}
 }
 

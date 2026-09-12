@@ -35,11 +35,11 @@ func TestPreflightDecodedTaskLineageIdentitySemantics(t *testing.T) {
 			wantLineage: true, wantSameID: true,
 		},
 		{
-			name:        "generated identity uses loop manager UUID semantics",
+			name: "producer identity with lineage is preserved", loopID: uuid.NewString(),
 			metadata:    map[string]any{agentic.MetadataKeyRelatedLoops: map[string]any{"researcher": "upstream"}},
-			wantLineage: true,
+			wantLineage: true, wantSameID: true,
 		},
-		{name: "no lineage does not reserve or mutate identity"},
+		{name: "producer identity without lineage is preserved", loopID: uuid.NewString(), wantSameID: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -59,14 +59,6 @@ func TestPreflightDecodedTaskLineageIdentitySemantics(t *testing.T) {
 			if test.wantSameID && task.LoopID != test.loopID {
 				t.Fatalf("LoopID = %q, want caller identity %q", task.LoopID, test.loopID)
 			}
-			if test.wantLineage && !test.wantSameID {
-				if _, err := uuid.Parse(task.LoopID); err != nil {
-					t.Fatalf("generated LoopID %q is not UUID: %v", task.LoopID, err)
-				}
-			}
-			if !test.wantLineage && task.LoopID != "" {
-				t.Fatalf("no-lineage preflight mutated LoopID to %q", task.LoopID)
-			}
 			if _, exists := component.handler.loopManager.HasActiveLoopForTask(task.TaskID); exists {
 				t.Fatal("pure preflight created persistent loop state")
 			}
@@ -78,6 +70,7 @@ func TestPreflightDecodedTaskRejectsMalformedLineageWithoutLoopCreation(t *testi
 	t.Parallel()
 	component := newLineagePreflightComponent()
 	task := validLineageTask("task-invalid-lineage")
+	originalLoopID := task.LoopID
 	task.Metadata = map[string]any{
 		agentic.MetadataKeyRelatedLoops: map[string]any{
 			"researcher": "upstream",
@@ -89,15 +82,16 @@ func TestPreflightDecodedTaskRejectsMalformedLineageWithoutLoopCreation(t *testi
 	if err == nil || !errs.IsInvalid(err) {
 		t.Fatalf("preflight error = %v, want typed invalid rejection", err)
 	}
-	if task.LoopID != "" {
-		t.Fatalf("malformed metadata reserved LoopID %q before validation", task.LoopID)
+	if task.LoopID != originalLoopID {
+		t.Fatalf("malformed metadata changed producer LoopID from %q to %q", originalLoopID, task.LoopID)
 	}
 	if _, exists := component.handler.loopManager.HasActiveLoopForTask(task.TaskID); exists {
 		t.Fatal("malformed preflight created loop state")
 	}
 }
 
-func TestPreflightGeneratedIdentityPreservesHandleTaskDedup(t *testing.T) {
+// spec: agentic-loop / Loop task, request, and tool work use only required correlation
+func TestPreflightRetainedIdentityPreservesHandleTaskDedup(t *testing.T) {
 	t.Parallel()
 	component := newLineagePreflightComponent()
 	firstTask := validLineageTask("task-redelivery")
@@ -112,13 +106,12 @@ func TestPreflightGeneratedIdentityPreservesHandleTaskDedup(t *testing.T) {
 		t.Fatalf("first HandleTask = %#v, %v", first, err)
 	}
 
-	redelivery := validLineageTask("task-redelivery")
-	redelivery.Metadata = firstTask.Metadata
+	redelivery := firstTask
 	if _, _, err := component.preflightDecodedTask(&redelivery); err != nil {
 		t.Fatal(err)
 	}
-	if redelivery.LoopID == firstTask.LoopID {
-		t.Fatal("independent redelivery unexpectedly reused an unpersisted prospective UUID")
+	if redelivery.LoopID != firstTask.LoopID {
+		t.Fatal("redelivery changed the producer-supplied LoopID")
 	}
 	second, err := component.handler.HandleTask(context.Background(), redelivery)
 	if err != nil {
@@ -174,7 +167,7 @@ func TestInvalidDecodedLineageTerminatesOnceAndHasNoBusinessSideEffects(t *testi
 	beforeRejected := testutil.ToFloat64(component.metrics.taskIntakeRejections.WithLabelValues(
 		taskIntakeRejectionLane, taskIntakeRejectionReason))
 	beforeCreated := testutil.ToFloat64(component.metrics.loopsCreated)
-	err = consumeLongRunningInput(context.Background(), msg, time.Hour,
+	err = consumeTypedLongRunningInput(context.Background(), msg, time.Hour,
 		component.taskInputHandler(time.Minute))
 	if err == nil || !errs.IsInvalid(err) {
 		t.Fatalf("consume error = %v, want typed invalid rejection", err)
@@ -232,7 +225,7 @@ func TestTransientLineageWriteNAKsThenResumesPendingSpawnOnRedelivery(t *testing
 
 	beforeCreated := testutil.ToFloat64(component.metrics.loopsCreated)
 	first := &inputAckMsg{data: data}
-	err = consumeLongRunningInput(context.Background(), first, time.Hour,
+	err = consumeTypedLongRunningInput(context.Background(), first, time.Hour,
 		component.taskInputHandler(time.Minute))
 	if err == nil || !errs.IsTransient(err) {
 		t.Fatalf("first delivery error = %v, want transient error", err)
@@ -253,7 +246,7 @@ func TestTransientLineageWriteNAKsThenResumesPendingSpawnOnRedelivery(t *testing
 	}
 
 	second := &inputAckMsg{data: data}
-	if err := consumeLongRunningInput(context.Background(), second, time.Hour,
+	if err := consumeTypedLongRunningInput(context.Background(), second, time.Hour,
 		component.taskInputHandler(time.Minute)); err != nil {
 		t.Fatalf("redelivery error = %v", err)
 	}
@@ -282,5 +275,7 @@ func newLineagePreflightComponent() *Component {
 }
 
 func validLineageTask(taskID string) agentic.TaskMessage {
-	return agentic.TaskMessage{TaskID: taskID, Role: "researcher", Model: "model", Prompt: "prompt"}
+	return agentic.TaskMessage{
+		LoopID: uuid.NewString(),
+		TaskID: taskID, Role: "researcher", Model: "model", Prompt: "prompt"}
 }

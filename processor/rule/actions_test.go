@@ -21,6 +21,7 @@ import (
 	semtypes "github.com/c360studio/semstreams/pkg/types"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/c360studio/semstreams/types"
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -579,22 +580,28 @@ func TestExecutePublish_SubstitutesPropertyTemplates(t *testing.T) {
 	ec := &ExecutionContext{
 		EntityID: "c360.platform.test.svc.entity.001",
 		MessageData: map[string]any{
-			"loop_id":   "loop-abc",
-			"call_id":   "call-001",
-			"tool_name": "bash",
+			"loop_id":              "loop-abc",
+			"request_id":           "request-001",
+			"execution_id":         "tool-exec-001",
+			"call_id":              "call-001",
+			"proposal_fingerprint": "sha256:proposal",
+			"tool_name":            "bash",
 		},
 	}
 	action := Action{
 		Type:    ActionTypePublish,
-		Subject: "agent.toolcall.rejected.$message.loop_id.$message.call_id",
+		Subject: "agent.toolcall.rejected.$message.execution_id",
 		Properties: map[string]any{
-			"decision":  "rejected",
-			"call_id":   "$message.call_id",
-			"loop_id":   "$message.loop_id",
-			"tool_name": "$message.tool_name",
-			"reason":    "writes outside worktree blocked",
-			"priority":  3,    // non-string survives unchanged
-			"sticky":    true, // non-string survives unchanged
+			"decision":             "rejected",
+			"request_id":           "$message.request_id",
+			"execution_id":         "$message.execution_id",
+			"call_id":              "$message.call_id",
+			"proposal_fingerprint": "$message.proposal_fingerprint",
+			"loop_id":              "$message.loop_id",
+			"tool_name":            "$message.tool_name",
+			"reason":               "writes outside worktree blocked",
+			"priority":             3,    // non-string survives unchanged
+			"sticky":               true, // non-string survives unchanged
 		},
 	}
 
@@ -603,7 +610,7 @@ func TestExecutePublish_SubstitutesPropertyTemplates(t *testing.T) {
 
 	got := mock.published[0]
 	assert.Equal(t,
-		"agent.toolcall.rejected.loop-abc.call-001",
+		"agent.toolcall.rejected.tool-exec-001",
 		got.subject,
 		"subject $message.* tokens must substitute (existing behaviour)")
 
@@ -613,8 +620,11 @@ func TestExecutePublish_SubstitutesPropertyTemplates(t *testing.T) {
 	props, ok := payload["properties"].(map[string]any)
 	require.True(t, ok, "properties must be a map")
 	assert.Equal(t, "rejected", props["decision"], "static string passes through unchanged")
+	assert.Equal(t, "request-001", props["request_id"])
+	assert.Equal(t, "tool-exec-001", props["execution_id"])
 	assert.Equal(t, "call-001", props["call_id"],
 		"$message.call_id MUST resolve — VerdictPayload.EffectiveCallID falls back to this field for publish-action verdicts")
+	assert.Equal(t, "sha256:proposal", props["proposal_fingerprint"])
 	assert.Equal(t, "loop-abc", props["loop_id"], "$message.loop_id must resolve")
 	assert.Equal(t, "bash", props["tool_name"], "$message.tool_name must resolve")
 	assert.Equal(t, "writes outside worktree blocked", props["reason"], "static string passes through")
@@ -1027,6 +1037,7 @@ func TestAction_PublishAgent(t *testing.T) {
 }
 
 // T050: Test PublishAgent payload format (TaskMessage)
+// spec: rule-agent-publishing / Publish-agent preserves the registered payload boundary
 func TestAction_PublishAgent_PayloadFormat(t *testing.T) {
 	t.Parallel()
 	entityID := semantictest.EntityID(t, "test", "rule", "actions", "payload", "sensor", "001")
@@ -1058,6 +1069,10 @@ func TestAction_PublishAgent_PayloadFormat(t *testing.T) {
 	// Verify TaskMessage fields
 	assert.NotEmpty(t, task.TaskID, "task_id should be set")
 	assert.Contains(t, task.TaskID, "rule-", "task_id should start with 'rule-'")
+	parsedLoopID, err := uuid.Parse(task.LoopID)
+	require.NoError(t, err, "publish_agent must mint loop identity before envelope marshal")
+	assert.Equal(t, uuid.Version(4), parsedLoopID.Version())
+	assert.Equal(t, parsedLoopID.String(), task.LoopID, "loop_id must use canonical UUID text")
 	assert.Equal(t, "general", task.Role)
 	assert.Equal(t, "mock-model", task.Model)
 	assert.Equal(t, "Analyze entity "+entityID+" in location "+relatedID, task.Prompt)
@@ -2127,7 +2142,7 @@ func TestAction_PublishAgent_NonLoopTriggerLeavesParentLoopIDUnset(t *testing.T)
 		{"chain execution", chainID},
 		{name: "non-canonical entity ID", entityID: "e.1"},
 	}
-	// entity-id-audit:classify intentional-malformed "e.1" line=2128 column=47 surface=go-field:.entityID entity_id_invalid:arity verifies noncanonical IDs remain opaque agent payload values
+	// entity-id-audit:classify intentional-malformed "e.1" line=2143 column=47 surface=go-field:.entityID entity_id_invalid:arity verifies noncanonical IDs remain opaque agent payload values
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2945,7 +2960,7 @@ func TestAction_UpdateKV_VariableSubstitution(t *testing.T) {
 		Payload: map[string]any{
 			"status":     "drafting",
 			"updated_at": "$now",
-			"entity_id":  "$entity.id", // entity-id-audit:classify intentional-template "$entity.id" line=2948 column=18 surface=go-field:.entity_id entity_id_invalid:arity runtime entity-ID substitution
+			"entity_id":  "$entity.id", // entity-id-audit:classify intentional-template "$entity.id" line=2963 column=18 surface=go-field:.entity_id entity_id_invalid:arity runtime entity-ID substitution
 		},
 		Merge: false,
 	}
@@ -3325,12 +3340,15 @@ func TestExecuteApprove_PublishesVerdictPayload(t *testing.T) {
 	pub := &mockPublisher{}
 	executor := NewActionExecutorFull(slog.Default(), mut, pub, testExecutorPlatform())
 	ec := newApproveTestEC("approve-rule-pub", nil, map[string]any{
-		"loop_id": "loop-abc",
-		"call_id": "call-001",
+		"loop_id":              "loop-abc",
+		"call_id":              "call-001",
+		"request_id":           "request-001",
+		"execution_id":         "execution-001",
+		"proposal_fingerprint": "sha256:proposal",
 	})
 	action := Action{
 		Type:    ActionTypeApprove,
-		Subject: "agent.toolcall.approved.$message.loop_id.$message.call_id",
+		Subject: "agent.toolcall.approved.$message.execution_id",
 		Reason:  "policy permits",
 	}
 
@@ -3339,7 +3357,7 @@ func TestExecuteApprove_PublishesVerdictPayload(t *testing.T) {
 
 	require.Len(t, pub.published, 1, "approve must publish exactly once")
 	got := pub.published[0]
-	assert.Equal(t, "agent.toolcall.approved.loop-abc.call-001", got.subject,
+	assert.Equal(t, "agent.toolcall.approved.execution-001", got.subject,
 		"subject must have $message.* substituted")
 
 	// Wire format is core.json.v1 BaseMessage wrapping a GenericJSONPayload.
@@ -3358,6 +3376,9 @@ func TestExecuteApprove_PublishesVerdictPayload(t *testing.T) {
 	assert.Equal(t, "approved", envelope.Payload.Data["decision"])
 	assert.Equal(t, "approve-rule-pub", envelope.Payload.Data["rule_id"])
 	assert.Equal(t, "policy permits", envelope.Payload.Data["reason"])
+	assert.Equal(t, "request-001", envelope.Payload.Data["request_id"])
+	assert.Equal(t, "execution-001", envelope.Payload.Data["execution_id"])
+	assert.Equal(t, "sha256:proposal", envelope.Payload.Data["proposal_fingerprint"])
 }
 
 // TestExecuteApprove_EmitsVerdictAudit verifies approve emits a governance

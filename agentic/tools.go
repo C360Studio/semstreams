@@ -205,12 +205,15 @@ func (t ToolDefinition) Validate() error {
 
 // ToolCall represents a request to call a tool
 type ToolCall struct {
-	ID        string         `json:"id"`
-	Name      string         `json:"name"`
-	Arguments map[string]any `json:"arguments,omitempty"`
-	Metadata  map[string]any `json:"metadata,omitempty"` // Domain context, propagated from task
-	LoopID    string         `json:"loop_id,omitempty"`
-	TraceID   string         `json:"trace_id,omitempty"`
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	Arguments   map[string]any `json:"arguments,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"` // Domain context, propagated from task
+	LoopID      string         `json:"loop_id,omitempty"`
+	TraceID     string         `json:"trace_id,omitempty"`
+	RequestID   string         `json:"request_id,omitempty"`
+	ExecutionID string         `json:"execution_id,omitempty"`
+	CallOrdinal uint32         `json:"call_ordinal,omitempty"`
 	// ApprovedBy is set by the loop when re-dispatching a previously
 	// gated tool call after receiving an ApprovalResponse. The
 	// agentic-tools approval filter recognises a non-empty ApprovedBy
@@ -624,16 +627,19 @@ const MetadataKeyTotalBytes = "total_bytes"
 
 // ToolResult represents the result of a tool call
 type ToolResult struct {
-	CallID     string         `json:"call_id"`
-	Name       string         `json:"name,omitempty"` // Tool function name (required by Gemini on tool result messages)
-	Content    string         `json:"content,omitempty"`
-	Error      string         `json:"error,omitempty"`
-	ErrorKind  ToolErrorKind  `json:"error_kind,omitempty"`  // Structured classification of the failure
-	ResultHint ToolResultHint `json:"result_hint,omitempty"` // Structured action recommendation when call worked but agent should refine
-	Metadata   map[string]any `json:"metadata,omitempty"`
-	LoopID     string         `json:"loop_id,omitempty"`
-	TraceID    string         `json:"trace_id,omitempty"`
-	StopLoop   bool           `json:"stop_loop,omitempty"` // Signal loop termination; Content becomes the completion result
+	CallID      string         `json:"call_id"`
+	Name        string         `json:"name,omitempty"` // Tool function name (required by Gemini on tool result messages)
+	Content     string         `json:"content,omitempty"`
+	Error       string         `json:"error,omitempty"`
+	ErrorKind   ToolErrorKind  `json:"error_kind,omitempty"`  // Structured classification of the failure
+	ResultHint  ToolResultHint `json:"result_hint,omitempty"` // Structured action recommendation when call worked but agent should refine
+	Metadata    map[string]any `json:"metadata,omitempty"`
+	LoopID      string         `json:"loop_id,omitempty"`
+	TraceID     string         `json:"trace_id,omitempty"`
+	RequestID   string         `json:"request_id,omitempty"`
+	ExecutionID string         `json:"execution_id,omitempty"`
+	CallOrdinal uint32         `json:"call_ordinal,omitempty"`
+	StopLoop    bool           `json:"stop_loop,omitempty"` // Signal loop termination; Content becomes the completion result
 }
 
 // Validate checks if the ToolResult is valid

@@ -441,9 +441,7 @@ func TestLegacyHeartbeatProductionCallZeroGrowthStagingGuard(t *testing.T) {
 		t.Fatalf("legacy ConsumeWithHeartbeat declaration = %#v, want %#v", gotDeclaration, wantDeclaration)
 	}
 	want := map[string]int{
-		"agentic/agentrun/agentrun.go":         1,
-		"processor/agentic-loop/component.go":  1,
-		"processor/agentic-model/component.go": 1,
+		"agentic/agentrun/agentrun.go": 1,
 	}
 	if !reflect.DeepEqual(scan.directCalls, want) {
 		t.Fatalf("legacy ConsumeWithHeartbeat callers = %#v, want exact branch-staging set %#v", scan.directCalls, want)

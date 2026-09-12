@@ -43,8 +43,10 @@ func IsApprovalRejected(reason string) bool {
 // review. The corresponding response is published as
 // agent.approval_response.<loop_id> with an ApprovalResponse payload.
 type ApprovalPendingEvent struct {
-	LoopID      string         `json:"loop_id"`
-	CallID      string         `json:"call_id"`
+	LoopID string `json:"loop_id"`
+	CallID string `json:"call_id"`
+	// ExecutionID is the opaque identity the approver must echo unchanged.
+	ExecutionID string         `json:"execution_id"`
 	ToolName    string         `json:"tool_name"`
 	Arguments   map[string]any `json:"arguments,omitempty"`
 	Reason      string         `json:"reason"` // Original "approval_required: ..." rejection reason
@@ -80,6 +82,9 @@ func (e *ApprovalPendingEvent) Validate() error {
 	if e.ToolName == "" {
 		return fmt.Errorf("tool_name required")
 	}
+	if e.ExecutionID == "" {
+		return fmt.Errorf("execution_id required")
+	}
 	return nil
 }
 
@@ -102,9 +107,11 @@ func (e *ApprovalPendingEvent) UnmarshalJSON(data []byte) error {
 // (Decision == approve | modify) or synthesizes a rejection result
 // for the LLM (Decision == reject).
 type ApprovalResponse struct {
-	LoopID   string `json:"loop_id"`
-	CallID   string `json:"call_id"`
-	Decision string `json:"decision"` // ApprovalDecisionApprove | ApprovalDecisionReject | ApprovalDecisionModify
+	LoopID string `json:"loop_id"`
+	CallID string `json:"call_id"`
+	// ExecutionID names the reviewed gate, not whichever gate is current at delivery.
+	ExecutionID string `json:"execution_id"`
+	Decision    string `json:"decision"` // ApprovalDecisionApprove | ApprovalDecisionReject | ApprovalDecisionModify
 	// ModifiedArguments replaces the original tool-call arguments when
 	// Decision == ApprovalDecisionModify. Ignored for approve/reject.
 	ModifiedArguments map[string]any `json:"modified_arguments,omitempty"`
@@ -139,6 +146,9 @@ func (r *ApprovalResponse) Validate() error {
 	}
 	if r.CallID == "" {
 		return fmt.Errorf("call_id required")
+	}
+	if r.ExecutionID == "" {
+		return fmt.Errorf("execution_id required")
 	}
 	switch r.Decision {
 	case ApprovalDecisionApprove, ApprovalDecisionModify:

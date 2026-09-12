@@ -58,7 +58,7 @@ type Hooks struct {
 	// skips and tombstones), with the entry's key and KV revision.
 	OnApply func(key string, revision uint64)
 	// OnCaughtUp fires when the view transitions to caught-up (initial
-	// bootstrap and every successful restart).
+	// bootstrap of this instance).
 	OnCaughtUp func()
 	// OnWatcherLost fires once per watcher loss with the cause.
 	OnWatcherLost func(err error)
@@ -143,9 +143,8 @@ type View[T any] struct {
 	tickCh       <-chan time.Time
 	hooks        Hooks
 
-	cancel         context.CancelFunc
-	restartWatcher func() error
-	wg             sync.WaitGroup
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 
 	// mu is THE projection mutex: apply, attach (snapshot+register), tick
 	// fan-out, and point reads all serialize on it (see package doc).
@@ -160,7 +159,7 @@ type View[T any] struct {
 	// appliedAt is appliedRev's server write time (entry.Created()). The two
 	// advance together — same places, same condition — so the pair Applied
 	// returns always names ONE write. Neither has any reset of its own: both
-	// survive bootstrap gating, fail-closed, Restart, and Stop identically
+	// survive bootstrap gating, fail-closed, and Stop identically
 	// (see Applied).
 	appliedAt time.Time
 	readyCh   chan struct{}
@@ -217,44 +216,15 @@ func (v *View[T]) Start(ctx context.Context) error {
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	v.cancel = cancel
-	v.restartWatcher = func() error { return v.openWatcher(runCtx) }
 	v.state = stateBootstrap
+	// Register both admitted tasks before Stop can close admission. The
+	// acquisition itself must join even when WatchAll returns after cancel.
+	v.wg.Add(2)
 	v.mu.Unlock()
-
-	v.wg.Add(1)
+	defer v.wg.Done()
 	go v.runTicker(runCtx)
 
 	return v.openWatcher(runCtx)
-}
-
-// Restart re-bootstraps a failed view: it opens a fresh WatchAll, replays,
-// reconciles ghost keys (keys absent from the fresh replay are removed), and
-// only then reports caught-up again (G5). Subscribers terminated by the loss
-// must re-attach for a coherent snapshot. The new watcher inherits the Start
-// context — jetstream binds watcher lifetime to the WatchAll context, so a
-// per-call context would kill the watcher when the call returned; if the
-// Start context itself was cancelled, Restart fails.
-func (v *View[T]) Restart() error {
-	v.mu.Lock()
-	switch v.state {
-	case stateFailed:
-	case stateStopped:
-		v.mu.Unlock()
-		return ErrViewStopped
-	default:
-		v.mu.Unlock()
-		return errors.New("graphview: restart requires a failed view")
-	}
-	restartWatcher := v.restartWatcher
-	if restartWatcher == nil {
-		v.mu.Unlock()
-		return errors.New("graphview: restart lifecycle unavailable")
-	}
-	v.state = stateBootstrap
-	v.cause = nil
-	v.pending = make(map[string]pendingOp[T])
-	v.mu.Unlock()
-	return restartWatcher()
 }
 
 func (v *View[T]) openWatcher(ctx context.Context) error {
@@ -300,6 +270,7 @@ func (v *View[T]) Stop() {
 	v.mu.Lock()
 	if v.state == stateStopped {
 		v.mu.Unlock()
+		v.wg.Wait()
 		return
 	}
 	v.state = stateStopped
@@ -313,7 +284,9 @@ func (v *View[T]) Stop() {
 	v.rotateReadyLocked()
 	cancel := v.cancel
 	v.cancel = nil
-	v.restartWatcher = nil
+	if len(subs) > 0 && v.hooks.OnSubscribers != nil {
+		v.wg.Add(1)
+	}
 	v.mu.Unlock()
 
 	for _, s := range subs {
@@ -321,6 +294,7 @@ func (v *View[T]) Stop() {
 	}
 	if len(subs) > 0 && v.hooks.OnSubscribers != nil {
 		v.hooks.OnSubscribers(0)
+		v.wg.Done()
 	}
 	if cancel != nil {
 		cancel()
@@ -516,6 +490,7 @@ func (v *View[T]) SnapshotAndSubscribe(ctx context.Context) (Snapshot[T], *Subsc
 	go s.run(ctx)
 	if v.hooks.OnSubscribers != nil {
 		v.hooks.OnSubscribers(n)
+		v.wg.Done()
 	}
 	return snap, s, nil
 }
@@ -539,6 +514,7 @@ func (v *View[T]) Subscribe(ctx context.Context) (*Subscription[T], error) {
 	go s.run(ctx)
 	if v.hooks.OnSubscribers != nil {
 		v.hooks.OnSubscribers(n)
+		v.wg.Done()
 	}
 	return s, nil
 }
@@ -559,6 +535,9 @@ func (v *View[T]) attachLocked() *Subscription[T] {
 	}
 	v.subs[id] = s
 	v.wg.Add(1)
+	if v.hooks.OnSubscribers != nil {
+		v.wg.Add(1)
+	}
 	return s
 }
 
@@ -567,9 +546,13 @@ func (v *View[T]) removeSub(id uint64) {
 	before := len(v.subs)
 	delete(v.subs, id)
 	n := len(v.subs)
+	if before != n && v.hooks.OnSubscribers != nil {
+		v.wg.Add(1)
+	}
 	v.mu.Unlock()
 	if before != n && v.hooks.OnSubscribers != nil {
 		v.hooks.OnSubscribers(n)
+		v.wg.Done()
 	}
 }
 
@@ -604,7 +587,7 @@ func (v *View[T]) rotateReadyLocked() {
 
 // runWatcher is the single projection writer: it applies every delivered
 // entry in watch order and detects the end-of-replay marker and watcher
-// loss. One instance runs per watcher generation (Start, then each Restart).
+// loss. One instance runs for the watcher admitted by Start.
 func (v *View[T]) runWatcher(ctx context.Context, watcher jetstream.KeyWatcher) {
 	defer v.wg.Done()
 	defer func() { _ = watcher.Stop() }()

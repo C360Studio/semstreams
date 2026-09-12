@@ -9,9 +9,11 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/agentterminal"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/test/e2e/harness/processbarrier"
 	"github.com/c360studio/semstreams/test/e2e/scenarios"
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -60,6 +62,7 @@ func (s *Scenario) verifyStageAProcessReplacement(
 	return nil
 }
 
+// spec: agentic-tools / Tool-call completion SHALL be durable before request acknowledgement
 func (s *Scenario) verifyCompletedOutcomeAcrossReplacement(
 	ctx context.Context,
 	result *scenarios.Result,
@@ -74,8 +77,8 @@ func (s *Scenario) verifyCompletedOutcomeAcrossReplacement(
 	if err != nil {
 		return fmt.Errorf("open TOOL stream: %w", err)
 	}
-	call := newProcessBarrierCall("completed-replay")
-	if err := s.publishToolCall(ctx, call); err != nil {
+	call, err := s.newProcessBarrierCall(ctx, toolStream, "completed-replay")
+	if err != nil {
 		return err
 	}
 	if _, err := waitForBarrierAttempts(ctx, evidence, call.ID, 1, 10*time.Second); err != nil {
@@ -115,7 +118,7 @@ func (s *Scenario) verifyCompletedOutcomeAcrossReplacement(
 	if err := s.releaseBarrier(ctx, call.ID); err != nil {
 		return err
 	}
-	if err := s.waitForOutcome(ctx, call.ID, 10*time.Second); err != nil {
+	if err := s.waitForOutcome(ctx, call.ExecutionID, 10*time.Second); err != nil {
 		return fmt.Errorf("completed outcome was not durable before replacement: %w", err)
 	}
 	if err := s.waitMetricWithLabels(ctx, "semstreams_agentic_tools_result_publish_failures_total",
@@ -130,8 +133,15 @@ func (s *Scenario) verifyCompletedOutcomeAcrossReplacement(
 	if err := s.replaceSemStreams(ctx, controller); err != nil {
 		return err
 	}
-	if err := s.waitForToolResult(ctx, call, 45*time.Second); err != nil {
+	if err := s.waitForToolResult(ctx, toolStream, call, 45*time.Second); err != nil {
 		return fmt.Errorf("replacement did not replay completed result: %w", err)
+	}
+	consumer, err := toolStream.Consumer(ctx, toolsConsumerName)
+	if err != nil {
+		return fmt.Errorf("open replacement tools consumer: %w", err)
+	}
+	if err := waitForConsumerSettled(ctx, consumer, 1, 10*time.Second); err != nil {
+		return fmt.Errorf("completed replay source did not settle: %w", err)
 	}
 	attempts, err := barrierAttemptCount(ctx, evidence, call.ID)
 	if err != nil {
@@ -149,10 +159,13 @@ func (s *Scenario) verifyCompletedOutcomeAcrossReplacement(
 		return fmt.Errorf("replacement executor count = %.0f, want 0 for completed replay", replacementExecutions)
 	}
 	result.Details["replacement_replay_call_id"] = call.ID
+	result.Details["replacement_replay_execution_id"] = call.ExecutionID
 	result.Metrics["replacement_replay_executor_effects"] = attempts
 	return nil
 }
 
+// spec: agentic-tools / Executor panic and ambiguous pre-completion effects SHALL be explicit
+// spec: agentic-tools / Tool delivery retains the permanent typed owner contract
 func (s *Scenario) verifyToolQuarantineAcrossReplacement(
 	ctx context.Context,
 	result *scenarios.Result,
@@ -176,8 +189,8 @@ func (s *Scenario) verifyToolQuarantineAcrossReplacement(
 		return fmt.Errorf("read tools consumer baseline: %w", err)
 	}
 
-	call := newProcessBarrierCall("ambiguous-create")
-	if err := s.publishToolCall(ctx, call); err != nil {
+	call, err := s.newProcessBarrierCall(ctx, toolStream, "ambiguous-create")
+	if err != nil {
 		return err
 	}
 	first, err := waitForBarrierAttempts(ctx, evidence, call.ID, 1, 10*time.Second)
@@ -202,8 +215,8 @@ func (s *Scenario) verifyToolQuarantineAcrossReplacement(
 			quarantinedInfo.AckFloor.Consumer, baselineInfo.AckFloor.Consumer, quarantinedInfo.NumAckPending)
 	}
 
-	blocked := newProcessBarrierCall("post-latch")
-	if err := s.publishToolCall(ctx, blocked); err != nil {
+	blocked, err := s.newProcessBarrierCall(ctx, toolStream, "post-latch")
+	if err != nil {
 		return err
 	}
 	if err := waitWithoutBarrierAttempt(ctx, evidence, blocked.ID, 2*time.Second); err != nil {
@@ -239,18 +252,23 @@ func (s *Scenario) verifyToolQuarantineAcrossReplacement(
 	if err := s.releaseBarrier(ctx, call.ID); err != nil {
 		return err
 	}
-	if err := s.waitForToolResult(ctx, call, 15*time.Second); err != nil {
+	if err := s.waitForToolResult(ctx, toolStream, call, 15*time.Second); err != nil {
 		return fmt.Errorf("redelivered quarantined call did not settle: %w", err)
 	}
-	if err := s.waitForToolResult(ctx, blocked, 15*time.Second); err != nil {
+	if err := s.waitForToolResult(ctx, toolStream, blocked, 15*time.Second); err != nil {
 		return fmt.Errorf("post-latch call did not settle after reconstruction: %w", err)
 	}
+	if err := waitForConsumerSettled(ctx, consumer, quarantinedInfo.Delivered.Consumer+2, 10*time.Second); err != nil {
+		return fmt.Errorf("replacement tool sources did not settle: %w", err)
+	}
 	result.Details["tools_quarantine_call_id"] = call.ID
+	result.Details["tools_quarantine_execution_id"] = call.ExecutionID
 	result.Metrics["tools_backoff_redelivery_ms"] = delta.Milliseconds()
 	result.Metrics["tools_quarantine_executor_attempts"] = 2
 	return nil
 }
 
+// spec: agentic-dispatch / Every dispatch durable input settles through its owner
 func (s *Scenario) verifyDispatchAcrossReplacement(
 	ctx context.Context,
 	result *scenarios.Result,
@@ -289,7 +307,8 @@ func (s *Scenario) verifyDispatchAcrossReplacement(
 	if err != nil {
 		return err
 	}
-	if err := s.nats.Publish(ctx, "agent.complete."+terminal.loopID, terminal.wire); err != nil {
+	terminalAck, err := js.Publish(ctx, "agent.complete."+terminal.loopID, terminal.wire)
+	if err != nil {
 		return fmt.Errorf("publish paused terminal: %w", err)
 	}
 	userStream, err := js.Stream(ctx, "USER")
@@ -330,6 +349,11 @@ func (s *Scenario) verifyDispatchAcrossReplacement(
 		return fmt.Errorf("resume dispatch into publication fault: %w", err)
 	}
 	paused = false
+	// Resume does not prove source delivery. Allow one default 30s pull renewal
+	// plus margin, then observe publication separately from the retained sequence.
+	if err := waitForConsumerDelivery(ctx, consumer, terminalAck.Sequence, 40*time.Second); err != nil {
+		return fmt.Errorf("dispatch injected terminal was not delivered: %w", err)
+	}
 	if err := s.waitMetricWithLabels(ctx, "semstreams_router_terminal_settlement_total",
 		map[string]string{"reason": "response_publish_transient"}, reasonBefore+1, 10*time.Second); err != nil {
 		return fmt.Errorf("dispatch unknown publication was not observed: %w", err)
@@ -356,6 +380,8 @@ func (s *Scenario) verifyDispatchAcrossReplacement(
 	)
 }
 
+// spec: agentic-dispatch / Dispatch task redelivery recovers the committed LoopID
+// spec: agentic-dispatch / Every dispatch durable input settles through its owner
 func (s *Scenario) verifyDispatchRecoveryAfterQuarantine(
 	ctx context.Context,
 	result *scenarios.Result,
@@ -394,27 +420,70 @@ func (s *Scenario) verifyDispatchRecoveryAfterQuarantine(
 	if err := waitForStreamSubject(ctx, userStream, blockedResponseSubject, 15*time.Second); err != nil {
 		return fmt.Errorf("replacement did not admit later terminal: %w", err)
 	}
-	if count, err := streamSubjectCount(ctx, userStream, responseSubject); err != nil || count != 1 {
-		return fmt.Errorf("replacement user response count = %d, want 1: %w", count, err)
+	if _, err := s.verifyDispatchResponse(ctx, userStream, responseSubject, terminal); err != nil {
+		return fmt.Errorf("replacement user response: %w", err)
+	}
+	if _, err := s.verifyDispatchResponse(ctx, userStream, blockedResponseSubject, blocked); err != nil {
+		return fmt.Errorf("replacement later user response: %w", err)
+	}
+	if err := waitForConsumerSettled(ctx, consumer, quarantinedDeliveries+2, 10*time.Second); err != nil {
+		return fmt.Errorf("replacement terminal sources did not settle: %w", err)
 	}
 	settledInfo, err := consumer.Info(ctx)
 	if err != nil {
 		return fmt.Errorf("read replacement dispatch consumer: %w", err)
 	}
-	// Re-publish the identical terminal envelope after successful replacement
-	// settlement. The deterministic response MsgID must keep the output at one.
+	// The identical terminal may publish another ordinary response. Durable
+	// source settlement and correlated output are required; a duplicate-window
+	// MsgID is not evidence that publication happens exactly once.
 	if err := s.nats.Publish(ctx, "agent.complete."+terminal.loopID, terminal.wire); err != nil {
 		return fmt.Errorf("republish identical terminal: %w", err)
 	}
-	if err := waitForConsumerDelivered(ctx, consumer, settledInfo.Delivered.Consumer+1, 10*time.Second); err != nil {
-		return fmt.Errorf("identical terminal was not consumed: %w", err)
+	if err := waitForConsumerSettled(ctx, consumer, settledInfo.Delivered.Consumer+1, 10*time.Second); err != nil {
+		return fmt.Errorf("identical terminal was not settled: %w", err)
 	}
-	if count, err := streamSubjectCount(ctx, userStream, responseSubject); err != nil || count != 1 {
-		return fmt.Errorf("deduplicated user response count = %d, want 1: %w", count, err)
+	count, err := s.verifyDispatchResponse(ctx, userStream, responseSubject, terminal)
+	if err != nil {
+		return fmt.Errorf("repeated terminal user response: %w", err)
 	}
 	result.Details["dispatch_replacement_loop_id"] = terminal.loopID
-	result.Metrics["dispatch_replacement_user_responses"] = 1
+	result.Metrics["dispatch_replacement_user_responses"] = count
 	return nil
+}
+
+func (s *Scenario) verifyDispatchResponse(
+	ctx context.Context, stream jetstream.Stream, subject string, terminal dispatchTerminalFixture,
+) (uint64, error) {
+	count, err := streamSubjectCount(ctx, stream, subject)
+	if err != nil {
+		return 0, fmt.Errorf("read user response count: %w", err)
+	}
+	if count < 1 {
+		return 0, fmt.Errorf("user response count = %d, want at least 1", count)
+	}
+	stored, err := stream.GetLastMsgForSubject(ctx, subject)
+	if err != nil {
+		return 0, fmt.Errorf("read user response: %w", err)
+	}
+	source, err := agentterminal.Decode(s.decoder, terminal.wire)
+	if err != nil {
+		return 0, fmt.Errorf("decode fixture terminal: %w", err)
+	}
+	decoded, err := s.decoder.Decode(stored.Data)
+	if err != nil {
+		return 0, fmt.Errorf("decode replacement user response: %w", err)
+	}
+	response, ok := decoded.Payload().(*agentic.UserResponse)
+	if !ok {
+		return 0, fmt.Errorf("replacement payload = %T, want *agentic.UserResponse", decoded.Payload())
+	}
+	if response.ResponseID != "terminal-user-response:"+source.SourceMessageID ||
+		response.InReplyTo != terminal.loopID || response.Type != agentic.ResponseTypeResult ||
+		"user.response."+response.ChannelType+"."+response.ChannelID != subject || response.UserID != "" ||
+		response.Content != source.Result || !response.Timestamp.Equal(source.TerminalAt) {
+		return 0, fmt.Errorf("replacement user response correlation differs from terminal %s", terminal.loopID)
+	}
+	return count, nil
 }
 
 type dispatchTerminalFixture struct {
@@ -426,7 +495,7 @@ func (s *Scenario) newDispatchTerminal(
 	ctx context.Context, label string,
 ) (dispatchTerminalFixture, string, error) {
 	now := time.Now().UTC()
-	loopID := fmt.Sprintf("e2e-dispatch-replacement-%s-%d", label, now.UnixNano())
+	loopID := uuid.NewString()
 	taskID := "task-" + loopID
 	channelID := "channel-" + loopID
 	loop := agentic.LoopEntity{
@@ -453,26 +522,41 @@ func (s *Scenario) newDispatchTerminal(
 		"user.response.e2e-replacement." + channelID, nil
 }
 
-func newProcessBarrierCall(label string) agentic.ToolCall {
-	now := time.Now().UnixNano()
-	return agentic.ToolCall{
-		ID:      fmt.Sprintf("e2e-process-barrier-%s-%d", label, now),
-		Name:    processbarrier.ToolName,
-		LoopID:  fmt.Sprintf("e2e-process-loop-%d", now),
-		TraceID: fmt.Sprintf("e2e-process-trace-%d", now),
+// newProcessBarrierCall captures a fresh call from the loop's identity owner.
+// The pause only keeps tools from entering the barrier before capture finishes.
+// spec: agentic-loop / Tool execution has stable framework correlation
+func (s *Scenario) newProcessBarrierCall(
+	ctx context.Context, stream jetstream.Stream, label string,
+) (call agentic.ToolCall, runErr error) {
+	if _, err := stream.PauseConsumer(ctx, toolsConsumerName, time.Now().Add(2*time.Minute)); err != nil {
+		return call, fmt.Errorf("pause tools for barrier capture: %w", err)
 	}
-}
-
-func (s *Scenario) publishToolCall(ctx context.Context, call agentic.ToolCall) error {
-	envelope := message.NewBaseMessage(call.Schema(), &call, "e2e-process-replacement")
+	defer func() {
+		joinHarnessFinalizationError(ctx, &runErr, "resume tools after barrier capture", func(finalCtx context.Context) error {
+			_, err := stream.ResumeConsumer(finalCtx, toolsConsumerName)
+			return err
+		})
+	}()
+	info, err := stream.Info(ctx)
+	if err != nil {
+		return call, fmt.Errorf("read TOOL sequence before barrier task: %w", err)
+	}
+	task := newTestTask(time.Now())
+	task.Prompt = "Run the process replacement barrier for " + label + ", then complete."
+	task.Tools = []agentic.ToolDefinition{{
+		Name: processbarrier.ToolName, Description: "Enter the E2E process replacement barrier.",
+		Effect: agentic.ToolEffectExternal, Parameters: map[string]any{"type": "object"},
+	}}
+	task.ToolChoice = &agentic.ToolChoice{Mode: "function", FunctionName: processbarrier.ToolName}
+	envelope := message.NewBaseMessage(task.Schema(), &task, "e2e-process-replacement")
 	wire, err := json.Marshal(envelope)
 	if err != nil {
-		return fmt.Errorf("marshal process-barrier call: %w", err)
+		return call, fmt.Errorf("marshal process-barrier task: %w", err)
 	}
-	if err := s.nats.Publish(ctx, "tool.execute."+call.ID, wire); err != nil {
-		return fmt.Errorf("publish process-barrier call: %w", err)
+	if err := s.nats.Publish(ctx, "agent.task.e2e", wire); err != nil {
+		return call, fmt.Errorf("publish process-barrier task: %w", err)
 	}
-	return nil
+	return s.awaitReplayToolCall(ctx, stream, task.LoopID, processbarrier.ToolName, info.State.LastSeq)
 }
 
 func (s *Scenario) releaseBarrier(ctx context.Context, callID string) error {
@@ -495,9 +579,9 @@ func flushBarrierRelease(ctx context.Context, flush func(context.Context) error)
 	return flush(flushCtx)
 }
 
-func (s *Scenario) waitForOutcome(ctx context.Context, callID string, timeout time.Duration) error {
+func (s *Scenario) waitForOutcome(ctx context.Context, executionID string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	key := "v1." + durableCallDigest(callID)
+	key := "v1." + durableCallDigest(executionID)
 	for time.Now().Before(deadline) {
 		if _, err := s.nats.GetKV(ctx, graph.BucketToolCallOutcomes, key); err == nil {
 			return nil
@@ -509,30 +593,14 @@ func (s *Scenario) waitForOutcome(ctx context.Context, callID string, timeout ti
 	return fmt.Errorf("%s/%s was not observable within %v", graph.BucketToolCallOutcomes, key, timeout)
 }
 
-func (s *Scenario) waitForToolResult(ctx context.Context, call agentic.ToolCall, timeout time.Duration) error {
-	js, err := s.nats.Client().JetStream()
+func (s *Scenario) waitForToolResult(
+	ctx context.Context, stream jetstream.Stream, call agentic.ToolCall, timeout time.Duration,
+) error {
+	raw, err := waitForStreamSubjectData(ctx, stream, "tool.result."+call.ExecutionID, timeout)
 	if err != nil {
 		return err
 	}
-	stream, err := js.Stream(ctx, "TOOL")
-	if err != nil {
-		return err
-	}
-	raw, err := waitForStreamSubjectData(ctx, stream, "tool.result."+call.ID, timeout)
-	if err != nil {
-		return err
-	}
-	var envelope struct {
-		Payload agentic.ToolResult `json:"payload"`
-	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return fmt.Errorf("decode process-barrier result: %w", err)
-	}
-	if envelope.Payload.CallID != call.ID || envelope.Payload.Name != call.Name {
-		return fmt.Errorf("tool result correlation = call:%q name:%q, want call:%q name:%q",
-			envelope.Payload.CallID, envelope.Payload.Name, call.ID, call.Name)
-	}
-	return nil
+	return s.validateReplayedToolResult(call, raw)
 }
 
 func (s *Scenario) replaceSemStreams(ctx context.Context, controller composeProcessController) error {
@@ -693,16 +761,43 @@ func waitDuration(ctx context.Context, duration time.Duration) error {
 	}
 }
 
-func waitForConsumerDelivered(
+func waitForConsumerDelivery(
+	ctx context.Context, consumer jetstream.Consumer, want uint64, timeout time.Duration,
+) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var delivered, ackFloor, queued uint64
+	var pending int
+	var lastReadErr error
+	for {
+		info, err := consumer.Info(ctx)
+		lastReadErr = err
+		if err == nil {
+			delivered, ackFloor = info.Delivered.Stream, info.AckFloor.Stream
+			pending, queued = info.NumAckPending, info.NumPending
+			if delivered >= want {
+				return nil
+			}
+		}
+		if err := waitDuration(ctx, 100*time.Millisecond); err != nil {
+			return fmt.Errorf("consumer did not deliver stream sequence %d within %v: "+
+				"delivered_stream=%d ack_floor_stream=%d pending=%d queued=%d last_read_error=%v: %w",
+				want, timeout, delivered, ackFloor, pending, queued, lastReadErr, err)
+		}
+	}
+}
+
+func waitForConsumerSettled(
 	ctx context.Context, consumer jetstream.Consumer, want uint64, timeout time.Duration,
 ) error {
 	deadline := time.Now().Add(timeout)
-	var last uint64
+	var delivered, ackFloor uint64
+	var pending int
 	for time.Now().Before(deadline) {
 		info, err := consumer.Info(ctx)
 		if err == nil {
-			last = info.Delivered.Consumer
-			if last >= want {
+			delivered, ackFloor, pending = info.Delivered.Consumer, info.AckFloor.Consumer, info.NumAckPending
+			if delivered >= want && ackFloor >= want && pending == 0 {
 				return nil
 			}
 		}
@@ -710,7 +805,8 @@ func waitForConsumerDelivered(
 			return err
 		}
 	}
-	return fmt.Errorf("consumer deliveries = %d, want at least %d within %v", last, want, timeout)
+	return fmt.Errorf("consumer delivered=%d ack_floor=%d pending=%d, want at least %d settled within %v",
+		delivered, ackFloor, pending, want, timeout)
 }
 
 func joinHarnessFinalizationError(

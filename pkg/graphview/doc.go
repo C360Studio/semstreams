@@ -49,8 +49,9 @@
 // initial WatchAll replay completes fail with ErrNotReady. Loss of the shared
 // watcher fails closed — every subscriber's delta channel closes with
 // ErrWatcherLost surfaced via Err(), and the frozen projection is never
-// served as live. Restart re-bootstraps and reconciles ghost keys (keys
-// absent from the fresh replay are removed) before reporting caught-up.
+// served as live. Its owner stops the failed view and constructs a new view,
+// passing the active operation context to Start. Fresh replay excludes ghost
+// keys before the replacement reports caught-up.
 // Decode/contract failures surface as typed per-key *PoisonError signals in
 // the delta lane and on point reads; they never launder through as upserts
 // and never halt delivery for unrelated keys.

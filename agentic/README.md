@@ -70,7 +70,7 @@ These components communicate over NATS JetStream using the types defined here.
 | Type | Description |
 |------|-------------|
 | `UserMessage` | Normalized input from any channel |
-| `UserSignal` | Control signal (cancel, pause, resume, approve) |
+| `UserSignal` | Control signal — `cancel` only; approve/reject travel as `ApprovalResponse` (ADR-039) |
 | `UserResponse` | Response sent back to user |
 | `TaskMessage` | Task to execute by agentic loop |
 | `Attachment` | File or media attached to a message |
@@ -82,6 +82,11 @@ delivery address. `UserID` is optional recipient metadata. Terminal-derived
 responses retain the same wire type and use a stable response ID across source
 redelivery; dispatch does not require adopters to synthesize a user identity or
 choose a terminal retry count.
+
+`UserMessage.PriorMessages` and `TaskMessage.PriorMessages` carry optional displayed user/assistant text for an
+independent chat turn. Use the delivered `UserResponse.Content` for assistant entries. Dispatch defaults to independent
+executions; the adapter supplies history for follow-ups and retains its displayed transcript. See
+[Chat turns and context](../docs/concepts/13-agentic-systems.md#context-management) for validation and restart behavior.
 
 ## Usage
 
@@ -110,8 +115,8 @@ if err := request.Validate(); err != nil {
 ### Managing Loop State
 
 ```go
-// The loop ID is a framework-minted canonical UUID, never an authored token
-// (ADR-105) — agentic-loop mints it; callers echo it.
+// A new TaskMessage producer is the framework birth seam: it mints a canonical
+// v4 UUID before validation and marshal. A continuation echoes its admitted ID.
 // Create with default max iterations (20)
 entity := agentic.NewLoopEntity("7c9e6679-7425-40de-944b-e07fc1f90ae7", "task_456", "general", "gpt-4")
 
@@ -165,7 +170,7 @@ The state machine supports these states:
 | `complete` | Successfully finished (terminal) |
 | `failed` | Failed execution (terminal) |
 | `cancelled` | Cancelled by user (terminal) |
-| `paused` | Paused by user signal |
+| `paused` | Legacy-valid; exported transitions accept it; no framework-owned pause signal or semantics (#1239) |
 | `awaiting_approval` | Waiting for user approval |
 
 States are fluid checkpoints. The loop can move backward except from terminal states.
@@ -197,12 +202,10 @@ Control signals for user interaction:
 | Signal | Description |
 |--------|-------------|
 | `cancel` | Stop execution immediately |
-| `pause` | Pause at next checkpoint |
-| `resume` | Continue paused loop |
-| `approve` | Approve pending result |
-| `reject` | Reject with optional reason |
-| `feedback` | Add feedback without decision |
-| `retry` | Retry failed loop |
+
+Approval and rejection are **not** signals. They travel as `ApprovalResponse` on
+`agent.approval_response.*` (ADR-039), which has a real handler. `feedback` and `retry` were advertised here
+and never implemented; they are gone (#1239).
 
 ## Thread Safety
 

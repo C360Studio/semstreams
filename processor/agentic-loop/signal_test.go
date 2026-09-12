@@ -52,67 +52,6 @@ func TestHandleSignalMessage_Cancel(t *testing.T) {
 	assert.True(t, entity.State.IsTerminal())
 }
 
-func TestHandleSignalMessage_Pause(t *testing.T) {
-	// Create handler with default config
-	config := DefaultConfig()
-	handler := NewMessageHandler(config)
-
-	// Create a loop first
-	loopID, err := handler.loopManager.CreateLoop("task-1", "general", "test-model", 20)
-	require.NoError(t, err)
-
-	// Get entity and set to executing
-	entity, err := handler.GetLoop(loopID)
-	require.NoError(t, err)
-	entity.State = agentic.LoopStateExecuting
-	err = handler.UpdateLoop(entity)
-	require.NoError(t, err)
-
-	// Request pause
-	entity, err = handler.GetLoop(loopID)
-	require.NoError(t, err)
-	entity.PauseRequested = true
-	err = handler.UpdateLoop(entity)
-	require.NoError(t, err)
-
-	// Verify pause was requested
-	entity, err = handler.GetLoop(loopID)
-	require.NoError(t, err)
-	assert.True(t, entity.PauseRequested)
-}
-
-func TestHandleSignalMessage_Resume(t *testing.T) {
-	// Create handler with default config
-	config := DefaultConfig()
-	handler := NewMessageHandler(config)
-
-	// Create a loop first
-	loopID, err := handler.loopManager.CreateLoop("task-1", "general", "test-model", 20)
-	require.NoError(t, err)
-
-	// Set loop to paused state
-	entity, err := handler.GetLoop(loopID)
-	require.NoError(t, err)
-	entity.State = agentic.LoopStatePaused
-	entity.PauseRequested = true
-	err = handler.UpdateLoop(entity)
-	require.NoError(t, err)
-
-	// Resume
-	entity, err = handler.GetLoop(loopID)
-	require.NoError(t, err)
-	entity.State = agentic.LoopStateExecuting
-	entity.PauseRequested = false
-	err = handler.UpdateLoop(entity)
-	require.NoError(t, err)
-
-	// Verify resumed
-	entity, err = handler.GetLoop(loopID)
-	require.NoError(t, err)
-	assert.Equal(t, agentic.LoopStateExecuting, entity.State)
-	assert.False(t, entity.PauseRequested)
-}
-
 func TestCannotCancelTerminalLoop(t *testing.T) {
 	config := DefaultConfig()
 	handler := NewMessageHandler(config)
@@ -134,28 +73,6 @@ func TestCannotCancelTerminalLoop(t *testing.T) {
 
 	// Cannot change to cancelled because already terminal
 	// This is the check the component does before updating
-}
-
-func TestCannotResumeNonPausedLoop(t *testing.T) {
-	config := DefaultConfig()
-	handler := NewMessageHandler(config)
-
-	// Create a loop in executing state
-	loopID, err := handler.loopManager.CreateLoop("task-1", "general", "test-model", 20)
-	require.NoError(t, err)
-
-	entity, err := handler.GetLoop(loopID)
-	require.NoError(t, err)
-	entity.State = agentic.LoopStateExecuting
-	err = handler.UpdateLoop(entity)
-	require.NoError(t, err)
-
-	// Verify state is not paused
-	entity, err = handler.GetLoop(loopID)
-	require.NoError(t, err)
-	assert.NotEqual(t, agentic.LoopStatePaused, entity.State)
-
-	// Resume check would fail
 }
 
 func TestSignalJSON(t *testing.T) {

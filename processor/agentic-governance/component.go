@@ -63,12 +63,14 @@ type Component struct {
 	messagesProcessed int64
 	violationsCount   int64
 	errors            int64
+	deliveryFatalErr  error
 	lastActivity      time.Time
 }
 
 type streamConsumerBinding struct {
-	handle      jetstream.ConsumeContext
-	drainIssued bool
+	handle       jetstream.ConsumeContext
+	drainOnce    *sync.Once
+	observerDone <-chan struct{}
 }
 
 // DeclarePorts is the component.PortDeclarer for agentic-governance: the
@@ -338,21 +340,34 @@ func (c *Component) setupInputConsumers(ctx context.Context) error {
 
 // createHandler creates a message handler for a specific message type.
 // outputPortName is the output port name used to resolve the publish subject via port config.
-func (c *Component) createHandler(msgType MessageType, outputPortName string) func(context.Context, []byte) {
-	return func(ctx context.Context, data []byte) {
-		c.handleMessage(ctx, data, msgType, outputPortName)
+func (c *Component) createHandler(msgType MessageType, outputPortName string) func(context.Context, []byte) (natsclient.DeliveryDecision, error) {
+	return func(ctx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
+		return c.handleMessage(ctx, data, msgType, outputPortName)
 	}
+}
+
+func runGovernanceDeliveryWork(
+	ctx context.Context,
+	data []byte,
+	work func(context.Context, []byte) (natsclient.DeliveryDecision, error),
+) (decision natsclient.DeliveryDecision, cause error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			decision = natsclient.DeliveryDecisionQuarantine
+			cause = fmt.Errorf("governance delivery work panicked: %v", recovered)
+		}
+	}()
+	return work(ctx, data)
 }
 
 // handleMessage processes a message through the filter chain.
 // outputPortName identifies the output port in config whose subject pattern is used to publish validated messages.
-func (c *Component) handleMessage(ctx context.Context, data []byte, msgType MessageType, outputPortName string) {
+func (c *Component) handleMessage(ctx context.Context, data []byte, msgType MessageType, outputPortName string) (natsclient.DeliveryDecision, error) {
 	// Parse the incoming message
 	var msg Message
 	if err := json.Unmarshal(data, &msg); err != nil {
-		c.logger.Error("Failed to unmarshal message", "error", err)
 		atomic.AddInt64(&c.errors, 1)
-		return
+		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("decode governance message: %w", err)
 	}
 
 	msg.Type = msgType
@@ -363,13 +378,8 @@ func (c *Component) handleMessage(ctx context.Context, data []byte, msgType Mess
 	// Process through filter chain
 	result, err := c.chain.Process(ctx, &msg)
 	if err != nil {
-		c.logger.Error("Filter chain error",
-			"error", err,
-			"message_id", msg.ID,
-			"user_id", msg.UserID,
-		)
 		atomic.AddInt64(&c.errors, 1)
-		return
+		return natsclient.DeliveryDecisionRetry, fmt.Errorf("process governance filter chain: %w", err)
 	}
 
 	// Update activity
@@ -405,7 +415,7 @@ func (c *Component) handleMessage(ctx context.Context, data []byte, msgType Mess
 			"filters", result.FiltersApplied,
 			"violations", len(result.Violations),
 		)
-		return
+		return natsclient.DeliveryDecisionAck, nil
 	}
 
 	// Add governance metadata
@@ -421,30 +431,27 @@ func (c *Component) handleMessage(ctx context.Context, data []byte, msgType Mess
 		// Build output subject from port config, falling back to portName + "." + msg.ID
 		outputSubject, resolveErr := component.ResolveSubject(c.outputPortDefs(), outputPortName, msg.ID)
 		if resolveErr != nil {
-			c.logger.Error("Failed to resolve validated output subject", "error", resolveErr)
 			atomic.AddInt64(&c.errors, 1)
-			return
+			return natsclient.DeliveryDecisionQuarantine, fmt.Errorf("resolve validated output subject: %w", resolveErr)
 		}
 
 		outputData, err := json.Marshal(outputMsg)
 		if err != nil {
-			c.logger.Error("Failed to marshal output message", "error", err)
 			atomic.AddInt64(&c.errors, 1)
-			return
+			return natsclient.DeliveryDecisionTerminate, fmt.Errorf("marshal validated output: %w", err)
 		}
 
-		if err := c.natsClient.Publish(ctx, outputSubject, outputData); err != nil {
-			c.logger.Error("Failed to publish validated message",
-				"error", err,
-				"subject", outputSubject,
-			)
+		if err := c.natsClient.PublishToStream(ctx, outputSubject, outputData); err != nil {
 			atomic.AddInt64(&c.errors, 1)
+			return natsclient.DeliveryDecisionQuarantine,
+				fmt.Errorf("validated output %s has unknown durable publication state: %w", outputSubject, err)
 		}
 	}
+	return natsclient.DeliveryDecisionAck, nil
 }
 
 // setupConsumer sets up a JetStream consumer for an input port
-func (c *Component) setupConsumer(ctx context.Context, port component.Port, handler func(context.Context, []byte)) error {
+func (c *Component) setupConsumer(ctx context.Context, port component.Port, handler func(context.Context, []byte) (natsclient.DeliveryDecision, error)) error {
 	facts, err := port.Facts()
 	if err != nil {
 		return err
@@ -499,17 +506,48 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port, hand
 	if c.consumeStream != nil {
 		consume = c.consumeStream
 	}
+	var admissionMu sync.Mutex
+	admissionOpen := true
+	fatal := make(chan natsclient.DeliveryResult, 1)
 	handle, err := consume(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		handler(msgCtx, msg.Data())
-		if ackErr := msg.Ack(); ackErr != nil {
-			c.logger.Error("Failed to ack JetStream message", "error", ackErr)
+		admissionMu.Lock()
+		admitted := admissionOpen
+		admissionMu.Unlock()
+		if !admitted {
+			return
+		}
+		decision, cause := runGovernanceDeliveryWork(msgCtx, msg.Data(), handler)
+		result := natsclient.SettleDelivery(msg, decision, cause)
+		if result.OwnerStopRequired() {
+			admissionMu.Lock()
+			if admissionOpen {
+				admissionOpen = false
+				c.recordDeliveryOwnerFatal(result)
+				fatal <- result
+			}
+			admissionMu.Unlock()
+		}
+		if result.Err() != nil && !result.OwnerStopRequired() {
+			c.logger.Error("Governance delivery did not settle cleanly", "port", port.Name, "error", result.Err())
 		}
 	})
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupConsumer", fmt.Sprintf("setup consumer for stream %s", streamName))
 	}
+	binding := streamConsumerBinding{handle: handle, drainOnce: &sync.Once{}}
+	done := make(chan struct{})
+	binding.observerDone = done
+	go func() {
+		defer close(done)
+		select {
+		case result := <-fatal:
+			c.logger.Error("Governance delivery ownership lost", "port", port.Name, "error", result.Err())
+			binding.drain()
+		case <-ctx.Done():
+		}
+	}()
 	c.lifecycleMu.Lock()
-	c.consumers = append(c.consumers, streamConsumerBinding{handle: handle})
+	c.consumers = append(c.consumers, binding)
 	c.lifecycleMu.Unlock()
 
 	c.logger.Info("Subscribed (JetStream)",
@@ -616,10 +654,7 @@ func (c *Component) cleanup(ctx context.Context) error {
 	var stopErr error
 	for i := range c.consumers {
 		binding := &c.consumers[i]
-		if !binding.drainIssued {
-			binding.handle.Drain()
-			binding.drainIssued = true
-		}
+		binding.drain()
 		closed := binding.handle.Closed()
 		if c.waitConsumerClosed != nil {
 			stopErr = errors.Join(stopErr, c.waitConsumerClosed(ctx, closed))
@@ -633,6 +668,15 @@ func (c *Component) cleanup(ctx context.Context) error {
 	}
 	if c.cancel != nil {
 		c.cancel()
+	}
+	for i := range c.consumers {
+		if done := c.consumers[i].observerDone; done != nil {
+			select {
+			case <-done:
+			case <-ctx.Done():
+				stopErr = errors.Join(stopErr, ctx.Err())
+			}
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		stopErr = errors.Join(stopErr, err)
@@ -671,21 +715,44 @@ func (c *Component) ConfigSchema() component.ConfigSchema {
 
 // Health returns the current health status
 func (c *Component) Health() component.HealthStatus {
-	errors := atomic.LoadInt64(&c.errors)
-
 	c.mu.RLock()
+	errors := atomic.LoadInt64(&c.errors)
 	running := c.running
 	startTime := c.startTime
 	status := c.getStatus()
+	lastError := ""
+	if c.deliveryFatalErr != nil {
+		running = false
+		status = "delivery ownership lost"
+		lastError = c.deliveryFatalErr.Error()
+	}
 	c.mu.RUnlock()
 
 	return component.HealthStatus{
 		Healthy:    running,
 		LastCheck:  time.Now(),
 		ErrorCount: int(errors),
+		LastError:  lastError,
 		Uptime:     time.Since(startTime),
 		Status:     status,
 	}
+}
+
+func (c *Component) recordDeliveryOwnerFatal(result natsclient.DeliveryResult) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.deliveryFatalErr != nil {
+		return
+	}
+	c.deliveryFatalErr = result.Err()
+	atomic.AddInt64(&c.errors, 1)
+}
+
+func (b *streamConsumerBinding) drain() {
+	if b.drainOnce == nil {
+		b.drainOnce = &sync.Once{}
+	}
+	b.drainOnce.Do(b.handle.Drain)
 }
 
 // getStatus returns a status string

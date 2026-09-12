@@ -845,7 +845,7 @@ refuses a wire value that disagrees, so it needed no change.
   authority. If you relied on that as a runtime override, it is gone; identity is established at Start and nothing
   moves it afterwards.
 
-## Loop tokens become full UUIDs (ADR-105, #1192) — enforced at the mint seams; no re-key
+## Loop tokens become full UUIDs (ADR-105, #1192) — minted at framework birth seams; no re-key
 
 > **A loop token is NOT an authorization token — read this before enabling multi-user.** Enforcement is canonical
 > FORM, not provenance: the framework cannot tell its own mint from a fresh UUID a client authored, and a client
@@ -865,14 +865,11 @@ refuses a wire value that disagrees, so it needed no change.
   `CreateLoopWithID` overwrites the colliding record and context manager, merging two conversations.
 - Run entity IDs, `run_id`, `ResolveRun`, and the gh#256 echo contract are **UNCHANGED**. The run's instance stays
   the root loop's UUID; nothing is re-keyed.
-- A submission whose `reply_to`, `loop_id`, `parent_loop_id`, `in_reply_to`, or `run_id` is not a canonical UUID is
-  refused: a typed error response naming the field at dispatch — synchronous on the HTTP submit path, published to
-  the response subject on the channel path — and a classified terminated delivery, counted on the
-  intake-rejection metric, at the agentic-loop task-stream intake. Before this, a non-canonical token was adopted
-  silently, or reached the graph write path where the parent/reply stamping composes through a panicking entity-ID
-  builder. Four seams enforce this — `TaskMessage.Validate`, dispatch submission, `LoopManager.CreateLoopWithID`,
-  and `agentrun.Mint`. Other loop-token carriers — `UserSignal`, `ApprovalResponse`, and control requests not yet
-  censused — still accept a non-canonical token; that is **#1228**, not part of this wave.
+- Every `TaskMessage` requires nonempty canonical `loop_id`. `TaskMessage.Validate` returns an ordinary error naming
+  a missing or malformed field; the rule publish boundary, agentic-loop intake, and direct `MessageHandler.HandleTask`
+  boundary classify that error as invalid before side effects. Durable intake terminates and counts the rejection.
+  Dispatch submission, `LoopManager.CreateLoopWithID`, `agentrun.Mint`, every remaining loop-token payload carrier,
+  and loop-scoped HTTP paths likewise refuse noncanonical tokens at their accepting boundaries.
 - Canonical means canonical: 36 bytes, lowercase, hyphenated. The uppercase, braced (`{…}`), and `urn:uuid:`
   spellings parse as UUIDs and are refused, because four spellings of one identity means a token that misses its
   own KV key and its own entity ID.
@@ -882,21 +879,34 @@ refuses a wire value that disagrees, so it needed no change.
 - Pre-v1 fresh storage (ADR-102 d7): no legacy tokens exist after redeploy, and nothing resolves an old-shape ID.
   No alias, no dual format, no legacy reader.
 
-### The obligations (per-sister; measured read-only 2026-08-31 — no production code changes required)
+### Direct TaskMessage producer migration (breaking)
 
-| Repo | SHA read | Finding | Instruction |
-|---|---|---|---|
-| semteams | `8a70b7e76e25` | Zero shape reliance in production. Shape appears only in comments and worked examples: `ui/src/lib/stores/taskRefs.svelte.ts:3`, `ui/src/lib/services/messageLoggerApi.ts:60`, `configs/personas/fragments/researcher-research-synthesize/00-identity.md:40`, and the manual probe commands in `ui/Taskfile.yml:1705,1721,1722,1741,1742` (`loop_70876992`) | Update comments/examples at leisure. The probe commands take a loop ID as an argument — pass the UUID the API returns; nothing in them parses the shape |
-| semsource | `4093d3ce4213` | Zero hits (the near-matches are `org_1` namespace literals) | None |
-| semdev | `ca3956af2ed8` | Reads `loop_id` opaquely from tool calls (`internal/tools/*`) | None |
+Every TaskMessage now requires `loop_id`. For new work, call `uuid.NewString()` once before `Validate` and marshal. For
+continuation work, echo the admitted existing LoopID. When retrying an uncertain publication, reuse the same serialized
+bytes; do not reconstruct the TaskMessage or regenerate LoopID. Missing/noncanonical identity is producer-invalid and
+is refused before loop state. There is no empty-ID compatibility path, legacy reader, scan, mapping, or recovery bucket.
 
-### Downstream action
+| Repository at measured revision | Production seams | Required owner migration |
+|---|---|---|
+| semdev `ca3956af2ed8` | `internal/intake/coordinatortask.go` | Add producer-local v4 LoopID before validation/marshal |
+| semteams `ce22c961d300` | `cmd/semteams/chainpause/decision_handler.go` | Add producer-local v4 LoopID before validation/marshal |
+| semspec `5a9496eecc45` | lesson decomposer, QA reviewer, researcher manager, question tool | Add producer-local v4 LoopID at each new-task construction |
+| semmachina `841c45e8bb01` | `internal/persona/spec.go` | Add LoopID before its existing Validate call |
+| semsage `4d28b4dc1210` | UI API and spawn executor | Add LoopID to UI API; spawn executor already conforms |
+| semdragon `07f4de9b6588` | quest bridge, DAG executor, explore tool | Replace prefixed NUID birth tokens with canonical v4 UUIDs |
+| semops, semsource, semconnect, semboids, semembed, semlink, semmem | No direct production constructor found | No direct code migration found |
 
-**Echo, never author.** A loop token is a value the framework handed you. Keep passing `reply_to` / `loop_id`
-verbatim; delete any test fixture that fabricates a non-UUID loop token and submits it — it will now be refused.
+Rule JSON users in semdev, semteams, and semspec require no sister code change: SemStreams' rule `publish_agent`
+producer mints the new-task LoopID before publishing. Sister repositories remain read-only to SemStreams agents; their
+owners apply and validate these migrations.
+
+Use fresh NATS state only after every direct producer is updated. Add no alias, dual format, online migration, or
+rollback reader. If retained deployed TaskMessage work is discovered, stop for a separate owner-reviewed recovery
+design.
 
 ### Doing nothing
 
+- A direct TaskMessage producer that omits `loop_id` now fails loudly before loop state; apply the migration above.
 - A client that echoes framework-minted IDs sees nothing change but the shape of the string.
 - A client that authors a **non-canonical** continuation token gets a typed error naming `reply_to` in the response
   it is already waiting on — instead of "Task submitted" followed by an async TERM it never sees.
@@ -935,13 +945,95 @@ POST <prefix>message   {"content": "/cancel <loop_id>", "user_id": "<the loop's 
 That routes through the command registry and publishes a correct `agentic.UserSignal`. Same HTTP surface, same
 component, already permissioned.
 
-**Publishing `agentic.UserSignal` on `agent.signal.<loop_id>` yourself also still works and is untouched.** Two
-sisters already do exactly that — `semdragon/processor/questdagexec/handler.go:1190` and
-`semsage/processor/ui-api/http.go:195`. Neither is affected by this removal.
+**Publishing `agentic.UserSignal` on `agent.signal.<loop_id>` yourself still works and the lane is untouched.**
+Two sisters do exactly that. Their exposure to *this* removal differs, and the earlier blanket "neither is
+affected" was written for the #1231 endpoint deletion — it does not hold for #1239:
 
-**`pause` and `resume` have no replacement, because they never had an implementation.** `handlePauseSignal` sets
-`entity.PauseRequested`, and nothing in the tree reads that field. Tracked as **#1239**; do not build on the
-assumption that pausing a loop is available.
+| Sister | Site | Affected by #1239? |
+|---|---|---|
+| semdragon | `processor/questdagexec/handler.go:1190` | **No** — publishes `SignalCancel` only |
+| semsage | `processor/ui-api/http.go:182` | **YES — will not compile** |
+
+### semsage MUST act before it bumps SemStreams
+
+Measured against semsage `4d28b4dc` (2026-03-05). `processor/ui-api/http.go:165` declares
+*"handleLoopSignal publishes a pause/resume/cancel signal for a loop"* and `:182` switches on
+`case agentic.SignalPause, agentic.SignalResume, agentic.SignalCancel:`. **`agentic.SignalPause` and
+`agentic.SignalResume` no longer exist, so that file fails to compile on the next bump** — a build break, not
+a behaviour change, so it cannot be missed.
+
+The migration is semsage's to implement, in its own repository:
+
+1. Remove `agentic.SignalPause` and `agentic.SignalResume` from the `:182` case. Keep `agentic.SignalCancel`
+   if the endpoint survives.
+2. Correct the `:186` operator-facing error text, which currently reads *"must be pause, resume, or cancel"*.
+3. Correct the `:165` doc comment.
+4. Decide the endpoint's disposition. Note that its pause and resume arms **never worked** — they published a
+   signal SemStreams accepted and ignored — so removing them takes away nothing an operator was getting.
+
+SemStreams does not make this change; sister repositories are read-only from here. This section is the
+record of the obligation.
+
+**`pause` and `resume` have no replacement, because they never had an implementation — and as of this release
+they are gone.** `handlePauseSignal` set `entity.PauseRequested`, and nothing in the tree ever read that field.
+Owner ruling on **#1239** (2026-09-02) deleted the surface rather than implement it. Pause is not wanted pre-v1.
+
+What was removed:
+
+- Signal verbs `pause` and `resume` (`agentic.SignalPause`, `agentic.SignalResume`).
+- `LoopEntity` fields `PauseRequested`, `PauseRequestedBy`, `StateBeforePause` — and with them the persisted
+  JSON keys `pause_requested`, `pause_requested_by`, `state_before_pause`.
+- The handlers `handlePauseSignal` / `handleResumeSignal`.
+
+**What you must do.** Nothing, if you never sent `pause` or `resume` — and nothing could have worked if you did.
+If you *do* still publish an `agentic.UserSignal` with `type: "pause"` or `"resume"`, the behaviour changes
+from *silently accepted and ignored* to **rejected by `UserSignal.Validate()`**. That is deliberate: an
+unimplemented verb that answers `200` is how this defect survived unnoticed for months. Remove the call; there
+is nothing to migrate it to.
+
+**Current-record validation.** `LoopEntity.Validate()` now rejects `state: "paused"` for every caller, including
+dispatch's exact reads and shared view. `LoopState` is a string type, so JSON decoding alone can still succeed;
+decodability is not valid current authority. Removed pause fields no longer define behavior, even when the decoder
+ignores their unknown JSON keys. There is no compatibility promise, backfill, or beta-state preservation requirement.
+
+Stop writing `paused` records. Use cancellation to end work and the separate approval protocol for a tool awaiting
+review. The remaining constant and transition-surface cleanup is tracked in #1146; their presence does not make
+`paused` a supported persisted state. This validation correction does not add suspend or checkpoint semantics.
+
+### `cancel` is now the entire signal vocabulary
+
+Removing pause/resume exposed that the same measurement had never been applied to the rest of the list.
+`agentic.UserSignal` advertised seven verbs. The loop's signal consumer
+(`processor/agentic-loop/component.go`) switches on **`cancel` alone**; every other verb fell to the default
+arm, logged `"Unsupported signal type"`, and — because the handler returns nothing and the consumer ACKs on
+a nil return — **was acknowledged as successfully delivered**. A caller sending `approve` got a valid signal,
+a successful publish, a successful ack, and no effect. That is the #1239 defect, four more times.
+
+Owner ruling (2026-09-02): reconcile the vocabulary with the handler rather than carry the advertisement.
+**`SignalApprove`, `SignalReject`, `SignalFeedback` and `SignalRetry` are removed**, alongside
+`SignalPause`/`SignalResume`. `SignalCancel` remains.
+
+**Approval and rejection are not affected, because they were never really here.** The working approval lane is
+`ApprovalResponse` on `agent.approval_response.*` (ADR-039), a different payload with a real handler. If you
+approve or reject tool calls today, you are already using it and nothing changes.
+
+**What you must do.** Nothing, if you only ever published `cancel` — which is the only verb that ever did
+anything. If you publish any of the other six, `UserSignal.Validate()` now refuses it and names it as removed.
+Delete the call; there is no replacement, because there was never an implementation. If the intent was
+approval, move to `ApprovalResponse`.
+
+**No sister publishes the four.** Swept read-only across `/Users/coby/Code/c360`: no sister references
+`SignalApprove`, `SignalReject`, `SignalFeedback` or `SignalRetry`. The only sister break from this release is
+semsage's pause/resume compile failure, recorded above.
+
+**Recorded residual — `ResponseAction.Signal`.** The interactive-affordance field on `UserResponse` is a
+free-form string and is deliberately not validated against the signal vocabulary: an affordance may map to a
+signal, to an `ApprovalResponse`, or to something the framework has never heard of, so validating it would be
+the framework predicting a value it does not own. An existing payload still round-trips. The consequence,
+stated rather than hidden: an adopter who sets `Signal: "approve"` gets no compile error, no runtime error,
+and a button that silently does nothing. Nothing in this tree produces one, so the defect is dormant rather
+than live — but point approval affordances at `ApprovalResponse`, and revisit this the moment a production
+producer appears.
 
 ### 2. Newly enforced: the `approve` permission
 
@@ -963,9 +1055,10 @@ conversation accumulated under that token was destroyed and the next request wen
 context. It now **attaches**: the loop's existing context manager is reused, the new user turn is appended after
 the prior turns, the system prompt is not re-seeded, and the request carries the whole accumulated conversation.
 
-If you were relying on `reply_to` to reset a conversation, it no longer does. **Omit `reply_to` to start a fresh
-loop** — that is, and always was, the way to ask for a new conversation. Auto-continue (a submission with no
-`reply_to` that resolves onto your most recent non-terminal loop) reaches the same attach.
+If you were relying on `reply_to` to reset a conversation, it no longer does. Omit `reply_to` with
+`auto_continue: false` to start a fresh execution. Explicitly enabled AutoContinue (a submission with no `reply_to`
+that resolves onto one exact user/type/channel nonterminal match) reaches the same attach. The #1146 change below makes
+AutoContinue opt-in and adds independent follow-up turns with supplied history.
 
 **A continuation is refused while the loop has work in flight.** "Live" is not "idle". If the loop has outstanding
 tool calls, or is `awaiting_approval` waiting on a human decision, the continuation is refused rather than
@@ -1007,14 +1100,17 @@ Exactly one payload type now travels that subject.
   left in place it could only ever read zero. Remove it from dashboards and alerts.
 - **New metric:** `semstreams_router_loop_admission_refusals_total{seam,reason}` — one series for every refusal the
   gate issues, labelled by which seam the request arrived on and why it was refused. The reason set is closed.
-- **New metric:** `semstreams_agentic_loop_model_responses_dropped_total{reason}` — a model response that arrived
-  with no loop mapping for its `RequestID`. Expected after a loop settles and releases its per-loop state, or after
-  a process replacement; a sustained rate against live loops points at NATS redelivery. It is the sibling of the
-  existing `semstreams_agentic_loop_tool_results_dropped_total{reason}`, which the same drop class already had.
+- **Removed metrics:** `semstreams_agentic_loop_model_responses_dropped_total{reason}` and
+  `semstreams_agentic_loop_tool_results_dropped_total{reason}`. Their log-and-ACK producers were removed: missing
+  process correlation now performs lane-specific durable read-through and settles as Retry, Terminate, or Quarantine
+  when application cannot be proven. Remove both series from dashboards and alerts.
+- **New metric:** `semstreams_agentic_loop_graph_evidence_failures_total{state,reason}` — counts nonblocking
+  completion/failure graph-evidence batches that did not commit. `reason` is bounded to `timeout` or `write_error`;
+  terminal settlement continues because this graph evidence is a derived projection, not authoritative loop state.
 - **`/status` reports the state it read.** For a loop this process is not running — after dispatch was replaced,
   say — `/status` used to print `State: running` for anything not settled, so a loop actually sitting in
   `awaiting_approval` told the user to wait for an agent that was waiting for them. It now prints the recorded
-  state (`executing`, `paused`, `awaiting_approval`, `complete`, …), or `unknown` when the record carries none.
+  state (`executing`, `awaiting_approval`, `complete`, …), or `unknown` when the record carries none.
   Anything parsing that text for the literal `running` needs updating.
 - **A NATS outage now answers 503, not 404.** When a loop's durable state cannot be read, the loop endpoints answer
   `503` with a transient classification. Previously an unreadable record was indistinguishable from an absent one,
@@ -1038,5 +1134,144 @@ request as transient. If you override ports on agentic-dispatch, keep the `agent
 
 A settled loop now releases its in-process footprint — conversation context, pending tools, and the per-loop routing
 maps. Long-running processes no longer retain every loop they have ever run. A late tool result, approval response,
-or model response arriving for an already-settled loop is now an expected, logged and counted drop rather than an
-error.
+or model response is not dropped merely because its process-local correlation is gone. The owning lane reads its
+exact durable evidence. Ordinary final tool/model deliveries still require applied proof before a duplicate is acknowledged;
+conflicting correlation quarantines and unresolved application retries. An approval instead names a particular
+execution: a validated current loop with no matching pending gate permits an observable, effect-free inapplicable
+ACK. That approval-specific outcome does not claim which historical decision won. Failed authority observation is
+not proof of inapplicability.
+
+An earlier `approval_required` ToolResult may instead be acknowledged as superseded when validated existing
+evidence proves that its exact execution advanced beyond approval. That check occurs before mutation, including
+when the loop is already loaded; it must not reopen the gate or overwrite a final result. Tool-result producers
+keep the existing correlation fields and payload contract. No new caller-supplied phase, receipt, or storage is
+required, and ordinary final-result duplicate checks are unchanged.
+
+## Approval decisions require the displayed execution identity (#1146)
+
+**Breaking input change:** `agentic.ApprovalResponse` and the existing HTTP `ApprovalRequest` require `execution_id`.
+`ApprovalPendingEvent` and the nested pending approval in `LoopInfo` expose the existing execution identity.
+There is no new ID generator: keep the opaque value with the prompt shown to the human and echo it unchanged.
+
+- HTTP clients add `execution_id` alongside their existing decision, approver, and optional modified arguments.
+  Missing identity returns 400; a closed or different current gate returns 409 without publication. Do not recover
+  from 409 by fetching a newer identity and applying the old human decision to it.
+- Direct publishers copy `pending.ExecutionID` into `ApprovalResponse.ExecutionID` before validation and registered
+  envelope marshaling. Missing identity is invalid; no old-wire fallback selects the current gate on their behalf.
+- Pending-event consumers and generated API clients retain the new nested identity field. All unrelated `LoopInfo`
+  fields remain unchanged. A client after replacement obtains the existing pending identity, not a newly minted one.
+- A queued decision for a noncurrent gate is acknowledged as an observable no-op with no business publication or
+  durable authority mutation. Source ACK and decision publication do not prove that the decision was applied.
+  Actual execution provenance continues to identify the decision that was used.
+
+Known adopter: SemTeams at `ce22c961d30014c463a09f8f8a2a90044ee1a1cf`,
+`ui/src/lib/services/agentApi.ts:383–417` (`submitApproval`). Its owner must retain the observed prompt identity and
+send it with the decision. The SemTeams publication observer is not an application receipt; this change does not
+make its observation of `ApprovalResponse` proof that the loop resumed. SemStreams makes no edits in sister repos.
+
+Verify a valid approval after restart, refusal of an older prompt while a later gate is open, and replay of an
+already handled decision without reopening the gate or changing its recorded outcome. Approval waits remain
+supported; normal multi-turn chat is unaffected. See [Approval flow](../concepts/17-approval-flow.md).
+
+## Independent chat turns and the AutoContinue default (#1146)
+
+**Default change:** `auto_continue` now defaults to false in code and schema. If you omit it, a normal submission
+without `reply_to` starts a new execution even when another loop is active. Commands needing a loop now require its
+explicit ID, for example `/cancel <loop_id>`. Set `auto_continue: true` explicitly only if you want the existing
+implicit attachment and command targeting behavior. Explicit `reply_to` remains available for admitted live loops;
+it does not reopen completed executions.
+
+**Chat adapter change:** UserMessage, HTTPMessageRequest, and TaskMessage accept optional `prior_messages` using
+the existing ChatMessage shape. For each follow-up, send prior user text and the actual assistant text you displayed
+from `UserResponse.Content`; send only the new turn in `content` (or TaskMessage `prompt`). Do not copy raw provider
+messages, tool exchanges, reasoning, system prompts, or budget instructions. Dispatch can display Decision.Reason
+instead of the raw provider Result, so the delivered response is the correct transcript source.
+
+```json
+{
+  "user_id": "alice",
+  "content": "Which color did I choose?",
+  "prior_messages": [
+    {"role": "user", "content": "I choose blue."},
+    {"role": "assistant", "content": "Blue it is."}
+  ]
+}
+```
+
+Only nonempty user/assistant text is accepted. Missing, null, and empty history mean the same thing: a context-free
+turn. Nonempty history on a command or an admitted attachment is an error, not ignored input. A redelivered input
+must retain the same ordered history; changing it under the same source identity is a correlation conflict.
+
+The adapter retains its displayed transcript, including across its own restart. SemStreams persists the supplied
+history with the task and reconstructs that execution after component replacement; no earlier execution or hosted
+conversation store is required. Existing transport/provider limits apply. Adopters need no new bucket, subject,
+request identity, or retention calculation. If they do nothing, submissions remain valid but have no automatic
+conversation recall, and implicit command targets are no longer selected under defaults.
+
+Downstream owners update and test their own adapters. Verify two completed turns separated by component replacement,
+with the second provider request containing the displayed exchange once and a fresh execution budget. This migration
+does not ask downstreams to preserve beta state or introduce a compatibility layer.
+
+## Dispatch reads loop authority instead of tracking notifications (#1146)
+
+Dispatch is now an edge gateway: it publishes admitted work, reads loop state, and bridges terminal outcomes to
+user responses. Agentic-loop owns creation, approval waits, intermediate transitions, and completion. Dispatch no
+longer consumes `agent.created` or `agent.approval_pending` to maintain a second process-local model of those facts.
+The loop still publishes both events for external subscribers; their payload contracts are unchanged by this cleanup.
+
+Explicit LoopID operations read the exact durable loop record. `/activity`, `/loops`, `/debug/state`, and AutoContinue
+share the existing read-only view over `AGENT_LOOPS`. After replacement, that view hydrates current state; it does
+not depend on already-acknowledged notifications being delivered again. There is no new bucket or recovery service.
+
+### Go callers and component configuration
+
+- `LoopTracker`, its constructors and methods, and `Component.LoopTracker()` are removed without an alias.
+  Custom commands replace `CommandContext.LoopTracker` with `LookupLoopOwner(ctx, loopID)`, returning only LoopID
+  and UserID. Invalid IDs, confirmed absence, missing owner, invalid records, and unavailable storage remain distinct
+  classified errors. Do not turn an unavailable lookup into permission or absence.
+- Remove `agent.created` and `agent.approval_pending` from dispatch input-port overrides. Retain its declared
+  `agent_loops` KV read port and the admitted user-message and terminal inputs. Do not remove the loop outputs or
+  unrelated external subscribers.
+- `graphview.View.Restart()` is removed. Its lifecycle owner stops the failed view, creates a replacement, and
+  starts it with the active lifecycle context. Shutdown must join that work; do not retain a context or provider
+  closure to recreate the old method. Dispatch handles its own shared-view lifecycle internally.
+
+Known adopter impact is the SemTeams `implementspec` custom command's tracker-based ownership check in
+`cmd/semteams/commands/implementspec/command.go` (`authorizeSelectedRun`, verified at `ce22c961d3`). Its owner
+must pass the operation's `context.Context` into that helper, migrate the check to `LookupLoopOwner(ctx, runID)`, and test
+classified failures. SemTeams clients still using the deleted
+`POST /loops/{id}/signal` endpoint must use the admitted cancellation path documented above; this change does not
+restore a generic signal endpoint. SemStreams agents do not modify sister repositories.
+
+### HTTP clients, AutoContinue, and dashboards
+
+`LoopInfo` remains the immutable `/loops` and `/debug/state` response shape, including the separately documented
+pending `execution_id` addition. No mutable entity or tracker is exposed. The former process-only
+`context_request_id` remains optional and empty; it is not reconstructed from an event that no longer drives state.
+`/loops` and `/debug/state` return 503 for unavailable, bootstrapping, or relevant-poisoned views, not a false empty
+list. AutoContinue also refuses unavailable truth with 503 instead of starting new work. `/activity` preserves its
+existing SSE error-event contract. Debug output exposes `loop_projection_ready` and `loop_projection_poisoned` so
+unavailable truth is distinguishable from zero loops.
+
+AutoContinue remains opt-in. It requires exact `(UserID, ChannelType, ChannelID)` agreement with one nonterminal
+record. Partial routes do not match; multiple matches refuse as ambiguous. Between a task's PubAck and its first
+durable loop record, another route-only request may create a second loop. If continuity matters, echo the returned
+LoopID. No route claim or prediction setting is added. Independent chat turns with `prior_messages` are unchanged.
+
+Remove `semstreams_router_active_loops` from dashboards and alerts; no replacement authoritative Prometheus count
+is introduced. Use `/loops` only while its view is ready. The agentic-loop execution gauge remains process-local
+telemetry, not a count of every retained loop.
+
+### Terminal response boundary
+
+A terminal user response requires both the retained complete/failed source and the exact routing records it names.
+Its recovery window is the intersection of those retentions, not either configured horizon alone. Transient reads
+retry; confirmed absence of the terminal's own loop record reports `terminal_route_unavailable` and remains
+retryable instead of fabricating a route from memory. The reason reports absence, not its historical cause.
+Ancestor-route lookup retains its existing fallback and `origin_unresolvable` report. A validated system-lane
+outcome with no user route settles without `user.response`.
+Required response publication still receives PubAck before source ACK, and remains at-least-once.
+
+Verify pending approval and explicit continuation after dispatch replacement, unavailable-view 503 responses,
+exact-route AutoContinue and its birth gap, and terminal routing after replacement. No beta-state preservation,
+tracker hydration, or compatibility layer is required.

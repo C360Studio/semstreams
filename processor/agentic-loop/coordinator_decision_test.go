@@ -19,6 +19,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,6 +47,7 @@ func decodeCompletionEvent(t *testing.T, msgs []agenticloop.PublishedMessage) *a
 func startDecisionTestLoop(t *testing.T, handler *agenticloop.MessageHandler) string {
 	t.Helper()
 	taskResult, err := handler.HandleTask(context.Background(), agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-decision",
 		Role:   "coordinator",
 		Model:  "qwen-32b",

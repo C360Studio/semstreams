@@ -91,7 +91,10 @@ func TestLifecycleCausalStartStopRollbackRetention(t *testing.T) {
 		t.Fatal(e)
 	}
 	c := d.(*Component)
-	c.initializeKVBucketsInput = func(context.Context) error { return nil }
+	c.initializeKVBucketsInput = func(context.Context) error {
+		c.loopsBucket = emptyApprovalDeadlineBucket()
+		return nil
+	}
 	c.waitForStreamInput = func(context.Context, string) error { return nil }
 	tracked := &causalHandle{closed: make(chan struct{}), closedCalls: make(chan struct{}, 3)}
 	var consumeCalls atomic.Int32

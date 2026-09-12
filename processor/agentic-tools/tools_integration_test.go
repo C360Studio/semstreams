@@ -65,6 +65,15 @@ func getSharedNATSClient(t *testing.T) *natsclient.Client {
 // publishToolCallMessage publishes a ToolCall wrapped in a BaseMessage envelope
 func publishToolCallMessage(t *testing.T, natsClient *natsclient.Client, subject string, call *agentic.ToolCall) {
 	t.Helper()
+	if call.RequestID == "" {
+		call.RequestID = "integration-request-" + call.ID
+	}
+	if call.ExecutionID == "" {
+		call.ExecutionID = "integration-execution-" + call.ID
+	}
+	if call.CallOrdinal == 0 {
+		call.CallOrdinal = 1
+	}
 	baseMsg := message.NewBaseMessage(call.Schema(), call, "integration-test")
 	msgData, err := json.Marshal(baseMsg)
 	require.NoError(t, err, "Failed to marshal BaseMessage")

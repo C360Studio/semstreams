@@ -31,7 +31,6 @@ func TestRouterMetrics_Creation(t *testing.T) {
 	assert.NotNil(t, metrics.messagesReceived, "Expected messagesReceived metric to be created")
 	assert.NotNil(t, metrics.commandsExecuted, "Expected commandsExecuted metric to be created")
 	assert.NotNil(t, metrics.tasksSubmitted, "Expected tasksSubmitted metric to be created")
-	assert.NotNil(t, metrics.activeLoops, "Expected activeLoops metric to be created")
 	assert.NotNil(t, metrics.routingDuration, "Expected routingDuration metric to be created")
 	assert.NotNil(t, metrics.completionsReceived, "Expected completionsReceived metric to be created")
 
@@ -163,59 +162,15 @@ func TestRouterMetrics_RecordTaskSubmitted(t *testing.T) {
 	assert.Equal(t, initial+3, after, "Counter should increment by 3")
 }
 
-// ====================================================================================
-// Gauge Tests - Active Loops
-// ====================================================================================
-
-func TestRouterMetrics_RecordLoopStarted(t *testing.T) {
+// TestRouterMetricsRetiresActiveLoopGauge preserves the registration boundary.
+func TestRouterMetricsRetiresActiveLoopGauge(t *testing.T) {
 	registry := metric.NewMetricsRegistry()
-	metrics := getMetrics(registry)
-
-	initial := getGaugeValue(t, metrics.activeLoops)
-
-	// Start loops
-	metrics.recordLoopStarted()
-	metrics.recordLoopStarted()
-
-	after := getGaugeValue(t, metrics.activeLoops)
-	assert.Equal(t, initial+2, after, "Gauge should increase by 2")
-}
-
-func TestRouterMetrics_RecordLoopEnded(t *testing.T) {
-	registry := metric.NewMetricsRegistry()
-	metrics := getMetrics(registry)
-
-	// Start some loops first
-	metrics.recordLoopStarted()
-	metrics.recordLoopStarted()
-	metrics.recordLoopStarted()
-
-	initial := getGaugeValue(t, metrics.activeLoops)
-
-	// End a loop
-	metrics.recordLoopEnded()
-
-	after := getGaugeValue(t, metrics.activeLoops)
-	assert.Equal(t, initial-1, after, "Gauge should decrease by 1")
-}
-
-func TestRouterMetrics_ActiveLoops_StartAndEnd(t *testing.T) {
-	registry := metric.NewMetricsRegistry()
-	metrics := getMetrics(registry)
-
-	initial := getGaugeValue(t, metrics.activeLoops)
-
-	// Simulate loop lifecycle
-	metrics.recordLoopStarted()
-	metrics.recordLoopStarted()
-	metrics.recordLoopStarted()
-	afterStart := getGaugeValue(t, metrics.activeLoops)
-	assert.Equal(t, initial+3, afterStart, "Should increase by 3")
-
-	metrics.recordLoopEnded()
-	metrics.recordLoopEnded()
-	afterEnd := getGaugeValue(t, metrics.activeLoops)
-	assert.Equal(t, initial+1, afterEnd, "Should have 1 active after 3 starts and 2 ends")
+	getMetrics(registry)
+	families, err := registry.PrometheusRegistry().Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		require.NotEqual(t, "semstreams_router_active_loops", family.GetName())
+	}
 }
 
 // ====================================================================================
@@ -333,16 +288,7 @@ func TestRouterMetrics_ConcurrentUpdates(t *testing.T) {
 		done <- struct{}{}
 	}()
 
-	go func() {
-		for i := 0; i < 50; i++ {
-			metrics.recordLoopStarted()
-			time.Sleep(time.Microsecond)
-		}
-		done <- struct{}{}
-	}()
-
 	// Wait for all goroutines
-	<-done
 	<-done
 	<-done
 
@@ -353,8 +299,6 @@ func TestRouterMetrics_ConcurrentUpdates(t *testing.T) {
 	tasks := getSimpleCounterValue(t, metrics.tasksSubmitted)
 	assert.GreaterOrEqual(t, tasks, float64(100), "Should have at least 100 tasks")
 
-	active := getGaugeValue(t, metrics.activeLoops)
-	assert.GreaterOrEqual(t, active, float64(50), "Should have at least 50 active loops")
 }
 
 // ====================================================================================

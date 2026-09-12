@@ -118,9 +118,12 @@ func startToolsWithEmitLesson(t *testing.T, natsClient *natsclient.Client) {
 
 func validLessonToolCall(id string) *agentic.ToolCall {
 	return &agentic.ToolCall{
-		ID:     id,
-		Name:   agentictools.EmitLessonToolName,
-		LoopID: "loop-ops-int",
+		ID:          id,
+		Name:        agentictools.EmitLessonToolName,
+		LoopID:      "loop-ops-int",
+		RequestID:   "integration-request-" + id,
+		ExecutionID: "integration-execution-" + id,
+		CallOrdinal: 1,
 		Metadata: map[string]any{
 			"agent.role": "ops",
 		},

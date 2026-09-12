@@ -63,7 +63,7 @@ func TestNonUUIDLoopIDIsTerminatedAtIntake(t *testing.T) {
 	beforeCreated := testutil.ToFloat64(comp.metrics.loopsCreated)
 
 	msg := &inputAckMsg{data: data}
-	err = consumeLongRunningInput(context.Background(), msg, time.Hour,
+	err = consumeTypedLongRunningInput(context.Background(), msg, time.Hour,
 		comp.taskInputHandler(time.Minute))
 	if err == nil || !errs.IsInvalid(err) {
 		t.Fatalf("consume error = %v, want typed invalid rejection", err)
@@ -89,6 +89,70 @@ func TestNonUUIDLoopIDIsTerminatedAtIntake(t *testing.T) {
 	}
 	if _, active := comp.handler.loopManager.HasActiveLoopForTask(task.TaskID); active {
 		t.Fatal("refused intake created loop business state")
+	}
+}
+
+// spec: entity-id-contract / A loop instance token is minted at its framework birth seam
+// spec: agentic-loop / Loop task, request, and tool work use only required correlation
+func TestMissingLoopIDIsTerminatedAtIntakeBeforeState(t *testing.T) {
+	configJSON, err := json.Marshal(DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	discoverable, err := NewComponent(configJSON, component.Dependencies{
+		Platform:        component.PlatformMeta{Org: "acme", Platform: "ops"},
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	comp := discoverable.(*Component)
+
+	task := validLineageTask("task-missing-loop")
+	task.LoopID = comp.handler.loopManager.GenerateLoopID()
+	data, err := json.Marshal(message.NewBaseMessage(task.Schema(), &task, "test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(data, &wire); err != nil {
+		t.Fatal(err)
+	}
+	payload, ok := wire["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("envelope payload shape = %T, want object", wire["payload"])
+	}
+	delete(payload, "loop_id")
+	data, err = json.Marshal(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	beforeRejected := testutil.ToFloat64(comp.metrics.taskIntakeRejections.WithLabelValues(
+		taskIntakeRejectionLane, taskIntakeRejectionReason))
+	beforeCreated := testutil.ToFloat64(comp.metrics.loopsCreated)
+	msg := &inputAckMsg{data: data}
+	err = consumeTypedLongRunningInput(context.Background(), msg, time.Hour,
+		comp.taskInputHandler(time.Minute))
+	if err == nil || !errs.IsInvalid(err) {
+		t.Fatalf("consume error = %v, want typed invalid rejection", err)
+	}
+	if !msg.terminated.Load() || msg.acked.Load() || msg.naked.Load() {
+		t.Fatalf("delivery ack state: term=%v ack=%v nak=%v, want Term only",
+			msg.terminated.Load(), msg.acked.Load(), msg.naked.Load())
+	}
+	if delta := testutil.ToFloat64(comp.metrics.taskIntakeRejections.WithLabelValues(
+		taskIntakeRejectionLane, taskIntakeRejectionReason)) - beforeRejected; delta != 1 {
+		t.Fatalf("intake-rejection metric delta = %v, want exactly 1", delta)
+	}
+	if delta := testutil.ToFloat64(comp.metrics.loopsCreated) - beforeCreated; delta != 0 {
+		t.Fatalf("loops-created metric delta = %v, want 0", delta)
+	}
+	if _, active := comp.handler.loopManager.HasActiveLoopForTask(task.TaskID); active {
+		t.Fatal("missing loop identity created loop business state")
+	}
+	if got := len(comp.handler.loopManager.loops); got != 0 {
+		t.Fatalf("registered loops = %d, want 0", got)
 	}
 }
 

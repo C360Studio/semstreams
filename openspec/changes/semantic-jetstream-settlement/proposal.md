@@ -46,13 +46,14 @@ The three current production caller files form a zero-growth branch-staging guar
 allowlist, compatibility promise, current capability, or merge gate.
 
 No binding migration is a mechanical nil-to-ACK/error-to-Retry conversion. Each ACK requires its accepted
-owner-specific durable definition of done. A fast lane does not gain raw settlement authority or an exported
-no-heartbeat workaround.
+owner-specific durable definition of done. No native message enters business work. The only non-heartbeat export is
+the separately reviewed stateless `SettleDelivery` transport interpreter; it owns no work, context, deadline,
+heartbeat, consumer handle, or lifecycle.
 
 ## Impact
 
-- Breaking pre-v1 API replacement: the default branch receives `ConsumeDeliveryWithHeartbeat` and removal of
-  `ConsumeWithHeartbeat` in one final PR.
+- Breaking pre-v1 API replacement: the default branch receives `ConsumeDeliveryWithHeartbeat`, `SettleDelivery`, and
+  removal of `ConsumeWithHeartbeat` in one final PR.
 - No accepted default-branch interval exposes both APIs.
 - #1146 and #1249 are separately claimed and reviewed on the non-default #759 integration branch.
 - Final PR #1156 carries default-branch closing authority for #759, #1146, #1249, and, only after complete proof,
@@ -68,7 +69,8 @@ no-heartbeat workaround.
 - No merge of PR #1156 while exported `ConsumeWithHeartbeat` or any production caller remains.
 - No API allowlist or compatibility status derived from the branch-staging zero-growth guard.
 - No mechanical ACK conversion.
-- No raw-message settlement escape or unreviewed exported no-heartbeat API.
+- No native message enters business work and no work-owning no-heartbeat policy, owner, or lifecycle API is added.
+  #1146 may expose only the separately reviewed stateless `SettleDelivery` transport interpreter.
 - No child-PR merge directly to `main` and no intermediate accepted dual-API state.
 - No shared admission gate, handle owner, supervisor, rule, workflow, state-machine runtime, checkpoint, outbox,
   CQRS layer, or event-sourced loop.

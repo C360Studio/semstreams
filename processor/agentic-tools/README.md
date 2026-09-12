@@ -25,12 +25,13 @@ registration, allowlist filtering, per-execution timeouts, and durable completio
 - **Tool Registration**: Register custom tool executors at runtime
 - **Allowlist Filtering**: Restrict which tools can execute
 - **Timeout Handling**: Per-execution timeout with context cancellation
-- **Correlated Results**: Every wire response carries its call ID
+- **Correlated Results**: Every wire response carries request, execution, and provider-call identity
 - **Durable Completion**: Completed calls replay their authoritative result without re-running the executor
 
-An initial `approval_required` response is a correlated nonterminal pause. It creates no COMPLETED outcome and leaves
-the same CallID eligible for approved re-dispatch. A logical call that reaches execution or terminal policy rejection
-receives a correlated durable terminal result; an approved re-dispatch enters that guarantee at the same boundary.
+An initial `approval_required` response is correlated nonterminal coordination. It creates no COMPLETED outcome and
+leaves the same execution identity eligible for approved re-dispatch. A logical call that reaches execution or
+terminal policy rejection receives a correlated durable terminal result; an approved re-dispatch enters that
+guarantee at the same boundary.
 
 The wire contract promises neither serialized execution nor execution overlap. The current implementation processes
 the wire path through one native callback and joins outcome persistence, result publication, and delivery settlement
@@ -102,14 +103,17 @@ type ToolExecutor interface {
 }
 ```
 
-An effectful executor must use `ToolCall.ID` as its downstream idempotency key. The framework stores only completed
-outcomes: if a process or storage write fails after an external effect but before completion is durably recorded, the
-same call can be delivered to `Execute` again. Executors do not need to know the outcome bucket, key, result subject,
-message ID, or payload ceiling; agentic-tools owns those mechanics and observes real transport outcomes.
+An effectful executor must use `ToolCall.ExecutionID` as the framework identity supplied to any downstream
+idempotency contract. The provider's `ToolCall.ID` is request-scoped conversation data and may repeat under another
+request. The framework stores only completed outcomes: if a process or storage write fails after an external effect
+but before completion is durably recorded, the same execution can be delivered to `Execute` again. Executors do not
+need to know the outcome bucket, key, result subject, message ID, or payload ceiling; agentic-tools owns those
+mechanics and observes real transport outcomes.
 
 For a completed call, agentic-tools persists the full `ToolResult` before publishing it and acknowledging the request.
 A failed result publication is retried by request redelivery, which republishes the stored result without invoking the
-executor. Reusing one call ID for different arguments or metadata is a permanent collision and is terminated.
+executor. Reusing one execution ID for different canonical call content is a permanent collision and is terminated;
+reusing a provider CallID under a different RequestID produces a different execution ID.
 
 The tool registry follows ADR-029 Pattern A (boot-registry): the embedding binary constructs an `*ExecutorRegistry`, registers builtins and any custom tools at startup, then plumbs the registry through `component.Dependencies.ToolRegistry`. There is no package-level singleton — every process owns its registry explicitly. This mirrors how `component.Registry` is wired in `cmd/semstreams/main.go`.
 
@@ -273,6 +277,9 @@ Blocked tools return an error result (not a Go error):
 ```json
 {
   "id": "call_001",
+  "request_id": "loop-id:req:request-uuid",
+  "execution_id": "tool-exec-v1-identity-digest",
+  "call_ordinal": 1,
   "name": "read_file",
   "arguments": {
     "path": "/etc/hosts"
@@ -285,6 +292,9 @@ Blocked tools return an error result (not a Go error):
 ```json
 {
   "call_id": "call_001",
+  "request_id": "loop-id:req:request-uuid",
+  "execution_id": "tool-exec-v1-identity-digest",
+  "call_ordinal": 1,
   "content": "127.0.0.1 localhost\n...",
   "error": "",
   "metadata": {}

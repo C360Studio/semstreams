@@ -34,6 +34,19 @@ what the client observed.
 owns. For example, the tools component is done only after the tool outcome is durable and the result publication
 receives its PubAck. A different component can own a different durable consequence.
 
+Conditional approval has a deliberately narrower definition of done: “apply this decision if its execution is
+still awaiting approval.” A validated exact current loop record can show that no matching gate remains. In that
+case the loop logs and counts an inapplicable decision, changes no authority, publishes no business work, and ACKs.
+That ACK does not claim that this decision was the historical winner. Missing process memory or a failed authority
+read cannot establish this outcome. This is an explicit approval contract, not permission for arbitrary log-and-ACK
+paths or a relaxation of ordinary final tool/model applied-result checks.
+
+The earlier `approval_required` tool status has its own narrow rule: validated durable evidence that the same
+execution advanced beyond its approval phase makes that old status superseded. The owner checks before changing
+state, including on an already-loaded loop, and ACKs a proven superseded status without reopening the gate or
+publishing work. It adds no recovery store and does not treat arbitrary unequal final results as duplicates.
+See [Approval flow](17-approval-flow.md).
+
 ## Happy path
 
 ```text
@@ -73,6 +86,17 @@ process stops       ── JetStream ──→  redeliver unsettled request
 The replacement does not need a supervisor record saying which step ran. It reconciles against the durable authority
 the component already owns. This is the streams-first restart pattern: settle only after durable done, let unsettled
 work redeliver, and make replay consult the durable consequence before repeating an effect.
+
+Tool execution and consuming its result are separate pieces of work. For an ordinary result that advances the loop
+to another model request, the loop rebuilds its current batch from its existing loop record and retained request and
+response. It keeps the collected results durable until the next request is published. If that publication fails,
+the result stays unsettled and redelivery resumes the same transition without spending another iteration. Rebuilding
+loop memory does not call the tool again; the tools component remains the owner of tool-effect recovery.
+
+If a tool asks to finish the loop, or completing its batch reaches the iteration limit, the final loop record retains
+the result as well as the terminal outcome.
+Redelivery checks the exact tool execution and its recorded outcome before acknowledging it as already handled.
+A finished loop alone is not proof that a particular result was consumed; missing evidence leaves the work unsettled.
 
 If the component cannot determine whether an external effect committed, it must not hide that ambiguity behind ACK
 or unlimited Retry. It returns Quarantine, leaves the message without a terminal method, and asks the existing exact

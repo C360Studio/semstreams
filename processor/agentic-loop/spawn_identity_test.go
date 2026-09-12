@@ -7,6 +7,7 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
+	"github.com/google/uuid"
 )
 
 // WriteSpawnIdentity births the loop-execution entity through canonical create
@@ -49,6 +50,7 @@ func loopIDFromEntityID(entityID, org, platform string) string {
 func TestBuildSpawnIdentityTriples_RequiredFields(t *testing.T) {
 	loopEntityID := "acme.ops.agentic-loop.agent.execution.spawn-001"
 	task := &agentic.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-spawn-001",
 		Role:   "researcher",
 		Prompt: "Investigate the deployment failure",
@@ -95,6 +97,7 @@ func TestBuildSpawnIdentityTriples_RequiredFields(t *testing.T) {
 func TestBuildSpawnIdentityTriples_StampsParent(t *testing.T) {
 	loopEntityID := "acme.ops.agentic-loop.agent.execution.child-001"
 	task := &agentic.TaskMessage{
+		LoopID:       uuid.NewString(),
 		TaskID:       "task-child-001",
 		Role:         "gather",
 		ParentLoopID: "parent-loop-uuid",
@@ -123,6 +126,7 @@ func TestBuildSpawnIdentityTriples_StampsParent(t *testing.T) {
 func TestBuildSpawnIdentityTriples_OptionalFieldsPresentWhenSet(t *testing.T) {
 	loopEntityID := "acme.ops.agentic-loop.agent.execution.spawn-full"
 	task := &agentic.TaskMessage{
+		LoopID:       uuid.NewString(),
 		TaskID:       "task-spawn-full",
 		Role:         "architect",
 		ParentLoopID: "parent-uuid",
@@ -161,6 +165,7 @@ func TestBuildSpawnIdentityTriples_OptionalFieldsPresentWhenSet(t *testing.T) {
 func TestBuildSpawnIdentityTriples_OptionalFieldsOmittedWhenEmpty(t *testing.T) {
 	loopEntityID := "acme.ops.agentic-loop.agent.execution.spawn-minimal"
 	task := &agentic.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-spawn-minimal",
 		Role:   "researcher",
 		// ParentLoopID, WorkflowSlug, WorkflowStep, UserID, Prompt all empty
@@ -201,6 +206,7 @@ func TestBuildSpawnIdentityTriples_LongPromptTruncated(t *testing.T) {
 	}
 
 	task := &agentic.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-long",
 		Role:   "researcher",
 		Prompt: longPrompt,
@@ -225,6 +231,7 @@ func TestBuildSpawnIdentityTriples_LongPromptTruncated(t *testing.T) {
 // this test.
 func TestBuildSpawnIdentityTriples_SharedTimestamp(t *testing.T) {
 	task := &agentic.TaskMessage{
+		LoopID:       uuid.NewString(),
 		TaskID:       "task-shared-ts",
 		Role:         "researcher",
 		ParentLoopID: "parent-id",
@@ -253,6 +260,7 @@ func TestBuildSpawnIdentityTriples_SharedTimestamp(t *testing.T) {
 // a vocab-defined predicate gets added but the entity doesn't emit it.
 func TestBuildSpawnIdentityTriples_TripleCountWithFullTask(t *testing.T) {
 	task := &agentic.TaskMessage{
+		LoopID:       uuid.NewString(),
 		TaskID:       "task-count",
 		Role:         "researcher",
 		ParentLoopID: "parent-id",
@@ -277,7 +285,9 @@ func TestBuildSpawnIdentityTriples_TripleCountWithFullTask(t *testing.T) {
 
 // Sanity check: now-vs-past timestamps are sensible (not zero).
 func TestBuildSpawnIdentityTriples_TimestampPopulated(t *testing.T) {
-	task := &agentic.TaskMessage{TaskID: "task-ts", Role: "researcher"}
+	task := &agentic.TaskMessage{
+		LoopID: uuid.NewString(),
+		TaskID: "task-ts", Role: "researcher"}
 	triples := buildSpawnTriples("acme.ops.agentic-loop.agent.execution.spawn-ts", task, "acme", "ops")
 
 	if len(triples) == 0 {
@@ -298,6 +308,7 @@ func TestBuildSpawnIdentityTriples_TimestampPopulated(t *testing.T) {
 func TestBuildSpawnIdentityTriples_StampsRunID(t *testing.T) {
 	loopEntityID := "acme.ops.agentic-loop.agent.execution.child-run-001"
 	task := &agentic.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-run-001",
 		Role:   "researcher",
 		RunID:  "root-loop-uuid",
@@ -338,6 +349,7 @@ func TestBuildSpawnIdentityTriples_StampsRunID(t *testing.T) {
 func TestBuildSpawnIdentityTriples_OmitsRunIDWhenEmpty(t *testing.T) {
 	loopEntityID := "acme.ops.agentic-loop.agent.execution.solo-loop"
 	task := &agentic.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-solo",
 		Role:   "researcher",
 		// RunID empty
@@ -361,6 +373,7 @@ func TestBuildSpawnIdentityTriples_OmitsRunIDWhenEmpty(t *testing.T) {
 func TestBuildSpawnIdentityTriples_RunIDIsNotEntityID(t *testing.T) {
 	loopEntityID := "acme.ops.agentic-loop.agent.execution.child-run-002"
 	task := &agentic.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-run-002",
 		Role:   "coordinator",
 		RunID:  "bare-run-uuid",
@@ -395,6 +408,7 @@ func TestBuildSpawnIdentityTriples_RunIDIsNotEntityID(t *testing.T) {
 func TestBuildSpawnIdentityTriples_StampsReplyTo(t *testing.T) {
 	loopEntityID := "acme.ops.agentic-loop.agent.execution.reply-001"
 	task := &agentic.TaskMessage{
+		LoopID:    uuid.NewString(),
 		TaskID:    "task-reply-001",
 		Role:      "coordinator",
 		InReplyTo: "asking-loop-uuid",
@@ -426,6 +440,7 @@ func TestBuildSpawnIdentityTriples_StampsReplyTo(t *testing.T) {
 func TestBuildSpawnIdentityTriples_OmitsReplyToWhenEmpty(t *testing.T) {
 	loopEntityID := "acme.ops.agentic-loop.agent.execution.non-reply"
 	task := &agentic.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-non-reply",
 		Role:   "researcher",
 		// InReplyTo empty
@@ -441,6 +456,7 @@ func TestBuildSpawnIdentityTriples_OmitsReplyToWhenEmpty(t *testing.T) {
 // test to include RunID — all triples in one batch share the same timestamp.
 func TestBuildSpawnIdentityTriples_SharedTimestamp_WithRunID(t *testing.T) {
 	task := &agentic.TaskMessage{
+		LoopID:       uuid.NewString(),
 		TaskID:       "task-shared-ts-run",
 		Role:         "researcher",
 		ParentLoopID: "parent-id",

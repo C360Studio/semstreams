@@ -2,12 +2,27 @@ package agenticdispatch
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go/jetstream"
 )
+
+func runDispatchDeliveryWork(
+	ctx context.Context,
+	data []byte,
+	work func(context.Context, []byte) (natsclient.DeliveryDecision, error),
+) (decision natsclient.DeliveryDecision, cause error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			decision = natsclient.DeliveryDecisionQuarantine
+			cause = fmt.Errorf("dispatch delivery work panicked: %v", recovered)
+		}
+	}()
+	return work(ctx, data)
+}
 
 type deliveryLaneAdmission struct {
 	mu      sync.Mutex

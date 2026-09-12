@@ -12,11 +12,14 @@ import (
 // loopMetrics holds Prometheus metrics for the agentic-loop component.
 type loopMetrics struct {
 	// Loop lifecycle
-	loopsCreated   prometheus.Counter
-	loopsCompleted prometheus.Counter
-	loopsFailed    *prometheus.CounterVec
-	loopsTimeout   prometheus.Counter
-	activeLoops    prometheus.Gauge
+	loopsCreated                   prometheus.Counter
+	loopsCompleted                 prometheus.Counter
+	loopsFailed                    *prometheus.CounterVec
+	loopsTimeout                   prometheus.Counter
+	approvalTimeoutPublishFailures prometheus.Counter
+	approvalDecisionsInapplicable  prometheus.Counter
+	approvalStatusesSuperseded     prometheus.Counter
+	activeLoops                    prometheus.Gauge
 
 	// Iterations
 	iterationsTotal   prometheus.Counter
@@ -32,10 +35,6 @@ type loopMetrics struct {
 	// Tool calls
 	toolCallsDispatched *prometheus.CounterVec
 	toolResultsReceived *prometheus.CounterVec
-	toolResultsDropped  *prometheus.CounterVec
-
-	// Model responses
-	modelResponsesDropped *prometheus.CounterVec
 
 	// Token usage per LLM request
 	requestTokensIn  prometheus.Histogram
@@ -52,6 +51,7 @@ type loopMetrics struct {
 
 	// Graph-write-before-publish ordering
 	graphWritePublishTimeouts *prometheus.CounterVec
+	graphEvidenceFailures     *prometheus.CounterVec
 	// Permanent decoded task-intake rejection. Labels are bounded enums only.
 	taskIntakeRejections *prometheus.CounterVec
 
@@ -102,6 +102,24 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Subsystem: "agentic_loop",
 				Name:      "loops_timeout_total",
 				Help:      "Total number of agentic loops that timed out",
+			}),
+			approvalTimeoutPublishFailures: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_loop",
+				Name:      "approval_timeout_publish_failures_total",
+				Help:      "Timeout decision publication attempts that returned an error; pending approval remains available for retry",
+			}),
+			approvalDecisionsInapplicable: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_loop",
+				Name:      "approval_decisions_inapplicable_total",
+				Help:      "Approval decisions observed as inapplicable because their execution gate is not current",
+			}),
+			approvalStatusesSuperseded: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_loop",
+				Name:      "approval_required_statuses_superseded_total",
+				Help:      "Approval-required tool statuses observed as superseded by the exact execution's later phase",
 			}),
 
 			activeLoops: prometheus.NewGauge(prometheus.GaugeOpts{
@@ -162,20 +180,6 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Help:      "Total tool results received by status",
 			}, []string{"status"}),
 
-			toolResultsDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
-				Namespace: "semstreams",
-				Subsystem: "agentic_loop",
-				Name:      "tool_results_dropped_total",
-				Help:      "Total tool results dropped at the wire because no loop mapping exists for the CallID. Sustained non-zero rate points at NATS redelivery or executor double-publish.",
-			}, []string{"reason"}),
-
-			modelResponsesDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
-				Namespace: "semstreams",
-				Subsystem: "agentic_loop",
-				Name:      "model_responses_dropped_total",
-				Help:      "Total model responses dropped at the wire because no loop maps to the RequestID. Expected after a loop settles and releases its per-loop state, or after a process replacement; a sustained rate against live loops points at NATS redelivery.",
-			}, []string{"reason"}),
-
 			requestTokensIn: prometheus.NewHistogram(prometheus.HistogramOpts{
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
@@ -232,8 +236,15 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "graph_write_publish_timeout_total",
-				Help:      "Total times the graph-write-before-publish budget expired before WriteLoopCompletion/WriteLoopFailure returned. The agent.complete.* event was published anyway (best-effort preserved), but the loop entity's graph triples may not yet be visible to subscribers walking ancestry. Sustained non-zero rate points at graph-gateway latency or NATS subscription propagation issues; a tightenable budget is at graphWritePublishBudget in component.go.",
+				Help:      "Total times the graph-write-before-publish budget expired. Completion and failure evidence is best-effort; synthetic decision evidence withholds terminal publication. Sustained non-zero rate points at graph-gateway latency or NATS subscription propagation issues; the budget is graphWritePublishBudget in component.go.",
 			}, []string{"state"}),
+
+			graphEvidenceFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_loop",
+				Name:      "graph_evidence_failures_total",
+				Help:      "Nonblocking completion and failure graph-evidence write failures by terminal state and bounded reason.",
+			}, []string{"state", "reason"}),
 
 			taskIntakeRejections: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Namespace: "semstreams",
@@ -265,7 +276,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "tool_call_governance_subscribe_before_publish_failures_total",
-				Help:      "Times a verdict arrived for a call_id that no longer had a waiter registered, signalling the subscribe-before-publish race regressing (ADR-039 race-fix option 3). Non-zero rate means investigate immediately — verdicts are being dropped silently.",
+				Help:      "Times a verdict arrived for an execution_id that no longer had a waiter registered, signalling the subscribe-before-publish race regressing (ADR-039 race-fix option 3). Non-zero rate means investigate immediately — verdicts are being dropped silently.",
 			}),
 
 			lessonInjection: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -282,6 +293,9 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = registry.RegisterCounter("agentic-loop", "loops_completed_total", metrics.loopsCompleted)
 			_ = registry.RegisterCounterVec("agentic-loop", "loops_failed_total", metrics.loopsFailed)
 			_ = registry.RegisterCounter("agentic-loop", "loops_timeout_total", metrics.loopsTimeout)
+			_ = registry.RegisterCounter("agentic-loop", "approval_timeout_publish_failures_total", metrics.approvalTimeoutPublishFailures)
+			_ = registry.RegisterCounter("agentic-loop", "approval_decisions_inapplicable_total", metrics.approvalDecisionsInapplicable)
+			_ = registry.RegisterCounter("agentic-loop", "approval_required_statuses_superseded_total", metrics.approvalStatusesSuperseded)
 			_ = registry.RegisterGauge("agentic-loop", "active_loops", metrics.activeLoops)
 			_ = registry.RegisterCounter("agentic-loop", "iterations_total", metrics.iterationsTotal)
 			_ = registry.RegisterHistogram("agentic-loop", "iterations_per_loop", metrics.iterationsPerLoop)
@@ -290,8 +304,6 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = registry.RegisterCounterVec("agentic-loop", "trajectory_audit_failures_total", metrics.trajectoryAuditFailures)
 			_ = registry.RegisterCounterVec("agentic-loop", "tool_calls_dispatched_total", metrics.toolCallsDispatched)
 			_ = registry.RegisterCounterVec("agentic-loop", "tool_results_received_total", metrics.toolResultsReceived)
-			_ = registry.RegisterCounterVec("agentic-loop", "tool_results_dropped_total", metrics.toolResultsDropped)
-			_ = registry.RegisterCounterVec("agentic-loop", "model_responses_dropped_total", metrics.modelResponsesDropped)
 			_ = registry.RegisterHistogram("agentic-loop", "request_tokens_in", metrics.requestTokensIn)
 			_ = registry.RegisterHistogram("agentic-loop", "request_tokens_out", metrics.requestTokensOut)
 			_ = registry.RegisterCounter("agentic-loop", "tool_results_truncated_total", metrics.toolResultsTruncated)
@@ -300,6 +312,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = registry.RegisterHistogram("agentic-loop", "context_compaction_tokens_saved", metrics.contextCompactionTokensSaved)
 			_ = registry.RegisterGauge("agentic-loop", "context_compacted_region_tokens", metrics.contextCompactedRegionTokens)
 			_ = registry.RegisterCounterVec("agentic-loop", "graph_write_publish_timeout_total", metrics.graphWritePublishTimeouts)
+			_ = registry.RegisterCounterVec("agentic-loop", "graph_evidence_failures_total", metrics.graphEvidenceFailures)
 			_ = registry.RegisterCounterVec("agentic-loop", "task_intake_rejections_total", metrics.taskIntakeRejections)
 			_ = registry.RegisterHistogramVec("agentic-loop", "tool_call_governance_verdict_duration_seconds", metrics.governanceVerdictDuration)
 			_ = registry.RegisterCounterVec("agentic-loop", "tool_call_governance_verdict_total", metrics.governanceVerdictTotal)
@@ -311,6 +324,9 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.loopsCompleted)
 			_ = prometheus.DefaultRegisterer.Register(metrics.loopsFailed)
 			_ = prometheus.DefaultRegisterer.Register(metrics.loopsTimeout)
+			_ = prometheus.DefaultRegisterer.Register(metrics.approvalTimeoutPublishFailures)
+			_ = prometheus.DefaultRegisterer.Register(metrics.approvalDecisionsInapplicable)
+			_ = prometheus.DefaultRegisterer.Register(metrics.approvalStatusesSuperseded)
 			_ = prometheus.DefaultRegisterer.Register(metrics.activeLoops)
 			_ = prometheus.DefaultRegisterer.Register(metrics.iterationsTotal)
 			_ = prometheus.DefaultRegisterer.Register(metrics.iterationsPerLoop)
@@ -319,8 +335,6 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.trajectoryAuditFailures)
 			_ = prometheus.DefaultRegisterer.Register(metrics.toolCallsDispatched)
 			_ = prometheus.DefaultRegisterer.Register(metrics.toolResultsReceived)
-			_ = prometheus.DefaultRegisterer.Register(metrics.toolResultsDropped)
-			_ = prometheus.DefaultRegisterer.Register(metrics.modelResponsesDropped)
 			_ = prometheus.DefaultRegisterer.Register(metrics.requestTokensIn)
 			_ = prometheus.DefaultRegisterer.Register(metrics.requestTokensOut)
 			_ = prometheus.DefaultRegisterer.Register(metrics.toolResultsTruncated)
@@ -367,7 +381,7 @@ func (m *loopMetrics) RecordGovernanceVerdict(decision, mode string, duration fl
 // RecordGovernanceVerdictMissingWaiter increments the
 // subscribe-before-publish-failures counter. Implements
 // DispatcherMetrics. Each non-zero increment signals a verdict
-// arrived for a call_id that no longer had a registered waiter —
+// arrived for an execution_id that no longer had a registered waiter —
 // either the race-fix regressed (verdict beat the pre-register) or a
 // verdict arrived after Propose's timeout already fired (benign in
 // audit mode, signal in enforce mode).
@@ -376,11 +390,14 @@ func (m *loopMetrics) RecordGovernanceVerdictMissingWaiter() {
 }
 
 // recordGraphWritePublishTimeout increments the counter when the
-// graph-write-before-publish budget expired before WriteLoopCompletion
-// or WriteLoopFailure returned. State is "complete" or "failure" to
-// match persistHandlerResult's terminal-state branches.
+// graph-write-before-publish budget expires. State identifies the
+// completion, failure, or settlement-required synthetic-decision branch.
 func (m *loopMetrics) recordGraphWritePublishTimeout(state string) {
 	m.graphWritePublishTimeouts.WithLabelValues(state).Inc()
+}
+
+func (m *loopMetrics) recordGraphEvidenceFailure(state, reason string) {
+	m.graphEvidenceFailures.WithLabelValues(state, reason).Inc()
 }
 
 func (m *loopMetrics) recordTaskIntakeRejection(lane, reason string) {
@@ -479,25 +496,6 @@ func (m *loopMetrics) recordToolResultReceived(hasError bool) {
 		status = "error"
 	}
 	m.toolResultsReceived.WithLabelValues(status).Inc()
-}
-
-// recordToolResultDropped records a tool result that arrived with no loop
-// mapping for its CallID. Reason "stale_callid" is the dominant case after
-// GetAndClearToolResults eviction — a re-delivered result for an already-
-// drained call. A sustained non-zero rate points at NATS redelivery or an
-// executor double-publishing.
-func (m *loopMetrics) recordToolResultDropped(reason string) {
-	m.toolResultsDropped.WithLabelValues(reason).Inc()
-}
-
-// recordModelResponseDropped records a model response that arrived with no loop
-// mapping for its RequestID. Reason "stale_request_id" is the settled-loop case:
-// terminal release takes the request routing with it, so a response that arrives
-// after the loop settled resolves nothing. The drop is deliberate and safe — the
-// loop's outcome is already recorded — and it is counted so that "safe" stays a
-// claim an operator can check rather than one only the code makes.
-func (m *loopMetrics) recordModelResponseDropped(reason string) {
-	m.modelResponsesDropped.WithLabelValues(reason).Inc()
 }
 
 // recordRequestTokens records prompt and completion token counts for an LLM request.

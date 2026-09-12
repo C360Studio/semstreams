@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
+	"github.com/google/uuid"
 )
 
 // testToolExecutor is a mock tool executor for testing tool injection
@@ -49,6 +51,7 @@ func TestHandleTask_CreatesLoop(t *testing.T) {
 	handler := agenticloop.NewMessageHandler(createTestConfig())
 
 	taskMsg := agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-001",
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -172,6 +175,7 @@ func TestHandleTask_MaxIterations_EffectiveBudget(t *testing.T) {
 
 			ctx := context.Background()
 			result, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+				LoopID:        uuid.NewString(),
 				TaskID:        "task-" + tt.name,
 				Role:          "general",
 				Model:         "qwen-32b",
@@ -206,6 +210,7 @@ func TestHandleModelResponse_MaxIterationsGuard_ReturnsTypedSentinel(t *testing.
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-cap",
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -288,6 +293,7 @@ func TestHandleTask_MultipleRoles(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			taskMsg := agenticloop.TaskMessage{
+				LoopID: uuid.NewString(),
 				TaskID: "task-" + tt.role,
 				Role:   tt.role,
 				Model:  tt.model,
@@ -317,6 +323,7 @@ func TestHandleModelResponse_ToolCall(t *testing.T) {
 	// Create a loop first
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-001",
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -391,6 +398,7 @@ func TestHandleModelResponse_Complete_General(t *testing.T) {
 	// Create a general role loop
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-001",
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -458,6 +466,7 @@ func TestHandleModelResponse_Complete_Architect(t *testing.T) {
 	// Create an architect role loop
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-001",
 		Role:   "architect",
 		Model:  "qwen-32b",
@@ -533,6 +542,7 @@ func TestHandleModelResponse_Error(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-001",
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -576,6 +586,7 @@ func TestHandleModelResponse_LengthTruncated(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-truncated",
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -654,6 +665,7 @@ func TestHandleToolResult_SingleTool(t *testing.T) {
 	// Create loop and trigger tool call
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-001",
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -680,15 +692,20 @@ func TestHandleToolResult_SingleTool(t *testing.T) {
 		},
 	}
 
-	_, err = handler.HandleModelResponse(ctx, loopID, toolResponse)
+	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, toolResponse)
 	if err != nil {
 		t.Fatalf("HandleModelResponse() error = %v", err)
 	}
+	dispatched := dispatchedToolCallFromResult(t, dispatchResult)
 
 	// Tool result
 	toolResult := agentic.ToolResult{
-		CallID:  "call-001",
-		Content: "Query result data",
+		CallID:      dispatched.ID,
+		Name:        dispatched.Name,
+		Content:     "Query result data",
+		RequestID:   dispatched.RequestID,
+		ExecutionID: dispatched.ExecutionID,
+		CallOrdinal: dispatched.CallOrdinal,
 	}
 
 	result, err := handler.HandleToolResult(ctx, loopID, toolResult)
@@ -755,6 +772,7 @@ func TestHandleToolResult_MultipleTool_SerialDispatch(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-001",
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -877,6 +895,7 @@ func TestHandleToolResult_WithError(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-001",
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -944,6 +963,7 @@ func TestHandleToolResult_ErrorCategoryFallsBackToUnknown(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-fallback",
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -1002,6 +1022,7 @@ func TestHandleToolResult_ErrorCategoryPreservesExecutorKind(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-preserve",
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -1046,6 +1067,7 @@ func TestHandleToolResult_StopLoop(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-001",
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -1069,16 +1091,21 @@ func TestHandleToolResult_StopLoop(t *testing.T) {
 		},
 	}
 
-	_, err = handler.HandleModelResponse(ctx, loopID, toolResponse)
+	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, toolResponse)
 	if err != nil {
 		t.Fatalf("HandleModelResponse() error = %v", err)
 	}
+	dispatched := dispatchedToolCallFromResult(t, dispatchResult)
 
 	// Tool result with StopLoop
 	toolResult := agentic.ToolResult{
-		CallID:   "call-001",
-		Content:  `{"dag": "quest-decomposition-result"}`,
-		StopLoop: true,
+		CallID:      dispatched.ID,
+		Name:        dispatched.Name,
+		Content:     `{"dag": "quest-decomposition-result"}`,
+		RequestID:   dispatched.RequestID,
+		ExecutionID: dispatched.ExecutionID,
+		CallOrdinal: dispatched.CallOrdinal,
+		StopLoop:    true,
 	}
 
 	result, err := handler.HandleToolResult(ctx, loopID, toolResult)
@@ -1157,6 +1184,7 @@ func TestHandleToolResult_StopLoopClearsQueue(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID:     uuid.NewString(),
 		TaskID:     "task-001",
 		Role:       "general",
 		Model:      "qwen-32b",
@@ -1240,6 +1268,7 @@ func TestHandleModelResponse_TerminalLoop(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-001",
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -1260,15 +1289,20 @@ func TestHandleModelResponse_TerminalLoop(t *testing.T) {
 			ToolCalls: []agentic.ToolCall{{ID: "call-001", Name: "submit_work"}},
 		},
 	}
-	_, err = handler.HandleModelResponse(ctx, loopID, toolResponse)
+	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, toolResponse)
 	if err != nil {
 		t.Fatalf("HandleModelResponse() error = %v", err)
 	}
+	dispatched := dispatchedToolCallFromResult(t, dispatchResult)
 
 	_, err = handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
-		CallID:   "call-001",
-		Content:  "done",
-		StopLoop: true,
+		CallID:      dispatched.ID,
+		Name:        dispatched.Name,
+		Content:     "done",
+		RequestID:   dispatched.RequestID,
+		ExecutionID: dispatched.ExecutionID,
+		CallOrdinal: dispatched.CallOrdinal,
+		StopLoop:    true,
 	})
 	if err != nil {
 		t.Fatalf("HandleToolResult(StopLoop) error = %v", err)
@@ -1328,6 +1362,7 @@ func TestHandleTask_IncludesBudgetMessage(t *testing.T) {
 
 	ctx := context.Background()
 	result, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-budget",
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -1397,6 +1432,7 @@ func TestMessageHandler_MaxIterationsGuard(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-001",
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -1504,6 +1540,7 @@ func TestHandleTask_PopulatesToolsInRequest(t *testing.T) {
 	handler.SetToolRegistry(newTestToolRegistry(t))
 
 	task := agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-tools",
 		Role:   "general",
 		Model:  "test-model",
@@ -1565,6 +1602,7 @@ func TestHandleToolResult_NextRequestHasTools(t *testing.T) {
 	// Create loop first
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-tools-2",
 		Role:   "general",
 		Model:  "test-model",
@@ -1588,15 +1626,20 @@ func TestHandleToolResult_NextRequestHasTools(t *testing.T) {
 		},
 	}
 
-	_, err = handler.HandleModelResponse(ctx, loopID, toolResponse)
+	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, toolResponse)
 	if err != nil {
 		t.Fatalf("HandleModelResponse() error = %v", err)
 	}
+	dispatched := dispatchedToolCallFromResult(t, dispatchResult)
 
 	// Complete the tool
 	toolResult := agentic.ToolResult{
-		CallID:  "call-001",
-		Content: "Tool result",
+		CallID:      dispatched.ID,
+		Name:        dispatched.Name,
+		Content:     "Tool result",
+		RequestID:   dispatched.RequestID,
+		ExecutionID: dispatched.ExecutionID,
+		CallOrdinal: dispatched.CallOrdinal,
 	}
 
 	result, err := handler.HandleToolResult(ctx, loopID, toolResult)
@@ -1651,6 +1694,7 @@ func TestHandleModelResponse_Complete_PopulatesTokenFields(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-tokens",
 		Role:   "general",
 		Model:  "test-model",
@@ -1712,6 +1756,7 @@ func TestHandleCompleteResponse_SyntheticDecide_OptInTextOnly(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-synth-textonly",
 		Role:   "researcher-research-gather",
 		Model:  "gemini-2.5-flash",
@@ -1765,6 +1810,7 @@ func TestHandleCompleteResponse_SyntheticDecide_DefaultOff(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-synth-default-off",
 		Role:   "general",
 		Model:  "test-model",
@@ -1810,6 +1856,7 @@ func TestHandleCompleteResponse_SyntheticDecide_DecideInToolsetTriggers(t *testi
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-decide-in-toolset",
 		Role:   "researcher-research-gather",
 		Model:  "gemini-2.5-flash",
@@ -1856,6 +1903,7 @@ func TestHandleCompleteResponse_SyntheticDecide_DecideNotInToolset_NoSynthesis(t
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-no-decide",
 		Role:   "submitter",
 		Model:  "test-model",
@@ -1900,6 +1948,7 @@ func TestHandleCompleteResponse_SyntheticDecide_ReasoningContentFallback(t *test
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-reasoning-fallback",
 		Role:   "researcher-research-gather",
 		Model:  "gemini-2.5-flash",
@@ -1958,6 +2007,7 @@ func TestHandleTask_PerTaskTools(t *testing.T) {
 	}
 
 	task := agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-per-task-tools",
 		Role:   "general",
 		Model:  "test-model",
@@ -2007,6 +2057,7 @@ func TestHandleTask_MetadataCachedAndPropagated(t *testing.T) {
 	handler := agenticloop.NewMessageHandler(createTestConfig())
 
 	task := agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-meta",
 		Role:   "general",
 		Model:  "test-model",
@@ -2073,6 +2124,7 @@ func TestHandleTask_PropagatesTimeoutToAgentRequest(t *testing.T) {
 	handler := agenticloop.NewMessageHandler(createTestConfig())
 
 	task := agenticloop.TaskMessage{
+		LoopID:  uuid.NewString(),
 		TaskID:  "task-timeout",
 		Role:    "general",
 		Model:   "test-model",
@@ -2128,6 +2180,7 @@ func TestHandleTask_PropagatesResponseFormatToAgentRequest(t *testing.T) {
 	})
 
 	task := agenticloop.TaskMessage{
+		LoopID:         uuid.NewString(),
 		TaskID:         "task-response-format",
 		Role:           "planner",
 		Model:          "test-model",
@@ -2178,6 +2231,7 @@ func TestHandleTask_NoResponseFormatPreservesNil(t *testing.T) {
 	handler := agenticloop.NewMessageHandler(createTestConfig())
 
 	task := agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-no-rf",
 		Role:   "general",
 		Model:  "test-model",
@@ -2222,6 +2276,7 @@ func TestHandleTask_DuplicateTaskID_DedupReturnsCreatedFalse(t *testing.T) {
 	handler := agenticloop.NewMessageHandler(createTestConfig())
 
 	task := agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-dedup-001",
 		Role:   "general",
 		Model:  "test-model",
@@ -2273,6 +2328,17 @@ func extractDispatchedToolCall(t *testing.T, data []byte) agentic.ToolCall {
 	return envelope.Payload
 }
 
+func dispatchedToolCallFromResult(t *testing.T, result agenticloop.HandlerResult) agentic.ToolCall {
+	t.Helper()
+	for _, published := range result.PublishedMessages {
+		if strings.HasPrefix(published.Subject, "tool.execute.") {
+			return extractDispatchedToolCall(t, published.Data)
+		}
+	}
+	t.Fatal("handler result did not publish tool.execute")
+	return agentic.ToolCall{}
+}
+
 // wirePrePopulatedTestKey stands in for any per-call key the
 // translation layer may write onto ToolCall.Metadata before the
 // loop's metadata-merge step runs. Pre-ADR-051 the canonical example
@@ -2305,6 +2371,7 @@ func TestPropagateMetadata_MergesWithWirePopulation(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-merge",
 		Role:   "general",
 		Model:  "test-model",
@@ -2388,6 +2455,7 @@ func TestPropagateMetadata_NoOverwriteOnConflict(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-conflict",
 		Role:   "general",
 		Model:  "test-model",
@@ -2449,6 +2517,7 @@ func TestEmptyNameToolCalls_Rejected(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-empty-name",
 		Role:   "general",
 		Model:  "test-model",
@@ -2502,6 +2571,7 @@ func TestEmptyNameToolCalls_AllEmpty(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-all-empty",
 		Role:   "general",
 		Model:  "test-model",
@@ -2563,6 +2633,7 @@ func TestHandleToolsComplete_FullConversationHistory(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-full-ctx",
 		Role:   "general",
 		Model:  "test-model",
@@ -2586,15 +2657,20 @@ func TestHandleToolsComplete_FullConversationHistory(t *testing.T) {
 		},
 	}
 
-	_, err = handler.HandleModelResponse(ctx, loopID, toolResponse)
+	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, toolResponse)
 	if err != nil {
 		t.Fatalf("HandleModelResponse() error = %v", err)
 	}
+	dispatched := dispatchedToolCallFromResult(t, dispatchResult)
 
 	// Tool result
 	result, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
-		CallID:  "call-ctx-1",
-		Content: `{"temp": 20}`,
+		CallID:      dispatched.ID,
+		Name:        dispatched.Name,
+		Content:     `{"temp": 20}`,
+		RequestID:   dispatched.RequestID,
+		ExecutionID: dispatched.ExecutionID,
+		CallOrdinal: dispatched.CallOrdinal,
 	})
 	if err != nil {
 		t.Fatalf("HandleToolResult() error = %v", err)
@@ -2679,6 +2755,7 @@ func TestHandleToolResult_PopulatesToolNameAndArguments(t *testing.T) {
 
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-tool-args",
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -2705,15 +2782,19 @@ func TestHandleToolResult_PopulatesToolNameAndArguments(t *testing.T) {
 		},
 	}
 
-	_, err = handler.HandleModelResponse(ctx, loopID, toolResponse)
+	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, toolResponse)
 	if err != nil {
 		t.Fatalf("HandleModelResponse() error = %v", err)
 	}
+	dispatched := dispatchedToolCallFromResult(t, dispatchResult)
 
 	// Tool result
 	result, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
-		CallID:  "call-args-001",
-		Content: "42 results",
+		CallID:      dispatched.ID,
+		Content:     "42 results",
+		RequestID:   dispatched.RequestID,
+		ExecutionID: dispatched.ExecutionID,
+		CallOrdinal: dispatched.CallOrdinal,
 	})
 	if err != nil {
 		t.Fatalf("HandleToolResult() error = %v", err)

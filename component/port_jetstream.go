@@ -34,11 +34,12 @@ type JetStreamPort struct {
 	// HeartbeatInterval is the cadence at which the consumer goroutine
 	// fires msg.InProgress() to reset the ack clock. Strings are parsed
 	// via time.ParseDuration ("60s", "90s"). Empty falls through to a
-	// per-component default. Should be sized comfortably below ack_wait
-	// (typical 1.5x margin) so a single missed heartbeat doesn't trigger
-	// redelivery. Honored by heartbeat-enabled typed consumers and by the
-	// explicitly held legacy model, loop, and AgentRun bindings; pure-ack
-	// consumers ignore it. New integrations use
+	// per-component default. Typed delivery owners require it to be at most
+	// half the shortest positive BackOff interval, or half the effective AckWait
+	// (an explicit positive value or the 30s server default) when BackOff is
+	// empty, so one missed heartbeat does not trigger redelivery. Honored by
+	// heartbeat-enabled typed consumers and by the explicitly held legacy
+	// AgentRun binding; pure-ack consumers ignore it. New integrations use
 	// natsclient.ConsumeDeliveryWithHeartbeat.
 	HeartbeatInterval string `json:"heartbeat_interval,omitempty"`
 	// MaxAckPending caps the number of delivered-but-unacked messages the

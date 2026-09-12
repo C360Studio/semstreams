@@ -135,18 +135,21 @@ func TestMessageLoggerShippedSubjectCensusArtifactIsCompleteAndExact(t *testing.
 	// through unchanged into Effective below. Delta/exact_collapses/added_kinds
 	// /overlaps are untouched — neither config held an agentic-loop or
 	// governance factory.
+	// gh#1146 retires dispatch's created/approval_pending tracker inputs in
+	// each of the nine affected configs: 18 effective-only JetStream rows and
+	// exact loop/dispatch collapses disappear; loop outputs retain every key.
 	require.Equal(t, subjectCensusCounts{Rows: 388, PerConfigExactKeys: 239, GlobalStrings: 50}, census.Raw)
-	require.Equal(t, subjectCensusCounts{Rows: 572, PerConfigExactKeys: 376, GlobalStrings: 66}, census.Effective)
-	require.Equal(t, subjectCensusCounts{Rows: 184, PerConfigExactKeys: 137, GlobalStrings: 16}, census.Delta)
+	require.Equal(t, subjectCensusCounts{Rows: 554, PerConfigExactKeys: 376, GlobalStrings: 66}, census.Effective)
+	require.Equal(t, subjectCensusCounts{Rows: 166, PerConfigExactKeys: 137, GlobalStrings: 16}, census.Delta)
 	require.Equal(t, census.Raw.Rows+census.Delta.Rows, census.Effective.Rows)
 	require.Equal(t, census.Raw.PerConfigExactKeys+census.Delta.PerConfigExactKeys, census.Effective.PerConfigExactKeys)
 	require.Equal(t, census.Raw.GlobalStrings+census.Delta.GlobalStrings, census.Effective.GlobalStrings)
 	require.Zero(t, census.Delta.Removals)
-	require.Equal(t, 47, census.ExactCollapses.Total)
+	require.Equal(t, 29, census.ExactCollapses.Total)
 	require.Equal(t, census.ExactCollapses.LoopDispatch+census.ExactCollapses.Governance, census.ExactCollapses.Total)
 	require.Equal(t, census.Raw.PerConfigExactKeys+census.Delta.Rows-census.ExactCollapses.Total,
 		census.Effective.PerConfigExactKeys)
-	require.Equal(t, 184, census.AddedKinds["jetstream_inputs"]+census.AddedKinds["jetstream_outputs"]+
+	require.Equal(t, 166, census.AddedKinds["jetstream_inputs"]+census.AddedKinds["jetstream_outputs"]+
 		census.AddedKinds["nats_inputs"]+census.AddedKinds["nats_outputs"]+census.AddedKinds["nats_request_inputs"])
 	require.Len(t, census.AffectedConfigs, 9)
 	for _, path := range census.AffectedConfigs {
@@ -168,7 +171,7 @@ func TestMessageLoggerShippedSubjectCensusArtifactIsCompleteAndExact(t *testing.
 	require.Equal(t, census.Effective, computed.Effective)
 	require.Equal(t, census.Delta, computed.Delta)
 	require.Equal(t, census.ExactCollapses, computed.ExactCollapses)
-	require.Equal(t, 47, computed.ExactCollapses.LoopDispatch)
+	require.Equal(t, 29, computed.ExactCollapses.LoopDispatch)
 	require.Zero(t, computed.ExactCollapses.Governance)
 	require.Equal(t, census.AddedKinds, computed.AddedKinds)
 	require.Equal(t, census.ContainmentOverlaps, computed.ContainmentOverlaps)

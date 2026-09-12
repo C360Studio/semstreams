@@ -8,17 +8,19 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
+	"github.com/google/uuid"
 )
 
 // gateCallWithMetadata drives a loop carrying task Metadata to
 // awaiting_approval on a tool call, so an approval-response test can prove what
 // the RE-DISPATCH (bare-ToolCall) path stamps. Mirrors gateLoopAtCall but seeds
 // TaskMessage.Metadata (cached at loop start) — the enforcement policy lives there.
-func gateCallWithMetadata(t *testing.T, handler *agenticloop.MessageHandler, callID, toolName string, args, meta map[string]any) string {
+func gateCallWithMetadata(t *testing.T, handler *agenticloop.MessageHandler, callID, toolName string, args, meta map[string]any) (string, string) {
 	t.Helper()
 	ctx := context.Background()
 
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID:   uuid.NewString(),
 		TaskID:   "task-" + callID,
 		Role:     "planner",
 		Model:    "qwen-32b",
@@ -30,7 +32,7 @@ func gateCallWithMetadata(t *testing.T, handler *agenticloop.MessageHandler, cal
 	}
 	loopID := taskResult.LoopID
 
-	if _, err = handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
 		RequestID: "req-" + callID,
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
@@ -39,14 +41,17 @@ func gateCallWithMetadata(t *testing.T, handler *agenticloop.MessageHandler, cal
 				{ID: callID, Name: toolName, Arguments: args},
 			},
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("HandleModelResponse: %v", err)
 	}
 
+	call := dispatchedToolCallFromResult(t, dispatchResult)
 	gateRes, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
-		CallID: callID,
-		Name:   toolName,
-		Error:  agentic.ApprovalRequiredPrefix + "needs human review",
+		CallID:    callID,
+		Name:      toolName,
+		Error:     agentic.ApprovalRequiredPrefix + "needs human review",
+		RequestID: call.RequestID, ExecutionID: call.ExecutionID, CallOrdinal: call.CallOrdinal,
 	})
 	if err != nil {
 		t.Fatalf("HandleToolResult (gate): %v", err)
@@ -54,7 +59,7 @@ func gateCallWithMetadata(t *testing.T, handler *agenticloop.MessageHandler, cal
 	if gateRes.State != agentic.LoopStateAwaitingApproval {
 		t.Fatalf("loop state = %s, want awaiting_approval", gateRes.State)
 	}
-	return loopID
+	return loopID, call.ExecutionID
 }
 
 // TestApprovedBashCall_CarriesFilesystemPolicy is the ADR-067 BLOCKING
@@ -66,17 +71,18 @@ func gateCallWithMetadata(t *testing.T, handler *agenticloop.MessageHandler, cal
 // policy at the shared dispatchToolCall seam, so it survives re-dispatch.
 func TestApprovedBashCall_CarriesFilesystemPolicy(t *testing.T) {
 	handler := agenticloop.NewMessageHandler(createTestConfig())
-	loopID := gateCallWithMetadata(t, handler, "call-ro", "bash", map[string]any{"command": "ls"}, map[string]any{
+	loopID, executionID := gateCallWithMetadata(t, handler, "call-ro", "bash", map[string]any{"command": "ls"}, map[string]any{
 		agentic.MetadataKeyFilesystemPolicy: agentic.FilesystemPolicyReadOnly,
 		agentic.MetadataKeyScratchPaths:     []string{".probe"},
 	})
 
 	result, err := handler.HandleApprovalResponse(context.Background(), agentic.ApprovalResponse{
-		LoopID:     loopID,
-		CallID:     "call-ro",
-		Decision:   agentic.ApprovalDecisionApprove,
-		ApprovedBy: "alice@example.com",
-		DecidedAt:  time.Now().UTC(),
+		LoopID:      loopID,
+		CallID:      "call-ro",
+		ExecutionID: executionID,
+		Decision:    agentic.ApprovalDecisionApprove,
+		ApprovedBy:  "alice@example.com",
+		DecidedAt:   time.Now().UTC(),
 	})
 	if err != nil {
 		t.Fatalf("HandleApprovalResponse: %v", err)
@@ -104,14 +110,15 @@ func TestApprovedBashCall_CarriesFilesystemPolicy(t *testing.T) {
 // (the stamp is opt-in; absent keys stay absent).
 func TestApprovedCall_NoPolicyStampsNothing(t *testing.T) {
 	handler := agenticloop.NewMessageHandler(createTestConfig())
-	loopID := gateCallWithMetadata(t, handler, "call-plain", "bash", map[string]any{"command": "ls"}, nil)
+	loopID, executionID := gateCallWithMetadata(t, handler, "call-plain", "bash", map[string]any{"command": "ls"}, nil)
 
 	result, err := handler.HandleApprovalResponse(context.Background(), agentic.ApprovalResponse{
-		LoopID:     loopID,
-		CallID:     "call-plain",
-		Decision:   agentic.ApprovalDecisionApprove,
-		ApprovedBy: "bob@example.com",
-		DecidedAt:  time.Now().UTC(),
+		LoopID:      loopID,
+		CallID:      "call-plain",
+		ExecutionID: executionID,
+		Decision:    agentic.ApprovalDecisionApprove,
+		ApprovedBy:  "bob@example.com",
+		DecidedAt:   time.Now().UTC(),
 	})
 	if err != nil {
 		t.Fatalf("HandleApprovalResponse: %v", err)
@@ -131,16 +138,17 @@ func TestApprovedCall_NoPolicyStampsNothing(t *testing.T) {
 // it for the whole DispatchEnforcedMetadataKeys set, decide included.
 func TestApprovedDecideCall_CarriesActionAllowlist(t *testing.T) {
 	handler := agenticloop.NewMessageHandler(createTestConfig())
-	loopID := gateCallWithMetadata(t, handler, "call-dec", "decide",
+	loopID, executionID := gateCallWithMetadata(t, handler, "call-dec", "decide",
 		map[string]any{"action": "handoff"},
 		map[string]any{agentic.MetadataKeyDecideActionAllowlist: []string{"handoff", "escalate"}})
 
 	result, err := handler.HandleApprovalResponse(context.Background(), agentic.ApprovalResponse{
-		LoopID:     loopID,
-		CallID:     "call-dec",
-		Decision:   agentic.ApprovalDecisionApprove,
-		ApprovedBy: "carol@example.com",
-		DecidedAt:  time.Now().UTC(),
+		LoopID:      loopID,
+		CallID:      "call-dec",
+		ExecutionID: executionID,
+		Decision:    agentic.ApprovalDecisionApprove,
+		ApprovedBy:  "carol@example.com",
+		DecidedAt:   time.Now().UTC(),
 	})
 	if err != nil {
 		t.Fatalf("HandleApprovalResponse: %v", err)

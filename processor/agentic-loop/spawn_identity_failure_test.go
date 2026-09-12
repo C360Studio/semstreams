@@ -34,11 +34,13 @@ type inputAckMsg struct {
 	progress   chan struct{}
 }
 
-func (m *inputAckMsg) Data() []byte                              { return m.data }
-func (m *inputAckMsg) Subject() string                           { return "agent.task.test" }
-func (m *inputAckMsg) Reply() string                             { return "" }
-func (m *inputAckMsg) Headers() nats.Header                      { return nil }
-func (m *inputAckMsg) Metadata() (*jetstream.MsgMetadata, error) { return nil, nil }
+func (m *inputAckMsg) Data() []byte         { return m.data }
+func (m *inputAckMsg) Subject() string      { return "agent.task.test" }
+func (m *inputAckMsg) Reply() string        { return "" }
+func (m *inputAckMsg) Headers() nats.Header { return nil }
+func (m *inputAckMsg) Metadata() (*jetstream.MsgMetadata, error) {
+	return &jetstream.MsgMetadata{NumDelivered: 1}, nil
+}
 func (m *inputAckMsg) Ack() error {
 	m.acked.Store(true)
 	return nil
@@ -110,7 +112,7 @@ func TestHandleSpawnIdentityFailure_GraphStatePoisonFailsLoopPerEntity(t *testin
 	poison := errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired,
 		&graph.StateContractError{Reason: graph.GraphStateReasonNoncanonicalEntityID})
 
-	if gotErr := c.handleSpawnIdentityFailure(context.Background(), loopID, before, poison); gotErr != nil {
+	if _, gotErr := c.handleSpawnIdentityFailure(context.Background(), loopID, before, poison); gotErr != nil {
 		t.Fatalf("handleSpawnIdentityFailure() error = %v, want nil (per-loop failure is fully handled)", gotErr)
 	}
 
@@ -156,7 +158,8 @@ func TestGraphStatePoisonRouting_DistinguishesOperationalErrors(t *testing.T) {
 	}
 }
 
-func TestHandleSpawnIdentityFailure_OperationalErrorUsesBusinessFailurePath(t *testing.T) {
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+func TestHandleSpawnIdentityFailure_InvalidSerializationTerminatesAndDiscardsSpeculativeState(t *testing.T) {
 	t.Parallel()
 
 	loopManager := NewLoopManager()
@@ -189,8 +192,9 @@ func TestHandleSpawnIdentityFailure_OperationalErrorUsesBusinessFailurePath(t *t
 	// terminal observation, because the release clears the map on return.
 	probe := newTerminalReaderProbe(c, loopID)
 
-	if err := c.handleSpawnIdentityFailure(context.Background(), loopID, entity, errors.New("temporary graph request failure")); err != nil {
-		t.Fatalf("operational birth failure returned consumer error: %v", err)
+	decision, err := c.handleSpawnIdentityFailure(context.Background(), loopID, entity, errors.New("temporary graph request failure"))
+	if err == nil || decision != natsclient.DeliveryDecisionTerminate {
+		t.Fatalf("serialization failure settlement = (%v, %v), want terminate with error", decision, err)
 	}
 
 	after := probe.terminalLoop(t)
@@ -198,7 +202,7 @@ func TestHandleSpawnIdentityFailure_OperationalErrorUsesBusinessFailurePath(t *t
 		t.Fatalf("operational error did not use business failure path: state=%q outcome=%q", after.State, after.Outcome)
 	}
 	if _, err := loopManager.GetLoop(loopID); err == nil {
-		t.Fatal("settled loop still held in process memory after the terminal path released it")
+		t.Fatal("failed failure serialization retained speculative process state before durable settlement")
 	}
 }
 
@@ -259,7 +263,7 @@ func TestGraphStatePoisonFailsLoopWhileIntakeContinues(t *testing.T) {
 			t.Fatal(err)
 		}
 		msg := &inputAckMsg{data: data}
-		if err := consumeLongRunningInput(context.Background(), msg, time.Hour,
+		if err := consumeTypedLongRunningInput(context.Background(), msg, time.Hour,
 			c.taskInputHandler(time.Minute)); err != nil {
 			t.Fatalf("consume(%s) error = %v, want nil", taskID, err)
 		}

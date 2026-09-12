@@ -10,6 +10,7 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/internal/agentterminal"
+	"github.com/c360studio/semstreams/internal/looptoken"
 	"github.com/c360studio/semstreams/message"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -61,24 +62,21 @@ func mergeRouteField(name string, values ...string) (string, error) {
 	return merged, nil
 }
 
-func reconcileTerminalRoute(tracker *LoopInfo, event agentterminal.Event, persisted *agentic.LoopEntity) (terminalRoute, error) {
-	var trackerRoute, persistedRoute terminalRoute
-	if tracker != nil {
-		trackerRoute = terminalRoute{ChannelType: tracker.ChannelType, ChannelID: tracker.ChannelID, UserID: tracker.UserID}
-	}
+func reconcileTerminalRoute(event agentterminal.Event, persisted *agentic.LoopEntity) (terminalRoute, error) {
+	var persistedRoute terminalRoute
 	if persisted != nil {
 		persistedRoute = terminalRoute{ChannelType: persisted.ChannelType, ChannelID: persisted.ChannelID, UserID: persisted.UserID}
 	}
 
-	channelType, err := mergeRouteField("channel_type", trackerRoute.ChannelType, event.ChannelType, persistedRoute.ChannelType)
+	channelType, err := mergeRouteField("channel_type", event.ChannelType, persistedRoute.ChannelType)
 	if err != nil {
 		return terminalRoute{}, err
 	}
-	channelID, err := mergeRouteField("channel_id", trackerRoute.ChannelID, event.ChannelID, persistedRoute.ChannelID)
+	channelID, err := mergeRouteField("channel_id", event.ChannelID, persistedRoute.ChannelID)
 	if err != nil {
 		return terminalRoute{}, err
 	}
-	userID, err := mergeRouteField("user_id", trackerRoute.UserID, event.UserID, persistedRoute.UserID)
+	userID, err := mergeRouteField("user_id", event.UserID, persistedRoute.UserID)
 	if err != nil {
 		return terminalRoute{}, err
 	}
@@ -89,8 +87,15 @@ func reconcileTerminalRoute(tracker *LoopInfo, event agentterminal.Event, persis
 }
 
 func (c *Component) loadPersistedLoop(ctx context.Context, loopID string) (*agentic.LoopEntity, error) {
+	if !looptoken.Valid(loopID) {
+		return nil, permanentTerminal("invalid loop id %q", loopID)
+	}
 	if c.loadPersistedLoopFn != nil {
-		return c.loadPersistedLoopFn(ctx, loopID)
+		persisted, err := c.loadPersistedLoopFn(ctx, loopID)
+		if err != nil {
+			return nil, err
+		}
+		return persisted, validatePersistedLoop(loopID, persisted)
 	}
 	if c.natsClient == nil {
 		return nil, fmt.Errorf("AGENT_LOOPS client unavailable")
@@ -114,10 +119,22 @@ func (c *Component) loadPersistedLoop(ctx context.Context, loopID string) (*agen
 	if err := json.Unmarshal(entry.Value(), &persisted); err != nil {
 		return nil, permanentTerminal("malformed %s/%s: %w", bucket, loopID, err)
 	}
-	if persisted.ID != loopID {
-		return nil, permanentTerminal("%s/%s contains loop id %q", bucket, loopID, persisted.ID)
+	return &persisted, validatePersistedLoop(loopID, &persisted)
+}
+
+// validatePersistedLoop is the current-record contract shared by the exact
+// reader and its declared projection. Neither can admit a merely decodable record.
+func validatePersistedLoop(loopID string, persisted *agentic.LoopEntity) error {
+	if persisted == nil {
+		return fmt.Errorf("loop state %q is not observable", loopID)
 	}
-	return &persisted, nil
+	if !looptoken.Valid(loopID) || persisted.ID != loopID {
+		return permanentTerminal("loop key %q contains invalid loop identity %q", loopID, persisted.ID)
+	}
+	if err := persisted.Validate(); err != nil {
+		return permanentTerminal("invalid loop state %q: %w", loopID, err)
+	}
+	return nil
 }
 
 func terminalResponse(event agentterminal.Event, route terminalRoute) agentic.UserResponse {
@@ -186,33 +203,23 @@ func (c *Component) settleAgentTerminal(ctx context.Context, data []byte) (settl
 		return permanentTerminal("normalize terminal: %w", err)
 	}
 
-	tracker := c.loopTracker.getSnapshot(event.LoopID)
 	persisted, err := c.loadPersistedLoop(ctx, event.LoopID)
 	if err != nil {
 		if isPermanentTerminal(err) {
 			reason = "routing_malformed"
+		} else if isLoopRecordAbsent(err) {
+			reason = "terminal_route_unavailable"
 		} else {
 			reason = "routing_read_transient"
 		}
 		return err
 	}
-	route, err := reconcileTerminalRoute(tracker, event, persisted)
+	route, err := reconcileTerminalRoute(event, persisted)
 	if err != nil {
 		reason = "routing_collision_or_malformed"
 		return err
 	}
 
-	trackerChanged := false
-	if tracker != nil {
-		trackerChanged, err = c.loopTracker.updateCompletionAt(event.LoopID, event.Outcome, event.Result, event.Error, event.TerminalAt)
-		if err != nil {
-			reason = "tracker_projection_collision"
-			return permanentTerminal("project tracker terminal: %w", err)
-		}
-	}
-	if trackerChanged {
-		c.metrics.recordLoopEnded()
-	}
 	// Terminal selection follows the typed decision, never route ownership
 	// (ADR-101 D2). A decision that is not a reserved reply action is a
 	// handoff to a rule chain: it publishes nothing, even when the deciding

@@ -27,7 +27,9 @@ const (
 	LoopStateCancelled LoopState = "cancelled" // Cancelled by user signal
 
 	// Signal-related states
-	LoopStatePaused           LoopState = "paused"            // Paused by user signal
+	// LoopStatePaused names the retired state and is rejected by LoopEntity
+	// validation. Its constant and transition vocabulary await separate retirement.
+	LoopStatePaused           LoopState = "paused"
 	LoopStateAwaitingApproval LoopState = "awaiting_approval" // Waiting for user approval
 )
 
@@ -50,7 +52,7 @@ type LoopEntity struct {
 	Model              string                `json:"model"`
 	Iterations         int                   `json:"iterations"`
 	MaxIterations      int                   `json:"max_iterations"`
-	PendingToolResults map[string]ToolResult `json:"pending_tool_results,omitempty"` // Accumulated tool results by call ID
+	PendingToolResults map[string]ToolResult `json:"pending_tool_results,omitempty"` // ExecutionID; synthetic failures use CallID
 	StartedAt          time.Time             `json:"started_at,omitempty"`           // When the loop was created
 	TimeoutAt          time.Time             `json:"timeout_at,omitempty"`           // When the loop should timeout
 	ParentLoopID       string                `json:"parent_loop_id,omitempty"`       // Parent loop ID for architect->editor relationship
@@ -63,11 +65,8 @@ type LoopEntity struct {
 	MaxDepth int `json:"max_depth,omitempty"` // Maximum allowed depth for spawned agents
 
 	// Signal support fields
-	PauseRequested   bool      `json:"pause_requested,omitempty"`    // Pause requested, will pause at next checkpoint
-	PauseRequestedBy string    `json:"pause_requested_by,omitempty"` // User who requested pause
-	StateBeforePause LoopState `json:"state_before_pause,omitempty"` // State before pause (for resume)
-	CancelledBy      string    `json:"cancelled_by,omitempty"`       // User who cancelled the loop
-	CancelledAt      time.Time `json:"cancelled_at,omitempty"`       // When the loop was cancelled
+	CancelledBy string    `json:"cancelled_by,omitempty"` // User who cancelled the loop
+	CancelledAt time.Time `json:"cancelled_at,omitempty"` // When the loop was cancelled
 
 	// Approval-gating fields (set when a tool call is rejected by the
 	// agentic-tools approval filter). The loop transitions to
@@ -117,7 +116,7 @@ func isValidLoopState(s LoopState) bool {
 	switch s {
 	case LoopStateExploring, LoopStatePlanning, LoopStateArchitecting,
 		LoopStateExecuting, LoopStateReviewing, LoopStateComplete,
-		LoopStateFailed, LoopStateCancelled, LoopStatePaused,
+		LoopStateFailed, LoopStateCancelled,
 		LoopStateAwaitingApproval:
 		return true
 	default:
@@ -144,7 +143,10 @@ func (e *LoopEntity) TransitionTo(newState LoopState) error {
 // Persisted on LoopEntity so a process restart mid-approval still
 // remembers what the human is reviewing.
 type PendingApprovalState struct {
+	RequestID   string         `json:"request_id,omitempty"`
+	ExecutionID string         `json:"execution_id,omitempty"`
 	CallID      string         `json:"call_id"`
+	CallOrdinal uint32         `json:"call_ordinal,omitempty"`
 	ToolName    string         `json:"tool_name"`
 	Arguments   map[string]any `json:"arguments,omitempty"`
 	Reason      string         `json:"reason,omitempty"`   // Original "approval_required: ..." rejection reason
