@@ -784,6 +784,9 @@ func assertGoTargetCompleteness(t *testing.T, root string, plan *Plan) {
 		if _, retired := postFoundationBUserResponseGoIdentityRetirements[item.RecordID]; retired {
 			continue
 		}
+		if _, retired := postFoundationBDispatchTrackerGoIdentityRetirements[item.RecordID]; retired {
+			continue
+		}
 		if item.Path == "gateway/graph-gateway/component.go" {
 			continue
 		}
@@ -971,6 +974,7 @@ func assertGoTargetCompleteness(t *testing.T, root string, plan *Plan) {
 		wantTotal += len(additions)
 	}
 	wantTotal -= len(postFoundationBUserResponseGoIdentityRetirements)
+	wantTotal -= len(postFoundationBDispatchTrackerGoIdentityRetirements)
 	for _, additions := range postFoundationBWorkflowTerminalGoIdentityAdditions {
 		wantTotal += len(additions)
 	}
@@ -1404,6 +1408,14 @@ var postFoundationBWorkflowTerminalGoIdentityAdditions = map[string][]string{
 // cut. The immutable Foundation B worklist remains historical evidence.
 var postFoundationBUserResponseGoIdentityRetirements = map[string]struct{}{
 	"go:processor/agentic-governance/config.go#L248C3": {},
+}
+
+// postFoundationBDispatchTrackerGoIdentityRetirements records the two dispatch
+// tracker inputs retired by owner-approved #1146 current-KV authority. The
+// immutable Foundation B worklist and loop producer outputs remain unchanged.
+var postFoundationBDispatchTrackerGoIdentityRetirements = map[string]struct{}{
+	"go:processor/agentic-dispatch/config.go#L80C5": {},
+	"go:processor/agentic-dispatch/config.go#L96C5": {},
 }
 
 func targetForConfigItem(item WorkItem, dispositions map[string]Disposition) (targetConfigItem, error) {

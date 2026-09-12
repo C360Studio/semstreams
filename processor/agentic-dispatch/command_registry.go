@@ -1,5 +1,5 @@
 // Package agenticdispatch provides message routing between users and agentic loops.
-// It handles command parsing, permission checking, loop tracking, and message dispatch.
+// It handles command parsing, permission checking, current ownership lookup, and message dispatch.
 package agenticdispatch
 
 import (
@@ -27,11 +27,22 @@ type CommandHandler func(ctx context.Context, msg agentic.UserMessage, args []st
 
 // CommandContext provides services to command executors
 type CommandContext struct {
-	NATSClient    *natsclient.Client
-	LoopTracker   *LoopTracker
-	Logger        *slog.Logger
-	HasPermission func(userID, permission string) bool
+	NATSClient      *natsclient.Client
+	LookupLoopOwner LoopOwnerLookup
+	Logger          *slog.Logger
+	HasPermission   func(userID, permission string) bool
 }
+
+// LoopOwner is the current ownership answer for one canonical loop ID.
+type LoopOwner struct {
+	LoopID string
+	UserID string
+}
+
+// LoopOwnerLookup reads current ownership. Refusals use classified codes
+// invalid_loop_id, loop_not_found, loop_owner_absent, loop_record_invalid,
+// or loop_state_unavailable. It never exposes a store or mutable projection.
+type LoopOwnerLookup func(context.Context, string) (LoopOwner, error)
 
 // CommandExecutor is the interface for command implementations
 type CommandExecutor interface {

@@ -987,12 +987,10 @@ from *silently accepted and ignored* to **rejected by `UserSignal.Validate()`**.
 unimplemented verb that answers `200` is how this defect survived unnoticed for months. Remove the call; there
 is nothing to migrate it to.
 
-**Persisted records.** The three JSON keys were written only by the deleted handlers — but `handlePauseSignal`
-set `PauseRequested = true` and persisted the loop, so **an existing `AGENT_LOOPS` record may well carry
-non-zero values for them**, not merely absent or falsy ones. That is the case the compatibility test uses.
-Decoding ignores unknown keys —
-no `DisallowUnknownFields` sits on the `LoopEntity` decode path — so old records load unchanged and no backfill
-or migration job is required.
+**Current-record validation.** `LoopEntity.Validate()` now rejects `state: "paused"` for every caller, including
+dispatch's exact reads and shared view. `LoopState` is a string type, so JSON decoding alone can still succeed;
+decodability is not valid current authority. Removed pause fields no longer define behavior, even when the decoder
+ignores their unknown JSON keys. There is no compatibility promise, backfill, or beta-state preservation requirement.
 
 #### `LoopState` `paused` is removed — this part is NOT a no-op for your data
 

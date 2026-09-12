@@ -1,6 +1,7 @@
 package agenticdispatch
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -10,6 +11,9 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/payloadbuiltins"
+	"github.com/c360studio/semstreams/pkg/graphview"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,43 +24,64 @@ func newTestComponent(t *testing.T) *Component {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	comp := &Component{
-		config:      DefaultConfig(),
-		loopTracker: NewLoopTrackerWithLogger(logger),
-		registry:    NewCommandRegistry(),
-		logger:      logger,
-		metrics:     getMetrics(nil), // Use default metrics for tests
-		natsClient:  nil,             // Will be nil for unit tests
+		config:     DefaultConfig(),
+		decoder:    message.NewDecoder(payloadbuiltins.NewTestRegistry(t)),
+		registry:   NewCommandRegistry(),
+		logger:     logger,
+		metrics:    getMetrics(nil), // Use default metrics for tests
+		natsClient: nil,             // Will be nil for unit tests
 	}
 	// The admission gate reads AGENT_LOOPS. With no NATS client that read fails
 	// as UNREADABLE, which is a different answer from "this loop does not
 	// exist" — so these handler tests declare an empty durable store and a
-	// tracker miss means absence, as it does in production when the key is gone.
+	// exact read declares absence when the key is gone.
 	withPersistedLoops(comp, nil)
 	return comp
 }
 
-func TestHandleListLoops(t *testing.T) {
-	comp := newTestComponent(t)
+// newCurrentLoopTestComponent supplies typed retained records through the
+// existing exact-read seam and the actual shared-view decoder/replay owner.
+func newCurrentLoopTestComponent(t *testing.T, records ...*agentic.LoopEntity) *Component {
+	t.Helper()
+	source := newFakeActivitySource()
+	c := newActivityTestComponent(t, source, graphview.Hooks{})
+	ctx, cancel := context.WithTimeout(t.Context(), activityTestWait)
+	defer cancel()
+	view, err := c.ensureActivityView(ctx)
+	require.NoError(t, err)
+	watcher := source.waitWatcher(t, 1)
+	byID := make(map[string]*agentic.LoopEntity)
+	for i, record := range records {
+		require.NoError(t, record.Validate())
+		data, err := json.Marshal(record)
+		require.NoError(t, err)
+		watcher.updates <- putEntry(record.ID, data, uint64(i+1))
+		byID[record.ID] = record
+	}
+	watcher.updates <- nil
+	require.NoError(t, view.WaitCaughtUp(ctx))
+	withPersistedLoops(c, byID)
+	return c
+}
 
-	// Add some test loops
-	comp.loopTracker.Track(&LoopInfo{
-		LoopID:      seamTestLoopA,
-		TaskID:      "task-1",
-		UserID:      "user-1",
-		ChannelType: "http",
-		ChannelID:   "chan-1",
-		State:       "executing",
-		Iterations:  3,
-		CreatedAt:   time.Now(),
-	})
-	comp.loopTracker.Track(&LoopInfo{
-		LoopID:      seamTestLoopB,
-		TaskID:      "task-2",
-		UserID:      "user-2",
-		ChannelType: "http",
-		ChannelID:   "chan-2",
-		State:       "pending",
-		CreatedAt:   time.Now(),
+func TestHandleListLoops(t *testing.T) {
+	comp := newCurrentLoopTestComponent(t, &agentic.LoopEntity{
+		ID:            seamTestLoopA,
+		TaskID:        "task-1",
+		UserID:        "user-1",
+		ChannelType:   "http",
+		ChannelID:     "chan-1",
+		State:         "executing",
+		Iterations:    3,
+		MaxIterations: 10,
+	}, &agentic.LoopEntity{
+		ID:            seamTestLoopB,
+		TaskID:        "task-2",
+		UserID:        "user-2",
+		ChannelType:   "http",
+		ChannelID:     "chan-2",
+		State:         agentic.LoopStatePlanning,
+		MaxIterations: 10,
 	})
 
 	t.Run("list all loops", func(t *testing.T) {
@@ -90,7 +115,7 @@ func TestHandleListLoops(t *testing.T) {
 	})
 
 	t.Run("filter by state", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/loops?state=pending", nil)
+		req := httptest.NewRequest(http.MethodGet, "/loops?state=planning", nil)
 		rec := httptest.NewRecorder()
 
 		comp.handleListLoops(rec, req)
@@ -101,7 +126,7 @@ func TestHandleListLoops(t *testing.T) {
 		err := json.Unmarshal(rec.Body.Bytes(), &loops)
 		require.NoError(t, err)
 		assert.Len(t, loops, 1)
-		assert.Equal(t, "pending", loops[0].State)
+		assert.Equal(t, "planning", loops[0].State)
 	})
 
 	t.Run("filter by user_id and state", func(t *testing.T) {
@@ -139,8 +164,8 @@ func TestHandleGetLoop(t *testing.T) {
 	comp := newTestComponent(t)
 
 	// Add a test loop
-	comp.loopTracker.Track(&LoopInfo{
-		LoopID:        seamTestLoopA,
+	withPersistedLoops(comp, map[string]*agentic.LoopEntity{seamTestLoopA: {
+		ID:            seamTestLoopA,
 		TaskID:        "task-1",
 		UserID:        "user-1",
 		ChannelType:   "http",
@@ -148,8 +173,7 @@ func TestHandleGetLoop(t *testing.T) {
 		State:         "executing",
 		Iterations:    3,
 		MaxIterations: 10,
-		CreatedAt:     time.Now(),
-	})
+	}})
 
 	t.Run("get existing loop", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/loops/"+seamTestLoopA, nil)
