@@ -244,7 +244,15 @@ func TestExpandDatatypePrefix(t *testing.T) {
 		{"xsd:string", "http://www.w3.org/2001/XMLSchema#string"},
 		{"xsd:float", "http://www.w3.org/2001/XMLSchema#float"},
 		{"xsd:dateTime", "http://www.w3.org/2001/XMLSchema#dateTime"},
+		{"rdf:JSON", "http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON"},
 		{"http://example.org/type", "http://example.org/type"},
+		// Residual, deliberately pinned: only the two prefixes this repository
+		// writes onto triples are expanded (gh#1267 task 5.3). Any other prefix
+		// still reaches the output as a relative reference, which is not valid
+		// RDF. Pinned so the behaviour is a known residual rather than a
+		// surprise; the message.Triple.Datatype doc comment no longer offers
+		// "geo:point" as an example (gh#1267 task 10.7), and gh#1272 tracks the
+		// same mechanism reached through the framework's own marker.
 		{"geo:point", "geo:point"},
 	}
 

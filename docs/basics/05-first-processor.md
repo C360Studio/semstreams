@@ -77,57 +77,57 @@ const (
 func RegisterVocabulary() {
     vocabulary.Register(PredicateMeasurementCelsius,
         vocabulary.WithDescription("Temperature reading in Celsius"),
-        vocabulary.WithDataType("float64"),
+        vocabulary.WithDataType(vocabulary.DataTypeFloat),
         vocabulary.WithUnits("celsius"),
     )
 
     vocabulary.Register(PredicateMeasurementPercent,
         vocabulary.WithDescription("Percentage measurement (e.g., humidity)"),
-        vocabulary.WithDataType("float64"),
+        vocabulary.WithDataType(vocabulary.DataTypeFloat),
         vocabulary.WithUnits("percent"),
         vocabulary.WithRange("0-100"),
     )
 
     vocabulary.Register(PredicateClassificationType,
         vocabulary.WithDescription("Sensor type classification"),
-        vocabulary.WithDataType("string"),
+        vocabulary.WithDataType(vocabulary.DataTypeString),
     )
 
     vocabulary.Register(PredicateLocationZone,
         vocabulary.WithDescription("Reference to zone entity where sensor is located"),
-        vocabulary.WithDataType("entity_ref"),
+        vocabulary.WithDataType(vocabulary.DataTypeEntityID),
     )
 
     vocabulary.Register(PredicateLocationLatitude,
         vocabulary.WithDescription("GPS latitude coordinate"),
-        vocabulary.WithDataType("float64"),
+        vocabulary.WithDataType(vocabulary.DataTypeFloat),
         vocabulary.WithRange("-90 to 90"),
     )
 
     vocabulary.Register(PredicateLocationLongitude,
         vocabulary.WithDescription("GPS longitude coordinate"),
-        vocabulary.WithDataType("float64"),
+        vocabulary.WithDataType(vocabulary.DataTypeFloat),
         vocabulary.WithRange("-180 to 180"),
     )
 
     vocabulary.Register(PredicateObservationRecorded,
         vocabulary.WithDescription("Timestamp when observation was recorded"),
-        vocabulary.WithDataType("timestamp"),
+        vocabulary.WithDataType(vocabulary.DataTypeDateTime),
     )
 
     vocabulary.Register(PredicateZoneName,
         vocabulary.WithDescription("Human-readable name of the zone"),
-        vocabulary.WithDataType("string"),
+        vocabulary.WithDataType(vocabulary.DataTypeString),
     )
 
     vocabulary.Register(PredicateZoneType,
         vocabulary.WithDescription("Type classification of the zone"),
-        vocabulary.WithDataType("string"),
+        vocabulary.WithDataType(vocabulary.DataTypeString),
     )
 
     vocabulary.Register(PredicateSensorSerial,
         vocabulary.WithDescription("Manufacturer serial number"),
-        vocabulary.WithDataType("string"),
+        vocabulary.WithDataType(vocabulary.DataTypeString),
         vocabulary.WithAlias(vocabulary.AliasTypeExternal, 0),
     )
 }

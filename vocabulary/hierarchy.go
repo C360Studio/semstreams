@@ -20,14 +20,14 @@ func init() {
 	// HierarchyDomainMember - entity → domain
 	Register(HierarchyDomainMember,
 		WithDescription("Entity belongs to a domain (3-part prefix match)"),
-		WithDataType("string"),
+		WithDataType(DataTypeString),
 		WithIRI(SkosBroader),
 		WithInverseOf(HierarchyDomainContains))
 
 	// HierarchyDomainContains - domain → entity (inverse)
 	Register(HierarchyDomainContains,
 		WithDescription("Domain contains entity members (inverse of hierarchy.domain.member)"),
-		WithDataType("string"),
+		WithDataType(DataTypeString),
 		WithIRI(SkosNarrower),
 		WithInverseOf(HierarchyDomainMember))
 
@@ -36,14 +36,14 @@ func init() {
 	// HierarchySystemMember - entity → system
 	Register(HierarchySystemMember,
 		WithDescription("Entity belongs to a system (4-part prefix match)"),
-		WithDataType("string"),
+		WithDataType(DataTypeString),
 		WithIRI(SkosBroader),
 		WithInverseOf(HierarchySystemContains))
 
 	// HierarchySystemContains - system → entity (inverse)
 	Register(HierarchySystemContains,
 		WithDescription("System contains entity members (inverse of hierarchy.system.member)"),
-		WithDataType("string"),
+		WithDataType(DataTypeString),
 		WithIRI(SkosNarrower),
 		WithInverseOf(HierarchySystemMember))
 
@@ -52,21 +52,21 @@ func init() {
 	// HierarchyTypeMember - entity → type container
 	Register(HierarchyTypeMember,
 		WithDescription("Entity belongs to a type container (5-part prefix + .group)"),
-		WithDataType("string"),
+		WithDataType(DataTypeString),
 		WithIRI(SkosBroader),
 		WithInverseOf(HierarchyTypeContains))
 
 	// HierarchyTypeContains - type container → entity (inverse)
 	Register(HierarchyTypeContains,
 		WithDescription("Type container contains entity members (inverse of hierarchy.type.member)"),
-		WithDataType("string"),
+		WithDataType(DataTypeString),
 		WithIRI(SkosNarrower),
 		WithInverseOf(HierarchyTypeMember))
 
 	// HierarchyTypeSibling - symmetric relationship between entities of same type
 	Register(HierarchyTypeSibling,
 		WithDescription("Entities share the same type (5-part prefix match, symmetric)"),
-		WithDataType("string"),
+		WithDataType(DataTypeString),
 		WithIRI(SkosRelated),
 		WithSymmetric(true))
 }

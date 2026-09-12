@@ -13,7 +13,7 @@ func TestRegisterVocabularyDeclaresReferenceRuleOutputs(t *testing.T) {
 	if meta == nil {
 		t.Fatalf("reference rule predicate %q is not registered", PredicateAlertStateActive)
 	}
-	if meta.DataType != "string" {
+	if meta.DataType != vocabulary.DataTypeString {
 		t.Fatalf("reference rule predicate datatype = %q, want string", meta.DataType)
 	}
 }

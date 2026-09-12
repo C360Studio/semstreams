@@ -1,0 +1,10 @@
+# 2026/09/09 17:22:46.017143 [TestPropDeclaredIntegerNeverFabricates] [rapid] draw observed: 0.5
+# 2026/09/09 17:22:46.017147 [TestPropDeclaredIntegerNeverFabricates] observed 0.5 emitted "0" as xsd:integer, which round-trips to 0
+# 
+v0.4.8#1327895704583225655
+0x0
+0x1
+0x0
+0x0
+0x0
+0x0

@@ -1,0 +1,10 @@
+# 2026/09/09 17:22:53.214966 [TestPropDeclaredIntegerNeverFabricates] [rapid] draw observed: 1.7976931348623157e+308
+# 2026/09/09 17:22:53.214971 [TestPropDeclaredIntegerNeverFabricates] observed 1.7976931348623157e+308 emitted "9223372036854775807" as xsd:integer, which round-trips to 9223372036854775807
+# 
+v0.4.8#7965978479537676685
+0x0
+0x0
+0x9867f1f40f739
+0x9
+0x0
+0x0

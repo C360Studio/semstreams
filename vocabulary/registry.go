@@ -107,24 +107,52 @@ func WithDescription(desc string) Option {
 	}
 }
 
-// WithDataType sets the expected Go type for the object value.
-// Examples: "string", "float64", "int", "bool", "time.Time"
+// WithDataType declares the pragmatic type of the object value. Pass one of
+// the seven canonical constants — DataTypeString, DataTypeEntityID,
+// DataTypeInt, DataTypeFloat, DataTypeBool, DataTypeDateTime, DataTypeJSON.
+//
+// It is NOT the Go type of the value: the serializer observes that directly,
+// and the authoritative JSON round trip erases it anyway. Declare only what
+// observation cannot recover — that an object is an entity reference, that a
+// number is semantically whole, that a string holds a structured document.
+//
+// The parameter stays a plain string so existing call sites keep compiling,
+// but any value outside the closed vocabulary panics at registration, naming
+// the accepted set. Nothing is normalized: a legacy spelling is refused like
+// any other non-canonical value, and the adopter migrates
+// (docs/operations/migration-predicate-datatype.md). Declaring nothing is
+// legal (gh#1267, ADR-107).
+//
+// Example:
+//
+//	Register("robotics.battery.cycles",
+//	    WithDescription("Battery charge cycles"),
+//	    WithDataType(DataTypeInt))
 func WithDataType(dataType string) Option {
 	return func(m *PredicateMetadata) {
 		m.DataType = dataType
 	}
 }
 
-// WithUnits specifies the measurement units (if applicable).
-// Examples: "percent", "meters", "celsius", "pascals"
+// WithUnits carries measurement units as free-form DOCUMENTATION on the
+// declaration. Examples: "percent", "meters", "celsius", "pascals".
+//
+// No framework path validates, normalizes, interprets, or honors the value —
+// unlike WithDataType, which is honored at export. Saying so is a smaller
+// promise than the field's presence beside DataType currently implies, and it
+// is one the framework actually keeps (gh#1267 Q4, tracked on gh#1264).
 func WithUnits(units string) Option {
 	return func(m *PredicateMetadata) {
 		m.Units = units
 	}
 }
 
-// WithRange describes valid value ranges (if applicable).
-// Examples: "0-100", "-90 to 90", "positive"
+// WithRange describes valid values as free-form DOCUMENTATION on the
+// declaration. Examples: "0-100", "-90 to 90", "positive" — three
+// incompatible grammars, which is why nothing parses it.
+//
+// No framework path validates, normalizes, interprets, or honors the value.
+// See WithUnits (gh#1267 Q4, tracked on gh#1264).
 func WithRange(valueRange string) Option {
 	return func(m *PredicateMetadata) {
 		m.Range = valueRange
@@ -196,7 +224,7 @@ func WithInverseOf(inversePredicate string) Option {
 //
 //	Register("agent.todo.record",
 //	    WithDescription("Free-form private todo record"),
-//	    WithDataType("string"),
+//	    WithDataType(DataTypeString),
 //	    WithRuleOpaque(true))
 func WithRuleOpaque(opaque bool) Option {
 	return func(m *PredicateMetadata) {
@@ -223,8 +251,13 @@ func WithSymmetric(symmetric bool) Option {
 }
 
 // WithRole declares the predicate's semantic role — a stored, first-class
-// ranking signal (ADR-062 increment 5, gh#396 / semsource ask #2). Consumers
-// read PredicateMetadata.Role instead of pattern-matching predicate names.
+// ranking signal (ADR-062 increment 5, gh#396 / semsource ask #2).
+//
+// It is declared but not yet read: measured 2026-09-09, no path in this
+// repository or any sister reads PredicateMetadata.Role. The deterministic
+// fusion ranker this comment previously named as its consumer reads Weight
+// (pkg/fusion/fusionvocab/signals.go:48), not Role. Corrected under gh#1267
+// Q5; whether Role gains a closed-set validator is a separate decision.
 //
 // Example:
 //
@@ -280,7 +313,7 @@ func WithWeight(weight float64) Option {
 //
 //	Register("robotics.battery.level",
 //	    WithDescription("Battery charge level percentage"),
-//	    WithDataType("float64"),
+//	    WithDataType(DataTypeFloat),
 //	    WithUnits("percent"),
 //	    WithRange("0-100"),
 //	    WithIRI("http://schema.org/batteryLevel"))
@@ -378,7 +411,22 @@ func RegisterPredicate(meta PredicateMetadata) {
 // validatePredicateMetadataLocked validates relationships between metadata
 // fields. The caller holds registryMu so an already-declared inverse can be
 // checked without racing another registration.
+//
+// It is the ONE enforcement seam for the closed datatype vocabulary
+// (ADR-107, gh#1267): both registration entry points reach it, so the
+// struct-literal path sister repositories use is covered by the same rule as
+// the functional-option path. Enforcing inside WithDataType would leave the
+// struct-literal path open.
+//
+// It refuses a non-canonical datatype rather than rewriting one, so what an
+// adopter declared is what the registry stores. Nothing here normalizes, which
+// is why it takes the metadata by value: it has no reason to reach back into
+// the caller's copy, and a pointer would invite one.
 func validatePredicateMetadataLocked(meta PredicateMetadata) error {
+	if err := validateDataType(meta.DataType); err != nil {
+		return err
+	}
+
 	if meta.InverseOf != "" {
 		if _, err := ParsePredicate(meta.InverseOf); err != nil {
 			return fmt.Errorf("inverse predicate %q: %w", meta.InverseOf, err)

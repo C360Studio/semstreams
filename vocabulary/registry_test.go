@@ -287,14 +287,14 @@ func TestCombineMultipleOptions(t *testing.T) {
 	// Register with multiple options including inverse
 	Register("test.rel.parent",
 		WithDescription("Parent-child relationship"),
-		WithDataType("string"),
+		WithDataType(DataTypeString),
 		WithIRI("http://example.org/parent"),
 		WithInverseOf("test.rel.child"))
 
 	meta := GetPredicateMetadata("test.rel.parent")
 	require.NotNil(t, meta)
 	assert.Equal(t, "Parent-child relationship", meta.Description)
-	assert.Equal(t, "string", meta.DataType)
+	assert.Equal(t, DataTypeString, meta.DataType)
 	assert.Equal(t, "http://example.org/parent", meta.StandardIRI)
 	assert.Equal(t, "test.rel.child", meta.InverseOf)
 	assert.Equal(t, "test", meta.Domain)
@@ -457,13 +457,13 @@ func TestRegisterWithRuleOpaque(t *testing.T) {
 	// Register an opaque predicate (free-form content, ADR-036)
 	Register("test.todo.content",
 		WithDescription("Free-form content"),
-		WithDataType("string"),
+		WithDataType(DataTypeString),
 		WithRuleOpaque(true))
 
 	// Register a structural predicate (rule-matchable)
 	Register("test.todo.status",
 		WithDescription("Status enum"),
-		WithDataType("string"))
+		WithDataType(DataTypeString))
 
 	meta := GetPredicateMetadata("test.todo.content")
 	require.NotNil(t, meta)

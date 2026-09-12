@@ -86,7 +86,7 @@ func TestHierarchyPredicatesRegistration(t *testing.T) {
 				"Predicate %s should have category %s", tt.predicate, tt.expectedCategory)
 			assert.Equal(t, tt.expectedIRI, meta.StandardIRI,
 				"Predicate %s should map to IRI %s", tt.predicate, tt.expectedIRI)
-			assert.Equal(t, "string", meta.DataType,
+			assert.Equal(t, DataTypeString, meta.DataType,
 				"Hierarchy predicates should have string datatype")
 		})
 	}

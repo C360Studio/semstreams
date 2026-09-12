@@ -1,5 +1,10 @@
 package vocabulary
 
+import (
+	"fmt"
+	"strings"
+)
+
 // Predicate vocabulary using three-level dotted notation: domain.category.property
 // This maintains consistency with the unified semantic architecture.
 //
@@ -331,6 +336,93 @@ func IsValidIndexingProfile(s string) bool {
 	}
 }
 
+// Predicate Object Datatypes (ADR-107, gh#1267)
+// The closed vocabulary a predicate declares for its object values. It names
+// the PRAGMATIC type of the object, never the Go type of the value: the Go
+// type is something the serializer observes directly, and a value read back
+// through the authoritative ENTITY_STATES JSON round trip no longer carries
+// the Go type its author predicted.
+//
+// Per ADR-107 no semantic-web term appears here. The mapping from these
+// values to XSD/RDF datatype IRIs belongs to the serializer, at the export
+// edge, and lives in vocabulary/export.
+
+const (
+	// DataTypeString declares plain text.
+	DataTypeString = "string"
+	// DataTypeEntityID declares that the object is a canonical 6-part entity
+	// ID rather than text that happens to resemble one.
+	DataTypeEntityID = "entity_id"
+	// DataTypeInt declares that the number is semantically whole, whatever the
+	// JSON round trip left in the Go value.
+	DataTypeInt = "int"
+	// DataTypeFloat declares a real number.
+	DataTypeFloat = "float"
+	// DataTypeBool declares a truth value.
+	DataTypeBool = "bool"
+	// DataTypeDateTime declares an instant, whether carried as a time.Time or
+	// as an RFC 3339 string.
+	DataTypeDateTime = "datetime"
+	// DataTypeJSON declares that the string holds a structured document.
+	DataTypeJSON = "json"
+)
+
+// isValidDataType reports whether s is one of the seven canonical predicate
+// object datatypes. The empty string is not one of them: registration accepts
+// it as "no datatype declared" rather than as a value.
+//
+// Unexported deliberately (gh#1267 owner ruling: "in package"). ADR-106 freezes
+// this Tier 1 package's surface, so a membership helper adopters never asked
+// for is a permanent bill for a fact the seven exported constants already
+// carry. Callers outside this package compare against those constants.
+func isValidDataType(s string) bool {
+	switch s {
+	case DataTypeString, DataTypeEntityID, DataTypeInt, DataTypeFloat,
+		DataTypeBool, DataTypeDateTime, DataTypeJSON:
+		return true
+	default:
+		return false
+	}
+}
+
+// validateDataType reports whether a declared datatype is one the registry
+// accepts: a canonical value, or absent.
+//
+// The framework normalizes nothing (gh#1267, owner ruling 2026-09-09, option
+// (d) no-legacy). There is deliberately no alias or legacy-spelling map here:
+// a normalizer on a Tier 1 frozen package is an undated permanent bridge, and
+// the whole adopter story is migration instead —
+// docs/operations/migration-predicate-datatype.md carries the family-wide
+// site list. So an adopter who declared a legacy spelling or a Go struct name
+// is refused at registration and told what to write.
+//
+// The empty string is accepted: an absent datatype is a legitimate
+// registration shape (three sister repositories register nothing but a
+// predicate name), and #1277 tracks closing the framework's own bare set.
+func validateDataType(declared string) error {
+	if declared == "" || isValidDataType(declared) {
+		return nil
+	}
+	return fmt.Errorf("unrecognized data type %q: expected one of %s, or none "+
+		"(see docs/operations/migration-predicate-datatype.md)",
+		declared, strings.Join(canonicalDataTypes(), ", "))
+}
+
+// canonicalDataTypes returns the seven canonical values in a stable order, for
+// error messages and for the repository contract guards that walk the closed
+// set rather than a hand-copied list of it.
+func canonicalDataTypes() []string {
+	return []string{
+		DataTypeString,
+		DataTypeEntityID,
+		DataTypeInt,
+		DataTypeFloat,
+		DataTypeBool,
+		DataTypeDateTime,
+		DataTypeJSON,
+	}
+}
+
 // Content Domain Predicates
 // Product-neutral content-classification convention. Products that classify
 // content emit these; the framework recognizes them for synthesis/enrichment.
@@ -356,13 +448,39 @@ type PredicateMetadata struct {
 	// Description provides human-readable documentation
 	Description string
 
-	// DataType indicates the expected Go type for the object value
+	// DataType declares the pragmatic type of the object value, as one of
+	// the seven canonical DataType* values, or is absent.
+	//
+	// It is NOT the Go type of the value. The serializer observes the Go type
+	// directly, and a value read back through the authoritative ENTITY_STATES
+	// JSON round trip no longer carries the Go type its author predicted — a
+	// declared whole number arrives as float64 every time. The declaration
+	// therefore carries only what observation cannot recover.
+	//
+	// Any value outside the closed vocabulary is refused at registration, and
+	// nothing is normalized — what is declared here is what every reader
+	// observes. Absent is legal.
+	// RDF export honors the declaration, and ignores it for any triple whose
+	// observed value contradicts it (gh#1267, ADR-107).
 	DataType string
 
-	// Units specifies the measurement units (if applicable)
+	// Units carries human-readable measurement units, as free-form
+	// DOCUMENTATION on the declaration. Examples: "percent", "celsius".
+	//
+	// No framework path validates, normalizes, interprets, or honors it. That
+	// is stated rather than left implicit because the alternative failure is
+	// silent: a field that looks typed, sits beside DataType which IS honored,
+	// and is frozen into a released surface reads as a promise the system does
+	// not keep. When a consumer is named it arrives with its own change; a
+	// closed vocabulary is deliberately not invented ahead of one (gh#1267 Q4,
+	// tracked on gh#1264).
 	Units string
 
-	// Range describes valid value ranges (if applicable)
+	// Range carries a human-readable description of valid values, as free-form
+	// DOCUMENTATION on the declaration. Examples: "0-100", "-90 to 90",
+	// "positive" — three incompatible grammars, which is why no framework path
+	// validates, normalizes, interprets, or honors it. See Units (gh#1267 Q4,
+	// tracked on gh#1264).
 	Range string
 
 	// Domain identifies which domain owns this predicate

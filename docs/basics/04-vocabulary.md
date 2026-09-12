@@ -78,24 +78,44 @@ import "github.com/c360studio/semstreams/vocabulary"
 func init() {
     vocabulary.Register(DroneBattery,
         vocabulary.WithDescription("Battery charge level percentage"),
-        vocabulary.WithDataType("int"),
+        vocabulary.WithDataType(vocabulary.DataTypeInt),
         vocabulary.WithUnits("percent"),
         vocabulary.WithRange("0-100"),
     )
 
     vocabulary.Register(GeoLatitude,
         vocabulary.WithDescription("Latitude in decimal degrees"),
-        vocabulary.WithDataType("float64"),
+        vocabulary.WithDataType(vocabulary.DataTypeFloat),
         vocabulary.WithRange("-90 to 90"),
         vocabulary.WithIRI(vocabulary.GeoLatitude), // Optional: RDF mapping
     )
 }
 ```
 
+`WithDataType` takes one of **seven** canonical constants. It declares the *pragmatic* type of the object — never
+the Go type of the value, which the serializer observes for itself and which the authoritative `ENTITY_STATES` JSON
+round trip erases anyway. One declaration renders three ways; the RDF column belongs to `vocabulary/export`, not to
+the registry (ADR-107):
+
+| Constant | Value | Typical Go value | RDF | JSON Schema |
+|---|---|---|---|---|
+| `DataTypeString` | `string` | `string` | `xsd:string` (omitted) | `{"type":"string"}` |
+| `DataTypeEntityID` | `entity_id` | `string` (6-part ID) | an IRI resource | `{"type":"string","format":"semstreams-entity-id"}` |
+| `DataTypeInt` | `int` | `float64` after the round trip | `xsd:integer` | `{"type":"integer"}` |
+| `DataTypeFloat` | `float` | `float64` | `xsd:double` | `{"type":"number"}` |
+| `DataTypeBool` | `bool` | `bool` | `xsd:boolean` | `{"type":"boolean"}` |
+| `DataTypeDateTime` | `datetime` | `time.Time` or RFC 3339 `string` | `xsd:dateTime` | `{"type":"string","format":"date-time"}` |
+| `DataTypeJSON` | `json` | `string` | `rdf:JSON` | `{"type":"string","contentMediaType":"application/json"}` |
+
+Declaring nothing is legal. **Anything outside the seven panics at registration**, naming the offending value and
+the accepted vocabulary. Nothing is normalized: a legacy spelling such as `float64` or `array` halts the binary
+rather than being translated — see [the migration note](../operations/migration-predicate-datatype.md). `WithUnits` and `WithRange` are free-form
+documentation: no framework path validates or honors either.
+
 Registration is optional but enables:
 
 - API introspection of available predicates
-- Data type validation
+- A declared datatype that RDF export honors
 - RDF/Turtle export with standard IRIs via the [`export`](../../vocabulary/export/doc.go) package
 
 ## Standard Vocabularies

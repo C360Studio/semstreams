@@ -81,8 +81,15 @@ type Triple struct {
 
 	// Datatype provides optional RDF datatype hint for the Object value.
 	// This helps with type interpretation and validation in downstream systems.
-	// Examples: "xsd:float", "xsd:dateTime", "geo:point", "xsd:boolean"
+	// Examples: "xsd:float", "xsd:dateTime", "xsd:boolean", "rdf:JSON"
 	// If omitted, the type is inferred from the Go type of Object.
+	//
+	// Only the "xsd:" and "rdf:" prefixes are expanded to full IRIs on export;
+	// an absolute IRI is passed through as written. Any OTHER prefix reaches
+	// the output as a relative reference, which is not valid RDF — so use one
+	// of those two prefixes, or write the IRI out in full. This comment used to
+	// offer "geo:point" as an example and that is exactly the trap (gh#1267);
+	// gh#1272 is the same mechanism one prefix over.
 	Datatype string `json:"datatype,omitempty"`
 
 	// ExpiresAt indicates when this triple should be considered expired.

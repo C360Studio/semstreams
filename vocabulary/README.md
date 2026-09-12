@@ -75,19 +75,19 @@ const (
 func init() {
     vocabulary.Register(BatteryLevel,
         vocabulary.WithDescription("Battery charge level percentage"),
-        vocabulary.WithDataType("float64"),
+        vocabulary.WithDataType(vocabulary.DataTypeFloat),
         vocabulary.WithUnits("percent"),
         vocabulary.WithRange("0-100"),
         vocabulary.WithIRI("http://schema.org/batteryLevel"))
 
     vocabulary.Register(BatteryVoltage,
         vocabulary.WithDescription("Battery voltage"),
-        vocabulary.WithDataType("float64"),
+        vocabulary.WithDataType(vocabulary.DataTypeFloat),
         vocabulary.WithUnits("volts"))
 
     vocabulary.Register(FlightModeArmed,
         vocabulary.WithDescription("Flight mode armed status"),
-        vocabulary.WithDataType("bool"))
+        vocabulary.WithDataType(vocabulary.DataTypeBool))
 }
 ```
 
@@ -135,18 +135,43 @@ vocabulary.Register("sensor.temperature.celsius",
 
 #### `WithDataType(dataType string)`
 
-Expected Go type for the object value.
-
-Common types: `"string"`, `"float64"`, `"int"`, `"bool"`, `"time.Time"`
+The **pragmatic type** of the object value — one of seven canonical constants. Not the Go type of the value: the
+serializer observes that directly, and the authoritative `ENTITY_STATES` JSON round trip erases it anyway (a declared
+whole number arrives back as `float64` every time). Declare only what observation cannot recover.
 
 ```go
 vocabulary.Register("sensor.temperature.celsius",
-    vocabulary.WithDataType("float64"))
+    vocabulary.WithDataType(vocabulary.DataTypeFloat))
 ```
+
+One declaration renders three ways. The Go column is what the serializer typically sees, **not** what you declare;
+the RDF column is owned by `vocabulary/export` (ADR-107 keeps semantic-web vocabulary at the export edge, never on
+the declaration surface):
+
+| Constant | Value | Typical Go value | RDF (Turtle / N-Triples) | JSON Schema |
+|---|---|---|---|---|
+| `DataTypeString` | `string` | `string` | `"text"` (`xsd:string`, omitted) | `{"type":"string"}` |
+| `DataTypeEntityID` | `entity_id` | `string` (6-part ID) | `<iri>` — a resource, never a literal | `{"type":"string","format":"semstreams-entity-id"}` |
+| `DataTypeInt` | `int` | `float64` after the round trip | `"5"^^xsd:integer` | `{"type":"integer"}` |
+| `DataTypeFloat` | `float` | `float64` | `"5.5"^^xsd:double` | `{"type":"number"}` |
+| `DataTypeBool` | `bool` | `bool` | `"true"^^xsd:boolean` | `{"type":"boolean"}` |
+| `DataTypeDateTime` | `datetime` | `time.Time`, or RFC 3339 `string` | `"…Z"^^xsd:dateTime` | `{"type":"string","format":"date-time"}` |
+| `DataTypeJSON` | `json` | `string` | `"…"^^rdf:JSON` | `{"type":"string","contentMediaType":"application/json"}` |
+
+Declaring nothing is legal. **Anything else panics at registration**, naming the offending value and the accepted
+vocabulary. The framework translates nothing — there is no legacy-spelling map, so `float64`, `number`, `double`,
+`time.Time`, `timestamp`, `int64`, `array`, `entity_ref`, `reference` and `boolean` all halt the binary rather than
+becoming their canonical equivalent. If you declare any of them today, see
+[`docs/operations/migration-predicate-datatype.md`](../docs/operations/migration-predicate-datatype.md), which is
+the whole migration.
+
+Export honors the declaration, and **ignores it for any triple whose observed value contradicts it** — a fractional
+value under an `int` declaration serializes as `xsd:double`, not as a rounded integer.
 
 #### `WithUnits(units string)`
 
-Measurement units (if applicable).
+Measurement units, as free-form **documentation**. No framework path validates, normalizes, interprets, or honors it
+— unlike `WithDataType`, which is honored at export.
 
 ```go
 vocabulary.Register("sensor.temperature.celsius",
@@ -155,7 +180,8 @@ vocabulary.Register("sensor.temperature.celsius",
 
 #### `WithRange(valueRange string)`
 
-Valid value ranges (if applicable).
+Valid value ranges, as free-form **documentation**. `"0-100"`, `"-90 to 90"` and `"positive"` are three incompatible
+grammars, which is why nothing parses it. No framework path validates, normalizes, interprets, or honors it.
 
 ```go
 vocabulary.Register("robotics.battery.level",
@@ -187,7 +213,7 @@ vocabulary.Register("robotics.communication.callsign",
 ```go
 vocabulary.Register("robotics.battery.level",
     vocabulary.WithDescription("Battery charge level percentage"),
-    vocabulary.WithDataType("float64"),
+    vocabulary.WithDataType(vocabulary.DataTypeFloat),
     vocabulary.WithUnits("percent"),
     vocabulary.WithRange("0-100"),
     vocabulary.WithIRI("http://schema.org/batteryLevel"))
@@ -242,21 +268,21 @@ Some predicates represent entity aliases (identifiers, labels, call signs). The 
 // Communication identifier - highest priority
 vocabulary.Register("robotics.communication.callsign",
     vocabulary.WithDescription("Radio call sign for ATC"),
-    vocabulary.WithDataType("string"),
+    vocabulary.WithDataType(vocabulary.DataTypeString),
     vocabulary.WithAlias(vocabulary.AliasTypeCommunication, 0),
     vocabulary.WithIRI(vocabulary.FoafAccountName))
 
 // External identifier
 vocabulary.Register("robotics.identifier.serial",
     vocabulary.WithDescription("Manufacturer serial number"),
-    vocabulary.WithDataType("string"),
+    vocabulary.WithDataType(vocabulary.DataTypeString),
     vocabulary.WithAlias(vocabulary.AliasTypeExternal, 1),
     vocabulary.WithIRI(vocabulary.DcIdentifier))
 
 // Display label - NOT used for resolution
 vocabulary.Register("entity.label.display",
     vocabulary.WithDescription("Human-readable display name"),
-    vocabulary.WithDataType("string"),
+    vocabulary.WithDataType(vocabulary.DataTypeString),
     vocabulary.WithAlias(vocabulary.AliasTypeLabel, 10),  // Low priority
     vocabulary.WithIRI(vocabulary.RdfsLabel))
 ```

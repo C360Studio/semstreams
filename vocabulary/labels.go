@@ -16,7 +16,7 @@ package vocabulary
 func init() {
 	Register(DCTermsTitle,
 		WithDescription("Human-readable title/name of the entity (display label, not an identity)"),
-		WithDataType("string"),
+		WithDataType(DataTypeString),
 		WithIRI(DcTitle),
 		WithAlias(AliasTypeLabel, labelPriorityTitle))
 }

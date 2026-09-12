@@ -20,20 +20,20 @@ func Register() {
 func registerInjectionPredicates() {
 	vocabulary.Register(InjectionSignal,
 		vocabulary.WithDescription("Signal-bucket label the injection classifier matched on (e.g., instruction-override, network-egress, benign); categorical, rule-matchable"),
-		vocabulary.WithDataType("string"))
+		vocabulary.WithDataType(vocabulary.DataTypeString))
 
 	vocabulary.Register(InjectionTier,
 		vocabulary.WithDescription("Classifier tier that produced the verdict (0=regex, 1=BM25, 2=neural, 3=LLM); operational filter, rule-matchable"),
-		vocabulary.WithDataType("int"))
+		vocabulary.WithDataType(vocabulary.DataTypeInt))
 
 	vocabulary.Register(InjectionScore,
 		vocabulary.WithDescription("Similarity score of the nearest-neighbor match; rule-opaque to prevent adversaries tuning embedding distance toward a rule threshold"),
-		vocabulary.WithDataType("float64"),
+		vocabulary.WithDataType(vocabulary.DataTypeFloat),
 		vocabulary.WithRange("0-1"),
 		vocabulary.WithRuleOpaque(true))
 
 	vocabulary.Register(InjectionTopMatchID,
 		vocabulary.WithDescription("Corpus record identifier (sha) of the nearest-neighbor example; rule-opaque telemetry — rules matching on corpus IDs break when the corpus is reshuffled"),
-		vocabulary.WithDataType("string"),
+		vocabulary.WithDataType(vocabulary.DataTypeString),
 		vocabulary.WithRuleOpaque(true))
 }
