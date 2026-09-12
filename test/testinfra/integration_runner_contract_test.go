@@ -322,7 +322,7 @@ func TestIntegrationRunner_TerminationReapsPullBeforeReleasingLock(t *testing.T)
 	if err := graceReleaseWriter.Close(); err != nil {
 		t.Fatalf("close cleanup-grace release: %v", err)
 	}
-	waitErr := waiter.wait(3 * time.Second)
+	waitErr := waiter.wait(untilTestDeadline(t))
 	var timeoutErr *commandWaitTimeoutError
 	if errors.As(waitErr, &timeoutErr) {
 		t.Fatalf("runner waiter timed out after child release: %v\n%s", waitErr, output.String())
@@ -447,7 +447,7 @@ func TestIntegrationRunnerFakePullHelper_PreTERMReleaseExits(t *testing.T) {
 	if err := releaseWriter.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := waiter.wait(3 * time.Second); err != nil {
+	if err := waiter.wait(untilTestDeadline(t)); err != nil {
 		t.Fatalf("helper did not accept pre-TERM release: %v", err)
 	}
 	if command.ProcessState == nil || !command.ProcessState.Exited() {
@@ -561,7 +561,7 @@ func TestIntegrationRunner_HostLockHasBoundedContentionDiagnostics(t *testing.T)
 	if err := os.WriteFile(releaseFile, []byte("release\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := holderWaiter.wait(3 * time.Second); err != nil {
+	if err := holderWaiter.wait(untilTestDeadline(t)); err != nil {
 		t.Fatalf("holder did not finish after release: %v\n%s", err, holderOutput.String())
 	}
 	cancelHolder()
@@ -833,6 +833,23 @@ func mustPipe(t *testing.T) (*os.File, *os.File) {
 		t.Fatal(err)
 	}
 	return reader, writer
+}
+
+// untilTestDeadline is the wait for a process the test has already released:
+// "it exits" is the assertion, and the bound is the one the test binary
+// enforces anyway. A per-step number under that bound is a predicted budget
+// for work the test does not control — bash spawning the fake toolchain
+// under parallel-suite load — and 3s fired 2 of 10 times under load on the
+// day it landed (gh#1290). Deleted, not widened, per the #1284 ruling. The
+// grace keeps the failure the test's own, reported with the process output,
+// rather than the binary's deadline panic.
+func untilTestDeadline(t *testing.T) time.Duration {
+	t.Helper()
+	deadline, ok := t.Deadline()
+	if !ok {
+		deadline = time.Now().Add(10 * time.Minute) // go test's default -timeout
+	}
+	return time.Until(deadline) - 5*time.Second
 }
 
 // commandWaiter gives exactly one goroutine ownership of Cmd.Wait. Callers may
