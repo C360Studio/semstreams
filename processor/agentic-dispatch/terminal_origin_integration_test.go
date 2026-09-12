@@ -4,7 +4,7 @@ package agenticdispatch
 
 // gh#1094 — real-NATS proofs for workflow terminal delivery:
 //
-//  1. Origin resolution is restart-safe: with an EMPTY process tracker, the
+//  1. Origin resolution is restart-safe: in a fresh dispatch instance, the
 //     route comes from persisted AGENT_LOOPS ancestry, and two deliveries of
 //     the same terminal leave exactly one message on the origin's subject.
 //  2. The AGENT_LOOPS bucket name is OBSERVED from the declared agent_loops
@@ -72,7 +72,7 @@ func TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart(t *
 	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads)
 	c := &Component{
 		config: DefaultConfig(), decoder: message.NewDecoder(reg), natsClient: tc.Client,
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)), loopTracker: NewLoopTracker(), metrics: getMetrics(nil),
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)), metrics: getMetrics(nil),
 	}
 	c.config.Ports.Outputs[2].Config = component.JetStreamPort{Subjects: []string{"user.response.>"}, StreamName: "USER_TERMINAL"}
 
@@ -81,20 +81,20 @@ func TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart(t *
 	// The chain as a rule-spawned workflow persists it: only the root owns a
 	// route; every descendant carries ancestry and nothing else.
 	putLoopRecord(t, ctx, kv, agentic.LoopEntity{
-		ID: "chain-root", TaskID: "task-chain-root", State: agentic.LoopStateComplete,
+		ID: "35f24ee8-8bb9-4dc4-bc8e-000000000029", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000029", State: agentic.LoopStateComplete, MaxIterations: 3,
 		ChannelType: "http", ChannelID: "origin-1", UserID: "user-1",
 	})
 	putLoopRecord(t, ctx, kv, agentic.LoopEntity{
-		ID: "chain-mid", TaskID: "task-chain-mid", State: agentic.LoopStateComplete,
-		ParentLoopID: "chain-root", RunID: "chain-root",
+		ID: "35f24ee8-8bb9-4dc4-bc8e-000000000030", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000030", State: agentic.LoopStateComplete, MaxIterations: 3,
+		ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000029", RunID: "35f24ee8-8bb9-4dc4-bc8e-000000000029",
 	})
 	putLoopRecord(t, ctx, kv, agentic.LoopEntity{
-		ID: "chain-terminal", TaskID: "task-chain-terminal", State: agentic.LoopStateComplete,
-		ParentLoopID: "chain-mid", RunID: "chain-root",
+		ID: "35f24ee8-8bb9-4dc4-bc8e-000000000031", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000031", State: agentic.LoopStateComplete, MaxIterations: 3,
+		ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000030", RunID: "35f24ee8-8bb9-4dc4-bc8e-000000000029",
 	})
 
 	terminal := &agentic.LoopCompletedEvent{
-		LoopID: "chain-terminal", TaskID: "task-chain-terminal", Outcome: agentic.OutcomeSuccess,
+		LoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000031", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000031", Outcome: agentic.OutcomeSuccess,
 		Role:        "coordinator",
 		Result:      `{"action":"respond_direct","reason":"Optimized the flight plan."}`,
 		CompletedAt: time.Now().UTC(),
@@ -109,9 +109,14 @@ func TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart(t *
 	}
 	require.NoError(t, json.Unmarshal(data, &source))
 
-	require.Empty(t, c.loopTracker.Get("chain-terminal"), "the tracker is empty, as after a restart")
+	before, err := kv.Get(ctx, "35f24ee8-8bb9-4dc4-bc8e-000000000031")
+	require.NoError(t, err)
 	require.NoError(t, c.settleAgentTerminal(ctx, data), "origin must be recovered from AGENT_LOOPS ancestry alone")
 	require.NoError(t, c.settleAgentTerminal(ctx, data), "redelivery must reuse the same response identity")
+	after, err := kv.Get(ctx, "35f24ee8-8bb9-4dc4-bc8e-000000000031")
+	require.NoError(t, err)
+	require.Equal(t, before.Revision(), after.Revision(), "dispatch never rewrites loop authority")
+	require.Equal(t, before.Value(), after.Value())
 
 	stream, err := tc.Client.GetStream(ctx, "USER_TERMINAL")
 	require.NoError(t, err)
@@ -135,7 +140,7 @@ func TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart(t *
 	require.True(t, ok, "expected *agentic.UserResponse, got %T", decoded.Payload())
 	require.Equal(t, agentic.ResponseTypeResult, response.Type)
 	require.Equal(t, "Optimized the flight plan.", response.Content)
-	require.Equal(t, "chain-terminal", response.InReplyTo)
+	require.Equal(t, "35f24ee8-8bb9-4dc4-bc8e-000000000031", response.InReplyTo)
 	require.Equal(t, "http", response.ChannelType)
 	require.Equal(t, "origin-1", response.ChannelID)
 	require.Equal(t, "user-1", response.UserID)
@@ -155,7 +160,7 @@ func TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort(t *testi
 	c := &Component{
 		config: dispatchConfigWithAgentLoopsBucket(t, altBucket), decoder: message.NewDecoder(reg),
 		natsClient: tc.Client, logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		loopTracker: NewLoopTracker(), metrics: getMetrics(nil),
+		metrics: getMetrics(nil),
 	}
 	c.config.Ports.Outputs[2].Config = component.JetStreamPort{Subjects: []string{"user.response.>"}, StreamName: "USER_TERMINAL"}
 
@@ -164,12 +169,12 @@ func TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort(t *testi
 	kv, err := tc.GetKVBucket(ctx, altBucket)
 	require.NoError(t, err)
 	putLoopRecord(t, ctx, kv, agentic.LoopEntity{
-		ID: "alt-loop", TaskID: "task-alt-loop", State: agentic.LoopStateComplete,
+		ID: "35f24ee8-8bb9-4dc4-bc8e-000000000032", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000032", State: agentic.LoopStateComplete, MaxIterations: 3,
 		ChannelType: "http", ChannelID: "alt-origin", UserID: "alt-user",
 	})
 
 	data := terminalEnvelopeForDispatch(t, &agentic.LoopCompletedEvent{
-		LoopID: "alt-loop", TaskID: "task-alt-loop", Outcome: agentic.OutcomeSuccess,
+		LoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000032", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000032", Outcome: agentic.OutcomeSuccess,
 		Result: "the alt result", CompletedAt: time.Now().UTC(),
 	})
 	require.NoError(t, c.settleAgentTerminal(ctx, data))

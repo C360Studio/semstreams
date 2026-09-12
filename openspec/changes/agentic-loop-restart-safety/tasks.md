@@ -3,17 +3,28 @@
 ## Finish line and status
 
 Deliver #1146's supported agentic restart contract: no successful ACK for unfinished required work, recovery from
-existing durable evidence, and working sequential chat. Keep the 15-subscription claim and every accepted refusal,
-identity, retention, lifecycle, and approval condition. This reconciliation adds no runtime behavior or approval.
+existing durable evidence, and working sequential chat. Keep the 15-subscription claim and the refusal, identity,
+retention, lifecycle, and approval conditions. The owner-approved 2026-09-12 reduction withdraws research rendering,
+prefix consolidation, and unknown-noncanonical-key authority poison; it does not waive canonical-current validation,
+registered stream decoding, or durability before ACK.
 
-The last committed runtime checkpoint is `160ad091`, followed by unpublished dispatch/validator/fixture changes.
-Earlier committed checkpoints passed full local gates and agentic E2E; the current combined tree has not. Its last
-full push gate stopped at the core dependency test because dispatch imports optional research. No runtime tests
-are made current by this documentation edit.
+R1's reduced dispatcher checkpoint passed complete local verification on 2026-09-12: `task check:push` (including
+the full unit and Docker-backed integration race suites) and mock-provider `task e2e:agentic` (16 verification
+stages, including approval after OS-process restart, cancellation, durable tool replay and process replacement).
+Independent review approved the current checkpoint source, including the underlying R1 changes and exact reusable
+graphview/shared-validator reviews. This is a verified draft checkpoint, not whole-#1146 completion or merge approval.
+
+On resume, the worktree exactly matched the saved [pause checkpoint](history/rescue-pause-2026-09-12.md).
+Corrections included a valid registered unsupported-payload fixture, existing-owner cancel-before-join,
+owner-versus-client cancellation in activity SSE, the positive native AutoContinue caught-up barrier, and exact
+audit/retired-consumer census metadata. The shutdown regression was observed failing before the correction;
+the existing explicit-terminal-SSE test was retained unchanged. No new runtime owner or recovery mechanism was added.
 
 The old 94-task checklist and execution journal are frozen in
 [the historical checkpoint](history/task-checkpoint-2026-09-11.md). The mapping below accounts for every old ID.
-No previously open task is marked complete here. Group counts are not a percentage estimate of work remaining.
+The reconciliation itself completed no previously open task. R1 is now verified as narrowed below; its research
+detour remains withdrawn by the owner, not implemented.
+Group counts are not a percentage estimate of work remaining.
 Accepted behavior lives in the eight capability deltas and design; historical task text is not a competing target.
 
 Every new behavior test cites `// spec: <capability> / <Requirement heading>` from an active delta. Use RED → minimum
@@ -37,15 +48,16 @@ These preserve the previously checked items at their recorded baselines, not who
 
 ## Closeout checklist
 
-- [ ] R1 BLOCKED: finish the existing dispatch edge-gateway slice and correct its introduced dependency/projection
-  defects (old 6.7–6.13). Resolve the research-boundary conflict explicitly before changing that contract; neither
-  a JSON field-peeking replacement nor silent loss of research activity is approved. Then prove one caught-up
-  authority view, mixed-key admission/poison/healing, immutable LoopInfo mapping, deletion/purge/expiry, exact
-  LookupLoopOwner, tracker/created/pending-consumer retirement, AutoContinue's exact tuple and birth gap, routeless
-  terminal settlement, retention-bounded user routing, metric removal, and graphview lifecycle replacement.
-  Preserve the admitted empty context_request_id exception and PendingApprovalInfo execution_id addition; no
-  other mapping change is implied. The research task's old “LoopInfo completion” wording is activity-only, not
-  proof that the bare research LoopEntity reached terminal state. Keep the pending-retry native drain regression.
+- [x] R1 Finish the minimal dispatcher by withdrawing the unpublished research rendering/prefix detour
+  (old 6.7–6.13, narrowed by owner on 2026-09-12). Retain tracker/created/pending-consumer retirement, exact
+  validated KV authority, immutable DTO/approval identity, ordinary completion activity, one view, canonical-current
+  poison/healing, deletion/purge/expiry, lifecycle join, exact LookupLoopOwner, and existing routing/AutoContinue
+  tuple/birth-gap obligations. Keep routeless terminal settlement, retention-bounded user routing and metric removal.
+  Preserve the empty context_request_id exception and PendingApprovalInfo execution_id addition; no unrelated
+  mapping change is implied. Core dependency closure and
+  TestIntegrationApprovalRequiredResultRetriesMatchingPendingPrompt passed, retaining strict native drain checks;
+  the full push gate, agentic E2E and current-checkpoint source review passed on 2026-09-12.
+  Research rendering is withdrawn, not completed; no new payload behavior or shared record package is authorized.
 
 - [ ] R2 Complete approval replacement/replay evidence and its remaining corrections (old 6.1, 6.1a, 6.2, 6.3, 6.5,
   6.5b–6.5d). Retain approve/modify/reject/timeout and original-deadline controls; exact execution/argument/trace
@@ -110,7 +122,8 @@ These preserve the previously checked items at their recorded baselines, not who
   real-NATS replacement matrix and eight non-heartbeat callback proofs, race/integration, lint, tagged vet, build,
   schema/contracts, and agentic E2E including approval after process restart and the admitted first-party path.
   Existing focused greens and older whole-suite greens do not satisfy this candidate gate. No known unfixed
-  required-job flake is waived by a later green run.
+  required-job flake is waived by a later green run. R1's current full-suite/E2E checkpoint is recorded above;
+  the final candidate after remaining R2–R10 work still requires this gate.
 
 - [ ] R12 Reconcile user documentation, migrations, schema/examples, and PR claims (old 11.3–11.4). Explain the
   settlement/message-pump pattern and correct concepts 03/17/27, linking concept 33. Cover provider duplicate risk,
@@ -143,9 +156,24 @@ Old IDs cited in dated artifacts resolve through this mapping; they do not reviv
   `5d8e4d7ba397ef62fb7e0aa0ff843e29b376121cbe83af5e2dc20b71c619b0b0`; 61 source/generated entries, not a commit.
 - Unpublished focused results: `final-handoff.md` and `results.json` beside that manifest. Mixed-view/native retention,
   matching-pending retry and focused race checks passed. Whole implementation review remains incomplete.
-- Current combined gate: `/private/tmp/gh1146-dispatch-final.Bdd1Kx/check-push.log`, SHA-256
+- Pre-rescue combined gate: `/private/tmp/gh1146-dispatch-final.Bdd1Kx/check-push.log`, SHA-256
   `4adab5744122ea365b87c53d32ec7d2aad01190c55b64eb570b04a43df32b8ac`: FAILED core→research closure. Later full
   unit/integration stages did not run; no combined-source E2E is claimed.
+- Resumed combined gate: `/private/tmp/gh1146-resume.qbsIrH/check-push.log`, SHA-256
+  `58fddbb65bc20f5204743344603f97673dea033247d4645cd855c2cb6af15728`: build/lint/tagged vet/schema/contracts passed;
+  unit race failed `TestAuditRepositoryFullWithAbsoluteRootReportsRepositoryRelativeCandidates`,
+  `TestFoundationBTargetCompleteness`, and `TestMessageLoggerShippedSubjectCensusArtifactIsCompleteAndExact`.
+  Full integration did not run. This failed run is historical, not combined-candidate approval.
+- Subsequent combined gate: `/private/tmp/gh1146-resume.qbsIrH/check-push-corrected.log`, SHA-256
+  `b04d39fc177f0269fa1f647f55bff7dbcba65f266911b7a239acb860eced3910`: failed the existing explicit-terminal-SSE
+  Stop test. Corrected the owner/client cancellation distinction; the test remained unchanged.
+- Verified R1 full gate: `/private/tmp/gh1146-resume.qbsIrH/check-push-final.log`, SHA-256
+  `e531b842261be76880730d37f41f0d36d1a7dd0f2ad47483cf560332578fdc22`: `task check:push` passed, including
+  full unit/integration race suites. Native dispatch passed in 85.910s; native loop passed in 383.253s.
+- Verified R1 E2E: `/private/tmp/gh1146-resume.qbsIrH/e2e-agentic.log`, SHA-256
+  `f032d230ab26096bab9d539c04b9d77f2b8ef5b4496b4121cd0e8cf82f7886b4`:
+  `AGENTIC_LLM_URL=http://mock-llm:8080/v1 task e2e:agentic` passed in 2m32s, `assertions_run=16`.
+  The tier explicitly ran `walk-approval-after-restart`; this is process-replacement evidence, not a seeded test.
 
 Local temporary paths are locators, not guaranteed durable proof. Before completing a closeout gate, supply its
 reproducible in-tree test/source or durable CI evidence at the reviewed candidate; do not promote a missing local
@@ -154,7 +182,8 @@ log or a historical source hash to current verification.
 ## Separate ownership and landing
 
 - #1288 owns the inherited research completion-envelope/readback/current-state mismatch. It has no selected API or
-  milestone. It does not excuse R1 or authorize dropping existing research activity semantics.
+  milestone. Its producer and registered payload remain unchanged. The new research activity-rendering requirement
+  is withdrawn from #1146; R1 must remove its introduced dependency without weakening existing stream validation.
 - #1158 owns broader registered application-subject enforcement; #1112 owns graph-ingest validation/identity panic;
   #609 owns the observed statistical readiness residual. They are not new unchecked tasks in this change, and
   applicable required-job flake rules still apply.

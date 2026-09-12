@@ -138,10 +138,9 @@ func TestAttack_LoadGlobalCommands_NoGoroutineLeak(t *testing.T) {
 	// Create and destroy components multiple times
 	for i := 0; i < 20; i++ {
 		comp := &Component{
-			registry:    NewCommandRegistry(),
-			loopTracker: NewLoopTracker(),
-			logger:      nil,
-			natsClient:  nil,
+			registry:   NewCommandRegistry(),
+			logger:     nil,
+			natsClient: nil,
 		}
 		comp.loadGlobalCommands()
 	}
@@ -173,10 +172,9 @@ func TestAttack_ClosureCapture_CorrectExecutorCalled(t *testing.T) {
 
 	// Create component and load global commands
 	comp := &Component{
-		registry:    NewCommandRegistry(),
-		loopTracker: NewLoopTracker(),
-		logger:      nil,
-		natsClient:  nil,
+		registry:   NewCommandRegistry(),
+		logger:     nil,
+		natsClient: nil,
 	}
 	comp.loadGlobalCommands()
 
@@ -245,7 +243,6 @@ func TestAttack_CommandContext_NilFields(t *testing.T) {
 			name: "nil NATSClient",
 			cmdCtx: &CommandContext{
 				NATSClient:    nil,
-				LoopTracker:   NewLoopTracker(),
 				Logger:        nil,
 				HasPermission: func(string, string) bool { return true },
 			},
@@ -254,7 +251,6 @@ func TestAttack_CommandContext_NilFields(t *testing.T) {
 			name: "nil Logger",
 			cmdCtx: &CommandContext{
 				NATSClient:    nil,
-				LoopTracker:   NewLoopTracker(),
 				Logger:        nil,
 				HasPermission: func(string, string) bool { return true },
 			},
@@ -263,7 +259,6 @@ func TestAttack_CommandContext_NilFields(t *testing.T) {
 			name: "nil HasPermission",
 			cmdCtx: &CommandContext{
 				NATSClient:    nil,
-				LoopTracker:   NewLoopTracker(),
 				Logger:        nil,
 				HasPermission: nil,
 			},
@@ -288,9 +283,7 @@ func TestAttack_CancelledContext_InExecutor(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	cmdCtx := &CommandContext{
-		LoopTracker: NewLoopTracker(),
-	}
+	cmdCtx := &CommandContext{}
 
 	msg := agentic.UserMessage{
 		MessageID:   "msg-1",

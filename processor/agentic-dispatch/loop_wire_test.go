@@ -22,7 +22,6 @@ func TestColdLoopWirePreservesPendingExecutionEcho(t *testing.T) {
 	withPersistedLoops(comp, map[string]*agentic.LoopEntity{seamTestLoopA: {
 		ID: seamTestLoopA, State: agentic.LoopStateAwaitingApproval, MaxIterations: 3, PendingApproval: pending,
 	}})
-	require.Nil(t, comp.loopTracker.Get(seamTestLoopA))
 	projected, err := comp.loopWireByID(t.Context(), seamTestLoopA)
 	require.NoError(t, err)
 	wire, err := json.Marshal(projected)

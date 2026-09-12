@@ -7,6 +7,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,7 +45,7 @@ func TestUnreadableRetainedTaskEvidenceDoesNotMintOrRefuse(t *testing.T) {
 	err = c.handleTaskSubmission(t.Context(), msg)
 	require.True(t, errs.IsTransient(err), "the durable source owner must retry an unreadable evidence check")
 	require.Empty(t, sink.all(), "a retryable evidence outage is not a permanent user refusal")
-	require.Empty(t, c.loopTracker.GetAllLoops(), "unreadable evidence must not track newly minted work")
+	require.Zero(t, testutil.ToFloat64(c.metrics.tasksSubmitted), "unreadable evidence must not publish newly minted work")
 }
 
 // spec: agentic-dispatch / Dispatch task redelivery recovers the committed LoopID

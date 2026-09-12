@@ -73,11 +73,11 @@ func TestSettleAgentTerminalConsumesARealLoopDecideCompletion(t *testing.T) {
 
 		loader := newAncestryLoader(
 			agentic.LoopEntity{
-				ID: terminalLoopID, TaskID: "seam-task", State: agentic.LoopStateComplete,
-				ParentLoopID: "seam-root",
+				ID: terminalLoopID, TaskID: "seam-task", State: agentic.LoopStateComplete, MaxIterations: 3,
+				ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000028",
 			},
 			agentic.LoopEntity{
-				ID: "seam-root", State: agentic.LoopStateComplete,
+				ID: "35f24ee8-8bb9-4dc4-bc8e-000000000028", State: agentic.LoopStateComplete, MaxIterations: 3,
 				ChannelType: "http", ChannelID: "origin-1", UserID: "user-1",
 			},
 		)
@@ -102,7 +102,7 @@ func TestSettleAgentTerminalConsumesARealLoopDecideCompletion(t *testing.T) {
 		terminalLoopID := loopIDFromEnvelope(t, c, data)
 
 		loader := newAncestryLoader(agentic.LoopEntity{
-			ID: terminalLoopID, TaskID: "seam-task", State: agentic.LoopStateComplete,
+			ID: terminalLoopID, TaskID: "seam-task", State: agentic.LoopStateComplete, MaxIterations: 3,
 			ChannelType: "http", ChannelID: "origin-1",
 		})
 		c.loadPersistedLoopFn = loader.load

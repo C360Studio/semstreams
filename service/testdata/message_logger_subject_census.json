@@ -43,11 +43,11 @@
     "configs/structural.json"
   ],
   "raw": {"rows": 388, "per_config_exact_keys": 239, "global_strings": 50},
-  "effective": {"rows": 572, "per_config_exact_keys": 376, "global_strings": 66},
-  "delta": {"rows": 184, "per_config_exact_keys": 137, "global_strings": 16, "removals": 0},
-  "exact_collapses": {"loop_dispatch": 47, "governance": 0, "total": 47},
+  "effective": {"rows": 554, "per_config_exact_keys": 376, "global_strings": 66},
+  "delta": {"rows": 166, "per_config_exact_keys": 137, "global_strings": 16, "removals": 0},
+  "exact_collapses": {"loop_dispatch": 29, "governance": 0, "total": 29},
   "added_kinds": {
-    "jetstream_inputs": 65,
+    "jetstream_inputs": 47,
     "jetstream_outputs": 65,
     "nats_inputs": 9,
     "nats_outputs": 27,

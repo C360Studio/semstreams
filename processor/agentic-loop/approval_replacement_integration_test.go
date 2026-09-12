@@ -73,44 +73,64 @@ func (*approvalReplacementExecutor) ListTools() []agentic.ToolDefinition {
 
 // spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
 func TestIntegrationApprovalAfterLoopAndDispatchReplacement(t *testing.T) {
-	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, false, false, "")
+	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, false, false, "", false)
 }
 
 // spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
 // spec: agentic-loop / Per-loop in-process state is released at terminal, through the one release point
 func TestIntegrationAppliedApprovalRedeliversAfterOwnerReplacement(t *testing.T) {
-	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, false, false, "agent.approval_response")
+	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, false, false, "agent.approval_response", false)
 }
 
 // spec: agentic-loop / Approval-required tool statuses settle by observed execution phase
 func TestIntegrationApprovalRequiredResultRedeliversAfterClosedGate(t *testing.T) {
-	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, false, false, "tool.result")
+	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, false, false, "tool.result", false)
 }
 
 // spec: agentic-loop / Approval-required tool statuses settle by observed execution phase
 func TestIntegrationApprovalRequiredResultRedeliversAfterLaterHistory(t *testing.T) {
 	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{
 		Decision: agentic.ApprovalDecisionReject, Reason: "retain rule-42 for audit",
-	}, false, false, "tool.result")
+	}, false, false, "tool.result", false)
+}
+
+// spec: agentic-loop / Approval-required tool statuses settle by observed execution phase
+func TestIntegrationApprovalRequiredResultRedeliversAfterModifiedGate(t *testing.T) {
+	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{
+		Decision: agentic.ApprovalDecisionModify, ModifiedArguments: map[string]any{"rule_id": "rule-99"},
+	}, false, false, "tool.result", false)
+}
+
+// spec: agentic-loop / Approval-required tool statuses settle by observed execution phase
+// spec: agentic-loop / Approval deadlines are reconstructed narrowly
+func TestIntegrationApprovalRequiredResultRedeliversAfterTimeout(t *testing.T) {
+	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{
+		Decision: agentic.ApprovalDecisionReject, Reason: "approval timed out after 8s",
+	}, false, true, "tool.result", false)
+}
+
+// spec: agentic-loop / Approval-required tool statuses settle by observed execution phase
+func TestIntegrationApprovalRequiredResultRetriesMatchingPendingPrompt(t *testing.T) {
+	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, false, false, "tool.result", true)
 }
 
 // spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
 func TestIntegrationModifiedApprovalAfterLoopAndDispatchReplacement(t *testing.T) {
 	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{
 		Decision: agentic.ApprovalDecisionModify, ModifiedArguments: map[string]any{"rule_id": "rule-99"},
-	}, false, false, "")
+	}, false, false, "", false)
 }
 
 // spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
 func TestIntegrationRejectedApprovalAfterLoopAndDispatchReplacement(t *testing.T) {
 	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{
 		Decision: agentic.ApprovalDecisionReject, Reason: "retain rule-42 for audit",
-	}, false, false, "")
+	}, false, false, "", false)
 }
 
 // spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
 func TestIntegrationApprovalReplacementIgnoresOlderSameCallIDResponse(t *testing.T) {
-	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, true, false, "")
+	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, true, false, "", false)
 }
 
 // spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
@@ -118,13 +138,13 @@ func TestIntegrationApprovalReplacementIgnoresOlderSameCallIDResponse(t *testing
 func TestIntegrationApprovalTimeoutAfterLoopAndDispatchReplacement(t *testing.T) {
 	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{
 		Decision: agentic.ApprovalDecisionReject, Reason: "approval timed out after 8s",
-	}, false, true, "")
+	}, false, true, "", false)
 }
 
 // Real task/model/tools owners produce every retained checkpoint; no process
 // cache or durable loop record is seeded. Graph/evidence E2E and
 // OS-process replacement remain separate proofs.
-func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.ApprovalRequest, retainOlderResponse, timeout bool, redeliverPort string) {
+func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.ApprovalRequest, retainOlderResponse, timeout bool, redeliverPort string, retryPending bool) {
 	t.Helper()
 	laterHistory := redeliverPort == "tool.result" && approvalRequest.Decision == agentic.ApprovalDecisionReject
 	const laterFailureContent = "Tool error: tool call had empty function name — call a specific tool by name or respond with text"
@@ -268,6 +288,9 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 	var closedPromptSequence uint64
 	var supersededBefore float64
 	var settledStreamSequence uint64
+	var pendingBefore jetstream.KeyValueEntry
+	var pendingPromptBefore agentic.ApprovalPendingEvent
+	var pendingPromptSequence uint64
 	startOwners := func(approvalTimeout, interruptAckPort string) (*http.ServeMux, func()) {
 		t.Helper()
 		loopConfig := DefaultConfig()
@@ -323,7 +346,37 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 								return err
 							}
 							// The first source ACK requires the persisted gate and prompt.
-							// Later superseded delivery correctly observes a closed gate.
+							// A matching pending retry republishes that same gate; later
+							// superseded delivery instead observes its closed phase.
+							if metadata.NumDelivered > 1 && retryPending {
+								current, err := c.loopsBucket.Get(msgCtx, result.LoopID)
+								if err != nil {
+									return err
+								}
+								if pendingBefore == nil || current.Revision() != pendingBefore.Revision() ||
+									!bytes.Equal(current.Value(), pendingBefore.Value()) {
+									return errors.New("pending retry rewrote retained gate identity or deadline before ACK")
+								}
+								prompt, err := stream.GetLastMsgForSubject(msgCtx, "agent.approval_pending."+result.LoopID)
+								if err != nil {
+									return err
+								}
+								base, err := decoder.Decode(prompt.Data)
+								if err != nil {
+									return err
+								}
+								republished, ok := base.Payload().(*agentic.ApprovalPendingEvent)
+								if !ok || !reflect.DeepEqual(pendingPromptBefore, *republished) || prompt.Sequence <= pendingPromptSequence {
+									return errors.New("pending retry ACK preceded a newly retained exact prompt publication")
+								}
+								if executor.calls.Load() != priorExecutions || providerCalls.Load() != 1+priorExecutions {
+									return errors.New("pending retry executed gated work or requested another model response")
+								}
+								t.Logf("pending retry pre-ACK: source=%d delivered=%d kv_revision=%d prompt_before=%d prompt_after=%d requested_at=%s timeout=%s",
+									metadata.Sequence.Stream, metadata.NumDelivered, current.Revision(), pendingPromptSequence, prompt.Sequence,
+									republished.RequestedAt.Format(time.RFC3339Nano), republished.Timeout)
+								return nil
+							}
 							if metadata.NumDelivered > 1 {
 								if redeliverPort == "tool.result" {
 									// The original source still occupies MaxAckPending=1.
@@ -421,7 +474,7 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 			require.NoError(t, owner.Start(runCtx))
 			started = append(started, owner)
 		}
-		if !timeout {
+		if approvalTimeout == "" {
 			require.Empty(t, c.handler.loopManager.loops, "Start must not receive another instance's process state")
 		}
 		mux := http.NewServeMux()
@@ -467,9 +520,12 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 				}
 			}
 			require.NoError(collect, lister.Err())
-			// These ACKed events must not repopulate the replacement tracker.
-			require.True(collect, seen["agent.created.*"])
-			require.True(collect, seen["agent.approval_pending.*"])
+			// Retired observational consumers stay absent before and after
+			// replacement. Every remaining owner still drains above.
+			require.False(collect, seen["agent.created.*"])
+			require.False(collect, seen["agent.approval_pending.*"])
+			require.True(collect, seen["agent.complete.*"])
+			require.True(collect, seen["agent.failed.*"])
 			require.True(collect, seen["agent.approval_response.*"])
 			if withheldFilter != "" {
 				require.True(collect, seen[withheldFilter])
@@ -479,6 +535,8 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 	initialTimeout, replacementTimeout := "", ""
 	if timeout {
 		initialTimeout, replacementTimeout = "8s", "1m"
+	} else if retryPending {
+		initialTimeout, replacementTimeout = "1m", "2m"
 	}
 	firstInterruptedPort := ""
 	if redeliverPort == "tool.result" {
@@ -600,6 +658,9 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 			// Retain the exact identity shown before replacement; do not ask
 			// the replacement owner to select a gate on behalf of this prompt.
 			approvalRequest.ExecutionID = prompt.ExecutionID
+			if retryPending {
+				pendingPromptBefore, pendingPromptSequence = *prompt, event.Sequence
+			}
 		}
 		eventFloors[prefix+"*"] = event.Sequence
 	}
@@ -641,11 +702,45 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 	if redeliverPort == "agent.approval_response" {
 		replacementInterruptedPort = redeliverPort
 	}
+	if retryPending {
+		pendingBefore = entry
+		require.Equal(t, time.Minute, pending.PendingApproval.Timeout)
+	}
 	replacementMux, stopReplacement := startOwners(replacementTimeout, replacementInterruptedPort)
 	var appliedApproval *approvalReplacementDelivery
 	unchanged, err := bucket.Get(ctx, loopID)
 	require.NoError(t, err)
 	require.Equal(t, entry.Value(), unchanged.Value(), "replacement must use retained pending authority")
+	if retryPending {
+		// No HTTP decision or manual handler call triggers recovery. Wait for
+		// the same server-owned source to redeliver while its gate remains open.
+		var retried *approvalReplacementDelivery
+		select {
+		case retried = <-settled["tool.result"]:
+		case <-time.After(info.Config.AckWait + 5*time.Second):
+			t.Fatal("original pending ToolResult did not redeliver to the replacement owner")
+		}
+		retriedMeta, err := retried.Metadata()
+		require.NoError(t, err)
+		require.Equal(t, metadata.Stream, retriedMeta.Stream)
+		require.Equal(t, metadata.Consumer, retriedMeta.Consumer)
+		require.Equal(t, metadata.Sequence.Stream, retriedMeta.Sequence.Stream)
+		require.Equal(t, uint64(2), retriedMeta.NumDelivered)
+		require.Equal(t, initial.Subject(), retried.Subject())
+		require.Equal(t, initial.Data(), retried.Data())
+		require.NoError(t, retried.ackCheckErr)
+		require.Equal(t, 1, retried.acks)
+		require.Zero(t, retried.naks+retried.terms)
+		require.True(t, time.Now().Before(pending.PendingApproval.RequestedAt.Add(pending.PendingApproval.Timeout)))
+		prompt, err := stream.GetLastMsgForSubject(ctx, "agent.approval_pending."+loopID)
+		require.NoError(t, err)
+		eventFloors["agent.approval_pending.*"] = prompt.Sequence
+		eventFloors[info.Config.FilterSubject] = retriedMeta.Sequence.Stream
+		waitSettled("")
+		t.Logf("matching pending source settled: sequence=%d delivered=%d ack=%d nak=%d term=%d original_timeout=%s replacement_config=%s",
+			retriedMeta.Sequence.Stream, retriedMeta.NumDelivered, retried.acks, retried.naks, retried.terms,
+			pending.PendingApproval.Timeout, replacementTimeout)
+	}
 	if timeout {
 		// Exercise the real five-second ticker without an HTTP decision or a
 		// manual handler call. A fifteen-second window allows three cadence
@@ -727,7 +822,7 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 		}
 		require.Equal(t, want, *call, "approval must preserve request/execution/ordinal/call/arguments/trace")
 		require.NoError(t, redispatched.DoubleAck(ctx))
-		if redeliverPort == "tool.result" {
+		if redeliverPort == "tool.result" && !retryPending {
 			// ApprovalResponse is an independent consumer and commits closure.
 			// The original unacked result holds the sole tool.result slot, so
 			// the completed approved result must remain queued until replay ACK.
@@ -957,7 +1052,7 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 	require.Equal(t, wantExecutions, executor.calls.Load())
 	require.Equal(t, wantProviderCalls, providerCalls.Load())
 	stopReplacement()
-	if redeliverPort == "tool.result" {
+	if redeliverPort == "tool.result" && !retryPending {
 		require.Contains(t, replayLogs.String(), "approval-required tool status superseded by observed execution phase")
 		require.Contains(t, replayLogs.String(), "loop_id="+loopID)
 		require.Contains(t, replayLogs.String(), "execution_id="+gated.ExecutionID)

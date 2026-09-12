@@ -3,10 +3,10 @@ package agentic
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
@@ -30,10 +30,10 @@ func TestApprovalRestartCannotPassWithoutReplacementAndRecovery(t *testing.T) {
 		"approval_restart_tool_call_verified": true,
 	}
 	for _, lane := range []string{"created", "pending"} {
-		complete["approval_restart_"+lane+"_sequence"] = uint64(21)
-		complete["approval_restart_"+lane+"_ack_floor"] = uint64(21)
-		complete["approval_restart_"+lane+"_pending"] = 0
-		complete["approval_restart_"+lane+"_queued"] = uint64(0)
+		for _, phase := range []string{"before", "after"} {
+			complete["approval_restart_"+lane+"_sequence_"+phase] = uint64(21)
+			complete["approval_restart_"+lane+"_consumer_absent_"+phase] = true
+		}
 	}
 	s := NewScenario(nil, DefaultConfig())
 	if err := s.validateResults(t.Context(), &scenarios.Result{Details: maps.Clone(complete)}); err != nil {
@@ -51,19 +51,27 @@ func TestApprovalRestartCannotPassWithoutReplacementAndRecovery(t *testing.T) {
 		{name: "no executor effect", key: "approval_restart_tool_executions", value: float64(0)},
 		{name: "omitted recovery", key: "approval_restart_outcome"},
 		{name: "wrong outcome", key: "approval_restart_outcome", value: agentic.OutcomeFailed},
-		{name: "missing created source", key: "approval_restart_created_sequence"},
-		{name: "unacked created source", key: "approval_restart_created_ack_floor", value: uint64(20)},
-		{name: "created delivery pending", key: "approval_restart_created_pending", value: 1},
-		{name: "created source queued", key: "approval_restart_created_queued", value: uint64(1)},
-		{name: "missing pending notification", key: "approval_restart_pending_sequence"},
-		{name: "unacked pending notification", key: "approval_restart_pending_ack_floor", value: uint64(20)},
-		{name: "pending notification outstanding", key: "approval_restart_pending_pending", value: 1},
-		{name: "pending notification queued", key: "approval_restart_pending_queued", value: uint64(1)},
+		{name: "missing created source before", key: "approval_restart_created_sequence_before"},
+		{name: "missing created source after", key: "approval_restart_created_sequence_after"},
+		{name: "missing pending source before", key: "approval_restart_pending_sequence_before"},
+		{name: "missing pending source after", key: "approval_restart_pending_sequence_after"},
+		{name: "created absence omitted before", key: "approval_restart_created_consumer_absent_before"},
+		{name: "created absence omitted after", key: "approval_restart_created_consumer_absent_after"},
+		{name: "pending absence omitted before", key: "approval_restart_pending_consumer_absent_before"},
+		{name: "pending absence omitted after", key: "approval_restart_pending_consumer_absent_after"},
+		{name: "created consumer exists before", key: "approval_restart_created_consumer_absent_before", value: false},
+		{name: "created consumer exists after", key: "approval_restart_created_consumer_absent_after", value: false},
+		{name: "pending consumer exists before", key: "approval_restart_pending_consumer_absent_before", value: false},
+		{name: "pending consumer exists after", key: "approval_restart_pending_consumer_absent_after", value: false},
 		{name: "unverified approved arguments", key: "approval_restart_tool_call_verified"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			details := maps.Clone(complete)
-			details[tt.key] = tt.value
+			if tt.value == nil {
+				delete(details, tt.key)
+			} else {
+				details[tt.key] = tt.value
+			}
 			if err := s.validateResults(t.Context(), &scenarios.Result{Details: details}); err == nil {
 				t.Fatalf("approval restart accepted %s", tt.name)
 			}
@@ -71,32 +79,41 @@ func TestApprovalRestartCannotPassWithoutReplacementAndRecovery(t *testing.T) {
 	}
 }
 
-// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
-func TestApprovalRestartNotificationMustBeFullySettled(t *testing.T) {
+type approvalRestartConsumerFixture struct {
+	jetstream.Stream
+	err     error
+	queried string
+}
+
+func (s *approvalRestartConsumerFixture) Consumer(_ context.Context, name string) (jetstream.Consumer, error) {
+	s.queried = name
+	return nil, s.err
+}
+
+// spec: agentic-dispatch / Dispatch is exclusively an edge gateway
+func TestApprovalRestartNotificationConsumerAbsenceRequiresExactNotFound(t *testing.T) {
 	for _, tt := range []struct {
-		name    string
-		ack     uint64
-		pending int
-		queued  uint64
-		settled bool
+		name   string
+		err    error
+		absent bool
 	}{
-		{name: "settled", ack: 21, settled: true},
-		{name: "source not acknowledged", ack: 20},
-		{name: "delivery outstanding", ack: 21, pending: 1},
-		{name: "notification still queued", ack: 21, queued: 1},
+		{name: "retired consumer absent", err: jetstream.ErrConsumerNotFound, absent: true},
+		{name: "wrapped consumer absent", err: fmt.Errorf("lookup: %w", jetstream.ErrConsumerNotFound), absent: true},
+		{name: "consumer still exists"},
+		{name: "stream absent is not consumer absence", err: jetstream.ErrStreamNotFound},
+		{name: "cancelled read", err: context.Canceled},
+		{name: "unavailable read", err: context.DeadlineExceeded},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			info := &jetstream.ConsumerInfo{NumAckPending: tt.pending, NumPending: tt.queued}
-			info.Delivered.Consumer, info.AckFloor.Consumer = 9, 9
-			info.Delivered.Stream, info.AckFloor.Stream = 21, tt.ack
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			if !tt.settled {
-				cancel()
-			}
-			_, err := waitForApprovalNotificationSettled(ctx, stageAConsumerFixture{info: info}, 21, time.Second)
-			if (err == nil) != tt.settled {
-				t.Fatalf("notification settlement=%v, want settled=%v", err, tt.settled)
+			for _, name := range []string{"agentic-dispatch-agent-created", "agentic-dispatch-agent-approval-pending"} {
+				stream := &approvalRestartConsumerFixture{err: tt.err}
+				err := verifyApprovalNotificationConsumerAbsent(t.Context(), stream, name)
+				if (err == nil) != tt.absent {
+					t.Fatalf("consumer absence=%v, want absent=%v", err, tt.absent)
+				}
+				if stream.queried != name {
+					t.Fatalf("queried consumer %q, want exact retired owner %q", stream.queried, name)
+				}
 			}
 		})
 	}

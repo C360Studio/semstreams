@@ -281,42 +281,48 @@ lifecycle context. Exported graphview `Restart` is not part of the contract.
 - **THEN** no new delivery is admitted, every consume handle drains and closes, and both work paths join
 - **AND** Stop returns only after no later ACK, publication, or projection mutation is possible
 
-### Requirement: The shared loop view classifies the mixed bucket
+### Requirement: The shared view separates current authority from activity
 
-> Reconciliation status (2026-09-11): this accepted requirement is retained unchanged. Its implementation correction
-> is decision-held under tasks R1 because the introduced core-to-research dependency violates core composition.
-> This note selects no replacement API, decoding shortcut, loss of research activity, or change of completion owner.
-> The inherited research completion/readback defect in #1288 does not resolve this requirement's implementation.
+Bare canonical LoopID keys SHALL validate as `LoopEntity` with key/ID equality. Invalid values under those keys
+SHALL poison authoritative listing and AutoContinue until a greater-revision valid write or tombstone heals them.
+Other non-completion keys SHALL be excluded from current-loop authority without optional-producer classification.
 
-Bare canonical LoopID keys SHALL validate as `LoopEntity` with key/ID equality. `COMPLETE_<canonical LoopID>` SHALL
-validate by completion family and remain activity-only. Known research namespaces SHALL be ignored as non-loop
-records. Every other key SHALL poison as malformed would-be loop state.
+Existing ordinary `COMPLETE_` activity SHALL retain its field mappings and canonical suffix/payload identity checks.
+Completion records SHALL remain activity-only. Unsupported or malformed completion records SHALL produce observable
+activity errors and SHALL NOT fabricate current state or block current-loop authority.
 
-A typed terminal payload's LoopID SHALL equal the suffix. A registered `SearchResult` has no payload LoopID; the
-suffix supplies its activity identity. Its aggregate `TokensUsed` SHALL NOT populate directional Loop token fields.
+This change SHALL NOT introduce research completion rendering, a payload behavior, or a shared namespace package.
+Registered stream terminal decoding and validation SHALL remain unchanged by this activity-scope reduction.
+Withdrawal of research rendering SHALL NOT withdraw registered ordinary-terminal support. Both private raw
+terminal records and registered ordinary-terminal envelopes SHALL retain their current validation and field mappings.
 
-Current-loop and unknown-key poison SHALL disable AutoContinue and authoritative listing until a greater-revision
-clean write or tombstone heals it.
+#### Scenario: Canonical current-loop corruption heals
 
-#### Scenario: SearchResult completion is projected
-
-- **GIVEN** a valid registered `SearchResult` at `COMPLETE_<canonical LoopID>`
-- **WHEN** the view decodes it
-- **THEN** the suffix supplies LoopID
-- **AND** synthesis, success, complete state, and iterations project through the existing Loop activity shape
-- **AND** TokensIn and TokensOut remain zero
-
-#### Scenario: Research intermediate record is present
-
-- **WHEN** a known research namespace is observed
-- **THEN** it is excluded without becoming loop poison
-
-#### Scenario: Malformed would-be loop heals
-
-- **GIVEN** an unknown or malformed current-loop key has poisoned the view
-- **WHEN** a greater-revision clean value or tombstone lands
+- **GIVEN** an invalid value under a canonical LoopID has poisoned current-loop authority
+- **WHEN** a greater-revision valid value with matching ID or a tombstone lands
 - **THEN** the poison clears
-- **AND** readiness may return after that revision is applied
+- **AND** authoritative listing and AutoContinue may resume after that revision is applied
+
+#### Scenario: Non-authority record is present
+
+- **WHEN** a key is neither a canonical LoopID nor a completion key
+- **THEN** it is excluded without interpreting its value or optional producer's namespace
+- **AND** it does not become a loop or poison current-loop authority
+
+#### Scenario: Ordinary completion remains activity-only
+
+- **GIVEN** an ordinary raw or registered completion with a canonical key and matching payload LoopID
+- **WHEN** the shared view decodes it
+- **THEN** it preserves the existing activity fields
+- **AND** it does not supply a current-loop record or an AutoContinue candidate
+
+#### Scenario: Unsupported completion does not block current authority
+
+- **GIVEN** an unsupported or malformed completion value
+- **WHEN** the shared view observes it
+- **THEN** activity reports the existing observable error
+- **AND** no result or current-loop state is fabricated
+- **AND** current-loop authority remains available if its own records and watcher are healthy
 
 ### Requirement: Terminal user-response routing is retention-intersection bounded
 

@@ -27,9 +27,8 @@ const (
 	LoopStateCancelled LoopState = "cancelled" // Cancelled by user signal
 
 	// Signal-related states
-	// LoopStatePaused remains legacy-valid and is accepted by the exported
-	// transition APIs. #1239 removes the framework-owned pause/resume signal path
-	// and pause semantics; callers may still explicitly transition a loop to it.
+	// LoopStatePaused names the retired state and is rejected by LoopEntity
+	// validation. Its constant and transition vocabulary await separate retirement.
 	LoopStatePaused           LoopState = "paused"
 	LoopStateAwaitingApproval LoopState = "awaiting_approval" // Waiting for user approval
 )
@@ -117,7 +116,7 @@ func isValidLoopState(s LoopState) bool {
 	switch s {
 	case LoopStateExploring, LoopStatePlanning, LoopStateArchitecting,
 		LoopStateExecuting, LoopStateReviewing, LoopStateComplete,
-		LoopStateFailed, LoopStateCancelled, LoopStatePaused,
+		LoopStateFailed, LoopStateCancelled,
 		LoopStateAwaitingApproval:
 		return true
 	default:

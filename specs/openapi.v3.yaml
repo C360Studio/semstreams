@@ -16,7 +16,7 @@ paths:
     /activity:
         get:
             summary: Real-time activity events (SSE)
-            description: 'Server-Sent Events stream of loop activity. Event types: loop_created, loop_updated, loop_deleted, loop_completed. loop_completed fires when a COMPLETE_<id> KV key is written; the envelope loop_id is the bare id (prefix stripped) matching data.loop_id — use event.type=="loop_completed" to detect terminal entries. When type is loop_completed, data.outcome carries the verdict ("success", "failed", or "cancelled"); data.state is NOT populated on terminal events. Each event''s data field is an ActivityEvent whose data field is a Loop (see #/components/schemas/Loop and #/components/schemas/ActivityEvent). Connect with EventSource or curl -N. Note: OpenAPI 3.0 cannot express per-event SSE JSON schema; consult the ActivityEvent and Loop component schemas.'
+            description: 'Server-Sent Events stream of loop activity. Event types: loop_created, loop_updated, loop_deleted, loop_completed. loop_completed fires when a valid ordinary completion is written to a COMPLETE_<id> KV key; the envelope loop_id is the bare id (prefix stripped) matching data.loop_id — use event.type=="loop_completed" to detect terminal entries. When type is loop_completed, data.outcome carries the verdict ("success", "failed", or "cancelled"). Unsupported or malformed completion records produce per-key error events. Each event''s data field is an ActivityEvent whose data field is a Loop (see #/components/schemas/Loop and #/components/schemas/ActivityEvent). Connect with EventSource or curl -N. Note: OpenAPI 3.0 cannot express per-event SSE JSON schema; consult the ActivityEvent and Loop component schemas.'
             tags:
                 - AgenticDispatch
             responses:
@@ -60,7 +60,7 @@ paths:
     /debug/state:
         get:
             summary: Internal component state for debugging
-            description: Returns internal state including active loops, registered commands, configuration, and uptime. Useful for debugging and monitoring.
+            description: Returns current loop projection readiness and poison count, registered commands, configuration, and uptime. An unavailable projection returns diagnostics with HTTP 503.
             tags:
                 - AgenticDispatch
             responses:
@@ -69,7 +69,13 @@ paths:
                     content:
                         application/json:
                             schema:
-                                type: object
+                                $ref: '#/components/schemas/DebugState'
+                "503":
+                    description: Loop projection unavailable, not caught up, or poisoned; readiness is false
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/DebugState'
     /entries:
         get:
             summary: Get recent message entries
@@ -325,8 +331,8 @@ paths:
                                 type: object
     /loops:
         get:
-            summary: List all tracked loops
-            description: Returns all active and recent loops. Supports optional filtering by user_id and state query parameters.
+            summary: List current persisted loops
+            description: Returns the authoritative current loop projection. Supports optional filtering by user_id and state query parameters.
             tags:
                 - AgenticDispatch
             parameters:
@@ -336,7 +342,7 @@ paths:
                   schema: {}
                 - name: state
                   in: query
-                  description: Filter by loop state (pending, executing, paused, complete, failed, cancelled)
+                  description: Filter by loop state (exploring, planning, architecting, executing, awaiting_approval, reviewing, complete, failed, cancelled)
                   schema: {}
             responses:
                 "200":
@@ -347,6 +353,8 @@ paths:
                                 type: array
                                 items:
                                     $ref: '#/components/schemas/Loop'
+                "503":
+                    description: The current loop projection is unavailable, not caught up, or poisoned
     /loops/{id}:
         get:
             summary: Get single loop by ID
@@ -371,7 +379,7 @@ paths:
                 "404":
                     description: Loop not found
                 "500":
-                    description: The tracker and the durable record disagree about this loop's route; no caller action resolves it
+                    description: The current loop authority is inconsistent; no caller action resolves it
                 "503":
                     description: Loop state is not readable right now; retry
     /loops/{id}/approval:
@@ -447,6 +455,10 @@ paths:
                                 type: object
                 "400":
                     description: Invalid request
+                "409":
+                    description: The current loop route is ambiguous or conflicts with the request; no task is published
+                "503":
+                    description: Required loop authority is unavailable, not caught up, or poisoned; no task is published
     /paths:
         get:
             summary: Get component data paths
@@ -1050,6 +1062,135 @@ components:
                 - id
                 - name
                 - type
+            type: object
+        DebugState:
+            properties:
+                command_count:
+                    type: integer
+                commands:
+                    items:
+                        type: string
+                    type: array
+                config:
+                    properties:
+                        auto_continue:
+                            type: boolean
+                        default_model:
+                            type: string
+                        default_role:
+                            type: string
+                        stream_name:
+                            type: string
+                    required:
+                        - default_role
+                        - default_model
+                        - auto_continue
+                        - stream_name
+                    type: object
+                loop_count:
+                    type: integer
+                loop_projection_poisoned:
+                    type: integer
+                loop_projection_ready:
+                    type: boolean
+                loops:
+                    items:
+                        anyOf:
+                            - properties:
+                                channel_id:
+                                    type: string
+                                channel_type:
+                                    type: string
+                                completed_at:
+                                    format: date-time
+                                    type: string
+                                context_request_id:
+                                    type: string
+                                created_at:
+                                    format: date-time
+                                    type: string
+                                error:
+                                    type: string
+                                iterations:
+                                    type: integer
+                                loop_id:
+                                    type: string
+                                max_iterations:
+                                    type: integer
+                                metadata:
+                                    additionalProperties: {}
+                                    type: object
+                                outcome:
+                                    type: string
+                                pending_approval:
+                                    anyOf:
+                                        - properties:
+                                            arguments:
+                                                additionalProperties: {}
+                                                type: object
+                                            call_id:
+                                                type: string
+                                            execution_id:
+                                                type: string
+                                            reason:
+                                                type: string
+                                            requested_at:
+                                                format: date-time
+                                                type: string
+                                            tool_name:
+                                                type: string
+                                            trace_id:
+                                                type: string
+                                          required:
+                                            - call_id
+                                            - execution_id
+                                            - tool_name
+                                            - requested_at
+                                          type: object
+                                        - type: "null"
+                                result:
+                                    type: string
+                                role:
+                                    type: string
+                                state:
+                                    type: string
+                                task_id:
+                                    type: string
+                                user_id:
+                                    type: string
+                                workflow_slug:
+                                    type: string
+                                workflow_step:
+                                    type: string
+                              required:
+                                - loop_id
+                                - task_id
+                                - user_id
+                                - channel_type
+                                - channel_id
+                                - state
+                                - iterations
+                                - max_iterations
+                                - created_at
+                              type: object
+                            - type: "null"
+                    type: array
+                start_time:
+                    format: date-time
+                    type: string
+                started:
+                    type: boolean
+                uptime:
+                    type: string
+            required:
+                - loop_projection_ready
+                - loop_projection_poisoned
+                - started
+                - loop_count
+                - command_count
+                - loops
+                - commands
+                - config
             type: object
         Graph:
             properties:

@@ -123,16 +123,8 @@ func DefaultConfig() Config {
 					Description: "Agent task completions",
 				},
 				{
-					Name: "agent.created", Config: component.JetStreamPort{Subjects: []string{"agent.created.*"}, StreamName: "AGENT"}, Required: false,
-					Description: "Loop creation events",
-				},
-				{
 					Name: "agent.failed", Config: component.JetStreamPort{Subjects: []string{"agent.failed.*"}, StreamName: "AGENT"}, Required: false,
 					Description: "Loop failure events",
-				},
-				{
-					Name: "agent.approval_pending", Config: component.JetStreamPort{Subjects: []string{"agent.approval_pending.*"}, StreamName: "AGENT"}, Required: false,
-					Description: "Approval-pending events used to populate the dispatch HTTP approval handler's CallID lookup",
 				},
 				{
 					Name: agentLoopsPortName, Config: component.KVReadPort{Bucket: "AGENT_LOOPS"}, Required: false,

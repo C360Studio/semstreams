@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
+	"github.com/c360studio/semstreams/pkg/graphview"
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
@@ -48,7 +49,6 @@ func newRestartIdentityDispatch(t *testing.T, client *natsclient.Client) *Compon
 		config:        cfg,
 		modelRegistry: newTestRegistry(),
 		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
-		loopTracker:   NewLoopTrackerWithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
 		registry:      NewCommandRegistry(),
 		metrics:       getMetrics(metric.NewMetricsRegistry()),
 		natsClient:    client,
@@ -209,14 +209,16 @@ func TestIntegrationUserMessageReplayAfterTaskCommitKeepsOneLogicalTask(t *testi
 	require.Equal(t, uint64(2), secondMeta.NumDelivered)
 
 	replacementDispatch := newRestartIdentityDispatch(t, replacementClient)
-	// Mutable AutoContinue state has moved on while the source was waiting for
-	// redelivery. The committed task is still authoritative for this exact source.
-	replacementDispatch.loopTracker.Track(&LoopInfo{
-		LoopID:      uuid.NewString(),
-		UserID:      userMessage.UserID,
-		ChannelType: userMessage.ChannelType,
-		ChannelID:   userMessage.ChannelID,
-		State:       "pending",
+	// Current route authority has moved on while the source waited for redelivery.
+	// Exact committed task recovery must precede AutoContinue, even without a ready view.
+	replacementDispatch.config.AutoContinue = true
+	putLoopRecord(t, ctx, loops, agentic.LoopEntity{
+		ID:            uuid.NewString(),
+		UserID:        userMessage.UserID,
+		ChannelType:   userMessage.ChannelType,
+		ChannelID:     userMessage.ChannelID,
+		State:         agentic.LoopStateExecuting,
+		MaxIterations: 5,
 	})
 	decision, cause = replacementDispatch.handleUserMessage(ctx, secondSource.Data())
 	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
@@ -308,5 +310,123 @@ func TestIntegrationUserMessageTaskMappingConflictQuarantines(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, uint64(1), info.State.Msgs, "conflict must not publish or overwrite either mapping")
 		})
+	}
+}
+
+// spec: agentic-dispatch / Prior messages accompany an independent chat turn
+// Positive publication controls migrated from disconnected-client tracker tests:
+// the stored task and user response, not a speculative process entry, prove which
+// loop each production intake selected.
+func TestIntegrationDispatchTaskPublicationPreservesMintAndAttachment(t *testing.T) {
+	ctx := t.Context()
+	tc := natsclient.NewTestClient(t,
+		natsclient.WithKVBuckets(defaultAgentLoopsBucket(t)),
+		natsclient.WithStreams(
+			natsclient.TestStreamConfig{Name: restartIdentityAgentStream, Subjects: []string{"agent.task.>"}},
+			natsclient.TestStreamConfig{Name: restartIdentityUserStream, Subjects: []string{"user.response.>"}},
+		),
+	)
+	kv, err := tc.GetKVBucket(ctx, defaultAgentLoopsBucket(t))
+	require.NoError(t, err)
+	agentStream, err := tc.Client.GetStream(ctx, restartIdentityAgentStream)
+	require.NoError(t, err)
+	userStream, err := tc.Client.GetStream(ctx, restartIdentityUserStream)
+	require.NoError(t, err)
+
+	for _, lane := range []string{"http", "channel"} {
+		for _, mode := range []string{"new", "independent_default", "reply_to", "auto_continue", "resume_anchors"} {
+			t.Run(lane+"/"+mode, func(t *testing.T) {
+				c := newRestartIdentityDispatch(t, tc.Client)
+				msg := newLoopTokenUserMessage()
+				msg.MessageID = lane + "-" + mode
+				msg.ChannelID = lane + "-" + mode
+				var existing *agentic.LoopEntity
+				var existingRevision uint64
+				if mode == "independent_default" || mode == "reply_to" || mode == "auto_continue" {
+					existing = &agentic.LoopEntity{
+						ID: uuid.NewString(), UserID: msg.UserID, ChannelType: msg.ChannelType, ChannelID: msg.ChannelID,
+						State: agentic.LoopStateExecuting, MaxIterations: 5,
+					}
+					putLoopRecord(t, ctx, kv, *existing)
+					entry, readErr := kv.Get(ctx, existing.ID)
+					require.NoError(t, readErr)
+					existingRevision = entry.Revision()
+				}
+				switch mode {
+				case "independent_default":
+					msg.PriorMessages = displayedPriorMessages()
+				case "reply_to":
+					msg.ReplyTo = existing.ID
+				case "auto_continue":
+					// Reuse the existing lifecycle-owned view fixture against the real KV source.
+					configured := c
+					c = newActivityTestComponent(t, kv, graphview.Hooks{})
+					c.config = configured.config
+					c.modelRegistry = configured.modelRegistry
+					c.decoder = configured.decoder
+					c.natsClient = tc.Client
+					c.loadPersistedLoopFn = nil // Exact admission reads the same real KV authority as the view.
+					c.metrics = getMetrics(metric.NewMetricsRegistry())
+					c.config.AutoContinue = true
+					view, viewErr := c.ensureActivityView(ctx)
+					require.NoError(t, viewErr)
+					require.NoError(t, view.WaitCaughtUp(ctx))
+				case "resume_anchors":
+					msg.RunID = uuid.NewString()
+					msg.InReplyTo = uuid.NewString()
+				}
+
+				var synchronous agentic.UserResponse
+				if lane == "http" {
+					var submitErr error
+					synchronous, submitErr = c.processTaskSubmissionSync(t.Context(), msg)
+					require.NoError(t, submitErr)
+					require.Equal(t, agentic.ResponseTypeStatus, synchronous.Type)
+				} else {
+					require.NoError(t, c.handleTaskSubmission(t.Context(), msg))
+				}
+
+				raw, readErr := agentStream.GetLastMsgForSubject(ctx, "agent.task."+stableDispatchTaskID(msg))
+				require.NoError(t, readErr)
+				task := restartIdentityTask(t, c.decoder, raw)
+				requireCanonicalUUID(t, task.LoopID, "published loop_id")
+				require.Equal(t, stableDispatchTaskID(msg), task.TaskID)
+				require.Equal(t, msg.MessageID, task.SourceMessageID)
+				require.Equal(t, msg.PriorMessages, task.PriorMessages)
+				require.Equal(t, msg.RunID, task.RunID)
+				require.Equal(t, msg.InReplyTo, task.InReplyTo)
+				if mode == "reply_to" || mode == "auto_continue" {
+					require.Equal(t, existing.ID, task.LoopID, "attachment preserves the admitted current LoopID")
+				} else {
+					if existing != nil {
+						require.NotEqual(t, existing.ID, task.LoopID, "default work remains independent")
+					}
+					_, readErr := kv.Get(ctx, task.LoopID)
+					require.True(t, natsclient.IsKVNotFoundError(readErr), "dispatch must not create loop authority")
+				}
+				if existing != nil {
+					entry, readErr := kv.Get(ctx, existing.ID)
+					require.NoError(t, readErr)
+					require.Equal(t, existingRevision, entry.Revision(), "submission must not mutate loop authority")
+				}
+
+				responseRaw, readErr := userStream.GetLastMsgForSubject(ctx, "user.response."+msg.ChannelType+"."+msg.ChannelID)
+				require.NoError(t, readErr)
+				decoded, decodeErr := c.decoder.Decode(responseRaw.Data)
+				require.NoError(t, decodeErr)
+				response, ok := decoded.Payload().(*agentic.UserResponse)
+				require.True(t, ok)
+				require.Equal(t, agentic.ResponseTypeStatus, response.Type)
+				require.Equal(t, task.LoopID, response.InReplyTo)
+				require.Equal(t, msg.UserID, response.UserID)
+				require.Equal(t, msg.ChannelID, response.ChannelID)
+				if lane == "http" {
+					require.Equal(t, synchronous.ResponseID, response.ResponseID)
+					require.Equal(t, synchronous.Content, response.Content)
+					require.Equal(t, synchronous.InReplyTo, response.InReplyTo)
+					require.True(t, synchronous.Timestamp.Equal(response.Timestamp))
+				}
+			})
+		}
 	}
 }

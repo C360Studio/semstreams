@@ -22,12 +22,11 @@ import (
 const (
 	// codeLoopTokenInvalid: the token is not in canonical loop-token form.
 	codeLoopTokenInvalid = "loop_token_invalid"
-	// codeLoopNotFound: no tracker entry and no AGENT_LOOPS record.
+	// codeLoopNotFound: the exact AGENT_LOOPS record is absent.
 	codeLoopNotFound = "loop_not_found"
-	// codeLoopUnreadable: the durable record could not be read, and the tracker
-	// does not hold the loop either. The request is answerable later.
+	// codeLoopUnreadable: current authority could not be read or validated.
 	codeLoopUnreadable = "loop_unreadable"
-	// codeLoopOwnerConflict: the two sources disagree about a route field.
+	// codeLoopOwnerConflict remains the existing route-conflict refusal vocabulary.
 	codeLoopOwnerConflict = "loop_owner_conflict"
 	// codeLoopTerminal: the loop has settled; it cannot be continued.
 	codeLoopTerminal = "loop_terminal"
@@ -99,14 +98,6 @@ const (
 // the production string instead of a copy that can drift away from it.
 const loopAdmissionRefusalLogMessage = "agentic-dispatch: loop request refused"
 
-// loopDurableReadToleratedLogMessage names the one place this gate deliberately
-// continues past a failure: the durable record could not be read, but the
-// tracker already holds the loop, so the owner is known and the read adds
-// nothing. Declared rather than silent, per the degradation the design states.
-// It does not move the refusal series — nothing was refused — and there is no
-// second series because the outcome is identical to a clean admit.
-const loopDurableReadToleratedLogMessage = "agentic-dispatch: loop durable read failed, admitting from tracker"
-
 // The operations a request naming a loop can ask for. The gate's ownership model
 // is a closed switch over exactly these; an unrecognized value refuses.
 const (
@@ -141,36 +132,19 @@ type loopAdmissionRequest struct {
 	Requester string
 }
 
-// loopFacts is the merged observation of one loop: the union of the process
-// tracker and the durable AGENT_LOOPS record, reconciled. It is returned by an
-// admitted request so a seam that needs the loop's route (the signal lane) reads
-// it from here rather than recomputing it from a source the gate already read.
+// loopFacts is an exact observation of current loop authority. It carries only
+// the route and state needed by admitted operations.
 type loopFacts struct {
 	LoopID      string
 	UserID      string
 	ChannelType string
 	ChannelID   string
-	// Terminal is true when EITHER source reports a settled state. Fail-closed:
-	// a tracker that has not yet seen the terminal event must not admit a
-	// continuation the durable record already refuses.
-	Terminal bool
-	// State is the loop's recorded state, carried so a seam that must SAY what
-	// the loop is doing reports what was read instead of inventing a value.
-	// Terminal answers the gate's question — may this be continued — and cannot
-	// answer /status's: "not settled" covers executing, paused, and
-	// awaiting_approval, and telling a user "running" for the last of those
-	// sends them to wait for an agent that is waiting for them.
-	State agentic.LoopState
-	// Tracked and Persisted report which sources held the loop. Both false never
-	// reaches a caller — that is the not-found refusal.
-	Tracked   bool
-	Persisted bool
+	Terminal    bool
+	State       agentic.LoopState
 }
 
-// loopLookupOutcome is the tri-state of the merged lookup. Absence, an unread
-// record, and a conflicting merge are three different answers and the gate
-// refuses each with its own reason; collapsing them would answer "not found" for
-// a NATS outage.
+// loopLookupOutcome distinguishes current authority from absence or an unread
+// record; a NATS outage must never become a not-found answer.
 type loopLookupOutcome int
 
 const (
@@ -180,7 +154,7 @@ const (
 	loopLookupConflict
 )
 
-// loopLookup is one merged observation. The three values are correlated — an
+// loopLookup is one current-authority observation. The three values are correlated — an
 // outcome, the facts it produced, and the cause when it produced none — so they
 // travel as a struct rather than as a positional tuple.
 type loopLookup struct {
@@ -224,7 +198,7 @@ func (c *Component) admitLoopRequest(ctx context.Context, req loopAdmissionReque
 				"and echo back verbatim, never one you author", req.Field, req.LoopID))
 	}
 
-	// Existence, from merged facts — never from process memory alone.
+	// Existence from the exact persisted authority, never process memory.
 	lookup := c.lookupLoop(ctx, req.LoopID)
 	switch lookup.outcome {
 	case loopLookupFound:
@@ -317,78 +291,38 @@ func (c *Component) authorizeLoopOperation(req loopAdmissionRequest, facts loopF
 	}
 }
 
-// lookupLoop merges the process tracker and the durable AGENT_LOOPS record.
-// Neither is authority alone: the tracker is empty after a process replacement,
-// and the durable record may be absent for a live loop because persisting it is
-// best-effort. Present in EITHER means the loop exists.
-//
-// It reuses the readers that already exist rather than re-deriving them:
-// getSnapshot for the immutable process read (the raw tracker pointer races
-// concurrent create/approval updates, which is why that method exists),
-// loadPersistedLoop for the durable read — which observes the bucket name
-// through the declared KV read port and never a constant — isLoopRecordAbsent
-// for the absence-versus-failure distinction, and mergeRouteField to reconcile
-// the route across the two observations.
-//
-// Degradation is explicit, because a design that leaves it implicit gets it
-// wrong. Tracker hit: admit, whatever the durable read did — the owner is
-// already known. Tracker miss plus key absence: not found. Tracker miss plus any
-// other read failure: unreadable, never an admit on a record nobody read.
+// lookupLoop reads the exact current authority; process state is never a fallback.
 func (c *Component) lookupLoop(ctx context.Context, loopID string) loopLookup {
-	tracked := c.loopTracker.getSnapshot(loopID)
-	persisted, persistErr := c.loadPersistedLoop(ctx, loopID)
-
-	if tracked == nil {
-		switch {
-		case persistErr != nil && isLoopRecordAbsent(persistErr):
-			return loopLookup{outcome: loopLookupAbsent, cause: persistErr}
-		case persistErr != nil:
-			return loopLookup{outcome: loopLookupUnreadable, cause: persistErr}
-		case persisted == nil:
-			// A nil record with a nil error is not an answer; treat the absence
-			// of both an error and a record as absence of the loop.
-			return loopLookup{outcome: loopLookupAbsent}
-		}
-		return loopLookup{outcome: loopLookupFound, facts: persistedLoopFacts(persisted)}
-	}
-
-	trackedFacts := trackerLoopFacts(tracked)
-	if persistErr != nil || persisted == nil {
-		if persistErr != nil {
-			c.logToleratedDurableReadFailure(loopID, persistErr)
-		}
-		return loopLookup{outcome: loopLookupFound, facts: trackedFacts}
-	}
-
-	merged, err := mergeLoopFacts(trackedFacts, persistedLoopFacts(persisted))
+	record, err := c.loadPersistedLoop(ctx, loopID)
 	if err != nil {
-		return loopLookup{outcome: loopLookupConflict, cause: err}
+		if isLoopRecordAbsent(err) {
+			return loopLookup{outcome: loopLookupAbsent, cause: err}
+		}
+		return loopLookup{outcome: loopLookupUnreadable, cause: err}
 	}
-	return loopLookup{outcome: loopLookupFound, facts: merged}
+	return loopLookup{outcome: loopLookupFound, facts: persistedLoopFacts(record)}
 }
 
-// logToleratedDurableReadFailure declares the one continue-past-a-failure this
-// gate performs, so it is a recorded event rather than a private choice.
-func (c *Component) logToleratedDurableReadFailure(loopID string, err error) {
-	if c.logger == nil {
-		return
+// lookupLoopOwner supplies the command operation's narrow current-state answer.
+func (c *Component) lookupLoopOwner(ctx context.Context, loopID string) (LoopOwner, error) {
+	if ctx == nil || !looptoken.Valid(loopID) {
+		return LoopOwner{}, errs.ClassifiedCode(errs.ErrorInvalid, "invalid_loop_id", fmt.Errorf("canonical loop ID and nonnil context required"))
 	}
-	c.logger.Warn(loopDurableReadToleratedLogMessage,
-		slog.String("loop_id", loopID),
-		slog.String("error", err.Error()))
-}
-
-// trackerLoopFacts projects the process tracker's record.
-func trackerLoopFacts(info *LoopInfo) loopFacts {
-	return loopFacts{
-		LoopID:      info.LoopID,
-		UserID:      info.UserID,
-		ChannelType: info.ChannelType,
-		ChannelID:   info.ChannelID,
-		Terminal:    isTerminalState(info.State),
-		State:       agentic.LoopState(info.State),
-		Tracked:     true,
+	entity, err := c.loadPersistedLoop(ctx, loopID)
+	if err != nil {
+		code, class := "loop_state_unavailable", errs.ErrorTransient
+		switch {
+		case isLoopRecordAbsent(err):
+			code, class = "loop_not_found", errs.ErrorInvalid
+		case isPermanentTerminal(err):
+			code, class = "loop_record_invalid", errs.ErrorInvalid
+		}
+		return LoopOwner{}, errs.ClassifiedCode(class, code, err)
 	}
+	if entity.UserID == "" {
+		return LoopOwner{}, errs.ClassifiedCode(errs.ErrorInvalid, "loop_owner_absent", fmt.Errorf("loop %q has no user owner", loopID))
+	}
+	return LoopOwner{LoopID: entity.ID, UserID: entity.UserID}, nil
 }
 
 // persistedLoopFacts projects the durable AGENT_LOOPS record.
@@ -400,62 +334,6 @@ func persistedLoopFacts(record *agentic.LoopEntity) loopFacts {
 		ChannelID:   record.ChannelID,
 		Terminal:    record.State.IsTerminal(),
 		State:       record.State,
-		Persisted:   true,
-	}
-}
-
-// mergeLoopFacts reconciles two observations of one loop. The route fields go
-// through mergeRouteField, the same rule terminal settlement already uses, so a
-// conflicting nonempty value is a refusal rather than a silent preference for
-// one source.
-//
-// Terminality is NOT merged that way, and the difference is deliberate: the two
-// sources observe the same state at different times, so a disagreement is
-// ordinary lag rather than corruption. It resolves fail-closed — settled in
-// EITHER source means settled.
-func mergeLoopFacts(tracked, persisted loopFacts) (loopFacts, error) {
-	userID, err := mergeRouteField("user_id", tracked.UserID, persisted.UserID)
-	if err != nil {
-		return loopFacts{}, err
-	}
-	channelType, err := mergeRouteField("channel_type", tracked.ChannelType, persisted.ChannelType)
-	if err != nil {
-		return loopFacts{}, err
-	}
-	channelID, err := mergeRouteField("channel_id", tracked.ChannelID, persisted.ChannelID)
-	if err != nil {
-		return loopFacts{}, err
-	}
-	return loopFacts{
-		LoopID:      tracked.LoopID,
-		UserID:      userID,
-		ChannelType: channelType,
-		ChannelID:   channelID,
-		Terminal:    tracked.Terminal || persisted.Terminal,
-		State:       mergeLoopState(tracked.State, persisted.State),
-		Tracked:     true,
-		Persisted:   true,
-	}, nil
-}
-
-// mergeLoopState resolves the two observations of one loop's state on the same
-// fail-closed rule Terminal uses: a settled observation in EITHER source is the
-// answer, because settled is the observation a disagreement must not lose.
-//
-// Below terminal the tracker wins, and that is not arbitrary: when both sources
-// are present the read seams render from the tracker anyway, so preferring it
-// here is what keeps the merged facts and the rendered answer from disagreeing.
-// An empty tracker state is not an observation and yields to the record.
-func mergeLoopState(tracked, persisted agentic.LoopState) agentic.LoopState {
-	switch {
-	case tracked.IsTerminal():
-		return tracked
-	case persisted.IsTerminal():
-		return persisted
-	case tracked != "":
-		return tracked
-	default:
-		return persisted
 	}
 }
 

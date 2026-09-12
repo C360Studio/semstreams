@@ -2,6 +2,7 @@ package agentic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -49,7 +50,7 @@ func (s *Scenario) walkApprovalAfterRestart(ctx context.Context, result *scenari
 	result.Details["approval_restart_source_sequence"] = checkpoint.source
 	result.Details["approval_restart_source_ack_floor"] = checkpoint.ackFloor
 	result.Details["approval_restart_process_before"] = before
-	if err := s.awaitSettledApprovalNotifications(ctx, result, checkpoint); err != nil {
+	if err := s.verifyApprovalNotificationsWithoutDispatchConsumers(ctx, result, checkpoint, "before"); err != nil {
 		return err
 	}
 	if err := s.replaceSemStreams(ctx, newComposeProcessController(s.config.ComposeFile)); err != nil {
@@ -60,6 +61,9 @@ func (s *Scenario) walkApprovalAfterRestart(ctx context.Context, result *scenari
 		return fmt.Errorf("application process was not replaced: before=%v after=%v error=%v", before, after, err)
 	}
 	result.Details["approval_restart_process_after"] = after
+	if err := s.verifyApprovalNotificationsWithoutDispatchConsumers(ctx, result, checkpoint, "after"); err != nil {
+		return err
+	}
 	recovered, err := s.awaitLoopState(ctx, task.LoopID, agentic.LoopStateAwaitingApproval)
 	if err != nil {
 		return err
@@ -88,11 +92,11 @@ func (s *Scenario) walkApprovalAfterRestart(ctx context.Context, result *scenari
 	return s.verifyRestartedApprovalCompletion(ctx, result, checkpoint, labels)
 }
 
-// Dispatch notifications must be acknowledged, not merely present in AGENT.
-// Otherwise their replay could repopulate the replacement's old process cache
-// and mask the absence of durable approval reconstruction.
-func (s *Scenario) awaitSettledApprovalNotifications(
-	ctx context.Context, result *scenarios.Result, checkpoint approvalRestartCheckpoint,
+// Created and pending events remain observable to external subscribers, but
+// dispatch must not consume them before or after replacement. The exact payload
+// witnesses remain independent of the retired consumers' absence proof.
+func (s *Scenario) verifyApprovalNotificationsWithoutDispatchConsumers(
+	ctx context.Context, result *scenarios.Result, checkpoint approvalRestartCheckpoint, phase string,
 ) error {
 	js, err := s.nats.Client().JetStream()
 	if err != nil {
@@ -132,53 +136,25 @@ func (s *Scenario) awaitSettledApprovalNotifications(
 		if !matches {
 			return fmt.Errorf("dispatch %s notification does not match approval loop %s", lane.name, checkpoint.loop.ID)
 		}
-		consumer, err := stream.Consumer(ctx, lane.consumer)
-		if err != nil {
-			return err
-		}
-		info, err := consumer.Info(ctx)
-		if err != nil {
-			return err
-		}
-		if info.Stream != streamName || info.Name != lane.consumer || info.Config.FilterSubject != lane.subject+"*" {
-			return fmt.Errorf("unexpected dispatch %s owner: stream=%q consumer=%q filter=%q", lane.name,
-				info.Stream, info.Name, info.Config.FilterSubject)
-		}
-		info, err = waitForApprovalNotificationSettled(ctx, consumer, source.Sequence, s.config.TaskTimeout)
-		if err != nil {
-			return fmt.Errorf("dispatch %s notification must settle before restart: %w", lane.name, err)
+		if err := verifyApprovalNotificationConsumerAbsent(ctx, stream, lane.consumer); err != nil {
+			return fmt.Errorf("dispatch %s consumer %s replacement: %w", lane.name, phase, err)
 		}
 		prefix := "approval_restart_" + lane.name
-		result.Details[prefix+"_sequence"] = source.Sequence
-		result.Details[prefix+"_ack_floor"] = info.AckFloor.Stream
-		result.Details[prefix+"_pending"] = info.NumAckPending
-		result.Details[prefix+"_queued"] = info.NumPending
+		result.Details[prefix+"_sequence_"+phase] = source.Sequence
+		result.Details[prefix+"_consumer_absent_"+phase] = true
 	}
 	return nil
 }
 
-func waitForApprovalNotificationSettled(
-	ctx context.Context, consumer jetstream.Consumer, source uint64, timeout time.Duration,
-) (*jetstream.ConsumerInfo, error) {
-	if err := waitForConsumerDelivery(ctx, consumer, source, timeout); err != nil {
-		return nil, err
+func verifyApprovalNotificationConsumerAbsent(ctx context.Context, stream jetstream.Stream, name string) error {
+	_, err := stream.Consumer(ctx, name)
+	if errors.Is(err, jetstream.ErrConsumerNotFound) {
+		return nil
 	}
-	info, err := consumer.Info(ctx)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("read retired consumer %q: %w", name, err)
 	}
-	if err := waitForConsumerSettled(ctx, consumer, info.Delivered.Consumer, timeout); err != nil {
-		return nil, err
-	}
-	info, err = consumer.Info(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if source == 0 || info.AckFloor.Stream < source || info.NumAckPending != 0 || info.NumPending != 0 {
-		return nil, fmt.Errorf("notification source=%d ack_floor=%d pending=%d queued=%d",
-			source, info.AckFloor.Stream, info.NumAckPending, info.NumPending)
-	}
-	return info, nil
+	return fmt.Errorf("retired dispatch consumer %q still exists", name)
 }
 
 func (s *Scenario) verifyApprovedRestartCall(ctx context.Context, checkpoint approvalRestartCheckpoint) error {
@@ -335,13 +311,13 @@ func (s *Scenario) verifyRestartedApprovalCompletion(
 func validateApprovalRestartEvidence(details map[string]any) error {
 	for _, lane := range []string{"created", "pending"} {
 		prefix := "approval_restart_" + lane
-		sequence, _ := details[prefix+"_sequence"].(uint64)
-		ackFloor, _ := details[prefix+"_ack_floor"].(uint64)
-		pending, havePending := details[prefix+"_pending"].(int)
-		queued, haveQueued := details[prefix+"_queued"].(uint64)
-		if sequence == 0 || ackFloor < sequence || !havePending || pending != 0 || !haveQueued || queued != 0 {
-			return fmt.Errorf("approval restart lacks settled dispatch %s notification: source=%d ack=%d pending=%d queued=%d",
-				lane, sequence, ackFloor, pending, queued)
+		for _, phase := range []string{"before", "after"} {
+			sequence, _ := details[prefix+"_sequence_"+phase].(uint64)
+			absent, _ := details[prefix+"_consumer_absent_"+phase].(bool)
+			if sequence == 0 || !absent {
+				return fmt.Errorf("approval restart lacks %s notification or retired consumer absence %s replacement: source=%d absent=%v",
+					lane, phase, sequence, absent)
+			}
 		}
 	}
 	if verified, _ := details["approval_restart_tool_call_verified"].(bool); !verified {

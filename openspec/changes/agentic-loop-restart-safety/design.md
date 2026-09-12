@@ -6,15 +6,22 @@ This document records the accepted #1146 contracts; it does not certify their co
 [Tasks](tasks.md) is the current execution and evidence record. Its completed checkpoints are baseline-scoped;
 the combined candidate, remaining approval proof, and final review/landing gates remain open.
 
-The detailed contracts below remain intact. All dated designs and inventories, and the frozen task journal in
+The detailed contracts below include the owner-approved 2026-09-12 reduction of research-rendering scope. All dated
+designs and inventories, and the frozen task journal in
 `history/`, are historical provenance rather than competing execution instructions. They neither revive withdrawn
 proposals nor make historical tests current. Old task IDs resolve through the mapping in `tasks.md`.
 
 The accepted rebaseline followed nested PR #1251 at
 `P=09ba38b1de5e7200e72281c8e4b8941d81be1da2`, whose merge base with the frozen staged #759 parent is exact
 `F=417beae5552f8f15ad3540edd7d8504c87174c13`. P records implementation ancestry, not the current worktree HEAD.
-The dispatch edge-gateway direction is owner-approved and independently reviewed; its remaining implementation
-and proof obligations, including the decision-held research boundary correction, remain in tasks R1 and R11.
+The dispatch edge-gateway direction is owner-approved and independently reviewed. On 2026-09-12 the owner accepted
+retaining its KV authority and tracker removal while withdrawing the unpublished research-rendering detour.
+The subtractive slice passed independent design review at SHA-256
+`9e575e1c405c59d351a05693b0752b5c10851d3fd0a0c32af92c5fc1a8c7db4a`.
+The smaller decoder-preservation amendment passed review at SHA-256
+`7947ae7a6310c69105c7842a20658565b4cdeb33ca2f1b05929388b981606c25`: only the research-specific branch is removed;
+ordinary registered completion support is retained alongside private raw completion records.
+Its implementation and proof remain in tasks R1 and R11; design review is not implementation approval.
 The producer-identity prerequisite is independently reviewed and owner-accepted by #1146 comment `5575482141`.
 
 The bounded approval-gate correction is independently reviewed and owner-accepted on 2026-09-10 by
@@ -472,26 +479,27 @@ system-lane terminal outcome with no user route is settled without inventing a `
 Those events remain loop outputs for external subscribers. The existing shared graph view becomes the sole local
 projection and adds no storage or retention.
 
-### Mixed `AGENT_LOOPS` key grammar
+### Current authority and existing activity
 
-The view classifies keys before decoding. A bare canonical LoopID must decode as a valid `LoopEntity` whose ID equals
-the key. A canonical `COMPLETE_<LoopID>` is activity-only and validates by payload family. A typed terminal payload's
-LoopID must equal the suffix. A registered `SearchResult` has no LoopID; the suffix supplies it, while the view maps
-complete state, successful outcome, synthesis, and iterations. Aggregate `TokensUsed` never populates directional
-token fields.
+Retain tracker removal and one existing shared view. Bare canonical LoopID keys are the current-authority domain.
+Their values must validate as `LoopEntity` with key/ID equality; malformed current values poison authority until
+a greater-revision clean write or tombstone heals them. Other non-completion keys are outside that domain and
+are excluded without optional-producer namespace knowledge. This explicitly withdraws the added requirement that
+unknown noncanonical keys poison current-loop authority; it does not weaken validation of current-loop values.
 
-Current research-pipeline namespaces are non-loop records and return `keep=false`:
+Preserve existing ordinary `COMPLETE_` activity, its field mappings, and completion key/identity validation.
+Completion never supplies current-loop authority. Unsupported or malformed completion values remain observable
+activity errors rather than fabricated results, and do not block current-loop authority. Research completion
+rendering is not part of this acceptance; its registered payload, producer, and #1288 ownership remain unchanged.
+Add no renderer interface, shared record package, additional view, compatibility decoder, or completion owner.
 
-- `research.request.received.`
-- `classify.complete.` and `classify.snapshot.`
-- `route.complete.` and `route.snapshot.`
-- `execute.complete.` and `execute.snapshot.`
-- `assess.complete.` and `assess.snapshot.`
-- `search_result.complete.` and `synthesize.snapshot.`
-
-Every other key is malformed would-be loop state and becomes poison. Current-loop or unknown-key poison disables
-AutoContinue and authoritative listing until a greater-revision valid write or tombstone heals it. These are current
-bucket grammars consolidated under one declaration, not legacy aliases.
+The runtime reduction removes only the unpublished `SearchResult` concrete-type branch and its optional research
+import. Both ordinary completion representations retain their current validation and mapping behavior: private raw
+terminal records and registered terminal envelopes. Registry decoding, explicit payload validation, terminal-family
+validation, canonical suffix agreement and field mappings remain unchanged, including the ordinary registered
+decode/marshal/projection sequence. Replacing that sequence is not a rescue prerequisite. Native registry-bound
+stream terminal decoding is unchanged. No decoder fallback or validator relaxation is introduced. The nine research
+producer/prefix edits are withdrawn, not moved into a new shared package.
 
 ### AutoContinue
 
@@ -930,7 +938,7 @@ interval.
 
 Additional proof covers exact acquisition-config validation, affected-closure admission, non-agentic zero lookup,
 resolved-stream overrides, DiscardNew capacity refusal, loop-bucket absence/match/races/drift/status failures,
-approval replacement evidence and same-CallID isolation, mixed-bucket classification, lifecycle drain/Closed/join,
+approval replacement evidence and same-CallID isolation, current-authority/activity separation, lifecycle drain/Closed/join,
 focused race/integration/contract tests, schema generation, and serialized `task e2e:agentic`.
 
 PR #1159 keeps `Closes #1146`, `Refs #759`, `Refs #1155`, `Refs #1249`, and `implemented-by: Sol`, and states that
@@ -994,7 +1002,7 @@ The design is rejected or revised if any premise fails:
     preserve one logical approval gate per execution without reopening a closed gate.
 17. At P, no provider ambiguity config, commit-unknown failure kind, or provider reconciliation seam exists; the
     simplified target preserves that absence.
-18. `SearchResult.TokensUsed` is aggregate spend and is not projected into directional `TokensIn` or `TokensOut`.
+18. The earlier `SearchResult` activity/token projection is withdrawn from #1146 and is not a landing gate.
 19. `component/flowgraph/flowgraph.go:381-389` defines the canonical directional matcher as
     `SubjectCovers(filter, pattern)` and identifies graph-level composition as its current caller. Rule publication
     passes declared filter first and concrete substituted subject second; it adds no matcher.
@@ -1031,9 +1039,10 @@ not assertions that every referenced mechanism is absent:
 - Affected-closure admission, named exact reads, all six rule-publisher classifier surfaces, and all four static
   producer configurations require their complete current-candidate evidence. Composition coverage alone is not
   PubAck proof.
-- The introduced core-to-research dependency/projection correction remains decision-held in R1. The inherited
-  research completion/readback mismatch belongs to #1288; it neither excuses this regression nor changes the
-  accepted mixed-view behavior.
+- R1 requires subtraction of the unpublished research-rendering detour and proof of the retained minimal
+  dispatcher. The previous research-boundary design is withdrawn, not implemented or accepted by this rescope.
+  The inherited research completion/readback mismatch remains #1288; the approval-Store ruling and all remaining
+  settlement/proof gates are unchanged.
 - The combined candidate has not passed its complete gate. R11–R15 retain verification, documentation,
   implementation/cross-agent review, archive, current-spec reconciliation, and landing obligations.
 
@@ -1085,8 +1094,10 @@ Implementation or review stops if:
   state authority beside `AGENT_LOOPS`;
 - dispatch owns an intermediate loop transition, retries a validated routeless non-user terminal indefinitely, or
   hides the AutoContinue birth gap with process memory;
-- the mixed-bucket view treats known research state as loop poison, accepts unknown keys, or maps aggregate research
-  tokens into directional loop-token fields;
+- the view admits noncanonical non-completion keys as current loops, accepts malformed canonical current state,
+  treats completion as current authority, or lets completion-only poison block current-loop authority;
+- the withdrawn research renderer, payload behavior, namespace package, or optional implementation dependency
+  reappears as a restart prerequisite;
 - terminal response routing claims either source or loop-state retention beyond their actual intersection;
 - graphview or dispatch retains context or adds a replacement exported restart lifecycle API;
 - governance treats core-NATS publication as synchronous durable PubAck;

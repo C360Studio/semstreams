@@ -4,8 +4,12 @@
 
 This proposal records the accepted scope, not implementation completion. Current source, completed checkpoints,
 remaining proof, and landing gates live in [tasks](tasks.md). The combined candidate is not yet accepted.
-The introduced dispatch-to-research dependency correction remains decision-held; the existing mixed-view contract
-is not withdrawn. This documentation reconciliation adds no runtime behavior or approval.
+The owner rescoped #1159 on 2026-09-12 around existing KV state and JetStream redelivery: save required state and
+output before ACK and reuse retained results. Typed model-response absence permits a provider call under the
+existing model contract; other lanes retain their existing refusal and absence rules.
+Sequential chat, approval after restart, cancellation, and the 15-subscription settlement duties remain in scope.
+The proposed research activity behavior, shared record package, and generalized mixed-record rendering are
+withdrawn as #1146 prerequisites. Approval-Store remains a separate evidence-dependent owner hold.
 
 ## Approved product direction (2026-09-08)
 

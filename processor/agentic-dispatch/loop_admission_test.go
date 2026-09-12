@@ -1,11 +1,13 @@
 package agenticdispatch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -30,10 +32,9 @@ func admissionTestComponent(t *testing.T) *Component {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return &Component{
-		config:      DefaultConfig(),
-		logger:      logger,
-		loopTracker: NewLoopTrackerWithLogger(logger),
-		metrics:     getMetrics(metric.NewMetricsRegistry()),
+		config:  DefaultConfig(),
+		logger:  logger,
+		metrics: getMetrics(metric.NewMetricsRegistry()),
 	}
 }
 
@@ -114,8 +115,8 @@ func TestExistenceRefusalPrecedesOwnershipRefusal(t *testing.T) {
 }
 
 // spec: agentic-dispatch / One gate admits every request that names an existing loop
-// I3, over the whole refusal vocabulary: every refusal the gate can return moves
-// exactly one series by exactly one.
+// I3: each refusal emitted by the exact-authority gate moves exactly one series
+// by exactly one and produces one diagnostic log.
 func TestGateRefusalIsCountedExactlyOnce(t *testing.T) {
 	owned := &agentic.LoopEntity{ID: admissionLoopA, UserID: "user-a", State: agentic.LoopStateExecuting, MaxIterations: 5}
 	settled := &agentic.LoopEntity{ID: admissionLoopA, UserID: "user-a", State: agentic.LoopStateComplete, MaxIterations: 5}
@@ -150,15 +151,14 @@ func TestGateRefusalIsCountedExactlyOnce(t *testing.T) {
 			code: codeLoopUnreadable, reason: reasonExistenceUnreadable,
 		},
 		{
-			name: "conflicting owners",
+			name: "invalid record identity",
 			arrange: func(c *Component) {
-				c.loopTracker.Track(&LoopInfo{LoopID: admissionLoopA, UserID: "user-a", State: "executing"})
 				withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: {
-					ID: admissionLoopA, UserID: "user-b", State: agentic.LoopStateExecuting, MaxIterations: 5,
+					ID: admissionLoopB, UserID: "user-a", State: agentic.LoopStateExecuting, MaxIterations: 5,
 				}})
 			},
 			req:  loopAdmissionRequest{Operation: loopOpContinue, LoopID: admissionLoopA, Requester: "user-a"},
-			code: codeLoopOwnerConflict, reason: reasonExistenceConflict,
+			code: codeLoopUnreadable, reason: reasonExistenceUnreadable,
 		},
 		{
 			name: "terminal loop",
@@ -198,6 +198,8 @@ func TestGateRefusalIsCountedExactlyOnce(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := admissionTestComponent(t)
+			var logs bytes.Buffer
+			c.logger = slog.New(slog.NewTextHandler(&logs, nil))
 			tc.arrange(c)
 			req := tc.req
 			req.Seam = "seam_under_test"
@@ -206,6 +208,10 @@ func TestGateRefusalIsCountedExactlyOnce(t *testing.T) {
 			_, err := c.admitLoopRequest(context.Background(), req)
 
 			requireRefusal(t, c, err, tc.code, tc.reason, "seam_under_test")
+			require.Equal(t, 1, strings.Count(logs.String(), loopAdmissionRefusalLogMessage))
+			require.Contains(t, logs.String(), "reason="+tc.reason)
+			require.Contains(t, logs.String(), "seam=seam_under_test")
+			require.Contains(t, logs.String(), "field=reply_to")
 		})
 	}
 }
@@ -213,12 +219,11 @@ func TestGateRefusalIsCountedExactlyOnce(t *testing.T) {
 // spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
 func TestContinuationAfterReplacementIsAdmittedFromDurableRecord(t *testing.T) {
 	c := admissionTestComponent(t)
-	// A replacement process: the tracker is empty, the durable record is not.
+	// A replacement process needs only the exact current authority.
 	withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: {
 		ID: admissionLoopA, UserID: "user-a", ChannelType: "slack", ChannelID: "C1",
 		State: agentic.LoopStateExecuting, MaxIterations: 5,
 	}})
-	require.Nil(t, c.loopTracker.Get(admissionLoopA), "tracker is empty in the replacement")
 
 	facts, err := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
 		Seam: "channel_submission", Field: "reply_to", Operation: loopOpContinue,
@@ -229,29 +234,31 @@ func TestContinuationAfterReplacementIsAdmittedFromDurableRecord(t *testing.T) {
 	require.Equal(t, "user-a", facts.UserID)
 	require.Equal(t, "slack", facts.ChannelType)
 	require.Equal(t, "C1", facts.ChannelID)
-	require.False(t, facts.Tracked)
-	require.True(t, facts.Persisted)
+	require.Equal(t, agentic.LoopStateExecuting, facts.State)
+	require.False(t, facts.Terminal)
 	require.Equal(t, 0, testutil.CollectAndCount(c.metrics.loopAdmissionRefusals))
 }
 
 // spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
-func TestLiveLoopWithoutDurableRecordIsAdmitted(t *testing.T) {
+func TestPreviouslyObservedLoopWithoutDurableRecordIsRefused(t *testing.T) {
 	c := admissionTestComponent(t)
-	c.loopTracker.Track(&LoopInfo{
-		LoopID: admissionLoopA, UserID: "user-a", ChannelType: "cli", ChannelID: "s1", State: "executing",
-	})
-	withPersistedLoops(c, nil) // best-effort persist has not landed
-
-	facts, err := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
+	records := map[string]*agentic.LoopEntity{admissionLoopA: {
+		ID: admissionLoopA, UserID: "user-a", ChannelType: "cli", ChannelID: "s1",
+		State: agentic.LoopStateExecuting, MaxIterations: 5,
+	}}
+	withPersistedLoops(c, records)
+	req := loopAdmissionRequest{
 		Seam: "channel_submission", Field: "reply_to", Operation: loopOpContinue,
 		LoopID: admissionLoopA, Requester: "user-a",
-	})
-
+	}
+	_, err := c.admitLoopRequest(context.Background(), req)
 	require.NoError(t, err)
-	require.Equal(t, "user-a", facts.UserID)
-	require.True(t, facts.Tracked)
-	require.False(t, facts.Persisted)
-	require.Equal(t, 0, testutil.CollectAndCount(c.metrics.loopAdmissionRefusals))
+	delete(records, admissionLoopA)
+
+	facts, err := c.admitLoopRequest(context.Background(), req)
+
+	requireRefusal(t, c, err, codeLoopNotFound, reasonExistenceAbsent, "channel_submission")
+	require.Equal(t, loopFacts{}, facts, "a prior observation cannot establish current existence")
 }
 
 // spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
@@ -274,39 +281,53 @@ func TestUnreadableDurableRecordRefusesTransient(t *testing.T) {
 	require.NotEqual(t, codeLoopNotFound, classified.Code, "an outage is never answered as not found")
 }
 
-// A tracker hit admits even while the durable read is failing: the owner is
-// already known, so the read adds nothing to the decision.
-func TestTrackerHitAdmitsThroughADurableReadFailure(t *testing.T) {
+// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
+func TestPriorAdmissionDoesNotBypassADurableReadFailure(t *testing.T) {
 	c := admissionTestComponent(t)
-	c.loopTracker.Track(&LoopInfo{LoopID: admissionLoopA, UserID: "user-a", State: "executing"})
+	withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: {
+		ID: admissionLoopA, UserID: "user-a", State: agentic.LoopStateExecuting, MaxIterations: 5,
+	}})
+	req := loopAdmissionRequest{
+		Seam: "channel_submission", Field: "reply_to", Operation: loopOpContinue,
+		LoopID: admissionLoopA, Requester: "user-a",
+	}
+	_, err := c.admitLoopRequest(context.Background(), req)
+	require.NoError(t, err)
 	c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
 		return nil, errors.New("access AGENT_LOOPS: connection refused")
 	}
 
-	facts, err := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
-		Seam: "channel_submission", Field: "reply_to", Operation: loopOpContinue,
-		LoopID: admissionLoopA, Requester: "user-a",
-	})
+	facts, err := c.admitLoopRequest(context.Background(), req)
 
-	require.NoError(t, err)
-	require.Equal(t, "user-a", facts.UserID)
-	require.Equal(t, 0, testutil.CollectAndCount(c.metrics.loopAdmissionRefusals))
+	requireRefusal(t, c, err, codeLoopUnreadable, reasonExistenceUnreadable, "channel_submission")
+	require.True(t, errs.IsTransient(err))
+	require.Equal(t, loopFacts{}, facts, "a prior admission cannot provide fallback ownership")
 }
 
 // spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
-func TestConflictingOwnersAcrossSourcesAreRefused(t *testing.T) {
+func TestCurrentOwnerReplacesPreviouslyObservedOwner(t *testing.T) {
 	c := admissionTestComponent(t)
-	c.loopTracker.Track(&LoopInfo{LoopID: admissionLoopA, UserID: "user-a", State: "executing"})
-	withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: {
-		ID: admissionLoopA, UserID: "user-b", State: agentic.LoopStateExecuting, MaxIterations: 5,
-	}})
-
-	_, err := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
+	records := map[string]*agentic.LoopEntity{admissionLoopA: {
+		ID: admissionLoopA, UserID: "user-a", State: agentic.LoopStateExecuting, MaxIterations: 5,
+	}}
+	withPersistedLoops(c, records)
+	req := loopAdmissionRequest{
 		Seam: seamCancelCommand, Field: "loop_id", Operation: loopOpCancel,
 		LoopID: admissionLoopA, Requester: "user-a",
-	})
+	}
+	_, err := c.admitLoopRequest(context.Background(), req)
+	require.NoError(t, err)
+	records[admissionLoopA] = &agentic.LoopEntity{
+		ID: admissionLoopA, UserID: "user-b", State: agentic.LoopStateExecuting, MaxIterations: 5,
+	}
 
-	requireRefusal(t, c, err, codeLoopOwnerConflict, reasonExistenceConflict, seamCancelCommand)
+	_, err = c.admitLoopRequest(context.Background(), req)
+	requireRefusal(t, c, err, codeLoopNotOwned, reasonOwnershipNotOwner, seamCancelCommand)
+
+	req.Requester = "user-b"
+	facts, err := c.admitLoopRequest(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, "user-b", facts.UserID, "only the current authority establishes ownership")
 }
 
 // The gate's ownership model, exercised directly on an EXISTING loop. The seam
@@ -319,7 +340,7 @@ func TestGateOwnershipModel(t *testing.T) {
 		name      string
 		operation string
 		requester string
-		// loopOwner is the owner recorded on both sources; "" is the
+		// loopOwner is the owner recorded in current authority; "" is the
 		// system-lane (ownerless) loop.
 		loopOwner string
 		cancelAny []string
@@ -397,32 +418,17 @@ func TestGateDoesNotConsultCancelOwn(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// Terminality is fail-closed across the two sources: either one reporting a
-// settled state refuses a continuation, and neither refuses a cancel, an
-// approval, or a read — settled loops stay readable and controllable.
-func TestGateTerminalRefusesContinuationFromEitherSource(t *testing.T) {
-	cases := []struct {
-		name        string
-		trackerLoop *LoopInfo
-		persisted   *agentic.LoopEntity
-	}{
-		{
-			name:        "durable record settled, tracker still running",
-			trackerLoop: &LoopInfo{LoopID: admissionLoopA, UserID: "user-a", State: "executing"},
-			persisted:   &agentic.LoopEntity{ID: admissionLoopA, UserID: "user-a", State: agentic.LoopStateComplete, MaxIterations: 5},
-		},
-		{
-			name:        "tracker settled, durable record still running",
-			trackerLoop: &LoopInfo{LoopID: admissionLoopA, UserID: "user-a", State: "cancelled"},
-			persisted:   &agentic.LoopEntity{ID: admissionLoopA, UserID: "user-a", State: agentic.LoopStateExecuting, MaxIterations: 5},
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
+// Terminal authority refuses continuation, but remains readable and controllable.
+func TestGateTerminalAuthorityRefusesContinuation(t *testing.T) {
+	for _, state := range []agentic.LoopState{
+		agentic.LoopStateComplete, agentic.LoopStateFailed, agentic.LoopStateCancelled,
+	} {
+		t.Run(state.String(), func(t *testing.T) {
 			c := admissionTestComponent(t)
-			c.loopTracker.Track(tc.trackerLoop)
-			withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: tc.persisted})
+			withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: {
+				ID: admissionLoopA, UserID: "user-a", State: state, MaxIterations: 5,
+			}})
 
 			_, err := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
 				Seam: "channel_submission", Field: "reply_to", Operation: loopOpContinue,
@@ -430,12 +436,72 @@ func TestGateTerminalRefusesContinuationFromEitherSource(t *testing.T) {
 			})
 			requireRefusal(t, c, err, codeLoopTerminal, reasonStateTerminal, "channel_submission")
 
-			// A settled loop is still readable — /status must keep working.
-			_, readErr := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
-				Seam: "status_command", Field: "id", Operation: loopOpRead,
+			for _, operation := range []string{loopOpRead, loopOpCancel, loopOpApprove} {
+				facts, operationErr := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
+					Seam: "seam_under_test", Field: "id", Operation: operation,
+					LoopID: admissionLoopA, Requester: "user-a",
+				})
+				require.NoError(t, operationErr, operation)
+				require.Equal(t, state, facts.State, operation)
+				require.True(t, facts.Terminal, operation)
+			}
+		})
+	}
+}
+
+// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
+func TestGateReportsExactCurrentStateWithoutMutatingAuthority(t *testing.T) {
+	for _, state := range []agentic.LoopState{
+		agentic.LoopStateExecuting, agentic.LoopStateAwaitingApproval,
+		agentic.LoopStateComplete, agentic.LoopStateFailed, agentic.LoopStateCancelled,
+	} {
+		t.Run(state.String(), func(t *testing.T) {
+			c := admissionTestComponent(t)
+			record := &agentic.LoopEntity{
+				ID: admissionLoopA, UserID: "user-a", State: state, MaxIterations: 5,
+			}
+			before := *record
+			withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: record})
+
+			facts, err := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
+				Seam: seamStatusCommand, Field: "id", Operation: loopOpRead,
 				LoopID: admissionLoopA, Requester: "user-a",
 			})
-			require.NoError(t, readErr)
+
+			require.NoError(t, err)
+			require.Equal(t, state, facts.State)
+			require.Equal(t, before, *record)
+			require.Zero(t, testutil.CollectAndCount(c.metrics.loopAdmissionRefusals))
+		})
+	}
+}
+
+// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
+func TestGateRefusesInvalidCurrentAuthorityBeforeOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		record *agentic.LoopEntity
+	}{
+		{"missing value", nil},
+		{"wrong identity", &agentic.LoopEntity{ID: admissionLoopB, State: agentic.LoopStateExecuting, MaxIterations: 5}},
+		{"malformed identity", &agentic.LoopEntity{ID: admissionMalformed, State: agentic.LoopStateExecuting, MaxIterations: 5}},
+		{"missing state", &agentic.LoopEntity{ID: admissionLoopA, MaxIterations: 5}},
+		{"unknown state", &agentic.LoopEntity{ID: admissionLoopA, State: "unknown", MaxIterations: 5}},
+		{"zero iteration budget", &agentic.LoopEntity{ID: admissionLoopA, State: agentic.LoopStateExecuting}},
+		{"negative iteration budget", &agentic.LoopEntity{ID: admissionLoopA, State: agentic.LoopStateExecuting, MaxIterations: -1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := admissionTestComponent(t)
+			withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: tc.record})
+
+			facts, err := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
+				Seam: seamChannelSubmission, Field: "reply_to", Operation: loopOpContinue,
+				LoopID: admissionLoopA, Requester: "stranger",
+			})
+
+			requireRefusal(t, c, err, codeLoopUnreadable, reasonExistenceUnreadable, seamChannelSubmission)
+			require.Equal(t, loopFacts{}, facts)
+			require.NotContains(t, err.Error(), "does not own", "invalid authority cannot establish ownership")
 		})
 	}
 }

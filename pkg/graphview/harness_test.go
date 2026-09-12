@@ -46,8 +46,7 @@ func newFakeWatcher() *fakeWatcher {
 func (w *fakeWatcher) Updates() <-chan jetstream.KeyValueEntry { return w.updates }
 func (w *fakeWatcher) Stop() error                             { return nil }
 
-// fakeSource hands out queued fake watchers: one per WatchAll call (Start,
-// then each Restart).
+// fakeSource hands out queued fake watchers: one per owner's Start.
 type fakeSource struct {
 	mu     sync.Mutex
 	queue  []*fakeWatcher
@@ -67,7 +66,7 @@ func (s *fakeSource) WatchAll(_ context.Context, _ ...jetstream.WatchOpt) (jetst
 }
 
 // lastIssued returns the watcher most recently handed to the view (the
-// restart generation's watcher after a Restart).
+// replacement owner's watcher after its Start).
 func (s *fakeSource) lastIssued() *fakeWatcher {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -108,7 +107,7 @@ type harness struct {
 }
 
 // newHarness starts a view over extraWatchers+1 queued fake watchers and
-// registers Stop as cleanup. The first watcher is h.w; restarts pop the next.
+// registers Stop as cleanup. The first watcher is h.w; replacements pop the next.
 func newHarness(t *testing.T, extraWatchers int) *harness {
 	t.Helper()
 	h := &harness{
@@ -144,6 +143,19 @@ func (h *harness) send(e jetstream.KeyValueEntry) {
 	case <-time.After(testWait):
 		h.t.Fatal("send: fake watcher channel full")
 	}
+}
+
+// replace stops the failed owner before constructing a fresh projection with
+// the same existing source/hooks; no retained entries cross that boundary.
+func (h *harness) replace() {
+	h.t.Helper()
+	h.view.Stop()
+	view, err := New[string](h.src, decodeTest, WithHooks(h.view.hooks), withTickChannel(h.tick))
+	require.NoError(h.t, err)
+	require.NoError(h.t, view.Start(h.t.Context()))
+	h.view = view
+	h.w = h.src.lastIssued()
+	h.t.Cleanup(view.Stop)
 }
 
 func (h *harness) waitApplied() uint64 {

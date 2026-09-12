@@ -18,11 +18,13 @@ success, failure, and cancellation envelopes. Dispatch now publishes a routed
 `UserResponse` before acknowledging its source terminal, and OTel rejects
 malformed terminal intent instead of settling it as successfully processed.
 
-Existing adopters do not need a configuration change. A response route still
+The original #1094 settlement correction required no configuration change. The later dispatch cleanup requires
+adopters with custom input-port overrides to remove the retired notification inputs; see the
+[dispatch migration](migration-beta162-to-beta163.md#dispatch-reads-loop-authority-instead-of-tracking-notifications-1146).
+A response route still
 requires `ChannelType` plus `ChannelID`; `UserID` remains optional. The only
-operational change is that transient routing or publication failures remain
-pending for redelivery while the source is retained, rather than being ACKed
-and lost.
+operational change is that failed routing or publication does not ACK the source as delivered.
+Transient reads retry; ambiguous publication stops the delivery owner with the source unsettled.
 
 SemStreams normalizes the three registered loop-terminal payloads before
 dispatch, AgentRun, or OTel interpret them. The accepted wire pairs are exactly:
@@ -38,8 +40,8 @@ category/outcome pair fail closed.
 
 ## Dispatch settlement
 
-Dispatch resolves response routing field by field from the process-local
-tracker, terminal payload, and the persisted loop record. `ChannelType` and
+Dispatch resolves response routing field by field from the terminal payload
+and exact validated persisted loop records. It has no process-local tracker. `ChannelType` and
 `ChannelID` are the address and both are required. `UserID` is optional
 metadata. Empty fields do not overwrite nonempty fields; conflicting nonempty
 values are permanent routing collisions. Once persisted state has been
@@ -96,20 +98,23 @@ Two distinct outcomes, and the difference matters operationally:
   observed, and both the parent chain and every encountered run anchor were
   exhausted (or the walk hit a cycle or the hop bound). The Warn names the
   absent loop and the run anchor. This IS an alert: it means an ancestor's
-  `AGENT_LOOPS` key expired (24h after its last write) or its best-effort
-  write never landed.
+  `AGENT_LOOPS` key expired or the named durable ancestor could not be established.
 
-Origin resolution reads only persisted records — never the process-local
-tracker — so a restarted dispatch resolves the same origin. That also means
-the 24h key TTL and the best-effort persistence of `AGENT_LOOPS` bound it: a
-workflow whose routed ancestor record is no longer observable has no delivery
-guarantee, the same horizon the AGENT source already has.
+Origin resolution reads only persisted records, so replacement does not depend on a previous process receiving
+creation notifications. Recovery requires both the terminal source and the routing records it names to remain
+retained. Their retention intersection is the delivery boundary; neither resource's full configured horizon is
+promised. A transient read retries. Confirmed absence of the terminal's own loop record reports
+`terminal_route_unavailable` and leaves the source retryable, without fabricating a route or claiming user delivery.
+That observation does not distinguish expiry, deletion, eviction, or a record never written. Ancestor lookup keeps
+the fallback and `origin_unresolvable` behavior described above.
 
 A terminal-derived response uses
 `terminal-user-response:<source BaseMessage ID>` for both `ResponseID` and
 `Nats-Msg-Id`, and uses the validated terminal timestamp. Dispatch requires a
 synchronous USER PubAck before ACKing the source terminal. Transient
-`AGENT_LOOPS` reads or USER publication failures are delayed-NAKed. Permanent
+`AGENT_LOOPS` reads are delayed-NAKed. Ambiguous USER publication returns Quarantine: no terminal method is
+attempted, and the exact delivery owner stops. See
+[semantic settlement](../concepts/33-semantic-settlement.md) for operator recovery. Permanent
 decode, identity, category/outcome, and routing failures are Termed.
 
 ## Bounded guarantee
@@ -125,8 +130,8 @@ indefinite storage. The checked AGENT declaration in `configs/agentic.json` is:
 Age or capacity pressure can therefore evict an unsettled terminal. No response
 publication is guaranteed after that eviction. The stable USER message ID only
 deduplicates within that stream's duplicate window; the declared behavior is
-at-least-once within bounded AGENT retention and USER deduplication, not
-exactly-once.
+at-least-once within the intersection of retained AGENT input and required loop routing state, not exactly-once.
+USER deduplication may suppress duplicates only inside its configured window.
 
 The `semstreams_router_terminal_settlement_total{reason}` counter uses fixed
 reason labels — including `handoff_settled` and `origin_unresolvable` — and
@@ -134,10 +139,9 @@ emits exactly one final disposition per delivery attempt. It does not include
 loop, user, channel, subject, or decision-action identifiers; the action name
 appears only in log lines.
 
-Origin resolution inherits a second bounded horizon: `AGENT_LOOPS` keys expire
-24h after their last write and are written best-effort, so a workflow whose
-routed ancestor record is not observable settles `origin_unresolvable` and no
-delivery is claimed past that point.
+Origin resolution also requires its routed ancestor records to remain available. Deletion, purge, expiry, or
+eviction can end that recovery window before the source event expires. No process projection extends the window
+and no delivery is claimed past it.
 Stream-level age and capacity are observable, but there is no per-message signal
 proving that an unsettled terminal was evicted before its response settled. The
 finite-MaxDeliver advisory is not such a signal for these unlimited-attempt

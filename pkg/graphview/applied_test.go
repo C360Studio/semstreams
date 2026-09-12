@@ -105,7 +105,7 @@ func TestAppliedAdvancesWithTheRevisionWatermark(t *testing.T) {
 // Every checkpoint asserts the timestamp against the same-instant revision, so
 // the two can never drift apart in lifecycle handling.
 func TestAppliedSurvivesLifecycleTransitions(t *testing.T) {
-	h := newHarness(t, 1) // one spare watcher queued for the restart
+	h := newHarness(t, 1) // one spare watcher queued for the replacement
 
 	t1 := time.Date(2026, 7, 1, 9, 0, 0, 0, time.UTC)
 	t2 := time.Date(2026, 7, 1, 9, 5, 0, 0, time.UTC)
@@ -134,11 +134,16 @@ func TestAppliedSurvivesLifecycleTransitions(t *testing.T) {
 	require.Equal(t, uint64(1), rev, "fail-closed does not reset the watermark")
 	require.True(t, at.Equal(t1), "fail-closed does not reset the timestamp either")
 
-	// Re-bootstrap: still retained while the fresh replay runs.
-	require.NoError(t, h.view.Restart())
-	rev, at = h.view.Applied()
+	// The stopped instance retains its diagnostic pair; a replacement starts
+	// with no observation until its own replay advances both values.
+	old := h.view
+	h.replace()
+	rev, at = old.Applied()
 	require.Equal(t, uint64(1), rev)
 	require.True(t, at.Equal(t1))
+	rev, at = h.view.Applied()
+	require.Zero(t, rev)
+	require.True(t, at.IsZero())
 
 	// The fresh replay advances both again.
 	h.w = h.src.lastIssued()

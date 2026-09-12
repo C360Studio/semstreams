@@ -991,19 +991,14 @@ from *silently accepted and ignored* to **rejected by `UserSignal.Validate()`**.
 unimplemented verb that answers `200` is how this defect survived unnoticed for months. Remove the call; there
 is nothing to migrate it to.
 
-**Persisted records.** The three JSON keys were written only by the deleted handlers — but `handlePauseSignal`
-set `PauseRequested = true` and persisted the loop, so **an existing `AGENT_LOOPS` record may well carry
-non-zero values for them**, not merely absent or falsy ones. That is the case the compatibility test uses.
-Decoding ignores unknown keys —
-no `DisallowUnknownFields` sits on the `LoopEntity` decode path — so old records load unchanged and no backfill
-or migration job is required.
+**Current-record validation.** `LoopEntity.Validate()` now rejects `state: "paused"` for every caller, including
+dispatch's exact reads and shared view. `LoopState` is a string type, so JSON decoding alone can still succeed;
+decodability is not valid current authority. Removed pause fields no longer define behavior, even when the decoder
+ignores their unknown JSON keys. There is no compatibility promise, backfill, or beta-state preservation requirement.
 
-`LoopState` `paused` deliberately remains legacy-valid. The exported transition APIs still accept it; #1239
-removes the framework-owned pause/resume signal path and pause semantics, not the state vocabulary. Preserving
-the state is required for **validation, not deserialization**: `LoopState` is a plain string type with no
-`UnmarshalJSON`, so a persisted `"state":"paused"` would decode either way. But `LoopEntity.Validate()` rejects
-any state that `isValidLoopState` does not list (`agentic/state.go:106,116`), so dropping the constant would make
-every pre-existing `paused` record invalid. Keeping it is what makes this migration a no-op for your data.
+Stop writing `paused` records. Use cancellation to end work and the separate approval protocol for a tool awaiting
+review. The remaining constant and transition-surface cleanup is tracked in #1146; their presence does not make
+`paused` a supported persisted state. This validation correction does not add suspend or checkpoint semantics.
 
 ### `cancel` is now the entire signal vocabulary
 
@@ -1062,7 +1057,7 @@ the prior turns, the system prompt is not re-seeded, and the request carries the
 
 If you were relying on `reply_to` to reset a conversation, it no longer does. Omit `reply_to` with
 `auto_continue: false` to start a fresh execution. Explicitly enabled AutoContinue (a submission with no `reply_to`
-that resolves onto your most recent non-terminal loop) reaches the same attach. The #1146 change below makes
+that resolves onto one exact user/type/channel nonterminal match) reaches the same attach. The #1146 change below makes
 AutoContinue opt-in and adds independent follow-up turns with supplied history.
 
 **A continuation is refused while the loop has work in flight.** "Live" is not "idle". If the loop has outstanding
@@ -1216,3 +1211,67 @@ conversation recall, and implicit command targets are no longer selected under d
 Downstream owners update and test their own adapters. Verify two completed turns separated by component replacement,
 with the second provider request containing the displayed exchange once and a fresh execution budget. This migration
 does not ask downstreams to preserve beta state or introduce a compatibility layer.
+
+## Dispatch reads loop authority instead of tracking notifications (#1146)
+
+Dispatch is now an edge gateway: it publishes admitted work, reads loop state, and bridges terminal outcomes to
+user responses. Agentic-loop owns creation, approval waits, intermediate transitions, and completion. Dispatch no
+longer consumes `agent.created` or `agent.approval_pending` to maintain a second process-local model of those facts.
+The loop still publishes both events for external subscribers; their payload contracts are unchanged by this cleanup.
+
+Explicit LoopID operations read the exact durable loop record. `/activity`, `/loops`, `/debug/state`, and AutoContinue
+share the existing read-only view over `AGENT_LOOPS`. After replacement, that view hydrates current state; it does
+not depend on already-acknowledged notifications being delivered again. There is no new bucket or recovery service.
+
+### Go callers and component configuration
+
+- `LoopTracker`, its constructors and methods, and `Component.LoopTracker()` are removed without an alias.
+  Custom commands replace `CommandContext.LoopTracker` with `LookupLoopOwner(ctx, loopID)`, returning only LoopID
+  and UserID. Invalid IDs, confirmed absence, missing owner, invalid records, and unavailable storage remain distinct
+  classified errors. Do not turn an unavailable lookup into permission or absence.
+- Remove `agent.created` and `agent.approval_pending` from dispatch input-port overrides. Retain its declared
+  `agent_loops` KV read port and the admitted user-message and terminal inputs. Do not remove the loop outputs or
+  unrelated external subscribers.
+- `graphview.View.Restart()` is removed. Its lifecycle owner stops the failed view, creates a replacement, and
+  starts it with the active lifecycle context. Shutdown must join that work; do not retain a context or provider
+  closure to recreate the old method. Dispatch handles its own shared-view lifecycle internally.
+
+Known adopter impact is the SemTeams `implementspec` custom command's tracker-based ownership check in
+`cmd/semteams/commands/implementspec/command.go` (`authorizeSelectedRun`, verified at `ce22c961d3`). Its owner
+must pass the operation's `context.Context` into that helper, migrate the check to `LookupLoopOwner(ctx, runID)`, and test
+classified failures. SemTeams clients still using the deleted
+`POST /loops/{id}/signal` endpoint must use the admitted cancellation path documented above; this change does not
+restore a generic signal endpoint. SemStreams agents do not modify sister repositories.
+
+### HTTP clients, AutoContinue, and dashboards
+
+`LoopInfo` remains the immutable `/loops` and `/debug/state` response shape, including the separately documented
+pending `execution_id` addition. No mutable entity or tracker is exposed. The former process-only
+`context_request_id` remains optional and empty; it is not reconstructed from an event that no longer drives state.
+`/loops` and `/debug/state` return 503 for unavailable, bootstrapping, or relevant-poisoned views, not a false empty
+list. AutoContinue also refuses unavailable truth with 503 instead of starting new work. `/activity` preserves its
+existing SSE error-event contract. Debug output exposes `loop_projection_ready` and `loop_projection_poisoned` so
+unavailable truth is distinguishable from zero loops.
+
+AutoContinue remains opt-in. It requires exact `(UserID, ChannelType, ChannelID)` agreement with one nonterminal
+record. Partial routes do not match; multiple matches refuse as ambiguous. Between a task's PubAck and its first
+durable loop record, another route-only request may create a second loop. If continuity matters, echo the returned
+LoopID. No route claim or prediction setting is added. Independent chat turns with `prior_messages` are unchanged.
+
+Remove `semstreams_router_active_loops` from dashboards and alerts; no replacement authoritative Prometheus count
+is introduced. Use `/loops` only while its view is ready. The agentic-loop execution gauge remains process-local
+telemetry, not a count of every retained loop.
+
+### Terminal response boundary
+
+A terminal user response requires both the retained complete/failed source and the exact routing records it names.
+Its recovery window is the intersection of those retentions, not either configured horizon alone. Transient reads
+retry; confirmed absence of the terminal's own loop record reports `terminal_route_unavailable` and remains
+retryable instead of fabricating a route from memory. The reason reports absence, not its historical cause.
+Ancestor-route lookup retains its existing fallback and `origin_unresolvable` report. A validated system-lane
+outcome with no user route settles without `user.response`.
+Required response publication still receives PubAck before source ACK, and remains at-least-once.
+
+Verify pending approval and explicit continuation after dispatch replacement, unavailable-view 503 responses,
+exact-route AutoContinue and its birth gap, and terminal routing after replacement. No beta-state preservation,
+tracker hydration, or compatibility layer is required.

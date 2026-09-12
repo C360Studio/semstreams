@@ -22,6 +22,9 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+// ErrNATSClientNil is returned when the NATS client is unavailable.
+var ErrNATSClientNil = errs.ErrNoConnection
+
 // scopeTaskTools applies c.config.DefaultTools to task.Tools when
 // configured. Mirrors the bus-dispatch and HTTP-dispatch paths so
 // both honor the same scoping contract: nil DefaultTools leaves
@@ -85,7 +88,6 @@ type Component struct {
 	natsClient    *natsclient.Client
 	taskEvidence  retainedTaskEvidenceReader
 	logger        *slog.Logger
-	loopTracker   *LoopTracker
 	registry      *CommandRegistry
 	metrics       *routerMetrics
 	modelRegistry model.RegistryReader // Unified model registry for model selection
@@ -155,11 +157,9 @@ type subscriptionInputBinding struct {
 }
 
 type subscriptionInputBindings struct {
-	userMessage     subscriptionInputBinding
-	agentComplete   subscriptionInputBinding
-	agentCreated    subscriptionInputBinding
-	agentFailed     subscriptionInputBinding
-	approvalPending subscriptionInputBinding
+	userMessage   subscriptionInputBinding
+	agentComplete subscriptionInputBinding
+	agentFailed   subscriptionInputBinding
 }
 
 // NewComponent creates a new router component
@@ -181,7 +181,6 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		decoder:       message.NewDecoder(deps.PayloadRegistry),
 		natsClient:    deps.NATSClient,
 		logger:        logger,
-		loopTracker:   NewLoopTrackerWithLogger(logger),
 		registry:      NewCommandRegistry(),
 		metrics:       getMetrics(deps.MetricsRegistry),
 		modelRegistry: deps.ModelRegistry,
@@ -605,38 +604,6 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	c.consumers = append(c.consumers, agentCompleteBinding)
 	c.lifecycleMu.Unlock()
 
-	// Subscribe to loop created events for workflow context sync
-	agentCreatedCfg := natsclient.StreamConsumerConfig{
-		StreamName:    bindings.agentCreated.streamName,
-		ConsumerName:  c.consumerName("agentic-dispatch-agent-created"),
-		FilterSubject: bindings.agentCreated.subject,
-		DeliverPolicy: "new",
-		AckPolicy:     "explicit",
-		MaxDeliver:    3,
-		MaxAckPending: bindings.agentCreated.consumerConfig.MaxAckPending,
-		AutoCreate:    false,
-	}
-	agentCreatedAdmission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
-	handle, err = c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.agentCreated.portName}, agentCreatedCfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		if !agentCreatedAdmission.admit() {
-			return
-		}
-		decision, cause := runDispatchDeliveryWork(msgCtx, msg.Data(), c.handleAgentCreated)
-		result := natsclient.SettleDelivery(msg, decision, cause)
-		agentCreatedAdmission.latch(result)
-		if result.Err() != nil && !result.OwnerStopRequired() {
-			c.logger.Error("Agent-created delivery did not settle cleanly", slog.Any("error", result.Err()))
-		}
-	})
-	if err != nil {
-		return errs.WrapTransient(err, "Component", "setupSubscriptions", "subscribe to agent.created")
-	}
-	agentCreatedBinding := newStreamConsumerBinding(handle)
-	c.observeDeliveryLane(ctx, &agentCreatedBinding, agentCreatedAdmission)
-	c.lifecycleMu.Lock()
-	c.consumers = append(c.consumers, agentCreatedBinding)
-	c.lifecycleMu.Unlock()
-
 	// Subscribe to loop failed events
 	agentFailedCfg := natsclient.StreamConsumerConfig{
 		StreamName:    bindings.agentFailed.streamName,
@@ -674,51 +641,6 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	c.observeDeliveryLane(ctx, &agentFailedBinding, agentFailedAdmission)
 	c.lifecycleMu.Lock()
 	c.consumers = append(c.consumers, agentFailedBinding)
-	c.lifecycleMu.Unlock()
-
-	// Subscribe to approval-pending events so the HTTP approval
-	// handler has the loop's CallID + tool args available locally
-	// (no KV.Get round-trip per request). Optional port — the
-	// dispatch surface continues to function without it; only the
-	// approval HTTP endpoint requires the cache populated.
-	//
-	// MaxDeliver is intentionally finite while terminal sibling subscriptions
-	// use unlimited delivery: a missed approval-pending event has
-	// asymmetric blast radius — it leaves the HTTP approval handler
-	// returning 400 forever for that loop until the next approval
-	// cycle. Terminal siblings instead use unlimited, retention-bounded
-	// settlement. Combined with the LoopTracker's early-arrival
-	// buffer (drains on the matching agent.created), 10 retries gives
-	// generous slack for race resolution without unbounded redelivery.
-	agentApprovalPendingCfg := natsclient.StreamConsumerConfig{
-		StreamName:    bindings.approvalPending.streamName,
-		ConsumerName:  c.consumerName("agentic-dispatch-agent-approval-pending"),
-		FilterSubject: bindings.approvalPending.subject,
-		DeliverPolicy: "new",
-		AckPolicy:     "explicit",
-		MaxDeliver:    10,
-		MaxAckPending: bindings.approvalPending.consumerConfig.MaxAckPending,
-		AutoCreate:    false,
-	}
-	approvalPendingAdmission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
-	handle, err = c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.approvalPending.portName}, agentApprovalPendingCfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		if !approvalPendingAdmission.admit() {
-			return
-		}
-		decision, cause := runDispatchDeliveryWork(msgCtx, msg.Data(), c.handleAgentApprovalPending)
-		result := natsclient.SettleDelivery(msg, decision, cause)
-		approvalPendingAdmission.latch(result)
-		if result.Err() != nil && !result.OwnerStopRequired() {
-			c.logger.Error("Approval-pending delivery did not settle cleanly", slog.Any("error", result.Err()))
-		}
-	})
-	if err != nil {
-		return errs.WrapTransient(err, "Component", "setupSubscriptions", "subscribe to agent.approval_pending")
-	}
-	approvalPendingBinding := newStreamConsumerBinding(handle)
-	c.observeDeliveryLane(ctx, &approvalPendingBinding, approvalPendingAdmission)
-	c.lifecycleMu.Lock()
-	c.consumers = append(c.consumers, approvalPendingBinding)
 	c.lifecycleMu.Unlock()
 
 	return nil
@@ -864,7 +786,11 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 	if len(args) > 0 && args[0] != "" {
 		loopID = args[0]
 	} else if c.config.AutoContinue {
-		loopID = c.loopTracker.GetActiveLoop(msg.UserID, msg.ChannelID)
+		var err error
+		loopID, err = c.activeLoop(ctx, msg)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Check if loop is required
@@ -1008,7 +934,13 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		if msg.ReplyTo != "" {
 			loopID = msg.ReplyTo
 		} else if c.config.AutoContinue {
-			loopID = c.loopTracker.GetActiveLoop(msg.UserID, msg.ChannelID)
+			loopID, err = c.activeLoop(ctx, msg)
+			if err != nil {
+				if errs.IsTransient(err) {
+					return err
+				}
+				return c.answerRefusedSubmission(ctx, msg, err)
+			}
 		}
 
 		if loopID != "" {
@@ -1047,25 +979,6 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 	taskID := task.TaskID
 	loopID = task.LoopID
 
-	// Track the loop and count it started. This is after the task is assembled
-	// and addressable and before the publish: the approval-pending arrival
-	// buffer that Track drains exists to absorb exactly this window, and the
-	// alternative — track first, untrack on failure — is a compensating action a
-	// later branch can skip.
-	c.loopTracker.Track(&LoopInfo{
-		LoopID:           loopID,
-		TaskID:           taskID,
-		Role:             task.Role,
-		UserID:           msg.UserID,
-		ChannelType:      msg.ChannelType,
-		ChannelID:        msg.ChannelID,
-		State:            "pending",
-		MaxIterations:    20,
-		ContextRequestID: msg.ContextRequestID,
-		CreatedAt:        time.Now(),
-	})
-	c.metrics.recordLoopStarted()
-
 	if err := c.natsClient.PublishToStream(ctx, prepared.subject, prepared.data); err != nil {
 		return errs.WrapFatal(err, "Component", "handleTaskSubmission",
 			fmt.Sprintf("task publication for loop %s has unknown durable state", loopID))
@@ -1103,100 +1016,11 @@ func (c *Component) handleAgentComplete(ctx context.Context, data []byte) {
 	}
 }
 
-// handleAgentCreated processes loop creation events for workflow context sync
-func (c *Component) handleAgentCreated(_ context.Context, data []byte) (natsclient.DeliveryDecision, error) {
-	// Parse BaseMessage envelope
-	baseMsg, err := c.decoder.Decode(data)
-	if err != nil {
-		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("decode agent-created event: %w", err)
-	}
-
-	// Extract LoopCreatedEvent from payload
-	createdPtr, ok := baseMsg.Payload().(*agentic.LoopCreatedEvent)
-	if !ok {
-		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("unexpected agent-created payload type %T", baseMsg.Payload())
-	}
-	created := *createdPtr
-
-	// Check if we already track this loop (we originated it)
-	if existing := c.loopTracker.Get(created.LoopID); existing != nil {
-		// Atomically update workflow context if missing
-		c.loopTracker.UpdateWorkflowContext(created.LoopID, created.WorkflowSlug, created.WorkflowStep)
-		// Atomically update context request ID if missing
-		c.loopTracker.UpdateContextRequestID(created.LoopID, created.ContextRequestID)
-		return natsclient.DeliveryDecisionAck, nil
-	}
-
-	// New loop we didn't originate - track it
-	c.loopTracker.Track(&LoopInfo{
-		LoopID:           created.LoopID,
-		TaskID:           created.TaskID,
-		Role:             created.Role,
-		State:            "executing",
-		MaxIterations:    created.MaxIterations,
-		WorkflowSlug:     created.WorkflowSlug,
-		WorkflowStep:     created.WorkflowStep,
-		ContextRequestID: created.ContextRequestID,
-		Metadata:         created.Metadata,
-		CreatedAt:        created.CreatedAt,
-	})
-
-	// Record external loop for metrics (will be decremented by handleAgentComplete)
-	c.metrics.recordLoopStarted()
-
-	c.logger.Debug("Tracked external loop",
-		slog.String("loop_id", created.LoopID),
-		slog.String("workflow_slug", created.WorkflowSlug),
-		slog.String("workflow_step", created.WorkflowStep))
-	return natsclient.DeliveryDecisionAck, nil
-}
-
 // handleAgentFailed processes loop failure events
 func (c *Component) handleAgentFailed(ctx context.Context, data []byte) {
 	if err := c.settleAgentTerminal(ctx, data); err != nil {
 		c.logger.Warn("Agent terminal settlement failed", slog.Any("error", err))
 	}
-}
-
-// handleAgentApprovalPending records the gated tool-call info on the
-// loop tracker so pending projections expose the reviewed execution and
-// tool arguments. HTTP approval admission still reads durable authority.
-// The framework's agentic-loop emits this event when a tool
-// call hits config.approval_required and the loop transitions to
-// LoopStateAwaitingApproval; dispatch is one of several subscribers
-// (the others being product-layer approval UIs).
-func (c *Component) handleAgentApprovalPending(_ context.Context, data []byte) (natsclient.DeliveryDecision, error) {
-	baseMsg, err := c.decoder.Decode(data)
-	if err != nil {
-		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("decode approval-pending event: %w", err)
-	}
-
-	pending, ok := baseMsg.Payload().(*agentic.ApprovalPendingEvent)
-	if !ok {
-		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("unexpected approval-pending payload type %T", baseMsg.Payload())
-	}
-
-	if pending.LoopID == "" || pending.CallID == "" {
-		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("approval-pending event missing required loop_id or call_id")
-	}
-
-	// SetPendingApproval handles the unknown-loop race internally by
-	// buffering until the matching agent.created arrives. Returns
-	// false on miss-or-buffered; either way the framework's loop
-	// state is canonical and the HTTP handler degrades gracefully.
-	if accepted := c.loopTracker.SetPendingApproval(pending.LoopID, &PendingApprovalInfo{
-		CallID:      pending.CallID,
-		ExecutionID: pending.ExecutionID,
-		ToolName:    pending.ToolName,
-		Arguments:   pending.Arguments,
-		Reason:      pending.Reason,
-		RequestedAt: pending.RequestedAt,
-		TraceID:     pending.TraceID,
-	}); !accepted {
-		return natsclient.DeliveryDecisionRetry,
-			fmt.Errorf("approval-pending projection for loop %q was not accepted", pending.LoopID)
-	}
-	return natsclient.DeliveryDecisionAck, nil
 }
 
 // sendResponse publishes a response to the user's channel
@@ -1279,11 +1103,6 @@ func (c *Component) CommandRegistry() *CommandRegistry {
 	return c.registry
 }
 
-// LoopTracker returns the loop tracker
-func (c *Component) LoopTracker() *LoopTracker {
-	return c.loopTracker
-}
-
 // inputPortBinding returns the configured stream and sole subject for a named JetStream input.
 func (c *Component) inputPortBinding(portName string) (string, string, error) {
 	for _, port := range c.inputPorts {
@@ -1338,15 +1157,7 @@ func (c *Component) resolveAndWaitForSubscriptionBindings(
 	if err != nil {
 		return subscriptionInputBindings{}, err
 	}
-	bindings.agentCreated, err = resolve("agent.created")
-	if err != nil {
-		return subscriptionInputBindings{}, err
-	}
 	bindings.agentFailed, err = resolve("agent.failed")
-	if err != nil {
-		return subscriptionInputBindings{}, err
-	}
-	bindings.approvalPending, err = resolve("agent.approval_pending")
 	if err != nil {
 		return subscriptionInputBindings{}, err
 	}
@@ -1354,9 +1165,7 @@ func (c *Component) resolveAndWaitForSubscriptionBindings(
 	streamNames := []string{
 		bindings.userMessage.streamName,
 		bindings.agentComplete.streamName,
-		bindings.agentCreated.streamName,
 		bindings.agentFailed.streamName,
-		bindings.approvalPending.streamName,
 	}
 	seen := make(map[string]struct{}, len(streamNames))
 	for _, streamName := range streamNames {
@@ -1398,10 +1207,10 @@ func (c *Component) outputPortDefs() []component.PortDefinition {
 // loadGlobalCommands loads globally registered commands into the component
 func (c *Component) loadGlobalCommands() {
 	cmdCtx := &CommandContext{
-		NATSClient:    c.natsClient,
-		LoopTracker:   c.loopTracker,
-		Logger:        c.logger,
-		HasPermission: c.hasPermission,
+		NATSClient:      c.natsClient,
+		LookupLoopOwner: c.lookupLoopOwner,
+		Logger:          c.logger,
+		HasPermission:   c.hasPermission,
 	}
 
 	for name, executor := range ListRegisteredCommands() {
