@@ -38,7 +38,9 @@ Rituals:
   afterwards. (Owner ruling 2026-09-02 on PR #1231 — *"so we are working on one issue and creating four others?"*
   — seven filed in one sitting, three relocated. Measured 2026-09-11: 19 of the 38 issues filed since carried no
   milestone, and ~35 of the 53 open arrivals in that window were residuals of in-flight PRs.)
-- **Land:** implementation review → the owner-run cross-agent round where the owner asks for it → fixes and re-review →
+- **Land:** implementation review → the owner-run cross-agent round where the owner asks for it — a docs-only
+  change owes none (owner ruling 2026-09-12: `.agents/`, `docs/`, `openspec/`, `*.md`, with no code or CI change)
+  → fixes and re-review →
   archive as the final content commit → narrow reviewer check of the archive/spec sync → undraft → CI green with
   **no known unfixed flake in a required job** (a fresh green over a known flake is rerun-to-green: fix it, or file it
   and obtain an explicit owner waiver recorded as a PR comment) → squash merge closes the issue. A correction after
