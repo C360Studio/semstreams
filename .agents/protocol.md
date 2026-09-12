@@ -28,6 +28,16 @@ Rituals:
   2026-08-25); `git worktree remove` it when the PR merges. Heavy local gates (the full integration suite, an e2e tier)
   run one agent at a time on a shared host: worktrees fix the git collision, not the CPU one (#736). CI is the arbiter;
   a local red under contention is not a finding.
+- **File:** before opening an issue, route the finding. A residual of a decision this change just made deliberately
+  → a doc comment at the line, or the change's `design.md`. A consequence an owner ruling already states → nothing;
+  the ruling is the record. An unmeasured cost → a *Declared cost* section in the design. Only an architectural
+  finding — it crosses files, it would need its evidence re-collected to re-derive, or it changes what someone
+  should *not* do next → **an issue, placed at filing**: the change's own milestone unless the finding is the reason
+  a different one exists, or a `horizon:post-v1` stamp. An issue nobody can place at filing is not an issue. Ask
+  the owner *before* filing, and only when the placement is a genuine scheduling call — never "where do these go?"
+  afterwards. (Owner ruling 2026-09-02 on PR #1231 — *"so we are working on one issue and creating four others?"*
+  — seven filed in one sitting, three relocated. Measured 2026-09-11: 19 of the 38 issues filed since carried no
+  milestone, and ~35 of the 53 open arrivals in that window were residuals of in-flight PRs.)
 - **Land:** implementation review → the owner-run cross-agent round where the owner asks for it → fixes and re-review →
   archive as the final content commit → narrow reviewer check of the archive/spec sync → undraft → CI green with
   **no known unfixed flake in a required job** (a fresh green over a known flake is rerun-to-green: fix it, or file it

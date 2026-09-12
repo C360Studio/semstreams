@@ -95,9 +95,10 @@ evidence, and carry the evidence into the handoff:
 5. **Am I establishing a pattern other planes should adopt?** If question 1 found *no* present owner and what you are
    adding is a named primitive intended for reuse across planes — a validator, gate, authority, classified-error
    family, dispatcher, or lifecycle shape — the change owes an **adoption sweep**: one line per plane that should
-   adopt it, pinned at `file:line`, filed as issues or one tracking issue. It is an **enumeration obligation, never a
-   migration obligation** — you fix none of them, and the number found never blocks your PR. Worked case and the
-   reason the bound matters: `docs/contributing/07-pattern-adoption.md`.
+   adopt it, pinned at `file:line`, filed as one tracking issue or as issues — each placed at filing per the
+   protocol's **File** ritual. It is an **enumeration obligation, never a migration obligation** — you fix none of
+   them, and the number found never blocks your PR. Worked case and the reason the bound matters:
+   `docs/contributing/07-pattern-adoption.md`.
 
 The architect's surface and adopter seam inventories answer these at design time. This check is the
 implementation-time re-run, scoped to the slice you touch — slices grow symbols the design never named.
@@ -261,7 +262,8 @@ PRs fell into the four classes below.
   class it accepts AND each it must reject, asserting an invariant (never panics; round-trips; rejection is a
   typed error), following the in-tree pattern (`FuzzParseEntityIDRoundTrip`, `FuzzKVValidatorsNeverPanic` — both
   seed rejects heavily). Seed corpora run in plain `go test`. Where fuzzing is genuinely inapplicable to the
-  surface, say why and cite the filed gap issue — silence is the finding, not the exemption.
+  surface, say why and cite the filed gap issue, placed per the protocol's **File** ritual — silence is the finding,
+  not the exemption.
 - A property-based test encodes an invariant the design cited, never one inferred from the implementation. Write
   the generator from the input grammar and the property from the cited spec clause; annotate the test
   `// spec: <capability> / <requirement heading>`, quoting the `### Requirement:` heading text verbatim, so the
@@ -272,8 +274,9 @@ PRs fell into the four classes below.
   mutation kill. A wide range that merely strides a bound catches an off-by-one only probabilistically (measured
   on PR #1213 — a `>=` mutation at the 256-byte entity-ID bound survived 100 uniform draws; a boundary-hugging
   `rapid.OneOf` generator killed it after 0 tests). If implementation reveals an invariant the spec never stated,
-  do not quietly encode it: mark it at the assertion and file a spec-gap issue, then cite that issue in place of
-  the clause (the route #1213 took for the unstated clean-`StopAll` registry clear, filed as #1214).
+  do not quietly encode it: mark it at the assertion and file a spec-gap issue — placed per the protocol's **File**
+  ritual — then cite that issue in place of the clause (the route #1213 took for the unstated clean-`StopAll`
+  registry clear, filed as #1214).
 - Use ephemeral ports, explicit synchronization, and no `t.Parallel()` around process-global state such as
   `slog.SetDefault`. Explain wall-clock assertions and give them realistic tolerance.
 - Run focused unit tests, `task lint`, `go test -race ./...`, schema generation/no-drift, contract tests, and relevant
@@ -286,4 +289,6 @@ PRs fell into the four classes below.
 ## Handoff
 
 Summarize the implemented task slice, semantic blast radius, tests and exact results, unresolved gates, and any
-follow-up owned by the architect, reviewer, or technical writer. Do not claim completion from compilation alone.
+follow-up owned by the architect, reviewer, or technical writer. Name every issue the slice filed and where each was
+placed (protocol **File** ritual); an unplaced filing is an unresolved gate. Do not claim completion from compilation
+alone.
