@@ -2,7 +2,7 @@
 
 ## Status
 
-**Accepted (2026-07-17).** This record approves fixed-position owner discovery as the replacement mechanism for
+**Accepted (2026-07-17).** **Amended 2026-09-11 (#1284)** — § 8 condition 4's evidence home; see § 8. This record approves fixed-position owner discovery as the replacement mechanism for
 the bounded graph-index layouts named below and fixes INCOMING ownership on the source assertion. Acceptance of the
 decision does not certify production activation: activation remains blocked until every evidence gate in this ADR
 passes and is recorded against the exact implementation revision.
@@ -136,7 +136,8 @@ Production activation is prohibited until all of the following are green for eve
 1. unit contract proof for complete layouts, arities, maxima, and pre-I/O rejection;
 2. pinned maximum-value real-NATS exact-match conformance;
 3. concurrent Put/Delete convergence, cancellation, empty bucket, restart, and clean bucket recreation;
-4. the 5,000-hot-member plus 20-predicate CI guard, with each operation below 3 seconds;
+4. the 5,000-hot-member plus 20-predicate workload, evidenced by a supervised run recorded against the
+   current server and SDK pin (see the amendment below);
 5. one 21,000-entity sustained-churn run at the configured worker shape and one stress shape, with p95 at most
    3 seconds, p99 at most 5 seconds, no operation reaching the 10-second handler bound, bounded queue growth, and
    temporary consumers returning to baseline;
@@ -144,6 +145,20 @@ Production activation is prohibited until all of the following are green for eve
 7. real-NATS `[A] -> [B] -> []` proof through the watcher, keyed lane, readiness watermark, repair, restart, and
    shuffled replay, plus affected public queries and the next completed clustering cycle; and
 8. fresh-state activation behind typed not-ready responses during the announced pre-v1 wipe/reseed.
+
+**Amendment (#1284, owner ruling 2026-09-11):** condition 4's workload — 5,000 hot members plus 20 spread
+predicates — and this section's prohibition on activating under a failed absolute budget both stand. What changes
+is where the evidence comes from and what bounds it. The continuously-running CI guard is a **regression guard,
+not activation evidence**: it proves exact match sets, post-churn convergence, bounded queue and consumer
+behaviour, and an order-of-magnitude latency check, and it carries **no per-operation wall-clock budget**.
+Condition 4 is satisfied by a **supervised run recorded against the current server and SDK pin**, captured in the
+[`Predicate Layout Evidence Runbook`](../operations/32-predicate-layout-smoke-harness.md) alongside condition 5's
+21,000-entity run, with its revision, host, runtime, pin and complete per-filter distribution. The absolute
+ceiling on a directly measured key listing is the framework-enforced `natsclient` KV deadline, observed as the
+operation's own typed error and never restated as a predicted budget. **Condition 4's** numeric budget lives in
+the runbook, not here, so that the measured record and the contract cannot drift apart (condition 5 keeps its own,
+unchanged). Activation remains prohibited until
+that supervised record exists on the current pin.
 
 Evidence collection follows the workload and resource-recording conventions in the
 [`Predicate Layout Evidence Runbook`](../operations/32-predicate-layout-smoke-harness.md). Its supervised 5k and

@@ -40,7 +40,6 @@ type ownerLoadProfile struct {
 	repetitions       int
 	churnPerWriter    int
 	workerShapes      []int
-	operationBudget   time.Duration
 	p95Budget         time.Duration
 	p99Budget         time.Duration
 	maxServerRSSBytes int64
@@ -57,23 +56,46 @@ func ownerLoadCIProfile() ownerLoadProfile {
 	return ownerLoadProfile{
 		name: "ci", entities: 5_000, nameContext: 5_000, spread: 20,
 		repetitions: 5, churnPerWriter: 50, workerShapes: []int{4},
-		// operationBudget 3s is a CONTRACTED ACTIVATION GATE, not a tunable test detail. Production
-		// activation is prohibited until this CI guard shows "each operation below 3 seconds" —
-		// docs/adr/077-bounded-owner-discovery-and-incoming-ownership.md:134-142 (condition 4),
-		// the graph-index spec's absolute-budget requirement, and
-		// docs/operations/32-predicate-layout-smoke-harness.md:49-50, which assigns 10s to the
-		// SEPARATE 21,000-entity Decision profile and 3s to CI. Do NOT raise it to match the full
-		// profile: that is a different profile with a different contract (gh#750, PR #755).
+		// This profile is a REGRESSION GUARD, not activation evidence (#1284, owner ruling
+		// 2026-09-11). ADR-077 section 8 condition 4 —
+		// docs/adr/077-bounded-owner-discovery-and-incoming-ownership.md:139 — is satisfied by the
+		// supervised record in docs/operations/32-predicate-layout-smoke-harness.md, section "Owner-filter acceptance record",
+		// taken on the
+		// current server and SDK pin, never by a shared-runner CI run. The graph-index spec states the
+		// same split under the requirement "Fixed-position owner filtering is proven before production
+		// reconciliation activates".
 		//
-		// This per-repetition gate is also the ONLY tail coverage here: at repetitions=5 the
-		// percentile gates compute p95 = p99 = durations[(5-1)*p/100] = durations[3], the
-		// second-largest of five, so neither ever examines the max. Pinned by
-		// TestOwnerLoadCIProfile_ContractedBudgets.
+		// There is exactly ONE absolute ceiling on a directly measured key listing, and this harness
+		// does not predict it: natsclient.DefaultKVOptions().Timeout (natsclient/kv.go:39, applied by
+		// applyTimeout at :538) bounds every KeysByFilter call here, and an expiry surfaces as the
+		// operation's own typed error on the require.NoError that precedes each measurement — with the
+		// partial key set refused at natsclient/kv.go:589 and :592. A per-repetition wall-clock budget
+		// is NOT restated at any value: below the deadline it fires on stalls the framework itself
+		// tolerates (the five gh#750/#1284 events), above it it can never fire (#1286).
 		//
-		// gh#750 records that this budget flakes under CI runner contention (observed 3.30s against a
-		// same-run max of 2.24s). Relaxing it requires an architect-reviewed ADR-077 / spec change that
-		// replaces the activation evidence — not a test edit.
-		operationBudget: 3 * time.Second, p95Budget: 3 * time.Second, p99Budget: 3 * time.Second,
+		// p95Budget/p99Budget stay at 3s by the same owner ruling. They are an order-of-magnitude
+		// latency check and they are deliberately loose. Measured healthy p95, stated in
+		// MILLISECONDS — the unit discipline #1286 exists for:
+		//
+		// Compare like for like: worst forward filter against worst forward filter. Pairing
+		// one filter's p95 with another's is the #1284 magnitude error.
+		//
+		//	quiet box, worst forward (name-forward)          p95  77.861 ms
+		//	shared runner, worst forward (name-forward)      p95 258.039 ms  (run 34367949188)
+		//	shared runner, worst healthy single sample           389.0   ms  (run 33208133273)
+		//	supervised 21k record (rev b10671ed)             p95 580.383 ms, p99 591.050 ms
+		//
+		// 3s is therefore ~38x the quiet-box p95 and ~11.6x the shared-runner p95: a weak regression
+		// guard that would not notice a 10x regression, against a realistic 5-20x regression class.
+		// Tightening it needs within-filter stall-adjacency data that does not exist yet, which is
+		// exactly what the submission-order recording below starts collecting. gh#1287 owns the
+		// re-derivation and must not be pre-empted by a bare constant edit.
+		//
+		// gh#750 / PR #755 raised the now-deleted per-operation budget against a distribution that no
+		// longer exists: that run measured p50 99.784608 ms, p95 697.726516 ms, max 2.23697341 s,
+		// while forward filters now measure p95 78-175 ms and max 166-389 ms. What an ADR/spec change
+		// protects from here is the EVIDENCE HOME, not this constant.
+		p95Budget: 3 * time.Second, p99Budget: 3 * time.Second,
 		maxServerRSSBytes: 1 << 30,
 	}
 }
@@ -82,7 +104,13 @@ func ownerLoadFullProfile() ownerLoadProfile {
 	return ownerLoadProfile{
 		name: "full", entities: 21_000, nameContext: 5_000, spread: 20,
 		repetitions: 30, churnPerWriter: 200, workerShapes: []int{4, maxGraphIndexWorkers},
-		operationBudget: 10 * time.Second, p95Budget: 3 * time.Second, p99Budget: 5 * time.Second,
+		// No operationBudget: the same natsclient KV deadline bounds this profile too, so a predicted
+		// 10s ceiling here could never fire (#1284 design P18). The supervised record is this
+		// profile's output. Q7(b) is RULED (#1284 comment 5640631023): these percentiles STAY at 3s/5s
+		// even though the supervised record measures 580.383 ms / 591.050 ms -- 5.2x/8.5x -- because a
+		// gate that has never fired cannot be tightened into anything but a new flake. Re-deriving
+		// BOTH profiles' budgets is gh#1287.
+		p95Budget: 3 * time.Second, p99Budget: 5 * time.Second,
 		maxServerRSSBytes: 2 << 30,
 	}
 }
@@ -285,6 +313,7 @@ func runOwnerLoadWorkerShape(
 	}
 	type listResult struct {
 		label    string
+		serial   int
 		duration time.Duration
 		count    int
 		err      error
@@ -297,7 +326,8 @@ func runOwnerLoadWorkerShape(
 		func(runCtx context.Context, job listJob) {
 			started := time.Now()
 			keys, err := job.fixture.store.KeysByFilter(runCtx, job.fixture.ownerFilter)
-			results <- listResult{label: job.fixture.name, duration: time.Since(started), count: len(keys), err: err}
+			results <- listResult{label: job.fixture.name, serial: job.serial,
+				duration: time.Since(started), count: len(keys), err: err}
 		})
 	dispatcher.Start(dispatchCtx)
 
@@ -368,14 +398,26 @@ func runOwnerLoadWorkerShape(
 			queueHighWater = max(queueHighWater, ownerLoadQueueDepth(dispatcher))
 		}
 	}
+	// Results arrive in COMPLETION order; the recorded distribution has to be in SUBMISSION order, so
+	// a reader can separate one inflated repetition from two adjacent ones (#1284). Each
+	// (fixture, serial) pair is submitted exactly once and exactly resultCount results are consumed,
+	// so a duplicate result necessarily leaves a zero slot that the check below rejects (a LOST result does not reach here at all — the drain blocks until the go test timeout, which fails closed with a worse diagnostic) —
+	// a zero-duration sample would otherwise enter the distribution as the fastest observation.
 	durations := make(map[string][]time.Duration, len(fixtures))
+	for _, fixture := range fixtures {
+		durations[fixture.name] = make([]time.Duration, profile.repetitions)
+	}
 	for range resultCount {
 		result := <-results
 		require.NoError(t, result.err, result.label)
 		require.Equal(t, 1, result.count, result.label)
-		require.Less(t, result.duration, profile.operationBudget, result.label)
-		durations[result.label] = append(durations[result.label], result.duration)
+		durations[result.label][result.serial] = result.duration
 		queueHighWater = max(queueHighWater, ownerLoadQueueDepth(dispatcher))
+	}
+	for label, samples := range durations {
+		for repetition, sample := range samples {
+			require.NotZero(t, sample, "%s repetition %d was never recorded", label, repetition)
+		}
 	}
 	catchUp := time.Since(catchUpStarted)
 	churnWG.Wait()
@@ -486,7 +528,6 @@ func measureOwnerLoadFilter(
 		duration := time.Since(started)
 		require.NoError(t, err, label)
 		require.Len(t, keys, want, label)
-		require.Less(t, duration, profile.operationBudget, "%s rep %d", label, repetition)
 		durations = append(durations, duration)
 	}
 	assertOwnerLoadLatency(t, label, durations, profile)
@@ -494,13 +535,59 @@ func measureOwnerLoadFilter(
 
 func assertOwnerLoadLatency(t *testing.T, label string, durations []time.Duration, profile ownerLoadProfile) {
 	t.Helper()
-	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
-	p95 := durations[(len(durations)-1)*95/100]
-	p99 := durations[(len(durations)-1)*99/100]
+	// The caller's slice is in submission order and stays that way: percentiles come from a sorted
+	// COPY, because the submission sequence is the evidence this harness now publishes (#1284).
+	// Recording happens BEFORE the budget assertions, so a run that breaches a percentile still
+	// publishes the distribution that explains the breach.
+	sorted := make([]time.Duration, len(durations))
+	copy(sorted, durations)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	p95 := sorted[(len(sorted)-1)*95/100]
+	p99 := sorted[(len(sorted)-1)*99/100]
+	line := fmt.Sprintf("phase=latency filter=%s reps=%d p50=%s p95=%s p99=%s max=%s submitted=%s",
+		label, len(sorted), sorted[len(sorted)/2], p95, p99, sorted[len(sorted)-1],
+		ownerLoadSubmissionOrder(durations))
+	t.Log(line)
+	recordOwnerLoadDistribution(t, line)
 	require.LessOrEqual(t, p95, profile.p95Budget, "%s p95", label)
 	require.LessOrEqual(t, p99, profile.p99Budget, "%s p99", label)
-	t.Logf("phase=latency filter=%s reps=%d p50=%s p95=%s p99=%s max=%s",
-		label, len(durations), durations[len(durations)/2], p95, p99, durations[len(durations)-1])
+}
+
+// ownerLoadSubmissionOrder renders the per-repetition durations in the order they were submitted.
+// Every value carries its own unit because time.Duration prints one (ns, µs, ms, s); a unit stated
+// once, far from the numbers, is the #1286 defect.
+func ownerLoadSubmissionOrder(durations []time.Duration) string {
+	rendered := make([]string, len(durations))
+	for i, duration := range durations {
+		rendered[i] = duration.String()
+	}
+	return strings.Join(rendered, ",")
+}
+
+// ownerLoadDistributionLogEnv names a file this harness APPENDS each distribution line to.
+//
+// go test discards a passing package's output entirely unless -v is passed — measured: a passing
+// test writing to t.Log, os.Stdout and os.Stderr produces only "ok <pkg> <time>". CI reaches this
+// suite through scripts/run-integration-tests.sh, which runs one un-verbose `go test` over ./...,
+// so a green run published nothing at all and the recording above would be invisible where it is
+// most needed. The script sets this variable, prints the file after the suite, and removes it:
+// the distribution lands in the job log on passing runs without making the whole integration suite
+// verbose or running this harness twice. Unset — a plain local `go test` — nothing is written, and
+// -v still shows the same line through t.Log.
+const ownerLoadDistributionLogEnv = "GRAPH_INDEX_LATENCY_LOG"
+
+func recordOwnerLoadDistribution(t *testing.T, line string) {
+	t.Helper()
+	path := os.Getenv(ownerLoadDistributionLogEnv)
+	if path == "" {
+		return
+	}
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	require.NoError(t, err, "open %s=%q", ownerLoadDistributionLogEnv, path)
+	_, writeErr := fmt.Fprintf(file, "test=%s %s\n", t.Name(), line)
+	closeErr := file.Close()
+	require.NoError(t, writeErr, "append to %s=%q", ownerLoadDistributionLogEnv, path)
+	require.NoError(t, closeErr, "close %s=%q", ownerLoadDistributionLogEnv, path)
 }
 
 func ownerLoadConsumerCounts(t *testing.T, ctx context.Context, fixtures []ownerLoadFixture) map[string]int {

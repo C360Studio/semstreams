@@ -605,6 +605,63 @@ func TestIntegrationRunner_CleansOnlyProvablyStaleLock(t *testing.T) {
 	}
 }
 
+// TestIntegrationRunner_PublishesLatencyEvidence pins the #1284 evidence channel end to end.
+//
+// `go test` discards a PASSING package's output unless -v is passed, and this runner deliberately
+// stays un-verbose over ./..., so the graph-index owner-filter harness appends its per-repetition
+// distribution to the file named by GRAPH_INDEX_LATENCY_LOG and the runner prints it. Nothing else
+// observes that wiring: the harness returns silently when the variable is unset, so deleting the
+// runner's export would restore the exact state #1284 exists to fix — a gate that records nothing
+// on the runs that pass it — with every other test still green. This test is what makes that
+// deletion red.
+func TestIntegrationRunner_PublishesLatencyEvidence(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("integration runner is a bash script")
+	}
+	repoRoot := findRepoRoot(t)
+	tools := newFakeToolchain(t)
+	lockDir := filepath.Join(t.TempDir(), "integration.lock")
+
+	const marker = "filter=probe reps=5 p50=1ms submitted=1ms,2ms,3ms,4ms,5ms"
+	command := exec.Command(filepath.Join(repoRoot, "scripts", "run-integration-tests.sh"))
+	command.Dir = repoRoot
+	command.Env = runnerEnvironment(tools, lockDir, map[string]string{"FAKE_LATENCY_LINE": marker})
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("runner failed: %v\n%s", err, output)
+	}
+
+	rendered := string(output)
+	if !strings.Contains(rendered, marker) {
+		t.Fatalf("runner did not publish the distribution the harness wrote.\n"+
+			"GRAPH_INDEX_LATENCY_LOG must be exported before `go test` and its contents printed after, "+
+			"or a passing run records nothing (#1284).\nwant substring: %s\ngot:\n%s", marker, rendered)
+	}
+	if !strings.Contains(rendered, "recorded latency distributions") {
+		t.Fatalf("runner printed the line but not its header; want %q\ngot:\n%s",
+			"recorded latency distributions", rendered)
+	}
+}
+
+// TestIntegrationRunner_LatencyEnvNameMatchesHarness closes the other direction: the runner and the
+// harness name the same variable. The harness constant is under a build tag this package does not
+// carry, so the name is compared as a literal against both files.
+func TestIntegrationRunner_LatencyEnvNameMatchesHarness(t *testing.T) {
+	repoRoot := findRepoRoot(t)
+	const envName = "GRAPH_INDEX_LATENCY_LOG"
+
+	runner := readFile(t, filepath.Join(repoRoot, "scripts", "run-integration-tests.sh"))
+	if !strings.Contains(runner, "export "+envName+"=") {
+		t.Fatalf("run-integration-tests.sh no longer exports %s; the #1284 evidence channel is broken", envName)
+	}
+
+	harness := readFile(t, filepath.Join(repoRoot, "processor", "graph-index", "owner_filter_load_integration_test.go"))
+	if !strings.Contains(harness, `ownerLoadDistributionLogEnv = "`+envName+`"`) {
+		t.Fatalf("owner_filter_load_integration_test.go no longer names %s; renaming one side silently "+
+			"stops publishing the distribution (#1284)", envName)
+	}
+}
+
 func TestIntegrationRunner_TaskAndCIConverge(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	taskFile := readFile(t, filepath.Join(repoRoot, "taskfiles", "test.yml"))
@@ -699,6 +756,12 @@ echo 'fake docker info'
 printf 'go\n' >> "$CALL_LOG"
 printf '%s\n' "$@" > "$GO_ARGUMENTS"
 printf '%s\n' "${TESTCONTAINERS_RYUK_DISABLED:-unset}" > "$RYUK_CAPTURE"
+# Stand in for the graph-index harness writing its distribution (#1284). Guarded on both
+# variables so every other test in this file is unaffected, and so a runner that stops
+# exporting GRAPH_INDEX_LATENCY_LOG writes nothing rather than failing obscurely.
+if [ -n "${GRAPH_INDEX_LATENCY_LOG:-}" ] && [ -n "${FAKE_LATENCY_LINE:-}" ]; then
+	printf '%s\n' "$FAKE_LATENCY_LINE" >> "$GRAPH_INDEX_LATENCY_LOG"
+fi
 `
 	writeExecutable(t, filepath.Join(tools.bin, "docker"), docker)
 	writeExecutable(t, filepath.Join(tools.bin, "go"), goCommand)

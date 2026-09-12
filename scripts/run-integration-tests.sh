@@ -40,6 +40,7 @@ lock_held=false
 image_pull_output_file=""
 image_pull_pid=""
 image_pull_timed_out=false
+latency_log=""
 
 read_owner() {
   observed_host="unknown"
@@ -227,6 +228,9 @@ acquire_lock() {
 cleanup_runner() {
   terminate_and_reap_image_pull
   release_lock
+  if [[ -n "$latency_log" ]]; then
+    rm -f "$latency_log"
+  fi
 }
 
 trap cleanup_runner EXIT
@@ -307,10 +311,25 @@ packages=("$@")
 if (( ${#packages[@]} == 0 )); then
   packages=(./...)
 fi
+# Latency evidence channel. `go test` discards a PASSING package's output entirely unless -v is
+# passed, and this runner deliberately stays un-verbose over ./... — adding -v here would make the
+# whole tagged suite verbose. So the graph-index owner-filter harness appends its per-filter
+# distribution to this file instead, and it is printed below on pass and on failure alike (#1284).
+latency_log=$(mktemp "${TMPDIR:-/tmp}/semstreams-latency.XXXXXX")
+export GRAPH_INDEX_LATENCY_LOG="$latency_log"
+
 set +e
 go test -race -failfast -tags=integration -timeout=20m -count=1 "${packages[@]}"
 status=$?
 set -e
+if [[ -s "$latency_log" ]]; then
+  echo "[INTEGRATION] recorded latency distributions (submission order):"
+  cat "$latency_log"
+else
+  echo "[INTEGRATION] no latency distributions recorded"
+fi
+rm -f "$latency_log"
+latency_log=""
 if (( status != 0 )); then
   echo "[INTEGRATION] tests failed with status $status" >&2
   exit "$status"
