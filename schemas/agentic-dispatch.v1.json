@@ -908,16 +908,6 @@
           "kind": "jetstream"
         },
         {
-          "name": "agent.created",
-          "direction": "input",
-          "type": "",
-          "required": false,
-          "connection_id": "AGENT",
-          "pattern": "stream",
-          "description": "Loop creation events",
-          "kind": "jetstream"
-        },
-        {
           "name": "agent.failed",
           "direction": "input",
           "type": "",
@@ -925,16 +915,6 @@
           "connection_id": "AGENT",
           "pattern": "stream",
           "description": "Loop failure events",
-          "kind": "jetstream"
-        },
-        {
-          "name": "agent.approval_pending",
-          "direction": "input",
-          "type": "",
-          "required": false,
-          "connection_id": "AGENT",
-          "pattern": "stream",
-          "description": "Approval-pending events used to populate the dispatch HTTP approval handler's CallID lookup",
           "kind": "jetstream"
         },
         {

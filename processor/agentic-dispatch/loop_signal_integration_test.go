@@ -33,7 +33,6 @@ func newSignalWireComponent(t *testing.T, tc *natsclient.TestClient) *Component 
 		config:        DefaultConfig(),
 		modelRegistry: newTestRegistry(),
 		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
-		loopTracker:   NewLoopTrackerWithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
 		registry:      NewCommandRegistry(),
 		metrics:       getMetrics(metric.NewMetricsRegistry()),
 		natsClient:    tc.Client,

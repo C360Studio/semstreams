@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/internal/looptoken"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/graphview"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -33,13 +35,14 @@ var errActivityViewStart = errors.New("start activity view")
 // and live events.
 type activityRecord struct {
 	loop      Loop
+	entity    *agentic.LoopEntity
 	createdAt time.Time
 }
 
 type activityViewCommand struct {
-	source graphview.WatcherSource
-	stop   bool
-	result chan activityViewResult
+	source  graphview.WatcherSource
+	replace *graphview.View[activityRecord]
+	result  chan activityViewResult
 }
 
 type activityViewResult struct {
@@ -64,13 +67,9 @@ func (c *Component) runActivityViewControl(
 		case <-runCtx.Done():
 			return
 		case command := <-commands:
-			if command.stop {
-				if view != nil {
-					view.Stop()
-					view = nil
-				}
-				command.result <- activityViewResult{}
-				return
+			if command.replace != nil && view == command.replace {
+				view.Stop()
+				view = nil
 			}
 			if view == nil {
 				opts := append([]graphview.Option{graphview.WithHooks(c.activityViewHooks())}, c.activityViewOpts...)
@@ -92,28 +91,30 @@ func (c *Component) runActivityViewControl(
 	}
 }
 
-// decodeActivityRecord is the shared view's validating DecodeFunc (G6).
-// COMPLETE_<id> keys decode terminal completion payloads (loopFromCompletion);
-// every other key decodes live agentic.LoopEntity state (loopFromEntity) —
-// the same production projections the per-client watcher path used. keep is
-// always true for well-formed payloads because today's wire forwards every
-// AGENT_LOOPS key. Genuinely malformed payloads return an error and poison
-// the key: they surface on the SSE error path instead of laundering through
-// as data-less activity events, and heal on the next clean write (ADR-079).
+// decodeActivityRecord validates canonical current-loop and completion records.
+// Other keys are outside current-loop authority and are excluded before decoding.
+// Malformed admitted records remain poison until a clean write or deletion.
 func (c *Component) decodeActivityRecord(key string, value []byte, meta graphview.EntryMeta) (activityRecord, bool, error) {
 	if strings.HasPrefix(key, completeKeyPrefix) {
-		loop, ok := loopFromCompletion(value)
-		if !ok {
-			return activityRecord{}, false, fmt.Errorf("undecodable completion payload on %s", key)
+		loop, err := c.loopFromCompletion(key, value)
+		if err != nil {
+			return activityRecord{}, false, err
 		}
 		return activityRecord{loop: loop, createdAt: meta.Created}, true, nil
+	}
+	if !looptoken.Valid(key) {
+		return activityRecord{}, false, nil
 	}
 	var e agentic.LoopEntity
 	if err := json.Unmarshal(value, &e); err != nil {
 		return activityRecord{}, false, fmt.Errorf("undecodable loop entity on %s: %w", key, err)
 	}
+	if err := validatePersistedLoop(key, &e); err != nil {
+		return activityRecord{}, false, err
+	}
 	return activityRecord{
 		loop:      loopFromEntity(&e, c.deps.Platform.Org, c.deps.Platform.Platform),
+		entity:    &e,
 		createdAt: meta.Created,
 	}, true, nil
 }
@@ -180,8 +181,15 @@ func (c *Component) activityViewHooks() graphview.Hooks {
 // one-shot control goroutine. A request after terminal Stop receives the
 // existing per-request error path and cannot rebuild lifecycle authority.
 func (c *Component) ensureActivityView(ctx context.Context) (*graphview.View[activityRecord], error) {
+	return c.requestActivityView(ctx, nil)
+}
+
+// requestActivityView delegates creation and failed-view replacement to the
+// existing lifecycle owner; it never retains the request context.
+func (c *Component) requestActivityView(ctx context.Context, replace *graphview.View[activityRecord]) (*graphview.View[activityRecord], error) {
 	c.lifecycleMu.Lock()
 	commands := c.activityCommands
+	done := c.activityDone
 	source := c.activityViewSource
 	c.lifecycleMu.Unlock()
 	if commands == nil {
@@ -207,13 +215,17 @@ func (c *Component) ensureActivityView(ctx context.Context) (*graphview.View[act
 
 	result := make(chan activityViewResult, 1)
 	select {
-	case commands <- activityViewCommand{source: source, result: result}:
+	case commands <- activityViewCommand{source: source, replace: replace, result: result}:
+	case <-done:
+		return nil, errors.New("activity view lifecycle stopped")
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
 	select {
 	case got := <-result:
 		return got.view, got.err
+	case <-done:
+		return nil, errors.New("activity view lifecycle stopped")
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -230,15 +242,8 @@ func (c *Component) stopActivityView() {
 	c.lifecycleMu.Lock()
 	cancel := c.activityCancel
 	done := c.activityDone
-	commands := c.activityCommands
 	c.lifecycleMu.Unlock()
 	if cancel != nil {
-		result := make(chan activityViewResult, 1)
-		select {
-		case commands <- activityViewCommand{stop: true, result: result}:
-			<-result
-		case <-done:
-		}
 		cancel()
 	}
 	if done != nil {
@@ -255,27 +260,87 @@ func (c *Component) stopActivityView() {
 
 // attachActivityView gates the SSE attach on view readiness (G5) bounded by
 // the request context: the view never serves an unmarked partial state. A
-// failed view is restarted at most once per attach — the supervisory choice
-// is restart-on-next-attach, not a background retry loop: the first client
-// arriving after a watcher loss pays the re-bootstrap, and an idle component
-// holds no retry state. Concurrent attaches race Restart benignly — exactly
-// one transitions the failed view to bootstrap, the losers' Restart error is
-// ignored, and everyone waits for the same caught-up signal.
+// failed view is replaced at most once per attach by the component's existing
+// control owner. The first caller after loss pays the fresh replay; concurrent
+// attaches share that replacement and wait for the same caught-up signal.
 func (c *Component) attachActivityView(ctx context.Context, view *graphview.View[activityRecord]) (
 	graphview.Snapshot[activityRecord], *graphview.Subscription[activityRecord], error,
 ) {
 	err := view.WaitCaughtUp(ctx)
 	if err != nil && errors.Is(err, graphview.ErrWatcherLost) {
-		if rerr := view.Restart(); rerr != nil {
-			c.logger.DebugContext(ctx, "activity view restart raced or failed",
-				slog.String("error", rerr.Error()))
+		view, err = c.requestActivityView(ctx, view)
+		if err == nil {
+			err = view.WaitCaughtUp(ctx)
 		}
-		err = view.WaitCaughtUp(ctx)
 	}
 	if err != nil {
 		return graphview.Snapshot[activityRecord]{}, nil, err
 	}
 	return view.SnapshotAndSubscribe(ctx)
+}
+
+// currentLoopSnapshot observes readiness without waiting for bootstrap, and
+// refuses current-loop poison rather than presenting a partial loop set.
+// Activity-only completion poison stays visible to SSE.
+func (c *Component) currentLoopSnapshot(ctx context.Context) (graphview.Snapshot[activityRecord], error) {
+	view, err := c.ensureActivityView(ctx)
+	if err != nil {
+		return graphview.Snapshot[activityRecord]{}, errs.WrapTransient(err, "Component", "currentLoopSnapshot", "loop projection unavailable")
+	}
+	snapshot, subscription, err := view.SnapshotAndSubscribe(ctx)
+	if errors.Is(err, graphview.ErrWatcherLost) {
+		view, err = c.requestActivityView(ctx, view)
+		if err == nil {
+			snapshot, subscription, err = view.SnapshotAndSubscribe(ctx)
+		}
+	}
+	if err != nil {
+		return snapshot, errs.WrapTransient(err, "Component", "currentLoopSnapshot", "loop projection not caught up")
+	}
+	subscription.Unsubscribe()
+	for key, poison := range snapshot.Poisoned {
+		if !strings.HasPrefix(key, completeKeyPrefix) {
+			return snapshot, errs.WrapTransient(poison, "Component", "currentLoopSnapshot", "current loop projection poisoned")
+		}
+	}
+	return snapshot, nil
+}
+
+// activeLoop observes the exact route tuple without choosing an ambiguous
+// winner or inventing current state in the post-publication birth gap.
+func (c *Component) activeLoop(ctx context.Context, msg agentic.UserMessage) (string, error) {
+	snapshot, err := c.currentLoopSnapshot(ctx)
+	if err != nil {
+		return "", err
+	}
+	var selected string
+	for _, entry := range snapshot.Entries {
+		entity := entry.Value.entity
+		if entity == nil || entity.State.IsTerminal() || msg.UserID == "" || msg.ChannelType == "" || msg.ChannelID == "" ||
+			entity.UserID != msg.UserID || entity.ChannelType != msg.ChannelType || entity.ChannelID != msg.ChannelID {
+			continue
+		}
+		if selected != "" {
+			return "", &errs.ClassifiedError{Class: errs.ErrorInvalid, Code: "loop_route_ambiguous", Err: fmt.Errorf("multiple current loops match the user/channel route")}
+		}
+		selected = entity.ID
+	}
+	return selected, nil
+}
+
+// currentLoopInfos preserves the response DTO without treating completion or
+// research records as current loops. Sort the complete set before rendering.
+func currentLoopInfos(snapshot graphview.Snapshot[activityRecord], userID string) []*LoopInfo {
+	loops := make([]*LoopInfo, 0, len(snapshot.Entries))
+	for _, entry := range snapshot.Entries {
+		record := entry.Value
+		if record.entity == nil || (userID != "" && record.entity.UserID != userID) {
+			continue
+		}
+		loops = append(loops, loopInfoFromEntity(record.entity, record.createdAt))
+	}
+	sort.Slice(loops, func(i, j int) bool { return loops[i].LoopID < loops[j].LoopID })
+	return loops
 }
 
 // handleActivityStream streams real-time activity events via SSE, served
@@ -429,9 +494,9 @@ func (c *Component) streamActivityDeltas(ctx context.Context, w http.ResponseWri
 		case batch, ok := <-sub.Deltas():
 			if !ok {
 				err := sub.Err()
-				if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-					// Clean detach — the client hung up (subscription context);
-					// same exit as the ctx.Done branch.
+				if err == nil || ctx.Err() != nil {
+					// Explicit unsubscribe or actual client detach. A canceled
+					// view owner must still fail closed while this request is live.
 					c.logger.InfoContext(ctx, "activity SSE client disconnected",
 						slog.String("client_id", clientID))
 					return

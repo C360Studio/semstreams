@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"sync/atomic"
@@ -120,36 +119,6 @@ func TestDispatchProductionCallbacksDoNotAckFalseDone(t *testing.T) {
 		for port, handle := range handles {
 			require.Zero(t, handle.drains.Load(), "a retryable publish failure must not drain owner %s", port)
 		}
-		cancel()
-		for _, binding := range c.consumers {
-			<-binding.observerDone
-		}
-	})
-
-	t.Run("unaccepted pending projection retries", func(t *testing.T) {
-		deps := componentDependenciesForCausalTest()
-		deps.PayloadRegistry = payloadbuiltins.NewTestRegistry(t)
-		discoverable, err := NewComponent([]byte(`{}`), deps)
-		require.NoError(t, err)
-		c := discoverable.(*Component)
-		c.waitForStreamInput = func(context.Context, string) error { return nil }
-		callbacks := make(map[string]func(context.Context, jetstream.Msg))
-		c.consumeStream = func(_ context.Context, owner natsclient.PortConsumerContext, _ natsclient.StreamConsumerConfig, callback func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
-			callbacks[owner.Port] = callback
-			return &causalConsumeHandle{closed: make(chan struct{}), closedCalls: make(chan struct{}, 1)}, nil
-		}
-		ctx, cancel := context.WithCancel(t.Context())
-		require.NoError(t, c.setupSubscriptions(ctx))
-		for i := range pendingApprovalBufferCap {
-			require.False(t, c.loopTracker.SetPendingApproval(fmt.Sprintf("buffered-%d", i), &PendingApprovalInfo{CallID: "call"}))
-		}
-
-		msg := &dispatchSettlementMsg{data: mustMarshalDispatchSettlementPayload(t, &agentic.ApprovalPendingEvent{
-			LoopID: "00000000-0000-4000-8000-000000000099", CallID: "call-overflow", ToolName: "search", RequestedAt: time.Now().UTC(),
-		})}
-		callbacks["agent.approval_pending"](ctx, msg)
-		require.Zero(t, msg.acks.Load()+msg.terms.Load())
-		require.Equal(t, int32(1), msg.naks.Load())
 		cancel()
 		for _, binding := range c.consumers {
 			<-binding.observerDone
@@ -297,7 +266,9 @@ func TestDispatchProductionCallbacksTerminateMalformedNonHeartbeatInputs(t *test
 	ctx, cancel := context.WithCancel(t.Context())
 	require.NoError(t, c.setupSubscriptions(ctx))
 
-	for _, port := range []string{"user.message", "agent.created", "agent.approval_pending"} {
+	require.NotContains(t, callbacks, "agent.created")
+	require.NotContains(t, callbacks, "agent.approval_pending")
+	for _, port := range []string{"user.message"} {
 		callback, ok := callbacks[port]
 		require.True(t, ok, "production setup did not bind %s", port)
 		msg := &dispatchSettlementMsg{data: []byte("{")}
@@ -307,20 +278,12 @@ func TestDispatchProductionCallbacksTerminateMalformedNonHeartbeatInputs(t *test
 		require.Equal(t, int32(1), msg.terms.Load(), "%s immutable malformed input must terminate", port)
 	}
 
-	loopID := "00000000-0000-4000-8000-000000000001"
 	valid := map[string][]byte{
 		"user.message": mustMarshalDispatchSettlementPayload(t, &agentic.UserMessage{
-			MessageID: "message-1", ChannelType: "cli", ChannelID: "channel-1", UserID: "user-1",
-			Content: "/help", Timestamp: time.Now().UTC(),
-		}),
-		"agent.created": mustMarshalDispatchSettlementPayload(t, &agentic.LoopCreatedEvent{
-			LoopID: loopID, TaskID: "task-1", Role: "research", MaxIterations: 3, CreatedAt: time.Now().UTC(),
-		}),
-		"agent.approval_pending": mustMarshalDispatchSettlementPayload(t, &agentic.ApprovalPendingEvent{
-			LoopID: loopID, CallID: "call-1", ToolName: "search", RequestedAt: time.Now().UTC(),
+			MessageID: "message-1", ChannelType: "cli", ChannelID: "channel-1", UserID: "user-1", Content: "/help", Timestamp: time.Now().UTC(),
 		}),
 	}
-	for _, port := range []string{"user.message", "agent.created", "agent.approval_pending"} {
+	for _, port := range []string{"user.message"} {
 		msg := &dispatchSettlementMsg{data: valid[port]}
 		callbacks[port](ctx, msg)
 		require.Equal(t, int32(1), msg.acks.Load(), "%s successful declared consequence must ACK", port)
@@ -328,10 +291,6 @@ func TestDispatchProductionCallbacksTerminateMalformedNonHeartbeatInputs(t *test
 	}
 	require.Len(t, responses, 1)
 	require.Contains(t, responses[0].Content, "/help")
-	tracked := c.loopTracker.Get(loopID)
-	require.NotNil(t, tracked)
-	require.NotNil(t, tracked.PendingApproval)
-	require.Equal(t, "call-1", tracked.PendingApproval.CallID)
 
 	cancel()
 	for _, binding := range c.consumers {
