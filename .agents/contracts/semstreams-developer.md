@@ -40,7 +40,8 @@ or runtime mechanics; they do not replace this project-specific role.
    producer -> graph-ingest -> `ENTITY_STATES` -> KV watchers -> derived indexes -> query/search/clustering.
 5. Report exact commands and outcomes. Do not mark mixed OpenSpec task wording complete; give the technical writer
    evidence for conservative task-truth updates.
-6. Complete SemStreams implementation review and the owner-run cross-agent round, resolve findings, and obtain any
+6. Complete SemStreams implementation review and any owner-requested cross-agent round per the
+   [shared protocol](../protocol.md); docs-only changes owe no owner-run round. Resolve findings and obtain any
    required re-review before archiving. Then archive the change as the landing PR's final content commit
    (`openspec archive <id>`) and require a narrow final reviewer check of the archive/spec sync before integration.
    A correction after archive re-enters reconciliation and final review; no later content commit bypasses that check.
@@ -231,8 +232,10 @@ PRs fell into the four classes below.
 ### Payload registry
 
 - Every polymorphic payload publish uses `BaseMessage`.
-- A new payload requires registry factory registration, alias-based `MarshalJSON`, and an import in every binary that
-  must execute registration.
+- A new payload requires registry factory registration, payload-only alias-based JSON serialization, and an explicit
+  `RegisterPayloads` call reachable from every binary that needs the type, directly or through shared composition
+  such as `payloadbuiltins.Register`. An import alone never registers a payload; follow
+  [new-payload](../skills/new-payload/SKILL.md).
 - Round-trip through the production decoder, not an anonymous shape cast.
 
 ### State ownership and component wiring

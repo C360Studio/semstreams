@@ -1,7 +1,7 @@
 ---
 name: new-payload
 description: Step-by-step checklist for adding a new payload type to the registry. Use when creating new message types for the agentic system or any polymorphic message flow.
-argument-hint: [PayloadTypeName]
+argument-hint: "[PayloadTypeName]"
 ---
 
 # New Payload Type Checklist
@@ -192,24 +192,31 @@ If your package isn't in `payloadbuiltins.Register`, build a per-test registry i
 
 `task schema:generate` (`cmd/openapi-generator`) walks `component.Registry` — component config schemas
 and the OpenAPI spec. It does not read `payloadregistry` at all, so registering a new payload type by
-itself produces no schema diff. Run it only if this change also touches a component's config surface
-(a new allowed-type enum value, a new `component.PropertySchema` field, etc.):
+itself produces no schema diff. During focused payload development, run it when this change also touches a
+component's config surface (a new allowed-type enum value, a new `component.PropertySchema` field, etc.):
 
 ```bash
 task schema:generate
 git diff schemas/ specs/openapi.v3.yaml   # must be empty, or commit the diff
 ```
 
-## Step 7: Grep every binary that should carry this type
+This focused step does not waive pre-push schema checks. The applicable full gate, including `task check:push`,
+may run generation even for payload-only changes; use [shared preflight](../semstreams-preflight/SKILL.md).
+
+## Step 7: Trace registration from every binary that should carry this type
 
 ```bash
-grep -rn "yourpackage\." cmd/
+rg -n 'yourpackage\.|payloadbuiltins\.Register' cmd/
 ```
 
-If a binary that should execute your `RegisterPayloads` call doesn't show up, its registry is
-half-migrated — messages of this type will fail to decode there with `unregistered payload type:
-domain.category.version` (see `message/base_message.go`'s `UnmarshalJSON`; there is no silent fallback
-for a registered-elsewhere type — the fact lane rejects it outright).
+Use the search to find composition entry points, then trace the executable registration call from each binary.
+A binary may call your package directly or reach it through `payloadbuiltins.Register` or another shared composition
+function. A missing direct import is not a defect if that call path exists; an import or package-name hit alone is
+not registration proof.
+
+If a binary cannot reach your `RegisterPayloads` call, its registry is half-migrated — messages of this type fail to
+decode there with `unregistered payload type: domain.category.version` (see `message/base_message.go`'s
+`UnmarshalJSON`; there is no silent fallback for a registered-elsewhere type).
 
 ## Verification Checklist
 
@@ -222,8 +229,9 @@ for a registered-elsewhere type — the fact lane rejects it outright).
 - [ ] `RegisterPayloads` is called from `payloadbuiltins.Register` or the product's composition root
 - [ ] Production-decoder round-trip test passes:
       `go test -run TestYourMessage_ProductionDecoderRoundTrip ./yourpackage/...`
-- [ ] `task schema:generate` produces no diff (commit `schemas/`/`specs/openapi.v3.yaml` if it does)
-- [ ] `grep -rn "yourpackage\." cmd/` shows the registration call in every binary that needs it
+- [ ] Schema generation runs when required by Step 6 or the applicable pre-push gate; commit intended
+      `schemas/`/`specs/openapi.v3.yaml` changes and confirm regeneration is clean
+- [ ] Every binary that needs the type has a traced executable registration path (Step 7)
 
 ## Common Mistakes
 
@@ -233,7 +241,7 @@ for a registered-elsewhere type — the fact lane rejects it outright).
 | Stack overflow on Marshal/Unmarshal | No type alias in `MarshalJSON`/`UnmarshalJSON` | Add `type Alias YourMessage` before the call |
 | `Register` returns a schema-consistency error | `Schema()` domain/category/version don't match the `Registration` | Use the same constants in both places |
 | `Register` returns "already registered" | Duplicate `domain.category.version` | Pick a distinct triple, or check you're not registering twice |
-| Works in `cmd/e2e-semstreams`, fails in `cmd/semstreams` (or vice versa) | Registered in one binary's composition root, not the other | Grep every binary (Step 7) |
+| Works in `cmd/e2e-semstreams`, fails in `cmd/semstreams` (or vice versa) | Registered in one binary's composition root, not the other | Trace every binary's registration path (Step 7) |
 
 ## Debugging
 

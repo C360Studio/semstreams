@@ -32,20 +32,31 @@ thin and must point to exactly one canonical contract.
 `AGENTS.md` carry a pointer plus the three gates — claim, merge, close — inline; edit the protocol only in
 `.agents/protocol.md`.
 
-## Shared decision skills
+## Shared skills
 
-The files in `skills/` are the tracked, platform-neutral canonical instructions for the five shared decision
-heuristics. The `.claude/skills/` entries of the same names are thin adapters (frontmatter for Claude discovery +
-a one-line pointer); Codex reads the canonical SKILL.md paths directly via `AGENTS.md`.
+Canonical skills live in `skills/`. Read the relevant `SKILL.md` fully; the platform adapters add discovery
+metadata and argument handling, not another rule set. Repository protocol and role contracts remain authoritative.
 
-- `.agents/skills/entity-or-bucket/SKILL.md` — graph entity triples vs private/operational KV
-- `.agents/skills/kv-or-stream/SKILL.md` — KV Watch vs JetStream Stream (4-test heuristic)
-- `.agents/skills/new-payload/SKILL.md` — payload-registry checklist
-- `.agents/skills/orchestration-check/SKILL.md` — rule vs component vs lifecycle boundary
-- `.agents/skills/query-pattern/SKILL.md` — GraphQL vs MCP vs NATS Direct
+| Canonical skill | Purpose | Claude command |
+| --- | --- | --- |
+| [entity-or-bucket](skills/entity-or-bucket/SKILL.md) | Graph triples vs private/operational KV | `/entity-or-bucket` |
+| [kv-or-stream](skills/kv-or-stream/SKILL.md) | Facts via KV Watch vs work via JetStream | `/kv-or-stream` |
+| [new-payload](skills/new-payload/SKILL.md) | Explicit payload registration and wire serialization | `/new-payload` |
+| [orchestration-check](skills/orchestration-check/SKILL.md) | Rule vs component vs lifecycle boundary | `/orchestration-check` |
+| [query-pattern](skills/query-pattern/SKILL.md) | Admitted remote operation vs named typed adapter; MCP graph access unavailable | `/query-pattern` |
+| [semstreams-dev](skills/semstreams-dev/SKILL.md) | Development contracts, existing patterns and production-path proof | `/semstreams-dev` |
+| [semstreams-preflight](skills/semstreams-preflight/SKILL.md) | Scope existing verification gates and record their evidence | `/preflight` |
+| [semstreams-handoff](skills/semstreams-handoff/SKILL.md) | Publish shared state and preserve unfinished work | `/semstreams-handoff` |
+| [semstreams-pickup](skills/semstreams-pickup/SKILL.md) | Reconcile current state and verify worktree ownership | `/semstreams-pickup` |
 
-All other `.claude/skills/` entries (openspec workflow, preflight, e2e-doctor, tag-release, semstreams-dev, …) are
-Claude-workflow tooling and remain platform-specific by design — do not mirror them.
+Codex can invoke the canonical names with `$`, or read their paths directly. Claude uses the command names above;
+its adapters live in `.claude/skills/<command-name>/SKILL.md`. The `preflight` adapter deliberately maps to the
+canonical `semstreams-preflight` name.
+
+The remaining Claude tools (OpenSpec workflows, `e2e-doctor`, `tag-release`) stay platform-specific. Their
+repository rules link to shared sources; do not copy their platform mechanics into another checklist. A private
+memory reference cannot be required to interpret a shared rule. Historical examples remain evidence for their
+recorded revision and do not override current contracts or issue/PR state.
 
 ## Manual read-only parity smoke
 
@@ -63,10 +74,11 @@ Run this procedure after changing a contract, adapter, or repository routing rul
 5. Confirm `AGENTS.md` and `CLAUDE.md` route the same logical roles.
 6. Inspect adapter size with `wc -l .claude/agents/semstreams-*.md .codex/agents/semstreams-*.toml`; adapters should
    remain short and contain no copied checklist.
-7. Confirm each of the five shared-skill adapters in
-   `.claude/skills/{entity-or-bucket,kv-or-stream,new-payload,orchestration-check,query-pattern}/SKILL.md`
-   names exactly its matching `.agents/skills/...` path, says to read it fully first, and contains no copied body
-   (`wc -l` ≈ 8). Confirm `AGENTS.md` lists the same five canonical skill paths.
+7. For every row in the shared-skills table, confirm the canonical file and Claude adapter exist, the adapter
+   points to that canonical file and says to read it fully, and it contains no copied checklist. Resolve the
+   `preflight` name mapping explicitly. Confirm both repository entry points route to the same shared skills.
+8. Validate changed skill frontmatter and relative links. A structurally valid adapter does not prove its
+   instructions make the right decisions; walk the applicable scenarios below without private memory.
 
 Use these semantic fixtures when reading the routing text:
 
@@ -80,5 +92,12 @@ Use these semantic fixtures when reading the routing text:
 - "Which of these two shapes / is this finding real / what should the owner rule on X" routes to SemStreams judge
   (one bounded question over evidence given as paths; a recommendation and the ruling it prepares — the owner rules).
 - "Check an isolated Go idiom" may use a generic Go agent only as a second pass.
+- "Add a payload" reaches explicit registration and the applicable production/E2E composition roots.
+- "Verify an integration change" reaches the canonical runner and its shared host lock.
+- "Prepare a docs-only PR" retains protocol review/CI gates and selects checks for the changed artifacts.
+- "The previous revision was green" preserves that evidence as historical, not current-head proof.
+- "Review a property whose expected result calls the implementation" reaches the independent-oracle and
+  boundary requirements, not a coverage-percentage substitute.
+- "Continue without private memory" resolves shared state and verifies ownership through pickup/protocol.
 
 The smoke passes only when Claude and Codex resolve the same logical role and canonical contract for every fixture.

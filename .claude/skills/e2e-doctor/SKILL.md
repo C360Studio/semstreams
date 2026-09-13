@@ -1,68 +1,48 @@
 ---
 name: e2e-doctor
-description: Diagnose and clear Docker substrate problems before running e2e/integration tests — disk starvation, leaked testcontainers, port conflicts. Use before an e2e tier, or when testcontainers time out (~60s "port 4222/tcp not found") and you suspect infra not code.
-argument-hint: [optional: tier name, e.g. structural]
+description: Diagnose Docker disk pressure, testcontainer cleanup, and port conflicts before SemStreams integration or E2E runs. Use when infrastructure evidence is needed to explain a test failure.
+argument-hint: "[optional tier name]"
 ---
 
-# E2E doctor — Docker substrate preflight
+# Diagnose E2E infrastructure
 
-semstreams e2e/integration spins up many NATS testcontainers fast. Under Docker disk/IO pressure,
-container startup blows past the ~60s ready deadline and fails with
-`mapped port: ... port "4222/tcp" not found, ctx err: context deadline exceeded` — which **reads
-exactly like a code/test failure but is infra** (the beta.115 trap: a 46h-leaked container + 29 GB
-build cache caused two integration packages to "fail"; both passed clean after reclaim). Check this
-FIRST when integration/e2e goes red at ~60s.
+Read the [testing policy](../../../docs/contributing/01-testing.md) and
+[shared protocol](../../../.agents/protocol.md). The canonical integration runner owns Docker preflight,
+the shared host lock and Reaper policy. Use that runner for both full and focused integration tests.
+Serialize heavy runs on the shared host; this helper does not bypass the runner's lock.
 
-## Step 1 — Disk pressure
+A mapped-port timeout can reflect infrastructure pressure, but the message alone does not prove that cause.
+Preserve the failing command, timestamps and logs before changing the environment. Compare actual Docker
+state with the failure; do not classify every timeout as infrastructure or every isolated rerun as a fix.
+
+## Inspect before changing resources
 
 ```bash
 docker system df
-```
-
-Flags:
-- **Build Cache** reclaimable more than ~10 GB → `docker builder prune -f` (safe; just rebuilds slower).
-- **Images** huge with few ACTIVE → most are likely *other projects'*; see Step 4 before pruning.
-
-## Step 2 — Leaked testcontainers / orphans
-
-```bash
-docker ps -a --format '{{.Names}}\t{{.Status}}\t{{.Image}}'
-```
-
-Look for old NATS/ryuk/e2e containers **up for hours** (testcontainers' ryuk should reap them but
-sometimes doesn't — e.g. `*-e2e-nats-*`, `*-nats-*`). Kill stragglers:
-
-```bash
-docker rm -f <name>            # leaked container holding a port / disk
-```
-
-## Step 3 — Port conflicts
-
-```bash
+docker ps -a --format '{{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}'
 task e2e:check-ports
 ```
 
-If a port is held, find and stop the holder (often a previous tier left `... up -d` running —
-`task e2e:<tier>:down` or `docker compose -f docker/compose/tiered.yml down -v`).
+For the selected tier, inspect its Compose project, labels, port mappings and any active session/run owner.
+An old NATS or Ryuk container may still belong to another session. Age and name patterns are not ownership
+evidence. An occupied port is a reason to identify its owner, not permission to stop it.
 
-## Step 4 — Safe reclaim recipe
+## Reclaim only the identified run
 
-Default safe sweep (frees the most for the least risk):
+Prefer the selected run's existing teardown command with its exact Compose project and profiles. A targeted
+`docker rm -f <confirmed-abandoned-container-id>` is appropriate only after ownership and abandonment are
+established and cleanup is within the session's authorization. Preserve another session's resources; report
+unresolved ownership rather than treating those resources as leaks.
 
-```bash
-docker rm -f <leaked containers from Step 2>
-docker builder prune -f          # reclaim build cache
-docker image prune -f            # dangling images only
-docker system df                 # confirm the drop
-```
+Host-wide builder/image pruning is not a routine preflight step. On a shared host, caches and large images
+can belong to sister projects or active builds. Do not use `docker image prune -a` as a cleanup shortcut;
+removing another project's image requires its owner's explicit authorization.
 
-**Do NOT blanket `docker image prune -a`.** On this laptop the big images are sister-project /
-sim artifacts (e.g. `seminstruct:qwen3-8b` ~10 GB, `px4-gazebo` ~10 GB, semspec/semteams sandboxes)
-— expensive to re-pull and not needed for semstreams tiers. Remove a specific giant only if the
-human confirms.
+## Verify cleanup and the original failure
 
-## Step 5 — Clean teardown after
+Confirm that the selected run's containers, volumes and listeners were released. The host's total container
+count need not be zero. Retain cleanup errors and unresolved resources with the run evidence.
 
-e2e tiers end with `... down -v --timeout 15`; confirm `docker ps -aq | wc -l` is back to 0 so the
-next run starts clean. Leftover containers from a killed run are the #1 source of the next flake
-(`feedback_substrate_flake_discipline`).
+Re-run the appropriate check only when the measured change justifies it. A clean rerun does not establish
+that a known flake is fixed. Follow the protocol's required-job flake rule, and report what the evidence proves
+about the original failure and what remains unknown.

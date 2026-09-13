@@ -324,7 +324,8 @@ enforce context use across the wider test suite. Duration and container-count re
 
 ### Graphable Implementations
 
-Test deterministic IDs and complete triples without infrastructure:
+Test deterministic IDs and complete triples without infrastructure. Use registered three-part predicates from the
+[vocabulary](../../vocabulary/README.md); this illustrative reading emits `sensor.temperature.celsius`:
 
 ```go
 func TestSensorReading_Graphable(t *testing.T) {
@@ -333,6 +334,7 @@ func TestSensorReading_Graphable(t *testing.T) {
     reading := SensorReading{
         DeviceID:   "sensor-042",
         SensorType: "temperature",
+        Value:      21.5,
         OrgID:      "acme",
         Platform:   "logistics",
     }
@@ -342,8 +344,8 @@ func TestSensorReading_Graphable(t *testing.T) {
         reading.EntityID())
     assert.Contains(t, reading.Triples(), Triple{
         Subject:   reading.EntityID(),
-        Predicate: "sensor.type",
-        Object:    "temperature",
+        Predicate: "sensor.temperature.celsius",
+        Object:    21.5,
     })
 }
 ```
