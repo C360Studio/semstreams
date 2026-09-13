@@ -10,7 +10,7 @@ A stream processor that builds semantic knowledge graphs from event data using N
 
 ## Architecture
 
-```
+```text
 Events → Graphable Interface → Knowledge Graph → Queries
 ```
 
@@ -50,6 +50,11 @@ Events → Graphable Interface → Knowledge Graph → Queries
   operation-specific typed adapter; MCP graph access is unavailable). Read the
   canonical `.agents/skills/<name>/SKILL.md` directly; the `.claude/skills/` entries of the same
   names are thin adapters to it.
+- Shared development and verification entry points: [semstreams-dev](.agents/skills/semstreams-dev/SKILL.md) and
+  [semstreams-preflight](.agents/skills/semstreams-preflight/SKILL.md). Session checkpoints use
+  [semstreams-handoff](.agents/skills/semstreams-handoff/SKILL.md) and
+  [semstreams-pickup](.agents/skills/semstreams-pickup/SKILL.md).
+  [The agent guide](.agents/README.md) maps platform command names to these canonical files.
 
 ## Shared work protocol (Claude and Codex)
 
@@ -130,6 +135,7 @@ start/stop contract; it must not retain the context itself. Exported lifecycle r
 `context.CancelFunc`. Existing exported cancel functions are removal debt, never precedent.
 
 Flow-based component architecture:
+
 - **Input**: UDP, WebSocket, File — ingest external data
 - **Processor**: Graph, JSONMap, Rule — transform and enrich
 - **Output**: File, HTTPPost, WebSocket — export data
@@ -199,6 +205,7 @@ task e2e:all            # Run all tiers sequentially
 ```
 
 **Agent guidance**: E2E tests require Docker and take significant time. For TDD workflows:
+
 - Use `task test` and `task test:integration` for rapid feedback
 - E2E tests are for final validation, not iterative development
 - If e2e fails, check `task e2e:check-ports` for port conflicts
@@ -230,6 +237,7 @@ go test ./test/contract/...  # Contract tests
 ```
 
 **Common CI failures:**
+
 - Revive lint warnings (fix all warnings, they indicate potential issues)
 - Uncommitted schema changes after `task schema:generate`
 - Race conditions detected in tests
@@ -269,8 +277,8 @@ grep -rn "iotsensor\." cmd/   # Or whichever package was migrated
 ```
 
 If only `cmd/e2e-semstreams` has it, the framework binary is
-half-migrated. See `feedback_e2e_required_for_breaking_changes.md`
-for the full case study.
+half-migrated. Follow the tracked [payload registration checklist](.agents/skills/new-payload/SKILL.md)
+and [E2E testing guide](docs/contributing/02-e2e-tests.md) for registration and verification.
 
 ## Architectural Identity (Not an Event Bus)
 

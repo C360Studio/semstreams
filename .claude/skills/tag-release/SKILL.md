@@ -1,85 +1,45 @@
 ---
 name: tag-release
-description: Cut a semstreams release tag the house way — preflight green, pre-tag build-tag sweep, e2e-before-breaking, compute the next beta version, annotated tag in house format, push, never re-tag. User-invoked only (tagging is irreversible and outward-facing).
-argument-hint: [optional: explicit version like v1.0.0-beta.NNN, else next is computed]
+description: Prepare and publish an explicitly requested SemStreams release tag using the shared candidate-proof contract and an authorized exact version and commit. User-invoked only.
+argument-hint: "[explicit version, if already chosen]"
 disable-model-invocation: true
 ---
 
-# Tag a release
+# Tag a SemStreams release
 
-Tagging is **irreversible** (the Go module proxy pins a version on first fetch — `feedback_never_retag`)
-and **outward-facing** (for a breaking tag, sister repos conform against it). Do every step; never
-skip to the tag. Confirm the version with the human before pushing.
+Read the [shared protocol](../../../.agents/protocol.md) and the full
+[release-candidate proof contract](../../../openspec/specs/release-candidate-proof/spec.md) before proceeding.
+They own milestone completion, candidate selection, immutable proof, authorization and publication. This
+helper does not substitute a local preflight result or a version calculation for those gates.
 
-## Step 1 — Preconditions
+## Select and prove the candidate
 
-```bash
-git checkout main && git pull origin main --ff-only   # on main, up to date
-git status -s                                          # working tree CLEAN
-```
+Follow the contract to select one clean, immutable merged-main candidate SHA after in-tree preparation.
+Use an isolated candidate worktree for proof; do not switch the shared discovery checkout or another claim's
+worktree. Resolve the candidate explicitly instead of assuming the current directory's HEAD is the release.
+Preserve the contract's archived records and manifest; do not regenerate them to fit the candidate.
 
-If not on main / not clean, stop. Tags go on a merged `main` commit, not a branch.
+Use [semstreams-preflight](../../../.agents/skills/semstreams-preflight/SKILL.md) for local gate selection.
+The pre-tag build-tag sweep includes `go vet -tags=integration ./...` and `go vet -tags=live_llm ./...`;
+these compile/check tagged code and do not replace executed tests. Derive breaking-change coverage from the
+actual release range and the contract's required paths. Registration migrations must trace every applicable
+production and E2E binary through explicit registration; a grep hit alone is insufficient.
 
-## Step 2 — Gates green
+Complete exact-candidate proof and independent review as the release contract requires, then obtain any
+still-missing owner authorization for the exact version and SHA. Preserve authorization already given.
+Do not publish when a required gate is red, missing or bound to a different candidate.
 
-Run `/preflight` (or `task check:push`) — must be fully green on the commit you're about to tag.
+## Publish and verify
 
-**Pre-tag build-tag sweep (mandatory, both tags):**
+Check that the authorized version is available locally and remotely. Create the annotated product tag on
+the authorized SHA with subject `vX — <short summary>` and an accurate body. Verify the tag resolves to that
+SHA before pushing that specific tag. Follow the separate publication/attestation phase in the release
+contract; a successful push does not establish that binaries, containers and attestations are complete.
 
-```bash
-go vet -tags=integration ./...
-go vet -tags=live_llm ./...
-```
+Never move a published version tag. If the version is wrong, prepare a new version through the same process.
+Record release facts in the shared release artifacts and GitHub state. Private memory can retain a pointer;
+it is not the release record.
 
-Plain `go vet` does NOT cover tagged files; a broken integration/live_llm file ships otherwise
-(`feedback_pre_tag_sweep_includes_build_tags`).
-
-## Step 3 — Breaking? → e2e BEFORE the tag (HARD RULE)
-
-If this release contains a BREAKING change (see `/preflight` Step 2 for the test), at least one
-relevant **e2e tier must be green before the tag lands** (`feedback_e2e_required_for_breaking_changes`).
-Pick the tier by touched path (table in `/preflight`). No green tier → do not tag.
-
-After a registry-retirement / factory+payload-split style migration, grep every binary for the
-migrated symbol to confirm none is half-migrated:
-
-```bash
-grep -rn "<migrated-symbol>" cmd/    # must appear in cmd/semstreams AND cmd/e2e-semstreams
-```
-
-## Step 4 — Compute the version
-
-```bash
-git tag --sort=-creatordate | head -3        # current latest, e.g. v1.0.0-beta.114
-git tag -l '<candidate>'                       # MUST be empty (available)
-```
-
-Bump the beta number by one unless the human gave an explicit `$ARGUMENTS` version. **Confirm the
-exact version with the human before proceeding** — this is the one number you can't take back.
-
-## Step 5 — Annotated tag (house format)
-
-Tags here are **annotated** with subject `vX — <short summary>`:
-
-```bash
-git tag -a <version> <commit> -m "<version> — <summary>
-<optional body: what changed; for BREAKING, name the lockstep + migration doc>"
-
-# verify it points where you think:
-git rev-parse <version>^{commit} HEAD          # both hashes must match
-```
-
-## Step 6 — Push
-
-```bash
-git push origin <version>
-```
-
-## Step 7 — After the tag
-
-- **Breaking?** The tag is the lockstep trigger — hand each sister team the migration doc
-  (`docs/adr/0NN-*-summary.md`), pinned to the tag URL (a fixed ref won't drift under them). Do NOT
-  touch the sister repos yourself unless asked.
-- Close the issues the release resolves; record the tag in the relevant project memory.
-- If you got the version wrong: **do not move the tag** — cut the next number. Re-tagging a pushed
-  version corrupts the module-proxy cache for everyone.
+Provide the SemStreams migration document with the release for affected adopters. Sister repository owners
+perform their own changes and validation. Tagging does not grant authority to mutate their repositories or
+close unrelated issues: apply the protocol's Close rule to each issue's actual merged-PR or owner record.

@@ -37,7 +37,9 @@ not replace this review.
    **untracked** path it is a silent no-op, so the paired `git stash pop` restores whatever is on top of the stack —
    frequently an unrelated stash from another branch, dumped over the tree you are reviewing.
 
-   **`cp` is the only sanctioned mechanism.** Mutation testing is encouraged; do it like this:
+   Mutation evidence is encouraged; a read-only reviewer requests it from the implementing agent and verifies the
+   artifact. The restoration recipe below does not authorize edits. If the user separately authorizes the reviewer
+   to make changes, **`cp` is the only sanctioned backup/restoration mechanism** for a mutation check:
 
    ```bash
    cp path/to/file.go /tmp/file.go.bak && md5 -q path/to/file.go   # BEFORE mutating; record the sum
@@ -55,8 +57,8 @@ not replace this review.
 
 ## Architecture review modes
 
-Before either architecture review, verify the caller, technical writer, or explorer materialized the complete handoff as an
-exact, line-addressable artifact with a recorded repository baseline and content hash. Preserve and verify the
+Before either architecture review, verify the caller, technical writer, or explorer materialized the complete handoff
+as an exact, line-addressable artifact with a recorded repository baseline and content hash. Preserve and verify the
 inventory checkpoint identity; require the same identity for the complete design before pre-owner review. Review that
 exact artifact, not a summary or direct-message reconstruction.
 
@@ -138,8 +140,9 @@ until the owner explicitly accepts the reviewed design.
 - A task that asserts a post-merge fact — "CI green", "merged", "merge-ready", "hosted CI approval" — is a
   finding: it cannot be ticked before merge and strands the change unarchived. Require it rewritten as a
   branch-checkable fact (PR number, recorded verdict, commands run). Run implementation review before archive. After
-  the owner-run cross-agent round and all fixes/re-review, narrowly check that the archive (`openspec archive <id>` +
-  spec sync) is the PR's final content commit and matches the reviewed implementation. A correction after archive
+  any owner-requested cross-agent round per the [shared protocol](../protocol.md) and all fixes/re-review, narrowly
+  check that the archive (`openspec archive <id>` + spec sync) is the PR's final content commit and matches the
+  reviewed implementation. A correction after archive
   re-enters reconciliation and final review; no later content commit may bypass this check or defer it to a follow-up.
 - Trace applicable paths end to end:
   producer -> graph-ingest -> `ENTITY_STATES` -> KV watchers -> derived indexes -> query/search/clustering.
@@ -221,8 +224,10 @@ until the owner explicitly accepts the reviewed design.
 ### Payload registry
 
 - Every polymorphic publish wraps `BaseMessage`, even when one known consumer reads raw.
-- A new payload has all three: factory registration, alias-based `MarshalJSON`, and a package import in every binary
-  that must run registration.
+- A new payload has factory registration, payload-only alias-based JSON serialization, and an explicit
+  `RegisterPayloads` call reachable from every binary that needs the type, directly or through shared composition
+  such as `payloadbuiltins.Register`. An import alone is not registration evidence; check the executable call path
+  using [new-payload](../skills/new-payload/SKILL.md).
 - Round-trip tests use the production decoder such as `payloadbuiltins.NewTestDecoder`, not an anonymous shape cast.
 
 ### Graph and state ownership
