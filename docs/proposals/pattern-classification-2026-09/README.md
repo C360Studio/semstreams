@@ -214,10 +214,35 @@ a backlog one.
 
 ## What this hands the owner
 
-Placement of nine bundles, in this order of leverage: **B1** (test-only, protects every later verification),
-**B2** and **B3** (the two adoption lanes, 12 issues, worked examples already in tree), **B4** and **B5** (small,
-breaking, adopter-visible), **B8** (14 issues, the largest cut to the unplaced count, but per-site rulings and the
-Tier 1 gate), **B7** and **B6** (blocked members), **B9** (behind the Codex stack).
+**Placing a bundle and working it are different asks, and B8 is where they diverge most.** Placement is a milestone
+assignment and needs nothing from this audit but the grouping. Working a bundle needs the rescopes, the rulings and
+the per-site judgments below.
+
+Against the metric the owner named — pre-v1 open with no milestone, 95 at this baseline — **34 of those 95 are in
+this 60-set**, so placing every bundle takes the unplaced count to 61. Which group carries them is not what the
+bundle sizes suggest:
+
+| group | issues in bundle | of which currently unplaced pre-v1 |
+|---|---|---|
+| standalone (10) | 10 | 9 |
+| B8 dead surface | 14 | 7 |
+| B2 boot honesty | 6 | 6 |
+| B3 typed absence | 6 | 4 |
+| B1 e2e can see | 5 | 3 |
+| B6 ADR-043 verdict | 3 | 3 |
+| B7 subject plane | 3 | 1 |
+| B9 loop durability | 6 | 1 |
+| B4 declared config | 4 | 0 |
+| B5 advertised set | 3 | 0 |
+
+The ten standalone issues carry more of the unplaced count than any bundle, and each is a single-package fix with no
+sibling — so the cheapest move against the metric is the group that needed no bundling at all. B4 and B5 carry none
+of it: every member already has a milestone, so they are work to schedule rather than backlog to place.
+
+**Order of leverage for working them:** **B1** (test-only, protects every later verification), **B2** and **B3** (the
+two adoption lanes, 12 issues, worked examples already in tree), **B4** and **B5** (small, breaking,
+adopter-visible), **B8** (largest bundle, but per-site rulings and the Tier 1 apidiff gate), **B7** and **B6**
+(blocked members), **B9** (behind the Codex stack).
 
 Four rescopes are owed before their bundles are worked: #620, #1187, #1222, #1223. Two issues need an owner ruling
 before placement: #857 and #1136. Nothing in this audit was filed as a new issue, per #1234 and the File ritual.
