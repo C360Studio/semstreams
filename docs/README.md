@@ -2,6 +2,10 @@
 
 ## Start Here
 
+**Building with a coding agent?** Start with
+[Building context with SemSource](basics/09-building-semsource.md): a worked source-to-context path, with product
+ownership, framework primitives, capability choices and evidence limits. Runtime agent loops are optional.
+
 **New to SemStreams?** Start with the basics:
 
 **Setting up your environment?** Start with [Prerequisites](basics/00-prerequisites.md) for Go, Docker, and NATS setup.
