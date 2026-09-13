@@ -113,6 +113,9 @@ Within the 19, the two sub-lanes cost different work and are bundled apart. **An
 (`Wrap*` discarded, or a `Warn` that continues) is mechanical adoption against a worked example — #348, #608, #980,
 #1035, #1041, #1132, #1170, #1244. **No error exists at all** — a seam returns nil, empty, truncated, or skipped and
 says nothing — needs the refusal to be invented before it can be coded: #472, #618, #621, #1043, #1172, #1270.
+The two lanes cover 14 of the 19. The other five sit outside them by circumstance, not by shape: #1204 is the lane's
+own container, #1138 is claimed by PR #1141, #857 awaits a ruling, and #1224 and #1288 are one research-graph pair
+whose fix is an envelope contract rather than an error class.
 
 ## Bundles
 
@@ -126,15 +129,15 @@ runs through the tier these five issues make honest, and #1224 is a live case of
 degraded path. Two rescope before work starts: #1222's agentic half is already closed and only research-graph
 remains, and #1223's migration gap is closed with only the guard residual left.
 
-**B2 — Boot honesty (6): #1204 is the home; #608, #980, #1041, #1132, #1170.** Five packages:
-`processor/graph-clustering`, `processor/agentic-tools`, `processor/rule` (two issues), `agentic` +
-`processor/agentic-loop`. No exported-surface change; all are Start-path behavior. Worked example:
+**B2 — Boot honesty (6): #1204 is the home; #608, #980, #1041, #1132, #1170.** Four owning packages behind the
+#1204 container: `processor/graph-clustering`, `processor/agentic-tools`, `processor/rule` (two issues), and
+`agentic` + `processor/agentic-loop`. No exported-surface change; all are Start-path behavior. Worked example:
 `processor/graph-ingest/authority_gate.go` and `processor/rule/entity_pattern_contract.go:68`. Nothing claimed,
 nothing blocked. #1132 is the inverse of the other four and belongs here anyway: it crashes where the neighbours
 swallow, and both answers are decided by the same question about what a Start path owes its caller.
 
-**B3 — Typed absence at a read seam (6): #1270 is the home; #472, #618, #621, #1043, #1172.** Six packages.
-Adopter-visible: `ResultHint` producers and a `Truncated` field change what a caller receives. Worked examples both
+**B3 — Typed absence at a read seam (6): #1270 is the home; #472, #618, #621, #1043, #1172.** Seven packages
+across six issues (#621 spans `pkg/fusion` and `processor/graph-query`). Adopter-visible: `ResultHint` producers and a `Truncated` field change what a caller receives. Worked examples both
 landed recently, which is what makes this bundle cheap — `processor/agentic-tools/executors/graph_query.go`
 (`ResultHint`, from #1261) and `processor/rule/actions.go:689` (`foreignFiringSkipRecorder`, from #1169). #1172 is
 pure adoption of #1169's shape in a second package.
@@ -165,8 +168,9 @@ invalid. #1201 is already approved and on beta.165 and is the enabler. **#810 an
 #1201 is placeable now. Worked example: `composition/analyze.go:114` (`explicitStreamCovers`).
 
 **B8 — Dead surface, ruled per site (14): #1203 is the home; #589, #620, #764, #1076, #1121, #1123, #1125, #1135,
-#1152, #1187, #1202, #1206, #1252.** This is the excavation bundle and the one that shrinks the unplaced pre-v1
-count most. It is **not one change**: #1203's own rule is that wanted-vs-wired is ruled per site, and four members
+#1152, #1187, #1202, #1206, #1252.** This is the excavation bundle and the largest by issue count. It carries 7 of
+the 34 currently-unplaced pre-v1 issues in this set, second to the standalone ten — see the closing table. It is
+**not one change**: #1203's own rule is that wanted-vs-wired is ruled per site, and four members
 (#1121, #1135, #1152, #1202) are `horizon:post-v1`. Ten of these are already named in #1203's body, so the bundle
 exists as filed work and needs placement, not re-filing. Blast radius is the gate: removals land in `message`,
 `config`, `service`, `pkg/dispatch` and delete `agentic/identity` outright, so every site must clear
