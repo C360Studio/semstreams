@@ -114,7 +114,7 @@ and runs as a loop.
 |-------|---------|
 | `subject` | NATS subject the task is published on. Must match `agentic-loop`'s `agent.task` port, which subscribes to `agent.task.*` — one token after the prefix ([`processor/agentic-loop/config.go:396`](../../processor/agentic-loop/config.go)) |
 | `role` | Agent role, e.g. `general`, `researcher`, `editor` |
-| `model` | Model endpoint name, as configured on `agentic-model` |
+| `model` | Model endpoint name, as declared in the top-level `model_registry.endpoints` |
 | `prompt` | Task prompt. Substitution applies — see below |
 
 **Optional.** The rest of the `publish_agent` surface, from the `Action` struct's JSON tags in
@@ -137,18 +137,30 @@ and runs as a loop.
 | `when` | Guard conditions; all must match for this action to run |
 | `for_each` / `for_each_var` | Iterate the action over a triple list, binding each item to `$<for_each_var>` (ADR-046) |
 
-**Substitution is `$`-prefixed.** `$entity.id`, the entity-ID segments (`$entity.org` … `$entity.instance`),
-`$entity.triple.<predicate>`, `$message.<field>`, `$state.iteration` and `$now` are the tokens; the
-authoritative list is the doc comment on `SubstituteVariables`
+**Substitution is `$`-prefixed.** The namespaces are `$now`, `$entity.id` and the entity-ID segments
+(`$entity.org` … `$entity.instance`), `$entity.triple.<predicate>` with its `.length` / `.triples` / `.value`
+suffix forms, `$entity.lifecycle.{phase,terminal,workflow}`, the `$related.*` mirror of the entity set,
+`$state.{iteration,max_iterations}`, `$schedule.{id,spec,last_fired_at}` on cron rules,
+`$caller.{id,role,org}` on caller-aware rules, and `$message.<field_path>` on message-path rules — among
+others; the authoritative list is the doc comment on `SubstituteVariables`
 ([`processor/rule/execution_context.go:207-252`](../../processor/rule/execution_context.go)). On a
 `publish_agent` action they are resolved in `subject`, `prompt`, `role`, `workflow_slug`, `workflow_step`,
 `loop_max_iterations`, string-valued `properties`, and `related_loops` values
-([`processor/rule/actions.go:1498,1562,1768-1787`](../../processor/rule/actions.go)). **`model` is not
+([`processor/rule/actions.go:1498,1562,1633,1768-1787`](../../processor/rule/actions.go)). **`model` is not
 substituted** — it is passed through as written, so a `$`-token there reaches the model registry as a literal
 endpoint name.
 
-There is no `text/template` engine on this path, so `{{...}}` and `${...}` are not substitution syntax. A token
-the engine does not recognize survives into the output verbatim and logs an unresolved-template warning.
+**Two different failure modes, and only one of them is loud.** A `$`-namespace token the engine cannot
+resolve — `$entity.triple.X` for a predicate the entity is not carrying, a `$schedule.*` token on an
+expression rule — survives into the output verbatim *and* logs an unresolved-template warning, so the rule
+processor's logs will name it. A `{{...}}` or `${...}` sequence is not a token at all: the rule's substitution
+path has no `text/template` engine and no `${}` syntax, so those characters pass straight through with **no
+warning of any kind**. The warning is gated on `unresolvedTemplateVarRe`, which matches only the
+`$entity|related|state|schedule|caller|message` namespaces
+([`processor/rule/execution_context.go:35`](../../processor/rule/execution_context.go), warned at
+[`:381`](../../processor/rule/execution_context.go) →
+[`:836`](../../processor/rule/execution_context.go)). Checking the logs will not find a stray `{{...}}` —
+only reading the emitted prompt will.
 
 Worked examples: the [agentic quickstart](../basics/07-agentic-quickstart.md#rule-triggered-agents) and the
 shipped rule packs under [`configs/rules/deep-research/`](../../configs/rules/deep-research/).
