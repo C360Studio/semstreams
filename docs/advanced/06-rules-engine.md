@@ -14,11 +14,13 @@
 
 ---
 
-The rules engine evaluates conditions against entities and executes actions when conditions match. Rules can add or remove triples, publish messages, and build dynamic relationships that affect community detection.
+The rules engine evaluates conditions against entities and executes actions when conditions match. Rules can
+add or remove triples, publish messages, and build dynamic relationships that affect community detection.
 
 ## What Rules Do
 
 Rules are stateful evaluators that:
+
 - Watch entity state changes in NATS KV
 - Evaluate conditions against entity triples
 - Execute actions on state transitions (enter/exit/while)
@@ -47,11 +49,13 @@ A battery alert rule:
 ```
 
 When `drone-007` reports battery at 15%:
+
 1. Condition evaluates: `15 < 20` = true
 2. State transition: none -> entered
 3. Actions: triple added, message published
 
 When battery recovers to 25%:
+
 1. Condition: `25 < 20` = false
 2. State transition: entered -> exited
 3. Exit action: alert triple removed
@@ -66,11 +70,106 @@ When battery recovers to 25%:
 
 State is persisted in `RULE_STATE` KV bucket.
 
+## Action Types
+
+Every entry in `on_enter`, `on_exit` or `while_true` carries a `type`. The twelve supported values are the
+`ActionType*` constants in [`processor/rule/actions.go:31-76`](../../processor/rule/actions.go):
+
+| `type` | What it does |
+|--------|--------------|
+| `publish` | Publishes a message to a NATS subject |
+| `add_triple` | Creates a relationship triple in the graph |
+| `remove_triple` | Removes a relationship triple from the graph |
+| `update_triple` | Updates metadata on an existing triple |
+| `reconcile_predicates` | Replaces or clears a named projection group's predicates atomically |
+| `publish_agent` | Triggers an agentic loop by publishing a task message |
+| `update_kv` | Writes JSON to a named KV bucket, with optional CAS merge |
+| `deny` | Issues a deny verdict and short-circuits the remaining actions |
+| `approve` | Issues an approve verdict; unlike `deny`, later actions still run |
+| `lifecycle_transition` | Moves a lifecycle-managed entity to a new phase (ADR-047) |
+| `lifecycle_complete` | Moves it to the first reachable terminal phase |
+| `lifecycle_fail` | Moves it to the declared failed phase, carrying a reason |
+
+### publish_agent
+
+`publish_agent` is how a rule hands work to an agent. It publishes a task message that `agentic-loop` picks up
+and runs as a loop.
+
+```json
+{
+  "type": "publish_agent",
+  "subject": "agent.task.research",
+  "role": "researcher",
+  "model": "general",
+  "tools": ["read_loop_result", "web_search"],
+  "prompt": "Research the question submitted to loop $entity.id, then submit plain-text findings."
+}
+```
+
+**Required.** All four are validated before the action runs; a missing one fails it with, for example,
+`subject is required for publish_agent action`
+([`processor/rule/actions.go:1687-1698`](../../processor/rule/actions.go)).
+
+| Field | Meaning |
+|-------|---------|
+| `subject` | NATS subject the task is published on. Must match `agentic-loop`'s `agent.task` port, which subscribes to `agent.task.*` — one token after the prefix ([`processor/agentic-loop/config.go:396`](../../processor/agentic-loop/config.go)) |
+| `role` | Agent role, e.g. `general`, `researcher`, `editor` |
+| `model` | Model endpoint name, as declared in the top-level `model_registry.endpoints` |
+| `prompt` | Task prompt. Substitution applies — see below |
+
+**Optional.** The rest of the `publish_agent` surface, from the `Action` struct's JSON tags in
+[`processor/rule/actions.go:89-444`](../../processor/rule/actions.go):
+
+| Field | Meaning |
+|-------|---------|
+| `tools` | Per-agent tool allowlist. Unset falls back to global tool discovery |
+| `properties` | Metadata stamped onto the task and onto every tool call it spawns. Reserved `agent.*` keys are skipped with a warning |
+| `action_allowlist` | Closed set of values the spawned loop's `decide` tool will accept |
+| `response_format` | Constrains the spawned loop's output to JSON or a JSON schema (ADR-034) |
+| `tool_choice` | Constrains tool selection per iteration (ADR-023) |
+| `related_loops` | Loop-ID lineage threaded onto the task so a role can read upstream results |
+| `filesystem_policy` / `scratch_paths` | Task-scoped read-only execution policy and its in-worktree exemptions (ADR-067) |
+| `run_scope` | `new`, `inherit`, `none`; controls agent-run association. Empty means `inherit` (ADR-053) |
+| `workflow_slug` / `workflow_step` | Names the workflow and the step within it |
+| `loop_max_iterations` | Iteration budget for the **spawned loop** |
+| `max_iterations` | Firing cap for **this action** per rule+entity match cycle. Omitted means 3; `0` means unlimited |
+| `id` | Stable identifier for that firing cap, so it survives action renames |
+| `when` | Guard conditions; all must match for this action to run |
+| `for_each` / `for_each_var` | Iterate the action over a triple list, binding each item to `$<for_each_var>` (ADR-046) |
+
+**Substitution is `$`-prefixed.** The namespaces are `$now`, `$entity.id` and the entity-ID segments
+(`$entity.org` … `$entity.instance`), `$entity.triple.<predicate>` with its `.length` / `.triples` / `.value`
+suffix forms, `$entity.lifecycle.{phase,terminal,workflow}`, the `$related.*` mirror of the entity set,
+`$state.{iteration,max_iterations}`, `$schedule.{id,spec,last_fired_at}` on cron rules,
+`$caller.{id,role,org}` on caller-aware rules, and `$message.<field_path>` on message-path rules — among
+others; the authoritative list is the doc comment on `SubstituteVariables`
+([`processor/rule/execution_context.go:207-252`](../../processor/rule/execution_context.go)). On a
+`publish_agent` action they are resolved in `subject`, `prompt`, `role`, `workflow_slug`, `workflow_step`,
+`loop_max_iterations`, string-valued `properties`, and `related_loops` values
+([`processor/rule/actions.go:1498,1562,1633,1768-1787`](../../processor/rule/actions.go)). **`model` is not
+substituted** — it is passed through as written, so a `$`-token there reaches the model registry as a literal
+endpoint name.
+
+**Two different failure modes, and only one of them is loud.** A `$`-namespace token the engine cannot
+resolve — `$entity.triple.X` for a predicate the entity is not carrying, a `$schedule.*` token on an
+expression rule — survives into the output verbatim *and* logs an unresolved-template warning, so the rule
+processor's logs will name it. A `{{...}}` or `${...}` sequence is not a token at all: the rule's substitution
+path has no `text/template` engine and no `${}` syntax, so those characters pass straight through with **no
+warning of any kind**. The warning is gated on `unresolvedTemplateVarRe`, which matches only the
+`$entity|related|state|schedule|caller|message` namespaces
+([`processor/rule/execution_context.go:35`](../../processor/rule/execution_context.go), warned at
+[`:381`](../../processor/rule/execution_context.go) →
+[`:836`](../../processor/rule/execution_context.go)). Checking the logs will not find a stray `{{...}}` —
+only reading the emitted prompt will.
+
+Worked examples: the [agentic quickstart](../basics/07-agentic-quickstart.md#rule-triggered-agents) and the
+shipped rule packs under [`configs/rules/deep-research/`](../../configs/rules/deep-research/).
+
 ## Graph Integration
 
 When enabled (default), rule actions directly affect the graph:
 
-```
+```text
 add_triple(predicate: "fleet.membership", object: "fleet-123")
      |
      v
@@ -88,12 +187,14 @@ Rules don't just alert - they build graph structure.
 ## Common Use Cases
 
 **Alerting:**
+
 ```json
 {"conditions": [{"field": "sensor.celsius", "operator": "gt", "value": 100}],
  "on_enter": [{"type": "publish", "subject": "alerts.temperature"}]}
 ```
 
 **Dynamic Relationships:**
+
 ```json
 {"conditions": [{"field": "drone.zone", "operator": "ne", "value": ""}],
  "on_enter": [{"type": "add_triple", "predicate": "zone.membership", "object": "zone.${entity.zone}"}],
@@ -101,6 +202,7 @@ Rules don't just alert - they build graph structure.
 ```
 
 **State Machines:**
+
 ```json
 {"conditions": [{"field": "equipment.status", "operator": "eq", "value": "maintenance"}],
  "on_enter": [{"type": "add_triple", "predicate": "ops.state", "object": "offline"}],
@@ -109,7 +211,7 @@ Rules don't just alert - they build graph structure.
 
 ## Architecture
 
-```
+```text
 RuleProcessor
 ├── EntityWatcher (KV Watch) ───┐
 ├── MessageHandler              ├──> StatefulEvaluator
@@ -131,5 +233,6 @@ RuleProcessor
 ## Detailed Reference
 
 For complete documentation, see the package reference:
+
 - [processor/rule/docs/](../../processor/rule/docs/) - Full reference documentation
 - [processor/rule/README.md](../../processor/rule/README.md) - Package overview and API
