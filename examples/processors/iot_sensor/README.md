@@ -1,169 +1,30 @@
 # IoT Sensor Example Processor
 
-This package demonstrates the correct pattern for implementing domain-specific processors in SemStreams. It shows how to create payloads that implement the `Graphable` interface with proper federated entity IDs and semantic predicates.
+This maintained example maps raw sensor readings to semantic entities and their zone relationships.
+The application owns the vocabulary and domain transformation; framework primitives provide ports, message
+registration, lifecycle and graph ingestion. No model or agent loop is needed.
 
-## Why Domain Processors Matter
+Follow [Building Your First Processor](../../../docs/basics/05-first-processor.md) for the checked local run and
+adaptation guide. The example is registered by `cmd/e2e-semstreams`, not the core `cmd/semstreams` binary.
 
-SemStreams exists to help developers transform incoming data into meaningful semantic graphs. The transformation step is where **domain knowledge lives** - it cannot be automated away by generic processors.
+## Source map
 
-Generic processors that automatically convert JSON to entities:
+| File | Responsibility |
+| --- | --- |
+| [vocabulary.go](vocabulary.go) | Predicate descriptions and units |
+| [payload.go](payload.go) | Sensor/zone Graphable payloads, identity minting and payload registration |
+| [processor.go](processor.go) | Raw input to domain facts |
+| [component.go](component.go) | Typed ports, dependencies, lifecycle and message emission |
+| [register.go](register.go) | Component factory, schema and port declarer |
 
-- Make semantic decisions without domain understanding
-- Produce low-quality, auto-generated triples
-- Create entity IDs without federated structure
-- Derive predicates from JSON keys, not semantic meaning
-- Treat relationships as strings, not entity references
+## Check behavior
 
-Domain processors encode your understanding of the data.
-
-## The Graphable Interface
-
-Every domain payload must implement:
-
-```go
-type Graphable interface {
-    EntityID() string      // 6-part federated identifier
-    Triples() []Triple     // Semantic facts about the entity
-}
-```
-
-## Using This Example
-
-### 1. Copy and Adapt
-
-Copy this package to your domain repository:
-
-```bash
-cp -r examples/processors/iot_sensor/ your-repo/processors/your_domain/
-```
-
-### 2. Define Your Payload
-
-Replace `SensorReading` with your domain entity:
-
-```go
-type YourPayload struct {
-    // Input fields from incoming data
-    ID        string
-    Type      string
-    // ... domain-specific fields
-
-    // EntityIDValue is the identity your processor MINTS for this entity,
-    // once, under the deployment authority — carried on the wire from there.
-    // The payload does NOT carry org/platform: positions 1-2 are the
-    // composition root's platform.org / platform.id and never come from a
-    // payload, a config key, a constant, or a product name (ADR-102 d2).
-    EntityIDValue string `json:"entity_id"`
-}
-```
-
-### 3. Implement EntityID
-
-Return the minted identity, and expose the minting function beside it:
-
-```go
-func (p *YourPayload) EntityID() string {
-    return p.EntityIDValue
-}
-
-// YourPayloadEntityID mints the deterministic 6-part federated ID.
-// The authority argument is component.Dependencies.Platform, verbatim.
-func YourPayloadEntityID(authority types.PlatformMeta, entityType, id string) string {
-    // {org}.{platform}.{system}.{domain}.{type}.{instance}
-    return semtypes.EntityID{
-        Org:      authority.Org,
-        Platform: authority.Platform,
-        System:   "yoursystem",
-        Domain:   "yourdomain",
-        Type:     entityType,
-        Instance: id,
-    }.Key()
-}
-```
-
-### 4. Implement Triples
-
-Return semantic facts using registered predicates:
-
-```go
-func (p *YourPayload) Triples() []message.Triple {
-    entityID := p.EntityID()
-    return []message.Triple{
-        {
-            Subject:   entityID,
-            Predicate: "yourdomain.category.property",
-            Object:    p.SomeValue,
-            // ...
-        },
-        // Entity references, not strings!
-        {
-            Subject:   entityID,
-            Predicate: "yourdomain.relationship.type",
-            Object:    p.relatedEntityID(), // Another entity ID
-        },
-    }
-}
-```
-
-### 5. Register Your Predicates
-
-Create a vocabulary file with your domain predicates:
-
-```go
-func RegisterVocabulary() {
-    vocabulary.Register("yourdomain.category.property",
-        vocabulary.WithDescription("Description of this predicate"),
-        vocabulary.WithDataType(vocabulary.DataTypeFloat),
-    )
-    // ... more predicates
-}
-```
-
-## Files in This Package
-
-| File | Purpose |
-|------|---------|
-| `payload.go` | `SensorReading` and `Zone` implementing Graphable |
-| `payload_test.go` | Tests verifying Graphable contract |
-| `processor.go` | JSON transformation with domain logic |
-| `processor_test.go` | Processor unit tests |
-| `vocabulary.go` | IoT predicate registration |
-| `README.md` | This file |
-
-## Running Tests
+From the repository root:
 
 ```bash
 go test -race ./examples/processors/iot_sensor/...
 ```
 
-## Key Patterns Demonstrated
-
-### Unit-Specific Predicates
-
-```go
-// Instead of generic "value" + "unit" triples:
-Predicate: measurementPredicateByUnit[s.Unit]
-// Produces only registered predicates such as sensor.measurement.celsius.
-```
-
-### Entity References
-
-```go
-// Instead of location as string:
-Predicate: "geo.location.zone"
-Object:    s.zoneEntityID()  // Another 6-part entity ID
-```
-
-### Classification Triples
-
-```go
-// Add domain knowledge about the entity:
-Predicate: "sensor.classification.type"
-Object:    s.SensorType
-```
-
-## Further Reading
-
-- [PROCESSOR-DESIGN-PHILOSOPHY.md](/docs/PROCESSOR-DESIGN-PHILOSOPHY.md) - Core philosophy
-- [SPEC-SEMANTIC-CONTRACT.md](/docs/SPEC-SEMANTIC-CONTRACT.md) - Semantic contract proposal
-- [vocabulary/](/vocabulary/) - Predicate registration system
+These unit checks cover transformation and payload/component contracts. The linked guide separately verifies
+UDP input through the local example composition to a queryable graph entity. The integration-tagged tests in
+this directory require the repository's [integration runner](../../../docs/contributing/01-testing.md).

@@ -206,58 +206,15 @@ const (
 )
 ```
 
-## Workflow Issues
+## Orchestration Issues
 
-### Workflow Never Completes
+For a chain that stalls or repeats work, check the owning entity's current phase, the rule condition/action,
+and the receiving component's result or failure signal. A rule trigger and successful work completion are
+separate observations. Inspect action-level iteration caps and the application's duplicate/completion policy.
 
-**Symptoms**: Execution stuck in "running" state.
-
-**Diagnosis**:
-```bash
-nats kv get WORKFLOW_EXECUTIONS exec-<id>
-```
-
-Check `current_step` and `step_results`.
-
-**Common causes**:
-1. Missing termination condition in loop
-2. Step action hanging
-3. Infinite loop without `max_iterations`
-
-**Resolution**:
-- Add `on_success: "complete"` to terminal steps
-- Add `max_iterations` to workflow
-- Check step action timeouts
-
-### Step Times Out
-
-**Symptoms**: Step fails with timeout error.
-
-**Diagnosis**: Check step duration in execution state.
-
-**Common causes**:
-1. External service slow
-2. Timeout too short for operation
-3. Deadlock in action handler
-
-**Resolution**:
-- Increase step `timeout`
-- Add retry with backoff
-- Profile external service
-
-### Variable Not Resolved
-
-**Symptoms**: Payload contains literal `${...}` instead of value.
-
-**Common causes**:
-1. Wrong variable path
-2. Step output doesn't exist
-3. Typo in variable name
-
-**Resolution**:
-- Check step name in `${steps.X.output}`
-- Verify step completed successfully before reference
-- Use exact field path from step output
+Use [Orchestration Layers](../concepts/14-orchestration-layers.md#debugging-orchestration-issues) for the current
+rule/component debugging path. The retired workflow engine's step-state and interpolation diagnostics do not
+apply to current compositions.
 
 ## NATS Connectivity Issues
 

@@ -2,7 +2,7 @@
 
 ## Start Here
 
-**Building with a coding agent?** Start with
+**Building with a coding agent?** Run the [first processor example](basics/05-first-processor.md), then read
 [Building context with SemSource](basics/09-building-semsource.md): a worked source-to-context path, with product
 ownership, framework primitives, capability choices and evidence limits. Runtime agent loops are optional.
 
@@ -73,18 +73,17 @@ Build LLM-powered autonomous agents with tool use:
 
 ## Workflow Orchestration
 
-Multi-step processes with loops, timeouts, and retries:
+Multi-step behavior composes rules and components, with lifecycle-managed entities for durable named progress:
 
-- [Workflow Quickstart](basics/08-workflow-quickstart.md) - Get started with workflows
-- [Workflow Configuration](advanced/09-workflow-configuration.md) - Complete schema reference
-- [Orchestration Layers](concepts/14-orchestration-layers.md) - When to use rules vs. workflows
+- [Orchestration Layers](concepts/14-orchestration-layers.md) - Patterns, state ownership and execution boundaries
+- [Phased Agentic Chains](concepts/25-phased-agentic-chains.md) - Roles, tools and phase transitions
+- [Lifecycle contract](../openspec/specs/lifecycle/spec.md) - Named entity phases and transition semantics
 
 ## Operations
 
 - [Caller-owned lifecycle context migration][lifecycle-context] - **BREAKING** atomic Stop prerequisite for
   components, services, and managers
-- [Native one-shot lifecycle migration target][native-lifecycle] - **PENDING** until the simplify runtime and proof
-  gates pass
+- [Native one-shot lifecycle migration][native-lifecycle] - Landed migration and adopter instructions
 - [Post-beta.160 ComponentManager context migration][cm-context] - Breaking Go source migration for the release
   after beta.160
 - [Migrate beta.159 to beta.160](operations/migration-beta159-to-beta160.md) - Canonical downstream breaking-change

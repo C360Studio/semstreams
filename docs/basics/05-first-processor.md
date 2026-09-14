@@ -1,1369 +1,152 @@
 # Building Your First Processor
 
-This tutorial walks through building a complete domain processor from scratch. We'll use IoT sensor
-readings as the example domain.
+Start with the maintained [IoT sensor example](../../examples/processors/iot_sensor/), then adapt its domain model
+for your application. It turns a raw reading into a sensor entity, a zone entity, and a relationship between them.
+This path uses local NATS and deterministic Go processing. No model or agent loop is needed.
 
-> **Working Example**: See [`/examples/processors/iot_sensor/`](../../examples/processors/iot_sensor/)
-> for the complete, runnable implementation of everything in this tutorial.
+The source files are the implementation reference. This guide explains how they fit together rather than copying
+an implementation that can drift from the compiled example.
 
-## What You're Building
+## Check the example
 
-A processor that:
-
-1. Receives sensor readings (temperature, humidity, pressure)
-2. Transforms them into graph entities with semantic triples
-3. Creates relationships to zone entities
-4. Integrates with the component framework for NATS messaging
-
-## Files You'll Create
-
-| File | Purpose | Lines |
-|------|---------|-------|
-| `vocabulary.go` | Predicate constants + vocabulary registration | ~80 |
-| `payload.go` | Graphable structs + init() for payload registry | ~200 |
-| `processor.go` | Transformation logic + helper functions | ~150 |
-| `component.go` | NATS integration + lifecycle management | ~400 |
-| `register.go` | Component registry hook | ~25 |
-| `processor_test.go` | Unit tests for transformation logic | ~100 |
-| `payload_test.go` | Graphable contract tests | ~100 |
-| `component_test.go` | Component creation and registration tests | ~80 |
-
-## Part 1: Design Your Vocabulary
-
-Start by defining the predicates that describe facts about your entities. This shapes your entire domain model.
-
-Create `vocabulary.go`:
-
-```go
-package iotsensor
-
-import "github.com/c360studio/semstreams/vocabulary"
-
-func init() {
-    // Auto-register vocabulary when package is imported
-    RegisterVocabulary()
-}
-
-// Predicate constants for the IoT sensor domain.
-// These follow the three-level dotted notation: domain.category.property
-const (
-    // Sensor measurement predicates (unit-specific)
-    PredicateMeasurementCelsius    = "sensor.measurement.celsius"
-    PredicateMeasurementFahrenheit = "sensor.measurement.fahrenheit"
-    PredicateMeasurementPercent    = "sensor.measurement.percent"
-    PredicateMeasurementHPA        = "sensor.measurement.hpa"
-
-    // Sensor classification predicates
-    PredicateClassificationType = "sensor.classification.type"
-
-    // Geo location predicates
-    PredicateLocationZone      = "geo.location.zone"
-    PredicateLocationLatitude  = "geo.location.latitude"
-    PredicateLocationLongitude = "geo.location.longitude"
-
-    // Time observation predicates
-    PredicateObservationRecorded = "time.observation.recorded"
-
-    // Facility zone predicates
-    PredicateZoneName = "facility.zone.name"
-    PredicateZoneType = "facility.zone.type"
-
-    // Sensor identity predicates (for ALIAS_INDEX)
-    PredicateSensorSerial = "iot.sensor.serial"
-)
-
-// RegisterVocabulary registers all IoT sensor domain predicates with the vocabulary
-// system. This is called automatically via init().
-func RegisterVocabulary() {
-    vocabulary.Register(PredicateMeasurementCelsius,
-        vocabulary.WithDescription("Temperature reading in Celsius"),
-        vocabulary.WithDataType(vocabulary.DataTypeFloat),
-        vocabulary.WithUnits("celsius"),
-    )
-
-    vocabulary.Register(PredicateMeasurementPercent,
-        vocabulary.WithDescription("Percentage measurement (e.g., humidity)"),
-        vocabulary.WithDataType(vocabulary.DataTypeFloat),
-        vocabulary.WithUnits("percent"),
-        vocabulary.WithRange("0-100"),
-    )
-
-    vocabulary.Register(PredicateClassificationType,
-        vocabulary.WithDescription("Sensor type classification"),
-        vocabulary.WithDataType(vocabulary.DataTypeString),
-    )
-
-    vocabulary.Register(PredicateLocationZone,
-        vocabulary.WithDescription("Reference to zone entity where sensor is located"),
-        vocabulary.WithDataType(vocabulary.DataTypeEntityID),
-    )
-
-    vocabulary.Register(PredicateLocationLatitude,
-        vocabulary.WithDescription("GPS latitude coordinate"),
-        vocabulary.WithDataType(vocabulary.DataTypeFloat),
-        vocabulary.WithRange("-90 to 90"),
-    )
-
-    vocabulary.Register(PredicateLocationLongitude,
-        vocabulary.WithDescription("GPS longitude coordinate"),
-        vocabulary.WithDataType(vocabulary.DataTypeFloat),
-        vocabulary.WithRange("-180 to 180"),
-    )
-
-    vocabulary.Register(PredicateObservationRecorded,
-        vocabulary.WithDescription("Timestamp when observation was recorded"),
-        vocabulary.WithDataType(vocabulary.DataTypeDateTime),
-    )
-
-    vocabulary.Register(PredicateZoneName,
-        vocabulary.WithDescription("Human-readable name of the zone"),
-        vocabulary.WithDataType(vocabulary.DataTypeString),
-    )
-
-    vocabulary.Register(PredicateZoneType,
-        vocabulary.WithDescription("Type classification of the zone"),
-        vocabulary.WithDataType(vocabulary.DataTypeString),
-    )
-
-    vocabulary.Register(PredicateSensorSerial,
-        vocabulary.WithDescription("Manufacturer serial number"),
-        vocabulary.WithDataType(vocabulary.DataTypeString),
-        vocabulary.WithAlias(vocabulary.AliasTypeExternal, 0),
-    )
-}
-```
-
-**Vocabulary design principles:**
-
-- Use three-part dotted notation: `domain.category.property`
-- Include units in measurement predicates for clarity
-- Distinguish property predicates (literal values) from relationship predicates (entity references)
-- Use constants—not string literals—to prevent typos
-- Register with the vocabulary system for discoverability
-
-See [Vocabulary](04-vocabulary.md) for complete design guidelines.
-
-## Part 2: Define Your Payload
-
-With your vocabulary defined, create the structs that hold your domain data. These must implement the `Graphable` interface.
-
-Create `payload.go`:
-
-```go
-package iotsensor
-
-import (
-    "encoding/json"
-    "fmt"
-    "time"
-
-    "github.com/c360studio/semstreams/message"
-    "github.com/c360studio/semstreams/payloadregistry"
-)
-
-// init registers the SensorReading payload type with the global PayloadRegistry.
-// This enables BaseMessage.UnmarshalJSON to recreate SensorReading payloads
-// from JSON when the message type is "iot.sensor.v1".
-//
-// CRITICAL: Without this registration, JSON deserialization will fail silently.
-func init() {
-    err := payloadregistry.Register(&payloadregistry.Registration{
-        Domain:      "iot",
-        Category:    "sensor",
-        Version:     "v1",
-        Description: "IoT sensor reading payload with Graphable implementation",
-        Factory: func() any {
-            return &SensorReading{}
-        },
-        Example: map[string]any{
-            "DeviceID":   "sensor-042",
-            "SensorType": "temperature",
-            "Value":      23.5,
-            "Unit":       "celsius",
-        },
-    })
-    if err != nil {
-        panic("failed to register SensorReading payload: " + err.Error())
-    }
-}
-
-// SensorReading represents an IoT sensor measurement.
-type SensorReading struct {
-    // Input fields (from incoming JSON)
-    DeviceID   string    `json:"device_id"`
-    SensorType string    `json:"sensor_type"`
-    Value      float64   `json:"value"`
-    Unit       string    `json:"unit"`
-    ObservedAt time.Time `json:"observed_at"`
-
-    // Optional fields
-    SerialNumber string   `json:"serial_number,omitempty"`
-    Latitude     *float64 `json:"latitude,omitempty"`
-    Longitude    *float64 `json:"longitude,omitempty"`
-
-    // Entity reference (minted by processor)
-    ZoneEntityID string `json:"zone_entity_id"`
-
-    // EntityIDValue is this reading's own identity, minted ONCE by the
-    // processor under the composition root's platform.org / platform.id and
-    // carried on the wire from there (ADR-102 d2). Never re-derived
-    // downstream — a reader would need an authority nobody can hand it.
-    EntityIDValue string `json:"entity_id"`
-}
-
-// EntityID returns the identity that was minted for this reading.
-func (s *SensorReading) EntityID() string {
-    return s.EntityIDValue
-}
-
-// SensorReadingEntityID mints the deterministic 6-part federated entity ID.
-// Format: {org}.{platform}.{system}.{domain}.{type}.{instance}
-// Example: "acme.dep1.sensor.environmental.temperature.sensor-042"
-//
-// Positions 1-2 are the DEPLOYMENT AUTHORITY: the composition root's
-// platform.org / platform.id, handed to you as
-// component.Dependencies.Platform. They are never a config key on your
-// component, never a product name, and never a field on the incoming
-// payload (ADR-102 d2).
-func SensorReadingEntityID(authority types.PlatformMeta, sensorType, deviceID string) string {
-    return semtypes.EntityID{
-        Org:      authority.Org,
-        Platform: authority.Platform,
-        System:   "sensor",
-        Domain:   "environmental",
-        Type:     sensorType,
-        Instance: deviceID,
-    }.Key()
-}
-
-// Triples returns semantic facts about this sensor reading.
-func (s *SensorReading) Triples() []message.Triple {
-    entityID := s.EntityID()
-
-    triples := []message.Triple{
-        // Measurement value with unit-specific predicate
-        {
-            Subject:    entityID,
-            Predicate:  fmt.Sprintf("sensor.measurement.%s", s.Unit),
-            Object:     s.Value,
-            Source:     "iot_sensor",
-            Timestamp:  s.ObservedAt,
-            Confidence: 1.0,
-        },
-        // Sensor type classification
-        {
-            Subject:    entityID,
-            Predicate:  PredicateClassificationType,
-            Object:     s.SensorType,
-            Source:     "iot_sensor",
-            Timestamp:  s.ObservedAt,
-            Confidence: 1.0,
-        },
-        // Location as entity reference (not string!)
-        {
-            Subject:    entityID,
-            Predicate:  PredicateLocationZone,
-            Object:     s.ZoneEntityID,
-            Source:     "iot_sensor",
-            Timestamp:  s.ObservedAt,
-            Confidence: 1.0,
-        },
-        // Observation timestamp
-        {
-            Subject:    entityID,
-            Predicate:  PredicateObservationRecorded,
-            Object:     s.ObservedAt,
-            Source:     "iot_sensor",
-            Timestamp:  s.ObservedAt,
-            Confidence: 1.0,
-        },
-    }
-
-    // Optional: Serial number for ALIAS_INDEX
-    if s.SerialNumber != "" {
-        triples = append(triples, message.Triple{
-            Subject:    entityID,
-            Predicate:  PredicateSensorSerial,
-            Object:     s.SerialNumber,
-            Source:     "iot_sensor",
-            Timestamp:  s.ObservedAt,
-            Confidence: 1.0,
-        })
-    }
-
-    // Optional: Geospatial data for SPATIAL_INDEX
-    if s.Latitude != nil && s.Longitude != nil {
-        triples = append(triples, message.Triple{
-            Subject:    entityID,
-            Predicate:  PredicateLocationLatitude,
-            Object:     *s.Latitude,
-            Source:     "iot_sensor",
-            Timestamp:  s.ObservedAt,
-            Confidence: 1.0,
-        })
-        triples = append(triples, message.Triple{
-            Subject:    entityID,
-            Predicate:  PredicateLocationLongitude,
-            Object:     *s.Longitude,
-            Source:     "iot_sensor",
-            Timestamp:  s.ObservedAt,
-            Confidence: 1.0,
-        })
-    }
-
-    return triples
-}
-
-// Schema returns the message type for sensor readings.
-// This must match the PayloadRegistration in init().
-func (s *SensorReading) Schema() message.Type {
-    return message.Type{
-        Domain:   "iot",
-        Category: "sensor",
-        Version:  "v1",
-    }
-}
-
-// Validate checks that the sensor reading has all required fields.
-func (s *SensorReading) Validate() error {
-    if s.DeviceID == "" {
-        return fmt.Errorf("device_id is required")
-    }
-    if s.SensorType == "" {
-        return fmt.Errorf("sensor_type is required")
-    }
-    if s.Unit == "" {
-        return fmt.Errorf("unit is required")
-    }
-    if s.EntityIDValue == "" {
-        return fmt.Errorf("entity_id is required; mint it with SensorReadingEntityID")
-    }
-    return nil
-}
-
-// MarshalJSON implements json.Marshaler.
-func (s *SensorReading) MarshalJSON() ([]byte, error) {
-    type Alias SensorReading
-    return json.Marshal((*Alias)(s))
-}
-
-// UnmarshalJSON implements json.Unmarshaler.
-func (s *SensorReading) UnmarshalJSON(data []byte) error {
-    type Alias SensorReading
-    return json.Unmarshal(data, (*Alias)(s))
-}
-```
-
-**Key points:**
-
-- `EntityID()` returns exactly 6 parts, deterministic (same input = same output)
-- `Triples()` uses vocabulary constants, not string literals
-- `Object: s.ZoneEntityID` (entity ID string) = relationship edge
-- `Object: s.Value` (a number) = property value
-- `Schema()` must match the `PayloadRegistration` domain/category/version
-- `init()` registers with the payload registry for JSON deserialization
-
-## Part 3: Handle Related Entities
-
-When your entity references another entity, you need that entity to exist. Create a Zone type:
-
-```go
-// ZoneEntityID mints a federated 6-part entity ID for a zone under the
-// deployment authority. Use this helper to ensure consistency between
-// Zone.EntityID() and references.
-func ZoneEntityID(authority types.PlatformMeta, zoneType, zoneID string) string {
-    return semtypes.EntityID{
-        Org:      authority.Org,
-        Platform: authority.Platform,
-        System:   "zone",
-        Domain:   "facility",
-        Type:     zoneType,
-        Instance: zoneID,
-    }.Key()
-}
-
-// Zone represents a location zone entity.
-type Zone struct {
-    ZoneID   string
-    ZoneType string
-    Name     string
-
-    // EntityIDValue is the zone's minted identity — ZoneEntityID's output.
-    EntityIDValue string `json:"entity_id"`
-}
-
-func (z *Zone) EntityID() string {
-    return z.EntityIDValue
-}
-
-func (z *Zone) Triples() []message.Triple {
-    entityID := z.EntityID()
-    now := time.Now()
-
-    return []message.Triple{
-        {
-            Subject:    entityID,
-            Predicate:  PredicateZoneName,
-            Object:     z.Name,
-            Source:     "iot_sensor",
-            Timestamp:  now,
-            Confidence: 1.0,
-        },
-        {
-            Subject:    entityID,
-            Predicate:  PredicateZoneType,
-            Object:     z.ZoneType,
-            Source:     "iot_sensor",
-            Timestamp:  now,
-            Confidence: 1.0,
-        },
-    }
-}
-
-func (z *Zone) Schema() message.Type {
-    return message.Type{Domain: "facility", Category: "zone", Version: "v1"}
-}
-
-func (z *Zone) Validate() error {
-    if z.ZoneID == "" {
-        return fmt.Errorf("zone_id is required")
-    }
-    if z.EntityIDValue == "" {
-        return fmt.Errorf("entity_id is required; mint it with ZoneEntityID")
-    }
-    return nil
-}
-```
-
-## Part 4: Implement the Processor
-
-The processor transforms raw JSON into your Graphable payload. Create `processor.go`:
-
-```go
-package iotsensor
-
-import (
-    "fmt"
-    "time"
-
-    semtypes "github.com/c360studio/semstreams/pkg/types"
-    "github.com/c360studio/semstreams/types"
-)
-
-// Processor transforms incoming JSON sensor data into Graphable payloads.
-type Processor struct {
-    // authority is the composition root's platform.org / platform.id,
-    // received through component.Dependencies.Platform. It is the ONLY
-    // source of positions 1-2 of every entity this processor mints
-    // (ADR-102 d2). There is no processor-level config for it, because
-    // there is no decision left for an operator to make.
-    authority types.PlatformMeta
-}
-
-func NewProcessor(authority types.PlatformMeta) *Processor {
-    return &Processor{authority: authority}
-}
-
-// Process transforms incoming JSON data into a SensorReading.
-//
-// Expected JSON format:
-//
-//    {
-//      "device_id": "sensor-042",
-//      "type": "temperature",
-//      "reading": 23.5,
-//      "unit": "celsius",
-//      "location": "warehouse-7",
-//      "timestamp": "2025-11-26T10:30:00Z"
-//    }
-func (p *Processor) Process(input map[string]any) (*SensorReading, error) {
-    deviceID, err := getString(input, "device_id")
-    if err != nil {
-        return nil, fmt.Errorf("missing device_id: %w", err)
-    }
-
-    sensorType, err := getString(input, "type")
-    if err != nil {
-        return nil, fmt.Errorf("missing type: %w", err)
-    }
-
-    value, err := getFloat64(input, "reading")
-    if err != nil {
-        return nil, fmt.Errorf("missing reading: %w", err)
-    }
-
-    unit, err := getString(input, "unit")
-    if err != nil {
-        return nil, fmt.Errorf("missing unit: %w", err)
-    }
-
-    locationID, err := getString(input, "location")
-    if err != nil {
-        return nil, fmt.Errorf("missing location: %w", err)
-    }
-
-    // Optional: zone type (default to "area")
-    zoneType := "area"
-    if zt, ok := input["zone_type"].(string); ok && zt != "" {
-        zoneType = zt
-    }
-
-    // Optional: timestamp (default to now)
-    var observedAt time.Time
-    if ts, ok := input["timestamp"].(string); ok {
-        parsed, err := time.Parse(time.RFC3339, ts)
-        if err != nil {
-            observedAt = time.Now()
-        } else {
-            observedAt = parsed
-        }
-    } else {
-        observedAt = time.Now()
-    }
-
-    return &SensorReading{
-        DeviceID:      deviceID,
-        SensorType:    sensorType,
-        Value:         value,
-        Unit:          unit,
-        ObservedAt:    observedAt,
-        ZoneEntityID:  ZoneEntityID(p.authority, zoneType, locationID),
-        EntityIDValue: SensorReadingEntityID(p.authority, sensorType, deviceID),
-    }, nil
-}
-
-// Helper functions for type-safe field extraction
-
-func getString(m map[string]any, key string) (string, error) {
-    v, ok := m[key]
-    if !ok {
-        return "", fieldNotFoundError(m, key)
-    }
-    s, ok := v.(string)
-    if !ok {
-        return "", fmt.Errorf("field %q is not a string: got %T", key, v)
-    }
-    return s, nil
-}
-
-func getFloat64(m map[string]any, key string) (float64, error) {
-    v, ok := m[key]
-    if !ok {
-        return 0, fieldNotFoundError(m, key)
-    }
-    switch val := v.(type) {
-    case float64:
-        return val, nil
-    case float32:
-        return float64(val), nil
-    case int:
-        return float64(val), nil
-    case int64:
-        return float64(val), nil
-    default:
-        return 0, fmt.Errorf("field %q is not a number: got %T", key, v)
-    }
-}
-
-// fieldNotFoundError returns a helpful error message suggesting similar field names.
-func fieldNotFoundError(m map[string]any, key string) error {
-    keys := make([]string, 0, len(m))
-    for k := range m {
-        keys = append(keys, k)
-    }
-
-    suggestions := findSimilarFields(key, keys)
-    if len(suggestions) > 0 {
-        return fmt.Errorf("field %q not found (did you mean %q?), available fields: %v",
-            key, suggestions[0], keys)
-    }
-    return fmt.Errorf("field %q not found, available fields: %v", key, keys)
-}
-
-// findSimilarFields finds field names similar to the expected key.
-func findSimilarFields(expected string, available []string) []string {
-    var similar []string
-
-    // Common field name mappings
-    commonMistakes := map[string][]string{
-        "type":      {"sensor_type", "sensorType", "kind"},
-        "reading":   {"value", "val", "measurement", "data"},
-        "location":  {"zone_id", "zoneId", "zone", "loc", "area"},
-        "device_id": {"deviceId", "id", "sensor_id", "sensorId"},
-        "unit":      {"units", "uom"},
-    }
-
-    if mistakes, ok := commonMistakes[expected]; ok {
-        for _, mistake := range mistakes {
-            for _, avail := range available {
-                if avail == mistake {
-                    similar = append(similar, avail)
-                }
-            }
-        }
-    }
-
-    return similar
-}
-```
-
-**Key points:**
-
-- Processor applies organizational context from configuration
-- Helper functions provide type-safe field extraction
-- Error messages suggest correct field names when input is malformed
-
-## Part 5: Test Your Domain Logic
-
-Create `processor_test.go`:
-
-```go
-package iotsensor
-
-import (
-    "encoding/json"
-    "testing"
-
-    "github.com/c360studio/semstreams/graph"
-    "github.com/c360studio/semstreams/message"
-    "github.com/c360studio/semstreams/types"
-)
-
-// testAuthority is a deployment authority in the shape a composition root
-// supplies it: platform.org / platform.id. "dep1" is a DEPLOYMENT name —
-// position 2 never carries a product name (ADR-102 d2, d3).
-var testAuthority = types.PlatformMeta{Org: "acme", Platform: "dep1"}
-
-func TestProcessor_Process_JSONTransformation(t *testing.T) {
-    p := NewProcessor(testAuthority)
-
-    inputJSON := `{
-        "device_id": "sensor-042",
-        "type": "temperature",
-        "reading": 23.5,
-        "unit": "celsius",
-        "location": "warehouse-7"
-    }`
-
-    var input map[string]any
-    if err := json.Unmarshal([]byte(inputJSON), &input); err != nil {
-        t.Fatalf("failed to unmarshal test input: %v", err)
-    }
-
-    result, err := p.Process(input)
-    if err != nil {
-        t.Fatalf("Process() unexpected error: %v", err)
-    }
-
-    // Verify result implements Graphable
-    var _ graph.Graphable = result
-
-    // Verify EntityID is valid 6-part format
-    entityID := result.EntityID()
-    if !message.IsValidEntityID(entityID) {
-        t.Errorf("EntityID() = %q is not valid 6-part format", entityID)
-    }
-
-    // Verify Triples returns meaningful data
-    triples := result.Triples()
-    if len(triples) < 3 {
-        t.Errorf("Triples() returned %d triples, want at least 3", len(triples))
-    }
-}
-```
-
-Create `payload_test.go`:
-
-```go
-package iotsensor
-
-import (
-    "strings"
-    "testing"
-    "time"
-
-    "github.com/c360studio/semstreams/graph"
-    "github.com/c360studio/semstreams/message"
-)
-
-func TestSensorReading_EntityID_6PartFormat(t *testing.T) {
-    reading := SensorReading{
-        DeviceID:      "sensor-042",
-        SensorType:    "temperature",
-        EntityIDValue: SensorReadingEntityID(testAuthority, "temperature", "sensor-042"),
-    }
-
-    entityID := reading.EntityID()
-    parts := strings.Split(entityID, ".")
-
-    if len(parts) != 6 {
-        t.Errorf("EntityID() = %q has %d parts, want 6", entityID, len(parts))
-    }
-
-    if !message.IsValidEntityID(entityID) {
-        t.Errorf("EntityID() = %q is not valid", entityID)
-    }
-}
-
-func TestSensorReading_Triples_SemanticPredicates(t *testing.T) {
-    reading := SensorReading{
-        DeviceID:     "sensor-042",
-        SensorType:   "temperature",
-        Value:        23.5,
-        Unit:         "celsius",
-        ZoneEntityID:  ZoneEntityID(testAuthority, "area", "warehouse-7"),
-        ObservedAt:    time.Now(),
-        EntityIDValue: SensorReadingEntityID(testAuthority, "temperature", "sensor-042"),
-    }
-
-    triples := reading.Triples()
-
-    if len(triples) < 3 {
-        t.Errorf("Triples() returned %d triples, want at least 3", len(triples))
-    }
-
-    // Verify all triples reference this entity
-    entityID := reading.EntityID()
-    for i, triple := range triples {
-        if triple.Subject != entityID {
-            t.Errorf("Triple[%d].Subject = %q, want %q", i, triple.Subject, entityID)
-        }
-    }
-}
-
-// Compile-time check that types implement Graphable
-func TestGraphableInterface(_ *testing.T) {
-    var _ graph.Graphable = (*SensorReading)(nil)
-    var _ graph.Graphable = (*Zone)(nil)
-}
-```
-
-Run tests:
+From the repository root, with the Go version declared in [go.mod](../../go.mod) installed (currently 1.26.3):
 
 ```bash
-go test ./examples/processors/iot_sensor/...
+go test -race ./examples/processors/iot_sensor/...
 ```
 
-## Part 6: Create the Component Wrapper
+This checks transformation, entity identity, semantic predicates, registration and payload behavior. It does not
+start the UDP-to-graph application. Docker is needed only for the live example below;
+see [Prerequisites](00-prerequisites.md).
 
-The component wrapper integrates your processor with the NATS messaging system. Create `component.go`:
+## Run the local dataflow
 
-```go
-package iotsensor
+This run uses Docker, `curl`, `jq` and netcat (`nc`), in addition to Go.
 
-import (
-    "context"
-    "encoding/json"
-    "fmt"
-    "log/slog"
-    "reflect"
-    "sync"
-    "sync/atomic"
-    "time"
+The example is composed by **`cmd/e2e-semstreams`**, the repository's example/test harness. It explicitly registers
+the IoT component and its payloads. The core `cmd/semstreams` binary does not include that example registration;
+`task dev:start` currently builds the core binary, so use the commands here for this example.
 
-    "github.com/c360studio/semstreams/component"
-    "github.com/c360studio/semstreams/message"
-    "github.com/c360studio/semstreams/natsclient"
-    "github.com/c360studio/semstreams/pkg/errs"
-    "github.com/nats-io/nats.go"
-)
+Use a fresh local NATS instance. The checked config uses TCP 4222 for NATS, TCP 8080 for HTTP, TCP 9090 for metrics,
+and UDP 14550 for input. Run without `SEMSTREAMS_NATS_URLS` or `SEMSTREAMS_LIFECYCLE_SEED` overrides.
 
-// ComponentConfig holds configuration for the component.
-//
-// Note what is NOT here: the deployment authority. There is no org_id or
-// platform key, because there is no decision for an operator to make —
-// positions 1-2 of every entity you mint are the composition root's
-// platform.org / platform.id, handed to you as deps.Platform (ADR-102 d2).
-type ComponentConfig struct {
-    Ports *component.PortConfig `json:"ports"`
-}
+### 1. Start NATS
 
-// DefaultConfig returns the default configuration.
-func DefaultConfig() ComponentConfig {
-    return ComponentConfig{
-        Ports: &component.PortConfig{
-            Inputs: []component.PortDefinition{
-                {
-                    Name:        "nats_input",
-                    Type:        "nats",
-                    Subject:     "raw.sensor.>",
-                    Required:    true,
-                    Description: "NATS subjects with sensor JSON data",
-                },
-            },
-            Outputs: []component.PortDefinition{
-                {
-                    Name:        "nats_output",
-                    Type:        "nats",
-                    Subject:     "events.graph.entity.sensor",
-                    Required:    true,
-                    Description: "NATS subject for Graphable sensor readings",
-                },
-            },
-        },
-    }
-}
-
-// removedConfigFields names every key withdrawn from the operator surface.
-// encoding/json silently DROPS a key with no matching struct field, so an
-// operator who upgrades and keeps org_id would see no error while every
-// entity ID quietly changed authority. A removed knob must fail at load.
-var removedConfigFields = map[string]string{
-    "org_id":   `removed (ADR-102 d2, BREAKING): positions 1-2 of every minted entity ID are the composition root's platform.org / platform.id. Delete the field; set platform.org at the top level of the config`,
-    "platform": `removed (ADR-102 d2, BREAKING): positions 1-2 of every minted entity ID are the composition root's platform.org / platform.id. Delete the field; set platform.id at the top level of the config`,
-}
-
-func rejectRemovedConfigKeys(raw json.RawMessage) error {
-    if len(raw) == 0 {
-        return nil
-    }
-    var present map[string]json.RawMessage
-    if err := json.Unmarshal(raw, &present); err != nil {
-        return nil // not an object; the caller's own decode reports that
-    }
-    for field, guidance := range removedConfigFields {
-        if _, found := present[field]; found {
-            return errs.WrapInvalid(errs.ErrInvalidConfig, "IoTSensorComponent", "rejectRemovedConfigKeys",
-                fmt.Sprintf("config field %q was %s", field, guidance))
-        }
-    }
-    return nil
-}
-
-var iotSensorSchema = component.GenerateConfigSchema(reflect.TypeOf(ComponentConfig{}))
-
-// Component wraps the domain processor with component lifecycle.
-type Component struct {
-    name        string
-    subjects    []string
-    outputSubj  string
-    config      ComponentConfig
-    natsClient  *natsclient.Client
-    logger      *slog.Logger
-    processor   *Processor
-
-    shutdown      chan struct{}
-    done          chan struct{}
-    running       bool
-    startTime     time.Time
-    mu            sync.RWMutex
-    lifecycleMu   sync.Mutex
-    wg            *sync.WaitGroup
-    subscriptions []*natsclient.Subscription
-
-    messagesProcessed int64
-    errors            int64
-    lastActivity      time.Time
-}
-
-// NewComponent creates a new component from configuration.
-func NewComponent(
-    rawConfig json.RawMessage, deps component.Dependencies,
-) (component.Discoverable, error) {
-    if err := rejectRemovedConfigKeys(rawConfig); err != nil {
-        return nil, err
-    }
-    var config ComponentConfig
-    if err := json.Unmarshal(rawConfig, &config); err != nil {
-        return nil, errs.WrapInvalid(err, "IoTSensorComponent", "NewComponent", "config unmarshal")
-    }
-
-    if config.Ports == nil {
-        config = DefaultConfig()
-    }
-
-    var inputSubjects []string
-    var outputSubject string
-
-    for _, input := range config.Ports.Inputs {
-        if input.Type == "nats" {
-            inputSubjects = append(inputSubjects, input.Subject)
-        }
-    }
-
-    if len(config.Ports.Outputs) > 0 {
-        outputSubject = config.Ports.Outputs[0].Subject
-    }
-
-    // The deployment authority comes from the composition root and nowhere
-    // else — the component never reads it from its own config (ADR-102 d2).
-    processor := NewProcessor(deps.Platform)
-
-    return &Component{
-        name:       "iot-sensor-processor",
-        subjects:   inputSubjects,
-        outputSubj: outputSubject,
-        config:     config,
-        natsClient: deps.NATSClient,
-        logger:     deps.GetLogger(),
-        processor:  processor,
-        shutdown:   make(chan struct{}),
-        done:       make(chan struct{}),
-        wg:         &sync.WaitGroup{},
-    }, nil
-}
-
-// Initialize prepares the component.
-func (c *Component) Initialize() error {
-    return nil
-}
-
-// Start begins processing messages.
-func (c *Component) Start(ctx context.Context) error {
-    c.lifecycleMu.Lock()
-    defer c.lifecycleMu.Unlock()
-
-    if c.running {
-        return errs.WrapFatal(errs.ErrAlreadyStarted, "IoTSensorComponent", "Start", "already running")
-    }
-
-    if c.natsClient == nil {
-        return errs.WrapFatal(errs.ErrMissingConfig, "IoTSensorComponent", "Start", "NATS client required")
-    }
-
-    for _, subject := range c.subjects {
-        sub, err := c.natsClient.Subscribe(ctx, subject, func(ctx context.Context, msg *nats.Msg) {
-            c.handleMessage(ctx, msg.Data)
-        })
-        if err != nil {
-            return errs.WrapTransient(err, "IoTSensorComponent", "Start",
-                fmt.Sprintf("subscribe to %s", subject))
-        }
-        c.subscriptions = append(c.subscriptions, sub)
-    }
-
-    c.mu.Lock()
-    c.running = true
-    c.startTime = time.Now()
-    c.mu.Unlock()
-
-    c.logger.Info("IoT sensor processor started",
-        "component", c.name,
-        "input_subjects", c.subjects,
-        "output_subject", c.outputSubj)
-
-    runtimeDone := c.done
-    wg := c.wg
-    go func() {
-        wg.Wait()
-        close(runtimeDone)
-    }()
-
-    return nil
-}
-
-// Stop gracefully stops the component.
-func (c *Component) Stop(ctx context.Context) error {
-    c.lifecycleMu.Lock()
-    defer c.lifecycleMu.Unlock()
-
-    if !c.running {
-        return nil
-    }
-
-    close(c.shutdown)
-
-    for _, sub := range c.subscriptions {
-        if err := sub.Unsubscribe(); err != nil {
-            c.logger.Warn("Failed to unsubscribe", "error", err)
-        }
-    }
-    c.subscriptions = nil
-
-    select {
-    case <-c.done:
-    case <-ctx.Done():
-        return fmt.Errorf("shutdown: %w", ctx.Err())
-    }
-
-    c.mu.Lock()
-    c.running = false
-    c.mu.Unlock()
-
-    return nil
-}
-
-// handleMessage processes incoming sensor JSON messages.
-func (c *Component) handleMessage(ctx context.Context, msgData []byte) {
-    atomic.AddInt64(&c.messagesProcessed, 1)
-    c.mu.Lock()
-    c.lastActivity = time.Now()
-    c.mu.Unlock()
-
-    var data map[string]any
-    if err := json.Unmarshal(msgData, &data); err != nil {
-        atomic.AddInt64(&c.errors, 1)
-        c.logger.Debug("Failed to parse JSON", "error", err)
-        return
-    }
-
-    reading, err := c.processor.Process(data)
-    if err != nil {
-        atomic.AddInt64(&c.errors, 1)
-        c.logger.Error("Failed to process sensor data", "error", err)
-        return
-    }
-
-    // Emit Zone entity first (referenced entity)
-    if reading.ZoneEntityID != "" {
-        zoneType, zoneID := ParseZoneEntityID(reading.ZoneEntityID)
-        if zoneType != "" && zoneID != "" {
-            zone := &Zone{
-                ZoneID:   zoneID,
-                ZoneType: zoneType,
-                Name:     zoneID,
-                // The reading already carries the zone identity the
-                // processor minted; reuse it rather than re-deriving.
-                EntityIDValue: reading.ZoneEntityID,
-            }
-            c.emitEntity(ctx, zone, zone.Schema())
-        }
-    }
-
-    // Emit SensorReading entity
-    c.emitEntity(ctx, reading, reading.Schema())
-}
-
-// emitEntity wraps a payload in BaseMessage and publishes.
-func (c *Component) emitEntity(ctx context.Context, payload message.Payload, msgType message.Type) {
-    baseMsg := message.NewBaseMessage(msgType, payload, c.name)
-
-    data, err := json.Marshal(baseMsg)
-    if err != nil {
-        atomic.AddInt64(&c.errors, 1)
-        c.logger.Error("Failed to marshal BaseMessage", "error", err)
-        return
-    }
-
-    if c.outputSubj != "" {
-        if err := c.natsClient.Publish(ctx, c.outputSubj, data); err != nil {
-            atomic.AddInt64(&c.errors, 1)
-            c.logger.Error("Failed to publish entity", "error", err)
-        }
-    }
-}
-
-// Discoverable interface implementation
-
-func (c *Component) Meta() component.Metadata {
-    return component.Metadata{
-        Name:        c.name,
-        Type:        "processor",
-        Description: "Transforms sensor JSON into Graphable payloads",
-        Version:     "0.1.0",
-    }
-}
-
-func (c *Component) InputPorts() []component.Port {
-    ports := make([]component.Port, len(c.subjects))
-    for i, subj := range c.subjects {
-        ports[i] = component.Port{
-            Name:      fmt.Sprintf("input_%d", i),
-            Direction: component.DirectionInput,
-            Required:  true,
-            Config:    component.NATSPort{Subject: subj},
-        }
-    }
-    return ports
-}
-
-func (c *Component) OutputPorts() []component.Port {
-    return []component.Port{
-        {
-            Name:      "output",
-            Direction: component.DirectionOutput,
-            Required:  true,
-            Config:    component.NATSPort{Subject: c.outputSubj},
-        },
-    }
-}
-
-func (c *Component) ConfigSchema() component.ConfigSchema {
-    return iotSensorSchema
-}
-
-func (c *Component) Health() component.HealthStatus {
-    c.mu.RLock()
-    defer c.mu.RUnlock()
-    return component.HealthStatus{
-        Healthy:    c.running,
-        LastCheck:  time.Now(),
-        ErrorCount: int(atomic.LoadInt64(&c.errors)),
-        Uptime:     time.Since(c.startTime),
-    }
-}
-
-func (c *Component) DataFlow() component.FlowMetrics {
-    c.mu.RLock()
-    defer c.mu.RUnlock()
-    return component.FlowMetrics{
-        LastActivity: c.lastActivity,
-    }
-}
-```
-
-## Part 7: Register the Component
-
-Create `register.go`:
-
-```go
-package iotsensor
-
-import "github.com/c360studio/semstreams/component"
-
-// Register registers the component with the registry.
-func Register(registry *component.Registry) error {
-    return registry.RegisterWithConfig(component.RegistrationConfig{
-        Name:        "iot_sensor",
-        Factory:     NewComponent,
-        Ports:       DeclarePorts, // required: a registration without it is refused (ADR-100)
-        Schema:      iotSensorSchema,
-        Type:        "processor",
-        Protocol:    "iot_sensor",
-        Domain:      "iot",
-        Description: "Transforms sensor JSON into Graphable payloads",
-        Version:     "0.1.0",
-    })
-}
-
-// DeclarePorts is the component.PortDeclarer: the ports NewComponent will
-// report for rawConfig, computed with no dependencies. It applies the same
-// "config.Ports or DefaultConfig()" rule NewComponent applies, so the two
-// cannot drift — boot admission compares the declaration with the constructed
-// component port for port and refuses the component on any difference. (The
-// shipped example, examples/processors/iot_sensor/component.go, goes one step
-// further and has NewComponent and DeclarePorts share one resolveConfig.)
-func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, error) {
-    var config ComponentConfig
-    if err := json.Unmarshal(rawConfig, &config); err != nil {
-        return component.PortConfig{}, err
-    }
-    if config.Ports == nil {
-        config = DefaultConfig()
-    }
-    return *config.Ports, nil
-}
-```
-
-For built-in processors, add the registration call to your component registry initialization. Check the
-declaration offline with `semstreams validate <config>` (or `composition.AssertValid` in your tests) before you boot.
-
-### Test Your Component
-
-Create `component_test.go` to verify the component creation and registration:
-
-```go
-package iotsensor
-
-import (
-    "encoding/json"
-    "strings"
-    "testing"
-
-    "github.com/c360studio/semstreams/component"
-)
-
-func TestNewComponent_ValidConfig(t *testing.T) {
-    config := ComponentConfig{
-        Ports: &component.PortConfig{
-            Inputs: []component.PortDefinition{
-                {Name: "input", Type: "nats", Subject: "raw.sensor.>"},
-            },
-            Outputs: []component.PortDefinition{
-                {Name: "output", Type: "nats", Subject: "events.graph.entity.sensor"},
-            },
-        },
-    }
-
-    rawConfig, err := json.Marshal(config)
-    if err != nil {
-        t.Fatalf("failed to marshal config: %v", err)
-    }
-
-    deps := component.Dependencies{} // NATSClient not needed for creation test
-
-    comp, err := NewComponent(rawConfig, deps)
-    if err != nil {
-        t.Fatalf("NewComponent() unexpected error: %v", err)
-    }
-
-    // Verify it implements Discoverable
-    meta := comp.Meta()
-    if meta.Type != "processor" {
-        t.Errorf("Meta().Type = %q, want processor", meta.Type)
-    }
-}
-
-// A config that still carries a retired authority key must be REFUSED, not
-// quietly ignored. This is the test that stops an upgrade from silently
-// re-minting every entity under a different authority.
-func TestNewComponent_RejectsRetiredAuthorityKey(t *testing.T) {
-    rawConfig := []byte(`{
-        "org_id": "acme",
-        "ports": {
-            "inputs":  [{"name": "input",  "config": {"kind": "nats", "subject": "raw.>"}}],
-            "outputs": [{"name": "output", "config": {"kind": "nats", "subject": "out.>"}}]
-        }
-    }`)
-
-    _, err := NewComponent(rawConfig, component.Dependencies{})
-    if err == nil {
-        t.Fatal("NewComponent() accepted the retired org_id key")
-    }
-    if !strings.Contains(err.Error(), "ADR-102") {
-        t.Errorf("refusal %q does not name the decision that retired the key", err)
-    }
-}
-
-func TestRegister(t *testing.T) {
-    registry := component.NewRegistry()
-
-    err := Register(registry)
-    if err != nil {
-        t.Fatalf("Register() error: %v", err)
-    }
-
-    // Verify it was registered
-    factory, ok := registry.GetFactory("iot_sensor")
-    if !ok || factory == nil {
-        t.Error("Expected component to be registered with factory")
-    }
-}
-```
-
-## Part 8: Wire It Up
-
-Add your processor to a flow configuration:
-
-```json
-{
-  "components": {
-    "iot_sensor": {
-      "type": "iot_sensor",
-      "config": {
-        "ports": {
-          "inputs": [
-            {
-              "name": "nats_input",
-              "config": {"kind":"nats","subject":"raw.sensor.>"}
-            }
-          ],
-          "outputs": [
-            {
-              "name": "nats_output",
-              "config": {"kind":"nats","subject":"events.graph.entity.sensor"}
-            }
-          ]
-        }
-      }
-    }
-  }
-}
-```
-
-## Part 9: Test End-to-End
+In one terminal:
 
 ```bash
-# Start SemStreams with your config
-task dev:start
-
-# Send test data
-task dev:send DATA='{"device_id":"sensor-001","type":"temperature","reading":23.5,"unit":"celsius","location":"warehouse-7"}'
-
-# Check message flow
-task dev:stats
-
-# Query via GraphQL
-# The first two positions are YOUR config's platform.org / platform.id.
-task dev:graphql QUERY='{ entity(id: "acme.dep1.sensor.environmental.temperature.sensor-001") { triples { predicate object } } }'
+docker run --rm --name semstreams-hello \
+  -p 127.0.0.1:4222:4222 nats:2.14.4-alpine -js
 ```
 
-## What Happens Next
+This disposable learning instance keeps no data after the container is removed. A deployed edge application needs
+its own durable storage and recovery configuration; this example does not prove offline synchronization.
 
-When your processor runs:
+### 2. Build, validate and start the example
 
-1. **Entity Storage**: The entity is stored in `ENTITY_STATES` KV bucket
-2. **Predicate Index**: Each predicate creates an entry in `PREDICATE_INDEX`
-3. **Relationship Index**: The zone reference creates entries in `INCOMING_INDEX` and `OUTGOING_INDEX`
-4. **Community Detection**: If enabled, entities with relationships cluster together
+In another terminal, from the repository root:
 
-## Common Patterns
-
-### Conditional Triples
-
-Add triples only when data is present:
-
-```go
-func (s *Sensor) Triples() []message.Triple {
-    triples := []message.Triple{...}
-
-    if s.SerialNumber != "" {
-        triples = append(triples, message.Triple{
-            Subject:   s.EntityID(),
-            Predicate: PredicateSensorSerial,
-            Object:    s.SerialNumber,
-        })
-    }
-
-    return triples
-}
+```bash
+go build -o bin/e2e-semstreams ./cmd/e2e-semstreams
+./bin/e2e-semstreams validate configs/hello-world.json
+./bin/e2e-semstreams --config configs/hello-world.json
 ```
 
-### Dynamic Predicates
+Validation should report no errors. This config reports warnings for optional API ports and unwatched indexes.
+It starts six components: UDP input, IoT processor, graph ingest, graph index, graph query, and graph gateway.
+Clustering is not enabled, so optional community-index/summary availability warnings can appear during the run.
+The prefix query below exercises the structural path.
 
-Include unit in the predicate for clarity:
+### 3. Observe a sensor entity
 
-```go
-// Results in: sensor.measurement.celsius, sensor.measurement.fahrenheit, etc.
-Predicate: fmt.Sprintf("sensor.measurement.%s", s.Unit)
+In a third terminal, check that startup completed:
+
+```bash
+curl --max-time 5 -fsS http://localhost:8080/readyz
 ```
 
-### Geospatial Data
+Expect `READY`. Then send a reading with netcat (`nc`):
 
-Add lat/lon for spatial indexing:
-
-```go
-if s.Latitude != nil && s.Longitude != nil {
-    triples = append(triples,
-        message.Triple{
-            Subject:   s.EntityID(),
-            Predicate: PredicateLocationLatitude,
-            Object:    *s.Latitude,
-        },
-        message.Triple{
-            Subject:   s.EntityID(),
-            Predicate: PredicateLocationLongitude,
-            Object:    *s.Longitude,
-        },
-    )
-}
+```bash
+printf '%s\n' \
+  '{"device_id":"sensor-001","type":"temperature","reading":23.5,"unit":"celsius","location":"warehouse-7"}' \
+  | nc -u -w 1 localhost 14550
 ```
 
-## Checklist
+Query the gateway mounted on the service manager's HTTP server:
 
-Before deploying your processor:
+```bash
+curl --max-time 5 -sS http://localhost:8080/graph-gateway/graphql \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "query": "{entitiesByPrefix(prefix: \"demo\", limit: 10) {entities {id triples {predicate object}} next_cursor}}"
+  }' \
+  | jq
+```
 
-- [ ] EntityID returns exactly 6 parts
-- [ ] EntityID is deterministic (same input = same output)
-- [ ] Positions 1-2 come from `deps.Platform` and nowhere else — no `org_id` /
-      `platform` config key, no constant, no product name, no payload field
-      (ADR-102 d2)
-- [ ] Predicates use dotted notation (domain.category.property)
-- [ ] Entity references use full entity IDs, not partial strings
-- [ ] Required fields are validated
-- [ ] Constants defined for all predicates
-- [ ] Vocabulary registered with vocabulary.Register()
-- [ ] Payload registered in init() with payloadregistry.Register()
-- [ ] Schema() matches payload registration domain/category/version
-- [ ] MarshalJSON and UnmarshalJSON implemented
-- [ ] Validate() checks all required fields
-- [ ] Component implements Discoverable interface
-- [ ] Component registered via Register() function
-- [ ] Tests cover EntityID, Triples, and processor transformation
-- [ ] Config file integration tested end-to-end
+Look for an ID ending in `.sensor.environmental.temperature.sensor-001` and a zone ending in
+`.zone.facility.area.warehouse-7`. The platform segment includes a deployment suffix; do not hard-code the full ID.
+Ingest and indexing are asynchronous, so repeat the query if the reading is not yet visible. The response may
+include generated hierarchy entities. If `next_cursor` is present, pass it as `cursor`
+to read the next page.
 
-## Next Steps
+The observed sensor has `sensor.measurement.celsius = 23.5` and `geo.location.zone` referencing the zone entity.
+That is the first-success check: input became explicit, queryable domain facts.
 
-- [Configuration](06-configuration.md) - Choose your capability level
-- [Index Reference](../advanced/05-index-reference.md) - How triples become queryable
-- [Testing Guide](../contributing/01-testing.md#testing-graphable-implementations) - Test your Graphable implementations
+Stop the example with Ctrl-C in its terminal, then stop NATS with Ctrl-C in its terminal. The harness exits after
+shutting down its components. This is a learning composition, not a production application template.
+
+## Adapt the domain, keep the framework contracts
+
+Decide what facts your application needs before copying files. The IoT example separates these responsibilities:
+
+| File | What to learn or adapt |
+| --- | --- |
+| [vocabulary.go](../../examples/processors/iot_sensor/vocabulary.go) | Named predicates, units and descriptions |
+| [payload.go](../../examples/processors/iot_sensor/payload.go) | Payloads, identity and registration |
+| [processor.go](../../examples/processors/iot_sensor/processor.go) | Raw input mapped to domain facts |
+| [component.go](../../examples/processors/iot_sensor/component.go) | Ports, lifecycle and message emission |
+| [register.go](../../examples/processors/iot_sensor/register.go) | Factory, schema and pure port declaration |
+
+### 1. Give facts an identity and meaning
+
+Define the domain's predicates and payload fields. A payload returns its minted entity ID and semantic triples;
+relationship objects use the related entity's ID. Mint under the deployment authority supplied through component
+dependencies. The application owns the source system, taxonomy and leaf identity; it does not substitute its
+product name for the deployment authority. The example's identity and predicate tests show these distinctions.
+
+See [Graphable](03-graphable-interface.md) and [Vocabulary](04-vocabulary.md) for the underlying concepts.
+
+### 2. Register payloads and component factories separately
+
+The example exports `RegisterPayloads(reg *payloadregistry.Registry) error` for wire decoding and
+`Register(registry *component.Registry) error` for component creation. Its registration includes `Factory`,
+`Schema` and `Ports: DeclarePorts`. The port declarer and constructor share configuration derivation.
+
+Your composition root must call both registration functions and pass the payload registry to consuming
+components. Importing a package does not perform payload registration. For standalone decoding, use
+`message.NewDecoder(reg)` with that same registry.
+Follow the [Payload Registry Guide](../concepts/15-payload-registry.md)
+for registration, encoding and decoding; do not introduce an `init()` payload singleton.
+
+For a working composition, inspect the explicit example registrations and service dependencies in
+[cmd/e2e-semstreams](../../cmd/e2e-semstreams/main.go). Select your own application components and capabilities;
+the harness's additional test facilities are not required in an adopter binary.
+
+### 3. Declare the dataflow
+
+Port definitions carry typed configuration in `Config`; they do not have flat `Type` or `Subject` fields.
+Use the example's `DeclarePorts` implementation and [hello-world config](../../configs/hello-world.json) together:
+UDP publishes raw input, the domain processor emits registered payloads, and graph ingest writes entity state.
+The processor supplies semantic facts rather than writing graph buckets itself.
+
+Keep domain transformation in the processor and execution mechanics in the component. Check ordinary behavior
+with the package tests, then use the application binary's composition validator and an observed input/output
+check. A successful compile alone does not establish a working graph path.
+
+## Continue with an application
+
+The [SemSource walkthrough](09-building-semsource.md) applies these ownership decisions to a real source-to-context
+application. [Orchestration layers](../concepts/14-orchestration-layers.md) explains how rules and components add
+multi-step behavior when the application needs it. Model use, agent loops and human interaction remain explicit
+application choices.

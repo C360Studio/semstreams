@@ -140,25 +140,17 @@ Configure formatting with these options:
 
 ## Integration with Workflows
 
-When using `ConstructedContext` with the workflow processor's `publish_agent` action:
+A Go application can attach a constructed result to `agentic.TaskMessage.Context` before dispatch.
+The agent loop consumes nonempty `Context.Content` as supplied context. The application owns relevance,
+query dependencies, and the choice to prepare fresh or shared context.
 
-```json
-{
-  "name": "review",
-  "action": {
-    "type": "publish_agent",
-    "role": "reviewer",
-    "prompt": "Review the following code",
-    "context": "${steps.build_context.output}"
-  }
-}
-```
+This package does not provide a workflow processor or step interpolation. In rule-driven applications,
+rules trigger components; a component constructs context and uses the application's task-dispatch path.
+`TaskMessage.Context` is not a `rule.Action` field.
 
-The context construction step produces a `ConstructedContext` that is embedded directly in the agent task. This enables:
-
-1. **Exact token budgets** - Know context size before dispatch
-2. **Fresh context per task** - No pollution from prior agent work
-3. **Source tracking** - Trace which entities contributed to decisions
+Token counts from this package are estimates. They do not establish the exact size of a complete model request.
+See [Context Construction](../../docs/concepts/22-context-construction.md) and
+[Orchestration Layers](../../docs/concepts/14-orchestration-layers.md).
 
 ## Design Philosophy
 
@@ -169,7 +161,7 @@ This package follows the principle that "what's relevant" is domain knowledge:
 - The consumer (e.g., SemSpec) implements the relevance logic
 
 **Pattern:**
-```
+```text
 Consumer:
 1. Analyze task to determine relevant entities (domain logic)
 2. Use pkg/context to query and format entities (building blocks)
@@ -177,12 +169,12 @@ Consumer:
 
 SemStreams:
 4. Agent loop receives pre-built context
-5. No runtime discovery needed
-6. Token budget is known precisely
+5. Further retrieval depends on the selected components and tools
+6. Context size is estimated before dispatch
 ```
 
 ## Related Documentation
 
 - [Agentic Systems](../../docs/concepts/13-agentic-systems.md) - Overview of agentic loop
-- [Workflow Configuration](../../docs/advanced/09-workflow-configuration.md) - Workflow processor
+- [Orchestration Layers](../../docs/concepts/14-orchestration-layers.md) - Rules and component composition
 - [Context Construction](../../docs/concepts/22-context-construction.md) - Concept guide

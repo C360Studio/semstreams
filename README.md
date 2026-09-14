@@ -29,7 +29,7 @@ a document becomes typed facts and stored content that a developer or coding age
 Before starting, verify your environment:
 
 ```bash
-# Check Go version (1.25+ required)
+# Check Go version (1.26.3+ required)
 go version
 
 # Check Docker is running
@@ -41,96 +41,25 @@ go install github.com/go-task/task/v3/cmd/task@latest
 
 Or run `task dev:check:prerequisites` to verify everything at once.
 
-### Install NATS Server
+The [local example guide](docs/basics/05-first-processor.md#run-the-local-dataflow) starts its own disposable
+NATS instance through Docker. No separate NATS installation is needed for that path.
+See [Prerequisites](docs/basics/00-prerequisites.md) for general setup.
 
-For local development, we run NATS in Docker:
+## Your First Example
 
-```bash
-# Start NATS with JetStream (managed by task commands)
-task dev:nats:start
-
-# Or manually with Docker
-docker run -d --name semstreams-nats -p 4222:4222 nats:2.14-alpine -js
-```
-
-See [Prerequisites Guide](docs/basics/00-prerequisites.md) for detailed setup instructions.
-
-## Your First 5 Minutes
-
-Get SemStreams running and see data flow through the knowledge graph:
-
-### 1. Build
+Run the maintained IoT processor's tests from the repository root:
 
 ```bash
-task build
+go test -race ./examples/processors/iot_sensor/...
 ```
 
-### 2. Start Everything
+Then follow [Building Your First Processor](docs/basics/05-first-processor.md) to start local NATS, run the
+example harness, send a sensor reading and query its graph entity. The guide names the actual binary and mounted
+HTTP route, and explains which parts belong to your application. It uses deterministic Go processing; no model
+or agent loop is needed.
 
-```bash
-task dev:start
-```
-
-This starts NATS and SemStreams with the hello-world config.
-
-### 3. Send Test Data
-
-In another terminal, send a sensor reading via UDP:
-
-```bash
-echo '{"device_id":"sensor-001","type":"temperature","reading":23.5,"unit":"celsius","location":"warehouse-7"}' | nc -u localhost 14550
-```
-
-Or use the task command:
-```bash
-task dev:send
-```
-
-### 4. Query the Graph
-
-```bash
-curl -s http://localhost:8084/graphql \
-  -H "Content-Type: application/json" \
-  -d '{"query":"{ entitiesByPrefix(prefix: \"demo\", limit: 10) { entities { id } next_cursor } }"}' | jq
-```
-
-You should see your sensor entity ID under `data.entitiesByPrefix.entities`. If
-`next_cursor` is present, pass it back as the query's `cursor` argument to read
-the next page.
-
-### 5. Debug (If Data Doesn't Appear)
-
-```bash
-# View recent messages flowing through the system
-task dev:messages
-
-# Trace a message through all components
-task dev:trace
-
-# View message statistics and stream counts
-task dev:stats
-```
-
-See [Debugging Data Flow](docs/operations/debugging-data-flow.md) for detailed troubleshooting.
-
-### 6. Stop
-
-```bash
-task dev:stop
-```
-
-That's it! You've ingested data, transformed it into a semantic graph, and queried
-an admitted HTTP facade operation.
-
-## Quick Start (For Experienced Users)
-
-```bash
-task build                                      # Build binary
-task dev:start                                  # Start NATS + SemStreams
-./bin/semstreams --config configs/structural.json  # Or run with a specific config
-```
-
-Run `task --list` to see all available commands.
+For a real source-to-context application, continue with
+[Building context with SemSource](docs/basics/09-building-semsource.md).
 
 ## How It Works: Continuous Intelligence
 
@@ -264,7 +193,7 @@ task e2e:all            # All tiers sequentially
 
 ## Requirements
 
-- **Go 1.25+** — [Download](https://go.dev/dl/)
+- **Go 1.26.3+** — [Download](https://go.dev/dl/)
 - **Docker** — [Download](https://docker.com) (for NATS, deployment, and E2E tests)
 - **Task** — `go install github.com/go-task/task/v3/cmd/task@latest`
 - (Optional) Embedding service for Statistical/Semantic tiers
