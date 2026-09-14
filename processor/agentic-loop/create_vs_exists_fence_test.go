@@ -12,8 +12,10 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/agentic-loop/prompt"
+	"github.com/google/uuid"
 )
 
 // Internal, deliberately: I7 is a claim about the three per-loop maps
@@ -40,18 +42,22 @@ func fenceHandler(t *testing.T) *MessageHandler {
 
 func requestMessages(t *testing.T, result HandlerResult) []agentic.ChatMessage {
 	t.Helper()
-	if len(result.PublishedMessages) == 0 {
-		t.Fatal("handler result published no messages; expected the agent request")
+	for _, published := range result.PublishedMessages {
+		if published.Subject != "agent.request."+result.LoopID {
+			continue
+		}
+		var envelope struct {
+			Payload struct {
+				Messages []agentic.ChatMessage `json:"messages"`
+			} `json:"payload"`
+		}
+		if err := json.Unmarshal(published.Data, &envelope); err != nil {
+			t.Fatalf("decode agent request envelope: %v", err)
+		}
+		return envelope.Payload.Messages
 	}
-	var envelope struct {
-		Payload struct {
-			Messages []agentic.ChatMessage `json:"messages"`
-		} `json:"payload"`
-	}
-	if err := json.Unmarshal(result.PublishedMessages[0].Data, &envelope); err != nil {
-		t.Fatalf("decode agent request envelope: %v", err)
-	}
-	return envelope.Payload.Messages
+	t.Fatal("handler result published no agent request")
+	return nil
 }
 
 func countRole(msgs []agentic.ChatMessage, role string) int {
@@ -179,8 +185,8 @@ func TestContinuationReusesContextManager(t *testing.T) {
 	h := fenceHandler(t)
 
 	first, err := h.HandleTask(ctx, TaskMessage{
-		TaskID: "task-1", Role: "general", Model: "model-a", Prompt: "first turn",
-	})
+		LoopID: uuid.NewString(),
+		TaskID: "task-1", Role: "general", Model: "model-a", Prompt: "first turn"})
 	if err != nil {
 		t.Fatalf("HandleTask (first): %v", err)
 	}
@@ -259,8 +265,8 @@ func TestContinuationDoesNotReseedSystemPrompt(t *testing.T) {
 	h := fenceHandler(t)
 
 	first, err := h.HandleTask(ctx, TaskMessage{
-		TaskID: "task-1", Role: "general", Model: "model-a", Prompt: "first turn",
-	})
+		LoopID: uuid.NewString(),
+		TaskID: "task-1", Role: "general", Model: "model-a", Prompt: "first turn"})
 	if err != nil {
 		t.Fatalf("HandleTask (first): %v", err)
 	}
@@ -302,8 +308,8 @@ func TestContinuationOfTerminalLoopIsRefused(t *testing.T) {
 	h := fenceHandler(t)
 
 	first, err := h.HandleTask(ctx, TaskMessage{
-		TaskID: "task-1", Role: "general", Model: "model-a", Prompt: "first turn",
-	})
+		LoopID: uuid.NewString(),
+		TaskID: "task-1", Role: "general", Model: "model-a", Prompt: "first turn"})
 	if err != nil {
 		t.Fatalf("HandleTask (first): %v", err)
 	}
@@ -354,8 +360,8 @@ func TestRedeliveredContinuationIsDeduplicated(t *testing.T) {
 	h := fenceHandler(t)
 
 	first, err := h.HandleTask(ctx, TaskMessage{
-		TaskID: "task-1", Role: "general", Model: "model-a", Prompt: "first turn",
-	})
+		LoopID: uuid.NewString(),
+		TaskID: "task-1", Role: "general", Model: "model-a", Prompt: "first turn"})
 	if err != nil {
 		t.Fatalf("HandleTask (first): %v", err)
 	}
@@ -414,8 +420,8 @@ func TestContinuationOfLoopWithToolsInFlightIsRefused(t *testing.T) {
 	h := fenceHandler(t)
 
 	first, err := h.HandleTask(ctx, TaskMessage{
-		TaskID: "task-1", Role: "general", Model: "model-a", Prompt: "first turn",
-	})
+		LoopID: uuid.NewString(),
+		TaskID: "task-1", Role: "general", Model: "model-a", Prompt: "first turn"})
 	if err != nil {
 		t.Fatalf("HandleTask (first): %v", err)
 	}
@@ -552,8 +558,8 @@ func TestBusyRefusalIsWarnedNotErrored(t *testing.T) {
 	c.logger = logger
 
 	first, err := h.HandleTask(ctx, TaskMessage{
-		TaskID: "task-1", Role: "general", Model: "model-a", Prompt: "first turn",
-	})
+		LoopID: uuid.NewString(),
+		TaskID: "task-1", Role: "general", Model: "model-a", Prompt: "first turn"})
 	if err != nil {
 		t.Fatalf("HandleTask (first): %v", err)
 	}
@@ -573,7 +579,8 @@ func TestBusyRefusalIsWarnedNotErrored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal task: %v", err)
 	}
-	if err := c.handleTaskMessage(ctx, data); err != nil {
+	decision, err := c.handleTaskMessage(ctx, data)
+	if err == nil || decision != natsclient.DeliveryDecisionRetry {
 		t.Fatalf("handleTaskMessage returned %v; a refusal is acked, not redelivered", err)
 	}
 

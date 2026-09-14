@@ -90,7 +90,7 @@ func TestLoopEntity_RunID_RoundTrip(t *testing.T) {
 	entity := agentic.LoopEntity{
 		ID:            "loop-123",
 		TaskID:        "task-001",
-		State:         agentic.LoopStateExploring,
+		State:         agentic.LoopStateRunning,
 		Role:          "coordinator",
 		Model:         "model-a",
 		MaxIterations: 10,
@@ -111,7 +111,7 @@ func TestLoopEntity_RunID_OmittedWhenEmpty(t *testing.T) {
 	entity := agentic.LoopEntity{
 		ID:            "loop-124",
 		TaskID:        "task-002",
-		State:         agentic.LoopStateExploring,
+		State:         agentic.LoopStateRunning,
 		Role:          "researcher",
 		Model:         "model-b",
 		MaxIterations: 5,

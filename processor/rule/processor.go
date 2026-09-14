@@ -582,13 +582,16 @@ type ruleStreamConsumer struct {
 }
 
 func (rp *Processor) runRuntimeCoordinator(ctx context.Context) {
+	// Capture before acknowledging any shutdown fence: a bounded Stop may clear
+	// lifecycle handles without joining the coordinator after its deadline.
+	wake := rp.commandWake
 	defer close(rp.coordinatorDone)
 	for {
 		select {
 		case <-ctx.Done():
 			rp.failQueuedRuntimeCommands(ctx.Err())
 			return
-		case <-rp.commandWake:
+		case <-wake:
 			for {
 				rp.commandMu.Lock()
 				if len(rp.commands) == 0 {
@@ -921,18 +924,24 @@ func (rp *Processor) Start(ctx context.Context) (startErr error) {
 	defer func() {
 		startErr = rp.finishStartAttempt(ctx, startDone, committed, startErr)
 	}()
+	// Keep registration itself counted: parent cancellation can end the
+	// coordinator before Start has registered every watcher and the sweeper.
+	// Release this count before failed-Start rollback joins runtimeDone.
+	runtimeWG := rp.runtimeWG
+	runtimeWG.Add(1)
+	defer runtimeWG.Done()
 
 	// Publish the coordinator before any fallible startup work so failed-Start
 	// rollback can always fence and join the same exact authority record.
-	rp.runtimeWG.Add(1)
+	runtimeWG.Add(1)
 	go func() {
-		defer rp.runtimeWG.Done()
+		defer runtimeWG.Done()
 		rp.runRuntimeCoordinator(runCtx)
 	}()
 	go func(wg *sync.WaitGroup, done chan struct{}) {
 		wg.Wait()
 		close(done)
-	}(rp.runtimeWG, rp.runtimeDone)
+	}(runtimeWG, rp.runtimeDone)
 
 	rp.mu.Lock()
 	if err := rp.prepareInitialRules(); err != nil {
@@ -1005,7 +1014,7 @@ func (rp *Processor) Start(ctx context.Context) (startErr error) {
 		rp.logger.Warn("rule readiness publisher unavailable; consumers will read this producer as unknown", "error", err)
 	} else {
 		rp.statusLoopDone = make(chan struct{})
-		go rp.statusMetricsLoop(runCtx)
+		go rp.statusMetricsLoop(runCtx, rp.statusLoopDone)
 	}
 	if rp.natsClient != nil {
 		rcm := NewConfigManager(rp, nil, rp.logger)
@@ -1017,9 +1026,9 @@ func (rp *Processor) Start(ctx context.Context) (startErr error) {
 			rp.kvConfigManager = rcm
 		}
 	}
-	rp.runtimeWG.Add(1)
+	runtimeWG.Add(1)
 	go func() {
-		defer rp.runtimeWG.Done()
+		defer runtimeWG.Done()
 		rp.runRevisionSweeper(runCtx, revisionSweepInterval, rp.revisionTTL)
 	}()
 

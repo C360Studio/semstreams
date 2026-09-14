@@ -7,7 +7,46 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/stretchr/testify/require"
 )
+
+// spec: agentic-dispatch / Dispatch uses one authority-backed current-state projection
+func TestColdLoopWirePreservesPendingExecutionEcho(t *testing.T) {
+	comp := newTestComponent(t)
+	pending := &agentic.PendingApprovalState{
+		RequestID: seamTestLoopA + ":req:original", ExecutionID: approvalTestExecutionID,
+		CallID: "same-provider-call", CallOrdinal: 1, ToolName: "delete_rule",
+		Arguments: map[string]any{"rule_id": "rule-42"}, Reason: "review required",
+		RequestedAt: time.Now().UTC(), TraceID: "trace-original",
+	}
+	withPersistedLoops(comp, map[string]*agentic.LoopEntity{seamTestLoopA: {
+		ID: seamTestLoopA, State: agentic.LoopStateAwaitingApproval, MaxIterations: 3, PendingApproval: pending,
+	}})
+	projected, err := comp.loopWireByID(t.Context(), seamTestLoopA)
+	require.NoError(t, err)
+	wire, err := json.Marshal(projected)
+	require.NoError(t, err)
+	var decoded struct {
+		PendingApproval *struct {
+			ExecutionID string         `json:"execution_id"`
+			CallID      string         `json:"call_id"`
+			ToolName    string         `json:"tool_name"`
+			Arguments   map[string]any `json:"arguments"`
+			Reason      string         `json:"reason"`
+			RequestedAt time.Time      `json:"requested_at"`
+			TraceID     string         `json:"trace_id"`
+		} `json:"pending_approval"`
+	}
+	require.NoError(t, json.Unmarshal(wire, &decoded))
+	require.NotNil(t, decoded.PendingApproval)
+	require.Equal(t, pending.ExecutionID, decoded.PendingApproval.ExecutionID)
+	require.Equal(t, pending.CallID, decoded.PendingApproval.CallID)
+	require.Equal(t, pending.ToolName, decoded.PendingApproval.ToolName)
+	require.Equal(t, pending.Arguments, decoded.PendingApproval.Arguments)
+	require.Equal(t, pending.Reason, decoded.PendingApproval.Reason)
+	require.Equal(t, pending.RequestedAt, decoded.PendingApproval.RequestedAt)
+	require.Equal(t, pending.TraceID, decoded.PendingApproval.TraceID)
+}
 
 // TestLoopFromEntity_RoundTrip verifies that a LoopEntity survives a
 // marshal→unmarshal cycle and projects correctly onto the Loop wire type.
@@ -17,7 +56,7 @@ func TestLoopFromEntity_RoundTrip(t *testing.T) {
 	entity := agentic.LoopEntity{
 		ID:            "loop-abc",
 		TaskID:        "task-xyz",
-		State:         agentic.LoopStateExecuting,
+		State:         agentic.LoopStateRunning,
 		Role:          "coordinator",
 		Model:         "gpt-4o",
 		Iterations:    3,
@@ -91,7 +130,7 @@ func TestLoopFromEntity_RoundTrip(t *testing.T) {
 // TestLoopRunFields_EmptyRunIDOmitted verifies the run fields stay empty (and so
 // omitempty-drop from the wire) when the loop is not part of a run.
 func TestLoopRunFields_EmptyRunIDOmitted(t *testing.T) {
-	got := loopFromEntity(&agentic.LoopEntity{ID: "loop-x", State: agentic.LoopStateExecuting, MaxIterations: 5}, "c360", "ops")
+	got := loopFromEntity(&agentic.LoopEntity{ID: "loop-x", State: agentic.LoopStateRunning, MaxIterations: 5}, "c360", "ops")
 	if got.RunID != "" || got.RunEntityID != "" {
 		t.Errorf("expected empty run fields for non-run loop, got run_id=%q run_entity_id=%q", got.RunID, got.RunEntityID)
 	}
@@ -312,7 +351,7 @@ func TestLoopFromInfo_Projection(t *testing.T) {
 	info := &LoopInfo{
 		LoopID:          "loop-tracked",
 		TaskID:          "task-t",
-		State:           "executing",
+		State:           "awaiting_approval",
 		Role:            "ops",
 		Iterations:      2,
 		MaxIterations:   10,

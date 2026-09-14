@@ -145,24 +145,14 @@ and appends bounded trajectory observations with separately stored full evidence
 **State Machine**:
 
 ```text
-                    ┌─────────────────────────────────┐
-                    │                                 │
-                    ▼                                 │
-┌──────────┐   ┌──────────┐   ┌─────────────┐   ┌──────────┐   ┌──────────┐
-│exploring │──▶│ planning │──▶│ architecting│──▶│executing │──▶│reviewing │
-└──────────┘   └──────────┘   └─────────────┘   └──────────┘   └────┬─────┘
-     ▲              ▲               ▲                ▲              │
-     │              │               │                │              │
-     └──────────────┴───────────────┴────────────────┘              │
-                    (fluid backward transitions)                     │
-                                                                     ▼
-                                                           ┌──────────────────┐
-                                                           │ complete │ failed │
-                                                           └──────────────────┘
+running           → awaiting_approval | complete | failed | cancelled
+awaiting_approval → running | failed | cancelled
+complete, failed, cancelled → no outgoing transitions
 ```
 
-States are checkpoints, not gates. Agents can move backward when they need to rethink (except from terminal
-states).
+The state table enforces operational transitions. Model/tool work remains running; entering approval requires a
+coherent pending gate. It does not establish durable completion or authorize ACK. See
+[Loop states](../../agentic/README.md#loop-states) and [Semantic settlement](../concepts/33-semantic-settlement.md).
 
 **Pending Tool Tracking**:
 

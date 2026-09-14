@@ -86,13 +86,13 @@ func TestWatcherLossFailsClosed(t *testing.T) {
 	require.ErrorIs(t, err, ErrWatcherLost)
 }
 
-// TestRestartReconcilesGhostKeys (G5): after a watcher loss, re-bootstrap
+// TestFreshReplacementReconcilesGhostKeys (G5): after watcher loss, a fresh owner
 // reconciles the retained projection against the fresh replay — a key whose
 // delete (and purge-cleaned tombstone) happened while the watcher was down
 // is REMOVED before caught-up is reported again, and never appears in
 // post-recovery snapshots or point reads.
-func TestRestartReconcilesGhostKeys(t *testing.T) {
-	h := newHarness(t, 1) // one spare watcher queued for the restart
+func TestFreshReplacementReconcilesGhostKeys(t *testing.T) {
+	h := newHarness(t, 1) // one spare watcher queued for the replacement
 
 	h.put("ghost", "g1", 1)
 	h.put("kept", "k1", 2)
@@ -103,11 +103,11 @@ func TestRestartReconcilesGhostKeys(t *testing.T) {
 	close(h.w.updates)
 	require.Error(t, h.waitLost())
 
-	require.NoError(t, h.view.Restart())
-	require.False(t, h.view.CaughtUp(), "restart re-enters bootstrap; caught-up only after reconcile")
+	h.replace()
+	require.False(t, h.view.CaughtUp(), "replacement enters bootstrap; caught-up only after replay")
 
 	// Fresh replay delivers only the surviving key (updated) and completes.
-	h.w = h.src.lastIssued() // the restart consumed the queued spare
+	h.w = h.src.lastIssued() // the replacement consumed the queued spare
 	h.put("kept", "k2", 3)
 	h.endReplay()
 
@@ -129,13 +129,12 @@ func TestRestartReconcilesGhostKeys(t *testing.T) {
 	sub.Unsubscribe()
 }
 
-// TestRestartRequiresFailedView: restart is only meaningful from the
-// fail-closed state; a live or stopped view refuses it.
-func TestRestartRequiresFailedView(t *testing.T) {
+// A live or stopped owner cannot be started again; replacement requires New.
+func TestStartCannotReuseLiveOrStoppedView(t *testing.T) {
 	h := newHarness(t, 0)
 	h.endReplay()
-	require.Error(t, h.view.Restart(), "restart of a live view must be refused")
+	require.ErrorIs(t, h.view.Start(t.Context()), ErrAlreadyStarted)
 
 	h.view.Stop()
-	require.ErrorIs(t, h.view.Restart(), ErrViewStopped)
+	require.ErrorIs(t, h.view.Start(t.Context()), ErrViewStopped)
 }

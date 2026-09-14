@@ -23,15 +23,15 @@
         },
         "heartbeat_interval": {
           "type": "string",
-          "description": "InProgress heartbeat interval (e.g. 60s or 2m). Must be less than ack_wait",
-          "default": "60s",
+          "description": "InProgress heartbeat interval for long-running consumers. Must be no more than half the shortest configured BackOff interval",
+          "default": "15s",
           "category": "advanced"
         },
         "max_deliver": {
           "type": "integer",
-          "description": "Maximum redelivery attempts for long-running consumers",
+          "description": "Maximum redelivery attempts for long-running consumers. Must cover the fixed two-entry BackOff",
           "default": 2,
-          "minimum": 1,
+          "minimum": 2,
           "maximum": 10,
           "category": "advanced"
         }
@@ -1001,7 +1001,7 @@
           "required": false,
           "connection_id": "AGENT",
           "pattern": "stream",
-          "description": "Control signals for loops (cancel, pause, etc.)",
+          "description": "Control signals for loops (cancel)",
           "kind": "jetstream"
         },
         {
@@ -1021,7 +1021,7 @@
           "required": false,
           "connection_id": "AGENT",
           "pattern": "stream",
-          "description": "Approve verdicts from rule-driven tool-call governance (ADR-039). Wildcard subscription; demuxed per-call by trailing path segments.",
+          "description": "Approve verdicts from rule-driven tool-call governance (ADR-039). Wildcard subscription; demuxed by execution_id.",
           "kind": "jetstream"
         },
         {
@@ -1031,7 +1031,7 @@
           "required": false,
           "connection_id": "AGENT",
           "pattern": "stream",
-          "description": "Reject verdicts from rule-driven tool-call governance (ADR-039). Wildcard subscription; demuxed per-call by trailing path segments.",
+          "description": "Reject verdicts from rule-driven tool-call governance (ADR-039). Wildcard subscription; demuxed by execution_id.",
           "kind": "jetstream"
         }
       ],

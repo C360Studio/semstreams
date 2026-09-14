@@ -70,10 +70,11 @@ retain the exact native handle.
 
 ## ADDED Requirements
 
-### Requirement: semantic heartbeat settlement has one permanent exported surface
+### Requirement: semantic settlement has permanent typed transport surfaces
 
 The framework SHALL expose `ConsumeDeliveryWithHeartbeat` with validated `HeartbeatDeliveryPolicy`,
-`DeliveryAttempt`, `DeliveryDecision`, and `DeliveryResult`.
+`DeliveryAttempt`, `DeliveryDecision`, and `DeliveryResult`. It SHALL also expose
+`SettleDelivery(jetstream.Msg, DeliveryDecision, error) DeliveryResult` for already-computed and joined work.
 
 `ConsumeWithHeartbeat` and `NewDurableHandler` SHALL NOT exist or have aliases. Every original model, tools, dispatch,
 loop, and AgentRun heartbeat binding SHALL use the permanent typed surface with its owner-specific durable definition
@@ -85,7 +86,7 @@ is branch-staging conformance only and SHALL be zero before archive.
 #### Scenario: final public surface
 
 - **WHEN** the semantic-settlement change is archived
-- **THEN** the permanent typed API exists
+- **THEN** both permanent typed transport APIs exist
 - **AND** `ConsumeWithHeartbeat`, `NewDurableHandler`, and every alias are absent
 - **AND** production callers of those removed symbols are zero
 
@@ -98,8 +99,9 @@ is branch-staging conformance only and SHALL be zero before archive.
 #### Scenario: fast lane lacks an admitted settlement route
 
 - **WHEN** an inventoried fast no-heartbeat lane cannot use an existing owner path
-- **THEN** migration stops for a separately reviewed capability delta
-- **AND** no raw message settlement or exported no-heartbeat interpreter is introduced
+- **THEN** its existing private binding callback may call `SettleDelivery` after typed business work joins
+- **AND** no native message enters business work
+- **AND** no shared helper owns work, context, deadline, admission, health, shutdown, or restart
 
 ### Requirement: delivery work returns a validated decision/error tuple
 
@@ -319,14 +321,20 @@ semantic retry timing.
 - **THEN** its accepted contract names the resulting AckWait, BackOff, and heartbeat behavior
 - **AND** semantic retry timing remains independent of that crash schedule
 
-### Requirement: shared settlement remains stateless and heartbeat-specific
+### Requirement: settlement-only delivery decisions use one shared interpreter
 
-The typed path SHALL use only a private terminal-method executor. The no-heartbeat interpreter SHALL remain private.
-#759 SHALL add no exported pull settlement operation and SHALL not modify OTEL production settlement.
+`SettleDelivery` SHALL validate the existing closed decision/error tuple and attempt at most one local terminal
+method. Ack with nil cause SHALL call Ack; Retry with non-nil cause SHALL call immediate Nak; Terminate with non-nil
+cause SHALL call Term. Quarantine with non-nil cause, invalid tuples, and nil message SHALL attempt no terminal method
+and SHALL return quarantined owner-stop evidence. Terminal-method errors SHALL remain local, unconfirmed evidence.
 
-#### Scenario: terminal execution is shared privately
+The function SHALL NOT invoke work, read payload or metadata, create context, derive a deadline from consumer policy,
+send heartbeat, or own consumer lifecycle. Its caller SHALL invoke and join delivery work before settlement and SHALL
+react to `OwnerStopRequired` through the existing exact owner. #759 SHALL not modify OTEL production settlement.
 
-- **WHEN** typed heartbeat settlement attempts a terminal JetStream method
+#### Scenario: terminal execution is shared without work ownership
+
+- **WHEN** typed heartbeat or settlement-only handling attempts a terminal JetStream method
 - **THEN** it calls the private terminal-method executor
 - **AND** no shared helper owns admission, a native handle, health, shutdown, or restart
 

@@ -8,7 +8,6 @@ import (
 	"errors"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/c360studio/semstreams/agentic"
 	gtypes "github.com/c360studio/semstreams/graph"
@@ -135,18 +134,13 @@ func TestTerminalStampCarriesObservedAuditLoss_Integration(t *testing.T) {
 		collector.subscribe(t, ctx, tc.Client)
 
 		c := newStampTestComponent(t, tc.Client, DefaultConfig())
-		const loopID = "loop-complete-audit"
-		_, err := c.handler.trajectoryManager.startTrajectory(loopID)
+		loopID, err := c.handler.loopManager.CreateLoop("task-complete-audit", "role", "model", 3)
+		require.NoError(t, err)
+		_, err = c.handler.trajectoryManager.startTrajectory(loopID)
 		require.NoError(t, err)
 		observeAuditLoss(t, c, loopID)
 
-		c.persistHandlerResult(ctx, HandlerResult{
-			LoopID: loopID,
-			State:  agentic.LoopStateComplete,
-			CompletionState: &agentic.LoopCompletedEvent{
-				LoopID: loopID, Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now(),
-			},
-		})
+		persistAuditTestCompletion(t, ctx, c, loopID)
 
 		outcome, withCondition, values := collector.outcomeRequests()
 		require.Equal(t, 1, outcome, "expected exactly one terminal append carrying agent.loop.outcome")
@@ -169,7 +163,7 @@ func TestTerminalStampCarriesObservedAuditLoss_Integration(t *testing.T) {
 		require.NoError(t, err)
 		observeAuditLoss(t, c, loopID)
 
-		c.handleLoopFailure(ctx, loopID, entity, "test_failure", errors.New("boom"))
+		require.NoError(t, c.handleLoopFailure(ctx, loopID, entity, "test_failure", errors.New("boom"), 0))
 
 		outcome, withCondition, values := collector.outcomeRequests()
 		require.Equal(t, 1, outcome, "expected exactly one terminal append carrying agent.loop.outcome")
@@ -194,9 +188,13 @@ func TestTerminalStampCarriesObservedAuditLoss_Integration(t *testing.T) {
 		require.NoError(t, err)
 		observeAuditLoss(t, c, loopID)
 
-		c.handleCancelSignal(ctx, agentic.UserSignal{
+		c.loopsBucket = &settlementBucket{values: make(map[string][]byte)}
+		require.NoError(t, c.persistLoopState(ctx, loopID))
+		decision, err := c.handleCancelSignal(ctx, agentic.UserSignal{
 			LoopID: loopID, Type: agentic.SignalCancel, UserID: "operator",
 		})
+		require.NoError(t, err)
+		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
 
 		outcome, withCondition, values := collector.outcomeRequests()
 		require.Equal(t, 1, outcome, "expected exactly one terminal append carrying agent.loop.outcome")
@@ -216,17 +214,12 @@ func TestTerminalStampOmitsConditionWithoutObservedLoss_Integration(t *testing.T
 	collector.subscribe(t, ctx, tc.Client)
 
 	c := newStampTestComponent(t, tc.Client, DefaultConfig())
-	const loopID = "loop-clean-audit"
-	_, err := c.handler.trajectoryManager.startTrajectory(loopID)
+	loopID, err := c.handler.loopManager.CreateLoop("task-clean-audit", "role", "model", 3)
+	require.NoError(t, err)
+	_, err = c.handler.trajectoryManager.startTrajectory(loopID)
 	require.NoError(t, err)
 
-	c.persistHandlerResult(ctx, HandlerResult{
-		LoopID: loopID,
-		State:  agentic.LoopStateComplete,
-		CompletionState: &agentic.LoopCompletedEvent{
-			LoopID: loopID, Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now(),
-		},
-	})
+	persistAuditTestCompletion(t, ctx, c, loopID)
 
 	outcome, withCondition, _ := collector.outcomeRequests()
 	require.Equal(t, 1, outcome, "expected exactly one terminal append carrying agent.loop.outcome")
@@ -245,7 +238,9 @@ func TestTerminalStampOmitsConditionWithoutObservedLoss_Integration(t *testing.T
 // healthy one. This drives the real Start path against real NATS holding a
 // bucket that violates the AGENT_TRAJECTORIES contract.
 func TestStartWithoutUsableTrajectoryBucketMarksEveryLoop_Integration(t *testing.T) {
-	tc := natsclient.NewTestClient(t, natsclient.WithKV())
+	tc := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(
+		natsclient.TestStreamConfig{Name: "AGENT", Subjects: []string{"agent.>", "tool.>"}},
+	))
 	ctx := context.Background()
 	collector := &appendCollector{}
 	collector.subscribe(t, ctx, tc.Client)
@@ -271,17 +266,12 @@ func TestStartWithoutUsableTrajectoryBucketMarksEveryLoop_Integration(t *testing
 	require.True(t, c.trajectoryAuditLoss.observed("loop-never-seen"),
 		"component-wide loss does not cover loops the marker has never seen")
 
-	const loopID = "loop-total-loss"
+	loopID, err := c.handler.loopManager.CreateLoop("task-total-loss", "role", "model", 3)
+	require.NoError(t, err)
 	_, err = c.handler.trajectoryManager.startTrajectory(loopID)
 	require.NoError(t, err)
 
-	c.persistHandlerResult(ctx, HandlerResult{
-		LoopID: loopID,
-		State:  agentic.LoopStateComplete,
-		CompletionState: &agentic.LoopCompletedEvent{
-			LoopID: loopID, Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now(),
-		},
-	})
+	persistAuditTestCompletion(t, ctx, c, loopID)
 
 	outcome, withCondition, values := collector.outcomeRequests()
 	require.Equal(t, 1, outcome, "expected exactly one terminal append carrying agent.loop.outcome")
@@ -293,4 +283,23 @@ func TestStartWithoutUsableTrajectoryBucketMarksEveryLoop_Integration(t *testing
 	// clear it for the loops that follow.
 	require.True(t, c.trajectoryAuditLoss.observed("loop-after-terminal"),
 		"a loop terminal cleared the component-wide latch")
+}
+
+func persistAuditTestCompletion(t *testing.T, ctx context.Context, c *Component, loopID string) {
+	t.Helper()
+	var revision uint64
+	if c.loopsBucket != nil {
+		require.NoError(t, c.persistLoopState(ctx, loopID))
+		_, observed, err := c.readLoopEntityRevision(ctx, loopID)
+		require.NoError(t, err)
+		revision = observed
+	}
+	require.NoError(t, c.handler.loopManager.TransitionLoop(loopID, agentic.LoopStateComplete))
+	require.NoError(t, c.handler.loopManager.UpdateCompletion(loopID, agentic.OutcomeSuccess, "done", ""))
+	entity, err := c.handler.GetLoop(loopID)
+	require.NoError(t, err)
+	err = c.persistHandlerResult(ctx, HandlerResult{LoopID: loopID, State: agentic.LoopStateComplete,
+		CompletionState: &agentic.LoopCompletedEvent{LoopID: loopID, TaskID: entity.TaskID,
+			Role: entity.Role, Outcome: agentic.OutcomeSuccess, Result: "done", CompletedAt: entity.CompletedAt}}, revision)
+	require.NoError(t, err)
 }

@@ -21,7 +21,8 @@ const (
 	IntentNewTask IntentType = "new_task"
 	// IntentContinue continues an existing loop with additional input.
 	IntentContinue IntentType = "continue"
-	// IntentSignal sends a control signal (approve, reject, etc.).
+	// IntentSignal sends a control signal. `cancel` is the whole vocabulary
+	// (#1239); approval travels as ApprovalResponse, not as a signal.
 	IntentSignal IntentType = "signal"
 	// IntentQuestion asks about loop status or system state.
 	IntentQuestion IntentType = "question"
@@ -86,14 +87,14 @@ func (c *LLMIntentClassifier) Classify(ctx context.Context, msg agentic.UserMess
 Intent types:
 - "new_task": The user wants to start a new task or give a new instruction
 - "continue": The user is providing additional input to an existing active loop (follow-up, clarification, refinement)
-- "signal": The user wants to control a loop (approve, reject, pause, resume, cancel)
+- "signal": The user wants to control a loop (cancel)
 - "question": The user is asking about status, progress, or system state
 - "meta": The user is asking about the system itself (capabilities, help, configuration)
 
 Current state:
 %s
 
-Respond with JSON: {"type": "<intent_type>", "loop_id": "<if applicable>", "signal_type": "<if signal: approve|reject|pause|resume|cancel>", "confidence": <0.0-1.0>}`, loopContext)
+Respond with JSON: {"type": "<intent_type>", "loop_id": "<if applicable>", "signal_type": "<if signal: cancel>", "confidence": <0.0-1.0>}`, loopContext)
 
 	// Resolve model endpoint
 	ep := c.resolveEndpoint()

@@ -45,7 +45,7 @@ These components communicate over NATS JetStream using the types defined here.
 
 | Type | Description |
 |------|-------------|
-| `LoopState` | Loop lifecycle state (exploring, planning, executing, etc.) |
+| `LoopState` | Operational state: running, awaiting approval, or terminal |
 | `LoopEntity` | Complete loop instance with state, iterations, timeouts |
 
 ### Tool System Types
@@ -70,7 +70,7 @@ These components communicate over NATS JetStream using the types defined here.
 | Type | Description |
 |------|-------------|
 | `UserMessage` | Normalized input from any channel |
-| `UserSignal` | Control signal (cancel, pause, resume, approve) |
+| `UserSignal` | Control signal — `cancel` only; approve/reject travel as `ApprovalResponse` (ADR-039) |
 | `UserResponse` | Response sent back to user |
 | `TaskMessage` | Task to execute by agentic loop |
 | `Attachment` | File or media attached to a message |
@@ -82,6 +82,11 @@ delivery address. `UserID` is optional recipient metadata. Terminal-derived
 responses retain the same wire type and use a stable response ID across source
 redelivery; dispatch does not require adopters to synthesize a user identity or
 choose a terminal retry count.
+
+`UserMessage.PriorMessages` and `TaskMessage.PriorMessages` carry optional displayed user/assistant text for an
+independent chat turn. Use the delivered `UserResponse.Content` for assistant entries. Dispatch defaults to independent
+executions; the adapter supplies history for follow-ups and retains its displayed transcript. See
+[Chat turns and context](../docs/concepts/13-agentic-systems.md#context-management) for validation and restart behavior.
 
 ## Usage
 
@@ -110,21 +115,28 @@ if err := request.Validate(); err != nil {
 ### Managing Loop State
 
 ```go
-// The loop ID is a framework-minted canonical UUID, never an authored token
-// (ADR-105) — agentic-loop mints it; callers echo it.
+// A new TaskMessage producer is the framework birth seam: it mints a canonical
+// v4 UUID before validation and marshal. A continuation echoes its admitted ID.
 // Create with default max iterations (20)
 entity := agentic.NewLoopEntity("7c9e6679-7425-40de-944b-e07fc1f90ae7", "task_456", "general", "gpt-4")
 
-// Or with custom max iterations
-entity := agentic.NewLoopEntity("7c9e6679-7425-40de-944b-e07fc1f90ae7", "task_456", "general", "gpt-4", 50)
-
-// State transitions
-entity.TransitionTo(agentic.LoopStatePlanning)
-entity.TransitionTo(agentic.LoopStateExecuting)
+// The new loop is running. Model and tool work do not need phase transitions.
+// Pass an optional final argument to NewLoopEntity to customize max iterations.
 
 // Iteration tracking
 if err := entity.IncrementIteration(); err != nil {
     // Max iterations reached
+}
+
+// Construct a local approval gate using the existing public API.
+if err := entity.BeginAwaitingApproval("call_1", "write_file", nil, "Review this action", time.Minute, ""); err != nil {
+    // Handle invalid state or arguments
+}
+if err := entity.Validate(); err != nil {
+    // Handle invalid entity; no framework identity stamping is needed for local validity
+}
+if err := entity.ResolveApproval(); err != nil {
+    // Handle missing or invalid gate; success returns the local entity to running
 }
 
 // Check terminal state
@@ -153,22 +165,24 @@ if err := agentic.ValidateToolsAllowed(calls, allowed); err != nil {
 
 ## Loop States
 
-The state machine supports these states:
+The loop has five operational states:
 
 | State | Description |
 |-------|-------------|
-| `exploring` | Initial discovery phase |
-| `planning` | Planning approach |
-| `architecting` | High-level design |
-| `executing` | Active execution |
-| `reviewing` | Reviewing results |
+| `running` | Nonterminal work, including model/tool execution and waiting for results |
+| `awaiting_approval` | Waiting for a human decision on a specific tool execution |
 | `complete` | Successfully finished (terminal) |
 | `failed` | Failed execution (terminal) |
 | `cancelled` | Cancelled by user (terminal) |
-| `paused` | Paused by user signal |
-| `awaiting_approval` | Waiting for user approval |
 
-States are fluid checkpoints. The loop can move backward except from terminal states.
+Running can enter approval or any terminal state. Awaiting approval can return to running or become failed/cancelled.
+Terminal states cannot reopen. `BeginAwaitingApproval` constructs a gate; a direct `TransitionTo` call cannot.
+Leaving approval clears its local pending gate. Invalid states, contradictory records and illegal edges return errors
+without changing the entity. Unknown `IsTerminal` remains false; use `Validate` to check record validity.
+
+These methods describe local state, not durable completion. The delivery owner still validates execution correlation,
+persists required state, finishes required publications and settles its input. See
+[Semantic settlement](../docs/concepts/33-semantic-settlement.md).
 
 ## NATS Subject Patterns
 
@@ -197,12 +211,10 @@ Control signals for user interaction:
 | Signal | Description |
 |--------|-------------|
 | `cancel` | Stop execution immediately |
-| `pause` | Pause at next checkpoint |
-| `resume` | Continue paused loop |
-| `approve` | Approve pending result |
-| `reject` | Reject with optional reason |
-| `feedback` | Add feedback without decision |
-| `retry` | Retry failed loop |
+
+Approval and rejection are **not** signals. They travel as `ApprovalResponse` on
+`agent.approval_response.*` (ADR-039), which has a real handler. `feedback` and `retry` were advertised here
+and never implemented; they are gone (#1239).
 
 ## Thread Safety
 

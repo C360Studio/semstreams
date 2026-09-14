@@ -12,9 +12,9 @@ the first release where this gate actually halts the agent loop.
 Before beta.19, `approval_required` rejected the first call with a
 permission error and let the LLM keep going — the model would see
 the error and could retry or reroute. From beta.19 forward, the
-loop pauses on the first rejection, persists the pending call, and
+loop waits for approval on the first gated result, persists the pending call, and
 emits a NATS event a product-layer approval UI can subscribe to.
-The loop only resumes when an explicit response arrives.
+The loop continues after an approval decision, including a configured timeout rejection.
 
 ## The contract
 
@@ -22,19 +22,19 @@ Subjects:
 
 | Direction | Subject | Payload | Frequency |
 |---|---|---|---|
-| Loop → UI | `agent.approval_pending.<loop_id>` | `agentic.ApprovalPendingEvent` | Once per gated call |
-| UI → Loop | `agent.approval_response.<loop_id>` | `agentic.ApprovalResponse` | Once per resolution |
+| Loop → UI | `agent.approval_pending.<loop_id>` | `agentic.ApprovalPendingEvent` | At-least-once pending notification |
+| UI → Loop | `agent.approval_response.<loop_id>` | `agentic.ApprovalResponse` | At-least-once decision delivery |
 
-State machine:
+Approval flow:
 
-```
-exploring/planning/executing
+```text
+running
         │
         │  tool call hits approval_required
         ▼
   awaiting_approval  ◀─── publishes ApprovalPendingEvent
         │
-        │  ApprovalResponse arrives
+        │  applicable ApprovalResponse resolves the gate to running
         ▼
   approve/modify  ─────►  re-dispatch ToolCall (with approved_by)
                           ─►  agentic-tools filter bypasses
@@ -51,8 +51,11 @@ Key design points:
 
 - **One pending call at a time per loop.** If a batch of tool calls
   contains two `approval_required` tools, the first to hit the
-  filter triggers the pause. Sibling results (including normal
+  filter opens the approval gate. Sibling results (including normal
   tools that did execute) are absorbed without advancing.
+- **Approve the action that was shown.** Each prompt carries the existing `ExecutionID`; the response must echo
+  that value. Provider `CallID` can repeat in a later turn, so it is not enough to identify the action being approved.
+  A retry uses the same execution identity and must not reopen a closed approval gate.
 - **Distinct prefixes.** The gating prefix is
   `approval_required:`; the synthesised rejection prefix is
   `approval_rejected:`. The loop's gate logic only matches the
@@ -62,10 +65,55 @@ Key design points:
   `ToolCall.ApprovedBy`, flows through `tool.execute`, lands in
   the trajectory step. Audit consumers can correlate every gated
   action to the human who said yes.
-- **Restart-safe.** `LoopEntity.PendingApproval` lives in the
-  AGENT_LOOPS KV bucket. A process restart mid-approval doesn't
-  lose the pending state; the new process picks up the same
-  `awaiting_approval` loop and waits on the same response subject.
+- **Recovery uses retained evidence.** `LoopEntity.PendingApproval` lives in AGENT_LOOPS KV. A replacement process
+  restores the pending gate and uses the exact retained request/response messages to continue. A restart does not
+  extend either store's retention window; confirmed missing continuation evidence causes an explicit failure.
+
+## A decision is conditional on its displayed execution
+
+The request means: **approve, modify, or reject this execution if it is still awaiting approval**. Keep the opaque
+`execution_id` with the prompt the human reviewed and return it unchanged. Do not compute it or fetch a replacement
+identity when the human clicks an older prompt. The pending notification follows durable persistence of that gate.
+
+`POST /loops/{id}/approval` requires `execution_id` in its existing request body. An omitted identity returns 400;
+a prompt for a different or closed gate returns 409 without publishing the decision. Successful HTTP submission
+means the decision was published, not that it was applied. The loop checks the identity again when consuming it.
+
+If a valid queued decision reaches a loop whose current gate no longer matches, the loop records an inapplicable
+decision and acknowledges it without dispatching work or changing durable loop state. This is an observable no-op,
+not a claim that this particular decision won or that its requested effect completed. An unreadable or invalid
+authority record cannot establish that the decision is inapplicable. Matching-gate correlation checks and the
+applied decision's actual approver and arguments remain intact.
+
+An old `approval_required` tool result is not a request to ask the human again. Before changing the loop, the owner
+checks existing durable evidence, even when the loop is already loaded in memory. If that exact execution has
+provably advanced beyond its approval phase, the old status is acknowledged as superseded without reopening a
+gate or dispatching work. An unreadable record or missing process state proves nothing. This narrow phase check
+does not make different final tool results interchangeable; their ordinary correlation and content checks remain.
+
+## Timeouts and restart
+
+A timed approval keeps its original request time and timeout in `LoopEntity.PendingApproval`.
+Before accepting work, a replacement loop component reads current loop records and restores the timed approvals
+it must watch. It does not restart their clocks or substitute its new timeout configuration. If required loop
+state cannot be read or validated, startup fails instead of silently dropping those timers.
+
+When a deadline expires, the timer publishes a rejection carrying that pending execution's identity to the existing
+approval-response subject. For a matching gate, the normal approval consumer reconstructs the pending call,
+publishes the required continuation, persists its outcome, and
+only then settles the decision. A timeout-publication failure leaves the approval pending for a later attempt;
+publishing a decision is not itself proof that the decision has been applied.
+Failed publication attempts emit an error log and increment
+`semstreams_agentic_loop_approval_timeout_publish_failures_total`.
+
+This uses the existing loop state and durable work stream, not a separate restart supervisor. See
+[Semantic settlement](33-semantic-settlement.md) for the receive, work, and settle pattern.
+
+There is no extra approval-continuation store to configure. If the required request or response is confirmed
+missing, the loop durably fails with `continuation_unavailable`; it does not guess the reviewed call or silently
+acknowledge unfinished work. Temporary read failures retry, and malformed or conflicting evidence is refused.
+Required messages can expire before the approval deadline. The default approval timeout and loop-state retention
+do not promise successful continuation throughout that interval or after message eviction.
 
 ## Wiring an approval UI
 
@@ -86,20 +134,22 @@ sub, err := js.Subscribe("agent.approval_pending.>", func(msg *nats.Msg) {
         return
     }
     // Surface pending to the human reviewer:
-    //   - pending.LoopID    — what loop is paused
-    //   - pending.ToolName  — what action is gated
-    //   - pending.Arguments — the proposed call payload
-    //   - pending.Reason    — original rejection text
+    //   - pending.LoopID      — which loop is waiting
+    //   - pending.ExecutionID — opaque identity to keep with this prompt
+    //   - pending.ToolName    — what action is gated
+    //   - pending.Arguments   — the proposed call payload
+    //   - pending.Reason      — original rejection text
     // Capture decision (approve/reject/modify) + approver identity.
 })
 
 // Publish the human's decision.
 response := &agentic.ApprovalResponse{
-    LoopID:     pending.LoopID,
-    CallID:     pending.CallID,
-    Decision:   agentic.ApprovalDecisionApprove,
-    ApprovedBy: "alice@example.com",
-    DecidedAt:  time.Now().UTC(),
+    LoopID:      pending.LoopID,
+    CallID:      pending.CallID,
+    ExecutionID: pending.ExecutionID,
+    Decision:    agentic.ApprovalDecisionApprove,
+    ApprovedBy:  "alice@example.com",
+    DecidedAt:   time.Now().UTC(),
 }
 data, _ := json.Marshal(message.NewBaseMessage(
     response.Schema(), response, "approval-ui",
@@ -115,6 +165,7 @@ arguments before re-dispatching:
 response := &agentic.ApprovalResponse{
     LoopID:            pending.LoopID,
     CallID:            pending.CallID,
+    ExecutionID:       pending.ExecutionID,
     Decision:          agentic.ApprovalDecisionModify,
     ModifiedArguments: map[string]any{"path": "/tmp/safe"},
     ApprovedBy:        "alice@example.com",
@@ -152,10 +203,9 @@ The approval flow is one layer. Treat it as part of a stack:
    strings into shell commands.
 3. **Use approvals for genuinely human-dependent decisions.** Not
    as a substitute for #1 and #2.
-4. **Audit everything.** The trajectory, the AGENT_LOOPS KV
-   history, and the JetStream replay on
-   `agent.approval_pending.>` give you three independent records
-   of what happened.
+4. **Distinguish submitted decisions from applied work.** An approval notification or response records what was
+   proposed or submitted, not which decision won. Applied tool work carries the approver actually used. Retention
+   and best-effort trajectory evidence are not a complete historical receipt service.
 
 ## Threat model
 
@@ -195,10 +245,8 @@ any pod with cluster network access can bypass every gated tool.
   always stronger than gating — a tool the agent can't see can't
   be invoked, forged or not.
 
-A future framework release will move the bypass decision off the
-wire payload (likely a per-call_id one-shot KV token) so forging
-`ApprovedBy` has no effect. Until then, the deployment-side
-mitigations above are how you close the gap.
+`ExecutionID` binds the decision to the displayed action; it is not an authentication credential and does not
+change this deployment trust boundary.
 
 ## Related
 

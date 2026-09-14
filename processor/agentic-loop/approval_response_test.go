@@ -9,18 +9,21 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/pkg/errs"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
+	"github.com/google/uuid"
 )
 
 // gateLoopAtCall sets up a loop, drives it through one tool_call
 // response, and feeds an approval_required rejection so it lands in
-// LoopStateAwaitingApproval. Returns the loopID for the response
-// tests to operate on.
-func gateLoopAtCall(t *testing.T, handler *agenticloop.MessageHandler, callID, toolName string, args map[string]any) string {
+// LoopStateAwaitingApproval. Returns the loop and execution identities
+// emitted by the real dispatch path for the approval response to echo.
+func gateLoopAtCall(t *testing.T, handler *agenticloop.MessageHandler, callID, toolName string, args map[string]any) (string, string) {
 	t.Helper()
 	ctx := context.Background()
 
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-" + callID,
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -31,7 +34,7 @@ func gateLoopAtCall(t *testing.T, handler *agenticloop.MessageHandler, callID, t
 	}
 	loopID := taskResult.LoopID
 
-	_, err = handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
 		RequestID: "req-" + callID,
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
@@ -45,10 +48,14 @@ func gateLoopAtCall(t *testing.T, handler *agenticloop.MessageHandler, callID, t
 		t.Fatalf("HandleModelResponse: %v", err)
 	}
 
+	dispatched := dispatchedToolCallFromResult(t, dispatchResult)
 	gateRes, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
-		CallID: callID,
-		Name:   toolName,
-		Error:  agentic.ApprovalRequiredPrefix + "needs human review",
+		CallID:      dispatched.ID,
+		Name:        dispatched.Name,
+		Error:       agentic.ApprovalRequiredPrefix + "needs human review",
+		RequestID:   dispatched.RequestID,
+		ExecutionID: dispatched.ExecutionID,
+		CallOrdinal: dispatched.CallOrdinal,
 	})
 	if err != nil {
 		t.Fatalf("HandleToolResult (gate): %v", err)
@@ -56,19 +63,20 @@ func gateLoopAtCall(t *testing.T, handler *agenticloop.MessageHandler, callID, t
 	if gateRes.State != agentic.LoopStateAwaitingApproval {
 		t.Fatalf("loop state = %s, want awaiting_approval", gateRes.State)
 	}
-	return loopID
+	return loopID, dispatched.ExecutionID
 }
 
 func TestHandleApprovalResponse_Approve(t *testing.T) {
 	handler := agenticloop.NewMessageHandler(createTestConfig())
-	loopID := gateLoopAtCall(t, handler, "call-A", "delete_rule", map[string]any{"rule_id": "rule-42"})
+	loopID, executionID := gateLoopAtCall(t, handler, "call-A", "delete_rule", map[string]any{"rule_id": "rule-42"})
 
 	resp := agentic.ApprovalResponse{
-		LoopID:     loopID,
-		CallID:     "call-A",
-		Decision:   agentic.ApprovalDecisionApprove,
-		ApprovedBy: "alice@example.com",
-		DecidedAt:  time.Now().UTC(),
+		LoopID:      loopID,
+		CallID:      "call-A",
+		ExecutionID: executionID,
+		Decision:    agentic.ApprovalDecisionApprove,
+		ApprovedBy:  "alice@example.com",
+		DecidedAt:   time.Now().UTC(),
 	}
 	result, err := handler.HandleApprovalResponse(context.Background(), resp)
 	if err != nil {
@@ -108,11 +116,12 @@ func TestHandleApprovalResponse_Approve(t *testing.T) {
 
 func TestHandleApprovalResponse_Modify(t *testing.T) {
 	handler := agenticloop.NewMessageHandler(createTestConfig())
-	loopID := gateLoopAtCall(t, handler, "call-M", "delete_rule", map[string]any{"rule_id": "rule-42"})
+	loopID, executionID := gateLoopAtCall(t, handler, "call-M", "delete_rule", map[string]any{"rule_id": "rule-42"})
 
 	resp := agentic.ApprovalResponse{
 		LoopID:            loopID,
 		CallID:            "call-M",
+		ExecutionID:       executionID,
 		Decision:          agentic.ApprovalDecisionModify,
 		ModifiedArguments: map[string]any{"rule_id": "rule-safe"},
 		ApprovedBy:        "alice@example.com",
@@ -142,14 +151,15 @@ func TestHandleApprovalResponse_Modify(t *testing.T) {
 
 func TestHandleApprovalResponse_Reject(t *testing.T) {
 	handler := agenticloop.NewMessageHandler(createTestConfig())
-	loopID := gateLoopAtCall(t, handler, "call-R", "delete_rule", nil)
+	loopID, executionID := gateLoopAtCall(t, handler, "call-R", "delete_rule", nil)
 
 	resp := agentic.ApprovalResponse{
-		LoopID:    loopID,
-		CallID:    "call-R",
-		Decision:  agentic.ApprovalDecisionReject,
-		Reason:    "policy violation",
-		DecidedAt: time.Now().UTC(),
+		LoopID:      loopID,
+		CallID:      "call-R",
+		ExecutionID: executionID,
+		Decision:    agentic.ApprovalDecisionReject,
+		Reason:      "policy violation",
+		DecidedAt:   time.Now().UTC(),
 	}
 	result, err := handler.HandleApprovalResponse(context.Background(), resp)
 	if err != nil {
@@ -193,6 +203,7 @@ func TestHandleApprovalResponse_NotAwaiting(t *testing.T) {
 	ctx := context.Background()
 
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-stale",
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -205,11 +216,12 @@ func TestHandleApprovalResponse_NotAwaiting(t *testing.T) {
 	// Loop is in exploring state, not awaiting approval. Stale or
 	// duplicate response must not error or mutate state.
 	resp := agentic.ApprovalResponse{
-		LoopID:     taskResult.LoopID,
-		CallID:     "ghost",
-		Decision:   agentic.ApprovalDecisionApprove,
-		ApprovedBy: "alice@example.com",
-		DecidedAt:  time.Now().UTC(),
+		LoopID:      taskResult.LoopID,
+		CallID:      "ghost",
+		ExecutionID: "closed-execution",
+		Decision:    agentic.ApprovalDecisionApprove,
+		ApprovedBy:  "alice@example.com",
+		DecidedAt:   time.Now().UTC(),
 	}
 	result, err := handler.HandleApprovalResponse(ctx, resp)
 	if err != nil {
@@ -230,7 +242,7 @@ func TestHandleApprovalResponse_NotAwaiting(t *testing.T) {
 // the gated tool must dispatch at most once per resolved approval.
 func TestHandleApprovalResponse_ConcurrentResponsesAtomicResolve(t *testing.T) {
 	handler := agenticloop.NewMessageHandler(createTestConfig())
-	loopID := gateLoopAtCall(t, handler, "call-race", "delete_rule", map[string]any{"rule_id": "rule-42"})
+	loopID, executionID := gateLoopAtCall(t, handler, "call-race", "delete_rule", map[string]any{"rule_id": "rule-42"})
 
 	const n = 16
 	var wg sync.WaitGroup
@@ -245,10 +257,11 @@ func TestHandleApprovalResponse_ConcurrentResponsesAtomicResolve(t *testing.T) {
 			// Half approve, half reject — the race guarantee must hold
 			// across mixed decisions too.
 			resp := agentic.ApprovalResponse{
-				LoopID:     loopID,
-				CallID:     "call-race",
-				ApprovedBy: "concurrent-approver",
-				DecidedAt:  time.Now().UTC(),
+				LoopID:      loopID,
+				CallID:      "call-race",
+				ExecutionID: executionID,
+				ApprovedBy:  "concurrent-approver",
+				DecidedAt:   time.Now().UTC(),
 			}
 			if i%2 == 0 {
 				resp.Decision = agentic.ApprovalDecisionApprove
@@ -282,7 +295,7 @@ func TestHandleApprovalResponse_ConcurrentResponsesAtomicResolve(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Across n concurrent responses for the SAME call_id, at most one
+	// Across n concurrent responses for the SAME execution, at most one
 	// must produce a tool.execute dispatch. If two winners
 	// double-dispatched we'd see ≥2 here, which is the bug.
 	if got := atomic.LoadInt64(&dispatchCount); got > 1 {
@@ -305,18 +318,19 @@ func TestHandleApprovalResponse_ConcurrentResponsesAtomicResolve(t *testing.T) {
 
 func TestHandleApprovalResponse_CallIDMismatch(t *testing.T) {
 	handler := agenticloop.NewMessageHandler(createTestConfig())
-	loopID := gateLoopAtCall(t, handler, "call-real", "delete_rule", nil)
+	loopID, executionID := gateLoopAtCall(t, handler, "call-real", "delete_rule", nil)
 
 	resp := agentic.ApprovalResponse{
-		LoopID:     loopID,
-		CallID:     "call-other", // pinned to a different call
-		Decision:   agentic.ApprovalDecisionApprove,
-		ApprovedBy: "alice@example.com",
-		DecidedAt:  time.Now().UTC(),
+		LoopID:      loopID,
+		CallID:      "call-other", // pinned to a different call
+		ExecutionID: executionID,
+		Decision:    agentic.ApprovalDecisionApprove,
+		ApprovedBy:  "alice@example.com",
+		DecidedAt:   time.Now().UTC(),
 	}
 	result, err := handler.HandleApprovalResponse(context.Background(), resp)
-	if err != nil {
-		t.Fatalf("mismatched call_id should not error: %v", err)
+	if !errs.IsFatal(err) {
+		t.Fatalf("same execution with mismatched call_id must report a correlation conflict: %v", err)
 	}
 
 	// Loop must remain awaiting approval; no dispatch should fire.

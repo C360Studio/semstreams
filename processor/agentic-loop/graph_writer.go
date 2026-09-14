@@ -157,20 +157,16 @@ func (w *graphWriter) createEntityWithTriples(ctx context.Context, entity *gtype
 //
 // Routed through writeBatch so all three triples land atomically — a
 // partial write would corrupt the rule-matching contract.
-func (w *graphWriter) WriteSyntheticDecide(ctx context.Context, loopID, modelText string) {
+func (w *graphWriter) WriteSyntheticDecide(ctx context.Context, loopID, modelText string) error {
 	if w.natsClient == nil {
-		return
+		return nil
 	}
 	if w.platform.Org == "" || w.platform.Platform == "" {
-		w.logger.Warn("graph_writer: cannot write synthetic decide, platform identity missing",
-			"loop_id", loopID, "org", w.platform.Org, "platform", w.platform.Platform)
-		return
+		return fmt.Errorf("write synthetic decide: platform identity missing for loop %s", loopID)
 	}
 	loopEntityID, err := agentic.TryLoopExecutionEntityID(w.platform.Org, w.platform.Platform, loopID)
 	if err != nil {
-		w.logger.Warn("graph_writer: cannot construct loop entity ID for synthetic decide",
-			"loop_id", loopID, "error", err)
-		return
+		return fmt.Errorf("construct loop entity ID for synthetic decide: %w", err)
 	}
 
 	now := time.Now()
@@ -203,14 +199,13 @@ func (w *graphWriter) WriteSyntheticDecide(ctx context.Context, loopID, modelTex
 	}
 
 	if err := w.writeBatch(ctx, triples); err != nil {
-		w.logger.Warn("graph_writer: failed to write synthetic decide triples",
-			"loop_id", loopID, "loop_entity_id", loopEntityID, "error", err)
-		return
+		return fmt.Errorf("write synthetic decide triples: %w", err)
 	}
 	w.logger.Info("graph_writer: stamped synthetic decide on terminal-tool-less completion",
 		"loop_id", loopID,
 		"loop_entity_id", loopEntityID,
 		"hint", "model returned text-only at completion — consider setting tool_choice='required' on the rule (#132) to prevent recurrence; high prevalence of this triple signals model/persona mismatch")
+	return nil
 }
 
 // WriteModelEndpoints births a graph entity for every endpoint in the model
@@ -277,14 +272,12 @@ func (w *graphWriter) WriteModelEndpoints(ctx context.Context) {
 // substituted any other completion-path triple in its action would evaluate
 // against a partial snapshot and bail. gh#159 + ADR-046 Phase 1 reference
 // fan-out pattern depends on this atomicity.
-func (w *graphWriter) WriteLoopCompletion(ctx context.Context, event *agentic.LoopCompletedEvent, evidenceIncomplete bool) {
+func (w *graphWriter) WriteLoopCompletion(ctx context.Context, event *agentic.LoopCompletedEvent, evidenceIncomplete bool) error {
 	if w.natsClient == nil {
-		return
+		return nil
 	}
 	if w.platform.Org == "" || w.platform.Platform == "" {
-		w.logger.Warn("graph_writer: cannot write loop completion, platform identity missing",
-			"loop_id", event.LoopID, "org", w.platform.Org, "platform", w.platform.Platform)
-		return
+		return fmt.Errorf("write loop completion: platform identity missing for loop %s", event.LoopID)
 	}
 
 	loopEntityID := agentic.LoopExecutionEntityID(w.platform.Org, w.platform.Platform, event.LoopID)
@@ -294,23 +287,21 @@ func (w *graphWriter) WriteLoopCompletion(ctx context.Context, event *agentic.Lo
 
 	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, cost, evidenceIncomplete)
 	if err := w.writeBatch(ctx, triples); err != nil {
-		w.logger.Warn("graph_writer: failed to write loop completion batch",
-			"loop_id", event.LoopID, "predicate_count", len(triples), "error", err)
+		return fmt.Errorf("write loop completion batch: %w", err)
 	}
+	return nil
 }
 
 // WriteLoopFailure emits triples for a loop that terminated with an error.
 //
 // Atomic-batch stamp shape mirrors WriteLoopCompletion — see its godoc for
 // the race-fix rationale (gh#159).
-func (w *graphWriter) WriteLoopFailure(ctx context.Context, event *agentic.LoopFailedEvent, evidenceIncomplete bool) {
+func (w *graphWriter) WriteLoopFailure(ctx context.Context, event *agentic.LoopFailedEvent, evidenceIncomplete bool) error {
 	if w.natsClient == nil {
-		return
+		return nil
 	}
 	if w.platform.Org == "" || w.platform.Platform == "" {
-		w.logger.Warn("graph_writer: cannot write loop failure, platform identity missing",
-			"loop_id", event.LoopID, "org", w.platform.Org, "platform", w.platform.Platform)
-		return
+		return fmt.Errorf("write loop failure: platform identity missing for loop %s", event.LoopID)
 	}
 
 	loopEntityID := agentic.LoopExecutionEntityID(w.platform.Org, w.platform.Platform, event.LoopID)
@@ -320,9 +311,9 @@ func (w *graphWriter) WriteLoopFailure(ctx context.Context, event *agentic.LoopF
 
 	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, cost, evidenceIncomplete)
 	if err := w.writeBatch(ctx, triples); err != nil {
-		w.logger.Warn("graph_writer: failed to write loop failure batch",
-			"loop_id", event.LoopID, "predicate_count", len(triples), "error", err)
+		return fmt.Errorf("write loop failure batch: %w", err)
 	}
+	return nil
 }
 
 // WriteLineageTriples emits cross-arc lineage triples on a spawned

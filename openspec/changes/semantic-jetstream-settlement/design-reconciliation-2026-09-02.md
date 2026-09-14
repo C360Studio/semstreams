@@ -2,6 +2,10 @@
 
 ## Evidence checkpoint
 
+Historical evidence only. Owner ruling #1146 comment `5530950829` supersedes this artifact wherever it forbids the
+narrow stateless `SettleDelivery` transport interpreter or implies a universal AckWait-derived work deadline. The
+canonical #759 and #1146 proposal, design, tasks, and capability deltas are current target-state authority.
+
 This design incorporates
 `openspec/changes/semantic-jetstream-settlement/inventory-rebaseline-2026-09-02.md` unchanged.
 

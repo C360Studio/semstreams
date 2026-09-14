@@ -20,41 +20,42 @@ func TestLoopEntity_BeginAwaitingApproval(t *testing.T) {
 		wantErr  string
 	}{
 		{
-			name:     "from executing succeeds",
-			startSt:  agentic.LoopStateExecuting,
+			name:     "from running succeeds",
+			startSt:  agentic.LoopStateRunning,
 			callID:   "call-001",
 			toolName: "delete_rule",
 		},
 		{
-			name:     "from planning succeeds",
-			startSt:  agentic.LoopStatePlanning,
+			name:     "retired planning fails",
+			startSt:  agentic.LoopState("planning"),
 			callID:   "call-002",
 			toolName: "delete_rule",
+			wantErr:  "invalid state",
 		},
 		{
 			name:     "from terminal complete fails",
 			startSt:  agentic.LoopStateComplete,
 			callID:   "call-003",
 			toolName: "delete_rule",
-			wantErr:  "cannot begin awaiting approval from terminal state",
+			wantErr:  "cannot begin awaiting approval from state",
 		},
 		{
 			name:     "from terminal failed fails",
 			startSt:  agentic.LoopStateFailed,
 			callID:   "call-004",
 			toolName: "delete_rule",
-			wantErr:  "cannot begin awaiting approval from terminal state",
+			wantErr:  "cannot begin awaiting approval from state",
 		},
 		{
 			name:     "missing call_id fails",
-			startSt:  agentic.LoopStateExecuting,
+			startSt:  agentic.LoopStateRunning,
 			callID:   "",
 			toolName: "delete_rule",
 			wantErr:  "call_id required",
 		},
 		{
 			name:     "missing tool_name fails",
-			startSt:  agentic.LoopStateExecuting,
+			startSt:  agentic.LoopStateRunning,
 			callID:   "call-005",
 			toolName: "",
 			wantErr:  "tool_name required",
@@ -80,8 +81,8 @@ func TestLoopEntity_BeginAwaitingApproval(t *testing.T) {
 			if entity.State != agentic.LoopStateAwaitingApproval {
 				t.Errorf("state = %s, want %s", entity.State, agentic.LoopStateAwaitingApproval)
 			}
-			if entity.StateBeforeApproval != tt.startSt {
-				t.Errorf("StateBeforeApproval = %s, want %s", entity.StateBeforeApproval, tt.startSt)
+			if err := entity.Validate(); err != nil {
+				t.Fatalf("Begin returned invalid local state: %v", err)
 			}
 			if entity.PendingApproval == nil {
 				t.Fatalf("PendingApproval is nil")
@@ -102,21 +103,25 @@ func TestLoopEntity_BeginAwaitingApproval(t *testing.T) {
 func TestLoopEntity_BeginAwaitingApproval_DuplicateCall(t *testing.T) {
 	t.Parallel()
 	entity := agentic.NewLoopEntity("loop-001", "task-001", "coordinator", "test-model", 20)
-	entity.State = agentic.LoopStateExecuting
+	entity.State = agentic.LoopStateRunning
 
 	if err := entity.BeginAwaitingApproval("call-001", "delete_rule", nil, "", 0, ""); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
-	// Re-invoking with the same call_id is idempotent (refreshes the
-	// timestamp, doesn't error).
-	if err := entity.BeginAwaitingApproval("call-001", "delete_rule", nil, "", 0, ""); err != nil {
-		t.Fatalf("same call_id should be idempotent: %v", err)
+	// Replaying a prompt must reuse its snapshot, not begin a second gate.
+	before, _ := json.Marshal(entity)
+	if err := entity.BeginAwaitingApproval("call-001", "delete_rule", nil, "", 0, ""); err == nil {
+		t.Fatal("same call_id must not begin a second gate")
 	}
 	// A different call_id while one is already pending is a logic
 	// error and should fail loudly.
 	err := entity.BeginAwaitingApproval("call-002", "delete_rule", nil, "", 0, "")
-	if err == nil || !strings.Contains(err.Error(), "already awaiting approval") {
+	if err == nil || !strings.Contains(err.Error(), "cannot begin awaiting approval") {
 		t.Fatalf("want already-awaiting error, got %v", err)
+	}
+	after, _ := json.Marshal(entity)
+	if string(after) != string(before) {
+		t.Fatal("refused Begin changed the existing gate")
 	}
 }
 
@@ -130,34 +135,33 @@ func TestLoopEntity_ResolveApproval(t *testing.T) {
 		wantErr   string
 	}{
 		{
-			name: "resume from executing",
+			name: "resolve returns running",
 			setup: func(e *agentic.LoopEntity) {
-				e.State = agentic.LoopStateExecuting
+				e.State = agentic.LoopStateRunning
 				_ = e.BeginAwaitingApproval("c1", "tool", nil, "", 0, "")
 			},
-			wantState: agentic.LoopStateExecuting,
+			wantState: agentic.LoopStateRunning,
 		},
 		{
-			name: "resume from planning",
+			name: "missing pending call refuses",
 			setup: func(e *agentic.LoopEntity) {
-				e.State = agentic.LoopStatePlanning
-				_ = e.BeginAwaitingApproval("c2", "tool", nil, "", 0, "")
+				e.State = agentic.LoopStateAwaitingApproval
+				e.PendingApproval = &agentic.PendingApprovalState{ToolName: "tool"}
 			},
-			wantState: agentic.LoopStatePlanning,
+			wantErr: "awaiting_approval requires pending call_id and tool_name",
 		},
 		{
 			name:    "resolve when not awaiting fails",
-			setup:   func(e *agentic.LoopEntity) { e.State = agentic.LoopStateExecuting },
+			setup:   func(e *agentic.LoopEntity) { e.State = agentic.LoopStateRunning },
 			wantErr: "loop not awaiting approval",
 		},
 		{
-			name: "missing prior state falls back to executing",
+			name: "local pending gate needs no execution stamping",
 			setup: func(e *agentic.LoopEntity) {
 				e.State = agentic.LoopStateAwaitingApproval
 				e.PendingApproval = &agentic.PendingApprovalState{CallID: "c3", ToolName: "tool"}
-				e.StateBeforeApproval = ""
 			},
-			wantState: agentic.LoopStateExecuting,
+			wantState: agentic.LoopStateRunning,
 		},
 	}
 
@@ -182,8 +186,8 @@ func TestLoopEntity_ResolveApproval(t *testing.T) {
 			if entity.PendingApproval != nil {
 				t.Errorf("PendingApproval not cleared: %+v", entity.PendingApproval)
 			}
-			if entity.StateBeforeApproval != "" {
-				t.Errorf("StateBeforeApproval not cleared: %s", entity.StateBeforeApproval)
+			if err := entity.Validate(); err != nil {
+				t.Fatalf("Resolve returned invalid local state: %v", err)
 			}
 		})
 	}
@@ -193,7 +197,7 @@ func TestLoopEntity_ApprovalRoundTripJSON(t *testing.T) {
 	t.Parallel()
 
 	entity := agentic.NewLoopEntity("loop-001", "task-001", "coordinator", "test-model", 20)
-	entity.State = agentic.LoopStateExecuting
+	entity.State = agentic.LoopStateRunning
 	if err := entity.BeginAwaitingApproval("call-001", "delete_rule",
 		map[string]any{"rule_id": "rule-42"},
 		"approval_required: Tool 'delete_rule' requires human approval",
@@ -221,29 +225,5 @@ func TestLoopEntity_ApprovalRoundTripJSON(t *testing.T) {
 	}
 	if v, ok := got.PendingApproval.Arguments["rule_id"].(string); !ok || v != "rule-42" {
 		t.Errorf("Arguments[rule_id] = %v", got.PendingApproval.Arguments["rule_id"])
-	}
-}
-
-func TestLoopEntity_ApprovalDoesNotInterfereWithPause(t *testing.T) {
-	t.Parallel()
-
-	entity := agentic.NewLoopEntity("loop-001", "task-001", "coordinator", "test-model", 20)
-	entity.State = agentic.LoopStateExecuting
-	entity.PauseRequested = true
-	entity.StateBeforePause = agentic.LoopStateExecuting
-
-	if err := entity.BeginAwaitingApproval("call-001", "delete_rule", nil, "", 0, ""); err != nil {
-		t.Fatalf("BeginAwaitingApproval: %v", err)
-	}
-
-	// Pause fields must remain untouched — they're orthogonal.
-	if !entity.PauseRequested {
-		t.Errorf("PauseRequested cleared by approval flow")
-	}
-	if entity.StateBeforePause != agentic.LoopStateExecuting {
-		t.Errorf("StateBeforePause overwritten: %s", entity.StateBeforePause)
-	}
-	if entity.StateBeforeApproval != agentic.LoopStateExecuting {
-		t.Errorf("StateBeforeApproval = %s, want executing", entity.StateBeforeApproval)
 	}
 }

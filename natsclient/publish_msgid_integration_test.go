@@ -19,6 +19,7 @@ import (
 // (drop-in PublishToStream behavior).
 func TestIntegration_PublishToStreamWithMsgID_Dedup(t *testing.T) {
 	ctx := context.Background()
+	const duplicateWindow = 250 * time.Millisecond
 
 	natsContainer, natsURL := startNATSContainerWithJS(ctx, t)
 	defer natsContainer.Terminate(ctx)
@@ -33,7 +34,7 @@ func TestIntegration_PublishToStreamWithMsgID_Dedup(t *testing.T) {
 		Name:       "MSGID_STREAM",
 		Subjects:   []string{"msgid.>"},
 		Storage:    jetstream.MemoryStorage,
-		Duplicates: 2 * time.Minute,
+		Duplicates: duplicateWindow,
 		MaxAge:     testStreamMaxAge,
 		MaxBytes:   testStreamMaxBytes,
 	})
@@ -52,14 +53,26 @@ func TestIntegration_PublishToStreamWithMsgID_Dedup(t *testing.T) {
 	assert.Equal(t, uint64(1), msgCount(),
 		"same Nats-Msg-Id within the window must dedup to one stored message")
 
+	// Expiry itself is the wall-clock behavior under test. Poll the server's
+	// authoritative stream state instead of sleeping for a guessed scheduler
+	// margin: duplicate attempts remain collapsed until the configured window
+	// actually expires, then the first accepted attempt advances the count.
+	require.Eventually(t, func() bool {
+		if err := client.PublishToStreamWithMsgID(ctx, "msgid.test", []byte("after-window"), "evt-1"); err != nil {
+			return false
+		}
+		return msgCount() == 2
+	}, 3*time.Second, 25*time.Millisecond,
+		"the same Nats-Msg-Id must store again after the configured window")
+
 	// Distinct msgID → a new message.
 	require.NoError(t, client.PublishToStreamWithMsgID(ctx, "msgid.test", []byte("second"), "evt-2"))
-	assert.Equal(t, uint64(2), msgCount(), "distinct Nats-Msg-Id must store a new message")
+	assert.Equal(t, uint64(3), msgCount(), "distinct Nats-Msg-Id must store a new message")
 
 	// Empty msgID → no dedup; two identical publishes both store.
 	require.NoError(t, client.PublishToStreamWithMsgID(ctx, "msgid.test", []byte("x"), ""))
 	require.NoError(t, client.PublishToStreamWithMsgID(ctx, "msgid.test", []byte("x"), ""))
-	assert.Equal(t, uint64(4), msgCount(), "empty msgID must not dedup")
+	assert.Equal(t, uint64(5), msgCount(), "empty msgID must not dedup")
 }
 
 // TestIntegration_PublishToStreamWithMsgID_NotConnected verifies the circuit

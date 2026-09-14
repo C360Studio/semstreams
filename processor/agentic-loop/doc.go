@@ -5,7 +5,7 @@
 // The agentic-loop processor orchestrates autonomous agent execution by managing
 // the lifecycle of agentic loops. It coordinates communication between the model
 // processor (LLM calls) and tools processor (tool execution), tracks state through
-// a 10-state machine, supports signal handling for user control, manages context
+// five operational states, supports signal handling for user control, manages context
 // memory with automatic compaction, and appends observed trajectory facts with
 // separately stored full evidence.
 //
@@ -52,30 +52,18 @@
 //
 // # State Machine
 //
-// Loops progress through ten states defined in the agentic package:
+// Loops use five operational states defined in the agentic package:
 //
-//	exploring → planning → architecting → executing → reviewing → complete
-//	     ↑          ↑            ↑             ↑           ↑        ↘ failed
-//	     └──────────┴────────────┴─────────────┴───────────┘         ↘ cancelled
-//	                                                                  ↘ paused
-//	                                                                   ↘ awaiting_approval
-//
-// States:
-//
-//   - exploring: Initial state, gathering information
-//   - planning: Developing approach
-//   - architecting: Designing solution
-//   - executing: Implementing solution
-//   - reviewing: Validating results
+//   - running: Nonterminal work outside a human approval gate
+//   - awaiting_approval: Waiting for user approval of the pending call
 //   - complete: Successfully finished (terminal)
 //   - failed: Failed due to error or max iterations (terminal)
 //   - cancelled: Cancelled by user signal (terminal)
-//   - paused: Paused by user signal, can resume
-//   - awaiting_approval: Waiting for user approval
 //
-// States are fluid checkpoints - the loop can transition backward (e.g., from
-// executing back to exploring) to support agent rethinking. Only terminal states
-// (complete, failed, cancelled) prevent further transitions.
+// Running may enter approval or a terminal state. Awaiting approval may return
+// to running or become failed/cancelled. Terminal states have no outgoing edges.
+// BeginAwaitingApproval constructs a gate; ResolveApproval clears it locally.
+// Local transitions do not establish durable application or settle a delivery.
 //
 // State transitions are managed by the LoopManager and persisted to NATS KV.
 //
@@ -85,7 +73,7 @@
 //
 //	signal := agentic.UserSignal{
 //	    SignalID:    "sig_abc123",
-//	    Type:        "cancel",  // cancel, pause, resume, approve, reject, feedback, retry
+//	    Type:        "cancel",  // the only handled verb
 //	    LoopID:      "7c9e6679-7425-40de-944b-e07fc1f90ae7",
 //	    UserID:      "user_789",
 //	    ChannelType: "cli",
@@ -96,12 +84,11 @@
 // Signal types and their effects:
 //
 //   - cancel: Stop execution immediately, transition to cancelled state
-//   - pause: Pause at next checkpoint, transition to paused state
-//   - resume: Continue paused loop, restore previous state
-//   - approve: Approve pending result, transition to complete
-//   - reject: Reject with optional reason, transition to failed
-//   - feedback: Add feedback without decision, no state change
-//   - retry: Retry failed loop, transition to exploring
+//
+// approve, reject, feedback and retry were advertised here and never handled;
+// they were deleted alongside pause/resume (#1239). Approval and rejection are
+// real on a different payload: ApprovalResponse over agent.approval_response.*
+// (ADR-039).
 //
 // # Context Management
 //
@@ -145,7 +132,7 @@
 //	loopID, err := manager.CreateLoop("task_123", "general", "gpt-4", 20)
 //
 //	// State transitions
-//	err = manager.TransitionLoop(loopID, agentic.LoopStateExecuting)
+//	err = manager.TransitionLoop(loopID, agentic.LoopStateRunning)
 //
 //	// Iteration tracking
 //	err = manager.IncrementIteration(loopID)
@@ -167,8 +154,12 @@
 //
 //	handler := NewMessageHandler(config)
 //
+//	// Direct HandleTask validates the TaskMessage and does not marshal it.
+//	// A stream producer mints once before wrapping and marshal, then reuses
+//	// those serialized bytes when retrying that publication.
 //	// Handle incoming task
 //	result, err := handler.HandleTask(ctx, TaskMessage{
+//	    LoopID: uuid.NewString(),
 //	    TaskID: "task_123",
 //	    Role:   "general",
 //	    Model:  "gpt-4",
@@ -244,13 +235,12 @@
 //	{
 //	    "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
 //	    "task_id": "task_456",
-//	    "state": "executing",
+//	    "state": "running",
 //	    "role": "general",
 //	    "model": "gpt-4",
 //	    "iterations": 3,
 //	    "max_iterations": 20,
 //	    "parent_loop_id": "",
-//	    "pause_requested": false,
 //	    "user_id": "user_789",
 //	    "channel_type": "cli",
 //	    "channel_id": "session_001"
@@ -331,12 +321,18 @@
 // Publish a task:
 //
 //	task := agenticloop.TaskMessage{
+//	    LoopID: uuid.NewString(),
 //	    TaskID: "analyze_code",
 //	    Role:   "general",
 //	    Model:  "gpt-4",
 //	    Prompt: "Review main.go for security issues",
 //	}
-//	taskData, _ := json.Marshal(task)
+//
+// Production code mints once before marshal and reuses these serialized bytes
+// when retrying this publication.
+//
+//	baseMsg := message.NewBaseMessage(task.Schema(), &task, "example")
+//	taskData, _ := json.Marshal(baseMsg)
 //	natsClient.PublishToStream(ctx, "agent.task.review", taskData)
 //
 // # Thread Safety

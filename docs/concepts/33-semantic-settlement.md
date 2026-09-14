@@ -34,6 +34,19 @@ what the client observed.
 owns. For example, the tools component is done only after the tool outcome is durable and the result publication
 receives its PubAck. A different component can own a different durable consequence.
 
+Conditional approval has a deliberately narrower definition of done: “apply this decision if its execution is
+still awaiting approval.” A validated exact current loop record can show that no matching gate remains. In that
+case the loop logs and counts an inapplicable decision, changes no authority, publishes no business work, and ACKs.
+That ACK does not claim that this decision was the historical winner. Missing process memory or a failed authority
+read cannot establish this outcome. This is an explicit approval contract, not permission for arbitrary log-and-ACK
+paths or a relaxation of ordinary final tool/model applied-result checks.
+
+The earlier `approval_required` tool status has its own narrow rule: validated durable evidence that the same
+execution advanced beyond its approval phase makes that old status superseded. The owner checks before changing
+state, including on an already-loaded loop, and ACKs a proven superseded status without reopening the gate or
+publishing work. It adds no recovery store and does not treat arbitrary unequal final results as duplicates.
+See [Approval flow](17-approval-flow.md).
+
 ## Happy path
 
 ```text
@@ -74,10 +87,41 @@ The replacement does not need a supervisor record saying which step ran. It reco
 the component already owns. This is the streams-first restart pattern: settle only after durable done, let unsettled
 work redeliver, and make replay consult the durable consequence before repeating an effect.
 
+The loop's terminal result uses the same idea. Success, failure, and cancellation share one saved completion record:
+if a result is already there, reuse it rather than replace it with a competing outcome. Saving the result is not ACK.
+Required graph work, result publication, and the final current-loop write must still finish. A replacement process
+uses the saved result to finish that work. The result also records whether the existing synthetic graph-decision
+action is required, so replay does not guess from conversation history that may have been compacted.
+
+Tool execution and consuming its result are separate pieces of work. For an ordinary result that advances the loop
+to another model request, the loop rebuilds its current batch from its existing loop record and retained request and
+response. It keeps the collected results durable until the next request is published. If that publication fails,
+the result stays unsettled and redelivery resumes the same transition without spending another iteration. Rebuilding
+loop memory does not call the tool again; the tools component remains the owner of tool-effect recovery.
+
+If a tool asks to finish the loop, or completing its batch reaches the iteration limit, the final loop record retains
+the result as well as the terminal outcome.
+Redelivery checks the exact tool execution and its recorded outcome before acknowledging it as already handled.
+A finished loop alone is not proof that a particular result was consumed; missing evidence leaves the work unsettled.
+
 If the component cannot determine whether an external effect committed, it must not hide that ambiguity behind ACK
 or unlimited Retry. It returns Quarantine, leaves the message without a terminal method, and asks the existing exact
 consumer owner to stop. The next design step is then component-specific reconciliation—not a generic framework state
 machine.
+
+## State transitions and settlement answer different questions
+
+The agentic loop's small state table answers “what may happen next?” Running work can wait for approval or finish;
+an approval wait can return to running, fail or be cancelled. Complete, failed and cancelled are final. Model and
+tool activity stays running: an adopter need not invent planning or reviewing phases to use the framework.
+
+Settlement answers “has this input's required work durably finished?” A legal transition alone cannot answer that.
+The loop keeps its current record in AGENT_LOOPS, and a write based on an older observation must not overwrite newer
+authority. Existing saved results and required publications determine what replay still owes before ACK.
+
+This combines a local state machine with the message pump, not a new state-machine service. Ordinary multi-turn chat
+is unchanged: a completed turn stays complete, and the next independent turn supplies its conversation history to a
+fresh loop. See [Loop states](../../agentic/README.md#loop-states) for the public contract.
 
 ## Owner responsibilities
 

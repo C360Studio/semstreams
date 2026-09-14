@@ -112,6 +112,7 @@ func TestToolDefinition_EffectJSONRoundTrip(t *testing.T) {
 			t.Parallel()
 
 			original := &agentic.TaskMessage{
+				LoopID: "7c9e6679-7425-40de-944b-e07fc1f90ae7",
 				TaskID: "task-effect-1",
 				Role:   "general",
 				Model:  "fast",
@@ -164,6 +165,7 @@ func TestToolDefinition_AbsentEffectOmitsTheKey(t *testing.T) {
 	t.Parallel()
 
 	def := &agentic.TaskMessage{
+		LoopID: "7c9e6679-7425-40de-944b-e07fc1f90ae7",
 		TaskID: "task-omit",
 		Role:   "general",
 		Model:  "fast",

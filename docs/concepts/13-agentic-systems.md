@@ -85,48 +85,33 @@ This enables:
 
 ### State Machine
 
-Agentic systems use a state machine to track progress through well-defined phases:
+The loop tracks operational state, not a developer workflow:
 
 ```text
-┌───────────┐   ┌──────────┐   ┌─────────────┐   ┌───────────┐   ┌───────────┐
-│ exploring │──▶│ planning │──▶│ architecting│──▶│ executing │──▶│ reviewing │
-└───────────┘   └──────────┘   └─────────────┘   └───────────┘   └─────┬─────┘
-      ▲               ▲               ▲                ▲               │
-      │               │               │                │               │
-      └───────────────┴───────────────┴────────────────┘               │
-                   (fluid backward transitions)                         │
-                                                                        ▼
-                                                    ┌───────────────────────────┐
-                                                    │complete│failed│cancelled  │
-                                                    ├───────────────────────────┤
-                                                    │paused │ awaiting_approval │
-                                                    └───────────────────────────┘
+running           → awaiting_approval | complete | failed | cancelled
+awaiting_approval → running | failed | cancelled
+complete, failed, cancelled → no outgoing transitions
 ```
 
 **States:**
 
 | State | Terminal | Description |
 |-------|----------|-------------|
-| `exploring` | No | Initial state, gathering information |
-| `planning` | No | Developing approach |
-| `architecting` | No | Designing solution |
-| `executing` | No | Implementing solution |
-| `reviewing` | No | Validating results |
+| `running` | No | Model/tool work, waiting for results, or an admitted continuation boundary |
+| `awaiting_approval` | No | Waiting for a human decision on a specific tool execution |
 | `complete` | Yes | Successfully finished |
 | `failed` | Yes | Failed due to error or max iterations |
 | `cancelled` | Yes | Cancelled by user signal |
-| `paused` | No | Paused by user signal, can resume |
-| `awaiting_approval` | No | Waiting for user approval |
 
 **Why states matter:**
 
-- **Checkpointing**: Can resume from interruptions
-- **Observability**: Know where the agent is in its process
-- **Control**: Can intervene at specific states
-- **Debugging**: Understand where things went wrong
+- **Control**: Enforce approval gates and terminal boundaries.
+- **Observability**: Distinguish ongoing work, a human decision and a finished loop.
 
-SemStreams uses **fluid states** — the agent can move backward (e.g., from executing back to exploring) when it
-needs to rethink. Only terminal states (complete, failed, cancelled) are final.
+State alone is not a restart checkpoint or proof of completed effects. Existing KV authority and retained results
+tell replay what is durable; the input settles only after its required work finishes. See
+[Semantic settlement](33-semantic-settlement.md). A completed chat turn remains terminal; a new independent turn
+carries its prior messages to a fresh loop.
 
 ### Signal Handling
 
@@ -138,16 +123,16 @@ Users can send control signals to affect running loops:
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
 │  cancel  ──▶  Stop execution immediately (→ cancelled)      │
-│  pause   ──▶  Pause at next checkpoint (→ paused)           │
-│  resume  ──▶  Continue paused loop (→ previous state)       │
-│  approve ──▶  Approve pending result (→ complete)           │
-│  reject  ──▶  Reject with reason (→ failed)                 │
-│  retry   ──▶  Retry failed loop (→ exploring)               │
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-Signals are published to `agent.signal.{loop_id}` and processed by the loop orchestrator.
+Signals are published to `agent.signal.{loop_id}` and processed by the loop orchestrator. `cancel` is the
+entire vocabulary — a `UserSignal` carrying any other verb fails `Validate()`.
+
+**Approval and rejection are not signals.** They travel as `ApprovalResponse` on
+`agent.approval_response.*` (ADR-039), a different payload with a real handler. `feedback` and `retry` were
+advertised on this subject and never implemented; they are gone (#1239).
 
 ### Tool Abstraction
 
@@ -183,6 +168,37 @@ name, and the arguments matching the parameter schema.
 contents, query results, etc.), and an error field if something went wrong.
 
 ### Context Management
+
+An execution is not a conversation. By default, each user submission starts a fresh loop; a chat can span many
+completed loops. For a follow-up, the chat adapter sends the transcript it displayed in `prior_messages`, followed
+by the new turn in `content`:
+
+```json
+{
+  "user_id": "alice",
+  "content": "Which color did I choose?",
+  "prior_messages": [
+    {"role": "user", "content": "I choose blue."},
+    {"role": "assistant", "content": "Blue it is."}
+  ]
+}
+```
+
+Use the delivered `UserResponse.Content` for assistant entries, not raw model output. History accepts nonempty text
+in user/assistant roles only, with no tool calls, reasoning, names, or system instructions. Omitting history, sending
+null, or sending an empty array makes a context-free turn; it does not ask the framework to recall earlier turns.
+
+The adapter owns the displayed transcript. SemStreams commits the supplied history with the task, gives the execution
+fresh instructions and budget, and recovers that input after restart. A committed task does not need earlier loops
+to remain stored. This is not a hosted conversation store; existing transport and model limits still apply.
+
+Restart uses the same [message-pump settlement pattern](33-semantic-settlement.md): unsettled work redelivers,
+matching retained provider output is reused, and confirmed absence permits another call.
+
+Explicit `reply_to` attaches to an admitted live execution; `auto_continue: true` opts into implicit attachment.
+Neither accepts nonempty `prior_messages`: attachment reuses that execution's context, while supplied history starts
+an independent turn. A completed execution is not reopened to continue a chat. Commands needing a target require an
+explicit loop ID under the default `auto_continue: false` configuration.
 
 Long-running loops can exceed model token limits. The context manager handles this automatically:
 
@@ -383,7 +399,7 @@ The agentic-loop manages its own state machine internally. State transitions hap
 │                                                                      │
 │   All Tools Complete ─────────────▶  Increment iteration, continue  │
 │   Max Iterations     ─────────────▶  Mark failed                    │
-│   User Signal        ─────────────▶  Handle cancel/pause/resume     │
+│   User Signal        ─────────────▶  Handle cancel                  │
 │                                                                      │
 │   No rules required. No external state machine driver.              │
 │                                                                      │
@@ -400,7 +416,7 @@ Agent loops are stored in NATS KV (`AGENT_LOOPS`) as queryable entities:
 ├─────────────────────────────────────────────┤
 │ id             = "<loop-uuid>"              │
 │ task_id        = "task_456"                 │
-│ state          = "executing"                │
+│ state          = "running"                  │
 │ role           = "general"                  │
 │ model          = "gpt-4"                    │
 │ iterations     = 3                          │
@@ -485,6 +501,10 @@ The rule processor can observe and react to agent activity, but **does not drive
 - Use the `publish` action to send tasks to `agent.task.*`
 - Spawn agents based on graph events (e.g., new entity triggers investigation)
 - Chain agents by triggering follow-up tasks on completion (architect → editor)
+
+The producer of a new `TaskMessage` owns its loop birth identity and fixes a canonical UUID before publication.
+Agentic-loop validates that identity and never repairs an absent value. See
+[Semantic Settlement](33-semantic-settlement.md) for the durable retry boundary.
 
 **Rules cannot control agents:**
 - No mechanism for rules to force state transitions

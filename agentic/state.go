@@ -6,30 +6,31 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/c360studio/semstreams/pkg/lifecycle"
 )
 
 // LoopState represents the current state of an agentic loop
 type LoopState string
 
-// Loop states for the agentic state machine.
-// The state machine supports fluid transitions (can move backward) except from terminal states.
+// Loop states describe operational progress, not developer workflow phases.
 const (
-	// Standard workflow states
-	LoopStateExploring    LoopState = "exploring"
-	LoopStatePlanning     LoopState = "planning"
-	LoopStateArchitecting LoopState = "architecting"
-	LoopStateExecuting    LoopState = "executing"
-	LoopStateReviewing    LoopState = "reviewing"
+	LoopStateRunning          LoopState = "running"
+	LoopStateAwaitingApproval LoopState = "awaiting_approval"
 
 	// Terminal states
 	LoopStateComplete  LoopState = "complete"
 	LoopStateFailed    LoopState = "failed"
 	LoopStateCancelled LoopState = "cancelled" // Cancelled by user signal
-
-	// Signal-related states
-	LoopStatePaused           LoopState = "paused"            // Paused by user signal
-	LoopStateAwaitingApproval LoopState = "awaiting_approval" // Waiting for user approval
 )
+
+var loopTransitions = lifecycle.Transitions{
+	string(LoopStateRunning):          {string(LoopStateAwaitingApproval), string(LoopStateComplete), string(LoopStateFailed), string(LoopStateCancelled)},
+	string(LoopStateAwaitingApproval): {string(LoopStateRunning), string(LoopStateFailed), string(LoopStateCancelled)},
+	string(LoopStateComplete):         {},
+	string(LoopStateFailed):           {},
+	string(LoopStateCancelled):        {},
+}
 
 // String returns the string representation of the state
 func (s LoopState) String() string {
@@ -38,7 +39,7 @@ func (s LoopState) String() string {
 
 // IsTerminal returns true if the state is a terminal state
 func (s LoopState) IsTerminal() bool {
-	return s == LoopStateComplete || s == LoopStateFailed || s == LoopStateCancelled
+	return isValidLoopState(s) && loopTransitions.IsTerminal(string(s))
 }
 
 // LoopEntity represents an agentic loop instance
@@ -50,7 +51,7 @@ type LoopEntity struct {
 	Model              string                `json:"model"`
 	Iterations         int                   `json:"iterations"`
 	MaxIterations      int                   `json:"max_iterations"`
-	PendingToolResults map[string]ToolResult `json:"pending_tool_results,omitempty"` // Accumulated tool results by call ID
+	PendingToolResults map[string]ToolResult `json:"pending_tool_results,omitempty"` // ExecutionID; synthetic failures use CallID
 	StartedAt          time.Time             `json:"started_at,omitempty"`           // When the loop was created
 	TimeoutAt          time.Time             `json:"timeout_at,omitempty"`           // When the loop should timeout
 	ParentLoopID       string                `json:"parent_loop_id,omitempty"`       // Parent loop ID for architect->editor relationship
@@ -63,20 +64,14 @@ type LoopEntity struct {
 	MaxDepth int `json:"max_depth,omitempty"` // Maximum allowed depth for spawned agents
 
 	// Signal support fields
-	PauseRequested   bool      `json:"pause_requested,omitempty"`    // Pause requested, will pause at next checkpoint
-	PauseRequestedBy string    `json:"pause_requested_by,omitempty"` // User who requested pause
-	StateBeforePause LoopState `json:"state_before_pause,omitempty"` // State before pause (for resume)
-	CancelledBy      string    `json:"cancelled_by,omitempty"`       // User who cancelled the loop
-	CancelledAt      time.Time `json:"cancelled_at,omitempty"`       // When the loop was cancelled
+	CancelledBy string    `json:"cancelled_by,omitempty"` // User who cancelled the loop
+	CancelledAt time.Time `json:"cancelled_at,omitempty"` // When the loop was cancelled
 
 	// Approval-gating fields (set when a tool call is rejected by the
 	// agentic-tools approval filter). The loop transitions to
 	// LoopStateAwaitingApproval and persists the pending call here so
-	// it can be re-dispatched on approval. StateBeforeApproval lets us
-	// restore the prior workflow state once the approval response
-	// arrives.
-	PendingApproval     *PendingApprovalState `json:"pending_approval,omitempty"`
-	StateBeforeApproval LoopState             `json:"state_before_approval,omitempty"`
+	// it can be re-dispatched on approval.
+	PendingApproval *PendingApprovalState `json:"pending_approval,omitempty"`
 
 	// User context (for routing responses)
 	UserID      string `json:"user_id,omitempty"`      // User who initiated the loop
@@ -103,8 +98,8 @@ func (e *LoopEntity) Validate() error {
 	if e.ID == "" {
 		return fmt.Errorf("id required")
 	}
-	if !isValidLoopState(e.State) {
-		return fmt.Errorf("invalid state: %s", e.State)
+	if err := e.validateState(); err != nil {
+		return err
 	}
 	if e.MaxIterations <= 0 {
 		return fmt.Errorf("max_iterations must be greater than 0")
@@ -114,27 +109,43 @@ func (e *LoopEntity) Validate() error {
 
 // isValidLoopState checks if the state is a valid LoopState
 func isValidLoopState(s LoopState) bool {
-	switch s {
-	case LoopStateExploring, LoopStatePlanning, LoopStateArchitecting,
-		LoopStateExecuting, LoopStateReviewing, LoopStateComplete,
-		LoopStateFailed, LoopStateCancelled, LoopStatePaused,
-		LoopStateAwaitingApproval:
-		return true
-	default:
-		return false
+	_, ok := loopTransitions[string(s)]
+	return ok
+}
+
+// validateState checks local coherence, not delivery correlation or durable application.
+func (e *LoopEntity) validateState() error {
+	if !isValidLoopState(e.State) {
+		return fmt.Errorf("invalid state: %s", e.State)
 	}
+	if e.State == LoopStateAwaitingApproval {
+		if e.PendingApproval == nil || e.PendingApproval.CallID == "" || e.PendingApproval.ToolName == "" {
+			return fmt.Errorf("awaiting_approval requires pending call_id and tool_name")
+		}
+	} else if e.PendingApproval != nil {
+		return fmt.Errorf("state %s cannot have pending approval", e.State)
+	}
+	return nil
 }
 
 // TransitionTo transitions the entity to a new state
 func (e *LoopEntity) TransitionTo(newState LoopState) error {
-	// Allow same-state transitions (no-op)
+	if err := e.validateState(); err != nil {
+		return err
+	}
+	if !isValidLoopState(newState) {
+		return fmt.Errorf("invalid state: %s", newState)
+	}
 	if e.State == newState {
 		return nil
 	}
-	// Prevent transitions from terminal states
-	if e.State.IsTerminal() {
-		return fmt.Errorf("cannot transition from terminal state %s", e.State)
+	if newState == LoopStateAwaitingApproval {
+		return fmt.Errorf("use BeginAwaitingApproval to construct an approval gate")
 	}
+	if !loopTransitions.IsValidTransition(string(e.State), string(newState)) {
+		return fmt.Errorf("cannot transition from %s to %s", e.State, newState)
+	}
+	e.PendingApproval = nil
 	e.State = newState
 	return nil
 }
@@ -144,27 +155,28 @@ func (e *LoopEntity) TransitionTo(newState LoopState) error {
 // Persisted on LoopEntity so a process restart mid-approval still
 // remembers what the human is reviewing.
 type PendingApprovalState struct {
+	RequestID   string         `json:"request_id,omitempty"`
+	ExecutionID string         `json:"execution_id,omitempty"`
 	CallID      string         `json:"call_id"`
+	CallOrdinal uint32         `json:"call_ordinal,omitempty"`
 	ToolName    string         `json:"tool_name"`
 	Arguments   map[string]any `json:"arguments,omitempty"`
 	Reason      string         `json:"reason,omitempty"`   // Original "approval_required: ..." rejection reason
-	RequestedAt time.Time      `json:"requested_at"`       // When the rejection arrived and the loop paused
+	RequestedAt time.Time      `json:"requested_at"`       // When the approval wait began
 	Timeout     time.Duration  `json:"timeout,omitempty"`  // Auto-reject deadline; zero means wait indefinitely
 	TraceID     string         `json:"trace_id,omitempty"` // Propagated for audit correlation
 }
 
 // BeginAwaitingApproval transitions the loop into
 // LoopStateAwaitingApproval and stores the pending call. Returns an
-// error if the loop is already terminal or already awaiting approval
-// for a different call (which would indicate a logic bug — two
-// rejections for the same loop shouldn't be possible while the first
-// is still pending).
+// error unless the loop is locally coherent and running. Delivery owners
+// supply their required correlation before publishing or committing the gate.
 func (e *LoopEntity) BeginAwaitingApproval(callID, toolName string, arguments map[string]any, reason string, timeout time.Duration, traceID string) error {
-	if e.State.IsTerminal() {
-		return fmt.Errorf("cannot begin awaiting approval from terminal state %s", e.State)
+	if err := e.validateState(); err != nil {
+		return err
 	}
-	if e.PendingApproval != nil && e.PendingApproval.CallID != callID {
-		return fmt.Errorf("loop already awaiting approval for call %s", e.PendingApproval.CallID)
+	if !loopTransitions.IsValidTransition(string(e.State), string(LoopStateAwaitingApproval)) {
+		return fmt.Errorf("cannot begin awaiting approval from state %s", e.State)
 	}
 	if callID == "" {
 		return fmt.Errorf("call_id required")
@@ -172,7 +184,6 @@ func (e *LoopEntity) BeginAwaitingApproval(callID, toolName string, arguments ma
 	if toolName == "" {
 		return fmt.Errorf("tool_name required")
 	}
-	e.StateBeforeApproval = e.State
 	e.State = LoopStateAwaitingApproval
 	e.PendingApproval = &PendingApprovalState{
 		CallID:      callID,
@@ -186,28 +197,13 @@ func (e *LoopEntity) BeginAwaitingApproval(callID, toolName string, arguments ma
 	return nil
 }
 
-// ResolveApproval clears the pending approval and restores the prior
-// state so the loop can resume normal iteration. Caller is
-// responsible for re-dispatching the tool (approve/modify) or
-// synthesizing a rejection (reject) before invoking this.
+// ResolveApproval clears the local gate and returns to running.
+// Delivery owners still complete required publication before durable gate closure.
 func (e *LoopEntity) ResolveApproval() error {
 	if e.State != LoopStateAwaitingApproval {
 		return fmt.Errorf("loop not awaiting approval (state=%s)", e.State)
 	}
-	if e.PendingApproval == nil {
-		return fmt.Errorf("loop awaiting approval but PendingApproval is nil")
-	}
-	restore := e.StateBeforeApproval
-	if restore == "" || restore == LoopStateAwaitingApproval {
-		// Defensive: if we somehow lost the prior state, fall back to
-		// executing so the loop can advance. Should not happen because
-		// BeginAwaitingApproval always captures it.
-		restore = LoopStateExecuting
-	}
-	e.State = restore
-	e.StateBeforeApproval = ""
-	e.PendingApproval = nil
-	return nil
+	return e.TransitionTo(LoopStateRunning)
 }
 
 // ErrMaxIterationsReached is the typed sentinel LoopEntity.IncrementIteration
@@ -240,7 +236,7 @@ func NewLoopEntity(id, taskID, role, model string, maxIterations ...int) LoopEnt
 	return LoopEntity{
 		ID:            id,
 		TaskID:        taskID,
-		State:         LoopStateExploring,
+		State:         LoopStateRunning,
 		Role:          role,
 		Model:         model,
 		Iterations:    0,

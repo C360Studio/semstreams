@@ -68,11 +68,6 @@ const (
 	// mapped reason (processor/agentic-dispatch/metrics.go).
 	loopAdmissionRefusalsMetric = "semstreams_router_loop_admission_refusals_total"
 
-	// approvalTrackerWindow bounds the retry on a 409 from the approval
-	// endpoint — see submitApproval for why that status is a race rather than
-	// an answer.
-	approvalTrackerWindow = 10 * time.Second
-
 	// toolExecutionsMetric counts executor invocations by tool name AND status.
 	// For approvalGatedTool it can only be nonzero via an approved re-dispatch:
 	// the approval filter refuses every un-approved call to it.
@@ -160,9 +155,9 @@ func (s *Scenario) walkApprovalPath(ctx context.Context, result *scenarios.Resul
 	if err != nil {
 		return err
 	}
-	if pending.ToolName != approvalGatedTool || pending.CallID == "" {
-		return fmt.Errorf("approval-pending event = tool:%q call:%q, want tool %q and a call id",
-			pending.ToolName, pending.CallID, approvalGatedTool)
+	if pending.ToolName != approvalGatedTool || pending.CallID == "" || pending.ExecutionID == "" {
+		return fmt.Errorf("approval-pending event = tool:%q call:%q execution:%q, want tool %q and call/execution ids",
+			pending.ToolName, pending.CallID, pending.ExecutionID, approvalGatedTool)
 	}
 	if !agentic.IsApprovalRequired(pending.Reason) {
 		return fmt.Errorf("approval-pending reason = %q, want the approval-required prefix", pending.Reason)
@@ -176,10 +171,10 @@ func (s *Scenario) walkApprovalPath(ctx context.Context, result *scenarios.Resul
 		return fmt.Errorf("parked loop user_id = %q, want %q", parked.UserID, approvalLoopOwner)
 	}
 
-	if err := s.submitApproval(ctx, task.LoopID, agentic.ApprovalDecisionApprove); err != nil {
+	if err := s.submitApproval(ctx, task.LoopID, pending.ExecutionID, agentic.ApprovalDecisionApprove); err != nil {
 		return err
 	}
-	if err := s.verifyApprovalResponsePublished(ctx, task.LoopID, pending.CallID); err != nil {
+	if err := s.verifyApprovalResponsePublished(ctx, task.LoopID, pending.CallID, pending.ExecutionID); err != nil {
 		return err
 	}
 
@@ -200,6 +195,7 @@ func (s *Scenario) walkApprovalPath(ctx context.Context, result *scenarios.Resul
 	}
 
 	result.Details["approval_call_id"] = pending.CallID
+	result.Details["approval_execution_id"] = pending.ExecutionID
 	result.Details["approval_outcome"] = outcome
 	return nil
 }
@@ -208,7 +204,7 @@ func (s *Scenario) walkApprovalPath(ctx context.Context, result *scenarios.Resul
 // published on the framework's own subject and decodes it through the
 // production payload registry — the wire payload the loop consumes, not the
 // endpoint's success envelope.
-func (s *Scenario) verifyApprovalResponsePublished(ctx context.Context, loopID, callID string) error {
+func (s *Scenario) verifyApprovalResponsePublished(ctx context.Context, loopID, callID, executionID string) error {
 	baseMsg, err := s.awaitStreamPayload(ctx, "agent.approval_response."+loopID, 20*time.Second)
 	if err != nil {
 		return fmt.Errorf("read approval response for loop %s: %w", loopID, err)
@@ -217,9 +213,9 @@ func (s *Scenario) verifyApprovalResponsePublished(ctx context.Context, loopID, 
 	if !ok {
 		return fmt.Errorf("approval response payload type = %T, want *agentic.ApprovalResponse", baseMsg.Payload())
 	}
-	if response.LoopID != loopID || response.CallID != callID {
-		return fmt.Errorf("approval response = loop:%q call:%q, want loop:%q call:%q",
-			response.LoopID, response.CallID, loopID, callID)
+	if response.LoopID != loopID || response.CallID != callID || response.ExecutionID != executionID {
+		return fmt.Errorf("approval response = loop:%q call:%q execution:%q, want loop:%q call:%q execution:%q",
+			response.LoopID, response.CallID, response.ExecutionID, loopID, callID, executionID)
 	}
 	if response.Decision != agentic.ApprovalDecisionApprove || response.ApprovedBy != approvalRequester {
 		return fmt.Errorf("approval response = decision:%q by:%q, want %q by %q",
@@ -236,6 +232,10 @@ func (s *Scenario) refuseNonCanonicalApproval(ctx context.Context, result *scena
 	loopID, _ := result.Details["approval_loop_id"].(string)
 	if loopID == "" {
 		return fmt.Errorf("approval refusal proof requires the admitted loop id")
+	}
+	executionID, _ := result.Details["approval_execution_id"].(string)
+	if executionID == "" {
+		return fmt.Errorf("approval refusal proof requires the original pending execution id")
 	}
 	refusals := []loopRefusalCase{
 		{
@@ -262,8 +262,9 @@ func (s *Scenario) refuseNonCanonicalApproval(ctx context.Context, result *scena
 		status, body, err := s.postJSON(ctx,
 			fmt.Sprintf("%s/loops/%s/approval", dispatchRoutePrefix, refusal.loopID),
 			agenticdispatch.ApprovalRequest{
-				Decision: agentic.ApprovalDecisionApprove,
-				UserID:   approvalRequester,
+				Decision:    agentic.ApprovalDecisionApprove,
+				ExecutionID: executionID,
+				UserID:      approvalRequester,
 			})
 		if err != nil {
 			return fmt.Errorf("post %s approval: %w", refusal.name, err)
@@ -579,41 +580,26 @@ func terminalOutcome(payload message.Payload) (string, error) {
 
 // submitApproval answers a pending approval over the production HTTP seam.
 //
-// A 409 is retried inside a bounded window instead of being failed on. The
-// endpoint answers 409 for "this loop is not awaiting approval", and the
-// scenario reads the ApprovalPendingEvent off the AGENT stream directly —
-// which can beat dispatch's own subscription delivering the same event into
-// the tracker the endpoint reads. That is a race between two observers of one
-// fact, not a refusal. Every other status is the answer and is reported as
-// one, and a 409 that outlasts the window still fails.
-func (s *Scenario) submitApproval(ctx context.Context, loopID, decision string) error {
-	deadline := time.Now().Add(approvalTrackerWindow)
-	for {
-		status, body, err := s.postJSON(ctx,
-			fmt.Sprintf("%s/loops/%s/approval", dispatchRoutePrefix, loopID),
-			agenticdispatch.ApprovalRequest{Decision: decision, UserID: approvalRequester})
-		if err != nil {
-			return fmt.Errorf("post approval for loop %s: %w", loopID, err)
-		}
-		if status == http.StatusOK {
-			var accepted agenticdispatch.ApprovalAcceptResponse
-			if err := json.Unmarshal(body, &accepted); err != nil {
-				return fmt.Errorf("decode approval acceptance: %w", err)
-			}
-			if !accepted.Accepted || accepted.LoopID != loopID || accepted.Decision != decision {
-				return fmt.Errorf("approval acceptance = %+v, want accepted %s for loop %s", accepted, decision, loopID)
-			}
-			return nil
-		}
-		if status != http.StatusConflict || !time.Now().Before(deadline) {
-			return fmt.Errorf("approval status = %d, want 200 (body %s)", status, strings.TrimSpace(string(body)))
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(250 * time.Millisecond):
-		}
+// Echo the originally observed gate identity. A 409 is a current-authority
+// refusal, not a tracker race; never fetch or substitute a replacement gate.
+func (s *Scenario) submitApproval(ctx context.Context, loopID, executionID, decision string) error {
+	status, body, err := s.postJSON(ctx,
+		fmt.Sprintf("%s/loops/%s/approval", dispatchRoutePrefix, loopID),
+		agenticdispatch.ApprovalRequest{Decision: decision, ExecutionID: executionID, UserID: approvalRequester})
+	if err != nil {
+		return fmt.Errorf("post approval for loop %s: %w", loopID, err)
 	}
+	if status != http.StatusOK {
+		return fmt.Errorf("approval status = %d, want 200 (body %s)", status, strings.TrimSpace(string(body)))
+	}
+	var accepted agenticdispatch.ApprovalAcceptResponse
+	if err := json.Unmarshal(body, &accepted); err != nil {
+		return fmt.Errorf("decode approval acceptance: %w", err)
+	}
+	if !accepted.Accepted || accepted.LoopID != loopID || accepted.Decision != decision {
+		return fmt.Errorf("approval acceptance = %+v, want accepted %s for loop %s", accepted, decision, loopID)
+	}
+	return nil
 }
 
 // chatCommand submits a slash command on the dispatch HTTP message endpoint and

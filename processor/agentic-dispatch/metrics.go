@@ -13,7 +13,6 @@ type routerMetrics struct {
 	messagesReceived    *prometheus.CounterVec
 	commandsExecuted    *prometheus.CounterVec
 	tasksSubmitted      prometheus.Counter
-	activeLoops         prometheus.Gauge
 	routingDuration     prometheus.Histogram
 	completionsReceived *prometheus.CounterVec
 	terminalSettlements *prometheus.CounterVec
@@ -102,13 +101,6 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 			Subsystem: "router",
 			Name:      "tasks_submitted_total",
 			Help:      "Total number of tasks submitted to agentic loops",
-		}),
-
-		activeLoops: prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: "semstreams",
-			Subsystem: "router",
-			Name:      "active_loops",
-			Help:      "Number of currently active agentic loops",
 		}),
 
 		routingDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
@@ -243,7 +235,6 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 		_ = registry.RegisterCounterVec("router", "messages_received_total", m.messagesReceived)
 		_ = registry.RegisterCounterVec("router", "commands_executed_total", m.commandsExecuted)
 		_ = registry.RegisterCounter("router", "tasks_submitted_total", m.tasksSubmitted)
-		_ = registry.RegisterGauge("router", "active_loops", m.activeLoops)
 		_ = registry.RegisterHistogram("router", "routing_duration_seconds", m.routingDuration)
 		_ = registry.RegisterCounterVec("router", "completions_received_total", m.completionsReceived)
 		_ = registry.RegisterCounterVec("router", "terminal_settlement_total", m.terminalSettlements)
@@ -266,7 +257,6 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 		_ = prometheus.DefaultRegisterer.Register(m.messagesReceived)
 		_ = prometheus.DefaultRegisterer.Register(m.commandsExecuted)
 		_ = prometheus.DefaultRegisterer.Register(m.tasksSubmitted)
-		_ = prometheus.DefaultRegisterer.Register(m.activeLoops)
 		_ = prometheus.DefaultRegisterer.Register(m.routingDuration)
 		_ = prometheus.DefaultRegisterer.Register(m.completionsReceived)
 		_ = prometheus.DefaultRegisterer.Register(m.terminalSettlements)
@@ -302,16 +292,6 @@ func (m *routerMetrics) recordCommandExecuted(command string) {
 // recordTaskSubmitted increments the tasks submitted counter.
 func (m *routerMetrics) recordTaskSubmitted() {
 	m.tasksSubmitted.Inc()
-}
-
-// recordLoopStarted increments the active loops gauge.
-func (m *routerMetrics) recordLoopStarted() {
-	m.activeLoops.Inc()
-}
-
-// recordLoopEnded decrements the active loops gauge.
-func (m *routerMetrics) recordLoopEnded() {
-	m.activeLoops.Dec()
 }
 
 // recordRoutingDuration records the duration of a routing operation.

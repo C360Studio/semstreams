@@ -292,6 +292,19 @@ type deliveryWorkResult struct {
 	cause    error
 }
 
+// SettleDelivery validates one joined semantic outcome and attempts at most
+// one immediate terminal method. It owns no work or delivery lifecycle.
+func SettleDelivery(msg jetstream.Msg, decision DeliveryDecision, cause error) DeliveryResult {
+	if msg == nil {
+		return DeliveryResult{
+			decision: decision, cause: &InvalidDeliveryDecisionError{decision: decision, cause: cause},
+			quarantined: true, ownerStopNeeded: true,
+		}
+	}
+	result := interpretDeliveryWork(deliveryWorkResult{decision: decision, cause: cause})
+	return settleDeliveryDecision(msg, ImmediateDeliveryRetry(), result)
+}
+
 // ConsumeDeliveryWithHeartbeat runs setup-validated work, renews the delivery
 // lease, joins work on cancellation or control loss, and attempts at most one
 // local terminal method. It owns no consumer lifecycle or restart state.

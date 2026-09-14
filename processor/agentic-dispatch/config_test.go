@@ -8,11 +8,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// spec: agentic-dispatch / Prior messages accompany an independent chat turn
 func TestDefaultConfig(t *testing.T) {
 	config := DefaultConfig()
 
 	assert.Equal(t, "general", config.DefaultRole)
-	assert.True(t, config.AutoContinue)
+	assert.False(t, config.AutoContinue)
 	assert.Equal(t, "USER", config.StreamName)
 
 	// Check permissions
@@ -23,7 +24,7 @@ func TestDefaultConfig(t *testing.T) {
 
 	// Check ports
 	require.NotNil(t, config.Ports)
-	assert.Len(t, config.Ports.Inputs, 6)
+	assert.Len(t, config.Ports.Inputs, 4)
 	assert.Len(t, config.Ports.Outputs, 4)
 
 	// gh#1094 R8: the loops bucket is declared, so every persisted-loop

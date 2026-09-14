@@ -11,7 +11,7 @@ import (
 // Model selection is resolved from the unified model registry (component.Dependencies.ModelRegistry).
 type Config struct {
 	DefaultRole                string                `json:"default_role" schema:"type:string,description:Default role for new tasks,default:general,category:basic,required"`
-	AutoContinue               bool                  `json:"auto_continue" schema:"type:bool,description:Automatically continue last active loop,default:true,category:basic"` // Continue last loop if exists
+	AutoContinue               bool                  `json:"auto_continue" schema:"type:bool,description:Automatically continue last active loop,default:false,category:basic"` // Continue last loop if explicitly enabled
 	Permissions                PermissionConfig      `json:"permissions" schema:"type:object,description:Permission configuration,category:advanced"`
 	StreamName                 string                `json:"stream_name" schema:"type:string,description:NATS stream name for user messages,default:USER,category:advanced"`
 	ConsumerNameSuffix         string                `json:"consumer_name_suffix,omitempty" schema:"type:string,description:Suffix appended to consumer names for uniqueness,category:advanced"`
@@ -99,7 +99,7 @@ func (c Config) Validate() error {
 func DefaultConfig() Config {
 	return Config{
 		DefaultRole:  "general",
-		AutoContinue: true,
+		AutoContinue: false,
 		StreamName:   "USER",
 		Permissions: PermissionConfig{
 			View:       []string{"*"}, // Everyone can view
@@ -123,16 +123,8 @@ func DefaultConfig() Config {
 					Description: "Agent task completions",
 				},
 				{
-					Name: "agent.created", Config: component.JetStreamPort{Subjects: []string{"agent.created.*"}, StreamName: "AGENT"}, Required: false,
-					Description: "Loop creation events",
-				},
-				{
 					Name: "agent.failed", Config: component.JetStreamPort{Subjects: []string{"agent.failed.*"}, StreamName: "AGENT"}, Required: false,
 					Description: "Loop failure events",
-				},
-				{
-					Name: "agent.approval_pending", Config: component.JetStreamPort{Subjects: []string{"agent.approval_pending.*"}, StreamName: "AGENT"}, Required: false,
-					Description: "Approval-pending events used to populate the dispatch HTTP approval handler's CallID lookup",
 				},
 				{
 					Name: agentLoopsPortName, Config: component.KVReadPort{Bucket: "AGENT_LOOPS"}, Required: false,

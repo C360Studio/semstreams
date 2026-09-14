@@ -496,7 +496,9 @@ func TestConsumeDeliveryWithHeartbeatValidDecisionTruthTable(t *testing.T) {
 			require.NoError(t, policyErr)
 			result := ConsumeDeliveryWithHeartbeat(t.Context(), msg, policy)
 			require.Equal(t, tt.decision, result.Decision())
-			require.ErrorIs(t, result.Cause(), tt.cause)
+			if tt.cause != nil {
+				require.ErrorIs(t, result.Cause(), tt.cause)
+			}
 			require.Equal(t, tt.attempted, result.SettlementAttempted())
 			require.Equal(t, tt.succeeded, result.SettlementMethodSucceeded())
 			require.Equal(t, tt.failed, result.SettlementMethodFailed())
@@ -545,6 +547,132 @@ func TestConsumeDeliveryWithHeartbeatInvalidDecisionTuplesFailClosed(t *testing.
 			require.True(t, result.OwnerStopRequired())
 			require.False(t, result.SettlementAttempted())
 			require.Zero(t, msg.ackCount.Load()+msg.nakCount.Load()+msg.termCount.Load())
+		})
+	}
+}
+
+// spec: jetstream-consumer-policy / settlement-only delivery decisions use one shared interpreter
+func TestSettleDeliveryDecisionTruthTable(t *testing.T) {
+	cause := errors.New("semantic cause")
+	settlementErr := errors.New("terminal method failed")
+	tests := []struct {
+		name       string
+		decision   DeliveryDecision
+		cause      error
+		configure  func(*mockMsg)
+		wantAck    int32
+		wantNak    int32
+		wantTerm   int32
+		attempted  bool
+		succeeded  bool
+		failed     bool
+		quarantine bool
+		ownerStop  bool
+		wantErr    error
+	}{
+		{name: "ack", decision: DeliveryDecisionAck, wantAck: 1, attempted: true, succeeded: true},
+		{name: "ack method failure", decision: DeliveryDecisionAck, configure: func(m *mockMsg) { m.ackErr = settlementErr }, wantAck: 1, attempted: true, failed: true, wantErr: settlementErr},
+		{name: "retry", decision: DeliveryDecisionRetry, cause: cause, wantNak: 1, attempted: true, succeeded: true, wantErr: cause},
+		{name: "retry method failure", decision: DeliveryDecisionRetry, cause: cause, configure: func(m *mockMsg) { m.nakErr = settlementErr }, wantNak: 1, attempted: true, failed: true, wantErr: settlementErr},
+		{name: "terminate", decision: DeliveryDecisionTerminate, cause: cause, wantTerm: 1, attempted: true, succeeded: true, wantErr: cause},
+		{name: "terminate method failure", decision: DeliveryDecisionTerminate, cause: cause, configure: func(m *mockMsg) { m.termErr = settlementErr }, wantTerm: 1, attempted: true, failed: true, wantErr: settlementErr},
+		{name: "quarantine", decision: DeliveryDecisionQuarantine, cause: cause, quarantine: true, ownerStop: true, wantErr: cause},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &mockMsg{subject: "settlement-only"}
+			if tt.configure != nil {
+				tt.configure(msg)
+			}
+
+			result := SettleDelivery(msg, tt.decision, tt.cause)
+
+			require.Equal(t, tt.decision, result.Decision())
+			require.ErrorIs(t, result.Cause(), tt.cause)
+			require.Equal(t, tt.wantAck, msg.ackCount.Load())
+			require.Equal(t, tt.wantNak, msg.nakCount.Load())
+			require.Equal(t, tt.wantTerm, msg.termCount.Load())
+			require.LessOrEqual(t, msg.ackCount.Load()+msg.nakCount.Load()+msg.termCount.Load(), int32(1))
+			require.Zero(t, msg.dataCount.Load())
+			require.Zero(t, msg.metadataCount.Load())
+			require.Zero(t, msg.inProgressCount.Load())
+			require.Equal(t, tt.attempted, result.SettlementAttempted())
+			require.Equal(t, tt.succeeded, result.SettlementMethodSucceeded())
+			require.Equal(t, tt.failed, result.SettlementMethodFailed())
+			require.False(t, result.ServerConfirmed())
+			require.Equal(t, tt.quarantine, result.Quarantined())
+			require.Equal(t, tt.ownerStop, result.OwnerStopRequired())
+			if tt.wantErr == nil {
+				require.NoError(t, result.Err())
+			} else {
+				require.ErrorIs(t, result.Err(), tt.wantErr)
+			}
+		})
+	}
+}
+
+// spec: jetstream-consumer-policy / settlement-only delivery decisions use one shared interpreter
+func TestSettleDeliveryInvalidTuplesAndNilMessageFailClosed(t *testing.T) {
+	supplied := errors.New("supplied")
+	invalidTuples := []struct {
+		name     string
+		decision DeliveryDecision
+		cause    error
+	}{
+		{name: "invalid nil", decision: DeliveryDecisionInvalid},
+		{name: "invalid error", decision: DeliveryDecisionInvalid, cause: supplied},
+		{name: "ack error", decision: DeliveryDecisionAck, cause: supplied},
+		{name: "retry nil", decision: DeliveryDecisionRetry},
+		{name: "terminate nil", decision: DeliveryDecisionTerminate},
+		{name: "quarantine nil", decision: DeliveryDecisionQuarantine},
+		{name: "unknown nil", decision: DeliveryDecision(200)},
+		{name: "unknown error", decision: DeliveryDecision(200), cause: supplied},
+	}
+	for _, tt := range invalidTuples {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := &mockMsg{subject: "invalid"}
+			result := SettleDelivery(msg, tt.decision, tt.cause)
+
+			require.Equal(t, tt.decision, result.Decision())
+			var invalid *InvalidDeliveryDecisionError
+			require.ErrorAs(t, result.Cause(), &invalid)
+			if tt.cause != nil {
+				require.ErrorIs(t, result.Cause(), tt.cause)
+			}
+			require.True(t, result.Quarantined())
+			require.True(t, result.OwnerStopRequired())
+			require.False(t, result.SettlementAttempted())
+			require.Zero(t, msg.ackCount.Load()+msg.nakCount.Load()+msg.termCount.Load())
+			require.Zero(t, msg.dataCount.Load())
+			require.Zero(t, msg.metadataCount.Load())
+			require.Zero(t, msg.inProgressCount.Load())
+		})
+	}
+
+	for _, tt := range []struct {
+		name     string
+		decision DeliveryDecision
+		cause    error
+	}{
+		{name: "nil message ack", decision: DeliveryDecisionAck},
+		{name: "nil message retry", decision: DeliveryDecisionRetry, cause: supplied},
+		{name: "nil message terminate", decision: DeliveryDecisionTerminate, cause: supplied},
+		{name: "nil message quarantine", decision: DeliveryDecisionQuarantine, cause: supplied},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			result := SettleDelivery(nil, tt.decision, tt.cause)
+			require.Equal(t, tt.decision, result.Decision())
+			var invalid *InvalidDeliveryDecisionError
+			require.ErrorAs(t, result.Cause(), &invalid)
+			require.Error(t, result.Err())
+			if tt.cause != nil {
+				require.ErrorIs(t, result.Cause(), tt.cause)
+			}
+			require.NoError(t, result.ControlError())
+			require.True(t, result.Quarantined())
+			require.True(t, result.OwnerStopRequired())
+			require.False(t, result.SettlementAttempted())
 		})
 	}
 }

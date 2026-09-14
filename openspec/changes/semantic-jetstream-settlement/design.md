@@ -21,7 +21,7 @@ and owner-requested cross-agent review of the final integrated claim set and own
 
 ### D1 — permanent additive typed API
 
-The permanent typed entry point is:
+The permanent typed entry points are:
 
 ```go
 func ConsumeDeliveryWithHeartbeat(
@@ -29,15 +29,23 @@ func ConsumeDeliveryWithHeartbeat(
     msg jetstream.Msg,
     policy HeartbeatDeliveryPolicy,
 ) DeliveryResult
+
+func SettleDelivery(
+    msg jetstream.Msg,
+    decision DeliveryDecision,
+    cause error,
+) DeliveryResult
 ```
 
-The established `Consume...With...` vocabulary describes one delivered message without reading as a heartbeat-message
-consumer. The permanent name does not change during staging or final cutover. Final current truth exports only this
-typed entry point; `ConsumeWithHeartbeat` and `NewDurableHandler` are absent without aliases.
+`ConsumeDeliveryWithHeartbeat` invokes measured long-running work and renews its lease. `SettleDelivery` validates an
+already-computed decision and attempts its terminal method; it invokes no work and owns no context, deadline,
+heartbeat, consumer handle, or lifecycle. The permanent names do not change during staging or final cutover.
+`ConsumeWithHeartbeat` and `NewDurableHandler` are absent without aliases.
 
 During non-default integration only, a zero-growth branch-staging guard pins the three current caller files and
 rejects any new production caller or alias. That list is not an API allowlist, compatibility promise, current
-capability, or merge authority. Documentation and examples teach only the permanent typed API.
+capability, or merge authority. Documentation and examples teach only these permanent typed APIs at their distinct
+boundaries.
 
 ### D2 — semantic decision and error-last work contract
 
@@ -213,9 +221,13 @@ The existing owner commits the exact acquired handle, observes buffered fatal re
 bounded evidence through existing health/error fields, and shares one private stop/drain-once path with ordinary Stop.
 The observer derives from Start/Run and joins Stop. Shared natsclient owns no lifecycle.
 
-### D9 — private terminal executor and branch-staging containment
+### D9 — shared settlement interpreter, private terminal executor, and branch-staging containment
 
-Typed and staged legacy helpers may share only a private terminal-method executor. Before extraction,
+`SettleDelivery` reuses the existing private decision interpreter and terminal-method executor. It validates the
+closed decision/error tuple and attempts Ack, immediate Nak, Term, or no settlement for Quarantine. It does not read
+payload or metadata, invoke work, create a context or goroutine, derive a deadline, send heartbeat, or own lifecycle.
+
+Typed and staged legacy helpers may share the private terminal-method executor. Before extraction,
 characterization tests pin every old ACK, 30-second Retry, Term, 5-second cancellation, InProgress, and error-chain
 path. Typed does not call legacy; legacy does not translate through the exported DeliveryDecision/DeliveryWork
 contract. `TerminateDelivery(error) error` and `PermanentDeliveryError` retain their exact contracts and are not part
@@ -239,8 +251,9 @@ The Stage A tools and dispatch bindings establish the typed foundation but do no
 
 #1146 retains its full accepted intake, command, model, loop, tools, signal, approval, projection, governance, replay,
 and context/lifecycle scope. Its model and three loop heartbeat migrations are additive. It rebases onto the reviewed
-#759 foundation checkpoint and chooses a reviewed route for every fast no-heartbeat lane. No lane receives raw
-settlement or an exported no-heartbeat API by implication.
+#759 foundation checkpoint and routes each non-heartbeat binding through typed business work followed by the narrow
+`SettleDelivery` transport helper in its existing private callback. No native message enters business work and no
+helper owns work, deadline, consumer lifecycle, or restart state.
 
 #1249 begins from the staged #759 head after #1146 integration so its AgentRun design observes the post-#1146 terminal
 and handler shapes. It defines source identity, handler durable done, replay, panic/error, and partial-success
@@ -285,13 +298,13 @@ is not reclaimed.
 
 - Extend the builder into a handle owner: creates a second lifecycle authority and cannot resolve
   callback-before-return.
-- Export a no-heartbeat `SettleDelivery`: no present #759 adopter; OTEL needs later pull-specific inventory.
+- Export a work-owning no-heartbeat policy or owner: duplicates component context and lifecycle authority.
 - Derive semantic retry from BackOff: conflates explicit Nak policy with server missing-settlement schedule.
 - Remove BackOff: silently weakens tools/loop crash recovery.
 - Shared gate/supervisor/durable quarantine: duplicates component and JetStream authority.
 - Migrate a binding by mechanical nil-to-ACK/error-to-Retry conversion: invents definition of done and replay safety.
-- Pass `jetstream.Msg`, a settlement-capable view, or per-delivery work closure: leaks settlement authority or weakens
-  setup-time validation.
+- Pass `jetstream.Msg`, a settlement-capable view, or per-delivery work closure into business work: leaks settlement
+  authority or weakens setup-time validation.
 - Export `DeliveryAttempt` fields or a public constructor: permits inconsistent caller-authored observations and
   turns a framework-observed fact back into caller prediction.
 - Treat redelivery as proof prior work ran: process loss before invocation produces the same later observation.

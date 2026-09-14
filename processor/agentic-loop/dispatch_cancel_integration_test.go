@@ -82,11 +82,11 @@ func TestCancelCommandCancelsTheLoop(t *testing.T) {
 	// loop, so admission depends entirely on the merged read.
 	kv, err := tc.GetKVBucket(ctx, "AGENT_LOOPS")
 	require.NoError(t, err)
-	record, err := json.Marshal(agentic.LoopEntity{
-		ID: loopID, TaskID: "task-1", UserID: "loop-owner",
-		ChannelType: "http", ChannelID: "session-1",
-		State: agentic.LoopStateExecuting, MaxIterations: 5,
-	})
+	loopComp.loopsBucket = kv
+	entity.UserID = "loop-owner"
+	entity.ChannelType = "http"
+	entity.ChannelID = "session-1"
+	record, err := json.Marshal(entity)
 	require.NoError(t, err)
 	_, err = kv.Put(ctx, loopID, record)
 	require.NoError(t, err)
@@ -113,7 +113,14 @@ func TestCancelCommandCancelsTheLoop(t *testing.T) {
 	// The exact bytes dispatch put on the subject — not a reconstruction.
 	data := fetchOne(t, ctx, tc, "AGENT", "signal-e2e", "agent.signal."+loopID)
 
-	loopComp.handleSignalMessage(ctx, data)
+	decision, err := loopComp.handleSignalMessage(ctx, data)
+	require.NoError(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+	entry, err := kv.Get(ctx, loopID)
+	require.NoError(t, err)
+	var saved agentic.LoopEntity
+	require.NoError(t, json.Unmarshal(entry.Value(), &saved))
+	require.Equal(t, agentic.LoopStateCancelled, saved.State)
 
 	// The loop cancelled. Its in-process entity is released on settlement
 	// (the terminal-release contract), so the observable outcome is the

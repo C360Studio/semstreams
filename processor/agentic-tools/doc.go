@@ -240,7 +240,7 @@
 //  3. Look up executor in registry
 //  4. Create timeout context
 //  5. Execute tool with context
-//  6. Publish ToolResult to tool.result.{call_id}
+//  6. Publish ToolResult to tool.result.{execution_id}
 //  7. Acknowledge JetStream message
 //
 // # Error Handling
@@ -268,12 +268,12 @@
 //
 // # Wire Execution
 //
-// Every wire response remains correlated to its call ID. An initial
-// approval_required response is a nonterminal pause: it creates no COMPLETED
-// outcome and leaves the same CallID eligible for approved re-dispatch. Calls
-// that reach execution or terminal policy rejection receive correlated durable
-// terminal results, and COMPLETED redelivery replays that result without
-// re-invoking the executor.
+// Every wire response remains correlated to its request, execution, and
+// provider-call identity. An initial approval_required response is nonterminal
+// coordination: it creates no COMPLETED outcome and leaves the same execution
+// identity eligible for approved re-dispatch. Calls that reach execution or
+// terminal policy rejection receive correlated durable terminal results, and
+// COMPLETED redelivery replays that result without re-invoking the executor.
 //
 // The wire contract promises neither serialized execution nor execution
 // overlap. The current implementation uses one native callback and joins

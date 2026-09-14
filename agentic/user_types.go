@@ -3,7 +3,9 @@ package agentic
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/internal/looptoken"
@@ -11,15 +13,21 @@ import (
 	"github.com/c360studio/semstreams/pkg/types"
 )
 
-// Signal type constants for user control signals
+// Signal type constants for user control signals.
+//
+// Cancel is the whole vocabulary. Five other verbs were advertised here and
+// none was ever handled: the loop's signal consumer switches on cancel alone
+// (processor/agentic-loop/component.go), so every other verb reached the
+// default arm, logged a warning, and was ACKed as delivered — the caller saw
+// success and got nothing. pause/resume were deleted under #1239; approve,
+// reject, feedback and retry followed under the same ruling once the same
+// shape was found in them.
+//
+// Approval and rejection are real, on a different payload: ApprovalResponse
+// over agent.approval_response.* (ADR-039). They were never UserSignal verbs
+// in practice, only in this list.
 const (
-	SignalCancel   = "cancel"   // Stop execution immediately
-	SignalPause    = "pause"    // Pause at next checkpoint
-	SignalResume   = "resume"   // Continue paused loop
-	SignalApprove  = "approve"  // Approve pending result
-	SignalReject   = "reject"   // Reject with optional reason
-	SignalFeedback = "feedback" // Add feedback without decision
-	SignalRetry    = "retry"    // Retry failed loop
+	SignalCancel = "cancel" // Stop execution immediately
 )
 
 // UserMessage represents normalized input from any channel (CLI, Slack, Discord, web)
@@ -33,6 +41,9 @@ type UserMessage struct {
 	// Content
 	Content     string       `json:"content"`
 	Attachments []Attachment `json:"attachments,omitempty"`
+	// PriorMessages is the adapter's displayed transcript for an independent turn.
+	// Dispatch validates it at task construction so routable invalid input receives an error response.
+	PriorMessages []ChatMessage `json:"prior_messages,omitempty"`
 
 	// Context
 	ReplyTo          string            `json:"reply_to,omitempty"`           // loop_id if continuing
@@ -111,7 +122,7 @@ type Attachment struct {
 // UserSignal represents a control signal from user to affect loop execution
 type UserSignal struct {
 	SignalID    string    `json:"signal_id"`
-	Type        string    `json:"type"` // cancel, pause, resume, approve, reject, feedback, retry
+	Type        string    `json:"type"` // cancel
 	LoopID      string    `json:"loop_id"`
 	UserID      string    `json:"user_id"`
 	ChannelType string    `json:"channel_type"`
@@ -129,7 +140,11 @@ func (s UserSignal) Validate() error {
 		return fmt.Errorf("type required")
 	}
 	if !isValidSignalType(s.Type) {
-		return fmt.Errorf("type must be one of: cancel, pause, resume, approve, reject, feedback, retry")
+		if redirect, removed := removedSignalTypes[s.Type]; removed {
+			return fmt.Errorf("type %q was removed in #1239 (advertised but never implemented)%s; "+
+				"type must be one of: %s", s.Type, redirect, strings.Join(validSignalTypes, ", "))
+		}
+		return fmt.Errorf("type must be one of: %s", strings.Join(validSignalTypes, ", "))
 	}
 	if s.LoopID == "" {
 		return fmt.Errorf("loop_id required")
@@ -164,13 +179,39 @@ func (s *UserSignal) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*Alias)(s))
 }
 
+// validSignalTypes is the closed signal vocabulary. It is the single source
+// for both isValidSignalType and the refusal message: a rejected verb must
+// never be named as permitted by the error that rejects it. Six verbs were
+// removed under #1239 — every one advertised and never handled; see
+// removedSignalTypes below.
+var validSignalTypes = []string{
+	SignalCancel,
+}
+
+// removedSignalTypes are verbs this package once advertised and never
+// implemented. They are spelled literally because the constants are gone: the
+// point of naming them is to answer an adopter who is still sending one, at
+// the moment their signal is refused, rather than handing them a list that
+// silently omits what they sent. Every other invalid type gets the plain list
+// — an unconditional hint would be noise on unrelated refusals.
+var removedSignalTypes = map[string]string{
+	"pause":    "",
+	"resume":   "",
+	"feedback": "",
+	"retry":    "",
+	"approve":  approvalRedirect,
+	"reject":   approvalRedirect,
+}
+
+// approvalRedirect names the lane that actually carries an approval decision.
+// approve/reject are the only two removed verbs with a real destination, and
+// approve is the one an adopter is most likely to be holding — telling them it
+// was removed without saying where to go would leave the correctness fact
+// discoverable only from a migration document they have no reason to open.
+const approvalRedirect = " — publish an ApprovalResponse on agent.approval_response.* instead (ADR-039)"
+
 func isValidSignalType(t string) bool {
-	switch t {
-	case SignalCancel, SignalPause, SignalResume, SignalApprove, SignalReject, SignalFeedback, SignalRetry:
-		return true
-	default:
-		return false
-	}
+	return slices.Contains(validSignalTypes, t)
 }
 
 // Response type constants
@@ -261,20 +302,26 @@ type ResponseBlock struct {
 
 // ResponseAction represents an interactive action in a response
 type ResponseAction struct {
-	ID     string `json:"id"`
-	Type   string `json:"type"` // button, reaction
-	Label  string `json:"label"`
-	Signal string `json:"signal"` // signal to send if clicked
-	Style  string `json:"style"`  // primary, danger, secondary
+	ID    string `json:"id"`
+	Type  string `json:"type"` // button, reaction
+	Label string `json:"label"`
+	// Signal is the control signal to send if the action is clicked. The only
+	// signal the loop handles is "cancel"; an approval affordance must publish
+	// an ApprovalResponse on agent.approval_response.* instead (ADR-039).
+	Signal string `json:"signal"`
+	Style  string `json:"style"` // primary, danger, secondary
 }
 
 // TaskMessage represents a task to be executed by an agentic loop
 type TaskMessage struct {
-	LoopID string `json:"loop_id,omitempty"` // loop to continue, or empty for new
-	TaskID string `json:"task_id"`
-	Role   string `json:"role"`
-	Model  string `json:"model"`
-	Prompt string `json:"prompt"`
+	LoopID          string `json:"loop_id"` // producer-minted loop identity
+	TaskID          string `json:"task_id"`
+	SourceMessageID string `json:"source_message_id,omitempty"`
+	Role            string `json:"role"`
+	Model           string `json:"model"`
+	Prompt          string `json:"prompt"`
+	// PriorMessages supplies ordered displayed user/assistant text, not prior execution state.
+	PriorMessages []ChatMessage `json:"prior_messages,omitempty"`
 
 	// Workflow context (optional, set by workflow commands)
 	WorkflowSlug string `json:"workflow_slug,omitempty"` // e.g., "add-user-auth"
@@ -363,6 +410,9 @@ type GraphContextSpec = types.GraphContextSpec
 
 // Validate checks if the TaskMessage is valid
 func (t TaskMessage) Validate() error {
+	if t.LoopID == "" {
+		return fmt.Errorf("loop_id required")
+	}
 	if t.TaskID == "" {
 		return fmt.Errorf("task_id required")
 	}
@@ -374,6 +424,9 @@ func (t TaskMessage) Validate() error {
 	}
 	if t.Prompt == "" {
 		return fmt.Errorf("prompt required")
+	}
+	if err := validatePriorMessages(t.PriorMessages); err != nil {
+		return err
 	}
 	if t.MaxIterations != nil && *t.MaxIterations < 1 {
 		return fmt.Errorf("max_iterations must be >= 1, got %d", *t.MaxIterations)
@@ -399,20 +452,39 @@ func (t TaskMessage) Validate() error {
 	return nil
 }
 
-// validateLoopTokens refuses any loop instance token this task carries that the
-// framework did not mint (ADR-105, #1192). Every one of these four fields is a
+// validatePriorMessages owns the narrower task-input subset without changing
+// ChatMessage's provider/tool grammar or imposing transcript ordering policy.
+func validatePriorMessages(messages []ChatMessage) error {
+	for i, msg := range messages {
+		if msg.Role != "user" && msg.Role != "assistant" {
+			return fmt.Errorf("prior_messages[%d].role must be user or assistant", i)
+		}
+		if msg.Content == "" {
+			return fmt.Errorf("prior_messages[%d].content required", i)
+		}
+		if msg.Name != "" || msg.ReasoningContent != "" || len(msg.ToolCalls) != 0 ||
+			msg.ToolCallID != "" || msg.IsError || len(msg.ReasoningRecords) != 0 {
+			return fmt.Errorf("prior_messages[%d] must contain only displayed role and content", i)
+		}
+	}
+	return nil
+}
+
+// validateLoopTokens refuses any loop instance token whose form cannot be one
+// the framework minted (ADR-105, #1192). Every one of these four fields is a
 // loop token, and every one reaches the graph write path: ParentLoopID composes
 // through the PANICKING LoopExecutionEntityID builder, and RunID / InReplyTo —
 // the gh#256 resume anchors, both client-set — are stamped raw into triples with
 // a silent half-write when their derivation fails.
 //
-// Validate is the refusal's one home because it is the gate both sides already
-// run: the rule engine before publishing, and agentic-loop intake on the way in,
-// where a rejection is loud (intake-rejection metric + TerminateDelivery). A
-// failure discovered later inside HandleTask is logged and ACKed with no metric.
+// Validate is the refusal's one home because it is the gate both sides run: the
+// rule engine before publishing, durable agentic-loop intake before state, and
+// direct HandleTask before loop registration. Intake counts and terminates an
+// invalid delivery; the direct boundary returns a typed invalid error.
 //
-// Empty is valid throughout: an unset token is the ordinary case, and the
-// framework mints it downstream. The caller's only verb is echo.
+// LoopID requiredness is checked by Validate before this shared form check.
+// The remaining tokens are optional, but every present token must have the
+// same canonical form.
 func (t TaskMessage) validateLoopTokens() error {
 	tokens := []struct {
 		field string
@@ -438,10 +510,10 @@ func (t TaskMessage) validateLoopTokens() error {
 // joins this call rather than growing a fifth spelling of the refusal text.
 //
 // Empty is not refused here. Whether a token is REQUIRED is each carrier's own
-// question and is asked before this one: a task's tokens are optional (an unset
-// one is the ordinary submission and the framework mints downstream), while a
-// signal, an approval response, and an approval-pending event each name a loop
-// that must already exist and reject an empty token on their own line.
+// question and is asked before this one: TaskMessage requires LoopID but keeps
+// its continuation tokens optional, while a signal, an approval response, and
+// an approval-pending event each name a loop that must already exist and reject
+// an empty token on their own line.
 func validateLoopTokenField(field, value string) error {
 	if value == "" || looptoken.Valid(value) {
 		return nil

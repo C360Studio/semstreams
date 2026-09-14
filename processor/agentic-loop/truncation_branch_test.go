@@ -8,6 +8,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
+	"github.com/google/uuid"
 )
 
 // fillContextToHighUtilization adds messages to the loop's context
@@ -57,6 +58,7 @@ func TestHandleLengthTruncation_FailFast_LowUtilization(t *testing.T) {
 	ctx := context.Background()
 
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-failfast",
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -138,6 +140,7 @@ func TestHandleLengthTruncation_ResetAfterForwardProgress(t *testing.T) {
 	ctx := context.Background()
 
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-reset",
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -225,6 +228,7 @@ func TestHandleLengthTruncation_Retry_HighUtilization(t *testing.T) {
 	ctx := context.Background()
 
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-retry",
 		Role:   "general",
 		Model:  "qwen-32b",
@@ -314,6 +318,7 @@ func TestHandleLengthTruncation_SecondTruncation_FailWithCompactionAttempted(t *
 	ctx := context.Background()
 
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-twice",
 		Role:   "general",
 		Model:  "qwen-32b",

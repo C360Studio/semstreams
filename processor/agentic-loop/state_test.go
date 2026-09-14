@@ -78,7 +78,7 @@ func TestLoopManager_CreateLoop(t *testing.T) {
 			if entity.Model != tt.model {
 				t.Errorf("Entity.Model = %s, want %s", entity.Model, tt.model)
 			}
-			if entity.State != agentic.LoopStateExploring {
+			if entity.State != agentic.LoopStateRunning {
 				t.Errorf("Entity.State = %s, want exploring", entity.State)
 			}
 			if entity.Iterations != 0 {
@@ -161,7 +161,7 @@ func TestLoopManager_UpdateLoop(t *testing.T) {
 	}
 
 	// Modify the entity
-	entity.State = agentic.LoopStatePlanning
+	entity.State = agentic.LoopStateRunning
 	entity.Iterations = 5
 
 	// Update
@@ -176,7 +176,7 @@ func TestLoopManager_UpdateLoop(t *testing.T) {
 		t.Fatalf("GetLoop() after update error = %v", err)
 	}
 
-	if updated.State != agentic.LoopStatePlanning {
+	if updated.State != agentic.LoopStateRunning {
 		t.Errorf("Updated.State = %s, want planning", updated.State)
 	}
 	if updated.Iterations != 5 {
@@ -237,14 +237,6 @@ func TestLoopManager_DeleteLoop_NonExistent(_ *testing.T) {
 }
 
 func TestLoopManager_StateTransition(t *testing.T) {
-	manager := agenticloop.NewLoopManager()
-
-	// Create a loop
-	loopID, err := manager.CreateLoop("task-001", "general", "qwen-32b")
-	if err != nil {
-		t.Fatalf("CreateLoop() error = %v", err)
-	}
-
 	tests := []struct {
 		name      string
 		fromState agentic.LoopState
@@ -252,63 +244,52 @@ func TestLoopManager_StateTransition(t *testing.T) {
 		wantErr   bool
 	}{
 		{
-			name:      "exploring to planning",
-			fromState: agentic.LoopStateExploring,
-			toState:   agentic.LoopStatePlanning,
+			name:      "running to failed",
+			fromState: agentic.LoopStateRunning,
+			toState:   agentic.LoopStateFailed,
 			wantErr:   false,
 		},
 		{
-			name:      "planning to architecting",
-			fromState: agentic.LoopStatePlanning,
-			toState:   agentic.LoopStateArchitecting,
+			name:      "running to cancelled",
+			fromState: agentic.LoopStateRunning,
+			toState:   agentic.LoopStateCancelled,
 			wantErr:   false,
 		},
 		{
-			name:      "architecting to executing",
-			fromState: agentic.LoopStateArchitecting,
-			toState:   agentic.LoopStateExecuting,
-			wantErr:   false,
-		},
-		{
-			name:      "executing to reviewing",
-			fromState: agentic.LoopStateExecuting,
-			toState:   agentic.LoopStateReviewing,
-			wantErr:   false,
-		},
-		{
-			name:      "reviewing to complete",
-			fromState: agentic.LoopStateReviewing,
+			name:      "running to complete",
+			fromState: agentic.LoopStateRunning,
 			toState:   agentic.LoopStateComplete,
 			wantErr:   false,
 		},
 		{
-			name:      "backward transition (executing to exploring)",
-			fromState: agentic.LoopStateExecuting,
-			toState:   agentic.LoopStateExploring,
-			wantErr:   false, // Fluid transitions allow backward movement
-		},
-		{
 			name:      "same state transition",
-			fromState: agentic.LoopStatePlanning,
-			toState:   agentic.LoopStatePlanning,
+			fromState: agentic.LoopStateRunning,
+			toState:   agentic.LoopStateRunning,
 			wantErr:   false, // Same state is allowed (no-op)
 		},
 		{
 			name:      "transition from terminal state (complete)",
 			fromState: agentic.LoopStateComplete,
-			toState:   agentic.LoopStateExecuting,
+			toState:   agentic.LoopStateRunning,
 			wantErr:   true, // Cannot transition from terminal state
 		},
 		{
 			name:      "transition from terminal state (failed)",
 			fromState: agentic.LoopStateFailed,
-			toState:   agentic.LoopStateExploring,
+			toState:   agentic.LoopStateRunning,
 			wantErr:   true, // Cannot transition from terminal state
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Each edge starts independently; a prior terminal row cannot be reset.
+			manager := agenticloop.NewLoopManager()
+			loopID, err := manager.CreateLoop("task-001", "general", "qwen-32b")
+			if err != nil {
+				t.Fatalf("CreateLoop() error = %v", err)
+			}
+
 			// Get entity and set to fromState
 			entity, err := manager.GetLoop(loopID)
 			if err != nil {
@@ -576,16 +557,16 @@ func TestLoopManager_GetAndClearToolResults_EvictsToolCallToLoop(t *testing.T) {
 
 	// Simulate dispatch: register A and B as in-flight tool calls plus their
 	// metadata (mirrors what dispatchToolCall populates).
-	manager.TrackToolCall("call-A", loopID)
+	manager.TrackToolCall("execution-A", loopID)
 	manager.TrackToolName("call-A", "graph_search")
-	manager.TrackToolCall("call-B", loopID)
+	manager.TrackToolCall("execution-B", loopID)
 	manager.TrackToolName("call-B", "http_request")
 
 	// Both results land.
-	if err := manager.StoreToolResult(loopID, agentic.ToolResult{CallID: "call-A", Name: "graph_search", Content: "a"}); err != nil {
+	if err := manager.StoreToolResult(loopID, agentic.ToolResult{ExecutionID: "execution-A", CallID: "call-A", Name: "graph_search", Content: "a"}); err != nil {
 		t.Fatalf("StoreToolResult(A) error = %v", err)
 	}
-	if err := manager.StoreToolResult(loopID, agentic.ToolResult{CallID: "call-B", Name: "http_request", Content: "b"}); err != nil {
+	if err := manager.StoreToolResult(loopID, agentic.ToolResult{ExecutionID: "execution-B", CallID: "call-B", Name: "http_request", Content: "b"}); err != nil {
 		t.Fatalf("StoreToolResult(B) error = %v", err)
 	}
 
@@ -598,10 +579,10 @@ func TestLoopManager_GetAndClearToolResults_EvictsToolCallToLoop(t *testing.T) {
 	// Routing must be evicted so a late re-delivery has no loop to attach to —
 	// findLoopIDForToolCall reads this map and a non-empty result would let
 	// the duplicate flow through HandleToolResult into the next turn's drain.
-	if _, ok := manager.GetLoopForToolCall("call-A"); ok {
+	if _, ok := manager.GetLoopForToolCall("execution-A"); ok {
 		t.Errorf("GetLoopForToolCall(call-A) still resolves after drain — a re-delivered result would leak into the next turn")
 	}
-	if _, ok := manager.GetLoopForToolCall("call-B"); ok {
+	if _, ok := manager.GetLoopForToolCall("execution-B"); ok {
 		t.Errorf("GetLoopForToolCall(call-B) still resolves after drain — a re-delivered result would leak into the next turn")
 	}
 
@@ -625,8 +606,8 @@ func TestLoopManager_GetAndClearToolResults_EvictsToolCallToLoop(t *testing.T) {
 	// approval-approve flow, where dispatchApprovedCall re-issues the same
 	// CallID via dispatchToolCall after the human says yes. If eviction
 	// blocked re-track, approval-after-drain would silently lose the result.
-	manager.TrackToolCall("call-A", loopID)
-	if got, ok := manager.GetLoopForToolCall("call-A"); !ok || got != loopID {
+	manager.TrackToolCall("execution-A", loopID)
+	if got, ok := manager.GetLoopForToolCall("execution-A"); !ok || got != loopID {
 		t.Errorf("GetLoopForToolCall(call-A) after re-track = (%q, %v), want (%q, true)", got, ok, loopID)
 	}
 }
@@ -760,13 +741,13 @@ func TestLoopManager_CancelLoop(t *testing.T) {
 	}{
 		{
 			name:        "cancel exploring loop",
-			setupState:  agentic.LoopStateExploring,
+			setupState:  agentic.LoopStateRunning,
 			cancelledBy: "user-123",
 			wantErr:     false,
 		},
 		{
 			name:        "cancel executing loop",
-			setupState:  agentic.LoopStateExecuting,
+			setupState:  agentic.LoopStateRunning,
 			cancelledBy: "user-456",
 			wantErr:     false,
 		},
@@ -792,7 +773,7 @@ func TestLoopManager_CancelLoop(t *testing.T) {
 			loopID, _ := manager.CreateLoop("task-001", "general", "qwen-32b", 10)
 
 			// Set up the loop state
-			if tt.setupState != agentic.LoopStateExploring {
+			if tt.setupState != agentic.LoopStateRunning {
 				_ = manager.TransitionLoop(loopID, tt.setupState)
 			}
 

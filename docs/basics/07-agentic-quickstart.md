@@ -174,31 +174,21 @@ Rules can spawn agents based on conditions:
 
 ## State Machine
 
-The agentic loop uses a fluid state machine:
+The agentic loop uses five operational states:
 
 ```text
-┌───────────┐   ┌──────────┐   ┌─────────────┐   ┌───────────┐   ┌───────────┐
-│ exploring │──►│ planning │──►│ architecting│──►│ executing │──►│ reviewing │
-└───────────┘   └──────────┘   └─────────────┘   └───────────┘   └─────┬─────┘
-      ▲               ▲               ▲                ▲               │
-      │               │               │                │               │
-      └───────────────┴───────────────┴────────────────┘               │
-                   (fluid backward transitions)                         │
-                                                                        ▼
-                                                    ┌───────────────────────────┐
-                                                    │ complete │ failed │cancelled│
-                                                    └───────────────────────────┘
+running           → awaiting_approval | complete | failed | cancelled
+awaiting_approval → running | failed | cancelled
+complete, failed, cancelled → no outgoing transitions
 ```
 
-**States are checkpoints, not gates.** Agents can move backward (e.g., from executing back to exploring) when they need to rethink. Only terminal states (complete, failed, cancelled) are final.
+Model/tool work stays running. Approval is a specific human-decision gate, and terminal states cannot reopen.
+Restart recovery uses the existing durable state and results; it does not infer completed work from a phase label.
 
 | State | Description |
 |-------|-------------|
-| `exploring` | Initial state, gathering information |
-| `planning` | Developing approach |
-| `architecting` | Designing solution |
-| `executing` | Implementing solution |
-| `reviewing` | Validating results |
+| `running` | Work is ongoing, including waiting for model/tool results |
+| `awaiting_approval` | Waiting for a human decision on a specific tool execution |
 | `complete` | Successfully finished |
 | `failed` | Failed due to error or max iterations |
 | `cancelled` | Cancelled by user signal |

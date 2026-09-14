@@ -160,10 +160,10 @@ func TestUserSignal_Validate(t *testing.T) {
 			wantErr: "",
 		},
 		{
-			name: "valid reject signal with payload",
+			name: "valid cancel signal with payload",
 			signal: UserSignal{
 				SignalID:    "sig-123",
-				Type:        SignalReject,
+				Type:        SignalCancel,
 				LoopID:      signalFixtureLoopID,
 				UserID:      "user-1",
 				ChannelType: "cli",
@@ -199,7 +199,44 @@ func TestUserSignal_Validate(t *testing.T) {
 				LoopID:   signalFixtureLoopID,
 				UserID:   "user-1",
 			},
-			wantErr: "type must be one of: cancel, pause, resume, approve, reject, feedback, retry",
+			wantErr: "type must be one of: cancel",
+		},
+		{
+			// spec: agentic-dispatch / One control-signal payload travels the loop signal subject
+			// A removed verb is refused, and the refusal names it rather than
+			// handing back a list that silently omits what was sent (#1239).
+			name: "removed verb pause is refused and named",
+			signal: UserSignal{
+				SignalID: "sig-123",
+				Type:     "pause",
+				LoopID:   signalFixtureLoopID,
+				UserID:   "user-1",
+			},
+			wantErr: `type "pause" was removed in #1239 (advertised but never implemented); type must be one of: cancel`,
+		},
+		{
+			// approve and reject are the only removed verbs with a real
+			// destination, so the refusal must carry it. Without this the adopter
+			// most likely to be affected is told "removed" and left to infer that
+			// approval is gone, which is false.
+			name: "removed verb approve is redirected to the approval lane",
+			signal: UserSignal{
+				SignalID: "sig-123",
+				Type:     "approve",
+				LoopID:   signalFixtureLoopID,
+				UserID:   "user-1",
+			},
+			wantErr: `type "approve" was removed in #1239 (advertised but never implemented) — publish an ApprovalResponse on agent.approval_response.* instead (ADR-039); type must be one of: cancel`,
+		},
+		{
+			name: "removed verb resume is refused and named",
+			signal: UserSignal{
+				SignalID: "sig-123",
+				Type:     "resume",
+				LoopID:   signalFixtureLoopID,
+				UserID:   "user-1",
+			},
+			wantErr: `type "resume" was removed in #1239 (advertised but never implemented); type must be one of: cancel`,
 		},
 		{
 			name: "missing loop_id",
@@ -233,11 +270,11 @@ func TestUserSignal_Validate(t *testing.T) {
 	}
 }
 
-// spec: entity-id-contract / A loop instance token is a framework-minted UUID
+// spec: entity-id-contract / A loop instance token is minted at its framework birth seam
 // Scenario: every remaining loop-token carrier refuses a non-canonical token.
 //
 // A control signal is the one lane on which a client-authored token used to
-// reach the loop's cancel/pause/resume handlers unchecked (#1228).
+// reach the loop's signal handlers unchecked (#1228).
 func TestUserSignalRefusesNonCanonicalLoopID(t *testing.T) {
 	signal := UserSignal{
 		SignalID:  "sig-123",
@@ -261,12 +298,12 @@ func TestUserSignalRefusesNonCanonicalLoopID(t *testing.T) {
 func TestUserSignal_JSONRoundTrip(t *testing.T) {
 	original := UserSignal{
 		SignalID:    "sig-123",
-		Type:        SignalReject,
+		Type:        SignalCancel,
 		LoopID:      signalFixtureLoopID,
 		UserID:      "user-1",
 		ChannelType: "slack",
 		ChannelID:   "C12345",
-		Payload:     "rejection reason",
+		Payload:     "cancellation reason",
 		Timestamp:   time.Now().UTC().Truncate(time.Millisecond),
 	}
 
@@ -311,9 +348,12 @@ func TestUserResponse_Validate(t *testing.T) {
 				UserID:      "U67890",
 				Type:        ResponseTypePrompt,
 				Content:     "Ready for review",
+				// ResponseAction.Signal is a free-form UI affordance, not a validated
+				// UserSignal type. An approve/reject affordance publishes an
+				// ApprovalResponse (ADR-039), not a UserSignal — only cancel is a
+				// signal the loop handles.
 				Actions: []ResponseAction{
-					{ID: "approve", Type: "button", Label: "Approve", Signal: SignalApprove, Style: "primary"},
-					{ID: "reject", Type: "button", Label: "Reject", Signal: SignalReject, Style: "danger"},
+					{ID: "cancel", Type: "button", Label: "Cancel", Signal: SignalCancel, Style: "danger"},
 				},
 				Timestamp: time.Now(),
 			},
@@ -392,7 +432,7 @@ func TestUserResponse_JSONRoundTrip(t *testing.T) {
 			{Type: "code", Content: "fmt.Println(\"hello\")", Lang: "go"},
 		},
 		Actions: []ResponseAction{
-			{ID: "retry", Type: "button", Label: "Retry", Signal: SignalRetry},
+			{ID: "cancel", Type: "button", Label: "Cancel", Signal: SignalCancel},
 		},
 		Timestamp: time.Now().UTC().Truncate(time.Millisecond),
 	}
@@ -410,19 +450,15 @@ func TestUserResponse_JSONRoundTrip(t *testing.T) {
 	assert.Len(t, decoded.Blocks, 1)
 	assert.Equal(t, "go", decoded.Blocks[0].Lang)
 	assert.Len(t, decoded.Actions, 1)
-	assert.Equal(t, SignalRetry, decoded.Actions[0].Signal)
+	assert.Equal(t, SignalCancel, decoded.Actions[0].Signal)
 }
 
 func TestSignalTypeConstants(t *testing.T) {
 	// Verify all signal types are valid
+	// Cancel is the whole vocabulary: it is the only verb the loop's signal
+	// consumer handles. See the const block in user_types.go.
 	validTypes := []string{
 		SignalCancel,
-		SignalPause,
-		SignalResume,
-		SignalApprove,
-		SignalReject,
-		SignalFeedback,
-		SignalRetry,
 	}
 
 	for _, sigType := range validTypes {
@@ -432,6 +468,15 @@ func TestSignalTypeConstants(t *testing.T) {
 	// Verify invalid types
 	assert.False(t, isValidSignalType("invalid"))
 	assert.False(t, isValidSignalType(""))
+
+	// Every verb this package once advertised and never handled must fail
+	// Validate, so a caller that still sends one is told, rather than getting a
+	// warning log and a successful ACK. pause/resume under #1239; approve,
+	// reject, feedback and retry under the same ruling once the identical shape
+	// was found in them.
+	for _, removed := range []string{"pause", "resume", "approve", "reject", "feedback", "retry"} {
+		assert.False(t, isValidSignalType(removed), "expected %s to be invalid", removed)
+	}
 }
 
 func TestResponseTypeConstants(t *testing.T) {
@@ -460,6 +505,16 @@ func TestTaskMessage_Validate(t *testing.T) {
 		task    TaskMessage
 		wantErr string
 	}{
+		{
+			name: "missing loop_id",
+			task: TaskMessage{
+				TaskID: "task-123",
+				Role:   "general",
+				Model:  "qwen2.5-coder:32b",
+				Prompt: "help me write code",
+			},
+			wantErr: "loop_id required",
+		},
 		{
 			name: "valid task message",
 			task: TaskMessage{
@@ -620,6 +675,9 @@ func TestTaskMessage_Validate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.wantErr != "loop_id required" && tt.task.LoopID == "" {
+				tt.task.LoopID = canonicalLoopToken
+			}
 			err := tt.task.Validate()
 			if tt.wantErr == "" {
 				assert.NoError(t, err)
@@ -631,7 +689,7 @@ func TestTaskMessage_Validate(t *testing.T) {
 }
 
 func TestTaskMessageValidateRelatedLoopsMetadata(t *testing.T) {
-	base := TaskMessage{TaskID: "task-123", Role: "general", Model: "gpt-4", Prompt: "test"}
+	base := TaskMessage{LoopID: canonicalLoopToken, TaskID: "task-123", Role: "general", Model: "gpt-4", Prompt: "test"}
 	tests := []struct {
 		name    string
 		related any
@@ -806,6 +864,7 @@ func TestTaskMessage_ResponseFormat_JSONRoundTrip(t *testing.T) {
 // the LLM client and produce confusing 400s.
 func TestTaskMessage_ResponseFormat_ValidatePropagates(t *testing.T) {
 	task := TaskMessage{
+		LoopID: canonicalLoopToken,
 		TaskID: "task-bad-rf",
 		Role:   "general",
 		Model:  "fast",
@@ -947,19 +1006,20 @@ func nonCanonicalLoopTokens() map[string]string {
 // side) and agentic-loop intake (consume side) already run, so refusing here
 // means no client-authored token reaches loop state or the graph write path.
 //
-// Empty stays valid: an unset LoopID is the ordinary case for a fresh task, and
-// the framework mints the token downstream. The framework observes; the caller
-// never predicts.
+// LoopID is required at the producer boundary; every supplied value must also
+// use the canonical form.
 func TestTaskMessageRefusesNonUUIDLoopID(t *testing.T) {
 	t.Parallel()
 
 	base := func() TaskMessage {
-		return TaskMessage{TaskID: "task-1", Role: "general", Model: "fast", Prompt: "p"}
+		return TaskMessage{LoopID: canonicalLoopToken, TaskID: "task-1", Role: "general", Model: "fast", Prompt: "p"}
 	}
 
-	t.Run("empty loop_id is valid", func(t *testing.T) {
+	t.Run("empty loop_id is required", func(t *testing.T) {
 		t.Parallel()
-		assert.NoError(t, base().Validate())
+		task := base()
+		task.LoopID = ""
+		assert.EqualError(t, task.Validate(), "loop_id required")
 	})
 
 	t.Run("canonical loop_id is valid", func(t *testing.T) {
@@ -992,7 +1052,7 @@ func TestTaskMessageRefusesNonCanonicalLoopTokenFields(t *testing.T) {
 	t.Parallel()
 
 	base := func() TaskMessage {
-		return TaskMessage{TaskID: "task-1", Role: "general", Model: "fast", Prompt: "p"}
+		return TaskMessage{LoopID: canonicalLoopToken, TaskID: "task-1", Role: "general", Model: "fast", Prompt: "p"}
 	}
 
 	fields := map[string]struct {

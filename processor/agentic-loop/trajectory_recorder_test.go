@@ -15,9 +15,11 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/storage"
 	"github.com/c360studio/semstreams/storage/storeregistry"
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -424,17 +426,17 @@ func TestTrajectoryAuditBudgetPreservesUsefulDeliveryContext(t *testing.T) {
 			var transitioned atomic.Bool
 			var published atomic.Bool
 
-			err := consumeLongRunningInput(parent, msg, time.Hour, func(workCtx context.Context, _ []byte) error {
+			err := consumeTypedLongRunningInput(parent, msg, time.Hour, func(workCtx context.Context, _ []byte) (natsclient.DeliveryDecision, error) {
 				c.recordTrajectoryObservations(workCtx, HandlerResult{trajectoryObservations: []trajectoryObservation{{
 					LoopID: "loop-budget", Kind: agentic.TrajectoryKindModelCompleted,
 					CausalPhase: agentic.TrajectoryPhaseModelResult, Evidence: map[string]string{"response": "full"},
 				}}})
 				if workCtx.Err() != nil {
-					return workCtx.Err()
+					return natsclient.DeliveryDecisionRetry, workCtx.Err()
 				}
 				transitioned.Store(true)
 				published.Store(true)
-				return nil
+				return natsclient.DeliveryDecisionAck, nil
 			})
 			if err != nil {
 				t.Fatalf("useful delivery failed after audit timeout: %v", err)
@@ -539,6 +541,7 @@ func TestHandlerProducesFullEvidenceBeforeOperationalTruncation(t *testing.T) {
 	handler := NewMessageHandler(config)
 
 	taskResult, err := handler.HandleTask(context.Background(), agentic.TaskMessage{
+		LoopID: uuid.NewString(),
 		TaskID: "task-full-evidence",
 		Role:   "researcher",
 		Model:  "test-model",
@@ -590,9 +593,12 @@ func TestHandlerProducesFullEvidenceBeforeOperationalTruncation(t *testing.T) {
 	}
 
 	toolResult, err := handler.HandleToolResult(context.Background(), loopID, agentic.ToolResult{
-		CallID:  callID,
-		Name:    "inspect",
-		Content: fullContent,
+		CallID:      callID,
+		Name:        "inspect",
+		Content:     fullContent,
+		RequestID:   request.RequestID,
+		ExecutionID: deriveToolExecutionID(request.RequestID, callID, 1),
+		CallOrdinal: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -626,8 +632,8 @@ func trajectoryKinds(observations []trajectoryObservation) []byte {
 func TestResultTerminalObservationIsRecordedAfterKnownHandlerFacts(t *testing.T) {
 	handler := NewMessageHandler(DefaultConfig())
 	result, err := handler.HandleTask(context.Background(), agentic.TaskMessage{
-		TaskID: "task-terminal-order", Role: "reviewer", Model: "test-model", Prompt: "review",
-	})
+		LoopID: uuid.NewString(),
+		TaskID: "task-terminal-order", Role: "reviewer", Model: "test-model", Prompt: "review"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -666,24 +672,32 @@ func TestApprovalRejectionAtIterationCapRecordsTerminalBeforeAdjacentSurfaces(t 
 	handler := NewMessageHandler(config)
 	ctx := context.Background()
 	taskResult, err := handler.HandleTask(ctx, agentic.TaskMessage{
-		TaskID: "task-approval-terminal", Role: "reviewer", Model: "test-model", Prompt: "review",
-	})
+		LoopID: uuid.NewString(),
+		TaskID: "task-approval-terminal", Role: "reviewer", Model: "test-model", Prompt: "review"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	loopID := taskResult.LoopID
 	const callID = "call-approval-terminal"
-	if _, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+	dispatched, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
 		RequestID: "request-approval-terminal", Status: agentic.StatusToolCall,
 		Message: agentic.ChatMessage{Role: "assistant", ToolCalls: []agentic.ToolCall{{
 			ID: callID, Name: "delete_rule", Arguments: map[string]any{"id": "rule-1"},
 		}}},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
+	decoder := payloadbuiltins.NewTestDecoder(t)
+	toolMessage, err := decoder.Decode(dispatched.PublishedMessages[0].Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := toolMessage.Payload().(*agentic.ToolCall)
 	gateResult, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
 		CallID: callID, Name: "delete_rule", ErrorKind: agentic.ToolErrorPermission,
-		Error: agentic.ApprovalRequiredPrefix + "requires approval",
+		Error:     agentic.ApprovalRequiredPrefix + "requires approval",
+		RequestID: call.RequestID, ExecutionID: call.ExecutionID, CallOrdinal: call.CallOrdinal,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -705,19 +719,24 @@ func TestApprovalRejectionAtIterationCapRecordsTerminalBeforeAdjacentSurfaces(t 
 	registry := payloadbuiltins.NewTestRegistry(t)
 	c := &Component{
 		config: config, handler: handler, decoder: message.NewDecoder(registry),
+		loopsBucket:        &settlementBucket{values: map[string][]byte{loopID: settlementLoopRecord(t, entity)}},
 		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
 		trajectoryRecorder: newTrajectoryRecorder(bucket, nil, "objectstore", func(trajectoryAuditFailure) {}),
 	}
 	response := agentic.ApprovalResponse{
 		LoopID: loopID, CallID: callID, Decision: agentic.ApprovalDecisionReject,
-		Reason: "policy", DecidedAt: time.Now().UTC(),
+		ExecutionID: call.ExecutionID,
+		Reason:      "policy", DecidedAt: time.Now().UTC(),
 	}
 	envelope := message.NewBaseMessage(response.Schema(), &response, "test")
 	data, err := json.Marshal(envelope)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.handleApprovalResponseMessage(ctx, data)
+	decision, err := c.handleApprovalResponseMessage(ctx, data)
+	if err != nil || decision != natsclient.DeliveryDecisionAck {
+		t.Fatalf("approval settlement = %v, %v; want ACK", decision, err)
+	}
 
 	if len(bucket.created) < 2 {
 		t.Fatalf("created facts = %d, want rejection observation and terminal", len(bucket.created))

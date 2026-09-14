@@ -106,7 +106,7 @@ func (rp *Processor) computeReadinessStatus() graph.IndexStatusResponse {
 
 // statusMetricsLoop republishes the readiness envelope on the shared heartbeat, so the
 // write doubles as a liveness signal.
-func (rp *Processor) statusMetricsLoop(ctx context.Context) {
+func (rp *Processor) statusMetricsLoop(ctx context.Context, done chan struct{}) {
 	// Signals Stop that no further tick can publish. Without this, Stop could nil
 	// entityDispatchRecords while a tick was mid-flight, and entityBootstrapState
 	// would read the empty map as VACUOUSLY COMPLETE — publishing
@@ -114,7 +114,7 @@ func (rp *Processor) statusMetricsLoop(ctx context.Context) {
 	// mid-replay. That entry stays Fresh at every consumer for three heartbeats, so
 	// the fold PROCEEDS: a fail-open on the exact field this change asks consumers to
 	// trust. Found in review.
-	defer close(rp.statusLoopDone)
+	defer close(done)
 	rp.refreshReadinessStatus(ctx)
 	ticker := time.NewTicker(rp.statusTickInterval())
 	defer ticker.Stop()

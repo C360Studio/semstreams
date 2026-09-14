@@ -41,6 +41,7 @@ func TestStagesAreExactlyThisOrderedList(t *testing.T) {
 		{"verify-stage-a-process-replacement", true},
 		{"walk-approval-path", true},
 		{"refuse-non-canonical-approval", true},
+		{"walk-approval-after-restart", true},
 		{"walk-signal-path", true},
 		{"refuse-non-canonical-signal", true},
 		{"validate-results", true},
@@ -121,11 +122,29 @@ func TestApprovalRequesterIsNotTheLoopOwner(t *testing.T) {
 func TestValidateResultsRequiresBothWalks(t *testing.T) {
 	complete := func() map[string]any {
 		return map[string]any{
-			"completion_method":                     "target_trajectory",
-			"approval_outcome":                      agentic.OutcomeSuccess,
-			"signal_outcome":                        agentic.OutcomeCancelled,
-			"approval_refusal_non_canonical_status": http.StatusBadRequest,
-			"signal_refusal_non_canonical_count":    float64(1),
+			"completion_method":                               "target_trajectory",
+			"approval_outcome":                                agentic.OutcomeSuccess,
+			"approval_restart_process_before":                 float64(100),
+			"approval_restart_process_after":                  float64(110),
+			"approval_restart_loop_id":                        pagedLoopToken,
+			"approval_restart_execution_id":                   "execution",
+			"approval_restart_source_sequence":                uint64(17),
+			"approval_restart_source_ack_floor":               uint64(17),
+			"approval_restart_result_sequence":                uint64(18),
+			"approval_restart_tool_executions":                float64(1),
+			"approval_restart_outcome":                        agentic.OutcomeSuccess,
+			"approval_restart_tool_call_verified":             true,
+			"approval_restart_created_sequence_before":        uint64(21),
+			"approval_restart_created_sequence_after":         uint64(21),
+			"approval_restart_created_consumer_absent_before": true,
+			"approval_restart_created_consumer_absent_after":  true,
+			"approval_restart_pending_sequence_before":        uint64(22),
+			"approval_restart_pending_sequence_after":         uint64(22),
+			"approval_restart_pending_consumer_absent_before": true,
+			"approval_restart_pending_consumer_absent_after":  true,
+			"signal_outcome":                                  agentic.OutcomeCancelled,
+			"approval_refusal_non_canonical_status":           http.StatusBadRequest,
+			"signal_refusal_non_canonical_count":              float64(1),
 		}
 	}
 	s := NewScenario(nil, DefaultConfig())

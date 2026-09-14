@@ -88,6 +88,8 @@ type LoopCompletedEvent struct {
 	// tool, a model-text completion, or a synthesized needs_clarification
 	// decision. Result is unchanged either way.
 	Decision *CoordinatorDecision `json:"decision,omitempty"`
+	// SyntheticDecideRequired records the completion builder's existing graph-action obligation for replay.
+	SyntheticDecideRequired bool `json:"synthetic_decide_required,omitempty"`
 }
 
 // Validate implements message.Payload

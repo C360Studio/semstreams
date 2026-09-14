@@ -19,9 +19,39 @@ import (
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/stretchr/testify/require"
 
 	"github.com/c360studio/semstreams/message"
 )
+
+type spawnBirthProbeBucket struct {
+	*terminalSelectionBucket
+	operations []string
+}
+
+func (b *spawnBirthProbeBucket) Create(ctx context.Context, key string, data []byte, opts ...jetstream.KVCreateOpt) (uint64, error) {
+	revision, err := b.terminalSelectionBucket.Create(ctx, key, data, opts...)
+	if err == nil {
+		operation := "create:" + key
+		if !strings.HasPrefix(key, "COMPLETE_") {
+			var entity agentic.LoopEntity
+			if decodeErr := json.Unmarshal(data, &entity); decodeErr != nil {
+				return 0, decodeErr
+			}
+			operation += ":" + string(entity.State)
+		}
+		b.operations = append(b.operations, operation)
+	}
+	return revision, err
+}
+
+func (b *spawnBirthProbeBucket) Update(ctx context.Context, key string, data []byte, revision uint64) (uint64, error) {
+	updated, err := b.terminalSelectionBucket.Update(ctx, key, data, revision)
+	if err == nil {
+		b.operations = append(b.operations, "update:"+key)
+	}
+	return updated, err
+}
 
 type inputAckMsg struct {
 	data       []byte
@@ -34,11 +64,13 @@ type inputAckMsg struct {
 	progress   chan struct{}
 }
 
-func (m *inputAckMsg) Data() []byte                              { return m.data }
-func (m *inputAckMsg) Subject() string                           { return "agent.task.test" }
-func (m *inputAckMsg) Reply() string                             { return "" }
-func (m *inputAckMsg) Headers() nats.Header                      { return nil }
-func (m *inputAckMsg) Metadata() (*jetstream.MsgMetadata, error) { return nil, nil }
+func (m *inputAckMsg) Data() []byte         { return m.data }
+func (m *inputAckMsg) Subject() string      { return "agent.task.test" }
+func (m *inputAckMsg) Reply() string        { return "" }
+func (m *inputAckMsg) Headers() nats.Header { return nil }
+func (m *inputAckMsg) Metadata() (*jetstream.MsgMetadata, error) {
+	return &jetstream.MsgMetadata{NumDelivered: 1}, nil
+}
 func (m *inputAckMsg) Ack() error {
 	m.acked.Store(true)
 	return nil
@@ -97,6 +129,7 @@ func TestHandleSpawnIdentityFailure_GraphStatePoisonFailsLoopPerEntity(t *testin
 	handler.logger = logger
 	c := &Component{
 		handler:   handler,
+		config:    DefaultConfig(),
 		logger:    logger,
 		started:   true,
 		startTime: time.Now(),
@@ -110,7 +143,7 @@ func TestHandleSpawnIdentityFailure_GraphStatePoisonFailsLoopPerEntity(t *testin
 	poison := errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired,
 		&graph.StateContractError{Reason: graph.GraphStateReasonNoncanonicalEntityID})
 
-	if gotErr := c.handleSpawnIdentityFailure(context.Background(), loopID, before, poison); gotErr != nil {
+	if _, gotErr := c.handleSpawnIdentityFailure(context.Background(), loopID, before, poison); gotErr != nil {
 		t.Fatalf("handleSpawnIdentityFailure() error = %v, want nil (per-loop failure is fully handled)", gotErr)
 	}
 
@@ -156,7 +189,8 @@ func TestGraphStatePoisonRouting_DistinguishesOperationalErrors(t *testing.T) {
 	}
 }
 
-func TestHandleSpawnIdentityFailure_OperationalErrorUsesBusinessFailurePath(t *testing.T) {
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+func TestHandleSpawnIdentityFailure_InvalidSerializationTerminatesAndDiscardsSpeculativeState(t *testing.T) {
 	t.Parallel()
 
 	loopManager := NewLoopManager()
@@ -168,14 +202,17 @@ func TestHandleSpawnIdentityFailure_OperationalErrorUsesBusinessFailurePath(t *t
 	if err != nil {
 		t.Fatalf("GetLoop() before error = %v", err)
 	}
-	// Force failure-event serialization to stop before NATS output. The loop
-	// transition and completion mutation occur first, which is the business
-	// failure routing this test locks without needing an external broker.
+	// Unserializable initial state refuses before durable birth, so no terminal
+	// observation or selected failure may advertise a loop that was never persisted.
 	entity.Metadata = map[string]any{"unserializable": func() {}}
 	if err := loopManager.UpdateLoop(entity); err != nil {
 		t.Fatalf("UpdateLoop() error = %v", err)
 	}
 
+	bucket := &terminalSelectionBucket{&approvalRevisionBucket{
+		settlementBucket: &settlementBucket{values: make(map[string][]byte)},
+		revisions:        make(map[string]uint64),
+	}}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	c := &Component{
 		handler: &MessageHandler{
@@ -183,22 +220,21 @@ func TestHandleSpawnIdentityFailure_OperationalErrorUsesBusinessFailurePath(t *t
 			trajectoryManager: newTrajectoryManager(),
 			logger:            logger,
 		},
-		logger: logger,
+		logger:      logger,
+		config:      DefaultConfig(),
+		loopsBucket: bucket,
 	}
-	// Same reason as the poison test above: the terminal outcome is read at the
-	// terminal observation, because the release clears the map on return.
-	probe := newTerminalReaderProbe(c, loopID)
+	decision, err := c.handleSpawnIdentityFailure(context.Background(), loopID, entity, errors.New("temporary graph request failure"))
+	if err == nil || decision != natsclient.DeliveryDecisionTerminate {
+		t.Fatalf("serialization failure settlement = (%v, %v), want terminate with error", decision, err)
+	}
 
-	if err := c.handleSpawnIdentityFailure(context.Background(), loopID, entity, errors.New("temporary graph request failure")); err != nil {
-		t.Fatalf("operational birth failure returned consumer error: %v", err)
-	}
-
-	after := probe.terminalLoop(t)
-	if after.State != agentic.LoopStateFailed || after.Outcome != agentic.OutcomeFailed {
-		t.Fatalf("operational error did not use business failure path: state=%q outcome=%q", after.State, after.Outcome)
-	}
+	require.ErrorContains(t, err, "marshal initial loop", "must refuse at the pre-birth serialization boundary")
+	require.NotContains(t, bucket.values, loopID)
+	require.NotContains(t, bucket.values, "COMPLETE_"+loopID)
+	require.Empty(t, bucket.values, "invalid birth must not author any durable evidence")
 	if _, err := loopManager.GetLoop(loopID); err == nil {
-		t.Fatal("settled loop still held in process memory after the terminal path released it")
+		t.Fatal("failed failure serialization retained speculative process state before durable settlement")
 	}
 }
 
@@ -235,12 +271,21 @@ func TestGraphStatePoisonFailsLoopWhileIntakeContinues(t *testing.T) {
 	poisonedLoopID := c.handler.loopManager.GenerateLoopID()
 	healthyLoopID := c.handler.loopManager.GenerateLoopID()
 
+	bucket := &spawnBirthProbeBucket{terminalSelectionBucket: &terminalSelectionBucket{&approvalRevisionBucket{
+		settlementBucket: &settlementBucket{values: make(map[string][]byte)},
+		revisions:        make(map[string]uint64),
+	}}}
+	c.loopsBucket = bucket
+	c.settlementEvidence = &settlementEvidence{}
+
 	poison := errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired,
 		&graph.StateContractError{Reason: graph.GraphStateReasonNoncanonicalEntityID})
 	var lineageWrites atomic.Int32
 	c.testLineageWriteHook = func(_ context.Context, loopID string, _ map[string]any) error {
 		lineageWrites.Add(1)
 		if loopID == poisonedLoopID {
+			require.NotContains(t, bucket.values, loopID, "fixture must reach the actual pre-birth failure")
+			require.NotContains(t, bucket.values, "COMPLETE_"+loopID)
 			return poison
 		}
 		return nil
@@ -259,7 +304,7 @@ func TestGraphStatePoisonFailsLoopWhileIntakeContinues(t *testing.T) {
 			t.Fatal(err)
 		}
 		msg := &inputAckMsg{data: data}
-		if err := consumeLongRunningInput(context.Background(), msg, time.Hour,
+		if err := consumeTypedLongRunningInput(context.Background(), msg, time.Hour,
 			c.taskInputHandler(time.Minute)); err != nil {
 			t.Fatalf("consume(%s) error = %v, want nil", taskID, err)
 		}
@@ -280,6 +325,20 @@ func TestGraphStatePoisonFailsLoopWhileIntakeContinues(t *testing.T) {
 			first.acked.Load(), first.naked.Load(), first.terminated.Load())
 	}
 	failed := probe.terminalLoop(t)
+	require.Equal(t, []string{"create:" + poisonedLoopID + ":running", "create:COMPLETE_" + poisonedLoopID, "update:" + poisonedLoopID}, bucket.operations,
+		"real running birth, selected failure, then final marker must be the exact write sequence")
+	var durable agentic.LoopEntity
+	require.NoError(t, json.Unmarshal(bucket.values[poisonedLoopID], &durable))
+	require.NoError(t, durable.Validate())
+	require.Equal(t, agentic.LoopStateFailed, durable.State)
+	require.Equal(t, "task-poisoned-entity", durable.TaskID)
+	var selected agentic.LoopFailedEvent
+	require.NoError(t, json.Unmarshal(bucket.values["COMPLETE_"+poisonedLoopID], &selected))
+	require.NoError(t, selected.Validate())
+	require.Equal(t, agentic.OutcomeFailed, selected.Outcome)
+	require.Equal(t, poisonedLoopID, selected.LoopID)
+	require.Equal(t, "task-poisoned-entity", selected.TaskID)
+	require.Contains(t, selected.Error, graph.ErrorCodeGraphStateResetRequired)
 	if failed.State != agentic.LoopStateFailed || failed.Outcome != agentic.OutcomeFailed {
 		t.Fatalf("poisoned loop state=%q outcome=%q, want terminal failure", failed.State, failed.Outcome)
 	}
@@ -334,4 +393,51 @@ func TestCleanupAfterStartFailureResetsState(t *testing.T) {
 	if c.consumerInfos != nil {
 		t.Fatalf("partial-start consumer state not reset: infos=%v", c.consumerInfos)
 	}
+}
+
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+func TestSpawnBirthCreateFailureCannotDeduplicateRedelivery(t *testing.T) {
+	discoverable, err := NewComponent([]byte("{}"), component.Dependencies{
+		Platform:        component.PlatformMeta{Org: "acme", Platform: "ops"},
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+	})
+	require.NoError(t, err)
+	c := discoverable.(*Component)
+	require.NoError(t, c.Start(t.Context()))
+	t.Cleanup(func() { require.NoError(t, c.Stop(context.Background())) })
+	loopID := c.handler.loopManager.GenerateLoopID()
+	bucket := &terminalSelectionBucket{&approvalRevisionBucket{
+		settlementBucket: &settlementBucket{values: make(map[string][]byte), failPutKey: loopID, failPutLeft: 1},
+		revisions:        make(map[string]uint64),
+	}}
+	c.loopsBucket = bucket
+	c.settlementEvidence = &settlementEvidence{}
+	lineageCalls := 0
+	c.testLineageWriteHook = func(_ context.Context, _ string, _ map[string]any) error {
+		lineageCalls++
+		return errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired,
+			&graph.StateContractError{Reason: graph.GraphStateReasonNoncanonicalEntityID})
+	}
+	task := validLineageTask("birth-create-redelivery")
+	task.LoopID = loopID
+	task.Metadata = map[string]any{agentic.MetadataKeyRelatedLoops: map[string]any{"researcher": "upstream-loop"}}
+	data := settlementEnvelope(t, &task)
+
+	decision, err := c.handleTaskMessage(t.Context(), data)
+	require.ErrorContains(t, err, "injected final marker failure")
+	require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
+	require.Empty(t, bucket.values, "failed initial Create must not invent durable completion")
+	require.Empty(t, perLoopMapCount(c.handler.loopManager, loopID))
+	require.Equal(t, 1, lineageCalls)
+
+	decision, err = c.handleTaskMessage(t.Context(), data)
+	require.NoError(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+	require.Equal(t, 2, lineageCalls, "redelivery must retry birth, not ACK active process deduplication")
+	var terminal agentic.LoopEntity
+	require.NoError(t, json.Unmarshal(bucket.values[loopID], &terminal))
+	require.NoError(t, terminal.Validate())
+	require.Equal(t, agentic.LoopStateFailed, terminal.State)
+	require.Contains(t, bucket.values, "COMPLETE_"+loopID)
+	require.Empty(t, perLoopMapCount(c.handler.loopManager, loopID))
 }

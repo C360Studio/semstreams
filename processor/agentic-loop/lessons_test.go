@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/c360studio/semstreams/graph"
@@ -46,7 +47,9 @@ func lessonHandler(reader LessonReader) *MessageHandler {
 }
 
 func opsTask() TaskMessage {
-	return TaskMessage{TaskID: "t1", Role: "ops", Model: "m", Prompt: "go"}
+	return TaskMessage{
+		LoopID: uuid.NewString(),
+		TaskID: "t1", Role: "ops", Model: "m", Prompt: "go"}
 }
 
 // activeLesson is a terse constructor for a fixture lesson entity projection.

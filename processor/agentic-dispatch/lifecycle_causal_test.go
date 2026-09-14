@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/model"
@@ -168,4 +169,84 @@ func TestLifecycleRunningDeadlineIsTerminalNoReplay(t *testing.T) {
 
 func componentDependenciesForCausalTest() component.Dependencies {
 	return component.Dependencies{NATSClient: &natsclient.Client{}, ModelRegistry: &model.Registry{}}
+}
+
+type cancellationBlockedActivitySource struct {
+	entered  chan struct{}
+	canceled chan struct{}
+	exited   chan struct{}
+}
+
+func (s *cancellationBlockedActivitySource) WatchAll(ctx context.Context, _ ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
+	close(s.entered)
+	<-ctx.Done()
+	close(s.canceled)
+	defer close(s.exited)
+	return nil, ctx.Err()
+}
+
+// spec: graph-view-subscription / View lifecycle and ownership
+func TestComponentStopCancelsAndJoinsBlockedActivityAcquisition(t *testing.T) {
+	discoverable, err := NewComponent([]byte(`{}`), componentDependenciesForCausalTest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := discoverable.(*Component)
+	c.waitForStreamInput = func(context.Context, string) error { return nil }
+	c.consumeStream = func(context.Context, natsclient.PortConsumerContext, natsclient.StreamConsumerConfig, func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
+		h := &causalConsumeHandle{closed: make(chan struct{}), closedCalls: make(chan struct{}, 3)}
+		close(h.closed)
+		return h, nil
+	}
+	source := &cancellationBlockedActivitySource{make(chan struct{}), make(chan struct{}), make(chan struct{})}
+	c.activityViewSource = source
+	runCtx, cancelRun := context.WithCancel(t.Context())
+	defer cancelRun()
+	if err := c.Start(runCtx); err != nil {
+		t.Fatal(err)
+	}
+	ownerDone := c.activityDone
+	requestDone, stopDone := make(chan struct{}), make(chan struct{})
+	var stopErr error
+	stopStarted := false
+	t.Cleanup(func() {
+		// Release the old deadlock through the parent only on test cleanup.
+		cancelRun()
+		<-requestDone
+		if stopStarted {
+			<-stopDone
+		} else if err := c.Stop(t.Context()); err != nil {
+			t.Error(err)
+		}
+	})
+	await := func(signal <-chan struct{}, failure string) {
+		t.Helper()
+		select {
+		case <-signal:
+		case <-time.After(activityTestWait): // Failure bound, never a readiness delay.
+			t.Fatal(failure)
+		}
+	}
+	go func() {
+		defer close(requestDone)
+		_, _ = c.ensureActivityView(t.Context())
+	}()
+	await(source.entered, "WatchAll acquisition did not start")
+	stopStarted = true
+	go func() {
+		stopErr = c.Stop(t.Context())
+		close(stopDone)
+	}()
+	await(source.canceled, "Component.Stop did not cancel the blocked WatchAll acquisition")
+	await(stopDone, "Component.Stop did not join the activity owner")
+	if stopErr != nil {
+		t.Fatal(stopErr)
+	}
+	for name, joined := range map[string]<-chan struct{}{"WatchAll acquisition": source.exited, "activity owner": ownerDone} {
+		select {
+		case <-joined:
+		default:
+			t.Errorf("Component.Stop returned before joining %s", name)
+		}
+	}
 }

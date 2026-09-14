@@ -15,6 +15,7 @@ import (
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -35,11 +36,10 @@ func terminalTestComponent(t *testing.T) *Component {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads)
 	return &Component{
-		config:      DefaultConfig(),
-		logger:      logger,
-		loopTracker: NewLoopTrackerWithLogger(logger),
-		metrics:     getMetrics(metric.NewMetricsRegistry()),
-		decoder:     message.NewDecoder(reg),
+		config:  DefaultConfig(),
+		logger:  logger,
+		metrics: getMetrics(metric.NewMetricsRegistry()),
+		decoder: message.NewDecoder(reg),
 	}
 }
 
@@ -53,7 +53,7 @@ func requireOneTerminalReason(t *testing.T, c *Component, want string, before ma
 		string(agentterminal.ReasonEnvelope), string(agentterminal.ReasonPayload),
 		string(agentterminal.ReasonTimestamp), string(agentterminal.ReasonIdentity),
 		string(agentterminal.ReasonCollision), "routing_malformed", "routing_read_transient",
-		"routing_collision_or_malformed", "tracker_projection_collision",
+		"routing_collision_or_malformed", "terminal_route_unavailable",
 		"response_publish_transient", "route_less_settled", "response_settled", "accepted",
 		"handoff_settled", "origin_unresolvable",
 	}
@@ -74,7 +74,7 @@ func terminalReasonSnapshot(c *Component) map[string]float64 {
 		string(agentterminal.ReasonEnvelope), string(agentterminal.ReasonPayload),
 		string(agentterminal.ReasonTimestamp), string(agentterminal.ReasonIdentity),
 		string(agentterminal.ReasonCollision), "routing_malformed", "routing_read_transient",
-		"routing_collision_or_malformed", "tracker_projection_collision",
+		"routing_collision_or_malformed", "terminal_route_unavailable",
 		"response_publish_transient", "route_less_settled", "response_settled", "accepted",
 		"handoff_settled", "origin_unresolvable",
 	}
@@ -88,10 +88,12 @@ func terminalReasonSnapshot(c *Component) map[string]float64 {
 func TestSettleAgentTerminalPublishesStableSuccessWithOptionalUserID(t *testing.T) {
 	c := terminalTestComponent(t)
 	at := time.Unix(1_700_000_500, 0).UTC()
-	c.loopTracker.Track(&LoopInfo{LoopID: "loop-1", TaskID: "task-1", ChannelType: "http", State: "executing", MaxIterations: 3})
-	c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
-		return &agentic.LoopEntity{ID: "loop-1", TaskID: "task-1", State: agentic.LoopStateComplete, MaxIterations: 3, ChannelID: "session-1"}, nil
+	persisted := &agentic.LoopEntity{
+		ID: "35f24ee8-8bb9-4dc4-bc8e-000000000001", TaskID: "task-1", State: agentic.LoopStateComplete, MaxIterations: 3,
+		ChannelType: "http", ChannelID: "session-1",
 	}
+	before := *persisted
+	withPersistedLoops(c, map[string]*agentic.LoopEntity{persisted.ID: persisted})
 	var got agentic.UserResponse
 	var gotMsgID string
 	c.sendTerminalResponseFn = func(_ context.Context, response agentic.UserResponse, msgID string) error {
@@ -99,7 +101,7 @@ func TestSettleAgentTerminalPublishesStableSuccessWithOptionalUserID(t *testing.
 		return nil
 	}
 
-	data := completionPayload(t, &agentic.LoopCompletedEvent{LoopID: "loop-1", TaskID: "task-1", Outcome: agentic.OutcomeSuccess, Result: "the result", CompletedAt: at})
+	data := completionPayload(t, &agentic.LoopCompletedEvent{LoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000001", TaskID: "task-1", Outcome: agentic.OutcomeSuccess, Result: "the result", CompletedAt: at})
 	var source struct {
 		ID string `json:"id"`
 	}
@@ -115,34 +117,32 @@ func TestSettleAgentTerminalPublishesStableSuccessWithOptionalUserID(t *testing.
 	require.Equal(t, "session-1", got.ChannelID)
 	require.Empty(t, got.UserID)
 	require.Equal(t, at, got.Timestamp)
-	require.Equal(t, at, c.loopTracker.Get("loop-1").CompletedAt)
+	require.Equal(t, before, *persisted, "terminal delivery does not mutate authority")
 }
 
 func TestSettleAgentTerminalProjectsCancellationFromCompletionLane(t *testing.T) {
 	c := terminalTestComponent(t)
 	at := time.Unix(1_700_000_600, 0).UTC()
-	c.loopTracker.Track(&LoopInfo{LoopID: "loop-c", TaskID: "task-c", ChannelType: "http", ChannelID: "session-c", State: "executing", MaxIterations: 3})
 	c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
-		return &agentic.LoopEntity{ID: "loop-c", TaskID: "task-c", State: agentic.LoopStateCancelled, MaxIterations: 3, ChannelType: "http", ChannelID: "session-c"}, nil
+		return &agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000002", TaskID: "task-c", State: agentic.LoopStateCancelled, MaxIterations: 3, ChannelType: "http", ChannelID: "session-c"}, nil
 	}
 	var got agentic.UserResponse
 	c.sendTerminalResponseFn = func(_ context.Context, response agentic.UserResponse, _ string) error { got = response; return nil }
-	data := terminalEnvelopeForDispatch(t, &agentic.LoopCancelledEvent{LoopID: "loop-c", TaskID: "task-c", Outcome: agentic.OutcomeCancelled, CancelledAt: at})
+	data := terminalEnvelopeForDispatch(t, &agentic.LoopCancelledEvent{LoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000002", TaskID: "task-c", Outcome: agentic.OutcomeCancelled, CancelledAt: at})
 	require.NoError(t, c.settleAgentTerminal(context.Background(), data))
 	require.Equal(t, agentic.ResponseTypeStatus, got.Type)
-	require.Equal(t, "Loop loop-c cancelled.", got.Content)
-	require.Equal(t, "cancelled", c.loopTracker.Get("loop-c").State)
+	require.Equal(t, "Loop 35f24ee8-8bb9-4dc4-bc8e-000000000002 cancelled.", got.Content)
+	require.Equal(t, "http", got.ChannelType)
+	require.Equal(t, "session-c", got.ChannelID)
+	require.Equal(t, at, got.Timestamp)
 }
 
 func TestSettleAgentTerminalProjectsFailureResponse(t *testing.T) {
 	c := terminalTestComponent(t)
 	at := time.Unix(1_700_000_650, 0).UTC()
-	c.loopTracker.Track(&LoopInfo{
-		LoopID: "loop-f", TaskID: "task-f", ChannelType: "http", ChannelID: "session-f", State: "executing",
-	})
 	c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
 		return &agentic.LoopEntity{
-			ID: "loop-f", TaskID: "task-f", State: agentic.LoopStateFailed,
+			ID: "35f24ee8-8bb9-4dc4-bc8e-000000000003", TaskID: "task-f", State: agentic.LoopStateFailed, MaxIterations: 3,
 			ChannelType: "http", ChannelID: "session-f",
 		}, nil
 	}
@@ -153,36 +153,36 @@ func TestSettleAgentTerminalProjectsFailureResponse(t *testing.T) {
 	}
 
 	data := terminalEnvelopeForDispatch(t, &agentic.LoopFailedEvent{
-		LoopID: "loop-f", TaskID: "task-f", Outcome: agentic.OutcomeFailed, Error: "boom", FailedAt: at,
+		LoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000003", TaskID: "task-f", Outcome: agentic.OutcomeFailed, Error: "boom", FailedAt: at,
 	})
 	require.NoError(t, c.settleAgentTerminal(context.Background(), data))
 	require.Equal(t, agentic.ResponseTypeError, got.Type)
-	require.Equal(t, "Loop loop-f failed: boom", got.Content)
+	require.Equal(t, "Loop 35f24ee8-8bb9-4dc4-bc8e-000000000003 failed: boom", got.Content)
 	require.Equal(t, at, got.Timestamp)
-	require.Equal(t, agentic.LoopStateFailed.String(), c.loopTracker.Get("loop-f").State)
+	require.Equal(t, "http", got.ChannelType)
+	require.Equal(t, "session-f", got.ChannelID)
 }
 
 func TestReconcileTerminalRouteFieldWise(t *testing.T) {
 	event := agentterminalEvent("terminal-user", "", "channel-id")
 	persisted := &agentic.LoopEntity{ChannelType: "slack", UserID: "terminal-user"}
-	route, err := reconcileTerminalRoute(&LoopInfo{ChannelType: "slack"}, event, persisted)
+	route, err := reconcileTerminalRoute(event, persisted)
 	require.NoError(t, err)
 	require.Equal(t, terminalRoute{ChannelType: "slack", ChannelID: "channel-id", UserID: "terminal-user"}, route)
 
 	for _, tc := range []struct {
 		name      string
-		tracker   *LoopInfo
 		event     agentterminal.Event
 		persisted *agentic.LoopEntity
 	}{
-		{"channel type conflict", &LoopInfo{ChannelType: "http"}, agentterminalEvent("", "slack", "id"), &agentic.LoopEntity{}},
-		{"channel id conflict", &LoopInfo{ChannelID: "a"}, agentterminalEvent("", "", "b"), &agentic.LoopEntity{}},
-		{"user id conflict", &LoopInfo{UserID: "a"}, agentterminalEvent("b", "http", "id"), &agentic.LoopEntity{}},
-		{"partial type", &LoopInfo{}, agentterminalEvent("", "http", ""), &agentic.LoopEntity{}},
-		{"partial id", &LoopInfo{}, agentterminalEvent("", "", "id"), &agentic.LoopEntity{}},
+		{"channel type conflict", agentterminalEvent("", "slack", "id"), &agentic.LoopEntity{ChannelType: "http", ChannelID: "id"}},
+		{"channel id conflict", agentterminalEvent("", "http", "b"), &agentic.LoopEntity{ChannelType: "http", ChannelID: "a"}},
+		{"user id conflict", agentterminalEvent("b", "http", "id"), &agentic.LoopEntity{UserID: "a", ChannelType: "http", ChannelID: "id"}},
+		{"partial type", agentterminalEvent("", "http", ""), &agentic.LoopEntity{}},
+		{"partial id", agentterminalEvent("", "", "id"), &agentic.LoopEntity{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := reconcileTerminalRoute(tc.tracker, tc.event, tc.persisted)
+			_, err := reconcileTerminalRoute(tc.event, tc.persisted)
 			require.Error(t, err)
 			require.True(t, isPermanentTerminal(err))
 		})
@@ -190,7 +190,7 @@ func TestReconcileTerminalRouteFieldWise(t *testing.T) {
 }
 
 func TestSettleAgentTerminalDispositionClasses(t *testing.T) {
-	valid := &agentic.LoopCompletedEvent{LoopID: "loop-d", TaskID: "task-d", Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now()}
+	valid := &agentic.LoopCompletedEvent{LoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000004", TaskID: "task-d", Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now()}
 
 	t.Run("transient persisted read", func(t *testing.T) {
 		c := terminalTestComponent(t)
@@ -212,7 +212,7 @@ func TestSettleAgentTerminalDispositionClasses(t *testing.T) {
 	t.Run("route-less settles without response", func(t *testing.T) {
 		c := terminalTestComponent(t)
 		c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
-			return &agentic.LoopEntity{ID: "loop-d", TaskID: "task-d", State: agentic.LoopStateComplete, MaxIterations: 3}, nil
+			return &agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000004", TaskID: "task-d", State: agentic.LoopStateComplete, MaxIterations: 3}, nil
 		}
 		called := false
 		c.sendTerminalResponseFn = func(context.Context, agentic.UserResponse, string) error { called = true; return nil }
@@ -223,7 +223,7 @@ func TestSettleAgentTerminalDispositionClasses(t *testing.T) {
 	t.Run("transient publish", func(t *testing.T) {
 		c := terminalTestComponent(t)
 		c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
-			return &agentic.LoopEntity{ID: "loop-d", TaskID: "task-d", State: agentic.LoopStateComplete, MaxIterations: 3, ChannelType: "http", ChannelID: "id"}, nil
+			return &agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000004", TaskID: "task-d", State: agentic.LoopStateComplete, MaxIterations: 3, ChannelType: "http", ChannelID: "id"}, nil
 		}
 		c.sendTerminalResponseFn = func(context.Context, agentic.UserResponse, string) error { return errors.New("no puback") }
 		err := c.settleAgentTerminal(context.Background(), completionPayload(t, valid))
@@ -233,7 +233,7 @@ func TestSettleAgentTerminalDispositionClasses(t *testing.T) {
 }
 
 func TestHandleTerminalDeliveryDecisionMatrix(t *testing.T) {
-	valid := &agentic.LoopCompletedEvent{LoopID: "loop-decision", TaskID: "task-decision", Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now()}
+	valid := &agentic.LoopCompletedEvent{LoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000005", TaskID: "task-decision", Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now()}
 
 	t.Run("immutable terminal poison", func(t *testing.T) {
 		c := terminalTestComponent(t)
@@ -242,15 +242,31 @@ func TestHandleTerminalDeliveryDecisionMatrix(t *testing.T) {
 		require.True(t, isPermanentTerminal(err))
 	})
 
-	t.Run("proven pre-publish failure retries", func(t *testing.T) {
-		c := terminalTestComponent(t)
-		c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
-			return nil, errors.New("read unavailable")
-		}
-		decision, err := c.handleTerminalDelivery(t.Context(), completionPayload(t, valid))
-		require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
-		require.Error(t, err)
-	})
+	for _, tt := range []struct {
+		name    string
+		readErr error
+		reason  string
+	}{
+		{"own record not found", jetstream.ErrKeyNotFound, "terminal_route_unavailable"},
+		{"own record deleted", jetstream.ErrKeyDeleted, "terminal_route_unavailable"},
+		{"infrastructure read unavailable", errors.New("read unavailable"), "routing_read_transient"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := terminalTestComponent(t)
+			c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
+				return nil, tt.readErr
+			}
+			c.sendTerminalResponseFn = func(context.Context, agentic.UserResponse, string) error {
+				t.Fatal("an unread own record cannot authorize a user response")
+				return nil
+			}
+			before := terminalReasonSnapshot(c)
+			decision, err := c.handleTerminalDelivery(t.Context(), completionPayload(t, valid))
+			require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
+			require.ErrorIs(t, err, tt.readErr)
+			requireOneTerminalReason(t, c, tt.reason, before)
+		})
+	}
 
 	t.Run("unknown publish outcome quarantines", func(t *testing.T) {
 		c := terminalTestComponent(t)
@@ -276,7 +292,7 @@ func TestHandleTerminalDeliveryDecisionMatrix(t *testing.T) {
 
 func TestSettleAgentTerminalRecordsExactlyOneFixedDisposition(t *testing.T) {
 	valid := &agentic.LoopCompletedEvent{
-		LoopID: "loop-m", TaskID: "task-m", Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now(),
+		LoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000006", TaskID: "task-m", Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now(),
 	}
 	tests := []struct {
 		name string
@@ -298,31 +314,22 @@ func TestSettleAgentTerminalRecordsExactlyOneFixedDisposition(t *testing.T) {
 		}},
 		{"routing collision", "routing_collision_or_malformed", func(c *Component) []byte {
 			c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
-				return &agentic.LoopEntity{ID: "loop-m", ChannelType: "http", ChannelID: "persisted"}, nil
+				return &agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000006", State: agentic.LoopStateComplete, MaxIterations: 3, ChannelType: "http", ChannelID: "persisted"}, nil
 			}
-			c.loopTracker.Track(&LoopInfo{LoopID: "loop-m", State: "executing", ChannelType: "http", ChannelID: "tracker"})
-			return completionPayload(t, valid)
-		}},
-		{"tracker collision", "tracker_projection_collision", func(c *Component) []byte {
-			at := valid.CompletedAt
-			c.loopTracker.Track(&LoopInfo{
-				LoopID: "loop-m", State: agentic.LoopStateComplete.String(), Outcome: agentic.OutcomeSuccess,
-				Result: "different", CompletedAt: at,
-			})
-			c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
-				return &agentic.LoopEntity{ID: "loop-m"}, nil
-			}
-			return completionPayload(t, valid)
+			conflicting := *valid
+			conflicting.ChannelType = "http"
+			conflicting.ChannelID = "event"
+			return completionPayload(t, &conflicting)
 		}},
 		{"route less", "route_less_settled", func(c *Component) []byte {
 			c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
-				return &agentic.LoopEntity{ID: "loop-m"}, nil
+				return &agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000006", State: agentic.LoopStateComplete, MaxIterations: 3}, nil
 			}
 			return completionPayload(t, valid)
 		}},
 		{"publish transient", "response_publish_transient", func(c *Component) []byte {
 			c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
-				return &agentic.LoopEntity{ID: "loop-m", ChannelType: "http", ChannelID: "id"}, nil
+				return &agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000006", State: agentic.LoopStateComplete, MaxIterations: 3, ChannelType: "http", ChannelID: "id"}, nil
 			}
 			c.sendTerminalResponseFn = func(context.Context, agentic.UserResponse, string) error {
 				return errors.New("no puback")
@@ -331,14 +338,14 @@ func TestSettleAgentTerminalRecordsExactlyOneFixedDisposition(t *testing.T) {
 		}},
 		{"settled", "response_settled", func(c *Component) []byte {
 			c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
-				return &agentic.LoopEntity{ID: "loop-m", ChannelType: "http", ChannelID: "id"}, nil
+				return &agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000006", State: agentic.LoopStateComplete, MaxIterations: 3, ChannelType: "http", ChannelID: "id"}, nil
 			}
 			c.sendTerminalResponseFn = func(context.Context, agentic.UserResponse, string) error { return nil }
 			return completionPayload(t, valid)
 		}},
 		{"handoff", "handoff_settled", func(c *Component) []byte {
 			c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
-				return &agentic.LoopEntity{ID: "loop-m", ChannelType: "http", ChannelID: "id"}, nil
+				return &agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000006", State: agentic.LoopStateComplete, MaxIterations: 3, ChannelType: "http", ChannelID: "id"}, nil
 			}
 			c.sendTerminalResponseFn = func(context.Context, agentic.UserResponse, string) error { return nil }
 			handoff := *valid
@@ -347,10 +354,10 @@ func TestSettleAgentTerminalRecordsExactlyOneFixedDisposition(t *testing.T) {
 		}},
 		{"origin unresolvable", "origin_unresolvable", func(c *Component) []byte {
 			c.loadPersistedLoopFn = func(_ context.Context, loopID string) (*agentic.LoopEntity, error) {
-				if loopID != "loop-m" {
+				if loopID != "35f24ee8-8bb9-4dc4-bc8e-000000000006" {
 					return nil, loopRecordAbsent(loopID)
 				}
-				return &agentic.LoopEntity{ID: "loop-m", ParentLoopID: "evicted-parent"}, nil
+				return &agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000006", State: agentic.LoopStateComplete, MaxIterations: 3, ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000007"}, nil
 			}
 			c.sendTerminalResponseFn = func(context.Context, agentic.UserResponse, string) error { return nil }
 			reply := *valid

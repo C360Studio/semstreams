@@ -66,6 +66,7 @@ func TestTaskMessage_InReplyTo_OmittedWhenEmpty(t *testing.T) {
 func TestTaskMessage_InReplyTo_ProductionWire(t *testing.T) {
 	t.Parallel()
 	task := &agentic.TaskMessage{
+		LoopID: "8d4f916a-85c2-4c35-b57a-5f97bb5b0864",
 		TaskID: "task-wire-001",
 		Role:   "coordinator",
 		Model:  "model-a",
