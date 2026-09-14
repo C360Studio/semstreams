@@ -1,19 +1,28 @@
 # SemStreams
 
-> A composable stream processing framework designed to run anywhere.
+> A Go framework for explicit semantic context and observable actions.
 
-SemStreams is a flow based framework that turns streaming data into a semantic knowledge graph, runs reactive rules, executes workflows, and orchestrates LLM-powered agents. One binary. NATS as the only dependency. Works offline, syncs when connected.
+SemStreams helps developers and coding agents build applications around a live semantic knowledge graph.
+Declare domain facts, relationships, component connections and action controls through framework primitives,
+so the context needed to understand an application is visible in its contracts.
 
+Start with structural or statistical capabilities, add neural search when useful, and compose agent loops or
+human participation where your application needs them. The application owns domain meaning and policy;
+SemStreams provides the mechanisms. Local and edge deployments remain central to that design.
+
+```text
+Sources → Explicit semantic context → Queries, rules and optional agents → Application behavior
 ```
-Sensors/Events → Knowledge Graph → Rules, Workflows, Agents → Action
-```
 
-**Built for the edge:**
+See [Building context with SemSource](docs/basics/09-building-semsource.md) for a worked application:
+a document becomes typed facts and stored content that a developer or coding agent can retrieve and inspect.
 
-- **Simple deployment** — single binary, ships as a Docker image
-- **Progressive AI** — start with rules, add LLMs when you're ready. Or run both: deterministic where it matters, intelligent where it helps
-- **Offline-first** — works disconnected, syncs when connectivity allows
-- **Edge to cluster** — runs on a Raspberry Pi, scales when needed
+**Built for local and edge systems:**
+
+- **Simple deployment** — Go binary with NATS JetStream; Docker images are available
+- **Progressive capabilities** — structural, statistical and semantic retrieval are useful choices in their own right
+- **Local dependencies** — keep storage and selected model services at the site when disconnected operation matters
+- **Application control** — select the capabilities and human participation appropriate to the work
 
 ## Prerequisites
 
@@ -132,11 +141,11 @@ SemStreams implements the **OODA loop** — a decision-making cycle from militar
 | Observe | Sense | **Ingest** — events via UDP, WebSocket, file, API |
 | Orient | Think | **Graph** — entities with typed relationships |
 | Decide | Act | **React** — rules evaluate conditions |
-| Act | Act | **Act** — rules fire, workflows orchestrate, agents reason |
+| Act | Act | **Act** — rules trigger, components execute, agents reason |
 
 The graph builds situational awareness; rules and agents close the loop.
 
-Two core patterns power this:
+Core contracts support this:
 - **Graphable** — Your types become graph entities ([docs](docs/basics/03-graphable-interface.md))
 - **Payload Registry** — Messages serialize with type discrimination ([docs](docs/concepts/15-payload-registry.md))
 - **Typed Graph Mutations** — Components create, reconcile, append, and delete through one revision-aware port
@@ -148,17 +157,18 @@ real conflicts without semantic owner leases, and relationship objects may arriv
 
 ## Progressive Capabilities
 
-Start simple, add capabilities as your needs grow:
+Choose the retrieval capability your application needs:
 
 | Tier | What You Get | What You Need |
 |------|--------------|---------------|
-| **Structural** | Rules engine, explicit relationships, graph indexing | NATS only |
-| **Statistical** | + BM25 search, community detection | + Search index |
-| **Semantic** | + Neural embeddings, LLM-powered agents | + Embedding service, LLM |
+| **Structural** | Explicit relationships, graph indexing and rules | NATS JetStream |
+| **Statistical** | BM25 lexical search over text | The same local stack; BM25 runs in Go |
+| **Semantic** | Neural embedding search over text | An embedding service, which may run locally |
 
-Most deployments start with Structural. Add capabilities when the problem demands it.
-
-Tiers aren't just about resources. Use rules when you need deterministic, auditable outcomes. Use agents when you need judgment and reasoning. Run both in the same flow — each handles what it does best.
+Generative completion and agent loops are separate choices, not requirements of semantic search. Applications can
+combine deterministic rules, retrieval and agents, with human participation selected by application policy.
+See the [inference tiers](docs/concepts/00-real-time-inference.md) and
+[SemSource profile mapping](docs/basics/09-building-semsource.md#choose-capabilities-by-need).
 
 ## Architecture
 
@@ -205,7 +215,8 @@ User Message ───────► agentic-dispatch ─────► agenti
 
 - **Modular** — 6 components that scale independently
 - **OpenAI-compatible** — works with any OpenAI-compatible endpoint
-- **Observable** — full trajectory capture for debugging
+- **Observable** — action identities and observed trajectory evidence for debugging;
+  [capture has explicit limits](openspec/specs/agentic-loop/spec.md)
 
 ```bash
 # Run agentic e2e tests
