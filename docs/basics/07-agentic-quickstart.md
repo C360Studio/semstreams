@@ -4,13 +4,15 @@ Get started with SemStreams' agentic AI orchestration system.
 
 ## What is the Agentic System?
 
-The agentic system enables LLM-powered autonomous task execution within SemStreams. Unlike simple request-response LLM integrations, agents can:
+The agentic system enables LLM-powered autonomous task execution within SemStreams. Unlike simple
+request-response LLM integrations, agents can:
 
 - **Decide what actions to take** based on the current situation
 - **Execute tools** to interact with the knowledge graph and external systems
 - **Iterate** until the task is complete or a stopping condition is met
 
-This transforms LLMs from passive responders into active problem solvers that can analyze sensor data, investigate anomalies, and execute multi-step workflows.
+This transforms LLMs from passive responders into active problem solvers that can analyze sensor data,
+investigate anomalies, and execute multi-step workflows.
 
 ## Prerequisites
 
@@ -66,11 +68,13 @@ task e2e:agentic
 ```
 
 This starts a Docker environment with:
+
 - NATS JetStream
 - SemStreams with agentic components
 - A mock LLM server for testing
 
 When a sensor reading exceeds the temperature threshold, a rule triggers an agent that:
+
 1. Receives the task to investigate the anomaly
 2. Uses the `query_entity` tool to get sensor details from the knowledge graph
 3. Analyzes the data and provides recommendations
@@ -146,14 +150,21 @@ The agentic configuration (`configs/agentic.json`) defines the component pipelin
 
 A tool named in `approval_required` is not executed when the model calls it.
 The loop parks in `awaiting_approval` and publishes an approval-pending event;
-a human answers over `POST /agentic-dispatch/loops/{loop_id}/approval` with
-`approve`, `reject`, or `modify`, and only then does the call run. Pair it with
-`agentic-loop`'s `approval_timeout` above — with no timeout set, a gated call
-nobody answers waits forever.
+a human answers over `POST /agentic-dispatch/loops/{id}/approval` with
+`approve`, `reject`, or `modify`, and only then does the call run. The prefix is
+the component's configured name, which the service manager mounts the routes
+under. A `reject` does not fail the loop — the loop hands the model a synthesized
+rejection result and carries on. Pair it with `agentic-loop`'s `approval_timeout`
+above — with no timeout set, a gated call nobody answers waits forever. The
+subjects, the state transitions, and what a product-layer approval UI has to
+implement are in [Approval Flow](../concepts/17-approval-flow.md).
 
 ### Rule-Triggered Agents
 
-Rules can spawn agents based on conditions:
+Rules can spawn agents based on conditions. A `publish_agent` action needs four fields — `subject`, `role`,
+`model` and `prompt`. All four are checked before the action does anything, and a missing one fails the action
+with, for example, `subject is required for publish_agent action`
+([`processor/rule/actions.go:1687-1698`](../../processor/rule/actions.go)).
 
 ```json
 {
@@ -164,13 +175,35 @@ Rules can spawn agents based on conditions:
   "on_enter": [
     {
       "type": "publish_agent",
+      "subject": "agent.task.anomaly",
       "role": "general",
       "model": "mock",
-      "prompt": "Temperature anomaly detected. Analyze sensor {{.EntityID}}..."
+      "prompt": "Temperature anomaly detected on sensor $entity.id. Its reading is $entity.triple.sensor.measurement.fahrenheit degrees Fahrenheit. Investigate and recommend an action."
     }
   ]
 }
 ```
+
+**Pick the subject to match the loop's task port.** `agentic-loop` subscribes its `agent.task` input to
+`agent.task.*` on the `AGENT` stream
+([`processor/agentic-loop/config.go:396`](../../processor/agentic-loop/config.go)). That wildcard is a single
+NATS token, so `agent.task.anomaly` is delivered and `agent.task.anomaly.high` is not. Name the work in one
+token, as the shipped rules do — `agent.task.research`, `agent.task.subtopic`, `agent.task.synthesis`
+([`configs/rules/deep-research/`](../../configs/rules/deep-research/)).
+
+**Substitution is `$`-prefixed, not Go templates.** There is no `text/template` engine anywhere on the rule or
+loop path; `{{.EntityID}}` is not substitution syntax and would reach the model as those literal characters. The
+tokens a rule can use are `$entity.id`, the entity-ID segments (`$entity.org` … `$entity.instance`),
+`$entity.triple.<predicate>`, `$message.<field>`, `$state.iteration` and `$now` — the full list is the doc
+comment on `SubstituteVariables`
+([`processor/rule/execution_context.go:207-252`](../../processor/rule/execution_context.go)). A token the engine
+does not recognize survives into the prompt verbatim and logs an unresolved-template warning, so check the rule
+processor's logs the first time a prompt comes out looking wrong.
+
+For a rule this quickstart's shape is derived from, read
+[`configs/rules/deep-research/01-spawn-researcher.json`](../../configs/rules/deep-research/01-spawn-researcher.json).
+The optional fields — `tools`, `properties`, `run_scope`, `workflow_slug`, `max_iterations` and the rest — are in
+the [rules engine reference](../advanced/06-rules-engine.md#publish_agent).
 
 ## State Machine
 
@@ -190,7 +223,8 @@ The agentic loop uses a fluid state machine:
                                                     └───────────────────────────┘
 ```
 
-**States are checkpoints, not gates.** Agents can move backward (e.g., from executing back to exploring) when they need to rethink. Only terminal states (complete, failed, cancelled) are final.
+**States are checkpoints, not gates.** Agents can move backward (e.g., from executing back to exploring) when
+they need to rethink. Only terminal states (complete, failed, cancelled) are final.
 
 | State | Description |
 |-------|-------------|
@@ -263,7 +297,7 @@ curl http://localhost:8080/api/agent/loops/7c9e6679-7425-40de-944b-e07fc1f90ae7
 Prometheus metrics at `:9090/metrics`. All metrics use the
 `semstreams_` namespace. A few you'll reach for first:
 
-```
+```text
 # Loop lifecycle
 semstreams_agentic_loop_loops_created_total
 semstreams_agentic_loop_loops_completed_total
