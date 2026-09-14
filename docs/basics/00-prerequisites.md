@@ -6,7 +6,7 @@ This guide covers everything you need to set up your development environment for
 
 | Software | Version | Purpose |
 |----------|---------|---------|
-| Go | 1.25+ | Build and run SemStreams |
+| Go | 1.26.3+ | Build and run SemStreams |
 | Docker | Latest | Run NATS, E2E tests, deployment |
 | Task | Latest | Task runner for build commands |
 
@@ -21,7 +21,7 @@ task dev:check:prerequisites
 Or verify each tool manually:
 
 ```bash
-go version          # Should show go1.25 or higher
+go version          # Should show go1.26.3 or higher
 docker info         # Should show Docker daemon info
 task --version      # Should show Task version
 ```
@@ -30,7 +30,7 @@ task --version      # Should show Task version
 
 ### Go
 
-Go 1.25 or higher is required.
+Go 1.26.3 or higher is required.
 
 **macOS (Homebrew)**:
 ```bash
@@ -51,7 +51,7 @@ Download from [go.dev/dl](https://go.dev/dl/) and follow the installation instru
 **Verify**:
 ```bash
 go version
-# go version go1.25.0 darwin/arm64
+# go version go1.26.3 darwin/arm64
 ```
 
 ### Docker
@@ -231,7 +231,7 @@ docker run -d --name semstreams-nats -p 4223:4222 nats:2.14-alpine -js
 
 Once your environment is set up:
 
-1. [Build and run SemStreams](../../README.md#your-first-5-minutes)
+1. [Build and run SemStreams](05-first-processor.md#run-the-local-dataflow)
 2. [Understand the architecture](02-architecture.md)
 3. [Learn about the Graphable interface](03-graphable-interface.md)
 4. [Build your first processor](05-first-processor.md)

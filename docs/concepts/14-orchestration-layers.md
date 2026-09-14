@@ -1,622 +1,206 @@
-# Orchestration Layers — How We Do Workflows in semstreams
+# Orchestration Layers
 
-semstreams has two orchestration layers — **rules** and **components**.
-There is no separate workflow engine. Multi-step patterns
-(linear pipelines, conditional branches, bounded iteration loops,
-async fan-out / fan-in) are expressed as **coordinated rule sets that
-fire components**, with per-action `MaxIterations` providing iteration
-caps and `Graphable` entity triples + KV state + ObjectStore providing
-durable storage.
+SemStreams composes multi-step applications from rules and components. Rules evaluate declared conditions and
+trigger actions. Components execute work. The lifecycle harness gives named entities explicit phases and transitions.
 
-This document is the canonical "how we do workflows in semstreams"
-pattern catalog. If you find yourself reaching for a workflow engine,
-state machine, or new KV bucket, **read this first**. Most of the
-time the existing primitives already cover the case.
+Applications choose their domain vocabulary, sequencing, completion criteria, and human participation.
+These choices can describe deterministic local processing, agentic work, or a combination of both.
 
 ## Why no separate workflow engine?
 
-A reactive workflow engine (`processor/reactive/`) shipped early in
-semstreams's life. It provided typed multi-phase state machines, async
-callback correlation, loop limits, and timeouts. It also bypassed the
-component framework: raw JetStream resources, invisible to flow
-discovery, broke the flowgraph validator. The capabilities were real;
-the integration discipline wasn't.
+The earlier reactive workflow engine under `processor/reactive/` was retired. Its old tutorials describe historical
+APIs. Current orchestration uses the component framework, rule engine and lifecycle primitives, keeping inputs,
+outputs, dependencies and state ownership visible in the application composition.
 
-Decision (2026-03-12): retire `processor/reactive/`. Absorb the
-capabilities the rule engine was missing (per-action firing caps,
-conditional branching in `when` clauses, configurable state buckets).
-Retirement completed in `main`; only `pkg/workflow/` (state-manager
-primitives) and a legacy `workflow_trigger_payload.go` compatibility
-shim remain. semspec — the early heavy reactive-workflow user — has a
-sister-repo migration tracked separately.
-
-The durable lesson: **a workflow primitive that lives outside the
-component framework creates state-plumbing debt the framework can't
-help you pay down later.** When you find a gap in the rule engine,
-file it as engine work. Don't build app-side state machines around it
-(see "The semspec trap" below).
+The [framework/product boundary](../../openspec/project.md#product-boundary) separates these primitives from
+the workflows and policies an application builds with them.
 
 ## The Two Layers
 
-```text
-┌─────────────────────────────────────────────────────────────┐
-│  RULE ENGINE  (orchestration)                               │
-│                                                             │
-│  Watches: KV state, NATS subjects, wallclock                │
-│  Evaluates: typed conditions (unified evaluator, ADR-041)    │
-│  Fires: actions (publish, publish_agent, deny, etc.)         │
-│  Caps: per-action MaxIterations (default 3, explicit 0 =     │
-│        unlimited)                                            │
-│                                                             │
-│  Rules trigger work. They don't do work.                    │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼  fires
-┌─────────────────────────────────────────────────────────────┐
-│  COMPONENTS  (execution)                                    │
-│                                                             │
-│  Receive: typed payloads on input ports                     │
-│  Execute: LLM calls, graph queries, file I/O, etc.          │
-│  Emit: results on output ports (KV writes, NATS publishes)   │
-│                                                             │
-│  Components are caller-agnostic. They don't know what       │
-│  triggered them or what comes next.                         │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Layer responsibilities
-
-| Layer | Owns | Does NOT own |
-|---|---|---|
-| Rule engine | Trigger conditions, action sequencing, iteration caps, condition evaluation | Work execution, business logic, payload semantics |
-| Component | Work execution, internal state machine, output emission | Caller identity, multi-step coordination, cross-component sequencing |
+| Responsibility | Owner |
+| --- | --- |
+| Evaluate conditions and select actions | Rule engine |
+| Track rule matches and action firing caps | Rule engine |
+| Execute model calls, tools, queries and processing | Components |
+| Define application phases and permitted transitions | Application lifecycle declarations |
+| Validate lifecycle transitions and publish their state | Lifecycle harness through graph-ingest |
 
 ### Substrate primitives (used by both layers)
 
-Substrate primitives are framework-provided types that components
-compose internally and rule actions reference via substitution. They
-are NOT a third layer — they sit below the two orchestration layers
-as shared infrastructure.
-
-| Primitive | Package | Use |
-|---|---|---|
-| **Lifecycle harness** (ADR-047) | `pkg/lifecycle` | Convention layer for named-instance entities with declared phases, restart recovery, operator visibility (drone missions, sensor lifecycles, scenario executions, plan/requirement). Apps implement `Participant` on state structs; framework provides `Manager` with KV-backed Get/Create/Update/Transition/Complete/Fail + List/Watch/History/Children/Ancestors. **Not a workflow engine** — orchestration stays in the rule engine. |
-| **BoundedDispatcher** (ADR-048) | `pkg/dispatch` | Bounded-concurrency parallel work primitive for component-internal fan-out. Wraps `pkg/worker.Pool[T]` with optional KV-twofer-aware completion handling. Use when a component does internal parallel work over a known list of items; bounded concurrency required; optionally KV-signaled async completion. **NOT for at-the-rule-layer fan-out** — that's `for_each` on `rule.Action`. |
-| **`.triples` enumeration** (ADR-048) | `processor/rule` substitution | Plural-substitution suffix mirroring `.length`. `$entity.triple.<predicate>.triples` resolves to a JSON-encoded array string of all element values across all matching triples (handles both N-triples-with-scalar-Objects and one-triple-with-list-Object patterns). Composes with `for_each` to enumerate child entities + array operators like `array_contains` / `length_eq`. Consumers parse the JSON string per the canonical persona-prose template (ADR-048). **Asymmetry vs `.length`**: `.triples` best-effort-stringifies scalar Objects (Pattern A) into JSON array elements; `.length` returns an error sentinel on scalar Objects because it was designed for Pattern B (single triple with list Object) before Pattern A existed. Both are defensible in isolation — `.length` is for "count of elements in a list-typed triple," `.triples` is for "collect everything that could be enumerated." |
-
-**"Rules sequence, components parallelize"**: rules are single-
-threaded per evaluation (`agentic-loop` owns MaxAckPending=1 on
-`agent.task` consumers and rejects port overrides); components
-compose `pkg/dispatch.BoundedDispatcher` internally when they need
-parallel work. Trying to make rules drive parallelism via
-agent-loop fan-out fights the substrate; see ADR-045's
-`execute_subqueries` for the canonical pattern.
+Use [lifecycle](../../openspec/specs/lifecycle/spec.md) when a named entity needs explicit phase, progress or
+operator interaction. Lifecycle manages declared transitions; application components perform the work.
+Use [BoundedDispatcher](../../pkg/dispatch/doc.go) for bounded parallel work inside a component.
+Rule actions provide guards, firing caps and per-item dispatch through the
+[current action types](../../processor/rule/actions.go).
+These primitives support the two layers; they do not introduce a separate workflow runtime.
 
 ## Signal kinds the rule engine watches
 
-Three kinds of signals fire rules:
+Entity rules evaluate decoded facts from `ENTITY_STATES`. Message rules evaluate the fields a payload exposes
+through `message.RuleReadable`; generic JSON payloads retain their data-map surface. Scheduled rules provide
+time-based triggers.
 
-| Signal | Rule type | Triggered by |
-|---|---|---|
-| KV state change | expression rule (`type: "expression"`) | A bucket key transitioning to a state where the rule's `when` predicates match |
-| NATS subject match | expression rule (`type: "expression"`) | A message landing on a subject the rule subscribes to |
-| Wallclock | cron rule (`type: "cron"`) | A cron expression's `Next()` time elapsing (ADR-031) |
-
-Cron rules accept `schedule`, `actions`, `cooldown`, `fire_every_n_events`,
-`name`, `description`, `enabled`, `metadata` only — condition-side fields
-are rejected at config-load.
+The entity evaluator does not decode arbitrary component KV records. Setting `entity_watch_buckets` to
+`AGENT_LOOPS`, or using a `COMPLETE_*` key pattern, does not create an operational-state rule adapter.
+See the [rule-engine specification](../../openspec/specs/rule-engine/spec.md) and
+[entity watch boundary](../../processor/rule/entity_pattern_contract.go) for admitted fields, buckets and patterns.
 
 ## Pattern Catalog
 
-Five patterns cover essentially all multi-step orchestration in
-semstreams. Each shows the rule shape, the state-storage shape, and
-when to use it.
+These shapes explain where decisions and work belong. They are conceptual patterns; use current action types and
+an explicitly composed application when turning a shape into configuration.
 
 ### Pattern 1 — Single trigger
 
-**Shape**: `A completes → B starts (no retry, no loop)`
+**Shape:** `condition becomes true → request work`
 
-**Use**: simple handoffs. Architect produces a plan; editor implements
-it. Validator approves a payload; publisher releases it.
-
-**Implementation**: one rule with one action.
-
-```json
-{
-  "name": "architect_complete_spawn_editor",
-  "type": "expression",
-  "when": {
-    "bucket": "AGENT_LOOPS",
-    "key_pattern": "COMPLETE_*",
-    "conditions": [
-      {"field": "role", "op": "eq", "value": "architect"},
-      {"field": "outcome", "op": "eq", "value": "success"}
-    ]
-  },
-  "actions": [
-    {
-      "type": "publish_agent",
-      "role": "editor",
-      "payload_ref": "{state.plan_objstore_ref}"
-    }
-  ]
-}
-```
-
-**State**: lives on the `COMPLETE_{loopID}` KV entry the upstream
-component wrote. The rule reads it; no new bucket.
+Use a rule to detect a declared condition and invoke a component through an action. Expose an entity rule's relevant
+domain or lifecycle fact on the entity. The component owns execution and its resulting artifacts.
+A private completion record is not automatically readable by an entity rule.
 
 ### Pattern 2 — Linear pipeline
 
-**Shape**: `A → B → C → D (no loop)`
+**Shape:** `A → B → C`
 
-**Use**: multi-stage processing where each stage's output feeds the
-next. Decompose → fetch → fuse → synthesize is the
-ADR-045 graph-search example.
+Use coordinated rules to request each stage from the state or message that permits it. Model durable,
+operator-visible progress on a named lifecycle entity. Keep the stage's result distinct from that progress:
+phase and relationships can be graph facts; full reports and model output belong with their producer.
+Pass references to those bodies so the next component can retrieve them.
 
-**Implementation**: a chain of rules, each watching for the prior
-stage's completion event.
-
-```json
-[
-  {"name": "stage_1_kickoff", "when": {"key_pattern": "input.received.*"},
-   "actions": [{"type": "publish", "subject": "component.stage_1.{id}"}]},
-  {"name": "stage_2_after_1", "when": {"key_pattern": "stage_1.complete.*"},
-   "actions": [{"type": "publish", "subject": "component.stage_2.{id}"}]},
-  {"name": "stage_3_after_2", "when": {"key_pattern": "stage_2.complete.*"},
-   "actions": [{"type": "publish", "subject": "component.stage_3.{id}"}]},
-  {"name": "stage_4_after_3", "when": {"key_pattern": "stage_3.complete.*"},
-   "actions": [{"type": "publish", "subject": "component.stage_4.{id}"}]}
-]
-```
-
-**State**: each stage writes its output as triples on an operation
-entity in an existing KV bucket (e.g., `AGENT_LOOPS`). Bulky payloads
-go to ObjectStore via `ContentStorable`; only refs travel in rule
-payloads. No new bucket; no parallel state machine.
+For agent phases, the application chooses roles, model configuration, tools and decision vocabulary.
+The [phased-chain guide](25-phased-agentic-chains.md) illustrates that division of responsibility.
 
 ### Pattern 3 — Conditional branch
 
-**Shape**: `A → if X then B else C`
+**Shape:** `A → if condition then B, otherwise C`
 
-**Use**: route to different downstream actions based on the result of
-a prior stage. "If validation passes, publish; otherwise, request
-human review."
+An action's `when` field is a list of condition expressions; all must match for that action to execute.
+The rule's trigger and each action's guard answer separate questions. Branch on an explicit fact or declared
+message field. A validation outcome might select further processing or an application-defined review step;
+the application decides whether a person participates.
 
-**Implementation**: one rule with multiple actions, each gated by an
-action-level `when` clause. The unified condition evaluator (ADR-041)
-makes this clean — `when` sees the same fields as rule-level
-conditions.
-
-```json
-{
-  "name": "route_validation_result",
-  "when": {"key_pattern": "validation.complete.*"},
-  "actions": [
-    {
-      "type": "publish",
-      "subject": "publisher.release.{id}",
-      "when": "$state.validation.passed == true"
-    },
-    {
-      "type": "publish_agent",
-      "role": "human_reviewer",
-      "when": "$state.validation.passed == false"
-    }
-  ]
-}
-```
-
-**State**: validation result lives on the operation entity. No new
-bucket.
+Use the [action definition](../../processor/rule/actions.go) for condition fields. Free-form expression strings
+from the retired tutorials are not the current shape.
 
 ### Pattern 4 — Bounded iteration
 
-**Shape**: `A → B → A → B... (max N times)`
+**Shape:** `review → revise → review`, with a declared stopping condition
 
-**Use**: review-fix cycles, refine-and-retry loops, retry on
-transient failure with backoff. Cap is required to prevent unbounded
-loops.
+Use rules for transitions and components for each unit of work. Keep named phase and progress on the lifecycle entity.
+An action's `max_iterations` limits repeated firing for a rule/entity match cycle. `loop_max_iterations` limits
+iterations inside the agent loop spawned by `publish_agent`; the two budgets are separate.
 
-**Implementation**: a rule whose action publishes the loop start,
-with `max_iterations` on the action as the cap. The per-action firing
-counter is keyed on a stable action ID (auto-generated fingerprint or
-author-supplied).
-
-```json
-{
-  "name": "review_fix_cycle",
-  "when": {"key_pattern": "review.complete.*"},
-  "actions": [
-    {
-      "type": "publish_agent",
-      "role": "fixer",
-      "when": "$state.review.issues_count > 0 AND $state.iteration < 3",
-      "max_iterations": 3
-    },
-    {
-      "type": "publish",
-      "subject": "pipeline.complete.{id}",
-      "when": "$state.review.issues_count == 0 OR $state.iteration >= 3"
-    }
-  ]
-}
-```
-
-**Default `MaxIterations`**: 3 (framework-wide, applies when the
-field is unset). Explicit `"max_iterations": 0` means unlimited.
-Authors who want stable counters across rule renames set
-`Action.ID` explicitly.
-
-**State**: iteration count is tracked by the rule engine itself
-(`MatchState.ActionIterations`); no app-side counter needed.
+The action firing cap defaults to three when omitted; explicit zero means unlimited. A requested loop budget cannot
+widen the component's configured ceiling. A firing cap is not an application completion policy: declare what
+success, failure, cap exhaustion and further review mean in the application's state and rules.
 
 ### Pattern 5 — Async fan-out / fan-in
 
-**Shape**: `A → (B, C, D in parallel) → E when all done`
+**Shape:** `A → work for several items → continuation when the application's condition holds`
 
-**Use**: parallel sub-tasks with a synchronization point. Fan out to
-multiple workers; gather results before proceeding.
+The current `publish_agent` executor supports `for_each` over a resolved list, binding the named iteration variable
+for each item dispatch. Other action types do not acquire iteration behavior merely by carrying that field.
 
-**Implementation**: one rule with multiple `publish` actions for the
-fan-out; a second rule on a "synchronizer" key pattern for the
-fan-in. The synchronizer is updated by each parallel branch and the
-fan-in rule fires when all expected branches have written.
+Per-item dispatch and runtime concurrency are different properties. Published task count does not establish how
+many loops or tool calls execute simultaneously. Use the selected components' execution contracts and validate
+the deployed composition. For work inside one component, use a bounded dispatcher. For dependency-gated units,
+consult the [gated-DAG dispatch contract](../../openspec/specs/gated-dag-dispatch/spec.md).
 
-```json
-[
-  {
-    "name": "fanout_to_workers",
-    "when": {"key_pattern": "fanout.start.*"},
-    "actions": [
-      {"type": "publish", "subject": "component.worker_b.{id}"},
-      {"type": "publish", "subject": "component.worker_c.{id}"},
-      {"type": "publish", "subject": "component.worker_d.{id}"}
-    ]
-  },
-  {
-    "name": "fanin_when_all_complete",
-    "when": {
-      "key_pattern": "fanout.synchronizer.*",
-      "conditions": [
-        {"field": "completed_count", "op": "eq", "value": 3}
-      ]
-    },
-    "actions": [
-      {"type": "publish", "subject": "component.aggregator.{id}"}
-    ]
-  }
-]
-```
+An empty list produces no dispatches. The current executor logs an unresolved or incorrectly shaped list and falls
+back to a single dispatch without the iteration binding. Inspect that warning when the task count is unexpected.
 
-**State**: each worker writes a completion fact, result summary, or
-ObjectStore ref to the operation entity and increments the synchronizer
-count. The fan-in rule reads the count. No new bucket; the operation
-entity carries the synchronization state. Bulky outputs, traces, and
-opaque completion payloads stay in the producing component's store.
+Fan-in needs an application meaning: which identified results satisfy the continuation condition, and how are
+failure, cancellation and duplicates handled? Neither `for_each` nor publication declares an all-results,
+majority or first-success policy.
 
 ## State Storage Boundaries
 
-Three categories of data, with different storage patterns. **The
-discipline here is what keeps you out of the semspec trap** (see
-below).
+| Fact or artifact | Home | Reader |
+| --- | --- | --- |
+| Domain facts and lifecycle phase | `ENTITY_STATES` | Graph queries and typed entity rules |
+| Rule match state and firing counters | Rule engine's owned state | Rule engine |
+| Component execution records and trajectories | Component-owned storage | Supported component readers |
+| Bulky content | ObjectStore or producer's content store | Stored reference and supported reader |
+| Published work and messages | Declared messaging ports | Corresponding consumers |
 
-| Category | Storage | Rule-observable? | In knowledge graph? |
-|---|---|---|---|
-| **Domain and lifecycle entities** | `ENTITY_STATES` KV | Yes | Yes (`Graphable`) |
-| **Operational execution artifacts** | Component-specific KV (e.g., `AGENT_LOOPS`) | Yes | No |
-| **Events** | JetStream streams | No (rules watch KV, not streams) | No |
-| **Bulky payloads** | ObjectStore via `ContentStorable`; ref-triples on owning entity | Indirectly (via refs) | Refs only |
+Only graph-ingest writes authoritative `ENTITY_STATES`. Components use graph ingestion or the admitted mutation
+surface to publish changes. Lifecycle maintains state through that same authority. Retained transition history is
+bounded; current graph state is not an unlimited audit log.
 
-### Domain and lifecycle entities (`ENTITY_STATES`)
+A run's outcome and relationships can be graph facts while its full output remains in component storage.
+A reference connects the facts to that content without copying the body into a rule action.
+Storage placement and rule readability are separate decisions. A private bucket needs a reason and an owner;
+it does not become readable by entity rules through configuration.
+See [Entity or Bucket](../../.agents/skills/entity-or-bucket/SKILL.md) for placement criteria.
 
-Semantic domain objects and lifecycle-managed coordination roots
-implementing `Graphable`:
+## Human participation and tool effects
 
-- 6-part hierarchical entity ID (`org.platform.system.domain.type.instance`)
-- Persist across multiple events
-- Queryable in the knowledge graph
-- Carry lifecycle facts when phase, progress, ownership, parent/child
-  links, audit source, or operator-writable metadata is itself part of
-  the semantic control surface
+Applications decide where people participate: review, clarification, approval, intervention or observation.
+SemStreams supplies controls and observable state that an application can compose into that experience.
 
-**Only `graph-ingest` writes to `ENTITY_STATES`.**
+Tool effects describe the worst effect a tool declares; they do not enable or remove an approval gate.
+Execution controls include configured `approval_required` and `allowed_tools` name sets, plus per-loop
+advertised-tool admission. A `read_only` tool can require approval; `external_effect` does not automatically
+require it. Absent or unrecognized effect metadata means `unknown`.
 
-Lifecycle does not violate the "no operational results in triples"
-rule. It is the explicit ADR-049 exception category: low-volume,
-relationship-bearing, operator-queryable control-plane state belongs in
-the graph because rules, dashboards, GraphQL, history, and inference all
-need the same facts. Short-lived traces, model trajectories, request
-logs, raw telemetry samples, and bulky artifacts do not become lifecycle
-triples just because they helped produce a lifecycle transition.
-
-### Operational execution artifacts (component-specific KV)
-
-Execution outcomes and internal traces that are not semantic domain or
-lifecycle facts:
-
-- Use `COMPLETE_{id}` key pattern for rules observability
-- Stored in component-specific buckets:
-  - `AGENT_LOOPS`: agent + research operation state (`COMPLETE_{loopID}`)
-  - Other components may register their own buckets when warranted
-- Transient or high-volume — represent how work happened, not what now
-  exists or what phase a named entity is in
-
-The rule processor's entity evaluator does not decode these buckets. Its
-`entity_watch_buckets` contract accepts only canonical six-position patterns
-for `ENTITY_STATES`. Reacting to an operational record requires a separately
-designed typed adapter owned by that record's component; it must define the
-decoder, evaluator, recovery behavior, and retention contract explicitly.
-
-```json
-{
-  "entity_watch_buckets": {
-    "ENTITY_STATES": ["acme.*.robotics.*.drone.*"]
-  }
-}
-```
-
-### Events (JetStream)
-
-Immediate notifications for downstream processing:
-
-- Published to streams for subscribers
-- Not directly observable by rules
-- Examples: `agent.complete.*`, `graph.ingest.*`
-
-### Bulky payloads (ObjectStore via `ContentStorable`)
-
-Per ADR-028: **rules carry references, never content.** If a payload
-might exceed ~16KB or contain freeform text/code/artifacts, write it
-to ObjectStore and put the ref-triple on the owning entity. The rule
-payload carries only the entity ID and ref. Components reading the
-payload dereference on demand.
-
-### Anti-pattern: writing opaque execution artifacts to `ENTITY_STATES`
-
-Pollutes the knowledge graph with non-semantic data. Breaks the
-`Graphable` contract. Makes graph queries less meaningful.
-
-This is different from writing lifecycle facts to `ENTITY_STATES`.
-`mission.phase=flying`, `batch.held_reason=quality_alarm`, and
-`survey.owns_child=capture-session-7` are graph facts about named
-entities. `agent token trace`, `raw completion JSON`, and
-`HTTP request timing sample` are execution artifacts; keep them in the
-owning component's bucket, metrics/tracing, JetStream, or ObjectStore
-with a ref triple when another entity needs to point at them.
-
-```go
-// WRONG
-entityBucket.Put(ctx, "workflow.review.exec123", completionData)
-
-// RIGHT — operational results in component bucket with COMPLETE_ prefix
-agentLoopsBucket.Put(ctx, "COMPLETE_exec123", completionData)
-```
+See [tool effect metadata](../operations/adopter-tool-effect-metadata.md) and the
+[tool contract](../../openspec/specs/agentic-tools/spec.md) before deriving application policy.
 
 ## Rules of Thumb
 
-### 1. Rules trigger; they don't orchestrate inline
+- Put trigger conditions in rules and execution mechanics in components.
+- Model named, operator-visible phase through lifecycle declarations.
+- Give each fact one owner; distinguish semantic facts from execution artifacts.
+- Carry content references through coordination paths.
+- Separate action firing caps, loop budgets and worker concurrency.
+- Tie component behavior to its inputs and configuration, rather than an assumed caller.
+- Record a framework gap when an application needs an unsupported reusable primitive.
 
-A rule fires one set of actions, not a sequence of stateful steps.
+## The semspec trap
 
-**Anti-pattern**: Rule A sets `step=1`, Rule B watches for `step=1`
-and sets `step=2`, Rule C watches for `step=2`...
-
-**Correct**: a multi-step pattern is a coordinated set of rules where
-each rule fires a component; state lives on the operation entity.
-See Pattern 2 (linear pipeline).
-
-### 2. Components execute; they don't coordinate
-
-A component does one thing. If a component is dispatching work to
-other components inline, that orchestration belongs in the rule
-layer.
-
-**Anti-pattern**: a component that, after finishing its work, calls
-into another component's API directly.
-
-**Correct**: the component emits its completion event; a rule
-watches for that event and fires the next component.
-
-### 3. Components are caller-agnostic
-
-A component doesn't know if it's standalone or part of a multi-step
-pattern. Same component, same behavior, regardless of caller.
-
-**Anti-pattern**: `if msg.workflow_id != "" { ... }` inside a
-component.
-
-**Correct**: behavior differences are configured (component config),
-not branched on caller identity.
-
-### 4. State ownership is exclusive
-
-Only one layer owns a piece of state.
-
-| State | Owner |
-|---|---|
-| Trigger conditions | Rule engine |
-| Iteration counters | Rule engine (per-action `MatchState`) |
-| Execution state inside a component | Component |
-| Domain and lifecycle entities | `graph-ingest` (writes to `ENTITY_STATES`) |
-| Lifecycle transition contract | `pkg/lifecycle.Manager` (emits through `graph-ingest`) |
-| Operational execution artifacts | Component that produced them (writes to its own bucket/ObjectStore) |
-
-### 5. If you need a new bucket, ask twice
-
-Adding a new KV bucket is a discipline-load decision, not a syntactic
-one. The semspec trap (below) is what happens when new buckets
-proliferate without the framework being able to see them. Before
-adding one:
-
-- Can the data live on an existing entity as triples?
-- Can the data live in an existing component's bucket
-  (`AGENT_LOOPS`, etc.) with a distinct key prefix?
-- Can bulky content live in ObjectStore with a ref-triple on an
-  existing entity?
-
-If the answer to all three is "no," and the bucket is genuinely
-component-owned operational state, register it via `entity_watch_buckets`
-and document it in the component's docs. **Never** create app-side
-state buckets that the rule engine isn't configured to watch.
-
-### 6. Engine gaps file as engine work
-
-If the rule engine can't express something you need (e.g., reading
-an evidence-array length inside a `when` clause), **file it as a
-rule-engine improvement**, not an app-side workaround. The semspec
-trap is the cautionary tale (below).
-
-## The semspec trap (don't repeat it)
-
-semspec was an early adopter, predating the mature rule engine. To
-work around rule-engine limitations, it built **its own plan and
-execution state machines** — roughly 7,264 LOC of `workflow/reactive/`
-code with its own state plumbing alongside the rule engine.
-
-That code is now a migration blocker. It imports the retired
-`processor/reactive/` engine, maintains its own state, has its own
-audit surface, and is invisible to flow discovery and the flowgraph
-validator. The team can't dig out anytime soon.
-
-**The lesson**: when the framework is missing something, the answer
-is engine work upstream, not app-side scaffolding downstream. Every
-time an app adds its own state machine "just for this one case," the
-framework loses the ability to help it later — debugging,
-observability, restart safety, validation, all degrade.
-
-This document is the canonical "how to do workflows in semstreams"
-answer. If the answer isn't here, propose adding it. If a pattern
-genuinely needs a new primitive, propose adding the primitive to the
-rule engine via ADR + engine ticket. Don't carve out a parallel
-state-machine path.
+Earlier applications accumulated parallel orchestration state around the retired workflow engine. That history
+explains the emphasis on declared composition and explicit ownership. It does not establish the current migration
+status of a sister repository. Start new applications with current contracts and identify missing primitives directly.
 
 ## Debugging Orchestration Issues
 
 ### Symptom: action fires multiple times unexpectedly
 
-**Likely cause**: rule re-triggers because state oscillates after the
-action runs.
-
-**Check**: is the action modifying state that causes the rule's
-condition to re-match?
-
-**Fix**: idempotent state updates, or track "already processed"
-flags on the entity. Verify `MaxIterations` is set on the action.
+Inspect the entity or message triggering each evaluation, rule match transitions, and the action firing cap.
+Distinguish repeated triggering from redelivery. For effectful tools, review the executor's idempotency contract.
 
 ### Symptom: chain stalls partway through
 
-**Likely cause**: a stage completed but the next rule isn't watching
-the right key pattern, or the rule's `when` clause doesn't match the
-emitted state.
-
-**Check**: read the KV bucket; confirm the stage's completion key was
-written; trace the rule engine's evaluation log for the next rule.
-
-**Fix**: align the rule's key pattern and `when` predicates with what
-the prior stage actually writes.
+Identify the expected next rule and the actual state or message it evaluates. Check entity patterns, predicates,
+action guards and component readiness. Confirm `publish_agent` has its required subject, role, model and prompt.
+A private completion record alone does not establish that the next entity rule has readable input.
 
 ### Symptom: component behaves differently in chain vs. standalone
 
-**Likely cause**: component has caller awareness it shouldn't.
-
-**Check**: does the component branch on a workflow ID, caller role,
-or any field that varies by caller?
-
-**Fix**: remove caller awareness. Behavior differences must come from
-configuration, not caller identity.
+Compare its actual inputs, configuration and dependencies. Look for hidden assumptions about caller identity
+or state supplied only by one composition.
 
 ### Symptom: looking for "the workflow ID"
 
-**There isn't one.** Multi-step patterns in semstreams are identified
-by the operation entity ID (e.g., the loop ID on the research-pipeline
-entity in `AGENT_LOOPS`). If you're reaching for a separate workflow
-identifier, you're probably about to recreate the semspec trap.
+Start with the application's named entity and lifecycle phase. Use loop, task and call identifiers for their
+respective execution records. One identifier or storage record need not represent the whole application.
 
 ## Use Case Examples
 
-### Simple agent handoff (Pattern 1)
+A telemetry application can use deterministic components and rules without a model. An agentic review app can
+add focused phases, explicit outcomes and a review gate. External connectivity depends on selected components,
+tools and model providers.
 
-```text
-Architect completes with plan → editor receives plan, implements.
-```
-
-Layer mapping:
-- Rule: `when architect completes → publish_agent editor`
-- Components: `agentic-loop` executes architect, then editor
-
-### Multi-step agent chain with retry (Patterns 2 + 4)
-
-```text
-For each task: architect → editor → reviewer → if issues, fix and re-review (max 3) → done.
-```
-
-Layer mapping:
-- Rules: one per transition; one with `max_iterations: 3` for the fix→review loop
-- Components: `agentic-loop` for each role
-- State: a task entity in an existing bucket carries phase, iteration,
-  feedback
-
-### Data pipeline with validation retry (Pattern 4)
-
-```text
-Ingest → validate → if invalid and attempts < 3, request correction, goto validate → if valid, process.
-```
-
-Layer mapping:
-- Rules: ingest trigger, validation router (Pattern 3 conditional),
-  retry action with `max_iterations: 3`
-- Components: validator, corrector, processor
-- State: an ingestion entity carries attempts and validation result
-
-### Graph search decomp+fusion (Patterns 2 + 3 + 4, ADR-045)
-
-```text
-research_graph(topic, hints?)
-  → nl_classify  (reuses existing graph/query.Classifier)
-  → route_search (LLM examines candidates, emits one of 4 actions)
-  → branch:
-       synthesize_directly  → synthesize → return
-       retighten            → loop back to nl_classify (max 2)
-       walk_seeds           → execute → assess → refine? (max 5) → synthesize → return
-       decompose            → execute → assess → refine? (max 5) → synthesize → return
-```
-
-Layer mapping:
-- Rules: seven rules (R0–R6 in ADR-045) coordinating the chain;
-  conditional branch on `route_search` decision; conditional branch
-  on `assess_sufficiency`; retighten loop with `max_iterations: 2`
-  (R2); refine loop with `max_iterations: 5` (R4); continuation rule
-  fires the parent
-- Components: `nl_classify` (wraps existing classifier),
-  `route_search`, `execute_subqueries`, `assess_sufficiency`,
-  `synthesize_answer`
-- State: a research-pipeline entity in `AGENT_LOOPS`; classifier
-  candidates + multi-hop evidence in ObjectStore via
-  `ContentStorable`; refs as triples on the entity
-
-See [ADR-045](../adr/045-graph-search-rule-chain.md) for the full
-design and the classify-and-route rationale.
+Start with the checked [First Processor](../basics/05-first-processor.md) guide for component composition.
+The [SemSource walkthrough](../basics/09-building-semsource.md) separates product semantics
+from framework responsibilities.
 
 ## References
 
-- [/orchestration-check](../../.claude/skills/orchestration-check/SKILL.md)
-  — decision skill for choosing between patterns
-- [/kv-or-stream](../../.claude/skills/kv-or-stream/SKILL.md) —
-  facts vs requests heuristic
-- [/new-payload](../../.claude/skills/new-payload/SKILL.md) —
-  payload registry checklist
-- [Concept: KV Twofer](02-kv-twofer.md) — single KV write = state +
-  events + history
-- [Concept: Streams vs KV Watches](03-streams-vs-kv-watches.md) —
-  facts vs requests
-- [Concept: Agentic Systems](13-agentic-systems.md) — agentic loop
-  fundamentals
-- [Concept: Rule-Driven Artifacts](18-rule-driven-artifacts.md) —
-  emitting markdown/JSON/webhook artifacts from rule actions
-- [ADR-028: Agentic Orchestration Architecture](../adr/028-orchestration-architecture.md)
-- [ADR-031: Time-Trigger Primitive (cron rules)](../adr/031-time-trigger-primitive.md)
-- [ADR-041: Unified Condition Evaluator](../adr/041-unified-condition-evaluator.md)
-- [ADR-045: Graph Search Decomp+Fusion via Rule-Chain + Components](../adr/045-graph-search-rule-chain.md)
-- Memory: `project_reactive_workflow_retirement` — historical context
-  on the workflow engine retirement
+- [Rule engine contract](../../openspec/specs/rule-engine/spec.md)
+- [Lifecycle contract](../../openspec/specs/lifecycle/spec.md)
+- [Rule action definitions](../../processor/rule/actions.go)
+- [Orchestration decision skill](../../.agents/skills/orchestration-check/SKILL.md)
+- [KV Twofer](02-kv-twofer.md)
+- [Streams vs KV Watches](03-streams-vs-kv-watches.md)
+- [ADR-028: Orchestration Architecture](../adr/028-orchestration-architecture.md)

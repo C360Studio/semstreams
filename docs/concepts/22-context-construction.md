@@ -46,7 +46,7 @@ The solution is to construct context **before** dispatching agents:
 
 Benefits:
 
-- **Exact token budgets** - Know size before dispatch
+- **Estimated token budgets** - Estimate context size before dispatch
 - **Fresh context per task** - No pollution from prior work
 - **Source tracking** - Trace which entities informed decisions
 - **Consistent context** - Multiple agents can share the same base context
@@ -57,7 +57,7 @@ SemStreams provides utilities in `pkg/context/` that any consumer can use.
 
 ### Token Estimation
 
-Manage context budgets precisely:
+Estimate context size to manage token budgets:
 
 ```go
 import "github.com/c360studio/semstreams/pkg/context"
@@ -127,7 +127,7 @@ The `ConstructedContext` type wraps everything needed for embedded context:
 ```go
 type ConstructedContext struct {
     Content       string          // Formatted string for LLM
-    TokenCount    int             // Exact token count
+    TokenCount    int             // Estimated token count
     Entities      []string        // Entity IDs included
     Sources       []ContextSource // Provenance tracking
     ConstructedAt time.Time       // For cache management
@@ -168,88 +168,36 @@ SemSpec flow:
 
 ## Integration with Workflows
 
-Embed context in `publish_agent` actions:
+Context construction belongs to the application component that understands the task. It selects relevant
+entities and bodies, retrieves them through composed query dependencies, and formats the result before dispatch.
 
-```json
-{
-  "name": "review",
-  "action": {
-    "type": "publish_agent",
-    "role": "reviewer",
-    "prompt": "Review the following code changes",
-    "context": "${steps.build_context.output}"
-  }
-}
-```
+For a Go producer constructing an `agentic.TaskMessage`, the `Context` field accepts a `ConstructedContext`.
+The agent loop consumes its nonempty `Content` as supplied context. This is an explicit task-construction seam;
+it is not a workflow-step interpreter.
 
-The `build_context` step produces a `ConstructedContext` that flows through variable interpolation.
+For rule-driven composition, a rule can trigger the component responsible for preparing and dispatching work.
+`TaskMessage.Context` is not a `rule.Action` field. Use the current
+[action definition](../../processor/rule/actions.go), and keep full content with its producer when coordination
+can carry a reference.
 
-For parallel agents, build separate contexts:
+When several agents need different evidence, the application chooses separate contexts or a shared body.
+That choice does not determine execution concurrency or aggregation behavior.
 
-```json
-{
-  "name": "parallel_review",
-  "type": "parallel",
-  "steps": [
-    {
-      "name": "sop_review",
-      "action": {
-        "type": "publish_agent",
-        "role": "sop_reviewer",
-        "prompt": "Check SOP compliance",
-        "context": "${steps.build_context.output.sop_context}"
-      }
-    },
-    {
-      "name": "style_review",
-      "action": {
-        "type": "publish_agent",
-        "role": "style_reviewer",
-        "prompt": "Check code style",
-        "context": "${steps.build_context.output.style_context}"
-      }
-    }
-  ]
-}
-```
+Token utilities use estimates. An estimated context budget does not establish the exact count of the final model
+request, which also contains prompts, tool definitions and other messages.
+See [Orchestration Layers](14-orchestration-layers.md) for current composition patterns and
+[Building context with SemSource](../basics/09-building-semsource.md) for a source-backed application.
 
 ## Example: Building Context for Code Review
 
-```go
-func buildReviewContext(ctx context.Context, client context.GraphClient, fileIDs []string) (*context.ConstructedContext, error) {
-    // Query files and their relationships
-    result, err := context.BatchQueryEntitiesWithOptions(ctx, client, fileIDs,
-        context.BatchQueryOptions{
-            IncludeRelationships: true,
-            Depth:                1,
-        })
-    if err != nil {
-        return nil, err
-    }
-
-    // Format with budget
-    opts := context.FormatOptions{
-        MaxTokens:      6000,
-        PrettyPrint:    true,
-        SectionHeaders: true,
-    }
-
-    constructed, err := context.BuildContextFromBatch(result, opts)
-    if err != nil {
-        return nil, err
-    }
-
-    // Token count is exact
-    log.Printf("Built context with %d tokens for %d entities",
-        constructed.TokenCount, len(constructed.Entities))
-
-    return constructed, nil
-}
-```
+An application selects relevant file IDs, retrieves entities through its composed query adapter, and formats the
+result within an estimated budget. Use the maintained [batch query helpers](../../pkg/context/batch.go) and
+[formatting implementation](../../pkg/context/format.go) as API references, then attach the constructed result
+through the explicit task seam above. The application determines which evidence matters and how to handle a
+query or formatting failure.
 
 ## Related Documentation
 
 - [Agentic Systems](13-agentic-systems.md) - Overview of agentic loop
-- [Parallel Agents](23-parallel-agents.md) - Parallel execution with context
-- [Workflow Configuration](../advanced/09-workflow-configuration.md) - Workflow processor
+- [Orchestration Layers](14-orchestration-layers.md) - Rules, components and per-item dispatch
 - [pkg/context README](../../pkg/context/README.md) - Package documentation

@@ -227,8 +227,8 @@ semspec trap"). semspec was an early adopter, predating the mature
 rule engine. To compensate for missing primitives, it built 7,264
 LOC of `workflow/reactive/` — its own plan + execution state
 machines, importing the now-retired `processor/reactive/` engine
-plus app-side state plumbing. That code is now a migration blocker
-for Phase 5 of the reactive-workflow retirement. The durable
+plus app-side state plumbing. This is a historical migration lesson,
+not a statement of the sister repository's current status. The durable
 lesson: *gaps in the framework surface upstream as engine work;
 they never get worked around as app-side state plumbing*. If
 research_graph had been written as a Claude skill with the LLM

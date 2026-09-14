@@ -1,7 +1,7 @@
 # Operations
 
-> **⚠️ DEPRECATED**: The JSON-based rules engine is superseded by the Reactive Workflow Engine
-> (ADR-021). See [Reactive Workflows Guide](/docs/advanced/10-reactive-workflows.md).
+> The rule engine is current. For multi-step composition, see
+> [Orchestration Layers](../../../docs/concepts/14-orchestration-layers.md).
 
 Monitoring, debugging, and maintaining the rules engine in production.
 

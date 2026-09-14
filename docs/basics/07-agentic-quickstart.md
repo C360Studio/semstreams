@@ -382,6 +382,5 @@ Always use tool allowlists in production:
 
 - [Agentic Components Reference](../advanced/08-agentic-components.md) - Detailed component specifications
 - [Agentic Systems Concepts](../concepts/13-agentic-systems.md) - Foundational concepts
-- [Orchestration Layers](../concepts/14-orchestration-layers.md) - When to use rules vs. workflows
-- [Workflow Quickstart](08-workflow-quickstart.md) - Multi-step workflow orchestration
+- [Orchestration Layers](../concepts/14-orchestration-layers.md) - Rules, components and durable phase patterns
 - [Troubleshooting](../operations/02-troubleshooting.md) - Common issues and solutions
