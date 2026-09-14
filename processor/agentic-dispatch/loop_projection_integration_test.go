@@ -30,7 +30,7 @@ func TestIntegrationMixedLoopBucketSharesOneCurrentView(t *testing.T) {
 	kv, err := tc.GetKVBucket(ctx, defaultAgentLoopsBucket(t))
 	require.NoError(t, err)
 	for _, id := range []string{admissionLoopA, admissionLoopB} {
-		putLoopRecord(t, ctx, kv, agentic.LoopEntity{ID: id, UserID: "user", ChannelType: "http", ChannelID: "channel", State: agentic.LoopStateExecuting, MaxIterations: 3})
+		putLoopRecord(t, ctx, kv, agentic.LoopEntity{ID: id, UserID: "user", ChannelType: "http", ChannelID: "channel", State: agentic.LoopStateRunning, MaxIterations: 3})
 	}
 	_, err = kv.Put(ctx, "COMPLETE_"+admissionLoopA, loopCompletionJSON(t, admissionLoopA))
 	require.NoError(t, err)

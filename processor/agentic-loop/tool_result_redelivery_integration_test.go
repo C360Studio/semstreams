@@ -40,6 +40,7 @@ func (b *toolResultCheckpointBucket) Put(ctx context.Context, key string, data [
 // spec: agentic-loop / Loop recovery is lane-specific and read-through
 // spec: agentic-loop / All six loop input classes settle after owner-specific durable done
 // spec: agentic-loop / Tool execution has stable framework correlation
+// spec: agentic-tools / Tool-result bounds SHALL be observed rather than predicted
 func TestIntegrationColdToolResultRedeliveryUnblocksLaterApproval(t *testing.T) {
 	ctx := t.Context()
 	tc := natsclient.NewTestClient(t, natsclient.WithStreams(
@@ -84,6 +85,10 @@ func TestIntegrationColdToolResultRedeliveryUnblocksLaterApproval(t *testing.T) 
 								_, err = stream.GetLastMsgForSubject(msgCtx, "agent.approval_pending."+result.LoopID)
 								return err
 							}
+							storedName := entity.PendingToolResults[result.ExecutionID].Name
+							if result.Name != "" || storedName != "search" {
+								return fmt.Errorf("source ACK did not preserve omitted wire name and dispatched checkpoint name")
+							}
 							request, err := stream.GetLastMsgForSubject(msgCtx, "agent.request."+result.LoopID)
 							if err != nil {
 								return err
@@ -97,7 +102,8 @@ func TestIntegrationColdToolResultRedeliveryUnblocksLaterApproval(t *testing.T) 
 								return fmt.Errorf("source ACK preceded next request PubAck")
 							}
 							for _, message := range next.Messages {
-								if message.Role == "tool" && message.ToolCallID == result.CallID && message.Content == result.Content && message.Name == result.Name {
+								if message.Role == "tool" && message.ToolCallID == result.CallID &&
+									message.Content == "Tool error: too_large" && message.Name == storedName && message.IsError {
 									return nil
 								}
 							}
@@ -157,8 +163,11 @@ func TestIntegrationColdToolResultRedeliveryUnblocksLaterApproval(t *testing.T) 
 	}
 	require.NoError(t, first.Start(firstCtx))
 	call := startCall(loopID, "search")
+	// Match the compact producer's wire shape without requiring it to copy the
+	// call's name. The loop already owns that fact in the dispatched call.
 	result := &agentic.ToolResult{LoopID: loopID, RequestID: call.RequestID, ExecutionID: call.ExecutionID,
-		CallOrdinal: call.CallOrdinal, CallID: call.ID, Name: call.Name, TraceID: call.TraceID, Content: "retained answer"}
+		CallOrdinal: call.CallOrdinal, CallID: call.ID, TraceID: call.TraceID,
+		Error: "too_large", ErrorKind: agentic.ToolErrorInternal}
 	resultData := settlementEnvelope(t, result)
 	require.NoError(t, tc.Client.PublishToStream(ctx, "tool.result."+call.ExecutionID, resultData))
 	failed := wait("tool.result", 5*time.Second)
@@ -168,7 +177,9 @@ func TestIntegrationColdToolResultRedeliveryUnblocksLaterApproval(t *testing.T) 
 	require.NoError(t, err)
 	var interrupted agentic.LoopEntity
 	require.NoError(t, json.Unmarshal(checkpoint.Value(), &interrupted))
-	require.Equal(t, *result, interrupted.PendingToolResults[call.ExecutionID])
+	wantResult := *result
+	wantResult.Name = call.Name
+	require.Equal(t, wantResult, interrupted.PendingToolResults[call.ExecutionID])
 	require.Equal(t, 1, interrupted.Iterations)
 	priorRequest, err := stream.GetLastMsgForSubject(ctx, "agent.request."+loopID)
 	require.NoError(t, err)
@@ -214,10 +225,12 @@ func TestIntegrationColdToolResultRedeliveryUnblocksLaterApproval(t *testing.T) 
 	require.NoError(t, err)
 	next := decoded.Payload().(*agentic.AgentRequest)
 	require.NotEqual(t, call.RequestID, next.RequestID)
-	require.Contains(t, next.Messages, agentic.ChatMessage{Role: "tool", ToolCallID: call.ID, Name: call.Name, Content: result.Content})
+	require.Contains(t, next.Messages, agentic.ChatMessage{Role: "tool", ToolCallID: call.ID,
+		Name: call.Name, Content: "Tool error: too_large", IsError: true})
 	recovered, err := replacement.loopsBucket.Get(ctx, loopID)
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(recovered.Value(), &interrupted))
+	require.Equal(t, wantResult, interrupted.PendingToolResults[call.ExecutionID])
 	require.Equal(t, 1, interrupted.Iterations, "publication replay must spend the iteration once")
 
 	approvalLoopID := uuid.NewString()

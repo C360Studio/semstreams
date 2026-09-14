@@ -53,8 +53,8 @@ ACK. PubAck uncertainty MAY repeat a result. `Nats-Msg-Id` MAY provide bounded d
 treated as permanent publication identity.
 
 The exact immutable `TOOL_CALL_OUTCOMES` read exists only at the executor-effect boundary. Before executor invocation,
-a matching outcome is replayed and a conflicting fingerprint quarantines. Ordinary ToolResult republication requires
-no second exact output lookup, general stream scan, or second tool authority.
+a matching outcome is replayed and a conflicting fingerprint terminates the delivery. Ordinary ToolResult
+republication requires no second exact output lookup, general stream scan, or second tool authority.
 
 #### Scenario: Completed result publication repeats
 
@@ -62,10 +62,11 @@ no second exact output lookup, general stream scan, or second tool authority.
 - **THEN** the stored outcome may be published again with the same framework execution identity
 - **AND** the executor is not invoked again
 
-#### Scenario: Completed outcome content conflicts
+#### Scenario: Stored completed outcome correlation conflicts
 
-- **WHEN** the expected execution identity names a different canonical result
-- **THEN** agentic-tools quarantines without selecting or overwriting either outcome
+- **WHEN** an immutable outcome under the expected execution identity has a mismatched request fingerprint or result
+  correlation
+- **THEN** agentic-tools terminates the delivery without executor invocation or overwriting the outcome
 
 ## MODIFIED Requirements
 
@@ -76,12 +77,16 @@ provider CallID, and positive call ordinal. Provider `ToolCall.ID` SHALL remain 
 the completed-outcome key. Before execution, agentic-tools SHALL read the exact outcome and validate its version,
 execution identity, RequestID, provider CallID, ordinal, complete V1 request fingerprint, and result correlation. A
 matching outcome SHALL be published without executor invocation. Missing state SHALL permit execution only under the
-executor's admitted retry contract. Corrupt, colliding, or mismatched state SHALL quarantine the delivery.
+executor's admitted retry contract. Corrupt, colliding, or mismatched immutable outcome state SHALL terminate the
+delivery without executor invocation.
 
 After execution or terminal policy rejection, the component SHALL Create-CAS the complete outcome. On a Create
-collision it SHALL read and validate the winner and publish that authoritative winner. A transient read, Create,
-winner-read, or result-publication failure SHALL return Retry. The request SHALL positively settle only after
-synchronous result publication receives PubAck.
+collision it SHALL read and validate the winner and publish that authoritative winner. A transient pre-execution
+read, pre-effect policy-outcome Create, winner-read after a typed Create collision, or ordinary completed-result
+publication failure SHALL return Retry. An unresolved outcome Create after executor invocation SHALL return
+Quarantine, stop the exact delivery owner without settlement, and SHALL NOT enter automatic semantic retry.
+The observed-bounds requirement below retains its specific compact-result dispositions. The request SHALL
+positively settle only after synchronous result publication receives PubAck.
 
 An initial `approval_required` result SHALL be nonterminal coordination and SHALL NOT be persisted as COMPLETED. It
 MAY use a phase-distinct `Nats-Msg-Id` for bounded duplicate suppression. An approved redispatch retains RequestID,
@@ -102,7 +107,7 @@ fingerprint. Its terminal result remains correlated by framework execution ident
 - **WHEN** a request repeats its provider CallID under a different RequestID, ordinal, or canonical ToolCall content
 - **THEN** it resolves to a distinct execution identity or a non-matching V1 fingerprint
 - **AND** no completed outcome is selected by provider CallID alone
-- **AND** an identity collision is quarantined without executor invocation
+- **AND** an immutable outcome identity collision terminates the delivery without executor invocation
 
 ### Requirement: Tool-result bounds SHALL be observed rather than predicted
 
@@ -132,7 +137,9 @@ An executor panic SHALL be recovered into a compact correlated internal result a
 Effectful executor contracts SHALL declare their operation-specific idempotency or reconciliation key and behavior;
 the framework SHALL NOT claim that provider `ToolCall.ID` alone makes an external effect idempotent. If an executor
 cannot reconcile an effect after failure between the effect and COMPLETED persistence, the ambiguity SHALL remain a
-typed, metered retry risk and SHALL NOT be presented as exactly-once execution.
+typed, metered unresolved-effect risk and SHALL NOT be presented as exactly-once execution. An unresolved
+post-execution outcome Create SHALL quarantine the delivery without automatic semantic retry; operation-specific
+effect reconciliation SHALL NOT be replaced by a second framework ledger.
 
 #### Scenario: executor panics
 
@@ -145,5 +152,25 @@ typed, metered retry risk and SHALL NOT be presented as exactly-once execution.
 
 - **WHEN** an effectful executor returns and COMPLETED persistence is transiently unresolved
 - **AND** the executor declares no operation-specific effect reconciliation
-- **THEN** agentic-tools returns Retry and records the ambiguity
+- **THEN** agentic-tools returns Quarantine, records the ambiguity, and stops the exact owner without settlement
 - **AND** it does not claim `ToolCall.ID` prevented a repeated external effect
+
+### Requirement: Durable outcome telemetry SHALL use a closed bounded vocabulary
+
+The component SHALL expose exactly these counter families and label values:
+
+- `outcome_total{path}`: `new`, `replay`, `rejection`, `compact`;
+- `outcome_store_failures_total{operation,reason}`: operation `get`, `create`, `read_winner`; reason `transport`,
+  `oversize`, `corrupt`;
+- `outcome_collisions_total` without labels;
+- `result_publish_failures_total{reason}`: `transport`, `oversize`, `marshal`;
+- `ambiguous_redeliveries_total{cause}`: `store_failure`, `shutdown`, `heartbeat`, `panic`.
+
+Call IDs and tool names SHALL NOT be metric labels. Ambiguous paths SHALL log `ambiguous_effect=true`.
+
+#### Scenario: an effect completes but outcome Create fails
+
+- **WHEN** the executor returns after a possible effect and outcome Create fails transiently
+- **THEN** `ambiguous_redeliveries_total{cause="store_failure"}` increments
+- **AND** the error log carries `ambiguous_effect=true`
+- **AND** the delivery is quarantined and the exact owner stops without settlement or automatic semantic retry

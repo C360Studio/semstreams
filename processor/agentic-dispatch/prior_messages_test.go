@@ -158,7 +158,7 @@ func TestPriorMessagesConflictsWithAdmittedAttachment(t *testing.T) {
 			msg.PriorMessages = displayedPriorMessages()
 			record := &agentic.LoopEntity{
 				ID: seamTestLoopA, UserID: msg.UserID, ChannelType: msg.ChannelType, ChannelID: msg.ChannelID,
-				State: agentic.LoopStateExecuting, MaxIterations: 5,
+				State: agentic.LoopStateRunning, MaxIterations: 5,
 			}
 			withPersistedLoops(c, map[string]*agentic.LoopEntity{record.ID: record})
 			before := *record

@@ -18,6 +18,7 @@ type loopMetrics struct {
 	loopsTimeout                   prometheus.Counter
 	approvalTimeoutPublishFailures prometheus.Counter
 	approvalDecisionsInapplicable  prometheus.Counter
+	cancellationsInapplicable      prometheus.Counter
 	approvalStatusesSuperseded     prometheus.Counter
 	activeLoops                    prometheus.Gauge
 
@@ -114,6 +115,12 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Subsystem: "agentic_loop",
 				Name:      "approval_decisions_inapplicable_total",
 				Help:      "Approval decisions observed as inapplicable because their execution gate is not current",
+			}),
+			cancellationsInapplicable: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_loop",
+				Name:      "cancellations_inapplicable_total",
+				Help:      "Cancellation deliveries observed as inapplicable because the authoritative loop is terminal; repeated deliveries are counted separately",
 			}),
 			approvalStatusesSuperseded: prometheus.NewCounter(prometheus.CounterOpts{
 				Namespace: "semstreams",
@@ -295,6 +302,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = registry.RegisterCounter("agentic-loop", "loops_timeout_total", metrics.loopsTimeout)
 			_ = registry.RegisterCounter("agentic-loop", "approval_timeout_publish_failures_total", metrics.approvalTimeoutPublishFailures)
 			_ = registry.RegisterCounter("agentic-loop", "approval_decisions_inapplicable_total", metrics.approvalDecisionsInapplicable)
+			_ = registry.RegisterCounter("agentic-loop", "cancellations_inapplicable_total", metrics.cancellationsInapplicable)
 			_ = registry.RegisterCounter("agentic-loop", "approval_required_statuses_superseded_total", metrics.approvalStatusesSuperseded)
 			_ = registry.RegisterGauge("agentic-loop", "active_loops", metrics.activeLoops)
 			_ = registry.RegisterCounter("agentic-loop", "iterations_total", metrics.iterationsTotal)
@@ -326,6 +334,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.loopsTimeout)
 			_ = prometheus.DefaultRegisterer.Register(metrics.approvalTimeoutPublishFailures)
 			_ = prometheus.DefaultRegisterer.Register(metrics.approvalDecisionsInapplicable)
+			_ = prometheus.DefaultRegisterer.Register(metrics.cancellationsInapplicable)
 			_ = prometheus.DefaultRegisterer.Register(metrics.approvalStatusesSuperseded)
 			_ = prometheus.DefaultRegisterer.Register(metrics.activeLoops)
 			_ = prometheus.DefaultRegisterer.Register(metrics.iterationsTotal)

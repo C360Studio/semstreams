@@ -112,7 +112,7 @@ func TestMockIntentClassifier_ContinueWithLoop(t *testing.T) {
 		{
 			LoopID:    "loop_abc12345",
 			UserID:    "user-1",
-			State:     "executing",
+			State:     "running",
 			CreatedAt: time.Now(),
 		},
 	}

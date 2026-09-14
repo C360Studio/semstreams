@@ -68,7 +68,7 @@ func TestHandleLoopApproval_CurrentAuthority(t *testing.T) {
 	}{
 		{name: "cold pending reaches existing publication", wantCode: http.StatusInternalServerError, wantText: ErrNATSClientNil.Error()},
 		{name: "current executing refuses approval", mutate: func(e *agentic.LoopEntity) {
-			e.State, e.PendingApproval = agentic.LoopStateExecuting, nil
+			e.State, e.PendingApproval = agentic.LoopStateRunning, nil
 		}, wantCode: http.StatusConflict, wantText: "loop not awaiting approval"},
 		{name: "current terminal refuses approval", mutate: func(e *agentic.LoopEntity) {
 			e.State, e.PendingApproval = agentic.LoopStateComplete, nil
@@ -86,7 +86,7 @@ func TestHandleLoopApproval_CurrentAuthority(t *testing.T) {
 			e.PendingApproval.ExecutionID = ""
 		}, wantCode: http.StatusServiceUnavailable, wantText: "loop record is not readable right now"},
 		{name: "nonawaiting with pending is incoherent", mutate: func(e *agentic.LoopEntity) {
-			e.State = agentic.LoopStateExecuting
+			e.State = agentic.LoopStateRunning
 		}, wantCode: http.StatusServiceUnavailable, wantText: "loop record is not readable right now"},
 		{name: "unavailable authority refuses without fallback", readError: errors.New("storage unavailable"),
 			wantCode: http.StatusServiceUnavailable, wantText: "loop record is not readable right now"},
@@ -222,7 +222,7 @@ func TestHandleLoopApproval_UnknownDecision(t *testing.T) {
 func TestHandleLoopApproval_NotAwaitingApproval(t *testing.T) {
 	comp := newTestComponent(t)
 	withPersistedLoops(comp, map[string]*agentic.LoopEntity{seamTestLoopB: {
-		ID: seamTestLoopB, UserID: "user-1", ChannelType: "http", State: agentic.LoopStateExecuting, MaxIterations: 3,
+		ID: seamTestLoopB, UserID: "user-1", ChannelType: "http", State: agentic.LoopStateRunning, MaxIterations: 3,
 	}})
 
 	body := `{"decision":"approve","execution_id":"` + approvalTestExecutionID + `"}`

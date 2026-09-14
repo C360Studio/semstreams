@@ -24,18 +24,16 @@ type failingLoopBucket struct {
 }
 
 type finalMarkerFailBucket struct {
-	jetstream.KeyValue
+	*terminalSelectionBucket
 	loopID string
-	values map[string][]byte
 	err    error
 }
 
-func (b *finalMarkerFailBucket) Put(_ context.Context, key string, value []byte) (uint64, error) {
+func (b *finalMarkerFailBucket) Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error) {
 	if key == b.loopID {
 		return 0, b.err
 	}
-	b.values[key] = append([]byte(nil), value...)
-	return 1, nil
+	return b.terminalSelectionBucket.Update(ctx, key, value, revision)
 }
 
 func (b failingLoopBucket) Put(context.Context, string, []byte) (uint64, error) {
@@ -44,6 +42,10 @@ func (b failingLoopBucket) Put(context.Context, string, []byte) (uint64, error) 
 
 func (b failingLoopBucket) Get(context.Context, string) (jetstream.KeyValueEntry, error) {
 	return nil, jetstream.ErrKeyNotFound
+}
+
+func (b failingLoopBucket) Create(context.Context, string, []byte, ...jetstream.KVCreateOpt) (uint64, error) {
+	return 0, b.err
 }
 
 // TestRunWithBudget_ReturnsCompletedFalseWhenFnReturnsFast asserts the
@@ -67,21 +69,27 @@ func TestRunWithBudget_ReturnsCompletedFalseWhenFnReturnsFast(t *testing.T) {
 // spec: agentic-loop / All six loop input classes settle after owner-specific durable done
 func TestPersistHandlerResultReturnsPublicationFailureAndDiscardsSpeculativeTerminalState(t *testing.T) {
 	handler := NewMessageHandler(DefaultConfig())
-	loopID := "publish-failure-loop"
-	_, err := handler.trajectoryManager.startTrajectory(loopID)
+	loopID, err := handler.loopManager.CreateLoop("task-publish-failure", "general", "model", 3)
 	require.NoError(t, err)
-	c := &Component{handler: handler, natsClient: &natsclient.Client{}}
+	entity, err := handler.GetLoop(loopID)
+	require.NoError(t, err)
+	bucket := &terminalSelectionBucket{&approvalRevisionBucket{
+		settlementBucket: &settlementBucket{values: map[string][]byte{loopID: settlementLoopRecord(t, entity)}},
+		revisions:        make(map[string]uint64),
+	}}
+	c := &Component{handler: handler, config: DefaultConfig(), loopsBucket: bucket, natsClient: &natsclient.Client{}, logger: slog.Default()}
+	_, revision, err := c.readLoopEntityRevision(t.Context(), loopID)
+	require.NoError(t, err)
+	_, err = handler.trajectoryManager.startTrajectory(loopID)
+	require.NoError(t, err)
+	result := HandlerResult{LoopID: loopID}
+	require.NoError(t, handler.handleCompleteResponse(&result, loopID, entity, "done", nil))
 
-	err = c.persistHandlerResult(t.Context(), HandlerResult{
-		LoopID: loopID,
-		State:  agentic.LoopStateComplete,
-		PublishedMessages: []PublishedMessage{{
-			Subject: "agent.complete." + loopID,
-			Data:    []byte(`{"complete":true}`),
-		}},
-	})
+	err = c.persistHandlerResult(t.Context(), result, revision)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "publish result")
+	require.Contains(t, bucket.values, "COMPLETE_"+loopID, "test did not reach the publication seam after selection")
+	require.Equal(t, settlementLoopRecord(t, entity), bucket.values[loopID], "publication failure committed a terminal marker")
 	_, err = handler.trajectoryManager.getTrajectory(loopID)
 	require.Error(t, err, "failed terminal attempt retained speculative process state")
 }
@@ -93,12 +101,20 @@ func TestTerminalLoopEntityIsFinalAppliedMarker(t *testing.T) {
 	require.NoError(t, err)
 	_, err = handler.trajectoryManager.startTrajectory(loopID)
 	require.NoError(t, err)
+	entity, err := handler.GetLoop(loopID)
+	require.NoError(t, err)
+	bucket := &finalMarkerFailBucket{
+		terminalSelectionBucket: &terminalSelectionBucket{&approvalRevisionBucket{
+			settlementBucket: &settlementBucket{values: map[string][]byte{loopID: settlementLoopRecord(t, entity)}},
+			revisions:        make(map[string]uint64),
+		}},
+		loopID: loopID, err: errors.New("final marker unavailable"),
+	}
+	c := &Component{handler: handler, config: DefaultConfig(), loopsBucket: bucket, logger: slog.Default()}
+	_, revision, err := c.readLoopEntityRevision(t.Context(), loopID)
+	require.NoError(t, err)
 	require.NoError(t, handler.loopManager.TransitionLoop(loopID, agentic.LoopStateComplete))
 	require.NoError(t, handler.loopManager.UpdateCompletion(loopID, agentic.OutcomeSuccess, "done", ""))
-	bucket := &finalMarkerFailBucket{
-		loopID: loopID, values: make(map[string][]byte), err: errors.New("final marker unavailable"),
-	}
-	c := &Component{handler: handler, loopsBucket: bucket, logger: slog.Default()}
 	completion := &agentic.LoopCompletedEvent{
 		LoopID: loopID, TaskID: "task-final-marker", Outcome: agentic.OutcomeSuccess,
 		Role: "general", Model: "model", Result: "done",
@@ -106,9 +122,11 @@ func TestTerminalLoopEntityIsFinalAppliedMarker(t *testing.T) {
 
 	err = c.persistHandlerResult(t.Context(), HandlerResult{
 		LoopID: loopID, State: agentic.LoopStateComplete, CompletionState: completion,
-	})
+	}, revision)
 
 	require.ErrorIs(t, err, bucket.err)
+	require.Equal(t, settlementLoopRecord(t, entity), bucket.values[loopID], "failed final Update changed the prior authority")
+	require.Equal(t, revision, bucket.revisions[loopID])
 	require.Contains(t, bucket.values, "COMPLETE_"+loopID,
 		"settlement-required effects did not run before the final marker")
 	_, lookupErr := handler.GetLoop(loopID)
@@ -125,9 +143,13 @@ func TestRequiredLoopStatePersistenceReturnsErrors(t *testing.T) {
 
 	err = c.persistLoopState(t.Context(), loopID)
 	require.ErrorIs(t, err, want)
-	err = c.persistCompletionState(t.Context(), loopID, &agentic.LoopCompletedEvent{LoopID: loopID})
+	_, err = c.selectTerminalOutcome(t.Context(), loopID, "task-persist", &agentic.LoopCompletedEvent{
+		LoopID: loopID, TaskID: "task-persist", Outcome: agentic.OutcomeSuccess, Result: "done", CompletedAt: time.Now(),
+	})
 	require.ErrorIs(t, err, want)
-	err = c.persistCancellationState(t.Context(), loopID, &agentic.LoopCancelledEvent{LoopID: loopID})
+	_, err = c.selectTerminalOutcome(t.Context(), loopID, "task-persist", &agentic.LoopCancelledEvent{
+		LoopID: loopID, TaskID: "task-persist", Outcome: agentic.OutcomeCancelled, CancelledBy: "operator", CancelledAt: time.Now(),
+	})
 	require.ErrorIs(t, err, want)
 }
 
@@ -200,13 +222,21 @@ func TestFailureLoopEntityIsFinalAppliedMarker(t *testing.T) {
 	entity, err := handler.GetLoop(loopID)
 	require.NoError(t, err)
 	bucket := &finalMarkerFailBucket{
-		loopID: loopID, values: make(map[string][]byte), err: errors.New("final marker unavailable"),
+		terminalSelectionBucket: &terminalSelectionBucket{&approvalRevisionBucket{
+			settlementBucket: &settlementBucket{values: map[string][]byte{loopID: settlementLoopRecord(t, entity)}},
+			revisions:        make(map[string]uint64),
+		}},
+		loopID: loopID, err: errors.New("final marker unavailable"),
 	}
-	c := &Component{handler: handler, loopsBucket: bucket, logger: slog.Default()}
+	c := &Component{handler: handler, config: DefaultConfig(), loopsBucket: bucket, logger: slog.Default()}
+	_, revision, err := c.readLoopEntityRevision(t.Context(), loopID)
+	require.NoError(t, err)
 
-	err = c.handleLoopFailure(t.Context(), loopID, entity, "provider_failure", errors.New("provider unavailable"))
+	err = c.handleLoopFailure(t.Context(), loopID, entity, "provider_failure", errors.New("provider unavailable"), revision)
 
 	require.ErrorIs(t, err, bucket.err)
+	require.Equal(t, settlementLoopRecord(t, entity), bucket.values[loopID], "failed final Update changed the prior authority")
+	require.Equal(t, revision, bucket.revisions[loopID])
 	require.Contains(t, bucket.values, "COMPLETE_"+loopID,
 		"failure completion did not commit before the final marker")
 	_, lookupErr := handler.GetLoop(loopID)
@@ -223,7 +253,7 @@ func TestImpossibleFailureTransitionIsQuarantined(t *testing.T) {
 	require.NoError(t, err)
 	c := &Component{handler: handler, logger: slog.Default()}
 
-	err = c.handleLoopFailure(t.Context(), loopID, entity, "handler_error", errors.New("late failure"))
+	err = c.handleLoopFailure(t.Context(), loopID, entity, "handler_error", errors.New("late failure"), 0)
 
 	require.Error(t, err)
 	require.True(t, errs.IsFatal(err), "impossible transition must map to Quarantine, not Retry")

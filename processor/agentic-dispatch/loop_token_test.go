@@ -130,7 +130,7 @@ func TestAutoContinueRefusesMalformedCurrentLoop(t *testing.T) {
 	require.NoError(t, err)
 	watcher := source.waitWatcher(t, 1)
 	watcher.updates <- fakeActivityEntry{key: admissionLoopA, rev: 1,
-		value: loopEntityJSON(t, admissionMalformed, agentic.LoopStateExecuting, 0)}
+		value: loopEntityJSON(t, admissionMalformed, agentic.LoopStateRunning, 0)}
 	watcher.updates <- nil
 	hooks.waitCaughtUp(t)
 	hooks.waitPoisonKey(t, admissionLoopA)

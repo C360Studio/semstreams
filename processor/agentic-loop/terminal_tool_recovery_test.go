@@ -32,7 +32,7 @@ func TestColdTerminalToolResultRequiresExactAppliedEvidence(t *testing.T) {
 			}
 			results[1].StopLoop = stopLoop
 			entity := agentic.NewLoopEntity(loopID, "terminal-tool-task", "general", "model", 1)
-			entity.State, entity.Iterations = agentic.LoopStateExecuting, entity.MaxIterations
+			entity.State, entity.Iterations = agentic.LoopStateRunning, entity.MaxIterations
 			bucket := &settlementBucket{values: map[string][]byte{loopID: settlementLoopRecord(t, entity)}}
 			response := &agentic.AgentResponse{RequestID: requestID, Status: agentic.StatusToolCall,
 				Message: agentic.ChatMessage{Role: "assistant", ToolCalls: calls}}
@@ -94,25 +94,39 @@ func TestColdTerminalToolResultRequiresExactAppliedEvidence(t *testing.T) {
 					// checkpoint at the cap, then time out before handling its
 					// response. That terminal is not the tool-drain consequence.
 					var checkpoint agentic.LoopEntity
-					require.NoError(t, json.Unmarshal(final, &checkpoint))
-					checkpoint.State, checkpoint.Outcome, checkpoint.Error = agentic.LoopStateExecuting, "", ""
-					checkpoint.CompletedAt = time.Time{}
+					require.NoError(t, json.Unmarshal(before, &checkpoint))
+					checkpoint.PendingToolResults[results[1].ExecutionID] = results[1]
 					checkpoint.TimeoutAt = time.Now().Add(-time.Second)
-					bucket.values[loopID] = settlementLoopRecord(t, checkpoint)
+					require.NoError(t, checkpoint.Validate())
+					// This independent schedule has not selected max_iterations.
+					// Reusing the parent store would require overwriting its COMPLETE.
+					timeoutBucket := &settlementBucket{values: map[string][]byte{loopID: settlementLoopRecord(t, checkpoint)}}
 					timeoutOwner := releaseTestComponent(t, NewMessageHandler(DefaultConfig()))
-					timeoutOwner.loopsBucket, timeoutOwner.settlementEvidence = bucket, evidence
+					timeoutOwner.loopsBucket, timeoutOwner.settlementEvidence = timeoutBucket, evidence
 					decision, err := timeoutOwner.handleResponseMessage(t.Context(), settlementEnvelope(t, response))
 					require.NoError(t, err)
 					require.Equal(t, natsclient.DeliveryDecisionAck, decision)
 					var timedOut agentic.LoopEntity
-					require.NoError(t, json.Unmarshal(bucket.values[loopID], &timedOut))
+					require.NoError(t, json.Unmarshal(timeoutBucket.values[loopID], &timedOut))
 					require.Equal(t, agentic.LoopStateFailed, timedOut.State)
 					require.Equal(t, "loop timeout exceeded", timedOut.Error)
 					require.Equal(t, checkpoint.MaxIterations, timedOut.Iterations)
 					require.Len(t, timedOut.PendingToolResults, len(calls))
-					decision, err = replacement.handleToolResultMessage(t.Context(), wire)
+					timeoutMarker, err := timeoutBucket.Get(t.Context(), loopID)
+					require.NoError(t, err)
+					savedTimeout := append([]byte(nil), timeoutBucket.values["COMPLETE_"+loopID]...)
+					timeoutReplacement := releaseTestComponent(t, NewMessageHandler(DefaultConfig()))
+					timeoutReplacement.loopsBucket, timeoutReplacement.settlementEvidence = timeoutBucket, evidence
+					timeoutReplacement.natsClient = &natsclient.Client{}
+					decision, err = timeoutReplacement.handleToolResultMessage(t.Context(), wire)
 					require.Equal(t, natsclient.DeliveryDecisionRetry, decision, "a timeout-at-cap marker is not the max-iteration consequence")
 					require.Error(t, err)
+					unchanged, err := timeoutBucket.Get(t.Context(), loopID)
+					require.NoError(t, err)
+					require.Equal(t, timeoutMarker.Value(), unchanged.Value())
+					require.Equal(t, timeoutMarker.Revision(), unchanged.Revision())
+					require.Equal(t, savedTimeout, timeoutBucket.values["COMPLETE_"+loopID])
+					require.Equal(t, final, bucket.values[loopID], "independent timeout schedule changed the parent's selected max-iteration marker")
 				})
 			}
 
@@ -130,9 +144,10 @@ func TestColdTerminalToolResultRequiresExactAppliedEvidence(t *testing.T) {
 						e.Iterations--
 					}
 				}, want: natsclient.DeliveryDecisionRetry},
-				{name: "approval remains unresolved", change: func(e *agentic.LoopEntity) {
+				// spec: agentic-loop / LoopEntity has one operational state contract
+				{name: "terminal with pending approval is malformed", change: func(e *agentic.LoopEntity) {
 					e.PendingApproval = &agentic.PendingApprovalState{ExecutionID: results[1].ExecutionID}
-				}, want: natsclient.DeliveryDecisionRetry},
+				}, want: natsclient.DeliveryDecisionQuarantine},
 				{name: "conflicting exact result", change: func(e *agentic.LoopEntity) {
 					r := e.PendingToolResults[results[1].ExecutionID]
 					r.Content = "different"

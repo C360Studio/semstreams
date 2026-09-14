@@ -342,7 +342,7 @@ paths:
                   schema: {}
                 - name: state
                   in: query
-                  description: Filter by loop state (exploring, planning, architecting, executing, awaiting_approval, reviewing, complete, failed, cancelled)
+                  description: Filter by loop state (running, awaiting_approval, complete, failed, cancelled)
                   schema: {}
             responses:
                 "200":

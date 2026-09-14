@@ -56,7 +56,7 @@ func TestIntegrationTerminalToolResultAppliedAfterReplacement(t *testing.T) {
 			}
 			results[1].StopLoop = stopLoop
 			entity := agentic.NewLoopEntity(loopID, "terminal-tool-task", "general", "model", 1)
-			entity.State, entity.Iterations = agentic.LoopStateExecuting, entity.MaxIterations
+			entity.State, entity.Iterations = agentic.LoopStateRunning, entity.MaxIterations
 			entity.PendingToolResults = map[string]agentic.ToolResult{results[0].ExecutionID: results[0]}
 			request := &agentic.AgentRequest{LoopID: loopID, RequestID: requestID, Role: entity.Role, Model: entity.Model,
 				Messages: []agentic.ChatMessage{{Role: "user", Content: "finish this task"}}}

@@ -219,7 +219,7 @@ func alterApprovalLaterHistory(t *testing.T, f *approvalRecoveryFixture, batchIn
 			call = calls[0]
 			require.NotEqual(t, incoming.ExecutionID, call.ExecutionID)
 		}
-		f.entity.State = agentic.LoopStateExecuting
+		f.entity.State = agentic.LoopStateRunning
 		require.NoError(t, f.entity.BeginAwaitingApproval(call.ID, call.Name, call.Arguments, incoming.Error, time.Hour, incoming.TraceID))
 		f.entity.PendingApproval.RequestID, f.entity.PendingApproval.ExecutionID = call.RequestID, call.ExecutionID
 		f.entity.PendingApproval.CallOrdinal = call.CallOrdinal
@@ -508,7 +508,13 @@ func approvalGateSettlementFixture(t *testing.T) (*Component, *agentic.ToolResul
 	})
 	require.NoError(t, err)
 	require.Len(t, taskResult.PublishedMessages, 2)
-	requestWire := taskResult.PublishedMessages[0]
+	var requestWire PublishedMessage
+	for _, published := range taskResult.PublishedMessages {
+		if published.Subject == "agent.request."+taskResult.LoopID {
+			requestWire = published
+			break
+		}
+	}
 	require.Equal(t, "agent.request."+taskResult.LoopID, requestWire.Subject)
 	requestMsg, err := c.decoder.Decode(requestWire.Data)
 	require.NoError(t, err)
@@ -677,13 +683,16 @@ func TestApprovalGateAfterUnsettledCancellationCannotAck(t *testing.T) {
 		UserID: "user-approval", ChannelType: "test", ChannelID: "approval-channel",
 	}
 	cancelDecision, err := c.handleSignalMessage(t.Context(), settlementEnvelope(t, signal))
-	require.ErrorContains(t, err, "cancellation completion has unknown durability")
+	require.ErrorContains(t, err, "publish result agent.complete.")
 	require.Equal(t, natsclient.DeliveryDecisionQuarantine, cancelDecision)
-	entity, err := c.handler.GetLoop(toolResult.LoopID)
-	require.NoError(t, err)
-	require.Equal(t, agentic.LoopStateCancelled, entity.State)
+	_, err = c.handler.GetLoop(toolResult.LoopID)
+	require.Error(t, err, "failed cancellation must release speculative process state")
 	bucket := c.loopsBucket.(*approvalRevisionBucket)
-	before := append([]byte(nil), bucket.values[toolResult.LoopID]...)
+	before := append([]byte(nil), bucket.values["COMPLETE_"+toolResult.LoopID]...)
+	require.NotEmpty(t, before)
+	var current agentic.LoopEntity
+	require.NoError(t, json.Unmarshal(bucket.values[toolResult.LoopID], &current))
+	require.Equal(t, agentic.LoopStateRunning, current.State, "failed publication cannot author the terminal marker")
 	msg := &loopDeliveryOwnerMsg{data: settlementEnvelope(t, toolResult)}
 
 	result, admitted := consumeAdmittedDelivery(t.Context(), msg,
@@ -691,8 +700,11 @@ func TestApprovalGateAfterUnsettledCancellationCannotAck(t *testing.T) {
 
 	require.True(t, admitted)
 	require.Zero(t, msg.acks.Load(), "terminal state alone does not prove the approval-required result applied")
-	require.ErrorContains(t, result.Err(), "terminal loop lacks execution-specific retained result")
-	require.Equal(t, before, bucket.values[toolResult.LoopID], "unsettled cancellation cannot authorize a new gate")
+	require.Equal(t, natsclient.DeliveryDecisionRetry, result.Decision())
+	require.ErrorContains(t, result.Err(), "publish result agent.approval_pending.")
+	require.Equal(t, before, bucket.values["COMPLETE_"+toolResult.LoopID], "late gate work cannot replace the selected cancellation")
+	require.NoError(t, json.Unmarshal(bucket.values[toolResult.LoopID], &current))
+	require.False(t, current.State.IsTerminal(), "neither failed publication authorizes a terminal marker")
 }
 
 // spec: agentic-loop / All six loop input classes settle after owner-specific durable done

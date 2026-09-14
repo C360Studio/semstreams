@@ -71,7 +71,7 @@ func TestHandleListLoops(t *testing.T) {
 		UserID:        "user-1",
 		ChannelType:   "http",
 		ChannelID:     "chan-1",
-		State:         "executing",
+		State:         "running",
 		Iterations:    3,
 		MaxIterations: 10,
 	}, &agentic.LoopEntity{
@@ -80,7 +80,7 @@ func TestHandleListLoops(t *testing.T) {
 		UserID:        "user-2",
 		ChannelType:   "http",
 		ChannelID:     "chan-2",
-		State:         agentic.LoopStatePlanning,
+		State:         agentic.LoopStateComplete,
 		MaxIterations: 10,
 	})
 
@@ -115,7 +115,7 @@ func TestHandleListLoops(t *testing.T) {
 	})
 
 	t.Run("filter by state", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/loops?state=planning", nil)
+		req := httptest.NewRequest(http.MethodGet, "/loops?state=complete", nil)
 		rec := httptest.NewRecorder()
 
 		comp.handleListLoops(rec, req)
@@ -126,11 +126,11 @@ func TestHandleListLoops(t *testing.T) {
 		err := json.Unmarshal(rec.Body.Bytes(), &loops)
 		require.NoError(t, err)
 		assert.Len(t, loops, 1)
-		assert.Equal(t, "planning", loops[0].State)
+		assert.Equal(t, "complete", loops[0].State)
 	})
 
 	t.Run("filter by user_id and state", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/loops?user_id=user-1&state=executing", nil)
+		req := httptest.NewRequest(http.MethodGet, "/loops?user_id=user-1&state=running", nil)
 		rec := httptest.NewRecorder()
 
 		comp.handleListLoops(rec, req)
@@ -142,7 +142,7 @@ func TestHandleListLoops(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, loops, 1)
 		assert.Equal(t, "user-1", loops[0].UserID)
-		assert.Equal(t, "executing", loops[0].State)
+		assert.Equal(t, "running", loops[0].State)
 	})
 
 	t.Run("empty result with non-matching filter", func(t *testing.T) {
@@ -170,7 +170,7 @@ func TestHandleGetLoop(t *testing.T) {
 		UserID:        "user-1",
 		ChannelType:   "http",
 		ChannelID:     "chan-1",
-		State:         "executing",
+		State:         "running",
 		Iterations:    3,
 		MaxIterations: 10,
 	}})
@@ -190,7 +190,7 @@ func TestHandleGetLoop(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, seamTestLoopA, loop.LoopID)
 		assert.Equal(t, "task-1", loop.TaskID)
-		assert.Equal(t, "executing", loop.State)
+		assert.Equal(t, "running", loop.State)
 		assert.Equal(t, 3, loop.Iterations)
 	})
 

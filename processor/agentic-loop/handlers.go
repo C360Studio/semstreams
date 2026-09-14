@@ -1137,12 +1137,14 @@ func (h *MessageHandler) buildTaskResultFromRequest(
 		Created: true,
 		PublishedMessages: []PublishedMessage{
 			{
-				Subject: requestSubject,
-				Data:    requestData,
-			},
-			{
+				// Commit creation before releasing model work: a fast response can
+				// complete the loop before this task is redelivered after a failure.
 				Subject: createdSubject,
 				Data:    createdData,
+			},
+			{
+				Subject: requestSubject,
+				Data:    requestData,
 			},
 		},
 		TrajectorySteps: []agentic.TrajectoryStep{step},
@@ -2108,10 +2110,10 @@ func resolveCompletionText(msg agentic.ChatMessage) string {
 
 // resolveToolName resolves the function name of a tool result through the
 // loop's name-fallback chain: the name tracked for this execution ID
-// first, then the name carried on the result envelope itself. The fallback
-// is what survives a LoopManager cache loss (process restart) — agentic-tools
-// stamps Name on every result before publishing, so the envelope always
-// carries it. Returns "" only when neither source knows the name.
+// first, then the optional name carried on the result envelope itself.
+// Cold batch recovery restores the tracked name from the originating call;
+// compact results and admission rejections need not carry it themselves.
+// Returns "" only when neither source knows the name.
 func (h *MessageHandler) resolveToolName(toolResult agentic.ToolResult) string {
 	if tracked := h.loopManager.GetToolName(toolResult.ExecutionID); tracked != "" {
 		return tracked
@@ -2238,6 +2240,7 @@ func (h *MessageHandler) handleCompleteResponse(result *HandlerResult, loopID st
 		}
 	}
 
+	completion.SyntheticDecideRequired = result.SyntheticDecide != nil
 	completionMsg := message.NewBaseMessage(completion.Schema(), &completion, "agentic-loop")
 	completionData, err := json.Marshal(completionMsg)
 	if err != nil {
@@ -2408,7 +2411,7 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 func (h *MessageHandler) checkApprovalGate(loopID string, entity *agentic.LoopEntity, toolResult agentic.ToolResult, result *HandlerResult) (bool, error) {
 	// If the loop is already awaiting approval, store the result and
 	// the trajectory step (done by caller) but stop here. Sibling
-	// tool results from the same batch can land after we paused on
+	// tool results from the same batch can land after we gated on
 	// the first approval_required hit — they must not advance the
 	// loop or trigger the next model request. The pending approval
 	// handler drains PendingToolResults when the loop resumes.
@@ -2416,7 +2419,7 @@ func (h *MessageHandler) checkApprovalGate(loopID string, entity *agentic.LoopEn
 		return true, nil
 	}
 	// Approval-gated rejection: the agentic-tools approval filter
-	// returned an "approval_required: ..." error. Pause the loop,
+	// returned an "approval_required: ..." error. Gate the loop,
 	// snapshot the call, and emit ApprovalPendingEvent so a
 	// product-layer UI can surface the request.
 	if !agentic.IsApprovalRequired(toolResult.Error) {

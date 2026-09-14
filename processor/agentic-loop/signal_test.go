@@ -106,11 +106,11 @@ func TestNewLoopStates(t *testing.T) {
 		state      agentic.LoopState
 		isTerminal bool
 	}{
-		{agentic.LoopStatePaused, false},
+		{agentic.LoopState("paused"), false},
 		{agentic.LoopStateCancelled, true},
 		{agentic.LoopStateAwaitingApproval, false},
-		{agentic.LoopStateExploring, false},
-		{agentic.LoopStateExecuting, false},
+		{agentic.LoopStateRunning, false},
+		{agentic.LoopStateRunning, false},
 		{agentic.LoopStateComplete, true},
 		{agentic.LoopStateFailed, true},
 	}

@@ -9,7 +9,8 @@ output before ACK and reuse retained results. Typed model-response absence permi
 existing model contract; other lanes retain their existing refusal and absence rules.
 Sequential chat, approval after restart, cancellation, and the 15-subscription settlement duties remain in scope.
 The proposed research activity behavior, shared record package, and generalized mixed-record rendering are
-withdrawn as #1146 prerequisites. Approval-Store remains a separate evidence-dependent owner hold.
+withdrawn as #1146 prerequisites. After R2 CLOSEOUT PASS, the owner retired the additional approval-Store plan in
+[comment 5654729986](https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5654729986).
 
 ## Approved product direction (2026-09-08)
 
@@ -38,10 +39,11 @@ work; performs exact authority reads for explicit LoopID operations; serves reve
 caught-up `AGENT_LOOPS` view; and bridges terminal events to durable user responses. Agentic-loop owns every
 transition between those edges.
 
-Approval continuation storage remains evidence-gated. The implementation first proves whether current `LoopEntity`
-plus exact retained request/response evidence reconstructs approve, modify, reject, and timeout after complete process
-replacement. The previously approved ObjectStore design is removed only after that proof and an explicit owner
-revocation; otherwise it remains the approved fallback.
+Approval continuation uses current `LoopEntity` plus exact retained request/response evidence for approve, modify,
+reject, and timeout after replacement. R2 supplies the reviewed replacement proof; the owner retired only the extra
+ObjectStore continuation plan. Confirmed required-evidence absence durably fails `continuation_unavailable`, even
+if the approval deadline has not passed. Existing timeout, KV-retention validation and stream-admission policies
+remain unchanged; no additional retention guarantee or storage mechanism is introduced.
 
 ## Claim scope
 
@@ -76,9 +78,9 @@ AgentRun complete/failed fanout is transferred intact to #1249 from the exact po
   events to user responses when validated authority carries a user route. Agentic-loop exclusively owns loop birth
   and every intermediate and terminal transition. `LoopTracker`, its pending cache, and dispatch's created/pending
   correctness inputs are removed.
-- Approval replacement first proves whether current loop state plus exact current request/response evidence is
-  sufficient. The approved ObjectStore continuation remains a conditional fallback pending that proof and a second
-  owner ruling.
+- Approval replacement uses current loop state and exact retained request/response evidence, with explicit durable
+  failure when required evidence is confirmed absent. No extra approval Store, configuration, digest or cleanup
+  ships. Approval lifetime does not guarantee matching stream-message retention.
 - AutoContinue uses exact `(UserID, ChannelType, ChannelID)` identity and remains a convenience. During the gap after
   task PubAck and before first `LoopEntity` birth, a second route-only message may create another loop; callers needing
   continuity carry the minted LoopID returned by the first task path.
@@ -161,7 +163,8 @@ AgentRun complete/failed fanout is transferred intact to #1249 from the exact po
   routing failure. Conflicting or unreadable route evidence still refuses settlement.
 - Approval continuation uses no CallID-indexed `ToolResult` lookup. The settled approval-required result already lives
   in `LoopEntity.PendingToolResults`.
-- The approved ObjectStore continuation plan remains conditional on the replacement evidence gate.
+- The additional ObjectStore approval-continuation plan is retired by owner comment `5654729986`; this does not
+  retire the framework's existing Store or alter other payload-storage uses.
 
 ## Impact
 

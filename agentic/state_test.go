@@ -14,11 +14,11 @@ import (
 
 // spec: agentic-dispatch / The shared loop view classifies the mixed bucket
 func TestLoopEntityValidateRejectsPausedAuthority(t *testing.T) {
-	entity := agentic.LoopEntity{ID: "00000000-0000-4000-8000-000000000001", State: agentic.LoopStatePaused, MaxIterations: 3}
+	entity := agentic.LoopEntity{ID: "00000000-0000-4000-8000-000000000001", State: agentic.LoopState("paused"), MaxIterations: 3}
 	if err := entity.Validate(); err == nil {
 		t.Fatal("paused is not valid current loop authority")
 	}
-	entity.State = agentic.LoopStateExecuting
+	entity.State = agentic.LoopStateRunning
 	if err := entity.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -30,13 +30,12 @@ func TestLoopState_String(t *testing.T) {
 		state agentic.LoopState
 		want  string
 	}{
-		{"exploring state", agentic.LoopStateExploring, "exploring"},
-		{"planning state", agentic.LoopStatePlanning, "planning"},
-		{"architecting state", agentic.LoopStateArchitecting, "architecting"},
-		{"executing state", agentic.LoopStateExecuting, "executing"},
-		{"reviewing state", agentic.LoopStateReviewing, "reviewing"},
+		{"running state", agentic.LoopStateRunning, "running"},
+		{"awaiting approval state", agentic.LoopStateAwaitingApproval, "awaiting_approval"},
+		{"unknown string preserved", agentic.LoopState("unknown"), "unknown"},
 		{"complete state", agentic.LoopStateComplete, "complete"},
 		{"failed state", agentic.LoopStateFailed, "failed"},
+		{"cancelled state", agentic.LoopStateCancelled, "cancelled"},
 	}
 
 	for _, tt := range tests {
@@ -55,15 +54,16 @@ func TestLoopState_IsTerminal(t *testing.T) {
 		state agentic.LoopState
 		want  bool
 	}{
-		{"exploring not terminal", agentic.LoopStateExploring, false},
-		{"planning not terminal", agentic.LoopStatePlanning, false},
-		{"architecting not terminal", agentic.LoopStateArchitecting, false},
-		{"executing not terminal", agentic.LoopStateExecuting, false},
-		{"reviewing not terminal", agentic.LoopStateReviewing, false},
+		{"running not terminal", agentic.LoopStateRunning, false},
+		{"retired exploring not terminal", agentic.LoopState("exploring"), false},
+		{"retired planning not terminal", agentic.LoopState("planning"), false},
+		{"retired architecting not terminal", agentic.LoopState("architecting"), false},
+		{"retired executing not terminal", agentic.LoopState("executing"), false},
+		{"retired reviewing not terminal", agentic.LoopState("reviewing"), false},
 		{"complete is terminal", agentic.LoopStateComplete, true},
 		{"failed is terminal", agentic.LoopStateFailed, true},
 		{"cancelled is terminal", agentic.LoopStateCancelled, true},
-		{"paused not terminal", agentic.LoopStatePaused, false},
+		{"paused not terminal", agentic.LoopState("paused"), false},
 		{"awaiting_approval not terminal", agentic.LoopStateAwaitingApproval, false},
 	}
 
@@ -87,7 +87,7 @@ func TestLoopEntity_JSONRoundTrip(t *testing.T) {
 			entity: agentic.LoopEntity{
 				ID:            "loop-123",
 				TaskID:        "task-abc",
-				State:         agentic.LoopStateExploring,
+				State:         agentic.LoopStateRunning,
 				Role:          "architect",
 				Model:         "gpt-4",
 				Iterations:    0,
@@ -99,7 +99,7 @@ func TestLoopEntity_JSONRoundTrip(t *testing.T) {
 			entity: agentic.LoopEntity{
 				ID:            "loop-456",
 				TaskID:        "task-def",
-				State:         agentic.LoopStateExecuting,
+				State:         agentic.LoopStateRunning,
 				Role:          "editor",
 				Model:         "claude-3",
 				Iterations:    5,
@@ -181,7 +181,7 @@ func TestLoopEntity_Validation(t *testing.T) {
 			entity: agentic.LoopEntity{
 				ID:            "loop-123",
 				TaskID:        "task-abc",
-				State:         agentic.LoopStateExploring,
+				State:         agentic.LoopStateRunning,
 				Role:          "architect",
 				Model:         "gpt-4",
 				Iterations:    0,
@@ -193,7 +193,7 @@ func TestLoopEntity_Validation(t *testing.T) {
 			name: "missing ID",
 			entity: agentic.LoopEntity{
 				TaskID:        "task-abc",
-				State:         agentic.LoopStateExploring,
+				State:         agentic.LoopStateRunning,
 				Role:          "architect",
 				Model:         "gpt-4",
 				MaxIterations: 20,
@@ -206,7 +206,7 @@ func TestLoopEntity_Validation(t *testing.T) {
 			entity: agentic.LoopEntity{
 				ID:            "",
 				TaskID:        "task-abc",
-				State:         agentic.LoopStateExploring,
+				State:         agentic.LoopStateRunning,
 				Role:          "architect",
 				Model:         "gpt-4",
 				MaxIterations: 20,
@@ -232,7 +232,7 @@ func TestLoopEntity_Validation(t *testing.T) {
 			entity: agentic.LoopEntity{
 				ID:            "loop-123",
 				TaskID:        "task-abc",
-				State:         agentic.LoopStateExploring,
+				State:         agentic.LoopStateRunning,
 				Role:          "architect",
 				Model:         "gpt-4",
 				MaxIterations: 0,
@@ -245,7 +245,7 @@ func TestLoopEntity_Validation(t *testing.T) {
 			entity: agentic.LoopEntity{
 				ID:            "loop-123",
 				TaskID:        "task-abc",
-				State:         agentic.LoopStateExploring,
+				State:         agentic.LoopStateRunning,
 				Role:          "architect",
 				Model:         "gpt-4",
 				MaxIterations: -1,
@@ -283,37 +283,19 @@ func TestLoopEntity_StateTransitions(t *testing.T) {
 		wantErr   bool
 		errMsg    string
 	}{
-		// Forward transitions (all non-terminal states)
-		{"exploring to planning", agentic.LoopStateExploring, agentic.LoopStatePlanning, false, ""},
-		{"exploring to architecting", agentic.LoopStateExploring, agentic.LoopStateArchitecting, false, ""},
-		{"exploring to executing", agentic.LoopStateExploring, agentic.LoopStateExecuting, false, ""},
-		{"planning to executing", agentic.LoopStatePlanning, agentic.LoopStateExecuting, false, ""},
-		{"architecting to executing", agentic.LoopStateArchitecting, agentic.LoopStateExecuting, false, ""},
-		{"executing to reviewing", agentic.LoopStateExecuting, agentic.LoopStateReviewing, false, ""},
-		{"reviewing to complete", agentic.LoopStateReviewing, agentic.LoopStateComplete, false, ""},
-
-		// Backward transitions (fluid state machine)
-		{"executing to exploring", agentic.LoopStateExecuting, agentic.LoopStateExploring, false, ""},
-		{"reviewing to planning", agentic.LoopStateReviewing, agentic.LoopStatePlanning, false, ""},
-		{"executing to architecting", agentic.LoopStateExecuting, agentic.LoopStateArchitecting, false, ""},
-
-		// To terminal states from any non-terminal
-		{"exploring to complete", agentic.LoopStateExploring, agentic.LoopStateComplete, false, ""},
-		{"planning to complete", agentic.LoopStatePlanning, agentic.LoopStateComplete, false, ""},
-		{"executing to complete", agentic.LoopStateExecuting, agentic.LoopStateComplete, false, ""},
-		{"exploring to failed", agentic.LoopStateExploring, agentic.LoopStateFailed, false, ""},
-		{"executing to failed", agentic.LoopStateExecuting, agentic.LoopStateFailed, false, ""},
+		{"running to complete", agentic.LoopStateRunning, agentic.LoopStateComplete, false, ""},
+		{"running to failed", agentic.LoopStateRunning, agentic.LoopStateFailed, false, ""},
+		{"running to cancelled", agentic.LoopStateRunning, agentic.LoopStateCancelled, false, ""},
 
 		// Terminal states cannot transition
-		{"complete to exploring", agentic.LoopStateComplete, agentic.LoopStateExploring, true, "cannot transition from terminal state complete"},
-		{"complete to executing", agentic.LoopStateComplete, agentic.LoopStateExecuting, true, "cannot transition from terminal state complete"},
-		{"complete to failed", agentic.LoopStateComplete, agentic.LoopStateFailed, true, "cannot transition from terminal state complete"},
-		{"failed to exploring", agentic.LoopStateFailed, agentic.LoopStateExploring, true, "cannot transition from terminal state failed"},
-		{"failed to executing", agentic.LoopStateFailed, agentic.LoopStateExecuting, true, "cannot transition from terminal state failed"},
-		{"failed to complete", agentic.LoopStateFailed, agentic.LoopStateComplete, true, "cannot transition from terminal state failed"},
+		{"complete to running", agentic.LoopStateComplete, agentic.LoopStateRunning, true, "cannot transition from complete to running"},
+		{"complete to failed", agentic.LoopStateComplete, agentic.LoopStateFailed, true, "cannot transition from complete to failed"},
+		{"failed to running", agentic.LoopStateFailed, agentic.LoopStateRunning, true, "cannot transition from failed to running"},
+		{"failed to complete", agentic.LoopStateFailed, agentic.LoopStateComplete, true, "cannot transition from failed to complete"},
+		{"cancelled to running", agentic.LoopStateCancelled, agentic.LoopStateRunning, true, "cannot transition from cancelled to running"},
 
 		// Same state (no-op, should be allowed)
-		{"exploring to exploring", agentic.LoopStateExploring, agentic.LoopStateExploring, false, ""},
+		{"running to running", agentic.LoopStateRunning, agentic.LoopStateRunning, false, ""},
 		{"complete to complete", agentic.LoopStateComplete, agentic.LoopStateComplete, false, ""},
 	}
 
@@ -407,7 +389,7 @@ func TestNewLoopEntity(t *testing.T) {
 			if entity.Model != tt.model {
 				t.Errorf("Model = %v, want %v", entity.Model, tt.model)
 			}
-			if entity.State != agentic.LoopStateExploring {
+			if entity.State != agentic.LoopStateRunning {
 				t.Errorf("State = %v, want exploring", entity.State)
 			}
 			if entity.Iterations != 0 {
@@ -478,7 +460,7 @@ func TestLoopEntity_IncrementIteration(t *testing.T) {
 			entity := agentic.LoopEntity{
 				ID:            "loop-test",
 				TaskID:        "task-test",
-				State:         agentic.LoopStateExecuting,
+				State:         agentic.LoopStateRunning,
 				Role:          "general",
 				Model:         "gpt-4",
 				Iterations:    tt.startIter,
@@ -523,7 +505,7 @@ func TestLoopEntity_IncrementIteration_ReturnsTypedSentinel(t *testing.T) {
 	entity := agentic.LoopEntity{
 		ID:            "loop-sentinel",
 		TaskID:        "task-sentinel",
-		State:         agentic.LoopStateExecuting,
+		State:         agentic.LoopStateRunning,
 		Role:          "general",
 		Model:         "gpt-4",
 		Iterations:    5,

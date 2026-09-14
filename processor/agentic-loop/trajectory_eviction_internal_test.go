@@ -13,6 +13,7 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -21,15 +22,28 @@ import (
 func TestTerminalPathsEvictActiveTrajectory(t *testing.T) {
 	t.Run("completed result", func(t *testing.T) {
 		handler := NewMessageHandler(DefaultConfig())
-		loopID := "completed-loop"
-		_, err := handler.trajectoryManager.startTrajectory(loopID)
+		loopID, err := handler.loopManager.CreateLoop("task-completed", "general", "model", 3)
+		require.NoError(t, err)
+		_, err = handler.trajectoryManager.startTrajectory(loopID)
 		require.NoError(t, err)
 
-		component := &Component{handler: handler, logger: discardLogger()}
-		component.persistHandlerResult(context.Background(), HandlerResult{
-			LoopID: loopID,
-			State:  agentic.LoopStateComplete,
-		})
+		entity, err := handler.GetLoop(loopID)
+		require.NoError(t, err)
+		bucket := &terminalSelectionBucket{&approvalRevisionBucket{
+			settlementBucket: &settlementBucket{values: map[string][]byte{loopID: settlementLoopRecord(t, entity)}},
+			revisions:        make(map[string]uint64),
+		}}
+		component := &Component{handler: handler, config: DefaultConfig(), loopsBucket: bucket, logger: discardLogger()}
+		_, revision, err := component.readLoopEntityRevision(t.Context(), loopID)
+		require.NoError(t, err)
+		require.NoError(t, handler.loopManager.TransitionLoop(loopID, agentic.LoopStateComplete))
+		require.NoError(t, handler.loopManager.UpdateCompletion(loopID, agentic.OutcomeSuccess, "done", ""))
+		require.NoError(t, component.persistHandlerResult(t.Context(), HandlerResult{
+			LoopID: loopID, State: agentic.LoopStateComplete,
+			CompletionState: &agentic.LoopCompletedEvent{
+				LoopID: loopID, TaskID: entity.TaskID, Outcome: agentic.OutcomeSuccess, Result: "done", CompletedAt: time.Now(),
+			},
+		}, revision))
 
 		_, err = handler.trajectoryManager.getTrajectory(loopID)
 		require.Error(t, err, "completed loop retained its active trajectory")
@@ -44,8 +58,14 @@ func TestTerminalPathsEvictActiveTrajectory(t *testing.T) {
 		entity, err := handler.loopManager.GetLoop(loopID)
 		require.NoError(t, err)
 
-		component := &Component{handler: handler, config: DefaultConfig(), logger: discardLogger()}
-		component.handleLoopFailure(context.Background(), loopID, entity, "test_failure", errors.New("boom"))
+		bucket := &terminalSelectionBucket{&approvalRevisionBucket{
+			settlementBucket: &settlementBucket{values: map[string][]byte{loopID: settlementLoopRecord(t, entity)}},
+			revisions:        make(map[string]uint64),
+		}}
+		component := &Component{handler: handler, config: DefaultConfig(), loopsBucket: bucket, logger: discardLogger()}
+		_, revision, err := component.readLoopEntityRevision(t.Context(), loopID)
+		require.NoError(t, err)
+		require.NoError(t, component.handleLoopFailure(t.Context(), loopID, entity, "test_failure", errors.New("boom"), revision))
 
 		_, err = handler.trajectoryManager.getTrajectory(loopID)
 		require.Error(t, err, "failed loop retained its active trajectory")
@@ -60,16 +80,30 @@ func TestTerminalPathsEvictActiveTrajectory(t *testing.T) {
 		_, err = handler.trajectoryManager.startTrajectory(loopID)
 		require.NoError(t, err)
 
-		component := &Component{handler: handler, config: config, logger: discardLogger()}
-		err = component.handleCancelSignal(context.Background(), agentic.UserSignal{
+		entity, err := handler.GetLoop(loopID)
+		require.NoError(t, err)
+		before := settlementLoopRecord(t, entity)
+		bucket := &terminalSelectionBucket{&approvalRevisionBucket{
+			settlementBucket: &settlementBucket{values: map[string][]byte{loopID: before}},
+			revisions:        make(map[string]uint64),
+		}}
+		component := &Component{handler: handler, config: config, loopsBucket: bucket, logger: discardLogger()}
+		_, revision, err := component.readLoopEntityRevision(t.Context(), loopID)
+		require.NoError(t, err)
+		decision, cancelErr := component.handleCancelSignal(context.Background(), agentic.UserSignal{
 			LoopID: loopID,
 			Type:   agentic.SignalCancel,
 			UserID: "operator",
 		})
-		require.Error(t, err, "missing completion output is an unknown terminal side effect")
+		err = cancelErr
+		require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
+		require.ErrorContains(t, err, "resolve selected terminal subject", "test must reach the selected cancellation publication seam")
+		require.Contains(t, bucket.values, "COMPLETE_"+loopID)
+		require.Equal(t, before, bucket.values[loopID], "failed cancellation must preserve the durable nonterminal marker")
+		require.Equal(t, revision, bucket.revisions[loopID])
 
 		_, err = handler.trajectoryManager.getTrajectory(loopID)
-		require.NoError(t, err, "failed cancellation durability released its active trajectory")
+		require.Error(t, err, "failed cancellation retained speculative trajectory state")
 	})
 }
 
@@ -107,12 +141,19 @@ func TestTimedOutToolResultEvictsActiveTrajectory(t *testing.T) {
 	handler.loopManager.TrackToolCall(executionID, loopID)
 	handler.loopManager.TrackToolName(executionID, "search")
 	handler.loopManager.TrackToolOrdinal(executionID, 1)
+	entity, err := handler.GetLoop(loopID)
+	require.NoError(t, err)
+	bucket := &terminalSelectionBucket{&approvalRevisionBucket{
+		settlementBucket: &settlementBucket{values: map[string][]byte{loopID: settlementLoopRecord(t, entity)}},
+		revisions:        make(map[string]uint64),
+	}}
 	registry := payloadbuiltins.NewTestRegistry(t)
 	component := &Component{
-		config:  config,
-		handler: handler,
-		decoder: message.NewDecoder(registry),
-		logger:  discardLogger(),
+		config:      config,
+		handler:     handler,
+		decoder:     message.NewDecoder(registry),
+		logger:      discardLogger(),
+		loopsBucket: bucket,
 	}
 	toolResult := agentic.ToolResult{
 		LoopID: loopID, RequestID: requestID, ExecutionID: executionID,
@@ -122,7 +163,10 @@ func TestTimedOutToolResultEvictsActiveTrajectory(t *testing.T) {
 	data, err := json.Marshal(envelope)
 	require.NoError(t, err)
 
-	component.handleToolResultMessage(context.Background(), data)
+	decision, err := component.handleToolResultMessage(t.Context(), data)
+	require.NoError(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+	require.Contains(t, bucket.values, "COMPLETE_"+loopID, "timeout must settle its business failure before cleanup")
 
 	_, err = handler.trajectoryManager.getTrajectory(loopID)
 	require.Error(t, err, "timed-out tool-result failure retained its active trajectory")
@@ -193,16 +237,29 @@ func TestTerminalPathsReleaseObservedAuditLoss(t *testing.T) {
 
 	t.Run("completed result", func(t *testing.T) {
 		handler := NewMessageHandler(DefaultConfig())
-		loopID := "completed-loop-audit"
-		_, err := handler.trajectoryManager.startTrajectory(loopID)
+		loopID, err := handler.loopManager.CreateLoop("task-completed", "general", "model", 3)
+		require.NoError(t, err)
+		_, err = handler.trajectoryManager.startTrajectory(loopID)
 		require.NoError(t, err)
 
-		component := &Component{handler: handler, logger: discardLogger()}
+		entity, err := handler.GetLoop(loopID)
+		require.NoError(t, err)
+		bucket := &terminalSelectionBucket{&approvalRevisionBucket{
+			settlementBucket: &settlementBucket{values: map[string][]byte{loopID: settlementLoopRecord(t, entity)}},
+			revisions:        make(map[string]uint64),
+		}}
+		component := &Component{handler: handler, config: DefaultConfig(), loopsBucket: bucket, logger: discardLogger()}
+		_, revision, err := component.readLoopEntityRevision(t.Context(), loopID)
+		require.NoError(t, err)
+		require.NoError(t, handler.loopManager.TransitionLoop(loopID, agentic.LoopStateComplete))
+		require.NoError(t, handler.loopManager.UpdateCompletion(loopID, agentic.OutcomeSuccess, "done", ""))
 		observe(t, component, loopID)
-		component.persistHandlerResult(context.Background(), HandlerResult{
-			LoopID: loopID,
-			State:  agentic.LoopStateComplete,
-		})
+		require.NoError(t, component.persistHandlerResult(t.Context(), HandlerResult{
+			LoopID: loopID, State: agentic.LoopStateComplete,
+			CompletionState: &agentic.LoopCompletedEvent{
+				LoopID: loopID, TaskID: entity.TaskID, Outcome: agentic.OutcomeSuccess, Result: "done", CompletedAt: time.Now(),
+			},
+		}, revision))
 
 		require.False(t, component.trajectoryAuditLoss.observed(loopID),
 			"completed loop retained its audit-loss marker")
@@ -217,9 +274,15 @@ func TestTerminalPathsReleaseObservedAuditLoss(t *testing.T) {
 		entity, err := handler.loopManager.GetLoop(loopID)
 		require.NoError(t, err)
 
-		component := &Component{handler: handler, config: DefaultConfig(), logger: discardLogger()}
+		bucket := &terminalSelectionBucket{&approvalRevisionBucket{
+			settlementBucket: &settlementBucket{values: map[string][]byte{loopID: settlementLoopRecord(t, entity)}},
+			revisions:        make(map[string]uint64),
+		}}
+		component := &Component{handler: handler, config: DefaultConfig(), loopsBucket: bucket, logger: discardLogger()}
+		_, revision, err := component.readLoopEntityRevision(t.Context(), loopID)
+		require.NoError(t, err)
 		observe(t, component, loopID)
-		component.handleLoopFailure(context.Background(), loopID, entity, "test_failure", errors.New("boom"))
+		require.NoError(t, component.handleLoopFailure(t.Context(), loopID, entity, "test_failure", errors.New("boom"), revision))
 
 		require.False(t, component.trajectoryAuditLoss.observed(loopID),
 			"failed loop retained its audit-loss marker")
@@ -234,16 +297,30 @@ func TestTerminalPathsReleaseObservedAuditLoss(t *testing.T) {
 		_, err = handler.trajectoryManager.startTrajectory(loopID)
 		require.NoError(t, err)
 
-		component := &Component{handler: handler, config: config, logger: discardLogger()}
+		entity, err := handler.GetLoop(loopID)
+		require.NoError(t, err)
+		before := settlementLoopRecord(t, entity)
+		bucket := &terminalSelectionBucket{&approvalRevisionBucket{
+			settlementBucket: &settlementBucket{values: map[string][]byte{loopID: before}},
+			revisions:        make(map[string]uint64),
+		}}
+		component := &Component{handler: handler, config: config, loopsBucket: bucket, logger: discardLogger()}
+		_, revision, err := component.readLoopEntityRevision(t.Context(), loopID)
+		require.NoError(t, err)
 		observe(t, component, loopID)
-		err = component.handleCancelSignal(context.Background(), agentic.UserSignal{
+		decision, cancelErr := component.handleCancelSignal(context.Background(), agentic.UserSignal{
 			LoopID: loopID,
 			Type:   agentic.SignalCancel,
 			UserID: "operator",
 		})
-		require.Error(t, err, "missing completion output is an unknown terminal side effect")
+		err = cancelErr
+		require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
+		require.ErrorContains(t, err, "resolve selected terminal subject", "test must reach the selected cancellation publication seam")
+		require.Contains(t, bucket.values, "COMPLETE_"+loopID)
+		require.Equal(t, before, bucket.values[loopID], "failed cancellation must preserve the durable nonterminal marker")
+		require.Equal(t, revision, bucket.revisions[loopID])
 
-		require.True(t, component.trajectoryAuditLoss.observed(loopID),
-			"failed cancellation durability released its audit-loss marker")
+		require.False(t, component.trajectoryAuditLoss.observed(loopID),
+			"failed cancellation retained its speculative audit-loss marker")
 	})
 }

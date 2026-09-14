@@ -100,22 +100,19 @@
 //
 // # State Machine
 //
-// LoopState represents the lifecycle of an agentic loop with seven states:
-//
-//	exploring → planning → architecting → executing → reviewing → complete
-//	                                                           ↘ failed
-//
-// States are fluid checkpoints, not gates. The loop can move backward (e.g.,
-// from executing back to exploring if the agent needs to rethink). Only the
-// terminal states (complete, failed) prevent further transitions.
+// LoopState has five operational states: running, awaiting_approval, complete,
+// failed, and cancelled. Running can enter approval or a terminal state;
+// awaiting approval can return to running or become failed/cancelled.
+// Terminal states have no outgoing transitions. Local state is not proof that
+// delivery settlement or durable publication has completed.
 //
 // Create and manage loop entities:
 //
 //	entity := agentic.NewLoopEntity("7c9e6679-7425-40de-944b-e07fc1f90ae7", "task_456", "general", "gpt-4")
 //
 //	// State transitions
-//	entity.TransitionTo(agentic.LoopStatePlanning)
-//	entity.TransitionTo(agentic.LoopStateExecuting)
+//	entity.BeginAwaitingApproval("call_1", "tool", nil, "review", 0, "")
+//	entity.ResolveApproval() // returns to running; delivery owners still own durability
 //
 //	// Iteration tracking (with guard)
 //	if err := entity.IncrementIteration(); err != nil {

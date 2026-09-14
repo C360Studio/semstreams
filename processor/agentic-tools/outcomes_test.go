@@ -467,6 +467,7 @@ func TestCompactTooLargeResultDropsSensitiveAndSizeFields(t *testing.T) {
 	assert.Equal(t, call.CallOrdinal, compact.CallOrdinal)
 	assert.Equal(t, agentic.ToolErrorInternal, compact.ErrorKind)
 	assert.Equal(t, "too_large", compact.Error)
+	assert.Empty(t, compact.Name)
 	assert.Empty(t, compact.Content)
 	assert.NotContains(t, compact.Error, original.Error)
 	assert.Nil(t, compact.Metadata)
@@ -478,6 +479,7 @@ func TestCompactTooLargeResultDropsSensitiveAndSizeFields(t *testing.T) {
 		Payload map[string]json.RawMessage `json:"payload"`
 	}
 	require.NoError(t, json.Unmarshal(encoded, &envelope))
+	assert.NotContains(t, envelope.Payload, "name")
 	assert.NotContains(t, envelope.Payload, "metadata")
 }
 

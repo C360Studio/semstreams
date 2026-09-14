@@ -61,6 +61,13 @@ func (b *approvalPutHookBucket) Update(ctx context.Context, key string, data []b
 	return b.KeyValue.Update(ctx, key, data, revision)
 }
 
+func (b *approvalRevisionBucket) Create(ctx context.Context, key string, data []byte, _ ...jetstream.KVCreateOpt) (uint64, error) {
+	if _, exists := b.values[key]; exists {
+		return 0, jetstream.ErrKeyExists
+	}
+	return b.Put(ctx, key, data)
+}
+
 type approvalRevisionEntry struct {
 	jetstream.KeyValueEntry
 	revision uint64
@@ -112,7 +119,7 @@ func TestApprovalFinalPutCannotOverwriteCompletedToolResult(t *testing.T) {
 		var approvalSnapshot agentic.LoopEntity
 		require.NoError(t, json.Unmarshal(data, &approvalSnapshot))
 		require.Nil(t, approvalSnapshot.PendingApproval)
-		require.Equal(t, agentic.LoopStateExecuting, approvalSnapshot.State)
+		require.Equal(t, agentic.LoopStateRunning, approvalSnapshot.State)
 		interleaved = true
 		// The approval owner commits its pre-publication JSON after publication.
 		// Complete the independent normal ToolResult owner before that write lands.
@@ -149,6 +156,7 @@ func TestApprovalCommitDoesNotBorrowUncommittedTerminalState(t *testing.T) {
 	f := newApprovalRecoveryFixture(t)
 	started := false
 	var terminalResult HandlerResult
+	var supportingRevision uint64
 	completed := f.result
 	completed.Error, completed.ErrorKind, completed.Content = "", "", "deleted"
 	completed.StopLoop = true
@@ -166,6 +174,10 @@ func TestApprovalCommitDoesNotBorrowUncommittedTerminalState(t *testing.T) {
 			// Stop at the ordinary owner's boundary between process transition
 			// and persistHandlerResult: no required terminal effect has run yet.
 			var err error
+			_, supportingRevision, err = f.c.readLoopEntityRevision(ctx, f.entity.ID)
+			if err != nil {
+				return err
+			}
 			terminalResult, err = f.c.handler.HandleToolResult(ctx, f.entity.ID, completed)
 			return err
 		},
@@ -181,9 +193,12 @@ func TestApprovalCommitDoesNotBorrowUncommittedTerminalState(t *testing.T) {
 	require.NotContains(t, f.bucket.values, "COMPLETE_"+f.entity.ID, "required result effects are still blocked")
 	var durable agentic.LoopEntity
 	require.NoError(t, json.Unmarshal(f.bucket.values[f.entity.ID], &durable))
-	require.Equal(t, agentic.LoopStateExecuting, durable.State, "approval must commit its own pre-publication snapshot, never another owner's uncommitted terminal state")
+	require.Equal(t, agentic.LoopStateRunning, durable.State, "approval must commit its own pre-publication snapshot, never another owner's uncommitted terminal state")
 	require.Nil(t, durable.PendingApproval)
-	require.NoError(t, f.c.persistHandlerResult(t.Context(), terminalResult))
+	require.Error(t, f.c.persistHandlerResult(t.Context(), terminalResult, supportingRevision), "the old operation cannot borrow approval's later revision")
+	decision, err = f.c.handleToolResultMessage(t.Context(), settlementEnvelope(t, &completed))
+	require.NoError(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
 	require.NoError(t, json.Unmarshal(f.bucket.values[f.entity.ID], &durable))
 	require.Equal(t, agentic.LoopStateComplete, durable.State)
 	require.Contains(t, f.bucket.values, "COMPLETE_"+f.entity.ID)
@@ -202,7 +217,7 @@ func newApprovalRecoveryFixture(t *testing.T) approvalRecoveryFixture {
 		CallID: calls[0].ID, CallOrdinal: calls[0].CallOrdinal, Name: calls[0].Name, TraceID: calls[0].TraceID,
 		ErrorKind: agentic.ToolErrorPermission, Error: agentic.ApprovalRequiredPrefix + "review required"}
 	entity := agentic.NewLoopEntity(loopID, "approval-task", "general", "model", 3)
-	entity.State = agentic.LoopStateExecuting
+	entity.State = agentic.LoopStateRunning
 	require.NoError(t, entity.BeginAwaitingApproval(result.CallID, result.Name, calls[0].Arguments,
 		result.Error, time.Hour, result.TraceID))
 	entity.PendingApproval.RequestID = requestID
@@ -236,7 +251,7 @@ func TestColdApprovalRestoresCurrentBatch(t *testing.T) {
 	var durable agentic.LoopEntity
 	require.NoError(t, json.Unmarshal(f.bucket.values[f.entity.ID], &durable))
 	require.Nil(t, durable.PendingApproval, "cold approval must actually resolve, not silently ACK a missing map")
-	require.Equal(t, f.entity.StateBeforeApproval, durable.State)
+	require.Equal(t, agentic.LoopStateRunning, durable.State)
 	require.Equal(t, f.entity.TaskID, durable.TaskID)
 	require.Equal(t, f.result, durable.PendingToolResults[f.result.ExecutionID])
 	loopID, found := f.c.handler.loopManager.GetLoopForToolCall(f.result.ExecutionID)
@@ -345,7 +360,7 @@ func TestColdApprovalWithoutCurrentGateIsObservableNoop(t *testing.T) {
 			// non-awaiting+nonnil-pending record tested in the refusal table.
 			require.NoError(t, f.entity.ResolveApproval())
 			require.Nil(t, f.entity.PendingApproval)
-			require.Empty(t, f.entity.StateBeforeApproval)
+			require.Equal(t, agentic.LoopStateRunning, f.entity.State)
 			f.bucket.values[f.entity.ID] = settlementLoopRecord(t, f.entity)
 			before := append([]byte(nil), f.bucket.values[f.entity.ID]...)
 			f.evidence.requestErr = errors.New("inapplicable input must not reconstruct historical requests")
@@ -382,7 +397,7 @@ func TestApprovalRequiredResultReplayCannotReopenClosedGate(t *testing.T) {
 	var resolved agentic.LoopEntity
 	require.NoError(t, json.Unmarshal(f.bucket.values[f.entity.ID], &resolved))
 	require.Nil(t, resolved.PendingApproval)
-	require.Equal(t, agentic.LoopStateExecuting, resolved.State)
+	require.Equal(t, agentic.LoopStateRunning, resolved.State)
 	before := append([]byte(nil), f.bucket.values[f.entity.ID]...)
 
 	// The component callback replays the original, valid approval-required
@@ -427,7 +442,7 @@ func TestColdApprovalUnresolvedOrConflictingEvidenceDoesNotResolve(t *testing.T)
 		{"request unavailable", func(f *approvalRecoveryFixture) { f.evidence.requestErr = errors.New("request unavailable") }, natsclient.DeliveryDecisionRetry},
 		{"response visibility unresolved", func(f *approvalRecoveryFixture) { f.evidence.responseFound = false }, natsclient.DeliveryDecisionRetry},
 		{"nonawaiting state contradicts retained pending gate", func(f *approvalRecoveryFixture) {
-			f.entity.State = agentic.LoopStateExecuting
+			f.entity.State = agentic.LoopStateRunning
 		}, natsclient.DeliveryDecisionQuarantine},
 		{"gated result missing", func(f *approvalRecoveryFixture) { f.entity.PendingToolResults = nil }, natsclient.DeliveryDecisionRetry},
 		{"pending arguments conflict", func(f *approvalRecoveryFixture) {
@@ -469,6 +484,60 @@ func TestColdApprovalUnresolvedOrConflictingEvidenceDoesNotResolve(t *testing.T)
 }
 
 // spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
+func TestColdApprovalRequestConflictPrecedesMissingResponse(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	f := newApprovalRecoveryFixture(t)
+	f.request.RequestID = f.entity.ID + ":req:" + uuid.NewString()
+	require.NoError(t, f.request.Validate())
+	f.evidence.request.data = settlementEnvelope(t, &f.request)
+	f.evidence.responseFound = false
+	before := append([]byte(nil), f.bucket.values[f.entity.ID]...)
+	probe := newTerminalReaderProbe(f.c, f.entity.ID)
+
+	// A present conflicting request is poison before any observation of the
+	// response it names, whether that response or its retention is observable.
+	decision, err := f.c.handleApprovalResponseMessage(ctx, settlementEnvelope(t, &f.approval))
+
+	assert.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
+	assert.ErrorContains(t, err, "request correlation conflict")
+	assert.Equal(t, before, f.bucket.values[f.entity.ID])
+	assert.NotContains(t, f.bucket.values, "COMPLETE_"+f.entity.ID)
+	assert.Empty(t, probe.facts)
+	assert.Empty(t, perLoopMapCount(f.c.handler.loopManager, f.entity.ID))
+	t.Logf("request=%s pending_request=%s response_absent=true decision=%v err=%v",
+		f.request.RequestID, f.entity.PendingApproval.RequestID, decision, err)
+}
+
+// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
+func TestColdApprovalGatedResultConflictPrecedesMissingRequest(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	f := newApprovalRecoveryFixture(t)
+	stored := f.entity.PendingToolResults[f.result.ExecutionID]
+	stored.TraceID = "conflicting-trace"
+	require.NoError(t, stored.Validate())
+	f.entity.PendingToolResults[f.result.ExecutionID] = stored
+	f.bucket.values[f.entity.ID] = settlementLoopRecord(t, f.entity)
+	f.evidence.requestFound = false
+	before := append([]byte(nil), f.bucket.values[f.entity.ID]...)
+	probe := newTerminalReaderProbe(f.c, f.entity.ID)
+
+	// The present result conflicts with its pending gate independently of
+	// whether the missing originating request should still be retained.
+	decision, err := f.c.handleApprovalResponseMessage(ctx, settlementEnvelope(t, &f.approval))
+
+	assert.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
+	assert.ErrorContains(t, err, "gated result correlation conflict")
+	assert.Equal(t, before, f.bucket.values[f.entity.ID])
+	assert.NotContains(t, f.bucket.values, "COMPLETE_"+f.entity.ID)
+	assert.Empty(t, probe.facts)
+	assert.Empty(t, perLoopMapCount(f.c.handler.loopManager, f.entity.ID))
+	t.Logf("stored_trace=%s pending_trace=%s request_absent=true decision=%v err=%v",
+		stored.TraceID, f.entity.PendingApproval.TraceID, decision, err)
+}
+
+// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
 func TestColdApprovalPublicationFailurePreservesPending(t *testing.T) {
 	f := newApprovalRecoveryFixture(t)
 	f.c.natsClient = &natsclient.Client{} // Disconnected real publisher: no PubAck.
@@ -497,7 +566,7 @@ func TestColdApprovalPreservesLiveDiscardOfSiblingCalls(t *testing.T) {
 	f := newApprovalRecoveryFixture(t)
 	f.response.Message.ToolCalls = append(f.response.Message.ToolCalls, agentic.ToolCall{ID: "sibling-call", Name: "search"})
 	beforeGate := f.entity
-	beforeGate.State, beforeGate.StateBeforeApproval = agentic.LoopStateExecuting, ""
+	beforeGate.State = agentic.LoopStateRunning
 	beforeGate.PendingApproval, beforeGate.PendingToolResults = nil, nil
 	require.NoError(t, f.c.handler.loopManager.restoreLoopFromRequest(beforeGate, f.request, nil))
 	_, err := f.c.handler.trajectoryManager.startTrajectory(f.entity.ID)
@@ -532,6 +601,92 @@ func TestColdApprovalPreservesLiveDiscardOfSiblingCalls(t *testing.T) {
 			require.Len(t, result.PublishedMessages, 1)
 			require.Equal(t, "agent.request."+f.entity.ID, result.PublishedMessages[0].Subject,
 				"approval completion must ask the model again, not revive the discarded sibling execution")
+		})
+	}
+}
+
+type approvalSelectionUnavailableBucket struct {
+	jetstream.KeyValue
+	selectedKey string
+	readFailure bool
+	err         error
+}
+
+func (b *approvalSelectionUnavailableBucket) Create(ctx context.Context, key string, data []byte, opts ...jetstream.KVCreateOpt) (uint64, error) {
+	if key == b.selectedKey {
+		if b.readFailure {
+			return 0, jetstream.ErrKeyExists
+		}
+		return 0, b.err
+	}
+	return b.KeyValue.Create(ctx, key, data, opts...)
+}
+
+func (b *approvalSelectionUnavailableBucket) Get(ctx context.Context, key string) (jetstream.KeyValueEntry, error) {
+	if key == b.selectedKey && b.readFailure {
+		return nil, b.err
+	}
+	return b.KeyValue.Get(ctx, key)
+}
+
+// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
+func TestApprovalTerminalSelectionUncertaintyRetriesBeforeEffects(t *testing.T) {
+	for _, stage := range []string{"create", "get"} {
+		t.Run(stage, func(t *testing.T) {
+			f := newApprovalRecoveryFixture(t)
+			f.entity.Iterations = f.entity.MaxIterations
+			f.bucket.values[f.entity.ID] = settlementLoopRecord(t, f.entity)
+			require.NoError(t, f.c.handler.loopManager.restoreToolBatch(f.entity, f.request, f.response, f.result))
+			f.approval.Decision, f.approval.Reason = agentic.ApprovalDecisionReject, "policy"
+			before := append([]byte(nil), f.bucket.values[f.entity.ID]...)
+			injected := errors.New("selected terminal " + stage + " unavailable")
+			f.c.loopsBucket = &approvalSelectionUnavailableBucket{KeyValue: f.c.loopsBucket,
+				selectedKey: "COMPLETE_" + f.entity.ID, readFailure: stage == "get", err: injected}
+			probe := newTerminalReaderProbe(f.c, f.entity.ID)
+			decision, err := f.c.handleApprovalResponseMessage(t.Context(), settlementEnvelope(t, &f.approval))
+			require.ErrorIs(t, err, injected)
+			require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
+			require.Equal(t, before, f.bucket.values[f.entity.ID])
+			require.NotContains(t, f.bucket.values, "COMPLETE_"+f.entity.ID)
+			require.Empty(t, probe.facts, "selection failure preceded terminal audit effects")
+			require.Empty(t, perLoopMapCount(f.c.handler.loopManager, f.entity.ID))
+		})
+	}
+}
+
+// spec: agentic-loop / Loop task, request, and tool work use only required correlation
+func TestWarmTerminalInputCannotBorrowAnotherGateRevision(t *testing.T) {
+	for _, owner := range []string{"response", "tool"} {
+		t.Run(owner, func(t *testing.T) {
+			f := newApprovalRecoveryFixture(t)
+			process := f.entity
+			require.NoError(t, process.ResolveApproval())
+			require.NoError(t, f.c.handler.loopManager.restoreToolBatch(process, f.request, f.response, f.result))
+			newer := f.entity
+			pending := *newer.PendingApproval
+			pending.RequestID = f.entity.ID + ":req:" + uuid.NewString()
+			pending.ExecutionID = deriveToolExecutionID(pending.RequestID, pending.CallID, pending.CallOrdinal)
+			newer.PendingApproval = &pending
+			newer.PendingToolResults = nil
+			require.NoError(t, newer.Validate())
+			f.bucket.values[newer.ID] = settlementLoopRecord(t, newer)
+			before := append([]byte(nil), f.bucket.values[newer.ID]...)
+			var decision natsclient.DeliveryDecision
+			var err error
+			if owner == "response" {
+				response := agentic.AgentResponse{RequestID: f.request.RequestID, Status: agentic.StatusComplete,
+					Message: agentic.ChatMessage{Role: "assistant", Content: "stale completion"}}
+				decision, err = f.c.handleResponseMessage(t.Context(), settlementEnvelope(t, &response))
+			} else {
+				result := f.result
+				result.Error, result.ErrorKind, result.Content, result.StopLoop = "", "", "stale completion", true
+				decision, err = f.c.handleToolResultMessage(t.Context(), settlementEnvelope(t, &result))
+			}
+			require.Error(t, err)
+			require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
+			require.Equal(t, before, f.bucket.values[newer.ID])
+			require.NotContains(t, f.bucket.values, "COMPLETE_"+newer.ID)
+			require.Empty(t, perLoopMapCount(f.c.handler.loopManager, newer.ID))
 		})
 	}
 }

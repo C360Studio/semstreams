@@ -40,7 +40,7 @@ func TestLoopOwnerLookupReturnsOnlyCurrentOwnerOrClassifiedRefusal(t *testing.T)
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newTestComponent(t)
-			record := &agentic.LoopEntity{ID: admissionLoopA, UserID: "owner-a", State: agentic.LoopStateExecuting, MaxIterations: 3}
+			record := &agentic.LoopEntity{ID: admissionLoopA, UserID: "owner-a", State: agentic.LoopStateRunning, MaxIterations: 3}
 			if tc.mutate != nil {
 				tc.mutate(record)
 			}
@@ -130,7 +130,7 @@ func FuzzLoopOwnerLookup(f *testing.F) {
 		reads := 0
 		c.loadPersistedLoopFn = func(_ context.Context, key string) (*agentic.LoopEntity, error) {
 			reads++
-			return &agentic.LoopEntity{ID: key, UserID: "owner", State: agentic.LoopStateExecuting, MaxIterations: 1}, nil
+			return &agentic.LoopEntity{ID: key, UserID: "owner", State: agentic.LoopStateRunning, MaxIterations: 1}, nil
 		}
 		var lookup LoopOwnerLookup = c.lookupLoopOwner
 		owner, err := lookup(t.Context(), id)
@@ -153,8 +153,8 @@ func TestHTTPAutoContinueRefusesUnavailableOrAmbiguousViewWithoutEffects(t *test
 		t.Run(map[bool]string{false: "unavailable", true: "ambiguous"}[ambiguous], func(t *testing.T) {
 			c := newTestComponent(t)
 			records := []*agentic.LoopEntity{
-				{ID: admissionLoopA, UserID: "user", ChannelType: "http", ChannelID: "channel", State: agentic.LoopStateExecuting, MaxIterations: 3},
-				{ID: admissionLoopB, UserID: "user", ChannelType: "http", ChannelID: "channel", State: agentic.LoopStateExecuting, MaxIterations: 3},
+				{ID: admissionLoopA, UserID: "user", ChannelType: "http", ChannelID: "channel", State: agentic.LoopStateRunning, MaxIterations: 3},
+				{ID: admissionLoopB, UserID: "user", ChannelType: "http", ChannelID: "channel", State: agentic.LoopStateRunning, MaxIterations: 3},
 			}
 			if ambiguous {
 				c = newCurrentLoopTestComponent(t, records...)

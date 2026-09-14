@@ -63,7 +63,7 @@ func TestHandleAgentCompleteDeliversResultWithoutAdvancingLoopAuthority(t *testi
 	c, sink := newCompletionTestComponent(t)
 	const loopID = admissionLoopA
 	persisted := &agentic.LoopEntity{
-		ID: loopID, TaskID: loopID + "-task", State: agentic.LoopStateExecuting,
+		ID: loopID, TaskID: loopID + "-task", State: agentic.LoopStateRunning,
 		MaxIterations: 10, UserID: "alice", ChannelType: "http", ChannelID: "session-1",
 	}
 	before := *persisted
@@ -118,7 +118,7 @@ func TestHandleAgentFailedDeliversErrorWithoutAdvancingLoopAuthority(t *testing.
 	c, sink := newCompletionTestComponent(t)
 	const loopID = admissionLoopA
 	persisted := &agentic.LoopEntity{
-		ID: loopID, TaskID: loopID + "-task", State: agentic.LoopStateExecuting,
+		ID: loopID, TaskID: loopID + "-task", State: agentic.LoopStateRunning,
 		MaxIterations: 10, UserID: "carol", ChannelType: "http", ChannelID: "session-3",
 	}
 	before := *persisted

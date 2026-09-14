@@ -179,8 +179,8 @@ func TestResearchGraphExecutor_HappyPath_LoopEntityShape(t *testing.T) {
 	if loopEntity.MaxIterations != 6 {
 		t.Errorf("max_iterations: got %d, want 6", loopEntity.MaxIterations)
 	}
-	if loopEntity.State != agentic.LoopStateExecuting {
-		t.Errorf("state = %q, want %q", loopEntity.State, agentic.LoopStateExecuting)
+	if loopEntity.State != agentic.LoopStateRunning {
+		t.Errorf("state = %q, want %q", loopEntity.State, agentic.LoopStateRunning)
 	}
 }
 

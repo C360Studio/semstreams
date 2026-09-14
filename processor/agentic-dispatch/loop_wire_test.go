@@ -56,7 +56,7 @@ func TestLoopFromEntity_RoundTrip(t *testing.T) {
 	entity := agentic.LoopEntity{
 		ID:            "loop-abc",
 		TaskID:        "task-xyz",
-		State:         agentic.LoopStateExecuting,
+		State:         agentic.LoopStateRunning,
 		Role:          "coordinator",
 		Model:         "gpt-4o",
 		Iterations:    3,
@@ -130,7 +130,7 @@ func TestLoopFromEntity_RoundTrip(t *testing.T) {
 // TestLoopRunFields_EmptyRunIDOmitted verifies the run fields stay empty (and so
 // omitempty-drop from the wire) when the loop is not part of a run.
 func TestLoopRunFields_EmptyRunIDOmitted(t *testing.T) {
-	got := loopFromEntity(&agentic.LoopEntity{ID: "loop-x", State: agentic.LoopStateExecuting, MaxIterations: 5}, "c360", "ops")
+	got := loopFromEntity(&agentic.LoopEntity{ID: "loop-x", State: agentic.LoopStateRunning, MaxIterations: 5}, "c360", "ops")
 	if got.RunID != "" || got.RunEntityID != "" {
 		t.Errorf("expected empty run fields for non-run loop, got run_id=%q run_entity_id=%q", got.RunID, got.RunEntityID)
 	}
@@ -351,7 +351,7 @@ func TestLoopFromInfo_Projection(t *testing.T) {
 	info := &LoopInfo{
 		LoopID:          "loop-tracked",
 		TaskID:          "task-t",
-		State:           "executing",
+		State:           "awaiting_approval",
 		Role:            "ops",
 		Iterations:      2,
 		MaxIterations:   10,

@@ -73,32 +73,112 @@ func (*approvalReplacementExecutor) ListTools() []agentic.ToolDefinition {
 
 // spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
 func TestIntegrationApprovalAfterLoopAndDispatchReplacement(t *testing.T) {
-	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, false, false, "", false)
+	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, false, false, "", false, "")
+}
+
+// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
+func TestIntegrationApprovalRetainedAbsenceFailsAfterReplacement(t *testing.T) {
+	for _, missing := range []string{"request", "response"} {
+		t.Run(missing, func(t *testing.T) {
+			testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, false, false, "", false, missing)
+		})
+	}
+}
+
+// spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
+func TestIntegrationMissingApprovalEvidenceCannotOverwriteCancellation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	tc := natsclient.NewTestClient(t, natsclient.WithStreams(
+		natsclient.TestStreamConfig{Name: "AGENT", Subjects: []string{"agent.>", "tool.>"}},
+	))
+	stream, err := tc.Client.GetStream(ctx, "AGENT")
+	require.NoError(t, err)
+	info, err := stream.Info(ctx)
+	require.NoError(t, err)
+	cfg := info.Config
+	cfg.Discard, cfg.MaxAge = jetstream.DiscardNew, time.Hour
+	cfg.MaxMsgs, cfg.MaxMsgsPerSubject, cfg.MaxBytes = -1, -1, -1
+	js, err := tc.Client.JetStream()
+	require.NoError(t, err)
+	_, err = js.UpdateStream(ctx, cfg)
+	require.NoError(t, err)
+
+	// Current authority and the input are seeded unit records. Real NATS
+	// supplies retention observation and any attempted terminal publication;
+	// this is an owner-ordering proof, not native cancellation settlement.
+	f := newApprovalRecoveryFixture(t)
+	f.entity.StartedAt = f.entity.PendingApproval.RequestedAt.Add(-time.Second)
+	f.bucket.values[f.entity.ID] = settlementLoopRecord(t, f.entity)
+	require.Less(t, time.Since(f.entity.StartedAt), cfg.MaxAge)
+	f.c.natsClient = tc.Client
+	_, err = f.c.handler.loopManager.CreateLoopWithID(f.entity.ID, f.entity.TaskID,
+		f.entity.Role, f.entity.Model, f.entity.MaxIterations)
+	require.NoError(t, err)
+	require.NoError(t, f.c.handler.UpdateLoop(f.entity))
+	f.evidence.requestFound = false
+	bucket := f.c.loopsBucket.(*approvalRevisionBucket)
+	var committed []byte
+	var committedRevision uint64
+	f.c.settlementEvidence = &approvalClosureEvidence{
+		loopSettlementEvidenceReader: f.evidence,
+		afterRequest: func(ctx context.Context) {
+			// The approval owner has observed the pending revision. The distinct
+			// signal owner now commits cancellation before the missing read returns.
+			require.Equal(t, uint64(1), bucket.revisions[f.entity.ID])
+			closed, err := f.c.handler.CancelLoop(f.entity.ID, "reviewer")
+			require.NoError(t, err)
+			require.Equal(t, agentic.LoopStateCancelled, closed.State)
+			require.NoError(t, closed.Validate())
+			require.NoError(t, f.c.persistLoopState(ctx, f.entity.ID))
+			committed = append([]byte(nil), f.bucket.values[f.entity.ID]...)
+			committedRevision = bucket.revisions[f.entity.ID]
+			require.Equal(t, uint64(2), committedRevision)
+			f.c.releaseLoopTransientState(f.entity.ID)
+			require.Empty(t, perLoopMapCount(f.c.handler.loopManager, f.entity.ID))
+		},
+	}
+
+	decision, callbackErr := f.c.handleApprovalResponseMessage(ctx, settlementEnvelope(t, &f.approval))
+
+	assert.Empty(t, perLoopMapCount(f.c.handler.loopManager, f.entity.ID), "stale recovery must not restore process state after cancellation released it")
+	require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
+	require.Error(t, callbackErr)
+	require.NotEmpty(t, committed, "cancellation must commit between observation and absent-evidence recovery")
+	assert.Equal(t, committed, f.bucket.values[f.entity.ID], "absent-evidence recovery must preserve committed cancellation")
+	assert.Equal(t, committedRevision, bucket.revisions[f.entity.ID])
+	assert.NotContains(t, f.bucket.values, "COMPLETE_"+f.entity.ID, "stale recovery cannot author a conflicting failure")
+	_, failureErr := stream.GetLastMsgForSubject(ctx, "agent.failed."+f.entity.ID)
+	assert.ErrorIs(t, failureErr, jetstream.ErrMsgNotFound)
+	var after agentic.LoopEntity
+	require.NoError(t, json.Unmarshal(f.bucket.values[f.entity.ID], &after))
+	t.Logf("cancel revision=%d final revision=%d final state=%s decision=%v err=%v failure_read=%v",
+		committedRevision, bucket.revisions[f.entity.ID], after.State, decision, callbackErr, failureErr)
 }
 
 // spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
 // spec: agentic-loop / Per-loop in-process state is released at terminal, through the one release point
 func TestIntegrationAppliedApprovalRedeliversAfterOwnerReplacement(t *testing.T) {
-	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, false, false, "agent.approval_response", false)
+	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, false, false, "agent.approval_response", false, "")
 }
 
 // spec: agentic-loop / Approval-required tool statuses settle by observed execution phase
 func TestIntegrationApprovalRequiredResultRedeliversAfterClosedGate(t *testing.T) {
-	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, false, false, "tool.result", false)
+	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, false, false, "tool.result", false, "")
 }
 
 // spec: agentic-loop / Approval-required tool statuses settle by observed execution phase
 func TestIntegrationApprovalRequiredResultRedeliversAfterLaterHistory(t *testing.T) {
 	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{
 		Decision: agentic.ApprovalDecisionReject, Reason: "retain rule-42 for audit",
-	}, false, false, "tool.result", false)
+	}, false, false, "tool.result", false, "")
 }
 
 // spec: agentic-loop / Approval-required tool statuses settle by observed execution phase
 func TestIntegrationApprovalRequiredResultRedeliversAfterModifiedGate(t *testing.T) {
 	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{
 		Decision: agentic.ApprovalDecisionModify, ModifiedArguments: map[string]any{"rule_id": "rule-99"},
-	}, false, false, "tool.result", false)
+	}, false, false, "tool.result", false, "")
 }
 
 // spec: agentic-loop / Approval-required tool statuses settle by observed execution phase
@@ -106,31 +186,31 @@ func TestIntegrationApprovalRequiredResultRedeliversAfterModifiedGate(t *testing
 func TestIntegrationApprovalRequiredResultRedeliversAfterTimeout(t *testing.T) {
 	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{
 		Decision: agentic.ApprovalDecisionReject, Reason: "approval timed out after 8s",
-	}, false, true, "tool.result", false)
+	}, false, true, "tool.result", false, "")
 }
 
 // spec: agentic-loop / Approval-required tool statuses settle by observed execution phase
 func TestIntegrationApprovalRequiredResultRetriesMatchingPendingPrompt(t *testing.T) {
-	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, false, false, "tool.result", true)
+	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, false, false, "tool.result", true, "")
 }
 
 // spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
 func TestIntegrationModifiedApprovalAfterLoopAndDispatchReplacement(t *testing.T) {
 	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{
 		Decision: agentic.ApprovalDecisionModify, ModifiedArguments: map[string]any{"rule_id": "rule-99"},
-	}, false, false, "", false)
+	}, false, false, "", false, "")
 }
 
 // spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
 func TestIntegrationRejectedApprovalAfterLoopAndDispatchReplacement(t *testing.T) {
 	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{
 		Decision: agentic.ApprovalDecisionReject, Reason: "retain rule-42 for audit",
-	}, false, false, "", false)
+	}, false, false, "", false, "")
 }
 
 // spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
 func TestIntegrationApprovalReplacementIgnoresOlderSameCallIDResponse(t *testing.T) {
-	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, true, false, "", false)
+	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{Decision: agentic.ApprovalDecisionApprove}, true, false, "", false, "")
 }
 
 // spec: agentic-loop / Approval continuation after replacement is exact and evidence-bounded
@@ -138,13 +218,13 @@ func TestIntegrationApprovalReplacementIgnoresOlderSameCallIDResponse(t *testing
 func TestIntegrationApprovalTimeoutAfterLoopAndDispatchReplacement(t *testing.T) {
 	testApprovalAfterReplacement(t, agenticdispatch.ApprovalRequest{
 		Decision: agentic.ApprovalDecisionReject, Reason: "approval timed out after 8s",
-	}, false, true, "", false)
+	}, false, true, "", false, "")
 }
 
 // Real task/model/tools owners produce every retained checkpoint; no process
 // cache or durable loop record is seeded. Graph/evidence E2E and
 // OS-process replacement remain separate proofs.
-func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.ApprovalRequest, retainOlderResponse, timeout bool, redeliverPort string, retryPending bool) {
+func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.ApprovalRequest, retainOlderResponse, timeout bool, redeliverPort string, retryPending bool, missingEvidence string) {
 	t.Helper()
 	laterHistory := redeliverPort == "tool.result" && approvalRequest.Decision == agentic.ApprovalDecisionReject
 	const laterFailureContent = "Tool error: tool call had empty function name — call a specific tool by name or respond with text"
@@ -184,6 +264,19 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 	))
 	stream, err := tc.Client.GetStream(ctx, "AGENT")
 	require.NoError(t, err)
+	if missingEvidence != "" {
+		// This isolated fault-injection stream cannot evict evidence by
+		// capacity. Its real policy and message age are re-observed below.
+		info, err := stream.Info(ctx)
+		require.NoError(t, err)
+		cfg := info.Config
+		cfg.Discard, cfg.MaxAge = jetstream.DiscardNew, time.Hour
+		cfg.MaxMsgs, cfg.MaxMsgsPerSubject, cfg.MaxBytes = -1, -1, -1
+		js, err := tc.Client.JetStream()
+		require.NoError(t, err)
+		_, err = js.UpdateStream(ctx, cfg)
+		require.NoError(t, err)
+	}
 	decoder := payloadbuiltins.NewTestDecoder(t)
 	toolCalls, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
 		Name: "approval-redispatch-observer", FilterSubject: "tool.execute.>", AckPolicy: jetstream.AckExplicitPolicy,
@@ -326,10 +419,59 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 							}
 						}
 					}
-					selectedSource := port.Port == redeliverPort && (port.Port != "tool.result" || gatedResult)
+					selectedSource := port.Port == redeliverPort && (port.Port != "tool.result" || gatedResult) ||
+						missingEvidence != "" && port.Port == "agent.approval_response"
 					observed := &approvalReplacementDelivery{
 						terminalMarkerDelivery: &terminalMarkerDelivery{Msg: msg},
 						interruptAck:           port.Port == interruptAckPort && selectedSource,
+					}
+					if missingEvidence != "" && port.Port == "agent.approval_response" {
+						observed.beforeAck = func() error {
+							base, err := decoder.Decode(msg.Data())
+							if err != nil {
+								return err
+							}
+							approval := base.Payload().(*agentic.ApprovalResponse)
+							entity, found, err := c.readLoopEntity(msgCtx, approval.LoopID)
+							if err != nil || !found || entity.State != agentic.LoopStateFailed ||
+								entity.Outcome != agentic.OutcomeFailed || entity.PendingApproval != nil {
+								return fmt.Errorf("retained absence ACK lacks final failed authority: found=%v state=%s err=%v", found, entity.State, err)
+							}
+							entry, err := c.loopsBucket.Get(msgCtx, "COMPLETE_"+approval.LoopID)
+							if err != nil {
+								return err
+							}
+							var failed agentic.LoopFailedEvent
+							if err := json.Unmarshal(entry.Value(), &failed); err != nil {
+								return err
+							}
+							if err := failed.Validate(); err != nil {
+								return err
+							}
+							if failed.LoopID != entity.ID || failed.TaskID != entity.TaskID ||
+								failed.Reason != "continuation_unavailable" || failed.Error != entity.Error {
+								return fmt.Errorf("retained absence ACK lacks matching COMPLETE_ failure: %+v", failed)
+							}
+							raw, err := stream.GetLastMsgForSubject(msgCtx, "agent.failed."+approval.LoopID)
+							if err != nil {
+								return err
+							}
+							base, err = decoder.Decode(raw.Data)
+							if err != nil {
+								return err
+							}
+							if err := base.Validate(); err != nil {
+								return err
+							}
+							published, ok := base.Payload().(*agentic.LoopFailedEvent)
+							if !ok || !reflect.DeepEqual(&failed, published) {
+								return errors.New("retained absence ACK preceded matching terminal publication")
+							}
+							if executor.calls.Load() != priorExecutions || providerCalls.Load() != 1+priorExecutions {
+								return errors.New("retained absence repeated an executor or provider effect")
+							}
+							return nil
+						}
 					}
 					if port.Port == "tool.result" {
 						observed.beforeAck = func() error {
@@ -687,6 +829,28 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 	t.Logf("approval checkpoint: loop=%s request=%s execution=%s tool_result_seq=%d ack_floor=%d kv_revision=%d withheld_filter=%q source=%s", loopID, request.RequestID, gated.ExecutionID, metadata.Sequence.Stream, info.AckFloor.Stream, entry.Revision(), withheldFilter, initial.Data())
 	stopFirst()
 	firstMux = nil
+	if missingEvidence != "" {
+		info, err := stream.Info(ctx)
+		require.NoError(t, err)
+		require.Equal(t, jetstream.DiscardNew, info.Config.Discard)
+		require.Equal(t, jetstream.LimitsPolicy, info.Config.Retention)
+		require.LessOrEqual(t, info.Config.MaxMsgs, int64(0))
+		require.LessOrEqual(t, info.Config.MaxMsgsPerSubject, int64(0))
+		require.LessOrEqual(t, info.Config.MaxBytes, int64(0))
+		required := requestRaw
+		if missingEvidence == "response" {
+			required = responseRaw
+		}
+		require.Less(t, time.Since(required.Time), info.Config.MaxAge)
+		// The checkpoint proved this exact evidence committed before the
+		// settled gate. Delete only that sequence after the first owners join.
+		require.NoError(t, stream.DeleteMsg(ctx, required.Sequence))
+		_, err = stream.GetLastMsgForSubject(ctx, required.Subject)
+		require.ErrorIs(t, err, jetstream.ErrMsgNotFound)
+		t.Logf("confirmed missing %s: subject=%s sequence=%d published=%s max_age=%s discard=%s checkpoint_revision=%d",
+			missingEvidence, required.Subject, required.Sequence, required.Time.Format(time.RFC3339Nano),
+			info.Config.MaxAge, info.Config.Discard, entry.Revision())
+	}
 	if timeout {
 		require.Equal(t, 8*time.Second, pending.PendingApproval.Timeout)
 		require.True(t, time.Now().Before(pending.PendingApproval.RequestedAt.Add(pending.PendingApproval.Timeout)),
@@ -711,6 +875,26 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 	unchanged, err := bucket.Get(ctx, loopID)
 	require.NoError(t, err)
 	require.Equal(t, entry.Value(), unchanged.Value(), "replacement must use retained pending authority")
+	if missingEvidence != "" {
+		approved := post(replacementMux, "/loops/"+loopID+"/approval", approvalRequest, approver)
+		require.Equal(t, http.StatusOK, approved.Code, "%s", approved.Body.String())
+		approval := wait("agent.approval_response")
+		current, err := bucket.Get(ctx, loopID)
+		require.NoError(t, err)
+		var failed agentic.LoopEntity
+		require.NoError(t, json.Unmarshal(current.Value(), &failed))
+		t.Logf("missing %s outcome: state=%s ack=%d nak=%d term=%d unchanged=%v provider_calls=%d executor_calls=%d",
+			missingEvidence, failed.State, approval.acks, approval.naks, approval.terms,
+			bytes.Equal(entry.Value(), current.Value()), providerCalls.Load(), executor.calls.Load())
+		require.Equal(t, agentic.LoopStateFailed, failed.State, "confirmed retained absence must durably fail, not retry indefinitely")
+		require.Equal(t, 1, approval.acks)
+		require.Zero(t, approval.naks+approval.terms)
+		require.NoError(t, approval.ackCheckErr, "durable failure and terminal PubAck must precede source ACK")
+		require.Zero(t, executor.calls.Load())
+		require.Equal(t, int32(1), providerCalls.Load())
+		waitSettled("")
+		return
+	}
 	if retryPending {
 		// No HTTP decision or manual handler call triggers recovery. Wait for
 		// the same server-owned source to redeliver while its gate remains open.
@@ -837,7 +1021,7 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 			require.NoError(t, err)
 			var closed agentic.LoopEntity
 			require.NoError(t, json.Unmarshal(closedEntry.Value(), &closed))
-			require.Equal(t, pending.StateBeforeApproval, closed.State)
+			require.Equal(t, agentic.LoopStateRunning, closed.State)
 			require.Nil(t, closed.PendingApproval)
 			require.Equal(t, *gated, closed.PendingToolResults[gated.ExecutionID])
 			require.Equal(t, wantExecutions, executor.calls.Load())

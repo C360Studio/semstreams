@@ -21,24 +21,24 @@ import (
 )
 
 // terminalMarkerFailingBucket delegates every real KV operation except the first
-// terminal bare-record Put. COMPLETE_ and ordinary nonterminal writes still commit.
+// terminal bare-record Update. COMPLETE_ and ordinary nonterminal writes still commit.
 type terminalMarkerFailingBucket struct {
 	jetstream.KeyValue
 	loopID string
 	failed atomic.Bool
 }
 
-func (b *terminalMarkerFailingBucket) Put(ctx context.Context, key string, value []byte) (uint64, error) {
+func (b *terminalMarkerFailingBucket) Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error) {
 	if key == b.loopID {
 		var entity agentic.LoopEntity
 		if err := json.Unmarshal(value, &entity); err != nil {
 			return 0, err
 		}
 		if entity.State.IsTerminal() && b.failed.CompareAndSwap(false, true) {
-			return 0, errors.New("injected final terminal marker Put failure")
+			return 0, errors.New("injected final terminal marker Update failure")
 		}
 	}
-	return b.KeyValue.Put(ctx, key, value)
+	return b.KeyValue.Update(ctx, key, value, revision)
 }
 
 // terminalMarkerDelivery observes settlement without replacing any server method.

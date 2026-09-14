@@ -217,7 +217,7 @@ func TestIntegrationUserMessageReplayAfterTaskCommitKeepsOneLogicalTask(t *testi
 		UserID:        userMessage.UserID,
 		ChannelType:   userMessage.ChannelType,
 		ChannelID:     userMessage.ChannelID,
-		State:         agentic.LoopStateExecuting,
+		State:         agentic.LoopStateRunning,
 		MaxIterations: 5,
 	})
 	decision, cause = replacementDispatch.handleUserMessage(ctx, secondSource.Data())
@@ -345,7 +345,7 @@ func TestIntegrationDispatchTaskPublicationPreservesMintAndAttachment(t *testing
 				if mode == "independent_default" || mode == "reply_to" || mode == "auto_continue" {
 					existing = &agentic.LoopEntity{
 						ID: uuid.NewString(), UserID: msg.UserID, ChannelType: msg.ChannelType, ChannelID: msg.ChannelID,
-						State: agentic.LoopStateExecuting, MaxIterations: 5,
+						State: agentic.LoopStateRunning, MaxIterations: 5,
 					}
 					putLoopRecord(t, ctx, kv, *existing)
 					entry, readErr := kv.Get(ctx, existing.ID)

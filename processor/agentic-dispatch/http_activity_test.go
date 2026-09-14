@@ -442,7 +442,7 @@ func TestActivityStream_OneWatcherManyClients(t *testing.T) {
 	// First client triggers the lazy view; feed its bootstrap replay.
 	c1 := startActivityClient(t, comp)
 	w := src.waitWatcher(t, 1)
-	w.updates <- putEntry("00000000-0000-4000-8000-000000000001", loopEntityJSON(t, "00000000-0000-4000-8000-000000000001", agentic.LoopStateExecuting, 1), 1)
+	w.updates <- putEntry("00000000-0000-4000-8000-000000000001", loopEntityJSON(t, "00000000-0000-4000-8000-000000000001", agentic.LoopStateRunning, 1), 1)
 	w.updates <- nil // end-of-replay marker
 	hooks.waitCaughtUp(t)
 
@@ -459,7 +459,7 @@ func TestActivityStream_OneWatcherManyClients(t *testing.T) {
 	hooks.waitSubscriberCount(t, 3)
 
 	// One live write fans out to every client through the one watcher.
-	w.updates <- putEntry("00000000-0000-4000-8000-000000000002", loopEntityJSON(t, "00000000-0000-4000-8000-000000000002", agentic.LoopStatePlanning, 0), 2)
+	w.updates <- putEntry("00000000-0000-4000-8000-000000000002", loopEntityJSON(t, "00000000-0000-4000-8000-000000000002", agentic.LoopStateRunning, 0), 2)
 	for _, cl := range []*activityClient{c1, c2, c3} {
 		cl.rec.waitFor(t, `"loop_id":"00000000-0000-4000-8000-000000000002"`)
 	}
@@ -485,14 +485,14 @@ func TestActivityStream_ReplayThenLiveOrdering(t *testing.T) {
 
 	cl := startActivityClient(t, comp)
 	w := src.waitWatcher(t, 1)
-	w.updates <- putEntry("00000000-0000-4000-8000-000000000001", loopEntityJSON(t, "00000000-0000-4000-8000-000000000001", agentic.LoopStateExecuting, 1), 1)
+	w.updates <- putEntry("00000000-0000-4000-8000-000000000001", loopEntityJSON(t, "00000000-0000-4000-8000-000000000001", agentic.LoopStateRunning, 1), 1)
 	w.updates <- nil
 	hooks.waitCaughtUp(t)
 	cl.rec.waitFor(t, "sync_complete")
 
 	// Live update to the same loop after the seam.
-	w.updates <- putEntry("00000000-0000-4000-8000-000000000001", loopEntityJSON(t, "00000000-0000-4000-8000-000000000001", agentic.LoopStateReviewing, 2), 2)
-	cl.rec.waitFor(t, string(agentic.LoopStateReviewing))
+	w.updates <- putEntry("00000000-0000-4000-8000-000000000001", loopEntityJSON(t, "00000000-0000-4000-8000-000000000001", agentic.LoopStateRunning, 2), 2)
+	cl.rec.waitFor(t, `"type":"loop_updated"`)
 
 	raw := cl.rec.contents()
 	idxConnected := strings.Index(raw, "event: connected")
@@ -514,12 +514,12 @@ func TestActivityStream_ReplayThenLiveOrdering(t *testing.T) {
 	assert.Equal(t, "00000000-0000-4000-8000-000000000001", replay.LoopID)
 	require.NotNil(t, replay.Data)
 	assert.Equal(t, "00000000-0000-4000-8000-000000000001", replay.Data.LoopID, "envelope loop_id equals data.loop_id")
-	assert.Equal(t, agentic.LoopStateExecuting.String(), replay.Data.State)
+	assert.Equal(t, agentic.LoopStateRunning.String(), replay.Data.State)
 	assert.Equal(t, 1, replay.Data.Iterations)
 
 	assert.Equal(t, "loop_updated", live.Type, "revision >1 maps to loop_updated")
 	require.NotNil(t, live.Data)
-	assert.Equal(t, agentic.LoopStateReviewing.String(), live.Data.State)
+	assert.Equal(t, agentic.LoopStateRunning.String(), live.Data.State)
 	assert.Equal(t, 2, live.Data.Iterations)
 
 	// The connected frame carries the client id, as before.
@@ -545,7 +545,7 @@ func TestActivityStream_CompletionAndDeleteEvents(t *testing.T) {
 	hooks.waitCaughtUp(t)
 	cl.rec.waitFor(t, "sync_complete")
 
-	w.updates <- putEntry("00000000-0000-4000-8000-000000000003", loopEntityJSON(t, "00000000-0000-4000-8000-000000000003", agentic.LoopStateExecuting, 1), 1)
+	w.updates <- putEntry("00000000-0000-4000-8000-000000000003", loopEntityJSON(t, "00000000-0000-4000-8000-000000000003", agentic.LoopStateRunning, 1), 1)
 	cl.rec.waitFor(t, `"loop_id":"00000000-0000-4000-8000-000000000003"`)
 
 	w.updates <- putEntry("COMPLETE_00000000-0000-4000-8000-000000000003", loopCompletionJSON(t, "00000000-0000-4000-8000-000000000003"), 2)
@@ -591,7 +591,7 @@ func TestActivityStream_PoisonIsPerKeyNonTerminal(t *testing.T) {
 	c1.rec.waitFor(t, "Malformed loop entry: 00000000-0000-4000-8000-000000000004")
 
 	// The stream survives the poisoned key: a later healthy write flows.
-	w.updates <- putEntry("00000000-0000-4000-8000-000000000005", loopEntityJSON(t, "00000000-0000-4000-8000-000000000005", agentic.LoopStateExecuting, 1), 2)
+	w.updates <- putEntry("00000000-0000-4000-8000-000000000005", loopEntityJSON(t, "00000000-0000-4000-8000-000000000005", agentic.LoopStateRunning, 1), 2)
 	c1.rec.waitFor(t, `"loop_id":"00000000-0000-4000-8000-000000000005"`)
 	select {
 	case <-c1.done:
@@ -624,7 +624,7 @@ func TestActivityStream_WatcherLossFailsClosedThenRestartsOnAttach(t *testing.T)
 
 	c1 := startActivityClient(t, comp)
 	w := src.waitWatcher(t, 1)
-	w.updates <- putEntry("00000000-0000-4000-8000-000000000001", loopEntityJSON(t, "00000000-0000-4000-8000-000000000001", agentic.LoopStateExecuting, 1), 1)
+	w.updates <- putEntry("00000000-0000-4000-8000-000000000001", loopEntityJSON(t, "00000000-0000-4000-8000-000000000001", agentic.LoopStateRunning, 1), 1)
 	w.updates <- nil
 	hooks.waitCaughtUp(t)
 	c1.rec.waitFor(t, "sync_complete")
@@ -638,7 +638,7 @@ func TestActivityStream_WatcherLossFailsClosedThenRestartsOnAttach(t *testing.T)
 	// Next attach restarts the shared view on a fresh watcher.
 	c2 := startActivityClient(t, comp)
 	w2 := src.waitWatcher(t, 2)
-	w2.updates <- putEntry("00000000-0000-4000-8000-000000000001", loopEntityJSON(t, "00000000-0000-4000-8000-000000000001", agentic.LoopStateReviewing, 5), 2)
+	w2.updates <- putEntry("00000000-0000-4000-8000-000000000001", loopEntityJSON(t, "00000000-0000-4000-8000-000000000001", agentic.LoopStateRunning, 5), 2)
 	w2.updates <- nil
 	hooks.waitCaughtUp(t)
 
@@ -647,8 +647,10 @@ func TestActivityStream_WatcherLossFailsClosedThenRestartsOnAttach(t *testing.T)
 	events := activityFrames(t, c2.rec.contents())
 	require.Len(t, events, 1)
 	require.NotNil(t, events[0].Data)
-	assert.Equal(t, agentic.LoopStateReviewing.String(), events[0].Data.State,
+	assert.Equal(t, agentic.LoopStateRunning.String(), events[0].Data.State,
 		"post-restart snapshot serves the fresh replay's state")
+	assert.Equal(t, 5, events[0].Data.Iterations,
+		"post-restart snapshot must not retain the old iteration count of 1")
 	assert.Equal(t, 2, src.calls(), "restart opens exactly one new watcher")
 }
 
@@ -676,7 +678,7 @@ func TestActivityStream_SlowClientDoesNotStallPeers(t *testing.T) {
 
 	// Five revisions of one loop land while the slow client cannot write.
 	for rev := uint64(1); rev <= 5; rev++ {
-		w.updates <- putEntry("00000000-0000-4000-8000-000000000006", loopEntityJSON(t, "00000000-0000-4000-8000-000000000006", agentic.LoopStateExecuting, int(rev)), rev)
+		w.updates <- putEntry("00000000-0000-4000-8000-000000000006", loopEntityJSON(t, "00000000-0000-4000-8000-000000000006", agentic.LoopStateRunning, int(rev)), rev)
 		hooks.waitAppliedKey(t, "00000000-0000-4000-8000-000000000006")
 	}
 
@@ -724,11 +726,11 @@ func TestDecodeActivityRecord(t *testing.T) {
 	meta := graphview.EntryMeta{Revision: 3, Created: created}
 
 	t.Run("live loop entity decodes and projects", func(t *testing.T) {
-		rec, keep, err := comp.decodeActivityRecord("00000000-0000-4000-8000-000000000001", loopEntityJSON(t, "00000000-0000-4000-8000-000000000001", agentic.LoopStateExecuting, 3), meta)
+		rec, keep, err := comp.decodeActivityRecord("00000000-0000-4000-8000-000000000001", loopEntityJSON(t, "00000000-0000-4000-8000-000000000001", agentic.LoopStateRunning, 3), meta)
 		require.NoError(t, err)
 		require.True(t, keep)
 		assert.Equal(t, "00000000-0000-4000-8000-000000000001", rec.loop.LoopID)
-		assert.Equal(t, agentic.LoopStateExecuting.String(), rec.loop.State)
+		assert.Equal(t, agentic.LoopStateRunning.String(), rec.loop.State)
 		assert.Equal(t, 3, rec.loop.Iterations)
 		assert.True(t, rec.createdAt.Equal(created), "record must carry the KV write time, not decode time")
 	})
@@ -775,13 +777,13 @@ func TestActivityStream_TimestampIsKVWriteTime(t *testing.T) {
 	// Replay entry carries its original write time.
 	c1 := startActivityClient(t, comp)
 	w := src.waitWatcher(t, 1)
-	w.updates <- putEntryAt("00000000-0000-4000-8000-000000000001", loopEntityJSON(t, "00000000-0000-4000-8000-000000000001", agentic.LoopStateExecuting, 1), 1, tReplay)
+	w.updates <- putEntryAt("00000000-0000-4000-8000-000000000001", loopEntityJSON(t, "00000000-0000-4000-8000-000000000001", agentic.LoopStateRunning, 1), 1, tReplay)
 	w.updates <- nil
 	hooks.waitCaughtUp(t)
 	c1.rec.waitFor(t, "sync_complete")
 
 	// Live upsert and delete carry their entries' write times.
-	w.updates <- putEntryAt("00000000-0000-4000-8000-000000000002", loopEntityJSON(t, "00000000-0000-4000-8000-000000000002", agentic.LoopStatePlanning, 1), 2, tLive)
+	w.updates <- putEntryAt("00000000-0000-4000-8000-000000000002", loopEntityJSON(t, "00000000-0000-4000-8000-000000000002", agentic.LoopStateRunning, 1), 2, tLive)
 	c1.rec.waitFor(t, `"loop_id":"00000000-0000-4000-8000-000000000002"`)
 	w.updates <- delEntryAt("00000000-0000-4000-8000-000000000002", 3, tDelete)
 	c1.rec.waitFor(t, "loop_deleted")
@@ -804,7 +806,7 @@ func TestActivityStream_TimestampIsKVWriteTime(t *testing.T) {
 
 	c2 := startActivityClient(t, comp)
 	w2 := src.waitWatcher(t, 2)
-	w2.updates <- putEntryAt("00000000-0000-4000-8000-000000000001", loopEntityJSON(t, "00000000-0000-4000-8000-000000000001", agentic.LoopStateExecuting, 1), 1, tReplay)
+	w2.updates <- putEntryAt("00000000-0000-4000-8000-000000000001", loopEntityJSON(t, "00000000-0000-4000-8000-000000000001", agentic.LoopStateRunning, 1), 1, tReplay)
 	w2.updates <- nil
 	hooks.waitCaughtUp(t)
 	c2.rec.waitFor(t, "sync_complete")
@@ -828,7 +830,7 @@ func TestActivityViewMetrics(t *testing.T) {
 
 	cl := startActivityClient(t, comp)
 	w := src.waitWatcher(t, 1)
-	w.updates <- putEntry("00000000-0000-4000-8000-000000000001", loopEntityJSON(t, "00000000-0000-4000-8000-000000000001", agentic.LoopStateExecuting, 1), 1)
+	w.updates <- putEntry("00000000-0000-4000-8000-000000000001", loopEntityJSON(t, "00000000-0000-4000-8000-000000000001", agentic.LoopStateRunning, 1), 1)
 	w.updates <- putEntry("00000000-0000-4000-8000-000000000004", []byte("{not json"), 2)
 	hooks.waitPoisonKey(t, "00000000-0000-4000-8000-000000000004")
 	w.updates <- nil
@@ -904,7 +906,7 @@ func TestActivityStreamCoalescesToViewRate(t *testing.T) {
 	cl.rec.waitFor(t, "sync_complete")
 
 	for rev := uint64(1); rev <= 5; rev++ {
-		w.updates <- putEntry("00000000-0000-4000-8000-000000000006", loopEntityJSON(t, "00000000-0000-4000-8000-000000000006", agentic.LoopStateExecuting, int(rev)), rev)
+		w.updates <- putEntry("00000000-0000-4000-8000-000000000006", loopEntityJSON(t, "00000000-0000-4000-8000-000000000006", agentic.LoopStateRunning, int(rev)), rev)
 		hooks.waitAppliedKey(t, "00000000-0000-4000-8000-000000000006")
 	}
 

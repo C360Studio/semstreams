@@ -997,8 +997,8 @@ decodability is not valid current authority. Removed pause fields no longer defi
 ignores their unknown JSON keys. There is no compatibility promise, backfill, or beta-state preservation requirement.
 
 Stop writing `paused` records. Use cancellation to end work and the separate approval protocol for a tool awaiting
-review. The remaining constant and transition-surface cleanup is tracked in #1146; their presence does not make
-`paused` a supported persisted state. This validation correction does not add suspend or checkpoint semantics.
+review. The [operational loop-state contract](#operational-loop-states-replace-developer-phases-1146) removes the
+remaining constant and transition surface. This correction does not add suspend or checkpoint semantics.
 
 ### `cancel` is now the entire signal vocabulary
 
@@ -1110,7 +1110,7 @@ Exactly one payload type now travels that subject.
 - **`/status` reports the state it read.** For a loop this process is not running — after dispatch was replaced,
   say — `/status` used to print `State: running` for anything not settled, so a loop actually sitting in
   `awaiting_approval` told the user to wait for an agent that was waiting for them. It now prints the recorded
-  state (`executing`, `awaiting_approval`, `complete`, …), or `unknown` when the record carries none.
+  state (`running`, `awaiting_approval`, `complete`, …), or `unknown` when the record carries none.
   Anything parsing that text for the literal `running` needs updating.
 - **A NATS outage now answers 503, not 404.** When a loop's durable state cannot be read, the loop endpoints answer
   `503` with a transient classification. Previously an unreadable record was indistinguishable from an absent one,
@@ -1275,3 +1275,64 @@ Required response publication still receives PubAck before source ACK, and remai
 Verify pending approval and explicit continuation after dispatch replacement, unavailable-view 503 responses,
 exact-route AutoContinue and its birth gap, and terminal routing after replacement. No beta-state preservation,
 tracker hydration, or compatibility layer is required.
+
+## Saved terminal results and required-action replay (#1146)
+
+Ordinary agentic-loop success, failure, and cancellation select one `COMPLETE_<LoopID>` result. Retrying work
+validates and reuses that result instead of replacing it with a competing outcome. Cancellation follows the same
+rule. Required effects and terminal publication still finish before the final current-loop marker and source ACK;
+result existence alone is not proof that those steps finished.
+
+The existing registered `LoopCompletedEvent` gains optional `synthetic_decide_required`. The framework sets it
+from the existing completion builder's decision; adopters add no configuration or initialization call. True means
+replay must finish the existing synthetic graph-decision action using the saved result. False or absent requests
+no such action. This does not change synthesis eligibility or the user-facing `decision` field.
+
+Use the normal fresh-state baseline for this pre-v1 adoption. There is no compatibility inference from old
+in-flight completion records, no Metadata flag, and no new payload type, bucket, or recovery service. Continue
+decoding terminal publications through the registered payload boundary; their existing subjects remain unchanged.
+
+## Operational loop states replace developer phases (#1146)
+
+`LoopStateRunning` (`running`) replaces the nonterminal developer-phase vocabulary. The five admitted states are
+`running`, `awaiting_approval`, `complete`, `failed` and `cancelled`. Model/tool execution and waiting for their results
+remain running; this is not a promise that a goroutine is executing or that an input has settled.
+
+### Go and wire consumers
+
+Remove references to `LoopStateExploring`, `LoopStatePlanning`, `LoopStateArchitecting`, `LoopStateExecuting`,
+`LoopStateReviewing` and `LoopStatePaused`, and remove `StateBeforeApproval` / `state_before_approval`.
+There are no aliases or runtime translations of retired state values. Callers using removed Go symbols fail to
+compile; clients matching old state strings must update their rendering and active-state classification.
+
+The existing public method signatures are unchanged. Running can enter approval or any terminal state; awaiting
+approval can return to running or become failed/cancelled. Terminal states cannot reopen. `BeginAwaitingApproval`
+constructs the gate; direct `TransitionTo(awaiting_approval)` refuses because it lacks the gate's required data.
+`ResolveApproval` returns to running. Allowed exits from approval clear `PendingApproval` with the state change.
+
+Unknown/retired states, contradictory state/gate fields, illegal edges and a second Begin now return errors without
+mutation. A coherent same-state transition remains a no-op; it is not delivery proof. Unknown `IsTerminal` remains
+false. `Validate` retains ID/iteration-budget checks and validates the state/gate relationship, without requiring
+RequestID, ExecutionID, ordinal, retained messages or terminal outcome/timestamps. Delivery owners still enforce
+their full correlation and durability requirements. State-only methods do not populate settlement-owned fields.
+
+### Measured downstream impact
+
+- SemTeams: update `ui/src/lib/types/agent.ts` state unions, active-state classification and normalizer fallback,
+  plus `ui/src/lib/types/task.ts` column mapping. Otherwise `running` survives the string cast but falls through
+  active-state checks and the unknown-state column fallback. Use operational status, not invented phase progression.
+- SemSpec: compile against the new API and validate `processor/execution-bridge/completion.go` terminal translation
+  and `processor/recovery-consumer/backstop.go` live-loop classification. `complete` and unknown terminality are
+  unchanged; local validation and delivery evidence remain distinct.
+- SemSage: validate state presentation around the string mirror in `processor/ui-api/types.go` and its consumers.
+
+These are the concrete consumers measured in the 2026-09-13 inventory, not an exhaustive claim about external
+adopters or import aliases. Their owners implement and validate changes in their own repositories.
+
+### Storage and verification
+
+This pre-v1 contract targets freshly provisioned storage. Verify cold start on empty storage and process replacement
+from records created under this contract, including approval continuation and sequential chat. It adds no
+legacy-record rewrite, translation, drain or disposal procedure. If an actual retained deployment needs recovery
+or upgrade, stop that deployment's upgrade work for a separately reviewed plan based on its real records.
+The relevant breaking-change E2E gate remains required before landing; this note is not proof that it has passed.

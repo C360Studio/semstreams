@@ -42,18 +42,22 @@ func fenceHandler(t *testing.T) *MessageHandler {
 
 func requestMessages(t *testing.T, result HandlerResult) []agentic.ChatMessage {
 	t.Helper()
-	if len(result.PublishedMessages) == 0 {
-		t.Fatal("handler result published no messages; expected the agent request")
+	for _, published := range result.PublishedMessages {
+		if published.Subject != "agent.request."+result.LoopID {
+			continue
+		}
+		var envelope struct {
+			Payload struct {
+				Messages []agentic.ChatMessage `json:"messages"`
+			} `json:"payload"`
+		}
+		if err := json.Unmarshal(published.Data, &envelope); err != nil {
+			t.Fatalf("decode agent request envelope: %v", err)
+		}
+		return envelope.Payload.Messages
 	}
-	var envelope struct {
-		Payload struct {
-			Messages []agentic.ChatMessage `json:"messages"`
-		} `json:"payload"`
-	}
-	if err := json.Unmarshal(result.PublishedMessages[0].Data, &envelope); err != nil {
-		t.Fatalf("decode agent request envelope: %v", err)
-	}
-	return envelope.Payload.Messages
+	t.Fatal("handler result published no agent request")
+	return nil
 }
 
 func countRole(msgs []agentic.ChatMessage, role string) int {

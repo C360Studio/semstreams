@@ -118,7 +118,7 @@ func TestExistenceRefusalPrecedesOwnershipRefusal(t *testing.T) {
 // I3: each refusal emitted by the exact-authority gate moves exactly one series
 // by exactly one and produces one diagnostic log.
 func TestGateRefusalIsCountedExactlyOnce(t *testing.T) {
-	owned := &agentic.LoopEntity{ID: admissionLoopA, UserID: "user-a", State: agentic.LoopStateExecuting, MaxIterations: 5}
+	owned := &agentic.LoopEntity{ID: admissionLoopA, UserID: "user-a", State: agentic.LoopStateRunning, MaxIterations: 5}
 	settled := &agentic.LoopEntity{ID: admissionLoopA, UserID: "user-a", State: agentic.LoopStateComplete, MaxIterations: 5}
 
 	cases := []struct {
@@ -154,7 +154,7 @@ func TestGateRefusalIsCountedExactlyOnce(t *testing.T) {
 			name: "invalid record identity",
 			arrange: func(c *Component) {
 				withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: {
-					ID: admissionLoopB, UserID: "user-a", State: agentic.LoopStateExecuting, MaxIterations: 5,
+					ID: admissionLoopB, UserID: "user-a", State: agentic.LoopStateRunning, MaxIterations: 5,
 				}})
 			},
 			req:  loopAdmissionRequest{Operation: loopOpContinue, LoopID: admissionLoopA, Requester: "user-a"},
@@ -222,7 +222,7 @@ func TestContinuationAfterReplacementIsAdmittedFromDurableRecord(t *testing.T) {
 	// A replacement process needs only the exact current authority.
 	withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: {
 		ID: admissionLoopA, UserID: "user-a", ChannelType: "slack", ChannelID: "C1",
-		State: agentic.LoopStateExecuting, MaxIterations: 5,
+		State: agentic.LoopStateRunning, MaxIterations: 5,
 	}})
 
 	facts, err := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
@@ -234,7 +234,7 @@ func TestContinuationAfterReplacementIsAdmittedFromDurableRecord(t *testing.T) {
 	require.Equal(t, "user-a", facts.UserID)
 	require.Equal(t, "slack", facts.ChannelType)
 	require.Equal(t, "C1", facts.ChannelID)
-	require.Equal(t, agentic.LoopStateExecuting, facts.State)
+	require.Equal(t, agentic.LoopStateRunning, facts.State)
 	require.False(t, facts.Terminal)
 	require.Equal(t, 0, testutil.CollectAndCount(c.metrics.loopAdmissionRefusals))
 }
@@ -244,7 +244,7 @@ func TestPreviouslyObservedLoopWithoutDurableRecordIsRefused(t *testing.T) {
 	c := admissionTestComponent(t)
 	records := map[string]*agentic.LoopEntity{admissionLoopA: {
 		ID: admissionLoopA, UserID: "user-a", ChannelType: "cli", ChannelID: "s1",
-		State: agentic.LoopStateExecuting, MaxIterations: 5,
+		State: agentic.LoopStateRunning, MaxIterations: 5,
 	}}
 	withPersistedLoops(c, records)
 	req := loopAdmissionRequest{
@@ -285,7 +285,7 @@ func TestUnreadableDurableRecordRefusesTransient(t *testing.T) {
 func TestPriorAdmissionDoesNotBypassADurableReadFailure(t *testing.T) {
 	c := admissionTestComponent(t)
 	withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: {
-		ID: admissionLoopA, UserID: "user-a", State: agentic.LoopStateExecuting, MaxIterations: 5,
+		ID: admissionLoopA, UserID: "user-a", State: agentic.LoopStateRunning, MaxIterations: 5,
 	}})
 	req := loopAdmissionRequest{
 		Seam: "channel_submission", Field: "reply_to", Operation: loopOpContinue,
@@ -308,7 +308,7 @@ func TestPriorAdmissionDoesNotBypassADurableReadFailure(t *testing.T) {
 func TestCurrentOwnerReplacesPreviouslyObservedOwner(t *testing.T) {
 	c := admissionTestComponent(t)
 	records := map[string]*agentic.LoopEntity{admissionLoopA: {
-		ID: admissionLoopA, UserID: "user-a", State: agentic.LoopStateExecuting, MaxIterations: 5,
+		ID: admissionLoopA, UserID: "user-a", State: agentic.LoopStateRunning, MaxIterations: 5,
 	}}
 	withPersistedLoops(c, records)
 	req := loopAdmissionRequest{
@@ -318,7 +318,7 @@ func TestCurrentOwnerReplacesPreviouslyObservedOwner(t *testing.T) {
 	_, err := c.admitLoopRequest(context.Background(), req)
 	require.NoError(t, err)
 	records[admissionLoopA] = &agentic.LoopEntity{
-		ID: admissionLoopA, UserID: "user-b", State: agentic.LoopStateExecuting, MaxIterations: 5,
+		ID: admissionLoopA, UserID: "user-b", State: agentic.LoopStateRunning, MaxIterations: 5,
 	}
 
 	_, err = c.admitLoopRequest(context.Background(), req)
@@ -379,7 +379,7 @@ func TestGateOwnershipModel(t *testing.T) {
 				c.config.Permissions.Approve = tc.approve
 			}
 			withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: {
-				ID: admissionLoopA, UserID: tc.loopOwner, State: agentic.LoopStateExecuting, MaxIterations: 5,
+				ID: admissionLoopA, UserID: tc.loopOwner, State: agentic.LoopStateRunning, MaxIterations: 5,
 			}})
 
 			facts, err := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
@@ -408,7 +408,7 @@ func TestGateDoesNotConsultCancelOwn(t *testing.T) {
 	c := admissionTestComponent(t)
 	c.config.Permissions.CancelOwn = false
 	withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: {
-		ID: admissionLoopA, UserID: "user-a", State: agentic.LoopStateExecuting, MaxIterations: 5,
+		ID: admissionLoopA, UserID: "user-a", State: agentic.LoopStateRunning, MaxIterations: 5,
 	}})
 
 	_, err := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
@@ -452,13 +452,16 @@ func TestGateTerminalAuthorityRefusesContinuation(t *testing.T) {
 // spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
 func TestGateReportsExactCurrentStateWithoutMutatingAuthority(t *testing.T) {
 	for _, state := range []agentic.LoopState{
-		agentic.LoopStateExecuting, agentic.LoopStateAwaitingApproval,
+		agentic.LoopStateRunning, agentic.LoopStateAwaitingApproval,
 		agentic.LoopStateComplete, agentic.LoopStateFailed, agentic.LoopStateCancelled,
 	} {
 		t.Run(state.String(), func(t *testing.T) {
 			c := admissionTestComponent(t)
 			record := &agentic.LoopEntity{
 				ID: admissionLoopA, UserID: "user-a", State: state, MaxIterations: 5,
+			}
+			if state == agentic.LoopStateAwaitingApproval {
+				record.PendingApproval = &agentic.PendingApprovalState{CallID: "call", ToolName: "tool", ExecutionID: "execution"}
 			}
 			before := *record
 			withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: record})
@@ -483,12 +486,12 @@ func TestGateRefusesInvalidCurrentAuthorityBeforeOwnership(t *testing.T) {
 		record *agentic.LoopEntity
 	}{
 		{"missing value", nil},
-		{"wrong identity", &agentic.LoopEntity{ID: admissionLoopB, State: agentic.LoopStateExecuting, MaxIterations: 5}},
-		{"malformed identity", &agentic.LoopEntity{ID: admissionMalformed, State: agentic.LoopStateExecuting, MaxIterations: 5}},
+		{"wrong identity", &agentic.LoopEntity{ID: admissionLoopB, State: agentic.LoopStateRunning, MaxIterations: 5}},
+		{"malformed identity", &agentic.LoopEntity{ID: admissionMalformed, State: agentic.LoopStateRunning, MaxIterations: 5}},
 		{"missing state", &agentic.LoopEntity{ID: admissionLoopA, MaxIterations: 5}},
 		{"unknown state", &agentic.LoopEntity{ID: admissionLoopA, State: "unknown", MaxIterations: 5}},
-		{"zero iteration budget", &agentic.LoopEntity{ID: admissionLoopA, State: agentic.LoopStateExecuting}},
-		{"negative iteration budget", &agentic.LoopEntity{ID: admissionLoopA, State: agentic.LoopStateExecuting, MaxIterations: -1}},
+		{"zero iteration budget", &agentic.LoopEntity{ID: admissionLoopA, State: agentic.LoopStateRunning}},
+		{"negative iteration budget", &agentic.LoopEntity{ID: admissionLoopA, State: agentic.LoopStateRunning, MaxIterations: -1}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := admissionTestComponent(t)

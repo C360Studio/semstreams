@@ -69,7 +69,7 @@ func TestHandleTask_CreatesLoop(t *testing.T) {
 	}
 
 	// Verify loop was created with correct initial state
-	if result.State != agentic.LoopStateExploring {
+	if result.State != agentic.LoopStateRunning {
 		t.Errorf("Initial state = %s, want exploring", result.State)
 	}
 
@@ -310,7 +310,7 @@ func TestHandleTask_MultipleRoles(t *testing.T) {
 			}
 
 			// Each role should create a valid loop
-			if result.State != agentic.LoopStateExploring {
+			if result.State != agentic.LoopStateRunning {
 				t.Errorf("Initial state = %s, want exploring", result.State)
 			}
 		})

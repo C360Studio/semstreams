@@ -53,6 +53,170 @@ boundary SHALL NOT silently trim the supplied history or import prior execution 
 - **WHEN** a new history-bearing task targets that LoopID
 - **THEN** it is refused before replacing its context or publishing execution work
 
+### Requirement: LoopEntity has one operational state contract
+
+`LoopState` SHALL remain an exported string type with exactly these admitted values:
+
+| Symbol | Wire value | Meaning |
+|---|---|---|
+| LoopStateRunning | running | Nonterminal work not waiting for human approval, including model/tool work, waiting for results and admissible continuation boundaries. |
+| LoopStateAwaitingApproval | awaiting_approval | A current tool call is gated on a human decision. |
+| LoopStateComplete | complete | Successful terminal loop outcome. |
+| LoopStateFailed | failed | Failed terminal loop outcome. |
+| LoopStateCancelled | cancelled | Cancelled terminal loop outcome. |
+
+`LoopStateExploring`, `LoopStatePlanning`, `LoopStateArchitecting`, `LoopStateExecuting`,
+`LoopStateReviewing`, `LoopStatePaused` and `LoopEntity.StateBeforeApproval` SHALL be removed.
+Retired wire values SHALL NOT be translated, aliased or reserved.
+
+Running SHALL NOT imply an executing goroutine, outstanding model request or settled delivery.
+Existing request, execution, gate and consumer evidence SHALL retain ownership of those distinctions.
+A loop's state SHALL NOT determine its enclosing AgentRun's phase.
+
+Agentic SHALL privately reuse `lifecycle.Transitions` for one `loopTransitions` declaration:
+
+| Source | Permitted differing-state targets |
+|---|---|
+| running | awaiting_approval, complete, failed, cancelled |
+| awaiting_approval | running, failed, cancelled |
+| complete | none |
+| failed | none |
+| cancelled | none |
+
+Membership and edge checks SHALL use this declaration. Its structure SHALL be checked with the existing
+validator. `LoopState.IsTerminal` SHALL return false for unknown values and otherwise use the table.
+The table SHALL NOT be exported or configurable. No Lifecycle Manager, second validator primitive,
+state-machine runtime or graph-backed second loop authority SHALL be introduced.
+
+Local state-field coherence SHALL mean:
+
+| State | Required local relationship |
+|---|---|
+| running | PendingApproval is nil. |
+| awaiting_approval | PendingApproval is nonnil with nonempty CallID and ToolName. |
+| complete, failed, cancelled | PendingApproval is nil. |
+
+`LoopEntity.Validate` SHALL retain its existing nonempty ID and positive MaxIterations checks and enforce
+state membership and local state-field coherence. It SHALL NOT require RequestID, ExecutionID, CallOrdinal,
+retained stream evidence, terminal Outcome or CompletedAt, or introduce new timeout/timestamp rules.
+
+The existing public method signatures SHALL remain unchanged. Their common state precondition SHALL be
+known state and local state-field coherence, without newly imposing whole-record ID/budget prerequisites.
+
+`TransitionTo` SHALL reject unknown source or target and contradictory source state fields before handling
+same-state requests. A coherent same-state request SHALL return nil without mutation. Direct
+running-to-awaiting_approval SHALL be refused without mutation because the state-only signature cannot
+construct its gate; callers SHALL use the existing `BeginAwaitingApproval` method. Allowed transitions
+from awaiting_approval to running, failed or cancelled SHALL clear PendingApproval and change State
+together. Allowed running-to-terminal transitions SHALL change State. All other differing-state requests
+SHALL be refused according to the table.
+
+`TransitionTo` SHALL NOT change or infer Outcome, Result, Error, CompletedAt, cancellation metadata or
+PendingToolResults. Local terminal state SHALL NOT be treated as committed terminal authority.
+
+`BeginAwaitingApproval` SHALL accept only coherent running state and retain its existing CallID/tool-name
+argument checks. It SHALL construct the pending value using its existing arguments and existing time/default
+behavior, and install that value with awaiting_approval together. Given an otherwise valid receiver, its result
+SHALL pass `Validate` immediately without caller identity stamping. A second Begin call while awaiting approval
+SHALL be refused, even when CallID is unchanged.
+
+`ResolveApproval` SHALL require locally coherent awaiting_approval state and clear PendingApproval while
+returning to running. It SHALL require no framework correlation stamping or retained-message lookup.
+Every failed public mutation SHALL leave the entire receiver unchanged.
+
+Local validity SHALL NOT replace the existing lane owner's complete gate identity and retained-evidence
+validation before effects, new durable gate commitment or settlement. Production correlation SHALL continue
+to come from the actual request/result, not values predicted by public state-API callers.
+
+Process installation, UpdateLoop and restoration SHALL validate local entity coherence and protect the current
+process entry under existing synchronization. Stale restoration SHALL NOT overwrite a newer terminal or
+incompatible gate. Startup approval-deadline hydration SHALL retain its existing record/deadline checks and
+SHALL NOT acquire a new retained-stream-evidence prerequisite.
+
+Creation SHALL establish a validated running record using creation semantics; an existing record SHALL be
+read and checked rather than overwritten as another birth. Form checks SHALL precede collision checks.
+The task owner SHALL establish required durable birth authority before entering a later failure-settlement
+path that depends on its existence. Unreadable authority SHALL NOT be treated as absence.
+
+AGENT_LOOPS SHALL remain current loop authority. Discarding a failed speculative candidate and reconstructing
+from freshly observed authority SHALL NOT be treated as an ordinary reverse edge. A changed durable revision
+SHALL NOT be overwritten by a stale candidate.
+
+The existing selected COMPLETE payload, required effects, PubAck, revision-conditioned final marker and
+source-specific settlement obligations SHALL remain unchanged. Final outcome/timestamp agreement SHALL be
+checked by the settlement owner, not inferred from a local state transition. PendingToolResults SHALL NOT be
+cleared merely because state becomes terminal. Existing truncated-outcome versus failed-event behavior SHALL
+remain unchanged.
+
+This pre-v1 contract SHALL target freshly provisioned storage. It SHALL NOT introduce an assumed legacy-record
+translation, rewrite, drain or disposal procedure. An actually discovered retained deployment requiring
+migration or recovery SHALL require its own evidence-based owner-reviewed plan.
+
+#### Scenario: State membership and terminality use the declared vocabulary
+
+- **WHEN** every admitted, retired and unknown state is checked
+- **THEN** only the five declared values pass state membership
+- **AND** only complete, failed and cancelled are terminal
+- **AND** unknown terminality remains false
+
+#### Scenario: Direct transitions enforce edges and coherent no-ops
+
+- **WHEN** each source/target pair is submitted directly to TransitionTo
+- **THEN** it follows the declared direct-method behavior
+- **AND** coherent same-state requests are unchanged no-ops
+- **AND** contradictory same-state records are refused
+- **AND** every refusal leaves the entire receiver unchanged
+
+#### Scenario: Public approval methods require no hidden identity stamping
+
+- **GIVEN** an otherwise valid running LoopEntity
+- **WHEN** BeginAwaitingApproval is called with valid existing arguments and then Validate is called
+- **THEN** validation succeeds without RequestID, ExecutionID or CallOrdinal stamping
+- **AND** ResolveApproval returns it to a locally valid running state without retained-message lookup
+
+#### Scenario: A state-only call cannot construct an approval gate
+
+- **GIVEN** a coherent running LoopEntity
+- **WHEN** TransitionTo requests awaiting_approval
+- **THEN** it refuses without mutation and directs the caller to BeginAwaitingApproval
+- **AND** a second Begin call on an awaiting loop also refuses without mutation
+
+#### Scenario: Leaving approval clears only the local gate
+
+- **GIVEN** a locally coherent awaiting_approval LoopEntity
+- **WHEN** TransitionTo requests running, failed or cancelled
+- **THEN** State changes and PendingApproval becomes nil together
+- **AND** outcome, timestamps, cancellation metadata and PendingToolResults remain unchanged
+- **AND** a request for complete is refused unchanged
+
+#### Scenario: Local validity does not satisfy delivery correlation
+
+- **GIVEN** a locally valid approval record with missing or conflicting lane-required correlation
+- **WHEN** a delivery owner considers effects or settlement
+- **THEN** its existing full correlation and evidence checks retain their classified refusal
+- **AND** local Validate success does not authorize publication or ACK
+
+#### Scenario: Startup installation does not require retained stream evidence
+
+- **GIVEN** current approval records satisfying local validity and existing startup record/deadline checks
+- **WHEN** the approval deadline owner is replaced
+- **THEN** installation requires no new retained request or response lookup
+- **AND** later delivery handling still performs its required lane-specific evidence checks
+
+#### Scenario: Restoration cannot regress current authority
+
+- **GIVEN** a stale nonterminal snapshot and newer terminal authority or an incompatible current gate
+- **WHEN** restoration or replacement is attempted
+- **THEN** stale state does not overwrite the newer state
+- **AND** a changed durable revision is reread and reclassified rather than overwritten
+
+#### Scenario: Fresh storage and replacement share the contract
+
+- **GIVEN** freshly provisioned storage
+- **WHEN** the component starts, creates records under this contract and is subsequently replaced
+- **THEN** cold start and replacement use the same admitted state and local-validity rules
+- **AND** no legacy-record conversion is introduced
+
 ### Requirement: All six loop input classes settle after owner-specific durable done
 
 Agentic-loop SHALL classify task, response, tool-result, cancel-signal, approval-response, and governance-verdict
@@ -80,6 +244,13 @@ acceptance, schema, examples, and documentation. Persisted `state:"paused"` SHAL
 compatibility shim, alias, reserved enum, migration, checkpoint, supervisor, or workflow state machine SHALL be
 added. `ResponseAction.Signal` and `ClassifiedIntent.SignalType` SHALL remain outside ownership of durable
 `agent.signal.*` settlement.
+
+A cancel that validates already-terminal current authority SHALL acknowledge an effect-free inapplicable delivery,
+not claim a newly completed cancellation. It SHALL log the signal, loop, terminal state and why no cancellation is
+needed, and increment one private unlabeled counter in the existing loop metrics when metrics are enabled. The count
+is per observed delivery, not per unique signal. This branch SHALL NOT mutate durable authority or selected completion,
+repair missing COMPLETE evidence, or publish a business outcome. Failed authority observation SHALL NOT emit this
+diagnostic or establish inapplicability. Existing transient-state cleanup and source settlement remain unchanged.
 
 The first fatal result from any loop delivery owner SHALL synchronously latch into the component's existing health
 surface before owner-stop observation drains the exact handle. Owner loss SHALL take status precedence over
@@ -197,10 +368,23 @@ The framework SHALL preserve provider ToolCall ID for conversation semantics and
 derived from RequestID, provider CallID, and positive call ordinal. Tool, approval, governance, and completed-outcome
 correlation SHALL use the framework identity.
 
+`ToolResult.Name` SHALL remain optional. The matched originating ToolCall SHALL supply the conversation tool name;
+an omitted result Name SHALL NOT be treated as conflicting required correlation during live handling, recovery,
+or applied-proof checking. A supplied nonempty Name SHALL agree with the matched call. RequestID, execution identity,
+provider CallID, ordinal, and the existing result-content proof requirements SHALL remain unchanged.
+
 #### Scenario: Provider repeats a CallID in another request
 
 - **WHEN** two provider responses use the same CallID under different RequestIDs
 - **THEN** their execution identities differ and their completed outcomes cannot collide
+
+#### Scenario: A correlated tool result omits its optional name
+
+- **GIVEN** an ordinary, compact, panic, or policy-rejection result with matching required execution correlation
+- **WHEN** its optional Name is omitted during live handling or after replacement
+- **THEN** the originating call supplies the conversation tool name
+- **AND** omission alone does not cause a correlation refusal
+- **AND** a supplied nonempty conflicting Name retains the existing correlation refusal
 
 ### Requirement: Loop task, request, and tool work use only required correlation
 
@@ -218,14 +402,35 @@ Their source ACK SHALL wait for required PubAck. `Nats-Msg-Id` MAY provide bound
 be treated as permanent identity or proof of publication. Exact retained reads SHALL exist only at named boundaries
 where they prevent repeating non-repeatable work or prove a lane-specific durable transition already applied.
 
-For every terminal `LoopEntity` transition, the bare `AGENT_LOOPS/<LoopID>` terminal Put SHALL be the final
-lane-applied marker after all settlement-required terminal effects for that lane, including `COMPLETE_`,
-settlement-required synthetic effects, and terminal-event PubAck where applicable. Best-effort trajectory audit and
-the existing atomic completion/failure graph batch, including evidence-integrity condition evidence, SHALL remain
-nonblocking and are not marker prerequisites. Before the final Put succeeds, the durable bare record remains
-nonterminal. A failed pre-marker attempt SHALL discard speculative process-local terminal state and Retry from exact
-retained evidence. The terminal marker proves application only where the lane's required correlation identifies the
-delivered source; it is not generic tool-execution proof.
+For ordinary agentic-loop success, failure and cancellation, `COMPLETE_<LoopID>` SHALL select one terminal
+outcome using Create. If the record already exists, the owner SHALL read, validate and reuse its ordinary
+terminal payload rather than replace it. Only the selected outcome SHALL drive required terminal effects and
+publication. Cancellation SHALL follow the same rule and SHALL NOT replace a saved outcome. An existing
+malformed or identity-conflicting record SHALL retain classified refusal; uncertain storage outcomes SHALL Retry.
+
+`LoopCompletedEvent.SyntheticDecideRequired` SHALL record whether the existing completion builder computed a
+required synthetic graph-decision action. This field SHALL NOT change the eligibility predicate or populate
+the user-facing Decision field. When true, initial execution and replay SHALL complete the existing synthetic
+action using the selected completion's LoopID and Result before terminal publication. Missing or false SHALL
+request no such action. Replay SHALL NOT infer the obligation from volatile trajectory, Decision absence,
+or historical-record heuristics.
+
+For every terminal `LoopEntity` transition, the bare `AGENT_LOOPS/<LoopID>` terminal write SHALL be the final
+lane-applied marker after all settlement-required terminal effects for that lane, including the selected
+`COMPLETE_` record, settlement-required synthetic effects, and terminal-event PubAck where applicable.
+Best-effort trajectory audit and the existing atomic completion/failure graph batch, including
+evidence-integrity condition evidence, SHALL remain nonblocking and are not marker prerequisites.
+
+Before the final marker succeeds, an attempt beginning from nonterminal durable authority SHALL leave that
+authority nonterminal. A failed pre-marker attempt SHALL discard speculative process-local terminal state,
+retain the selected completion, and Retry using it together with the lane's existing exact retained evidence.
+Required effects MAY repeat compatibly with the selected outcome. A changed authority revision SHALL NOT be
+overwritten with stale speculative state.
+
+Already-cancelled durable authority SHALL NOT be regressed because its COMPLETE_ record is absent.
+Existing malformed-state and identity-conflict refusals SHALL remain unchanged. The final terminal marker
+proves application only where the lane's required correlation identifies the delivered source; neither bare
+terminality nor selected-record existence is generic tool-execution or source-applied proof.
 
 #### Scenario: task identity is fixed before durable publication
 
@@ -334,19 +539,23 @@ source ACK. A matching ExecutionID with conflicting CallID or other required cor
 clearing pending state. Different pending ExecutionID SHALL instead follow the inapplicable rule above.
 
 Applicable approve/modify SHALL preserve the actual decision's approver and chosen arguments in the dispatched
-ToolCall. Reject/timeout SHALL preserve existing rejection provenance. `PendingApproval` SHALL clear only after
-required PubAck or durable applied-state proof; an inapplicable delivery SHALL clear nothing.
+ToolCall. Reject/timeout SHALL preserve existing rejection provenance. `PendingApproval` in durable current
+authority SHALL clear only after required PubAck or durable applied-state proof; an inapplicable delivery SHALL
+clear nothing. Local candidate mutation follows `LoopEntity has one operational state contract` and SHALL NOT
+be mistaken for durable gate closure.
 
-The storage mechanism remains gated by the accepted replacement proof. If retained exact evidence satisfies every
-branch, no continuation Store is required. If it does not, the approved content-addressed ObjectStore design remains
-the fallback after owner ruling.
+Approval continuation SHALL use the existing loop KV and exact retained request/response evidence above, without
+an additional continuation Store, configuration, digest, or associated cleanup. Owner comment `5654729986` retires
+that plan after the R2 replacement proof. Successful continuation after required message eviction is not promised,
+including eviction before the approval deadline; confirmed absence SHALL follow `continuation_unavailable` above.
+The existing default approval timeout, KV-retention validation and DiscardNew/admission policies remain unchanged.
 
 The ApprovalResponse amendment SHALL NOT change ordinary final-tool-result or model-response applied-proof
-requirements or revoke the Store fallback. The separately approved approval-required ToolResult requirement below
+requirements. The separately approved approval-required ToolResult requirement below
 admits its pre-mutation exact authority read even on warm routes and its narrow phase-supersession outcome.
-Task 6.6 still requires explicit owner revocation
-of comment `5463183450` before removing that plan. A pass under inapplicable-decision semantics SHALL NOT be
-described as proof of the superseded historical applied-decision claim.
+The retirement supersedes only the additional approval-Store obligation accepted through comment `5463183450`,
+not its unrelated policies or later amendments. A pass under inapplicable-decision semantics SHALL NOT be described
+as proof of the superseded historical applied-decision claim.
 
 #### Scenario: Same CallID exists under two requests
 
@@ -361,7 +570,7 @@ described as proof of the superseded historical applied-decision claim.
 - **WHEN** current state and retained request/response evidence validate and agree
 - **THEN** approve or modify publishes tool work at least once or proves its durable transition already applied
 - **AND** reject or timeout publishes a rejection transition at least once or proves it already applied
-- **AND** `PendingApproval` clears only after required PubAck or durable applied-state proof
+- **AND** `PendingApproval` in durable current authority clears only after required PubAck or durable applied-state proof
 - **AND** applicable approve/modify retains the actual approver and chosen arguments
 - **AND** reject/timeout retains existing rejection provenance
 

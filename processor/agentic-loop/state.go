@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -385,6 +386,10 @@ func (m *LoopManager) restoreLoopFromRequest(entity agentic.LoopEntity, request 
 		if current.TaskID != entity.TaskID || current.Role != entity.Role || current.Model != entity.Model {
 			return fmt.Errorf("loop %q process and durable correlation conflict", entity.ID)
 		}
+		if (current.State.IsTerminal() && !reflect.DeepEqual(*current, entity)) ||
+			(current.PendingApproval != nil && !reflect.DeepEqual(current.PendingApproval, entity.PendingApproval)) {
+			return fmt.Errorf("loop %q has a protected current terminal or approval entry", entity.ID)
+		}
 		// Timer discovery installs the entity without request context. Preserve
 		// warm history only when this exact request is already correlated.
 		if batch == nil && m.requestToLoop[request.RequestID] == entity.ID {
@@ -520,10 +525,18 @@ func (m *LoopManager) UpdateLoop(entity agentic.LoopEntity) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, exists := m.loops[entity.ID]; !exists {
+	if err := entity.Validate(); err != nil {
+		return errs.WrapInvalid(err, "LoopManager", "UpdateLoop", "validate loop")
+	}
+	current, exists := m.loops[entity.ID]
+	if !exists {
 		return errs.Wrap(fmt.Errorf("loop %s not found", entity.ID), "LoopManager", "UpdateLoop", "find loop")
 	}
 
+	if (current.State.IsTerminal() && !reflect.DeepEqual(*current, entity)) ||
+		(current.PendingApproval != nil && !reflect.DeepEqual(current.PendingApproval, entity.PendingApproval)) {
+		return fmt.Errorf("loop %q has a protected current terminal or approval entry", entity.ID)
+	}
 	m.loops[entity.ID] = &entity
 	return nil
 }
@@ -1464,8 +1477,10 @@ func (m *LoopManager) CancelLoop(loopID, cancelledBy string) (agentic.LoopEntity
 		)
 	}
 
+	if err := entity.TransitionTo(agentic.LoopStateCancelled); err != nil {
+		return agentic.LoopEntity{}, errs.WrapInvalid(err, "LoopManager", "CancelLoop", "transition loop")
+	}
 	now := time.Now()
-	entity.State = agentic.LoopStateCancelled
 	entity.CancelledBy = cancelledBy
 	entity.CancelledAt = now
 	entity.Outcome = agentic.OutcomeCancelled

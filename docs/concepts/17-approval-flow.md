@@ -12,7 +12,7 @@ the first release where this gate actually halts the agent loop.
 Before beta.19, `approval_required` rejected the first call with a
 permission error and let the LLM keep going — the model would see
 the error and could retry or reroute. From beta.19 forward, the
-loop pauses on the first rejection, persists the pending call, and
+loop waits for approval on the first gated result, persists the pending call, and
 emits a NATS event a product-layer approval UI can subscribe to.
 The loop continues after an approval decision, including a configured timeout rejection.
 
@@ -27,14 +27,14 @@ Subjects:
 
 Approval flow:
 
-```
-exploring/planning/executing
+```text
+running
         │
         │  tool call hits approval_required
         ▼
   awaiting_approval  ◀─── publishes ApprovalPendingEvent
         │
-        │  ApprovalResponse arrives
+        │  applicable ApprovalResponse resolves the gate to running
         ▼
   approve/modify  ─────►  re-dispatch ToolCall (with approved_by)
                           ─►  agentic-tools filter bypasses
@@ -51,7 +51,7 @@ Key design points:
 
 - **One pending call at a time per loop.** If a batch of tool calls
   contains two `approval_required` tools, the first to hit the
-  filter triggers the pause. Sibling results (including normal
+  filter opens the approval gate. Sibling results (including normal
   tools that did execute) are absorbed without advancing.
 - **Approve the action that was shown.** Each prompt carries the existing `ExecutionID`; the response must echo
   that value. Provider `CallID` can repeat in a later turn, so it is not enough to identify the action being approved.
@@ -65,10 +65,9 @@ Key design points:
   `ToolCall.ApprovedBy`, flows through `tool.execute`, lands in
   the trajectory step. Audit consumers can correlate every gated
   action to the human who said yes.
-- **Restart-safe.** `LoopEntity.PendingApproval` lives in the
-  AGENT_LOOPS KV bucket. A process restart mid-approval doesn't
-  lose the pending state; the new process picks up the same
-  `awaiting_approval` loop and waits on the same response subject.
+- **Recovery uses retained evidence.** `LoopEntity.PendingApproval` lives in AGENT_LOOPS KV. A replacement process
+  restores the pending gate and uses the exact retained request/response messages to continue. A restart does not
+  extend either store's retention window; confirmed missing continuation evidence causes an explicit failure.
 
 ## A decision is conditional on its displayed execution
 
@@ -109,6 +108,12 @@ Failed publication attempts emit an error log and increment
 
 This uses the existing loop state and durable work stream, not a separate restart supervisor. See
 [Semantic settlement](33-semantic-settlement.md) for the receive, work, and settle pattern.
+
+There is no extra approval-continuation store to configure. If the required request or response is confirmed
+missing, the loop durably fails with `continuation_unavailable`; it does not guess the reviewed call or silently
+acknowledge unfinished work. Temporary read failures retry, and malformed or conflicting evidence is refused.
+Required messages can expire before the approval deadline. The default approval timeout and loop-state retention
+do not promise successful continuation throughout that interval or after message eviction.
 
 ## Wiring an approval UI
 

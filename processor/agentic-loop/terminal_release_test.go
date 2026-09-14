@@ -268,7 +268,7 @@ func TestTerminalReleaseHappensAfterTerminalReaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLoop: %v", err)
 	}
-	c.handleLoopFailure(context.Background(), loopID, entity, "handler_error", errors.New("boom"))
+	c.handleLoopFailure(context.Background(), loopID, entity, "handler_error", errors.New("boom"), 0)
 
 	if state := probe.terminalLoop(t).State; state != agentic.LoopStateFailed {
 		t.Fatalf("terminal observation saw state %q, want failed", state)

@@ -9,6 +9,7 @@ import (
 	"reflect"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
@@ -213,8 +214,12 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 			fmt.Errorf("approval for loop %q conflicts with the current durable pending identity", response.LoopID)
 	}
 	if needsRecovery {
-		if err := c.recoverApprovalResponse(ctx, response, persisted); err != nil {
-			return loopSettlementDecision(err), err
+		settled, decision, err := c.recoverApprovalResponse(ctx, response, persisted, revision)
+		if err != nil {
+			return decision, err
+		}
+		if settled {
+			return natsclient.DeliveryDecisionAck, nil
 		}
 	}
 	result, err := c.handler.HandleApprovalResponse(ctx, response)
@@ -236,9 +241,15 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 	}
 
 	if result.State.IsTerminal() {
-		// Rejection terminal effects retain the established final-marker order.
-		if err := c.persistHandlerResult(ctx, result); err != nil {
-			return natsclient.DeliveryDecisionQuarantine,
+		// Selection uncertainty is retryable before effects; unknown effects retain quarantine.
+		var candidate message.Payload
+		if result.CompletionState != nil {
+			candidate = result.CompletionState
+		} else if result.FailureState != nil {
+			candidate = result.FailureState
+		}
+		if decision, err := c.persistTerminalOutcome(ctx, result, candidate, revision); err != nil {
+			return decision,
 				fmt.Errorf("approval result for loop %q has unknown durable state: %w", response.LoopID, err)
 		}
 	} else {

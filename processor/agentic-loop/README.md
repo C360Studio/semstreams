@@ -31,7 +31,7 @@ state, and records append-only observed trajectory facts with separately stored 
 
 ## Features
 
-- **State Machine**: 10-state lifecycle with signal-related states
+- **State Machine**: Five operational states with declared transitions and terminal absorption
 - **Signal Handling**: The `cancel` signal — the entire vocabulary (approval travels as `ApprovalResponse`)
 - **Context Management**: Automatic compaction and GC for long-running loops
 - **Tool Coordination**: Tracks pending tool calls, aggregates results
@@ -154,29 +154,25 @@ state, and records append-only observed trajectory facts with separately stored 
 
 ## State Machine
 
-```
-exploring → planning → architecting → executing → reviewing → complete
-     ↑          ↑            ↑             ↑           ↑        ↘ failed
-     └──────────┴────────────┴─────────────┴───────────┘         ↘ cancelled
-                                                                   ↘ awaiting_approval
+```text
+running           → awaiting_approval | complete | failed | cancelled
+awaiting_approval → running | failed | cancelled
+complete, failed, cancelled → no outgoing transitions
 ```
 
 ### States
 
 | State | Terminal | Description |
 |-------|----------|-------------|
-| `exploring` | No | Initial state, gathering information |
-| `planning` | No | Developing approach |
-| `architecting` | No | Designing solution |
-| `executing` | No | Implementing solution |
-| `reviewing` | No | Validating results |
+| `running` | No | Model/tool work, waiting for results, or an admitted continuation boundary |
+| `awaiting_approval` | No | A specific tool execution is waiting for a human decision |
 | `complete` | Yes | Successfully finished |
 | `failed` | Yes | Failed due to error or max iterations |
 | `cancelled` | Yes | Cancelled by user signal |
-| `paused` | No | Legacy-valid; exported transitions accept it; no framework-owned pause signal or semantics (#1239) |
-| `awaiting_approval` | No | Waiting for user approval |
 
-States are fluid checkpoints - loops can transition backward except from terminal states.
+The table describes operational state, not developer phases or completed effects. Local state methods enforce its
+edges and keep `PendingApproval` coherent. AGENT_LOOPS remains current authority; required effects and publications
+must finish before durable terminal settlement. See [Semantic settlement](../../docs/concepts/33-semantic-settlement.md).
 
 ## Signal Handling
 
@@ -254,7 +250,7 @@ Stores `LoopEntity` as JSON:
 {
   "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
   "task_id": "task_456",
-  "state": "executing",
+  "state": "running",
   "role": "general",
   "model": "gpt-4",
   "iterations": 3,

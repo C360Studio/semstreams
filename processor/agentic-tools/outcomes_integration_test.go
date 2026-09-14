@@ -388,6 +388,7 @@ func TestIntegrationLowMaxPayloadStoresAndPublishesCompactAuthority(t *testing.T
 	authority, err := decodeCompletedOutcome(entry.Value(), call)
 	require.NoError(t, err)
 	assert.Equal(t, "too_large", authority.Result.Error)
+	assert.Empty(t, authority.Result.Name)
 	assert.Empty(t, authority.Result.Content)
 	stream, err := client.JetStream()
 	require.NoError(t, err)
@@ -395,9 +396,10 @@ func TestIntegrationLowMaxPayloadStoresAndPublishesCompactAuthority(t *testing.T
 	require.NoError(t, err)
 	raw, err := toolStream.GetLastMsgForSubject(ctx, "tool.result."+call.ExecutionID)
 	require.NoError(t, err)
-	var envelope struct {
-		Payload agentic.ToolResult `json:"payload"`
-	}
-	require.NoError(t, json.Unmarshal(raw.Data, &envelope))
-	assert.Equal(t, authority.Result, envelope.Payload)
+	decoded, err := payloadbuiltins.NewTestDecoder(t).Decode(raw.Data)
+	require.NoError(t, err)
+	result, ok := decoded.Payload().(*agentic.ToolResult)
+	require.True(t, ok, "compact output must cross the registered ToolResult boundary")
+	assert.Equal(t, authority.Result, *result)
+	assert.Empty(t, result.Name)
 }

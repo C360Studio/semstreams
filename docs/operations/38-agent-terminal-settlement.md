@@ -40,6 +40,11 @@ category/outcome pair fail closed.
 
 ## Dispatch settlement
 
+Cancelling a loop that is already terminal acknowledges an inapplicable delivery; it does not change the saved
+outcome or mean that this cancellation originally completed. Agentic-loop logs the signal, loop, terminal state
+and skip reason. With metrics enabled, `semstreams_agentic_loop_cancellations_inapplicable_total` counts each such
+delivery, including repeats, without identity labels. No configuration or caller change is required.
+
 Dispatch resolves response routing field by field from the terminal payload
 and exact validated persisted loop records. It has no process-local tracker. `ChannelType` and
 `ChannelID` are the address and both are required. `UserID` is optional

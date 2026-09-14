@@ -17,7 +17,7 @@ import (
 // spec: agentic-dispatch / The shared view separates current authority from activity
 func TestLoopProjectionClassifiesCurrentAuthority(t *testing.T) {
 	c := terminalTestComponent(t)
-	valid := agentic.LoopEntity{ID: admissionLoopA, State: agentic.LoopStateExecuting, MaxIterations: 20}
+	valid := agentic.LoopEntity{ID: admissionLoopA, State: agentic.LoopStateRunning, MaxIterations: 20}
 	data, err := json.Marshal(valid)
 	require.NoError(t, err)
 	for _, tc := range []struct {
@@ -145,7 +145,7 @@ func TestLoopListDoesNotReportUnreadyAsEmpty(t *testing.T) {
 func TestLoopAdmissionValidatesPersistedAuthority(t *testing.T) {
 	c := admissionTestComponent(t)
 	withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: {
-		ID: admissionLoopB, UserID: "user-a", State: agentic.LoopStateExecuting, MaxIterations: 20,
+		ID: admissionLoopB, UserID: "user-a", State: agentic.LoopStateRunning, MaxIterations: 20,
 	}})
 	_, err := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
 		Seam: seamChannelSubmission, Field: "reply_to", Operation: loopOpContinue,
@@ -153,7 +153,7 @@ func TestLoopAdmissionValidatesPersistedAuthority(t *testing.T) {
 	})
 	require.Error(t, err, "a decodable but wrong-key record is not current loop authority")
 	withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: {
-		ID: admissionLoopA, UserID: "user-a", State: agentic.LoopStatePaused, MaxIterations: 20,
+		ID: admissionLoopA, UserID: "user-a", State: agentic.LoopState("paused"), MaxIterations: 20,
 	}})
 	_, err = c.loadPersistedLoop(t.Context(), admissionLoopA)
 	require.Error(t, err, "the exact reader shares retired-state validation")

@@ -241,12 +241,10 @@ func (e *ResearchGraphExecutor) researchGraph(ctx context.Context, call agentic.
 	persistedIntent.BudgetTokens = intent.ResolvedBudgetTokens()
 	persistedIntent.MaxIterations = intent.ResolvedMaxIterations()
 
-	// Construct the research-pipeline LoopEntity. State starts at
-	// LoopStateExecuting because the chain begins firing as soon as
-	// R0 sees the trigger key — no exploring / planning phase for a
-	// rule-coordinated chain.
+	// Construct the research-pipeline LoopEntity in running state;
+	// rule-chain phases remain separate from operational loop state.
 	loopEntity := agentic.NewLoopEntity(loopID, "", research.PipelineRole, "", persistedIntent.MaxIterations)
-	loopEntity.State = agentic.LoopStateExecuting
+	loopEntity.State = agentic.LoopStateRunning
 	loopEntity.ParentLoopID = call.LoopID
 	loopEntity.StartedAt = e.now().UTC()
 

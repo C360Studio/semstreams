@@ -121,7 +121,7 @@ func trackLoopOwnedBy(c *Component, loopID, userID string) {
 		UserID:        userID,
 		ChannelType:   "http",
 		ChannelID:     "session-1",
-		State:         agentic.LoopStateExecuting,
+		State:         agentic.LoopStateRunning,
 		MaxIterations: 5,
 	}})
 }
@@ -644,7 +644,7 @@ func TestReadSeamsAnswerFromTheDurableRecordAfterReplacement(t *testing.T) {
 		withPersistedLoops(c, map[string]*agentic.LoopEntity{seamTestLoopA: {
 			ID: seamTestLoopA, TaskID: "task-x", UserID: "user-a", Role: "assistant",
 			ChannelType: "http", ChannelID: "session-1",
-			State: agentic.LoopStateExecuting, MaxIterations: 7, Iterations: 3,
+			State: agentic.LoopStateRunning, MaxIterations: 7, Iterations: 3,
 		}})
 	}
 
@@ -673,7 +673,7 @@ func TestReadSeamsAnswerFromTheDurableRecordAfterReplacement(t *testing.T) {
 		var loop Loop
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &loop))
 		assert.Equal(t, seamTestLoopA, loop.LoopID)
-		assert.Equal(t, "executing", loop.State)
+		assert.Equal(t, "running", loop.State)
 		assert.Equal(t, 3, loop.Iterations)
 		assert.Equal(t, "user-a", loop.UserID)
 	})
@@ -692,7 +692,7 @@ func TestStatusReportsTheRecordedStateNotAFabricatedRunning(t *testing.T) {
 		state agentic.LoopState
 	}{
 		{"awaiting approval", agentic.LoopStateAwaitingApproval},
-		{"executing", agentic.LoopStateExecuting},
+		{"running", agentic.LoopStateRunning},
 		{"complete", agentic.LoopStateComplete},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -701,6 +701,12 @@ func TestStatusReportsTheRecordedStateNotAFabricatedRunning(t *testing.T) {
 			withPersistedLoops(c, map[string]*agentic.LoopEntity{seamTestLoopA: {
 				ID: seamTestLoopA, TaskID: "task-x", UserID: "user-a",
 				ChannelType: "http", ChannelID: "session-1", State: tc.state, MaxIterations: 5,
+				PendingApproval: func() *agentic.PendingApprovalState {
+					if tc.state == agentic.LoopStateAwaitingApproval {
+						return &agentic.PendingApprovalState{CallID: "call", ToolName: "tool", ExecutionID: "execution"}
+					}
+					return nil
+				}(),
 			}})
 
 			resp, err := c.handleStatusCommand(context.Background(),
@@ -709,14 +715,14 @@ func TestStatusReportsTheRecordedStateNotAFabricatedRunning(t *testing.T) {
 			require.NoError(t, err)
 			assert.Contains(t, resp.Content, string(tc.state),
 				"the recorded state is not in the answer")
-			if tc.state != agentic.LoopStateExecuting {
+			if tc.state != agentic.LoopStateRunning {
 				assert.NotContains(t, resp.Content, "State: running",
 					"a state the record did not hold was invented")
 			}
 		})
 	}
 
-	for _, state := range []agentic.LoopState{"", "unknown", agentic.LoopStatePaused} {
+	for _, state := range []agentic.LoopState{"", "unknown", agentic.LoopState("paused")} {
 		t.Run("invalid state "+string(state), func(t *testing.T) {
 			c, _, _ := newSeamTestComponent(t)
 			withPersistedLoops(c, map[string]*agentic.LoopEntity{seamTestLoopA: {

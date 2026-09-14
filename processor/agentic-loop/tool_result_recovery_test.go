@@ -108,9 +108,11 @@ func TestColdToolResultOrderedBatchCheckpoints(t *testing.T) {
 				if tc.priorTool && i == len(results)-1 {
 					// Observe the actual registered next-request envelope from the
 					// normal transition owner, not only its context-manager cache.
+					_, revision, err := c.readLoopEntityRevision(t.Context(), loopID)
+					require.NoError(t, err)
 					transition, err := c.handler.HandleToolResult(t.Context(), loopID, results[i])
 					require.NoError(t, err)
-					require.NoError(t, c.persistHandlerResult(t.Context(), transition))
+					require.NoError(t, c.persistHandlerResult(t.Context(), transition, revision))
 					for _, publication := range transition.PublishedMessages {
 						decoded, err := c.decoder.Decode(publication.Data)
 						require.NoError(t, err)

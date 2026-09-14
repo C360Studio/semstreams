@@ -33,6 +33,7 @@ func (e settlementEntry) Operation() jetstream.KeyValueOp { return jetstream.Key
 
 type settlementBucket struct {
 	jetstream.KeyValue
+	revisions   map[string]uint64
 	values      map[string][]byte
 	getErr      error
 	putErr      error
@@ -48,7 +49,13 @@ func (b *settlementBucket) Get(_ context.Context, key string) (jetstream.KeyValu
 	if !ok {
 		return nil, jetstream.ErrKeyNotFound
 	}
-	return settlementEntry{key: key, value: value}, nil
+	if b.revisions == nil {
+		b.revisions = make(map[string]uint64)
+	}
+	if b.revisions[key] == 0 {
+		b.revisions[key] = 1
+	}
+	return approvalRevisionEntry{KeyValueEntry: settlementEntry{key: key, value: value}, revision: b.revisions[key]}, nil
 }
 
 func (b *settlementBucket) Put(_ context.Context, key string, value []byte) (uint64, error) {
@@ -59,8 +66,33 @@ func (b *settlementBucket) Put(_ context.Context, key string, value []byte) (uin
 		b.failPutLeft--
 		return 0, errors.New("injected final marker failure")
 	}
+	if b.revisions == nil {
+		b.revisions = make(map[string]uint64)
+	}
+	if _, exists := b.values[key]; exists && b.revisions[key] == 0 {
+		b.revisions[key] = 1
+	}
 	b.values[key] = append([]byte(nil), value...)
-	return 1, nil
+	b.revisions[key]++
+	return b.revisions[key], nil
+}
+
+func (b *settlementBucket) Create(ctx context.Context, key string, value []byte, _ ...jetstream.KVCreateOpt) (uint64, error) {
+	if _, exists := b.values[key]; exists {
+		return 0, jetstream.ErrKeyExists
+	}
+	return b.Put(ctx, key, value)
+}
+
+func (b *settlementBucket) Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error) {
+	entry, err := b.Get(ctx, key)
+	if err != nil {
+		return 0, err
+	}
+	if entry.Revision() != revision {
+		return 0, errors.New("KV revision mismatch")
+	}
+	return b.Put(ctx, key, value)
 }
 
 type settlementEvidence struct {
@@ -276,7 +308,7 @@ func TestColdToolResultRestoresOriginatingBatch(t *testing.T) {
 	}
 
 	t.Run("live turn restores and continues", func(t *testing.T) {
-		c := newComponent(t, agentic.LoopStateExecuting)
+		c := newComponent(t, agentic.LoopStateRunning)
 		decision, err := c.handleToolResultMessage(t.Context(), settlementEnvelope(t, result))
 		require.NoError(t, err)
 		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
@@ -302,7 +334,7 @@ func TestColdToolResultRestoresOriginatingBatch(t *testing.T) {
 	})
 
 	t.Run("lookup failure retries", func(t *testing.T) {
-		c := newComponent(t, agentic.LoopStateExecuting)
+		c := newComponent(t, agentic.LoopStateRunning)
 		c.settlementEvidence = &settlementEvidence{responseErr: errors.New("stream unavailable")}
 		decision, err := c.handleToolResultMessage(t.Context(), settlementEnvelope(t, result))
 		require.Error(t, err)
@@ -637,7 +669,9 @@ func TestFailureTerminalSignalsFollowFinalMarker(t *testing.T) {
 	first := newProcess(t)
 	firstEntity, err := first.handler.GetLoop(loopID)
 	require.NoError(t, err)
-	err = first.handleLoopFailure(t.Context(), loopID, firstEntity, "provider_failure", errors.New("provider unavailable"))
+	_, revision, err := first.readLoopEntityRevision(t.Context(), loopID)
+	require.NoError(t, err)
+	err = first.handleLoopFailure(t.Context(), loopID, firstEntity, "provider_failure", errors.New("provider unavailable"), revision)
 	require.Error(t, err)
 	require.Equal(t, failedBefore, testutil.ToFloat64(metrics.loopsFailed.WithLabelValues("provider_failure")))
 	require.Equal(t, activeBefore+1, testutil.ToFloat64(metrics.activeLoops))
@@ -647,7 +681,7 @@ func TestFailureTerminalSignalsFollowFinalMarker(t *testing.T) {
 	secondEntity, err := second.handler.GetLoop(loopID)
 	require.NoError(t, err)
 	require.NoError(t, second.handleLoopFailure(
-		t.Context(), loopID, secondEntity, "provider_failure", errors.New("provider unavailable"),
+		t.Context(), loopID, secondEntity, "provider_failure", errors.New("provider unavailable"), revision,
 	))
 	require.Equal(t, failedBefore+1, testutil.ToFloat64(metrics.loopsFailed.WithLabelValues("provider_failure")))
 	require.Equal(t, activeBefore, testutil.ToFloat64(metrics.activeLoops))

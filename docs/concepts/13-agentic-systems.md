@@ -85,48 +85,33 @@ This enables:
 
 ### State Machine
 
-Agentic systems use a state machine to track progress through well-defined phases:
+The loop tracks operational state, not a developer workflow:
 
 ```text
-┌───────────┐   ┌──────────┐   ┌─────────────┐   ┌───────────┐   ┌───────────┐
-│ exploring │──▶│ planning │──▶│ architecting│──▶│ executing │──▶│ reviewing │
-└───────────┘   └──────────┘   └─────────────┘   └───────────┘   └─────┬─────┘
-      ▲               ▲               ▲                ▲               │
-      │               │               │                │               │
-      └───────────────┴───────────────┴────────────────┘               │
-                   (fluid backward transitions)                         │
-                                                                        ▼
-                                                    ┌───────────────────────────┐
-                                                    │complete│failed│cancelled  │
-                                                    ├───────────────────────────┤
-                                                    │paused │ awaiting_approval │
-                                                    └───────────────────────────┘
+running           → awaiting_approval | complete | failed | cancelled
+awaiting_approval → running | failed | cancelled
+complete, failed, cancelled → no outgoing transitions
 ```
 
 **States:**
 
 | State | Terminal | Description |
 |-------|----------|-------------|
-| `exploring` | No | Initial state, gathering information |
-| `planning` | No | Developing approach |
-| `architecting` | No | Designing solution |
-| `executing` | No | Implementing solution |
-| `reviewing` | No | Validating results |
+| `running` | No | Model/tool work, waiting for results, or an admitted continuation boundary |
+| `awaiting_approval` | No | Waiting for a human decision on a specific tool execution |
 | `complete` | Yes | Successfully finished |
 | `failed` | Yes | Failed due to error or max iterations |
 | `cancelled` | Yes | Cancelled by user signal |
-| `paused` | No | Legacy-valid; exported transitions accept it; no framework-owned pause signal or semantics (#1239) |
-| `awaiting_approval` | No | Waiting for user approval |
 
 **Why states matter:**
 
-- **Checkpointing**: Can resume from interruptions
-- **Observability**: Know where the agent is in its process
-- **Control**: Can intervene at specific states
-- **Debugging**: Understand where things went wrong
+- **Control**: Enforce approval gates and terminal boundaries.
+- **Observability**: Distinguish ongoing work, a human decision and a finished loop.
 
-SemStreams uses **fluid states** — the agent can move backward (e.g., from executing back to exploring) when it
-needs to rethink. Only terminal states (complete, failed, cancelled) are final.
+State alone is not a restart checkpoint or proof of completed effects. Existing KV authority and retained results
+tell replay what is durable; the input settles only after its required work finishes. See
+[Semantic settlement](33-semantic-settlement.md). A completed chat turn remains terminal; a new independent turn
+carries its prior messages to a fresh loop.
 
 ### Signal Handling
 
@@ -431,7 +416,7 @@ Agent loops are stored in NATS KV (`AGENT_LOOPS`) as queryable entities:
 ├─────────────────────────────────────────────┤
 │ id             = "<loop-uuid>"              │
 │ task_id        = "task_456"                 │
-│ state          = "executing"                │
+│ state          = "running"                  │
 │ role           = "general"                  │
 │ model          = "gpt-4"                    │
 │ iterations     = 3                          │

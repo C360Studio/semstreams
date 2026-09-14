@@ -5,7 +5,7 @@
 // The agentic-loop processor orchestrates autonomous agent execution by managing
 // the lifecycle of agentic loops. It coordinates communication between the model
 // processor (LLM calls) and tools processor (tool execution), tracks state through
-// a 10-state machine, supports signal handling for user control, manages context
+// five operational states, supports signal handling for user control, manages context
 // memory with automatic compaction, and appends observed trajectory facts with
 // separately stored full evidence.
 //
@@ -52,30 +52,18 @@
 //
 // # State Machine
 //
-// Loops progress through ten states defined in the agentic package:
+// Loops use five operational states defined in the agentic package:
 //
-//	exploring → planning → architecting → executing → reviewing → complete
-//	     ↑          ↑            ↑             ↑           ↑        ↘ failed
-//	     └──────────┴────────────┴─────────────┴───────────┘         ↘ cancelled
-//	                                                                   ↘ awaiting_approval
-//
-// States:
-//
-//   - exploring: Initial state, gathering information
-//   - planning: Developing approach
-//   - architecting: Designing solution
-//   - executing: Implementing solution
-//   - reviewing: Validating results
+//   - running: Nonterminal work outside a human approval gate
+//   - awaiting_approval: Waiting for user approval of the pending call
 //   - complete: Successfully finished (terminal)
 //   - failed: Failed due to error or max iterations (terminal)
 //   - cancelled: Cancelled by user signal (terminal)
-//   - paused: Legacy-valid and accepted by transition APIs; #1239 removes the
-//     framework-owned signal path and pause semantics
-//   - awaiting_approval: Waiting for user approval
 //
-// States are fluid checkpoints - the loop can transition backward (e.g., from
-// executing back to exploring) to support agent rethinking. Only terminal states
-// (complete, failed, cancelled) prevent further transitions.
+// Running may enter approval or a terminal state. Awaiting approval may return
+// to running or become failed/cancelled. Terminal states have no outgoing edges.
+// BeginAwaitingApproval constructs a gate; ResolveApproval clears it locally.
+// Local transitions do not establish durable application or settle a delivery.
 //
 // State transitions are managed by the LoopManager and persisted to NATS KV.
 //
@@ -144,7 +132,7 @@
 //	loopID, err := manager.CreateLoop("task_123", "general", "gpt-4", 20)
 //
 //	// State transitions
-//	err = manager.TransitionLoop(loopID, agentic.LoopStateExecuting)
+//	err = manager.TransitionLoop(loopID, agentic.LoopStateRunning)
 //
 //	// Iteration tracking
 //	err = manager.IncrementIteration(loopID)
@@ -247,7 +235,7 @@
 //	{
 //	    "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
 //	    "task_id": "task_456",
-//	    "state": "executing",
+//	    "state": "running",
 //	    "role": "general",
 //	    "model": "gpt-4",
 //	    "iterations": 3,

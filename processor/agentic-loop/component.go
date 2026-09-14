@@ -1465,6 +1465,7 @@ func normalizedRelatedLoops(metadata map[string]any) (map[string]any, bool, erro
 // Ordinary operational birth failures take the same path under the
 // pre-existing spawn_identity_birth_failed reason.
 func (c *Component) handleSpawnIdentityFailure(ctx context.Context, loopID string, entity agentic.LoopEntity, err error) (natsclient.DeliveryDecision, error) {
+	defer c.releaseLoopTransientState(loopID)
 	reason := "spawn_identity_birth_failed"
 	if graph.IsStateContractError(err) {
 		err = graph.ClassifyStateContractError(err)
@@ -1475,13 +1476,43 @@ func (c *Component) handleSpawnIdentityFailure(ctx context.Context, loopID strin
 			"class", errs.ErrorFatal.String(),
 			"error", err)
 	}
+	// Graph birth can fail before ordinary task intake's initial checkpoint.
+	// Establish its validated running authority without overwriting another owner.
+	var revision uint64
+	if c.loopsBucket != nil {
+		if validateErr := entity.Validate(); validateErr != nil {
+			return natsclient.DeliveryDecisionQuarantine, errs.WrapFatal(validateErr, "agentic-loop", "handleSpawnIdentityFailure", "validate birth record")
+		}
+		if entity.State != agentic.LoopStateRunning {
+			return natsclient.DeliveryDecisionRetry, fmt.Errorf("loop %q is no longer a running birth", loopID)
+		}
+		data, marshalErr := json.Marshal(entity)
+		if marshalErr != nil {
+			return natsclient.DeliveryDecisionTerminate, errs.WrapInvalid(marshalErr,
+				"agentic-loop", "handleSpawnIdentityFailure", "marshal initial loop")
+		}
+		var createErr error
+		revision, createErr = c.loopsBucket.Create(ctx, loopID, data)
+		if errors.Is(createErr, jetstream.ErrKeyExists) {
+			current, observed, readErr := c.readLoopEntityRevision(ctx, loopID)
+			if readErr != nil {
+				return loopSettlementDecision(readErr), readErr
+			}
+			if observed == 0 || !reflect.DeepEqual(current, entity) {
+				return natsclient.DeliveryDecisionRetry, fmt.Errorf("loop %q birth authority changed", loopID)
+			}
+			revision = observed
+		} else if createErr != nil {
+			return loopSettlementDecision(createErr), createErr
+		}
+	}
 	// Record creation immediately before the failure path so the failure
 	// path's active-loop decrement remains balanced (creation is otherwise
 	// recorded only after a successful graph birth).
 	if c.metrics != nil && entity.ID != "" {
 		c.metrics.recordLoopCreated()
 	}
-	if settleErr := c.handleLoopFailure(ctx, loopID, entity, reason, err); settleErr != nil {
+	if settleErr := c.handleLoopFailure(ctx, loopID, entity, reason, err, revision); settleErr != nil {
 		return loopSettlementDecision(settleErr), settleErr
 	}
 	return natsclient.DeliveryDecisionAck, nil
@@ -1493,10 +1524,11 @@ func (c *Component) handleResponseMessage(ctx context.Context, data []byte) (nat
 	if err != nil {
 		return loopSettlementDecision(err), err
 	}
-	entity, loopID, err := c.ensureResponseLoop(ctx, *response)
+	entity, revision, err := c.ensureResponseLoop(ctx, *response)
 	if err != nil {
 		return loopSettlementDecision(err), err
 	}
+	loopID := entity.ID
 	if entity.State.IsTerminal() {
 		// Process state reaches terminal before the final durable marker. Read
 		// authority even on a warm mapping so a concurrently redelivered
@@ -1524,9 +1556,9 @@ func (c *Component) handleResponseMessage(ctx context.Context, data []byte) (nat
 		// prepared terminal result through the normal effects-first/final-marker
 		// lane rather than attempting a second failure transition.
 		if result.State.IsTerminal() && result.FailureState != nil {
-			if persistErr := c.persistHandlerResult(ctx, result); persistErr != nil {
+			if persistErr := c.persistHandlerResult(ctx, result, revision); persistErr != nil {
 				c.releaseLoopTransientState(loopID)
-				return natsclient.DeliveryDecisionRetry, persistErr
+				return loopSettlementDecision(persistErr), persistErr
 			}
 			c.recordTerminalState(result, entity, failureReasonForHandlerError(err))
 			return natsclient.DeliveryDecisionAck, nil
@@ -1539,16 +1571,16 @@ func (c *Component) handleResponseMessage(ctx context.Context, data []byte) (nat
 			c.releaseLoopTransientState(loopID)
 			return loopSettlementDecision(err), err
 		}
-		if settleErr := c.handleLoopFailure(ctx, loopID, entity, failureReasonForHandlerError(err), err); settleErr != nil {
+		if settleErr := c.handleLoopFailure(ctx, loopID, entity, failureReasonForHandlerError(err), err, revision); settleErr != nil {
 			return loopSettlementDecision(settleErr), settleErr
 		}
 		return natsclient.DeliveryDecisionAck, nil
 	}
 
 	c.recordResponseMetrics(response)
-	if err := c.persistHandlerResult(ctx, result); err != nil {
+	if err := c.persistHandlerResult(ctx, result, revision); err != nil {
 		c.releaseLoopTransientState(loopID)
-		return natsclient.DeliveryDecisionRetry, err
+		return loopSettlementDecision(err), err
 	}
 	if result.State.IsTerminal() {
 		failureReason := "unknown"
@@ -1603,7 +1635,7 @@ func (c *Component) extractAgentResponse(data []byte) (*agentic.AgentResponse, e
 }
 
 // handleLoopFailure records failure metrics and publishes failure events.
-func (c *Component) handleLoopFailure(ctx context.Context, loopID string, entity agentic.LoopEntity, reason string, err error) error {
+func (c *Component) handleLoopFailure(ctx context.Context, loopID string, entity agentic.LoopEntity, reason string, err error, revision uint64) error {
 	// Keep the failed transition process-local until every required terminal
 	// effect completes. The bare terminal LoopEntity is the final applied
 	// marker; a failed attempt releases speculative state so redelivery reads
@@ -1617,16 +1649,8 @@ func (c *Component) handleLoopFailure(ctx context.Context, loopID string, entity
 	}
 	defer c.releaseLoopTransientState(loopID)
 
-	latest, _ := c.handler.GetLoop(loopID)
-	failure, _, _ := c.handler.BuildFailureMessages(loopID, reason, err.Error())
-	c.recordTerminalObservation(ctx, loopID, agentic.TrajectoryStatusFailed, agentic.TrajectoryErrorUnknown,
-		trajectoryTerminalEvidence{Loop: latest, Failure: failure})
-
-	if err := c.publishFailureEvents(ctx, loopID, reason, err.Error()); err != nil {
+	if err := c.publishFailureEvents(ctx, loopID, reason, err.Error(), revision); err != nil {
 		return err
-	}
-	if persistErr := c.persistLoopState(ctx, loopID); persistErr != nil {
-		return persistErr
 	}
 	if c.metrics != nil && entity.ID != "" {
 		duration := time.Since(entity.StartedAt).Seconds()
@@ -1636,59 +1660,16 @@ func (c *Component) handleLoopFailure(ctx context.Context, loopID string, entity
 	return nil
 }
 
-// publishFailureEvents publishes failure events including workflow callback.
-//
-// Same write-before-publish ordering as persistHandlerResult (post-beta.57):
-// KV state and graph triples are stamped BEFORE the JetStream publish so any
-// subscriber consuming the failure event and immediately reading
-// COMPLETE_{loopID} from the loops KV bucket — rules engine, execution-manager,
-// future ops/analytics — finds the state already there. Pre-fix order had
-// publish first, KV write last, leaving the same race that beta.57 closed for
-// the success path. Audit finding 2026-05-08 (project_audit_findings_2026_05_08.md).
-//
-// Graph write goes through stampLoopFailureWithBudget so a degraded
-// graph-gateway never holds the publish indefinitely (mirrors the beta.57
-// stampLoopCompletionWithBudget pattern). KV write is a single fast Put;
-// the existing errorCtx 5s detached timeout already bounds the whole
-// function so no separate budget is needed.
-func (c *Component) publishFailureEvents(ctx context.Context, loopID, reason, errorMsg string) error {
+// publishFailureEvents uses the existing bounded finalizer and selected terminal owner.
+func (c *Component) publishFailureEvents(ctx context.Context, loopID, reason, errorMsg string, revision uint64) error {
 	errorCtx, cancel := natsclient.DetachContextWithTrace(ctx, 5*time.Second)
 	defer cancel()
-
-	failure, failMsgs, err := c.handler.BuildFailureMessages(loopID, reason, errorMsg)
+	failure, messages, err := c.handler.BuildFailureMessages(loopID, reason, errorMsg)
 	if err != nil {
 		return fmt.Errorf("build failure event for loop %s: %w", loopID, err)
 	}
-
-	// Persist failure to KV first so watchers (rules engine,
-	// execution-manager) see COMPLETE_{loopID} when they react to the
-	// failure event below.
-	if failure != nil {
-		if err := c.persistFailureState(errorCtx, loopID, failure); err != nil {
-			return err
-		}
-	}
-
-	// Stamp graph triples second (under budget). The reorder is the
-	// load-bearing change vs pre-fix; the budget cap mirrors the success
-	// path's stampLoopCompletionWithBudget so a slow graph-gateway can't
-	// stall the publish.
-	if failure != nil {
-		_ = c.stampLoopFailureWithBudget(errorCtx, loopID, failure)
-	}
-
-	// Publish last — every observable side effect is now in place.
-	// NATS-less deployments (test scaffolding) skip the publish, matching
-	// publishResults' nil-client guard.
-	if c.natsClient == nil {
-		return nil
-	}
-	for _, msg := range failMsgs {
-		if pubErr := c.natsClient.PublishToStream(errorCtx, msg.Subject, msg.Data); pubErr != nil {
-			return fmt.Errorf("publish failure event for loop %s: %w", loopID, pubErr)
-		}
-	}
-	return nil
+	return c.persistHandlerResult(errorCtx, HandlerResult{LoopID: loopID, State: agentic.LoopStateFailed,
+		FailureState: failure, PublishedMessages: messages}, revision)
 }
 
 // recordResponseMetrics records metrics and logs for a successful response.
@@ -1761,49 +1742,219 @@ const graphWritePublishBudget = 2 * time.Second
 // A required pre-marker persistence or publication failure discards the
 // speculative process-local terminal state so redelivery can cold-read the
 // prior nonterminal record and exact retained evidence.
-func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResult) error {
-	terminal := result.State == agentic.LoopStateComplete || result.State == agentic.LoopStateFailed
-
+func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResult, revision uint64) error {
+	if result.State.IsTerminal() {
+		var candidate message.Payload
+		switch {
+		case result.State == agentic.LoopStateComplete && result.CompletionState != nil:
+			candidate = result.CompletionState
+		case result.State == agentic.LoopStateFailed && result.FailureState != nil:
+			candidate = result.FailureState
+		}
+		_, err := c.persistTerminalOutcome(ctx, result, candidate, revision)
+		return err
+	}
 	c.recordHandlerResultTrajectory(ctx, result)
-	if terminal {
-		// A failed required effect or final marker discards the speculative
-		// terminal process state. Redelivery then cold-reads the prior
-		// nonterminal LoopEntity and exact retained request.
-		defer c.releaseLoopTransientState(result.LoopID)
-		if result.CompletionState != nil {
-			if err := c.persistCompletionState(ctx, result.LoopID, result.CompletionState); err != nil {
-				return err
-			}
-			_ = c.stampLoopCompletionWithBudget(ctx, result.LoopID, result.CompletionState)
-		} else if result.FailureState != nil {
-			if err := c.persistFailureState(ctx, result.LoopID, result.FailureState); err != nil {
-				return err
-			}
-			_ = c.stampLoopFailureWithBudget(ctx, result.LoopID, result.FailureState)
-		}
-		// Terminal-tool-less synthesis (#133). Detected in
-		// handleCompleteResponse; emitted here on the graph path so the
-		// triples ride the same publish budget as the loop completion
-		// stamp and downstream rules see them on the same KV revision
-		// the agent.complete.* event refers to.
-		if result.SyntheticDecide != nil {
-			if err := c.stampSyntheticDecideWithBudget(ctx, result.SyntheticDecide); err != nil {
-				return err
-			}
-		}
-	} else if err := c.persistLoopState(ctx, result.LoopID); err != nil {
+	if err := c.persistLoopState(ctx, result.LoopID); err != nil {
 		return err
 	}
+	return c.publishResults(ctx, result)
+}
 
+// persistTerminalOutcome completes the selected effects before its source-correlated final marker.
+func (c *Component) persistTerminalOutcome(ctx context.Context, result HandlerResult, candidate message.Payload, revision uint64) (natsclient.DeliveryDecision, error) {
+	defer c.releaseLoopTransientState(result.LoopID)
+	marker, err := c.handler.GetLoop(result.LoopID)
+	if err != nil {
+		return loopSettlementDecision(err), err
+	}
+	if err := marker.Validate(); err != nil {
+		return natsclient.DeliveryDecisionQuarantine, errs.WrapFatal(err, "agentic-loop", "persistTerminalOutcome", "validate prepared terminal")
+	}
+	// Local validity is necessary but does not bind this payload to its prepared marker.
+	if result.State != marker.State || !marker.State.IsTerminal() {
+		return natsclient.DeliveryDecisionQuarantine, errs.WrapFatal(errors.New("terminal result conflicts with prepared state"),
+			"agentic-loop", "persistTerminalOutcome", "validate terminal candidate")
+	}
+	switch prepared := candidate.(type) {
+	case *agentic.LoopCompletedEvent:
+		if prepared == nil || marker.State != agentic.LoopStateComplete || marker.Outcome != agentic.OutcomeSuccess || marker.Result != prepared.Result {
+			return natsclient.DeliveryDecisionQuarantine, errs.WrapFatal(errors.New("completion conflicts with prepared marker"), "agentic-loop", "persistTerminalOutcome", "validate terminal candidate")
+		}
+	case *agentic.LoopFailedEvent:
+		if prepared == nil || marker.State != agentic.LoopStateFailed || marker.Error != prepared.Error ||
+			(marker.Outcome != agentic.OutcomeFailed && marker.Outcome != agentic.OutcomeTruncated) {
+			return natsclient.DeliveryDecisionQuarantine, errs.WrapFatal(errors.New("failure conflicts with prepared marker"), "agentic-loop", "persistTerminalOutcome", "validate terminal candidate")
+		}
+	case *agentic.LoopCancelledEvent:
+		if prepared == nil || marker.State != agentic.LoopStateCancelled || marker.Outcome != agentic.OutcomeCancelled || marker.CancelledBy != prepared.CancelledBy {
+			return natsclient.DeliveryDecisionQuarantine, errs.WrapFatal(errors.New("cancellation conflicts with prepared marker"), "agentic-loop", "persistTerminalOutcome", "validate terminal candidate")
+		}
+	default:
+		return natsclient.DeliveryDecisionQuarantine, errs.WrapFatal(errors.New("missing terminal payload"), "agentic-loop", "persistTerminalOutcome", "validate terminal candidate")
+	}
+	if c.loopsBucket != nil {
+		current, observed, err := c.readLoopEntityRevision(ctx, result.LoopID)
+		if err != nil {
+			return loopSettlementDecision(err), err
+		}
+		if revision == 0 || observed != revision || current.State.IsTerminal() {
+			return natsclient.DeliveryDecisionRetry, fmt.Errorf("terminal authority for loop %q changed or is not observable", result.LoopID)
+		}
+		if current.TaskID != marker.TaskID {
+			return natsclient.DeliveryDecisionQuarantine, errs.WrapFatal(errors.New("terminal task identity conflicts with authority"),
+				"agentic-loop", "persistTerminalOutcome", "terminal correlation conflict")
+		}
+	}
+	selected, err := c.selectTerminalOutcome(ctx, result.LoopID, marker.TaskID, candidate)
+	if err != nil {
+		return loopSettlementDecision(err), err
+	}
+	port := "agent.complete"
+	switch saved := selected.(type) {
+	case *agentic.LoopCompletedEvent:
+		prepared, ok := candidate.(*agentic.LoopCompletedEvent)
+		if !ok || marker.State != agentic.LoopStateComplete || marker.Outcome != agentic.OutcomeSuccess || marker.Result != saved.Result ||
+			prepared.Result != saved.Result || !reflect.DeepEqual(prepared.Decision, saved.Decision) {
+			return natsclient.DeliveryDecisionRetry, fmt.Errorf("selected success for loop %q lacks this delivery's compatible applied proof", result.LoopID)
+		}
+		marker.Result, marker.Error, marker.CompletedAt = saved.Result, "", saved.CompletedAt
+		result.CompletionState, result.FailureState = saved, nil
+	case *agentic.LoopFailedEvent:
+		prepared, ok := candidate.(*agentic.LoopFailedEvent)
+		if !ok || marker.State != agentic.LoopStateFailed || marker.Error != saved.Error ||
+			(marker.Outcome != agentic.OutcomeFailed && marker.Outcome != agentic.OutcomeTruncated) ||
+			prepared.Reason != saved.Reason || prepared.Error != saved.Error {
+			return natsclient.DeliveryDecisionRetry, fmt.Errorf("selected failure for loop %q lacks this delivery's compatible applied proof", result.LoopID)
+		}
+		// A truncated marker intentionally accompanies an ordinary failed event.
+		marker.Result, marker.Error, marker.CompletedAt = "", saved.Error, saved.FailedAt
+		result.CompletionState, result.FailureState = nil, saved
+		port = "agent.failed"
+	case *agentic.LoopCancelledEvent:
+		prepared, ok := candidate.(*agentic.LoopCancelledEvent)
+		if !ok || marker.State != agentic.LoopStateCancelled || marker.Outcome != agentic.OutcomeCancelled || prepared.CancelledBy != saved.CancelledBy {
+			return natsclient.DeliveryDecisionRetry, fmt.Errorf("selected cancellation for loop %q lacks this delivery's compatible applied proof", result.LoopID)
+		}
+		marker.Result, marker.Error, marker.CompletedAt = "", "cancelled by user", saved.CancelledAt
+		marker.CancelledBy, marker.CancelledAt = saved.CancelledBy, saved.CancelledAt
+	}
+	if err := marker.Validate(); err != nil {
+		return natsclient.DeliveryDecisionQuarantine, errs.WrapFatal(err, "agentic-loop", "persistTerminalOutcome", "validate final terminal")
+	}
+	result.State, result.SyntheticDecide = marker.State, nil
+	// From here approval retains its existing refusal after unknown effects.
+	if cancelled, ok := selected.(*agentic.LoopCancelledEvent); ok {
+		c.recordTerminalObservation(ctx, result.LoopID, agentic.TrajectoryStatusCancelled, "",
+			trajectoryTerminalEvidence{Loop: marker, Cancelled: cancelled})
+	} else {
+		c.recordHandlerResultTrajectory(ctx, result)
+	}
+	switch saved := selected.(type) {
+	case *agentic.LoopCompletedEvent:
+		_ = c.stampLoopCompletionWithBudget(ctx, result.LoopID, saved)
+		if saved.SyntheticDecideRequired {
+			if err := c.stampSyntheticDecideWithBudget(ctx, &SyntheticDecideRequest{LoopID: saved.LoopID, Reason: saved.Result}); err != nil {
+				return natsclient.DeliveryDecisionQuarantine, err
+			}
+		}
+	case *agentic.LoopFailedEvent:
+		_ = c.stampLoopFailureWithBudget(ctx, result.LoopID, saved)
+	case *agentic.LoopCancelledEvent:
+		if c.graphWriter != nil {
+			c.graphWriter.WriteLoopCancellation(ctx, saved, c.trajectoryAuditLoss.observed(result.LoopID))
+			if err := ctx.Err(); err != nil {
+				return natsclient.DeliveryDecisionQuarantine, err
+			}
+		}
+	}
+	subject, err := component.ResolveSubject(c.config.Ports.Outputs, port, result.LoopID)
+	if err != nil {
+		return natsclient.DeliveryDecisionQuarantine, errs.WrapFatal(err, "agentic-loop", "persistTerminalOutcome", "resolve selected terminal subject")
+	}
+	data, err := json.Marshal(message.NewBaseMessage(selected.Schema(), selected, "agentic-loop"))
+	if err != nil {
+		return natsclient.DeliveryDecisionQuarantine, errs.WrapFatal(err, "agentic-loop", "persistTerminalOutcome", "marshal selected terminal")
+	}
+	result.PublishedMessages = []PublishedMessage{{Subject: subject, Data: data}}
 	if err := c.publishResults(ctx, result); err != nil {
-		return err
+		return natsclient.DeliveryDecisionQuarantine, err
 	}
-	if terminal {
-		// COMPLETE_, required graph effects, and terminal PubAck may repeat;
-		// the bare terminal LoopEntity is deliberately the final marker.
-		return c.persistLoopState(ctx, result.LoopID)
+	if c.loopsBucket == nil {
+		return natsclient.DeliveryDecisionAck, nil // Existing unit seam, not production durability proof.
 	}
-	return nil
+	data, err = json.Marshal(marker)
+	if err != nil {
+		return natsclient.DeliveryDecisionQuarantine, errs.WrapFatal(err, "agentic-loop", "persistTerminalOutcome", "marshal terminal marker")
+	}
+	if _, err := c.loopsBucket.Update(ctx, result.LoopID, data, revision); err != nil {
+		return natsclient.DeliveryDecisionQuarantine, err
+	}
+	return natsclient.DeliveryDecisionAck, nil
+}
+
+// selectTerminalOutcome preserves the existing ordinary terminal payload representation.
+func (c *Component) selectTerminalOutcome(ctx context.Context, loopID, taskID string, candidate message.Payload) (message.Payload, error) {
+	if candidate == nil {
+		return nil, errs.WrapFatal(errors.New("missing terminal payload"), "agentic-loop", "selectTerminalOutcome", "validate terminal candidate")
+	}
+	if err := candidate.Validate(); err != nil {
+		return nil, errs.WrapFatal(err, "agentic-loop", "selectTerminalOutcome", "validate terminal candidate")
+	}
+	data, err := json.Marshal(candidate)
+	if err != nil {
+		return nil, errs.WrapFatal(err, "agentic-loop", "selectTerminalOutcome", "marshal terminal candidate")
+	}
+	var header agentic.LoopCompletedEvent
+	if err := json.Unmarshal(data, &header); err != nil {
+		return nil, errs.WrapFatal(err, "agentic-loop", "selectTerminalOutcome", "decode terminal candidate")
+	}
+	category := candidate.Schema().Category
+	if header.LoopID != loopID || header.TaskID != taskID ||
+		!((category == agentic.CategoryLoopCompleted && header.Outcome == agentic.OutcomeSuccess) ||
+			(category == agentic.CategoryLoopFailed && header.Outcome == agentic.OutcomeFailed) ||
+			(category == agentic.CategoryLoopCancelled && header.Outcome == agentic.OutcomeCancelled)) {
+		return nil, errs.WrapFatal(errors.New("terminal identity or category/outcome conflict"), "agentic-loop", "selectTerminalOutcome", "validate terminal candidate")
+	}
+	if c.loopsBucket == nil {
+		return candidate, nil
+	}
+	key := "COMPLETE_" + loopID
+	if _, err := c.loopsBucket.Create(ctx, key, data); err == nil {
+		return candidate, nil
+	} else if !errors.Is(err, jetstream.ErrKeyExists) {
+		return nil, err
+	}
+	entry, err := c.loopsBucket.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	data = entry.Value()
+	header = agentic.LoopCompletedEvent{}
+	if err := json.Unmarshal(data, &header); err != nil {
+		return nil, errs.WrapFatal(err, "agentic-loop", "selectTerminalOutcome", "decode saved terminal")
+	}
+	if header.LoopID != loopID || header.TaskID != taskID {
+		return nil, errs.WrapFatal(errors.New("saved terminal identity conflict"), "agentic-loop", "selectTerminalOutcome", "validate saved terminal")
+	}
+	var selected message.Payload
+	switch header.Outcome {
+	case agentic.OutcomeSuccess:
+		selected = &agentic.LoopCompletedEvent{}
+	case agentic.OutcomeFailed:
+		selected = &agentic.LoopFailedEvent{}
+	case agentic.OutcomeCancelled:
+		selected = &agentic.LoopCancelledEvent{}
+	default:
+		return nil, errs.WrapFatal(fmt.Errorf("invalid saved outcome %q", header.Outcome), "agentic-loop", "selectTerminalOutcome", "validate saved terminal")
+	}
+	if err := json.Unmarshal(data, selected); err != nil {
+		return nil, errs.WrapFatal(err, "agentic-loop", "selectTerminalOutcome", "decode saved terminal")
+	}
+	if err := selected.Validate(); err != nil {
+		return nil, errs.WrapFatal(err, "agentic-loop", "selectTerminalOutcome", "validate saved terminal")
+	}
+	return selected, nil
 }
 
 // stampLoopCompletionWithBudget invokes the best-effort completion graph batch
@@ -1967,39 +2118,40 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) (n
 			return natsclient.DeliveryDecisionAck, nil
 		}
 	}
-	if toolResult.LoopID != "" && toolResult.LoopID != loopID {
-		err := errs.WrapFatal(
-			fmt.Errorf("execution %q maps to loop %q but payload names %q", toolResult.ExecutionID, loopID, toolResult.LoopID),
-			"agentic-loop", "handleToolResultMessage", "tool correlation conflict",
-		)
-		return natsclient.DeliveryDecisionQuarantine, err
-	}
-	if toolResult.RequestID == "" || toolResult.ExecutionID == "" || toolResult.CallOrdinal == 0 {
-		err := errs.WrapFatal(
-			fmt.Errorf("tool result requires request_id, execution_id, and positive call_ordinal"),
-			"agentic-loop", "handleToolResultMessage", "tool correlation conflict",
-		)
-		return natsclient.DeliveryDecisionQuarantine, err
-	}
-	requestLoopID, err := loopIDFromRequestID(toolResult.RequestID)
-	if err != nil || requestLoopID != loopID {
-		conflictErr := errs.WrapFatal(
-			fmt.Errorf("tool result request %q conflicts with routed loop %q", toolResult.RequestID, loopID),
-			"agentic-loop", "handleToolResultMessage", "tool correlation conflict",
-		)
-		return natsclient.DeliveryDecisionQuarantine, conflictErr
-	}
-	wantExecutionID := deriveToolExecutionID(toolResult.RequestID, toolResult.CallID, toolResult.CallOrdinal)
-	if toolResult.ExecutionID != wantExecutionID ||
-		c.handler.loopManager.GetToolName(toolResult.ExecutionID) != toolResult.Name ||
-		c.handler.loopManager.GetToolOrdinal(toolResult.ExecutionID) != toolResult.CallOrdinal {
-		err := errs.WrapFatal(
-			fmt.Errorf("execution %q conflicts with dispatched call correlation", toolResult.ExecutionID),
-			"agentic-loop", "handleToolResultMessage", "tool correlation conflict",
-		)
+	if toolResult, err = c.validateRoutedToolResult(loopID, toolResult); err != nil {
 		return natsclient.DeliveryDecisionQuarantine, err
 	}
 
+	if observedRevision == 0 && c.loopsBucket != nil {
+		current, observed, readErr := c.readLoopEntityRevision(ctx, loopID)
+		observedRevision, err = observed, readErr
+		if err != nil {
+			return loopSettlementDecision(err), err
+		}
+		if observedRevision == 0 {
+			return natsclient.DeliveryDecisionRetry, fmt.Errorf("loop %q is not yet observable", loopID)
+		}
+		process, getErr := c.handler.GetLoop(loopID)
+		if getErr != nil {
+			return loopSettlementDecision(getErr), getErr
+		}
+		if current.TaskID != process.TaskID || current.Role != process.Role || current.Model != process.Model {
+			return natsclient.DeliveryDecisionQuarantine, errs.WrapFatal(errors.New("tool process authority conflicts"), "agentic-loop", "handleToolResultMessage", "tool correlation conflict")
+		}
+		if current.State.IsTerminal() || (process.PendingApproval != nil && !reflect.DeepEqual(process.PendingApproval, current.PendingApproval)) {
+			c.releaseLoopTransientState(loopID)
+			return natsclient.DeliveryDecisionRetry, fmt.Errorf("tool authority for loop %q changed", loopID)
+		}
+		// Approved work can complete before its approval owner's cleared-gate CAS.
+		// Only that same routed execution may use the still-pending revision.
+		if pending := current.PendingApproval; pending != nil &&
+			(pending.RequestID != toolResult.RequestID || pending.ExecutionID != toolResult.ExecutionID ||
+				pending.CallID != toolResult.CallID || pending.CallOrdinal != toolResult.CallOrdinal ||
+				pending.ToolName != toolResult.Name || pending.TraceID != toolResult.TraceID) {
+			c.releaseLoopTransientState(loopID)
+			return natsclient.DeliveryDecisionRetry, fmt.Errorf("tool execution %q does not own the current gate", toolResult.ExecutionID)
+		}
+	}
 	hasError := toolResult.Error != ""
 
 	c.logger.Debug("Processing tool result",
@@ -2023,9 +2175,9 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) (n
 		// An existing terminal state does not prove that this result applied.
 		if result.State.IsTerminal() && (result.CompletionState != nil || result.FailureState != nil) {
 			entity, entErr := c.handler.GetLoop(loopID)
-			if persistErr := c.persistHandlerResult(ctx, result); persistErr != nil {
+			if persistErr := c.persistHandlerResult(ctx, result, observedRevision); persistErr != nil {
 				c.releaseLoopTransientState(loopID)
-				return natsclient.DeliveryDecisionRetry, persistErr
+				return loopSettlementDecision(persistErr), persistErr
 			}
 			if entErr == nil {
 				c.recordTerminalState(result, entity, "timeout")
@@ -2065,14 +2217,55 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) (n
 	// persistHandlerResult covers publishResults + persistLoopState for all states,
 	// plus finalization and completion-state persistence
 	// when the loop reaches a terminal state.
-	if err := c.persistHandlerResult(ctx, result); err != nil {
+	if err := c.persistHandlerResult(ctx, result, observedRevision); err != nil {
 		c.releaseLoopTransientState(loopID)
-		return natsclient.DeliveryDecisionRetry, err
+		return loopSettlementDecision(err), err
 	}
 	if terminalEntityFound {
 		c.recordTerminalState(result, terminalEntity, failureReason)
 	}
 	return natsclient.DeliveryDecisionAck, nil
+}
+
+// validateRoutedToolResult checks dispatched correlation and restores an omitted
+// name from the matched call before the result reaches authority or persistence.
+func (c *Component) validateRoutedToolResult(loopID string, toolResult agentic.ToolResult) (agentic.ToolResult, error) {
+	if toolResult.LoopID != "" && toolResult.LoopID != loopID {
+		err := errs.WrapFatal(
+			fmt.Errorf("execution %q maps to loop %q but payload names %q", toolResult.ExecutionID, loopID, toolResult.LoopID),
+			"agentic-loop", "handleToolResultMessage", "tool correlation conflict",
+		)
+		return toolResult, err
+	}
+	if toolResult.RequestID == "" || toolResult.ExecutionID == "" || toolResult.CallOrdinal == 0 {
+		err := errs.WrapFatal(
+			fmt.Errorf("tool result requires request_id, execution_id, and positive call_ordinal"),
+			"agentic-loop", "handleToolResultMessage", "tool correlation conflict",
+		)
+		return toolResult, err
+	}
+	requestLoopID, err := loopIDFromRequestID(toolResult.RequestID)
+	if err != nil || requestLoopID != loopID {
+		conflictErr := errs.WrapFatal(
+			fmt.Errorf("tool result request %q conflicts with routed loop %q", toolResult.RequestID, loopID),
+			"agentic-loop", "handleToolResultMessage", "tool correlation conflict",
+		)
+		return toolResult, conflictErr
+	}
+	wantExecutionID := deriveToolExecutionID(toolResult.RequestID, toolResult.CallID, toolResult.CallOrdinal)
+	if toolResult.Name == "" {
+		toolResult.Name = c.handler.resolveToolName(toolResult)
+	}
+	if toolResult.ExecutionID != wantExecutionID ||
+		c.handler.loopManager.GetToolName(toolResult.ExecutionID) != toolResult.Name ||
+		c.handler.loopManager.GetToolOrdinal(toolResult.ExecutionID) != toolResult.CallOrdinal {
+		err := errs.WrapFatal(
+			fmt.Errorf("execution %q conflicts with dispatched call correlation", toolResult.ExecutionID),
+			"agentic-loop", "handleToolResultMessage", "tool correlation conflict",
+		)
+		return toolResult, err
+	}
+	return toolResult, nil
 }
 
 // persistApprovalGate binds a new gate to its pre-mutation authority observation.
@@ -2160,82 +2353,6 @@ func (c *Component) emitContextMetrics(result HandlerResult) {
 		c.metrics.recordContextUtilization(cm.Utilization())
 		c.metrics.recordCompactedRegionTokens(cm.GetRegionTokens(RegionCompactedHistory))
 	}
-}
-
-// persistCompletionState persists the enriched completion state to KV.
-// Key pattern: COMPLETE_{loopID} for rules engine to watch.
-// The rules engine can then trigger follow-up actions based on completion data.
-func (c *Component) persistCompletionState(ctx context.Context, loopID string, completion *agentic.LoopCompletedEvent) error {
-	if c.loopsBucket == nil || completion == nil {
-		return nil
-	}
-
-	data, err := json.Marshal(completion)
-	if err != nil {
-		return fmt.Errorf("marshal completion state for loop %s: %w", loopID, err)
-	}
-
-	// Key pattern: COMPLETE_{loopID} for rules engine to watch
-	key := fmt.Sprintf("COMPLETE_%s", loopID)
-	if _, err := c.loopsBucket.Put(ctx, key, data); err != nil {
-		return fmt.Errorf("persist completion state for loop %s: %w", loopID, err)
-	}
-
-	c.logger.Debug("Persisted completion state",
-		slog.String("loop_id", loopID),
-		slog.String("key", key),
-		slog.String("role", completion.Role))
-	return nil
-}
-
-// persistFailureState persists the failure state to KV.
-// Key pattern: COMPLETE_{loopID} — same as success, so watchers don't need
-// to distinguish between success/failure key patterns. The outcome field
-// in the serialized event tells them what happened.
-func (c *Component) persistFailureState(ctx context.Context, loopID string, failure *agentic.LoopFailedEvent) error {
-	if c.loopsBucket == nil || failure == nil {
-		return nil
-	}
-
-	data, err := json.Marshal(failure)
-	if err != nil {
-		return fmt.Errorf("marshal failure state for loop %s: %w", loopID, err)
-	}
-
-	key := fmt.Sprintf("COMPLETE_%s", loopID)
-	if _, err := c.loopsBucket.Put(ctx, key, data); err != nil {
-		return fmt.Errorf("persist failure state for loop %s: %w", loopID, err)
-	}
-
-	c.logger.Debug("Persisted failure state",
-		slog.String("loop_id", loopID),
-		slog.String("key", key),
-		slog.String("reason", failure.Reason))
-	return nil
-}
-
-// persistCancellationState persists the cancellation state to KV.
-// Uses same COMPLETE_{loopID} key pattern so watchers handle all terminal states uniformly.
-func (c *Component) persistCancellationState(ctx context.Context, loopID string, cancelled *agentic.LoopCancelledEvent) error {
-	if c.loopsBucket == nil || cancelled == nil {
-		return nil
-	}
-
-	data, err := json.Marshal(cancelled)
-	if err != nil {
-		return fmt.Errorf("marshal cancellation state for loop %s: %w", loopID, err)
-	}
-
-	key := fmt.Sprintf("COMPLETE_%s", loopID)
-	if _, err := c.loopsBucket.Put(ctx, key, data); err != nil {
-		return fmt.Errorf("persist cancellation state for loop %s: %w", loopID, err)
-	}
-
-	c.logger.Debug("Persisted cancellation state",
-		slog.String("loop_id", loopID),
-		slog.String("key", key),
-		slog.String("cancelled_by", cancelled.CancelledBy))
-	return nil
 }
 
 // persistLoopState persists the loop state to KV
@@ -2342,47 +2459,58 @@ func (c *Component) handleSignalMessage(ctx context.Context, data []byte) (natsc
 	// Handle based on signal type
 	switch signal.Type {
 	case agentic.SignalCancel:
-		if err := c.handleCancelSignal(ctx, signal); err != nil {
-			if errs.IsFatal(err) {
-				return natsclient.DeliveryDecisionQuarantine, err
-			}
-			return natsclient.DeliveryDecisionRetry, err
-		}
-		return natsclient.DeliveryDecisionAck, nil
+		return c.handleCancelSignal(ctx, signal)
 	default:
 		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("unsupported signal type %q for loop %q", signal.Type, signal.LoopID)
 	}
 }
 
 // handleCancelSignal handles a cancel signal for a loop
-func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserSignal) error {
+func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserSignal) (natsclient.DeliveryDecision, error) {
 	loopID := signal.LoopID
-
-	// Drain any in-flight tool calls into synth-results BEFORE the
-	// CancelLoop transition so tool-pair integrity is preserved in
-	// KV-persisted context. Mode (e) of orphan-tool-call recovery —
-	// without this, a cancelled loop's stored context would carry
-	// assistant tool_calls with no matching tool_results, 400ing any
-	// downstream replay.
+	current, revision, err := c.readLoopEntityRevision(ctx, loopID)
+	if err != nil {
+		if errs.IsFatal(err) {
+			return natsclient.DeliveryDecisionQuarantine, err
+		}
+		return natsclient.DeliveryDecisionRetry, err
+	}
+	if revision == 0 {
+		return natsclient.DeliveryDecisionRetry, fmt.Errorf("loop %q is not yet observable for cancellation", loopID)
+	}
+	if current.State.IsTerminal() {
+		c.logger.WarnContext(ctx, "cancellation inapplicable: authoritative loop is terminal; no cancellation effects required",
+			slog.String("signal_id", signal.SignalID), slog.String("loop_id", loopID), slog.String("state", string(current.State)))
+		if c.metrics != nil {
+			c.metrics.cancellationsInapplicable.Inc()
+		}
+		c.releaseLoopTransientState(loopID)
+		return natsclient.DeliveryDecisionAck, nil // This cancel is effect-free and inapplicable to a closed loop.
+	}
+	if _, err := c.handler.GetLoop(loopID); err != nil {
+		if _, err := c.handler.loopManager.CreateLoopWithID(loopID, current.TaskID, current.Role, current.Model, current.MaxIterations); err != nil {
+			if errs.IsFatal(err) {
+				return natsclient.DeliveryDecisionQuarantine, err
+			}
+			return natsclient.DeliveryDecisionRetry, err
+		}
+	}
+	defer c.releaseLoopTransientState(loopID)
+	if err := c.handler.UpdateLoop(current); err != nil {
+		if errs.IsFatal(err) {
+			return natsclient.DeliveryDecisionQuarantine, err
+		}
+		return natsclient.DeliveryDecisionRetry, err
+	}
 	c.handler.drainPendingToolFailures(loopID, fmt.Sprintf("loop cancelled by %s", signal.UserID))
-
-	// Atomically cancel the loop and get the updated entity
 	entity, err := c.handler.CancelLoop(loopID, signal.UserID)
 	if err != nil {
-		return fmt.Errorf("cancel loop %q: %w", loopID, err)
+		err = fmt.Errorf("cancel loop %q: %w", loopID, err)
+		if errs.IsFatal(err) {
+			return natsclient.DeliveryDecisionQuarantine, err
+		}
+		return natsclient.DeliveryDecisionRetry, err
 	}
-	// Persist loop state to KV
-	if err := c.persistLoopState(ctx, loopID); err != nil {
-		return errs.WrapFatal(err, "agentic-loop", "handleCancelSignal", "cancelled loop state has unknown durability")
-	}
-
-	// Record metrics
-	if c.metrics != nil {
-		duration := time.Since(entity.StartedAt).Seconds()
-		c.metrics.recordLoopFailed("cancelled", entity.Iterations, duration)
-	}
-
-	// Publish completion event with workflow context for reactive workflows
 	completion := agentic.LoopCancelledEvent{
 		LoopID:       loopID,
 		TaskID:       entity.TaskID,
@@ -2396,42 +2524,14 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 		RunID:        entity.RunID,
 		RunEntityID:  c.handler.resolveRunEntityID(entity.RunID),
 	}
-	c.recordTerminalObservation(ctx, loopID, agentic.TrajectoryStatusCancelled, "",
-		trajectoryTerminalEvidence{Loop: entity, Cancelled: &completion})
-
-	completionMsg := message.NewBaseMessage(completion.Schema(), &completion, "agentic-loop")
-	completionData, err := json.Marshal(completionMsg)
-	if err != nil {
-		return errs.WrapFatal(err, "agentic-loop", "handleCancelSignal", "marshal cancellation after state transition")
+	if decision, err := c.persistTerminalOutcome(ctx, HandlerResult{LoopID: loopID, State: agentic.LoopStateCancelled}, &completion, revision); err != nil {
+		return decision, err
 	}
-
-	subject, err := component.ResolveSubject(c.config.Ports.Outputs, "agent.complete", loopID)
-	if err != nil {
-		return errs.WrapFatal(err, "agentic-loop", "handleCancelSignal", "resolve cancellation subject after state transition")
+	if c.metrics != nil {
+		c.metrics.recordLoopFailed("cancelled", entity.Iterations, time.Since(entity.StartedAt).Seconds())
 	}
-	if err := c.natsClient.PublishToStream(ctx, subject, completionData); err != nil {
-		return errs.WrapFatal(err, "agentic-loop", "handleCancelSignal", "cancellation completion has unknown durability")
-	}
-
-	// Emit cancellation entity to graph (non-fatal)
-	// A cancelled loop can have lost evidence too — the terminal
-	// observation above runs before this write.
-	if c.graphWriter != nil {
-		c.graphWriter.WriteLoopCancellation(ctx, &completion, c.trajectoryAuditLoss.observed(loopID))
-		if err := ctx.Err(); err != nil {
-			return errs.WrapFatal(err, "agentic-loop", "handleCancelSignal", "cancellation graph write has unknown durability")
-		}
-	}
-
-	// Persist cancellation to KV so watchers detect it
-	if err := c.persistCancellationState(ctx, loopID, &completion); err != nil {
-		return errs.WrapFatal(err, "agentic-loop", "handleCancelSignal", "cancellation terminal state has unknown durability")
-	}
-	c.releaseLoopTransientState(loopID)
-	c.logger.Info("Loop cancelled",
-		slog.String("loop_id", loopID),
-		slog.String("cancelled_by", signal.UserID))
-	return nil
+	c.logger.Info("Loop cancelled", slog.String("loop_id", loopID), slog.String("cancelled_by", signal.UserID))
+	return natsclient.DeliveryDecisionAck, nil
 }
 
 // handleToolCallVerdictMessage routes inbound verdicts from

@@ -1,6 +1,7 @@
 package agenticloop
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -85,7 +88,12 @@ func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 		requestID := handler.loopManager.GenerateRequestID(loopID)
 		handler.loopManager.TrackRequest(requestID, loopID)
 		c := releaseTestComponent(t, handler)
-		c.loopsBucket = failingLoopBucket{err: errors.New("kv unavailable")}
+		entity, err := handler.GetLoop(loopID)
+		require.NoError(t, err)
+		before := settlementLoopRecord(t, entity)
+		injected := errors.New("kv unavailable")
+		bucket := &settlementBucket{values: map[string][]byte{loopID: before}, putErr: injected}
+		c.loopsBucket = bucket
 		c.settlementEvidence = &settlementEvidence{
 			request: retainedRequest(t, loopID, requestID), requestFound: true,
 		}
@@ -101,7 +109,9 @@ func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 		require.Equal(t, natsclient.DeliveryDecisionRetry, result.Decision())
 		require.Zero(t, msg.acks.Load()+msg.terms.Load())
 		require.Equal(t, int32(1), msg.naks.Load())
-		require.Contains(t, result.Err().Error(), "persist completion state")
+		require.ErrorIs(t, result.Err(), injected)
+		require.Equal(t, before, bucket.values[loopID])
+		require.NotContains(t, bucket.values, "COMPLETE_"+loopID, "selected result persistence must be the failing operation")
 	})
 
 	t.Run("tool result", func(t *testing.T) {
@@ -115,7 +125,12 @@ func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 		})
 		require.NoError(t, err)
 		c := releaseTestComponent(t, handler)
-		c.loopsBucket = failingLoopBucket{err: errors.New("kv unavailable")}
+		entity, err := handler.GetLoop(loopID)
+		require.NoError(t, err)
+		before := settlementLoopRecord(t, entity)
+		injected := errors.New("kv unavailable")
+		bucket := &settlementBucket{values: map[string][]byte{loopID: before}, putErr: injected}
+		c.loopsBucket = bucket
 		toolResult := &agentic.ToolResult{
 			RequestID: requestID, ExecutionID: deriveToolExecutionID(requestID, "call-tool", 1),
 			CallID: "call-tool", CallOrdinal: 1, Name: "search", Content: "result",
@@ -129,6 +144,8 @@ func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 		require.Zero(t, msg.acks.Load()+msg.terms.Load())
 		require.Equal(t, int32(1), msg.naks.Load())
 		require.Contains(t, result.Err().Error(), "persist loop state")
+		require.ErrorIs(t, result.Err(), injected)
+		require.Equal(t, before, bucket.values[loopID])
 	})
 }
 
@@ -169,7 +186,7 @@ func TestToolTimeoutCommitsTerminalFailureBeforeAck(t *testing.T) {
 	handler.loopManager.TrackToolCall(executionID, loopID)
 	handler.loopManager.TrackToolName(executionID, "search")
 	handler.loopManager.TrackToolOrdinal(executionID, 1)
-	bucket := &settlementBucket{values: make(map[string][]byte)}
+	bucket := &settlementBucket{values: map[string][]byte{loopID: settlementLoopRecord(t, entity)}}
 	c := releaseTestComponent(t, handler)
 	c.loopsBucket = bucket
 	toolResult := &agentic.ToolResult{
@@ -707,7 +724,7 @@ func TestLoopApprovalPanicProductionCallbackQuarantinesExactOwner(t *testing.T) 
 }
 
 // spec: agentic-loop / All six loop input classes settle after owner-specific durable done
-func TestLoopCancellationUnknownPublicationQuarantinesWithoutReleasingTransientState(t *testing.T) {
+func TestLoopCancellationUnknownPublicationQuarantinesAfterReleasingTransientState(t *testing.T) {
 	discoverable, err := NewComponent([]byte(`{}`), component.Dependencies{
 		NATSClient: &natsclient.Client{}, PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	})
@@ -719,6 +736,11 @@ func TestLoopCancellationUnknownPublicationQuarantinesWithoutReleasingTransientS
 	require.NoError(t, err)
 	_, err = c.handler.trajectoryManager.startTrajectory(loopID)
 	require.NoError(t, err)
+	entity, err := c.handler.GetLoop(loopID)
+	require.NoError(t, err)
+	before := settlementLoopRecord(t, entity)
+	bucket := &settlementBucket{values: map[string][]byte{loopID: before}}
+	c.loopsBucket = bucket
 	c.waitForStreamInput = func(context.Context, string) error { return nil }
 	callbacks := make(map[string]func(context.Context, jetstream.Msg))
 	handles := make(map[string]*loopPolicyHandle)
@@ -742,8 +764,10 @@ func TestLoopCancellationUnknownPublicationQuarantinesWithoutReleasingTransientS
 	require.Zero(t, msg.acks.Load()+msg.naks.Load()+msg.terms.Load())
 	require.Eventually(t, func() bool { return handles["agent.signal"].drains.Load() == 1 }, time.Second, time.Millisecond)
 	_, err = c.handler.trajectoryManager.getTrajectory(loopID)
-	require.NoError(t, err, "unknown terminal publication released the loop trajectory")
-	require.Contains(t, c.Health().LastError, "unknown durability")
+	require.Error(t, err, "unknown terminal publication retained speculative process state")
+	require.Equal(t, before, bucket.values[loopID], "unknown publication must not commit the terminal marker")
+	require.Contains(t, bucket.values, "COMPLETE_"+loopID, "test must reach publication after terminal selection")
+	require.Contains(t, c.Health().LastError, "publish result agent.complete.")
 	for port, handle := range handles {
 		if port != "agent.signal" {
 			require.Zero(t, handle.drains.Load(), "cancellation failure drained unrelated owner %s", port)
@@ -775,3 +799,141 @@ func (m *loopSettlementMsg) NakWithDelay(time.Duration) error        { m.naks.Ad
 func (*loopSettlementMsg) InProgress() error                         { return nil }
 func (m *loopSettlementMsg) Term() error                             { m.terms.Add(1); return nil }
 func (m *loopSettlementMsg) TermWithReason(string) error             { return m.Term() }
+
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+func TestCancellationPreEffectCollisionClassificationRetries(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+	loopID, err := handler.loopManager.CreateLoop("task-cancel-collision", "general", "model", 3)
+	require.NoError(t, err)
+	entity, err := handler.GetLoop(loopID)
+	require.NoError(t, err)
+	_, collision := handler.loopManager.CreateLoopWithID(loopID, entity.TaskID, entity.Role, entity.Model, entity.MaxIterations)
+	require.ErrorIs(t, collision, ErrLoopAlreadyExists)
+	require.True(t, errs.IsInvalid(collision))
+	require.False(t, errs.IsFatal(collision))
+	before := settlementLoopRecord(t, entity)
+	bucket := &settlementBucket{
+		values: map[string][]byte{loopID: before}, revisions: map[string]uint64{loopID: 1}, getErr: collision,
+	}
+	c := releaseTestComponent(t, handler)
+	c.loopsBucket = bucket
+	// Classification-only control: pass the real manager collision error through
+	// the existing read-error seam. This does not claim to schedule the gap
+	// between cancellation's GetLoop and CreateLoopWithID, which has no test hook.
+	msg := &loopDeliveryOwnerMsg{data: settlementEnvelope(t, &agentic.UserSignal{
+		SignalID: "cancel-collision", LoopID: loopID, Type: agentic.SignalCancel, UserID: "operator",
+	})}
+	result, admitted := consumeAdmittedDelivery(
+		t.Context(), msg, task4HeartbeatPolicy(t, "agent.signal", c.handleSignalMessage), newDeliveryLaneAdmission(nil),
+	)
+	require.True(t, admitted)
+	require.ErrorIs(t, result.Err(), collision)
+	require.Equal(t, natsclient.DeliveryDecisionRetry, result.Decision())
+	require.Equal(t, int32(1), msg.naks.Load())
+	require.Zero(t, msg.acks.Load()+msg.terms.Load())
+	require.Len(t, bucket.values, 1, "pre-effect refusal must not select a terminal outcome")
+	require.Equal(t, before, bucket.values[loopID])
+	require.Equal(t, uint64(1), bucket.revisions[loopID])
+	after, err := handler.GetLoop(loopID)
+	require.NoError(t, err)
+	require.Equal(t, entity, after)
+}
+
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+func TestTerminalCancellationInapplicabilityDiagnostic(t *testing.T) {
+	for _, name := range []string{"terminal redelivery", "terminal metrics disabled", "running selection error", "authority read error"} {
+		t.Run(name, func(t *testing.T) {
+			handler := NewMessageHandler(DefaultConfig())
+			loopID, err := handler.loopManager.CreateLoop("task-cancel-diagnostic", "general", "model", 3)
+			require.NoError(t, err)
+			entity, err := handler.GetLoop(loopID)
+			require.NoError(t, err)
+			terminal := name == "terminal redelivery" || name == "terminal metrics disabled"
+			if terminal {
+				entity, err = handler.CancelLoop(loopID, "original operator")
+				require.NoError(t, err)
+			}
+			require.NoError(t, entity.Validate())
+			bucket := &settlementBucket{
+				values:    map[string][]byte{loopID: settlementLoopRecord(t, entity)},
+				revisions: map[string]uint64{loopID: 7},
+			}
+			injected := errors.New("injected cancellation storage failure")
+			switch name {
+			case "terminal redelivery", "terminal metrics disabled":
+				saved := &agentic.LoopCancelledEvent{LoopID: loopID, TaskID: entity.TaskID,
+					Outcome: agentic.OutcomeCancelled, CancelledBy: entity.CancelledBy, CancelledAt: entity.CancelledAt}
+				require.NoError(t, saved.Validate())
+				bucket.values["COMPLETE_"+loopID], err = json.Marshal(saved)
+				require.NoError(t, err)
+				bucket.revisions["COMPLETE_"+loopID] = 6
+			case "running selection error":
+				bucket.putErr = injected
+			case "authority read error":
+				bucket.getErr = injected
+			}
+			before, err := json.Marshal(bucket.values)
+			require.NoError(t, err)
+			beforeRevisions, err := json.Marshal(bucket.revisions)
+			require.NoError(t, err)
+			c := releaseTestComponent(t, handler)
+			c.loopsBucket = bucket
+			registeredMetrics := getMetrics(nil)
+			c.metrics = registeredMetrics
+			beforeCounter := testutil.ToFloat64(registeredMetrics.cancellationsInapplicable)
+			if name == "terminal metrics disabled" {
+				c.metrics = nil
+			}
+			var logs bytes.Buffer
+			c.logger = slog.New(slog.NewTextHandler(&logs, nil))
+			data := settlementEnvelope(t, &agentic.UserSignal{
+				SignalID: "cancel-diagnostic", LoopID: loopID, Type: agentic.SignalCancel, UserID: "operator",
+			})
+			deliveries := 1
+			if name == "terminal redelivery" {
+				deliveries = 2 // The same signal is counted per delivery, not deduplicated as an operation.
+			}
+			for range deliveries {
+				msg := &loopDeliveryOwnerMsg{data: data}
+				result, admitted := consumeAdmittedDelivery(
+					t.Context(), msg, task4HeartbeatPolicy(t, "agent.signal", c.handleSignalMessage), newDeliveryLaneAdmission(nil),
+				)
+				require.True(t, admitted)
+				if terminal {
+					require.NoError(t, result.Err())
+					require.Equal(t, natsclient.DeliveryDecisionAck, result.Decision())
+					require.Equal(t, int32(1), msg.acks.Load())
+					require.Zero(t, msg.naks.Load()+msg.terms.Load())
+				} else {
+					require.ErrorIs(t, result.Err(), injected, "control must reach its actual storage failure")
+					require.Equal(t, natsclient.DeliveryDecisionRetry, result.Decision())
+					require.Equal(t, int32(1), msg.naks.Load())
+					require.Zero(t, msg.acks.Load()+msg.terms.Load())
+				}
+			}
+			wantSkipped := 0
+			if terminal {
+				wantSkipped = deliveries
+				assert.Contains(t, logs.String(), "level=WARN")
+				assert.Contains(t, logs.String(), "authoritative loop is terminal; no cancellation effects required")
+				assert.Contains(t, logs.String(), "signal_id=cancel-diagnostic")
+				assert.Contains(t, logs.String(), "loop_id="+loopID)
+				assert.Contains(t, logs.String(), "state=cancelled")
+				_, err = handler.GetLoop(loopID)
+				require.Error(t, err, "inapplicable cancellation still releases transient process state")
+			}
+			wantIncrements := wantSkipped
+			if c.metrics == nil {
+				wantIncrements = 0
+			}
+			assert.Equal(t, beforeCounter+float64(wantIncrements), testutil.ToFloat64(registeredMetrics.cancellationsInapplicable))
+			assert.Equal(t, wantSkipped, strings.Count(logs.String(), "cancellation inapplicable:"))
+			after, err := json.Marshal(bucket.values)
+			require.NoError(t, err)
+			assert.Equal(t, before, after, "diagnostics cannot change current authority or selected outcome")
+			afterRevisions, err := json.Marshal(bucket.revisions)
+			require.NoError(t, err)
+			assert.Equal(t, beforeRevisions, afterRevisions)
+		})
+	}
+}

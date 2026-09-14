@@ -5,6 +5,7 @@ package agenticloop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -22,6 +23,11 @@ import (
 
 // spec: agentic-loop / Delivery work joins before settlement
 func TestIntegrationApprovalRejectionJoinsCancelledGraphRequestBeforeQuarantine(t *testing.T) {
+	t.Run("warm_rejection", func(t *testing.T) { testApprovalRejectionJoinsCancelledGraphRequest(t, false) })
+	t.Run("cold_retained_absence", func(t *testing.T) { testApprovalRejectionJoinsCancelledGraphRequest(t, true) })
+}
+
+func testApprovalRejectionJoinsCancelledGraphRequest(t *testing.T, cold bool) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithStreams(
 		natsclient.TestStreamConfig{Name: "AGENT", Subjects: []string{"agent.>", "tool.>"}},
 	))
@@ -71,6 +77,24 @@ func TestIntegrationApprovalRejectionJoinsCancelledGraphRequestBeforeQuarantine(
 	entity.Iterations = entity.MaxIterations
 	require.NoError(t, c.handler.UpdateLoop(entity))
 	require.NoError(t, c.persistLoopState(setupCtx, loopID))
+	if cold {
+		stream, err := testClient.Client.GetStream(setupCtx, "AGENT")
+		require.NoError(t, err)
+		info, err := stream.Info(setupCtx)
+		require.NoError(t, err)
+		cfg := info.Config
+		cfg.Discard, cfg.MaxAge = jetstream.DiscardNew, time.Hour
+		cfg.MaxMsgsPerSubject = -1
+		js, err := testClient.Client.JetStream()
+		require.NoError(t, err)
+		_, err = js.UpdateStream(setupCtx, cfg)
+		require.NoError(t, err)
+		_, err = stream.GetLastMsgForSubject(setupCtx, "agent.request."+loopID)
+		require.ErrorIs(t, err, jetstream.ErrMsgNotFound, "fixture lacks the exact required request")
+		c.releaseLoopTransientState(loopID)
+	}
+	before, err := c.loopsBucket.Get(setupCtx, loopID)
+	require.NoError(t, err)
 	response := &agentic.ApprovalResponse{
 		LoopID: loopID, CallID: call.ID, Decision: agentic.ApprovalDecisionReject,
 		ExecutionID: call.ExecutionID,
@@ -110,6 +134,13 @@ func TestIntegrationApprovalRejectionJoinsCancelledGraphRequestBeforeQuarantine(
 			require.Zero(t, handle.drains.Load(), "graph failure drained unrelated owner %s", port)
 		}
 	}
+	after, err := c.loopsBucket.Get(setupCtx, loopID)
+	require.NoError(t, err)
+	require.Equal(t, before.Revision(), after.Revision())
+	require.Equal(t, before.Value(), after.Value(), "unknown terminal effect must not install the final marker")
+	_, err = c.loopsBucket.Get(setupCtx, "COMPLETE_"+loopID)
+	require.NoError(t, err, "the selected result must survive the failed effect")
+	require.Empty(t, perLoopMapCount(c.handler.loopManager, loopID))
 	close(graphRelease)
 	released = true
 
@@ -162,7 +193,38 @@ func TestIntegrationLoopSignalAndApprovalCallbacksCommitBeforeAck(t *testing.T) 
 	signalData, err := json.Marshal(message.NewBaseMessage(signal.Schema(), signal, "test"))
 	require.NoError(t, err)
 	signalMsg := &loopSettlementMsg{data: signalData}
-	callbacks["agent.signal"](ctx, signalMsg)
+	observedSignal := &terminalMarkerDelivery{Msg: signalMsg, beforeAck: func() error {
+		marker, err := c.loopsBucket.Get(ctx, cancelLoopID)
+		if err != nil {
+			return err
+		}
+		selected, err := c.loopsBucket.Get(ctx, "COMPLETE_"+cancelLoopID)
+		if err != nil {
+			return err
+		}
+		if marker.Revision() <= selected.Revision() {
+			return errors.New("cancel ACK preceded final marker")
+		}
+		stream, err := testClient.Client.GetStream(ctx, "AGENT")
+		if err != nil {
+			return err
+		}
+		published, err := stream.GetLastMsgForSubject(ctx, "agent.complete."+cancelLoopID)
+		if err != nil {
+			return err
+		}
+		base, err := c.decoder.Decode(published.Data)
+		if err != nil {
+			return err
+		}
+		cancelled, ok := base.Payload().(*agentic.LoopCancelledEvent)
+		if !ok || cancelled.LoopID != cancelLoopID || cancelled.CancelledBy != signal.UserID {
+			return errors.New("cancel ACK lacks exact registered terminal publication")
+		}
+		return nil
+	}}
+	callbacks["agent.signal"](ctx, observedSignal)
+	require.NoError(t, observedSignal.ackCheckErr)
 	require.Equal(t, int32(1), signalMsg.acks.Load())
 	require.Zero(t, signalMsg.naks.Load()+signalMsg.terms.Load())
 	select {
@@ -255,6 +317,6 @@ func setUpPersistedApprovalForSettlement(t *testing.T, ctx context.Context, c *C
 	})
 	require.NoError(t, err)
 	require.Equal(t, agentic.LoopStateAwaitingApproval, gate.State)
-	require.NoError(t, c.persistHandlerResult(ctx, gate))
+	require.NoError(t, c.persistHandlerResult(ctx, gate, 0))
 	return *call
 }
