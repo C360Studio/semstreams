@@ -38,6 +38,24 @@ before that callback returns. That is an implementation detail, not a stable ser
 `MaxAckPending=3` bounds delivered-but-unacknowledged admission at NATS; it is not an executor thread-safety or local
 dispatch guarantee. Direct callers of the thread-safe registry may still overlap executor calls.
 
+### Built-in HTTP page reader
+
+`http_request` is a bounded, single-page static reader. It issues `GET` only, follows at most five policy-validated
+HTTP/HTTPS redirects, does not execute JavaScript, and does not crawl links. It returns final-URL, content-type,
+transformation, and truncation metadata with the normalized body inside one 20,000-byte model-facing bound. Explicit
+valid MIME declarations are authoritative: `text/plain` remains raw even when its bytes resemble HTML; MIME sniffing
+is limited to absent, invalid, or generic declarations such as `application/octet-stream`.
+
+**BREAKING (pre-v1):** `POST` is no longer accepted by `http_request`; it is rejected as `invalid_args` before DNS
+or dialing. Durable tool delivery can execute an unfinished call again, while a bodyless POST has neither a useful
+page-read meaning nor a downstream idempotency contract. Adopters needing an HTTP write must provide a purpose-built
+effectful executor with operation-specific arguments and a real downstream idempotency contract. Do not substitute
+an `Idempotency-Key` header without downstream ownership of that contract.
+
+The built-in declares `mutating` when a graph publisher is wired because a successful read can append its observation
+and loop back-link. A text-only instance declares `read_only`. Neither variant is `external_effect`: GET does not
+change remote state.
+
 ## Configuration
 
 ```json
