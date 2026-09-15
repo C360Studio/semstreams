@@ -13,6 +13,7 @@ import (
 	"github.com/c360studio/semstreams/internal/agentterminal"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -228,6 +229,48 @@ func TestSettleAgentTerminalDispositionClasses(t *testing.T) {
 		err := c.settleAgentTerminal(context.Background(), completionPayload(t, valid))
 		require.Error(t, err)
 		require.False(t, isPermanentTerminal(err))
+	})
+}
+
+func TestHandleTerminalDeliveryDecisionMatrix(t *testing.T) {
+	valid := &agentic.LoopCompletedEvent{LoopID: "loop-decision", TaskID: "task-decision", Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now()}
+
+	t.Run("immutable terminal poison", func(t *testing.T) {
+		c := terminalTestComponent(t)
+		decision, err := c.handleTerminalDelivery(t.Context(), []byte(`{"bad":true}`))
+		require.Equal(t, natsclient.DeliveryDecisionTerminate, decision)
+		require.True(t, isPermanentTerminal(err))
+	})
+
+	t.Run("proven pre-publish failure retries", func(t *testing.T) {
+		c := terminalTestComponent(t)
+		c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
+			return nil, errors.New("read unavailable")
+		}
+		decision, err := c.handleTerminalDelivery(t.Context(), completionPayload(t, valid))
+		require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
+		require.Error(t, err)
+	})
+
+	t.Run("unknown publish outcome quarantines", func(t *testing.T) {
+		c := terminalTestComponent(t)
+		c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
+			return &agentic.LoopEntity{ID: valid.LoopID, TaskID: valid.TaskID, State: agentic.LoopStateComplete, MaxIterations: 3, ChannelType: "http", ChannelID: "id"}, nil
+		}
+		c.sendTerminalResponseFn = func(context.Context, agentic.UserResponse, string) error { return errors.New("no puback") }
+		decision, err := c.handleTerminalDelivery(t.Context(), completionPayload(t, valid))
+		require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
+		require.True(t, isUnknownTerminalPublication(err))
+	})
+
+	t.Run("durable non-publish completion acks", func(t *testing.T) {
+		c := terminalTestComponent(t)
+		c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
+			return &agentic.LoopEntity{ID: valid.LoopID, TaskID: valid.TaskID, State: agentic.LoopStateComplete, MaxIterations: 3}, nil
+		}
+		decision, err := c.handleTerminalDelivery(t.Context(), completionPayload(t, valid))
+		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+		require.NoError(t, err)
 	})
 }
 
