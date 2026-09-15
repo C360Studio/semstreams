@@ -69,7 +69,19 @@ This claim does not absorb #935, #1043 or #1045, change general rule atomicity, 
 
 Any breaking composition restriction requires migration notes and relevant agentic E2E evidence before landing.
 
-## Current Stop Point
+## Initial Claim Stop Point (historical)
 
 Open the draft claim, then finish the bounded admission/reload and integration design. No runtime implementation
 or capability-delta promotion is authorized before independent design review and owner acceptance.
+
+## Accepted Contract and Current Stop Point
+
+The owner accepted the independently reviewed publication-only design and explicit stacked integration sequence:
+https://github.com/C360Studio/semstreams/issues/1311#issuecomment-5676602813.
+The initial claim text above records the earlier scope-only approval; `design.md` now holds the accepted target.
+
+The rule-engine delta and finite tasks materialize that target. No runtime code or Git restack has occurred.
+Implementation remains gated on publishing the reviewed #1159 settlement, correlation, and required R8 checkpoint.
+The child then targets and integrates into #1159, not independently into main. Existing gates remain required.
+Generic publish wire compatibility must be proved through the integrated production codec; the publish_agent
+TaskMessage envelope and R8 transport correction are not evidence that generic publish already satisfies it.
