@@ -443,7 +443,7 @@ func (c *Component) handleMessage(ctx context.Context, data []byte, msgType Mess
 
 		if err := c.natsClient.PublishToStream(ctx, outputSubject, outputData); err != nil {
 			atomic.AddInt64(&c.errors, 1)
-			return natsclient.DeliveryDecisionQuarantine,
+			return natsclient.DeliveryDecisionRetry,
 				fmt.Errorf("validated output %s has unknown durable publication state: %w", outputSubject, err)
 		}
 	}

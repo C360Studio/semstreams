@@ -15,6 +15,7 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/agentic/agentrun"
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/component/flowgraph"
 	"github.com/c360studio/semstreams/governance"
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
@@ -1124,7 +1125,13 @@ func (e *ActionExecutor) executePublish(ctx context.Context, action Action, ec *
 
 	// Publish via NATS if publisher is configured
 	if e.publisher != nil {
-		data, err := json.Marshal(payload)
+		var wirePayload any = payload
+		if flowgraph.SubjectCovers("agent.toolcall.approved.>", subject) ||
+			flowgraph.SubjectCovers("agent.toolcall.rejected.>", subject) {
+			generic := message.NewGenericJSON(payload)
+			wirePayload = message.NewBaseMessage(generic.Schema(), generic, "rule_engine")
+		}
+		data, err := json.Marshal(wirePayload)
 		if err != nil {
 			return fmt.Errorf("marshal publish payload: %w", err)
 		}
@@ -2131,13 +2138,10 @@ func (e *ActionExecutor) executeApprove(ctx context.Context, action Action, ec *
 		"entity_id": entityID,
 		"timestamp": time.Now().Format(time.RFC3339Nano),
 	}
-	// Echo call_id / loop_id from the proposed message so downstream
-	// consumers (the agentic-loop subject-mode dispatcher) can demux
-	// verdicts without parsing the subject. ADR-039: the subject IS
-	// authoritative for the decision, but the payload mirrors the
-	// routing identifiers so consumers don't need a custom subject
-	// parser. No-op when MessageData is nil (cron-fired or entity-
-	// state evaluations have no inbound call_id).
+	// Echo the observed proposal identity. Verdict intake requires payload
+	// correlation and agreement with the actual delivered subject; neither
+	// source repairs missing identity in the other. No identity is invented
+	// for evaluations without MessageData.
 	if ec.MessageData != nil {
 		if v, ok := ec.MessageData["call_id"].(string); ok && v != "" {
 			payloadData["call_id"] = v
@@ -2151,12 +2155,7 @@ func (e *ActionExecutor) executeApprove(ctx context.Context, action Action, ec *
 			}
 		}
 	}
-	// Wrap in a `core.json.v1` BaseMessage so subscribers using the
-	// payload registry (`message.NewDecoder(reg).Decode(data)`) can
-	// read this off the wire. Raw `json.Marshal(map)` would deliver
-	// silently to the agentic-loop's bespoke handler today but trap
-	// any future audit/ops dashboard subscriber that decodes via
-	// registry. See feedback_nats_publishes_use_payload_registry.
+	// Verdict consumers require the existing registered core.json.v1 carrier.
 	generic := message.NewGenericJSON(payloadData)
 	baseMsg := message.NewBaseMessage(generic.Schema(), generic, "rule_engine")
 	data, err := json.Marshal(baseMsg)

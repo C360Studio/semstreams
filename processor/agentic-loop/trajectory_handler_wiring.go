@@ -44,15 +44,15 @@ func appendTrajectoryObservation(result *HandlerResult, observation trajectoryOb
 //
 // The loop-manager release is admissible only under one invariant, which the
 // agentic-loop spec states: after a loop settles, the ABSENCE of its in-process
-// entity is indistinguishable from its PRESENCE in a terminal state. Every
-// reader that can still be handed a message for a settled loop — a late or
-// duplicate approval response, a late tool result, a late model response —
-// must classify it from exact durable evidence: ACK only when application is
-// proven, quarantine conflicting correlation, and retry when proof is not yet
-// observable. That case was already reachable whenever a process replacement
-// preceded the late message; the release makes it common, which is why it is
-// now a contract rather than an accident. The durable loop record remains the
-// authority for a settled loop's result.
+// entity is indistinguishable from its PRESENCE in a terminal state.
+// Every late reader classifies its input from exact durable authority,
+// never from process absence or bare terminality alone. Ordinary final
+// tool/model responses require lane-specific applied proof. Approval-required
+// statuses may instead prove phase supersession; ApprovalResponse may observe
+// no matching current gate and ACK effect-free with its required log and metric.
+// Conflicting required correlation quarantines, and unresolved evidence retries.
+// Release changes no lane's settlement proof. The durable loop record remains
+// the authority for a settled loop's result.
 //
 // HandleTask's own rollback still discards only the trajectory, and correctly
 // so: MessageHandler holds no *Component and no trajectoryRecorder, so

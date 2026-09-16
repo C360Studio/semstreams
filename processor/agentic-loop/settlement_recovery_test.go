@@ -112,6 +112,10 @@ func (e *settlementEvidence) ReadAgentResponse(context.Context, string, string) 
 	return e.response, e.responseFound, e.responseErr
 }
 
+func (*settlementEvidence) ReadGovernanceVerdict(context.Context, string, string) (retainedLoopMessage, bool, error) {
+	return retainedLoopMessage{}, false, errors.New("governance evidence not configured by this fixture")
+}
+
 func settlementEnvelope(t *testing.T, payload message.Payload) []byte {
 	t.Helper()
 	data, err := json.Marshal(message.NewBaseMessage(payload.Schema(), payload, "test"))

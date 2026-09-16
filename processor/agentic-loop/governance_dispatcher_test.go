@@ -31,17 +31,27 @@ func governanceTestCall(id, name string) agentic.ToolCall {
 	}
 }
 
+func governanceTestVerdict(decision, executionID string) VerdictPayload {
+	return VerdictPayload{Decision: decision, ExecutionID: executionID, LoopID: "loop-1",
+		RequestID: "request-1", ProposalFingerprint: "fingerprint"}
+}
+
+func governanceTestProposal(executionID string) ProposedToolCallPayload {
+	return ProposedToolCallPayload{LoopID: "loop-1", RequestID: "request-1", ExecutionID: executionID,
+		CallID: "call-1", CallOrdinal: 1, ProposalFingerprint: "fingerprint", ToolName: "lookup"}
+}
+
 // spec: agentic-loop / All six loop input classes settle after owner-specific durable done
 func TestGovernanceDispatcherHandleVerdictDeclaresDeliveryOutcome(t *testing.T) {
 	t.Parallel()
 
 	disabled := NewGovernanceDispatcher(ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeDisabled}, nil, slog.Default(), nil)
-	decision, err := disabled.HandleVerdict("approved", "call-disabled", nil)
+	decision, err := disabled.HandleVerdict(governanceTestVerdict("approved", "call-disabled"))
 	require.NoError(t, err)
 	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
 
 	audit := NewGovernanceDispatcher(ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeAudit}, nil, slog.Default(), nil)
-	decision, err = audit.HandleVerdict("approved", "call-audit", nil)
+	decision, err = audit.HandleVerdict(governanceTestVerdict("approved", "call-audit"))
 	require.NoError(t, err)
 	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
 
@@ -50,20 +60,20 @@ func TestGovernanceDispatcherHandleVerdictDeclaresDeliveryOutcome(t *testing.T) 
 		nil, slog.Default(), nil,
 	).(*enforceDispatcher)
 
-	decision, err = enforce.HandleVerdict("approved", "missing", nil)
+	decision, err = enforce.HandleVerdict(governanceTestVerdict("approved", "missing"))
 	require.Error(t, err)
 	require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
 
-	delivered := enforce.registerWaiter("delivered")
-	decision, err = enforce.HandleVerdict("approved", "delivered", nil)
+	delivered := enforce.registerWaiter(governanceTestProposal("delivered")).arrivals
+	decision, err = enforce.HandleVerdict(governanceTestVerdict("approved", "delivered"))
 	require.NoError(t, err)
 	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
 	require.Equal(t, "approved", (<-delivered).decision)
 	enforce.releaseWaiter("delivered")
 
-	full := enforce.registerWaiter("full")
+	full := enforce.registerWaiter(governanceTestProposal("full")).arrivals
 	full <- verdictArrival{decision: "approved"}
-	decision, err = enforce.HandleVerdict("rejected", "full", nil)
+	decision, err = enforce.HandleVerdict(governanceTestVerdict("rejected", "full"))
 	require.Error(t, err)
 	require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
 	enforce.releaseWaiter("full")
@@ -198,7 +208,7 @@ func TestDispatcher_AuditModeIgnoresPublishFailure(t *testing.T) {
 func TestDispatcher_EnforceModeWaitsForApproveVerdict(t *testing.T) {
 	t.Parallel()
 
-	pub := &mockVerdictPublisher{}
+	pub := &raceTestPublisher{}
 	d := NewGovernanceDispatcher(
 		ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeEnforce, Timeout: "2s"},
 		pub, slog.Default(), nil,
@@ -206,17 +216,13 @@ func TestDispatcher_EnforceModeWaitsForApproveVerdict(t *testing.T) {
 
 	calls := []agentic.ToolCall{governanceTestCall("call-001", "bash")}
 
-	// Simulate an approve verdict arriving 50ms after Propose starts.
-	// HandleVerdict runs on a separate goroutine (in production, the
-	// JetStream callback). The buffered waiter channel absorbs the
-	// send even if Propose hasn't entered its select yet.
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		payload, _ := json.Marshal(VerdictPayload{
-			Decision: "approved", RuleID: "rule-allow", Reason: "policy permits",
-		})
-		d.HandleVerdict("approved", "execution-call-001", payload)
-	}()
+	pub.onPublish = func() {
+		payload := verdictForPublishedProposal(publishedGovernanceProposal(t, pub.published[0].data), "approved")
+		payload.RuleID, payload.Reason = "rule-allow", "policy permits"
+		decision, err := d.HandleVerdict(payload)
+		require.NoError(t, err)
+		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+	}
 
 	result, err := d.Propose(context.Background(), "loop-1", "", calls)
 	require.NoError(t, err)
@@ -229,7 +235,7 @@ func TestDispatcher_EnforceModeWaitsForApproveVerdict(t *testing.T) {
 func TestDispatcher_EnforceModeRejectsOnDenyVerdict(t *testing.T) {
 	t.Parallel()
 
-	pub := &mockVerdictPublisher{}
+	pub := &raceTestPublisher{}
 	d := NewGovernanceDispatcher(
 		ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeEnforce, Timeout: "2s"},
 		pub, slog.Default(), nil,
@@ -237,13 +243,13 @@ func TestDispatcher_EnforceModeRejectsOnDenyVerdict(t *testing.T) {
 
 	calls := []agentic.ToolCall{governanceTestCall("call-001", "bash")}
 
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		payload, _ := json.Marshal(VerdictPayload{
-			Decision: "rejected", RuleID: "block-bash", Reason: "bash disallowed",
-		})
-		d.HandleVerdict("rejected", "execution-call-001", payload)
-	}()
+	pub.onPublish = func() {
+		payload := verdictForPublishedProposal(publishedGovernanceProposal(t, pub.published[0].data), "rejected")
+		payload.RuleID, payload.Reason = "block-bash", "bash disallowed"
+		decision, err := d.HandleVerdict(payload)
+		require.NoError(t, err)
+		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+	}
 
 	result, err := d.Propose(context.Background(), "loop-1", "", calls)
 	require.NoError(t, err)
@@ -289,7 +295,7 @@ func TestDispatcher_EnforceModeFailsClosedOnTimeout(t *testing.T) {
 func TestDispatcher_EnforceModeMixedVerdictsPreserveOrder(t *testing.T) {
 	t.Parallel()
 
-	pub := &mockVerdictPublisher{}
+	pub := &raceTestPublisher{}
 	d := NewGovernanceDispatcher(
 		ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeEnforce, Timeout: "2s"},
 		pub, slog.Default(), nil,
@@ -301,19 +307,21 @@ func TestDispatcher_EnforceModeMixedVerdictsPreserveOrder(t *testing.T) {
 		governanceTestCall("c3", "bash"),
 	}
 
-	// Race-fix: send the verdicts AFTER Propose has registered all
-	// waiters. 50ms slop is sufficient because Propose pre-registers
-	// every waiter synchronously before publish completes.
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		// Reverse order on purpose to confirm the dispatcher
-		// re-orders by request, not by arrival.
-		approvedPayload, _ := json.Marshal(VerdictPayload{Decision: "approved"})
-		rejectedPayload, _ := json.Marshal(VerdictPayload{Decision: "rejected", Reason: "blocked"})
-		d.HandleVerdict("approved", "execution-c3", approvedPayload)
-		d.HandleVerdict("rejected", "execution-c2", rejectedPayload)
-		d.HandleVerdict("approved", "execution-c1", approvedPayload)
-	}()
+	pub.onPublish = func() {
+		if len(pub.published) != len(calls) {
+			return
+		}
+		// Reverse actual publication order to test routing independently of arrival.
+		for i := len(pub.published) - 1; i >= 0; i-- {
+			payload := verdictForPublishedProposal(publishedGovernanceProposal(t, pub.published[i].data), "approved")
+			if i == 1 {
+				payload.Decision, payload.Reason = "rejected", "blocked"
+			}
+			decision, err := d.HandleVerdict(payload)
+			require.NoError(t, err)
+			require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+		}
+	}
 
 	result, err := d.Propose(context.Background(), "loop-1", "", calls)
 	require.NoError(t, err)
@@ -325,18 +333,23 @@ func TestDispatcher_EnforceModeMixedVerdictsPreserveOrder(t *testing.T) {
 	assert.Equal(t, "c2", result.Rejected[0].Call.ID)
 }
 
-// Publish failure on a single call in enforce mode becomes a per-call
-// rejection — the rest of the batch continues with their waiters
-// intact. This is the architectural commitment that publish failure
-// degrades to fail-closed gracefully rather than wedging the loop.
+// spec: agentic-governance / Governance publications are durably at-least-once
+// A partial publication is retryable source work, never a policy rejection.
 func TestDispatcher_EnforceModePartialPublishFailure(t *testing.T) {
 	t.Parallel()
 
-	// Custom publisher that fails on the second call only.
-	pub := &selectiveFailPublisher{failCallIDMatch: func(callID string) bool {
-		return callID == "c2"
-	}}
-	d := NewGovernanceDispatcher(
+	var d GovernanceDispatcher
+	pub := proposalTestPublisher(func(_ context.Context, _ string, data []byte) error {
+		proposal := publishedGovernanceProposal(t, data)
+		if proposal.CallID == "c2" {
+			return errors.New("selective publish failure")
+		}
+		decision, err := d.HandleVerdict(verdictForPublishedProposal(proposal, "approved"))
+		require.NoError(t, err)
+		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+		return nil
+	})
+	d = NewGovernanceDispatcher(
 		ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeEnforce, Timeout: "1s"},
 		pub, slog.Default(), nil,
 	)
@@ -346,21 +359,11 @@ func TestDispatcher_EnforceModePartialPublishFailure(t *testing.T) {
 		governanceTestCall("c2", "bash"),
 	}
 
-	go func() {
-		time.Sleep(30 * time.Millisecond)
-		payload, _ := json.Marshal(VerdictPayload{Decision: "approved"})
-		// Only c1 will have a verdict subscribe path — c2's publish failed.
-		d.HandleVerdict("approved", "execution-c1", payload)
-	}()
-
 	result, err := d.Propose(context.Background(), "loop-1", "", calls)
-	require.NoError(t, err)
-
-	require.Len(t, result.Approved, 1)
-	assert.Equal(t, "c1", result.Approved[0].ID)
-	require.Len(t, result.Rejected, 1)
-	assert.Equal(t, "c2", result.Rejected[0].Call.ID)
-	assert.Contains(t, result.Rejected[0].Reason, "publish failed")
+	require.ErrorIs(t, err, ErrGovernancePublishFailed)
+	require.Empty(t, result.Approved)
+	require.Empty(t, result.Rejected)
+	require.Empty(t, d.(*enforceDispatcher).waiters)
 }
 
 // Race-condition fix: verdict arriving BEFORE Propose enters its select
@@ -381,8 +384,11 @@ func TestDispatcher_EnforceModeVerdictBeforeSelectArrival(t *testing.T) {
 	// before Propose returns from publish and enters the select. The
 	// buffered waiter channel must absorb this.
 	pub.onPublish = func() {
-		payload, _ := json.Marshal(VerdictPayload{Decision: "approved", RuleID: "fast-rule"})
-		d.HandleVerdict("approved", "execution-fast-call", payload)
+		payload := verdictForPublishedProposal(publishedGovernanceProposal(t, pub.published[0].data), "approved")
+		payload.RuleID = "fast-rule"
+		decision, err := d.HandleVerdict(payload)
+		require.NoError(t, err)
+		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
 	}
 
 	result, err := d.Propose(context.Background(), "loop-1", "", calls)
@@ -410,8 +416,7 @@ func TestDispatcher_EnforceModeLateVerdictIsNoOp(t *testing.T) {
 	require.Len(t, result.Rejected, 1)
 
 	// Now fire a late verdict — must not panic.
-	payload, _ := json.Marshal(VerdictPayload{Decision: "approved"})
-	d.HandleVerdict("approved", "execution-late-call", payload)
+	d.HandleVerdict(governanceTestVerdict("approved", "execution-late-call"))
 }
 
 // --- metrics integration --------------------------------------------
@@ -453,7 +458,7 @@ func (m *mockDispatcherMetrics) Verdicts() []recordedVerdict {
 func TestDispatcher_EnforceModeRecordsApprovedVerdictMetric(t *testing.T) {
 	t.Parallel()
 
-	pub := &mockVerdictPublisher{}
+	pub := &raceTestPublisher{}
 	mx := &mockDispatcherMetrics{}
 	d := NewGovernanceDispatcher(
 		ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeEnforce, Timeout: "2s"},
@@ -461,11 +466,12 @@ func TestDispatcher_EnforceModeRecordsApprovedVerdictMetric(t *testing.T) {
 	)
 
 	calls := []agentic.ToolCall{governanceTestCall("c1", "bash")}
-	go func() {
-		time.Sleep(30 * time.Millisecond)
-		payload, _ := json.Marshal(VerdictPayload{Decision: "approved"})
-		d.HandleVerdict("approved", "execution-c1", payload)
-	}()
+	pub.onPublish = func() {
+		payload := verdictForPublishedProposal(publishedGovernanceProposal(t, pub.published[0].data), "approved")
+		decision, err := d.HandleVerdict(payload)
+		require.NoError(t, err)
+		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+	}
 
 	_, err := d.Propose(context.Background(), "loop-1", "", calls)
 	require.NoError(t, err)
@@ -517,37 +523,10 @@ func TestDispatcher_LateVerdictIncrementsMissingWaiterMetric(t *testing.T) {
 
 	// Late verdict — waiter already released by defer. Must increment
 	// the missing-waiter counter, not panic.
-	payload, _ := json.Marshal(VerdictPayload{Decision: "approved"})
-	d.HandleVerdict("approved", "execution-late-call", payload)
+	d.HandleVerdict(governanceTestVerdict("approved", "execution-late-call"))
 
 	assert.Equal(t, 1, mx.missingWaiterCalls,
 		"late verdict for released waiter must increment subscribe-before-publish counter")
-}
-
-// --- subject parsing -------------------------------------------------
-
-func TestDecisionFromVerdictSubject(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		subject string
-		want    string
-	}{
-		{"canonical approved", "agent.toolcall.approved.loop-1.call-001", "approved"},
-		{"canonical rejected", "agent.toolcall.rejected.loop-1.call-001", "rejected"},
-		{"unrelated subject — empty", "agent.task.review", ""},
-		{"wrong verb — empty", "agent.toolcall.observed.loop-1.call-1", ""},
-		{"three segments still parses", "agent.toolcall.approved", "approved"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := decisionFromVerdictSubject(tt.subject)
-			assert.Equal(t, tt.want, got)
-		})
-	}
 }
 
 // VerdictPayload supports two on-the-wire shapes. The approve-action
@@ -663,41 +642,6 @@ func TestToolCallGovernanceConfigIsEnforcing(t *testing.T) {
 }
 
 // --- helpers -------------------------------------------------------
-
-// selectiveFailPublisher fails on calls whose call_id matches the
-// predicate. The mock builds the proposed subject as
-// "agent.toolcall.proposed.<loop>" — the publisher parses the payload
-// to extract call_id and decide whether to fail.
-type selectiveFailPublisher struct {
-	mu              sync.Mutex
-	published       []publishedVerdict
-	failCallIDMatch func(callID string) bool
-}
-
-func (m *selectiveFailPublisher) PublishToStream(_ context.Context, subject string, data []byte) error {
-	// Bytes are BaseMessage-wrapped (wire envelope around GenericJSONPayload).
-	// Extract the proposed-call payload via the wire envelope so the
-	// per-call_id predicate can decide whether to fail.
-	var envelope struct {
-		Payload json.RawMessage `json:"payload"`
-	}
-	if err := json.Unmarshal(data, &envelope); err == nil {
-		var generic struct {
-			Data ProposedToolCallPayload `json:"data"`
-		}
-		if err := json.Unmarshal(envelope.Payload, &generic); err == nil {
-			if m.failCallIDMatch != nil && m.failCallIDMatch(generic.Data.CallID) {
-				return errors.New("selective publish failure")
-			}
-		}
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	cpy := make([]byte, len(data))
-	copy(cpy, data)
-	m.published = append(m.published, publishedVerdict{subject: subject, data: cpy})
-	return nil
-}
 
 // raceTestPublisher invokes onPublish from within PublishToStream BEFORE
 // returning. This simulates the worst-case race where the verdict

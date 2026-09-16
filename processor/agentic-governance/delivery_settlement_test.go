@@ -22,7 +22,7 @@ type governanceSettlementMsg struct {
 }
 
 // spec: agentic-governance / Governance validation settles after its declared consequence
-func TestGovernanceAllowedPublicationFailureQuarantinesExactOwner(t *testing.T) {
+func TestGovernanceAllowedPublicationFailureRetriesAllProductionCallbacks(t *testing.T) {
 	discoverable, err := NewComponent([]byte(`{}`), component.Dependencies{NATSClient: &natsclient.Client{}})
 	require.NoError(t, err)
 	c := discoverable.(*Component)
@@ -37,22 +37,34 @@ func TestGovernanceAllowedPublicationFailureQuarantinesExactOwner(t *testing.T) 
 		return handle, nil
 	}
 	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(func() {
+		cancel()
+		for _, binding := range c.consumers {
+			<-binding.observerDone
+		}
+	})
 	require.NoError(t, c.setupInputConsumers(ctx))
 	data, err := json.Marshal(Message{ID: "message-1", Content: Content{Text: "clean"}})
 	require.NoError(t, err)
-	msg := &governanceSettlementMsg{data: data}
-	callbacks["task_validation"](ctx, msg)
-	require.Zero(t, msg.acks.Load()+msg.naks.Load()+msg.terms.Load())
-	require.Eventually(t, func() bool { return handles["task_validation"].drains.Load() == 1 }, time.Second, time.Millisecond)
-	for port, handle := range handles {
-		if port != "task_validation" {
-			require.Zero(t, handle.drains.Load(), "publish failure drained unrelated owner %s", port)
-		}
-	}
-	require.Contains(t, c.Health().LastError, "unknown durable publication state")
-	cancel()
-	for _, binding := range c.consumers {
-		<-binding.observerDone
+	for _, port := range []string{"task_validation", "request_validation", "response_validation"} {
+		t.Run(port, func(t *testing.T) {
+			callback, ok := callbacks[port]
+			require.True(t, ok, "production setup did not bind %s", port)
+			for attempt := range 2 {
+				msg := &governanceSettlementMsg{data: data}
+				callback(ctx, msg)
+				require.Equal(t, int32(1), msg.naks.Load(), "attempt %d must remain admitted and retry", attempt)
+				require.Zero(t, msg.acks.Load(), "publication failure must not ACK")
+				require.Zero(t, msg.terms.Load(), "publication failure must not terminate")
+				health := c.Health()
+				require.True(t, health.Healthy)
+				require.Equal(t, "running", health.Status)
+				require.Empty(t, health.LastError)
+				for owner, handle := range handles {
+					require.Zero(t, handle.drains.Load(), "publish failure drained owner %s", owner)
+				}
+			}
+		})
 	}
 }
 

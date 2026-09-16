@@ -37,6 +37,12 @@ Any wider API, ownership, coordination, or storage change stops for the owner wi
 why the existing primitives are insufficient, and the smallest proposed scope change. R3's separate retirement
 ruling is recorded below; it authorizes no replacement mechanism.
 
+The owner extended bounded intake to all remaining #1146 work on 2026-09-15:
+https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5679435736.
+Read the full current proposal/design/tasks, applicable specs, and relevant slice evidence; accumulated historical
+artifacts need not be reread for each slice. Preserve all history. Inventory/design review, owner surface approval,
+TDD, implementation review, migration, E2E, and push/merge gates remain unchanged.
+
 ## Completed checkpoints retained
 
 These preserve the previously checked items at their recorded baselines, not whole-PR approval or a new test run.
@@ -199,7 +205,7 @@ These preserve the previously checked items at their recorded baselines, not who
   compact producer/registered decoding pass without skips. Active specs now preserve the accepted #759 dispositions
   and complete existing telemetry requirement. This closes only R5, not R6 or the final combined/whole-PR gates.
 
-- [ ] R6 Finish cancel/approval/verdict fast lanes and the accepted operational state contract (old 7.2–7.8).
+- [x] R6 Finish cancel/approval/verdict fast lanes and the accepted operational state contract (old 7.2–7.8).
   First implement `agentic-loop / LoopEntity has one operational state contract`: five-state vocabulary,
   private lifecycle.Transitions reuse, unchanged unknown IsTerminal behavior, local Validate/Begin/Resolve/direct
   TransitionTo behavior, StateBeforeApproval retirement and mandatory caller/fixture/documentation adaptations.
@@ -210,18 +216,99 @@ These preserve the previously checked items at their recorded baselines, not who
   waiter, conflict, panic, replacement and pre-marker proofs; one release point; lane-specific applied proof;
   approval exceptions; and nonblocking audit/graph evidence. ResponseAction/intent hints are not additional
   durable signal verbs. The earlier shared-validator correction is not completion of this group.
+  Owner comment `5661115059` requires Retry for transient final-KV persistence failure after required terminal
+  effects and PubAck. Use the existing terminal owner/classifier and saved result; preserve earlier fatal,
+  unknown-effect and terminal-publication dispositions. Prove source Retry without owner quarantine, saved-result
+  reuse, and final-marker-before-ACK. This ruling completes no R6 proof or review gate.
   The first local slice passed independent implementation review on 2026-09-13 with no remaining findings:
   `review-loop-state-implementation-2026-09-13.md` records behavioral RED/GREEN, the 39-file delta/manifest and
   the one test-assertion review correction. Agentic, dispatch and graphresearch race suites pass; the loop suite
   retained its three pre-existing terminal-selection failures. Later terminal/native evidence is recorded under R2;
   it does not claim whole-R6 completion or a new E2E result.
+  The remaining bounded R6 slice passed independent implementation/evidence review on 2026-09-14:
+  `review-r6-fastlane-evidence-2026-09-14.md` records seven actual-callback rows, native cancellation final-marker
+  RED/GREEN and verdict redelivery across component replacement, one-line final-KV classification correction,
+  focused refusal/release controls and corrected explanations. Final native race passes without skips (62.900s);
+  package lint is clean. Existing state/R2 evidence is reused explicitly, not presented as newly rerun.
+  Optional verdict reason and retained-governance correlation remain R7; R11 and the whole-PR gates stay open.
 
 - [ ] R7 Close governance settlement/correlation proof (old 8.1–8.3). Cover allowed/denied/filter-error/panic/budget,
   missing/full waiters, exact retained verdicts, and replacement before/after proposal/verdict/tool publication.
   All three validation handlers propagate classified outcomes and required PubAcks. Ordinary output remains
   at-least-once with no general committed-output lookup. Match RequestID, ExecutionID and proposal fingerprint.
+  Apply owner comment `5682070598`: reuse matching validated retained verdicts; successful exact typed absence
+  permits the same exactly correlated proposal under current policy without a finite verdict-retention horizon.
+  Prove failed-read Retry, conflict Quarantine, and permitted changed-policy evaluation after absence without
+  assuming approval or repeating protected tool effects. This acceptance completes no implementation/proof gate.
+  Owner comment `5694233488` selects Quarantine for opposing retained approved/rejected verdicts that both
+  validate and match the same proposal: select neither and stop the affected response consumer without ACK.
+  Implement the retained reader, mandatory response-owner wiring and required source-error propagation as one
+  reviewed slice. Missing/full live waiters retain their existing dispositions; retained recovery does not
+  independently authorize orphan-verdict ACK. This ruling completes no implementation, R7/R8 or landing gate.
   If retained evidence is insufficient, report the concrete
   failpoint before proposing additional state. Policy content and framework-wide wire enforcement remain separate.
+  The bounded validated-output publication correction passed independent implementation review on 2026-09-14:
+  `review-r7-validation-2026-09-14.md` records the one-line Quarantine-to-Retry correction and all three installed
+  callbacks exercised twice. Intended RED reached each callback; governance package race passed (1.712s) and pinned
+  package lint was clean. A separate test-only followup then passed independent review: all nine actual-callback
+  denial/filter-error/cancellation cases passed on arrival under race (1.527s); no production change was needed.
+  The combined governance package race pass is 1.640s. Native and verdict-correlation proof remain open, including
+  an external rule proposal-input settlement ownership question; do not expand the frozen subscription claim.
+  The owner selected the independently reviewed separate-prerequisite direction in
+  `design-r7-rule-input-scope-2026-09-14.md`: #1311, claimed by draft PR #1312 in beta.163.
+  R7's full source-to-verdict guarantee remains blocked on that separately designed/proven boundary; the guarantee
+  is not narrowed. No rule-input implementation is added to this claim; unaffected owned proofs may continue.
+  Governance-only registered-envelope direction is owner approved:
+  https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5677581095.
+  `inventory-r7-verdict-wire-2026-09-15.md` and its architect audit supplement independently passed INVENTORY review
+  (92 and 31 exact pins mechanically verified); see `review-r7-verdict-wire-inventory-2026-09-15.md`.
+  The exact wire contract and caller/adopter shape passed independent DESIGN review; see
+  `review-r7-verdict-wire-design-2026-09-15.md` and the checksummed `design-r7-verdict-wire-2026-09-15.md`.
+  The owner accepted `HandleVerdict(VerdictPayload)` and bounded implementation/TDD on 2026-09-15:
+  https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5678920204.
+  The reviewed additive governance wire requirement is promoted. The bounded implementation independently passed
+  review with no findings; see `review-r7-verdict-wire-implementation-2026-09-15.md`. Final affected-package race,
+  production-codec/refusal matrix, 13 fuzz seeds, bounded fuzz, native installed callbacks/replacement, vet and
+  pinned lint pass. No retained-proposal/source-settlement or whole-R7 completion is claimed. Work is local/uncommitted.
+  The owner separately approved bounded current-contract/wire-evidence reading for this slice:
+  https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5677867478. Other gates remain unchanged.
+  A 2026-09-15 unchanged native validation-output test passed (0.25s; package 4.075s; zero skips), covering all
+  three installed callbacks twice with real output publication but fake source messages/handles. It does not prove
+  native source ACK/redelivery or PubAck-at-settlement ordering. Exact evidence and limits are recorded in
+  `review-r7-validation-2026-09-14.md`; no production change or additional R7 completion is claimed.
+  The retained-verdict/expected-proposal inventory refresh independently passed review on 2026-09-15:
+  `inventory-r7-retained-verdict-refresh-2026-09-15.md`, SHA-256 `8b73908f…`, 183/183 exact pins.
+  It preserves the reviewed wire boundary and identifies existing R8 admission ownership; no new target state or
+  implementation is approved by inventory review. The architect's bounded live-match handoff
+  `task-r7-live-proposal-match-2026-09-15.md` (SHA-256 `fc4b2d4c…`) then passed independent CONFORMANCE review.
+  It implements the existing correlation requirement in the existing waiter, without a new API, policy or store.
+  The live-match slice now has independent IMPLEMENTATION APPROVE, no findings: see
+  `review-r7-live-proposal-match-2026-09-15.md`. One production file prepares/publishes the same proposal and compares
+  normalized verdict identity before enqueueing; no public API, store or lifecycle owner was added. The intended
+  REDs, full loop race (4.195s), two native live controls (package 4.250s), bounded fuzz (671 executions), tagged vet
+  and pinned lint pass. Exact eight-file manifest is `73f664e4…`; source/evidence are preserved. This is local,
+  uncommitted live-matching proof, not retained recovery, R7/R8 completion, or a new whole-PR/push/E2E pass.
+  The 2026-09-16 bounded lowering found no existing disposition for two retained opposite decisions that each
+  match the same proposal. Architect and independent reviewer confirmed the gap; the owner approved Quarantine:
+  https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5694233488.
+  The private Component-owned implementation mapping and existing production-test fixtures are preserved in
+  `review-r8-admission-checkpoint-2026-09-15.md`; neither requires a new public reader or setter. The finalized
+  `task-r7-retained-verdict-2026-09-16.md` passed independent task CONFORMANCE review at SHA-256 `5359f69e…`,
+  with no findings or additional design choice. Candidate-01 initially received independent IMPLEMENTATION
+  APPROVE, no findings; the candidate-02 test-budget correction and final review below supersede that verdict. See
+  `review-r7-retained-verdict-2026-09-16.md`. The historical candidate-01 nine-file manifest is
+  `539fb851…`; four existing production files changed, with no new public API, configuration or store.
+  Intended source/constructor REDs, final 25-case focused race, full loop race (3.975s; zero skips), seven real-NATS
+  replacement cases (215.590s), existing native controls (33.492s), scoped vet/lint and formatting pass.
+  Source/evidence are preserved and developer ownership is released. This is local/uncommitted focused proof,
+  not full R7/R8, #1311 source settlement, combined E2E or publication readiness. Typed absence stays unchanged.
+  Preflight subsequently found a HIGH test-budget issue: the seven-case parent took 213.52s, over the three-minute
+  top-level ceiling. Runtime correctness review still has no findings. The unchanged cases are now grouped into
+  three semantic top-level tests; grouped native verification passes at 61.01s / 61.03s / 91.48s with zero skips.
+  The separate exception for seven added sequential container starts and approximately 3.6 minutes of suite cost
+  has explicit owner and reviewer approval (owner comment `5695458130`); only that baseline-cost rule is waived.
+  Independent candidate-02 IMPLEMENTATION APPROVE closes the HIGH finding; all nine hashes match `4a6d77d3…`.
+  See the current correction section of `review-r7-retained-verdict-2026-09-16.md`; R7 remains unchecked.
 
 - [ ] R8 Close replay admission, first-party producer and loop-authority proof (old 9.2–9.10). Preserve local observed
   requirements, zero non-agentic lookup, zero dependent allocation on refusal, DiscardNew backpressure and queued
@@ -230,6 +317,39 @@ These preserve the previously checked items at their recorded baselines, not who
   envelope refusal, and PubAck.
   Loop authority uses typed not-found/create-exists handling and observes History 10, TTL 24h, nonbinding MaxBytes
   and approval lifetime before consumers/sweeper; no reconciliation of retained drift or additional public gate.
+  Covered-output classifier/PubAck slice independently APPROVED on 2026-09-15; see
+  `review-r8-publisher-2026-09-15.md`. Existing classifier now reuses canonical directional wildcard coverage.
+  Intended unit/native RED and GREEN, all six configurations, 27 new unit cases, 15 unchanged controls, real PubAck,
+  package race and tagged vet/lint pass. This is local/uncommitted partial evidence; R8 remains unchecked.
+  Action-specific refusal/admission, producer-to-loop, envelope and authority proof remain required.
+  The next bounded prerequisite inventory/conformance passed independently on 2026-09-15:
+  `inventory-r7-replay-admission-prerequisite-2026-09-15.md`, SHA-256 `4b3dc5f0…`, 41/41 exact pins.
+  That inventory recorded the pre-amendment dependency. Owner comment `5682070598` supersedes only the finite
+  verdict-retention horizon prerequisite for R7 re-proposal after successful exact typed absence.
+  Exact lookup, observed DiscardNew and the remaining admission/safety obligations stay required.
+  Other R8 lowering and applicable arithmetic remain unproven; no new gate, storage, public API or standalone
+  source-error-propagation change is authorized.
+  Pickup evidence is recorded in `inventory-r8-admission-checkpoint-2026-09-15.md` (SHA-256 `4f0be2e2…`).
+  Independent review verified 25/25 pins before the documented correction and confirmed the record is explicitly
+  incomplete, not full R8 INVENTORY PASS. Shipped DiscardOld conflicts with the accepted policy; a finite local
+  horizon has not been established. Unlimited deliveries alone do not disprove retention-scoped safety.
+  The stale model admission dependency is reconciled to existing owner ruling `5550778818`, including its response
+  publisher and startup scenarios. Independent documentation review APPROVED; strict OpenSpec validation passes.
+  See `review-r8-admission-checkpoint-2026-09-15.md`. No runtime changes or new runtime-test evidence accompany this
+  correction. The next evidence boundary is the R7 source/proposal/verdict stream and retention relationship;
+  no guessed formula, new deadline, or relaxation of other admission obligations is authorized.
+  A bounded follow-on located AgentResponse as the replay source and confirmed shipped co-location is not imposed
+  across admitted port overrides. Initial publication order alone is not a recovery invariant when response
+  republication is allowed.
+  That checkpoint preceded the implemented and independently reviewed retained-verdict slice recorded in
+  `review-r7-retained-verdict-2026-09-16.md`. The formerly requested
+  finite verdict-retention proof is no longer a prerequisite for R7 re-proposal after successful exact typed absence.
+  The owner approved that narrow amendment in comment `5682070598`:
+  https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5682070598.
+  Matching reuse, failed-read Retry, conflict Quarantine, current-policy evaluation, DiscardNew, required PubAck,
+  #1311 source settlement and separate tool-effect protection remain. Other lanes' retention and other R8
+  obligations are unchanged. Clear only this owner-decision hold; preserve frozen #1156, #759/#1311 stacking
+  holds and combined-proof gates. R7/R8 remain unchecked; source-error propagation remains coupled to durable authority.
 
 - [ ] R9 Close cross-lane publication and source-retention evidence (old 2.5, 9.11). Every named ordinary publication
   is at-least-once and source ACK follows required PubAck; uncertain PubAck may republish. Nats-Msg-Id is only
@@ -259,6 +379,15 @@ These preserve the previously checked items at their recorded baselines, not who
   against the complete retained claim set (old 11.5–11.6). The reconciliation review is documentation-only.
 - [ ] R14 After implementation/proof review, reconcile every modified requirement and unaffected scenario, then
   archive and synchronize all eight capability specs as the final content commit (old 11.7). Do not archive now.
+  The first 2026-09-15 `task spec:properties` run reported three existing unresolved citations (3/330):
+  `agentic/state_test.go:15` cites the retired shared-view heading; `create_vs_exists_fence_test.go:417` and `:498`
+  included an extra `Requirement:` prefix. Both test files matched HEAD and were not changed by the R7 wire slice.
+  A subsequent comment-only reconciliation points the state test at the current operational-state requirement
+  and removes both extra prefixes. `task spec:properties` now reports `330/330 citations resolve` (exit 0).
+  The three affected tests pass with `-race -count=1` (agentic 1.453s; agentic-loop 1.460s), and `git diff --check`
+  is clean. No test logic or production code changed. New wire-test citations remain separately checked because
+  the script scans tracked files only. This resolves the citation failure, not R14's final reconciliation/archive.
+  Independent review returned APPROVE for the exact comment-only diff and cited test semantics.
 - [ ] R15 Obtain the narrow final archive/spec-sync review and record the exact staged candidate and PR/base
   identity (old 11.8). Hosted checks, undraft and non-default merge follow that review under the shared protocol;
   they are not post-merge checkboxes. #1249 starts from the resulting reviewed checkpoint A.
@@ -322,10 +451,14 @@ log or a historical source hash to current verification.
 - #1140 owns governance policy content; #1145 owns framework-wide pattern work; #1244 owns the later declared
   transition design. None is silently implemented or closed by this reconciliation.
 - #1249 retains transferred AgentRun H.1/H.2 from exact post-#1146 checkpoint A. #1155's combined proof stays open.
-  PR #1159 remains based on frozen parent `417beae5552f8f15ad3540edd7d8504c87174c13` in PR #1156. Completing and
-  merging #1159 into that branch is not landing on main; #1156 still requires #1249 and combined review/proof.
+  PR #1159 remains based on frozen parent `417beae5552f8f15ad3540edd7d8504c87174c13` in PR #1156. The newer
+  [#1311 stack ruling](https://github.com/C360Studio/semstreams/issues/1311#issuecomment-5676602813) governs the
+  future sequence: publish the reviewed #1159 prerequisites, stack/implement/prove #1312 against that exact
+  checkpoint, integrate it into #1159, land #1156 through its existing gates, then reconcile/prove the combined
+  #1159 tree before main landing or an end-to-end guarantee. This records the accepted sequence, not a restack,
+  parent advance or waiver of #1249/combined review and proof. No helper copy or hoist is authorized.
 
-## Minimum loop-state contract: owner accepted, implementation incomplete
+## Minimum loop-state contract: implemented; combined verification remains open
 
 The 2026-09-13 inventory passed independent review at SHA-256
 `6f1c33a257ee6c0e6174c2cdcb95c005b67b6d426dcc7c42270dfed7970924c6` (118/118 pins, eight source fingerprints).
@@ -345,9 +478,30 @@ exit, terminal-field preservation, local manager cancellation and installation v
 caller/fixture adaptation. See `review-loop-state-implementation-2026-09-13.md`. It does not claim complete
 stale-revision protection or terminal settlement.
 
-Published R1 and all unrelated WIP remain preserved. R2 has independent CLOSEOUT PASS; R3's owner retirement is
-recorded above. R4 also has independent CLOSEOUT PASS; R5–R15 remain open.
-V4 is unapplied verbatim; its bounded alignment assessment and next implementation sign-off are recorded in
-`terminal-selection-state-alignment-2026-09-13.md`. The R3 decision, #1249, #1288 and wider
-#1244 work remain separate. Freshly provisioned-storage cold-start/E2E and replacement proofs remain required;
-no unmeasured retained-deployment migration is introduced.
+Published R1–R5 and the first R6 state slice remain preserved at `c347eff4`; R3's owner retirement is recorded above.
+The remaining local R6 fast-lane correction/proof is recorded in `review-r6-fastlane-evidence-2026-09-14.md`.
+R7–R15 remain open. Historical V4 was not applied verbatim; its aligned terminal correction and R2 proof are
+recorded in `review-terminal-complete-2026-09-13.md`. #1249, #1288 and wider #1244 work remain separate.
+R11 still requires final combined fresh-storage/E2E/replacement verification; earlier passes do not approve later
+changes. No unmeasured retained-deployment migration is introduced.
+
+## 2026-09-16 verification and next owner choices
+
+R7 candidate-02 grouped native proof and final independent implementation review pass, as recorded above.
+The subsequent complete pre-push attempt failed during the unit repository audit on shifted fixture annotations;
+integration was not reached. Exactly two existing line references in `processor/rule/actions_test.go` have now
+been corrected without changing classifications or behavior. Focused audit proof and independent mechanical
+review pass; the complete pre-push rerun then passed with no source/module/schema drift. A subsequent post-staging
+CI audit exposed three placeholder entity IDs in new wire tests omitted by the earlier tracked-only audit. Their
+bounded fixture correction now has focused unit/native proof and independent approval. Staged static guards
+pass; the API report remains explicitly unavailable/nonblocking under existing CI policy. The required final
+complete gate on the corrected fixture snapshot then exited 0 (loop native package 666.300s). Final checkpoint
+record/hash accounting is separate from R11's still-required combined proof after the remaining work.
+See `review-r7-retained-verdict-2026-09-16.md` for the failed runs, corrections and exact evidence.
+No task is completed by partial preflight results.
+
+The bounded R8 loop-authority inventory has independent INVENTORY PASS and 118/118 verified pins. Its lowering
+docket has independent pre-owner DESIGN REVIEW PASS only. Issue comment `5695760323` requests selection of
+loop-side duplicate bucket-setting retirement and a proposed 12-hour maximum approval wait for this release.
+The maximum is an explicit product-limit proposal, not a measured safety guarantee. Both choices remain pending;
+R8 implementation is not released. Existing R7/R8, #1311/#1312, frozen-parent and combined-proof holds remain.

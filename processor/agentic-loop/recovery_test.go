@@ -26,7 +26,7 @@ func (d *contextCapturingGovernanceDispatcher) Propose(
 	return DispatcherResult{Approved: calls}, ctx.Err()
 }
 
-func (*contextCapturingGovernanceDispatcher) HandleVerdict(string, string, []byte) (natsclient.DeliveryDecision, error) {
+func (*contextCapturingGovernanceDispatcher) HandleVerdict(VerdictPayload) (natsclient.DeliveryDecision, error) {
 	return natsclient.DeliveryDecisionAck, nil
 }
 func (*contextCapturingGovernanceDispatcher) Mode() string { return "enforce" }
@@ -572,7 +572,7 @@ func TestHandleToolCallResponse_AllDispatchesFail(t *testing.T) {
 	}
 
 	result := &HandlerResult{}
-	if err := handler.handleToolCallResponse(context.Background(), result, loopID, "request-recovery", bad); err != nil {
+	if err := handler.handleToolCallResponse(context.Background(), result, loopID, "request-recovery", bad, handler.proposeToolCalls); err != nil {
 		t.Fatalf("handleToolCallResponse: %v", err)
 	}
 

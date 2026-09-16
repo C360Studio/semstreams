@@ -334,7 +334,7 @@ durable state, or communication path.
 #### Scenario: Verdict arrives without a waiter
 
 - **WHEN** an exact verdict arrives after replacement with no waiter
-- **THEN** its retained identity remains recoverable for response replay
+- **THEN** while retained, its validated identity remains recoverable for response replay
 - **AND** missing or full process channel is not completed log-and-drop
 
 #### Scenario: Loop business work reaches its own deadline
@@ -423,9 +423,14 @@ evidence-integrity condition evidence, SHALL remain nonblocking and are not mark
 
 Before the final marker succeeds, an attempt beginning from nonterminal durable authority SHALL leave that
 authority nonterminal. A failed pre-marker attempt SHALL discard speculative process-local terminal state,
-retain the selected completion, and Retry using it together with the lane's existing exact retained evidence.
-Required effects MAY repeat compatibly with the selected outcome. A changed authority revision SHALL NOT be
-overwritten with stale speculative state.
+retain the selected completion, and preserve the lane's stage-specific settlement disposition. After required
+terminal effects and terminal-event PubAck, a transient final-marker persistence failure SHALL return Retry.
+This failure alone SHALL NOT quarantine or stop the delivery owner. Redelivery SHALL reread current authority
+and, when the marker remains uncommitted, reuse the selected completion with the existing lane-specific evidence.
+Fatal or invalid errors SHALL retain their existing classified refusal. Earlier unknown-effect or publication
+failures SHALL retain their existing lane-specific dispositions; saved completion alone SHALL NOT authorize
+automatic retry of an unresolved effect. Required effects MAY repeat compatibly with the selected outcome.
+A changed authority revision SHALL NOT be overwritten with stale speculative state.
 
 Already-cancelled durable authority SHALL NOT be regressed because its COMPLETE_ record is absent.
 Existing malformed-state and identity-conflict refusals SHALL remain unchanged. The final terminal marker
@@ -479,6 +484,15 @@ terminality nor selected-record existence is generic tool-execution or source-ap
 - **WHEN** terminal publication receives PubAck but the final bare `LoopEntity` Put has not committed
 - **THEN** the lane is not settled and source ACK is withheld
 - **AND** a replacement may repeat the ordinary terminal publication
+
+#### Scenario: Transient final-marker persistence failure retries
+
+- **GIVEN** the selected terminal outcome is saved and required terminal effects and publication have completed
+- **WHEN** the final conditional LoopEntity write fails transiently after terminal-event PubAck
+- **THEN** the owner returns Retry without source ACK and discards speculative process state
+- **AND** that persistence failure alone does not quarantine or stop the consumer
+- **AND** redelivery rereads current authority and reuses the saved outcome when the final marker remains uncommitted
+- **AND** earlier fatal, unknown-effect and unknown-publication exits retain their existing lane-specific dispositions
 
 #### Scenario: Exact model response is proven applied
 
@@ -779,17 +793,30 @@ authority.
 
 ### Requirement: Restart-safe replay observes and admits local stream bounds
 
-Each recovery-dependent model, dispatch, governance, and loop owner SHALL invoke pure internal
+Each recovery-dependent dispatch, governance, and loop owner SHALL invoke pure internal
 `agentstreamadmission.ObserveAndValidate` after resolving its own PortFacts and before its own first dependent
 allocation. Stream identity and requirement SHALL derive only from that component's resolved facts and local typed
 AckWait, BackOff, MaxDeliver, maximum work/replay need, and PubAck dependency. No owner SHALL read another config,
 shared maxima, factory names, or raw JSON. Dispatch SHALL admit its AGENT outputs before USER intake. Non-agentic
 components SHALL perform zero lookup.
 
+The provider-invocation lane, including its response publisher, SHALL NOT depend on replay admission. Its retained
+response reuse, permitted reinvocation on typed absence, and required PubAck remain governed by the agentic-model
+settlement and publication requirements.
+
 Admission SHALL require observed DiscardNew, sufficient MaxAge, and no earlier message bound. Refusal SHALL be typed
 `agent_stream_replay_inadmissible`, name observed/required values, leave only the affected closure not ready, and
 allocate or positively settle nothing. It SHALL mutate no stream and persist no state. Approval lifetime is excluded
 and belongs only to loop-state acquisition.
+
+For R7 governance re-proposal only, a successful exact retained-verdict lookup returning typed absence SHALL
+permit the same exactly correlated proposal to be evaluated under current policy without a finite
+verdict-retention horizon prerequisite, as specified by the governance correlation requirement.
+Startup admission, local Requirement, MaxAge and safety-margin checks SHALL NOT reintroduce that prerequisite.
+Observed DiscardNew, required PubAck, #1311 source-to-verdict settlement, separate tool-effect protection,
+other lanes' retention requirements and all other R8 obligations SHALL remain unchanged.
+The provider exception remains separate. No new state, timer, timestamp API, recovery runtime, policy-version
+pinning or guarantee after source loss is introduced.
 
 #### Scenario: Capacity policy discards old evidence
 
@@ -803,7 +830,7 @@ and belongs only to loop-state acquisition.
 
 #### Scenario: Concurrent components reject before allocation
 
-- **WHEN** model, dispatch, governance, and loop start concurrently against inadmissible resolved streams
+- **WHEN** dispatch, governance, and loop start concurrently against inadmissible resolved streams
 - **THEN** each affected closure remains not ready with zero dependent allocation or positive settlement
 - **AND** queued USER remains unconsumed
 
@@ -811,7 +838,7 @@ and belongs only to loop-state acquisition.
 
 - **WHEN** composition contains a non-agentic component and agentic stream overrides
 - **THEN** the non-agentic component performs zero lookup and can start
-- **AND** each agentic owner observes only its own resolved stream
+- **AND** each admission-dependent agentic owner observes only its own resolved stream
 
 ### Requirement: Loop-state authority is acquired and observed before loop work
 

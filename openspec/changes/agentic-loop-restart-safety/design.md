@@ -592,12 +592,28 @@ state retention. Route facts must agree. Transient absence retries; deletion, pu
 
 Governance stays in the existing rule and component layers.
 
-Each proposal carries LoopID, RequestID, execution identity, and a proposal fingerprint. Verdict subjects use the
-NATS-safe execution identity. A replacement response handler first checks for an exact matching retained verdict
-before publishing a proposal again.
+The bounded registered-wire and typed-handoff contract is specified in
+`design-r7-verdict-wire-2026-09-15.md` (reviewed SHA-256
+`91480e9cd53dba53c74f388fdf0ab04e6f1687fa33c3e7493eb10469740524c4`), independently reviewed and owner accepted at
+https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5678920204. Its additive requirement lives in the
+governance spec delta. It changes the existing verdict carrier/handoff, not the retained-recovery obligations below.
 
-A verdict arriving without a process waiter is validated and remains recoverable; it is not silently discarded as
-completed work. No governance bucket is admitted unless a real replacement failpoint proves that retained verdict
+Each proposal carries LoopID, RequestID, execution identity, and a proposal fingerprint. Verdict subjects use the
+NATS-safe execution identity. At the existing waiter-loss boundary, replacement response work reads the exact
+retained verdict before republishing. A matching validated verdict is reused. Under owner comment `5682070598`,
+a successful exact lookup returning typed absence permits republication of the same exactly correlated proposal
+for current-policy evaluation without a finite verdict-retention horizon prerequisite. The new decision may differ
+from an expired earlier verdict. Absence grants no approval and proves no absence of historical decisions.
+Failed or unresolved reads Retry without re-proposal; required-correlation conflicts Quarantine.
+When both exact decision subjects retain opposing validated verdicts that each match the same originating
+proposal, response recovery SHALL Quarantine without choosing either decision or positively settling the source.
+The existing delivery owner stops its affected consumer. This disposition is owner-approved in
+[comment 5694233488](https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5694233488).
+It introduces no decision precedence, timestamp comparison or additional authority.
+Required PubAck, #1311 source-to-verdict settlement and separate protection against repeated tool effects remain.
+
+A verdict arriving without a process waiter is validated and remains recoverable while retained; it is not silently
+discarded as completed work. No governance bucket is admitted unless a real replacement failpoint proves that retained verdict
 lookup and response redelivery are insufficient. Policy content and feature expansion remain #1140.
 
 ## Per-lane definition of done
@@ -614,8 +630,8 @@ its retained handle, awaits exact `Closed`, then cancels and joins its own obser
 | 4 | governance `task_validation`; fast | completed policy; allowed output receives JetStream PubAck; blocked means deliberate non-forwarding | invalid → Terminate; filter/resolution/marshal/publish uncertainty → Retry; correlation conflict/panic → Quarantine | source correlation; allowed outputs are at-least-once |
 | 5 | governance `request_validation`; fast | same row-4 contract for `AgentRequest` | same as row 4; core-NATS publish never proves done | RequestID; allowed outputs are at-least-once |
 | 6 | governance `response_validation`; fast | same row-4 contract for `AgentResponse` | same as row 4 | RequestID; allowed outputs are at-least-once |
-| 7 | loop `agent.signal`; fast, cancel-only after #1251 | current cancellation state and `COMPLETE_` commit; terminal event receives PubAck | invalid/unknown → Terminate; missing live authority/KV/publication → Retry; conflict/panic → Quarantine | LoopID and exact current loop state distinguish live missing from durable terminal proof |
-| 8 | loop `agent.approval_response`; fast | matching gate applies its branch and clears pending only after PubAck or durable applied proof; noncurrent gate records log plus metric and ACKs without business publication or authority mutation | invalid including missing ExecutionID → Terminate; unresolved authority/evidence/publication → Retry; panic or matching-gate correlation conflict → Quarantine | exact coherent current LoopEntity decides gate applicability; matching-gate reconstruction uses exact retained request/response; no additional approval Store |
+| 7 | loop `agent.signal`; fast, cancel-only after #1251 | current cancellation state and `COMPLETE_` commit; terminal event receives PubAck | invalid/unknown → Terminate; transient pre-effect authority/selection or post-PubAck final-KV failure → Retry; conflict/panic or earlier unknown effect/terminal publication → Quarantine | LoopID and exact current loop state distinguish live missing from durable terminal proof |
+| 8 | loop `agent.approval_response`; fast | matching gate applies its branch and clears pending only after PubAck or durable applied proof; noncurrent gate records log plus metric and ACKs without business publication or authority mutation | invalid including missing ExecutionID → Terminate; unresolved authority/evidence, nonterminal publication or transient post-PubAck final-KV failure → Retry; panic, matching-gate correlation conflict or earlier unknown terminal effect/publication → Quarantine | exact coherent current LoopEntity decides gate applicability; matching-gate reconstruction uses exact retained request/response; no additional approval Store |
 | 9 | loop `agent.toolcall.approved`; fast | verdict reaches waiter or remains recoverable for response replay | invalid → Terminate; retained lookup unavailable → Retry; mismatch/panic → Quarantine | execution identity, proposal fingerprint, exact retained verdict at waiter-loss boundary |
 | 10 | loop `agent.toolcall.rejected`; fast | same row-9 contract for rejection | same as row 9 | same as row 9 |
 | 11 | tools `tool.execute`; heartbeat | immutable completed outcome exists and ToolResult receives PubAck | permanent invalid or immutable outcome poison → Terminate; transient pre-effect, winner-read or ordinary completed-result publication failure → Retry; unresolved post-execution outcome Create → Quarantine | `TOOL_CALL_OUTCOMES` is the executor-effect boundary; completed replay invokes no executor; observed-bounds dispositions remain specific; result publication is at-least-once |
@@ -698,8 +714,11 @@ synthetic effects, and required terminal-event PubAck—and then the bare termin
 lane-applied marker. A changed authority revision cannot be overwritten with stale speculative state.
 Best-effort trajectory audit and the existing atomic completion/failure graph batch, including evidence-integrity
 condition evidence, remain nonblocking and are not marker prerequisites. A pre-marker failure discards speculative
-process-local loop state, preserves the selected result, and retries from the prior
-nonterminal `LoopEntity` plus exact retained request. Compatible terminal effects may repeat. During the brief
+process-local loop state and preserves the selected result with the lane's stage-specific disposition. A transient
+final-KV failure after required effects and terminal PubAck retries through the existing classifier. Redelivery
+rereads current authority and reuses the saved result when the marker remains uncommitted. Earlier fatal,
+unknown-effect and publication exits retain their existing lane-specific dispositions; saved result existence is
+not blanket permission to retry unresolved effects. Compatible terminal effects may repeat. During the brief
 COMPLETE/event-before-terminal-LoopEntity window, the lane is not settled and cross-surface readers must retry rather
 than continue or discard. Permanently malformed responses terminate. Unknown correlation quarantines unless a
 committed later output proves prior application.
@@ -733,7 +752,10 @@ This does not weaken ordinary final-result content matching or license ACK from 
 ### `agent.signal`
 
 Cancel follows the same saved-outcome selection rule: required effects and terminal-event PubAck precede its final
-current-state marker. It cannot replace an already-selected outcome. Already-cancelled current authority is not
+current-state marker. Under owner comment `5661115059`, transient failure of that final KV write returns Retry
+through the existing classifier; it does not stop the consumer solely for that failure. Earlier unknown
+terminal-publication/effect exits retain Quarantine. It cannot replace an already-selected outcome.
+Already-cancelled current authority is not
 regressed when its `COMPLETE_` record is absent; existing malformed-state refusal remains intact. Invalid signals
 terminate. A missing live loop retries within its retention horizon. A validated already-terminal loop makes cancel
 inapplicable: ACK means no cancellation remains to perform, not proof that this signal previously applied. The existing
@@ -854,16 +876,25 @@ The accepted observed-admission contract below remains subject to the current pr
 
 Each recovery-dependent agentic owner calls pure repo-internal
 `internal/agentstreamadmission.ObserveAndValidate` after resolving its own admitted port facts and before its own
-first dependent consumer, subscription, observer, worker, or publisher success. Model, dispatch, governance, and loop
+first dependent consumer, subscription, observer, worker, or publisher success. Dispatch, governance, and loop
 derive stream identity only from their resolved `component.PortFacts`; no factory name, raw JSON, shared maxima, or
 another component's configuration is read. Dispatch admits its resolved AGENT outputs before consuming USER input.
-First-party AGENT publishers admit their resolved output and propagate refusal through their existing source outcome.
+First-party AGENT publishers admit their resolved output and propagate refusal through their existing source outcome,
+except for the provider-invocation lane. That lane, including its response publisher, has no replay-admission
+prerequisite under owner comment `5550778818`; its retained-response reuse and PubAck-before-source-ACK contract remains.
 A non-agentic component imports nothing, performs zero lookup, and remains independently startable.
 
-Each owner builds its local `Requirement` only from resolved AckWait, BackOff, MaxDeliver, maximum local processing
-and replay need, and required producer PubAck dependency. Loop timeout informs only loop's local requirement.
+Each admission-dependent owner builds its local `Requirement` only from resolved AckWait, BackOff, MaxDeliver,
+maximum local processing and replay need, and required producer PubAck dependency. Loop timeout informs only loop's
+local requirement.
 Approval lifetime and `AGENT_LOOPS` TTL/capacity are excluded from stream admission and are validated only by the
 loop-owned bucket gate below. The strongest local requirement refuses only that dependency closure.
+
+Owner comment `5682070598` removes only the finite verdict-retention horizon prerequisite for R7 re-proposal
+after successful exact typed absence. The local Requirement, MaxAge and safety-margin clauses do not reintroduce
+that prerequisite. Observed DiscardNew, required PubAck, source-settlement and tool-effect safeguards remain;
+other lanes' retention requirements and all other R8 obligations are unchanged. This is not the separate provider
+exception and adds no guarantee after source loss.
 
 The validator reads actual StreamInfo and requires `DiscardNew`, MaxAge covering the locally computed horizon and
 safety margin, and no MaxMsgs, MaxMsgsPerSubject, or other observed bound that can evict required evidence earlier.
@@ -1064,7 +1095,9 @@ The design is rejected or revised if any premise fails:
    decision branch and observable effect-free settlement of noncurrent gates. Confirmed required-evidence absence
    durably fails `continuation_unavailable`, even before the approval deadline. No extra Store fallback or historical
    decision-provenance claim is introduced; the R3 ruling leaves timeout and retention policies unchanged.
-8. Governance replacement reads the exact retained verdict or safely re-obtains it. Failure returns for new design.
+8. Governance replacement reuses a matching validated retained verdict. Successful exact typed absence permits
+   the same exactly correlated proposal to be evaluated under current policy without a finite verdict-retention
+   horizon prerequisite; failed reads Retry and conflicts Quarantine. Complete R7 implementation/proof remains required.
 9. A matching retained response produces zero provider calls; typed absence permits another call with the same stable
    RequestID, including after ambiguous replacement.
 10. No process-only map is required to classify a delivered source after replacement.
@@ -1167,7 +1200,8 @@ Implementation or review stops if:
 - a matching retained response still permits provider invocation, conflicting retained correlation does not
   quarantine, typed absence does not permit another call with the same RequestID, or source ACK can precede required
   response PubAck;
-- AGENT remains `DiscardOld`, or observed AGENT bounds cannot prove the caller-local horizon;
+- AGENT remains `DiscardOld`, or observed AGENT bounds cannot prove a still-required caller-local horizon;
+  the removed R7 verdict-retention horizon prerequisite is excluded under owner comment `5682070598`;
 - USER or TOOL source retention is assumed rather than measured from the actual source stream;
 - the retired approval-continuation Store, configuration, digest, cleanup, or post-eviction success promise returns
   without new owner authority;
@@ -1216,10 +1250,12 @@ is not required to interpret or complete any row. There are no deviations.
 | Derive no universal work deadline from AckWait; heartbeat only after measured lane-specific need | `proposal.md / Holds`; dispatch, governance, and loop owner settlement requirements; `tasks.md / 1.5–1.7` | owner ruling `5530950829` |
 | Ship model 60s/120s and loop 15s against shortest BackOff 30s; validate before allocation | `agentic-model / Model heartbeat policy is valid before acquisition`; `agentic-loop / Long-running loop heartbeat policy is valid before acquisition`; `tasks.md / 1.2–1.4` | invalid defaults fail setup |
 | Make provider invocation durably at-least-once with retained-response reuse and no ambiguity framework | `design.md / Provider at-least-once recovery`; `agentic-model / Model request settlement is bound to a durable response`; `tasks.md / 3.1–3.3` | comment `5550778818`; retained match reuses, conflict quarantines, absence calls again, PubAck precedes source ACK |
-| Persist bare terminal LoopEntity last as the lane-applied marker for every terminal loop outcome | `design.md / Per-lane definition of done`; `agentic-loop / Loop task, request, and tool work use only required correlation`; `tasks.md / 4.2–4.3, 6.5, 7.5–7.7` | comment `5571755835`; settlement-required effects precede the marker; pre-marker failure discards speculative process state and retries; ordinary effects may repeat; bare terminal state is not generic ToolResult proof; no second owner/runtime |
+| Persist bare terminal LoopEntity last as the lane-applied marker for every terminal loop outcome | `design.md / Per-lane definition of done`; `agentic-loop / Loop task, request, and tool work use only required correlation`; `tasks.md / 4.2–4.3, 6.5, 7.5–7.7` | comment `5571755835` preserves selected evidence and discards speculative process state before replay; comment `5661115059` explicitly retries transient final-KV failure after required effects/PubAck; earlier lane-specific refusals remain; ordinary effects may repeat; bare terminal state is not generic ToolResult proof; no second owner/runtime |
 | Reuse one selected ordinary terminal outcome and persist the existing synthetic-action obligation | `design.md / agent.response complete or error`; `agentic-loop / Loop task, request, and tool work use only required correlation`; `tasks.md / R2` | owner comments `5647247843` and `5651819675`; reviewed handoff `b411304309`; existing COMPLETE_ and registered event types, unchanged synthesis policy; runtime proof remains required |
 | Replace stale current-spec semantics through full MODIFIED blocks | `design.md / Current-spec reconciliation`; exact MODIFIED requirements in dispatch, tools, and loop deltas; `tasks.md / 5.2, 6.10, 7.7` | unaffected scenarios/citations preserved; no additive conflict |
 | Use strong observed DiscardNew and refuse only the affected dependency closure | `agentic-loop / Restart-safe replay observes and admits local stream bounds`; `tasks.md / 9.1–9.4` | no whole-composition/global-maxima gate |
+| Permit governance re-evaluation after successful exact retained-verdict absence without a finite verdict-retention horizon prerequisite | `Governance correlation`; `Observed AGENT replay admissibility`; governance correlation/publication requirements; loop replay-admission requirement; `tasks.md / R7–R8` | comment `5682070598`; matching reuse, failed-read Retry, conflict Quarantine, current-policy re-evaluation, unchanged DiscardNew/PubAck/#1311/tool-effect safeguards and other retention obligations; no new state, timer or API |
+| Quarantine opposing retained decisions that both match one proposal | `Governance correlation`; governance correlation requirement; `tasks.md / R7` | comment `5694233488`; select neither, no positive response settlement or proposal/tool publication, stop affected response consumer; no election policy or new authority |
 | Admit first-party rule AGENT output through the same internal validator and existing publisher | `rule-agent-publishing / First-party publish-agent output is admitted before action execution`; `rule-agent-publishing / Publish-agent classification uses canonical wildcard coverage and durable publication`; `tasks.md / 9.5–9.7` | six classifier surfaces; no duplicate gate/API |
 | Make the TaskMessage producer the framework birth mint seam; require LoopID and add no helper or recovery owner | `entity-id-contract / A loop instance token is minted at its framework birth seam`; `agentic-loop / Loop task, request, and tool work use only required correlation`; `rule-agent-publishing / Publish-agent preserves the registered payload boundary`; `tasks.md / 3A.1–3A.3` | comment `5575482141`; producer-local v4 before marshal; ordinary validator error plus classified accepting boundaries; same-byte downstream retry/redelivery only; task 9 remains separate |
 | Use exact canonical publisher matcher in its existing direction and ownership | `design.md / First-party rule publisher admission`; `rule-agent-publishing / Publish-agent classification uses canonical wildcard coverage and durable publication`; `tasks.md / 9.6` | `component/flowgraph.SubjectCovers(declaredFilter, concreteSubject)`; no duplicate matcher |

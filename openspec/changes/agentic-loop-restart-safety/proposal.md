@@ -150,6 +150,17 @@ AgentRun complete/failed fanout is transferred intact to #1249 from the exact po
   response correlation quarantines; typed absence permits another provider call with the same RequestID. Every new
   response receives PubAck before source ACK. This adds no provider ambiguity config, failure-kind wire field,
   reconciliation capability, endpoint census, ledger, outbox, or provider dependency on AGENT replay admission.
+- Owner comment `5682070598` permits governance re-evaluation after a successful exact retained-verdict lookup
+  returns typed absence: republish the same exactly correlated proposal under current policy without proving a
+  finite verdict-retention horizon. A matching retained verdict is reused; failed or unresolved reads Retry and
+  correlation conflicts Quarantine. Absence is neither approval nor proof that no earlier decision existed;
+  current policy may decide differently from an expired verdict. Observed DiscardNew, required PubAck before ACK,
+  #1311 source-to-verdict settlement, separate tool-effect protection, other lanes' retention requirements and
+  other R8 obligations remain unchanged. No new store, timer, timestamp API, recovery runtime or policy-version
+  pinning is authorized, and no guarantee after source loss is added.
+  Owner comment `5694233488` additionally requires Quarantine when both retained approved and rejected
+  verdicts validate and match the same originating proposal. Recovery selects neither decision and stops
+  the affected delivery owner without positive settlement.
 - `AGENT_LOOPS` is the sole current-state authority for loops. Dispatch retains no `LoopTracker` or pending-approval
   cache.
 - One caught-up authority-backed view serves `/activity`, `/loops`, `/debug/state`, and AutoContinue. Explicit LoopID

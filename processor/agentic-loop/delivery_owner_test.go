@@ -37,6 +37,7 @@ func task4HeartbeatPolicy(t *testing.T, port string, handler inputHandler) natsc
 
 type loopDeliveryOwnerMsg struct {
 	data        []byte
+	subject     string
 	dataCalls   atomic.Int32
 	heartbeats  atomic.Int32
 	settlement  atomic.Int32
@@ -47,8 +48,13 @@ type loopDeliveryOwnerMsg struct {
 	metadataErr error
 }
 
-func (m *loopDeliveryOwnerMsg) Data() []byte       { m.dataCalls.Add(1); return m.data }
-func (*loopDeliveryOwnerMsg) Subject() string      { return "agent.task.test" }
+func (m *loopDeliveryOwnerMsg) Data() []byte { m.dataCalls.Add(1); return m.data }
+func (m *loopDeliveryOwnerMsg) Subject() string {
+	if m.subject != "" {
+		return m.subject
+	}
+	return "agent.task.test"
+}
 func (*loopDeliveryOwnerMsg) Reply() string        { return "" }
 func (*loopDeliveryOwnerMsg) Headers() nats.Header { return nil }
 func (m *loopDeliveryOwnerMsg) Metadata() (*jetstream.MsgMetadata, error) {
@@ -642,8 +648,10 @@ func TestLoopProductionCallbacksTerminateMalformedNonHeartbeatInputs(t *testing.
 		{port: "agent.toolcall.approved", decision: "approved", callID: "call-approved"},
 		{port: "agent.toolcall.rejected", decision: "rejected", callID: "call-rejected"},
 	} {
-		data := []byte(`{"decision":"` + row.decision + `","execution_id":"` + row.callID + `"}`)
-		msg := &loopSettlementMsg{data: data}
+		fields := validVerdictFields()
+		fields["decision"], fields["execution_id"] = row.decision, row.callID
+		data := settlementEnvelope(t, message.NewGenericJSON(fields))
+		msg := &loopSettlementMsg{data: data, subject: row.port + "." + row.callID}
 		callbacks[row.port](ctx, msg)
 		require.Equal(t, int32(1), msg.acks.Load())
 		require.Zero(t, msg.naks.Load()+msg.terms.Load())
@@ -663,11 +671,157 @@ type settlementVerdictDispatcher struct{ received chan string }
 func (*settlementVerdictDispatcher) Propose(context.Context, string, string, []agentic.ToolCall) (DispatcherResult, error) {
 	return DispatcherResult{}, nil
 }
-func (d *settlementVerdictDispatcher) HandleVerdict(decision, callID string, _ []byte) (natsclient.DeliveryDecision, error) {
-	d.received <- decision + ":" + callID
+func (d *settlementVerdictDispatcher) HandleVerdict(payload VerdictPayload) (natsclient.DeliveryDecision, error) {
+	d.received <- payload.Decision + ":" + payload.ExecutionID
 	return natsclient.DeliveryDecisionAck, nil
 }
 func (*settlementVerdictDispatcher) Mode() string { return "enforce" }
+
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+func TestLoopProductionVerdictCallbacksSettleRealWaiterOutcomes(t *testing.T) {
+	for _, verdict := range []struct {
+		port     string
+		decision string
+	}{
+		{port: "agent.toolcall.approved", decision: "approved"},
+		{port: "agent.toolcall.rejected", decision: "rejected"},
+	} {
+		for _, waiterState := range []string{"empty", "missing", "full"} {
+			t.Run(verdict.port+"/"+waiterState, func(t *testing.T) {
+				discoverable, err := NewComponent([]byte(`{}`), component.Dependencies{
+					NATSClient: &natsclient.Client{}, PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+				})
+				require.NoError(t, err)
+				c := discoverable.(*Component)
+				dispatcher := &enforceDispatcher{
+					logger: slog.New(slog.NewTextHandler(io.Discard, nil)), waiters: make(map[string]verdictWaiter),
+				}
+				c.handler.SetGovernanceDispatcher(dispatcher)
+				c.waitForStreamInput = func(context.Context, string) error { return nil }
+				callbacks := make(map[string]func(context.Context, jetstream.Msg))
+				handles := make(map[string]*loopPolicyHandle)
+				c.consumeStream = func(_ context.Context, _ context.Context, owner natsclient.PortConsumerContext, _ natsclient.StreamConsumerConfig, callback func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
+					handle := &loopPolicyHandle{closed: make(chan struct{})}
+					callbacks[owner.Port] = callback
+					handles[owner.Port] = handle
+					return handle, nil
+				}
+				ctx, cancel := context.WithCancel(t.Context())
+				t.Cleanup(func() {
+					cancel()
+					for _, binding := range c.consumers {
+						<-binding.observerDone
+					}
+				})
+				require.NoError(t, c.setupSubscriptions(ctx, ctx))
+				callback, ok := callbacks[verdict.port]
+				require.True(t, ok, "production setup did not bind %s", verdict.port)
+
+				const executionID = "execution-target"
+				unrelated := dispatcher.registerWaiter(governanceTestProposal("execution-other")).arrivals
+				var waiter chan verdictArrival
+				original := verdictArrival{decision: "already queued"}
+				if waiterState != "missing" {
+					waiter = dispatcher.registerWaiter(governanceTestProposal(executionID)).arrivals
+					if waiterState == "full" {
+						waiter <- original
+					}
+				}
+				data := settlementEnvelope(t, &message.GenericJSONPayload{Data: map[string]any{
+					"decision": verdict.decision, "execution_id": executionID,
+					"loop_id": "loop-1", "request_id": "request-1", "proposal_fingerprint": "fingerprint",
+				}})
+				msg := &loopDeliveryOwnerMsg{data: data, subject: verdict.port + "." + executionID}
+				callback(ctx, msg)
+
+				require.Equal(t, int32(1), msg.dataCalls.Load())
+				require.Zero(t, msg.terms.Load())
+				require.Zero(t, msg.heartbeats.Load())
+				require.Empty(t, unrelated, "verdict reached another execution's waiter")
+				switch waiterState {
+				case "empty":
+					require.Equal(t, int32(1), msg.acks.Load())
+					require.Zero(t, msg.naks.Load())
+					require.Len(t, waiter, 1)
+					require.Equal(t, verdict.decision, (<-waiter).decision)
+				case "missing":
+					require.Zero(t, msg.acks.Load())
+					require.Equal(t, int32(1), msg.naks.Load())
+				case "full":
+					require.Zero(t, msg.settlement.Load())
+					require.Len(t, waiter, 1)
+					require.Equal(t, original, <-waiter, "full waiter overwrote its queued verdict")
+					require.Eventually(t, func() bool { return handles[verdict.port].drains.Load() == 1 }, time.Second, time.Millisecond)
+					afterClose := &loopDeliveryOwnerMsg{data: data}
+					callback(ctx, afterClose)
+					require.Zero(t, afterClose.dataCalls.Load(), "closed owner invoked more work")
+					require.Zero(t, afterClose.settlement.Load())
+					require.Empty(t, waiter)
+				}
+				for port, handle := range handles {
+					if waiterState == "full" && port == verdict.port {
+						require.Equal(t, int32(1), handle.drains.Load())
+					} else {
+						require.Zero(t, handle.drains.Load(), "unexpected drain of %s", port)
+					}
+				}
+			})
+		}
+	}
+}
+
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+func TestLoopProductionSignalCallbackTerminatesUnsupportedRegisteredSignal(t *testing.T) {
+	discoverable, err := NewComponent([]byte(`{}`), component.Dependencies{
+		NATSClient: &natsclient.Client{}, PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+	})
+	require.NoError(t, err)
+	c := discoverable.(*Component)
+	loopID, err := c.handler.loopManager.CreateLoop("task-unsupported-signal", "general", "model", 3)
+	require.NoError(t, err)
+	before, err := c.handler.GetLoop(loopID)
+	require.NoError(t, err)
+	record := settlementLoopRecord(t, before)
+	bucket := &settlementBucket{values: map[string][]byte{loopID: record}}
+	c.loopsBucket = bucket
+	c.waitForStreamInput = func(context.Context, string) error { return nil }
+	callbacks := make(map[string]func(context.Context, jetstream.Msg))
+	handles := make(map[string]*loopPolicyHandle)
+	c.consumeStream = func(_ context.Context, _ context.Context, owner natsclient.PortConsumerContext, _ natsclient.StreamConsumerConfig, callback func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
+		handle := &loopPolicyHandle{closed: make(chan struct{})}
+		callbacks[owner.Port] = callback
+		handles[owner.Port] = handle
+		return handle, nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(func() {
+		cancel()
+		for _, binding := range c.consumers {
+			<-binding.observerDone
+		}
+	})
+	require.NoError(t, c.setupSubscriptions(ctx, ctx))
+	valid := settlementEnvelope(t, &agentic.UserSignal{
+		SignalID: "signal-unsupported", Type: agentic.SignalCancel, LoopID: loopID, UserID: "operator",
+	})
+	data := bytes.Replace(valid, []byte(`"type":"cancel"`), []byte(`"type":"unsupported"`), 1)
+	require.NotEqual(t, valid, data)
+	msg := &loopDeliveryOwnerMsg{data: data}
+	callback, ok := callbacks["agent.signal"]
+	require.True(t, ok)
+	callback(ctx, msg)
+
+	require.Equal(t, int32(1), msg.terms.Load())
+	require.Zero(t, msg.acks.Load()+msg.naks.Load())
+	require.Nil(t, bucket.revisions, "unsupported signal reached current-loop KV lookup")
+	require.Equal(t, map[string][]byte{loopID: record}, bucket.values)
+	after, err := c.handler.GetLoop(loopID)
+	require.NoError(t, err)
+	require.Equal(t, before, after, "unsupported signal mutated loop state")
+	for port, handle := range handles {
+		require.Zero(t, handle.drains.Load(), "unsupported signal drained %s", port)
+	}
+}
 
 // spec: agentic-loop / All six loop input classes settle after owner-specific durable done
 // scenario: Approval handler panics
@@ -781,14 +935,20 @@ func TestLoopCancellationUnknownPublicationQuarantinesAfterReleasingTransientSta
 }
 
 type loopSettlementMsg struct {
-	data  []byte
-	acks  atomic.Int32
-	naks  atomic.Int32
-	terms atomic.Int32
+	data    []byte
+	subject string
+	acks    atomic.Int32
+	naks    atomic.Int32
+	terms   atomic.Int32
 }
 
-func (m *loopSettlementMsg) Data() []byte                            { return m.data }
-func (*loopSettlementMsg) Subject() string                           { return "loop.test" }
+func (m *loopSettlementMsg) Data() []byte { return m.data }
+func (m *loopSettlementMsg) Subject() string {
+	if m.subject != "" {
+		return m.subject
+	}
+	return "loop.test"
+}
 func (*loopSettlementMsg) Reply() string                             { return "" }
 func (*loopSettlementMsg) Headers() nats.Header                      { return nil }
 func (*loopSettlementMsg) Metadata() (*jetstream.MsgMetadata, error) { return nil, nil }

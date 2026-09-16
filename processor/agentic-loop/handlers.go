@@ -428,8 +428,8 @@ func (h *MessageHandler) resolveParentLoopID(loopID string) string {
 // synchronized once the JetStream consumer callbacks start reading
 // it — the setter must be called between NewComponent and Start.
 //
-// Nil clears any previously installed dispatcher (effectively
-// reverting to disabled-mode pass-through). The Component wires this
+// Nil clears any previously installed dispatcher; verdict intake then
+// quarantines because its owner is unavailable. The Component wires this
 // automatically in NewComponent based on Config.ToolCallGovernance.Mode;
 // tests stub via this setter.
 func (h *MessageHandler) SetGovernanceDispatcher(d GovernanceDispatcher) {
@@ -1179,6 +1179,19 @@ func (h *MessageHandler) buildTaskResultFromRequest(
 
 // HandleModelResponse processes a model response
 func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string, response agentic.AgentResponse) (HandlerResult, error) {
+	return h.handleModelResponse(ctx, loopID, response, h.proposeToolCalls)
+}
+
+type governanceOperation func(context.Context, string, string, []agentic.ToolCall) (DispatcherResult, error)
+
+func (h *MessageHandler) proposeToolCalls(ctx context.Context, loopID, parentLoopID string, calls []agentic.ToolCall) (DispatcherResult, error) {
+	if h.governanceDispatcher == nil {
+		return DispatcherResult{Approved: calls}, nil
+	}
+	return h.governanceDispatcher.Propose(ctx, loopID, parentLoopID, calls)
+}
+
+func (h *MessageHandler) handleModelResponse(ctx context.Context, loopID string, response agentic.AgentResponse, propose governanceOperation) (HandlerResult, error) {
 	// Check for cancellation before starting work
 	if err := ctx.Err(); err != nil {
 		return HandlerResult{}, err
@@ -1302,7 +1315,7 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 		// future truncation can self-heal once.
 		h.loopManager.ResetTruncationRetry(loopID)
 
-		if err := h.handleToolCallResponse(ctx, &result, loopID, response.RequestID, response.Message.ToolCalls); err != nil {
+		if err := h.handleToolCallResponse(ctx, &result, loopID, response.RequestID, response.Message.ToolCalls, propose); err != nil {
 			return result, err
 		}
 
@@ -1357,6 +1370,7 @@ func (h *MessageHandler) handleToolCallResponse(
 	loopID string,
 	requestID string,
 	toolCalls []agentic.ToolCall,
+	propose governanceOperation,
 ) error {
 	if err := stampToolExecutionCorrelation(requestID, toolCalls); err != nil {
 		return err
@@ -1402,14 +1416,14 @@ func (h *MessageHandler) handleToolCallResponse(
 	//
 	// Rejections at this layer materialize as immediate error results,
 	// same shape as the in-process filter's rejection path below.
-	if h.governanceDispatcher != nil {
+	if propose == nil {
+		return errors.New("governance operation is unavailable")
+	}
+	{
 		parentLoopID := h.resolveParentLoopID(loopID)
-		govResult, gErr := h.governanceDispatcher.Propose(ctx, loopID, parentLoopID, toolCalls)
+		govResult, gErr := propose(ctx, loopID, parentLoopID, toolCalls)
 		if gErr != nil {
-			// Governance-layer failure that isn't a per-call rejection
-			// is currently reserved (ErrGovernancePublishFailed) — the
-			// dispatcher returns per-call rejections instead. Surface
-			// any such error to the caller for visibility.
+			// Failed observation or required publication is not a policy rejection.
 			return gErr
 		}
 		for _, rejection := range govResult.Rejected {

@@ -1,0 +1,387 @@
+# Inventory: R6 remaining cancel, approval-response and tool-verdict fast lanes
+base: c347eff487f50b93bc338d764f43ef5b5ea5e133
+
+## Claimed gap
+
+- `openspec/changes/agentic-loop-restart-safety/tasks.md:202` — `- [x] R6 Finish cancel/approval/verdict fast lanes and the accepted operational state contract (old 7.2–7.8).`
+- `openspec/changes/agentic-loop-restart-safety/tasks.md:208` — `Subsequent R2/R6 work proves stale-current/restoration protection together with observed revisions, selected`
+- `openspec/changes/agentic-loop-restart-safety/tasks.md:209` — `COMPLETE reuse and cancel's required durable state/terminal PubAck. Keep unknown-signal refusal; missing/full`
+- `openspec/changes/agentic-loop-restart-safety/tasks.md:210` — `waiter, conflict, panic, replacement and pre-marker proofs; one release point; lane-specific applied proof;`
+- `openspec/changes/agentic-loop-restart-safety/tasks.md:211` — `approval exceptions; and nonblocking audit/graph evidence. ResponseAction/intent hints are not additional`
+- `openspec/changes/agentic-loop-restart-safety/tasks.md:212` — `durable signal verbs. The earlier shared-validator correction is not completion of this group.`
+- `openspec/changes/agentic-loop-restart-safety/history/task-checkpoint-2026-09-11.md:1070` — `- [ ] 7.5 RED: add cancel-only UserSignal vocabulary, durable cancel completion, separate ApprovalResponse, missing`
+- `openspec/changes/agentic-loop-restart-safety/history/task-checkpoint-2026-09-11.md:1075` — `- [ ] 7.6 Refactor cancel, approval-response, approved-verdict, and rejected-verdict through their four existing`
+- `openspec/changes/agentic-loop-restart-safety/history/task-checkpoint-2026-09-11.md:1094` — `- [ ] 7.8 GREEN: prove all four lanes meet their owner-specific durable-done/refusal contract across replacement.`
+
+## Spellings of the fact
+
+- `agentic/user_types.go:30` — `SignalCancel = "cancel" // Stop execution immediately`
+- `agentic/user_types.go:124` — `SignalID    string    `json:"signal_id"``
+- `agentic/user_types.go:142` — `if !isValidSignalType(s.Type) {`
+- `agentic/user_types.go:311` — `Signal string `json:"signal"``
+- `processor/agentic-dispatch/intent_classifier.go:37` — `SignalType string     `json:"signal_type,omitempty"` // For signal intents`
+- `processor/agentic-dispatch/intent_classifier.go:97` — `Respond with JSON: {"type": "<intent_type>", "loop_id": "<if applicable>", "signal_type": "<if signal: cancel>", "confidence": <0.0-1.0>}`, loopContext)`
+- `processor/agentic-loop/component.go:2441` — `func (c *Component) handleSignalMessage(ctx context.Context, data []byte) (natsclient.DeliveryDecision, error) {`
+- `processor/agentic-loop/component.go:2461` — `case agentic.SignalCancel:`
+- `processor/agentic-loop/component.go:2464` — `return natsclient.DeliveryDecisionTerminate, fmt.Errorf("unsupported signal type %q for loop %q", signal.Type, signal.LoopID)`
+- `processor/agentic-loop/component.go:2469` — `func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserSignal) (natsclient.DeliveryDecision, error) {`
+- `processor/agentic-loop/component.go:2471` — `current, revision, err := c.readLoopEntityRevision(ctx, loopID)`
+- `processor/agentic-loop/component.go:2474` — `return natsclient.DeliveryDecisionQuarantine, err`
+- `processor/agentic-loop/component.go:2476` — `return natsclient.DeliveryDecisionRetry, err`
+- `processor/agentic-loop/component.go:2479` — `return natsclient.DeliveryDecisionRetry, fmt.Errorf("loop %q is not yet observable for cancellation", loopID)`
+- `processor/agentic-loop/component.go:2482` — `c.logger.WarnContext(ctx, "cancellation inapplicable: authoritative loop is terminal; no cancellation effects required",`
+- `processor/agentic-loop/component.go:2485` — `c.metrics.cancellationsInapplicable.Inc()`
+- `processor/agentic-loop/component.go:2488` — `return natsclient.DeliveryDecisionAck, nil // This cancel is effect-free and inapplicable to a closed loop.`
+- `processor/agentic-loop/component.go:2491` — `if _, err := c.handler.loopManager.CreateLoopWithID(loopID, current.TaskID, current.Role, current.Model, current.MaxIterations); err != nil {`
+- `processor/agentic-loop/component.go:2499` — `if err := c.handler.UpdateLoop(current); err != nil {`
+- `processor/agentic-loop/component.go:2505` — `c.handler.drainPendingToolFailures(loopID, fmt.Sprintf("loop cancelled by %s", signal.UserID))`
+- `processor/agentic-loop/component.go:2506` — `entity, err := c.handler.CancelLoop(loopID, signal.UserID)`
+- `processor/agentic-loop/component.go:2527` — `if decision, err := c.persistTerminalOutcome(ctx, HandlerResult{LoopID: loopID, State: agentic.LoopStateCancelled}, &completion, revision); err != nil {`
+- `processor/agentic-loop/component.go:2559` — `func (c *Component) handleToolCallVerdictMessage(_ context.Context, data []byte) (natsclient.DeliveryDecision, error) {`
+- `processor/agentic-loop/component.go:2562` — `return natsclient.DeliveryDecisionQuarantine, errors.New("tool-call verdict dispatcher is unavailable")`
+- `processor/agentic-loop/component.go:2567` — `return natsclient.DeliveryDecisionTerminate, fmt.Errorf("decode tool-call verdict payload of %d bytes", len(data))`
+- `processor/agentic-loop/component.go:2577` — `return dispatcher.HandleVerdict(decision, executionID, data)`
+- `processor/agentic-loop/approval_response_handler.go:155` — `func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []byte) (natsclient.DeliveryDecision, error) {`
+- `processor/agentic-loop/approval_response_handler.go:166` — `if err := response.Validate(); err != nil {`
+- `processor/agentic-loop/approval_response_handler.go:177` — `needsRecovery := getErr != nil || entity.PendingApproval == nil`
+- `processor/agentic-loop/approval_response_handler.go:182` — `persisted, revision, err := c.readLoopEntityRevision(ctx, response.LoopID)`
+- `processor/agentic-loop/approval_response_handler.go:186` — `if revision == 0 {`
+- `processor/agentic-loop/approval_response_handler.go:191` — `if persisted.State != agentic.LoopStateAwaitingApproval && pending != nil {`
+- `processor/agentic-loop/approval_response_handler.go:198` — `fmt.Errorf("loop %q awaits approval without coherent pending execution identity", response.LoopID)`
+- `processor/agentic-loop/approval_response_handler.go:200` — `if persisted.State != agentic.LoopStateAwaitingApproval || pending.ExecutionID != response.ExecutionID {`
+- `processor/agentic-loop/approval_response_handler.go:201` — `c.logger.WarnContext(ctx, "approval response inapplicable: no matching current gate",`
+- `processor/agentic-loop/approval_response_handler.go:204` — `c.metrics.approvalDecisionsInapplicable.Inc()`
+- `processor/agentic-loop/approval_response_handler.go:206` — `return natsclient.DeliveryDecisionAck, nil`
+- `processor/agentic-loop/approval_response_handler.go:210` — `fmt.Errorf("approval execution %q conflicts with current call identity", response.ExecutionID)`
+- `processor/agentic-loop/approval_response_handler.go:212` — `if !needsRecovery && !reflect.DeepEqual(entity.PendingApproval, persisted.PendingApproval) {`
+- `processor/agentic-loop/approval_response_handler.go:217` — `settled, decision, err := c.recoverApprovalResponse(ctx, response, persisted, revision)`
+- `processor/agentic-loop/approval_response_handler.go:225` — `result, err := c.handler.HandleApprovalResponse(ctx, response)`
+- `processor/agentic-loop/approval_response_handler.go:240` — `fmt.Errorf("approval for loop %q lacks durable branch-applied proof", response.LoopID)`
+- `processor/agentic-loop/approval_response_handler.go:251` — `if decision, err := c.persistTerminalOutcome(ctx, result, candidate, revision); err != nil {`
+- `processor/agentic-loop/approval_response_handler.go:269` — `if err := c.publishResults(ctx, result); err != nil {`
+- `processor/agentic-loop/approval_response_handler.go:275` — `if _, err := c.loopsBucket.Update(ctx, result.LoopID, data, revision); err != nil {`
+- `processor/agentic-loop/approval_response_handler.go:277` — `return natsclient.DeliveryDecisionRetry, fmt.Errorf("commit approved loop %s: %w", result.LoopID, err)`
+- `processor/agentic-loop/governance_dispatcher.go:136` — `type VerdictPayload struct {`
+- `processor/agentic-loop/governance_dispatcher.go:140` — `RequestID           string         `json:"request_id,omitempty"``
+- `processor/agentic-loop/governance_dispatcher.go:141` — `ExecutionID         string         `json:"execution_id,omitempty"``
+- `processor/agentic-loop/governance_dispatcher.go:142` — `ProposalFingerprint string         `json:"proposal_fingerprint,omitempty"``
+- `processor/agentic-loop/governance_dispatcher.go:155` — `if executionID, ok := v.Properties["execution_id"].(string); ok {`
+- `processor/agentic-loop/governance_dispatcher.go:230` — `HandleVerdict(decision, executionID string, data []byte) (natsclient.DeliveryDecision, error)`
+- `processor/agentic-loop/governance_dispatcher.go:282` — `func (d *disabledDispatcher) HandleVerdict(decision, executionID string, _ []byte) (natsclient.DeliveryDecision, error) {`
+- `processor/agentic-loop/governance_dispatcher.go:289` — `return natsclient.DeliveryDecisionAck, nil`
+- `processor/agentic-loop/governance_dispatcher.go:319` — `func (d *auditDispatcher) HandleVerdict(decision, executionID string, data []byte) (natsclient.DeliveryDecision, error) {`
+- `processor/agentic-loop/governance_dispatcher.go:359` — `waiters map[string]chan verdictArrival`
+- `processor/agentic-loop/governance_dispatcher.go:367` — `func (d *enforceDispatcher) registerWaiter(callID string) chan verdictArrival {`
+- `processor/agentic-loop/governance_dispatcher.go:375` — `func (d *enforceDispatcher) releaseWaiter(callID string) {`
+- `processor/agentic-loop/governance_dispatcher.go:399` — `channels[call.ExecutionID] = d.registerWaiter(call.ExecutionID)`
+- `processor/agentic-loop/governance_dispatcher.go:403` — `d.releaseWaiter(call.ExecutionID)`
+- `processor/agentic-loop/governance_dispatcher.go:414` — `publishFailures[call.ExecutionID] = err`
+- `processor/agentic-loop/governance_dispatcher.go:435` — `decision, reason := d.awaitVerdict(ctx, channels[call.ExecutionID], call, loopID)`
+- `processor/agentic-loop/governance_dispatcher.go:459` — `func (d *enforceDispatcher) awaitVerdict(ctx context.Context, ch chan verdictArrival, call agentic.ToolCall, loopID string) (string, string) {`
+- `processor/agentic-loop/governance_dispatcher.go:489` — `func (d *enforceDispatcher) HandleVerdict(decision, executionID string, data []byte) (natsclient.DeliveryDecision, error) {`
+- `processor/agentic-loop/governance_dispatcher.go:494` — `return natsclient.DeliveryDecisionTerminate, errors.New("verdict missing decision or execution_id")`
+- `processor/agentic-loop/governance_dispatcher.go:512` — `d.metrics.RecordGovernanceVerdictMissingWaiter()`
+- `processor/agentic-loop/governance_dispatcher.go:514` — `return natsclient.DeliveryDecisionRetry, fmt.Errorf("no active governance waiter for execution_id %q", executionID)`
+- `processor/agentic-loop/governance_dispatcher.go:520` — `case ch <- verdictArrival{decision: decision, reason: payload.EffectiveReason(), ruleID: payload.RuleID}:`
+- `processor/agentic-loop/governance_dispatcher.go:521` — `return natsclient.DeliveryDecisionAck, nil`
+- `processor/agentic-loop/governance_dispatcher.go:525` — `return natsclient.DeliveryDecisionQuarantine, fmt.Errorf("governance waiter for execution_id %q is full", executionID)`
+- `processor/agentic-loop/component.go:1765` — `func (c *Component) persistTerminalOutcome(ctx context.Context, result HandlerResult, candidate message.Payload, revision uint64) (natsclient.DeliveryDecision, error) {`
+- `processor/agentic-loop/component.go:1797` — `current, observed, err := c.readLoopEntityRevision(ctx, result.LoopID)`
+- `processor/agentic-loop/component.go:1801` — `if revision == 0 || observed != revision || current.State.IsTerminal() {`
+- `processor/agentic-loop/component.go:1804` — `if current.TaskID != marker.TaskID {`
+- `processor/agentic-loop/component.go:1809` — `selected, err := c.selectTerminalOutcome(ctx, result.LoopID, marker.TaskID, candidate)`
+- `processor/agentic-loop/component.go:1819` — `return natsclient.DeliveryDecisionRetry, fmt.Errorf("selected success for loop %q lacks this delivery's compatible applied proof", result.LoopID)`
+- `processor/agentic-loop/component.go:1828` — `return natsclient.DeliveryDecisionRetry, fmt.Errorf("selected failure for loop %q lacks this delivery's compatible applied proof", result.LoopID)`
+- `processor/agentic-loop/component.go:1837` — `return natsclient.DeliveryDecisionRetry, fmt.Errorf("selected cancellation for loop %q lacks this delivery's compatible applied proof", result.LoopID)`
+- `processor/agentic-loop/component.go:1879` — `result.PublishedMessages = []PublishedMessage{{Subject: subject, Data: data}}`
+- `processor/agentic-loop/component.go:1880` — `if err := c.publishResults(ctx, result); err != nil {`
+- `processor/agentic-loop/component.go:1890` — `if _, err := c.loopsBucket.Update(ctx, result.LoopID, data, revision); err != nil {`
+- `processor/agentic-loop/component.go:1922` — `key := "COMPLETE_" + loopID`
+- `processor/agentic-loop/component.go:1937` — `if header.LoopID != loopID || header.TaskID != taskID {`
+- `processor/agentic-loop/component.go:1954` — `if err := selected.Validate(); err != nil {`
+
+## Adjacent claims
+
+- `openspec/changes/agentic-loop-restart-safety/inventory-loop-state-contract-2026-09-13.md:1` — `# Inventory: bounded LoopEntity state contract and adopter seams`
+- `openspec/changes/agentic-loop-restart-safety/review-loop-state-implementation-2026-09-13.md:5` — `Independent semstreams-reviewer verdict: **APPROVE — first-R6 slice, no remaining findings.**`
+- `openspec/changes/agentic-loop-restart-safety/review-terminal-complete-2026-09-13.md:214` — `Independent reviewer: **R2 CLOSEOUT PASS.** The bounded obligation map is satisfied by the current unit-race,`
+- `openspec/changes/agentic-loop-restart-safety/review-terminal-complete-2026-09-13.md:217` — `owner choice. This does not revoke the Store ruling, complete R4–R10 or R6, or establish a whole-PR/push/merge gate.`
+- `openspec/changes/agentic-loop-restart-safety/tasks.md:159` — `[terminal-outcome-ruling]: https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5647247843`
+- `openspec/changes/agentic-loop-restart-safety/tasks.md:160` — `[terminal-field-ruling]: https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5651819675`
+- `openspec/changes/agentic-loop-restart-safety/tasks.md:161` — `[terminal-complete-patch-ruling]: https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5653214732`
+- `openspec/changes/agentic-loop-restart-safety/tasks.md:162` — `[terminal-cancel-diagnostic-ruling]: https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5654482198`
+- `openspec/changes/agentic-loop-restart-safety/tasks.md:163` — `[approval-store-retirement-ruling]: https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5654729986`
+- `openspec/changes/agentic-loop-restart-safety/tasks.md:229` — `- [ ] R7 Close governance settlement/correlation proof (old 8.1–8.3). Cover allowed/denied/filter-error/panic/budget,`
+- `openspec/changes/agentic-loop-restart-safety/design.md:617` — `| 7 | loop `agent.signal`; fast, cancel-only after #1251 | current cancellation state and `COMPLETE_` commit; terminal event receives PubAck | invalid/unknown → Terminate; transient pre-effect authority/selection or post-PubAck final-KV failure → Retry; conflict/panic or earlier unknown effect/terminal publication → Quarantine | LoopID and exact current loop state distinguish live missing from durable terminal proof |`
+- `openspec/changes/agentic-loop-restart-safety/design.md:618` — `| 8 | loop `agent.approval_response`; fast | matching gate applies its branch and clears pending only after PubAck or durable applied proof; noncurrent gate records log plus metric and ACKs without business publication or authority mutation | invalid including missing ExecutionID → Terminate; unresolved authority/evidence, nonterminal publication or transient post-PubAck final-KV failure → Retry; panic, matching-gate correlation conflict or earlier unknown terminal effect/publication → Quarantine | exact coherent current LoopEntity decides gate applicability; matching-gate reconstruction uses exact retained request/response; no additional approval Store |`
+- `openspec/changes/agentic-loop-restart-safety/design.md:619` — `| 9 | loop `agent.toolcall.approved`; fast | verdict reaches waiter or remains recoverable for response replay | invalid → Terminate; retained lookup unavailable → Retry; mismatch/panic → Quarantine | execution identity, proposal fingerprint, exact retained verdict at waiter-loss boundary |`
+- `openspec/changes/agentic-loop-restart-safety/design.md:620` — `| 10 | loop `agent.toolcall.rejected`; fast | same row-9 contract for rejection | same as row 9 | same as row 9 |`
+- `openspec/changes/agentic-loop-restart-safety/design.md:1117` — `- Governance retained-verdict recovery at the waiter-loss boundary requires the complete R7 evidence. Ordinary`
+- `openspec/changes/agentic-loop-restart-safety/design.md:1234` — `| Echo the reviewed ExecutionID; settle noncurrent approval gates observably without effects or historical applied claims | `design.md / Approval continuation`; approval-continuation and terminal-release requirements; dispatch current-state projection requirement; `tasks.md / R1–R3, R6` | owner comment `5618375806`; one gate per execution; narrow pending JSON/OpenAPI addition; tool/model proofs unchanged; Store retirement is the separate R3 ruling |`
+- `openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md:308` — `- **WHEN** a registered UserSignal carries any value other than cancel`
+- `openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md:309` — `- **THEN** validation or handling terminates it as permanently invalid`
+- `openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md:314` — `- **WHEN** an admitted cancel signal is handled`
+- `openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md:315` — `- **THEN** current cancellation state and `COMPLETE_<loopID>` commit`
+- `openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md:316` — `- **AND** the terminal event receives PubAck before source ACK`
+- `openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md:320` — `- **WHEN** approval work panics`
+- `openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md:321` — `- **THEN** handler recovery returns a non-nil fatal-classified error`
+- `openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md:322` — `- **AND** the production delivery callback returns Quarantine without persistence or settlement`
+- `openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md:323` — `- **AND** the exact owner stops and drains`
+- `openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md:336` — `- **WHEN** an exact verdict arrives after replacement with no waiter`
+- `openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md:337` — `- **THEN** its retained identity remains recoverable for response replay`
+- `openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md:338` — `- **AND** missing or full process channel is not completed log-and-drop`
+- `openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md:889` — `### Requirement: Per-loop in-process state is released at terminal, through the one release point`
+- `openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md:905` — `lane-specific evidence to prove that input already applied. For an approval-required tool status only,`
+- `openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md:912` — `A late approval response MUST follow `Approval continuation after replacement is exact and evidence-bounded`.`
+- `openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md:943` — `- **THEN** the approval owner logs and counts inapplicability and positively settles the source`
+- `openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md:990` — `- **THEN** the approval owner quarantines the delivery`
+- `docs/adr/039-tool-call-governance-rule-driven.md:11` — `"verdict is structural; audit-write failure must not flip it" discipline are`
+- #1146 — agentic-loop: prevent silent ACK and active-state loss across process restart
+- #1239 — agentic-loop: pause/resume are advertised and unimplemented — PauseRequested is written twice, read never, and its comment promises a checkpoint that does not exist
+- #759 — natsclient: establish semantic JetStream settlement as the restart-safety foundation
+- #1155 — e2e(agentic): prove semantic-settlement quarantine and AgentRun redelivery across process replacement
+- #1159 — fix(agentic-loop): preserve durable work across process restart
+- #1156 — refactor(natsclient): add semantic delivery settlement
+- OpenSpec active change: agentic-loop-restart-safety — 12/22 tasks.
+- OpenSpec active change: semantic-jetstream-settlement — 44/67 tasks.
+
+## Consumers
+
+- `processor/agentic-loop/component.go:922` — `settleHandlerFn = c.handleSignalMessage`
+- `processor/agentic-loop/component.go:924` — `settleHandlerFn = c.handleApprovalResponseMessage`
+- `processor/agentic-loop/component.go:933` — `settleHandlerFn = c.handleToolCallVerdictMessage`
+- `processor/agentic-loop/component.go:1072` — `admission = newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)`
+- `processor/agentic-loop/component.go:1077` — `decision, cause := runLoopDeliveryWork(msgCtx, msg.Data(), settleHandlerFn)`
+- `processor/agentic-loop/component.go:1078` — `result := natsclient.SettleDelivery(msg, decision, cause)`
+- `processor/agentic-loop/component.go:1079` — `admission.latch(result)`
+- `processor/agentic-loop/component.go:1766` — `defer c.releaseLoopTransientState(result.LoopID)`
+- `processor/agentic-loop/component.go:2487` — `c.releaseLoopTransientState(loopID)`
+- `processor/agentic-loop/component.go:2498` — `defer c.releaseLoopTransientState(loopID)`
+- `processor/agentic-loop/component.go:2300` — `if err := c.natsClient.PublishToStream(ctx, msg.Subject, msg.Data); err != nil {`
+- `processor/agentic-loop/approval_response_handler.go:227` — `c.releaseLoopTransientState(response.LoopID)`
+- `processor/agentic-loop/approval_response_handler.go:268` — `c.recordHandlerResultTrajectory(ctx, result)`
+- `processor/agentic-loop/approval_response_handler.go:276` — `c.releaseLoopTransientState(response.LoopID)`
+- `processor/agentic-loop/trajectory_handler_wiring.go:64` — `func (c *Component) releaseLoopTransientState(loopID string) {`
+- `processor/agentic-loop/trajectory_handler_wiring.go:65` — `c.handler.trajectoryManager.discardTrajectory(loopID)`
+- `processor/agentic-loop/trajectory_handler_wiring.go:66` — `c.trajectoryAuditLoss.release(loopID)`
+- `processor/agentic-loop/trajectory_handler_wiring.go:68` — `_ = c.handler.loopManager.DeleteLoop(loopID)`
+- `processor/agentic-loop/settlement_recovery.go:123` — `func (c *Component) readLoopEntityRevision(ctx context.Context, loopID string) (agentic.LoopEntity, uint64, error) {`
+- `processor/agentic-loop/settlement_recovery.go:127` — `entry, err := c.loopsBucket.Get(ctx, loopID)`
+- `processor/agentic-loop/settlement_recovery.go:128` — `if errors.Is(err, jetstream.ErrKeyNotFound) || errors.Is(err, jetstream.ErrKeyDeleted) {`
+- `processor/agentic-loop/settlement_recovery.go:134` — `var entity agentic.LoopEntity`
+- `processor/agentic-loop/settlement_recovery.go:140` — `if err := entity.Validate(); err != nil {`
+- `processor/agentic-loop/settlement_recovery.go:145` — `if entity.ID != loopID || entity.TaskID == "" {`
+- `processor/agentic-loop/settlement_recovery.go:151` — `return entity, entry.Revision(), nil`
+- `processor/agentic-loop/settlement_recovery.go:738` — `func (c *Component) recoverApprovalResponse(ctx context.Context, approval agentic.ApprovalResponse, entity agentic.LoopEntity, revision uint64) (bool, natsclient.DeliveryDecision, error) {`
+- `processor/agentic-loop/settlement_recovery.go:833` — `// The pending snapshot remains durable until terminal PubAck and the final`
+- `processor/agentic-loop/component.go:1857` — `if err := c.stampSyntheticDecideWithBudget(ctx, &SyntheticDecideRequest{LoopID: saved.LoopID, Reason: saved.Result}); err != nil {`
+- `processor/agentic-loop/component.go:1865` — `c.graphWriter.WriteLoopCancellation(ctx, saved, c.trajectoryAuditLoss.observed(result.LoopID))`
+- `processor/agentic-loop/component.go:1866` — `if err := ctx.Err(); err != nil {`
+- `processor/agentic-loop/component.go:1993` — `c.logger.Warn("completion graph evidence write failed; terminal settlement continues",`
+- `processor/agentic-loop/component.go:2058` — `c.logger.Warn("failure graph evidence write failed; terminal settlement continues",`
+- `processor/agentic-loop/graph_writer.go:495` — `func (w *graphWriter) WriteLoopCancellation(ctx context.Context, event *agentic.LoopCancelledEvent, evidenceIncomplete bool) {`
+- `processor/agentic-loop/graph_writer.go:507` — `if err := w.writeBatch(ctx, triples); err != nil {`
+- `processor/agentic-loop/graph_writer.go:508` — `w.logger.Warn("graph_writer: failed to write loop cancellation batch",`
+- `processor/agentic-loop/delivery_owner_test.go:611` — `func TestLoopProductionCallbacksTerminateMalformedNonHeartbeatInputs(t *testing.T) {`
+- `processor/agentic-loop/delivery_owner_test.go:628` — `for _, port := range []string{"agent.signal", "agent.approval_response", "agent.toolcall.approved", "agent.toolcall.rejected"} {`
+- `processor/agentic-loop/delivery_owner_test.go:635` — `require.Equal(t, int32(1), msg.terms.Load(), "%s immutable malformed input must terminate", port)`
+- `processor/agentic-loop/delivery_owner_test.go:819` — `func TestLoopApprovalPanicProductionCallbackQuarantinesExactOwner(t *testing.T) {`
+- `processor/agentic-loop/delivery_owner_test.go:853` — `require.Zero(t, msg.acks.Load()+msg.naks.Load()+msg.terms.Load())`
+- `processor/agentic-loop/delivery_owner_test.go:854` — `require.Eventually(t, func() bool { return handles["agent.approval_response"].drains.Load() == 1 }, time.Second, time.Millisecond)`
+- `processor/agentic-loop/delivery_owner_test.go:872` — `func TestLoopCancellationUnknownPublicationQuarantinesAfterReleasingTransientState(t *testing.T) {`
+- `processor/agentic-loop/delivery_owner_test.go:909` — `require.Zero(t, msg.acks.Load()+msg.naks.Load()+msg.terms.Load())`
+- `processor/agentic-loop/delivery_owner_test.go:912` — `require.Error(t, err, "unknown terminal publication retained speculative process state")`
+- `processor/agentic-loop/delivery_owner_test.go:914` — `require.Contains(t, bucket.values, "COMPLETE_"+loopID, "test must reach publication after terminal selection")`
+- `processor/agentic-loop/delivery_owner_test.go:949` — `func TestCancellationPreEffectCollisionClassificationRetries(t *testing.T) {`
+- `processor/agentic-loop/delivery_owner_test.go:977` — `require.Equal(t, int32(1), msg.naks.Load())`
+- `processor/agentic-loop/delivery_owner_test.go:981` — `require.Equal(t, uint64(1), bucket.revisions[loopID])`
+- `processor/agentic-loop/delivery_owner_test.go:988` — `func TestTerminalCancellationInapplicabilityDiagnostic(t *testing.T) {`
+- `processor/agentic-loop/delivery_owner_test.go:1063` — `assert.Contains(t, logs.String(), "authoritative loop is terminal; no cancellation effects required")`
+- `processor/agentic-loop/delivery_owner_test.go:1074` — `assert.Equal(t, beforeCounter+float64(wantIncrements), testutil.ToFloat64(registeredMetrics.cancellationsInapplicable))`
+- `processor/agentic-loop/governance_dispatcher_test.go:35` — `func TestGovernanceDispatcherHandleVerdictDeclaresDeliveryOutcome(t *testing.T) {`
+- `processor/agentic-loop/governance_dispatcher_test.go:53` — `decision, err = enforce.HandleVerdict("approved", "missing", nil)`
+- `processor/agentic-loop/governance_dispatcher_test.go:55` — `require.Equal(t, natsclient.DeliveryDecisionRetry, decision)`
+- `processor/agentic-loop/governance_dispatcher_test.go:58` — `decision, err = enforce.HandleVerdict("approved", "delivered", nil)`
+- `processor/agentic-loop/governance_dispatcher_test.go:61` — `require.Equal(t, "approved", (<-delivered).decision)`
+- `processor/agentic-loop/governance_dispatcher_test.go:66` — `decision, err = enforce.HandleVerdict("rejected", "full", nil)`
+- `processor/agentic-loop/governance_dispatcher_test.go:68` — `require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)`
+- `processor/agentic-loop/governance_dispatcher_test.go:198` — `func TestDispatcher_EnforceModeWaitsForApproveVerdict(t *testing.T) {`
+- `processor/agentic-loop/governance_dispatcher_test.go:229` — `func TestDispatcher_EnforceModeRejectsOnDenyVerdict(t *testing.T) {`
+- `processor/agentic-loop/governance_dispatcher_test.go:369` — `func TestDispatcher_EnforceModeVerdictBeforeSelectArrival(t *testing.T) {`
+- `processor/agentic-loop/governance_dispatcher_test.go:397` — `func TestDispatcher_EnforceModeLateVerdictIsNoOp(t *testing.T) {`
+- `processor/agentic-loop/governance_dispatcher_test.go:503` — `func TestDispatcher_LateVerdictIncrementsMissingWaiterMetric(t *testing.T) {`
+- `processor/agentic-loop/approval_recovery_test.go:112` — `func TestApprovalFinalPutCannotOverwriteCompletedToolResult(t *testing.T) {`
+- `processor/agentic-loop/approval_recovery_test.go:155` — `func TestApprovalCommitDoesNotBorrowUncommittedTerminalState(t *testing.T) {`
+- `processor/agentic-loop/approval_recovery_test.go:246` — `func TestColdApprovalRestoresCurrentBatch(t *testing.T) {`
+- `processor/agentic-loop/approval_recovery_test.go:268` — `func TestOldApprovalCannotResolveLaterRequestWithSameCallID(t *testing.T) {`
+- `processor/agentic-loop/approval_recovery_test.go:343` — `func TestColdApprovalWithoutCurrentGateIsObservableNoop(t *testing.T) {`
+- `processor/agentic-loop/approval_recovery_test.go:436` — `func TestColdApprovalUnresolvedOrConflictingEvidenceDoesNotResolve(t *testing.T) {`
+- `processor/agentic-loop/approval_recovery_test.go:541` — `func TestColdApprovalPublicationFailurePreservesPending(t *testing.T) {`
+- `processor/agentic-loop/approval_recovery_test.go:553` — `func TestColdApprovalFinalStateFailureRetries(t *testing.T) {`
+- `processor/agentic-loop/approval_recovery_test.go:633` — `func TestApprovalTerminalSelectionUncertaintyRetriesBeforeEffects(t *testing.T) {`
+- `processor/agentic-loop/delivery_settlement_integration_test.go:25` — `func TestIntegrationApprovalRejectionJoinsCancelledGraphRequestBeforeQuarantine(t *testing.T) {`
+- `processor/agentic-loop/delivery_settlement_integration_test.go:118` — `require.Zero(t, msg.acks.Load()+msg.naks.Load()+msg.terms.Load(), "source settled while graph request was live")`
+- `processor/agentic-loop/delivery_settlement_integration_test.go:130` — `require.Zero(t, msg.acks.Load()+msg.naks.Load()+msg.terms.Load(), "unknown graph effect must not settle the source")`
+- `processor/agentic-loop/delivery_settlement_integration_test.go:154` — `func TestIntegrationLoopSignalAndApprovalCallbacksCommitBeforeAck(t *testing.T) {`
+- `processor/agentic-loop/delivery_settlement_integration_test.go:201` — `selected, err := c.loopsBucket.Get(ctx, "COMPLETE_"+cancelLoopID)`
+- `processor/agentic-loop/delivery_settlement_integration_test.go:206` — `return errors.New("cancel ACK preceded final marker")`
+- `processor/agentic-loop/delivery_settlement_integration_test.go:212` — `published, err := stream.GetLastMsgForSubject(ctx, "agent.complete."+cancelLoopID)`
+- `processor/agentic-loop/delivery_settlement_integration_test.go:222` — `return errors.New("cancel ACK lacks exact registered terminal publication")`
+- `processor/agentic-loop/delivery_settlement_integration_test.go:228` — `require.Equal(t, int32(1), signalMsg.acks.Load())`
+- `processor/agentic-loop/delivery_settlement_integration_test.go:258` — `require.Nil(t, durable.PendingApproval, "approval ACK requires the cleared pending state to be durable")`
+- `processor/agentic-loop/approval_replacement_integration_test.go:75` — `func TestIntegrationApprovalAfterLoopAndDispatchReplacement(t *testing.T) {`
+- `processor/agentic-loop/approval_replacement_integration_test.go:80` — `func TestIntegrationApprovalRetainedAbsenceFailsAfterReplacement(t *testing.T) {`
+- `processor/agentic-loop/approval_replacement_integration_test.go:89` — `func TestIntegrationMissingApprovalEvidenceCannotOverwriteCancellation(t *testing.T) {`
+- `processor/agentic-loop/approval_replacement_integration_test.go:161` — `func TestIntegrationAppliedApprovalRedeliversAfterOwnerReplacement(t *testing.T) {`
+- `processor/agentic-loop/approval_replacement_integration_test.go:198` — `func TestIntegrationModifiedApprovalAfterLoopAndDispatchReplacement(t *testing.T) {`
+- `processor/agentic-loop/approval_replacement_integration_test.go:205` — `func TestIntegrationRejectedApprovalAfterLoopAndDispatchReplacement(t *testing.T) {`
+- `processor/agentic-loop/approval_replacement_integration_test.go:212` — `func TestIntegrationApprovalReplacementIgnoresOlderSameCallIDResponse(t *testing.T) {`
+- `processor/agentic-loop/approval_replacement_integration_test.go:218` — `func TestIntegrationApprovalTimeoutAfterLoopAndDispatchReplacement(t *testing.T) {`
+- `processor/agentic-loop/terminal_marker_redelivery_integration_test.go:92` — `func TestIntegrationTerminalMarkerFailureRedeliversAfterComponentReplacement(t *testing.T) {`
+- `processor/agentic-loop/terminal_selection_test.go:30` — `func TestTerminalSelectionPreservesSavedOutcome(t *testing.T) {`
+- `processor/agentic-loop/terminal_selection_test.go:94` — `func TestTerminalSelectionRefusesContradictoryPreparedState(t *testing.T) {`
+- `processor/agentic-loop/terminal_selection_test.go:137` — `func TestTerminalSelectionRejectsChangedSupportingRevision(t *testing.T) {`
+- `processor/agentic-loop/terminal_selection_test.go:161` — `func TestTerminalSelectionRefusesCandidateMarkerMismatchBeforeSelection(t *testing.T) {`
+- `processor/agentic-loop/terminal_selection_test.go:188` — `func TestTerminalSelectionReplaysStoredSuccess(t *testing.T) {`
+- `processor/agentic-loop/terminal_selection_test.go:226` — `func TestSelectedSyntheticActionFailureWithholdsTerminalMarker(t *testing.T) {`
+- `processor/agentic-loop/terminal_selection_test.go:283` — `func TestTerminalSelectionRejectsPoisonAndUncertainStorage(t *testing.T) {`
+- `processor/agentic-loop/signal_test.go:13` — `func TestHandleSignalMessage_Cancel(t *testing.T) {`
+- `processor/agentic-loop/signal_test.go:55` — `func TestCannotCancelTerminalLoop(t *testing.T) {`
+
+## Problem shape
+
+- `processor/agentic-loop/delivery_owner.go:12` — `func runLoopDeliveryWork(`
+- `processor/agentic-loop/delivery_owner.go:18` — `if recovered := recover(); recovered != nil {`
+- `processor/agentic-loop/delivery_owner.go:19` — `decision = natsclient.DeliveryDecisionQuarantine`
+- `processor/agentic-loop/delivery_owner.go:20` — `cause = fmt.Errorf("loop delivery work panicked: %v", recovered)`
+- `processor/agentic-loop/component.go:1923` — `if _, err := c.loopsBucket.Create(ctx, key, data); err == nil {`
+- `processor/agentic-loop/component.go:1925` — `} else if !errors.Is(err, jetstream.ErrKeyExists) {`
+- `processor/agentic-loop/component.go:1928` — `entry, err := c.loopsBucket.Get(ctx, key)`
+
+## Reviewer supplement: settlement, drain and release exclusions
+
+Reviewer-requested pins, opened and materialized by root on 2026-09-14; not additional explorer searches.
+
+- `processor/agentic-loop/delivery_owner.go:48` — `func (a *deliveryLaneAdmission) latch(result natsclient.DeliveryResult) {`
+- `processor/agentic-loop/delivery_owner.go:49` — `if !result.OwnerStopRequired() {`
+- `processor/agentic-loop/delivery_owner.go:57` — `a.open = false`
+- `processor/agentic-loop/delivery_owner.go:60` — `a.onFatal(result)`
+- `processor/agentic-loop/delivery_owner.go:65` — `func (c *Component) recordDeliveryOwnerFatal(result natsclient.DeliveryResult) {`
+- `processor/agentic-loop/delivery_owner.go:71` — `c.deliveryFatalErr = result.Err()`
+- `processor/agentic-loop/delivery_owner.go:96` — `b.drainOnce.Do(b.handle.Drain)`
+- `processor/agentic-loop/delivery_owner.go:99` — `func (c *Component) observeDeliveryLane(`
+- `processor/agentic-loop/delivery_owner.go:110` — `case result := <-admission.fatal:`
+- `processor/agentic-loop/delivery_owner.go:112` — `binding.drain()`
+- `processor/agentic-loop/settlement_recovery.go:312` — `if !keepLoop {`
+- `processor/agentic-loop/settlement_recovery.go:313` — `_ = c.handler.loopManager.DeleteLoop(entity.ID)`
+- `processor/agentic-loop/handlers.go:931` — `if registeredHere && !keepLoop {`
+- `processor/agentic-loop/handlers.go:932` — `_ = h.loopManager.DeleteLoop(loopID)`
+- `processor/agentic-loop/terminal_release_test.go:204` — `func TestTerminalReleaseClearsEveryPerLoopMap(t *testing.T) {`
+- `processor/agentic-loop/terminal_release_test.go:231` — `func TestTerminalReleaseIsIdempotent(t *testing.T) {`
+- `processor/agentic-loop/terminal_release_test.go:256` — `func TestTerminalReleaseHappensAfterTerminalReaders(t *testing.T) {`
+- `processor/agentic-loop/terminal_release_test.go:480` — `func TestApprovalSweepUnaffectedByTerminalRelease(t *testing.T) {`
+- `processor/agentic-loop/terminal_release_test.go:521` — `func TestSettledLoopResultReadableAfterRelease(t *testing.T) {`
+
+## Searches
+
+- S01 `git rev-parse HEAD` → 1; c347eff487f50b93bc338d764f43ef5b5ea5e133.
+- S02 `git status --short` → 0.
+- S03 `git ls-files '**/AGENTS.md'` → 0.
+- S04 `git grep -n -E '7\.[2-8]|R6' -- openspec/changes/agentic-loop-restart-safety/history/task-checkpoint-2026-09-11.md openspec/changes/agentic-loop-restart-safety/tasks.md` → 25.
+- S05 `gopls workspace_symbol -matcher=fuzzy handleSignal` → FAILED: Go build cache operation not permitted; 0 symbols.
+- S06 `gopls workspace_symbol -matcher=fuzzy handleSignal` → 4 result lines.
+- S07 `git grep -n -E 'fast.lane|signal|approval|verdict|waiter|settlement|terminal' -- processor/agentic-loop/*.go` → 1655 reported output lines; output truncated, only 592 captured matching pins inspected.
+- S08 `git grep -n -E '^###|^##|^[^[:space:]]*7\.[2-8]|^- \[ \] 7\.[2-8]' -- openspec/changes/agentic-loop-restart-safety/history/task-checkpoint-2026-09-11.md` → 22 captured matching pins.
+- S09 `gopls workspace_symbol -matcher=fuzzy Component.handle` → 100 result lines (workspace-symbol result limit reached).
+- S10 `gopls workspace_symbol -matcher=fuzzy verdict` → 100 result lines (workspace-symbol result limit reached).
+- S11 `sed -n '1053,1095p' openspec/changes/agentic-loop-restart-safety/history/task-checkpoint-2026-09-11.md` → 43 lines read.
+- S12 `sed -n '49,58p' openspec/project.md` → 10 lines read.
+- S13 `git grep -n -E 'inventory:verify|inventory-verify' -- Taskfile.yml scripts` → 9 captured matching pins.
+- S14 `git grep -n -E 'fast.lane|release|signal|verdict|approval|COMPLETE_' -- openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md` → 97 captured matching pins.
+- S15 `git grep -n -E 'signal|approval|verdict|waiter|complete|settlement' -- processor/agentic-loop/component.go` → 78 captured matching pins.
+- S16 `gopls call_hierarchy processor/agentic-loop/component.go:2469:21` → 24 result lines.
+- S17 `gopls call_hierarchy processor/agentic-loop/approval_response_handler.go:155:21` → 43 result lines.
+- S18 `gopls implementation processor/agentic-loop/governance_dispatcher.go:232:2` → 5 result lines.
+- S19 `gopls symbols processor/agentic-loop/delivery_owner_test.go` → 64 result lines.
+- S20 `sed -n '2441,2535p' processor/agentic-loop/component.go` → 95 lines read.
+- S21 `sed -n '2560,2583p' processor/agentic-loop/component.go` → 24 lines read.
+- S22 `sed -n '155,315p' processor/agentic-loop/approval_response_handler.go` → 161 lines read.
+- S23 `gopls references processor/agentic-loop/component.go:2441:21` → 4 result lines.
+- S24 `gopls references processor/agentic-loop/component.go:2560:21` → 1 result lines.
+- S25 `gopls references processor/agentic-loop/trajectory_handler_wiring.go:64:21` → 36 result lines.
+- S26 `git ls-files 'processor/agentic-loop/*signal*' 'processor/agentic-loop/*terminal*test.go' 'processor/agentic-loop/*delivery*go' 'processor/agentic-loop/*approval*test.go' 'processor/agentic-loop/*governance*test.go'` → exit 0; 20 output lines.
+- S27 `git grep -n -E 'COMPLETE_|observedRevision|revision|selected|terminal|releaseLoopTransientState|settle' -- processor/agentic-loop/terminal_selection.go processor/agentic-loop/delivery_owner.go processor/agentic-loop/trajectory_handler_wiring.go` → 12 captured matching pins.
+- S28 `sed -n '1765,1935p' processor/agentic-loop/component.go` → 171 lines read.
+- S29 `sed -n '216,236p' processor/agentic-loop/governance_dispatcher.go` → 21 lines read.
+- S30 `sed -n '348,372p' processor/agentic-loop/governance_dispatcher.go` → 25 lines read.
+- S31 `sed -n '461,553p' processor/agentic-loop/governance_dispatcher.go` → 93 lines read.
+- S32 `sed -n '64,81p' processor/agentic-loop/trajectory_handler_wiring.go` → 18 lines read.
+- S33 `git grep -n -E 'panic|recover\(|DeliveryDecision|ConsumeHandle|settle|Closed|deadline|budget|release|Ack|Nak|handler' -- processor/agentic-loop/delivery_owner.go` → 5 captured matching pins.
+- S34 `git grep -n -E 'COMPLETE_|observedRevision|selectedTerminal|terminalSelection|applied|InProgress|PubAck' -- processor/agentic-loop/settlement_recovery.go processor/agentic-loop/component.go processor/agentic-loop/approval_response_handler.go` → 25 captured matching pins.
+- S35 `git grep -n -E 'waiter|conflict|full|panic|missing|duplicate|RequestID|ExecutionID|Fingerprint|request_id|execution_id|proposal_fingerprint' -- processor/agentic-loop/governance_dispatcher.go processor/agentic-loop/governance_dispatcher_test.go` → 84 captured matching pins.
+- S36 `git grep -n -E 'SignalCancel|signal_id|SignalType|ResponseAction|AGENT_SIGNAL|agent.signal|agent.approval_response|tool.call.approved|tool.call.rejected' -- agentic/signals.go agentic/signal.go agentic/approval.go processor/agentic-loop/component.go processor/agentic-loop/config.go processor/agentic-dispatch/classifier.go processor/agentic-loop/response_action.go` → 10 captured matching pins.
+- S37 `gopls symbols processor/agentic-loop/terminal_selection_test.go` → 19 result lines.
+- S38 `gopls symbols processor/agentic-loop/approval_replacement_integration_test.go` → 23 result lines.
+- S39 `gopls symbols processor/agentic-loop/delivery_settlement_integration_test.go` → 4 result lines.
+- S40 `gopls symbols processor/agentic-loop/terminal_marker_redelivery_integration_test.go` → 18 result lines.
+- S41 `gopls symbols processor/agentic-loop/signal_test.go` → 4 result lines.
+- S42 `gh issue list --repo c360studio/semstreams --search 'agentic-loop restart' --state open --json number,title` → 15 open issues.
+- S43 `gh pr list --repo c360studio/semstreams --draft --json number,title,body --limit 30` → 5 draft titles visible; body output truncated.
+- S44 `openspec list` → 2 active changes.
+- S45 `git grep -n -E 'R6|7\.[5-8]|fast.lane|owner|ruling|state contract|APPROVE|INVENTORY PASS' -- openspec/changes/agentic-loop-restart-safety/inventory-loop-state-contract-2026-09-13.md openspec/changes/agentic-loop-restart-safety/review-loop-state-implementation-2026-09-13.md openspec/changes/agentic-loop-restart-safety/tasks.md` → 87 captured matching pins.
+- S46 `git grep -n -E 'fast.lane|All six loop input|Cancel|cancel|waiter|verdict|Per-loop in-process state' -- openspec/specs/agentic-loop/spec.md docs/adr/039* docs/operations/migration-beta162-to-beta163.md` → 54 captured matching pins.
+- S47 `git grep -n -E 'SignalCancel|signal_id|AGENT_SIGNAL|agent_signal|agent-signal|ResponseAction|ClassifiedIntent|SignalType' -- agentic processor/agentic-dispatch/classifier.go processor/agentic-loop/response_*.go` → FAILED before search: unquoted glob had no matches; corrected search recorded below.
+- S48 `git grep -n -E 'WriteLoopCancellation|PublishToStream|runLoopDeliveryWork|DeliveryOwner|DeliveryWork|Settlement' -- processor/agentic-loop/component.go processor/agentic-loop/graph_writer.go processor/agentic-loop/delivery_owner.go` → 32 captured matching pins.
+- S49 `git grep -n -E 'R6|cancel|fast.lane|verdict' -- openspec/changes/agentic-loop-restart-safety/review-terminal-complete-2026-09-13.md openspec/changes/agentic-loop-restart-safety/design.md openspec/changes/semantic-jetstream-settlement/specs/natsclient/spec.md` → 67 captured matching pins.
+- S50 `git grep -n -E 'SignalCancel|signal_id|AGENT_SIGNAL|agent_signal|agent-signal|ResponseAction|ClassifiedIntent|SignalType' -- agentic processor/agentic-dispatch/classifier.go 'processor/agentic-loop/response_*.go'` → 46 captured matching pins.
+- S51 `git grep -n -E 'nonblocking|non-blocking|best.effort|return|ctx.Err|writeTriples' -- processor/agentic-loop/graph_writer.go` → 75 captured matching pins.
+- S52 `git grep -n -E 'cancel|signal|approval|verdict|Ack|acks|naks|terms|COMPLETE_|PubAck|revision|Update|Quarantine|Inapplicable|panic' -- processor/agentic-loop/delivery_settlement_integration_test.go processor/agentic-loop/delivery_owner_test.go` → 191 captured matching pins.
+- S53 `sed -n '921p;922p;923p;924p;926p;933p;1060p;1072p;1073p;1074p;1075p;1076p;1077p;1078p;1079p;1080p;1081p;1082p;1765p;1766p;1774p;1797p;1801p;1804p;1809p;1819p;1828p;1837p;1849p;1856p;1857p;1863p;1865p;1866p;1879p;1880p;1883p;1884p;1890p;2294p;2300p;2441p;2461p;2464p;2469p;2471p;2474p;2476p;2479p;2482p;2485p;2487p;2488p;2491p;2498p;2499p;2505p;2506p;2527p;2560p;2563p;2568p;2571p;2572p;2578p;2619p' processor/agentic-loop/component.go` → 66 lines read.
+- S54 `sed -n '155p;166p;177p;180p;182p;186p;191p;198p;200p;201p;204p;206p;210p;212p;217p;225p;227p;231p;233p;235p;240p;243p;251p;258p;268p;269p;275p;276p;277p' processor/agentic-loop/approval_response_handler.go` → 29 lines read.
+- S55 `sed -n '115p;116p;119p;136p;140p;141p;142p;150p;155p;232p;284p;291p;321p;336p;348p;361p;369p;371p;377p;381p;389p;401p;405p;416p;437p;461p;491p;496p;507p;515p;517p;525p;526p;530p' processor/agentic-loop/governance_dispatcher.go` → 34 lines read.
+- S56 `sed -n '12p;18p;19p;20p;65p' processor/agentic-loop/delivery_owner.go` → 5 lines read.
+- S57 `sed -n '64p;65p;66p;68p' processor/agentic-loop/trajectory_handler_wiring.go` → 4 lines read.
+- S58 `sed -n '123p;126p;132p;139p;147p;152p;738p;793p;833p;841p;923p' processor/agentic-loop/settlement_recovery.go` → 11 lines read.
+- S59 `sed -n '490p;495p;496p;500p;505p;507p;508p;509p' processor/agentic-loop/graph_writer.go` → 8 lines read.
+- S60 `sed -n '35p;53p;54p;55p;58p;61p;64p;66p;67p;68p;198p;229p;369p;397p;503p' processor/agentic-loop/governance_dispatcher_test.go` → 15 lines read.
+- S61 `sed -n '611p;628p;633p;635p;674p;708p;709p;718p;727p;764p;765p;767p;769p;804p;832p;833p;836p;843p;904p;905p;918p;923p;929p' processor/agentic-loop/delivery_owner_test.go` → 23 lines read.
+- S62 `sed -n '25p;118p;130p;154p;201p;206p;212p;222p;228p;258p' processor/agentic-loop/delivery_settlement_integration_test.go` → 10 lines read.
+- S63 `sed -n '75p;80p;89p;161p;198p;205p;212p;218p' processor/agentic-loop/approval_replacement_integration_test.go` → 8 lines read.
+- S64 `sed -n '92p' processor/agentic-loop/terminal_marker_redelivery_integration_test.go` → 1 lines read.
+- S65 `sed -n '30p;94p;137p;161p;188p;226p;283p' processor/agentic-loop/terminal_selection_test.go` → 7 lines read.
+- S66 `sed -n '13p;55p;78p' processor/agentic-loop/signal_test.go` → 3 lines read.
+- S67 `sed -n '112p;155p;246p;268p;343p;436p;541p;553p;633p' processor/agentic-loop/approval_recovery_test.go` → 9 lines read.
+- S68 `sed -n '202p;208p;209p;210p;211p;212p;219p' openspec/changes/agentic-loop-restart-safety/tasks.md` → 7 lines read.
+- S69 `sed -n '1070p;1071p;1072p;1075p;1076p;1077p;1078p;1079p;1081p;1094p' openspec/changes/agentic-loop-restart-safety/history/task-checkpoint-2026-09-11.md` → 10 lines read.
+- S70 `sed -n '286p;302p;320p;336p;405p;420p;430p;875p;878p;891p;898p;903p;929p;976p' openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md` → 14 lines read.
+- S71 `sed -n '1p' openspec/changes/agentic-loop-restart-safety/inventory-loop-state-contract-2026-09-13.md` → 1 lines read.
+- S72 `sed -n '5p' openspec/changes/agentic-loop-restart-safety/review-loop-state-implementation-2026-09-13.md` → 1 lines read.
+- S73 `sed -n '212p;214p;215p;216p;217p' openspec/changes/agentic-loop-restart-safety/review-terminal-complete-2026-09-13.md` → 5 lines read.
+- S74 `sed -n '617p;618p;619p;620p;1075p;1111p;1228p' openspec/changes/agentic-loop-restart-safety/design.md` → 7 lines read.
+- S75 `sed -n '11p' docs/adr/039-tool-call-governance-rule-driven.md` → 1 lines read.
+- S76 `sed -n '30p;124p;142p;187p;188p;304p;308p' agentic/user_types.go` → 7 lines read.
+- S77 `git grep -n -E 'ClassifiedIntent|SignalType|signal_type|AGENT_SIGNAL|agent_signal|agent-signal' -- processor/agentic-dispatch agentic ':!*_test.go'` → 24 captured matching pins.
+- S78 `sed -n '1918,1956p' processor/agentic-loop/component.go` → 39 lines read.
+- S79 `sed -n '123,151p' processor/agentic-loop/settlement_recovery.go` → 29 lines read.
+- S80 `sed -n '277,340p' openspec/changes/agentic-loop-restart-safety/specs/agentic-loop/spec.md` → 64 lines read.
+- S81 `sed -n '304,317p' agentic/user_types.go` → 14 lines read.
+- S82 `sed -n '1,70p' scripts/inventory-verify.sh` → 70 lines read.
+- R01 (root) `sed -n '35,120p' processor/agentic-loop/delivery_owner.go` → 86 lines read.
+- R02 (root) `sed -n '300,320p' processor/agentic-loop/settlement_recovery.go` → 21 lines read.
+- R03 (root) `sed -n '920,939p' processor/agentic-loop/handlers.go` → 20 lines read.
+- R04 (root) `rg -n '^func Test(TerminalReleaseClearsEveryPerLoopMap|TerminalReleaseIsIdempotent|TerminalReleaseHappensAfterTerminalReaders|ApprovalSweepUnaffectedByTerminalRelease|SettledLoopResultReadableAfterRelease)' processor/agentic-loop/terminal_release_test.go` → 5 declaration matches.
+- R05 (root) `task inventory:verify -- openspec/changes/agentic-loop-restart-safety/inventory-r6-fastlane-evidence-2026-09-14.md` after the reviewed R6 comment/test/spec edits → 207 OK, 38 MOVED, 6 AMBIGUOUS, 2 DRIFT; refreshed only those pins.
+- R06 (root) `rg -n 'governance_dispatcher.go:(232|291|526)|delivery_owner_test.go:(708|764|832)|design.md:(617|618)' openspec/changes/agentic-loop-restart-safety/inventory-r6-fastlane-evidence-2026-09-14.md` → 9 lines, including one historical search entry left unchanged.
+- R07 (root) `sed -n '612,621p' openspec/changes/agentic-loop-restart-safety/design.md`; `sed -n '225,234p;283,293p;516,526p' processor/agentic-loop/governance_dispatcher.go`; `sed -n '850,857p;905,913p;974,981p' processor/agentic-loop/delivery_owner_test.go` → 67 lines; resolved the 6 ambiguous locations and opened both reviewed design-row replacements.
+- R08 (root) inventory verification after R6 task-truth materialization → 251 OK, one R7 task-pin move and one R6 checkbox drift; refreshed only those two pins.
+- R09 (root) `rg -n 'tasks.md:(202|223)' openspec/changes/agentic-loop-restart-safety/inventory-r6-fastlane-evidence-2026-09-14.md` → 2 pins checked before the task-only refresh.
+
+`AGENT_SIGNAL`, `agent_signal`, and `agent-signal` had zero captured matches in the recorded combined searches.
+
+- NOT RUN — Uninspected remainder of the truncated broad `fast.lane|signal|approval|verdict|waiter|settlement|terminal` search; the subsequent named-file searches are the inspected subset.
+- NOT RUN — Full draft-PR bodies beyond the truncated output; no additional issue-body or issue-comment search.
+- NOT RUN — Exhaustive native cancel replacement, per-verdict conflict/panic, and audit/graph failure test-name searches beyond the recorded declarations and assertions.
+- NOT RUN — Additional gopls callers/readers for ResponseAction.Signal, ClassifiedIntent.SignalType, VerdictPayload.RequestID and ProposalFingerprint.
+- NOT RUN — Further five-state vocabulary/caller sweep, R2/R4/R5 re-inventory, R7 producer internals, R8 admission, R9 retention, and R10 broad lifecycle (brief boundary).
+- NOT RUN — Tests, native infrastructure, Git mutations, and external writes; this inventory records existing source only.
+- Verification: `task inventory:verify -- openspec/changes/agentic-loop-restart-safety/inventory-r6-fastlane-evidence-2026-09-14.md` (pin verification only).

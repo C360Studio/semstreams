@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/component/flowgraph"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -62,15 +63,17 @@ func (p *actionPublisher) Publish(ctx context.Context, subject string, data []by
 	return nil
 }
 
-// isJetStreamPortBySubject checks if an output port with the given subject is configured for JetStream
+// isJetStreamPortBySubject reports whether a declared JetStream output covers the subject.
 func (rp *Processor) isJetStreamPortBySubject(subject string) bool {
 	for _, port := range rp.outputPorts {
 		facts, err := port.Facts()
-		if err != nil {
+		if err != nil || facts.Kind() != component.PortKindJetStream {
 			continue
 		}
-		if subjects := facts.NATSSubjects(); len(subjects) == 1 && subjects[0] == subject {
-			return facts.Kind() == component.PortKindJetStream
+		for _, declaredFilter := range facts.NATSSubjects() {
+			if flowgraph.SubjectCovers(declaredFilter, subject) {
+				return true
+			}
 		}
 	}
 	return false

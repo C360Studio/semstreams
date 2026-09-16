@@ -353,6 +353,9 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 			logger:        deps.GetLogger(),
 		},
 	}
+	if deps.NATSClient != nil {
+		comp.settlementEvidence = natsLoopSettlementEvidenceReader{client: deps.NATSClient}
+	}
 
 	return comp, nil
 }
@@ -907,7 +910,7 @@ func (c *Component) setupSubscriptions(setupCtx, consumerCtx context.Context) er
 
 		var (
 			handler         inputHandler
-			settleHandlerFn func(context.Context, []byte) (natsclient.DeliveryDecision, error)
+			settleHandlerFn func(context.Context, string, []byte) (natsclient.DeliveryDecision, error)
 		)
 
 		// Route to appropriate handler based on port name
@@ -919,17 +922,15 @@ func (c *Component) setupSubscriptions(setupCtx, consumerCtx context.Context) er
 		case "tool.result":
 			handler = c.handleToolResultMessage
 		case "agent.signal":
-			settleHandlerFn = c.handleSignalMessage
+			settleHandlerFn = func(ctx context.Context, _ string, data []byte) (natsclient.DeliveryDecision, error) {
+				return c.handleSignalMessage(ctx, data)
+			}
 		case "agent.approval_response":
-			settleHandlerFn = c.handleApprovalResponseMessage
+			settleHandlerFn = func(ctx context.Context, _ string, data []byte) (natsclient.DeliveryDecision, error) {
+				return c.handleApprovalResponseMessage(ctx, data)
+			}
 		case "agent.toolcall.approved", "agent.toolcall.rejected":
-			// Verdicts from rule-driven tool-call governance (ADR-039).
-			// Both subjects route into the same demux — the dispatcher
-			// reads decision + execution_id from the verdict payload.
-			// Skip if no dispatcher is configured (disabled mode with
-			// no fallback construction); the wildcard subscription is
-			// still cheap to bind but never gets traffic in disabled
-			// mode because nothing publishes to proposed.
+			// Both ports validate the registered verdict against its actual subject.
 			settleHandlerFn = c.handleToolCallVerdictMessage
 		default:
 			c.logger.Warn("Unknown input port", "port", port.Name)
@@ -951,7 +952,7 @@ func (c *Component) setupConsumer(
 	port component.Port,
 	subject string,
 	handler inputHandler,
-	settleHandlerFn func(context.Context, []byte) (natsclient.DeliveryDecision, error),
+	settleHandlerFn func(context.Context, string, []byte) (natsclient.DeliveryDecision, error),
 ) error {
 	facts, err := port.Facts()
 	if err != nil {
@@ -1050,8 +1051,10 @@ func (c *Component) setupConsumer(
 		// the single authority on task-work timeout attribution.
 		DisableMessageTimeout: port.Name == "agent.task",
 	}
-	var handlerFn func(context.Context, jetstream.Msg)
-	var admission *deliveryLaneAdmission
+	var (
+		handlerFn func(context.Context, jetstream.Msg)
+		admission *deliveryLaneAdmission
+	)
 	if useHeartbeat {
 		policy, policyErr := newLoopHeartbeatDeliveryPolicy(setupCtx, cfg, heartbeatInterval, port.Name, handler)
 		if policyErr != nil {
@@ -1074,7 +1077,10 @@ func (c *Component) setupConsumer(
 			if !admission.admit() {
 				return
 			}
-			decision, cause := runLoopDeliveryWork(msgCtx, msg.Data(), settleHandlerFn)
+			deliveredSubject := msg.Subject()
+			decision, cause := runLoopDeliveryWork(msgCtx, msg.Data(), func(ctx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
+				return settleHandlerFn(ctx, deliveredSubject, data)
+			})
 			result := natsclient.SettleDelivery(msg, decision, cause)
 			admission.latch(result)
 			if result.Err() != nil && !result.OwnerStopRequired() {
@@ -1548,7 +1554,7 @@ func (c *Component) handleResponseMessage(ctx context.Context, data []byte) (nat
 		return natsclient.DeliveryDecisionAck, nil
 	}
 
-	result, err := c.handler.HandleModelResponse(ctx, loopID, *response)
+	result, err := c.handler.handleModelResponse(ctx, loopID, *response, c.recoverGovernance)
 	if err != nil {
 		c.recordTrajectoryObservations(ctx, result)
 		// A handler can return a prepared business-terminal failure (for
@@ -1888,7 +1894,7 @@ func (c *Component) persistTerminalOutcome(ctx context.Context, result HandlerRe
 		return natsclient.DeliveryDecisionQuarantine, errs.WrapFatal(err, "agentic-loop", "persistTerminalOutcome", "marshal terminal marker")
 	}
 	if _, err := c.loopsBucket.Update(ctx, result.LoopID, data, revision); err != nil {
-		return natsclient.DeliveryDecisionQuarantine, err
+		return loopSettlementDecision(err), err
 	}
 	return natsclient.DeliveryDecisionAck, nil
 }
@@ -2539,117 +2545,89 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 // governance dispatcher (ADR-039). The dispatcher demuxes by execution_id
 // to per-call waiter channels.
 //
-// Both wildcard subjects share this single handler because the
-// existing input-port consumer wrapper discards the subject (see
-// setupConsumer's adapter at component.go:805). The verdict's decision
-// is read from the payload via VerdictPayload.EffectiveDecision — both
-// authorship paths (approve action's top-level fields, publish action's
-// nested Properties) are supported.
+// Both rule authoring paths use the registered GenericJSON carrier. The actual
+// delivered subject must agree with normalized payload identity; wrapper metadata
+// cannot repair or override it. Dispatch receives the typed value, not wire bytes.
 //
-// Wire format: the rule engine's `approve` action publishes a
-// `core.json.v1` BaseMessage; the canonical ADR-039 reject pattern
-// (`publish` action + `deny`) publishes a raw map. This handler
-// tolerates BOTH shapes — registry decode first, falling back to raw
-// JSON. The discipline (every publish wraps in registry) governs new
-// code; the fallback preserves the existing reject path. See
-// feedback_nats_publishes_use_payload_registry.
-//
-// No-op when the dispatcher is nil (disabled-mode-without-construction
-// edge case; should not occur in production because NewComponent always
-// constructs a dispatcher).
-func (c *Component) handleToolCallVerdictMessage(_ context.Context, data []byte) (natsclient.DeliveryDecision, error) {
+// A missing dispatcher quarantines the delivery. NewComponent constructs one
+// for every configured mode, including disabled mode.
+func (c *Component) handleToolCallVerdictMessage(_ context.Context, subject string, data []byte) (natsclient.DeliveryDecision, error) {
 	dispatcher := c.handler.GovernanceDispatcher()
 	if dispatcher == nil {
 		return natsclient.DeliveryDecisionQuarantine, errors.New("tool-call verdict dispatcher is unavailable")
 	}
 
-	payload, ok := decodeVerdictPayload(c.decoder, data)
-	if !ok {
-		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("decode tool-call verdict payload of %d bytes", len(data))
+	payload, decision, err := decodeVerdictMessage(c.decoder, subject, data)
+	if err != nil {
+		return decision, err
 	}
-
-	decision := payload.EffectiveDecision()
-	executionID := payload.effectiveExecutionID()
-	if decision == "" || executionID == "" {
-		return natsclient.DeliveryDecisionTerminate,
-			fmt.Errorf("tool-call verdict payload missing decision or execution_id (decision=%q execution_id=%q)", decision, executionID)
-	}
-
-	return dispatcher.HandleVerdict(decision, executionID, data)
+	return dispatcher.HandleVerdict(payload)
 }
 
-// decodeVerdictPayload reads a VerdictPayload from wire bytes,
-// tolerating both authorship paths:
-//
-//  1. `approve` action — `core.json.v1` BaseMessage wrapping a
-//     GenericJSONPayload whose Data map contains the verdict fields.
-//     Decode via the registry, extract Data into VerdictPayload.
-//  2. `publish` action (the ADR-039 reject pattern) — raw map JSON
-//     with fields nested under `properties`. Decode via raw
-//     json.Unmarshal.
-//
-// Returns the decoded VerdictPayload and true on success; false on
-// double-fallback failure (neither shape parsed). The double-attempt
-// is acceptable for verdict frequency (per-tool-call, not per-token).
-func decodeVerdictPayload(decoder *message.Decoder, data []byte) (VerdictPayload, bool) {
-	// Try registry decode first — the canonical post-beta.69 shape.
-	if decoder != nil {
-		if baseMsg, err := decoder.Decode(data); err == nil {
-			if generic, ok := baseMsg.Payload().(*message.GenericJSONPayload); ok {
-				return verdictPayloadFromMap(generic.Data), true
-			}
-		}
+func decodeVerdictMessage(decoder *message.Decoder, subject string, data []byte) (VerdictPayload, natsclient.DeliveryDecision, error) {
+	payload, decision, err := decodeVerdictPayload(decoder, data)
+	if err != nil {
+		return VerdictPayload{}, decision, err
 	}
-
-	// Fallback: raw JSON, used by the canonical ADR-039 reject pattern
-	// emitted via the `publish` action. Pre-existing wire shape; the
-	// fallback preserves compatibility.
-	var raw VerdictPayload
-	if err := json.Unmarshal(data, &raw); err == nil {
-		return raw, true
+	if subject != "agent.toolcall."+payload.Decision+"."+payload.ExecutionID {
+		return VerdictPayload{}, natsclient.DeliveryDecisionQuarantine, fmt.Errorf("verdict subject %q conflicts with decision/execution identity", subject)
 	}
+	return payload, decision, nil
+}
 
-	return VerdictPayload{}, false
+// decodeVerdictPayload admits only validated registered GenericJSON, then uses
+// the same correlation interpreter as direct typed dispatcher calls.
+func decodeVerdictPayload(decoder *message.Decoder, data []byte) (VerdictPayload, natsclient.DeliveryDecision, error) {
+	if decoder == nil {
+		return VerdictPayload{}, natsclient.DeliveryDecisionTerminate, errors.New("verdict decoder is unavailable")
+	}
+	baseMsg, err := decoder.Decode(data)
+	if err != nil {
+		return VerdictPayload{}, natsclient.DeliveryDecisionTerminate, fmt.Errorf("decode verdict envelope: %w", err)
+	}
+	if err := baseMsg.Validate(); err != nil {
+		return VerdictPayload{}, natsclient.DeliveryDecisionTerminate, fmt.Errorf("validate verdict envelope: %w", err)
+	}
+	generic, ok := baseMsg.Payload().(*message.GenericJSONPayload)
+	if !ok {
+		return VerdictPayload{}, natsclient.DeliveryDecisionTerminate, errors.New("verdict payload must be GenericJSON")
+	}
+	payload, err := verdictPayloadFromMap(generic.Data)
+	if err != nil {
+		return VerdictPayload{}, natsclient.DeliveryDecisionTerminate, err
+	}
+	return normalizeVerdictPayload(payload)
 }
 
 // verdictPayloadFromMap translates a GenericJSONPayload.Data map into
-// the typed VerdictPayload. Only the routing-relevant fields are
-// extracted; the original bytes are still passed to the dispatcher's
-// HandleVerdict for context logging.
-func verdictPayloadFromMap(data map[string]any) VerdictPayload {
+// the existing typed shape without silently dropping malformed correlation.
+func verdictPayloadFromMap(data map[string]any) (VerdictPayload, error) {
 	p := VerdictPayload{}
-	if v, ok := data["decision"].(string); ok {
-		p.Decision = v
+	for _, field := range []struct {
+		name  string
+		value *string
+	}{
+		{"decision", &p.Decision}, {"call_id", &p.CallID}, {"loop_id", &p.LoopID},
+		{"request_id", &p.RequestID}, {"execution_id", &p.ExecutionID}, {"proposal_fingerprint", &p.ProposalFingerprint},
+	} {
+		if raw, supplied := data[field.name]; supplied {
+			value, ok := raw.(string)
+			if !ok {
+				return VerdictPayload{}, fmt.Errorf("verdict %s must be a string", field.name)
+			}
+			*field.value = value
+		}
 	}
-	if v, ok := data["call_id"].(string); ok {
-		p.CallID = v
+	if raw, supplied := data["properties"]; supplied {
+		var ok bool
+		p.Properties, ok = raw.(map[string]any)
+		if !ok {
+			return VerdictPayload{}, errors.New("verdict properties must be an object")
+		}
 	}
-	if v, ok := data["loop_id"].(string); ok {
-		p.LoopID = v
-	}
-	if v, ok := data["request_id"].(string); ok {
-		p.RequestID = v
-	}
-	if v, ok := data["execution_id"].(string); ok {
-		p.ExecutionID = v
-	}
-	if v, ok := data["proposal_fingerprint"].(string); ok {
-		p.ProposalFingerprint = v
-	}
-	if v, ok := data["rule_id"].(string); ok {
-		p.RuleID = v
-	}
-	if v, ok := data["reason"].(string); ok {
-		p.Reason = v
-	}
-	if v, ok := data["entity_id"].(string); ok {
-		p.EntityID = v
-	}
-	if v, ok := data["timestamp"].(string); ok {
-		p.Timestamp = v
-	}
-	if v, ok := data["properties"].(map[string]any); ok {
-		p.Properties = v
-	}
-	return p
+	p.RuleID, _ = data["rule_id"].(string)
+	p.Reason, _ = data["reason"].(string)
+	p.EntityID, _ = data["entity_id"].(string)
+	p.Timestamp, _ = data["timestamp"].(string)
+	return p, nil
 }

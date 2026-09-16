@@ -12,7 +12,7 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 )
 
-// spec: agentic-dispatch / The shared loop view classifies the mixed bucket
+// spec: agentic-loop / LoopEntity has one operational state contract
 func TestLoopEntityValidateRejectsPausedAuthority(t *testing.T) {
 	entity := agentic.LoopEntity{ID: "00000000-0000-4000-8000-000000000001", State: agentic.LoopState("paused"), MaxIterations: 3}
 	if err := entity.Validate(); err == nil {

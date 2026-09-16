@@ -614,10 +614,11 @@ func TestExecutePublish_SubstitutesPropertyTemplates(t *testing.T) {
 		got.subject,
 		"subject $message.* tokens must substitute (existing behaviour)")
 
-	var payload map[string]any
-	require.NoError(t, json.Unmarshal(got.data, &payload))
-
-	props, ok := payload["properties"].(map[string]any)
+	decoder := message.NewDecoder(payloadregistry.NewWithSubset(t, message.RegisterPayloads))
+	decoded, err := decoder.Decode(got.data)
+	require.NoError(t, err)
+	require.NoError(t, decoded.Validate())
+	props, ok := decoded.Payload().(*message.GenericJSONPayload).Data["properties"].(map[string]any)
 	require.True(t, ok, "properties must be a map")
 	assert.Equal(t, "rejected", props["decision"], "static string passes through unchanged")
 	assert.Equal(t, "request-001", props["request_id"])
@@ -2142,7 +2143,7 @@ func TestAction_PublishAgent_NonLoopTriggerLeavesParentLoopIDUnset(t *testing.T)
 		{"chain execution", chainID},
 		{name: "non-canonical entity ID", entityID: "e.1"},
 	}
-	// entity-id-audit:classify intentional-malformed "e.1" line=2143 column=47 surface=go-field:.entityID entity_id_invalid:arity verifies noncanonical IDs remain opaque agent payload values
+	// entity-id-audit:classify intentional-malformed "e.1" line=2144 column=47 surface=go-field:.entityID entity_id_invalid:arity verifies noncanonical IDs remain opaque agent payload values
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2960,7 +2961,7 @@ func TestAction_UpdateKV_VariableSubstitution(t *testing.T) {
 		Payload: map[string]any{
 			"status":     "drafting",
 			"updated_at": "$now",
-			"entity_id":  "$entity.id", // entity-id-audit:classify intentional-template "$entity.id" line=2963 column=18 surface=go-field:.entity_id entity_id_invalid:arity runtime entity-ID substitution
+			"entity_id":  "$entity.id", // entity-id-audit:classify intentional-template "$entity.id" line=2964 column=18 surface=go-field:.entity_id entity_id_invalid:arity runtime entity-ID substitution
 		},
 		Merge: false,
 	}

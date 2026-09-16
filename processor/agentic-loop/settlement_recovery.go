@@ -23,11 +23,12 @@ type retainedLoopMessage struct {
 }
 
 // loopSettlementEvidenceReader is private and operation-specific: settlement
-// needs only the exact current request and originating response. It is not a
+// needs only exact request, response, and governance-verdict evidence. It is not a
 // stream query surface and cannot enumerate or scan AGENT.
 type loopSettlementEvidenceReader interface {
 	ReadAgentRequest(context.Context, string, string) (retainedLoopMessage, bool, error)
 	ReadAgentResponse(context.Context, string, string) (retainedLoopMessage, bool, error)
+	ReadGovernanceVerdict(context.Context, string, string) (retainedLoopMessage, bool, error)
 }
 
 type natsLoopSettlementEvidenceReader struct {
@@ -41,6 +42,12 @@ func (r natsLoopSettlementEvidenceReader) ReadAgentRequest(
 }
 
 func (r natsLoopSettlementEvidenceReader) ReadAgentResponse(
+	ctx context.Context, streamName, subject string,
+) (retainedLoopMessage, bool, error) {
+	return r.readExact(ctx, streamName, subject)
+}
+
+func (r natsLoopSettlementEvidenceReader) ReadGovernanceVerdict(
 	ctx context.Context, streamName, subject string,
 ) (retainedLoopMessage, bool, error) {
 	return r.readExact(ctx, streamName, subject)
@@ -90,12 +97,16 @@ func agentRequestAddress(definitions []component.PortDefinition, loopID string) 
 }
 
 func agentResponseAddress(definitions []component.PortDefinition, requestID string) (string, string, error) {
-	subject, err := component.ResolveSubject(definitions, "agent.response", requestID)
+	return agentInputAddress(definitions, "agent.response", requestID)
+}
+
+func agentInputAddress(definitions []component.PortDefinition, portName, token string) (string, string, error) {
+	subject, err := component.ResolveSubject(definitions, portName, token)
 	if err != nil {
 		return "", "", err
 	}
 	for _, definition := range definitions {
-		if definition.Name != "agent.response" {
+		if definition.Name != portName {
 			continue
 		}
 		port, err := definition.Resolve(component.DirectionInput)
@@ -108,11 +119,119 @@ func agentResponseAddress(definitions []component.PortDefinition, requestID stri
 		}
 		stream, ok := facts.Stream()
 		if !ok || stream.Name() == "" {
-			return "", "", errors.New("agent.response input does not declare a JetStream stream")
+			return "", "", fmt.Errorf("%s input does not declare a JetStream stream", portName)
 		}
 		return subject, stream.Name(), nil
 	}
-	return "", "", errors.New("agent.response input not found")
+	return "", "", fmt.Errorf("%s input not found", portName)
+}
+
+// recoverGovernance observes every call before allowing the absent subset to
+// reach policy. A later failed read cannot follow an earlier re-proposal.
+func (c *Component) recoverGovernance(ctx context.Context, loopID, parentLoopID string, calls []agentic.ToolCall) (DispatcherResult, error) {
+	dispatcher := c.handler.GovernanceDispatcher()
+	if !c.config.ToolCallGovernance.IsEnforcing() && (dispatcher == nil || dispatcher.Mode() != ToolCallGovernanceModeEnforce) {
+		return c.handler.proposeToolCalls(ctx, loopID, parentLoopID, calls)
+	}
+	if dispatcher == nil || c.settlementEvidence == nil || c.config.Ports == nil {
+		return DispatcherResult{}, errors.New("governance dispatcher, retained evidence reader, or ports are unavailable")
+	}
+	retained := make(map[string]VerdictPayload, len(calls))
+	var absent []agentic.ToolCall
+	for _, call := range calls {
+		if err := ctx.Err(); err != nil {
+			return DispatcherResult{}, err
+		}
+		proposal, err := prepareProposedToolCall(loopID, parentLoopID, call)
+		if err != nil {
+			return DispatcherResult{}, errs.WrapInvalid(err, "agentic-loop", "recoverGovernance", "prepare originating proposal")
+		}
+		verdict, found, err := c.readRetainedGovernanceVerdict(ctx, proposal)
+		if err != nil {
+			return DispatcherResult{}, err
+		}
+		if found {
+			retained[call.ExecutionID] = verdict
+		} else {
+			absent = append(absent, call)
+		}
+	}
+	var evaluated DispatcherResult
+	if len(absent) > 0 {
+		var err error
+		evaluated, err = dispatcher.Propose(ctx, loopID, parentLoopID, absent)
+		if err != nil {
+			return DispatcherResult{}, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return DispatcherResult{}, err
+	}
+	// Both existing result sets follow the originating order, including when
+	// retained decisions and newly evaluated decisions are interleaved.
+	var result DispatcherResult
+	for _, call := range calls {
+		if verdict, ok := retained[call.ExecutionID]; ok {
+			if verdict.Decision == "approved" {
+				result.Approved = append(result.Approved, call)
+			} else {
+				result.Rejected = append(result.Rejected, ToolCallRejection{Call: call,
+					Reason: fmtVerdictReason(verdictArrival{decision: verdict.Decision, reason: verdict.Reason, ruleID: verdict.RuleID})})
+			}
+			continue
+		}
+		for _, approved := range evaluated.Approved {
+			if approved.ExecutionID == call.ExecutionID {
+				result.Approved = append(result.Approved, approved)
+			}
+		}
+		for _, rejected := range evaluated.Rejected {
+			if rejected.Call.ExecutionID == call.ExecutionID {
+				result.Rejected = append(result.Rejected, rejected)
+			}
+		}
+	}
+	return result, nil
+}
+
+func (c *Component) readRetainedGovernanceVerdict(ctx context.Context, proposal ProposedToolCallPayload) (VerdictPayload, bool, error) {
+	var retained VerdictPayload
+	for _, decision := range []string{"approved", "rejected"} {
+		if err := ctx.Err(); err != nil {
+			return VerdictPayload{}, false, err
+		}
+		portName := "agent.toolcall." + decision
+		subject, stream, err := agentInputAddress(c.config.Ports.Inputs, portName, proposal.ExecutionID)
+		if err != nil {
+			return VerdictPayload{}, false, errs.WrapTransient(err, "agentic-loop", "readRetainedGovernanceVerdict", "resolve retained verdict address")
+		}
+		if subject != portName+"."+proposal.ExecutionID {
+			return VerdictPayload{}, false, fmt.Errorf("verdict input %q does not resolve the canonical execution subject", portName)
+		}
+		raw, found, err := c.settlementEvidence.ReadGovernanceVerdict(ctx, stream, subject)
+		if err != nil {
+			return VerdictPayload{}, false, fmt.Errorf("read retained verdict %s: %w", subject, err)
+		}
+		if !found {
+			continue
+		}
+		verdict, disposition, err := decodeVerdictMessage(c.decoder, raw.subject, raw.data)
+		if err != nil {
+			if disposition == natsclient.DeliveryDecisionTerminate {
+				return VerdictPayload{}, false, errs.WrapInvalid(err, "agentic-loop", "readRetainedGovernanceVerdict", "invalid retained verdict")
+			}
+			return VerdictPayload{}, false, errs.WrapFatal(err, "agentic-loop", "readRetainedGovernanceVerdict", "conflicting retained verdict")
+		}
+		if err := matchVerdictProposal(verdict, proposal); err != nil {
+			return VerdictPayload{}, false, errs.WrapFatal(err, "agentic-loop", "readRetainedGovernanceVerdict", "proposal correlation conflict")
+		}
+		if raw.subject != subject || retained.Decision != "" {
+			return VerdictPayload{}, false, errs.WrapFatal(errors.New("opposing retained verdicts or exact-subject conflict"),
+				"agentic-loop", "readRetainedGovernanceVerdict", "verdict correlation conflict")
+		}
+		retained = verdict
+	}
+	return retained, retained.Decision != "", nil
 }
 
 func (c *Component) readLoopEntity(ctx context.Context, loopID string) (agentic.LoopEntity, bool, error) {

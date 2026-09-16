@@ -1147,6 +1147,95 @@ when the loop is already loaded; it must not reopen the gate or overwrite a fina
 keep the existing correlation fields and payload contract. No new caller-supplied phase, receipt, or storage is
 required, and ordinary final-result duplicate checks are unchanged.
 
+## Tool-governance verdict wire and typed dispatcher handoff (#1146)
+
+This concerns rule-produced tool-policy verdicts on `agent.toolcall.approved.>` and
+`agent.toolcall.rejected.>`, not the human `ApprovalResponse` flow described below.
+
+**Breaking wire change:** both families require the existing registered `core.json.v1` BaseMessage carrier.
+Raw verdict JSON is no longer accepted. The ordinary `publish` action adds that carrier for these destinations;
+its entire existing inner wrapper remains intact, including `entity_id`, `subject`, `timestamp`, `source`,
+`properties` and optional `related_id`. Other publish destinations are unchanged by this bounded migration.
+`approve` already uses the registered carrier. `deny` remains a structural rule short-circuit with its existing
+audit behavior; it is not a replacement for publishing a routing rejection.
+
+### Rule authors and external wire users
+
+Keep the existing action types and property authoring. Use the execution identity observed on the proposal as the
+destination suffix, not a reconstructed loop/call pair. Echo `loop_id`, `request_id`, `execution_id` and
+`proposal_fingerprint` unchanged. The payload decision is `approved` or `rejected`, and must agree with the actual
+delivered subject `agent.toolcall.<decision>.<execution_id>`. The framework does not fill missing correlation from
+the subject or the current waiter. For example, the existing publish action can express a rejection as:
+
+```json
+{
+  "type": "publish",
+  "subject": "agent.toolcall.rejected.$message.execution_id",
+  "properties": {
+    "decision": "rejected",
+    "loop_id": "$message.loop_id",
+    "request_id": "$message.request_id",
+    "execution_id": "$message.execution_id",
+    "proposal_fingerprint": "$message.proposal_fingerprint",
+    "reason": "This tool is not allowed by the policy"
+  }
+}
+```
+
+`approve` echoes the available proposal correlation itself; continue configuring its destination and reason.
+`call_id` remains optional. Optional `reason` and `rule_id` use a nonempty top-level string, otherwise the string
+in properties, otherwise empty. They are not extra correlation requirements. Conflicting supplied correlation is
+refused, not resolved by choosing the top-level value.
+
+External publishers wrap their verdict with `message.NewGenericJSON` and `message.NewBaseMessage`; receivers use
+the configured payload registry decoder and validate the decoded message. A subscriber reading the former raw map
+must now read GenericJSON's Data. No new payload registration is introduced: use the existing built-in registration
+at the receiving composition root. A durable publication acknowledgement does not prove that a verdict was applied.
+
+Known configuration impact, measured by the 2026-09-15 inventory: SemSpec at
+`5a9496eecc453747f4bc557b95444db6304c1420`, `configs/e2e.json:264` and `:418`, uses loop/call suffixes and omits
+required request/execution/fingerprint echoes. The same shape exists in `semspec-ui-bmad` at `c8308d7e` and
+`semspec-ui-run-visibility` at `e30cbf78`, `configs/e2e-gemini.json:409`. Their owners update those destinations and
+properties in their own repositories. Leaving them unchanged produces invalid or conflicting verdicts; adding
+the carrier alone does not fix their correlation. External or dynamically generated configurations remain unmeasured.
+
+### Custom Go dispatchers
+
+Implementations and direct callers of the existing GovernanceDispatcher replace the old routing strings and bytes
+with the existing VerdictPayload value:
+
+```go
+HandleVerdict(payload VerdictPayload) (natsclient.DeliveryDecision, error)
+```
+
+Return values, `Propose`, `Mode`, construction and installation remain unchanged. Stop decoding or serializing the
+verdict inside this method: the loop passes the typed value. Populate the required correlation for direct calls;
+the built-in dispatchers validate direct typed inputs too. Normal component construction requires no new step.
+The measured local sister search found no direct Go-symbol users, not proof that external implementations are absent.
+
+Verify both action paths through the production registry decoder, preservation of reason/rule ID, refusal of raw
+or conflicting inputs, and the actual delivered subject at the installed callback. Retained-verdict lookup,
+originating-proposal matching, source settlement and replacement proof remain separate #1146/#1311 obligations;
+this wire migration does not claim to complete them. The relevant breaking-change E2E gate remains required.
+
+### Governance replay after replacement
+
+The accepted restart contract reuses a matching saved verdict. If an exact lookup succeeds and confirms no verdict
+is retained, the loop may submit the same correlated proposal for evaluation under the current policy. That policy
+may decide differently from an expired earlier verdict. Missing evidence is never approval; a failed lookup retries,
+and conflicting required correlation stops the affected delivery owner rather than selecting a value.
+If both a valid approval and a valid rejection are retained for that same proposal, recovery also stops the
+affected response consumer without selecting either decision or publishing proposal/tool work
+([owner ruling 5694233488](https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5694233488)).
+
+Applications do not calculate a verdict-retention window or supply a new retry timer. Required publication must
+still receive PubAck before source ACK, and tool-effect protection remains separate from repeatable policy evaluation.
+DiscardNew and other lanes' retention obligations are unchanged. Normal component construction installs the
+private evidence reader; applications have no additional reader/setter obligation. The focused retained-verdict
+slice is implemented and replacement-tested under
+[owner ruling 5682070598](https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5682070598).
+#1311 proposal-source settlement and the remaining combined proof are still open; follow the change's R7/R8 tasks.
+
 ## Approval decisions require the displayed execution identity (#1146)
 
 **Breaking input change:** `agentic.ApprovalResponse` and the existing HTTP `ApprovalRequest` require `execution_id`.
