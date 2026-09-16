@@ -258,6 +258,10 @@ PRs fell into the four classes below.
 
 ## Test and operational fidelity
 
+Apply the canonical [testing discipline](../../docs/contributing/01-testing.md#testing-discipline) for the
+requirement/violation/observation record, independent checks, controlled mutation experiments, and evidence handoff.
+The SemStreams requirements below remain additional obligations.
+
 - Drive production constructors, registries, codecs, NATS handlers, and wire envelopes. Helper-only tests do not prove
   the assembled system.
 - Any new exported surface that parses, decodes, or validates external bytes or strings — subjects, keys, entity

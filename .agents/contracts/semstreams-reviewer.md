@@ -258,6 +258,10 @@ until the owner explicitly accepts the reviewed design.
 
 ### Test fidelity
 
+Apply the canonical [testing discipline](../../docs/contributing/01-testing.md#testing-discipline), including
+the omitted-obligation question, independent expectations, controlled mutation evidence, and separation of observed
+outcomes from equivalence or deferral assessments. The SemStreams checks below remain additional obligations.
+
 - Tests drive production constructors, registries, codecs, NATS handlers, and wire envelopes rather than only helpers.
 - Network listeners use ephemeral ports. Tests mutating global state such as `slog.SetDefault` are not parallel.
 - Wall-clock assertions have a rationale and realistic tolerance; concurrent tests use explicit synchronization.
