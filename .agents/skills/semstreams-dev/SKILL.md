@@ -47,7 +47,11 @@ For context-taking operations, apply the full developer contract, including its 
 exceptions. Production structs do not retain contexts; continuing work derives from `Start`/`Run` and joins
 `Stop`. Do not use a copied constructor to invent a new lifetime or nil-context fallback.
 
-## Prove the behavior at its production seam
+## Challenge the behavior at its production seam
+
+Apply the [testing discipline](../../../docs/contributing/01-testing.md#testing-discipline): identify the accepted
+requirement, plausible violation, independent expectation, and distinguishing observation before implementation.
+Preserve acceptance, rejection, forbidden-side-effect, and evidence-scope distinctions in the checks and handoff.
 
 Use the [testing policy](../../../docs/contributing/01-testing.md) and the developer/reviewer contracts to choose
 the lowest sufficient tier. Observe the intended failing assertion before implementation. A constructor,

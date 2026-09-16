@@ -5,6 +5,151 @@ infrastructure is justified, and the wall-clock and isolation rules for new test
 [natsclient test-helper guide](../operations/23-natsclient-test-helpers.md) contains implementation examples and MUST
 not redefine this policy.
 
+## Testing Discipline
+
+> Prompts focus attention. Contracts state what must hold. Property tests search for counterexamples.
+> Mutation tests check whether our tests detect meaningful faults.
+
+The working formulation above comes from the SemDev/SemStreams testing-policy discussion; SemStreams adoption is
+tracked in [#1313](https://github.com/C360Studio/semstreams/issues/1313).
+
+For each material behavior change, ask: **What would we observe if we were wrong, and have we actually looked?**
+Choose checks according to the failure's consequence and shape. Test counts and global mutation scores do not answer
+that question. Passing checks increase confidence within their stated scope; they do not establish general correctness.
+
+The author, developer, reviewer, and handoff method below is language-neutral and reusable across the sem*
+repositories. Each repository owns its adoption, commands, and additional obligations. This policy governs SemStreams
+development; it does not establish product runtime enforcement, a testing dependency, or a supported-language claim.
+
+### Author: Identify What the Check Must Distinguish
+
+Before implementation, record these in the change's existing design or handoff:
+
+- **Requirement:** cite the accepted requirement and its revision, including the applicable OpenSpec requirement.
+- **Plausible violation:** describe a concrete implementation mistake that would break it.
+- **Expected-result source:** explain how the expectation follows independently from the requirement, a small
+  reference model, or an external contract. Repeating the implementation's algorithm reproduces its assumptions.
+- **Observation:** name the contract-visible result or persisted state that distinguishes the violation from correct
+  behavior, including forbidden side effects. A successful response can coexist with an incorrect write or emission.
+
+For a 256-byte maximum, otherwise-valid inputs at 255, 256, and 257 bytes distinguish a rejection at the exact bound.
+The requirement supplies the expected result; a broad random range may never exercise that boundary.
+
+### Developer: Choose and Exercise Useful Checks
+
+Use the smallest combination that addresses the failure shape:
+
+- **Examples:** retain concrete regressions and explicit boundaries. Observe the intended failing assertion before
+  implementing the fix or new behavior, following the developer contract's TDD requirements.
+- **Properties:** search generated inputs or operation sequences for violations of a cited invariant. Derive
+  generators from the input contract and expectations independently from the implementation. Include relevant bounds,
+  empty cases, ordering, and repeated operations deliberately.
+- **Fuzzing:** explore inputs with a named behavioral assertion and retain useful cases. Freedom from crashes alone
+  supports a narrower claim than grammar conformance. Distinguish corpus replay from exploratory execution.
+- **Targeted mutations:** when risk warrants it, introduce a plausible fault and check whether the relevant assertion
+  notices. Explain the choice or deferral; there is no per-change mutation quota.
+
+Address required acceptance and required rejection where applicable, including forbidden side effects. Self-consistency
+does not establish conformance: a parser can round-trip invalid inputs consistently, and a rejection check can pass
+against an implementation that rejects everything. Generate relevant invalid classes as well as valid ones, or cover
+them with explicit cases; state which obligations each check actually exercises.
+
+Use the [lowest sufficient tier](#choose-the-lowest-sufficient-tier) that can expose the claimed violation. An offline
+regression may need production-boundary evidence alongside it. A helper test cannot establish wiring, delivery,
+persistence, or API-to-UI behavior its environment does not exercise. Focused experiments supplement required suites.
+
+Use existing repository tools and declared commands. Tool adoption or new automated gates require a separately scoped
+change. This discipline does not select a mutation runner, require a library, or introduce a score threshold.
+
+### Establish Sensitivity to a Selected Mutation
+
+Perform a bounded experiment in a disposable copy, or preserve an exact backup of every affected file. In SemStreams,
+follow the developer/reviewer contracts' `cp` backup and checksum restoration procedure; do not use Git restoration or
+stash commands. Keep concurrent and pre-existing work intact. During each comparison, change only the implementation
+under assessment; keep test code, generators, expectations, fixtures, and runner configuration fixed.
+
+1. The unmodified baseline passes the selected checks, and the intended tests actually execute.
+2. Apply a named, relevant mutation. The mutant builds and reaches the selected test.
+3. The relevant assertion fails because it observes the intended violation.
+4. Restore the original bytes, verify checksums, and rerun the selected checks successfully.
+
+If checks change after investigating a survivor, establish a new passing baseline and repeat the experiment. Do not
+restore over concurrent edits; isolate the experiment when exclusive ownership of affected files cannot be maintained.
+
+Record the source revision and the experiment snapshot, including relevant uncommitted and untracked files; identify
+their contents with a retained patch/files and checksums or an equivalent reproducible artifact. Record the mutation
+location and operation, selected tests and commands, runner version/configuration, relevant environment, observed
+results, and replay seed or shrunk counterexample when available. Capture enough output to distinguish the intended
+assertion failure from a broken runner. Baseline, mutant, and restored runs must refer to the same recorded checks.
+
+Retain small experiment snapshots inline in the PR record; attach larger snapshots, including patches, relevant files,
+and checksums, to the PR and link them from the handoff. Session scratchpads and private agent memory are not durable
+evidence homes.
+
+For a generated failure, replay the same input or operation sequence (or a stable seed) against the mutant and the
+original implementation before recording detection. If that comparison cannot be reproduced, record it as
+inconclusive rather than attributing a difference between random samples to the mutation.
+
+Preserve a replayable witness for important generated discoveries. If generator or tool changes make replay unstable,
+retain the case as a deterministic regression test. Label retained mutation witnesses as synthetic: they do not show
+that the original implementation contained the bug. Follow the package's corpus-curation guidance when retaining cases.
+
+Record execution outcomes separately from reviewer assessments:
+
+- **Detected:** the valid mutant caused the intended assertion failure, with passing baseline and restored checks.
+- **Survived:** the selected checks did not detect the mutation. Investigate missing inputs, assertions, or scope.
+- **Invalid:** the mutant could not build or was otherwise ineligible for this experiment.
+- **Inconclusive:** an error, external timeout, skipped or unselected test, or unrelated failure did not establish
+  detection by the intended assertion. A bounded assertion that observes a required termination failure can establish
+  detection; an outer runner timeout alone cannot.
+
+Assessments such as equivalent, outside the claimed scope, or deferred do not replace those observations. An
+equivalence assessment names the applicable contract and input domain, its reasoning, and its reviewer; passing the
+selected tests is not the argument. Unresolved survivors remain unresolved. A runner's zero exit may mean its
+evaluation succeeded; inspect the report. A nonzero exit alone does not establish detection of the intended fault.
+
+### Reviewer: Challenge the Relationship
+
+Read the cited requirement and ask whether an implementation could pass the checks while violating it. Also ask:
+**What relevant obligation or failure mode is missing from the checks entirely?** Confirm the expected-result source
+is independent, generators reach relevant boundaries, and assertions observe required effects. Review survivors and
+decisions to defer mutation checks. A generator being able to reach a boundary does not ensure a particular run did;
+explicit boundary cases or retained witnesses provide dependable checks for those cases.
+
+Distinguish measurements from judgments. Output can establish an observed assertion failure; whether it adequately
+challenges a requirement remains a review assessment. An equivalence argument or a reviewer finding no counterexample
+is not proof of correctness. Findings strengthen checks or identify uncertainty. If evidence challenges the accepted
+requirement itself, surface a specification gap through the existing owner decision process; do not silently weaken
+the requirement to fit the implementation.
+
+### Handoff: Preserve the Limits of the Evidence
+
+Use the existing change, review, or PR record to summarize the requirement, plausible violation, independent
+expectation, distinguishing observation, checks actually run, snapshot, commands, results, and replay information.
+For selected mutations, include baseline, validity, assertion result, and restored-baseline evidence. Preserve
+deferred checks, unresolved survivors, and reviewer assessments with their reasons. Link existing artifacts instead
+of duplicating them.
+
+Say which fault a check detected and what remains untested. Planned checks remain pending until executed. Adoption of
+this guidance does not establish automated enforcement or narrow any existing verification or release gate.
+
+### SemStreams Application
+
+The [developer contract](../../.agents/contracts/semstreams-developer.md#test-and-operational-fidelity) owns the exact
+`// spec:` citation format, native fuzz obligations, boundary requirements, and specification-gap handling. The
+[reviewer contract](../../.agents/contracts/semstreams-reviewer.md#test-fidelity) applies those requirements
+independently.
+`task spec:properties` checks citation resolution; it does not validate the property's meaning or sensitivity.
+
+Use [the entity-ID properties](../../pkg/types/entity_id_prop_test.go) and their
+[curated boundary witness](../../pkg/types/testdata/rapid/README.md) as recorded examples. Their acceptance,
+classified-rejection, and self-consistency checks protect different obligations; none subsumes the others.
+
+The tiers and commands below, race checks for changed concurrency, production constructor/registry/codec/wire evidence,
+real-NATS checks where its semantics matter, and breaking-change E2E requirements continue to apply. SemDev's
+constitutional, offline-pin, clean-room, and product-delivery requirements remain local to SemDev; sister repositories
+may adopt this method through their own owners. No sister runtime or workflow is changed by this policy.
+
 ## Choose the Lowest Sufficient Tier
 
 - **Unit:** one function, type, or in-process component behavior. Use `*_test.go` and
