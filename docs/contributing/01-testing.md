@@ -10,14 +10,16 @@ not redefine this policy.
 > Prompts focus attention. Contracts state what must hold. Property tests search for counterexamples.
 > Mutation tests check whether our tests detect meaningful faults.
 
+The working formulation above comes from the SemDev/SemStreams testing-policy discussion; SemStreams adoption is
+tracked in [#1313](https://github.com/C360Studio/semstreams/issues/1313).
+
 For each material behavior change, ask: **What would we observe if we were wrong, and have we actually looked?**
 Choose checks according to the failure's consequence and shape. Test counts and global mutation scores do not answer
 that question. Passing checks increase confidence within their stated scope; they do not establish general correctness.
 
 The author, developer, reviewer, and handoff method below is language-neutral and reusable across the sem*
-repositories. Each repository owns its adoption, commands, and additional obligations. This policy governs
-SemStreams development;
-it does not establish product runtime enforcement, a testing dependency, or a supported-language claim.
+repositories. Each repository owns its adoption, commands, and additional obligations. This policy governs SemStreams
+development; it does not establish product runtime enforcement, a testing dependency, or a supported-language claim.
 
 ### Author: Identify What the Check Must Distinguish
 
@@ -80,6 +82,10 @@ location and operation, selected tests and commands, runner version/configuratio
 results, and replay seed or shrunk counterexample when available. Capture enough output to distinguish the intended
 assertion failure from a broken runner. Baseline, mutant, and restored runs must refer to the same recorded checks.
 
+Retain small experiment snapshots inline in the PR record; attach larger snapshots, including patches, relevant files,
+and checksums, to the PR and link them from the handoff. Session scratchpads and private agent memory are not durable
+evidence homes.
+
 For a generated failure, replay the same input or operation sequence (or a stable seed) against the mutant and the
 original implementation before recording detection. If that comparison cannot be reproduced, record it as
 inconclusive rather than attributing a difference between random samples to the mutation.
@@ -120,9 +126,9 @@ the requirement to fit the implementation.
 
 Use the existing change, review, or PR record to summarize the requirement, plausible violation, independent
 expectation, distinguishing observation, checks actually run, snapshot, commands, results, and replay information.
-For selected
-mutations, include baseline, validity, assertion result, and restored-baseline evidence. Preserve deferred checks,
-unresolved survivors, and reviewer assessments with their reasons. Link existing artifacts instead of duplicating them.
+For selected mutations, include baseline, validity, assertion result, and restored-baseline evidence. Preserve
+deferred checks, unresolved survivors, and reviewer assessments with their reasons. Link existing artifacts instead
+of duplicating them.
 
 Say which fault a check detected and what remains untested. Planned checks remain pending until executed. Adoption of
 this guidance does not establish automated enforcement or narrow any existing verification or release gate.

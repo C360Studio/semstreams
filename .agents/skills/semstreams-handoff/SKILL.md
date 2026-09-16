@@ -28,6 +28,10 @@ Identify tests on a dirty tree and the snapshot or diff needed to reproduce them
 unrun checks. Historical green does not prove later edits. Run inexpensive state checks now; do not repeat expensive
 suites solely to write a handoff or describe a previous result as freshly verified.
 
+For test-sensitivity evidence, use the testing policy's
+[handoff requirements](../../../docs/contributing/01-testing.md#handoff-preserve-the-limits-of-the-evidence).
+Link retained PR snapshots and witnesses rather than relying on local scratch files.
+
 Record pending commands, approvals, automations, and background jobs with their identifiers and owners, including
 whether they will keep running. Do not silently cancel or duplicate another session's work.
 
