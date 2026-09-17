@@ -93,6 +93,11 @@ does not make different final tool results interchangeable; their ordinary corre
 
 ## Timeouts and restart
 
+Approval waits default to `12h`, also the maximum supported wait for this release. Set `approval_timeout` to a
+positive duration no greater than 12 hours; explicit empty, invalid or longer values fail configuration admission
+rather than being silently shortened. Loop-state retention remains 24 hours. That leaves nominal grace, not a
+guarantee of continuation or settlement before expiry. Longer delayed-review workflows are not supported by this limit.
+
 A timed approval keeps its original request time and timeout in `LoopEntity.PendingApproval`.
 Before accepting work, a replacement loop component reads current loop records and restores the timed approvals
 it must watch. It does not restart their clocks or substitute its new timeout configuration. If required loop

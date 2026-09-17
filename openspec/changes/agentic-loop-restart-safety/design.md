@@ -919,18 +919,50 @@ follow the distinct approval recovery dispositions above; removing the Store pla
 
 ### Loop-owned `AGENT_LOOPS` acquisition
 
-AGENT replay admission and loop-state authority acquisition are separate gates. Agentic-loop resolves its bucket from
-the admitted `loops` KV-write port, then calls internal
-`processor/agentic-loop/internal/loopbucket.AcquireOwner`. The helper calls `KeyValue` first and calls
-`CreateKeyValue` only when `errors.Is(err, jetstream.ErrBucketNotFound)`. Permission, timeout, transport, and every
-other lookup error return with zero create mutation. A typed `jetstream.ErrBucketExists` create race permits exactly
-one KeyValue retry before observation.
+Owner comment `5696610710` accepts this bounded lowering. AGENT replay admission and loop-state authority
+acquisition remain separate gates.
 
-Creation declares History 10, TTL 24h, and non-binding MaxBytes. After get, create, or race-get, the helper observes
-actual status/backing stream and requires exact History 10, exact TTL 24h, and MaxBytes `<=0`. It publishes the handle
-and starts task/response/tool-result/signal/approval/verdict consumers and the approval sweeper only after that
-observation succeeds. Retained or race-winning drift is refused without update or reconciliation because earlier
-eviction may already have destroyed authority. Approval timeout is validated against this observed bucket only.
+The admitted output named `loops`, resolved as `kv-write`, is agentic-loop's sole bucket declaration.
+Its default remains AGENT_LOOPS. Remove loop-side `Config.LoopsBucket`, its default and schema entry.
+Before ordinary configuration decoding can ignore unknown fields, the existing configuration owner rejects any
+present top-level `loops_bucket` key, regardless of value. The error names the retired key and directs the caller
+to `ports.outputs` → `loops` → `config.bucket`. No alias, ignored compatibility field or raw-to-port translation remains.
+
+`DeclarePorts` and `NewComponent` continue sharing `resolveConfig`. Runtime initialization reads the normalized
+KV-write bucket from the already captured output ports; it does not re-decode raw configuration or independently
+classify concrete port configuration types.
+
+The existing research common-bucket validator obtains agentic-loop's effective declaration through its existing
+`DeclarePorts`, then uses canonical port resolution/facts to read `loops`. It compares that actual bucket with the
+other owners' existing bucket selections. Declaration failure or mismatch fails composition with component and
+bucket context. Tools and research-stage configuration, provisioning and execution semantics remain unchanged.
+No dependency from core registration to the optional research capability is introduced.
+
+The existing initializer calls internal `processor/agentic-loop/internal/loopbucket.AcquireOwner`.
+It gets first, creates only for typed `jetstream.ErrBucketNotFound`, and propagates all other lookup errors without
+creation. Typed `jetstream.ErrBucketExists` from creation permits exactly one get; failure of that get returns
+without another create or retry loop.
+
+Creation declares History 10, TTL 24h and nonbinding MaxBytes. After get, create or race-get, actual status/backing
+stream observation must establish History exactly 10, TTL exactly 24h and MaxBytes `<=0`.
+Failed or incomplete observation is not admission. Policy errors identify the bucket and observed/required values;
+I/O errors preserve their wrapped cause. Retained or race-winning drift is refused without update or reconciliation.
+
+Omitted `approval_timeout` becomes `12h`. A present value must be a JSON string parsing as a positive Go duration
+no greater than 12h. Explicit empty, null, non-string, malformed, zero, negative and above-12h values fail
+configuration admission. Exactly 12h is valid. No invalid value is defaulted or clamped.
+
+Scalar timeout validation does not establish durable authority. Startup requires both the valid effective timeout
+and observed exact bucket policy before assigning `c.loopsBucket`, restoring approval deadlines, allocating
+dependent consumers/query subscriptions or launching the sweeper. A shorter timeout does not excuse wrong KV policy.
+
+The 12h maximum with TTL24h leaves at least 12h nominal grace. This is an owner-selected release limit, not measured
+completion latency and not a guarantee that timeout processing, recovery or settlement finishes before expiry.
+Existing retained deadlines, evidence-absence classifications, publication requirements and refusal policies remain unchanged.
+
+All acquisition I/O uses the Start-derived operation context. Errors return through existing failed-Start rollback.
+There is no new readiness API, timer, supervisor, lease, store or public policy knob.
+The separate trajectory-audit path remains nonblocking.
 
 ### First-party rule publisher admission
 
@@ -1254,6 +1286,7 @@ is not required to interpret or complete any row. There are no deviations.
 | Reuse one selected ordinary terminal outcome and persist the existing synthetic-action obligation | `design.md / agent.response complete or error`; `agentic-loop / Loop task, request, and tool work use only required correlation`; `tasks.md / R2` | owner comments `5647247843` and `5651819675`; reviewed handoff `b411304309`; existing COMPLETE_ and registered event types, unchanged synthesis policy; runtime proof remains required |
 | Replace stale current-spec semantics through full MODIFIED blocks | `design.md / Current-spec reconciliation`; exact MODIFIED requirements in dispatch, tools, and loop deltas; `tasks.md / 5.2, 6.10, 7.7` | unaffected scenarios/citations preserved; no additive conflict |
 | Use strong observed DiscardNew and refuse only the affected dependency closure | `agentic-loop / Restart-safe replay observes and admits local stream bounds`; `tasks.md / 9.1–9.4` | no whole-composition/global-maxima gate |
+| Retire the loop-side duplicate bucket setting and cap approval wait at 12h | `Loop-owned AGENT_LOOPS acquisition`; loop declaration, lifetime and acquisition requirements; `tasks.md / R8` | owner comment `5696610710`; one port declaration, explicit removed-key refusal, default/max12h and observed TTL24h; nominal grace only; no new recovery machinery |
 | Permit governance re-evaluation after successful exact retained-verdict absence without a finite verdict-retention horizon prerequisite | `Governance correlation`; `Observed AGENT replay admissibility`; governance correlation/publication requirements; loop replay-admission requirement; `tasks.md / R7–R8` | comment `5682070598`; matching reuse, failed-read Retry, conflict Quarantine, current-policy re-evaluation, unchanged DiscardNew/PubAck/#1311/tool-effect safeguards and other retention obligations; no new state, timer or API |
 | Quarantine opposing retained decisions that both match one proposal | `Governance correlation`; governance correlation requirement; `tasks.md / R7` | comment `5694233488`; select neither, no positive response settlement or proposal/tool publication, stop affected response consumer; no election policy or new authority |
 | Admit first-party rule AGENT output through the same internal validator and existing publisher | `rule-agent-publishing / First-party publish-agent output is admitted before action execution`; `rule-agent-publishing / Publish-agent classification uses canonical wildcard coverage and durable publication`; `tasks.md / 9.5–9.7` | six classifier surfaces; no duplicate gate/API |

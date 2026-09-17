@@ -104,9 +104,11 @@ func TestApprovalDeadlineSnapshotRestoresOnlyCurrentTimedPending(t *testing.T) {
 }
 
 // spec: agentic-loop / Approval deadlines are reconstructed narrowly
-func TestApprovalDeadlineSnapshotPreservesDeadlineWhenNewApprovalsAreUntimed(t *testing.T) {
+func TestApprovalDeadlineSnapshotPreservesDeadlineWithDifferentValidTimeout(t *testing.T) {
 	f := newApprovalRecoveryFixture(t)
-	require.Zero(t, f.c.config.ApprovalTimeout())
+	f.c.config.ApprovalTimeoutStr = "5m"
+	require.NoError(t, f.c.config.Validate())
+	require.Equal(t, 5*time.Minute, f.c.config.ApprovalTimeout())
 	w := &approvalDeadlineWatcher{updates: make(chan jetstream.KeyValueEntry, 2)}
 	w.updates <- settlementEntry{key: f.entity.ID}
 	w.updates <- nil

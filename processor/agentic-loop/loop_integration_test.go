@@ -5,6 +5,7 @@ package agenticloop_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -58,7 +59,6 @@ func TestExistingIncompatibleTrajectoryBucketDisablesAuditAndDegradesHealth(t *t
 	testClient, err := natsclient.NewSharedTestClient(
 		natsclient.WithJetStream(),
 		natsclient.WithKV(),
-		natsclient.WithKVBuckets("AGENT_LOOPS"),
 		natsclient.WithStreams(natsclient.TestStreamConfig{Name: "AGENT", Subjects: []string{"agent.>", "tool.>"}}),
 		natsclient.WithTestTimeout(5*time.Second),
 		natsclient.WithStartTimeout(30*time.Second),
@@ -68,6 +68,8 @@ func TestExistingIncompatibleTrajectoryBucketDisablesAuditAndDegradesHealth(t *t
 	natsClient := testClient.Client
 	ctx := context.Background()
 	js, err := natsClient.JetStream()
+	require.NoError(t, err)
+	_, err = js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: "AGENT_LOOPS", History: 10, TTL: 24 * time.Hour})
 	require.NoError(t, err)
 	bucket, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
 		Bucket: agentic.TrajectoryBucketName, History: 2,
@@ -117,13 +119,18 @@ func TestMain(m *testing.M) {
 	testClient, err := natsclient.NewSharedTestClient(
 		natsclient.WithJetStream(),
 		natsclient.WithKV(),
-		natsclient.WithKVBuckets("AGENT_LOOPS"),
 		natsclient.WithStreams(streams...),
 		natsclient.WithTestTimeout(5*time.Second),
 		natsclient.WithStartTimeout(30*time.Second),
 	)
 	if err != nil {
 		panic("Failed to create shared test client: " + err.Error())
+	}
+	initCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_, err = testClient.Client.CreateKeyValueBucket(initCtx, jetstream.KeyValueConfig{Bucket: "AGENT_LOOPS", History: 10, TTL: 24 * time.Hour})
+	cancel()
+	if err != nil {
+		panic(errors.Join(err, testClient.Terminate()))
 	}
 
 	sharedTestClient = testClient
@@ -206,7 +213,6 @@ func TestIntegration_LoopFullCycle(t *testing.T) {
 		Timeout:            "60s",
 		StreamName:         "AGENT",
 		ConsumerNameSuffix: "fullcycle-test",
-		LoopsBucket:        "AGENT_LOOPS",
 	}
 
 	rawConfig, err := json.Marshal(config)
@@ -347,7 +353,6 @@ func TestIntegration_LoopWithToolCalls(t *testing.T) {
 		Timeout:            "60s",
 		StreamName:         "AGENT",
 		ConsumerNameSuffix: "toolcalls-test",
-		LoopsBucket:        "AGENT_LOOPS",
 	}
 
 	rawConfig, err := json.Marshal(config)
@@ -504,7 +509,6 @@ func TestIntegration_LoopMaxIterations(t *testing.T) {
 		Timeout:            "60s",
 		StreamName:         "AGENT",
 		ConsumerNameSuffix: "maxiter-test",
-		LoopsBucket:        "AGENT_LOOPS",
 	}
 
 	rawConfig, err := json.Marshal(config)
@@ -641,7 +645,6 @@ func TestIntegration_LoopStatePersistence(t *testing.T) {
 		Timeout:            "60s",
 		StreamName:         "AGENT",
 		ConsumerNameSuffix: "persist-test",
-		LoopsBucket:        "AGENT_LOOPS",
 	}
 
 	rawConfig, err := json.Marshal(config)
@@ -712,8 +715,10 @@ func TestIntegration_LoopStatePersistence(t *testing.T) {
 func TestIntegration_LoopTrajectoryCapture(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithFastStartup(), natsclient.WithJetStream(),
 		natsclient.WithStreams(natsclient.TestStreamConfig{Name: "AGENT", Subjects: []string{"agent.>", "tool.>"}}),
-		natsclient.WithKV(), natsclient.WithKVBuckets("AGENT_LOOPS"))
+		natsclient.WithKV())
 	natsClient := tc.Client
+	_, bucketErr := natsClient.CreateKeyValueBucket(t.Context(), jetstream.KeyValueConfig{Bucket: "AGENT_LOOPS", History: 10, TTL: 24 * time.Hour})
+	require.NoError(t, bucketErr)
 
 	config := agenticloop.Config{
 		Ports: &component.PortConfig{
@@ -738,7 +743,6 @@ func TestIntegration_LoopTrajectoryCapture(t *testing.T) {
 		Timeout:            "60s",
 		StreamName:         "AGENT",
 		ConsumerNameSuffix: "trajectory-test",
-		LoopsBucket:        "AGENT_LOOPS",
 	}
 
 	rawConfig, err := json.Marshal(config)

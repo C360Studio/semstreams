@@ -616,9 +616,6 @@ func testApprovalAfterReplacement(t *testing.T, approvalRequest agenticdispatch.
 			require.NoError(t, owner.Start(runCtx))
 			started = append(started, owner)
 		}
-		if approvalTimeout == "" {
-			require.Empty(t, c.handler.loopManager.loops, "Start must not receive another instance's process state")
-		}
 		mux := http.NewServeMux()
 		dispatch.(*agenticdispatch.Component).RegisterHTTPHandlers("/", mux)
 		return mux, stop

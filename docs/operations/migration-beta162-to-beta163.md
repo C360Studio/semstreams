@@ -1236,6 +1236,53 @@ slice is implemented and replacement-tested under
 [owner ruling 5682070598](https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5682070598).
 #1311 proposal-source settlement and the remaining combined proof are still open; follow the change's R7/R8 tasks.
 
+## Loop bucket declaration and approval-wait limit (#1146)
+
+**Breaking configuration/API change:** agentic-loop no longer exposes `Config.LoopsBucket` or accepts its
+top-level JSON key `loops_bucket`. Remove that key even when it contains the default AGENT_LOOPS or matches your port.
+Go struct literals using the removed field fail compilation; retained JSON gets an actionable configuration error.
+
+The existing `loops` KV-write output is the sole declaration. With no override it selects AGENT_LOOPS.
+For a custom bucket, use the existing canonical port configuration:
+
+```json
+{
+  "ports": {
+    "outputs": [
+      {
+        "name": "loops",
+        "config": {
+          "kind": "kv-write",
+          "bucket": "CUSTOM_LOOPS"
+        }
+      }
+    ]
+  }
+}
+```
+
+This replaces only that named output. Keep unrelated ports and configuration.
+Do not remove `loops_bucket` from agentic-tools or research-stage configurations: those surfaces are unchanged.
+For research assemblies, their selected buckets must agree with the loop's effective port bucket; the existing
+composition validator now checks that actual declaration.
+
+**Approval limit:** omission of `approval_timeout` now uses `12h`, also the maximum supported wait for this release.
+A supplied value must be a positive duration no greater than 12h. Explicit empty, null, zero, negative, malformed
+or longer values fail configuration admission. Existing settings such as `18h` no longer start; waits are never
+silently shortened. Longer delayed-review workflows are therefore outside this release's supported limit.
+
+Startup observes actual loop-bucket History 10, TTL 24h and nonbinding MaxBytes before accepting work.
+The resulting nominal grace is not a promise of recovery or settlement before expiry.
+Existing pending deadlines are not reset by replacement configuration, and existing evidence/refusal rules remain.
+
+Use the normal fresh-storage pre-v1 adoption path. An incompatible retained bucket is refused, not repaired.
+This note authorizes no destructive cleanup or migration of a deployed bucket; an actual retained deployment needing
+upgrade or recovery requires its separately reviewed plan.
+
+[Owner acceptance](https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5696610710).
+Verify the changed constructor/configuration path and relevant agentic E2E before the breaking change lands.
+This note does not claim that verification has passed.
+
 ## Approval decisions require the displayed execution identity (#1146)
 
 **Breaking input change:** `agentic.ApprovalResponse` and the existing HTTP `ApprovalRequest` require `execution_id`.

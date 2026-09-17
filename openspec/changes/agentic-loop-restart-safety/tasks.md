@@ -317,6 +317,18 @@ These preserve the previously checked items at their recorded baselines, not who
   envelope refusal, and PubAck.
   Loop authority uses typed not-found/create-exists handling and observes History 10, TTL 24h, nonbinding MaxBytes
   and approval lifetime before consumers/sweeper; no reconciliation of retained drift or additional public gate.
+  Owner comment `5696610710` accepts loop-side `LoopsBucket` / `loops_bucket` retirement and default/maximum
+  approval wait 12h with observed TTL24h. The inventory has independent PASS and the option docket has pre-owner
+  DESIGN REVIEW PASS. The exact accepted lowering passed independent CONFORMANCE REVIEW on 2026-09-16;
+  see `review-r8-loop-authority-2026-09-16.md`. Candidate 02 now has bounded IMPLEMENTATION APPROVE and focused
+  unit/native race proof; the folded-name refusal finding is closed. One-test native cost has reviewer and owner
+  approval (owner comment `5710924052`). The loop-authority checkpoint now passes full pre-push and agentic E2E
+  after two independently reviewed fixture adaptations; remaining R8 admission/producer and combined proof stay open.
+  Implement `task-r8-loop-authority-2026-09-16.md`: explicit retired-key error; one port-derived loop identity;
+  existing research agreement-check adaptation; typed acquisition/race handling; actual-policy admission before
+  handle/dependent work; timeout omission/default and explicit refusal; mandatory caller/schema/config/doc/fixture
+  adaptations. Nominal grace is not a recovery guarantee. This acceptance completes no implementation or proof.
+  R7/R8, #1311/#1312, frozen-parent, R11 and final review/landing holds remain.
   Covered-output classifier/PubAck slice independently APPROVED on 2026-09-15; see
   `review-r8-publisher-2026-09-15.md`. Existing classifier now reuses canonical directional wildcard coverage.
   Intended unit/native RED and GREEN, all six configurations, 27 new unit cases, 15 unchanged controls, real PubAck,
@@ -485,7 +497,7 @@ recorded in `review-terminal-complete-2026-09-13.md`. #1249, #1288 and wider #12
 R11 still requires final combined fresh-storage/E2E/replacement verification; earlier passes do not approve later
 changes. No unmeasured retained-deployment migration is introduced.
 
-## 2026-09-16 verification and next owner choices
+## 2026-09-16 verification and accepted R8 choices
 
 R7 candidate-02 grouped native proof and final independent implementation review pass, as recorded above.
 The subsequent complete pre-push attempt failed during the unit repository audit on shifted fixture annotations;
@@ -500,8 +512,19 @@ record/hash accounting is separate from R11's still-required combined proof afte
 See `review-r7-retained-verdict-2026-09-16.md` for the failed runs, corrections and exact evidence.
 No task is completed by partial preflight results.
 
-The bounded R8 loop-authority inventory has independent INVENTORY PASS and 118/118 verified pins. Its lowering
-docket has independent pre-owner DESIGN REVIEW PASS only. Issue comment `5695760323` requests selection of
-loop-side duplicate bucket-setting retirement and a proposed 12-hour maximum approval wait for this release.
-The maximum is an explicit product-limit proposal, not a measured safety guarantee. Both choices remain pending;
-R8 implementation is not released. Existing R7/R8, #1311/#1312, frozen-parent and combined-proof holds remain.
+The owner accepted both R8 loop-authority choices in comment `5696610710`.
+The dated option docket and reviews remain provenance. Exact lowering passed independent conformance review;
+candidate 02 implementation passed bounded review after correcting the single folded-name refusal finding.
+Three-package race and the five-test native selection pass on the exact 27-file source. The one new native fixture
+has six cases and one additional NATS start, measured at 0.44s; its narrow cost has reviewer and owner approval
+(owner comment `5710924052`). See `review-r8-loop-authority-2026-09-16.md` for hashes, evidence and exception terms.
+The fresh full gate failed an obsolete post-Start empty-memory assertion now contradicted by the accepted 12h
+default and deadline restoration. The bounded three-line test correction preserves pre-Start isolation and all
+durable assertions; independent source review and the existing 12-test native replacement matrix pass.
+The subsequent full gate exposed one hand-built trajectory fixture without captured loop ports. Its bounded
+production-constructor adaptation preserves all degradation assertions; the affected native test and two policy
+controls pass. Both failed gates remain recorded in the R8 review; no production correction was required.
+The corrected checkpoint's full pre-push passed on 2026-09-17 (155 unit/155 native package passes), followed by
+mock-backed agentic E2E with 16 verification stages including approval after process restart. All source and
+module/schema hashes remained unchanged. This is bounded loop-authority checkpoint proof, not whole R8 or R11.
+R8 remains unchecked; remaining admission/producer proof, final combined E2E, whole-PR review and landing stay open.

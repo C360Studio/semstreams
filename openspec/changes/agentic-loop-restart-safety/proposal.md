@@ -120,8 +120,12 @@ AgentRun complete/failed fanout is transferred intact to #1249 from the exact po
   the same already-marshaled publication and downstream redelivery of retained AGENT bytes; a fresh execution of
   upstream `publishAgentOnce` is outside this claim. Tasks 9.5–9.7 retain admission, wildcard coverage, publisher
   classification, PubAck, and registered-payload ownership.
-- Agentic-loop separately acquires and observes the existing `AGENT_LOOPS` authority before publishing its handle or
-  starting dependent consumers and the approval sweeper.
+- Agentic-loop acquires its loop-state authority from the existing admitted `loops` KV-write port. The loop-side
+  `Config.LoopsBucket` / `loops_bucket` setting is removed; supplying the retired JSON key fails explicitly.
+  Existing research composition validates the loop's declared port identity against its other unchanged bucket
+  owners. Startup observes exact History 10, TTL 24h and nonbinding MaxBytes before publishing the handle or
+  starting dependent work. Approval timeout defaults to 12h and cannot exceed 12h. The resulting nominal grace
+  is not a recovery or settlement guarantee. Owner acceptance is recorded in comment `5696610710`.
 - The nested #1239 work is already integrated as PR #1251. Pause/resume handlers and dead signal verbs are gone;
   #1146 settles the surviving cancel lane and the separate approval-response lane.
 - Binding product ruling #1239 comment `5526837992`, linked from #1146 comment `5526837994`, removes `paused` from

@@ -51,10 +51,9 @@ type Config struct {
 	Timeout                           string                   `json:"timeout" schema:"type:string,description:Timeout duration for loop execution (e.g. 120s or 5m),default:120s,category:basic,required"`
 	StreamName                        string                   `json:"stream_name" schema:"type:string,description:JetStream stream name,default:AGENT,category:advanced"`
 	ConsumerNameSuffix                string                   `json:"consumer_name_suffix" schema:"type:string,description:Suffix for consumer names,category:advanced"`
-	LoopsBucket                       string                   `json:"loops_bucket" schema:"type:string,description:NATS KV bucket name for storing loop state,default:AGENT_LOOPS,category:advanced,required"`
 	ToolResultMaxBytes                int                      `json:"tool_result_max_bytes,omitempty" schema:"type:int,description:Maximum bytes for tool result content before truncation. 0 means no limit,default:32768,category:advanced"`
 	TrajectoryEvidenceStorageInstance string                   `json:"trajectory_evidence_storage_instance,omitempty" schema:"type:string,description:Logical registered storage instance for full trajectory evidence,default:objectstore,category:advanced"`
-	ApprovalTimeoutStr                string                   `json:"approval_timeout,omitempty" schema:"type:string,description:Auto-reject pending approvals after this duration (e.g. 5m or 1h). Empty means wait indefinitely,category:advanced"`
+	ApprovalTimeoutStr                string                   `json:"approval_timeout,omitempty" schema:"type:string,description:Positive approval wait at most 12h inclusive. Omission defaults to 12h. TTL24h provides nominal grace not a completion guarantee,default:12h,category:advanced"`
 	Consumer                          ConsumerConfig           `json:"consumer" schema:"type:object,description:JetStream consumer tuning for long-running ports (agent.task/agent.response/tool.result),category:advanced"`
 	Context                           ContextConfig            `json:"context" schema:"type:object,description:Context window management. Model limits are resolved from the model registry,category:advanced"`
 	ToolCallGovernance                ToolCallGovernanceConfig `json:"tool_call_governance,omitempty" schema:"type:object,description:Subject-mode tool-call governance (ADR-039). Default mode=disabled is no-op (no governance gate),category:advanced"`
@@ -208,23 +207,13 @@ func (c Config) Validate() error {
 		return errs.WrapInvalid(fmt.Errorf("timeout must be positive"), "Config", "Validate", "check timeout value")
 	}
 
-	// Validate loops_bucket
-	if strings.TrimSpace(c.LoopsBucket) == "" {
-		return errs.WrapInvalid(fmt.Errorf("loops_bucket is required"), "Config", "Validate", "check loops_bucket")
-	}
 	if strings.TrimSpace(c.TrajectoryEvidenceStorageInstance) == "" {
 		return errs.WrapInvalid(fmt.Errorf("trajectory_evidence_storage_instance is required"), "Config", "Validate", "check trajectory evidence storage instance")
 	}
 
-	// Validate approval timeout (empty is allowed — means wait forever)
-	if strings.TrimSpace(c.ApprovalTimeoutStr) != "" {
-		d, err := time.ParseDuration(c.ApprovalTimeoutStr)
-		if err != nil {
-			return errs.WrapInvalid(err, "Config", "Validate", "parse approval_timeout format")
-		}
-		if d < 0 {
-			return errs.WrapInvalid(fmt.Errorf("approval_timeout must be non-negative"), "Config", "Validate", "check approval_timeout value")
-		}
+	approvalTimeout, err := time.ParseDuration(c.ApprovalTimeoutStr)
+	if err != nil || approvalTimeout <= 0 || approvalTimeout > 12*time.Hour {
+		return errs.WrapInvalid(fmt.Errorf("approval_timeout %q must be a Go duration in (0,12h]", c.ApprovalTimeoutStr), "Config", "Validate", "check approval_timeout")
 	}
 
 	// Validate consumer config
@@ -242,8 +231,7 @@ func (c Config) Validate() error {
 }
 
 // ApprovalTimeout returns the parsed duration for ApprovalTimeoutStr.
-// Returns zero (wait indefinitely) when unset or unparseable; the
-// validation step is the safety net for malformed input.
+// The caller must validate configuration first; there is no runtime fallback.
 func (c Config) ApprovalTimeout() time.Duration {
 	if c.ApprovalTimeoutStr == "" {
 		return 0
@@ -382,7 +370,7 @@ func DefaultConfig() Config {
 		MaxIterations:                     20,
 		Timeout:                           "120s",
 		StreamName:                        "AGENT",
-		LoopsBucket:                       "AGENT_LOOPS",
+		ApprovalTimeoutStr:                "12h",
 		ToolResultMaxBytes:                32768,
 		TrajectoryEvidenceStorageInstance: "objectstore",
 		Consumer:                          DefaultConsumerConfig(),
