@@ -1011,7 +1011,7 @@ Always use allowlists in production:
 
 - `execute_command` or `bash` tools
 - `write_file` without path restrictions
-- `http_request` to arbitrary URLs
+- `http_request` GET reads to arbitrary URLs (the built-in validates every redirect hop and does not admit POST)
 - Database write operations
 
 ### API Key Management
