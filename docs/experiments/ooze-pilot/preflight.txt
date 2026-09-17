@@ -1,0 +1,38 @@
+Ooze pilot local preflight
+Baseline HEAD: 228e0a546f411e168bab7b0cb5fed1aa91db33db (empty claim over 84fc01e4)
+Diff scope: new docs/experiments/ooze-pilot/ only; production/root module/CI unchanged.
+
+Commands and authoritative completion statuses:
+GOMAXPROCS=2 GOFLAGS=-p=2 GOTOOLCHAIN=local task build:default — exit 0
+GOMAXPROCS=2 GOFLAGS=-p=2 GOTOOLCHAIN=local task lint — exit 0
+(harness module) GOMAXPROCS=2 GOFLAGS=-p=2 GOTOOLCHAIN=local go vet ./... — exit 0
+python3 -m py_compile run.py child.py (pilot paths) — exit 0
+gofmt -l harness/pilot_test.go (pilot path) — empty output
+Markdown relative-link check — all 5 Markdown artifacts resolve their file targets
+Inventory verifier — 60 pins valid; 0 drift; 0 unparsed (recorded in reviews.md)
+
+The artifact-only build/lint gates and isolated harness vet/syntax checks were selected through
+semstreams-preflight. The actual pilot ran its focused final subject baseline with -race; see
+archived evidence-accepted/final-race-baseline.log and commands.json for exit 0 and scope.
+No full integration/E2E suite ran locally; production behavior and framework contracts are unchanged.
+Root Task preflight is separate from the experiment, whose commands never invoke Task or read .env.
+
+Build output:
+task: [build:default] go build -o bin/semstreams ./cmd/semstreams
+task: [build:default] echo "Built bin/semstreams"
+Built bin/semstreams
+
+Lint output:
+task: [lint:default] go vet ./...
+task: [lint:default] go fmt ./...
+task: [lint:default] go tool revive -config revive.toml -formatter friendly ./...
+task: [lint:test-ports] echo "running fixed-port lint guard (scripts/lint-test-ports.sh)"
+running fixed-port lint guard (scripts/lint-test-ports.sh)
+task: [lint:test-ports] bash scripts/lint-test-ports.sh
+task: [lint:request-guard] go test ./test/natsclient/
+ok  	github.com/c360studio/semstreams/test/natsclient	0.702s
+
+Harness vet output: (empty)
+
+Staged git diff --check: exit 0.
+Independent final implementation/evidence review: APPROVE; see reviews.md.

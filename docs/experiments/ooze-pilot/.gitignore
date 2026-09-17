@@ -1,0 +1,6 @@
+# Expanded raw records are retained losslessly in evidence.tar.gz.
+/evidence/
+/evidence-qualified/
+/evidence-final/
+/evidence-accepted/
+/__pycache__/
