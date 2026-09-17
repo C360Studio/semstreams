@@ -5,7 +5,9 @@ PR [#1319](https://github.com/C360Studio/semstreams/pull/1319)
 
 ## Recommendation
 
-Defer routine adoption of this pinned Ooze revision and keep the existing manual sensitivity workflow.
+Defer routine adoption of this pinned Ooze revision. Require targeted sensitivity evidence when the
+[testing policy's mutation criteria](../../contributing/01-testing.md#when-targeted-mutation-evidence-is-required)
+apply, using existing tools. This evaluation does not justify a general mutation-testing integration.
 Ooze is useful as a bounded candidate generator: it produced ten relevant entity-ID mutations, all
 independently detected and replayed. Its raw score does not supply the evidence our testing policy needs.
 Compilation errors, unrelated command failures, and test timeouts were credited as kills. Cancellation
@@ -15,6 +17,12 @@ This evaluation adds a reproducible experiment, not a supported runner, root dep
 A later adoption proposal should account for classification, baseline selection, cancellation, and source
 protection before promising less work. Do not turn this one-off recorder into a maintained platform by default.
 No production defect or missing check was discovered in the selected comparison slice.
+
+The owner accepted a policy follow-up within this PR: record which mutation criteria apply to an issue,
+require controlled evidence in the PR when triggered, and have the reviewer independently check applicability
+and results. The canonical policy and developer/reviewer prompts carry that instruction. This is review-time
+evidence at a recorded revision; it does not continuously check later test changes. A persistent automated
+check can be justified separately for a demonstrated gap. No tool-adoption implementation issue is opened.
 
 ## Scope and provenance
 
@@ -26,8 +34,9 @@ No production defect or missing check was discovered in the selected comparison 
 - Scope: comparison mutations in `pkg/types/entity_id.go`. Other operators and platforms were not evaluated.
 - Execution: serial; `GOMAXPROCS=2`, `GOFLAGS=-p=2`, `GOTOOLCHAIN=local`, `-parallel=1`, `-count=1`,
   Rapid seed 1318 and `-rapid.nofailfile`. Exact selectors and commands are retained per experiment.
-- Isolation: dedicated claim/worktree; only this directory changes. No Docker/NATS, shared service,
-  root dependency/CI edits, sister-repository writes, or modifications to another claim.
+- Experiment isolation: dedicated claim/worktree, with experiment files confined to this directory. The
+  subsequent owner-approved policy follow-up also updates the testing policy and developer/reviewer contracts.
+  No Docker/NATS, shared service, root dependency/CI edits, sister-repository writes, or other claims are changed.
 
 The [inventory](inventory.md), [reviewed plan](plan.md), [source observations](upstream-notes.md),
 [upstream hashes](upstream-source.json), and [review record](reviews.md) separate prior knowledge from results.

@@ -260,7 +260,11 @@ until the owner explicitly accepts the reviewed design.
 
 Apply the canonical [testing discipline](../../docs/contributing/01-testing.md#testing-discipline), including
 the omitted-obligation question, independent expectations, controlled mutation evidence, and separation of observed
-outcomes from equivalence or deferral assessments. The SemStreams checks below remain additional obligations.
+outcomes from equivalence or deferral assessments. Independently apply its
+[mutation criteria](../../docs/contributing/01-testing.md#when-targeted-mutation-evidence-is-required) and verify the
+required evidence or explicitly accept or reject the recorded deferral with reasons and remaining risk;
+a completion checkbox is not evidence.
+The SemStreams checks below remain additional obligations.
 
 - Tests drive production constructors, registries, codecs, NATS handlers, and wire envelopes rather than only helpers.
 - Network listeners use ephemeral ports. Tests mutating global state such as `slog.SetDefault` are not parallel.

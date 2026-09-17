@@ -65,6 +65,34 @@ Python syntax and staged whitespace checks passed; the reviewer did not rerun mu
 
 | Constraint | Evidence |
 |---|---|
-| Do not interfere with current claims | Only this directory is staged; separate claimed worktree; source copies from pinned Git; process groups and temporary paths limited to this pilot. |
+| Do not interfere with current claims | Isolated copies and owned processes; policy overlap check below. |
 | Evaluate utility before adoption | README recommendation and results; no production/root dependency/CI change. |
 | Keep evidence reproducible | Pinned harness, exact commands, source/runner hashes, complete byte-verified archive, paired replay. |
+
+## Owner-approved policy follow-up
+
+On 2026-09-17, the owner accepted conditional mutation evidence in developer/reviewer prompts and asked to
+include it in this PR before merge. This extends the earlier artifact-only scope to the canonical testing policy
+and two role contracts; it does not adopt a tool or CI gate. The existing experiment results and archive are unchanged.
+
+The policy names the triggering risks, requires controlled baseline/mutant/restoration evidence when applicable,
+and requires independent reviewer assessment of applicability and explicit acceptance or rejection of any deferral.
+The pilot recommendation now reflects that bounded requirement and the unproven return from a general tool integration.
+
+A live paginated changed-file check of PRs #1141, #1156, #1159, #1254, and #1312 found no overlap with the three
+policy/contract files. The OpenSpec queue is empty; this development-policy clarification changes no runtime
+capability spec and requires no archive/spec sync. Earlier review verdicts above cover their recorded snapshots;
+this policy follow-up requires its own review before landing.
+
+Independent SemStreams implementation/merge review: **APPROVE**, no unresolved findings.
+Reviewed against HEAD `5b4e7810819f53aa909c7d4b5790729416d610c7`; reviewed binary diff SHA256:
+`7cf27d8a863002fd990b27dd1cf832658bdb26c9d2faafa1b9718d0e2c30fd88`.
+This verdict record and minor review-record line wrapping were added after that digest.
+
+The reviewer independently verified all five claims' complete file lists, the four preflight source hashes,
+unchanged experiment code and archive, empty OpenSpec queue, and policy/role consistency. One wording finding
+was resolved: deferrals require explicit acceptance or rejection with reasons; unaccepted or rejected deferrals
+leave the requirement unmet, and accepted deferrals never establish detection. Historical inventory and plan
+remain pinned experiment checkpoints; the later owner-approved scope is explicit here and in the report.
+
+The open, unfixed #1317 required-job flake remains an external merge hold. This review does not waive it.
