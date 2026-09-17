@@ -41,7 +41,6 @@ func inflightTestComponent(ctx context.Context, t *testing.T, natsClient *natscl
 		Timeout:            "60s",
 		StreamName:         "AGENT",
 		ConsumerNameSuffix: suffix,
-		LoopsBucket:        "AGENT_LOOPS",
 	}
 	rawConfig, err := json.Marshal(config)
 	require.NoError(t, err)

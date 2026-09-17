@@ -167,7 +167,6 @@
         "max_iterations": 15,
         "timeout": "120s",
         "stream_name": "AGENT",
-        "loops_bucket": "AGENT_LOOPS",
         "consumer": {
           "ack_wait": "120s",
           "heartbeat_interval": "15s",

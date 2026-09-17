@@ -67,6 +67,13 @@ Key design points:
   lose the pending state; the new process picks up the same
   `awaiting_approval` loop and waits on the same response subject.
 
+## Timeouts
+
+Approval waits default to `12h`, also the maximum supported wait for this release. Set `approval_timeout` to a
+positive duration no greater than 12 hours; explicit empty, invalid or longer values fail configuration admission
+rather than being silently shortened. Loop-state retention remains 24 hours. That leaves nominal grace, not a
+guarantee of continuation or settlement before expiry. Longer delayed-review workflows are not supported by this limit.
+
 ## Wiring an approval UI
 
 The framework ships the events and the state. The actual UI is

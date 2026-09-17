@@ -184,7 +184,6 @@
         "max_iterations": 5,
         "timeout": "120s",
         "stream_name": "AGENT",
-        "loops_bucket": "AGENT_LOOPS",
         "ports": {
           "inputs": [
             {

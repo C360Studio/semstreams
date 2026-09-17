@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/payloadregistry"
+	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
 	researchassess "github.com/c360studio/semstreams/processor/research-graph-assess"
 	researchclassify "github.com/c360studio/semstreams/processor/research-graph-classify"
 	researchexecute "github.com/c360studio/semstreams/processor/research-graph-execute"
@@ -335,17 +336,45 @@ func validateLoopsBuckets(configs map[string][]json.RawMessage) error {
 	var common string
 	for _, name := range names {
 		for _, raw := range configs[name] {
-			var bucketConfig struct {
-				LoopsBucket string `json:"loops_bucket"`
-			}
-			if len(raw) > 0 {
-				if err := json.Unmarshal(raw, &bucketConfig); err != nil {
-					return fmt.Errorf("read %s loops_bucket: %w", name, err)
+			var bucket string
+			if name == "agentic-loop" {
+				declaration, err := agenticloop.DeclarePorts(raw, name)
+				if err != nil {
+					return fmt.Errorf("read agentic-loop loops declaration: %w", err)
 				}
-			}
-			bucket := bucketConfig.LoopsBucket
-			if bucket == "" {
-				bucket = defaultLoopsBucket
+				for _, definition := range declaration.Outputs {
+					if definition.Name != "loops" {
+						continue
+					}
+					port, err := definition.Resolve(component.DirectionOutput)
+					if err != nil {
+						return fmt.Errorf("resolve agentic-loop loops output: %w", err)
+					}
+					facts, err := port.Facts()
+					if err != nil {
+						return fmt.Errorf("observe agentic-loop loops output: %w", err)
+					}
+					if facts.Kind() != component.PortKindKVWrite {
+						return fmt.Errorf("agentic-loop loops output must be kv-write")
+					}
+					bucket = strings.TrimPrefix(facts.ResourceID(), "kv:")
+				}
+				if bucket == "" {
+					return fmt.Errorf("agentic-loop loops bucket declaration is absent")
+				}
+			} else {
+				var bucketConfig struct {
+					LoopsBucket string `json:"loops_bucket"`
+				}
+				if len(raw) > 0 {
+					if err := json.Unmarshal(raw, &bucketConfig); err != nil {
+						return fmt.Errorf("read %s loops_bucket: %w", name, err)
+					}
+				}
+				bucket = bucketConfig.LoopsBucket
+				if bucket == "" {
+					bucket = defaultLoopsBucket
+				}
 			}
 			if common == "" {
 				common = bucket
