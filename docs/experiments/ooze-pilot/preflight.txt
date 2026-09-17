@@ -1,0 +1,64 @@
+Ooze pilot local preflight
+Baseline HEAD: 228e0a546f411e168bab7b0cb5fed1aa91db33db (empty claim over 84fc01e4)
+Diff scope: new docs/experiments/ooze-pilot/ only; production/root module/CI unchanged.
+
+Commands and authoritative completion statuses:
+GOMAXPROCS=2 GOFLAGS=-p=2 GOTOOLCHAIN=local task build:default — exit 0
+GOMAXPROCS=2 GOFLAGS=-p=2 GOTOOLCHAIN=local task lint — exit 0
+(harness module) GOMAXPROCS=2 GOFLAGS=-p=2 GOTOOLCHAIN=local go vet ./... — exit 0
+python3 -m py_compile run.py child.py (pilot paths) — exit 0
+gofmt -l harness/pilot_test.go (pilot path) — empty output
+Markdown relative-link check — all 5 Markdown artifacts resolve their file targets
+Inventory verifier — 60 pins valid; 0 drift; 0 unparsed (recorded in reviews.md)
+
+The artifact-only build/lint gates and isolated harness vet/syntax checks were selected through
+semstreams-preflight. The actual pilot ran its focused final subject baseline with -race; see
+archived evidence-accepted/final-race-baseline.log and commands.json for exit 0 and scope.
+No full integration/E2E suite ran locally; production behavior and framework contracts are unchanged.
+Root Task preflight is separate from the experiment, whose commands never invoke Task or read .env.
+
+Build output:
+task: [build:default] go build -o bin/semstreams ./cmd/semstreams
+task: [build:default] echo "Built bin/semstreams"
+Built bin/semstreams
+
+Lint output:
+task: [lint:default] go vet ./...
+task: [lint:default] go fmt ./...
+task: [lint:default] go tool revive -config revive.toml -formatter friendly ./...
+task: [lint:test-ports] echo "running fixed-port lint guard (scripts/lint-test-ports.sh)"
+running fixed-port lint guard (scripts/lint-test-ports.sh)
+task: [lint:test-ports] bash scripts/lint-test-ports.sh
+task: [lint:request-guard] go test ./test/natsclient/
+ok  	github.com/c360studio/semstreams/test/natsclient	0.702s
+
+Harness vet output: (empty)
+
+Staged git diff --check: exit 0.
+Independent final implementation/evidence review: APPROVE; see reviews.md.
+
+Policy follow-up preflight — 2026-09-17
+Base HEAD: 5b4e7810819f53aa909c7d4b5790729416d610c7; origin/main: 84fc01e46c104d890bffe32b0046e72f006df454.
+Scope: testing policy, developer/reviewer contracts, pilot recommendation, review/preflight records.
+No production, test, harness, root dependency, or CI changes in this amendment.
+
+SHA256 .agents/contracts/semstreams-developer.md: 5c2c24518d0c8987b2b6ae233c31864c6e2fc982a16412e9406880022435c12d
+SHA256 .agents/contracts/semstreams-reviewer.md: b53b7c34e0084fc5060f2c2f4c6e46e4915dfd8cfd82f889d9189b903463191b
+SHA256 docs/contributing/01-testing.md: 3795bd5c7b7cabe530fb6ddaa89f82af11d1d46905c62ee9f2a85e8abaf26664
+SHA256 docs/experiments/ooze-pilot/README.md: bb990aceae780425d51779de13535e8b41eb818954fb6ab3dfc0666e6c908beb
+
+GOMAXPROCS=2 GOFLAGS=-p=2 GOTOOLCHAIN=local task build:default — exit 0.
+GOMAXPROCS=2 GOFLAGS=-p=2 GOTOOLCHAIN=local task lint — exit 0.
+Lint ran go vet, go fmt, revive, fixed-port guard, and request-guard tests (0.705s).
+Changed Markdown: one H1, heading hierarchy, relative files and heading anchors — passed.
+git diff --check — exit 0.
+Historical evidence.tar.gz SHA256 unchanged: 0c3e9a4ff2918ea56eb60406f146360bc3adef9e99d43cc294cd8a6f5bd577d7.
+task openspec:queue — empty; no runtime capability-spec change or archive required.
+
+Claim overlap: gh api --paginate --slurp repos/C360Studio/semstreams/pulls/<n>/files,
+flatten pages and select the three changed canonical policy/contract filenames above:
+#1141 [], #1156 [], #1159 [], #1254 [], #1312 []. No overlap.
+The current PR is the same session-owned claim/worktree; no ownership transfer occurred.
+
+Hosted merge gate: rules/branches/main requires CI Status Check and e2e statistical.
+#1317 remains open and unfixed. A later green alone does not waive that known-flake constraint.

@@ -1,0 +1,74 @@
+{
+  "commit": "87c15dcb180492ba96f30278efc0146dd248f09b",
+  "module": "github.com/gtramontina/ooze",
+  "version": "v0.2.1-0.20260819134008-87c15dcb1804",
+  "sum": "h1:+8df7xKa1y7k+VvjOpovG0HJ2fasd0If/mokOMqqUPE=",
+  "toolchain": "go1.26.4 darwin/arm64",
+  "files": [
+    {
+      "path": "go.mod",
+      "sha256": "41921e2eb8c0cb28712b1666472a06eaa30d82024420cb1e3aad86bc3ce37508",
+      "url": "https://github.com/gtramontina/ooze/blob/87c15dcb180492ba96f30278efc0146dd248f09b/go.mod"
+    },
+    {
+      "path": "options.go",
+      "sha256": "d90784562eb86414e9cb92316abedf870eb415eb16917e7fcaf4c5678883321b",
+      "url": "https://github.com/gtramontina/ooze/blob/87c15dcb180492ba96f30278efc0146dd248f09b/options.go"
+    },
+    {
+      "path": "release.go",
+      "sha256": "f048bacbc899589fdd239e6270c7567be7a1be915cb433dcae5de48d5b879a30",
+      "url": "https://github.com/gtramontina/ooze/blob/87c15dcb180492ba96f30278efc0146dd248f09b/release.go"
+    },
+    {
+      "path": "internal/cmdtestrunner/cmdtestrunner.go",
+      "sha256": "b9a88bfec785d698eebf4c75f9f03538d283f03b29e0ad0fbc7f8f31f8878f7f",
+      "url": "https://github.com/gtramontina/ooze/blob/87c15dcb180492ba96f30278efc0146dd248f09b/internal/cmdtestrunner/cmdtestrunner.go"
+    },
+    {
+      "path": "internal/cmdtestrunner/process_tree_darwin.go",
+      "sha256": "82b8c757193d58b4c1ce4025b0f4efca5d1831aaec2d719fb6cb1c46ab3c08cc",
+      "url": "https://github.com/gtramontina/ooze/blob/87c15dcb180492ba96f30278efc0146dd248f09b/internal/cmdtestrunner/process_tree_darwin.go"
+    },
+    {
+      "path": "internal/fsrepository/fsrepository.go",
+      "sha256": "5308952986dbcaf3877c4aa6a1e7a5fec72f3a685b6baf068a469cbbfc6d4a2b",
+      "url": "https://github.com/gtramontina/ooze/blob/87c15dcb180492ba96f30278efc0146dd248f09b/internal/fsrepository/fsrepository.go"
+    },
+    {
+      "path": "internal/fsrepository/materialize_unix.go",
+      "sha256": "8ffcb0d49b44b4e1251b9a19ff1943574bac7fbb41b2481b7ab85cce6e87788b",
+      "url": "https://github.com/gtramontina/ooze/blob/87c15dcb180492ba96f30278efc0146dd248f09b/internal/fsrepository/materialize_unix.go"
+    },
+    {
+      "path": "internal/fsrepository/fstemporaryrepository.go",
+      "sha256": "b69037365da8dd9adab8e62c3b29edd59f7aa94879b5e2891d0c8517f18f96c9",
+      "url": "https://github.com/gtramontina/ooze/blob/87c15dcb180492ba96f30278efc0146dd248f09b/internal/fsrepository/fstemporaryrepository.go"
+    },
+    {
+      "path": "internal/gosourcefile/gosourcefile.go",
+      "sha256": "70e0ba5ed2a179f0e5c3679bf7fe045da12269969c9575f279996f25b7c6261a",
+      "url": "https://github.com/gtramontina/ooze/blob/87c15dcb180492ba96f30278efc0146dd248f09b/internal/gosourcefile/gosourcefile.go"
+    },
+    {
+      "path": "internal/consolereporter/consolereporter.go",
+      "sha256": "faf43179d8e0ff053b702c63612522ecc50b2cbf0c3056a65fa308a7df66b025",
+      "url": "https://github.com/gtramontina/ooze/blob/87c15dcb180492ba96f30278efc0146dd248f09b/internal/consolereporter/consolereporter.go"
+    },
+    {
+      "path": "internal/scorecalculator/scorecalculator.go",
+      "sha256": "d11397e7fda76d7741c02dead529d662524a087fa310d652762a2928fb362d69",
+      "url": "https://github.com/gtramontina/ooze/blob/87c15dcb180492ba96f30278efc0146dd248f09b/internal/scorecalculator/scorecalculator.go"
+    },
+    {
+      "path": "internal/testingtlaboratory/testingtlaboratory.go",
+      "sha256": "5a7d968993e6c6cf7f1017025f6b9c1c228efcf3d0fe064f8607dcc3e1e83644",
+      "url": "https://github.com/gtramontina/ooze/blob/87c15dcb180492ba96f30278efc0146dd248f09b/internal/testingtlaboratory/testingtlaboratory.go"
+    },
+    {
+      "path": "viruses/comparison/comparison.go",
+      "sha256": "21c2a10a5eb2fc8ec470c758bb47b188c8b2c1119f75d438cd1e3caaf1448d92",
+      "url": "https://github.com/gtramontina/ooze/blob/87c15dcb180492ba96f30278efc0146dd248f09b/viruses/comparison/comparison.go"
+    }
+  ]
+}

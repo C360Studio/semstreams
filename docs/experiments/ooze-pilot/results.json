@@ -1,0 +1,333 @@
+{
+  "accepted_run": "evidence-accepted",
+  "archive": {
+    "bytes": 1558995,
+    "exploratory_runs": [
+      "evidence",
+      "evidence-qualified",
+      "evidence-final"
+    ],
+    "file": "evidence.tar.gz",
+    "regular_files_verified_byte_for_byte": 821,
+    "sha256": "0c3e9a4ff2918ea56eb60406f146360bc3adef9e99d43cc294cd8a6f5bd577d7"
+  },
+  "controls": {
+    "cancellation": {
+      "intervention": "SIGINT to pilot test PID (ordinary cancellation probe)",
+      "live_group_members_after_harness_cleanup": 0,
+      "live_group_members_before_harness_cleanup": 2,
+      "returncode": -2,
+      "seconds": 0.312,
+      "source_unchanged": true,
+      "temporary_directories_after_harness_cleanup": 0,
+      "temporary_directories_before_harness_cleanup": 1
+    },
+    "command-exit": {
+      "intervention": null,
+      "live_group_members_after_harness_cleanup": 0,
+      "live_group_members_before_harness_cleanup": 0,
+      "returncode": 0,
+      "seconds": 0.351,
+      "source_unchanged": true,
+      "temporary_directories_after_harness_cleanup": 0,
+      "temporary_directories_before_harness_cleanup": 0
+    },
+    "discovery": {
+      "intervention": null,
+      "live_group_members_after_harness_cleanup": 0,
+      "live_group_members_before_harness_cleanup": 0,
+      "returncode": 0,
+      "seconds": 10.903,
+      "source_unchanged": true,
+      "temporary_directories_after_harness_cleanup": 0,
+      "temporary_directories_before_harness_cleanup": 0
+    },
+    "driver-interruption": {
+      "intervention": "SIGINT to Python pilot driver (finally-path calibration)",
+      "live_group_members_after_harness_cleanup": 0,
+      "live_group_members_before_harness_cleanup": 3,
+      "returncode": -9,
+      "seconds": 0.252,
+      "source_unchanged": true,
+      "temporary_directories_after_harness_cleanup": 0,
+      "temporary_directories_before_harness_cleanup": 1
+    },
+    "equivalent": {
+      "intervention": null,
+      "live_group_members_after_harness_cleanup": 0,
+      "live_group_members_before_harness_cleanup": 0,
+      "returncode": 0,
+      "seconds": 0.727,
+      "source_unchanged": true,
+      "temporary_directories_after_harness_cleanup": 0,
+      "temporary_directories_before_harness_cleanup": 0
+    },
+    "invalid-build": {
+      "intervention": null,
+      "live_group_members_after_harness_cleanup": 0,
+      "live_group_members_before_harness_cleanup": 0,
+      "returncode": 0,
+      "seconds": 0.485,
+      "source_unchanged": true,
+      "temporary_directories_after_harness_cleanup": 0,
+      "temporary_directories_before_harness_cleanup": 0
+    },
+    "missing-command": {
+      "intervention": null,
+      "live_group_members_after_harness_cleanup": 0,
+      "live_group_members_before_harness_cleanup": 0,
+      "returncode": 2,
+      "seconds": 0.227,
+      "source_unchanged": true,
+      "temporary_directories_after_harness_cleanup": 0,
+      "temporary_directories_before_harness_cleanup": 0
+    },
+    "negative": {
+      "intervention": null,
+      "live_group_members_after_harness_cleanup": 0,
+      "live_group_members_before_harness_cleanup": 0,
+      "returncode": 0,
+      "seconds": 1.781,
+      "source_unchanged": true,
+      "temporary_directories_after_harness_cleanup": 0,
+      "temporary_directories_before_harness_cleanup": 0
+    },
+    "normal-descendant-cleanup": {
+      "intervention": null,
+      "live_group_members_after_harness_cleanup": 0,
+      "live_group_members_before_harness_cleanup": 0,
+      "returncode": 0,
+      "seconds": 0.209,
+      "source_unchanged": true,
+      "temporary_directories_after_harness_cleanup": 0,
+      "temporary_directories_before_harness_cleanup": 0
+    },
+    "outer-deadline": {
+      "intervention": "outer deadline SIGKILL pilot process group",
+      "live_group_members_after_harness_cleanup": 0,
+      "live_group_members_before_harness_cleanup": 2,
+      "returncode": -9,
+      "seconds": 3.221,
+      "source_unchanged": true,
+      "temporary_directories_after_harness_cleanup": 0,
+      "temporary_directories_before_harness_cleanup": 1
+    },
+    "positive": {
+      "intervention": null,
+      "live_group_members_after_harness_cleanup": 0,
+      "live_group_members_before_harness_cleanup": 0,
+      "returncode": 0,
+      "seconds": 1.817,
+      "source_unchanged": true,
+      "temporary_directories_after_harness_cleanup": 0,
+      "temporary_directories_before_harness_cleanup": 0
+    },
+    "restored-coverage": {
+      "intervention": null,
+      "live_group_members_after_harness_cleanup": 0,
+      "live_group_members_before_harness_cleanup": 0,
+      "returncode": 0,
+      "seconds": 1.629,
+      "source_unchanged": true,
+      "temporary_directories_after_harness_cleanup": 0,
+      "temporary_directories_before_harness_cleanup": 0
+    },
+    "source-preservation": {
+      "intervention": null,
+      "live_group_members_after_harness_cleanup": 0,
+      "live_group_members_before_harness_cleanup": 0,
+      "returncode": 0,
+      "seconds": 0.759,
+      "source_unchanged": false,
+      "temporary_directories_after_harness_cleanup": 0,
+      "temporary_directories_before_harness_cleanup": 0
+    },
+    "test-timeout": {
+      "intervention": null,
+      "live_group_members_after_harness_cleanup": 0,
+      "live_group_members_before_harness_cleanup": 0,
+      "returncode": 0,
+      "seconds": 2.589,
+      "source_unchanged": true,
+      "temporary_directories_after_harness_cleanup": 0,
+      "temporary_directories_before_harness_cleanup": 0
+    },
+    "zero-mutations": {
+      "intervention": null,
+      "live_group_members_after_harness_cleanup": 0,
+      "live_group_members_before_harness_cleanup": 0,
+      "returncode": 1,
+      "seconds": 0.308,
+      "source_unchanged": true,
+      "temporary_directories_after_harness_cleanup": 0,
+      "temporary_directories_before_harness_cleanup": 0
+    },
+    "zero-tests": {
+      "intervention": null,
+      "live_group_members_after_harness_cleanup": 0,
+      "live_group_members_before_harness_cleanup": 0,
+      "returncode": 0,
+      "seconds": 1.246,
+      "source_unchanged": true,
+      "temporary_directories_after_harness_cleanup": 0,
+      "temporary_directories_before_harness_cleanup": 0
+    }
+  },
+  "copied_subject_integrity": {
+    "runtime_retained_for_inspection": "/var/folders/db/qk1n2zs935q9ld3p2sn98yzr0000gn/T/semstreams-ooze-pilot-ual8dkx7",
+    "source_files_match_initial": true,
+    "subject": "/var/folders/db/qk1n2zs935q9ld3p2sn98yzr0000gn/T/semstreams-ooze-pilot-ual8dkx7/subject"
+  },
+  "discovery": {
+    "evaluated": 10,
+    "generated": 10,
+    "inconclusive": 0,
+    "independently_detected": 10,
+    "invalid": 0,
+    "new_production_defects_or_missing_checks_found": 0,
+    "ooze_killed": 10,
+    "operator": "comparison",
+    "survivors": 0,
+    "target": "pkg/types/entity_id.go",
+    "unevaluated": 0
+  },
+  "go_version": "go version go1.26.4 darwin/arm64",
+  "manual_replay": [
+    {
+      "baseline": 0,
+      "candidate": "candidate-01",
+      "mutant": 1,
+      "restored": 0,
+      "source_restored": true
+    },
+    {
+      "baseline": 0,
+      "candidate": "candidate-02",
+      "mutant": 1,
+      "restored": 0,
+      "source_restored": true
+    },
+    {
+      "baseline": 0,
+      "candidate": "candidate-03",
+      "mutant": 1,
+      "restored": 0,
+      "source_restored": true
+    },
+    {
+      "baseline": 0,
+      "candidate": "candidate-04",
+      "mutant": 1,
+      "restored": 0,
+      "source_restored": true
+    },
+    {
+      "baseline": 0,
+      "candidate": "candidate-05",
+      "mutant": 1,
+      "restored": 0,
+      "source_restored": true
+    },
+    {
+      "baseline": 0,
+      "candidate": "candidate-06",
+      "mutant": 1,
+      "restored": 0,
+      "source_restored": true
+    },
+    {
+      "baseline": 0,
+      "candidate": "candidate-07",
+      "mutant": 1,
+      "restored": 0,
+      "source_restored": true
+    },
+    {
+      "baseline": 0,
+      "candidate": "candidate-08",
+      "mutant": 1,
+      "restored": 0,
+      "source_restored": true
+    },
+    {
+      "baseline": 0,
+      "candidate": "candidate-09",
+      "mutant": 1,
+      "restored": 0,
+      "source_restored": true
+    },
+    {
+      "baseline": 0,
+      "candidate": "candidate-10",
+      "mutant": 1,
+      "restored": 0,
+      "source_restored": true
+    }
+  ],
+  "runner_integrity": {
+    "source_after": {
+      "child.py": "b61c62e902423e1f5b30a47aab3851df49d590a068795c425b9ce3ee3ba840d8",
+      "harness/go.mod": "0344c918c0cd62181c416f60d34f8b07676fc9aa6e72d393b4471cf464324599",
+      "harness/go.sum": "d49c5d54ad8b42609fb7f8e3de340d58567be10a1d8b6a17d117f282cdb0d6d0",
+      "harness/pilot_test.go": "d3656a1d9b34f7096df1bfebaaeb202491b30b6053d8ac00b891271f7d666175",
+      "run.py": "2e8f5aeea8509737252cf234fc81df750299a350ef2adeb3503f8a640a8e12a6"
+    },
+    "source_before": {
+      "child.py": "b61c62e902423e1f5b30a47aab3851df49d590a068795c425b9ce3ee3ba840d8",
+      "harness/go.mod": "0344c918c0cd62181c416f60d34f8b07676fc9aa6e72d393b4471cf464324599",
+      "harness/go.sum": "d49c5d54ad8b42609fb7f8e3de340d58567be10a1d8b6a17d117f282cdb0d6d0",
+      "harness/pilot_test.go": "d3656a1d9b34f7096df1bfebaaeb202491b30b6053d8ac00b891271f7d666175",
+      "run.py": "2e8f5aeea8509737252cf234fc81df750299a350ef2adeb3503f8a640a8e12a6"
+    },
+    "source_unchanged_during_run": true
+  },
+  "source_base": "84fc01e46c104d890bffe32b0046e72f006df454",
+  "source_worktree_files_match_pinned_input": {
+    "go.mod": true,
+    "go.sum": true,
+    "pkg/errs/classified_is_test.go": true,
+    "pkg/errs/doc.go": true,
+    "pkg/errs/errs.go": true,
+    "pkg/errs/errs_test.go": true,
+    "pkg/errs/shutdown.go": true,
+    "pkg/errs/shutdown_test.go": true,
+    "pkg/retry/README.md": true,
+    "pkg/retry/doc.go": true,
+    "pkg/retry/retry.go": true,
+    "pkg/retry/retry_test.go": true,
+    "pkg/types/README.md": true,
+    "pkg/types/context.go": true,
+    "pkg/types/doc.go": true,
+    "pkg/types/entity_domain_authority.go": true,
+    "pkg/types/entity_domain_authority_test.go": true,
+    "pkg/types/entity_id.go": true,
+    "pkg/types/entity_id_authority.go": true,
+    "pkg/types/entity_id_authority_test.go": true,
+    "pkg/types/entity_id_contract_test.go": true,
+    "pkg/types/entity_id_prop_test.go": true,
+    "pkg/types/entity_id_semantics_test.go": true,
+    "pkg/types/entity_type.go": true,
+    "pkg/types/framework_identity_families.go": true,
+    "pkg/types/keyable.go": true,
+    "pkg/types/testdata/rapid/README.md": true,
+    "pkg/types/testdata/rapid/TestPropEntityIDByteBound/TestPropEntityIDByteBound-20260831140043-41866.fail": true,
+    "pkg/types/type.go": true,
+    "pkg/types/type_validate_test.go": true
+  },
+  "timing_limits": [
+    "warm caches; not a cold installation benchmark",
+    "single host and few runs; variation observed",
+    "human effort not independently timed; no established developer-time savings"
+  ],
+  "timings_seconds": {
+    "final_subject_race_baseline": 3.427,
+    "harness_build_cached": 1.351,
+    "harness_dependencies_cached": 0.284,
+    "manual_mutant_executions": 11.401,
+    "manual_with_baselines_and_restoration": 30.366,
+    "ooze_mutant_batch": 10.903,
+    "ooze_same_command_after": 0.825,
+    "ooze_same_command_before": 1.115,
+    "warm_baseline": 1.772
+  }
+}

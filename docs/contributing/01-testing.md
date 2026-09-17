@@ -46,8 +46,8 @@ Use the smallest combination that addresses the failure shape:
   empty cases, ordering, and repeated operations deliberately.
 - **Fuzzing:** explore inputs with a named behavioral assertion and retain useful cases. Freedom from crashes alone
   supports a narrower claim than grammar conformance. Distinguish corpus replay from exploratory execution.
-- **Targeted mutations:** when risk warrants it, introduce a plausible fault and check whether the relevant assertion
-  notices. Explain the choice or deferral; there is no per-change mutation quota.
+- **Targeted mutations:** apply the [mutation criteria](#when-targeted-mutation-evidence-is-required), introduce a
+  plausible fault, and check whether the relevant assertion notices. There is no per-change mutation quota.
 
 Address required acceptance and required rejection where applicable, including forbidden side effects. Self-consistency
 does not establish conformance: a parser can round-trip invalid inputs consistently, and a rejection check can pass
@@ -60,6 +60,34 @@ persistence, or API-to-UI behavior its environment does not exercise. Focused ex
 
 Use existing repository tools and declared commands. Tool adoption or new automated gates require a separately scoped
 change. This discipline does not select a mutation runner, require a library, or introduce a score threshold.
+
+### When Targeted Mutation Evidence Is Required
+
+For each material behavior change, record whether the following criteria apply in the existing issue, design, or
+PR record. Targeted mutation evidence is required when the change:
+
+- Changes enforcement of a consequential invariant whose violation could silently corrupt state, lose accepted
+  work, permit unauthorized behavior, or leave owned work running after shutdown.
+- Fixes a regression that the existing checks allowed to pass.
+- Has a concrete, plausible fault identified by the author or reviewer whose detection by the relevant assertions
+  remains uncertain.
+
+Name the applicable criterion, requirement, and fault; select the bounded experiment needed to address that risk.
+When none applies, a brief rationale is sufficient. Documentation-only changes do not trigger experiments merely
+because they describe testing. No particular mutation library, repository-wide scan, or score threshold is required.
+
+When a criterion applies, perform the controlled experiment below and preserve evidence that the baseline passed,
+the mutant compiled and reached the selected test, the intended assertion detected the violation, and the restored
+baseline passed. Include the mutation, commands, source snapshot, and observed results in the PR. Existing evidence
+can satisfy this requirement when it covers the same fault and reviewed source/checks; link it rather than repeating
+an experiment. A checkbox saying that mutation testing was done is insufficient.
+
+Record survivors and invalid or inconclusive outcomes explicitly; none establishes detection. If the experiment
+cannot be completed, record the constraint, unresolved risk, and proposed deferral. The reviewer must explicitly
+accept or reject the deferral with reasons; an unaccepted or rejected deferral leaves the evidence requirement unmet.
+An accepted deferral records remaining risk and does not establish detection. Required experiments and their evidence
+are part of the issue's acceptance and PR review, not a new CI gate. They establish sensitivity at the recorded
+revision and do not automatically detect later weakening of tests.
 
 ### Establish Sensitivity to a Selected Mutation
 
@@ -115,6 +143,11 @@ Read the cited requirement and ask whether an implementation could pass the chec
 is independent, generators reach relevant boundaries, and assertions observe required effects. Review survivors and
 decisions to defer mutation checks. A generator being able to reach a boundary does not ensure a particular run did;
 explicit boundary cases or retained witnesses provide dependable checks for those cases.
+
+Independently apply the [mutation criteria](#when-targeted-mutation-evidence-is-required); do not rely only on the
+issue author's selection. Where a criterion applies, require the controlled evidence or explicitly accept or reject
+a recorded deferral with reasons and its remaining risk. Missing applicability reasoning, an unaccepted deferral,
+or an unsupported detection claim is a finding.
 
 Distinguish measurements from judgments. Output can establish an observed assertion failure; whether it adequately
 challenges a requirement remains a review assessment. An equivalence argument or a reviewer finding no counterexample

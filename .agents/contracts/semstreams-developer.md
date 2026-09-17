@@ -260,6 +260,9 @@ PRs fell into the four classes below.
 
 Apply the canonical [testing discipline](../../docs/contributing/01-testing.md#testing-discipline) for the
 requirement/violation/observation record, independent checks, controlled mutation experiments, and evidence handoff.
+Apply its [mutation criteria](../../docs/contributing/01-testing.md#when-targeted-mutation-evidence-is-required)
+in the issue/design or PR record. When triggered, preserve the required baseline, valid mutant, intended assertion,
+and restored-baseline evidence; record unresolved outcomes or proposed deferrals explicitly.
 The SemStreams requirements below remain additional obligations.
 
 - Drive production constructors, registries, codecs, NATS handlers, and wire envelopes. Helper-only tests do not prove
