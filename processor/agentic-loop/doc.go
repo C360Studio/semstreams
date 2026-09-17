@@ -191,7 +191,7 @@
 //	    "max_iterations": 20,
 //	    "timeout": "120s",
 //	    "stream_name": "AGENT",
-//	    "loops_bucket": "AGENT_LOOPS",
+//	    "approval_timeout": "12h",
 //	    "trajectory_evidence_storage_instance": "objectstore",
 //	    "context": {
 //	        "enabled": true,
@@ -209,11 +209,16 @@
 //   - max_iterations: Maximum loop iterations before failure (default: 20, range: 1-1000)
 //   - timeout: Loop execution timeout as duration string (default: "120s")
 //   - stream_name: JetStream stream name for agentic messages (default: "AGENT")
-//   - loops_bucket: NATS KV bucket for loop state (default: "AGENT_LOOPS")
+//   - approval_timeout: Positive approval wait, at most 12h (default: "12h")
 //   - trajectory_evidence_storage_instance: Registered Store instance for full evidence (default: "objectstore")
 //   - consumer_name_suffix: Optional suffix for JetStream consumer names (for testing)
 //   - context: Context management configuration (see ContextConfig)
 //   - ports: Port configuration for inputs and outputs
+//
+// The loops KV-write output is the sole loop bucket declaration (default AGENT_LOOPS).
+// The removed top-level loops_bucket key fails configuration admission. Startup observes
+// History 10, TTL 24h and nonbinding MaxBytes before work. The 12h approval limit
+// provides nominal grace, not a recovery guarantee; replacement preserves retained deadlines.
 //
 // # Ports
 //
@@ -311,13 +316,7 @@
 //
 // Create and start the component:
 //
-//	config := agenticloop.Config{
-//	    MaxIterations:      20,
-//	    Timeout:            "120s",
-//	    StreamName:         "AGENT",
-//	    LoopsBucket: "AGENT_LOOPS",
-//	    Context:    agenticloop.DefaultContextConfig(),
-//	}
+//	config := agenticloop.DefaultConfig()
 //
 //	rawConfig, _ := json.Marshal(config)
 //	comp, err := agenticloop.NewComponent(rawConfig, deps)
