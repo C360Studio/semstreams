@@ -52,6 +52,8 @@ exceptions. Production structs do not retain contexts; continuing work derives f
 Apply the [testing discipline](../../../docs/contributing/01-testing.md#testing-discipline): identify the accepted
 requirement, plausible violation, independent expectation, and distinguishing observation before implementation.
 Preserve acceptance, rejection, forbidden-side-effect, and evidence-scope distinctions in the checks and handoff.
+Record the [PBT decision](../../../docs/contributing/01-testing.md#when-to-use-property-based-testing) for applicable
+invariants; use the [Rapid practice guide](../../../docs/contributing/09-property-testing.md) for implementation recipes.
 
 Use the [testing policy](../../../docs/contributing/01-testing.md) and the developer/reviewer contracts to choose
 the lowest sufficient tier. Observe the intended failing assertion before implementation. A constructor,

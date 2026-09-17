@@ -215,6 +215,9 @@ terminal event was silently dropped. No amount of caller care fixes a prediction
   the requirement or drop the claim. These stated invariants are the only admissible source when the developer
   writes a property or fuzz harness; a property authored later by reading the implementation reconstructs it and
   proves nothing.
+- Apply the testing policy's [PBT decision](../../docs/contributing/01-testing.md#when-to-use-property-based-testing)
+  to those invariants. Record the bounded property approach or why named examples/fuzz checks sufficiently exercise
+  the obligation; use the [Rapid guide](../../docs/contributing/09-property-testing.md) for existing patterns.
 - ADRs record genuine decisions — irreversible choices and cross-repo contracts, the why. Mechanics live in the
   capability's spec. Do not draft "how it works" as an ADR.
 - Respect the pre-v1 fresh-state policy: breaking identity/index adoption starts downstreams on

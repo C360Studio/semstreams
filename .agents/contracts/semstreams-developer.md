@@ -263,6 +263,8 @@ requirement/violation/observation record, independent checks, controlled mutatio
 Apply its [mutation criteria](../../docs/contributing/01-testing.md#when-targeted-mutation-evidence-is-required)
 in the issue/design or PR record. When triggered, preserve the required baseline, valid mutant, intended assertion,
 and restored-baseline evidence; record unresolved outcomes or proposed deferrals explicitly.
+Apply the [PBT decision](../../docs/contributing/01-testing.md#when-to-use-property-based-testing) before writing checks;
+use the [Rapid guide](../../docs/contributing/09-property-testing.md) for generators, state models, budgets, and replay.
 The SemStreams requirements below remain additional obligations.
 
 - Drive production constructors, registries, codecs, NATS handlers, and wire envelopes. Helper-only tests do not prove
