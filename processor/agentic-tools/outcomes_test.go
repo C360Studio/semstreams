@@ -289,6 +289,66 @@ func TestHandleToolCallPermanentDispositionTable(t *testing.T) {
 	})
 }
 
+func TestHandleToolDeliveryDecisionMatrix(t *testing.T) {
+	wire := func(t *testing.T, call agentic.ToolCall) []byte {
+		base := message.NewBaseMessage(call.Schema(), &call, "test")
+		data, err := json.Marshal(base)
+		require.NoError(t, err)
+		return data
+	}
+
+	t.Run("immutable poison terminates", func(t *testing.T) {
+		component := &Component{decoder: payloadbuiltins.NewTestDecoder(t), logger: slog.Default()}
+		decision, err := component.handleToolDelivery(t.Context(), []byte("not-json"))
+		require.Equal(t, natsclient.DeliveryDecisionTerminate, decision)
+		var permanent *natsclient.PermanentDeliveryError
+		require.ErrorAs(t, err, &permanent)
+	})
+
+	t.Run("proven pre-effect read failure retries", func(t *testing.T) {
+		component := &Component{
+			config: DefaultConfig(), registry: NewExecutorRegistry(), decoder: payloadbuiltins.NewTestDecoder(t),
+			logger: slog.Default(), outcomes: &memoryOutcomeStore{values: make(map[string][]byte), getErr: errors.New("read unavailable")},
+		}
+		decision, err := component.handleToolDelivery(t.Context(), wire(t, agentic.ToolCall{ID: "read", Name: "count"}))
+		require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
+		require.Error(t, err)
+	})
+
+	t.Run("post-effect create ambiguity quarantines", func(t *testing.T) {
+		executor := &countingExecutor{}
+		component := &Component{
+			config: DefaultConfig(), registry: NewExecutorRegistry(), decoder: payloadbuiltins.NewTestDecoder(t),
+			logger: slog.Default(), outcomes: &memoryOutcomeStore{values: make(map[string][]byte), createErr: errors.New("create unknown")},
+		}
+		require.NoError(t, component.registry.RegisterTool("count", executor))
+		decision, err := component.handleToolDelivery(t.Context(), wire(t, agentic.ToolCall{ID: "effect", Name: "count"}))
+		require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
+		require.True(t, isAmbiguousOutcomeCreateError(err))
+		require.Equal(t, int32(1), executor.calls.Load())
+	})
+
+	t.Run("completed replay publication retries without effect", func(t *testing.T) {
+		executor := &countingExecutor{}
+		store := &memoryOutcomeStore{values: make(map[string][]byte)}
+		component := &Component{
+			config: DefaultConfig(), registry: NewExecutorRegistry(), decoder: payloadbuiltins.NewTestDecoder(t),
+			logger: slog.Default(), outcomes: store,
+		}
+		require.NoError(t, component.registry.RegisterTool("count", executor))
+		component.publishStream = func(context.Context, string, []byte, string) error { return nil }
+		data := wire(t, agentic.ToolCall{ID: "replay", Name: "count"})
+		decision, err := component.handleToolDelivery(t.Context(), data)
+		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+		require.NoError(t, err)
+		component.publishStream = func(context.Context, string, []byte, string) error { return errors.New("no puback") }
+		decision, err = component.handleToolDelivery(t.Context(), data)
+		require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
+		require.Error(t, err)
+		require.Equal(t, int32(1), executor.calls.Load())
+	})
+}
+
 func TestToolCallOutcomeIdentityV1(t *testing.T) {
 	call := agentic.ToolCall{
 		ID: "call-123", Name: "lookup", LoopID: "loop-1", TraceID: "trace-1", ApprovedBy: "operator",
