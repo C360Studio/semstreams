@@ -82,13 +82,25 @@
       deleted `semstreams_router_active_loops` gauge. The unreachable `loopLookupConflict` vocabulary is a declared
       residual in `design.md`, not deleted, because removing it edits the generated OpenAPI surface
 
+- [x] 6.7 Mutation evidence for the three behavioural fixes (`cp` backup + `md5 -q` verified restore, no stash,
+      no checkout; `loop_admission.go` baseline `02a9323a…`, `http.go` baseline `62db2148…`, both restored and
+      `git status --porcelain` empty afterwards):
+
+      | mutation | test that dies |
+      |---|---|
+      | drop `Iterations`/`MaxIterations`/`StartedAt` from `persistedLoopFacts` | `TestStatusReportsIterationProgressAndAgeFromTheRecord/a_record_with_a_start_time_reports_both` — `loop_seams_test.go:770` does not contain `Iterations: 7/19`, `:772` does not contain `Age: 1m30s` |
+      | restore the pending-block-before-state ordering in `handleLoopApproval` | `TestHandleLoopApproval_CurrentAuthority` executing / cancelled / failed — `approval_handler_test.go:107`, 503 `"loop record is not readable right now"` where 409 is required |
+      | return `err.Error()` on the `GET /loops` refusal again | `TestUnavailableLoopViewAnswersWithoutFrameworkInternals/GET_/loops` — `loop_seams_test.go:875` should not contain `Component.currentLoopSnapshot`, `:877` should not contain `failed:` |
+
 ## 5. Gates
 
-- [ ] 5.1 `task lint`, `task test`, `task schema:generate` with no drift, `task openspec:validate`,
-      `task spec:properties`
-- [ ] 5.2 `task check:push`
-- [ ] 5.3 `task e2e:agentic` on the final head — required, both commits are BREAKING. Exit 0,
-      `assertions_run=15`, `duration=2m4.80s`, all 17 stages green including
-      `verify-stage-a-process-replacement` (78.6s, `dispatch_replacement_user_responses:1`) and
-      `walk-approval-path` (`approval_listing_matched:2`)
+- [x] 5.1 Re-run on the round-1 head: `task lint` 0, `task openspec:validate` 0 (57 passed, 0 failed),
+      `task spec:properties` 0 (213/213 citations resolve),
+      `go test -race -count=1 ./processor/agentic-dispatch/... ./processor/agentic-loop/...` 0 (five packages `ok`,
+      no `FAIL`). `task schema:generate` with no drift is covered inside `check:push` by `schema:check-changes`
+- [x] 5.2 `task check:push` 0 on the round-1 head: zero `FAIL` lines, 312 `ok`, `[INTEGRATION] tests complete`
+- [x] 5.3 `task e2e:agentic` on the final head — required, both commits are BREAKING. Exit 0,
+      `assertions_run=15`, `duration=2m4.752573667s`, all 17 stages green including
+      `verify-stage-a-process-replacement` (78.679s, `dispatch_replacement_user_responses:1`),
+      `verify-durable-tool-replay` (44.652s) and `walk-approval-path` (`approval_listing_matched:2`)
 - [ ] 5.4 Implementation review resolved; stack rebased onto the reviewed L1 head; archive as the final content commit
