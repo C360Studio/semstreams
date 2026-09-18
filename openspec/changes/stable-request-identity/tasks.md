@@ -54,7 +54,7 @@
 
 ## 5. Gates
 
-- [ ] 5.1 `task lint`, `task test`, `task schema:generate` with no drift, `task openspec:validate`,
-      `task spec:properties`
-- [ ] 5.2 `task check:push`
+- [x] 5.1 `task lint` 0, `task schema:generate` with no drift, `task openspec:validate` 0 (56/56),
+      `task spec:properties` 0 (176/176), `go test -race ./processor/agentic-tools/... ./processor/agentic-loop/...` 0
+- [x] 5.2 `task check:push` 0, zero FAIL lines, 310 `ok`
 - [ ] 5.3 Implementation review resolved; archive as the final content commit
