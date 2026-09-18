@@ -509,8 +509,15 @@ func (d *enforceDispatcher) HandleVerdict(decision, callID string, data []byte) 
 		if d.metrics != nil {
 			d.metrics.RecordGovernanceVerdictMissingWaiter()
 		}
-		// Decision deliberately unset: the caller classifies. Returning
-		// Retry here made a documented-normal input a hot redelivery loop.
+		// Quarantine is the fail-closed placeholder, not an "unset"
+		// decision: it is the most severe decision in the vocabulary, and
+		// a caller that settled it directly would latch owner-fatal health
+		// and drain the lane on a documented-normal input. It is paired
+		// with ErrNoGovernanceWaiter precisely so the caller must notice —
+		// handleToolCallVerdictMessage checks the sentinel and replaces
+		// this decision with one taken from the loop record. The previous
+		// Retry was worse: it made the same normal input a hot redelivery
+		// loop that no record could ever end.
 		return natsclient.DeliveryDecisionQuarantine,
 			fmt.Errorf("%w for call_id %q", ErrNoGovernanceWaiter, callID)
 	}
