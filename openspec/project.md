@@ -25,6 +25,17 @@ Standards interest, sponsor interest, an in-repo example, or first-party authors
 is not sufficient. See ADR-075. Unwired-in-the-framework does not mean broken;
 classify framework responsibility before building.
 
+Why the graph holds everything, including agent runs: every step an agent takes
+is recorded as graph entities with its evidence in ObjectStore, because an
+agentic harness you cannot audit is the black hole this substrate exists to
+close: a transcript at best, nothing verifiable, and no answer to "what did that
+tool actually return". Agent execution evidence is a **first-class capability,
+not trace exhaust**. SemStreams runs the loops, so it owns the audit primitives;
+how they are consumed belongs to the product above. Evidence is not regenerable,
+so expiry is never its reclamation mechanism (ADR-068). Indexing profiles decide
+what gets **embedded** (ADR-054), which is not the same question as what gets
+**retained**.
+
 ## Product Boundary
 
 - **SemStreams provides** the graph substrate: the KV-twofer and NATS/KV

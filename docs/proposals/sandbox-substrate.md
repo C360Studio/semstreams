@@ -496,5 +496,5 @@ Both call `pkg/sandbox.Manager` and `pkg/testevidence.Manager`; both compose pol
 - ADR-049 (Lifecycle Prime substrate) — `docs/adr/049-lifecycle-prime.md`
 - ADR-048 (BoundedDispatcher substrate primitive) — `docs/adr/048-bounded-dispatcher-and-triples-substrate.md`
 - `workflow-primitives-decision.md` — the prior framework-vs-product layering exercise this proposal extends
-- CLAUDE.md § Orchestration Boundaries — the substrate-not-engine discipline
+- `docs/concepts/14-orchestration-layers.md` and the `orchestration-check` skill — the substrate-not-engine discipline
 - Gemini design review (2026-05-31, surfaced the sandbox↔testevidence split that this revision folds in)

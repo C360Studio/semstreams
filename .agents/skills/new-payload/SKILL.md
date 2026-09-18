@@ -157,7 +157,7 @@ each binary's own composition root instead — see `cmd/e2e-semstreams/main.go`'
 semdragon) call `payloadbuiltins.Register(reg)` and layer their own `reg.Register(...)` calls on top.
 
 **A type registered in one binary but not another silently half-migrates the deployment** — see the
-beta.18 case study in `CLAUDE.md`/`AGENTS.md` ("Breaking changes — E2E required before merge"). Check
+beta.18 case study in `docs/contributing/02-e2e-tests.md` § Breaking Changes Require an E2E Tier Before Merge. Check
 every binary explicitly (Step 7).
 
 ## Step 5: Write a production-decoder round-trip test

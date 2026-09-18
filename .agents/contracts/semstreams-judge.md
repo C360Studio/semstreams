@@ -65,7 +65,7 @@ Defects are *prevented* by trigger 1, before the code exists.
 3. Verify what you rely on: each pin you lean on, open the range (`sed -n a,bp`); each structural claim, one `gopls`
    call. Anything not verified is labeled UNVERIFIED in the answer, never quietly leaned on.
 4. Build the strongest case for each side before choosing. Apply the house rules that bind the question: the adopter
-   seam (`CLAUDE.md` § The adopter seam rule — prefer observation to prediction), the product boundary, the governing
+   seam (`.agents/contracts/semstreams-architect.md` § The adopter seam inventory — prefer observation to prediction), the product boundary, the governing
    ADR where one exists, the guarantee and revision contracts in the reviewer contract.
 5. Answer in the format below.
 
