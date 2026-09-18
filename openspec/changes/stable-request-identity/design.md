@@ -49,10 +49,23 @@ proves the guarantee with no window in play; the window test is the bonus.
 - **A continuation admitted while a request is in flight reuses that request's name.** `attachContinuation`
   refuses a terminal loop, a loop with pending tools, and a loop awaiting approval, but not a loop whose model
   request is outstanding — and both requests sit at the same `Iterations`. Inside the duplicate window the
-  continuation's publish is rejected; outside it, agentic-model answers from the retained response. Either way the
-  continuation's added turn is not lost: it is in the loop's context manager and rides the next iteration's
-  request. The consequence is a deferred turn, not a dropped one, and it replaces today's shape, which is two
-  concurrent provider calls answering one loop. Making the outstanding request's identity durable is L4's.
+  continuation's publish is rejected. Outside it there is nothing retained to answer from — the first request has
+  not returned — so the provider is called twice, which is what happens today and is not made worse. Either way
+  the continuation's added turn is not lost: it is in the loop's context manager and rides the next iteration's
+  request, so the consequence is a deferred turn and not a dropped one. Making the outstanding request's identity
+  durable is L4's.
+
+## Declared deviations from the brief
+
+- **No exported `<iteration>:<retry>` parse helper.** The brief asked for one; nothing in this tree or any sister
+  parses a RequestID suffix, and the framework's own `ExtractLoopIDFromRequest` splits on the first colon and never
+  looks past it. An exported parser with zero consumers is phantom surface, and the durable input a parser would
+  serve — recovering the retry ordinal after a replacement — is L4's `LoopEntity.PublishedRequestID`, which carries
+  the whole previous RequestID rather than requiring the suffix be re-derived. The grammar is documented in the
+  migration note for the only consumer class that exists: a log or index that must treat the suffix as opaque.
+- **`GenerateRequestID` derives both ordinals instead of taking them from its callers.** Recorded in full in the PR
+  body; the short reason is that the three call sites' locals disagree — `handleToolsComplete`'s post-increment
+  `newIteration` is 1 for the *second* request — so only manager-held state is injective across all three.
 
 ## Declared cost
 

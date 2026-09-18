@@ -160,9 +160,15 @@ func (v VerdictPayload) effectiveExecutionID() string {
 	return ""
 }
 
-// EffectiveCallID returns the routing call_id from the payload,
+// EffectiveCallID returns the provider call_id from the payload,
 // preferring the top-level CallID (approve-action shape) and falling
 // back to Properties["call_id"] (publish-action shape).
+//
+// It is no longer the routing key: verdicts demux on the framework
+// execution identity (effectiveExecutionID), and the call_id is
+// conversation context an audit consumer may want. Retained because the
+// payload still carries the field in both shapes and reading it should
+// not mean writing the fall-through twice.
 func (v VerdictPayload) EffectiveCallID() string {
 	if v.CallID != "" {
 		return v.CallID
