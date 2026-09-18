@@ -2210,8 +2210,12 @@ func (c *Component) publishResults(ctx context.Context, result HandlerResult) er
 		return nil
 	}
 	for _, msg := range result.PublishedMessages {
-		// Use JetStream for publishing to ensure delivery
-		if err := c.natsClient.PublishToStream(ctx, msg.Subject, msg.Data); err != nil {
+		// Use JetStream for publishing to ensure delivery. A message that
+		// carries a MsgID publishes through the Nats-Msg-Id path so the server
+		// rejects a duplicate of the same logical message inside the stream's
+		// Duplicates window (owner ruling Q5 on #1330). An empty MsgID is a
+		// drop-in for PublishToStream.
+		if err := c.natsClient.PublishToStreamWithMsgID(ctx, msg.Subject, msg.Data, msg.MsgID); err != nil {
 			return fmt.Errorf("publish result %s: %w", msg.Subject, err)
 		}
 	}

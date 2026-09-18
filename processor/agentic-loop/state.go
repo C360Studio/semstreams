@@ -1125,11 +1125,43 @@ func (m *LoopManager) SetMetadata(loopID string, metadata map[string]any) error 
 	return nil
 }
 
-// GenerateRequestID creates a structured request ID that embeds the loop ID.
-// Format: loopID:req:UUID
-// This allows recovery of loop ID from request ID if in-memory maps are lost.
+// GenerateRequestID mints the deterministic identity of a logical model
+// request. Format: loopID:req:iteration:retry (owner ruling Q4 on #1330,
+// 2026-09-18; scope amendment on #1328).
+//
+// The loopID:req: prefix is unchanged, so ExtractLoopIDFromRequest and every
+// agent.response.<requestID> subject keep working; only the suffix shape moved
+// from a UUID to the two ordinals that name the work.
+//
+//   - iteration is the 1-based ordinal of the request within the loop:
+//     LoopEntity.Iterations at mint time plus one. The first request of a loop
+//     is :1:0; handleToolsComplete increments Iterations before it mints, so
+//     the request that follows a tool batch takes the next ordinal. A loop this
+//     manager does not know has not iterated, so its ordinal is 1.
+//   - retry is the within-iteration truncation-retry ordinal, read from the
+//     same process-local counter IncrementTruncationRetry advances and
+//     ResetTruncationRetry clears. A compaction retry of iteration N is :N:1.
+//
+// Both inputs are facts this manager already holds, so no caller computes them
+// and no caller can disagree with the state the loop is actually in. The
+// determinism is what lets a redelivered task or tool batch republish the same
+// request: agentic-model answers it from the retained response instead of
+// calling the provider a second time, and the Nats-Msg-Id stamped from this ID
+// lets the server reject the duplicate outright inside its window.
+//
+// Residual, declared: the retry ordinal is process-local. After a process
+// replacement mid-iteration the counter is zero, so a retry minted by the
+// replacement reads :N:0 rather than :N:1. Deriving it durably is L4's
+// (#1330, LoopEntity.PublishedRequestID).
 func (m *LoopManager) GenerateRequestID(loopID string) string {
-	return fmt.Sprintf("%s:req:%s", loopID, uuid.NewString())
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	iteration := 1
+	if entity, exists := m.loops[loopID]; exists {
+		iteration = entity.Iterations + 1
+	}
+	return fmt.Sprintf("%s:req:%d:%d", loopID, iteration, m.truncationRetryAttempts[loopID])
 }
 
 // GenerateToolCallID creates a structured tool call ID that embeds the loop ID.

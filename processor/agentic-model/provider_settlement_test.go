@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -52,8 +54,26 @@ func providerSettlementComponent(t *testing.T, reader retainedResponseEvidenceRe
 	return &Component{
 		config:           DefaultConfig(),
 		decoder:          payloadbuiltins.NewTestDecoder(t),
+		logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		responseEvidence: reader,
 	}
+}
+
+// spec: agentic-model / Request delivery settles only on its own response
+//
+// An undecodable request names no RequestID, so no response can be addressed to
+// it and no redelivery can decode it either. The only honest settlement is
+// Terminate with the classified error, never a log-and-Ack, and the retained
+// lookup never runs because there is nothing to correlate.
+func TestUnparseableRequestTerminatesWithoutRetainedLookup(t *testing.T) {
+	reader := &stubRetainedResponseReader{}
+	c := providerSettlementComponent(t, reader)
+
+	decision, err := c.handleRequest(t.Context(), []byte("not a message envelope"))
+
+	require.Error(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionTerminate, decision)
+	require.Zero(t, reader.calls, "a request that cannot be parsed has no identity to look up")
 }
 
 // spec: agentic-model / Model request settlement is bound to a durable response

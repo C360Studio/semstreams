@@ -47,6 +47,12 @@ type TaskMessage = agentic.TaskMessage
 type PublishedMessage struct {
 	Subject string
 	Data    []byte
+	// MsgID, when non-empty, is stamped as the Nats-Msg-Id header so the
+	// server rejects a duplicate of this logical message inside the stream's
+	// Duplicates window (owner ruling Q5 on #1330). Every agent.request
+	// carries its deterministic RequestID here; an empty MsgID publishes
+	// exactly as before.
+	MsgID string
 }
 
 // HandlerResult contains the results of a handler operation
@@ -1086,6 +1092,7 @@ func (h *MessageHandler) buildTaskRequest(loopID string, task TaskMessage, entit
 			{
 				Subject: requestSubject,
 				Data:    requestData,
+				MsgID:   request.RequestID,
 			},
 			{
 				Subject: createdSubject,
@@ -1935,6 +1942,7 @@ func (h *MessageHandler) emitRetryRequest(ctx context.Context, loopID string, en
 	result.PublishedMessages = append(result.PublishedMessages, PublishedMessage{
 		Subject: requestSubject,
 		Data:    requestData,
+		MsgID:   request.RequestID,
 	})
 	appendTrajectoryObservation(result, trajectoryObservation{
 		LoopID:            loopID,
@@ -2609,6 +2617,7 @@ func (h *MessageHandler) handleToolsComplete(
 	result.PublishedMessages = append(result.PublishedMessages, PublishedMessage{
 		Subject: requestSubject,
 		Data:    requestData,
+		MsgID:   request.RequestID,
 	})
 	appendTrajectoryObservation(result, trajectoryObservation{
 		LoopID:            loopID,

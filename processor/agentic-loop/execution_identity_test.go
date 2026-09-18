@@ -7,27 +7,83 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/natsclient"
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
-// spec: agentic-model / Model request settlement is bound to a durable response
-func TestRequestIDsDistinguishLogicalProviderWork(t *testing.T) {
+// spec: stable-request-identity / A logical model request has one deterministic identity
+//
+// (a) of the #1328 scope amendment: the same logical request minted twice
+// yields the same ID, and a request at a different iteration does not.
+func TestRequestIDIsDeterministicPerIteration(t *testing.T) {
 	manager := NewLoopManager()
-	loopID := uuid.NewString()
+	loopID, err := manager.CreateLoop("task-determinism", "role", "model", 5)
+	require.NoError(t, err)
 
 	first := manager.GenerateRequestID(loopID)
-	second := manager.GenerateRequestID(loopID)
+	redelivered := manager.GenerateRequestID(loopID)
+	require.Equal(t, first, redelivered,
+		"a redelivered task republishes the same logical request, so its ID must not move")
+	require.Equal(t, loopID+":req:1:0", first,
+		"the first request of a loop is iteration 1, retry 0")
 
-	require.NotEqual(t, first, second)
-	require.Equal(t, loopID, manager.ExtractLoopIDFromRequest(first))
-	require.Equal(t, loopID, manager.ExtractLoopIDFromRequest(second))
-	for _, requestID := range []string{first, second} {
-		suffix := strings.TrimPrefix(requestID, loopID+":req:")
-		_, err := uuid.Parse(suffix)
-		require.NoError(t, err, "RequestID must retain a full collision-resistant request token")
-	}
+	require.NoError(t, manager.IncrementIteration(loopID))
+	second := manager.GenerateRequestID(loopID)
+	require.Equal(t, loopID+":req:2:0", second)
+	require.NotEqual(t, first, second,
+		"a different iteration is different logical work and must not reuse an identity")
+}
+
+// spec: stable-request-identity / A logical model request has one deterministic identity
+//
+// (b) of the #1328 scope amendment: a truncation retry of iteration N is :N:1,
+// and forward progress clears the ordinal back to 0.
+func TestRequestIDCarriesTheTruncationRetryOrdinal(t *testing.T) {
+	manager := NewLoopManager()
+	loopID, err := manager.CreateLoop("task-retry", "role", "model", 5)
+	require.NoError(t, err)
+	require.NoError(t, manager.IncrementIteration(loopID))
+	require.NoError(t, manager.IncrementIteration(loopID))
+
+	require.Equal(t, loopID+":req:3:0", manager.GenerateRequestID(loopID))
+
+	require.Equal(t, 1, manager.IncrementTruncationRetry(loopID))
+	require.Equal(t, loopID+":req:3:1", manager.GenerateRequestID(loopID),
+		"the compaction retry is within-iteration recovery: same iteration, next retry ordinal")
+
+	manager.ResetTruncationRetry(loopID)
+	require.Equal(t, loopID+":req:3:0", manager.GenerateRequestID(loopID),
+		"forward progress clears the retry ordinal")
+}
+
+// spec: stable-request-identity / A logical model request has one deterministic identity
+//
+// (c) of the #1328 scope amendment: the loopID:req: prefix is unchanged, so
+// loop extraction and the agent.response.<requestID> subject both still
+// resolve. semspec splits a RequestID on its FIRST colon; the suffix shape is
+// free, the prefix is the contract.
+func TestRequestIDKeepsTheLoopPrefixAndSubjectGrammar(t *testing.T) {
+	manager := NewLoopManager()
+	loopID, err := manager.CreateLoop("task-grammar", "role", "model", 5)
+	require.NoError(t, err)
+	requestID := manager.GenerateRequestID(loopID)
+
+	require.True(t, strings.HasPrefix(requestID, loopID+":req:"))
+	require.Equal(t, loopID, manager.ExtractLoopIDFromRequest(requestID))
+	require.Equal(t, loopID, strings.SplitN(requestID, ":", 2)[0],
+		"a consumer that splits on the first colon still recovers the loop token")
+	require.NotContains(t, requestID, ".",
+		"a RequestID is one NATS subject token, so it may not contain a dot")
+
+	subject, err := component.ResolveSubject(
+		[]component.PortDefinition{{
+			Name:   "agent.response",
+			Config: component.JetStreamPort{Subjects: []string{"agent.response.*"}, StreamName: "AGENT"},
+		}},
+		"agent.response", requestID)
+	require.NoError(t, err)
+	require.Equal(t, "agent.response."+requestID, subject)
 }
 
 // spec: agentic-loop / Tool execution has stable framework correlation
