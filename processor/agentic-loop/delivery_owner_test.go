@@ -27,6 +27,7 @@ type loopDeliveryOwnerMsg struct {
 	settlement  atomic.Int32
 	acks        atomic.Int32
 	naks        atomic.Int32
+	nakDelays   atomic.Int32
 	terms       atomic.Int32
 	metadata    atomic.Int32
 	metadataErr error
@@ -48,6 +49,7 @@ func (*loopDeliveryOwnerMsg) DoubleAck(context.Context) error { return nil }
 func (m *loopDeliveryOwnerMsg) Nak() error                    { m.naks.Add(1); m.settlement.Add(1); return nil }
 func (m *loopDeliveryOwnerMsg) NakWithDelay(time.Duration) error {
 	m.naks.Add(1)
+	m.nakDelays.Add(1)
 	m.settlement.Add(1)
 	return nil
 }
