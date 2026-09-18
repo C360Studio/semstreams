@@ -93,16 +93,32 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       ADR-049, the void-returning graph writers, agentic-model's absent panic wrapper, and the four-way duplication
       of the delivery-owner trio.
 
-## 7. Gates
+## 7. Review round 2
 
-- [x] 7.1 `task lint`, `task test`, `task schema:generate` with empty `schemas/`/`specs/` drift,
+- [x] 7.1 MODIFY `jetstream-consumer-policy`'s *shared settlement remains stateless and heartbeat-specific* so the
+      archived truth matches the exported surface, restating its existing scenario verbatim; record in `design.md`
+      (D8) that the block targets L0's delta text and why the stacking order makes that safe.
+- [x] 7.2 Delete the unreachable `maxDeliver == 0` floor and correct the withdrawn "0 = unlimited" premise in the
+      production doc comment, `proposal.md` and the test's own comment: `component.GetConsumerConfig` defaults
+      MaxDeliver to 3, so the missing piece was the schedule, not the ceiling.
+- [x] 7.3 Observe the delayed NAK at the call site, not only in the primitive:
+      `TestNonHeartbeatLaneRetrySettlesAsADelayedNak`.
+- [x] 7.4 Observe the publish-phase fatal classification and the arm ORDER without a broker:
+      `TestPublishPhaseFailureLeavesPersistHandlerResultFatalClassified`,
+      `TestHeartbeatWorkMapsFatalToQuarantineAheadOfPermanentAndRetry`.
+- [x] 7.5 Correct the missing-waiter branch's "decision deliberately unset" comment: it returns Quarantine, the
+      most severe decision, and is safe only because its one caller checks `ErrNoGovernanceWaiter`.
+
+## 8. Gates
+
+- [x] 8.1 `task lint`, `task test`, `task schema:generate` with empty `schemas/`/`specs/` drift,
       `task openspec:validate`, `task spec:properties`, `task check:push` — commands and exit codes recorded in
       the PR body.
-- [x] 7.2 Run `task e2e:agentic` on the landing head and record every stage's pass/fail verbatim in the PR body,
+- [x] 8.2 Run `task e2e:agentic` on the landing head and record every stage's pass/fail verbatim in the PR body,
       including the process-replacement recovery stages this layer does not implement.
 
-## 8. Landing
+## 9. Landing
 
-- [ ] 8.1 Complete SemStreams implementation review and resolve findings.
-- [ ] 8.2 Archive this change (`openspec archive settle-after-durable-effect`) as the final content commit and
+- [ ] 9.1 Complete SemStreams implementation review and resolve findings.
+- [ ] 9.2 Archive this change (`openspec archive settle-after-durable-effect`) as the final content commit and
       obtain the narrow reviewer check of the archive/spec sync.
