@@ -15,12 +15,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// L1 made Retry the default classification for every unclassified error on the
-// four non-heartbeat lanes. Those lanes shipped with no consumer config at
-// all, and MaxDeliver 0 means unlimited (natsclient/stream.go:37), while
-// SettleDelivery's Retry is a bare Nak. Every transient error was therefore an
-// unbounded, undelayed redelivery loop. This drives the production setup path
-// and reads the consumer it actually acquires.
+// This change made Retry the default classification for every unclassified
+// error on the four non-heartbeat lanes. Those lanes shipped with no consumer
+// config at all, so they had no BackOff, and SettleDelivery's Retry is a bare
+// Nak: every transient error was redelivered at line rate until
+// component.GetConsumerConfig's default MaxDeliver of 3 burned through. The
+// missing piece was the schedule, not the ceiling. This drives the production
+// setup path and reads the consumer it actually acquires.
 //
 // spec: agentic-loop / Long-running loop heartbeat policy is valid before acquisition
 func TestNonHeartbeatLanesAcquireABoundedConsumer(t *testing.T) {
@@ -59,6 +60,45 @@ func TestNonHeartbeatLanesAcquireABoundedConsumer(t *testing.T) {
 				"the floor the heartbeat lanes are held to applies here too")
 		})
 	}
+}
+
+// The acquisition config is only half the bound. The other half is the
+// settlement call the lane's own installed callback makes, and swapping it
+// back to the bare SettleDelivery left every test green — the primitive's test
+// below drives natsclient directly and never observes the wiring. This drives
+// the production setup path, keeps the callback it installs, and pushes one
+// Retry-classified message through it.
+//
+// spec: agentic-loop / Long-running loop heartbeat policy is valid before acquisition
+func TestNonHeartbeatLaneRetrySettlesAsADelayedNak(t *testing.T) {
+	t.Parallel()
+
+	var installed func(context.Context, jetstream.Msg)
+	c := &Component{
+		config: DefaultConfig(), logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		waitForStreamInput: func(context.Context, string) error { return nil },
+		consumeStream: func(_ context.Context, _ context.Context, _ natsclient.PortConsumerContext, _ natsclient.StreamConsumerConfig, handler func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
+			installed = handler
+			return &loopPolicyHandle{closed: make(chan struct{})}, nil
+		},
+	}
+
+	require.NoError(t, c.setupConsumer(
+		t.Context(), t.Context(), shippedLoopPort(t, "agent.signal"), "agent.signal.>",
+		func(context.Context, []byte) error { return nil },
+		func(context.Context, []byte) (natsclient.DeliveryDecision, error) {
+			return natsclient.DeliveryDecisionRetry, errors.New("not yet")
+		},
+	))
+	require.NotNil(t, installed, "setup must install a callback on the non-heartbeat lane")
+
+	msg := &loopDeliveryOwnerMsg{data: []byte("{}")}
+	installed(t.Context(), msg)
+
+	require.Equal(t, int32(1), msg.naks.Load(), "a Retry classification must negatively acknowledge")
+	require.Equal(t, int32(1), msg.nakDelays.Load(),
+		"the lane must settle through the delayed retry policy, not the bare Nak SettleDelivery defaults to")
+	require.Zero(t, msg.acks.Load()+msg.terms.Load())
 }
 
 // And the same floor refuses before allocation when it is not met, exactly as
