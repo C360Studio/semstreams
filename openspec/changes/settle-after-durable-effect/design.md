@@ -89,9 +89,13 @@ phase can go back to Retry.
 
 L0 (#759) ADDs the requirement *shared settlement remains stateless and heartbeat-specific*, whose prose reads "The
 no-heartbeat interpreter SHALL remain private. #759 SHALL add no exported pull settlement operation"
-(`openspec/changes/semantic-jetstream-settlement/specs/jetstream-consumer-policy/spec.md:322` on this branch, which
-carries L0 as its base; L0's own head at the time of writing is `29bd7dae`). This change exports a settlement
-operation, so once L0 archives, that sentence becomes current truth and contradicts the tree.
+(`openspec/changes/semantic-jetstream-settlement/specs/jetstream-consumer-policy/spec.md:324-325` on this branch,
+which carries L0 as its base; the same two sentences are at `:333-334` in L0's own tree at its head `759bd596`,
+byte-identical). This change exports a settlement operation, so once L0 archives, that sentence becomes current
+truth and contradicts the tree.
+
+Both pins are of a live branch and will move again. The requirement heading — `:322` here, `:331` in L0's tree — is
+the durable handle; the line numbers are there to be re-derived with `sed -n`, not trusted.
 
 The MODIFIED block in this change's delta therefore targets a requirement that is not in
 `openspec/specs/jetstream-consumer-policy/spec.md` yet — it arrives there when L0 archives, which happens first
