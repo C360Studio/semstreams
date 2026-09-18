@@ -44,7 +44,7 @@ func (m *modelDeliveryOwnerMsg) InProgress() error                { m.heartbeats
 func (m *modelDeliveryOwnerMsg) Term() error                      { m.settlement.Add(1); return nil }
 func (m *modelDeliveryOwnerMsg) TermWithReason(string) error      { m.settlement.Add(1); return nil }
 
-// spec: agentic-model / Model request settlement is bound to a durable response
+// spec: agentic-model / The model delivery owner latches its first fatal result into health
 func TestModelUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner(t *testing.T) {
 	var workCalls atomic.Int32
 	policy, err := natsclient.ValidateHeartbeatDeliveryPolicy(
@@ -91,7 +91,7 @@ func TestModelUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner(t *testin
 	<-binding.observerDone
 }
 
-// spec: agentic-model / Model request settlement is bound to a durable response
+// spec: agentic-model / The model delivery owner latches its first fatal result into health
 func TestModelSetupWiresMetadataFailureToAcquiredOwner(t *testing.T) {
 	port, err := (component.PortDefinition{
 		Name: "agent.request",

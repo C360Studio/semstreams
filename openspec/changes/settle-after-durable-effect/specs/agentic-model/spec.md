@@ -2,10 +2,7 @@
 
 ## ADDED Requirements
 
-### Requirement: Model request settlement is bound to a durable response
-
-Agentic-model SHALL NOT positively acknowledge an `AgentRequest` until a matching `AgentResponse` has received
-synchronous JetStream PubAck. It SHALL use RequestID as the stable logical response identity.
+### Requirement: The model delivery owner latches its first fatal result into health
 
 Agentic-model SHALL receive immutable delivery-attempt observation from the accepted settlement adapter. It SHALL
 NOT receive or retain native message or settlement authority.
@@ -15,13 +12,6 @@ surface before owner-stop observation can drain the handle. Health SHALL report 
 `delivery ownership lost`, the exact cause in `LastError`, and exactly one increment of the existing error count.
 Later fatal results SHALL neither overwrite the first cause nor increment the count again. This adds no metric family,
 public state, durable state, or communication path.
-
-#### Scenario: Response publication succeeds
-
-- **WHEN** a provider returns an `AgentResponse` for a valid `AgentRequest`
-- **THEN** agentic-model publishes the response with deterministic identity
-- **AND** waits for PubAck
-- **AND** only then positively acknowledges the source request
 
 #### Scenario: Delivery metadata is unavailable
 
