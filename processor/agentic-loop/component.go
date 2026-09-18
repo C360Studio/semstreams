@@ -2407,7 +2407,7 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 // No-op when the dispatcher is nil (disabled-mode-without-construction
 // edge case; should not occur in production because NewComponent always
 // constructs a dispatcher).
-func (c *Component) handleToolCallVerdictMessage(_ context.Context, data []byte) (natsclient.DeliveryDecision, error) {
+func (c *Component) handleToolCallVerdictMessage(ctx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
 	dispatcher := c.handler.GovernanceDispatcher()
 	if dispatcher == nil {
 		return natsclient.DeliveryDecisionQuarantine, errors.New("tool-call verdict dispatcher is unavailable")
@@ -2425,7 +2425,33 @@ func (c *Component) handleToolCallVerdictMessage(_ context.Context, data []byte)
 			fmt.Errorf("tool-call verdict payload missing decision or call_id (decision=%q call_id=%q)", decision, callID)
 	}
 
-	return dispatcher.HandleVerdict(decision, callID, data)
+	settled, err := dispatcher.HandleVerdict(decision, callID, data)
+	if errors.Is(err, ErrNoGovernanceWaiter) {
+		return c.settleVerdictWithoutWaiter(ctx, callID, err)
+	}
+	return settled, err
+}
+
+// settleVerdictWithoutWaiter decides a verdict whose call_id has no waiter
+// here. The dispatcher's own doc comment says such verdicts are expected in
+// normal operation — audit mode, late arrivals, verdicts for other components'
+// loops on a shared stream — and the RecordGovernanceVerdictMissingWaiter
+// counter exists for exactly that, so Retrying them made a documented-normal
+// input a hot redelivery loop. But the fourth case is real: after process
+// replacement the loop is still waiting and the verdict is still owed. The
+// call_id grammar carries the loop ID, so the record decides which it is.
+func (c *Component) settleVerdictWithoutWaiter(
+	ctx context.Context, callID string, cause error,
+) (natsclient.DeliveryDecision, error) {
+	loopID := loopIDFromStructuredID(callID, ":tool:")
+	if c.classifyMissingLoop(ctx, loopID) == loopPresenceStale {
+		c.logger.Debug("Verdict has no waiter and its loop is finished or foreign; acknowledging",
+			slog.String("call_id", callID), slog.String("loop_id", loopID))
+		return natsclient.DeliveryDecisionAck, nil
+	}
+	c.logger.Warn("Verdict names a live loop this process does not hold",
+		slog.String("call_id", callID), slog.String("loop_id", loopID))
+	return natsclient.DeliveryDecisionRetry, cause
 }
 
 // decodeVerdictPayload reads a VerdictPayload from wire bytes,

@@ -208,16 +208,31 @@ type GovernanceDispatcher interface {
 	// verdict, after extracting the decision and call_id from the
 	// payload via VerdictPayload.EffectiveCallID/EffectiveDecision.
 	// The dispatcher demuxes by call_id to the appropriate waiter
-	// channel. No-op when no waiter is registered for the call_id
-	// (audit mode, late arrivals, verdicts for other components'
-	// loops on a shared stream). Data is retained for audit logging
-	// only — routing decisions are made from decision + callID.
+	// channel. Data is retained for audit logging only — routing
+	// decisions are made from decision + callID.
+	//
+	// When no waiter is registered for the call_id the dispatcher
+	// cannot decide the settlement, because the two reasons a waiter
+	// is missing settle in opposite directions: the verdict is late
+	// or belongs to another component's loop on the shared stream
+	// (nothing to deliver it to, ever), or this process was replaced
+	// and the loop is still waiting somewhere. The dispatcher owns no
+	// durable state and cannot tell those apart, so it returns an
+	// error wrapping ErrNoGovernanceWaiter and the Component — which
+	// owns the loops bucket — classifies it.
 	HandleVerdict(decision, callID string, data []byte) (natsclient.DeliveryDecision, error)
 
 	// Mode returns the configured mode for inspection. Useful for
 	// observability gauges and conditional logging in the handler.
 	Mode() string
 }
+
+// ErrNoGovernanceWaiter reports that a verdict arrived for a call_id with no
+// registered waiter in this process. It is not itself a settlement: the
+// Component resolves it against the loops bucket, because a verdict for a
+// finished or foreign loop and a verdict for a loop this process lost look
+// identical from the waiter map alone.
+var ErrNoGovernanceWaiter = errors.New("no active governance waiter")
 
 // NewGovernanceDispatcher constructs the dispatcher matching the
 // configured mode. Publisher may be nil in disabled mode (no publishes
@@ -494,7 +509,10 @@ func (d *enforceDispatcher) HandleVerdict(decision, callID string, data []byte) 
 		if d.metrics != nil {
 			d.metrics.RecordGovernanceVerdictMissingWaiter()
 		}
-		return natsclient.DeliveryDecisionRetry, fmt.Errorf("no active governance waiter for call_id %q", callID)
+		// Decision deliberately unset: the caller classifies. Returning
+		// Retry here made a documented-normal input a hot redelivery loop.
+		return natsclient.DeliveryDecisionQuarantine,
+			fmt.Errorf("%w for call_id %q", ErrNoGovernanceWaiter, callID)
 	}
 
 	// Non-blocking send via the buffered channel. If somehow a second

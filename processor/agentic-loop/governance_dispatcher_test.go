@@ -43,9 +43,13 @@ func TestGovernanceDispatcherHandleVerdictDeclaresDeliveryOutcome(t *testing.T) 
 		nil, slog.Default(), nil,
 	).(*enforceDispatcher)
 
+	// A missing waiter is not a settlement the dispatcher can make: the
+	// Component classifies it against the loops bucket. The dispatcher's job
+	// is to say WHICH condition it hit, in a form errors.Is can read.
 	decision, err = enforce.HandleVerdict("approved", "missing", nil)
 	require.Error(t, err)
-	require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
+	require.ErrorIs(t, err, ErrNoGovernanceWaiter)
+	require.Contains(t, err.Error(), "missing", "the cause must name the call_id it could not route")
 
 	delivered := enforce.registerWaiter("delivered")
 	decision, err = enforce.HandleVerdict("approved", "delivered", nil)
