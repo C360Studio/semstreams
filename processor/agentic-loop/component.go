@@ -976,15 +976,16 @@ func (c *Component) resolveLoopLaneDelivery(
 		lane.ackWait = 30 * time.Second
 		// These four lanes are the ones this change gave a Retry
 		// classification to, so they need the same bound the heartbeat lanes
-		// have. Their shipped port definitions carry no consumer config at
-		// all, and MaxDeliver 0 is "unlimited" at natsclient/stream.go:37 — an
-		// unbounded, undelayed redelivery loop for every transient error. The
-		// floor is the BackOff length, the same rule validateLoopRetryPolicy
-		// enforces at setup.
+		// have. What they were missing was not a delivery ceiling —
+		// component.GetConsumerConfig already defaults MaxDeliver to 3
+		// (component/port_jetstream.go:130), and these ports declare no
+		// consumer config to override it — but a BackOff and a delay: their
+		// Retry was a bare Nak against an empty BackOff, so every transient
+		// error was redelivered at line rate until the ceiling burned through.
+		// The resolved MaxDeliver is passed through and then held to the
+		// BackOff length by validateLoopRetryPolicy at setup, which refuses
+		// rather than repairs.
 		lane.maxDeliver = consumerCfg.MaxDeliver
-		if lane.maxDeliver == 0 {
-			lane.maxDeliver = len(lane.backOff)
-		}
 		lane.msgTimeout = c.messageTimeout
 	}
 	return lane
