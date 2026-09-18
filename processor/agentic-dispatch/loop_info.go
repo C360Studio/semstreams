@@ -53,7 +53,21 @@ type PendingApprovalInfo struct {
 	TraceID     string         `json:"trace_id,omitempty"`
 }
 
+// loopInfoFromEntity projects one durable record onto the immutable LoopInfo
+// wire shape. createdAt is the KV revision timestamp of the record, used only
+// as a fallback.
+//
+// CreatedAt prefers LoopEntity.StartedAt because the record is rewritten on
+// every iteration, so the revision timestamp advances with the loop and a
+// reader computing an age from it would get the age of the last write under a
+// field named "created". StartedAt is zero when the producing agentic-loop had
+// no `timeout` configured (only SetTimeout writes it), and the revision
+// timestamp is the closest thing that exists then — it is still an upper bound
+// on the loop's age rather than an invention.
 func loopInfoFromEntity(e *agentic.LoopEntity, createdAt time.Time) *LoopInfo {
+	if !e.StartedAt.IsZero() {
+		createdAt = e.StartedAt
+	}
 	return &LoopInfo{
 		LoopID: e.ID, TaskID: e.TaskID, Role: e.Role, UserID: e.UserID,
 		ChannelType: e.ChannelType, ChannelID: e.ChannelID, State: e.State.String(),

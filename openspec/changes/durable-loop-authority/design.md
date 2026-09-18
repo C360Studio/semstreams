@@ -37,6 +37,35 @@ instead of starting one (`newSeamTestComponent`, `newLoopTokenTestComponent`, `n
 `AutoContinue = false`: they test refusal precedence, token validation and task identity, never continuation, and
 the one subtest that wants continuation builds an activity component over the real KV and opts back in.
 
+## Review round 1: two refusals whose classification this layer owns, and one it does not
+
+**The approval handler now decides on state before `PendingApproval`.** Nothing clears the pending block on a
+transition out of `awaiting_approval` — `LoopEntity.TransitionTo` and `LoopManager.CancelLoop` both leave it, and
+`persistLoopState` marshals the whole entity — so a loop cancelled mid-approval lands `state: cancelled` *with* a
+pending block. `loopOpApprove` deliberately skips the gate's terminal check, so that record reaches the handler, and
+reading the combination as incoherence answered 503 "loop record is not readable right now" for a record that read
+perfectly. A polling client would retry a permanent state forever. State first makes it the 409 it is.
+
+**Clearing the pending block on a terminal transition is deliberately NOT done here.** It is the other half of the
+same defect and it belongs to the layer that owns terminal and adopt transitions (L4, #1330): this change writes no
+`LoopEntity` at all, so adding the first write to `CancelLoop` from a dispatch-side fix would put a mutation in the
+wrong owner. Dispatch's own answer is correct without it, which is why the fix divides here.
+
+**An unavailable loop view answers with a fixed phrase.** `errs.Wrap` renders `"<Type>.<Op>: <what> failed: <cause>"`,
+so returning `err.Error()` from `POST /message` and `GET /loops` shipped
+`Component.currentLoopSnapshot: loop projection unavailable failed: …` as the HTTP body — and because
+`auto_continue` defaults to true here, a dispatch whose view is still warming reaches it on the *default*
+configuration. Internal type and method names are not a client contract; they moved to the log line.
+
+## Declared residuals
+
+- **`loopLookupConflict` and `codeLoopOwnerConflict` are unreachable.** `lookupLoop` has exactly three producers
+  (`loop_admission.go:299,:301,:303`) and none of them is the conflict outcome, because there is no second source
+  left to conflict with. The vocabulary, the `/loops/{id}` `"500"` OpenAPI response at `http.go:1100` and
+  `loop_seams_test.go:630` are retained rather than deleted in this round: removing them edits the generated OpenAPI
+  surface, which is a separate reviewable change from the one this PR is. Whoever removes them should do all three
+  together.
+
 ## Declared cost
 
 The stack's L1 (#1327) is receiving review fixes after this branch was cut. This layer was built on the L1 head

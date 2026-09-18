@@ -216,7 +216,7 @@ func TestGateRefusalIsCountedExactlyOnce(t *testing.T) {
 	}
 }
 
-// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
+// spec: agentic-dispatch / Loop existence and ownership come from durable authority alone
 func TestContinuationAfterReplacementIsAdmittedFromDurableRecord(t *testing.T) {
 	c := admissionTestComponent(t)
 	// A replacement process needs only the exact current authority.
@@ -239,7 +239,14 @@ func TestContinuationAfterReplacementIsAdmittedFromDurableRecord(t *testing.T) {
 	require.Equal(t, 0, testutil.CollectAndCount(c.metrics.loopAdmissionRefusals))
 }
 
-// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
+// spec: agentic-dispatch / Loop existence and ownership come from durable authority alone
+// Scenario: "a loop this process admitted before, whose record is now gone, is not found".
+//
+// This test used to cite "a live loop with no durable record is admitted from
+// the tracker" and assert its exact negation: the merged-facts requirement said
+// a tracker hit admits without the record, and this says a prior observation
+// establishes nothing. The requirement it contradicted is REMOVED in
+// durable-loop-authority; the citation above names the one it proves.
 func TestPreviouslyObservedLoopWithoutDurableRecordIsRefused(t *testing.T) {
 	c := admissionTestComponent(t)
 	records := map[string]*agentic.LoopEntity{admissionLoopA: {
@@ -261,7 +268,7 @@ func TestPreviouslyObservedLoopWithoutDurableRecordIsRefused(t *testing.T) {
 	require.Equal(t, loopFacts{}, facts, "a prior observation cannot establish current existence")
 }
 
-// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
+// spec: agentic-dispatch / Loop existence and ownership come from durable authority alone
 func TestUnreadableDurableRecordRefusesTransient(t *testing.T) {
 	c := admissionTestComponent(t)
 	c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
@@ -281,7 +288,7 @@ func TestUnreadableDurableRecordRefusesTransient(t *testing.T) {
 	require.NotEqual(t, codeLoopNotFound, classified.Code, "an outage is never answered as not found")
 }
 
-// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
+// spec: agentic-dispatch / Loop existence and ownership come from durable authority alone
 func TestPriorAdmissionDoesNotBypassADurableReadFailure(t *testing.T) {
 	c := admissionTestComponent(t)
 	withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: {
@@ -304,7 +311,7 @@ func TestPriorAdmissionDoesNotBypassADurableReadFailure(t *testing.T) {
 	require.Equal(t, loopFacts{}, facts, "a prior admission cannot provide fallback ownership")
 }
 
-// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
+// spec: agentic-dispatch / Loop existence and ownership come from durable authority alone
 func TestCurrentOwnerReplacesPreviouslyObservedOwner(t *testing.T) {
 	c := admissionTestComponent(t)
 	records := map[string]*agentic.LoopEntity{admissionLoopA: {
@@ -418,7 +425,7 @@ func TestGateDoesNotConsultCancelOwn(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
+// spec: agentic-dispatch / Loop existence and ownership come from durable authority alone
 // Terminal authority refuses continuation, but remains readable and controllable.
 func TestGateTerminalAuthorityRefusesContinuation(t *testing.T) {
 	for _, state := range []agentic.LoopState{
@@ -449,7 +456,7 @@ func TestGateTerminalAuthorityRefusesContinuation(t *testing.T) {
 	}
 }
 
-// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
+// spec: agentic-dispatch / Loop existence and ownership come from durable authority alone
 func TestGateReportsExactCurrentStateWithoutMutatingAuthority(t *testing.T) {
 	for _, state := range []agentic.LoopState{
 		agentic.LoopStateExecuting, agentic.LoopStateAwaitingApproval,
@@ -476,7 +483,7 @@ func TestGateReportsExactCurrentStateWithoutMutatingAuthority(t *testing.T) {
 	}
 }
 
-// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
+// spec: agentic-dispatch / Loop existence and ownership come from durable authority alone
 func TestGateRefusesInvalidCurrentAuthorityBeforeOwnership(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

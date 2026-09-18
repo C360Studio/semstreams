@@ -1445,8 +1445,15 @@ routes do not match; multiple matches refuse as ambiguous. Between a task's PubA
 record, another route-only request may create a second loop. If continuity matters, echo the returned LoopID. No
 route claim or prediction setting is added.
 
+`LoopInfo.CreatedAt` on `/loops` and `/debug/state` is now the loop's own recorded start (`LoopEntity.StartedAt`)
+rather than the tracker's in-process creation time. It falls back to the record's KV revision timestamp when the
+producing agentic-loop had no `timeout` configured, which is the only case where no start time is on record. The
+field's type and name are unchanged; a consumer computing an age from it gets a better answer than it did, never a
+worse one. `/status` reports `Iterations n/m` and `Age` from the same record, and says the age is unknown rather
+than substituting a write timestamp when the record carries no start.
+
 Remove `semstreams_router_active_loops` from dashboards and alerts; no replacement authoritative Prometheus count is
-introduced. Use `/loops` only while its view is ready. The agentic-loop execution gauge remains process-local
+introduced. `docs/advanced/08-agentic-components.md`'s metric table no longer lists it. Use `/loops` only while its view is ready. The agentic-loop execution gauge remains process-local
 telemetry, not a count of every retained loop.
 
 ### Terminal response boundary

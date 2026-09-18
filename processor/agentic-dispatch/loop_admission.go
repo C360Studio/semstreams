@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/internal/looptoken"
@@ -151,6 +152,20 @@ type loopFacts struct {
 	// awaiting_approval, and telling a user "running" for the second of those
 	// sends them to wait for an agent that is waiting for them.
 	State agentic.LoopState
+	// Iterations and MaxIterations are the loop's progress against its budget.
+	// They come from the record, not from a process that happens to be running
+	// the loop, so /status answers them after a replacement too.
+	Iterations    int
+	MaxIterations int
+
+	// StartedAt is the loop's own creation time as the record carries it
+	// (LoopEntity.StartedAt), NOT the KV revision timestamp — the record is
+	// rewritten on every iteration, so a revision timestamp would report the
+	// age of the last write and call it the age of the loop. It is zero when
+	// the producing agentic-loop had no `timeout` configured, which is the one
+	// case where the loop's age is genuinely not on record; a reader must say
+	// so rather than substitute another clock.
+	StartedAt time.Time
 }
 
 // loopLookupOutcome distinguishes current authority from absence or an unread
@@ -338,12 +353,15 @@ func (c *Component) lookupLoopOwner(ctx context.Context, loopID string) (LoopOwn
 // persistedLoopFacts projects the durable AGENT_LOOPS record.
 func persistedLoopFacts(record *agentic.LoopEntity) loopFacts {
 	return loopFacts{
-		LoopID:      record.ID,
-		UserID:      record.UserID,
-		ChannelType: record.ChannelType,
-		ChannelID:   record.ChannelID,
-		Terminal:    record.State.IsTerminal(),
-		State:       record.State,
+		LoopID:        record.ID,
+		UserID:        record.UserID,
+		ChannelType:   record.ChannelType,
+		ChannelID:     record.ChannelID,
+		Terminal:      record.State.IsTerminal(),
+		State:         record.State,
+		Iterations:    record.Iterations,
+		MaxIterations: record.MaxIterations,
+		StartedAt:     record.StartedAt,
 	}
 }
 

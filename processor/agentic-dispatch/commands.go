@@ -82,8 +82,22 @@ func loopStatusFromFacts(facts loopFacts) string {
 	if state == "" {
 		state = "unknown"
 	}
-	return fmt.Sprintf("Loop: %s\nState: %s (from the durable record; this process is not running it)\nUser: %s",
-		facts.LoopID, state, facts.UserID)
+	return fmt.Sprintf("Loop: %s\nState: %s (from the durable record)\nIterations: %d/%d\nAge: %s\nUser: %s",
+		facts.LoopID, state, facts.Iterations, facts.MaxIterations, loopAgeLabel(facts.StartedAt), facts.UserID)
+}
+
+// loopAgeLabel renders a loop's age from its recorded start, or says the record
+// does not carry one.
+//
+// There is no substitute clock. The KV revision timestamp advances on every
+// iteration, so using it would report the age of the last write under the word
+// "Age"; a status line that answers the wrong question confidently is worse
+// than one that admits the field is absent.
+func loopAgeLabel(startedAt time.Time) string {
+	if startedAt.IsZero() {
+		return "unknown (the record carries no start time)"
+	}
+	return time.Since(startedAt).Truncate(time.Second).String()
 }
 
 // handleCancelCommand handles the /cancel command
