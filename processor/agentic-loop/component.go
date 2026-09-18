@@ -1799,12 +1799,12 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 		}
 	}
 
-	// Everything above this line is safe to re-run: persistLoopState and the
-	// completion/failure state writes are KV Puts of the whole current entity
-	// (`c.loopsBucket.Put` at :2220 and :2142/:2169 — last write wins, not an
-	// append), and the graph stamps go through WriteLoopCompletion/-Failure,
-	// which replace the loop entity's single-valued triples. A Retry re-runs
-	// them to the same values.
+	// Everything above this line is safe to re-run: persistLoopState (:2224),
+	// persistCompletionState (:2146) and persistFailureState (:2173) each do a
+	// single c.loopsBucket.Put of the whole current entity — last write wins,
+	// not an append — and the graph stamps go through WriteLoopCompletion and
+	// WriteLoopFailure, which replace the loop entity's single-valued triples.
+	// A Retry re-runs them all to the same values.
 	//
 	// publishResults is not. It publishes result.PublishedMessages one at a
 	// time, so a failure on the third leaves two already PubAck'd — including
