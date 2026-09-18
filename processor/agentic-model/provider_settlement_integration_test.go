@@ -119,6 +119,27 @@ func publishProviderSettlementRequest(
 	return ack, req
 }
 
+func publishProviderSettlementRequestForModel(
+	t *testing.T,
+	tc *natsclient.TestClient,
+	requestID string,
+	modelName string,
+) (*jetstream.PubAck, agentic.AgentRequest) {
+	t.Helper()
+	req := agentic.AgentRequest{
+		RequestID: requestID,
+		LoopID:    "loop-" + requestID,
+		Role:      "general",
+		Model:     modelName,
+		Messages:  []agentic.ChatMessage{{Role: "user", Content: "test"}},
+	}
+	ack, err := tc.Client.PublishToStreamWithAck(
+		t.Context(), "agent.request."+requestID, encodeModelPayload(t, &req),
+	)
+	require.NoError(t, err)
+	return ack, req
+}
+
 func requireProviderSourceAck(
 	t *testing.T,
 	tc *natsclient.TestClient,
@@ -455,4 +476,87 @@ func TestIntegrationPostProviderPrePubAckReplacementMayInvokeAgain(t *testing.T)
 	}, 5*time.Second, 10*time.Millisecond)
 	requireProviderSourceAck(t, tc, "agentic-model-agent-request-all-replacement", ack.Sequence)
 	require.Equal(t, int32(2), calls.Load())
+}
+
+// spec: agentic-model / Request delivery settles only on its own response
+//
+// A request naming an endpoint the registry cannot resolve fails before any
+// provider call. The delivery still settles on a durable response — the error
+// response is published first and the source is acked only after its PubAck —
+// because a configuration error is not transient and retrying it would wedge
+// the loop behind a delivery that can never succeed.
+func TestIntegrationEndpointResolutionFailurePublishesErrorBeforeSourceAck(t *testing.T) {
+	tc := newProviderSettlementNATS(t)
+	var calls atomic.Int32
+	provider := successfulProvider(&calls)
+	defer provider.Close()
+
+	component := newProviderSettlementComponent(t, tc, provider.URL, "endpoint-failure")
+	require.NoError(t, component.Start(t.Context()))
+	t.Cleanup(func() { require.NoError(t, component.Stop(context.Background())) })
+	ack, req := publishProviderSettlementRequestForModel(
+		t, tc, "endpoint-failure", "model-that-is-not-registered")
+
+	responseStream, err := tc.Client.GetStream(t.Context(), providerSettlementResponseStream)
+	require.NoError(t, err)
+	decoder := payloadbuiltins.NewTestDecoder(t)
+	var response agentic.AgentResponse
+	require.Eventually(t, func() bool {
+		raw, readErr := responseStream.GetLastMsgForSubject(t.Context(), "agent.response."+req.RequestID)
+		if readErr != nil {
+			return false
+		}
+		decoded, decodeErr := decoder.Decode(raw.Data)
+		if decodeErr != nil {
+			return false
+		}
+		payload, ok := decoded.Payload().(*agentic.AgentResponse)
+		if !ok {
+			return false
+		}
+		response = *payload
+		return true
+	}, 5*time.Second, 10*time.Millisecond)
+	require.Equal(t, agentic.StatusError, response.Status)
+	require.Equal(t, req.RequestID, response.RequestID)
+	requireProviderSourceAck(t, tc, "agentic-model-agent-request-all-endpoint-failure", ack.Sequence)
+	require.Zero(t, calls.Load(), "endpoint resolution fails before any provider call")
+}
+
+// spec: stable-request-identity / A logical model request has one deterministic identity
+//
+// The #1328 acceptance half that does not depend on a duplicate window: a
+// second publish of the SAME deterministic RequestID, arriving as its own
+// stream message with no Nats-Msg-Id dedup available, is answered from the
+// retained response. The provider is called once across both deliveries. This
+// is the guarantee; the server-side window is the bonus.
+func TestIntegrationRepublishedRequestIDReusesRetainedResponseOutsideAnyWindow(t *testing.T) {
+	tc := newProviderSettlementNATS(t)
+	var calls atomic.Int32
+	provider := successfulProvider(&calls)
+	defer provider.Close()
+
+	component := newProviderSettlementComponent(t, tc, provider.URL, "republished")
+	require.NoError(t, component.Start(t.Context()))
+	t.Cleanup(func() { require.NoError(t, component.Stop(context.Background())) })
+
+	const requestID = "loop-republished:req:1:0"
+	firstAck, req := publishProviderSettlementRequest(t, tc, requestID)
+	responseStream, err := tc.Client.GetStream(t.Context(), providerSettlementResponseStream)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		_, readErr := responseStream.GetLastMsgForSubject(t.Context(), "agent.response."+req.RequestID)
+		return readErr == nil
+	}, 5*time.Second, 10*time.Millisecond)
+	requireProviderSourceAck(t, tc, "agentic-model-agent-request-all-republished", firstAck.Sequence)
+	require.Equal(t, int32(1), calls.Load())
+
+	// The republish carries no Nats-Msg-Id, so the server stores it as a new
+	// message: the window cannot be what prevents the second provider call.
+	secondAck, _ := publishProviderSettlementRequest(t, tc, requestID)
+	require.Greater(t, secondAck.Sequence, firstAck.Sequence,
+		"the republish must reach the stream for the retained-response rule to be what answers it")
+	requireProviderSourceAck(t, tc, "agentic-model-agent-request-all-republished", secondAck.Sequence)
+	require.Equal(t, int32(1), calls.Load(),
+		"a redelivered request with a committed response must never call the provider again")
 }
