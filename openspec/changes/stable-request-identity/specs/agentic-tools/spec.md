@@ -31,8 +31,16 @@ ACK. PubAck uncertainty MAY repeat a result. `Nats-Msg-Id` MAY provide bounded d
 treated as permanent publication identity.
 
 The exact immutable `TOOL_CALL_OUTCOMES` read exists only at the executor-effect boundary. Before executor invocation,
-a matching outcome is replayed and a conflicting fingerprint quarantines. Ordinary ToolResult republication requires
-no second exact output lookup, general stream scan, or second tool authority.
+a matching outcome is replayed and a conflicting fingerprint SHALL terminate the delivery. Ordinary ToolResult
+republication requires no second exact output lookup, general stream scan, or second tool authority.
+
+Terminate, not quarantine, is the correct disposition for a fingerprint conflict: the stored outcome and the arriving
+call disagree about what one execution identity names, which is a property of that message and cannot change on
+redelivery. Only a produced-but-unknown durable effect — an ambiguous outcome `Create` — is a quarantine, because
+that is a property of the store rather than the message and it is what the operator must inspect. The framework
+producer derives the execution identity from RequestID, provider CallID and call ordinal and so cannot produce a
+conflicting fingerprint under one identity; a conflict means a foreign or diverging producer, and terminating one
+such delivery leaves the rest of the consumer running.
 
 #### Scenario: Completed result publication repeats
 
@@ -43,5 +51,12 @@ no second exact output lookup, general stream scan, or second tool authority.
 #### Scenario: Completed outcome content conflicts
 
 - **WHEN** the expected execution identity names a different canonical result
-- **THEN** agentic-tools quarantines without selecting or overwriting either outcome
+- **THEN** agentic-tools terminates that delivery without selecting or overwriting either outcome
+- **AND** the consumer keeps running, because the conflict is a property of the message and not of the store
+
+#### Scenario: An outcome write leaves a durable effect unknown
+
+- **WHEN** the completed-outcome `Create` neither confirms nor refuses
+- **THEN** agentic-tools quarantines, which is the disposition that stops the owner for inspection
+- **AND** the executor is not invoked again on that delivery
 

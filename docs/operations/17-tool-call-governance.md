@@ -321,7 +321,7 @@ resolve against the proposed-call payload:
 | `$message.request_id` | The provider request identity |
 | `$message.execution_id` | The framework tool-execution identity — required for verdict subjects |
 | `$message.call_id` | The provider's request-scoped tool-call ID |
-| `$message.proposal_fingerprint` | The canonical proposed-call fingerprint verdicts must echo |
+| `$message.proposal_fingerprint` | The canonical proposed-call fingerprint. Echo it: it is carried as audit context, and nothing compares it to the proposal today, so a wrong value is not refused — verdicts route on `execution_id` alone |
 | `$message.tool_name` | The tool name (`bash`, `http_request`, etc.) |
 | `$message.command` | The bash command (top-level convenience) |
 | `$message.url` | The HTTP URL (top-level convenience) |
