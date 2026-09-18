@@ -1234,3 +1234,37 @@ declares a `Duplicates` window (the NATS server default is 2m when unset), the s
 the same logical request inside it. That is a convenience, not a contract: the guarantee that bounds provider work
 is agentic-model's retained-response read, which holds regardless of the window. No stream configuration changes
 here and none is required.
+
+## Tool results are addressed by execution identity, and an uncorrelated tool call is refused (#1328)
+
+Every `ToolCall` the framework dispatches now carries three correlation fields — `request_id`, `execution_id`
+(`tool-exec-v1-<digest>`, derived by agentic-loop from RequestID + provider CallID + call ordinal) and a 1-based
+`call_ordinal`. Three addresses moved off the provider `call_id` and onto `execution_id`:
+
+| Address | Was | Now |
+|---|---|---|
+| Result subject | `tool.result.<call_id>` | `tool.result.<execution_id>` |
+| Result `Nats-Msg-Id` | `tool-result/v1/<digest of call_id>` | `tool-result/v1/<digest of execution_id>` |
+| `TOOL_CALL_OUTCOMES` key | `v1.<digest of call_id>` | `v1.<digest of execution_id>` |
+
+The digest is unchanged (sha256, lowercase unpadded base32); only its input moved. The `tool.result.*` and
+`tool.result.>` subject families are unchanged, so a stream or consumer that binds the family needs no edit —
+an execution id is still one dotless subject token.
+
+**What to check.**
+
+- **A consumer that reads one call's result by exact subject** — `GetLastMsgForSubject("tool.result." + callID)`
+  finds nothing now. Read the `execution_id` off the `ToolCall` (or, for an approval-gated call, off the loop's
+  persisted `pending_approval.execution_id`; `ApprovalPendingEvent` still publishes only the provider `call_id`)
+  and address the result under that. Every `ToolResult` carries `request_id`, `execution_id` and `call_ordinal`,
+  so a consumer that scans the family can correlate without predicting a subject.
+- **Anything that publishes a `ToolCall` directly onto `tool.execute.*`** — a harness, a replay tool, a fixture.
+  agentic-tools now validates the correlation before executing and **terminates** a delivery whose `request_id`
+  or `execution_id` is empty or whose `call_ordinal` is zero: the call is not retried and no result is ever
+  published. Stamp all three. Executors are unaffected — agentic-tools copies the correlation from the call onto
+  whatever result the executor returns, so no executor signature changes.
+- **`TOOL_CALL_OUTCOMES` written before this change** is keyed under the old digest. Nothing recomputes an old
+  key, so no rekey or backfill is required and no replay regresses — a pre-upgrade outcome simply stops being
+  found, and the call re-executes once under its new identity. The bucket carries no TTL and no binding MaxBytes
+  (`RetentionNoLifecycle`), so those keys persist until an operator removes them; delete the bucket before the
+  upgrade if you want it clean, and expect the in-flight calls it covered to execute once more.
