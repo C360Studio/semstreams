@@ -72,16 +72,17 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 ## 6. Review round 1
 
 - [x] 6.1 Classify a missing loop from its record, never from process memory, and use it at every site that
-      previously Acked on a memory miss: `TestClassifyMissingLoopReadsTheRecordNotMemory`,
-      `TestClassifyMissingLoopAgainstRealKV_Integration`, `TestUncorrelatedResponseSettlesByRecordNotByMemory`,
+      previously Acked on a memory miss: `TestLoopIDFromStructuredIDAcceptsOnlyMintedTokens`,
+      `TestClassifyMissingLoopWithoutBucketIsUnknownNotStale`, `TestClassifyMissingLoopWithoutTokenIsStale`,
+      `TestClassifyMissingLoopReadsTheLoopsBucketNotMemory_Integration`,
+      `TestUncorrelatedResponseSettlesByRecordNotByMemory`,
       `TestUncorrelatedToolResultSettlesByRecordNotByMemory`,
       `TestVerdictWithoutWaiterSettlesByRecordNotByWaiterMap`, `TestUncancellableLoopSettlesWithoutRetrying`.
 - [x] 6.2 Terminate an undecodable or wrongly-typed input instead of acknowledging it:
       `TestUndecodableHeartbeatLaneInputTerminatesRatherThanAcking`,
       `TestWrongPayloadTypeOnHeartbeatLaneTerminatesRatherThanAcking`.
-- [x] 6.3 Quarantine a partially published handler result rather than replaying returned PubAcks:
-      `TestPartialPublishQuarantinesRatherThanRepublishing_Integration`,
-      `TestPrePublishPersistFailureStillRetries_Integration`.
+- [x] 6.3 Quarantine a partially published handler result rather than replaying returned PubAcks, while a
+      pre-publish failure still retries: `TestIntegrationPartialPublishQuarantinesRatherThanRetrying`.
 - [x] 6.4 Bound retry on the four non-heartbeat lanes with a validated BackOff/`max_deliver` floor and a delayed
       NAK: `TestNonHeartbeatLanesAcquireABoundedConsumer`,
       `TestNonHeartbeatLaneRefusesSingleDeliveryBeforeAllocation`,
