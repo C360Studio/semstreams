@@ -55,13 +55,23 @@ func isTransientTerminal(err error) bool {
 // transientTerminalError: the framework cancels work during Stop, and the
 // delivery must go back to the server for the replacement process.
 //
-// This is sound because the only site in this lane that begins an external
-// effect, publishTerminalResponse, never returns a bare context error — every
-// one of its paths returns unknownTerminalPublicationError or
-// permanentTerminalError. A bare context error therefore proves the publish
-// was not attempted, which is exactly the pre-effect proof #759 requires for a
-// NAK. The classifier checks unknown publication first so a cancellation that
-// interrupted a publish still quarantines.
+// This is NOT a test that the context error arrived bare. errors.Is unwraps,
+// and both unknownTerminalPublicationError and permanentTerminalError
+// implement Unwrap, so a publish cancelled mid-flight also satisfies this
+// predicate. What keeps that case safe is arm ORDER in
+// classifyTerminalDeliveryDecision (component.go): isUnknownTerminalPublication
+// is checked, and quarantines, before this arm is reached. The ordering is the
+// mechanism, and the guard on it is
+// TestHandleTerminalDeliveryDecisionMatrix/cancellation_during_publish_still_quarantines
+// — not this function.
+//
+// In production this arm is defensive rather than load-bearing: every context
+// error on this lane already arrives as a transientTerminalError from
+// loadPersistedLoop, which takes the preceding half of the same case. It is
+// reachable only if a future effect site returns a wrapped context error of
+// its own, and the order handles that correctly only for as long as such a
+// site is classified ahead of this arm. Any new effect site therefore adds its
+// typed arm above this one; see design.md § Declared cost.
 func isShutdownCancellation(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

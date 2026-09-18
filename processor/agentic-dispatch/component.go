@@ -771,6 +771,11 @@ func (c *Component) handleTerminalDelivery(
 // errors; its anti-goals forbid blind retry of commit-unknown effects). Both
 // terminal lanes run MaxDeliver=0, so a blind NAK here is an unbounded retry
 // of an effect whose commit state is unproven.
+// Arm order is load-bearing, not stylistic: isUnknownTerminalPublication must
+// stay above isShutdownCancellation, because errors.Is unwraps and a publish
+// cancelled mid-flight satisfies both. A new effect site on this lane is
+// classified above the cancellation arm; design.md § Declared cost records
+// that this ordering rests on prose, not on a guard.
 func classifyTerminalDeliveryDecision(err error) natsclient.DeliveryDecision {
 	switch {
 	case err == nil:

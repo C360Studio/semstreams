@@ -295,6 +295,30 @@ Removal, complete replacement proof, migration reconciliation, and the complete 
 and is the final content commit. There is no accepted additive dual-API period. Closed issue #1250 remains closed and
 is not reclaimed.
 
+## Declared cost
+
+**The dispatch terminal lane's "every effect-site error is typed" invariant is prose-guarded.** The Retry arm for
+owner shutdown (`processor/agentic-dispatch/terminal_settlement.go`, `isShutdownCancellation`) is safe because
+`classifyTerminalDeliveryDecision` checks `isUnknownTerminalPublication` — which quarantines — before it. It is
+*not* safe because a context error arrives bare: `errors.Is` unwraps, and both
+`unknownTerminalPublicationError` and `permanentTerminalError` implement `Unwrap`, so a publish cancelled mid-flight
+satisfies the cancellation predicate too.
+
+The arm order holds only while every site that begins an external effect on this lane returns a typed error. Today
+exactly one site does, and all four of its error returns are typed — `publishTerminalResponse` at
+`processor/agentic-dispatch/terminal_settlement.go:203, :210, :214, :217` (`unknownTerminalPublicationError` at
+:203 and :217, `permanentTerminal` at :210 and :214; pins taken at this commit, after the doc-comment rewrite above
+them). Nothing enforces that. A future effect site returning
+`fmt.Errorf("...: %w", ctx.Err())` after its commit would reach the cancellation arm and NAK a delivery whose effect
+state is unknown, on a `MaxDeliver=0` lane.
+
+This is recorded rather than guarded, and deliberately: the arm is unreachable in production today —
+`loadPersistedLoopFn` is assigned only in `_test.go`, so every production context error on this lane already arrives
+as `transientTerminalError` and takes the preceding half of the same case. The mitigation is the doc comment at the
+predicate and the ordering test
+`TestHandleTerminalDeliveryDecisionMatrix/cancellation_during_publish_still_quarantines`, which fails if the order
+is reversed. Any layer that adds an effect site to this lane classifies it above the cancellation arm.
+
 ## Rejected designs
 
 - Extend the builder into a handle owner: creates a second lifecycle authority and cannot resolve
