@@ -89,7 +89,7 @@ The linked file is the rule; this table is only its index.
 | A BREAKING change lands only with a relevant E2E tier green | `docs/contributing/02-e2e-tests.md` § Breaking Changes | prose today; #1325 |
 | New payload types register via `RegisterPayloads`, no `init()`, no singleton, explicit call from the composition root | `.agents/skills/new-payload/SKILL.md`, `docs/concepts/15-payload-registry.md` | round-trip and registration consistency only (`test/contract/message_contract_test.go`); per-binary parity is prose |
 | Rule vs component vs lifecycle boundary; workflow shapes compose the Lifecycle harness | `.agents/skills/orchestration-check/SKILL.md`, `docs/concepts/14-orchestration-layers.md` | review |
-| Test fidelity: production seams, `-race`, explicit synchronization, mutation evidence via `cp` backup and checksum | `docs/contributing/01-testing.md`, contracts § Test fidelity | CI Test job |
+| Test fidelity: production seams, `-race`, explicit synchronization, mutation evidence via `cp` backup and checksum | `docs/contributing/01-testing.md`, contracts § Test fidelity | `-race` and structural guards: CI; fidelity and mutation evidence: review |
 
 ## Working here (Claude and Codex)
 
