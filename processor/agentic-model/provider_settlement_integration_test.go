@@ -523,7 +523,7 @@ func TestIntegrationEndpointResolutionFailurePublishesErrorBeforeSourceAck(t *te
 	require.Zero(t, calls.Load(), "endpoint resolution fails before any provider call")
 }
 
-// spec: stable-request-identity / A logical model request has one deterministic identity
+// spec: agentic-model / Request delivery settles only on its own response
 //
 // The #1328 acceptance half that does not depend on a duplicate window: a
 // second publish of the SAME deterministic RequestID, arriving as its own

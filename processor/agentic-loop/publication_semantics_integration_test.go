@@ -52,7 +52,7 @@ func TestIntegrationOrdinaryLoopPublicationsMayRepeat(t *testing.T) {
 	}
 }
 
-// spec: stable-request-identity / A logical model request has one deterministic identity
+// spec: agentic-loop / A logical model request has one deterministic identity
 //
 // Ruling Q5 (#1330): every agent.request publish stamps its deterministic
 // RequestID as Nats-Msg-Id, so a stream that declares a Duplicates window

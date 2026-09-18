@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// spec: stable-request-identity / A logical model request has one deterministic identity
+// spec: agentic-loop / A logical model request has one deterministic identity
 //
 // (a) of the #1328 scope amendment: the same logical request minted twice
 // yields the same ID, and a request at a different iteration does not.
@@ -35,7 +35,7 @@ func TestRequestIDIsDeterministicPerIteration(t *testing.T) {
 		"a different iteration is different logical work and must not reuse an identity")
 }
 
-// spec: stable-request-identity / A logical model request has one deterministic identity
+// spec: agentic-loop / A logical model request has one deterministic identity
 //
 // (b) of the #1328 scope amendment: a truncation retry of iteration N is :N:1,
 // and forward progress clears the ordinal back to 0.
@@ -57,7 +57,7 @@ func TestRequestIDCarriesTheTruncationRetryOrdinal(t *testing.T) {
 		"forward progress clears the retry ordinal")
 }
 
-// spec: stable-request-identity / A logical model request has one deterministic identity
+// spec: agentic-loop / A logical model request has one deterministic identity
 //
 // (c) of the #1328 scope amendment: the loopID:req: prefix is unchanged, so
 // loop extraction and the agent.response.<requestID> subject both still
