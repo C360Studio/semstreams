@@ -76,9 +76,12 @@ The framework SHALL expose `ConsumeDeliveryWithHeartbeat` with validated `Heartb
 `DeliveryDecision`, and `DeliveryResult`.
 
 `NewDurableHandler` SHALL NOT exist or have an alias. `ConsumeWithHeartbeat` SHALL have no alias and no new
-production caller, and SHALL be deleted by the PR that migrates its last one (#1249). Every original model, tools,
-dispatch, loop, and AgentRun heartbeat binding SHALL use the permanent typed surface with its owner-specific durable
-definition of done.
+production caller, and SHALL be deleted by the PR that migrates its last one (#1249).
+
+The bindings this change migrates — agentic-tools' one and agentic-dispatch's terminal two — SHALL use the permanent
+typed surface with their owner-specific durable definitions of done. The model, loop, and AgentRun bindings are NOT
+in this change's scope: they keep the legacy helper under the ratchet until their own layers migrate them (#1327 for
+model and loop, #1249 for AgentRun), and each names its definition of done in its own reviewed delta.
 
 No capability SHALL describe a production legacy allowlist. The exact caller list is ratchet conformance only: it
 never widens, and it reaches zero in the PR that removes the helper.

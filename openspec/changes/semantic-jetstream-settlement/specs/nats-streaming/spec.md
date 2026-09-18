@@ -76,15 +76,29 @@ ledger, state-machine runtime, or new durable primitive.
 - **THEN** the AST ratchet fails
 - **AND** the recorded caller set is never widened, only reduced by the migrating PRs
 
-## REMOVED Requirements
+## MODIFIED Requirements
 
 ### Requirement: Heartbeat consumption SHALL expose settlement failure
 
-**Reason**: This requirement names the removed `ConsumeWithHeartbeat` export and its inferred nil/error settlement
-contract. Final current truth has one typed semantic-settlement surface and preserves semantic, heartbeat-control, and
-terminal-method evidence through `DeliveryResult`.
+`ConsumeWithHeartbeat` SHALL return ACK, delayed NAK, and Term settlement errors to its caller while preserving the
+existing heartbeat and shutdown delays. It SHALL not discard a settlement error after work has returned.
 
-**Migration**: Define an owner-specific `DeliveryWork` decision matrix, validate `HeartbeatDeliveryPolicy` from the
-exact acquisition configuration, call `ConsumeDeliveryWithHeartbeat`, inspect every `DeliveryResult`, and stop the
-exact retained consumer owner outside the callback when `OwnerStopRequired` is true. ACK, Retry, Terminate, and
-Quarantine replace inferred success/error handling; the removed helper has no alias.
+This contract SHALL bind only the helper's remaining ratcheted callers. It is not the framework's settlement
+contract: a migrated binding defines an owner-specific `DeliveryWork` decision matrix, validates
+`HeartbeatDeliveryPolicy` from the exact acquisition configuration, calls `ConsumeDeliveryWithHeartbeat`, inspects
+every `DeliveryResult`, and stops the exact retained consumer owner outside the callback when `OwnerStopRequired` is
+true. ACK, Retry, Terminate, and Quarantine replace inferred success/error handling there.
+
+This requirement is deleted together with the helper by the PR that migrates its last caller (#1249).
+
+#### Scenario: transient work fails and delayed NAK fails
+
+- **WHEN** work returns a transient error
+- **AND** `NakWithDelay` also fails
+- **THEN** the returned error chain contains both failures
+
+#### Scenario: shutdown NAK fails
+
+- **WHEN** context cancellation owns the delivery outcome
+- **AND** the five-second delayed NAK fails
+- **THEN** the returned error chain contains context cancellation and the settlement failure

@@ -12,38 +12,39 @@ can migrate. JetStream already owns durable delivery and restart redelivery, and
 handles; a shared supervisor, state-machine runtime, lifecycle gate, or durable quarantine store would duplicate
 those authorities.
 
-SemStreams is pre-v1 and greenfield. The permanent typed API and removal of the old export must reach `main` in one
-atomic transition rather than establish a compatibility period as accepted framework surface.
+SemStreams is pre-v1 and greenfield, so the old export gets no deprecation period: it is deleted by the PR that
+migrates its last caller (#1249) rather than kept alive as accepted framework surface. The typed API lands first, in
+this change, with the two bindings whose durable consequences the foundation can encode.
 
 ## What changes
 
 - Add validated ACK, Retry, Terminate, and Quarantine decisions plus an error-last work contract.
-- Observe the delivery number without exposing native settlement authority.
+- Validate server delivery metadata before work without exposing the delivery count or native settlement authority.
 - Separate semantic retry timing from the consumer's AckWait and BackOff lease policy.
 - Validate heartbeat policy from the exact consumer configuration before acquisition.
 - Preserve semantic, heartbeat-control, and local-settlement evidence in an inspectable result.
 - Stop the exact existing owner after heartbeat control loss or quarantine.
-- Migrate tools, dispatch complete/failed, model, loop task/response/tool-result, and AgentRun complete/failed through
-  separately accepted owner-specific definitions of done.
-- Prove all nine bindings across SemStreams process replacement while retaining NATS.
-- Remove `NewDurableHandler` and `ConsumeWithHeartbeat` without aliases.
+- Migrate tools and dispatch complete/failed in this change through accepted owner-specific definitions of done;
+  model, loop task/response/tool-result (#1327) and AgentRun complete/failed (#1249) migrate in their own layers.
+- Prove the three migrated bindings across SemStreams process replacement while retaining NATS; the remaining six are
+  proven by their own layers.
+- Remove `NewDurableHandler` without alias here; `ConsumeWithHeartbeat` is removed by #1249 with its last caller.
 - Correct gated-DAG publish ambiguity and bounded deduplication claims, while keeping adopter-specific done/replay in
   `gated-dag-dispatch` and generic transport mechanics in `jetstream-consumer-policy`.
 - Document the message-pump and lease-watchdog pattern and the measured gated-DAG adopter migration seams.
 
-## Atomic public landing
+## Layered public landing
 
-#759 owns the complete public API transaction: introduce the permanent typed settlement surface, integrate the nine
-owner-specific migrations, and remove exported `ConsumeWithHeartbeat` without alias. PR #1156 remains draft and does
-not merge until the old symbol and every production caller are absent.
+#759 owns the complete public API transaction, landed in layers rather than one squash. This change is the
+foundation: the permanent typed settlement surface, the tools and dispatch migrations, and removal of
+`NewDurableHandler`. It promotes only what it implements.
 
-#1146 retains its full accepted restart-safety scope and implements model plus loop task/response/tool-result against
-the staged #759 foundation through PR #1159. #1249 independently designs and implements AgentRun complete/failed
-fanout settlement against the post-#1146 staged foundation. Both PRs target the non-default #759 branch and receive
-their own reviews. Their work reaches `main` only through the final reviewed #1156 squash merge.
+The remaining migrations land as their own claimed, reviewed, and archived PRs stacked above it: #1327 takes model
+and loop task/response/tool-result, #1249 takes AgentRun complete/failed fanout and deletes `ConsumeWithHeartbeat`
+with its last caller. Neither closes #759; the layer that finishes the migration does.
 
-The three current production caller files form a zero-growth branch-staging guard only. They are not an API
-allowlist, compatibility promise, current capability, or merge gate.
+The remaining production caller files form a zero-growth ratchet only. They are not an API allowlist, compatibility
+promise, current capability, or merge gate.
 
 No binding migration is a mechanical nil-to-ACK/error-to-Retry conversion. Each ACK requires its accepted
 owner-specific durable definition of done. A fast lane does not gain raw settlement authority or an exported

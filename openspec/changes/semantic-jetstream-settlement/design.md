@@ -4,21 +4,22 @@
 
 ### D0 — non-default integration trunk and atomic default-branch cutover
 
-`codex/gh759-semantic-settlement` is the integration trunk and the head of PR #1156. PR #1156 alone targets `main`.
-PR #1159 and the #1249 implementation PR target the #759 branch and are separately claimed, reviewed, archived, and
-squash-merged there.
+**Superseded 2026-09-18; the heading is kept as this decision's name.** The trunk-and-one-squash topology below was
+abandoned: `codex/gh759-semantic-settlement` and PR #1156 are dead, and the work re-landed as layers on `main` —
+PR #1331 (this foundation), then #1327 and #1249 above it, each claimed, reviewed, and archived on its own. What
+survives from D0 is the greenfield rule in the next paragraph, as the owner re-ruled it.
 
 The legacy helper is removed in the PR that migrates its last caller (#1249). No deprecation period is offered to
 adopters; `docs/operations/migration-beta162-to-beta163.md` names the removal. Until that PR merges, `main` carries
 the helper unadvertised and the AST ratchet forbids any new caller. (Owner ruling 2026-09-18, recorded on #759.) The
 exact caller list is enforced only as a zero-growth test that shrinks after each staged child merge.
 
-After #1146 and #1249 integrate, #759 removes `ConsumeWithHeartbeat`, proves the exported symbol and production caller
-count are zero, and archives the final capability state. The final default-branch squash therefore performs one
-greenfield API cutover rather than accepting a compatibility period.
+The layer that migrates the last caller (#1249) removes `ConsumeWithHeartbeat` in the same PR and proves the
+exported symbol and production caller count are zero. Each layer promotes only the bindings it implements; no layer
+archives a contract for bindings it left on the legacy helper.
 
-Non-default child merges do not close their issues. PR #1156 declares the complete closing set before implementation
-and owner-requested cross-agent review of the final integrated claim set and owns default-branch closure.
+No child merge closes #759. The layer that finishes the migration declares the closing set before its own reviews and
+owns closure.
 
 ### D1 — permanent additive typed API
 
@@ -36,8 +37,8 @@ The established `Consume...With...` vocabulary describes one delivered message w
 consumer. The permanent name does not change during staging or final cutover. Final current truth exports only this
 typed entry point; `ConsumeWithHeartbeat` and `NewDurableHandler` are absent without aliases.
 
-During non-default integration only, a zero-growth branch-staging guard pins the three current caller files and
-rejects any new production caller or alias. That list is not an API allowlist, compatibility promise, current
+Until the last caller migrates, a zero-growth ratchet pins the remaining caller files and rejects any new production
+caller or alias. That list is not an API allowlist, compatibility promise, current
 capability, or merge authority. Documentation and examples teach only the permanent typed API.
 
 ### D2 — semantic decision and error-last work contract
@@ -286,14 +287,16 @@ and replay. SemStreams records exact migration instructions for each checkpoint 
 
 ### D15 — final legacy removal
 
-Final `ConsumeWithHeartbeat` removal belongs to #759. The branch-staging zero-growth guard shrinks as #1146 and #1249
-migrate their callers. After the final staged migration, conformance requires zero production callers and absence of
-the exported declaration and every alias.
+Final `ConsumeWithHeartbeat` removal belongs to #759 and lands in the #1249 layer with its last caller. The
+zero-growth ratchet shrinks as #1327 and #1249 migrate theirs. After the final migration, conformance requires zero
+production callers and absence of the exported declaration and every alias.
 
-Removal, complete replacement proof, migration reconciliation, and the complete closing claim set precede final PR
-#1156 implementation and owner-requested cross-agent review. Archive/spec sync follows accepted fixes and re-review
-and is the final content commit. There is no accepted additive dual-API period. Closed issue #1250 remains closed and
-is not reclaimed.
+Removal, complete replacement proof, migration reconciliation, and the complete closing claim set precede that
+layer's implementation review and owner-requested cross-agent review. Each layer's archive/spec sync follows its own
+accepted fixes and re-review and is that PR's final content commit. The interval in which both APIs exist on `main`
+is a shrinking remainder under the ratchet, not an accepted additive dual-API period: no deprecation is offered and
+no adopter is invited onto the legacy helper (owner ruling 2026-09-18). Closed issue #1250 remains closed and is not
+reclaimed.
 
 ## Declared cost
 
