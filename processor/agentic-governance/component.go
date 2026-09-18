@@ -506,27 +506,14 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port, hand
 	if c.consumeStream != nil {
 		consume = c.consumeStream
 	}
-	var admissionMu sync.Mutex
-	admissionOpen := true
-	fatal := make(chan natsclient.DeliveryResult, 1)
+	admission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
 	handle, err := consume(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		admissionMu.Lock()
-		admitted := admissionOpen
-		admissionMu.Unlock()
-		if !admitted {
+		if !admission.admit() {
 			return
 		}
 		decision, cause := runGovernanceDeliveryWork(msgCtx, msg.Data(), handler)
 		result := natsclient.SettleDelivery(msg, decision, cause)
-		if result.OwnerStopRequired() {
-			admissionMu.Lock()
-			if admissionOpen {
-				admissionOpen = false
-				c.recordDeliveryOwnerFatal(result)
-				fatal <- result
-			}
-			admissionMu.Unlock()
-		}
+		admission.latch(result)
 		if result.Err() != nil && !result.OwnerStopRequired() {
 			c.logger.Error("Governance delivery did not settle cleanly", "port", port.Name, "error", result.Err())
 		}
@@ -534,18 +521,8 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port, hand
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupConsumer", fmt.Sprintf("setup consumer for stream %s", streamName))
 	}
-	binding := streamConsumerBinding{handle: handle, drainOnce: &sync.Once{}}
-	done := make(chan struct{})
-	binding.observerDone = done
-	go func() {
-		defer close(done)
-		select {
-		case result := <-fatal:
-			c.logger.Error("Governance delivery ownership lost", "port", port.Name, "error", result.Err())
-			binding.drain()
-		case <-ctx.Done():
-		}
-	}()
+	binding := newStreamConsumerBinding(handle)
+	c.observeDeliveryLane(ctx, &binding, admission, port.Name)
 	c.lifecycleMu.Lock()
 	c.consumers = append(c.consumers, binding)
 	c.lifecycleMu.Unlock()
