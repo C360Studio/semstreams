@@ -31,7 +31,8 @@ zero code and is not carried.
 ## D3 — the fatal latch is per LANE, and JetStream keeps delivery authority
 
 `deliveryLaneAdmission` is **one per lane**, not one per component: each `setupConsumer` call constructs its own
-(`agentic-loop/component.go:1049`, `:1057`; dispatch `:547`, `:618`, `:702`; governance per `setupConsumer`). It is
+(`agentic-loop/component.go:1066`, `:1088`; `agentic-dispatch/component.go:547`, `:588`, `:618`, `:659`,
+`:702`; `agentic-model/component.go:408`; `agentic-governance/component.go:509`). It is
 a mutex-guarded bool plus a one-slot channel. On the first result whose `OwnerStopRequired()` is true it closes that
 lane's admission, records the cause on the component's existing health surface exactly once, and wakes a per-binding
 observer that drains that exact consume handle. Health is component-wide and the drain is lane-exact, so a fatal on
@@ -73,7 +74,7 @@ defended against here. Declared residual below.
 ## D7 — a partial publish is Quarantine, not Retry
 
 `persistHandlerResult` stamps the loop entity and then publishes. The stamp is a whole-entity upsert
-(`component.go:2220`, `:2142`, `:2169` write the full record, not a delta), so replaying it is harmless. The publish
+(`component.go:2224`, `:2146`, `:2173` write the full record, not a delta), so replaying it is harmless. The publish
 phase is not: it emits N results in a loop, and a failure on result k leaves 1..k-1 already durable on the stream
 with no record of how far it got. Redelivering that callback republishes them. So the two phases now classify
 differently — a pre-publish failure wraps to Retry as before, and a publish-phase failure wraps
@@ -87,7 +88,8 @@ phase can go back to Retry.
 ## Not in this layer
 
 `agentic-model`'s request lane still returns Ack from its callback before the response PubAck returns
-(`processor/agentic-model/component.go:391-398`). That is the same defect class this change exists to fix, and it
+(`processor/agentic-model/component.go:396-397` — `handleRequest` is called for effect and
+`DeliveryDecisionAck` is returned unconditionally). That is the same defect class this change exists to fix, and it
 is L2's (`af829616`) subject, not a gap here — L1 touches agentic-model only for its heartbeat lease floor and its
 delivery-owner health latch, and this change's `specs/agentic-model/` delta is scoped to exactly those two. Landing
 the request-lane half here would split one component's settlement across two changes.
