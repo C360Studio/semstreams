@@ -10,8 +10,9 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 - [x] 1.4 Record explicit owner approval on #759.
 - [x] 1.5 File and reconcile #1155 as the process-replacement admission gate.
 - [x] 1.6 Committed the OpenSpec proposal first as `12878610`, pushed the isolated branch, and opened draft PR #1156
-      with the original claim and `implemented-by: Sol`; the accepted greenfield amendment governs the staging and
-      final closing body from this point forward.
+      with the original claim and `implemented-by: Sol`. That claim was superseded: PR #1156 and its branch are
+      abandoned and the live claim is draft PR #1331 (§6.1), which carries the same thirteen commits byte-identical
+      on `main`.
 - [x] 1.7 Complete the 2026-09-02 inventory rebaseline, Stage A design reconciliation, independent design review, and
       independently reviewed owner-approved greenfield staging amendment.
 
@@ -109,45 +110,22 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 - [x] 5.7 With a real durable consumer, prove an explicit semantic Retry produces a server-counted second delivery of
       the same stream sequence, and that the framework exposes no delivery count to work (2.9 withdrawal).
 
-## 6. Non-default staged integrations
+## 6. Landing
 
-- [ ] 6.1 Rebase #759 onto current `main`, preserve merged #1245 coverage, complete the foundation/docs/spec
-      reconciliation, review it, and record the pushed remote parent full SHA as `F`.
-- [ ] 6.2 Retarget PR #1159 to base `codex/gh759-semantic-settlement`, rebase its branch onto exact `F`, and verify its
-      merge base and diff before implementation.
-- [ ] 6.3 Correct #1146 proposal/design/tasks for exact `F`, the non-default base, full-scope fast-lane gate, and
-      AgentRun transfer before its implementation, review, or archive.
-- [ ] 6.4 Confirm #1146 implementation/proof, complete-claim implementation review, owner-requested cross-agent review,
-      fixes/re-review, final-content archive, and narrow archive/spec-sync review are recorded in that order.
-- [ ] 6.5 After hosted #1159 integration, confirm its reviewed content, archive, and current-spec sync are present on
-      #759; record its reviewed head and staging merge SHA without representing #1146 as closed.
-- [ ] 6.6 Record the updated remote #759 head as `A`; create `codex/gh1249-agentrun-fanout-settlement` from exact `A`,
-      commit its proposal first, and open a draft PR based on `codex/gh759-semantic-settlement` with `Closes #1249`.
-- [ ] 6.7 Correct #1249 proposal/design/tasks for exact `A`, the non-default base, and complete AgentRun transfer before
-      its implementation, review, or archive.
-- [ ] 6.8 Confirm independent inventory/design review and owner acceptance precede AgentRun implementation.
-- [ ] 6.9 Confirm #1249 implementation/proof, complete-claim implementation review, owner-requested cross-agent review,
-      fixes/re-review, final-content archive, and narrow archive/spec-sync review are recorded in that order.
-- [ ] 6.10 After hosted #1249 integration, confirm its reviewed content, archive, and current-spec sync are present on
-       #759; record its reviewed head and staging merge SHA without representing #1249 as closed.
+Landing choreography — undraft, CI, squash, issue closure — lives on PR #1331's checklist, not here (owner ruling
+on #1230, Option 1). These tasks assert only branch-checkable facts.
 
-## 7. Final zero-caller cutover
-
-- [ ] 7.1 Fast-forward the #759 worktree after each hosted child merge; do not recreate reviewed integrations through
-      cherry-pick or local merge.
-- [ ] 7.2 Shrink the branch-staging zero-growth guard after #1146 and #1249; never describe it as an API allowlist.
-- [ ] 7.3 Prove zero production `ConsumeWithHeartbeat` calls, remove the exported helper without alias, and replace the
-      staging guard with final absence conformance.
-- [ ] 7.4 Prove all nine original bindings use their accepted typed settlement contracts and no binding was migrated
-      through mechanical nil/error conversion.
-- [ ] 7.5 Reconcile SemStreams-owned sister migration instructions and the temporary branch-only adopter seam.
-- [ ] 7.6 Complete every #1155 replacement-proof row and run focused race, full race/integration, lint, build, schema,
-      contracts, gated-DAG, and serialized agentic E2E gates.
-- [ ] 7.7 After zero-caller/removal/full-proof gates pass, replace PR #1156 staging `Refs #759` with `Closes #759` and
-      add `Closes #1146`, `Closes #1249`, and `Closes #1155` before implementation review of the complete claim set.
-- [ ] 7.8 Obtain SemStreams implementation review of the complete integrated code and claim set.
-- [ ] 7.9 Obtain the owner-requested cross-agent review.
-- [ ] 7.10 Apply every finding and repeat implementation and cross-agent review until accepted.
-- [ ] 7.11 Confirm #1146 and #1249 are archived and their current-spec sync is present.
-- [ ] 7.12 Archive `semantic-jetstream-settlement` as PR #1156's final content commit.
-- [ ] 7.13 Obtain narrow integrated archive/spec-sync review and make no later content commit.
+- [x] 6.1 Re-land the reviewed foundation directly on `main`: worktree branch `claude/gh759-semantic-settlement`,
+      draft PR #1331, thirteen commits cherry-picked from the abandoned `codex/gh759-semantic-settlement` head.
+      Identity verified at `0ccb1a74`: `git diff 417beae5 0ccb1a74 --stat` over all 54 files PR #1156 touched is
+      empty. PR #1156 and its branch are abandoned; no task in this change targets them.
+- [x] 6.2 Record the stack above this PR. Each child carries its own claim, review, and archive, and none closes
+      #759: L0.5 is #1239 (PR #1332, base `claude/gh759-semantic-settlement`) and L1 is #1327 (PR #1334, base
+      `claude/gh1239-signal-vocabulary`). This change's spec deltas cover the L0 foundation only.
+- [x] 6.3 Record that removing `ConsumeWithHeartbeat` belongs to the PR that migrates its last production caller —
+      the #1249 AgentRun layer — and not to this change (owner ruling 2026-09-18 on #759). No deprecation period is
+      offered to adopters; `docs/operations/migration-beta162-to-beta163.md` names the removal, and the AST ratchet
+      in `natsclient/consumer_policy_callsite_test.go` forbids any new caller until then.
+- [ ] 6.4 Apply every SemStreams implementation-review finding on PR #1331 and obtain re-review of the fixes.
+- [ ] 6.5 Archive `semantic-jetstream-settlement` as PR #1331's final content commit and obtain the narrow
+      archive/spec-sync review, with no later content commit.
