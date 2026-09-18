@@ -371,6 +371,7 @@ func (s *Scenario) verifyDurableToolReplay(ctx context.Context, result *scenario
 			"entity_id": "c360.agentic.sensor.environmental.temperature.temp-sensor-001",
 		},
 	}
+	stampInjectedExecutionIdentity(&call)
 	request := message.NewBaseMessage(call.Schema(), &call, "e2e-durable-replay")
 	wire, err := json.Marshal(request)
 	if err != nil {
@@ -420,7 +421,7 @@ func (s *Scenario) verifyDurableToolReplay(ctx context.Context, result *scenario
 func (s *Scenario) verifyReplayedToolResult(
 	ctx context.Context, stream jetstream.Stream, call agentic.ToolCall, executionsBefore float64,
 ) (string, float64, error) {
-	resultSubject := "tool.result." + call.ID
+	resultSubject := "tool.result." + call.ExecutionID
 	deadline := time.Now().Add(45 * time.Second)
 	var stored *jetstream.RawStreamMsg
 	for time.Now().Before(deadline) {
@@ -441,7 +442,7 @@ func (s *Scenario) verifyReplayedToolResult(
 	if stored == nil {
 		return "", 0, fmt.Errorf("stored result did not replay within 45s")
 	}
-	wantMsgID := "tool-result/v1/" + durableCallDigest(call.ID)
+	wantMsgID := "tool-result/v1/" + durableExecutionDigest(call.ExecutionID)
 	if got := stored.Header.Get(nats.MsgIdHdr); got != wantMsgID {
 		return "", 0, fmt.Errorf("replayed result Nats-Msg-Id = %q, want %q", got, wantMsgID)
 	}
@@ -473,8 +474,31 @@ func (s *Scenario) verifyReplayedToolResult(
 	return wantMsgID, executionDelta, nil
 }
 
-func durableCallDigest(callID string) string {
-	sum := sha256.Sum256([]byte(callID))
+// stampInjectedExecutionIdentity supplies the tool-execution correlation a
+// framework-minted call carries (#1328), on a call this tier hand-injects.
+//
+// These stages publish straight onto tool.execute.<call_id>, bypassing the
+// agentic-loop that normally stamps request_id / execution_id / call_ordinal,
+// and agentic-tools TERMINATES a delivery whose correlation is absent rather
+// than executing it. Without this the injected call never reaches an executor.
+//
+// The values are synthetic on purpose. agentic-tools treats the execution id
+// as opaque — it addresses the result subject, the result Nats-Msg-Id and the
+// outcome key off it and never re-derives it — so re-implementing the loop's
+// sha256 derivation here would mirror production without proving anything
+// about it. The request id follows the Q4 grammar (<loop>:req:<iteration>:<retry>)
+// so a stream dump from this tier reads like a real one.
+func stampInjectedExecutionIdentity(call *agentic.ToolCall) {
+	call.RequestID = call.LoopID + ":req:1:0"
+	call.CallOrdinal = 1
+	call.ExecutionID = "tool-exec-v1-" + call.ID
+}
+
+// durableExecutionDigest mirrors agentic-tools' outcomeIdentityDigest: the
+// result message id and the tool-call outcome key are both digests of the
+// EXECUTION id (#1328), not of the provider call id.
+func durableExecutionDigest(executionID string) string {
+	sum := sha256.Sum256([]byte(executionID))
 	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:]))
 }
 

@@ -115,7 +115,7 @@ func (s *Scenario) verifyCompletedOutcomeAcrossReplacement(
 	if err := s.releaseBarrier(ctx, call.ID); err != nil {
 		return err
 	}
-	if err := s.waitForOutcome(ctx, call.ID, 10*time.Second); err != nil {
+	if err := s.waitForOutcome(ctx, call.ExecutionID, 10*time.Second); err != nil {
 		return fmt.Errorf("completed outcome was not durable before replacement: %w", err)
 	}
 	if err := s.waitMetricWithLabels(ctx, "semstreams_agentic_tools_result_publish_failures_total",
@@ -477,12 +477,14 @@ func (s *Scenario) newDispatchTerminal(
 
 func newProcessBarrierCall(label string) agentic.ToolCall {
 	now := time.Now().UnixNano()
-	return agentic.ToolCall{
+	call := agentic.ToolCall{
 		ID:      fmt.Sprintf("e2e-process-barrier-%s-%d", label, now),
 		Name:    processbarrier.ToolName,
 		LoopID:  fmt.Sprintf("e2e-process-loop-%d", now),
 		TraceID: fmt.Sprintf("e2e-process-trace-%d", now),
 	}
+	stampInjectedExecutionIdentity(&call)
+	return call
 }
 
 func (s *Scenario) publishToolCall(ctx context.Context, call agentic.ToolCall) error {
@@ -517,9 +519,9 @@ func flushBarrierRelease(ctx context.Context, flush func(context.Context) error)
 	return flush(flushCtx)
 }
 
-func (s *Scenario) waitForOutcome(ctx context.Context, callID string, timeout time.Duration) error {
+func (s *Scenario) waitForOutcome(ctx context.Context, executionID string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	key := "v1." + durableCallDigest(callID)
+	key := "v1." + durableExecutionDigest(executionID)
 	for time.Now().Before(deadline) {
 		if _, err := s.nats.GetKV(ctx, graph.BucketToolCallOutcomes, key); err == nil {
 			return nil
@@ -540,7 +542,7 @@ func (s *Scenario) waitForToolResult(ctx context.Context, call agentic.ToolCall,
 	if err != nil {
 		return err
 	}
-	raw, err := waitForStreamSubjectData(ctx, stream, "tool.result."+call.ID, timeout)
+	raw, err := waitForStreamSubjectData(ctx, stream, "tool.result."+call.ExecutionID, timeout)
 	if err != nil {
 		return err
 	}

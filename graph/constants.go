@@ -45,7 +45,8 @@ const (
 
 	// Operational buckets
 	// BucketToolCallOutcomes is agentic-tools' immutable COMPLETED ledger for
-	// durable tool-result replay. Keys are opaque v1 hashes of ToolCall.ID.
+	// durable tool-result replay. Keys are opaque v1 hashes of the framework
+	// tool-execution identity (ToolCall.ExecutionID), not of the provider call id.
 	BucketToolCallOutcomes = "TOOL_CALL_OUTCOMES"
 
 	// BucketGraphIngestAppliedSeq is graph-ingest's ADR-072 redelivery-guard
