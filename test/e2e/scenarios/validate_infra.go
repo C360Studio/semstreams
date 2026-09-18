@@ -360,85 +360,22 @@ func (s *TieredScenario) getEntityCountForEmbeddings(result *Result) int {
 	return 74 // Kitchen sink dataset
 }
 
-// executeTestHTTPGateway validates GraphQL Gateway query endpoints
+// executeTestHTTPGateway validates GraphQL Gateway query endpoints.
+//
+// gh#1336: globalSearch is served from graph-query's community generation, and
+// while no generation is published the gateway answers with the DECLARED
+// readiness transient instead of a result. This stage used to turn one such
+// sample into a tier failure — the e2e statistical red of 2026-09-18, on a
+// comment-only commit. The wait belongs to awaitReadyGatewayGlobalSearch (see
+// http_gateway_readiness.go); the assertions below are unchanged and run
+// against the first answer the index actually served.
 func (s *TieredScenario) executeTestHTTPGateway(ctx context.Context, result *Result) error {
-	graphqlURL := s.config.GraphQLURL
-	httpClient := &http.Client{Timeout: globalSearchClientTimeout(60 * time.Second)}
-
-	// Test globalSearch via GraphQL endpoint
-	graphqlQuery := map[string]any{
-		"query": `query($query: String!, $level: Int, $maxCommunities: Int) {
-			globalSearch(query: $query, level: $level, maxCommunities: $maxCommunities) {
-				entities { id type }
-				count
-				strategy
-			}
-		}`,
-		"variables": map[string]any{
-			"query":          "robot warehouse",
-			"level":          0,
-			"maxCommunities": 10,
-		},
-	}
-
-	queryJSON, err := json.Marshal(graphqlQuery)
+	gqlResp, err := s.awaitReadyGatewayGlobalSearch(ctx, result,
+		communityIndexReadyWait, communityIndexReadyPoll)
 	if err != nil {
-		return fmt.Errorf("marshal GraphQL gateway query: %w", err)
+		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", graphqlURL, strings.NewReader(string(queryJSON)))
-	if err != nil {
-		return fmt.Errorf("create GraphQL gateway request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	startTime := time.Now()
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("execute GraphQL gateway request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	latency := time.Since(startTime)
-	result.Metrics["graphql_gateway_latency_ms"] = latency.Milliseconds()
-
-	if resp.StatusCode != http.StatusOK {
-		body, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			return fmt.Errorf("GraphQL gateway returned status %d and body read failed: %w", resp.StatusCode, readErr)
-		}
-		return fmt.Errorf("GraphQL gateway returned status %d: %s", resp.StatusCode, body)
-	}
-
-	// Parse GraphQL response structure
-	var gqlResp struct {
-		Data struct {
-			GlobalSearch struct {
-				Entities []struct {
-					ID   string `json:"id"`
-					Type string `json:"type"`
-				} `json:"entities"`
-				Count    int    `json:"count"`
-				Strategy string `json:"strategy"`
-			} `json:"globalSearch"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("read GraphQL gateway response: %w", err)
-	}
-
-	if err := json.Unmarshal(bodyBytes, &gqlResp); err != nil {
-		return fmt.Errorf("decode GraphQL gateway response: %w", err)
-	}
-
-	if len(gqlResp.Errors) > 0 {
-		return fmt.Errorf("GraphQL gateway search error: %s", gqlResp.Errors[0].Message)
-	}
 	if gqlResp.Data.GlobalSearch.Strategy != "graphrag" {
 		return fmt.Errorf("GraphQL globalSearch strategy = %q, want %q", gqlResp.Data.GlobalSearch.Strategy, "graphrag")
 	}
@@ -446,7 +383,7 @@ func (s *TieredScenario) executeTestHTTPGateway(ctx context.Context, result *Res
 	hitCount := len(gqlResp.Data.GlobalSearch.Entities)
 	result.Metrics["graphql_gateway_search_hits"] = hitCount
 	result.Details["graphql_gateway_tested"] = true
-	result.Details["graphql_gateway_endpoint"] = graphqlURL
+	result.Details["graphql_gateway_endpoint"] = s.config.GraphQLURL
 	result.Details["graphql_gateway_strategy"] = gqlResp.Data.GlobalSearch.Strategy
 
 	return nil
