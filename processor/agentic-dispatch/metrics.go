@@ -17,6 +17,7 @@ type routerMetrics struct {
 	routingDuration     prometheus.Histogram
 	completionsReceived *prometheus.CounterVec
 	terminalSettlements *prometheus.CounterVec
+	deliveryRefusals    *prometheus.CounterVec
 
 	// HTTP endpoint metrics
 	httpRequestsTotal   *prometheus.CounterVec
@@ -133,6 +134,13 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 			Help:      "Terminal settlement attempts by fixed bounded reason",
 		}, []string{"reason"}),
 
+		deliveryRefusals: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "semstreams",
+			Subsystem: "router",
+			Name:      "delivery_refusals_total",
+			Help:      "Deliveries refused unsettled by a latched terminal lane, by port",
+		}, []string{"lane"}),
+
 		// HTTP endpoint metrics
 		httpRequestsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "semstreams",
@@ -247,6 +255,7 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 		_ = registry.RegisterHistogram("router", "routing_duration_seconds", m.routingDuration)
 		_ = registry.RegisterCounterVec("router", "completions_received_total", m.completionsReceived)
 		_ = registry.RegisterCounterVec("router", "terminal_settlement_total", m.terminalSettlements)
+		_ = registry.RegisterCounterVec("router", "delivery_refusals_total", m.deliveryRefusals)
 		_ = registry.RegisterCounterVec("router", "http_requests_total", m.httpRequestsTotal)
 		_ = registry.RegisterHistogramVec("router", "http_request_duration_seconds", m.httpRequestDuration)
 		_ = registry.RegisterCounterVec("router", "loop_approvals_submitted_total", m.loopApprovalsSubmitted)
@@ -270,6 +279,7 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 		_ = prometheus.DefaultRegisterer.Register(m.routingDuration)
 		_ = prometheus.DefaultRegisterer.Register(m.completionsReceived)
 		_ = prometheus.DefaultRegisterer.Register(m.terminalSettlements)
+		_ = prometheus.DefaultRegisterer.Register(m.deliveryRefusals)
 		_ = prometheus.DefaultRegisterer.Register(m.httpRequestsTotal)
 		_ = prometheus.DefaultRegisterer.Register(m.httpRequestDuration)
 		_ = prometheus.DefaultRegisterer.Register(m.loopApprovalsSubmitted)
@@ -326,6 +336,10 @@ func (m *routerMetrics) recordCompletionReceived(status string) {
 
 func (m *routerMetrics) recordTerminalSettlement(reason string) {
 	m.terminalSettlements.WithLabelValues(reason).Inc()
+}
+
+func (m *routerMetrics) recordDeliveryRefused(lane string) {
+	m.deliveryRefusals.WithLabelValues(lane).Inc()
 }
 
 // recordHTTPRequest records an HTTP request with endpoint, method, and status.

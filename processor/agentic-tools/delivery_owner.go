@@ -12,14 +12,33 @@ import (
 // delivery authority; this latch only prevents new local work after ownership
 // control becomes unsafe.
 type deliveryLaneAdmission struct {
-	mu      sync.Mutex
-	open    bool
-	fatal   chan natsclient.DeliveryResult
-	onFatal func(natsclient.DeliveryResult)
+	mu        sync.Mutex
+	open      bool
+	fatal     chan natsclient.DeliveryResult
+	onFatal   func(natsclient.DeliveryResult)
+	onRefused func(subject string)
 }
 
-func newDeliveryLaneAdmission(onFatal func(natsclient.DeliveryResult)) *deliveryLaneAdmission {
-	return &deliveryLaneAdmission{open: true, fatal: make(chan natsclient.DeliveryResult, 1), onFatal: onFatal}
+func newDeliveryLaneAdmission(
+	onFatal func(natsclient.DeliveryResult),
+	onRefused func(subject string),
+) *deliveryLaneAdmission {
+	return &deliveryLaneAdmission{
+		open:      true,
+		fatal:     make(chan natsclient.DeliveryResult, 1),
+		onFatal:   onFatal,
+		onRefused: onRefused,
+	}
+}
+
+// refuse declares the refusal. The lane is Drain()ed rather than stopped, so
+// buffered deliveries still reach this path after the latch; without this
+// declaration only the first fatal is visible and every later refusal is a
+// silent drop.
+func (a *deliveryLaneAdmission) refuse(subject string) {
+	if a.onRefused != nil {
+		a.onRefused(subject)
+	}
 }
 
 func (a *deliveryLaneAdmission) admit() bool {
@@ -52,6 +71,11 @@ func consumeAdmittedDelivery(
 	admission *deliveryLaneAdmission,
 ) (natsclient.DeliveryResult, bool) {
 	if !admission.admit() {
+		subject := ""
+		if msg != nil {
+			subject = msg.Subject()
+		}
+		admission.refuse(subject)
 		return natsclient.DeliveryResult{}, false
 	}
 	result := natsclient.ConsumeDeliveryWithHeartbeat(ctx, msg, policy)

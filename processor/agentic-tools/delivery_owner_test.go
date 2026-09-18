@@ -1,6 +1,7 @@
 package agentictools
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -74,8 +76,15 @@ func TestDeliveryLaneBuffersFatalBeforeHandleAndRefusesLaterDelivery(t *testing.
 			return natsclient.DeliveryDecisionQuarantine, cause
 		})
 	require.NoError(t, err)
-	component := &Component{running: true, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	admission := newDeliveryLaneAdmission(component.recordDeliveryOwnerFatal)
+	logs := &bytes.Buffer{}
+	component := &Component{
+		running: true,
+		logger:  slog.New(slog.NewTextHandler(logs, nil)),
+		metrics: newToolsMetrics(),
+	}
+	admission := newDeliveryLaneAdmission(component.recordDeliveryOwnerFatal, func(subject string) {
+		component.recordDeliveryRefused("tool.execute", subject)
+	})
 	msg := &deliveryOwnerMsg{data: []byte("first")}
 	result, admitted := consumeAdmittedDelivery(t.Context(), msg, policy, admission)
 	require.True(t, admitted)
@@ -101,6 +110,15 @@ func TestDeliveryLaneBuffersFatalBeforeHandleAndRefusesLaterDelivery(t *testing.
 	require.Equal(t, int32(1), msg.dataCalls.Load())
 	require.Zero(t, msg.heartbeats.Load())
 	require.Zero(t, msg.settlement.Load())
+
+	// A refused delivery is a declared skip, not a silent drop: both call
+	// sites guard every branch on admission, so the refusal is invisible
+	// unless the lane names it here.
+	require.Equal(t, float64(1),
+		testutil.ToFloat64(component.metrics.deliveryRefusals.WithLabelValues("tool.execute")),
+		"a refused delivery must increment the refusal counter")
+	require.Contains(t, logs.String(), "Tool delivery refused by latched lane")
+	require.Contains(t, logs.String(), "subject=tool.delivery")
 	binding.drain()
 	require.Equal(t, int32(1), handle.drains.Load(), "fatal and ordinary stop share drain-once")
 	cancel()
@@ -116,7 +134,7 @@ func TestDeliveryMetadataFailureBuffersBeforeHandleAndDrainsExactOwner(t *testin
 			return natsclient.DeliveryDecisionAck, nil
 		})
 	require.NoError(t, err)
-	admission := newDeliveryLaneAdmission(nil)
+	admission := newDeliveryLaneAdmission(nil, nil)
 	msg := &deliveryOwnerMsg{data: []byte("must-not-run"), metadataErr: metadataCause}
 
 	result, admitted := consumeAdmittedDelivery(t.Context(), msg, policy, admission)
@@ -161,7 +179,7 @@ func TestDeliveryLaneAllowsAlreadyAdmittedWorkToComplete(t *testing.T) {
 			return natsclient.DeliveryDecisionQuarantine, errors.New("fatal")
 		})
 	require.NoError(t, err)
-	admission := newDeliveryLaneAdmission(nil)
+	admission := newDeliveryLaneAdmission(nil, nil)
 	type slowOutcome struct {
 		result   natsclient.DeliveryResult
 		admitted bool
@@ -188,7 +206,7 @@ func TestDeliveryMethodErrorDoesNotCloseAdmission(t *testing.T) {
 			return natsclient.DeliveryDecisionAck, nil
 		})
 	require.NoError(t, err)
-	admission := newDeliveryLaneAdmission(nil)
+	admission := newDeliveryLaneAdmission(nil, nil)
 	msg := &deliveryOwnerMsg{ackErr: errors.New("ack unknown")}
 	result, admitted := consumeAdmittedDelivery(t.Context(), msg, policy, admission)
 	require.True(t, admitted)

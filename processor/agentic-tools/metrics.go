@@ -55,6 +55,7 @@ type toolsMetrics struct {
 	outcomeCollisions     prometheus.Counter
 	resultPublishFailures *prometheus.CounterVec
 	ambiguousRedeliveries *prometheus.CounterVec
+	deliveryRefusals      *prometheus.CounterVec
 }
 
 var (
@@ -80,13 +81,14 @@ func getMetrics(registry *metric.MetricsRegistry) *toolsMetrics {
 			_ = registry.RegisterCounter("agentic-tools", "outcome_collisions_total", metrics.outcomeCollisions)
 			_ = registry.RegisterCounterVec("agentic-tools", "result_publish_failures_total", metrics.resultPublishFailures)
 			_ = registry.RegisterCounterVec("agentic-tools", "ambiguous_redeliveries_total", metrics.ambiguousRedeliveries)
+			_ = registry.RegisterCounterVec("agentic-tools", "delivery_refusals_total", metrics.deliveryRefusals)
 			return
 		}
 		for _, collector := range []prometheus.Collector{
 			metrics.executionsTotal, metrics.executionDuration, metrics.errorsTotal, metrics.timeoutTotal,
 			metrics.filteredTotal, metrics.rejectionsTotal, metrics.retriesTotal, metrics.retriesExhausted,
 			metrics.toolsRegistered, metrics.outcomeTotal, metrics.outcomeStoreFailures, metrics.outcomeCollisions,
-			metrics.resultPublishFailures, metrics.ambiguousRedeliveries,
+			metrics.resultPublishFailures, metrics.ambiguousRedeliveries, metrics.deliveryRefusals,
 		} {
 			_ = prometheus.DefaultRegisterer.Register(collector)
 		}
@@ -110,6 +112,7 @@ func newToolsMetrics() *toolsMetrics {
 		outcomeCollisions:     prometheus.NewCounter(prometheus.CounterOpts{Namespace: "semstreams", Subsystem: "agentic_tools", Name: "outcome_collisions_total", Help: "Immutable outcome collisions"}),
 		resultPublishFailures: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "semstreams", Subsystem: "agentic_tools", Name: "result_publish_failures_total", Help: "Tool result publication failures"}, []string{"reason"}),
 		ambiguousRedeliveries: prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "semstreams", Subsystem: "agentic_tools", Name: "ambiguous_redeliveries_total", Help: "Redeliveries with potentially completed external effects"}, []string{"cause"}),
+		deliveryRefusals:      prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: "semstreams", Subsystem: "agentic_tools", Name: "delivery_refusals_total", Help: "Deliveries refused unsettled by a latched lane, by port"}, []string{"lane"}),
 	}
 }
 
@@ -125,6 +128,9 @@ func (m *toolsMetrics) recordPublishFailure(reason resultPublishFailureReason) {
 }
 func (m *toolsMetrics) recordAmbiguous(cause ambiguousRedeliveryCause) {
 	m.ambiguousRedeliveries.WithLabelValues(string(cause)).Inc()
+}
+func (m *toolsMetrics) recordDeliveryRefused(lane string) {
+	m.deliveryRefusals.WithLabelValues(lane).Inc()
 }
 
 func (m *toolsMetrics) recordToolsRegistered(count int) { m.toolsRegistered.Set(float64(count)) }

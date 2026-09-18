@@ -430,7 +430,10 @@ func (c *Component) setupConsumer(ctx context.Context, setup consumerSetup) erro
 	if err != nil {
 		return errs.WrapInvalid(err, "Component", "setupConsumer", "validate heartbeat delivery policy")
 	}
-	admission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
+	lane := setup.port.Name
+	admission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal, func(subject string) {
+		c.recordDeliveryRefused(lane, subject)
+	})
 
 	// The typed heartbeat helper owns delivery control; work receives payload
 	// bytes only and returns the owner-defined semantic decision. It calls
@@ -493,6 +496,25 @@ func (c *Component) recordHandlerError(ctx context.Context, err error) {
 		c.logger.Error("Tool delivery interrupted by shutdown", "error", err, "ambiguous_effect", true)
 	default:
 		c.logger.Error("Tool handler error", "error", err)
+	}
+}
+
+// recordDeliveryRefused declares a delivery the latched lane refused. The
+// exact handle is drained rather than stopped (tasks.md 4.7), so buffered
+// deliveries keep arriving after the first fatal; refusing them is safe
+// because no terminal method is attempted — each stays pending for redelivery
+// to the reconstructed owner. Without this line the refusals are a silent
+// drop: both call sites guard every branch on admission.
+func (c *Component) recordDeliveryRefused(lane, subject string) {
+	if c.metrics != nil {
+		c.metrics.recordDeliveryRefused(lane)
+	}
+	if c.logger != nil {
+		c.logger.Warn("Tool delivery refused by latched lane",
+			"lane", lane,
+			"subject", subject,
+			"settled", false,
+			"resolution", "left pending for redelivery after explicit lane reconstruction")
 	}
 }
 

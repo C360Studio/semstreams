@@ -307,11 +307,21 @@ OwnerStopRequired result. Closed admission SHALL perform no work, heartbeat, or 
 MAY finish. The callback SHALL NOT drain or wait on its handle; the existing owner SHALL stop the exact committed
 handle outside callback and join the observer during Stop.
 
+Refusal by closed admission is a declared event, not a silent drop. Each refused delivery SHALL emit a substrate log
+line and increment a lane-labelled counter naming the refusal and why continuing is safe (ADR-098). The buffered
+deliveries a drained handle flushes reach this path, so the first fatal result alone SHALL NOT be the only signal.
+
 #### Scenario: control loss precedes handle return
 
 - **WHEN** a callback reports OwnerStopRequired before acquisition returns
 - **THEN** the result remains buffered until the exact handle is committed
 - **AND** owner-side shutdown occurs outside callback
+
+#### Scenario: closed admission refuses a buffered delivery
+
+- **WHEN** a delivery reaches a binding whose admission is already closed
+- **THEN** the binding performs no work, heartbeat, or terminal method
+- **AND** it emits a log line and increments its lane-labelled refusal counter
 
 ### Requirement: current crash redelivery declarations are preserved
 

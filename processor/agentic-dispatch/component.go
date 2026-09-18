@@ -586,7 +586,9 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	if err != nil {
 		return errs.WrapInvalid(err, "Component", "setupSubscriptions", "validate agent.complete delivery policy")
 	}
-	agentCompleteAdmission := newDeliveryLaneAdmission(c.recordAgentCompleteFatal)
+	agentCompleteAdmission := newDeliveryLaneAdmission(c.recordAgentCompleteFatal, func(subject string) {
+		c.recordDeliveryRefused(bindings.agentComplete.portName, subject)
+	})
 	handle, err = c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.agentComplete.portName}, agentCompleteCfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		result, admitted := consumeAdmittedDelivery(msgCtx, msg, agentCompletePolicy, agentCompleteAdmission)
 		if admitted && !result.OwnerStopRequired() {
@@ -649,7 +651,9 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	if err != nil {
 		return errs.WrapInvalid(err, "Component", "setupSubscriptions", "validate agent.failed delivery policy")
 	}
-	agentFailedAdmission := newDeliveryLaneAdmission(c.recordAgentFailedFatal)
+	agentFailedAdmission := newDeliveryLaneAdmission(c.recordAgentFailedFatal, func(subject string) {
+		c.recordDeliveryRefused(bindings.agentFailed.portName, subject)
+	})
 	handle, err = c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.agentFailed.portName}, agentFailedCfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		result, admitted := consumeAdmittedDelivery(msgCtx, msg, agentFailedPolicy, agentFailedAdmission)
 		if admitted && !result.OwnerStopRequired() {
@@ -711,6 +715,25 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 func (c *Component) observeTerminalDelivery(err error) {
 	if c.terminalDeliveryDoneFn != nil {
 		c.terminalDeliveryDoneFn(err)
+	}
+}
+
+// recordDeliveryRefused declares a delivery the latched lane refused. Both
+// terminal lanes are drained rather than stopped (tasks.md 4.7), so buffered
+// deliveries keep arriving after the first fatal; refusing them is safe
+// because no terminal method is attempted — each stays pending for redelivery
+// to the reconstructed owner. Without this line the refusals are a silent
+// drop: every call-site branch is guarded on admission.
+func (c *Component) recordDeliveryRefused(lane, subject string) {
+	if c.metrics != nil {
+		c.metrics.recordDeliveryRefused(lane)
+	}
+	if c.logger != nil {
+		c.logger.Warn("Terminal delivery refused by latched lane",
+			slog.String("lane", lane),
+			slog.String("subject", subject),
+			slog.Bool("settled", false),
+			slog.String("resolution", "left pending for redelivery after explicit lane reconstruction"))
 	}
 }
 

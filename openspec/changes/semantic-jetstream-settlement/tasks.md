@@ -74,7 +74,8 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 - [x] 4.6 At the foundation checkpoint, assert branch-staged model/loop/AgentRun source, config, settlement,
       cancellation, logs, and health remain unchanged before their separately reviewed migrations.
 - [x] 4.7 Prove metadata-unavailable results close admission and drain the exact tools or dispatch handle outside
-      callback, including callback-before-handle ordering.
+      callback, including callback-before-handle ordering. Drain, not stop, is the recorded choice; each delivery the
+      closed admission then refuses emits a log line and a lane-labelled counter rather than dropping silently.
 - [x] 4.8 Replace builder-only tests with permanent policy/API integration tests, recheck zero adopters, obtain the
       approved Stage A gate, and remove `NewDurableHandler` without alias.
 - [x] 4.9 Add the reviewed `gated-dag-dispatch` delta: correct PubAck ambiguity, preserve deterministic

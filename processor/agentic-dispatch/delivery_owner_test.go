@@ -1,13 +1,17 @@
 package agenticdispatch
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,7 +24,7 @@ func TestTerminalDeliveryFatalBuffersBeforeHandleAndDrainsExactHandleOnce(t *tes
 		logger:                 slog.New(slog.NewTextHandler(io.Discard, nil)),
 		terminalDeliveryDoneFn: func(err error) { observed <- err },
 	}
-	admission := newDeliveryLaneAdmission(c.recordAgentCompleteFatal)
+	admission := newDeliveryLaneAdmission(c.recordAgentCompleteFatal, nil)
 	admission.latch(result)
 	require.Len(t, admission.fatal, 1)
 	health := c.Health()
@@ -58,7 +62,7 @@ func TestTerminalLaneFatalHealthFailsClosedIndependently(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &Component{started: true}
-			admission := newDeliveryLaneAdmission(func(result natsclient.DeliveryResult) { tt.record(c, result) })
+			admission := newDeliveryLaneAdmission(func(result natsclient.DeliveryResult) { tt.record(c, result) }, nil)
 			admission.latch(result)
 			health := c.Health()
 			require.False(t, health.Healthy)
@@ -68,3 +72,36 @@ func TestTerminalLaneFatalHealthFailsClosedIndependently(t *testing.T) {
 		})
 	}
 }
+
+// A refused delivery is a declared skip, not a silent drop: every call-site
+// branch is guarded on admission, so the refusal is invisible unless the lane
+// names it. The lanes drain rather than stop, so buffered deliveries do
+// reach this path.
+func TestRefusedTerminalDeliveryIsLoggedAndCounted(t *testing.T) {
+	logs := &bytes.Buffer{}
+	c := &Component{
+		started: true,
+		logger:  slog.New(slog.NewTextHandler(logs, nil)),
+		metrics: getMetrics(metric.NewMetricsRegistry()),
+	}
+	before := testutil.ToFloat64(c.metrics.deliveryRefusals.WithLabelValues("agent.complete"))
+	admission := newDeliveryLaneAdmission(c.recordAgentCompleteFatal, func(subject string) {
+		c.recordDeliveryRefused("agent.complete", subject)
+	})
+	fatal := natsclient.ConsumeDeliveryWithHeartbeat(t.Context(), nil, natsclient.HeartbeatDeliveryPolicy{})
+	admission.latch(fatal)
+
+	result, admitted := consumeAdmittedDelivery(t.Context(), &refusedDeliveryMsg{}, natsclient.HeartbeatDeliveryPolicy{}, admission)
+
+	require.False(t, admitted)
+	require.Equal(t, natsclient.DeliveryResult{}, result)
+	require.Equal(t, before+1,
+		testutil.ToFloat64(c.metrics.deliveryRefusals.WithLabelValues("agent.complete")),
+		"a refused delivery must increment the refusal counter")
+	require.Contains(t, logs.String(), "Terminal delivery refused by latched lane")
+	require.Contains(t, logs.String(), "subject=agent.complete")
+}
+
+type refusedDeliveryMsg struct{ jetstream.Msg }
+
+func (*refusedDeliveryMsg) Subject() string { return "agent.complete" }
