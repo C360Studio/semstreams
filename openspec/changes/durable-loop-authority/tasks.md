@@ -43,5 +43,8 @@
 - [x] 5.1 `task lint`, `task test`, `task schema:generate` with no drift, `task openspec:validate`,
       `task spec:properties`
 - [x] 5.2 `task check:push`
-- [ ] 5.3 `task e2e:agentic` on the final head — required, both commits are BREAKING
+- [x] 5.3 `task e2e:agentic` on the final head — required, both commits are BREAKING. Exit 0,
+      `assertions_run=15`, `duration=2m4.80s`, all 17 stages green including
+      `verify-stage-a-process-replacement` (78.6s, `dispatch_replacement_user_responses:1`) and
+      `walk-approval-path` (`approval_listing_matched:2`)
 - [ ] 5.4 Implementation review resolved; stack rebased onto the reviewed L1 head; archive as the final content commit
