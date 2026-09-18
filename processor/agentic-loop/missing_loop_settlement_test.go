@@ -11,6 +11,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -282,5 +283,77 @@ func TestVerdictWithoutWaiterSettlesByRecordNotByWaiterMap(t *testing.T) {
 		require.Error(t, err)
 		require.ErrorIs(t, err, ErrNoGovernanceWaiter)
 		require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
+	})
+}
+
+// CancelLoop refuses for two permanent reasons, and handleSignalMessage maps
+// every non-fatal error to Retry, so both used to redeliver against a decision
+// that can never change. Neither is transient and neither is a failure — but
+// the third case, a loop that is live in another process, still is owed the
+// cancel and must not be acknowledged away with them.
+//
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// Deliberately NOT parallel: loopMetrics counters are process-global, so a
+// before/after delta on one is only meaningful when nothing else is moving it.
+func TestUncancellableLoopSettlesWithoutRetrying(t *testing.T) {
+
+	const liveElsewhereLoopID = "b0f7a1e2-2c4d-4a5b-8e6f-1d2c3b4a5e60"
+	const absentLoopID = "d2f9c304-4e6f-4c7d-a081-3f4e5d6c7082"
+
+	newComponent := func(t *testing.T) *Component {
+		t.Helper()
+		c := releaseTestComponent(t, NewMessageHandler(DefaultConfig()))
+		c.metrics = getMetrics(nil)
+		c.loopsBucket = recordLoopBucket{records: map[string]agentic.LoopEntity{
+			liveElsewhereLoopID: {ID: liveElsewhereLoopID, State: agentic.LoopStateExploring},
+		}}
+		return c
+	}
+	cancelSignal := func(t *testing.T, loopID string) []byte {
+		t.Helper()
+		return baseMessageBytes(t, &agentic.UserSignal{
+			SignalID: "sig-1", LoopID: loopID, Type: agentic.SignalCancel, UserID: "operator",
+		})
+	}
+
+	t.Run("already terminal acknowledges without effect", func(t *testing.T) {
+		c := newComponent(t)
+		loopID, err := c.handler.loopManager.CreateLoop("task-cancel", "general", "model", 3)
+		require.NoError(t, err)
+		require.NoError(t, c.handler.loopManager.TransitionLoop(loopID, agentic.LoopStateComplete))
+		before := testutil.ToFloat64(c.metrics.signalsDropped.WithLabelValues("already_terminal"))
+
+		decision, err := c.handleSignalMessage(t.Context(), cancelSignal(t, loopID))
+		require.NoError(t, err)
+		require.Equal(t, natsclient.DeliveryDecisionAck, decision,
+			"cancelling a finished loop is idempotent, not a transient failure")
+		require.Equal(t, float64(1),
+			testutil.ToFloat64(c.metrics.signalsDropped.WithLabelValues("already_terminal"))-before,
+			"an effect-free acknowledgement is a declared event")
+	})
+
+	t.Run("no durable record acknowledges without effect", func(t *testing.T) {
+		c := newComponent(t)
+		before := testutil.ToFloat64(c.metrics.signalsDropped.WithLabelValues("stale_loop_id"))
+
+		decision, err := c.handleSignalMessage(t.Context(), cancelSignal(t, absentLoopID))
+		require.NoError(t, err)
+		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+		require.Equal(t, float64(1),
+			testutil.ToFloat64(c.metrics.signalsDropped.WithLabelValues("stale_loop_id"))-before)
+	})
+
+	t.Run("live in another process is still owed the cancel", func(t *testing.T) {
+		c := newComponent(t)
+		before := testutil.ToFloat64(c.metrics.signalsDropped.WithLabelValues("stale_loop_id")) +
+			testutil.ToFloat64(c.metrics.signalsDropped.WithLabelValues("already_terminal"))
+
+		decision, err := c.handleSignalMessage(t.Context(), cancelSignal(t, liveElsewhereLoopID))
+		require.Error(t, err)
+		require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
+
+		after := testutil.ToFloat64(c.metrics.signalsDropped.WithLabelValues("stale_loop_id")) +
+			testutil.ToFloat64(c.metrics.signalsDropped.WithLabelValues("already_terminal"))
+		require.Equal(t, before, after, "a retried signal is not a dropped one")
 	})
 }

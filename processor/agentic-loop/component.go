@@ -2304,6 +2304,36 @@ func (c *Component) handleSignalMessage(ctx context.Context, data []byte) (natsc
 	}
 }
 
+// settleUncancellableLoop decides a cancel whose CancelLoop refused. Neither
+// refusal is transient, and handleSignalMessage maps every non-fatal error to
+// Retry, so a bare wrap left the signal redelivering against a decision that
+// can never change.
+//
+// Already terminal is idempotent success: the loop is in exactly the state the
+// operator asked for. Not found in memory is the same two-case question every
+// other lane asks, and the loops bucket answers it: no record means nothing to
+// cancel anywhere; a live record means the loop is running in another process
+// and the cancel is still owed to it.
+func (c *Component) settleUncancellableLoop(ctx context.Context, loopID string, cause error) error {
+	if errs.IsInvalid(cause) {
+		c.logger.Info("Cancel signal for an already-terminal loop; acknowledging without effect",
+			"loop_id", loopID, "reason", cause)
+		if c.metrics != nil {
+			c.metrics.recordSignalDropped("already_terminal")
+		}
+		return nil
+	}
+	if errors.Is(cause, ErrLoopNotFound) && c.classifyMissingLoop(ctx, loopID) == loopPresenceStale {
+		c.logger.Warn("Cancel signal for a loop with no durable record; acknowledging without effect",
+			"loop_id", loopID)
+		if c.metrics != nil {
+			c.metrics.recordSignalDropped("stale_loop_id")
+		}
+		return nil
+	}
+	return fmt.Errorf("cancel loop %q: %w", loopID, cause)
+}
+
 // handleCancelSignal handles a cancel signal for a loop
 func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserSignal) error {
 	loopID := signal.LoopID
@@ -2319,7 +2349,7 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 	// Atomically cancel the loop and get the updated entity
 	entity, err := c.handler.CancelLoop(loopID, signal.UserID)
 	if err != nil {
-		return fmt.Errorf("cancel loop %q: %w", loopID, err)
+		return c.settleUncancellableLoop(ctx, loopID, err)
 	}
 	// Persist loop state to KV
 	if err := c.persistLoopState(ctx, loopID); err != nil {
