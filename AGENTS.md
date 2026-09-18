@@ -8,8 +8,8 @@ derive from the tree and one line per rule naming where the rule lives. Per-plat
 
 SemStreams is the governed graph substrate and **framework** for the C360 `sem*` family. It owns primitives and
 contracts, never a consumer's domain semantics. Read `openspec/project.md` (Purpose + Product Boundary) before
-scoping anything, and especially before concluding that something is unused, dead, or safe to delete: a capability
-nothing in this tree reads may still be a first-class purpose whose consumer is a sister repo or a product above us.
+scoping anything, especially before calling something unused, dead, or deletable: a capability nothing in this
+tree reads may still be a first-class purpose whose consumer is a sister repo or a product above us.
 A `grep` for callers answers "is this wired", never "is this wanted"; when it matters, read `git log -S` and the
 governing ADR. Agent execution evidence is a first-class capability, not trace exhaust (`openspec/project.md`
 § Purpose).
@@ -52,9 +52,8 @@ task e2e:core           # Docker tiers: core ~10s, structural ~30s, statistical 
                         # semantic ~90s, agentic ~30s, all = every tier in sequence
 ```
 
-Before every push run `task check:push`: it mirrors CI (build, lint, vet with the integration and live_llm tags,
-schema drift, contract tests, race unit tests, then integration through the canonical runner and its host lock).
-`task check` is the fast subset. A diff that edits files tests read, including markdown, is a code change for gate
+Before every push run `task check:push`: it mirrors CI (build, lint, tagged vet, schema drift, contract, race unit,
+then integration through the canonical runner and its host lock). `task check` is the fast subset. A diff that edits files tests read, including markdown, is a code change for gate
 purposes. Revive warnings fail CI and `go fmt` must be clean. E2E tiers are for final validation, not iteration;
 `task e2e:check-ports` explains port conflicts.
 
@@ -62,8 +61,8 @@ purposes. Revive warnings fail CI and `go fmt` must be clean. E2E tiers are for 
 
 SemStreams is a knowledge-graph engine, not an event bus. Every KV bucket is a twofer: `Get` is state, `Watch` is
 events; `ENTITY_STATES` has history 1 and is current authority, never an audit or recovery ledger. Facts travel by KV
-Watch, work requests by JetStream stream (the `kv-or-stream` skill). There are two orchestration
-layers only: the rule engine triggers and components execute; rules pass references, never payloads (ADR-028).
+Watch, work requests by JetStream stream (the `kv-or-stream` skill). Two orchestration layers only: the
+rule engine triggers, components execute; rules pass references, never payloads (ADR-028).
 Read `docs/concepts/00-real-time-inference.md`, `02-kv-twofer.md`, `03-streams-vs-kv-watches.md`, and
 `14-orchestration-layers.md` before designing a communication path or adding orchestration.
 
@@ -75,9 +74,9 @@ Read `docs/concepts/00-real-time-inference.md`, `02-kv-twofer.md`, `03-streams-v
 | `openspec/changes/<id>/` | Proposed target state: proposal, tasks, spec deltas; archived on completion |
 | `docs/adr/` | Decisions only: irreversible choices and cross-repo contracts, never mechanics |
 
-Non-trivial work starts with a change before code; small mechanical fixes do not. Specs are seeded lazily when a
-change first touches a capability, never backfilled. The role split is `openspec/project.md` § How we
-spec; the change discipline is `docs/contributing/06-openspec-change-discipline.md`.
+Non-trivial work starts with a change before code; mechanical fixes do not. Specs are seeded lazily when a change
+first touches a capability, never backfilled. Role split: `openspec/project.md` § How we spec; discipline:
+`docs/contributing/06-openspec-change-discipline.md`.
 
 ## Rules and where they live
 
@@ -104,14 +103,13 @@ never become a pointer:
 - **Close:** the squash merge of a PR that declared `Closes #n` is the authorization. A close with no merged PR
   behind it takes the owner's word on the issue.
 
-**Agents mutate only this repository.** Sister repositories are read-only inventory sources: inspect them to measure
-impact, never branch, edit, push, open or comment on anything there. A breaking change records its impact and
+**Agents mutate only this repository.** Sister repositories are read-only inventory: inspect to measure impact; never
+branch, edit, push, open, or comment there. A breaking change records its impact and
 migration steps in a SemStreams-owned `docs/operations/migration-*.md`; the sister's owner applies it.
 
 Role agents are the default path for nontrivial work; no permission is needed to spawn them, and only
 massively-parallel Workflow orchestration is opt-in. `semstreams-architect`
 designs, inventory first. `semstreams-developer` implements. `semstreams-reviewer` reviews every nontrivial change
 before integration. `semstreams-explorer` enumerates. `semstreams-judge` answers one bounded question over
-collected evidence and never rules. Contracts are `.agents/contracts/`; platform
-adapters, skills, and command names are in `.agents/README.md`. Binding rulings stay with the owner and live on the
-issue.
+collected evidence and never rules. Contracts: `.agents/contracts/`; adapters, skills,
+and command names: `.agents/README.md`. Binding rulings stay with the owner, on the issue.
