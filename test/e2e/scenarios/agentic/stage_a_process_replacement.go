@@ -401,8 +401,12 @@ func (s *Scenario) verifyDispatchRecoveryAfterQuarantine(
 	if err := waitForConsumerSettled(ctx, consumer, 0, 20*time.Second); err != nil {
 		return fmt.Errorf("replacement deliveries did not settle before counting responses: %w", err)
 	}
-	if count, err := streamSubjectCount(ctx, userStream, responseSubject); err != nil || count != 1 {
-		return fmt.Errorf("replacement user response count = %d, want 1: %w", count, err)
+	count, err := streamSubjectCount(ctx, userStream, responseSubject)
+	if err != nil {
+		return fmt.Errorf("count replacement user responses: %w", err)
+	}
+	if count != 1 {
+		return fmt.Errorf("replacement user response count = %d, want 1", count)
 	}
 	settledInfo, err := consumer.Info(ctx)
 	if err != nil {
@@ -423,8 +427,12 @@ func (s *Scenario) verifyDispatchRecoveryAfterQuarantine(
 	if err := waitForConsumerSettled(ctx, consumer, replayedSequence, 20*time.Second); err != nil {
 		return fmt.Errorf("identical terminal was not settled: %w", err)
 	}
-	if count, err := streamSubjectCount(ctx, userStream, responseSubject); err != nil || count != 1 {
-		return fmt.Errorf("deduplicated user response count = %d, want 1: %w", count, err)
+	deduplicated, err := streamSubjectCount(ctx, userStream, responseSubject)
+	if err != nil {
+		return fmt.Errorf("count deduplicated user responses: %w", err)
+	}
+	if deduplicated != 1 {
+		return fmt.Errorf("deduplicated user response count = %d, want 1", deduplicated)
 	}
 	result.Details["dispatch_replacement_loop_id"] = terminal.loopID
 	result.Metrics["dispatch_replacement_user_responses"] = 1
