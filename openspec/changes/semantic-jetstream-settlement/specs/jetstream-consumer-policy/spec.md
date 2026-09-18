@@ -250,20 +250,21 @@ present, otherwise positive AckWait, otherwise 30 seconds. Invalid AckWait/BackO
 ### Requirement: delivery results preserve semantic and transport evidence
 
 `DeliveryResult` SHALL expose requested decision/cause, control error, settlement error, local method
-attempt/success/failure, server confirmation, quarantine, owner-stop requirement, and aggregate error. Plain terminal
-methods SHALL never report server confirmation. A method error SHALL mean unknown/not-confirmed and SHALL NOT prove
-redelivery.
+attempt/success/failure, quarantine, owner-stop requirement, and aggregate error. It SHALL expose no
+server-confirmation accessor: plain terminal methods never provide that confirmation, so a reader that always
+answers the same way is a false affordance rather than evidence. A method error SHALL mean unknown/not-confirmed
+and SHALL NOT prove redelivery.
 
 #### Scenario: clean local Ack
 
 - **WHEN** ACK is selected and Ack returns nil
 - **THEN** local method success is true and `Err` is nil
-- **AND** server confirmation is false
+- **AND** no result value reports server confirmation
 
 #### Scenario: terminal method errors
 
 - **WHEN** Ack, Nak, delayed Nak, or Term returns an error without control loss or quarantine
-- **THEN** the method failure remains observable and server confirmation is false
+- **THEN** the method failure remains observable and no result value claims the server settled
 - **AND** OwnerStopRequired is false
 
 ### Requirement: cancellation joins semantic work

@@ -24,8 +24,9 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       quarantine, and no disposition constructor family. The shipped callback contract is
       `DeliveryWork(context.Context, []byte)` (see 2.9).
 - [x] 2.3 Add the complete DeliveryResult decision/handling truth table: exact requested-decision preservation, typed
-      causes, cause reachability, local-method predicates, false server confirmation, quarantine, and
-      OwnerStopRequired.
+      causes, cause reachability, local-method predicates, quarantine, and OwnerStopRequired. The constant-false
+      `ServerConfirmed` accessor was withdrawn on review: no production reader, and its own doc warned against its
+      affordance. Absence of the accessor is now the guarantee.
 - [x] 2.4 Add pre-implementation retry-policy tests for zero, immediate Nak, fixed delayed Nak, nonpositive delay,
       and preservation of semantic cause across local method success/failure.
 - [x] 2.5 Add pre-implementation heartbeat-policy tests for nil/ended context, nil work, invalid retry,

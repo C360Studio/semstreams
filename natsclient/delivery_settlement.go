@@ -146,6 +146,12 @@ type HeartbeatDeliveryPolicy struct {
 
 // ValidateHeartbeatDeliveryPolicy validates one delivery policy before the
 // caller acquires its consumer. cfg must be the same value used for acquisition.
+//
+// ctx is a setup-time precondition only: it is checked for nil and for an
+// already-ended deadline so a policy cannot be built for a lifecycle that has
+// gone away. It confers no lifecycle authority, is not retained by the
+// returned policy, and does not govern any delivery — per-delivery context
+// comes from the consume callback passed to ConsumeDeliveryWithHeartbeat.
 func ValidateHeartbeatDeliveryPolicy(
 	ctx context.Context,
 	cfg StreamConsumerConfig,
@@ -211,7 +217,10 @@ func effectiveDeliveryAckWait(cfg StreamConsumerConfig) (time.Duration, error) {
 }
 
 // DeliveryResult is the immutable semantic and local transport observation
-// produced by ConsumeDeliveryWithHeartbeat.
+// produced by ConsumeDeliveryWithHeartbeat. It exposes no server-confirmation
+// affordance: this contract uses plain Ack/Nak/NakWithDelay/Term, whose nil
+// return proves the local call only, so there is nothing a caller could read
+// that would mean the server settled the delivery.
 type DeliveryResult struct {
 	decision        DeliveryDecision
 	cause           error
@@ -246,10 +255,6 @@ func (r DeliveryResult) SettlementMethodSucceeded() bool {
 func (r DeliveryResult) SettlementMethodFailed() bool {
 	return r.settlementTried && r.settlementErr != nil
 }
-
-// ServerConfirmed reports server-confirmed settlement. Plain terminal methods
-// used by this contract never provide that confirmation.
-func (r DeliveryResult) ServerConfirmed() bool { return false }
 
 // Quarantined reports that no terminal method was safe to attempt.
 func (r DeliveryResult) Quarantined() bool { return r.quarantined }

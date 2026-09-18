@@ -185,7 +185,6 @@ func (r DeliveryResult) SettlementError() error
 func (r DeliveryResult) SettlementAttempted() bool
 func (r DeliveryResult) SettlementMethodSucceeded() bool
 func (r DeliveryResult) SettlementMethodFailed() bool
-func (r DeliveryResult) ServerConfirmed() bool
 func (r DeliveryResult) Quarantined() bool
 func (r DeliveryResult) OwnerStopRequired() bool
 func (r DeliveryResult) Err() error
@@ -193,7 +192,9 @@ func (r DeliveryResult) Err() error
 
 Decision preserves exactly what joined work requested; invalid tuples do not rewrite it. Panic synthesizes Quarantine
 because work returned no tuple. Only clean local Ack has nil Err. Retry/Terminate causes remain reachable after method
-success. Control and settlement errors remain separate. Plain Ack/Nak/NakWithDelay/Term never sets ServerConfirmed.
+success. Control and settlement errors remain separate. Plain Ack/Nak/NakWithDelay/Term can never prove server
+settlement, so (amended 2026-09-18, same review as D2a) `DeliveryResult` exposes no server-confirmation accessor at
+all rather than a constant-false one.
 Method error means unknown/not-confirmed, not unsettled or guaranteed redelivery.
 
 OwnerStopRequired is true for semantic quarantine, invalid/panic defense, and every InProgress control failure while

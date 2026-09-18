@@ -87,6 +87,15 @@ func newStreamConsumerBinding(handle jetstream.ConsumeContext) streamConsumerBin
 	return streamConsumerBinding{handle: handle, drainOnce: &sync.Once{}}
 }
 
+// drain stops this lane through `jetstream.ConsumeContext.Drain`, not `Stop`.
+// #759's acceptance wording says the exact handle is "stopped" with "no later
+// delivery before explicit reconstruction"; tasks.md 4.7 records Drain as the
+// implementation, and the two agree because admission latches BEFORE the
+// handle is drained: every buffered delivery Drain flushes hits closed
+// admission, runs no work, attempts no terminal method, is declared through
+// recordDeliveryRefused, and stays pending for the reconstructed owner. Drain
+// is preferred over Stop so an already-admitted in-flight delivery can finish
+// and settle instead of being abandoned mid-effect.
 func (b *streamConsumerBinding) drain() {
 	if b.drainOnce == nil {
 		b.drainOnce = &sync.Once{}

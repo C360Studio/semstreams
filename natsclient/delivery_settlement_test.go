@@ -408,7 +408,6 @@ func TestConsumeDeliveryWithHeartbeatValidDecisionTruthTable(t *testing.T) {
 			require.Equal(t, tt.attempted, result.SettlementAttempted())
 			require.Equal(t, tt.succeeded, result.SettlementMethodSucceeded())
 			require.Equal(t, tt.failed, result.SettlementMethodFailed())
-			require.False(t, result.ServerConfirmed())
 			require.Equal(t, tt.quarantine, result.Quarantined())
 			require.Equal(t, tt.stop, result.OwnerStopRequired())
 			if tt.wantErr == nil {
