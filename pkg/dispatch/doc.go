@@ -14,8 +14,8 @@
 // # What this is
 //
 // BoundedDispatcher is the framework-provided primitive for the
-// "rules sequence, components parallelize" architecture (CLAUDE.md
-// Orchestration Boundaries section). It's what components compose
+// "rules sequence, components parallelize" architecture
+// (docs/concepts/14-orchestration-layers.md). It's what components compose
 // internally when they need to do parallel work over a known list
 // of items — drone fleet weather-monitor walking all active
 // missions, scenario-orchestrator dispatching ready requirements

@@ -8,6 +8,11 @@ import (
 	"testing"
 )
 
+// guidanceMapWordCeiling bounds the always-loaded agent guidance map (gh#1323:
+// the previous CLAUDE.md was 3,020 words, 78% of it rule bodies duplicated
+// verbatim from files every role loads anyway).
+const guidanceMapWordCeiling = 1100
+
 func TestProfileContract(t *testing.T) {
 	root := repositoryRoot(t)
 
@@ -95,27 +100,29 @@ func TestProfileContract(t *testing.T) {
 		}
 	})
 
-	t.Run("routing is symmetric and ordered", func(t *testing.T) {
-		agents := markdownSection(t, readProfileFile(t, root, "AGENTS.md"), "## Semantic Agent Routing")
-		claude := markdownSection(t, readProfileFile(t, root, "CLAUDE.md"), "## Semantic Agent Routing")
+	t.Run("guidance map is one file under two names", func(t *testing.T) {
+		// CLAUDE.md (Claude Code) and AGENTS.md (Codex) are the always-loaded
+		// guidance map. Before gh#1323 they were hand-maintained copies whose
+		// agreement was checked section by section; AGENTS.md had silently
+		// never carried the purpose or OpenSpec sections. Byte identity
+		// subsumes every per-section symmetry check. The word ceiling is a
+		// ratchet: the map is paid on every turn of every session, so a rule
+		// that needs more than one line belongs in its canonical home.
+		agents := readProfileFile(t, root, "AGENTS.md")
+		claude := readProfileFile(t, root, "CLAUDE.md")
 		if agents != claude {
-			t.Error("AGENTS.md and CLAUDE.md must have identical Semantic Agent Routing sections")
+			t.Fatalf("AGENTS.md and CLAUDE.md differ (%d vs %d bytes); the guidance map is one file under two names: edit one and cp it over the other", len(agents), len(claude))
+		}
+		if words := len(strings.Fields(claude)); words > guidanceMapWordCeiling {
+			t.Errorf("guidance map is %d words, ceiling is %d: move the rule body to its canonical home and leave one line here", words, guidanceMapWordCeiling)
 		}
 
-		developer := strings.Index(agents, "`semstreams-developer`")
-		reviewer := strings.Index(agents, "`semstreams-reviewer`")
+		developer := strings.Index(claude, "`semstreams-developer`")
+		reviewer := strings.Index(claude, "`semstreams-reviewer`")
 		if developer < 0 || reviewer < 0 {
-			t.Error("Semantic Agent Routing is missing the SemStreams developer or reviewer")
+			t.Error("guidance map is missing the SemStreams developer or reviewer")
 		} else if developer >= reviewer {
-			t.Error("Semantic Agent Routing must route implementation before review")
-		}
-	})
-
-	t.Run("shared work protocol is symmetric", func(t *testing.T) {
-		agents := markdownSection(t, readProfileFile(t, root, "AGENTS.md"), "## Shared work protocol (Claude and Codex)")
-		claude := markdownSection(t, readProfileFile(t, root, "CLAUDE.md"), "## Shared work protocol (Claude and Codex)")
-		if agents != claude {
-			t.Error("AGENTS.md and CLAUDE.md must have identical Shared work protocol sections")
+			t.Error("guidance map must route implementation before review")
 		}
 	})
 
@@ -147,19 +154,6 @@ func readProfileFile(t *testing.T, root, name string) string {
 		t.Fatalf("read %s: %v", name, err)
 	}
 	return string(body)
-}
-
-func markdownSection(t *testing.T, body, heading string) string {
-	t.Helper()
-	start := strings.Index(body, heading)
-	if start < 0 {
-		t.Fatalf("missing Markdown section %q", heading)
-	}
-	section := body[start:]
-	if next := strings.Index(section[len(heading):], "\n## "); next >= 0 {
-		section = section[:len(heading)+next]
-	}
-	return strings.TrimSpace(section)
 }
 
 func lineCount(body string) int {

@@ -72,7 +72,7 @@ Run this procedure after changing a contract, adapter, or repository routing rul
    have no sandbox override (the explorer writes the inventory file) and therefore inherit the parent workspace
    permissions.
 5. Confirm `AGENTS.md` and `CLAUDE.md` are byte-identical and under the word ceiling:
-   `go test ./test/contract/ -run TestGuidanceMap` (the map is one file under two names).
+   `go test ./internal/agentprofiles/ -run TestProfileContract` (the map is one file under two names).
 6. Inspect adapter size with `wc -l .claude/agents/semstreams-*.md .codex/agents/semstreams-*.toml`; adapters should
    remain short and contain no copied checklist.
 7. For every row in the shared-skills table, confirm the canonical file and Claude adapter exist, the adapter

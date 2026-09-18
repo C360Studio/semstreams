@@ -1,7 +1,7 @@
 # SemStreams
 
 Guidance for coding agents. Claude Code loads this file as `CLAUDE.md`, Codex as `AGENTS.md`; the two are
-byte-identical and `test/contract/guidance_map_identity_test.go` keeps them so. It carries the facts an agent cannot
+byte-identical and `internal/agentprofiles/profile_contract_test.go` keeps them so. It carries the facts an agent cannot
 derive from the tree and one line per rule naming where the rule lives. Per-platform command names: `.agents/README.md`.
 
 ## What this is for
@@ -16,7 +16,7 @@ governing ADR. Agent execution evidence is a first-class capability, not trace e
 
 ## Stack and layout
 
-Go 1.25, NATS JetStream (KV, ObjectStore), Prometheus metrics, slog logging. Flow-based components: Input (UDP,
+Go 1.26, NATS JetStream (KV, ObjectStore), Prometheus metrics, slog logging. Flow-based components: Input (UDP,
 WebSocket, File) → Processor (Graph, JSONMap, Rule) → Output (File, HTTPPost, WebSocket), plus Storage (ObjectStore)
 and Gateway (admitted HTTP operations; embedded queries need a named typed adapter).
 
@@ -52,15 +52,17 @@ task e2e:core           # Docker tiers: core ~10s, structural ~30s, statistical 
                         # semantic ~90s, agentic ~30s, all = every tier in sequence
 ```
 
-Before every push, run what CI runs: `task lint`, `go test -race ./...`, `go test -race -tags=integration -p 2 ./...`,
-`task schema:generate` with a clean diff, and `go test ./test/contract/...`. Revive warnings fail CI and `go fmt`
-must be clean. E2E tiers are for final validation, not iteration; `task e2e:check-ports` explains port conflicts.
+Before every push run `task check:push`: it mirrors CI (build, lint, vet with the integration and live_llm tags,
+schema drift, contract tests, race unit tests, then integration through the canonical runner and its host lock).
+`task check` is the fast subset. A diff that edits files tests read, including markdown, is a code change for gate
+purposes. Revive warnings fail CI and `go fmt` must be clean. E2E tiers are for final validation, not iteration;
+`task e2e:check-ports` explains port conflicts.
 
 ## Architecture in five sentences
 
 SemStreams is a knowledge-graph engine, not an event bus. Every KV bucket is a twofer: `Get` is state, `Watch` is
 events; `ENTITY_STATES` has history 1 and is current authority, never an audit or recovery ledger. Facts travel by KV
-Watch, work requests by JetStream stream (`/kv-or-stream`). There are two orchestration
+Watch, work requests by JetStream stream (the `kv-or-stream` skill). There are two orchestration
 layers only: the rule engine triggers and components execute; rules pass references, never payloads (ADR-028).
 Read `docs/concepts/00-real-time-inference.md`, `02-kv-twofer.md`, `03-streams-vs-kv-watches.md`, and
 `14-orchestration-layers.md` before designing a communication path or adding orchestration.
@@ -86,7 +88,7 @@ The linked file is the rule; this table is only its index.
 | Production structs never retain `context.Context`; no invented roots; nil never defaults to `Background` | `.agents/contracts/semstreams-developer.md` § Context ownership | struct half: `test/contract/context_ownership_contract_test.go`; root half: #1324 |
 | Every outward-facing surface answers the adopter seam questions; prefer observation to prediction | `.agents/contracts/semstreams-architect.md` § The adopter seam inventory | architect and reviewer contracts |
 | A BREAKING change lands only with a relevant E2E tier green | `docs/contributing/02-e2e-tests.md` § Breaking Changes | prose today; #1325 |
-| New payload types register via `RegisterPayloads`, no `init()`, no singleton, explicit call from the composition root | `.agents/skills/new-payload/SKILL.md`, `docs/concepts/15-payload-registry.md` | `test/contract/message_contract_test.go` |
+| New payload types register via `RegisterPayloads`, no `init()`, no singleton, explicit call from the composition root | `.agents/skills/new-payload/SKILL.md`, `docs/concepts/15-payload-registry.md` | round-trip and registration consistency only (`test/contract/message_contract_test.go`); per-binary parity is prose |
 | Rule vs component vs lifecycle boundary; workflow shapes compose the Lifecycle harness | `.agents/skills/orchestration-check/SKILL.md`, `docs/concepts/14-orchestration-layers.md` | review |
 | Test fidelity: production seams, `-race`, explicit synchronization, mutation evidence via `cp` backup and checksum | `docs/contributing/01-testing.md`, contracts § Test fidelity | CI Test job |
 
@@ -106,7 +108,8 @@ never become a pointer:
 impact, never branch, edit, push, open or comment on anything there. A breaking change records its impact and
 migration steps in a SemStreams-owned `docs/operations/migration-*.md`; the sister's owner applies it.
 
-Role agents are the default path for nontrivial work; no permission is needed to spawn them. `semstreams-architect`
+Role agents are the default path for nontrivial work; no permission is needed to spawn them, and only
+massively-parallel Workflow orchestration is opt-in. `semstreams-architect`
 designs, inventory first. `semstreams-developer` implements. `semstreams-reviewer` reviews every nontrivial change
 before integration. `semstreams-explorer` enumerates. `semstreams-judge` answers one bounded question over
 collected evidence and never rules. Contracts are `.agents/contracts/`; platform
