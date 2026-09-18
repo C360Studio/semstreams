@@ -1474,9 +1474,12 @@ func (c *Component) handleSpawnIdentityFailure(ctx context.Context, loopID strin
 
 // handleResponseMessage processes incoming agent response messages
 func (c *Component) handleResponseMessage(ctx context.Context, data []byte) error {
-	response, loopID, ok := c.extractAgentResponse(data)
-	if !ok {
-		return nil
+	response, loopID, err := c.extractAgentResponse(data)
+	if err != nil {
+		return err
+	}
+	if loopID == "" {
+		return c.settleResponseWithoutLoop(ctx, response.RequestID)
 	}
 
 	entity, _ := c.handler.GetLoop(loopID)
@@ -1506,33 +1509,33 @@ func failureReasonForHandlerError(err error) string {
 }
 
 // extractAgentResponse parses an agent response message and finds its loop.
-// Returns the response, loop ID, and success flag.
-func (c *Component) extractAgentResponse(data []byte) (*agentic.AgentResponse, string, bool) {
+//
+// A decode or payload-type failure is returned as a PermanentDeliveryError:
+// the bytes on this message will never decode, so the heartbeat policy
+// terminates the delivery rather than discarding it behind a log line.
+//
+// An empty loop ID with a nil error is NOT a failure and not a decision — it
+// means only that process memory does not route this RequestID. The caller
+// classifies that against the loops bucket, because memory alone cannot tell a
+// settled loop from one this process lost.
+func (c *Component) extractAgentResponse(data []byte) (*agentic.AgentResponse, string, error) {
 	baseMsg, err := c.decoder.Decode(data)
 	if err != nil {
 		c.logger.Error("Failed to unmarshal BaseMessage", "error", err)
-		return nil, "", false
+		return nil, "", natsclient.TerminateDelivery(
+			fmt.Errorf("decode agent response BaseMessage: %w", err))
 	}
 
 	responsePtr, ok := baseMsg.Payload().(*agentic.AgentResponse)
 	if !ok {
 		c.logger.Error("Unexpected payload type", "type", fmt.Sprintf("%T", baseMsg.Payload()))
-		return nil, "", false
+		return nil, "", natsclient.TerminateDelivery(
+			fmt.Errorf("agent response payload is %T, not *agentic.AgentResponse", baseMsg.Payload()))
 	}
 
-	// No loop for this request is an EXPECTED settled-drop, not a fault. A
-	// terminal loop's per-loop state is released (#1233), which takes its
-	// request routing with it, so a model response that arrives after the loop
-	// settled — or after a process replacement — resolves nothing. Warn and
-	// drop: absence here must look the same as a terminal loop still present,
-	// and neither is an error the operator can act on.
 	loopID := c.findLoopIDForRequest(responsePtr.RequestID)
 	if loopID == "" {
-		c.logger.Warn("No loop found for request", "request_id", responsePtr.RequestID)
-		if c.metrics != nil {
-			c.metrics.recordModelResponseDropped("stale_request_id")
-		}
-		return nil, "", false
+		return responsePtr, "", nil
 	}
 
 	c.logger.Debug("Processing model response",
@@ -1540,7 +1543,32 @@ func (c *Component) extractAgentResponse(data []byte) (*agentic.AgentResponse, s
 		slog.String("request_id", responsePtr.RequestID),
 		slog.String("status", responsePtr.Status))
 
-	return responsePtr, loopID, true
+	return responsePtr, loopID, nil
+}
+
+// settleResponseWithoutLoop decides a model response whose RequestID routes to
+// no loop in this process. A terminal loop's per-loop state is released
+// (#1233), which takes its request routing with it, so a response arriving
+// after settlement resolves nothing and is an expected drop. A response
+// arriving after process replacement looks identical from memory and is the
+// opposite case — the loop is live and still owed this response.
+func (c *Component) settleResponseWithoutLoop(ctx context.Context, requestID string) error {
+	loopID := loopIDFromStructuredID(requestID, ":req:")
+	switch c.classifyMissingLoop(ctx, loopID) {
+	case loopPresenceStale:
+		c.logger.Warn("No loop found for request", "request_id", requestID)
+		if c.metrics != nil {
+			c.metrics.recordModelResponseDropped("stale_request_id")
+		}
+		return nil
+	default:
+		c.logger.Warn("Model response names a loop this process does not hold",
+			"request_id", requestID, "loop_id", loopID)
+		if c.metrics != nil {
+			c.metrics.recordModelResponseDropped("loop_held_elsewhere")
+		}
+		return fmt.Errorf("loop %q for request %q is not held by this process", loopID, requestID)
+	}
 }
 
 // handleLoopFailure records failure metrics and publishes failure events.
@@ -1858,13 +1886,15 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 	baseMsg, err := c.decoder.Decode(data)
 	if err != nil {
 		c.logger.Error("Failed to unmarshal BaseMessage", "error", err)
-		return nil
+		return natsclient.TerminateDelivery(
+			fmt.Errorf("decode tool result BaseMessage: %w", err))
 	}
 
 	toolResultPtr, ok := baseMsg.Payload().(*agentic.ToolResult)
 	if !ok {
 		c.logger.Error("Unexpected payload type", "type", fmt.Sprintf("%T", baseMsg.Payload()))
-		return nil
+		return natsclient.TerminateDelivery(
+			fmt.Errorf("tool result payload is %T, not *agentic.ToolResult", baseMsg.Payload()))
 	}
 	toolResult := *toolResultPtr
 
@@ -1880,13 +1910,12 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 	// routing entry for model-authored call IDs as well as structured ones, so
 	// recovery cannot resolve a loop that is gone and hand it to
 	// HandleToolResult, which would fail instead of dropping.
+	// The fourth case the comment above did not name: the loop is live and
+	// this process is simply not the one holding it. Memory reads identically
+	// to the three expected drops, so the loops bucket decides.
 	loopID := c.findLoopIDForToolCall(toolResult.CallID)
 	if loopID == "" {
-		c.logger.Warn("No loop found for tool call", "call_id", toolResult.CallID)
-		if c.metrics != nil {
-			c.metrics.recordToolResultDropped("stale_callid")
-		}
-		return nil
+		return c.settleToolResultWithoutLoop(ctx, toolResult)
 	}
 
 	hasError := toolResult.Error != ""
@@ -1940,6 +1969,33 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 	// plus finalization and completion-state persistence
 	// when the loop reaches a terminal state.
 	return c.persistHandlerResult(ctx, result)
+}
+
+// settleToolResultWithoutLoop decides a tool result whose CallID routes to no
+// loop in this process. The ToolResult payload carries its own LoopID, and the
+// structured CallID grammar carries one too; either identifies the record to
+// read. Stale is the expected settled-drop the surrounding comment describes;
+// live means an executor's completed work would be destroyed by an ACK.
+func (c *Component) settleToolResultWithoutLoop(ctx context.Context, toolResult agentic.ToolResult) error {
+	loopID := toolResult.LoopID
+	if loopID == "" {
+		loopID = loopIDFromStructuredID(toolResult.CallID, ":tool:")
+	}
+	switch c.classifyMissingLoop(ctx, loopID) {
+	case loopPresenceStale:
+		c.logger.Warn("No loop found for tool call", "call_id", toolResult.CallID)
+		if c.metrics != nil {
+			c.metrics.recordToolResultDropped("stale_callid")
+		}
+		return nil
+	default:
+		c.logger.Warn("Tool result names a loop this process does not hold",
+			"call_id", toolResult.CallID, "loop_id", loopID)
+		if c.metrics != nil {
+			c.metrics.recordToolResultDropped("loop_held_elsewhere")
+		}
+		return fmt.Errorf("loop %q for tool call %q is not held by this process", loopID, toolResult.CallID)
+	}
 }
 
 // publishResults publishes all output messages from a handler result using JetStream.
