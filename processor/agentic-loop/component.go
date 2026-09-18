@@ -1163,6 +1163,14 @@ func newLoopHeartbeatDeliveryPolicy(
 			if handlerErr == nil {
 				return natsclient.DeliveryDecisionAck, nil
 			}
+			// Fatal is checked first and means one thing here: an external
+			// effect may already have happened and we cannot tell. Retry is
+			// only safe when re-execution is, so a commit-unknown error can
+			// never fall through to it. The cancel lane already made this
+			// call; the heartbeat lanes were the ones still blind-retrying.
+			if errs.IsFatal(handlerErr) {
+				return natsclient.DeliveryDecisionQuarantine, handlerErr
+			}
 			var permanent *natsclient.PermanentDeliveryError
 			if errors.As(handlerErr, &permanent) {
 				return natsclient.DeliveryDecisionTerminate, handlerErr
@@ -1767,8 +1775,25 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 		}
 	}
 
+	// Everything above this line is safe to re-run: persistLoopState and the
+	// completion/failure state writes are KV Puts of the whole current entity
+	// (`c.loopsBucket.Put` at :2107 and :2029/:2056 — last write wins, not an
+	// append), and the graph stamps go through WriteLoopCompletion/-Failure,
+	// which replace the loop entity's single-valued triples. A Retry re-runs
+	// them to the same values.
+	//
+	// publishResults is not. It publishes result.PublishedMessages one at a
+	// time, so a failure on the third leaves two already PubAck'd — including
+	// tool.execute messages whose executors are running. Until deterministic
+	// tool-call identity lands (L2) the re-run mints fresh call IDs, so a
+	// Retry here would run the first two tools twice and TOOL_CALL_OUTCOMES
+	// could not dedupe them: different CallIDs are different calls. Commit is
+	// unknown, so the lane quarantines and stops rather than blind-retrying an
+	// effect that may already have happened. L4 (#1330) relaxes this to
+	// identity-based replay.
 	if err := c.publishResults(ctx, result); err != nil {
-		return err
+		return errs.WrapFatal(err, "agentic-loop", "persistHandlerResult",
+			"published results have unknown durability")
 	}
 	if terminal {
 		c.releaseLoopTransientState(result.LoopID)
