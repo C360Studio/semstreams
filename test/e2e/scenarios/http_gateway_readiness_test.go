@@ -215,3 +215,54 @@ func TestHTTPGatewayStageStopsOnContextCancellation(t *testing.T) {
 		t.Fatal("stage ignored a cancelled context")
 	}
 }
+
+// TestHTTPGatewayStageAdmitsNoRequestPastTheReadinessBudget is the boundary the
+// per-response deadline check alone does not cover (owner review of PR #1337,
+// P2): the first response is not-ready with budget still left, but the polling
+// delay is longer than what remains. An unclamped delay would sleep past the
+// deadline and then admit one more request — which runs on the per-query
+// timeout (60s, or the longer semantic override) entirely outside the budget,
+// and would be reported as SUCCESS if it happened to be served.
+//
+// maxWait bounds ADMISSION: no request starts once the budget is spent.
+func TestHTTPGatewayStageAdmitsNoRequestPastTheReadinessBudget(t *testing.T) {
+	t.Parallel()
+
+	const (
+		maxWait = 30 * time.Millisecond
+		poll    = 1 * time.Second // deliberately longer than the whole budget
+	)
+
+	url, requests := stubGateway(t, notReadyEnvelope)
+	s, result := readinessScenario(url)
+
+	start := time.Now()
+	_, err := s.awaitReadyGatewayGlobalSearch(context.Background(), result, maxWait, poll)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("stage passed although the readiness budget expired")
+	}
+	if got := requests.Load(); got != 1 {
+		t.Errorf("gateway requests = %d, want 1 — no request may be admitted past the budget", got)
+	}
+	// The delay was clamped to what the budget had left, so the wait cannot have
+	// run for the polling interval. Tolerance is wide (an order of magnitude
+	// under the 1s interval) because this is a scheduling assertion, not a
+	// timing measurement.
+	waitMS, ok := result.Metrics["graphql_gateway_readiness_wait_ms"].(int64)
+	if !ok {
+		t.Fatalf("graphql_gateway_readiness_wait_ms = %v, want an int64", result.Metrics["graphql_gateway_readiness_wait_ms"])
+	}
+	if waitMS >= poll.Milliseconds()/2 {
+		t.Errorf("recorded wait = %dms, want well under the %s polling interval — the delay was not bounded by the budget",
+			waitMS, poll)
+	}
+	if elapsed >= poll/2 {
+		t.Errorf("wall clock = %s, want well under the %s polling interval", elapsed, poll)
+	}
+	// It waited, but it never got to retry: the count is requests beyond the first.
+	if got := result.Metrics["graphql_gateway_index_not_ready_retries"]; got != 0 {
+		t.Errorf("graphql_gateway_index_not_ready_retries = %v, want 0 (waited, never retried)", got)
+	}
+}

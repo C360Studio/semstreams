@@ -127,6 +127,14 @@ func gatewayGlobalSearchQuery() map[string]any {
 // It records what it did on the Result unconditionally — a wait that happened
 // and a wait that was not needed are both observations, and a metric that only
 // appears when the slow path ran cannot be read as zero.
+//
+// maxWait bounds ADMISSION, not completion. No request is started once the
+// readiness budget is spent — including the case where the polling delay itself
+// would cross the deadline, since an admitted request may then occupy the whole
+// per-query timeout OUTSIDE the budget and return success from outside it. A
+// request admitted while the budget still held is allowed to finish on the
+// per-query timeout, which is deliberately longer for legitimate semantic
+// synthesis.
 func (s *TieredScenario) awaitReadyGatewayGlobalSearch(
 	ctx context.Context,
 	result *Result,
@@ -142,21 +150,36 @@ func (s *TieredScenario) awaitReadyGatewayGlobalSearch(
 	startWait := time.Now()
 	deadline := startWait.Add(maxWait)
 
-	retries := 0
+	// attempts counts requests ISSUED; the recorded retry count is every request
+	// beyond the first, so a budget that expires during the delay reads as "waited,
+	// never retried" rather than claiming a retry that was refused.
+	attempts := 0
+	var notReady gatewayGraphQLError
 	record := func() {
-		result.Metrics["graphql_gateway_index_not_ready_retries"] = retries
+		result.Metrics["graphql_gateway_index_not_ready_retries"] = attempts - 1
 		result.Metrics["graphql_gateway_readiness_wait_ms"] = time.Since(startWait).Milliseconds()
+	}
+	budgetSpent := func() error {
+		record()
+		return fmt.Errorf(
+			"gateway globalSearch never served a ready community index within %s "+
+				"(%d attempts over %s; last response: code=%q class=%q message=%q): "+
+				"the community generation graph-query answers globalSearch from was "+
+				"never published, so this is the index, not the query",
+			maxWait, attempts, time.Since(startWait).Round(time.Millisecond),
+			notReady.Extensions.Code, notReady.Extensions.Class, notReady.Message)
 	}
 
 	for {
 		gqlResp, latency, err := s.postGatewayGlobalSearch(ctx, httpClient, queryJSON)
+		attempts++
 		if err != nil {
 			record()
 			return nil, err
 		}
 		result.Metrics["graphql_gateway_latency_ms"] = latency.Milliseconds()
 
-		notReady, waiting := readinessTransient(gqlResp.Errors)
+		transient, waiting := readinessTransient(gqlResp.Errors)
 		if !waiting {
 			record()
 			if len(gqlResp.Errors) > 0 {
@@ -164,28 +187,37 @@ func (s *TieredScenario) awaitReadyGatewayGlobalSearch(
 			}
 			return gqlResp, nil
 		}
+		notReady = transient
 
-		if !time.Now().Before(deadline) {
-			record()
-			return nil, fmt.Errorf(
-				"gateway globalSearch never served a ready community index within %s "+
-					"(%d attempts over %s; last response: code=%q class=%q message=%q): "+
-					"the community generation graph-query answers globalSearch from was "+
-					"never published, so this is the index, not the query",
-				maxWait, retries+1, time.Since(startWait).Round(time.Millisecond),
-				notReady.Extensions.Code, notReady.Extensions.Class, notReady.Message)
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, budgetSpent()
 		}
 
-		retries++
 		fmt.Printf("[GATEWAY READINESS WAIT] globalSearch reports %q (%s/%s) after %.1fs; retrying\n",
 			notReady.Message, notReady.Extensions.Class, notReady.Extensions.Code,
 			time.Since(startWait).Seconds())
+
+		// Never sleep past the budget. An unclamped delay that crosses the
+		// deadline admits one more request, and that request runs on the
+		// per-query timeout (60s, or the longer semantic override) entirely
+		// outside the budget — a success there would be reported as success.
+		delay := poll
+		if delay > remaining {
+			delay = remaining
+		}
 
 		select {
 		case <-ctx.Done():
 			record()
 			return nil, ctx.Err()
-		case <-time.After(poll):
+		case <-time.After(delay):
+		}
+
+		// The clamped delay lands ON the deadline, so re-check before admitting
+		// the next request rather than after it has already run.
+		if !time.Now().Before(deadline) {
+			return nil, budgetSpent()
 		}
 	}
 }
