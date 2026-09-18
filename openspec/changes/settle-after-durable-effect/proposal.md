@@ -45,10 +45,12 @@ running, and `max_deliver: 1` silently truncated a two-entry BackOff to a single
 - **A partially published result quarantines.** `persistHandlerResult`'s stamp phase is a whole-entity upsert and
   stays retryable; its publish phase is not, so a failure there is fatal-wrapped and settles as Quarantine rather
   than replaying publications whose PubAcks already returned.
-- **Retry on the non-heartbeat lanes is bounded.** Those four lanes shipped with no consumer configuration, so
-  `max_deliver: 0` meant unlimited and `SettleDelivery`'s Retry was an undelayed NAK. They now carry the same
-  validated BackOff/`max_deliver` floor as the heartbeat lanes and settle Retry through
-  `natsclient.SettleDeliveryWithRetry` with a 30s delay.
+- **Retry on the non-heartbeat lanes is delayed and scheduled.** Those four lanes shipped with no consumer
+  configuration, so they carried no BackOff at all and `SettleDelivery`'s Retry was a bare, undelayed NAK: every
+  transient error was redelivered at line rate until `component.GetConsumerConfig`'s default `max_deliver: 3`
+  burned through. They now carry the same BackOff `[30s,2m]` as the heartbeat lanes, are held to the same
+  `max_deliver` floor by the same validator, and settle Retry through `natsclient.SettleDeliveryWithRetry` with a
+  30s delay.
 
 ## Impact
 
