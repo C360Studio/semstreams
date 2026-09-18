@@ -75,19 +75,20 @@ retain the exact native handle.
 The framework SHALL expose `ConsumeDeliveryWithHeartbeat` with validated `HeartbeatDeliveryPolicy`,
 `DeliveryDecision`, and `DeliveryResult`.
 
-`ConsumeWithHeartbeat` and `NewDurableHandler` SHALL NOT exist or have aliases. Every original model, tools, dispatch,
-loop, and AgentRun heartbeat binding SHALL use the permanent typed surface with its owner-specific durable definition
-of done.
+`NewDurableHandler` SHALL NOT exist or have an alias. `ConsumeWithHeartbeat` SHALL have no alias and no new
+production caller, and SHALL be deleted by the PR that migrates its last one (#1249). Every original model, tools,
+dispatch, loop, and AgentRun heartbeat binding SHALL use the permanent typed surface with its owner-specific durable
+definition of done.
 
-No final capability SHALL describe a production legacy allowlist. Any exact caller list used before final integration
-is branch-staging conformance only and SHALL be zero before archive.
+No capability SHALL describe a production legacy allowlist. The exact caller list is ratchet conformance only: it
+never widens, and it reaches zero in the PR that removes the helper.
 
-#### Scenario: final public surface
+#### Scenario: public surface at this layer
 
-- **WHEN** the semantic-settlement change is archived
+- **WHEN** this change is archived
 - **THEN** the permanent typed API exists
-- **AND** `ConsumeWithHeartbeat`, `NewDurableHandler`, and every alias are absent
-- **AND** production callers of those removed symbols are zero
+- **AND** `NewDurableHandler` and every alias are absent with zero production callers
+- **AND** `ConsumeWithHeartbeat` carries only its ratcheted remaining callers and no alias
 
 #### Scenario: binding migration requires semantic authority
 

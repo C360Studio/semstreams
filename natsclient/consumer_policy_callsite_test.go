@@ -413,9 +413,11 @@ func TestNewDurableHandlerRetirementIgnoresUnrelatedSelector(t *testing.T) {
 }
 
 // TestLegacyHeartbeatProductionCallZeroGrowthStagingGuard prevents another
-// production caller while the non-default integration branch stages the final
-// migrations. The expected files are not an API allowlist or merge authority;
-// final #759 conformance replaces this guard with zero callers and no export.
+// production caller while the remaining bindings migrate. The expected files
+// are not an API allowlist, a compatibility promise, or merge authority: the
+// set only ever shrinks. Layer L1 (#1327) removes the loop and model entries;
+// the PR migrating the last one (#1249, AgentRun) deletes ConsumeWithHeartbeat
+// and replaces this guard with zero callers and no export.
 func TestLegacyHeartbeatProductionCallZeroGrowthStagingGuard(t *testing.T) {
 	files := parseProductionGoFiles(t, filepath.Clean(".."))
 	scan := scanLegacyHeartbeatReferences(files)

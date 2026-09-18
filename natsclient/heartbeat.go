@@ -72,10 +72,15 @@ func nonCancellationWorkError(err error) error {
 // Cancellation and heartbeat failure wait for work to exit before returning
 // delivery control.
 //
-// Deprecated: use ConsumeDeliveryWithHeartbeat. This export exists only on the
-// non-default #759 integration branch while model, loop, and AgentRun migrate.
-// It admits no new production caller and is removed before the branch reaches
-// main; its staging caller set is not a compatibility promise.
+// New bindings use ConsumeDeliveryWithHeartbeat, which returns a typed
+// DeliveryResult instead of inferring settlement from nil/error. This helper
+// admits no new production caller: the AST ratchet in
+// consumer_policy_callsite_test.go pins the exact remaining set. After layer
+// L1 (#1327) its only production caller is agentic/agentrun/agentrun.go, and
+// the PR that migrates that caller to the typed API (#1249, in this stack)
+// deletes this function in the same commit. There is no deprecation period
+// and no alias; docs/operations/migration-beta162-to-beta163.md names the
+// removal for adopters.
 func ConsumeWithHeartbeat(
 	ctx context.Context,
 	msg jetstream.Msg,

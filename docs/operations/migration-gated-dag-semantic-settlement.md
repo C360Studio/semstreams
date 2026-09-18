@@ -27,9 +27,10 @@ SemStreams separates two responsibilities:
 - `jetstream-consumer-policy` owns typed settlement, heartbeat, lease validation, and exact native consume-handle
   mechanics.
 
-The permanent typed API and removal of the old heartbeat helper reach `main` together in the final #759 cutover.
-The non-default integration branch is staging, not a compatibility release. Nil/error is not a portable definition
-of done, and a fast consumer receives no raw-message or exported no-heartbeat workaround.
+The typed API is the only surface a new binding uses. The old heartbeat helper is deleted by the PR that migrates
+its last caller (#1249) with no deprecation period — its remaining callers are pinned by an AST ratchet that only
+shrinks, so its presence is a remainder, not a compatibility release. Nil/error is not a portable definition of
+done, and a fast consumer receives no raw-message or exported no-heartbeat workaround.
 
 The dispatch producer uses the logical unit ID as `Nats-Msg-Id`. Server deduplication applies only inside the stream's
 configured `Duplicates` window. `Duplicates >= BackstopInterval` covers ordinary backstop-driven redispatch; it is

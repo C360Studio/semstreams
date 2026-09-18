@@ -51,12 +51,13 @@ no-heartbeat workaround.
 
 ## Impact
 
-- Breaking pre-v1 API replacement: the default branch receives `ConsumeDeliveryWithHeartbeat` and removal of
-  `ConsumeWithHeartbeat` in one final PR.
-- No accepted default-branch interval exposes both APIs.
-- #1146 and #1249 are separately claimed and reviewed on the non-default #759 integration branch.
-- Final PR #1156 carries default-branch closing authority for #759, #1146, #1249, and, only after complete proof,
-  #1155.
+- Breaking pre-v1 API replacement: the default branch receives `ConsumeDeliveryWithHeartbeat`, and
+  `ConsumeWithHeartbeat` is removed by the PR that migrates its last caller (#1249). No deprecation period is
+  offered to adopters; `docs/operations/migration-beta162-to-beta163.md` names the removal. Until that PR merges,
+  `main` carries the helper unadvertised and the AST ratchet forbids any new caller. (Owner ruling 2026-09-18,
+  recorded on #759.)
+- #1146/#1327 and #1249 are separately claimed and reviewed as PRs stacked above the foundation PR #1331; none of
+  them closes #759.
 - `NewDurableHandler` and `ConsumeWithHeartbeat` are both absent from final current truth.
 - Tools heartbeat changes from 120 seconds to 5 seconds while BackOff remains 15/60 seconds.
 - SemStreams records SemSpec and SemDragon migration requirements without mutating either sister repository.

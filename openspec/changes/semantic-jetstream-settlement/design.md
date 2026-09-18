@@ -8,9 +8,10 @@
 PR #1159 and the #1249 implementation PR target the #759 branch and are separately claimed, reviewed, archived, and
 squash-merged there.
 
-The #759 branch may temporarily contain both typed and legacy exports only as unmerged staging state. That condition
-is never archived as current framework truth and never reaches `main`. The exact caller list is enforced only as a
-zero-growth test that shrinks after each staged child merge.
+The legacy helper is removed in the PR that migrates its last caller (#1249). No deprecation period is offered to
+adopters; `docs/operations/migration-beta162-to-beta163.md` names the removal. Until that PR merges, `main` carries
+the helper unadvertised and the AST ratchet forbids any new caller. (Owner ruling 2026-09-18, recorded on #759.) The
+exact caller list is enforced only as a zero-growth test that shrinks after each staged child merge.
 
 After #1146 and #1249 integrate, #759 removes `ConsumeWithHeartbeat`, proves the exported symbol and production caller
 count are zero, and archives the final capability state. The final default-branch squash therefore performs one

@@ -49,9 +49,11 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 - [x] 2.11 Implement metadata validation before Data/work, migrate the three policy bindings through local wrappers
       that leave domain handlers unchanged, migrate settlement fakes, preserve C8/C9, and prove panic, cancellation,
       control-loss, and every started task still join under valid metadata.
-- [x] 2.12 Add the deprecation notice and exact shrinking AST zero-growth staging guard for
-      `ConsumeWithHeartbeat`; docs/examples advertise only the permanent typed API. The guard is not an API
-      allowlist, current capability, compatibility promise, or merge authority.
+- [x] 2.12 Add the exact shrinking AST zero-growth guard for `ConsumeWithHeartbeat`; docs/examples advertise only
+      the permanent typed API. The guard is not an API allowlist, current capability, compatibility promise, or
+      merge authority. No `Deprecated:` marker ships: the owner ruled 2026-09-18 that a greenfield repository offers
+      no deprecation period, so the helper's doc names the PR that deletes it (#1249) and
+      `docs/operations/migration-beta162-to-beta163.md` names the removal for adopters.
 
 ## 3. TDD owner-private control loss
 

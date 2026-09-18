@@ -58,21 +58,23 @@ a prior invocation ran, that an external effect committed, or that replay is ide
 - **THEN** the binding follows its accepted ambiguity decision rather than mechanically ACKing or retrying
 - **AND** JetStream redelivery is not treated as provider-outcome authority
 
-### Requirement: no staged compatibility surface becomes current truth
+### Requirement: the legacy helper is a shrinking remainder, never a compatibility surface
 
-Temporary coexistence of typed and legacy settlement on a non-default integration branch SHALL NOT be archived as
-current capability truth or merged to the default branch. Final current truth SHALL contain only the permanent typed
-surface and its migrated production bindings.
+While `ConsumeWithHeartbeat` still has production callers, its coexistence with the typed surface SHALL NOT be
+described as a compatibility period. It SHALL remain unadvertised, SHALL admit no new production caller — enforced
+by an AST ratchet over the exact remaining set, which only shrinks — and SHALL carry no deprecation window, alias,
+or shim. It is deleted by the PR that migrates its last caller. Adopters get the removal from
+`docs/operations/migration-beta162-to-beta163.md`, not from a deprecation marker. (Owner ruling 2026-09-18.)
 
-JetStream remains the delivery and redelivery authority. This staging rule adds no supervisor, checkpoint, outbox,
-receipt ledger, state-machine runtime, or new durable primitive.
+JetStream remains the delivery and redelivery authority. This rule adds no supervisor, checkpoint, outbox, receipt
+ledger, state-machine runtime, or new durable primitive.
 
-#### Scenario: default branch receives one settlement surface
+#### Scenario: a new caller is refused while the remainder shrinks
 
-- **GIVEN** typed and legacy settlement coexist temporarily on the non-default integration branch
-- **WHEN** the semantic-settlement change reaches the default branch
-- **THEN** only the permanent typed settlement surface and migrated bindings are present
-- **AND** no temporary compatibility state is archived as current truth
+- **GIVEN** the typed surface and the unremoved legacy helper are both present
+- **WHEN** any production file adds a call to the legacy helper
+- **THEN** the AST ratchet fails
+- **AND** the recorded caller set is never widened, only reduced by the migrating PRs
 
 ## REMOVED Requirements
 

@@ -87,13 +87,11 @@ work join, and the one terminal settlement attempt. Inspect every `DeliveryResul
 and settlement evidence in existing health/log surfaces. If `OwnerStopRequired` is true, close admission and stop the
 exact retained consume handle outside the callback. A terminal-method error alone does not authorize owner shutdown.
 
-The non-default #759 integration branch temporarily retains `ConsumeWithHeartbeat` only as a removal boundary while
-#1146 migrates model and loop and #1249 migrates AgentRun. Its three-file zero-growth guard is not an API allowlist,
-compatibility promise, current capability, or merge authority. No new integration may call it.
-
-Final #759 conformance requires every production caller and the exported symbol to be absent without alias. The typed
-surface and removal reach `main` together in one breaking pre-v1 cutover; no accepted default-branch interval exposes
-both APIs. New and migrated integrations use only the typed API above.
+`ConsumeWithHeartbeat` is still exported while its last callers migrate — #1327 takes model and loop, #1249 takes
+AgentRun — and it is deleted by that last PR, with no deprecation period, alias, or shim. Its zero-growth AST ratchet
+(`natsclient/consumer_policy_callsite_test.go`) is not an API allowlist, compatibility promise, current capability,
+or merge authority: the pinned set only shrinks, and no new integration may call it. New and migrated integrations
+use only the typed API above. (Owner ruling 2026-09-18 on #759.)
 
 ## Removed Client lifecycle authority
 
