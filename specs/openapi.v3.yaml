@@ -922,6 +922,7 @@ components:
                                             type: string
                                       required:
                                         - call_id
+                                        - execution_id
                                         - tool_name
                                         - requested_at
                                       type: object
@@ -1398,6 +1399,7 @@ components:
                                 type: string
                           required:
                             - call_id
+                            - execution_id
                             - tool_name
                             - requested_at
                           type: object
@@ -1475,6 +1477,7 @@ components:
                                 type: string
                           required:
                             - call_id
+                            - execution_id
                             - tool_name
                             - requested_at
                           type: object

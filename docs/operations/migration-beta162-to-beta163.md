@@ -1525,3 +1525,148 @@ reachable only for a non-rule-engine publisher that emits a rejection in the env
 Every line pin in this section was re-derived with `sed -n '<n>p'` against the head it ships on, not carried
 forward: one of them (`governance_dispatcher.go:401`) had already drifted onto a comment line before anyone read
 it. Re-derive rather than trust when you cite this section from anywhere else.
+
+## Loop bucket declaration and approval-wait limit (#1146)
+
+**Breaking configuration/API change:** agentic-loop no longer exposes `Config.LoopsBucket` or accepts its
+top-level JSON key `loops_bucket`. Remove that key even when it contains the default AGENT_LOOPS or matches your port.
+Go struct literals using the removed field fail compilation; retained JSON gets an actionable configuration error.
+
+The existing `loops` KV-write output is the sole declaration. With no override it selects AGENT_LOOPS.
+For a custom bucket, use the existing canonical port configuration:
+
+```json
+{
+  "ports": {
+    "outputs": [
+      {
+        "name": "loops",
+        "config": {
+          "kind": "kv-write",
+          "bucket": "CUSTOM_LOOPS"
+        }
+      }
+    ]
+  }
+}
+```
+
+This replaces only that named output. Keep unrelated ports and configuration.
+Do not remove `loops_bucket` from agentic-tools or research-stage configurations: those surfaces are unchanged.
+For research assemblies, their selected buckets must agree with the loop's effective port bucket; the existing
+composition validator now checks that actual declaration.
+
+**Approval limit:** omission of `approval_timeout` now uses `12h`, also the maximum supported wait for this release.
+A supplied value must be a positive duration no greater than 12h. Explicit empty, null, zero, negative, malformed
+or longer values fail configuration admission. Existing settings such as `18h` no longer start; waits are never
+silently shortened. Longer delayed-review workflows are therefore outside this release's supported limit.
+
+Startup observes actual loop-bucket History 10, TTL 24h and nonbinding MaxBytes before accepting work.
+The resulting nominal grace is not a promise of recovery or settlement before expiry.
+Existing pending deadlines are not reset by replacement configuration, and existing evidence/refusal rules remain.
+
+Use the normal fresh-storage pre-v1 adoption path. An incompatible retained bucket is refused, not repaired.
+This note authorizes no destructive cleanup or migration of a deployed bucket; an actual retained deployment needing
+upgrade or recovery requires its separately reviewed plan.
+
+[Owner acceptance](https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5696610710).
+Verify the changed constructor/configuration path and relevant agentic E2E before the breaking change lands.
+This note does not claim that verification has passed.
+
+### The bucket policy is observed before any loop work
+
+Startup acquires the effective loop bucket and observes its actual policy before accepting work
+(`processor/agentic-loop/internal/loopbucket/acquire.go`). A bucket it creates is History 10 with TTL 24h. A
+pre-existing bucket at any other policy is **refused, never reconciled**, with this exact error:
+
+```
+loop bucket "<NAME>" policy: observed History=<h> TTL=<ttl> MaxAge=<age> MaxBytes=<bytes>; require History=10 TTL=24h MaxAge=24h MaxBytes<=0 (no reconciliation)
+```
+
+A deployment whose AGENT_LOOPS (or custom loop bucket) was provisioned at another History, TTL, MaxAge, or with a
+positive MaxBytes must delete and recreate it. That is the pre-v1 fresh-storage path: this release adds no repair,
+no online migration, and no compatibility reader. If the bucket holds state you cannot discard, stop and ask for a
+separately reviewed migration plan rather than editing the policy under a running deployment.
+
+Two adjacent observations that are not errors: a bucket the component creates itself always satisfies the policy,
+and `loops_bucket` on agentic-tools and the research stages is a different, unchanged surface.
+
+### Adopter configurations that set the loop bucket
+
+Measured read-only on the sister checkout at semspec `5a9496ee` (2026-09-18): **thirteen** flow configs carry the
+retired key on their `agentic-loop` component — `configs/e2e.json:160`, `semspec.json:265`, `e2e-mock.json:254`,
+`e2e-mock-ui.json:254`, `e2e-sparky.json:289`, `e2e-claude.json:311`, `e2e-mock-legacy.json:316`,
+`e2e-local.json:317`, `e2e-mock-ui-legacy.json:333`, `e2e-gemini.json:345`, `e2e-hybrid.json:368`,
+`e2e-hybrid-gpt5.json:369`, `e2e-openrouter.json:395`. Every one names the default `AGENT_LOOPS`, so the fix is to
+delete the line; only a config that named a different bucket needs the `loops` output port shown above.
+
+Each of those files carries a **second** `loops_bucket` about fifteen hundred lines further down, on semspec's own
+`recovery-consumer` processor (for example `e2e-claude.json:818`, `e2e-gemini.json:874`). That key belongs to a
+semspec-owned component and is **not** the retired one — leaving it alone is correct, and removing it would break
+the backstop reconciler. Match on the enclosing component, never on the key name.
+
+SemStreams makes no edits in sister repositories; semspec's owner applies this.
+
+## Dispatch reads loop authority instead of tracking notifications (#1329)
+
+Dispatch is now an edge gateway: it publishes admitted work, reads loop state, and bridges terminal outcomes to
+user responses. Agentic-loop owns creation, approval waits, intermediate transitions, and completion. Dispatch no
+longer consumes `agent.created` or `agent.approval_pending` to maintain a second process-local model of those facts.
+The loop still publishes both events for external subscribers; their payload contracts are unchanged by this cleanup.
+
+Explicit LoopID operations read the exact durable loop record. `/activity`, `/loops`, `/debug/state`, and
+auto-continue share one read-only view over `AGENT_LOOPS`. After replacement, that view hydrates current state; it
+does not depend on already-acknowledged notifications being delivered again. There is no new bucket and no recovery
+service.
+
+### Go callers and component configuration
+
+- `LoopTracker`, its constructors and methods, and `Component.LoopTracker()` are removed without an alias.
+  Custom commands replace `CommandContext.LoopTracker` with `LookupLoopOwner(ctx, loopID)`, returning only LoopID
+  and UserID. Invalid IDs, confirmed absence, missing owner, invalid records, and unavailable storage remain
+  distinct classified errors. Do not turn an unavailable lookup into permission or absence.
+- Remove `agent.created` and `agent.approval_pending` from dispatch input-port overrides. Retain its declared
+  `agent_loops` KV read port and the admitted user-message and terminal inputs. Do not remove the loop outputs or
+  unrelated external subscribers.
+- `graphview.View.Restart()` is removed. Its lifecycle owner stops the failed view, creates a replacement, and
+  starts it with the active lifecycle context. Shutdown must join that work; do not retain a context or provider
+  closure to recreate the old method. Dispatch handles its own shared-view lifecycle internally.
+
+Known adopter impact is the SemTeams `implementspec` custom command's tracker-based ownership check in
+`cmd/semteams/commands/implementspec/command.go` (`authorizeSelectedRun`, verified at `ce22c961d3`). Its owner must
+pass the operation's `context.Context` into that helper, migrate the check to `LookupLoopOwner(ctx, runID)`, and
+test classified failures. SemStreams agents do not modify sister repositories.
+
+### HTTP clients, auto-continue, and dashboards
+
+`LoopInfo` remains the immutable `/loops` and `/debug/state` response shape, including its pending `execution_id`.
+No mutable entity or tracker is exposed. The former process-only `context_request_id` remains optional and empty; it
+is not reconstructed from an event that no longer drives state. `/loops` and `/debug/state` return 503 for
+unavailable, bootstrapping, or relevant-poisoned views, not a false empty list. Auto-continue also refuses
+unavailable truth with 503 instead of starting new work — with `auto_continue` still defaulting to true at this
+release, a dispatch whose view is not ready refuses submissions rather than starting a second loop under the same
+route. `/activity` preserves its existing SSE error-event contract. Debug output exposes `loop_projection_ready`
+and `loop_projection_poisoned` so unavailable truth is distinguishable from zero loops.
+
+Auto-continue requires exact `(UserID, ChannelType, ChannelID)` agreement with one nonterminal record. Partial
+routes do not match; multiple matches refuse as ambiguous. Between a task's PubAck and its first durable loop
+record, another route-only request may create a second loop. If continuity matters, echo the returned LoopID. No
+route claim or prediction setting is added.
+
+Remove `semstreams_router_active_loops` from dashboards and alerts; no replacement authoritative Prometheus count is
+introduced. Use `/loops` only while its view is ready. The agentic-loop execution gauge remains process-local
+telemetry, not a count of every retained loop.
+
+### Terminal response boundary
+
+A terminal user response requires both the retained complete/failed source and the exact routing records it names.
+Its recovery window is the intersection of those retentions, not either configured horizon alone. Transient reads
+retry; confirmed absence of the terminal's own loop record reports `terminal_route_unavailable` and remains
+retryable instead of fabricating a route from memory. The reason reports absence, not its historical cause.
+Ancestor-route lookup retains its existing fallback and `origin_unresolvable` report. A validated system-lane
+outcome with no user route settles without `user.response`. Required response publication still receives PubAck
+before source ACK, and remains at-least-once.
+
+Verify pending approval and explicit continuation after dispatch replacement, unavailable-view 503 responses,
+exact-route auto-continue and its birth gap, and terminal routing after replacement. No beta-state preservation,
+tracker hydration, or compatibility layer is required.

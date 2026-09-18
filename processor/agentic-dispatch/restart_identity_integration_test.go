@@ -313,7 +313,7 @@ func TestIntegrationUserMessageTaskMappingConflictQuarantines(t *testing.T) {
 	}
 }
 
-// spec: agentic-dispatch / Prior messages accompany an independent chat turn
+// spec: agentic-dispatch / Dispatch uses one authority-backed current-state projection
 // Positive publication controls migrated from disconnected-client tracker tests:
 // the stored task and user response, not a speculative process entry, prove which
 // loop each production intake selected.
