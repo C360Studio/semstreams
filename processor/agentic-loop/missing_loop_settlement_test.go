@@ -225,3 +225,62 @@ func TestUncorrelatedToolResultSettlesByRecordNotByMemory(t *testing.T) {
 		require.Contains(t, result.Err().Error(), "not held by this process")
 	})
 }
+
+// A verdict with no waiter was documented as expected-in-normal-operation and
+// settled as Retry, which on an unbounded lane is a hot loop for exactly the
+// inputs the RecordGovernanceVerdictMissingWaiter counter exists to count. The
+// call_id grammar carries the loop ID, so the record decides: a finished or
+// foreign loop acknowledges, a live one is still owed the verdict.
+//
+// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+func TestVerdictWithoutWaiterSettlesByRecordNotByWaiterMap(t *testing.T) {
+	t.Parallel()
+
+	const (
+		terminalLoopID = "c1e8b2f3-3d5e-4b6c-9f70-2e3d4c5b6f71"
+		liveLoopID     = "b0f7a1e2-2c4d-4a5b-8e6f-1d2c3b4a5e60"
+	)
+	bucket := recordLoopBucket{records: map[string]agentic.LoopEntity{
+		terminalLoopID: {ID: terminalLoopID, State: agentic.LoopStateComplete},
+		liveLoopID:     {ID: liveLoopID, State: agentic.LoopStateExploring},
+	}}
+
+	settle := func(t *testing.T, callID string) (natsclient.DeliveryDecision, error) {
+		t.Helper()
+		config := DefaultConfig()
+		config.ToolCallGovernance.Mode = ToolCallGovernanceModeEnforce
+		config.ToolCallGovernance.Timeout = "1s"
+		handler := NewMessageHandler(config)
+		handler.SetGovernanceDispatcher(NewGovernanceDispatcher(
+			config.ToolCallGovernance, nil, discardLogger(), nil))
+		c := releaseTestComponent(t, handler)
+		c.config = config
+		c.loopsBucket = bucket
+		payload := map[string]any{"decision": "approved", "call_id": callID}
+		data, err := json.Marshal(payload)
+		require.NoError(t, err)
+		return c.handleToolCallVerdictMessage(t.Context(), data)
+	}
+
+	t.Run("finished or foreign loop acknowledges", func(t *testing.T) {
+		t.Parallel()
+		decision, err := settle(t, terminalLoopID+":tool:1")
+		require.NoError(t, err)
+		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+	})
+
+	t.Run("a provider-authored call id with no minted token acknowledges", func(t *testing.T) {
+		t.Parallel()
+		decision, err := settle(t, "toolu_model_authored")
+		require.NoError(t, err)
+		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+	})
+
+	t.Run("live loop is still owed the verdict", func(t *testing.T) {
+		t.Parallel()
+		decision, err := settle(t, liveLoopID+":tool:1")
+		require.Error(t, err)
+		require.ErrorIs(t, err, ErrNoGovernanceWaiter)
+		require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
+	})
+}
