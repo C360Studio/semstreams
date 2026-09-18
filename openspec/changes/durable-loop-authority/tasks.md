@@ -40,8 +40,8 @@
 
 ## 5. Gates
 
-- [ ] 5.1 `task lint`, `task test`, `task schema:generate` with no drift, `task openspec:validate`,
+- [x] 5.1 `task lint`, `task test`, `task schema:generate` with no drift, `task openspec:validate`,
       `task spec:properties`
-- [ ] 5.2 `task check:push`
+- [x] 5.2 `task check:push`
 - [ ] 5.3 `task e2e:agentic` on the final head — required, both commits are BREAKING
 - [ ] 5.4 Implementation review resolved; stack rebased onto the reviewed L1 head; archive as the final content commit

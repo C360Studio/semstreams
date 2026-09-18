@@ -241,6 +241,8 @@ var errReadUnavailable = errors.New("read unavailable")
 // that makes a hand-seeded AGENT_LOOPS record unroutable no matter how valid
 // the record itself is — the dispatch-replacement E2E fixture minted a readable
 // synthetic id and its terminal never reached the response publish.
+//
+// spec: agentic-dispatch / Dispatch uses one authority-backed current-state projection
 func TestSettleAgentTerminalRefusesNonCanonicalLoopIDBeforeReadingAuthority(t *testing.T) {
 	const synthetic = "e2e-dispatch-replacement-unknown-publish-1"
 	c := terminalTestComponent(t)

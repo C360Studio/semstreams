@@ -75,6 +75,12 @@ retryable.
 - **THEN** dispatch refuses from the record alone, as conflict or unavailable
 - **AND** no process-local cache can override or stand in for that record
 
+#### Scenario: A terminal names a loop id that cannot be one
+
+- **WHEN** a complete or failed event carries a LoopID that is not a canonical framework loop token
+- **THEN** dispatch refuses it as permanently malformed routing without reading `AGENT_LOOPS`
+- **AND** publishes no user response
+
 #### Scenario: A failed publish leaves the decision retryable
 
 - **GIVEN** a validated pending approval
