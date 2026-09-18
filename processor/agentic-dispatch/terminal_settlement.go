@@ -50,6 +50,22 @@ func isTransientTerminal(err error) bool {
 	return errors.As(err, &target)
 }
 
+// isShutdownCancellation reports a terminal-lane failure that is the owner's
+// own cancellation surfacing through work. It sits on the same footing as
+// transientTerminalError: the framework cancels work during Stop, and the
+// delivery must go back to the server for the replacement process.
+//
+// This is sound because the only site in this lane that begins an external
+// effect, publishTerminalResponse, never returns a bare context error — every
+// one of its paths returns unknownTerminalPublicationError or
+// permanentTerminalError. A bare context error therefore proves the publish
+// was not attempted, which is exactly the pre-effect proof #759 requires for a
+// NAK. The classifier checks unknown publication first so a cancellation that
+// interrupted a publish still quarantines.
+func isShutdownCancellation(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
 func isUnknownTerminalPublication(err error) bool {
 	var target *unknownTerminalPublicationError
 	return errors.As(err, &target)

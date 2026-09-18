@@ -779,7 +779,7 @@ func classifyTerminalDeliveryDecision(err error) natsclient.DeliveryDecision {
 		return natsclient.DeliveryDecisionTerminate
 	case isUnknownTerminalPublication(err):
 		return natsclient.DeliveryDecisionQuarantine
-	case isTransientTerminal(err):
+	case isTransientTerminal(err), isShutdownCancellation(err):
 		return natsclient.DeliveryDecisionRetry
 	default:
 		return natsclient.DeliveryDecisionQuarantine

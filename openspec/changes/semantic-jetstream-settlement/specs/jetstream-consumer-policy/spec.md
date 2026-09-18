@@ -123,7 +123,9 @@ not be deprecated or removed by this change.
 
 An owner's decision matrix SHALL classify every error it settles positively, terminally, or by retry, and SHALL do so
 from a typed cause rather than from the absence of another class. Retry SHALL require a typed result proving that no
-external effect began or that the durable consequence is already committed. An error the matrix does not classify
+external effect began or that the durable consequence is already committed. Owner cancellation surfacing from work
+is such a result only where the lane's effect site provably cannot return a bare context error; where it can, a
+cancellation is unclassified and SHALL fail closed. An error the matrix does not classify
 SHALL return Quarantine: no terminal method, delivery left pending, lane latched, exact handle stopped. No owner
 matrix SHALL make Retry its unclassified default.
 

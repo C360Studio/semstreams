@@ -74,8 +74,10 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       Quarantine; any unclassified error Quarantine, never Retry.
 - [x] 4.3 Migrate tools one binding to the permanent typed API and exact-owner control-loss reaction.
 - [x] 4.4 Encode both dispatch terminal done matrices: deterministic response PubAck ACK; typed proven pre-publish
-      failure Retry; immutable terminal/route poison Term; unknown publish outcome Quarantine before MaxDeliver=0
-      retry; any unclassified error Quarantine, never Retry.
+      failure Retry; owner-shutdown cancellation observed before any publish Retry; immutable terminal/route poison
+      Term; unknown publish outcome Quarantine before MaxDeliver=0 retry; any unclassified error Quarantine, never
+      Retry. In agentic-tools the same shutdown class needs no separate arm: it surfaces through the typed
+      pre-effect ledger read, and a cancellation after execution lands on the ambiguous-Create arm.
 - [x] 4.5 Migrate dispatch two bindings to the permanent typed API and exact-owner control-loss reaction.
 - [x] 4.6 At the foundation checkpoint, assert branch-staged model/loop/AgentRun source, config, settlement,
       cancellation, logs, and health remain unchanged before their separately reviewed migrations.
