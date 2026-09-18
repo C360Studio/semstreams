@@ -32,9 +32,10 @@ reached into the two commits replayed here and were removed at the conflict:
 the tracker gone, auto-continue resolution reads the shared view, so a dispatch whose view is not ready now refuses
 a submission (503) instead of silently starting a second loop under the same route. That is `5e0e2259`'s own stated
 contract — "AutoContinue also refuses unavailable truth with 503 instead of starting new work" — but at this base it
-applies to the default configuration rather than an opt-in one. Two unit fixtures that construct a component with no
-view (`newSeamTestComponent`, `newLoopTokenTestComponent`) now set `AutoContinue = false`: they test refusal
-precedence and token validation, never continuation, and a test that wants continuation supplies a view.
+applies to the default configuration rather than an opt-in one. Three fixtures that construct a component directly
+instead of starting one (`newSeamTestComponent`, `newLoopTokenTestComponent`, `newRestartIdentityDispatch`) now set
+`AutoContinue = false`: they test refusal precedence, token validation and task identity, never continuation, and
+the one subtest that wants continuation builds an activity component over the real KV and opts back in.
 
 ## Declared cost
 
