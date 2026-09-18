@@ -235,6 +235,43 @@ func TestSettleAgentTerminalDispositionClasses(t *testing.T) {
 
 var errReadUnavailable = errors.New("read unavailable")
 
+// A terminal whose LoopID is not a canonical framework loop token (ADR-105) is
+// refused permanently BEFORE authority is read: the loop-state seam is never
+// called and the disposition is routing_malformed. This is the precondition
+// that makes a hand-seeded AGENT_LOOPS record unroutable no matter how valid
+// the record itself is — the dispatch-replacement E2E fixture minted a readable
+// synthetic id and its terminal never reached the response publish.
+func TestSettleAgentTerminalRefusesNonCanonicalLoopIDBeforeReadingAuthority(t *testing.T) {
+	const synthetic = "e2e-dispatch-replacement-unknown-publish-1"
+	c := terminalTestComponent(t)
+	read := false
+	c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
+		read = true
+		return &agentic.LoopEntity{
+			ID: synthetic, TaskID: "task-n", State: agentic.LoopStateComplete,
+			MaxIterations: 3, ChannelType: "http", ChannelID: "id",
+		}, nil
+	}
+	published := false
+	c.sendTerminalResponseFn = func(context.Context, agentic.UserResponse, string) error {
+		published = true
+		return nil
+	}
+
+	before := terminalReasonSnapshot(c)
+	event := &agentic.LoopCompletedEvent{
+		LoopID: synthetic, TaskID: "task-n", Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now(),
+	}
+	err := c.settleAgentTerminal(context.Background(), completionPayload(t, event))
+
+	require.Error(t, err)
+	require.True(t, isPermanentTerminal(err), "a loop id that cannot be one is never retryable")
+	require.ErrorContains(t, err, `invalid loop id "`+synthetic+`"`)
+	require.False(t, read, "authority must not be read under a key that cannot be a loop id")
+	require.False(t, published, "no user response may be published for a refused route")
+	requireOneTerminalReason(t, c, "routing_malformed", before)
+}
+
 func TestHandleTerminalDeliveryDecisionMatrix(t *testing.T) {
 	valid := &agentic.LoopCompletedEvent{LoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000005", TaskID: "task-decision", Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now()}
 
