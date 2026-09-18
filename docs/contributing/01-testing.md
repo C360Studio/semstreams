@@ -41,9 +41,9 @@ Use the smallest combination that addresses the failure shape:
 
 - **Examples:** retain concrete regressions and explicit boundaries. Observe the intended failing assertion before
   implementing the fix or new behavior, following the developer contract's TDD requirements.
-- **Properties:** search generated inputs or operation sequences for violations of a cited invariant. Derive
-  generators from the input contract and expectations independently from the implementation. Include relevant bounds,
-  empty cases, ordering, and repeated operations deliberately.
+- **Properties:** apply the [PBT decision](#when-to-use-property-based-testing), then search generated inputs or
+  operation sequences for violations of a cited invariant. Derive generators from the input contract and expectations
+  independently from the implementation. Include bounds, empty cases, ordering, and repeated operations deliberately.
 - **Fuzzing:** explore inputs with a named behavioral assertion and retain useful cases. Freedom from crashes alone
   supports a narrower claim than grammar conformance. Distinguish corpus replay from exploratory execution.
 - **Targeted mutations:** apply the [mutation criteria](#when-targeted-mutation-evidence-is-required), introduce a
@@ -60,6 +60,34 @@ persistence, or API-to-UI behavior its environment does not exercise. Focused ex
 
 Use existing repository tools and declared commands. Tool adoption or new automated gates require a separately scoped
 change. This discipline does not select a mutation runner, require a library, or introduce a score threshold.
+
+### When to Use Property-Based Testing
+
+For a material behavior change involving any of the following shapes, record the PBT decision in its existing issue,
+design, or PR record before implementing the checks:
+
+- A nontrivial input grammar with interacting accepted and rejected classes or meaningful size/arity boundaries.
+- A transformation with a contract-stated law, such as round-trip preservation, idempotence, normalization,
+  partition completeness, or monotonic revision behavior.
+- Stateful histories where outcomes depend on operation order, replacement/deletion, retry/replay, or shutdown.
+
+Cite the invariant and choose a bounded property at the lowest sufficient tier, or explain why named existing
+examples or fuzz checks sufficiently exercise that obligation. Identify the independently derived expectation,
+relevant input/history classes, observable result, and limits. A rationale must address the failure shape; a test
+count or an assertion that existing tests pass is insufficient. No per-PR property quota or duplicate Rapid test is
+required. A property expressed in a native fuzz target can satisfy the decision when its assertions and execution
+scope fit; existing mandatory fuzz obligations still apply.
+
+Use the [Rapid practice guide](09-property-testing.md) for structured inputs, state models, budgets, and replay.
+Reviewers independently check applicability, the choice or rationale, and whether generators and assertions address
+the cited invariant. A reachable value or action is not evidence that a sampled run exercised it; preserve explicit
+boundary examples and deterministic sequences when their execution is required. Apply the separate mutation criteria
+when sensitivity evidence is needed.
+
+This decision applies prospectively to new work and newly changed behavior at an existing claim's next normal update.
+It does not reopen completed reviews, force restacks, or require retroactive PBT for unchanged reviewed slices.
+Existing correctness, fuzzing, mutation, verification, and release obligations remain in force. This guidance adds
+no automated gate and does not claim the separately tracked test improvements are complete.
 
 ### When Targeted Mutation Evidence Is Required
 

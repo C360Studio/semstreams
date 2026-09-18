@@ -264,6 +264,9 @@ outcomes from equivalence or deferral assessments. Independently apply its
 [mutation criteria](../../docs/contributing/01-testing.md#when-targeted-mutation-evidence-is-required) and verify the
 required evidence or explicitly accept or reject the recorded deferral with reasons and remaining risk;
 a completion checkbox is not evidence.
+Independently apply the [PBT decision](../../docs/contributing/01-testing.md#when-to-use-property-based-testing),
+including the rationale for existing examples/fuzz checks, generator reachability, and assertion independence.
+Use the [Rapid guide](../../docs/contributing/09-property-testing.md) to check execution and replay claims.
 The SemStreams checks below remain additional obligations.
 
 - Tests drive production constructors, registries, codecs, NATS handlers, and wire envelopes rather than only helpers.
