@@ -1017,10 +1017,20 @@ func (c *Component) setupConsumer(
 		backOff = []time.Duration{30 * time.Second, 2 * time.Minute}
 		useHeartbeat = true
 		heartbeatInterval = c.config.Consumer.ParsedHeartbeatInterval()
-	default: // agent.signal — fast, advisory
+	default: // agent.signal, agent.approval_response, agent.toolcall.* — fast
 		ackWait = 30 * time.Second
 		maxAckPending = componentMaxAckPending
+		// These four lanes are the ones L1 gave a Retry classification to, so
+		// they need the same bound the heartbeat lanes have. Their shipped
+		// port definitions carry no consumer config at all, and MaxDeliver 0
+		// is "unlimited" at natsclient/stream.go:37 — an unbounded, undelayed
+		// redelivery loop for every transient error. The floor is the BackOff
+		// length, the same rule validateLoopRetryPolicy enforces below.
+		backOff = []time.Duration{30 * time.Second, 2 * time.Minute}
 		maxDeliver = consumerCfg.MaxDeliver
+		if maxDeliver == 0 {
+			maxDeliver = len(backOff)
+		}
 		msgTimeout = c.messageTimeout
 		useHeartbeat = false
 	}
@@ -1061,13 +1071,23 @@ func (c *Component) setupConsumer(
 			return errs.WrapInvalid(fmt.Errorf("input port %q has no typed settlement handler", port.Name),
 				"agentic-loop", "setupConsumer", "missing settlement handler")
 		}
+		if err := validateLoopRetryPolicy(port.Name, cfg); err != nil {
+			return err
+		}
+		// Same 30s delay the heartbeat lanes use. Without it a Retry is a bare
+		// Nak, redelivered at line rate.
+		settleRetry, retryErr := natsclient.DelayedDeliveryRetry(30 * time.Second)
+		if retryErr != nil {
+			return errs.WrapInvalid(retryErr, "agentic-loop", "setupConsumer",
+				"construct settlement retry policy")
+		}
 		admission = newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
 		handlerFn = func(msgCtx context.Context, msg jetstream.Msg) {
 			if !admission.admit() {
 				return
 			}
 			decision, cause := runLoopDeliveryWork(msgCtx, msg.Data(), settleHandlerFn)
-			result := natsclient.SettleDelivery(msg, decision, cause)
+			result := natsclient.SettleDeliveryWithRetry(msg, settleRetry, decision, cause)
 			admission.latch(result)
 			if result.Err() != nil && !result.OwnerStopRequired() {
 				c.logger.Error("Message delivery did not settle cleanly", "port", port.Name, "error", result.Err())

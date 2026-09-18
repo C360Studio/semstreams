@@ -283,15 +283,37 @@ type deliveryWorkResult struct {
 
 // SettleDelivery validates one joined semantic outcome and attempts at most
 // one immediate terminal method. It owns no work or delivery lifecycle.
+//
+// Retry here is a bare Nak, which JetStream redelivers as fast as it can. That
+// is right only for a lane whose Retry is rare and whose consumer bounds the
+// attempts. A lane that classifies ordinary transient errors as Retry wants
+// SettleDeliveryWithRetry instead.
 func SettleDelivery(msg jetstream.Msg, decision DeliveryDecision, cause error) DeliveryResult {
-	if msg == nil {
+	return SettleDeliveryWithRetry(msg, ImmediateDeliveryRetry(), decision, cause)
+}
+
+// SettleDeliveryWithRetry is SettleDelivery with the Retry policy supplied by
+// the caller rather than fixed at immediate. Every other rule is identical: it
+// validates the closed decision/error tuple, attempts at most one terminal
+// method, and owns no work, context, heartbeat, or consumer lifecycle.
+//
+// The typed heartbeat owner already takes its retry policy this way; a
+// settlement-only lane has exactly the same need — a Retry that means "not
+// yet" should not spin at line rate — and had no way to say it.
+func SettleDeliveryWithRetry(
+	msg jetstream.Msg,
+	retry DeliveryRetryPolicy,
+	decision DeliveryDecision,
+	cause error,
+) DeliveryResult {
+	if msg == nil || !retry.valid() {
 		return DeliveryResult{
 			decision: decision, cause: &InvalidDeliveryDecisionError{decision: decision, cause: cause},
 			quarantined: true, ownerStopNeeded: true,
 		}
 	}
 	result := interpretDeliveryWork(deliveryWorkResult{decision: decision, cause: cause})
-	return settleDeliveryDecision(msg, ImmediateDeliveryRetry(), result)
+	return settleDeliveryDecision(msg, retry, result)
 }
 
 // ConsumeDeliveryWithHeartbeat validates server delivery metadata, runs
