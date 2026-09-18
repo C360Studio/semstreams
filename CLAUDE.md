@@ -84,9 +84,9 @@ The linked file is the rule; this table is only its index.
 
 | Rule | Canonical home | Enforced by |
 |------|----------------|-------------|
-| Production structs never retain `context.Context`; no invented roots; nil never defaults to `Background` | `.agents/contracts/semstreams-developer.md` § Context ownership | struct half: `test/contract/context_ownership_contract_test.go`; root half: #1324 |
+| Production structs never retain `context.Context`; no invented roots; nil never defaults to `Background` | `.agents/contracts/semstreams-developer.md` § Context ownership | struct half: `test/contract/context_ownership_contract_test.go`; root half: #1012 |
 | Every outward-facing surface answers the adopter seam questions; prefer observation to prediction | `.agents/contracts/semstreams-architect.md` § The adopter seam inventory | architect and reviewer contracts |
-| A BREAKING change lands only with a relevant E2E tier green | `docs/contributing/02-e2e-tests.md` § Breaking Changes | prose today; #1325 |
+| A BREAKING change lands only with a relevant E2E tier green | `docs/contributing/02-e2e-tests.md` § Breaking Changes | prose today; #1117 |
 | New payload types register via `RegisterPayloads`, no `init()`, no singleton, explicit call from the composition root | `.agents/skills/new-payload/SKILL.md`, `docs/concepts/15-payload-registry.md` | round-trip and registration consistency only (`test/contract/message_contract_test.go`); per-binary parity is prose |
 | Rule vs component vs lifecycle boundary; workflow shapes compose the Lifecycle harness | `.agents/skills/orchestration-check/SKILL.md`, `docs/concepts/14-orchestration-layers.md` | review |
 | Test fidelity: production seams, `-race`, explicit synchronization, mutation evidence via `cp` backup and checksum | `docs/contributing/01-testing.md`, contracts § Test fidelity | `-race` and structural guards: CI; fidelity and mutation evidence: review |

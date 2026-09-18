@@ -322,7 +322,7 @@ grep -rn "iotsensor\." cmd/   # Or whichever package was migrated
 
 If only `cmd/e2e-semstreams` has it, the framework binary is half-migrated. Follow the
 [payload registration checklist](../../.agents/skills/new-payload/SKILL.md). The per-PR ladder does not yet run the
-semantic or agentic tier on a `!` PR; that gate is gh#1325.
+semantic or agentic tier on a `!` PR; the per-PR gate is gh#1117, the nightly run gh#769.
 
 ## External Dependencies
 
