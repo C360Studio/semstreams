@@ -294,6 +294,36 @@ steps:
   - task e2e:semantic
 ```
 
+## Breaking Changes Require an E2E Tier Before Merge
+
+Any commit or tag marked **BREAKING** in the changelog or commit message (a `!` after the type/scope) MUST have at
+least one relevant E2E tier green BEFORE the breaking commit lands on main. Unit and integration tests do not
+exercise the full ingest → entity → graph store → query path; registry singleton retirements and similar migrations
+can leave a sister binary half-migrated and silently break every flow that uses it.
+
+Concrete case (2026-05-07): beta.18 retired the payload-registry singleton. `cmd/e2e-semstreams/main.go` got the
+migration; `cmd/semstreams/main.go` did not. Three months of beta releases shipped on top of a silently broken
+Docker semantic stack because nobody ran `task e2e:semantic` on main between the migration and the forensic
+discovery.
+
+Before tagging anything labeled BREAKING:
+
+```bash
+task e2e:semantic            # Or whichever tier covers the touched path
+# Confirm green. If no tier covers the path, that is a coverage gap: file it before tagging.
+```
+
+After landing a registry-retirement-style migration (singletons, `init()` shims, factory + payload split), grep for
+every binary that imports the migrated package and verify each has the explicit registration call:
+
+```bash
+grep -rn "iotsensor\." cmd/   # Or whichever package was migrated
+```
+
+If only `cmd/e2e-semstreams` has it, the framework binary is half-migrated. Follow the
+[payload registration checklist](../../.agents/skills/new-payload/SKILL.md). The per-PR ladder does not yet run the
+semantic or agentic tier on a `!` PR; the per-PR gate is gh#1117, the nightly run gh#769.
+
 ## External Dependencies
 
 ### SemEmbed

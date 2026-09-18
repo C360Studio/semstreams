@@ -19,7 +19,7 @@ name: E2E Ladder
 #     the tiered/statistical variant boots the full stack and validates
 #     health/dataflow along the way, so a separate core job would be redundant.
 #   - e2e:semantic's heavy quality variants (:8b, :frontier) are too heavy for
-#     per-PR and stay pre-tag/manual (CLAUDE.md: a relevant e2e tier green
+#     per-PR and stay pre-tag/manual (docs/contributing/02-e2e-tests.md: a relevant e2e tier green
 #     before any BREAKING tag). The DEFAULT semantic variant is already the
 #     CI-shaped small-model configuration (semembed + seminstruct
 #     qwen3-0.6b/1.7b) for exactly this reason, but runs in no workflow yet.

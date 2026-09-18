@@ -195,8 +195,8 @@ Check` and `e2e statistical`.
 
 `.github/workflows/release.yml` (push tags `v*`) builds and publishes binaries and release notes; it runs no e2e
 task. `.github/workflows/container.yml` (`workflow_run` after `CI` succeeds on `main`, or push tags) builds and
-pushes the container image; it also runs no e2e task. Per this repo's own hard rule (`CLAUDE.md`, "Breaking
-changes — E2E required before merge"), a relevant e2e tier must be run **manually** and green before any
+pushes the container image; it also runs no e2e task. Per this repo's own hard rule (`docs/contributing/02-e2e-tests.md`,
+"Breaking Changes Require an E2E Tier Before Merge"), a relevant e2e tier must be run **manually** and green before any
 BREAKING commit is tagged — that gate is a documented obligation on the person tagging, not something any
 workflow automates.
 

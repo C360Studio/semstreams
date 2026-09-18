@@ -128,7 +128,7 @@ All three end up writing semi-structured YAML/JSON that some downstream policy l
 
 Three reasons:
 
-1. **Render target multiplication.** Each product is already eyeing 2-3 render targets per primitive. The combinatorial explosion of `N products × M targets × 2 primitives` is the carve-out-parallel-path failure mode flagged in `CLAUDE.md` Orchestration Boundaries.
+1. **Render target multiplication.** Each product is already eyeing 2-3 render targets per primitive. The combinatorial explosion of `N products × M targets × 2 primitives` is the carve-out-parallel-path failure mode flagged in `docs/concepts/14-orchestration-layers.md`.
 2. **Cross-product reasoning.** A SemTeams Coordinator that knows "this chain runs the SemSpec QA verifications at integration tier" needs to read the *same* contracts SemSpec writes. Product-local contracts can't be composed.
 3. **N=2 greenfield arrival.** Per [[feedback_greenfield_cross_product_break_now]] (parked-on-substrate refinement), pre-1.0 + we own every consumer + N=2 for both primitives today = act on the second arrival, not the third.
 
@@ -496,5 +496,5 @@ Both call `pkg/sandbox.Manager` and `pkg/testevidence.Manager`; both compose pol
 - ADR-049 (Lifecycle Prime substrate) — `docs/adr/049-lifecycle-prime.md`
 - ADR-048 (BoundedDispatcher substrate primitive) — `docs/adr/048-bounded-dispatcher-and-triples-substrate.md`
 - `workflow-primitives-decision.md` — the prior framework-vs-product layering exercise this proposal extends
-- CLAUDE.md § Orchestration Boundaries — the substrate-not-engine discipline
+- `docs/concepts/14-orchestration-layers.md` and the `orchestration-check` skill — the substrate-not-engine discipline
 - Gemini design review (2026-05-31, surfaced the sandbox↔testevidence split that this revision folds in)
