@@ -45,7 +45,8 @@ unchanged; that amendment did not decide old task 6.6 or change ordinary final-r
 The sequential-chat addendum is independently reviewed and owner-accepted on 2026-09-08: optional PriorMessages and,
 as a separate product choice, AutoContinue=false. Reviewed draft SHA-256
 `b10470f4a67066f1dc27e3ff19688a3eea2b4352c83b5e1ed105c0d3789ec1cb` is provenance; the contract below and active
-capability deltas are target-state authority. This does not accept the earlier blanket continuation-removal proposal.
+capability deltas are target-state authority. Owner comment `5728438234` later supersedes the attachment/default-only
+part: live prompt/task attachment is retired, while model/tool/approval continuation and same-task recovery remain.
 
 ## Accepted operational loop-state contract
 
@@ -86,12 +87,14 @@ nonempty text content; name, tool, reasoning, and execution-only fields are abse
 AgentRequest validation remain unchanged. One private TaskMessage validator owns this subset. Dispatch routes invalid
 history to its existing observable refusal before publishing work; nonempty history on commands is also refused.
 
-AutoContinue defaults to false in typed config and schema. Ordinary no-ReplyTo submissions start an independent
-execution even when another execution is active. Explicit ReplyTo or configured AutoContinue retains existing
-attachment. After attachment admission, supplied nonempty history is conflicting intent and is refused before
-publication or mutation. Commands needing a target require explicit loop_id under defaults; their errors say so.
-Same-source redelivery resolves the committed task before reconsidering attachment and compares ordered role/content
-history, treating nil and empty equally. Conflicting history uses existing correlation quarantine, not overwrite.
+Every newly submitted turn starts a fresh execution, even while another execution is active. Live attachment and
+inferred command targeting are retired under owner comment `5728438234`. Dispatch removes AutoContinue and
+submission ReplyTo while explicitly rejecting their retired JSON keys. Commands use explicit target arguments;
+cancel, status, reads and approval keep their existing admission.
+
+Same-source redelivery resolves and validates its committed task without reminting or republishing that retained
+task. Ordered role/content comparison remains, with nil and empty history equivalent; conflicts use existing
+correlation quarantine. No TaskMessage may rebind another task's execution.
 
 The adapter supplies what it displayed: user text and delivered UserResponse.Content, which can differ from raw
 provider Result. Dispatch forwards this history into the existing durable task. Loop initial assembly is fresh
@@ -103,7 +106,7 @@ cannot attach to an execution owned by a different TaskID.
 There is no transcript store, automatic recall, new payload type, retrieval API, or recovery owner. Existing transport
 and provider limits apply without silent history trimming or caller-predicted size budgets. Once the task commits,
 execution recovery no longer depends on the adapter or older executions. The adapter owns its displayed transcript
-across its own restart. Adopters find the HTTP example and AutoContinue/command change in the migration guide and
+across its own restart. Adopters find the HTTP example and attachment retirement in the migration guide and
 agentic concepts guide; they need no loop identity or storage knowledge for ordinary independent chat.
 
 Acceptance uses real NATS with started dispatch, loop, and model components and a deterministic fake provider. Turn
@@ -174,8 +177,9 @@ the affected inventory before its evidence is reused; historical acceptance is n
 - The framework-owned rule `publish_agent` producer that feeds row 15 is part of this vertical. Its six configured
   classifier surfaces and four statically loaded producer configurations use the existing rule publisher plus the
   same repo-internal AGENT admission validator; no second gate or exported API is introduced.
-- Every `TaskMessage` producer fixes LoopID before validation and marshal. New work mints producer-local v4 UUID;
-  continuation work echoes an admitted existing token. `TaskMessage.Validate` returns an ordinary field-naming error;
+- Every `TaskMessage` producer fixes LoopID before validation and marshal. New work mints a fresh producer-local
+  v4 UUID; the same serialized publication retry and downstream redelivery preserve its identity and bytes.
+  No different task may attach to that execution. `TaskMessage.Validate` returns an ordinary field-naming error;
   rule, intake, and direct-handler operation boundaries classify it before side effects. Agentic-loop performs no
   absent-ID mint or recovery. The change adds no helper API, compatibility path, scan, map, ledger, bucket, or second
   owner, and does not reopen tasks 9.5–9.7.
@@ -222,7 +226,14 @@ own downstream retry/redelivery.
 Adopt streams-first, lane-specific settlement and replay.
 
 Each consumer holds its source delivery until its lane-specific durable business outcome and every required
-downstream PubAck have completed. Replacement recovery uses:
+downstream PubAck have completed.
+
+The sole dispatch task-publication exception is a successfully decoded and validated exact retained TaskMessage
+matching the submission's TaskID, LoopID and source correlation. This proves the task committed even if its original
+PubAck was lost. Both durable USER and HTTP submission reuse that commitment without republishing the task.
+It does not substitute for any other required PubAck or prove downstream processing.
+
+Replacement recovery uses:
 
 1. source redelivery;
 2. stable TaskID, framework-minted LoopID, RequestID, and tool execution identity;
@@ -269,8 +280,8 @@ The shared decision skills resolve as follows:
 
 ## Correlation is lane-scoped
 
-- Every TaskMessage producer supplies LoopID before validation and marshal. For new work, that execution mints a random
-  v4 UUID locally; for continuation, it echoes the admitted existing token. Dispatch derives stable TaskID from
+- Every TaskMessage producer supplies LoopID before validation and marshal. For new work, that execution mints a fresh
+  random v4 UUID locally. A different task cannot reuse that execution. Dispatch derives stable TaskID from
   validated `UserMessage` identity and already retains the mapping. Rule `publish_agent` joins that shape. Retry of
   the same marshaled publication and downstream redelivery reuse retained bytes; upstream producer re-execution is
   outside the reuse claim.
@@ -522,7 +533,7 @@ Dispatch is exclusively an edge gateway. It:
 
 1. admits external work and publishes task, cancel, and approval messages;
 2. answers explicit LoopID operations from exact `AGENT_LOOPS` authority;
-3. serves reverse lookup, listing, debug, activity, and AutoContinue from one caught-up read-only view; and
+3. serves listing, debug and activity from one caught-up read-only view; and
 4. translates terminal complete/failed outcomes into durable user responses only when a validated user route exists.
 
 Agentic-loop exclusively owns loop birth, pending approval, every intermediate transition, and terminal state.
@@ -555,17 +566,32 @@ decode/marshal/projection sequence. Replacing that sequence is not a rescue prer
 stream terminal decoding is unchanged. No decoder fallback or validator relaxation is introduced. The nine research
 producer/prefix edits are withdrawn, not moved into a new shared package.
 
-### AutoContinue
+### Retired live attachment
 
-AutoContinue defaults to false. When explicitly enabled, it matches only exact `(UserID, ChannelType, ChannelID)`.
-Empty or partial matches and cross-channel
-fallback never match. Zero current nonterminal matches creates work, one continues it, and more than one refuses as
-ambiguous. Bootstrap, watcher loss, relevant poison, or unreadable authority retries durable intake and returns 503
-to HTTP.
+Reject presence, not the value, of `auto_continue` and submission `reply_to`: false, null, empty string and other
+values are all refusals. Match case-folded key spellings accepted by the existing JSON decoder; escaped keys are
+decoded before comparison. Missing keys remain accepted. There is no blanket strict-JSON policy.
 
-The gap after task PubAck and before first `LoopEntity` birth remains explicit. A second route-only AutoContinue
-request in that gap may create a second task. Callers requiring continuity use explicit LoopID. No route-claim bucket
-or prediction mechanism is added.
+Configuration uses the existing component-local retired-key pattern before ordinary decoding/allocation. HTTP
+rejects `reply_to` at `/message` body decoding before task lookup/minting, command effects or publication, through
+the existing synchronous error response.
+
+USER removes the exported field but retains only a private, nonserialized presence bit during UserMessage decoding;
+it retains no value or target and resets the bit on each decode. Existing Validate rejects it. Dispatch validates
+before choosing command or task handling. Routable invalid input receives the existing registered ResponseTypeError
+naming the retired field and directing the caller to a new turn with prior_messages. Negative PubAck precedes
+Terminate; failed required publication retries. Malformed, unregistered or unroutable input retains its existing
+refusal behavior; no response route is invented. The shared envelope decoder and payload registry do not change.
+
+CreateLoopWithID retains form-first, no-overwrite behavior. HandleTask no longer treats existence as permission to
+rebind TaskID. A known different-task/loop conflict at durable intake uses existing fatal correlation Quarantine
+and owner-health/error observability, including a warm collision. It never fabricates LoopFailed, appropriates
+another task's terminal outcome, modifies COMPLETE or overwrites authority. Same-task/same-loop recovery and
+matching terminal suppression keep their existing paths. Arbitrary identity reuse after all relevant evidence
+expires is not detectable under this contract and is not promised.
+
+No task-mode field, new carrier, store, lifetime calculation or compatibility acceptance is added. This slice does
+not close R8's progressed-authority/missing-request RED, source-to-task retention proof or in-flight evidence proof.
 
 ### Command, HTTP, metric, and lifecycle seams
 
@@ -626,7 +652,7 @@ its retained handle, awaits exact `Closed`, then cancels and joins its own obser
 
 | # | Physical subscription and owner | Happy-path done | Sad-path settlement | Durable authority and replacement |
 |---:|---|---|---|---|
-| 1 | dispatch `user.message`; fast | required task, cancel, approval, or user-response publication receives PubAck; refusal response receives PubAck without projection mutation | permanent invalid after response → Terminate; transient lookup/marshal/publish → Retry; required-correlation conflict/panic → Quarantine | source MessageID; stable TaskID-to-random-LoopID mapping; exact LoopID authority or caught-up AutoContinue view |
+| 1 | dispatch `user.message`; fast | required task receives PubAck or has validated exact retained-commitment proof; required cancel, approval and user-response publications receive PubAck; refusal response receives PubAck without projection mutation | permanent invalid after response → Terminate; transient lookup/marshal/publish → Retry; required-correlation conflict/panic → Quarantine | source MessageID; stable TaskID-to-random-LoopID mapping; exact LoopID authority for explicit controls |
 | 4 | governance `task_validation`; fast | completed policy; allowed output receives JetStream PubAck; blocked means deliberate non-forwarding | invalid → Terminate; filter/resolution/marshal/publish uncertainty → Retry; correlation conflict/panic → Quarantine | source correlation; allowed outputs are at-least-once |
 | 5 | governance `request_validation`; fast | same row-4 contract for `AgentRequest` | same as row 4; core-NATS publish never proves done | RequestID; allowed outputs are at-least-once |
 | 6 | governance `response_validation`; fast | same row-4 contract for `AgentResponse` | same as row 4 | RequestID; allowed outputs are at-least-once |
@@ -638,7 +664,7 @@ its retained handle, awaits exact `Closed`, then cancels and joins its own obser
 | 12 | dispatch `agent.complete`; heartbeat | retained terminal source and exact current loop route agree; routed user response receives PubAck, or validated no-user-route outcome settles | invalid → Terminate; unreadable authority/publish → Retry; route conflict → Quarantine | SourceMessageID, LoopID, exact loop route; response publication is at-least-once |
 | 13 | dispatch `agent.failed`; heartbeat | same row-12 contract for failure | same as row 12 | same as row 12 |
 | 14 | model `agent.request`; heartbeat | matching retained AgentResponse is reused, or a newly invoked provider response receives PubAck | invalid/endpoint permanent → error response or Terminate; retained lookup failure → Retry; correlation conflict/metadata/panic → Quarantine | RequestID; retained match prevents another call; typed absence permits another call; responses are at-least-once |
-| 15 | loop `agent.task`; heartbeat | loop/graph birth or continuation commits; initial/next request and created/refusal outputs receive PubAck | invalid → Terminate; safely repeatable dependency failure → Retry; TaskID/LoopID conflict, impossible partial birth, or panic → Quarantine | stable TaskID-to-random-LoopID mapping, `AGENT_LOOPS`, and graph identity; ordinary events are at-least-once |
+| 15 | loop `agent.task`; heartbeat | loop/graph birth or same-task recovery commits; required request and created outputs receive PubAck | invalid → Terminate; safely repeatable dependency failure → Retry; TaskID/LoopID conflict, impossible partial birth, or panic → Quarantine | stable TaskID-to-random-LoopID mapping, `AGENT_LOOPS`, and graph identity; ordinary events are at-least-once |
 | 16 | loop `agent.response`; heartbeat | turn is hydrated and resulting loop/terminal/next output commits with PubAck | invalid → Terminate; missing correlation/dependency → Retry; conflict/panic → Quarantine; durable applied proof → ACK | RequestID, current loop, originating request/response, and lane-specific applied-state proof |
 | 17 | loop `tool.result`; heartbeat | ordinary result persists and required next output receives PubAck; approval-required status first reads authority and may ACK effect-free on positive phase-supersession proof | invalid → Terminate; unresolved phase observation or unseen gated sibling → Retry before mutation; conflict/panic → Quarantine; confirmed required retained absence → existing durable continuation_unavailable; ordinary final-result proofs unchanged | RequestID, execution identity, exact current loop including warm approval-required delivery, admitted request/response evidence; conditional gate writes; no additional approval Store |
 
@@ -671,9 +697,14 @@ ceiling. Config structs, defaults, generated schemas, docs, and every example/te
 
 ### `user.message` task
 
-Happy-path done is a stable TaskID-to-random-LoopID mapping, `agent.task` PubAck, and user acknowledgement PubAck.
+Happy-path done is a stable TaskID-to-random-LoopID mapping, task commitment proved by synchronous PubAck or validated
+exact retained-task evidence, and user acknowledgement PubAck. Valid retained task evidence skips only task publication.
 Invalid or unauthorized input terminates only after user-error PubAck. Transient publication failure retries and an
-ordinary output may repeat.
+ordinary user response may repeat.
+
+HTTP submission shares retained-task reuse but preserves its existing synchronous response, exact-read refusal and
+optional stream-mirror behavior. No HTTP error-policy change is part of this correction. Typed task absence, evidence
+failure/conflict, pending task delivery and destination-consumer state otherwise retain their existing behavior.
 
 ### `user.message` command
 
@@ -787,7 +818,8 @@ Audit-mode observability remains nonblocking.
 
 ## Settlement terms
 
-- ACK means the source's required durable transition or result and every required downstream PubAck have completed.
+- ACK means the source's required durable transition or result and every required downstream PubAck have completed,
+  with only the dispatch task-publication obligation allowed to use its validated exact retained-commitment proof.
 - Retry means the lane's declared correlation, durable authority, and side-effect policy make another attempt safe.
 - Terminate means the payload or immutable authority is permanently invalid and no useful retry exists under that
   lane's contract.
@@ -817,7 +849,7 @@ Property and fuzz tests cite these normative delta requirements rather than reco
 | one TaskID cannot select two LoopIDs | `agentic-dispatch / Dispatch task redelivery recovers the committed LoopID` |
 | one RequestID cannot select different provider work | `agentic-model / Model request settlement is bound to a durable response` |
 | one framework execution identity cannot select different tool work or completed outcome | `agentic-tools / Completed tool outcome identity is globally unambiguous` |
-| ordinary publications are at-least-once and ACK waits for required PubAck | owner-specific settlement requirements |
+| ordinary publications remain at-least-once; ACK requires their PubAcks, with the dispatch task-only retained-commitment exception | owner-specific settlement requirements |
 | `Nats-Msg-Id` supplies bounded suppression only | owner-specific publication requirements |
 | missing process state never proves stale or complete | `agentic-loop / All six loop input classes settle after owner-specific durable done` |
 | ACK follows every required durable effect and PubAck | `agentic-loop / All six loop input classes settle after owner-specific durable done` |
@@ -827,7 +859,7 @@ Property and fuzz tests cite these normative delta requirements rather than reco
 | an approval echoes the reviewed ExecutionID; one execution has one logical gate, never reopened after closure | `agentic-loop / Approval continuation after replacement is exact and evidence-bounded` |
 | a noncurrent approval ACK is observable and effect-free, not historical applied-decision proof | `agentic-loop / Approval continuation after replacement is exact and evidence-bounded`; `agentic-loop / Per-loop in-process state is released at terminal, through the one release point` |
 | HTTP approval never substitutes the current identity for a missing or outdated echo | `agentic-dispatch / Dispatch uses one authority-backed current-state projection` |
-| partial projection never licenses AutoContinue | `agentic-dispatch / Dispatch uses one authority-backed current-state projection` |
+| retired targeting refuses before effects; ordinary chat starts new work | `agentic-dispatch / Prior messages accompany an independent chat turn` |
 | observed DiscardOld cannot satisfy strong recovery | `agentic-loop / Restart-safe replay observes and admits local stream bounds` |
 | every delivery task joins before result and Stop | `agentic-loop / Delivery work joins before settlement`; owner-specific shutdown requirements |
 | first-party rule task output is durable before row 15 | `rule-agent-publishing / Publish-agent classification uses canonical wildcard coverage and durable publication` |
@@ -870,9 +902,17 @@ does not advertise a single-delivery posture.
 
 ## Observed AGENT replay admissibility
 
-`MaxAge` alone cannot prove a recovery horizon while `MaxBytes` plus `DiscardOld` may evict required evidence early.
+`MaxAge` alone cannot prove evidence survival while `MaxBytes` plus `DiscardOld` may evict required evidence early.
 The inventoried DiscardOld posture therefore could not support that recovery claim under capacity pressure.
 The accepted observed-admission contract below remains subject to the current proof gates in tasks.
+
+Owner comment `5712921768` accepts the bounded retention decision in
+`design-r8-retention-decision-2026-09-17.md` (reviewed SHA-256 `52742eff…`), supported by
+`inventory-r8-retention-premise-2026-09-17.md` (SHA-256 `fb937d0e…`).
+It removes only the timer-derived recovery-horizon/safety-margin calculation. AckWait, BackOff, MaxDeliver and
+work timeout govern attempts; they do not establish a maximum outage, restart delay or elapsed recovery guarantee.
+Dated inventories and reviews remain historical evidence. Their arithmetic prerequisite is superseded by this
+ruling, not retroactively satisfied; all other findings and proof obligations retain their recorded status.
 
 Each recovery-dependent agentic owner calls pure repo-internal
 `internal/agentstreamadmission.ObserveAndValidate` after resolving its own admitted port facts and before its own
@@ -884,23 +924,36 @@ except for the provider-invocation lane. That lane, including its response publi
 prerequisite under owner comment `5550778818`; its retained-response reuse and PubAck-before-source-ACK contract remains.
 A non-agentic component imports nothing, performs zero lookup, and remains independently startable.
 
-Each admission-dependent owner builds its local `Requirement` only from resolved AckWait, BackOff, MaxDeliver,
-maximum local processing and replay need, and required producer PubAck dependency. Loop timeout informs only loop's
-local requirement.
+Each admission-dependent owner builds its local `Requirement` from its resolved source/evidence dependency,
+observed retention obligations and required producer PubAck dependency. No elapsed recovery horizon or safety
+margin is computed from AckWait, BackOff, MaxDeliver or work timeout.
 Approval lifetime and `AGENT_LOOPS` TTL/capacity are excluded from stream admission and are validated only by the
 loop-owned bucket gate below. The strongest local requirement refuses only that dependency closure.
 
 Owner comment `5682070598` removes only the finite verdict-retention horizon prerequisite for R7 re-proposal
-after successful exact typed absence. The local Requirement, MaxAge and safety-margin clauses do not reintroduce
+after successful exact typed absence. Local Requirement and observed-retention checks do not reintroduce
 that prerequisite. Observed DiscardNew, required PubAck, source-settlement and tool-effect safeguards remain;
 other lanes' retention requirements and all other R8 obligations are unchanged. This is not the separate provider
 exception and adds no guarantee after source loss.
 
-The validator reads actual StreamInfo and requires `DiscardNew`, MaxAge covering the locally computed horizon and
-safety margin, and no MaxMsgs, MaxMsgsPerSubject, or other observed bound that can evict required evidence earlier.
+The validator reads actual StreamInfo and requires `DiscardNew`, observed age/eviction policy compatible with the
+named source/evidence dependency, and no MaxMsgs, MaxMsgsPerSubject, or other observed bound that can evict required
+evidence earlier. Passing policy checks alone does not establish the identity-sensitive proofs below.
 It retains no context, starts no goroutine, mutates no stream, and writes no durable or process state. Refusal is typed
 `agent_stream_replay_inadmissible`, names stream plus observed/required fields, leaves the affected closure not ready,
 and allocates or positively settles nothing in it.
+
+Two concrete identity proofs remain open:
+
+- Dispatch: a supported operational redelivery must not outlive its committed task mapping and mint another LoopID.
+- Loop task: supported replay must not outlive required current/terminal authority or reconstruct an earlier request
+  after meaningful progress.
+
+Both proofs use actual source/evidence identities and retention policies and include first-party republication.
+Original source-before-evidence ordering is not sufficient where internal republication changes that ordering.
+Arbitrary caller resubmission after evidence expiry is not automatically covered by pending-delivery recovery;
+this amendment grants neither indefinite deduplication nor changed identifier-reuse semantics.
+A demonstrated production counterexample stops this proof slice for bounded design at the existing owner.
 
 `DiscardNew` trades availability under a full stream for non-loss: a capacity refusal from required JetStream
 publication makes the producer Retry and retain its source delivery. There is no core-NATS fallback. `Nats-Msg-Id`
@@ -1002,13 +1055,13 @@ does not change admission, subject coverage, publisher classification, PubAck, o
 | External person | What they must know | If they do nothing | Discovery | What they should have to know |
 |---|---|---|---|---|
 | Component author | Return the owner-specific domain outcome; do not settle native messages | Void/log-only success can ACK incomplete work and fails review | typed API and compile/test failure | The definition of done only; the private owner handles ACK/Retry/Terminate/Quarantine |
-| Direct TaskMessage producer | New work mints LoopID once before Validate/marshal; continuation echoes admitted LoopID | Missing/noncanonical LoopID is refused before side effects | validation error, classified boundary, migration note | One birth/echo rule; no stream, bucket, scan, or recovery mechanics |
+| Direct TaskMessage producer | New work mints fresh LoopID once before Validate/marshal; same serialized retry preserves identity | Missing/noncanonical identity or known different-task reuse refuses before effects | validation error, classified boundary, migration note | Fresh identity for new work; preserve bytes for retry; no storage or recovery mechanics |
 | Tool executor author | Raw external executors preserve RequestID and execution identity; provider CallID is not globally unique | Replay is refused loudly when correlation is missing | payload validation and migration doc | Hosted executors know nothing; agentic-tools stamps correlation |
 | Approval UI developer | Submit LoopID, decision, and the opaque ExecutionID attached to the reviewed prompt | Missing echo receives HTTP 400 or invalid wire settlement; a stale HTTP prompt receives 409 | typed HTTP/wire refusal | Echo an observed value; never compute identity or select a replacement gate |
 | Model operator | Know that ambiguous replacement may repeat a provider call | Omission requires no configuration; retained matches are reused and typed absence calls again | model operations documentation | Only the at-least-once duplicate-risk contract; no policy, reconciliation, or failure-kind mechanics |
 | Custom command author | Use `LookupLoopOwner` with LoopID | Old field removal is a compile failure | compile error and migration note | Only LoopID and returned owner |
 | HTTP/UI author | Existing `LoopInfo` wire gains only nested pending `execution_id`; projection endpoints can return 503 | Ordinary reads continue; approval inputs without the echo fail visibly | typed HTTP response and schema | No bucket, watcher, or cache |
-| AutoContinue caller | Opt into exact user/type/channel matching | No partial or cross-channel fallback | schema/docs and typed ambiguity/unavailable response | Only whether convenience is wanted |
+| Former attachment caller | Remove auto_continue and submission reply_to; send each new turn with displayed prior_messages | Known retired keys refuse; omission starts a new execution | Component schema, HTTP schema, typed USER refusal and migration guide | No loop targeting or retention calculation for chat |
 | Dashboard operator | Remove `router_active_loops` query | Series disappears | metric migration note | Use `/loops` with caught-up signal |
 | graphview caller | Do not call removed `Restart()` | Compile failure | compile error and migration note | Lifecycle owner recreates the view |
 | Framework operator | Configure admitted stream/bucket policy | Affected closure refuses readiness; confirmed missing approval evidence fails explicitly | boot error or durable continuation_unavailable | No extra approval Store; an approval deadline is not a retention guarantee |
@@ -1041,7 +1094,7 @@ or understand replay storage.
 
 ### Direct TaskMessage producer
 
-For new work, it calls `uuid.NewString()` once before Validate and marshal. For continuation, it echoes the admitted
+For new work, it calls `uuid.NewString()` once before Validate and marshal. It does not attach another task to an
 existing LoopID. It retries the same uncertain publication with the same serialized bytes and does not reconstruct the
 task or regenerate LoopID for that retry. Missing or malformed identity fails before side effects. No exported helper,
 constructor, generator policy, recovery map, or storage concept is exposed.
@@ -1121,8 +1174,8 @@ The design is rejected or revised if any premise fails:
 3. RequestID stably identifies one logical provider-work turn and retains its LoopID correlation.
 4. Tool execution identity is a digest of RequestID, provider CallID, and ordinal; provider CallID is unchanged.
 5. Cold `ToolResult` handling reconstructs its active batch without scanning.
-6. The observed AGENT admissibility contract requires `DiscardNew` and does not infer a horizon from MaxAge while
-   an earlier capacity-eviction bound remains possible.
+6. The observed AGENT admissibility contract requires `DiscardNew` and measured source/evidence retention
+   obligations; neither consumer timers nor MaxAge alone establish an elapsed recovery guarantee.
 7. Approval replacement uses current `LoopEntity` plus exact retained request/response evidence for every applicable
    decision branch and observable effect-free settlement of noncurrent gates. Confirmed required-evidence absence
    durably fails `continuation_unavailable`, even before the approval deadline. No extra Store fallback or historical
@@ -1171,8 +1224,8 @@ not assertions that every referenced mechanism is absent:
 - Exact retained-message lookup correctness and performance require evidence at each named boundary.
 - The accepted inventories do not separately admit strong retention for the USER and TOOL source streams used by
   physical rows 1, 11, and 17. Implementation review must measure their actual source-delivery guarantees and prove
-  their observed bounds sufficient for the complete 15-lane horizon. AGENT admission is not proof for another
-  stream.
+  the applicable source/evidence retention and republication relationships at the named boundaries. AGENT admission
+  is not proof for another stream; no complete 15-lane elapsed horizon is inferred from consumer timers.
 - Governance retained-verdict recovery at the waiter-loss boundary requires the complete R7 evidence. Ordinary
   validated output remains at-least-once.
 - `AGENT_LOOPS` matching/race/drift behavior requires the complete R8 evidence. A create literal is not observed
@@ -1232,15 +1285,16 @@ Implementation or review stops if:
 - a matching retained response still permits provider invocation, conflicting retained correlation does not
   quarantine, typed absence does not permit another call with the same RequestID, or source ACK can precede required
   response PubAck;
-- AGENT remains `DiscardOld`, or observed AGENT bounds cannot prove a still-required caller-local horizon;
-  the removed R7 verdict-retention horizon prerequisite is excluded under owner comment `5682070598`;
+- required resolved streams remain `DiscardOld`, earlier eviction defeats required evidence, or timer arithmetic
+  substitutes for a required source/evidence identity proof; the removed R7 verdict-retention prerequisite remains
+  excluded under owner comment `5682070598`, and comment `5712921768` removes only the timer-derived calculation;
 - USER or TOOL source retention is assumed rather than measured from the actual source stream;
 - the retired approval-continuation Store, configuration, digest, cleanup, or post-eviction success promise returns
   without new owner authority;
 - dispatch retains `LoopTracker`, a pending-approval cache, created/pending correctness inputs, or another current-
   state authority beside `AGENT_LOOPS`;
 - dispatch owns an intermediate loop transition, retries a validated routeless non-user terminal indefinitely, or
-  hides the AutoContinue birth gap with process memory;
+  reintroduces live attachment or inferred command targets;
 - the view admits noncanonical non-completion keys as current loops, accepts malformed canonical current state,
   treats completion as current authority, or lets completion-only poison block current-loop authority;
 - the withdrawn research renderer, payload behavior, namespace package, or optional implementation dependency
@@ -1274,7 +1328,7 @@ is not required to interpret or complete any row. There are no deviations.
 | Binding ruling or accepted correction | Exact active target | Conformance |
 |---|---|---|
 | Optional PriorMessages on three inputs | Independent chat turns | Sequential-chat implementation map below |
-| AutoContinue=false, separately approved | Independent chat turns | Sequential-chat implementation map below |
+| Live attachment retired, owner 5728438234 superseding default-only change | Independent chat turns; Retired live attachment | Retirement implementation/proof remains under R8 |
 | Build and review on staged #759; do not require merge-first | `proposal.md / Holds`; `tasks.md / 1.1` | exact `P`, frozen parent `F`, re-review on drift |
 | Remove dispatch created/pending correctness inputs; retain their loop outputs; transfer AgentRun H.1/H.2 to #1249 checkpoint A | `proposal.md / Claim scope`; `tasks.md / 6.9`; `tasks.md / Transferred: AgentRun` | 15 physical subscriptions remain in #1146 |
 | Remove paused state completely; support cancel, durable approval wait, restart from durable boundary, and lifecycle quiesce | `proposal.md / Holds`; `design.md / User-facing control and quiesce contract`; `agentic-loop / All six loop input classes settle after owner-specific durable done`; `tasks.md / 7.1–7.4` | comment 5526837992 supersedes compatibility premise; no shim/migration/reserved enum |
@@ -1286,6 +1340,7 @@ is not required to interpret or complete any row. There are no deviations.
 | Reuse one selected ordinary terminal outcome and persist the existing synthetic-action obligation | `design.md / agent.response complete or error`; `agentic-loop / Loop task, request, and tool work use only required correlation`; `tasks.md / R2` | owner comments `5647247843` and `5651819675`; reviewed handoff `b411304309`; existing COMPLETE_ and registered event types, unchanged synthesis policy; runtime proof remains required |
 | Replace stale current-spec semantics through full MODIFIED blocks | `design.md / Current-spec reconciliation`; exact MODIFIED requirements in dispatch, tools, and loop deltas; `tasks.md / 5.2, 6.10, 7.7` | unaffected scenarios/citations preserved; no additive conflict |
 | Use strong observed DiscardNew and refuse only the affected dependency closure | `agentic-loop / Restart-safe replay observes and admits local stream bounds`; `tasks.md / 9.1–9.4` | no whole-composition/global-maxima gate |
+| Replace timer-derived recovery horizon with boundary-specific observed-retention proof | `Observed AGENT replay admissibility`; loop replay-admission requirement; `tasks.md / R8` | owner comment `5712921768`; retain dispatch mapping and loop-task authority proofs, internal republication, DiscardNew, typed refusal, PubAck, KV and named absence constraints; no new state/API/timing policy |
 | Retire the loop-side duplicate bucket setting and cap approval wait at 12h | `Loop-owned AGENT_LOOPS acquisition`; loop declaration, lifetime and acquisition requirements; `tasks.md / R8` | owner comment `5696610710`; one port declaration, explicit removed-key refusal, default/max12h and observed TTL24h; nominal grace only; no new recovery machinery |
 | Permit governance re-evaluation after successful exact retained-verdict absence without a finite verdict-retention horizon prerequisite | `Governance correlation`; `Observed AGENT replay admissibility`; governance correlation/publication requirements; loop replay-admission requirement; `tasks.md / R7–R8` | comment `5682070598`; matching reuse, failed-read Retry, conflict Quarantine, current-policy re-evaluation, unchanged DiscardNew/PubAck/#1311/tool-effect safeguards and other retention obligations; no new state, timer or API |
 | Quarantine opposing retained decisions that both match one proposal | `Governance correlation`; governance correlation requirement; `tasks.md / R7` | comment `5694233488`; select neither, no positive response settlement or proposal/tool publication, stop affected response consumer; no election policy or new authority |
@@ -1295,7 +1350,7 @@ is not required to interpret or complete any row. There are no deviations.
 | Treat `TaskMessage` as registered Payload, not Graphable | `rule-agent-publishing / Publish-agent preserves the registered payload boundary`; `tasks.md / 9.5–9.7` | no graph-interface prediction |
 | Retire only the additional approval-continuation Store after R2 evidence | `design.md / Approval continuation`; `agentic-loop / Approval continuation after replacement is exact and evidence-bounded`; `tasks.md / R2–R3` | owner comment `5654729986`; existing KV/exact messages, confirmed-absence failure even before deadline, unchanged timeout/KV-validation/DiscardNew; no extra configuration, digest, cleanup or eviction-survival claim |
 | Echo the reviewed ExecutionID; settle noncurrent approval gates observably without effects or historical applied claims | `design.md / Approval continuation`; approval-continuation and terminal-release requirements; dispatch current-state projection requirement; `tasks.md / R1–R3, R6` | owner comment `5618375806`; one gate per execution; narrow pending JSON/OpenAPI addition; tool/model proofs unchanged; Store retirement is the separate R3 ruling |
-| Make dispatch exclusively an edge gateway over one authority-backed view | `design.md / Dispatch edge-gateway boundary`; `agentic-dispatch / Dispatch is exclusively an edge gateway`; `agentic-dispatch / Dispatch uses one authority-backed current-state projection`; `tasks.md / 6.7–6.13` | no tracker, pending cache, created/pending correctness inputs, or intermediate-state ownership; routeless terminals settle; the AutoContinue birth gap remains explicit |
+| Make dispatch exclusively an edge gateway over one authority-backed view | `design.md / Dispatch edge-gateway boundary`; `agentic-dispatch / Dispatch is exclusively an edge gateway`; `agentic-dispatch / Dispatch uses one authority-backed current-state projection`; `tasks.md / 6.7–6.13` | no tracker, pending cache, created/pending correctness inputs, or intermediate-state ownership; routeless terminals settle; live attachment is retired |
 | Keep correlation lane-scoped; make ordinary publications at-least-once; retain exact reads only at named boundaries | `design.md / Correlation is lane-scoped`; corresponding dispatch, loop, model, tools, and governance publication requirements; `tasks.md / 2.1–2.6` | comment `5538906152`; bounded dedupe is not long-horizon proof |
 | Every touched consumer owner stops admission, drains handles, awaits `Closed`, then cancels/joins | dispatch, governance, model, loop, tools, and graph-view lifecycle requirements; `tasks.md / 10.1–10.3` | lifecycle closure is capability-owned |
 | Accept the minimum operational LoopEntity contract without absorbing wider #1244 | `design.md / Accepted operational loop-state contract`; `agentic-loop / LoopEntity has one operational state contract`; `tasks.md / R6, R2, R4` | owner comment `5652414046`; five states, private lifecycle.Transitions reuse, local validity separate from lane correlation; durability and wider #1244 obligations remain |
@@ -1307,7 +1362,9 @@ is not required to interpret or complete any row. There are no deviations.
 
 ### Sequential-chat implementation map
 
-The owner accepted both choices on 2026-09-08 after independent design review. No additional public surface was added.
+This is historical implementation evidence for the two choices accepted on 2026-09-08, not the current retirement
+implementation map. Owner comment `5728438234` supersedes the false-default and attachment rows; their source pins
+will drift during retirement. The PriorMessages contract and its chat acceptance remain supported.
 
 | Accepted obligation | Implementation evidence |
 |---|---|
@@ -1317,8 +1374,8 @@ The owner accepted both choices on 2026-09-08 after independent design review. N
 | Forward history through existing task producer | `processor/agentic-dispatch/component.go:932` |
 | Validate and compare retained source history | `processor/agentic-dispatch/task_recovery.go:94`, `:215` |
 | History in initial request and ContextManager | `processor/agentic-loop/handlers.go:654`, `:817` |
-| Reject different-task history before rebinding | `processor/agentic-loop/state.go:273` |
-| Default false in typed configuration and schema | `processor/agentic-dispatch/config.go:14`, `:102` |
-| Refuse history on commands and attachment | `processor/agentic-dispatch/http.go:209`, `:354` |
+| Historical: reject different-task history before rebinding; rebinding now retired | `processor/agentic-loop/state.go:273` |
+| Superseded: false default; configuration now retired | `processor/agentic-dispatch/config.go:14`, `:102` |
+| Historical: command/attachment history refusal; attachment now retired | `processor/agentic-dispatch/http.go:209`, `:354` |
 | Actual replaced-component chat acceptance | `processor/agentic-dispatch/sequential_chat_integration_test.go:35` |
 | Actual post-PubAck provider replacement proof | `processor/agentic-model/provider_post_puback_integration_test.go:39` |

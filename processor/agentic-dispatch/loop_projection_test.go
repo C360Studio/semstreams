@@ -148,7 +148,7 @@ func TestLoopAdmissionValidatesPersistedAuthority(t *testing.T) {
 		ID: admissionLoopB, UserID: "user-a", State: agentic.LoopStateRunning, MaxIterations: 20,
 	}})
 	_, err := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
-		Seam: seamChannelSubmission, Field: "reply_to", Operation: loopOpContinue,
+		Seam: seamChannelSubmission, Field: "loop_id", Operation: loopOpRead,
 		LoopID: admissionLoopA, Requester: "user-a",
 	})
 	require.Error(t, err, "a decodable but wrong-key record is not current loop authority")

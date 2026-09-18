@@ -83,8 +83,8 @@ func TestFormRefusalPrecedesExistenceRefusal(t *testing.T) {
 
 	_, err := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
 		Seam:      "channel_submission",
-		Field:     "reply_to",
-		Operation: loopOpContinue,
+		Field:     "loop_id",
+		Operation: loopOpCancel,
 		LoopID:    admissionMalformed,
 		Requester: "user-a",
 	})
@@ -103,8 +103,8 @@ func TestExistenceRefusalPrecedesOwnershipRefusal(t *testing.T) {
 
 	_, err := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
 		Seam:      "http_submission",
-		Field:     "reply_to",
-		Operation: loopOpContinue,
+		Field:     "loop_id",
+		Operation: loopOpCancel,
 		LoopID:    admissionLoopA,
 		Requester: "stranger",
 	})
@@ -119,7 +119,6 @@ func TestExistenceRefusalPrecedesOwnershipRefusal(t *testing.T) {
 // by exactly one and produces one diagnostic log.
 func TestGateRefusalIsCountedExactlyOnce(t *testing.T) {
 	owned := &agentic.LoopEntity{ID: admissionLoopA, UserID: "user-a", State: agentic.LoopStateRunning, MaxIterations: 5}
-	settled := &agentic.LoopEntity{ID: admissionLoopA, UserID: "user-a", State: agentic.LoopStateComplete, MaxIterations: 5}
 
 	cases := []struct {
 		name    string
@@ -131,13 +130,13 @@ func TestGateRefusalIsCountedExactlyOnce(t *testing.T) {
 		{
 			name:    "malformed token",
 			arrange: func(c *Component) { withPersistedLoops(c, nil) },
-			req:     loopAdmissionRequest{Operation: loopOpContinue, LoopID: admissionMalformed, Requester: "user-a"},
+			req:     loopAdmissionRequest{Operation: loopOpCancel, LoopID: admissionMalformed, Requester: "user-a"},
 			code:    codeLoopTokenInvalid, reason: reasonFormMalformed,
 		},
 		{
 			name:    "absent loop",
 			arrange: func(c *Component) { withPersistedLoops(c, nil) },
-			req:     loopAdmissionRequest{Operation: loopOpContinue, LoopID: admissionLoopA, Requester: "user-a"},
+			req:     loopAdmissionRequest{Operation: loopOpCancel, LoopID: admissionLoopA, Requester: "user-a"},
 			code:    codeLoopNotFound, reason: reasonExistenceAbsent,
 		},
 		{
@@ -147,7 +146,7 @@ func TestGateRefusalIsCountedExactlyOnce(t *testing.T) {
 					return nil, errors.New("nats unavailable")
 				}
 			},
-			req:  loopAdmissionRequest{Operation: loopOpContinue, LoopID: admissionLoopA, Requester: "user-a"},
+			req:  loopAdmissionRequest{Operation: loopOpCancel, LoopID: admissionLoopA, Requester: "user-a"},
 			code: codeLoopUnreadable, reason: reasonExistenceUnreadable,
 		},
 		{
@@ -157,23 +156,15 @@ func TestGateRefusalIsCountedExactlyOnce(t *testing.T) {
 					ID: admissionLoopB, UserID: "user-a", State: agentic.LoopStateRunning, MaxIterations: 5,
 				}})
 			},
-			req:  loopAdmissionRequest{Operation: loopOpContinue, LoopID: admissionLoopA, Requester: "user-a"},
+			req:  loopAdmissionRequest{Operation: loopOpCancel, LoopID: admissionLoopA, Requester: "user-a"},
 			code: codeLoopUnreadable, reason: reasonExistenceUnreadable,
-		},
-		{
-			name: "terminal loop",
-			arrange: func(c *Component) {
-				withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: settled})
-			},
-			req:  loopAdmissionRequest{Operation: loopOpContinue, LoopID: admissionLoopA, Requester: "user-a"},
-			code: codeLoopTerminal, reason: reasonStateTerminal,
 		},
 		{
 			name: "not owned",
 			arrange: func(c *Component) {
 				withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: owned})
 			},
-			req:  loopAdmissionRequest{Operation: loopOpContinue, LoopID: admissionLoopA, Requester: "user-b"},
+			req:  loopAdmissionRequest{Operation: loopOpCancel, LoopID: admissionLoopA, Requester: "user-b"},
 			code: codeLoopNotOwned, reason: reasonOwnershipNotOwner,
 		},
 		{
@@ -203,7 +194,7 @@ func TestGateRefusalIsCountedExactlyOnce(t *testing.T) {
 			tc.arrange(c)
 			req := tc.req
 			req.Seam = "seam_under_test"
-			req.Field = "reply_to"
+			req.Field = "loop_id"
 
 			_, err := c.admitLoopRequest(context.Background(), req)
 
@@ -211,13 +202,13 @@ func TestGateRefusalIsCountedExactlyOnce(t *testing.T) {
 			require.Equal(t, 1, strings.Count(logs.String(), loopAdmissionRefusalLogMessage))
 			require.Contains(t, logs.String(), "reason="+tc.reason)
 			require.Contains(t, logs.String(), "seam=seam_under_test")
-			require.Contains(t, logs.String(), "field=reply_to")
+			require.Contains(t, logs.String(), "field=loop_id")
 		})
 	}
 }
 
 // spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
-func TestContinuationAfterReplacementIsAdmittedFromDurableRecord(t *testing.T) {
+func TestExplicitControlAfterReplacementIsAdmittedFromDurableRecord(t *testing.T) {
 	c := admissionTestComponent(t)
 	// A replacement process needs only the exact current authority.
 	withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: {
@@ -226,7 +217,7 @@ func TestContinuationAfterReplacementIsAdmittedFromDurableRecord(t *testing.T) {
 	}})
 
 	facts, err := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
-		Seam: "channel_submission", Field: "reply_to", Operation: loopOpContinue,
+		Seam: "channel_submission", Field: "loop_id", Operation: loopOpCancel,
 		LoopID: admissionLoopA, Requester: "user-a",
 	})
 
@@ -248,7 +239,7 @@ func TestPreviouslyObservedLoopWithoutDurableRecordIsRefused(t *testing.T) {
 	}}
 	withPersistedLoops(c, records)
 	req := loopAdmissionRequest{
-		Seam: "channel_submission", Field: "reply_to", Operation: loopOpContinue,
+		Seam: "channel_submission", Field: "loop_id", Operation: loopOpCancel,
 		LoopID: admissionLoopA, Requester: "user-a",
 	}
 	_, err := c.admitLoopRequest(context.Background(), req)
@@ -269,7 +260,7 @@ func TestUnreadableDurableRecordRefusesTransient(t *testing.T) {
 	}
 
 	_, err := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
-		Seam: "http_submission", Field: "reply_to", Operation: loopOpContinue,
+		Seam: "http_submission", Field: "loop_id", Operation: loopOpCancel,
 		LoopID: admissionLoopA, Requester: "user-a",
 	})
 
@@ -288,7 +279,7 @@ func TestPriorAdmissionDoesNotBypassADurableReadFailure(t *testing.T) {
 		ID: admissionLoopA, UserID: "user-a", State: agentic.LoopStateRunning, MaxIterations: 5,
 	}})
 	req := loopAdmissionRequest{
-		Seam: "channel_submission", Field: "reply_to", Operation: loopOpContinue,
+		Seam: "channel_submission", Field: "loop_id", Operation: loopOpCancel,
 		LoopID: admissionLoopA, Requester: "user-a",
 	}
 	_, err := c.admitLoopRequest(context.Background(), req)
@@ -347,8 +338,6 @@ func TestGateOwnershipModel(t *testing.T) {
 		approve   []string
 		wantCode  string
 	}{
-		{name: "owner continues", operation: loopOpContinue, requester: owner, loopOwner: owner},
-		{name: "second holder cannot continue", operation: loopOpContinue, requester: "user-b", loopOwner: owner, wantCode: codeLoopNotOwned},
 		{name: "owner cancels", operation: loopOpCancel, requester: owner, loopOwner: owner},
 		{name: "non-owner cannot cancel", operation: loopOpCancel, requester: "user-b", loopOwner: owner, wantCode: codeLoopNotOwned},
 		{name: "cancel_any cancels another user's loop", operation: loopOpCancel, requester: "ops", loopOwner: owner, cancelAny: []string{"ops"}},
@@ -363,7 +352,6 @@ func TestGateOwnershipModel(t *testing.T) {
 		{name: "read is not owner-scoped", operation: loopOpRead, requester: "user-b", loopOwner: owner},
 
 		// Unknown owner fails closed for every operation that consults it.
-		{name: "ownerless loop refuses continue", operation: loopOpContinue, requester: owner, loopOwner: "", wantCode: codeLoopNotOwned},
 		{name: "ownerless loop refuses cancel", operation: loopOpCancel, requester: owner, loopOwner: "", wantCode: codeLoopNotOwned},
 		// ... but approve and read never consult the owner, so an autonomously
 		// spawned loop's tool call is still approvable and its record readable.
@@ -419,8 +407,8 @@ func TestGateDoesNotConsultCancelOwn(t *testing.T) {
 }
 
 // spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
-// Terminal authority refuses continuation, but remains readable and controllable.
-func TestGateTerminalAuthorityRefusesContinuation(t *testing.T) {
+// Terminal authority remains readable and controllable.
+func TestGateTerminalAuthorityRemainsReadableAndControllable(t *testing.T) {
 	for _, state := range []agentic.LoopState{
 		agentic.LoopStateComplete, agentic.LoopStateFailed, agentic.LoopStateCancelled,
 	} {
@@ -429,12 +417,6 @@ func TestGateTerminalAuthorityRefusesContinuation(t *testing.T) {
 			withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: {
 				ID: admissionLoopA, UserID: "user-a", State: state, MaxIterations: 5,
 			}})
-
-			_, err := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
-				Seam: "channel_submission", Field: "reply_to", Operation: loopOpContinue,
-				LoopID: admissionLoopA, Requester: "user-a",
-			})
-			requireRefusal(t, c, err, codeLoopTerminal, reasonStateTerminal, "channel_submission")
 
 			for _, operation := range []string{loopOpRead, loopOpCancel, loopOpApprove} {
 				facts, operationErr := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
@@ -498,7 +480,7 @@ func TestGateRefusesInvalidCurrentAuthorityBeforeOwnership(t *testing.T) {
 			withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: tc.record})
 
 			facts, err := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
-				Seam: seamChannelSubmission, Field: "reply_to", Operation: loopOpContinue,
+				Seam: seamChannelSubmission, Field: "loop_id", Operation: loopOpCancel,
 				LoopID: admissionLoopA, Requester: "stranger",
 			})
 
@@ -517,7 +499,6 @@ func TestLoopAdmissionMetricReasonHasOneHomePerCode(t *testing.T) {
 		codeLoopNotFound:      reasonExistenceAbsent,
 		codeLoopUnreadable:    reasonExistenceUnreadable,
 		codeLoopOwnerConflict: reasonExistenceConflict,
-		codeLoopTerminal:      reasonStateTerminal,
 		codeLoopNotOwned:      reasonOwnershipNotOwner,
 		codeLoopNotPermitted:  reasonOwnershipNotPermitted,
 	}

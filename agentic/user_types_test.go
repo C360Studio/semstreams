@@ -110,7 +110,6 @@ func TestUserMessage_JSONRoundTrip(t *testing.T) {
 		ChannelID:   "C12345",
 		UserID:      "U67890",
 		Content:     "test message",
-		ReplyTo:     "loop-abc",
 		ThreadID:    "thread-xyz",
 		Metadata:    map[string]string{"team_id": "T123"},
 		Attachments: []Attachment{

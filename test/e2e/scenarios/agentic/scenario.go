@@ -254,6 +254,8 @@ func (s *Scenario) stages() []agenticStage {
 		{name: "walk-approval-after-restart", fn: s.walkApprovalAfterRestart, asserts: true},
 		{name: "walk-signal-path", fn: s.walkSignalPath, asserts: true},
 		{name: "refuse-non-canonical-signal", fn: s.refuseNonCanonicalSignal, asserts: true},
+		{name: "walk-independent-chat-turns", fn: s.walkIndependentChatTurns, asserts: true},
+		{name: "refuse-retired-target-inputs", fn: s.refuseRetiredTargetInputs, asserts: true},
 		{name: "validate-results", fn: s.validateResults, asserts: true},
 	}
 }
@@ -1187,6 +1189,12 @@ func (s *Scenario) validateResults(_ context.Context, result *scenarios.Result) 
 		return fmt.Errorf("non-canonical cancel refusal counter = %v, want at least 1", count)
 	}
 
+	if err := validateChatTurnEvidence(result.Details); err != nil {
+		return err
+	}
+	if err := validateRetiredTargetEvidence(result.Details); err != nil {
+		return err
+	}
 	result.Details["validation_passed"] = true
 	return nil
 }

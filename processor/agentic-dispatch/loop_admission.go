@@ -28,8 +28,6 @@ const (
 	codeLoopUnreadable = "loop_unreadable"
 	// codeLoopOwnerConflict remains the existing route-conflict refusal vocabulary.
 	codeLoopOwnerConflict = "loop_owner_conflict"
-	// codeLoopTerminal: the loop has settled; it cannot be continued.
-	codeLoopTerminal = "loop_terminal"
 	// codeLoopNotOwned: the requester is not the loop's recorded owner and holds
 	// no configured override for the operation.
 	codeLoopNotOwned = "loop_not_owned"
@@ -86,7 +84,6 @@ const (
 	reasonExistenceAbsent       = "existence_absent"
 	reasonExistenceUnreadable   = "existence_unreadable"
 	reasonExistenceConflict     = "existence_conflict"
-	reasonStateTerminal         = "state_terminal"
 	reasonOwnershipNotOwner     = "ownership_not_owner"
 	reasonOwnershipNotPermitted = "ownership_not_permitted"
 	reasonSubmissionInvalid     = "submission_invalid"
@@ -101,9 +98,6 @@ const loopAdmissionRefusalLogMessage = "agentic-dispatch: loop request refused"
 // The operations a request naming a loop can ask for. The gate's ownership model
 // is a closed switch over exactly these; an unrecognized value refuses.
 const (
-	// loopOpContinue: a submission resolving onto an existing loop, by explicit
-	// reply_to or by auto-continue.
-	loopOpContinue = "continue"
 	// loopOpCancel: the /cancel chat command.
 	loopOpCancel = "cancel"
 	// loopOpApprove: an approval decision on a gated tool call.
@@ -113,15 +107,15 @@ const (
 	// loopOpSubmit: the submission itself. It is NEVER passed to
 	// admitLoopRequest — a submission that names no existing loop mints one and
 	// has nothing to admit. It labels the submission-path refusals that happen
-	// after admission, so a refused submission is countable in the same series
+	// before task publication, so a refused submission is countable in the same series
 	// as everything else this package refuses.
 	loopOpSubmit = "submit"
 )
 
 // loopAdmissionRequest is what a seam hands the gate. Seam and Field are the
 // seam's own vocabulary and travel into the metric label and the refusal Detail
-// respectively: Field is the name the CALLER used for the token (reply_to, id,
-// loop_id), so a refusal names something the caller can act on.
+// respectively: Field is the name the CALLER used for the token (id or loop_id),
+// so a refusal names something the caller can act on.
 type loopAdmissionRequest struct {
 	Seam      string
 	Field     string
@@ -176,7 +170,7 @@ type loopLookup struct {
 // It is NOT authorization. Requester is asserted by the caller — taken from
 // product middleware when middleware supplied it, otherwise from the request
 // body's own claimed user field, otherwise from a default — and nothing verifies
-// it. The gate converts an accidental cross-attach into a typed refusal and
+// it. The gate converts a disallowed explicit control into a typed refusal and
 // makes every refusal countable; it does not isolate mutually untrusted parties.
 // Authorization is a separate contract (epic #1205).
 //
@@ -188,10 +182,8 @@ type loopLookup struct {
 // error the gate produced and counts nothing of its own.
 func (c *Component) admitLoopRequest(ctx context.Context, req loopAdmissionRequest) (loopFacts, error) {
 	// Form. The predicate has one home (internal/looptoken); this gate holds no
-	// second spelling of loop-token shape. An empty token reaches here only from
-	// a seam that resolved nothing to attach to, which is a caller bug, not a
-	// mint signal — the mint decision belongs to the submission path BEFORE it
-	// calls the gate.
+	// second spelling of loop-token shape. This gate admits explicit controls
+	// and reads; it never mints execution identity.
 	if !looptoken.Valid(req.LoopID) {
 		return loopFacts{}, c.refuseLoopRequest(req, codeLoopTokenInvalid, fmt.Errorf(
 			"%s %q is not a loop ID this framework minted: a loop ID is an opaque token you receive "+
@@ -232,7 +224,6 @@ func (c *Component) admitLoopRequest(ctx context.Context, req loopAdmissionReque
 //
 // The model is exactly as ruled and is not extended:
 //
-//   - continue: requester == the loop's recorded owner.
 //   - cancel, signal: requester == owner, OR requester in cancel_any.
 //   - approve: requester in the approve list, ownership NOT consulted — a
 //     second-party reviewer is the entire point of an approval, and a later
@@ -259,17 +250,6 @@ func (c *Component) authorizeLoopOperation(req loopAdmissionRequest, facts loopF
 		if !c.hasPermission(req.Requester, "approve") {
 			return c.refuseLoopRequest(req, codeLoopNotPermitted,
 				fmt.Errorf("requester is not permitted to approve loop %q", req.LoopID))
-		}
-		return nil
-
-	case loopOpContinue:
-		if facts.Terminal {
-			return c.refuseLoopRequest(req, codeLoopTerminal,
-				fmt.Errorf("loop %q has already settled and cannot be continued", req.LoopID))
-		}
-		if facts.UserID == "" || facts.UserID != req.Requester {
-			return c.refuseLoopRequest(req, codeLoopNotOwned,
-				fmt.Errorf("%s %q names a loop the requester does not own", req.Field, req.LoopID))
 		}
 		return nil
 
@@ -382,8 +362,8 @@ func (c *Component) refuseSubmission(seam, loopID, code string, cause error) err
 // or ok=false for anything that is not one of this package's refusals. One home,
 // so three endpoints cannot disagree about what "not owned" answers.
 //
-// The design names four (400 malformed, 404 absent, 403 not permitted or not
-// owned, 409 terminal). The two remaining codes are decided here on the same
+// The gate uses 400 for malformed, 404 for absent, and 403 for not permitted or
+// not owned. The two remaining codes are decided here on the same
 // rule — what can the caller do about it:
 //
 //   - unreadable: nothing now, something later. 503, matching the transient
@@ -403,8 +383,6 @@ func loopRefusalHTTPStatus(err error) (int, bool) {
 		return http.StatusNotFound, true
 	case codeLoopNotOwned, codeLoopNotPermitted:
 		return http.StatusForbidden, true
-	case codeLoopTerminal:
-		return http.StatusConflict, true
 	case codeLoopUnreadable:
 		return http.StatusServiceUnavailable, true
 	case codeLoopOwnerConflict:
@@ -432,8 +410,6 @@ func loopAdmissionMetricReason(err error) (string, bool) {
 		return reasonExistenceUnreadable, true
 	case codeLoopOwnerConflict:
 		return reasonExistenceConflict, true
-	case codeLoopTerminal:
-		return reasonStateTerminal, true
 	case codeLoopNotOwned:
 		return reasonOwnershipNotOwner, true
 	case codeLoopNotPermitted:

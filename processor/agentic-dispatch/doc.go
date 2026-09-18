@@ -3,8 +3,10 @@
 // The agentic-dispatch component handles command parsing, permission checking,
 // current-loop reads, and message dispatch. It bridges input components (CLI, Slack,
 // Discord, Web) with the agentic processing system.
-// Explicit loop operations read validated durable state; listing and AutoContinue
+// Explicit loop operations read validated durable state; listing, activity and debug
 // use one caught-up read-only view. Dispatch does not own intermediate loop state.
+// Each new chat turn starts an independent execution with optional displayed history;
+// live attachment and inferred command targets are not supported.
 //
 // # Architecture
 //
@@ -70,8 +72,8 @@
 //
 // The agentic-dispatch component provides these built-in commands:
 //
-//   - /cancel [loop_id] - Cancel current or specified loop
-//   - /status [loop_id] - Show loop status
+//   - /cancel <loop_id> - Cancel the specified loop
+//   - /status <loop_id> - Show the specified loop's status
 //   - /loops - List active loops
 //   - /help - Show available commands
 //

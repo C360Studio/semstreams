@@ -900,6 +900,11 @@ Rule JSON users in semdev, semteams, and semspec require no sister code change: 
 producer mints the new-task LoopID before publishing. Sister repositories remain read-only to SemStreams agents; their
 owners apply and validate these migrations.
 
+Go callers composing `ActionExecutor` directly must supply a publisher for attempted `publish_agent` work.
+A missing publisher now returns a classified error before run creation or graph writes instead of silently
+succeeding. The normal framework factory already supplies it. An empty resolved `for_each` still performs no
+dispatch and succeeds; other action types and constructor signatures are unchanged.
+
 Use fresh NATS state only after every direct producer is updated. Add no alias, dual format, online migration, or
 rollback reader. If retained deployed TaskMessage work is discovered, stop for a separate owner-reviewed recovery
 design.
@@ -907,10 +912,10 @@ design.
 ### Doing nothing
 
 - A direct TaskMessage producer that omits `loop_id` now fails loudly before loop state; apply the migration above.
-- A client that echoes framework-minted IDs sees nothing change but the shape of the string.
-- A client that authors a **non-canonical** continuation token gets a typed error naming `reply_to` in the response
-  it is already waiting on — instead of "Task submitted" followed by an async TERM it never sees.
-- A stream producer that pre-fills `loop_id`, `parent_loop_id`, `in_reply_to`, or `run_id` gets a classified intake
+- Clients echoing framework-minted IDs for surviving controls and lineage retain those uses with canonical token
+  shape and the operation's existing admission rules. Submission `reply_to` is retired for every value, not only
+  noncanonical tokens; migrate to [new turns with displayed history](#3-live-attachment-is-retired).
+- A stream producer supplying a noncanonical `loop_id`, `parent_loop_id`, `in_reply_to`, or `run_id` gets a classified intake
   rejection — metric plus terminated delivery — instead of today's silent adoption, or a silent half-written triple.
 - A peer deployment that has not adopted ADR-105 still mints `loop_xxxxxxxx`-shaped tokens, and a loop imported from
   it is refused by `task.Validate()` (`processor/rule/actions.go:1885`), so `publish_agent` publishes nothing for
@@ -922,8 +927,9 @@ design.
 
 ## One admission gate for every loop-naming request (#1227, #1228, #1225, #1233) — `POST /loops/{id}/signal` is removed
 
-Every request that names an existing loop — continue, cancel, approve, read — now passes one admission gate before
-anything acts on it: form, then existence, then ownership, with a classified refusal and exactly one counted metric.
+Supported explicit loop operations — cancel, approve, read — pass one admission gate before anything acts on them:
+form, then existence, then the operation's ownership/permission rules, with a classified refusal and one counted metric.
+Submission `reply_to` is retired and refused before this gate; it is not another supported loop operation.
 Sister repositories are **read-only** to SemStreams agents; every obligation is recorded here. Sweeps below were run
 against each sister's working tree on 2026-09-01.
 
@@ -1045,37 +1051,42 @@ admitted.
 Ownership is deliberately **not** consulted for approval: a second-party reviewer is the entire point, so a reviewer
 who did not start the loop can still approve it. That is a decision, not an oversight.
 
-### 3. `reply_to` on a live loop now CONTINUES the conversation — read this one even if you send no `reply_to`
+### 3. Live attachment is retired
 
-**This is the largest behavioural change in the release, and it needs no configuration to reach you.**
+Remove `auto_continue` from dispatch configuration, including declarations set to false. Remove submission
+`reply_to` and Go references to Config.AutoContinue, UserMessage.ReplyTo and HTTPMessageRequest.ReplyTo. Supplying
+either retired JSON key is refused rather than silently changing its meaning.
 
-A submission whose `reply_to` names a loop this process is still running used to mint a **fresh** loop over that
-token: `CreateLoopWithID` overwrote the loop entity, its pending-tool set, and its context manager, so the
-conversation accumulated under that token was destroyed and the next request went to the model with a brand-new
-context. It now **attaches**: the loop's existing context manager is reused, the new user turn is appended after
-the prior turns, the system prompt is not re-seeded, and the request carries the whole accumulated conversation.
+Send each conversational turn as new work with `prior_messages` containing the user text and assistant responses
+actually displayed. Each turn gets a fresh execution and budget. Do not reuse the prior LoopID to continue chatting.
+This does not carry forward the prior execution's internal tool/system/working context or unused budget.
 
-If you were relying on `reply_to` to reset a conversation, it no longer does. Omit `reply_to` with
-`auto_continue: false` to start a fresh execution. Explicitly enabled AutoContinue (a submission with no `reply_to`
-that resolves onto one exact user/type/channel nonterminal match) reaches the same attach. The #1146 change below makes
-AutoContinue opt-in and adds independent follow-up turns with supplied history.
+Explicit cancellation, status/read and approval targets remain supported. `run_id`, `in_reply_to` and
+`parent_loop_id` retain their separate lineage meanings. Internal model/tool rounds, approval waits and same-task
+redelivery are not retired.
 
-**A continuation is refused while the loop has work in flight.** "Live" is not "idle". If the loop has outstanding
-tool calls, or is `awaiting_approval` waiting on a human decision, the continuation is refused rather than
-attached, because attaching there would send the provider an assistant turn carrying `tool_calls` whose `tool`
-results have not arrived yet, run two rounds over one conversation, and — in the approval case — move the loop off
-the state the human's decision resolves, silently abandoning the gated call. Practically: **wait for the turn to
-finish, or for the approval to be answered, then send your next message.** The turn is not queued; you get a
-refusal, and it is answerable once the round finishes. There is no configuration for this.
+Direct TaskMessage producers mint a fresh LoopID per new task and preserve it when retrying the same serialized
+publication. Known identity conflicts refuse without altering the existing task. Detection of arbitrary identity
+reuse after all evidence expires is not guaranteed.
 
-A continuation by `reply_to` must also name a loop you own: it is refused unless the requester equals the loop's
-recorded owner. Previously a second holder of the token took over the tracker entry, and the original user's
-completion was delivered to the second user. So send the same `user_id` when you continue a loop that you sent when
-you created it. And a `reply_to` naming a **settled** loop is refused rather than silently minting a fresh loop
-under the same token; auto-continue is unaffected there, because it never resolves a terminal loop.
+Loop-package callers remove checks for the attachment-only `ErrLoopBusy` and `ErrLoopTerminal` sentinels.
+`CreateLoopWithID` still returns `ErrLoopAlreadyExists` without overwriting state. Durable task intake classifies
+a known different-task collision as its existing fatal correlation conflict (Quarantine), not a retryable attachment.
 
-These are correctness guards, **not authorization**. Identity remains caller-asserted until the beta.166 auth wave
-(epic #1205); the gate refuses a caller who contradicts recorded state, and cannot verify who anyone is.
+A known retired key fails component startup for configuration, returns a synchronous error for HTTP, and reaches
+the existing typed negative response for a routable registered USER input. Required response publication must
+receive PubAck before that durable input terminates; a failed publication retries. Malformed, unregistered and
+unroutable input keeps its existing rejection path, without inventing a route or task-completion result.
+
+Known downstream actions, based on read-only checkout inventory:
+
+- SemTeams at `ce22c961` and SemDev at `ca3956a` remove their explicit true settings.
+- SemSpec at `5a9496ee` removes thirteen explicit false settings; its unrelated workflow AutoContinue is unchanged.
+- SemTeams, SemSpec and SemStreams UI regenerate affected mirrored schemas/client types and remove source references.
+  SemTeams' inspected UI message sender already uses separate run/reply lineage rather than submission reply_to.
+
+Downstream owners implement and validate these changes in their repositories. Use the normal pre-v1 fresh-storage
+adoption path; this retirement adds no compatibility reader or deployed-state migration.
 
 ### 4. Removed exported Go surface
 
@@ -1236,6 +1247,25 @@ slice is implemented and replacement-tested under
 [owner ruling 5682070598](https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5682070598).
 #1311 proposal-source settlement and the remaining combined proof are still open; follow the change's R7/R8 tasks.
 
+## Restart retention contract (#1146)
+
+The accepted contract does not derive a recovery window from AckWait, BackOff, MaxDeliver or work timeout.
+Those settings govern delivery attempts and work; they do not bound downtime or guarantee eventual recovery.
+Applications do not calculate a new recovery horizon or supply a safety-margin setting.
+
+Existing requirements remain: actual configured stream observation, DiscardNew, typed absence versus failed reads,
+and the existing KV authority/retention owners. Required publications receive PubAck before source ACK, with one
+task-only exception: dispatch reuses a validated exact retained TaskMessage without republishing it. Required durable
+USER responses still need PubAck; HTTP retains its synchronous response and optional stream mirror. Applications need
+no new field, setting or API for this correction. Provider reinvocation and governance re-evaluation retain their
+separately documented absence permissions. Terminal routing remains bounded by retained source and routing evidence.
+
+Dispatch task-mapping and loop-task authority proofs remain tracked in R8, including first-party republication.
+Arbitrary caller resubmission after evidence expiry is not automatically covered by pending-delivery recovery;
+this amendment neither promises indefinite deduplication nor changes identifier-reuse semantics.
+This records the accepted contract, not completion of the remaining implementation or verification.
+See [owner ruling 5712921768](https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5712921768).
+
 ## Loop bucket declaration and approval-wait limit (#1146)
 
 **Breaking configuration/API change:** agentic-loop no longer exposes `Config.LoopsBucket` or accepts its
@@ -1309,13 +1339,11 @@ Verify a valid approval after restart, refusal of an older prompt while a later 
 already handled decision without reopening the gate or changing its recorded outcome. Approval waits remain
 supported; normal multi-turn chat is unaffected. See [Approval flow](../concepts/17-approval-flow.md).
 
-## Independent chat turns and the AutoContinue default (#1146)
+## Independent chat turns (#1146)
 
-**Default change:** `auto_continue` now defaults to false in code and schema. If you omit it, a normal submission
-without `reply_to` starts a new execution even when another loop is active. Commands needing a loop now require its
-explicit ID, for example `/cancel <loop_id>`. Set `auto_continue: true` explicitly only if you want the existing
-implicit attachment and command targeting behavior. Explicit `reply_to` remains available for admitted live loops;
-it does not reopen completed executions.
+Each new work submission starts a new execution even when another loop is active. Commands needing a loop require
+its explicit ID, for example `/cancel <loop_id>`. Live attachment and inferred command targets are retired; remove
+both `auto_continue` and submission `reply_to`, as described in [the retirement migration](#3-live-attachment-is-retired).
 
 **Chat adapter change:** UserMessage, HTTPMessageRequest, and TaskMessage accept optional `prior_messages` using
 the existing ChatMessage shape. For each follow-up, send prior user text and the actual assistant text you displayed
@@ -1335,14 +1363,14 @@ instead of the raw provider Result, so the delivered response is the correct tra
 ```
 
 Only nonempty user/assistant text is accepted. Missing, null, and empty history mean the same thing: a context-free
-turn. Nonempty history on a command or an admitted attachment is an error, not ignored input. A redelivered input
+turn. Nonempty history on a command is an error, not ignored input. A redelivered input
 must retain the same ordered history; changing it under the same source identity is a correlation conflict.
 
 The adapter retains its displayed transcript, including across its own restart. SemStreams persists the supplied
 history with the task and reconstructs that execution after component replacement; no earlier execution or hosted
 conversation store is required. Existing transport/provider limits apply. Adopters need no new bucket, subject,
 request identity, or retention calculation. If they do nothing, submissions remain valid but have no automatic
-conversation recall, and implicit command targets are no longer selected under defaults.
+conversation recall, and commands require explicit targets.
 
 Downstream owners update and test their own adapters. Verify two completed turns separated by component replacement,
 with the second provider request containing the displayed exchange once and a fresh execution budget. This migration
@@ -1355,7 +1383,7 @@ user responses. Agentic-loop owns creation, approval waits, intermediate transit
 longer consumes `agent.created` or `agent.approval_pending` to maintain a second process-local model of those facts.
 The loop still publishes both events for external subscribers; their payload contracts are unchanged by this cleanup.
 
-Explicit LoopID operations read the exact durable loop record. `/activity`, `/loops`, `/debug/state`, and AutoContinue
+Explicit LoopID operations read the exact durable loop record. `/activity`, `/loops`, and `/debug/state`
 share the existing read-only view over `AGENT_LOOPS`. After replacement, that view hydrates current state; it does
 not depend on already-acknowledged notifications being delivered again. There is no new bucket or recovery service.
 
@@ -1379,20 +1407,18 @@ classified failures. SemTeams clients still using the deleted
 `POST /loops/{id}/signal` endpoint must use the admitted cancellation path documented above; this change does not
 restore a generic signal endpoint. SemStreams agents do not modify sister repositories.
 
-### HTTP clients, AutoContinue, and dashboards
+### HTTP clients and current-state views
 
 `LoopInfo` remains the immutable `/loops` and `/debug/state` response shape, including the separately documented
 pending `execution_id` addition. No mutable entity or tracker is exposed. The former process-only
 `context_request_id` remains optional and empty; it is not reconstructed from an event that no longer drives state.
 `/loops` and `/debug/state` return 503 for unavailable, bootstrapping, or relevant-poisoned views, not a false empty
-list. AutoContinue also refuses unavailable truth with 503 instead of starting new work. `/activity` preserves its
+list. `/activity` preserves its
 existing SSE error-event contract. Debug output exposes `loop_projection_ready` and `loop_projection_poisoned` so
 unavailable truth is distinguishable from zero loops.
 
-AutoContinue remains opt-in. It requires exact `(UserID, ChannelType, ChannelID)` agreement with one nonterminal
-record. Partial routes do not match; multiple matches refuse as ambiguous. Between a task's PubAck and its first
-durable loop record, another route-only request may create a second loop. If continuity matters, echo the returned
-LoopID. No route claim or prediction setting is added. Independent chat turns with `prior_messages` are unchanged.
+Live attachment is retired; see [the migration](#3-live-attachment-is-retired). Independent chat uses fresh
+executions with supplied `prior_messages`, not a route-based lookup of another execution.
 
 Remove `semstreams_router_active_loops` from dashboards and alerts; no replacement authoritative Prometheus count
 is introduced. Use `/loops` only while its view is ready. The agentic-loop execution gauge remains process-local
@@ -1408,9 +1434,9 @@ Ancestor-route lookup retains its existing fallback and `origin_unresolvable` re
 outcome with no user route settles without `user.response`.
 Required response publication still receives PubAck before source ACK, and remains at-least-once.
 
-Verify pending approval and explicit continuation after dispatch replacement, unavailable-view 503 responses,
-exact-route AutoContinue and its birth gap, and terminal routing after replacement. No beta-state preservation,
-tracker hydration, or compatibility layer is required.
+Verify fresh-run chat across component replacement, explicit cancel/status/approval after replacement,
+retired-target refusal, unavailable-view responses and terminal routing. No beta-state preservation or
+compatibility layer is required.
 
 ## Saved terminal results and required-action replay (#1146)
 

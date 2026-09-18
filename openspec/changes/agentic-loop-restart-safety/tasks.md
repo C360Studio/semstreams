@@ -43,6 +43,44 @@ Read the full current proposal/design/tasks, applicable specs, and relevant slic
 artifacts need not be reread for each slice. Preserve all history. Inventory/design review, owner surface approval,
 TDD, implementation review, migration, E2E, and push/merge gates remain unchanged.
 
+## Remaining-work reconciliation, 2026-09-18
+
+Independent read-only task-truth review at `68c14c8e` plus current WIP reuses the recorded proofs; no tests were
+rerun and no group was completed. These are the existing R7–R10 obligations, not additions to the finish line:
+
+- **R7:** validation/wire/live-match/retained-verdict slices have reusable bounded approvals. The validation native
+  fixture still uses fake source handles and observes outputs after return; actual source redelivery and required
+  PubAck before source settlement remain. #1311/#1312 is the separate rule-source prerequisite, still design-only
+  at `25ae71a`. Preserve the accepted exact-absence/current-policy verdict behavior.
+- **R8:** publisher, missing-publisher refusal, retained-task reuse, loop authority and attachment retirement have
+  reusable evidence. The accepted `agentstreamadmission.ObserveAndValidate` implementation is still absent, not
+  merely unverified. Required refusal-before-allocation, queued USER safety, source/evidence retention, four producer
+  paths and envelope checks remain. `publish_agent` can still reach generic core fallback for an uncovered subject
+  (`processor/rule/actions.go:1970` to `processor/rule/publisher.go:50`); action-specific refusal is unfinished.
+  The seeded progressed-loop/missing-request RED remains separate from production expiry proof; safe refusal
+  eligibility is unresolved. Refreshed `inventory-r8-missing-history-2026-09-18.md` has independent
+  INVENTORY PASS at SHA-256 `fe162dcab86781c4b52b3534c65d5a44925bd0c382fac7a87f96b471c3ecfa74` (51/51 pins).
+  It confirms the existing terminal owner and valid partial-birth fixtures, but no exhaustive absent-request
+  discriminator. Compact `design-r8-missing-history-2026-09-18.md` has independent CONFORMANCE PASS at SHA-256
+  `832634d19d9546653979900f326ccfd131f7d35e905da9a45b12115bb8471c11`, as a prerequisite record only.
+  Whether accepted policy-only admission supplies the missing invariant is being checked; it is not assumed.
+  Neither verdict approves an iteration/timestamp guess, runtime correction or R8 closure.
+- **R9:** reuse R4 required-output/replacement, R5 completed-effect replay and R6 final-marker evidence. Observe actual
+  resolved USER and TOOL retention and source/evidence/republication relationships for existing rows 1/11/17;
+  shipped declarations and AGENT admission are not that observation. Existing dispatch replay, stored-outcome replay
+  and cold-tool-result replacement fixtures locate the remaining seams.
+- **R10:** reuse lifecycle acquisition/rollback tests, governance cancelled-filter join, loop budget join and native
+  cancelled-graph-request proof. Active business callbacks during Stop across the five owners remain unproven.
+  Source inspection identifies a concrete existing trajectory-batch gap: `trajectory_handler_wiring.go:164–196`
+  starts work in a goroutine but returns on cancellation without joining it. Existing timeout tests assert
+  diagnostics, not join. Add the bounded hold/cancel/release regression at that existing Store/KV seam before fixing
+  the return-before-join path; no new recovery owner or supervisor is implied.
+
+The reviewer verified relevant validation, retained-verdict, R4 native and retirement log/source hashes. Those
+baseline-scoped passes remain reusable evidence, not final combined-source approval. R11–R15 remain delivery gates.
+The owner-requested post-mortem is recorded separately on PR #1159 in comment `5732767078`; it adds no merge or
+milestone gate and no runtime scope here.
+
 ## Completed checkpoints retained
 
 These preserve the previously checked items at their recorded baselines, not whole-PR approval or a new test run.
@@ -315,6 +353,104 @@ These preserve the previously checked items at their recorded baselines, not who
   source safety. Verify all six classifier/configuration surfaces and four static producers, declaration-only and
   dynamic-subject refusals, canonical wildcard coverage, registered non-Graphable TaskMessage, malformed/unregistered
   envelope refusal, and PubAck.
+  The 2026-09-17 missing-publisher slice has independent IMPLEMENTATION APPROVE with no findings, locally/uncommitted.
+  `publish_agent` now refuses absent publication capability before run/graph effects; generic publishing is unchanged.
+  Focused RED/GREEN and full rule race pass (638 top-level / 565 nested cases, zero FAIL/SKIP); runtime is six lines
+  smaller with no new symbol or dependency. See `review-r8-missing-publisher-2026-09-17.md`. This is not whole R8,
+  a fresh full pre-push/E2E result, or completion of the remaining replay-admission proof.
+  The bounded retention-premise inventory has independent PASS (58/58 exact pins). Its accompanying decision draft
+  has pre-owner DESIGN REVIEW PASS and a separate judge recommendation; see `review-r8-retention-premise-2026-09-17.md`.
+  Owner comment `5712921768` approves removing only the unsupported timer-derived horizon/safety-margin
+  calculation. Current contract promotion preserves observed retention/admission, settlement and the two concrete
+  identity proofs: dispatch source-to-task mapping and loop task-to-current/terminal-authority/request.
+  Test actual retention and first-party republication ordering using existing seams; distinguish ordinary source
+  redelivery from arbitrary caller resubmission after expiry. Stop on a demonstrated production counterexample
+  for bounded design at the existing owner. No new state, API or timing policy is authorized. Neither proof nor
+  remaining admission implementation is completed by the document promotion; R8 remains unchecked.
+  The two new unit contrasts produce two PASS controls and one intended RED: progressed authority plus seeded
+  request absence generates original-prompt/Iteration-1 output. Independent review confirms that limited claim,
+  not actual TTL reachability or wire publication. A temporary native dispatch variant then observes real mapping
+  expiry while the original USER sequence remains redeliverable; the production handler publishes a replacement
+  LoopID. This demonstrates an unsafe-policy admission obligation, not final admitted-policy failure. Its original
+  fixture is restored exactly; the unit RED remains. See the same review artifact for commands, hashes and limits.
+  Native-evidence review passes. The bounded source-backed loop reachability supplement has independent PASS
+  (29/29 pins): internal task republication can defeat equal-MaxAge ordering, and running/Iterations=0 does not
+  prove partial birth. Its scheduling assumptions and lack of native 24h reproduction are explicit in the review.
+  This reaches the proof-only stop: no runtime correction or task completion follows. Next is bounded correction
+  design at the existing admission/task-recovery owners, not a guessed iteration guard or new recovery mechanism.
+  The bounded choice has independent PRE-OWNER DESIGN REVIEW PASS at `61710f30…`.
+  Owner comment `5726121727` approves task-only retained-commitment reuse in durable USER and HTTP, with their existing
+  caller-specific response/error behavior, and separately authorizes bounded expiry-first investigation.
+  The approved retained-task exception is promoted and its four-file implementation independently APPROVED,
+  with no findings: two existing publication guards, six net production lines, no new API/state/timer.
+  Intended unit/native REDs, full dispatch race (2.285s; one unchanged skip) and canonical native selection
+  (4.043s; zero skips) pass. See `review-r8-task-reuse-2026-09-18.md` for exact hashes, commands and limits.
+  Work is local/uncommitted; no new full-repository/E2E or publication-readiness claim.
+  Origin-age supplemental inventory `bb968d55…` independently passes, 43/43 pins, but establishes no expiry policy.
+  No expiry implementation is authorized. The evidence-loss RED, remaining absence/retention obligations,
+  R8 checkbox and existing landing holds remain open.
+  The bounded expiry investigation now has PRE-OWNER DESIGN REVIEW PASS at `d13943cd…`:
+  `design-r8-expiry-direction-2026-09-18.md`. A young continuation does not date its older loop evidence, so
+  current metadata alone does not close the absence classifier. Owner question `5726318989` asks whether to
+  preserve minimal recovery facts via existing owners or explicitly end recovery at expiry with observable refusal.
+  Owner comment `5726829372` now selects bounded design of minimal retained facts through existing owners.
+  Storage, capacity and cleanup costs must be explicit; unrelated AGENT history and second authority are not
+  accepted defaults. No TTL change, new field/store or implementation is approved by this direction ruling.
+  The retained-facts inventory independently passes at `53fe8a90…` (71/71 pins). Corrected decision draft
+  `design-r8-retained-facts-2026-09-18.md` (`82e6e3ce…`) has DESIGN REVIEW PASS only as a product-choice docket.
+  Full-content custody is not established as the minimum safety mechanism. Decision request `5727173168` asks
+  whether unavailable reconstruction should visibly refuse (root recommendation) or additional content should
+  survive stream expiry. Both still owe identity/authority lifetime, partial-birth and shared-bucket design.
+  No mechanical implementation or spec promotion is approved; `status:needs-decision` marks this product choice.
+  Owner comment `5727252562` subsequently selects safety with explicit refusal when required reconstruction
+  history is definitively unavailable. Normal multi-turn/restart remains supported while required evidence exists;
+  indefinite content custody is not required. This resolves the product choice, not its unselected storage mechanism.
+  The architect is lowering that accepted behavior against the unchanged reviewed inventory; identity lifetime,
+  co-tenancy, valid partial birth and refusal settlement remain explicit design obligations. R8 stays unchecked.
+  Refusal-carrier inventory `b51881ee…` independently passes (20/20 pins); raw unrouted-task and SSE refusal remain
+  unresolved, not proof that another payload is required. A bounded judge pass finds permanent facts unproven:
+  the earlier equal-retention witness depended on republishing a present task, which the accepted reuse fix removes.
+  Actual supported redelivery/republication and young attachment still need proof. Arbitrary expired-identity
+  resubmission has no indefinite deduplication guarantee in the current delta. No new bucket or age policy is selected.
+  The finite task-intent proposal (`design-r8-finite-task-intent-2026-09-18.md`, reviewed at `50f057a7…`) passes only
+  as an owner-choice contract proposal. Its proposed required `loop_mode` field is not implementation-approved;
+  it does not by itself classify every absence. Post-publication lost-authority refusal/settlement and the remaining
+  in-flight/republication proofs must be resolved before claiming a complete finite solution.
+  Expanded/corrected docket `ff890002…` has independent DESIGN REVIEW PASS only as a product choice. Owner question
+  `5727538325` asks whether to retain live attachment with a distinct task-refusal contract, or retire it while
+  preserving new-run chat with supplied user/assistant history. Retirement loses live working/tool/system context
+  and budget reuse. At that checkpoint raw-wire lowering was unresolved and `status:needs-decision` named the choice,
+  not a reversal of the accepted unavailable-history refusal. The following ruling supersedes that decision hold.
+  Owner comment `5728438234` subsequently accepts retirement of live attachment, preserving new-run chat with supplied
+  history, cancel/approval controls, within-turn iterations and restart/redelivery. The product-choice label is cleared;
+  Retirement inventory `e027be80…` independently passes 72/72 pins. Mechanical lowering
+  `design-r8-attachment-retirement-2026-09-18.md` at `08741a60…` has independent DESIGN CONFORMANCE PASS: no materially
+  new owner decision is required. Known raw identity conflict keeps existing Quarantine; arbitrary expired reuse
+  detection is not promised. Promoted deltas/migration have combined CONFORMANCE PASS; design `a1edfe6c…` and
+  migration `528d1a6f…` include the review corrections. No task-mode field,
+  carrier, store, TTL extension or compatibility acceptance is selected. R8 remains unchecked.
+  Retirement work, without discharging the separate missing-request RED or finite supported-retention proofs:
+  - [x] Lower and independently review accepted live-attachment retirement across dispatch, loop and entity-ID deltas.
+  - [x] Remove public/config targeting and explicitly refuse retired JSON keys through existing response/settlement routes.
+  - [x] Remove different-task rebinding while preserving same-task recovery, terminal suppression and explicit controls.
+  - [x] Reconcile schemas, shipped configs, current docs and migration; record downstream-owner actions.
+  - [x] Complete focused RED/GREEN, fuzz/property applicability and targeted mutation evidence.
+  - [x] Reuse sequential-chat integration and extend/run the existing agentic E2E with actual retirement/chat assertions.
+
+  Input/config slice has independent IMPLEMENTATION APPROVE at the frozen fingerprints in
+  `review-r8-retired-inputs-2026-09-18.md`: registered USER/config/HTTP refusals, nine shipped configs, schemas and
+  current documentation. Focused race/fuzz and three compiled guard-mutation checks pass; native chat/replay controls
+  returned exit 0 on that snapshot (root-observed, complete native log not independently reviewed).
+  Raw-loop retirement also has independent IMPLEMENTATION APPROVE: 27-case ownership matrix, existing recovery
+  controls and a compiled rebind mutant detected/restored; three production files remove 187 net lines with no new
+  symbol. Full-loop race has 574 top-level and 750 nested passes, no skips, and only the preserved missing-request
+  RED fails. Property citations pass 386/386. The five-file E2E extension has independent IMPLEMENTATION APPROVE
+  after correcting its result-before-status observation. Root's deployed `env -u AGENTIC_LLM_URL task e2e:agentic`
+  passes on the frozen dirty candidate: 18 asserting stages, 2m33.040884875s, including new-run chat, retired-target
+  refusal, process replacement and approval after restart. Cleanup completes; full log and fingerprints are in
+  the same review checkpoint. This closes the retirement integration/E2E subtask, not the missing-request RED,
+  finite supported-retention proofs, R8 or the final combined-source gates. Strict OpenSpec passes 55/55.
+
   Loop authority uses typed not-found/create-exists handling and observes History 10, TTL 24h, nonbinding MaxBytes
   and approval lifetime before consumers/sweeper; no reconciliation of retained drift or additional public gate.
   Owner comment `5696610710` accepts loop-side `LoopsBucket` / `loops_bucket` retirement and default/maximum
@@ -339,17 +475,20 @@ These preserve the previously checked items at their recorded baselines, not who
   That inventory recorded the pre-amendment dependency. Owner comment `5682070598` supersedes only the finite
   verdict-retention horizon prerequisite for R7 re-proposal after successful exact typed absence.
   Exact lookup, observed DiscardNew and the remaining admission/safety obligations stay required.
-  Other R8 lowering and applicable arithmetic remain unproven; no new gate, storage, public API or standalone
-  source-error-propagation change is authorized.
+  Other R8 lowering remains unproven; owner comment `5712921768` supersedes only the timer-derived arithmetic
+  prerequisite in dated evidence. No new gate, storage, public API or standalone source-error-propagation change
+  is authorized.
   Pickup evidence is recorded in `inventory-r8-admission-checkpoint-2026-09-15.md` (SHA-256 `4f0be2e2…`).
   Independent review verified 25/25 pins before the documented correction and confirmed the record is explicitly
-  incomplete, not full R8 INVENTORY PASS. Shipped DiscardOld conflicts with the accepted policy; a finite local
-  horizon has not been established. Unlimited deliveries alone do not disprove retention-scoped safety.
+  incomplete, not full R8 INVENTORY PASS. Shipped DiscardOld conflicts with the accepted policy. That historical
+  checkpoint recorded an unestablished finite local horizon; comment `5712921768` now replaces the timer-derived
+  calculation with the named boundary proofs. Unlimited deliveries alone do not disprove retention-scoped safety.
   The stale model admission dependency is reconciled to existing owner ruling `5550778818`, including its response
   publisher and startup scenarios. Independent documentation review APPROVED; strict OpenSpec validation passes.
   See `review-r8-admission-checkpoint-2026-09-15.md`. No runtime changes or new runtime-test evidence accompany this
-  correction. The next evidence boundary is the R7 source/proposal/verdict stream and retention relationship;
-  no guessed formula, new deadline, or relaxation of other admission obligations is authorized.
+  correction. Its then-next evidence boundary was the R7 source/proposal/verdict stream and retention relationship;
+  subsequent R7 evidence and the current R8 amendment supersede that pickup direction. No guessed formula, new
+  deadline, or relaxation of other admission obligations is authorized.
   A bounded follow-on located AgentResponse as the replay source and confirmed shipped co-location is not imposed
   across admitted port overrides. Initial publication order alone is not a recovery invariant when response
   republication is allowed.

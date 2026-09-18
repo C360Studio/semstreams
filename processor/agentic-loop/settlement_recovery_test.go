@@ -211,6 +211,60 @@ func TestColdTaskRedeliveryWithoutRequestRebuildsFromTaskAndPreservesLoop(t *tes
 }
 
 // spec: agentic-loop / Loop recovery is lane-specific and read-through
+func TestColdTaskRedeliveryWithTerminalAuthorityCreatesNoRequest(t *testing.T) {
+	loopID := uuid.NewString()
+	entity := agentic.NewLoopEntity(loopID, "task-1", "general", "model", 3)
+	require.NoError(t, entity.TransitionTo(agentic.LoopStateComplete))
+	bucket := &settlementBucket{values: map[string][]byte{loopID: settlementLoopRecord(t, entity)}}
+	c := releaseTestComponent(t, NewMessageHandler(DefaultConfig()))
+	c.loopsBucket = bucket
+	c.settlementEvidence = &settlementEvidence{}
+	task := agentic.TaskMessage{
+		LoopID: loopID, TaskID: entity.TaskID, Role: entity.Role, Model: entity.Model, Prompt: "work",
+	}
+
+	// Inspect the ordinary output directly: this unit fixture has no NATS publisher.
+	result, err := c.recoverTaskDelivery(t.Context(), task)
+	require.NoError(t, err)
+	require.Equal(t, agentic.LoopStateComplete, result.State)
+	require.Empty(t, result.PublishedMessages, "terminal authority must suppress new work")
+
+	decision, err := c.handleTaskMessage(t.Context(), settlementEnvelope(t, &task))
+	require.NoError(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+	_, lookupErr := c.handler.GetLoop(loopID)
+	require.Error(t, lookupErr, "terminal task replay installed a new active loop")
+}
+
+// spec: agentic-loop / Restart-safe replay observes and admits local stream bounds
+func TestColdTaskRedeliveryWithProgressAndMissingRequestRefusesInitialRebuild(t *testing.T) {
+	loopID := uuid.NewString()
+	entity := agentic.NewLoopEntity(loopID, "task-1", "general", "model", 3)
+	entity.Iterations = 2
+	bucket := &settlementBucket{values: map[string][]byte{loopID: settlementLoopRecord(t, entity)}}
+	c := releaseTestComponent(t, NewMessageHandler(DefaultConfig()))
+	c.loopsBucket = bucket
+	c.settlementEvidence = &settlementEvidence{}
+	task := agentic.TaskMessage{
+		LoopID: loopID, TaskID: entity.TaskID, Role: entity.Role, Model: entity.Model, Prompt: "original task",
+	}
+
+	// Seeded absence proves this recovery branch only, not production expiry.
+	// Inspect the exact output that handleTaskMessage passes to publishResults.
+	result, err := c.recoverTaskDelivery(t.Context(), task)
+	for _, output := range result.PublishedMessages {
+		envelope, decodeErr := c.decoder.Decode(output.Data)
+		require.NoError(t, decodeErr)
+		if request, ok := envelope.Payload().(*agentic.AgentRequest); ok {
+			t.Errorf("progressed loop reconstructed an initial request: iterations=%d subject=%q request_id=%q loop_id=%q messages=%+v",
+				entity.Iterations, output.Subject, request.RequestID, request.LoopID, request.Messages)
+		}
+	}
+	require.Error(t, err, "missing required request evidence after progress must refuse, not reconstruct initial work")
+	require.Empty(t, result.PublishedMessages)
+}
+
+// spec: agentic-loop / Loop recovery is lane-specific and read-through
 // spec: agentic-loop / All six loop input classes settle after owner-specific durable done
 func TestColdModelResponseRestoresExactLoopAndCommitsTerminalState(t *testing.T) {
 	loopID := uuid.NewString()

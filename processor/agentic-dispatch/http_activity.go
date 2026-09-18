@@ -306,28 +306,6 @@ func (c *Component) currentLoopSnapshot(ctx context.Context) (graphview.Snapshot
 	return snapshot, nil
 }
 
-// activeLoop observes the exact route tuple without choosing an ambiguous
-// winner or inventing current state in the post-publication birth gap.
-func (c *Component) activeLoop(ctx context.Context, msg agentic.UserMessage) (string, error) {
-	snapshot, err := c.currentLoopSnapshot(ctx)
-	if err != nil {
-		return "", err
-	}
-	var selected string
-	for _, entry := range snapshot.Entries {
-		entity := entry.Value.entity
-		if entity == nil || entity.State.IsTerminal() || msg.UserID == "" || msg.ChannelType == "" || msg.ChannelID == "" ||
-			entity.UserID != msg.UserID || entity.ChannelType != msg.ChannelType || entity.ChannelID != msg.ChannelID {
-			continue
-		}
-		if selected != "" {
-			return "", &errs.ClassifiedError{Class: errs.ErrorInvalid, Code: "loop_route_ambiguous", Err: fmt.Errorf("multiple current loops match the user/channel route")}
-		}
-		selected = entity.ID
-	}
-	return selected, nil
-}
-
 // currentLoopInfos preserves the response DTO without treating completion or
 // research records as current loops. Sort the complete set before rendering.
 func currentLoopInfos(snapshot graphview.Snapshot[activityRecord], userID string) []*LoopInfo {

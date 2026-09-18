@@ -4,19 +4,20 @@
 
 Every loop-execution instance token — dispatch conversations, rule-spawned loops, subagent loops, and
 research-pipeline loops alike — MUST be minted at its framework birth seam as a version 4 UUID and carried in
-canonical RFC 4122 text form: 36 bytes, lowercase hexadecimal, hyphenated. For a newly published `TaskMessage`, the
-task producer is that birth seam and MUST mint before validation, envelope marshal, and publication. A continuation
-producer MUST echo the admitted existing LoopID. End-user input, configuration, and tool-call arguments MUST NOT
+canonical RFC 4122 text form: 36 bytes, lowercase hexadecimal, hyphenated. For a newly produced `TaskMessage`, the
+producer is that birth seam and MUST mint a fresh v4 LoopID before validation, envelope marshal, and publication.
+Retry of the same already-marshaled task and downstream redelivery reuse its identity and bytes. No different task
+may attach to an existing execution. End-user input, configuration, and tool-call arguments MUST NOT
 choose a birth token, and no adopter-facing knob MAY configure or relax the contract. A component that directly
 constructs and publishes `TaskMessage` participates in the framework task-production seam. The validation predicate
 MUST live module-internal with no exported surface.
 
 **Enforcement is FORM, not provenance — and the difference is load-bearing.** The framework validates that a
-supplied token is a canonical UUID. It does not, and with a form predicate cannot, detect who minted it: a client
-that authors a fresh canonical UUID and supplies it as `reply_to` is ACCEPTED. Producer-local minting is therefore
-the contract asked of direct task producers, not a provenance property any seam verifies. Two consequences a reader
-MUST NOT infer away. First, form alone confers no isolation: what a party may DO with a token it holds is decided by
-the agentic-dispatch admission gate, which checks existence and ownership at every seam that attaches to a loop — and
+supplied token is a canonical UUID. A supplied canonical UUID can pass the form predicate regardless of who authored
+it. Passing that predicate does not establish birth provenance, existence, ownership or authorization. Producer-local
+minting is the contract asked of direct task producers, not a provenance property any seam verifies. The predicate
+is not an expired-identity detector. Two consequences a reader MUST NOT infer away. First, form alone confers no
+isolation: surviving explicit control/read operations perform their existing authority and permission checks — and
 those checks are correctness and accident-prevention guards, not authorization, because caller identity on that plane
 is asserted by the caller. A multi-tenant deployment MUST NOT rely on loop tokens, or on that gate, for isolation
 between mutually untrusted parties; authorization is a separate contract (epic #1205). Second, the backstop against
@@ -35,12 +36,10 @@ token joins it rather than validating non-emptiness of its own:
   the delivery and count the intake rejection, so no absent or NON-CANONICAL token reaches loop state or the graph
   write path, whose parent and reply stamping composes through the panicking entity-ID builder.
 - `LoopManager.CreateLoopWithID` MUST refuse before registering any loop state.
-- Dispatch MUST refuse a non-canonical resolved continuation token, `run_id`, or `in_reply_to` on an inbound
-  submission, with a typed error response naming the offending field — synchronous on the HTTP submit path,
-  published to the response subject on the channel path — validating after auto-continue resolution and BEFORE
-  minting, before the loop is tracked, and before the loop-started metric is recorded, so that a refused submission
-  leaves neither a tracked loop nor a moved active-loops gauge, and so both the client's `reply_to` and an
-  auto-continued value pass one check.
+- Dispatch MUST refuse a non-canonical `run_id` or `in_reply_to` before task minting or publication through its
+  existing typed response route: synchronous on HTTP, published to the response subject on the channel path.
+  Retired submission `reply_to` MUST be refused by the dispatch retirement requirement, not resolved or validated
+  as an attachment target. User control, approval and HTTP path-token validation remain unchanged.
 - `agentrun.Mint` MUST refuse a non-canonical firing-loop instance (its scenario lives in the graph-ingest capability,
   which owns Mint's refusal behavior).
 - Every remaining payload that carries a loop token MUST refuse a non-canonical one in its own `Validate`: the user
@@ -59,7 +58,7 @@ execution of an upstream producer is a separate production attempt outside this 
 #### Scenario: a new conversation mints a full canonical UUID on every dispatch intake path
 
 - **GIVEN** a running agentic-dispatch component
-- **WHEN** a user message with no `reply_to` arrives via the HTTP submit path, and another via the channel path
+- **WHEN** a valid new work submission arrives via the HTTP submit path, and another via the channel path
 - **THEN** each minted `loop_id` is a canonical 36-byte lowercase hyphenated UUID, with no prefix and no truncation
 - **AND** the test that verifies this is `TestNewConversationMintsCanonicalUUID`
 
@@ -83,38 +82,29 @@ execution of an upstream producer is a separate production attempt outside this 
 - **AND** the tests that verify this are `TestNonUUIDLoopIDIsTerminatedAtIntake` and
   `TestCreateLoopWithIDRefusesNonUUIDToken`
 
-#### Scenario: a non-canonical reply_to fails at the client boundary on both intake paths
-
-- **GIVEN** a client submitting a message whose `reply_to` is `loop_ab12cd34`
-- **WHEN** dispatch handles it on the HTTP submit path
-- **THEN** the client receives a synchronous error response naming `reply_to`, and no task is published
-- **AND WHEN** the same message arrives on the channel path
-- **THEN** an error response naming `reply_to` is published to the response subject, and no task is published
-- **AND** the tests that verify this are `TestNonUUIDReplyToHTTPGetsSynchronousError` and
-  `TestNonUUIDReplyToChannelGetsErrorResponse`
+Submission `reply_to` is no longer a loop-token input. Its refusal is specified by agentic-dispatch's
+"Retired targeting is refused explicitly" scenario, irrespective of value or canonical form.
 
 #### Scenario: a client-authored run_id or in_reply_to is refused at dispatch, before any state is recorded
 
-- **GIVEN** a client submitting a message whose `reply_to` is absent but whose `run_id` is `run-42`
+- **GIVEN** a client submitting a message whose `run_id` is `run-42`
 - **WHEN** dispatch handles it on the HTTP submit path
-- **THEN** the client receives a synchronous error response naming `run_id`, no task is published, no loop is
-  tracked, and the active-loops gauge does not move
+- **THEN** the client receives a synchronous error response naming `run_id`, no task is published and no loop
+  authority is changed
 - **AND WHEN** a message whose `in_reply_to` is non-canonical arrives on the channel path
 - **THEN** an error response naming `in_reply_to` is published to the response subject rather than the submitter
-  being left without an answer, and no loop is tracked
+  being left without an answer, and no loop authority is changed
 - **AND** the tests that verify this are `TestNonUUIDRunIDHTTPGetsSynchronousError` and
   `TestNonUUIDInReplyToChannelGetsErrorResponse`
 
 #### Scenario: a canonical token is accepted on its form alone, whoever authored it
 
-- **GIVEN** a client submitting a message whose `reply_to` is a canonical UUID that this framework never minted
+- **GIVEN** a client requesting a loop read with a canonical UUID for which no loop authority exists
 - **WHEN** the form check runs
 - **THEN** it PASSES — form is the whole of this requirement, and provenance is not verified at any seam
 - **AND WHEN** the admission gate then runs
-- **THEN** the submission is refused as naming no such loop, because a token this framework never minted names no
-  loop to continue — the refusal comes from existence, not from form, and the two are different axes
-- **AND** the tests that verify this are `TestCanonicalReplyToPassesFormCheck` and
-  `TestUnmintedCanonicalReplyToIsRefusedAsNotFound`
+- **THEN** the request is refused as naming no such loop
+- **AND** the refusal comes from existence, not form; canonical form alone supplies neither provenance nor authority
 
 #### Scenario: a task carrying any non-canonical loop-token field is refused
 
@@ -161,6 +151,6 @@ execution of an upstream producer is a separate production attempt outside this 
 process replacement. The replacement requirement names the actual framework birth seam: every new-task producer mints
 before validation and durable publication, while agentic-loop validates and never repairs absent identity.
 
-**Migration**: Every direct `TaskMessage` producer supplies a canonical v4 LoopID before validation and marshal; a
-continuation producer echoes the admitted existing LoopID. Retry an uncertain publication with the same serialized
+**Migration**: Every direct `TaskMessage` producer mints a fresh canonical v4 LoopID before validation and marshal.
+Retry an uncertain publication with the same serialized
 bytes. There is no empty-ID compatibility path, helper API, scan, mapping, ledger, bucket, or consumer recovery owner.

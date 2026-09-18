@@ -36,13 +36,11 @@ type HTTPMessageRequest struct {
 	UserID      string            `json:"user_id,omitempty"`
 	ChannelType string            `json:"channel_type,omitempty"`
 	ChannelID   string            `json:"channel_id,omitempty"`
-	ReplyTo     string            `json:"reply_to,omitempty"`
 	Metadata    map[string]string `json:"metadata,omitempty"`
 	// PriorMessages is the ordered displayed transcript for an independent turn.
-	PriorMessages []agentic.ChatMessage `json:"prior_messages,omitempty" description:"Optional ordered displayed user/assistant messages for an independent turn. Each entry requires nonempty content; name, tool and reasoning fields must be empty. Omitted, null and empty are equivalent. Cannot accompany commands or attachment to an existing loop."`
+	PriorMessages []agentic.ChatMessage `json:"prior_messages,omitempty" description:"Optional ordered displayed user/assistant messages for an independent turn. Each entry requires nonempty content; name, tool and reasoning fields must be empty. Omitted, null and empty are equivalent. Cannot accompany commands."`
 
-	// Resumable-reply anchors (gh#256). Distinct from ReplyTo (which routes to
-	// a loop to continue): these let a reply re-enter and resume a paused run.
+	// Run/reply lineage (gh#256) is independent of the new execution's identity.
 	// RunID is the bare run anchor the resumed loop re-attaches to; InReplyTo
 	// marks the message as a reply to a specific loop's question so a rule can
 	// fire on the resumed loop. Both optional; absent for ordinary submissions.
@@ -120,8 +118,26 @@ func (c *Component) handleHTTPMessage(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 
 	// Parse request body
+	var raw json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+		c.writeJSONError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		c.writeJSONError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	for name := range fields {
+		if strings.EqualFold(name, "reply_to") {
+			refusal := c.refuseSubmission(seamHTTPSubmission, "", codeSubmissionInvalid,
+				fmt.Errorf("reply_to is retired; submit a new turn with prior_messages"))
+			c.writeJSONError(w, http.StatusBadRequest, refusal.Error())
+			return
+		}
+	}
 	var req HTTPMessageRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(raw, &req); err != nil {
 		c.writeJSONError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
@@ -154,7 +170,6 @@ func (c *Component) handleHTTPMessage(w http.ResponseWriter, r *http.Request) {
 		UserID:        req.UserID,
 		Content:       req.Content,
 		PriorMessages: req.PriorMessages,
-		ReplyTo:       req.ReplyTo,
 		Metadata:      req.Metadata,
 		RunID:         req.RunID,
 		InReplyTo:     req.InReplyTo,
@@ -218,7 +233,7 @@ func (c *Component) processMessageSync(ctx context.Context, msg agentic.UserMess
 func (c *Component) processCommandSync(ctx context.Context, msg agentic.UserMessage) (agentic.UserResponse, error) {
 	if len(msg.PriorMessages) != 0 {
 		return refusedSubmissionResponse(msg,
-			c.refuseSubmission(seamHTTPSubmission, msg.ReplyTo, codeSubmissionInvalid,
+			c.refuseSubmission(seamHTTPSubmission, "", codeSubmissionInvalid,
 				fmt.Errorf("prior_messages cannot accompany a command"))), nil
 	}
 	name, cmd, args, found := c.registry.Match(msg.Content)
@@ -251,12 +266,6 @@ func (c *Component) processCommandSync(ctx context.Context, msg agentic.UserMess
 	loopID := ""
 	if len(args) > 0 && args[0] != "" {
 		loopID = args[0]
-	} else if c.config.AutoContinue {
-		var err error
-		loopID, err = c.activeLoop(ctx, msg)
-		if err != nil {
-			return agentic.UserResponse{}, err
-		}
 	}
 
 	// Check if loop is required
@@ -327,7 +336,7 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 	prepared, vacant, found, err := c.findRetainedDispatchTask(ctx, msg)
 	if err != nil {
 		return refusedSubmissionResponse(msg,
-			c.refuseSubmission(seamHTTPSubmission, msg.ReplyTo, codeSubmissionInvalid, err)), nil
+			c.refuseSubmission(seamHTTPSubmission, "", codeSubmissionInvalid, err)), nil
 	}
 
 	// Check submit permission
@@ -343,55 +352,24 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 		}, nil
 	}
 
-	// Resolve a continuation only after exact retained absence. An empty result
-	// means new work; prepareNewDispatchTask mints its LoopID only after any
-	// named continuation passes admission.
-	loopID := prepared.task.LoopID
+	// Only exact retained absence permits a fresh execution.
 	if !found {
-		if msg.ReplyTo != "" {
-			loopID = msg.ReplyTo
-		} else if c.config.AutoContinue {
-			loopID, err = c.activeLoop(ctx, msg)
-			if err != nil {
-				return agentic.UserResponse{}, err
-			}
-		}
-
-		if loopID != "" {
-			_, err = c.admitLoopRequest(ctx, loopAdmissionRequest{
-				Seam:      seamHTTPSubmission,
-				Field:     "reply_to",
-				Operation: loopOpContinue,
-				LoopID:    loopID,
-				Requester: msg.UserID,
-			})
-			if err != nil {
-				// The client hears about it here, synchronously, in the response it is
-				// already waiting on, naming the field — rather than "Task submitted"
-				// followed by an async TERM it never sees (ADR-105, #1192).
-				return refusedSubmissionResponse(msg, err), nil
-			}
-			if len(msg.PriorMessages) != 0 {
-				return refusedSubmissionResponse(msg,
-					c.refuseSubmission(seamHTTPSubmission, loopID, codeSubmissionInvalid,
-						fmt.Errorf("prior_messages cannot accompany attachment to an existing loop"))), nil
-			}
-		}
-
-		prepared, err = c.prepareNewDispatchTask(ctx, msg, loopID, vacant)
+		prepared, err = c.prepareNewDispatchTask(ctx, msg, vacant)
 		if err != nil {
 			return refusedSubmissionResponse(msg,
-				c.refuseSubmission(seamHTTPSubmission, loopID, codeSubmissionInvalid, err)), nil
+				c.refuseSubmission(seamHTTPSubmission, "", codeSubmissionInvalid, err)), nil
 		}
-		loopID = prepared.task.LoopID
 	}
 	task := prepared.task
 	taskID := task.TaskID
-	loopID = task.LoopID
+	loopID := task.LoopID
 
-	if err := c.natsClient.PublishToStream(ctx, prepared.subject, prepared.data); err != nil {
-		return refusedSubmissionResponse(msg,
-			c.refuseSubmission(seamHTTPSubmission, loopID, codeSubmissionUndeliverable, err)), nil
+	// Validated retained task evidence already proves this publication committed.
+	if !found {
+		if err := c.natsClient.PublishToStream(ctx, prepared.subject, prepared.data); err != nil {
+			return refusedSubmissionResponse(msg,
+				c.refuseSubmission(seamHTTPSubmission, loopID, codeSubmissionUndeliverable, err)), nil
+		}
 	}
 
 	// Record task submitted
@@ -944,7 +922,6 @@ type DebugState struct {
 type DebugConfig struct {
 	DefaultRole  string `json:"default_role"`
 	DefaultModel string `json:"default_model"` // Resolved from model registry
-	AutoContinue bool   `json:"auto_continue"`
 	StreamName   string `json:"stream_name"`
 }
 
@@ -993,7 +970,6 @@ func (c *Component) handleDebugState(w http.ResponseWriter, r *http.Request) {
 		Config: DebugConfig{
 			DefaultRole:  c.config.DefaultRole,
 			DefaultModel: c.resolveModel(),
-			AutoContinue: c.config.AutoContinue,
 			StreamName:   c.config.StreamName,
 		},
 	}

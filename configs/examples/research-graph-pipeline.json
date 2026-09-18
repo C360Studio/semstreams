@@ -122,7 +122,6 @@
       "config": {
         "default_role": "general",
         "default_tools": ["research_graph", "read_loop_result"],
-        "auto_continue": false,
         "stream_name": "USER",
         "ports": {
           "inputs": [

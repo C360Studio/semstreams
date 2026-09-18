@@ -2218,11 +2218,11 @@ func (s *stubToolExecutor) Execute(_ context.Context, call agentic.ToolCall) (ag
 	return agentic.ToolResult{CallID: call.ID, Content: "stub"}, nil
 }
 
-// T051: Test PublishAgent without publisher (no-op)
+// spec: rule-agent-publishing / Publish-agent classification uses canonical wildcard coverage and durable publication
 func TestAction_PublishAgent_NoPublisher(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	executor := NewActionExecutor(nil) // No publisher configured
 
 	action := Action{
@@ -2233,9 +2233,9 @@ func TestAction_PublishAgent_NoPublisher(t *testing.T) {
 		Prompt:  "Test prompt",
 	}
 
-	// Should not error, just log and return
+	// An attempted task cannot succeed without its required publisher.
 	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "publisher", "entity", "none")})
-	require.NoError(t, err)
+	require.True(t, errs.IsInvalid(err), "missing publisher must fail as invalid: %v", err)
 }
 
 // T052: Test PublishAgent error handling
@@ -2631,12 +2631,12 @@ func TestAction_PublishAgent_NoMutatorSkipsTriple(t *testing.T) {
 }
 
 // TestAction_PublishAgent_NoPublisherSkipsTriple verifies that when there is
-// no publisher, the spawned_task triple is also not written. Writing the
-// triple when the task was never published would leave stale tracking state.
+// no publisher, the action fails without writing the spawned_task triple.
+// spec: rule-agent-publishing / Publish-agent classification uses canonical wildcard coverage and durable publication
 func TestAction_PublishAgent_NoPublisherSkipsTriple(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	mockMut := &mockTripleMutator{}
 	executor := NewActionExecutorFull(nil, mockMut, nil, testExecutorPlatform())
 
@@ -2649,7 +2649,7 @@ func TestAction_PublishAgent_NoPublisherSkipsTriple(t *testing.T) {
 	}
 
 	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "publisher", "entity", "skipped")})
-	require.NoError(t, err)
+	require.True(t, errs.IsInvalid(err), "missing publisher must fail as invalid: %v", err)
 	assert.Empty(t, mockMut.addedTriples,
 		"no triple should be written when publish was skipped")
 }

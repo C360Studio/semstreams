@@ -35,6 +35,7 @@ func TestApprovalRestartCannotPassWithoutReplacementAndRecovery(t *testing.T) {
 			complete["approval_restart_"+lane+"_consumer_absent_"+phase] = true
 		}
 	}
+	maps.Copy(complete, chatRetirementDetails())
 	s := NewScenario(nil, DefaultConfig())
 	if err := s.validateResults(t.Context(), &scenarios.Result{Details: maps.Clone(complete)}); err != nil {
 		t.Fatal(err)

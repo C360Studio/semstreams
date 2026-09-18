@@ -1,6 +1,7 @@
 package agentic
 
 import (
+	"maps"
 	"net/http"
 	"testing"
 	"time"
@@ -44,6 +45,8 @@ func TestStagesAreExactlyThisOrderedList(t *testing.T) {
 		{"walk-approval-after-restart", true},
 		{"walk-signal-path", true},
 		{"refuse-non-canonical-signal", true},
+		{"walk-independent-chat-turns", true},
+		{"refuse-retired-target-inputs", true},
 		{"validate-results", true},
 	}
 
@@ -121,7 +124,7 @@ func TestApprovalRequesterIsNotTheLoopOwner(t *testing.T) {
 
 func TestValidateResultsRequiresBothWalks(t *testing.T) {
 	complete := func() map[string]any {
-		return map[string]any{
+		details := map[string]any{
 			"completion_method":                               "target_trajectory",
 			"approval_outcome":                                agentic.OutcomeSuccess,
 			"approval_restart_process_before":                 float64(100),
@@ -146,6 +149,8 @@ func TestValidateResultsRequiresBothWalks(t *testing.T) {
 			"approval_refusal_non_canonical_status":           http.StatusBadRequest,
 			"signal_refusal_non_canonical_count":              float64(1),
 		}
+		maps.Copy(details, chatRetirementDetails())
+		return details
 	}
 	s := NewScenario(nil, DefaultConfig())
 
@@ -158,6 +163,14 @@ func TestValidateResultsRequiresBothWalks(t *testing.T) {
 		"signal_outcome",
 		"approval_refusal_non_canonical_status",
 		"signal_refusal_non_canonical_count",
+		"chat_first_loop_id",
+		"chat_second_loop_id",
+		"chat_displayed_response",
+		"chat_second_request",
+		"retired_http_status",
+		"retired_user_response",
+		"retired_tasks_before",
+		"retired_tasks_after",
 	} {
 		details := complete()
 		delete(details, missing)

@@ -195,10 +195,11 @@ to remain stored. This is not a hosted conversation store; existing transport an
 Restart uses the same [message-pump settlement pattern](33-semantic-settlement.md): unsettled work redelivers,
 matching retained provider output is reused, and confirmed absence permits another call.
 
-Explicit `reply_to` attaches to an admitted live execution; `auto_continue: true` opts into implicit attachment.
-Neither accepts nonempty `prior_messages`: attachment reuses that execution's context, while supplied history starts
-an independent turn. A completed execution is not reopened to continue a chat. Commands needing a target require an
-explicit loop ID under the default `auto_continue: false` configuration.
+Each new turn starts an independent execution; it does not attach to a running loop or reopen a completed one.
+Submission `reply_to` and configuration `auto_continue` are retired and explicitly refused, including empty or false
+values. Commands needing a target require an explicit loop ID. Approval waits, cancellation and same-task restart
+remain supported. Supplied history carries the displayed conversation, not another execution's internal tool/system
+context or budget. See [the migration](../operations/migration-beta162-to-beta163.md#3-live-attachment-is-retired).
 
 Long-running loops can exceed model token limits. The context manager handles this automatically:
 

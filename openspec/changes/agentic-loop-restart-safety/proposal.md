@@ -12,20 +12,20 @@ The proposed research activity behavior, shared record package, and generalized 
 withdrawn as #1146 prerequisites. After R2 CLOSEOUT PASS, the owner retired the additional approval-Store plan in
 [comment 5654729986](https://github.com/C360Studio/semstreams/issues/1146#issuecomment-5654729986).
 
-## Approved product direction (2026-09-08)
+## Approved product direction (2026-09-08, amended 2026-09-18)
 
-The accepted product checkpoint is restart-safe sequential chat through the supported task/dispatch path, using real
-NATS and a deterministic fake model. A bounded execution can finish a turn without ending the conversation; the
-next turn must receive the relevant prior exchange after component replacement. Following inventory and independent
-design review, the owner accepted optional `PriorMessages` on UserMessage, HTTPMessageRequest, and TaskMessage, and
-separately accepted changing the existing AutoContinue default to false. The adapter supplies its displayed transcript;
-the committed task carries that input through execution recovery. Explicit attachment remains supported.
+Sequential chat uses independent executions. The adapter supplies its displayed user/assistant transcript through
+optional `PriorMessages` on UserMessage, HTTPMessageRequest and TaskMessage; each new turn receives a fresh
+TaskID/LoopID and execution budget. The committed task carries this input through restart recovery.
 
-Keep the settlement-first, retained-result-reuse work. Matching durable provider output is reused; confirmed absence
-permits another call; required durable consequences precede ACK. Do not make sequential chat wait for #1244's complete
-transition review. The proposed blanket continuation removal is not accepted. No new bucket, ledger, supervisor,
-conversation runtime, or public API beyond those three optional fields is authorized by this product checkpoint.
-Unfinished scope below remains open.
+Owner comment `5728438234` supersedes the earlier retention of live attachment and the AutoContinue-default-only
+decision. Live attachment and inferred command targets are retired. Explicit cancel/status/read/approval targets,
+run/reply/parent lineage, same-task redelivery, and model/tool/approval continuation within one execution remain
+supported. Sequential chat does not wait for #1244's complete transition review.
+
+Settlement-first recovery and retained-result reuse remain unchanged. This retirement introduces no conversation
+store, new payload, identifier scheme, compatibility acceptance or indefinite duplicate-detection guarantee.
+Remaining R8 missing-request and supported-retention proofs stay open.
 
 ## Why
 
@@ -59,19 +59,22 @@ AgentRun complete/failed fanout is transferred intact to #1249 from the exact po
 
 ## What Changes
 
-- Independent chat turns accept ordered, text-only prior user/assistant messages on existing registered task inputs.
-  Omitted, null, and empty history are equivalent. The loop generates fresh execution instructions and includes
-  history once before the current prompt, including after replacement and during later tool iterations. Nonempty
-  history conflicts with attachment and commands. Ordinary submissions are independent by default; AutoContinue is
-  opt-in, and commands requiring a target name an explicit loop_id under defaults. No hosted conversation recall is
-  promised; the adapter retains the displayed transcript and supplies it for each follow-up.
+- Independent chat turns carry ordered, text-only displayed history. Missing, null and empty history are equivalent.
+  The loop includes history once before the current prompt, including after replacement and during later tool
+  iterations. Commands reject nonempty history. `auto_continue` and submission `reply_to` are removed and explicitly
+  refused when present in JSON. Commands requiring a target use an explicit loop ID. The adapter owns conversation
+  recall and supplies the displayed transcript.
 - Durable agentic inputs settle only after their owner-specific durable consequence. Ordinary publications are
   durably at-least-once: source ACK waits for every required JetStream PubAck, and `Nats-Msg-Id` supplies only
   duplicate-window suppression. Exact reconstruction is limited to named task-birth, provider-invocation, approval-
   continuation, governance-verdict, tool-effect, explicit-LoopID, and terminal-route boundaries.
+  Dispatch's task-publication obligation alone may instead use validated exact retained-task commitment. Durable
+  USER and HTTP submissions then skip task republication while preserving their respective response/error behavior.
+  This does not complete the remaining R8 expiry, identity-absence or retention proofs.
 - Every durable `TaskMessage` carries a nonempty canonical LoopID fixed at its framework task-production seam before
-  validation and marshal. A new-task producer mints one v4 UUID locally with `uuid.NewString()`; a continuation
-  producer echoes the admitted existing token. Agentic-loop validates and observes the supplied identity and never
+  validation and marshal. Every new task producer execution mints one fresh v4 UUID locally with `uuid.NewString()`.
+  Retry of the same already-marshaled task and downstream redelivery preserve its TaskID, LoopID and bytes.
+  Existing identity never authorizes different-task rebinding. Agentic-loop validates the supplied identity and never
   repairs absence with a mint, derivation, scan, map, ledger, bucket, or second owner.
 - Agentic-dispatch is exclusively an edge gateway. It admits external requests and publishes task, cancel, and
   approval work; exposes exact reads and one caught-up current-state projection; and bridges terminal complete/failed
@@ -81,9 +84,6 @@ AgentRun complete/failed fanout is transferred intact to #1249 from the exact po
 - Approval replacement uses current loop state and exact retained request/response evidence, with explicit durable
   failure when required evidence is confirmed absent. No extra approval Store, configuration, digest or cleanup
   ships. Approval lifetime does not guarantee matching stream-message retention.
-- AutoContinue uses exact `(UserID, ChannelType, ChannelID)` identity and remains a convenience. During the gap after
-  task PubAck and before first `LoopEntity` birth, a second route-only message may create another loop; callers needing
-  continuity carry the minted LoopID returned by the first task path.
 - Breaking tracker, graphview restart, debug-readiness, and metric migrations are documented and covered by the
   relevant agentic E2E before landing.
 
@@ -110,6 +110,11 @@ AgentRun complete/failed fanout is transferred intact to #1249 from the exact po
   authority is added.
 - Each recovery-dependent agentic component validates only its own resolved stream facts and local typed requirement
   before its dependent allocation. Non-agentic components perform no admission lookup.
+- Owner comment `5712921768` replaces the timer-derived recovery-horizon/safety-margin calculation with
+  boundary-specific proof against observed retention and supported replay behavior. Consumer timers establish no
+  elapsed recovery guarantee. DiscardNew, local observed admission, typed refusal, PubAck, KV ownership and the
+  named absence constraints remain. Dispatch source-to-task mapping and loop task-to-authority/request identity
+  proofs remain open; internal republication belongs in those proofs. No new state, API or timing policy is added.
 - A rule processor whose resolved local outputs declare the AGENT task family uses the same internal admission
   validator before its action evaluator can publish. Runtime classification calls
   `component/flowgraph.SubjectCovers(declaredFilter, concreteSubject)` in that exact direction, not exact subject
@@ -167,10 +172,11 @@ AgentRun complete/failed fanout is transferred intact to #1249 from the exact po
   the affected delivery owner without positive settlement.
 - `AGENT_LOOPS` is the sole current-state authority for loops. Dispatch retains no `LoopTracker` or pending-approval
   cache.
-- One caught-up authority-backed view serves `/activity`, `/loops`, `/debug/state`, and AutoContinue. Explicit LoopID
+- One caught-up authority-backed view serves `/activity`, `/loops`, and `/debug/state`. Explicit LoopID
   operations exact-read `AGENT_LOOPS`.
-- AutoContinue matches only exact `(UserID, ChannelType, ChannelID)` and is a convenience over currently authoritative
-  records, not a continuity guarantee during the task-publication-to-`LoopEntity`-birth interval.
+- Live prompt/task attachment and AutoContinue are retired under owner comment `5728438234`; independent chat,
+  explicit controls and same-task recovery remain supported. Known identity conflict refuses without overwriting
+  another task's authority or terminal result. No arbitrary expired-identity detection is promised.
 - Dispatch retains complete/failed consumption only to bridge terminal outcomes to durable user responses within the
   intersection of source-event and loop-state retention.
 - A complete/failed event whose validated loop authority has no user route is a routeless non-user terminal. Dispatch
@@ -194,6 +200,7 @@ AgentRun complete/failed fanout is transferred intact to #1249 from the exact po
   agentic E2E. #1155 remains open until #1249 supplies transferred AgentRun complete/failed proof; the combined
   matrix gate is completed later.
 - Breaking adopter migrations: every direct `TaskMessage` producer supplies canonical LoopID before validation and
-  marshal; `CommandContext.LoopTracker` becomes the narrow `LookupLoopOwner` operation; exported
+  marshal; remove AutoContinue and submission ReplyTo in favor of new turns with displayed PriorMessages;
+  `CommandContext.LoopTracker` becomes the narrow `LookupLoopOwner` operation; exported
   `graphview.View.Restart` is removed; `router_active_loops` is removed with no authoritative Prometheus replacement.
   `/loops` and `/debug/state` preserve the `LoopInfo` JSON schema through an immutable view-derived DTO.

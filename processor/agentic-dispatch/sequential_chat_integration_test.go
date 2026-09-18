@@ -176,7 +176,6 @@ func TestIntegrationSequentialChatAfterComponentReplacement(t *testing.T) {
 		}
 	}
 	require.Empty(t, providerRequests, "both completed executions made exactly one provider call")
-	require.False(t, DefaultConfig().AutoContinue, "ordinary submissions must be independent under defaults")
 }
 
 // spec: agentic-dispatch / Prior messages accompany an independent chat turn

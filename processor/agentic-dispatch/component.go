@@ -211,6 +211,17 @@ func DeclarePorts(rawConfig json.RawMessage, _ string) (component.PortConfig, er
 // the effective ports. It is the one derivation DeclarePorts and NewComponent
 // share, so the declaration and the constructed component cannot drift.
 func resolveConfig(rawConfig json.RawMessage) (Config, []component.Port, []component.Port, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(rawConfig, &fields); err != nil {
+		return Config{}, nil, nil, errs.WrapInvalid(err, "Component", "NewComponent", "parse config")
+	}
+	for name := range fields {
+		if strings.EqualFold(name, "auto_continue") {
+			return Config{}, nil, nil, errs.WrapInvalid(
+				fmt.Errorf("auto_continue is retired; submit each new turn with prior_messages"),
+				"Component", "NewComponent", "parse config")
+		}
+	}
 	// Parse configuration
 	var config Config
 	if err := json.Unmarshal(rawConfig, &config); err != nil {
@@ -723,6 +734,16 @@ func (c *Component) handleUserMessage(ctx context.Context, data []byte) (natscli
 		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("unexpected user message payload type %T", baseMsg.Payload())
 	}
 	msg := *userMsg
+	if err := msg.Validate(); err != nil {
+		refusal := c.refuseSubmission(seamChannelSubmission, "", codeSubmissionInvalid, err)
+		if msg.ChannelType == "" || msg.ChannelID == "" || msg.UserID == "" {
+			return natsclient.DeliveryDecisionTerminate, refusal
+		}
+		if publishErr := c.answerRefusedSubmission(ctx, msg, refusal); publishErr != nil {
+			return natsclient.DeliveryDecisionRetry, publishErr
+		}
+		return natsclient.DeliveryDecisionTerminate, refusal
+	}
 
 	// Record message received
 	c.metrics.recordMessageReceived(msg.ChannelType)
@@ -752,7 +773,7 @@ func (c *Component) handleUserMessage(ctx context.Context, data []byte) (natscli
 func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) error {
 	if len(msg.PriorMessages) != 0 {
 		return c.answerRefusedSubmission(ctx, msg,
-			c.refuseSubmission(seamChannelSubmission, msg.ReplyTo, codeSubmissionInvalid,
+			c.refuseSubmission(seamChannelSubmission, "", codeSubmissionInvalid,
 				fmt.Errorf("prior_messages cannot accompany a command")))
 	}
 	name, cmd, args, found := c.registry.Match(msg.Content)
@@ -785,12 +806,6 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 	loopID := ""
 	if len(args) > 0 && args[0] != "" {
 		loopID = args[0]
-	} else if c.config.AutoContinue {
-		var err error
-		loopID, err = c.activeLoop(ctx, msg)
-		if err != nil {
-			return err
-		}
 	}
 
 	// Check if loop is required
@@ -885,8 +900,7 @@ func (c *Component) buildTaskMessage(ctx context.Context, msg agentic.UserMessag
 // submitter's response subject. The channel lane has no synchronous return, so
 // without this a refusal is a logged bare return and the submitter waits
 // forever (#1225). The content is the refusal's own message, which names the
-// field the caller can act on — reply_to on a refused continuation, the task
-// field TaskMessage.Validate rejected on a refused payload.
+// field the caller can act on, including retired targeting or invalid task fields.
 //
 // It never counts anything: the refusal it is handed was already metered and
 // logged exactly once, where it was built.
@@ -910,7 +924,7 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 			return err
 		}
 		return c.answerRefusedSubmission(ctx, msg,
-			c.refuseSubmission(seamChannelSubmission, msg.ReplyTo, codeSubmissionInvalid, err))
+			c.refuseSubmission(seamChannelSubmission, "", codeSubmissionInvalid, err))
 	}
 
 	// Check submit permission
@@ -926,62 +940,26 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		})
 	}
 
-	// Resolve a continuation only after exact retained absence. An empty result
-	// means new work; prepareNewDispatchTask mints its LoopID only after any
-	// named continuation passes admission.
-	loopID := prepared.task.LoopID
+	// Only exact retained absence permits a fresh execution.
 	if !found {
-		if msg.ReplyTo != "" {
-			loopID = msg.ReplyTo
-		} else if c.config.AutoContinue {
-			loopID, err = c.activeLoop(ctx, msg)
-			if err != nil {
-				if errs.IsTransient(err) {
-					return err
-				}
-				return c.answerRefusedSubmission(ctx, msg, err)
-			}
-		}
-
-		if loopID != "" {
-			_, err = c.admitLoopRequest(ctx, loopAdmissionRequest{
-				Seam:      seamChannelSubmission,
-				Field:     "reply_to",
-				Operation: loopOpContinue,
-				LoopID:    loopID,
-				Requester: msg.UserID,
-			})
-			if err != nil {
-				// This path has no synchronous return, so its answer goes out on the
-				// response subject — same refusal, same named field, different delivery.
-				return c.answerRefusedSubmission(ctx, msg, err)
-			}
-			if len(msg.PriorMessages) != 0 {
-				return c.answerRefusedSubmission(ctx, msg,
-					c.refuseSubmission(seamChannelSubmission, loopID, codeSubmissionInvalid,
-						fmt.Errorf("prior_messages cannot accompany attachment to an existing loop")))
-			}
-		}
-
-		prepared, err = c.prepareNewDispatchTask(ctx, msg, loopID, vacant)
+		prepared, err = c.prepareNewDispatchTask(ctx, msg, vacant)
 		if err != nil {
 			return c.answerRefusedSubmission(ctx, msg,
-				c.refuseSubmission(seamChannelSubmission, loopID, codeSubmissionInvalid, err))
+				c.refuseSubmission(seamChannelSubmission, "", codeSubmissionInvalid, err))
 		}
-		loopID = prepared.task.LoopID
 	}
 
-	// Retained evidence bypasses mutable continuation inference and admission:
-	// the original submission already crossed those gates before its task
-	// committed, and replacement must finish that durable input rather than
-	// reinterpret it against a later active loop.
+	// Replacement finishes the original committed input with its retained identity.
 	task := prepared.task
 	taskID := task.TaskID
-	loopID = task.LoopID
+	loopID := task.LoopID
 
-	if err := c.natsClient.PublishToStream(ctx, prepared.subject, prepared.data); err != nil {
-		return errs.WrapFatal(err, "Component", "handleTaskSubmission",
-			fmt.Sprintf("task publication for loop %s has unknown durable state", loopID))
+	// Validated retained task evidence already proves this publication committed.
+	if !found {
+		if err := c.natsClient.PublishToStream(ctx, prepared.subject, prepared.data); err != nil {
+			return errs.WrapFatal(err, "Component", "handleTaskSubmission",
+				fmt.Sprintf("task publication for loop %s has unknown durable state", loopID))
+		}
 	}
 
 	// Record task submitted

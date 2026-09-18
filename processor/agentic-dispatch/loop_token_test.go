@@ -10,7 +10,6 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
-	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -74,75 +73,6 @@ func requireCanonicalUUID(t *testing.T, token, what string) {
 	require.NotContains(t, token, "_", "%s must carry no mint prefix", what)
 }
 
-// TestNonUUIDReplyToHTTPGetsSynchronousError: a client that authors a
-// continuation token learns so in the response it is already waiting on, naming
-// the field it got wrong — not "Task submitted" followed by an async TERM it
-// never sees.
-func TestNonUUIDReplyToHTTPGetsSynchronousError(t *testing.T) {
-	t.Parallel()
-	c, _ := newLoopTokenTestComponent()
-
-	msg := newLoopTokenUserMessage()
-	msg.ReplyTo = "loop_ab12cd34"
-
-	resp, err := c.processTaskSubmissionSync(context.Background(), msg)
-	require.NoError(t, err)
-
-	assert.Equal(t, agentic.ResponseTypeError, resp.Type,
-		"an authored continuation token must be answered with an error, not an acknowledgement")
-	assert.Contains(t, strings.ToLower(resp.Content), "reply_to",
-		"the error must name the field the client got wrong")
-	require.Zero(t, testutil.ToFloat64(c.metrics.tasksSubmitted), "a refused submission cannot count a task publication")
-}
-
-// TestNonUUIDReplyToChannelGetsErrorResponse: the channel path has no
-// synchronous return, so its answer goes out on the response subject via
-// sendResponse. Same refusal, same named field, different delivery.
-func TestNonUUIDReplyToChannelGetsErrorResponse(t *testing.T) {
-	t.Parallel()
-	c, sink := newLoopTokenTestComponent()
-
-	msg := newLoopTokenUserMessage()
-	msg.ReplyTo = "loop_ab12cd34"
-
-	require.NoError(t, c.handleTaskSubmission(context.Background(), msg))
-
-	responses := sink.all()
-	require.Len(t, responses, 1, "exactly one response must be published for a refused submission")
-	assert.Equal(t, agentic.ResponseTypeError, responses[0].Type)
-	assert.Contains(t, strings.ToLower(responses[0].Content), "reply_to",
-		"the error must name the field the client got wrong")
-	assert.Equal(t, msg.ChannelType, responses[0].ChannelType)
-	assert.Equal(t, msg.ChannelID, responses[0].ChannelID)
-	require.Zero(t, testutil.ToFloat64(c.metrics.tasksSubmitted), "a refused submission cannot count a task publication")
-}
-
-// spec: agentic-dispatch / The shared view separates current authority from activity
-func TestAutoContinueRefusesMalformedCurrentLoop(t *testing.T) {
-	source := newFakeActivitySource()
-	hooks := newActivityHookChans()
-	c := newActivityTestComponent(t, source, hooks.hooks())
-	c.metrics = getMetrics(metric.NewMetricsRegistry())
-	c.taskEvidence = emptyRetainedTaskEvidenceReader{}
-	c.config.AutoContinue = true // Explicit opt-in; ordinary chat turns are independent by default.
-	require.True(t, c.config.AutoContinue, "this test exercises the auto-continue branch")
-	_, err := c.ensureActivityView(t.Context())
-	require.NoError(t, err)
-	watcher := source.waitWatcher(t, 1)
-	watcher.updates <- fakeActivityEntry{key: admissionLoopA, rev: 1,
-		value: loopEntityJSON(t, admissionMalformed, agentic.LoopStateRunning, 0)}
-	watcher.updates <- nil
-	hooks.waitCaughtUp(t)
-	hooks.waitPoisonKey(t, admissionLoopA)
-
-	resp, err := c.processTaskSubmissionSync(t.Context(), newLoopTokenUserMessage())
-	require.Error(t, err)
-	require.True(t, errs.IsTransient(err), "poisoned current authority cannot masquerade as an empty route")
-	require.Contains(t, err.Error(), "poison")
-	require.Empty(t, resp.InReplyTo)
-	require.Zero(t, testutil.ToFloat64(c.metrics.tasksSubmitted))
-}
-
 // TestNonUUIDRunIDHTTPGetsSynchronousError: run_id is a loop token the CLIENT
 // authors (HTTPMessageRequest.RunID, gh#256 resume anchor), so it reaches the
 // published task without ever passing through the continuation branch. Refusing
@@ -192,7 +122,7 @@ func TestPrepareNewDispatchTaskMintsCanonicalUUID(t *testing.T) {
 	_, vacant, found, err := c.findRetainedDispatchTask(t.Context(), msg)
 	require.NoError(t, err)
 	require.False(t, found)
-	prepared, err := c.prepareNewDispatchTask(t.Context(), msg, "", vacant)
+	prepared, err := c.prepareNewDispatchTask(t.Context(), msg, vacant)
 	require.NoError(t, err)
 	requireCanonicalUUID(t, prepared.task.LoopID, "prepared loop_id")
 }

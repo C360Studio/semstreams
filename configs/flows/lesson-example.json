@@ -97,7 +97,6 @@
       "enabled": true,
       "config": {
         "default_role": "lesson-example",
-        "auto_continue": false,
         "stream_name": "USER",
         "ports": {
           "inputs": [

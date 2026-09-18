@@ -1320,17 +1320,6 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) (natscli
 		result, err = c.handler.HandleTask(ctx, *task)
 	}
 	if err != nil {
-		// A continuation refused because its loop is still working is ordinary
-		// user behaviour — someone typed while the agent was thinking — not an
-		// operator-actionable fault, and this path became common the moment
-		// intake started attaching (#1227). ERROR here would manufacture a
-		// false-alarm class out of a refusal that is working as designed. Every
-		// other handler failure keeps ERROR.
-		if errors.Is(err, ErrLoopBusy) {
-			c.logger.Warn("Task refused — the loop it names still has work in flight",
-				"error", err, "task_id", task.TaskID, "loop_id", task.LoopID)
-			return natsclient.DeliveryDecisionRetry, err
-		}
 		return loopSettlementDecision(err),
 			fmt.Errorf("handle task %q: %w", task.TaskID, err)
 	}

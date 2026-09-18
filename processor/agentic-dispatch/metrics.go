@@ -154,7 +154,7 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 			Namespace: "semstreams",
 			Subsystem: "router",
 			Name:      "loop_admission_refusals_total",
-			Help:      "Requests dispatch refused, by the seam they arrived on and the single mapped reason (form_malformed, existence_absent, existence_unreadable, existence_conflict, state_terminal, ownership_not_owner, ownership_not_permitted, submission_invalid, submission_undeliverable)",
+			Help:      "Requests dispatch refused, by the seam they arrived on and the single mapped reason (form_malformed, existence_absent, existence_unreadable, existence_conflict, ownership_not_owner, ownership_not_permitted, submission_invalid, submission_undeliverable)",
 		}, []string{"seam", "reason"}),
 
 		// SSE metrics

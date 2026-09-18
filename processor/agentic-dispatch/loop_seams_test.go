@@ -154,31 +154,6 @@ type seamRefusalDriver struct {
 func seamRefusalDrivers() []seamRefusalDriver {
 	return []seamRefusalDriver{
 		{
-			seam: seamChannelSubmission,
-			drive: func(t *testing.T, c *Component, sink *captureSink, loopID, requester string) string {
-				t.Helper()
-				msg := seamUserMessage(requester)
-				msg.ReplyTo = loopID
-				require.NoError(t, c.handleTaskSubmission(context.Background(), msg))
-				responses := sink.all()
-				require.Len(t, responses, 1, "the channel lane answers on the response subject")
-				require.Equal(t, agentic.ResponseTypeError, responses[0].Type)
-				return responses[0].Content
-			},
-		},
-		{
-			seam: seamHTTPSubmission,
-			drive: func(t *testing.T, c *Component, _ *captureSink, loopID, requester string) string {
-				t.Helper()
-				msg := seamUserMessage(requester)
-				msg.ReplyTo = loopID
-				resp, err := c.processTaskSubmissionSync(context.Background(), msg)
-				require.NoError(t, err)
-				require.Equal(t, agentic.ResponseTypeError, resp.Type)
-				return resp.Content
-			},
-		},
-		{
 			seam: seamCancelCommand,
 			drive: func(t *testing.T, c *Component, _ *captureSink, loopID, requester string) string {
 				t.Helper()
@@ -282,42 +257,6 @@ func TestRefusalIsCountedExactlyOncePerSeam(t *testing.T) {
 }
 
 // spec: agentic-dispatch / The ownership model binds the user lane, and approval is deliberately not owner-scoped
-// The defect #1227 reports: a second holder of the token takes over the loop.
-func TestSecondHolderCannotContinueAnotherUsersLoop(t *testing.T) {
-	c, sink, rec := newSeamTestComponent(t)
-	trackLoopOwnedBy(c, seamTestLoopA, "user-a")
-
-	msg := seamUserMessage("user-b")
-	msg.ReplyTo = seamTestLoopA
-	c.handleTaskSubmission(context.Background(), msg)
-
-	responses := sink.all()
-	require.Len(t, responses, 1)
-	assert.Equal(t, agentic.ResponseTypeError, responses[0].Type)
-	assert.Contains(t, responses[0].Content, "does not own")
-	requireSeamRefusal(t, c, rec, seamChannelSubmission, reasonOwnershipNotOwner)
-}
-
-// spec: agentic-dispatch / The ownership model binds the user lane, and approval is deliberately not owner-scoped
-// I4: a refused continuation leaves the exact recorded owner and route unchanged.
-func TestRefusedContinuationDoesNotRepointOwnership(t *testing.T) {
-	c, _, _ := newSeamTestComponent(t)
-	trackLoopOwnedBy(c, seamTestLoopA, "user-a")
-	record, err := c.loadPersistedLoop(t.Context(), seamTestLoopA)
-	require.NoError(t, err)
-	before := *record
-
-	msg := seamUserMessage("user-b")
-	msg.ReplyTo = seamTestLoopA
-	response, err := c.processTaskSubmissionSync(context.Background(), msg)
-	require.NoError(t, err)
-	require.Equal(t, agentic.ResponseTypeError, response.Type)
-	after, err := c.loadPersistedLoop(t.Context(), seamTestLoopA)
-	require.NoError(t, err)
-	require.Equal(t, before, *after, "a refused request cannot replace the authority's owner or route")
-}
-
-// spec: agentic-dispatch / The ownership model binds the user lane, and approval is deliberately not owner-scoped
 // cancel admits a non-owner on the cancel-any list. The default list is empty,
 // so this is the configured-operator case, and it is the ONLY way a non-owner
 // cancels someone else's loop. The /cancel command is the one seam that asks
@@ -409,27 +348,6 @@ func TestApprovalDefaultAdmitsEveryone(t *testing.T) {
 }
 
 // spec: agentic-dispatch / The ownership model binds the user lane, and approval is deliberately not owner-scoped
-// A settled loop cannot be continued, and no new loop is minted under its
-// token — the silent fork #1227 reports. The exact terminal authority refuses it.
-func TestAttachToTerminalLoopIsRefused(t *testing.T) {
-	c, sink, rec := newSeamTestComponent(t)
-	withPersistedLoops(c, map[string]*agentic.LoopEntity{seamTestLoopA: {
-		ID: seamTestLoopA, UserID: "user-a", State: agentic.LoopStateComplete, MaxIterations: 5,
-	}})
-
-	msg := seamUserMessage("user-a")
-	msg.ReplyTo = seamTestLoopA
-	c.handleTaskSubmission(context.Background(), msg)
-
-	responses := sink.all()
-	require.Len(t, responses, 1)
-	assert.Equal(t, agentic.ResponseTypeError, responses[0].Type)
-	assert.Contains(t, responses[0].Content, "already settled")
-	assert.Zero(t, testutil.ToFloat64(c.metrics.tasksSubmitted), "no task was published under a settled loop's token")
-	requireSeamRefusal(t, c, rec, seamChannelSubmission, reasonStateTerminal)
-}
-
-// spec: agentic-dispatch / The ownership model binds the user lane, and approval is deliberately not owner-scoped
 // A system-lane loop carries no user owner and is never owner-checked, because
 // it never traverses this gate: the rule engine's agent-publish action builds a
 // task with no loop id and publishes it straight to agent.task.*. The property
@@ -468,8 +386,8 @@ func TestSystemLaneLoopIsNotOwnerChecked(t *testing.T) {
 
 		_, err := c.admitLoopRequest(context.Background(), loopAdmissionRequest{
 			Seam:      seamChannelSubmission,
-			Field:     "reply_to",
-			Operation: loopOpContinue,
+			Field:     "loop_id",
+			Operation: loopOpCancel,
 			LoopID:    seamTestLoopA,
 			Requester: "user-a",
 		})
@@ -487,18 +405,17 @@ func TestAssertedIdentityIsNotVerified(t *testing.T) {
 
 	// No authenticating middleware; the claim rides in the body/message.
 	impostor := seamUserMessage("user-a")
-	impostor.ReplyTo = seamTestLoopA
-	resp, err := c.processTaskSubmissionSync(context.Background(), impostor)
-	require.NoError(t, err)
+	impostor.Content = "/cancel " + seamTestLoopA
+	_, err := c.processCommandSync(context.Background(), impostor)
+	require.ErrorContains(t, err, "not connected to NATS", "the asserted owner passed admission and reached signal publication")
 
-	assert.NotContains(t, resp.Content, "does not own",
+	assert.NotContains(t, err.Error(), "does not own",
 		"the gate matches the claimed identity; it does not verify it")
-	requireSeamRefusal(t, c, rec, seamHTTPSubmission, reasonSubmissionUndeliver)
+	require.Zero(t, rec.countMessage(loopAdmissionRefusalLogMessage))
 	assert.Equal(t, 0.0,
 		testutil.ToFloat64(c.metrics.loopAdmissionRefusals.WithLabelValues(
 			seamHTTPSubmission, reasonOwnershipNotOwner)),
 		"an unverified claim of the owner's identity passes the ownership check")
-	require.Contains(t, resp.Content, "not connected to NATS", "the asserted owner passed admission and reached task publication")
 }
 
 // spec: agentic-dispatch / A refused or unpublishable submission leaves no tracked loop and no moved gauge
@@ -550,11 +467,6 @@ func TestFailedSubmissionLeavesAuthorityAndTaskCountUnchanged(t *testing.T) {
 		arrange func(*Component)
 		mutate  func(*agentic.UserMessage)
 	}{
-		{
-			name:    "refused by the gate",
-			arrange: func(c *Component) { trackLoopOwnedBy(c, seamTestLoopA, "user-a") },
-			mutate:  func(m *agentic.UserMessage) { m.ReplyTo = seamTestLoopA },
-		},
 		{
 			name:    "refused by the task's own validation",
 			arrange: func(*Component) {},
@@ -619,7 +531,6 @@ func TestEveryRefusalCodeMapsToAnHTTPStatus(t *testing.T) {
 		codeLoopNotFound:      http.StatusNotFound,
 		codeLoopNotOwned:      http.StatusForbidden,
 		codeLoopNotPermitted:  http.StatusForbidden,
-		codeLoopTerminal:      http.StatusConflict,
 		codeLoopUnreadable:    http.StatusServiceUnavailable,
 		codeLoopOwnerConflict: http.StatusInternalServerError,
 	}

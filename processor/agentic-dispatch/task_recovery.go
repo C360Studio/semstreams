@@ -100,7 +100,7 @@ func (c *Component) findRetainedDispatchTask(
 		if err := sourceTask.Validate(); err != nil {
 			return preparedDispatchTask{}, vacantDispatchTaskSlot{}, false, err
 		}
-		if err := validateRetainedDispatchTask(retained, msg, taskID, msg.ReplyTo); err != nil {
+		if err := validateRetainedDispatchTask(retained, msg, taskID); err != nil {
 			return preparedDispatchTask{}, vacantDispatchTaskSlot{}, false, errs.WrapFatal(
 				err, "Component", "findRetainedDispatchTask", "task mapping conflict")
 		}
@@ -112,12 +112,9 @@ func (c *Component) findRetainedDispatchTask(
 func (c *Component) prepareNewDispatchTask(
 	ctx context.Context,
 	msg agentic.UserMessage,
-	loopID string,
 	slot vacantDispatchTaskSlot,
 ) (preparedDispatchTask, error) {
-	if loopID == "" {
-		loopID = uuid.NewString()
-	}
+	loopID := uuid.NewString()
 	task := c.buildTaskMessage(ctx, msg, loopID, slot.taskID)
 	data, err := json.Marshal(message.NewBaseMessage(task.Schema(), &task, "agentic-dispatch"))
 	if err != nil {
@@ -193,15 +190,12 @@ func validateRetainedDispatchTask(
 	task agentic.TaskMessage,
 	msg agentic.UserMessage,
 	taskID string,
-	requestedLoopID string,
 ) error {
 	switch {
 	case task.TaskID != taskID:
 		return fmt.Errorf("retained task_id %q does not match %q", task.TaskID, taskID)
 	case task.LoopID == "":
 		return fmt.Errorf("retained task has no loop_id")
-	case requestedLoopID != "" && task.LoopID != requestedLoopID:
-		return fmt.Errorf("retained loop_id %q does not match requested loop_id %q", task.LoopID, requestedLoopID)
 	case task.SourceMessageID != msg.MessageID:
 		return fmt.Errorf("retained source_message_id %q does not match %q", task.SourceMessageID, msg.MessageID)
 	case task.ChannelType != msg.ChannelType:

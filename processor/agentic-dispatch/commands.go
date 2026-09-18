@@ -17,20 +17,20 @@ import (
 
 // registerBuiltinCommands registers all built-in commands
 func (c *Component) registerBuiltinCommands() {
-	// /cancel [loop_id] - Cancel a loop
+	// /cancel <loop_id> - Cancel a loop
 	c.registry.Register("cancel", CommandConfig{
 		Pattern:     `^/cancel\s*(\S*)$`,
 		Permission:  "cancel_own",
 		RequireLoop: false,
-		Help:        "/cancel [loop_id] - Cancel current or specified loop",
+		Help:        "/cancel <loop_id> - Cancel the specified loop",
 	}, c.handleCancelCommand)
 
-	// /status [loop_id] - Show loop status
+	// /status <loop_id> - Show loop status
 	c.registry.Register("status", CommandConfig{
 		Pattern:     `^/status\s*(\S*)$`,
 		Permission:  "view",
 		RequireLoop: false,
-		Help:        "/status [loop_id] - Show loop status",
+		Help:        "/status <loop_id> - Show loop status",
 	}, c.handleStatusCommand)
 
 	// /loops - List active loops
@@ -88,7 +88,7 @@ func loopStatusFromFacts(facts loopFacts) string {
 
 // handleCancelCommand handles the /cancel command
 func (c *Component) handleCancelCommand(ctx context.Context, msg agentic.UserMessage, args []string, loopID string) (agentic.UserResponse, error) {
-	// Use provided loop ID or active loop
+	// Preserve the explicit command argument and custom-handler target.
 	targetLoopID := loopID
 	if len(args) > 0 && args[0] != "" {
 		targetLoopID = args[0]
@@ -182,7 +182,7 @@ func (c *Component) handleCancelCommand(ctx context.Context, msg agentic.UserMes
 
 // handleStatusCommand handles the /status command
 func (c *Component) handleStatusCommand(ctx context.Context, msg agentic.UserMessage, args []string, loopID string) (agentic.UserResponse, error) {
-	// Use provided loop ID or active loop
+	// Preserve the explicit command argument and custom-handler target.
 	targetLoopID := loopID
 	if len(args) > 0 && args[0] != "" {
 		targetLoopID = args[0]

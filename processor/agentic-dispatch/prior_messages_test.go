@@ -11,7 +11,6 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
-	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -38,7 +37,7 @@ func TestPriorMessagesTaskWireAndSourceRecovery(t *testing.T) {
 	_, vacant, found, err := c.findRetainedDispatchTask(t.Context(), msg)
 	require.NoError(t, err)
 	require.False(t, found)
-	prepared, err := c.prepareNewDispatchTask(t.Context(), msg, "", vacant)
+	prepared, err := c.prepareNewDispatchTask(t.Context(), msg, vacant)
 	require.NoError(t, err)
 	decoded, err := c.decoder.Decode(prepared.data)
 	require.NoError(t, err)
@@ -46,7 +45,6 @@ func TestPriorMessagesTaskWireAndSourceRecovery(t *testing.T) {
 
 	c.taskEvidence = priorTaskEvidence{prepared.data}
 	// Current route authority moved; committed source recovery needs no ready view.
-	c.config.AutoContinue = true
 	trackLoopOwnedBy(c, seamTestLoopB, msg.UserID)
 	recovered, _, found, err := c.findRetainedDispatchTask(t.Context(), msg)
 	require.NoError(t, err)
@@ -72,7 +70,7 @@ func TestPriorMessagesEmptySourceRecovery(t *testing.T) {
 	msg := seamUserMessage("user")
 	_, slot, _, err := c.findRetainedDispatchTask(t.Context(), msg)
 	require.NoError(t, err)
-	prepared, err := c.prepareNewDispatchTask(t.Context(), msg, "", slot)
+	prepared, err := c.prepareNewDispatchTask(t.Context(), msg, slot)
 	require.NoError(t, err)
 	c.taskEvidence = priorTaskEvidence{prepared.data}
 	msg.PriorMessages = []agentic.ChatMessage{}
@@ -90,7 +88,7 @@ func TestPriorMessagesInvalidRetainedSourceIsAnswered(t *testing.T) {
 	msg.PriorMessages = displayedPriorMessages()
 	_, slot, _, err := c.findRetainedDispatchTask(t.Context(), msg)
 	require.NoError(t, err)
-	prepared, err := c.prepareNewDispatchTask(t.Context(), msg, "", slot)
+	prepared, err := c.prepareNewDispatchTask(t.Context(), msg, slot)
 	require.NoError(t, err)
 	c.taskEvidence = priorTaskEvidence{prepared.data}
 	msg.PriorMessages[0].Name = "must not bypass validation on redelivery"
@@ -142,63 +140,9 @@ func TestPriorMessagesRoutableInvalidInputIsAnsweredBeforeMutation(t *testing.T)
 }
 
 // spec: agentic-dispatch / Prior messages accompany an independent chat turn
-func TestPriorMessagesConflictsWithAdmittedAttachment(t *testing.T) {
-	for _, viaHTTP := range []bool{false, true} {
-		for _, explicit := range []bool{false, true} {
-			source := newFakeActivitySource()
-			hooks := newActivityHookChans()
-			c := newActivityTestComponent(t, source, hooks.hooks())
-			c.metrics = getMetrics(metric.NewMetricsRegistry())
-			c.taskEvidence = emptyRetainedTaskEvidenceReader{}
-			c.modelRegistry = newTestRegistry()
-			c.natsClient = &natsclient.Client{}
-			sink := &captureSink{}
-			c.sendResponseFn = sink.add
-			msg := seamUserMessage("user")
-			msg.PriorMessages = displayedPriorMessages()
-			record := &agentic.LoopEntity{
-				ID: seamTestLoopA, UserID: msg.UserID, ChannelType: msg.ChannelType, ChannelID: msg.ChannelID,
-				State: agentic.LoopStateRunning, MaxIterations: 5,
-			}
-			withPersistedLoops(c, map[string]*agentic.LoopEntity{record.ID: record})
-			before := *record
-			_, err := c.ensureActivityView(t.Context())
-			require.NoError(t, err)
-			encoded, err := json.Marshal(record)
-			require.NoError(t, err)
-			watcher := source.waitWatcher(t, 1)
-			watcher.updates <- fakeActivityEntry{key: record.ID, rev: 1, value: encoded}
-			watcher.updates <- nil
-			hooks.waitCaughtUp(t)
-			if explicit {
-				msg.ReplyTo = seamTestLoopA
-			} else {
-				c.config.AutoContinue = true
-			}
-			var response agentic.UserResponse
-			if viaHTTP {
-				response, err = c.processTaskSubmissionSync(t.Context(), msg)
-				require.NoError(t, err)
-			} else {
-				require.NoError(t, c.handleTaskSubmission(t.Context(), msg))
-				responses := sink.all()
-				require.Len(t, responses, 1)
-				response = responses[0]
-			}
-			require.Equal(t, agentic.ResponseTypeError, response.Type)
-			require.Contains(t, response.Content, "prior_messages")
-			require.Equal(t, before, *record)
-			require.Zero(t, testutil.ToFloat64(c.metrics.tasksSubmitted))
-		}
-	}
-}
-
-// spec: agentic-dispatch / Prior messages accompany an independent chat turn
 func TestPriorMessagesCommandAndDefaultTarget(t *testing.T) {
-	require.False(t, DefaultConfig().AutoContinue)
-	field, ok := reflect.TypeFor[Config]().FieldByName("AutoContinue")
-	require.True(t, ok)
-	require.Contains(t, field.Tag.Get("schema"), "default:false")
+	_, present := reflect.TypeFor[Config]().FieldByName("AutoContinue")
+	require.False(t, present, "retired targeting is absent from the public config")
 	for _, viaHTTP := range []bool{false, true} {
 		for _, command := range []string{"/help", "/status", "/cancel"} {
 			c, sink, _ := newSeamTestComponent(t)
@@ -225,27 +169,5 @@ func TestPriorMessagesCommandAndDefaultTarget(t *testing.T) {
 				require.Equal(t, agentic.ResponseTypeError, response.Type)
 			}
 		}
-	}
-}
-
-// spec: agentic-dispatch / Prior messages accompany an independent chat turn
-func TestPriorMessagesAutoContinueUnavailableDoesNotAssumeNewWork(t *testing.T) {
-	for _, viaHTTP := range []bool{false, true} {
-		c, sink, _ := newSeamTestComponent(t)
-		c.config.AutoContinue = true
-		msg := seamUserMessage("user")
-		msg.PriorMessages = displayedPriorMessages()
-		var err error
-		if viaHTTP {
-			var response agentic.UserResponse
-			response, err = c.processTaskSubmissionSync(t.Context(), msg)
-			require.Equal(t, agentic.UserResponse{}, response)
-		} else {
-			err = c.handleTaskSubmission(t.Context(), msg)
-			require.Empty(t, sink.all())
-		}
-		require.Error(t, err)
-		require.True(t, errs.IsTransient(err))
-		require.Zero(t, testutil.ToFloat64(c.metrics.tasksSubmitted))
 	}
 }

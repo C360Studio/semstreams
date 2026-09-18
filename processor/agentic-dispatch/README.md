@@ -14,7 +14,7 @@ The agentic-dispatch component is the central hub for user interaction with the 
 
 Agentic-loop owns loop creation, approval waits, intermediate transitions, and terminal state. Dispatch does not
 maintain another state machine or a `LoopTracker`. Explicit LoopID operations read the durable loop record;
-listing, activity, debug, and AutoContinue share one caught-up read-only view. A restart rehydrates that view from
+listing, activity and debug share one caught-up read-only view. A restart rehydrates that view from
 current state without replaying already-acknowledged creation or approval notifications.
 
 ## Configuration
@@ -23,7 +23,6 @@ current state without replaying already-acknowledged creation or approval notifi
 {
   "default_role": "general",
   "default_model": "qwen2.5-coder:32b",
-  "auto_continue": false,
   "stream_name": "USER",
   "permissions": {
     "view": ["*"],
@@ -41,13 +40,12 @@ current state without replaying already-acknowledged creation or approval notifi
 |--------|------|---------|-------------|
 | `default_role` | string | "general" | Default role for tasks |
 | `default_model` | string | "" | Default model for tasks |
-| `auto_continue` | bool | false | Opt into attachment to an active loop and implicit command targeting |
 | `stream_name` | string | "USER" | JetStream stream for user messages |
 | `permissions` | object | (see above) | Permission configuration |
 
-### Chat turns and explicit attachment
+### Independent chat turns
 
-By default, a message without `reply_to` starts an independent loop, even when another loop is active. For sequential
+Each new work message starts an independent loop, even when another loop is active. For sequential
 chat, send the displayed user/assistant transcript in optional `prior_messages` and the new turn in `content`.
 Dispatch commits that history into the task; the loop can reconstruct its input after replacement. No loop ID is
 needed for an independent turn. See [Agentic Systems](../../docs/concepts/13-agentic-systems.md#context-management)
@@ -57,14 +55,11 @@ History is ordered, nonempty user/assistant text only. Omitted, null, and empty 
 `UserResponse.Content` for assistant entries, which may differ from raw model output. Invalid history returns an
 error; it is not silently dropped.
 
-Explicit `reply_to` and `auto_continue: true` retain their live-loop attachment behavior, but cannot be combined with
-nonempty history. Commands do not accept history. Under defaults, commands that act on a loop require an explicit
-loop ID, such as `/cancel <loop_id>`; enabling AutoContinue also opts into its implicit command target selection.
-
-AutoContinue matches the exact `(UserID, ChannelType, ChannelID)` tuple: one nonterminal match continues, no match
-starts work, and multiple matches refuse as ambiguous. An unavailable view is not an empty view. Between task
-publication and the first durable loop record, a second route-only submission may create another loop. Echo the
-returned LoopID when continuity is required; dispatch does not create a separate route claim to conceal that gap.
+Live attachment is retired. Remove submission `reply_to` and configuration `auto_continue`, including false or null
+values; these keys are refused, not silently ignored. A new turn does not reuse an earlier execution's internal
+tool/system context or budget. Commands do not accept history and require an explicit loop ID when they act on a loop,
+such as `/cancel <loop_id>`. Approval, cancellation, status and same-task retry remain supported. See
+[the migration](../../docs/operations/migration-beta162-to-beta163.md#3-live-attachment-is-retired).
 
 ### JetStream Integration
 
@@ -123,8 +118,8 @@ Consumer naming: `agentic-dispatch-{port-name}`
 
 | Command | Permission | Description |
 |---------|------------|-------------|
-| `/cancel [id]` | `cancel_own` | Cancel current or specified loop |
-| `/status [id]` | `view` | Show loop status |
+| `/cancel <id>` | `cancel_own` | Cancel the specified loop |
+| `/status <id>` | `view` | Show the specified loop's status |
 | `/loops` | `view` | List your active loops |
 | `/help` | (none) | Show available commands |
 

@@ -22,34 +22,9 @@ import (
 // errors.Is — the same shape pkg/lifecycle uses for create-versus-exists
 // (pkg/lifecycle/errors.go), and consumed the same way.
 var (
-	// ErrLoopAlreadyExists is returned by CreateLoopWithID when the supplied
-	// framework-minted token already names a registered loop. It is a
-	// distinguishable condition rather than a generic invalid error because
-	// task intake branches on it: a task naming a live loop is a
-	// CONTINUATION of that loop, and the right move is to attach to the
-	// conversation already under that token, never to mint a second loop
-	// over it (#1227). A caller that cannot attach may still treat it as a
-	// refusal; what it must not do is proceed as if it created the loop.
+	// ErrLoopAlreadyExists is returned by CreateLoopWithID before any state
+	// is overwritten. Existence never authorizes attaching a different task.
 	ErrLoopAlreadyExists = errors.New("agentic-loop: loop already exists")
-
-	// ErrLoopTerminal is returned when a continuation names a loop that has
-	// already settled. A settled loop cannot be advanced and its token must
-	// not be recycled into a replacement loop, so the task is refused rather
-	// than attached — the terminal loop's recorded outcome stays the answer
-	// for that token.
-	ErrLoopTerminal = errors.New("agentic-loop: loop is terminal")
-
-	// ErrLoopBusy is returned when a continuation names a loop that has work
-	// in flight: outstanding tool calls, or a human approval decision it is
-	// waiting on. It is deliberately distinct from ErrLoopTerminal because the
-	// two mean opposite things to the caller — terminal is final, busy is
-	// answerable once the round finishes. Attaching in that window appends the
-	// new user turn to a half-written round (an assistant turn carrying
-	// tool_calls whose tool results have not arrived), sends orphan tool_calls
-	// to the provider, runs two rounds concurrently over one context manager,
-	// and moves an approval-gated loop off the state its human decision
-	// resolves. Owner ruling 2026-09-02: refuse; do not queue the turn.
-	ErrLoopBusy = errors.New("agentic-loop: loop has work in flight")
 
 	// ErrLoopNotFound is returned when an operation names a loop the manager
 	// does not hold. After a loop settles its per-loop state is released
@@ -195,10 +170,8 @@ func (m *LoopManager) GenerateLoopID() string {
 // The already-exists check runs second, before the three map writes below,
 // because those writes OVERWRITE an existing record, its pending-tool set, and
 // its context manager: creating over a live token silently destroyed the
-// conversation accumulated under it, which is a create where the caller meant a
-// continuation. Callers that mean a continuation branch on ErrLoopAlreadyExists
-// and attach; callers that meant a create get a refusal that left every map
-// exactly as it found it.
+// conversation accumulated under it. Callers receive ErrLoopAlreadyExists with
+// every map unchanged; task intake treats a conflicting identity as fatal.
 func (m *LoopManager) CreateLoopWithID(loopID, taskID, role, model string, maxIterations ...int) (string, error) {
 	if !looptoken.Valid(loopID) {
 		return "", errs.WrapInvalid(
@@ -237,77 +210,6 @@ func (m *LoopManager) CreateLoopWithID(loopID, taskID, role, model string, maxIt
 	m.contextManagers[loopID] = NewContextManager(loopID, model, m.contextConfig, opts...)
 
 	return loopID, nil
-}
-
-// attachContinuation binds a continuation task to the loop already registered
-// under loopID and returns that loop's current entity.
-//
-// It is the second half of the create-versus-exists fence: CreateLoopWithID
-// refuses the token, and intake calls this to join the live loop instead of
-// minting over it. Two things happen here and nowhere else, both under the one
-// lock so a concurrent settle cannot slip between them:
-//
-//   - A settled loop is REFUSED with ErrLoopTerminal. A terminal loop cannot be
-//     advanced, and minting a replacement under its token would make the
-//     recorded outcome unreachable for the token that names it.
-//   - A loop with work IN FLIGHT is REFUSED with ErrLoopBusy. Non-terminal is
-//     not idle: between the assistant turn that carries tool_calls and the
-//     turn boundary that appends the matching tool results, the conversation is
-//     half-written, and a continuation sends it as-is. See ErrLoopBusy for the
-//     three consequences. The check reads the pending-tool map directly rather
-//     than calling GetPendingTools: the write lock is already held here and
-//     sync.RWMutex is not reentrant.
-//   - The loop's task association is rebound to the continuation's task ID.
-//     This is what keeps redelivery dedup working across an attach: intake
-//     dedupes on TaskID via HasActiveLoopForTask, so a redelivery of THIS task
-//     message must find the loop it already produced. Leaving the previous
-//     turn's TaskID in place would let the same continuation be processed
-//     twice, appending the user's turn to the conversation each time.
-//     Residual, known and accepted: the rebind preserves dedup for THIS turn
-//     and drops it for the previous one. A single scalar cannot dedupe more
-//     than one turn — that needs a set or a window. So a redelivery of turn
-//     N-1 arriving after turn N has attached is no longer recognised as
-//     already-seen and appends that prompt a second time. Narrow in practice,
-//     and bounded by the restart-safety work in gh#1159.
-//
-// No other per-loop state is touched: the context manager, the pending-tool
-// set, and every cache stay exactly as the live loop left them.
-func (m *LoopManager) attachContinuation(task agentic.TaskMessage) (agentic.LoopEntity, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	loopID := task.LoopID
-	entity, exists := m.loops[loopID]
-	if !exists {
-		return agentic.LoopEntity{}, errs.Wrap(
-			fmt.Errorf("loop %s: %w", loopID, ErrLoopNotFound),
-			"agentic-loop", "attachContinuation", "find loop")
-	}
-	// Supplied history belongs to an independent task. Check before any
-	// rebinding under the same lock that owns the existing execution.
-	if len(task.PriorMessages) != 0 && entity.TaskID != task.TaskID {
-		return agentic.LoopEntity{}, errs.WrapInvalid(
-			fmt.Errorf("prior_messages cannot accompany attachment to a different task's execution"),
-			"agentic-loop", "attachContinuation", "conflicting conversation input")
-	}
-	if entity.State.IsTerminal() {
-		return agentic.LoopEntity{}, errs.WrapInvalid(
-			fmt.Errorf("loop %s is %s: %w", loopID, entity.State, ErrLoopTerminal),
-			"agentic-loop", "attachContinuation", "refuse continuation of a settled loop")
-	}
-	if pending := len(m.pendingTools[loopID]); pending > 0 {
-		return agentic.LoopEntity{}, errs.WrapTransient(
-			fmt.Errorf("loop %s has %d tool call(s) still outstanding: %w", loopID, pending, ErrLoopBusy),
-			"agentic-loop", "attachContinuation", "refuse continuation of a loop with work in flight")
-	}
-	if entity.State == agentic.LoopStateAwaitingApproval {
-		return agentic.LoopEntity{}, errs.WrapTransient(
-			fmt.Errorf("loop %s is awaiting a human approval decision: %w", loopID, ErrLoopBusy),
-			"agentic-loop", "attachContinuation", "refuse continuation of a loop with work in flight")
-	}
-
-	entity.TaskID = task.TaskID
-	return *entity, nil
 }
 
 // HasActiveLoopForTask returns true if a non-terminal loop already exists for the

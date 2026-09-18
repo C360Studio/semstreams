@@ -17,7 +17,6 @@ import (
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
-	"github.com/c360studio/semstreams/pkg/graphview"
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
@@ -158,6 +157,9 @@ func TestIntegrationUserMessageReplayAfterTaskCommitKeepsOneLogicalTask(t *testi
 	require.Equal(t, natsclient.DeliveryDecisionAck, decision,
 		"both required destination publications received PubAck")
 	require.NoError(t, cause)
+	responseSubject := "user.response." + userMessage.ChannelType + "." + userMessage.ChannelID
+	firstResponseRaw, err := firstUserStream.GetLastMsgForSubject(ctx, responseSubject)
+	require.NoError(t, err)
 
 	firstAgentInfo, err := agentStream.Info(ctx)
 	require.NoError(t, err)
@@ -210,8 +212,7 @@ func TestIntegrationUserMessageReplayAfterTaskCommitKeepsOneLogicalTask(t *testi
 
 	replacementDispatch := newRestartIdentityDispatch(t, replacementClient)
 	// Current route authority has moved on while the source waited for redelivery.
-	// Exact committed task recovery must precede AutoContinue, even without a ready view.
-	replacementDispatch.config.AutoContinue = true
+	// Exact committed task recovery needs no ready current-state view.
 	putLoopRecord(t, ctx, loops, agentic.LoopEntity{
 		ID:            uuid.NewString(),
 		UserID:        userMessage.UserID,
@@ -223,25 +224,55 @@ func TestIntegrationUserMessageReplayAfterTaskCommitKeepsOneLogicalTask(t *testi
 	decision, cause = replacementDispatch.handleUserMessage(ctx, secondSource.Data())
 	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
 	require.NoError(t, cause)
-	require.NoError(t, secondSource.Ack())
 
 	secondAgentInfo, err := agentStream.Info(ctx)
 	require.NoError(t, err)
-	require.Equal(t, uint64(2), secondAgentInfo.State.Msgs,
-		"current replay publishes a second task after the duplicate window")
+	require.Equal(t, uint64(1), secondAgentInfo.State.Msgs,
+		"retained commitment must not republish the task after the duplicate window")
 	secondRaw, err := agentStream.GetMsg(ctx, secondAgentInfo.State.LastSeq)
 	require.NoError(t, err)
 	secondTask := restartIdentityTask(t, decoder, secondRaw)
 	require.Equal(t, firstTask.Prompt, secondTask.Prompt,
-		"both tasks came from the same source content")
+		"retained task keeps the same source content")
 
-	t.Logf("source stream sequence %d delivered twice; first task_id=%s loop_id=%s; second task_id=%s loop_id=%s",
+	t.Logf("source stream sequence %d delivered twice; first task_id=%s loop_id=%s; retained task_id=%s loop_id=%s",
 		firstMeta.Sequence.Stream, firstTask.TaskID, firstTask.LoopID, secondTask.TaskID, secondTask.LoopID)
 	require.Equal(t, firstTask.LoopID, secondTask.LoopID,
 		"one retry-equivalent UserMessage must not become two logical loops")
 	require.Equal(t, firstTask.TaskID, secondTask.TaskID,
 		"one retry-equivalent UserMessage must not become two logical tasks")
 	require.Equal(t, firstTask.SourceMessageID, secondTask.SourceMessageID)
+	require.Equal(t, firstRaw.Sequence, secondRaw.Sequence, "replay must retain the original task publication")
+	require.Equal(t, firstRaw.Time, secondRaw.Time, "replay must not refresh task retention")
+	responseRaw, err := replacementUserStream.GetLastMsgForSubject(ctx, responseSubject)
+	require.NoError(t, err)
+	require.Greater(t, responseRaw.Sequence, firstResponseRaw.Sequence, "replay completes its required response before source ACK")
+	responseMessage, err := decoder.Decode(responseRaw.Data)
+	require.NoError(t, err)
+	response, ok := responseMessage.Payload().(*agentic.UserResponse)
+	require.True(t, ok)
+	require.Equal(t, firstTask.LoopID, response.InReplyTo)
+	require.Equal(t, agentic.ResponseTypeStatus, response.Type)
+	require.NoError(t, secondSource.Ack())
+
+	// The HTTP caller reuses the same retained commitment after the same
+	// replacement/window boundary while still returning and mirroring its response.
+	synchronous, err := replacementDispatch.processTaskSubmissionSync(ctx, *userMessage)
+	require.NoError(t, err)
+	require.Equal(t, agentic.ResponseTypeStatus, synchronous.Type)
+	require.Equal(t, firstTask.LoopID, synchronous.InReplyTo)
+	httpAgentInfo, err := agentStream.Info(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), httpAgentInfo.State.Msgs)
+	require.Equal(t, firstRaw.Sequence, httpAgentInfo.State.LastSeq)
+	httpResponseRaw, err := replacementUserStream.GetLastMsgForSubject(ctx, responseSubject)
+	require.NoError(t, err)
+	require.Greater(t, httpResponseRaw.Sequence, responseRaw.Sequence, "HTTP still publishes its stream mirror")
+	httpResponseMessage, err := decoder.Decode(httpResponseRaw.Data)
+	require.NoError(t, err)
+	httpResponse, ok := httpResponseMessage.Payload().(*agentic.UserResponse)
+	require.True(t, ok)
+	require.Equal(t, synchronous.ResponseID, httpResponse.ResponseID)
 }
 
 // spec: agentic-dispatch / Dispatch task redelivery recovers the committed LoopID
@@ -255,12 +286,6 @@ func TestIntegrationUserMessageTaskMappingConflictQuarantines(t *testing.T) {
 			name: "same TaskID names a different source",
 			mutate: func(_ *Component, task *agentic.TaskMessage, _ *agentic.UserMessage) {
 				task.SourceMessageID = "another-source-message"
-			},
-		},
-		{
-			name: "same TaskID names a different LoopID",
-			mutate: func(_ *Component, _ *agentic.TaskMessage, msg *agentic.UserMessage) {
-				msg.ReplyTo = uuid.NewString()
 			},
 		},
 		{
@@ -303,6 +328,10 @@ func TestIntegrationUserMessageTaskMappingConflictQuarantines(t *testing.T) {
 			decision, cause := dispatch.handleUserMessage(ctx, sourceData)
 			require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
 			require.ErrorContains(t, cause, "task mapping conflict")
+			response, err := dispatch.processTaskSubmissionSync(ctx, *userMessage)
+			require.NoError(t, err)
+			require.Equal(t, agentic.ResponseTypeError, response.Type)
+			require.Contains(t, response.Content, "task mapping conflict")
 
 			stream, err := tc.Client.GetStream(ctx, restartIdentityAgentStream)
 			require.NoError(t, err)
@@ -317,7 +346,7 @@ func TestIntegrationUserMessageTaskMappingConflictQuarantines(t *testing.T) {
 // Positive publication controls migrated from disconnected-client tracker tests:
 // the stored task and user response, not a speculative process entry, prove which
 // loop each production intake selected.
-func TestIntegrationDispatchTaskPublicationPreservesMintAndAttachment(t *testing.T) {
+func TestIntegrationDispatchTaskPublicationPreservesFreshMintAndLineage(t *testing.T) {
 	ctx := t.Context()
 	tc := natsclient.NewTestClient(t,
 		natsclient.WithKVBuckets(defaultAgentLoopsBucket(t)),
@@ -334,7 +363,7 @@ func TestIntegrationDispatchTaskPublicationPreservesMintAndAttachment(t *testing
 	require.NoError(t, err)
 
 	for _, lane := range []string{"http", "channel"} {
-		for _, mode := range []string{"new", "independent_default", "reply_to", "auto_continue", "resume_anchors"} {
+		for _, mode := range []string{"new", "independent_default", "resume_anchors"} {
 			t.Run(lane+"/"+mode, func(t *testing.T) {
 				c := newRestartIdentityDispatch(t, tc.Client)
 				msg := newLoopTokenUserMessage()
@@ -342,7 +371,7 @@ func TestIntegrationDispatchTaskPublicationPreservesMintAndAttachment(t *testing
 				msg.ChannelID = lane + "-" + mode
 				var existing *agentic.LoopEntity
 				var existingRevision uint64
-				if mode == "independent_default" || mode == "reply_to" || mode == "auto_continue" {
+				if mode == "independent_default" {
 					existing = &agentic.LoopEntity{
 						ID: uuid.NewString(), UserID: msg.UserID, ChannelType: msg.ChannelType, ChannelID: msg.ChannelID,
 						State: agentic.LoopStateRunning, MaxIterations: 5,
@@ -355,22 +384,6 @@ func TestIntegrationDispatchTaskPublicationPreservesMintAndAttachment(t *testing
 				switch mode {
 				case "independent_default":
 					msg.PriorMessages = displayedPriorMessages()
-				case "reply_to":
-					msg.ReplyTo = existing.ID
-				case "auto_continue":
-					// Reuse the existing lifecycle-owned view fixture against the real KV source.
-					configured := c
-					c = newActivityTestComponent(t, kv, graphview.Hooks{})
-					c.config = configured.config
-					c.modelRegistry = configured.modelRegistry
-					c.decoder = configured.decoder
-					c.natsClient = tc.Client
-					c.loadPersistedLoopFn = nil // Exact admission reads the same real KV authority as the view.
-					c.metrics = getMetrics(metric.NewMetricsRegistry())
-					c.config.AutoContinue = true
-					view, viewErr := c.ensureActivityView(ctx)
-					require.NoError(t, viewErr)
-					require.NoError(t, view.WaitCaughtUp(ctx))
 				case "resume_anchors":
 					msg.RunID = uuid.NewString()
 					msg.InReplyTo = uuid.NewString()
@@ -395,15 +408,11 @@ func TestIntegrationDispatchTaskPublicationPreservesMintAndAttachment(t *testing
 				require.Equal(t, msg.PriorMessages, task.PriorMessages)
 				require.Equal(t, msg.RunID, task.RunID)
 				require.Equal(t, msg.InReplyTo, task.InReplyTo)
-				if mode == "reply_to" || mode == "auto_continue" {
-					require.Equal(t, existing.ID, task.LoopID, "attachment preserves the admitted current LoopID")
-				} else {
-					if existing != nil {
-						require.NotEqual(t, existing.ID, task.LoopID, "default work remains independent")
-					}
-					_, readErr := kv.Get(ctx, task.LoopID)
-					require.True(t, natsclient.IsKVNotFoundError(readErr), "dispatch must not create loop authority")
+				if existing != nil {
+					require.NotEqual(t, existing.ID, task.LoopID, "default work remains independent")
 				}
+				_, readErr = kv.Get(ctx, task.LoopID)
+				require.True(t, natsclient.IsKVNotFoundError(readErr), "dispatch must not create loop authority")
 				if existing != nil {
 					entry, readErr := kv.Get(ctx, existing.ID)
 					require.NoError(t, readErr)

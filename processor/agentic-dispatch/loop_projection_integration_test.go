@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -44,7 +43,6 @@ func TestIntegrationMixedLoopBucketSharesOneCurrentView(t *testing.T) {
 	hooks := newActivityHookChans()
 	c := startProductionTerminalDispatch(t, ctx, tc, "AGENT", "VIEW_USER_INPUT", "VIEW_USER_OUTPUT", "mixed-view", func(c *Component) {
 		c.activityTestHooks = hooks.hooks()
-		c.config.AutoContinue = true
 	})
 	decoded, err := c.decoder.Decode(unsupported)
 	require.NoError(t, err, "the unsupported completion must be a valid registered envelope")
@@ -74,10 +72,9 @@ func TestIntegrationMixedLoopBucketSharesOneCurrentView(t *testing.T) {
 	require.NoError(t, err)
 	before, err := kv.Get(ctx, admissionLoopA)
 	require.NoError(t, err)
-	assertNativeAutoContinueRefusal(t, c, http.StatusConflict)
 	info, err := kvStream.Info(ctx)
 	require.NoError(t, err)
-	require.Equal(t, 1, info.State.Consumers, "list, AutoContinue and both SSE clients share one native watcher")
+	require.Equal(t, 1, info.State.Consumers, "list and both SSE clients share one native watcher")
 	after, err := kv.Get(ctx, admissionLoopA)
 	require.NoError(t, err)
 	require.Equal(t, before.Revision(), after.Revision())
@@ -86,7 +83,6 @@ func TestIntegrationMixedLoopBucketSharesOneCurrentView(t *testing.T) {
 	require.NoError(t, err)
 	hooks.waitPoisonKey(t, admissionLoopA)
 	assertNativeLoopList(t, c, http.StatusServiceUnavailable, 0)
-	assertNativeAutoContinueRefusal(t, c, http.StatusServiceUnavailable)
 	_, err = kv.Put(ctx, admissionLoopA, before.Value())
 	require.NoError(t, err)
 	hooks.waitAppliedKey(t, admissionLoopA)
@@ -105,7 +101,6 @@ func TestIntegrationMixedLoopBucketSharesOneCurrentView(t *testing.T) {
 	for _, client := range clients {
 		client.waitDone(t)
 	}
-	assertNativeAutoContinueRefusal(t, c, http.StatusServiceUnavailable)
 	require.Eventually(t, func() bool { info, err := kvStream.Info(ctx); return err == nil && info.State.Consumers == 0 }, time.Second, time.Millisecond)
 }
 
@@ -119,18 +114,6 @@ func assertNativeLoopList(t *testing.T, c *Component, status, count int) {
 		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &loops))
 		require.Len(t, loops, count)
 	}
-}
-
-func assertNativeAutoContinueRefusal(t *testing.T, c *Component, status int) {
-	t.Helper()
-	response := httptest.NewRecorder()
-	c.handleHTTPMessage(response, httptest.NewRequest(http.MethodPost, "/message", strings.NewReader(
-		`{"content":"continue","user_id":"user","channel_type":"http","channel_id":"channel"}`)))
-	require.Equal(t, status, response.Code, response.Body.String())
-	var result HTTPMessageResponse
-	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &result))
-	require.Equal(t, agentic.ResponseTypeError, result.Type)
-	require.Empty(t, result.InReplyTo)
 }
 
 func assertNativeMixedPoisonHealing(t *testing.T, ctx context.Context, c *Component, tc *natsclient.TestClient) {

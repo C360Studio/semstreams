@@ -8,15 +8,23 @@ unchanged into the durable TaskMessage. Invalid routable history SHALL reach the
 before task publication; nonempty history on a command SHALL be refused rather than ignored. Required negative-response
 publication failure SHALL NOT acknowledge its durable source.
 
-AutoContinue SHALL default to false in typed configuration and generated schema. An ordinary submission without
-ReplyTo SHALL create an independent execution under defaults, even if another loop is active. Explicit ReplyTo and
-explicitly configured AutoContinue SHALL retain existing attachment behavior. After attachment admission succeeds,
-nonempty prior history SHALL be refused as conflicting intent before task publication or live-loop mutation.
-Commands requiring a loop SHALL require an explicit loop_id under defaults, with an error that states that remedy.
+Every new work submission SHALL start an independent execution with a freshly minted LoopID. No submission SHALL
+attach to or rebind an existing execution. Commands requiring a loop SHALL use an explicit target argument; their
+existing control/read admission and custom-command signatures remain unchanged.
 
-Same-source redelivery SHALL recover its retained task before consulting current attachment state. Source comparison
-SHALL include ordered prior role/content, with nil and empty equivalent. Different history under the same source
-identity SHALL use existing correlation quarantine, without overwriting the task or minting a replacement LoopID.
+Config.AutoContinue, UserMessage.ReplyTo and HTTPMessageRequest.ReplyTo SHALL be absent. Supplying `auto_continue`
+in component JSON or `reply_to` in submission JSON SHALL be explicitly refused, including null or empty values;
+omission SHALL remain valid. The check SHALL recognize the case-folded spellings previously consumed by encoding/json
+without introducing general strict-JSON policy or accepting a compatibility value.
+
+A routable rejected USER input SHALL publish the existing typed negative response and receive PubAck before
+Terminate. Publication failure SHALL Retry. HTTP SHALL return its existing synchronous error response. Retired-key
+refusal SHALL occur before command effects, task lookup/minting/publication or loop mutation.
+
+Same-source redelivery SHALL validate and reuse its retained task. Source comparison SHALL preserve ordered history
+and all surviving correlation fields, with nil and empty history equivalent; it SHALL NOT reinterpret a replay as a
+new conversational turn. Different history under the same source identity SHALL use existing correlation quarantine,
+without overwriting the task or minting a replacement LoopID.
 
 The adapter supplies its displayed user text and UserResponse.Content; SemStreams SHALL NOT promise automatic hosted
 conversation recall. Existing transport limits apply without silent history trimming or new caller-computed limits.
@@ -28,11 +36,12 @@ conversation recall. Existing transport limits apply without silent history trim
 - **THEN** the registered durable TaskMessage contains that ordered history unchanged
 - **AND** this remains true when the displayed Decision.Reason differs from the provider's raw Result
 
-#### Scenario: Independent work is the default
+#### Scenario: A new turn never targets an active execution
 
-- **GIVEN** another execution is active on the same user and channel route
-- **WHEN** a submission omits ReplyTo and AutoContinue uses its default
-- **THEN** dispatch publishes a task with a fresh LoopID rather than attaching to the active execution
+- **GIVEN** another execution exists for the user/channel route
+- **WHEN** an otherwise valid new work submission arrives
+- **THEN** its task has a fresh LoopID and contains only the supplied displayed history
+- **AND** no existing execution is rebound or mutated
 
 #### Scenario: Empty history has no presence semantics
 
@@ -40,25 +49,31 @@ conversation recall. Existing transport limits apply without silent history trim
 - **THEN** their history validation and routing behavior are equivalent
 - **AND** retained-source correlation treats them as the same history
 
-#### Scenario: History conflicts with admitted attachment
+#### Scenario: Retired targeting is refused explicitly
 
-- **GIVEN** ReplyTo or explicitly configured AutoContinue resolves an admitted attachment
-- **WHEN** the input also supplies nonempty prior history
-- **THEN** the caller receives an error without a task publication or live-loop mutation
-- **AND** the same attachment without history retains its existing behavior
+- **WHEN** component JSON contains auto_continue, or submission JSON contains reply_to, with any value
+- **THEN** the applicable boundary refuses and names the retired key
+- **AND** no command, task publication, new task/loop identity or loop mutation occurs
+- **AND** a routable durable USER receives its negative response before termination
+- **AND** failed negative publication retries without acknowledging that source
 
-#### Scenario: Commands require an explicit default target
+#### Scenario: Commands require an explicit target
 
-- **WHEN** a command requiring a loop omits loop_id under default configuration
+- **WHEN** a command requiring a loop omits loop_id
 - **THEN** dispatch reports that an explicit loop_id is required
 - **AND** nonempty history on any command is an input error, not ignored data
-- **AND** explicitly configured AutoContinue retains its existing implicit command target behavior
+
+#### Scenario: Explicit controls remain available
+
+- **WHEN** a caller supplies an explicit cancel/status/read/approval target
+- **THEN** its existing token, authority and permission checks remain in force
+- **AND** no target is inferred from another active loop
 
 #### Scenario: Redelivery retains the committed conversation input
 
 - **GIVEN** dispatch committed a task and was replaced before settling its source
 - **WHEN** the source redelivers
-- **THEN** dispatch reuses its committed LoopID and history before resolving current attachment state
+- **THEN** dispatch reuses its committed LoopID and history without creating a new conversational turn
 - **AND** changed ordered history under the same source identity quarantines rather than overwrites or remints
 
 ### Requirement: Every dispatch durable input settles through its owner
@@ -68,10 +83,14 @@ It SHALL NOT consume `agent.created` or `agent.approval_pending` as correctness 
 receive only an immutable owner-supplied work view and SHALL return a typed semantic outcome. Native message and
 settlement methods SHALL NOT escape the owner.
 
-A `UserMessage` SHALL not be positively acknowledged until every required task, cancel signal, approval response,
-and user-response publication has synchronous JetStream PubAck. These ordinary publications are at-least-once.
-Terminal events SHALL retain their typed ancestry and read-through contract. No void, log-only, or core-NATS
-publication failure SHALL become ACK.
+A `UserMessage` SHALL NOT be positively acknowledged until every required publication has synchronous JetStream
+PubAck, except for the task-only retained-commitment proof defined below. A successfully decoded and validated exact
+retained TaskMessage whose TaskID, LoopID and source correlation match the submission SHALL satisfy that task's
+publication obligation without another task publication, even when the original PubAck was not observed.
+
+All other required publications, including cancel signals, approval responses and user responses, SHALL retain their
+existing synchronous PubAck requirement. Ordinary publications remain at-least-once. Terminal events SHALL retain
+their typed ancestry and read-through contract. No void, log-only, or core-NATS publication failure SHALL become ACK.
 
 The three durable subscriptions SHALL invoke their typed business handlers using the callback installed by each
 production setup branch. All delivery-derived work SHALL join before the private callback passes its decision and
@@ -132,18 +151,10 @@ temporarily unreadable route evidence SHALL not be treated as routeless.
 - **THEN** dispatch publishes no `user.response`
 - **AND** settles the terminal source after required validation
 
-#### Scenario: AutoContinue observes the loop-birth gap
-
-- **GIVEN** a new task has received PubAck but its first `LoopEntity` is not yet visible
-- **WHEN** another route-only message uses the same `(UserID, ChannelType, ChannelID)`
-- **THEN** dispatch observes zero current matches and may mint another task and random LoopID
-- **AND** it does not invent a route claim from process memory
-- **AND** a caller requiring continuity must supply the first minted LoopID
-
 ### Requirement: Dispatch uses one authority-backed current-state projection
 
-Dispatch SHALL use one caught-up graph view over `AGENT_LOOPS` for `/activity`, `/loops`, `/debug/state`, and
-AutoContinue. `LoopTracker` and pending-approval process caches SHALL NOT exist. `/loops` and `/debug/state` SHALL
+Dispatch SHALL use one caught-up graph view over `AGENT_LOOPS` for `/activity`, `/loops`, and `/debug/state`.
+`LoopTracker` and pending-approval process caches SHALL NOT exist. `/loops` and `/debug/state` SHALL
 preserve the existing immutable `LoopInfo` JSON schema except for `execution_id` on the existing nested
 `PendingApprovalInfo`. That identity SHALL come from observed pending authority and appear in the corresponding
 JSON/OpenAPI schema. The existing optional `context_request_id` field SHALL remain empty in the authority-backed
@@ -153,7 +164,7 @@ addition SHALL NOT authorize tracker retirement or unrelated projection expansio
 `/debug/state` SHALL expose the view's caught-up readiness
 and current poison diagnostics rather than reporting a false empty state.
 
-Explicit LoopID approval, read, continuation, cancellation, terminal-route, and command-owner operations SHALL
+Explicit LoopID approval, read, cancellation, terminal-route, and command-owner operations SHALL
 exact-read and validate `AGENT_LOOPS/<LoopID>`. A partial, stale, watcher-lost, or relevant-poisoned projection SHALL
 never be treated as empty.
 
@@ -208,7 +219,6 @@ dispatch's check SHALL NOT stand in for that application-time check.
 - **WHEN** the shared view is not caught up or has current-loop poison
 - **THEN** listing and debug return service unavailable
 - **AND** debug diagnostics identify not-caught-up readiness or the current poison condition
-- **AND** AutoContinue remains retryable
 - **AND** no path assumes zero loops
 
 #### Scenario: Loop DTO shape is preserved
@@ -220,24 +230,6 @@ dispatch's check SHALL NOT stand in for that application-time check.
 - **AND** JSON/OpenAPI verification preserves every other unrelated field and mapping
 - **AND** no mutable loop entity, tracker state, or projection internals enter the response
 
-#### Scenario: Exact AutoContinue tuple has one match
-
-- **GIVEN** exactly one nonterminal record matches `(UserID, ChannelType, ChannelID)`
-- **WHEN** AutoContinue resolves the message
-- **THEN** dispatch continues that LoopID
-
-#### Scenario: Partial route does not match
-
-- **WHEN** only UserID, ChannelType, or ChannelID agrees
-- **THEN** the record is not an AutoContinue candidate
-
-#### Scenario: AutoContinue is ambiguous
-
-- **GIVEN** more than one exact nonterminal match
-- **WHEN** AutoContinue resolves the message
-- **THEN** dispatch refuses with typed ambiguity
-- **AND** does not guess
-
 ### Requirement: Dispatch task redelivery recovers the committed LoopID
 
 Dispatch SHALL derive stable TaskID from validated `UserMessage` identity. For new work it SHALL mint a
@@ -245,16 +237,38 @@ random framework LoopID and retain that LoopID in the committed `TaskMessage`. O
 exact-read the retained task by TaskID, validate the TaskID/source mapping, and recover the retained LoopID. One
 TaskID naming two LoopIDs SHALL quarantine.
 
+When this exact retained-task validation succeeds, both durable UserMessage handling and HTTP submission SHALL reuse
+the task commitment without republishing the task. This proof SHALL apply only to that task publication. Typed
+absence SHALL retain the existing preparation/publication path; failed reads and invalid or conflicting evidence
+SHALL retain each caller's existing classifications and SHALL NOT mint or publish replacement work.
+
+The durable UserMessage path SHALL still obtain PubAck for its required user response before source ACK; response
+publication failure SHALL retry. HTTP submission SHALL retain its existing synchronous response, exact-read refusal,
+and optional stream-mirror behavior. This change SHALL NOT make the optional HTTP mirror a required publication.
+Retained-task reuse SHALL NOT delete the task, advance its destination consumer, or claim to repair late DeliverNew
+consumers or exhausted delivery budgets.
+
 Cancel, approval-response, refusal, terminal user-response, and other ordinary publications SHALL be at-least-once.
-Source ACK SHALL wait for every required PubAck. A stable `Nats-Msg-Id` MAY suppress duplicates inside the configured
+Source ACK SHALL wait for every required PubAck, subject only to the task-specific retained-commitment exception above.
+A stable `Nats-Msg-Id` MAY suppress duplicates inside the configured
 server window, but SHALL NOT be treated as exact commitment proof or a guarantee beyond that window. Dispatch SHALL
 NOT add exact committed-output lookup for ordinary publications.
 
 #### Scenario: User delivery repeats after task commit
 
-- **WHEN** a `UserMessage` redelivers after its task committed
-- **THEN** dispatch reads the retained task by stable TaskID
-- **AND** reuses its random minted LoopID rather than deriving or minting another
+- **GIVEN** the exact correlated TaskMessage remains retained
+- **WHEN** a UserMessage redelivers, including after replacement lost the original PubAck observation
+- **THEN** dispatch validates and reuses its committed TaskID, LoopID and source correlation
+- **AND** does not publish another task, including beyond the duplicate-suppression window
+- **AND** obtains PubAck for its required user response before acknowledging the source
+- **AND** failure of that response publication retries without replacing the task
+
+#### Scenario: HTTP submission reuses a retained task
+
+- **WHEN** HTTP submission finds and validates its exact retained task
+- **THEN** it reuses that commitment without another task publication
+- **AND** preserves the existing synchronous response and optional stream-mirror behavior
+- **AND** an exact-read failure retains the existing HTTP refusal behavior
 
 #### Scenario: Task mapping conflicts
 
@@ -284,7 +298,7 @@ lifecycle context. Exported graphview `Restart` is not part of the contract.
 ### Requirement: The shared view separates current authority from activity
 
 Bare canonical LoopID keys SHALL validate as `LoopEntity` with key/ID equality. Invalid values under those keys
-SHALL poison authoritative listing and AutoContinue until a greater-revision valid write or tombstone heals them.
+SHALL poison authoritative listing until a greater-revision valid write or tombstone heals them.
 Other non-completion keys SHALL be excluded from current-loop authority without optional-producer classification.
 
 Existing ordinary `COMPLETE_` activity SHALL retain its field mappings and canonical suffix/payload identity checks.
@@ -301,7 +315,7 @@ terminal records and registered ordinary-terminal envelopes SHALL retain their c
 - **GIVEN** an invalid value under a canonical LoopID has poisoned current-loop authority
 - **WHEN** a greater-revision valid value with matching ID or a tombstone lands
 - **THEN** the poison clears
-- **AND** authoritative listing and AutoContinue may resume after that revision is applied
+- **AND** authoritative listing may resume after that revision is applied
 
 #### Scenario: Non-authority record is present
 
@@ -314,7 +328,7 @@ terminal records and registered ordinary-terminal envelopes SHALL retain their c
 - **GIVEN** an ordinary raw or registered completion with a canonical key and matching payload LoopID
 - **WHEN** the shared view decodes it
 - **THEN** it preserves the existing activity fields
-- **AND** it does not supply a current-loop record or an AutoContinue candidate
+- **AND** it does not supply a current-loop record
 
 #### Scenario: Unsupported completion does not block current authority
 
@@ -362,11 +376,12 @@ A custom command needing ownership SHALL receive only
 UserID. Invalid ID, confirmed absence, missing owner, invalid record, and unavailable storage SHALL be distinct error
 classes. No raw `LoopEntity`, KV handle, bucket name, tracker, or generic query surface is exposed.
 
-#### Scenario: a continuation after a process replacement is admitted from the durable record
+#### Scenario: An explicit control reads authority after replacement
 
-- **GIVEN** a loop created before dispatch was replaced whose exact `AGENT_LOOPS` record names its owner
-- **WHEN** that owner continues it by explicit LoopID
-- **THEN** the request continues that loop rather than silently forking it
+- **GIVEN** dispatch was replaced and an exact durable loop record remains
+- **WHEN** a caller explicitly requests status, cancellation or approval for that loop
+- **THEN** dispatch uses that durable authority and the operation's existing admission rules
+- **AND** it neither creates nor rebinds an execution
 
 #### Scenario: an unreadable durable record refuses as transient
 
@@ -387,3 +402,174 @@ classes. No raw `LoopEntity`, KV handle, bucket name, tracker, or generic query 
 - **WHEN** a command supplies a canonical LoopID
 - **THEN** `LookupLoopOwner` returns only LoopID and UserID from exact authority
 - **AND** absence, missing owner, invalid record, and unavailable storage are classified distinctly
+
+### Requirement: One gate admits every request that names an existing loop
+
+Dispatch MUST admit every supported explicit control/read request that names a loop through exactly one gate, and
+no seam MAY hand-roll
+any part of the decision. The gate runs three checks in a FIXED order — **form, then existence, then
+ownership** — so that a later reason never masks an earlier one: a malformed token is always answered as
+malformed, never as "not found" or "not yours", and an absent loop is always answered as absent, never as
+"not yours". Ordering is the requirement, not an implementation note: it is what makes a refusal reason
+diagnostic rather than a leak of whether some other party's loop exists.
+
+- **Form** MUST reuse the canonical loop-token predicate that `entity-id-contract` defines. The gate MUST NOT
+  contain a second spelling of loop-token shape — no length test, no prefix test, no regular expression.
+- **Existence** MUST be decided from validated durable authority (see the merged-facts requirement below), never from process
+  memory alone.
+- **Ownership** MUST be decided by the ownership model below, against the loop's own recorded owner.
+
+Every refusal MUST be a classified error carrying a machine-readable `Code` and a `Detail` map naming the seam
+and the failing field; an unclassified `Wrap`-family error is not a refusal this gate may return. Exactly one
+home MUST map a refusal to its metric reason label, so two seams cannot disagree about what the same refusal is
+called. Exactly one named log constant MUST carry the refusal WARN, so a test pins the production string rather
+than a copy of it. A refusal MUST increment its counter exactly once and MUST NOT be counted again by a seam
+that already returned.
+
+The gate MUST NOT read `AGENT_TRAJECTORIES`, ObjectStore evidence, or any other execution-audit surface. Agent
+execution evidence stays write-only from execution's side; nothing in the admission decision may depend on it.
+
+#### Scenario: a malformed token is refused as malformed even when the loop does not exist
+
+- **GIVEN** a request naming the loop `loop_ab12cd34`, which no `AGENT_LOOPS` record holds
+- **WHEN** the gate admits it on any seam
+- **THEN** the refusal carries the invalid-token code and names the token field, not the not-found code
+- **AND** the refusal counter increments exactly once with the invalid-token reason
+- **AND** the test that verifies this is `TestFormRefusalPrecedesExistenceRefusal`
+
+#### Scenario: an absent loop is refused as absent even when the requester is not its owner
+
+- **GIVEN** a canonical loop token that no `AGENT_LOOPS` record holds
+- **WHEN** a requester who owns no such loop requests its cancellation
+- **THEN** the refusal carries the not-found code, not the not-owned code
+- **AND** the test that verifies this is `TestExistenceRefusalPrecedesOwnershipRefusal`
+
+#### Scenario: every seam refuses through the one gate with one counted reason
+
+- **GIVEN** explicit `/cancel` and `/status` commands on the channel and HTTP paths, and the `GET` and `approval`
+  loop endpoints
+- **WHEN** each is given a non-canonical loop token
+- **THEN** each refuses through the shared gate, each emits the single named refusal log constant, and the
+  refusal counter records one increment labelled with that seam
+- **AND** the tests that verify this are `TestEverySeamRefusesThroughTheGate` and
+  `TestRefusalIsCountedExactlyOncePerSeam`
+
+Submission `reply_to` is retired and refused before this gate; it is not an operation naming an existing loop.
+
+### Requirement: The ownership model binds the user lane, and approval is deliberately not owner-scoped
+
+The gate MUST apply exactly this ownership model to requests arriving on the user lane, and MUST NOT extend it:
+
+- **cancel**: the requester MUST equal the loop's recorded owner OR appear in the configured cancel-any list.
+- **approve**: the requester MUST appear in the configured approve list. **Ownership is deliberately NOT
+  consulted.** A second-party reviewer is the entire point of an approval, and a future change that "fixes" this
+  by adding an owner check removes the capability. The approve list has been advertised in configuration and
+  unread by any call site; this requirement is what makes it load-bearing. Its default admits everyone, so
+  enforcing it changes no default deployment's behaviour.
+- **read** (`GET` of a loop): form is checked; ownership is NOT. Scoping reads is a separate question and is
+  not decided here.
+
+An unknown owner MUST fail closed. When a user-lane request names a loop whose recorded owner cannot be
+determined from validated durable authority — absent or present with no recorded owner — the gate MUST refuse. The
+consequence is stated so it is not later mistaken for a bug: a user-lane request naming a **system-lane** loop
+is refused, because a system-lane loop has no user owner to match.
+
+Two lanes exist and only one is bound by the model above. The **user lane** is dispatch: identity, permissions,
+and channels. The **system lane** is the rule engine's agent-publish action and the graph-research continuation
+subject; loops born on that lane carry no user owner, never traverse this gate, and MUST NOT be refused for
+having no owner.
+
+#### Scenario: a non-owner on the cancel-any list may cancel
+
+- **GIVEN** a loop created by `user-a` and an operator in the cancel-any list
+- **WHEN** the operator cancels it by command
+- **THEN** it is admitted, and a requester on neither the cancel-any list nor the loop's ownership is refused
+- **AND** the test that verifies this is `TestCancelAnyAdmitsNonOwnerCancel`
+
+#### Scenario: an approver who does not own the loop is admitted
+
+- **GIVEN** a loop created by `user-a` awaiting approval, and `reviewer-b` in the approve list
+- **WHEN** `reviewer-b` submits the approval
+- **THEN** it is admitted and published, and ownership is never consulted
+- **AND WHEN** `stranger-c`, absent from the approve list, submits the same approval
+- **THEN** it is refused with the permission reason
+- **AND** the tests that verify this are `TestApprovalIsNotOwnerScoped` and
+  `TestApprovalRefusedForCallerOutsideApproveList`
+
+#### Scenario: a system-lane loop is not refused for having no owner
+
+- **GIVEN** a loop spawned by a rule's agent-publish action, carrying no user owner
+- **WHEN** it runs, publishes, and settles
+- **THEN** no admission refusal occurs anywhere on its path, because it never traverses the user-lane gate
+- **AND** the test that verifies this is `TestSystemLaneLoopIsNotOwnerChecked`
+
+### Requirement: The gate is not authorization, and the spec says so
+
+This capability MUST NOT be read, cited, or extended as an authorization boundary. Caller identity on this plane
+is **asserted by the caller**: it is taken from product middleware when middleware supplied it, otherwise from
+the request body's own claimed user field, otherwise from a fixed default. Nothing verifies it. A party that can
+reach a dispatch seam can therefore claim any identity, and every check above will pass for the identity it
+claimed.
+
+The gate applies the declared control permissions and makes every gate refusal countable. Live attachment is
+retired independently; its removal is not an authorization boundary. What it does not buy is isolation between mutually untrusted parties. Authorization — authenticated
+identity, and a policy surface that binds it — is a separate contract and is not delivered here.
+
+#### Scenario: an asserted identity is accepted at face value
+
+- **GIVEN** no authenticating middleware installed
+- **WHEN** a client submits a request claiming any user identity it likes
+- **THEN** that identity is used for every check in this capability, unverified
+- **AND** the test that verifies this is `TestAssertedIdentityIsNotVerified`
+
+### Requirement: A refused or unpublishable submission leaves no tracked loop and no moved gauge
+
+A submission that does not result in a published task MUST leave dispatch's observable state exactly as it found
+it. Dispatch has no loop tracker or active-loops gauge to update. A refusal MUST NOT publish task work or mutate
+loop authority. Every routable submission failure MUST answer the submitter with a typed error response that
+names the offending field, synchronously on the HTTP path and on the response subject on the channel path, and
+MUST increment a counter. A logged bare return is not an acceptable outcome on any submission path.
+
+#### Scenario: a task that fails payload validation answers the submitter and leaks nothing
+
+- **GIVEN** a submission whose task message fails validation at serialization time, for example an empty prompt
+  or an empty role
+- **WHEN** dispatch handles it on the channel path
+- **THEN** an error response naming the offending field is published to the response subject, a refusal is
+  counted, no task is published and loop authority is unchanged
+- **AND WHEN** the same submission arrives on the HTTP path
+- **THEN** the client receives a synchronous error response naming the offending field rather than a generic
+  retry suggestion, a refusal is counted, no task is published and loop authority is unchanged
+- **AND** the tests that verify this are `TestValidationFailureAnswersChannelSubmitter`,
+  `TestValidationFailureAnswersHTTPSubmitter`, and `TestFailedSubmissionLeavesGaugeAndTrackerUnchanged`
+
+### Requirement: The ungated seams are named, with the reason each is exempt
+
+Every seam that accepts a loop token and does NOT pass through the gate MUST be listed here with its reason, so
+that an ungated seam is a recorded decision rather than an omission a later reader has to rediscover:
+
+- **Framework-published loop events** — loop-created, approval-pending, and terminal completion and failure
+  events. These correlate by a loop id the framework itself published on a stream, not by a caller-controlled
+  field. There is no requester to check. Dispatch consumes only complete/failed for terminal routing, not
+  created/pending as correctness inputs.
+- **Outbound approval-pending events.** An event agentic-loop publishes, not a request dispatch admits. Its token still
+  carries the form check at its own payload boundary.
+- **Read-projection wire types** for the loops view and for completion decoding. These decode framework-written
+  records; they are not an intake of untrusted input.
+- **The user-message payload's own validation.** Surviving run/reply-lineage tokens are checked at the dispatch
+  seam. Decoding a retired `reply_to` key records only private, nonserialized presence, not a target or value.
+  Dispatch validates before command/task handling so routable rejection can publish its negative response;
+  decode-time rejection MUST NOT replace that response. Malformed, unregistered and unroutable input retains its
+  existing refusal behavior without an invented route.
+- **The HTTP request body type for submissions.** A retired `reply_to` key is rejected during body decoding through
+  the existing synchronous error response. Surviving run/reply-lineage fields keep their existing validation.
+- **Loop read (`GET`)** is gated for form and existence only; ownership is not consulted, per the ownership
+  model above.
+
+#### Scenario: a framework-published loop event is not owner-checked
+
+- **GIVEN** a terminal completion event for a loop with a recorded owner
+- **WHEN** dispatch handles it
+- **THEN** it is not refused for ownership, and terminal routing follows its existing contract
+- **AND** created/pending events are not dispatch correctness inputs
+- **AND** the test that verifies this is `TestFrameworkPublishedEventsAreNotOwnerChecked`

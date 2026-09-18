@@ -1,7 +1,6 @@
 package agenticdispatch
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -77,11 +76,10 @@ func TestLoopOwnerLookupReturnsOnlyCurrentOwnerOrClassifiedRefusal(t *testing.T)
 
 // spec: agentic-dispatch / Dispatch uses one authority-backed current-state projection
 func TestHTTPProjectionRefusesHeldBootstrapBeforeRequestCancellation(t *testing.T) {
-	for _, endpoint := range []string{"list", "debug", "auto_continue"} {
+	for _, endpoint := range []string{"list", "debug"} {
 		t.Run(endpoint, func(t *testing.T) {
 			source := newFakeActivitySource()
 			c := newActivityTestComponent(t, source, graphview.Hooks{})
-			c.config.AutoContinue = true
 			c.modelRegistry = newTestRegistry()
 			c.taskEvidence = emptyRetainedTaskEvidenceReader{}
 			view, err := c.ensureActivityView(t.Context())
@@ -98,10 +96,6 @@ func TestHTTPProjectionRefusesHeldBootstrapBeforeRequestCancellation(t *testing.
 				c.handleListLoops(response, request)
 			case "debug":
 				c.handleDebugState(response, request)
-			case "auto_continue":
-				request = httptest.NewRequest(http.MethodPost, "/message", strings.NewReader(
-					`{"content":"continue","user_id":"user","channel_type":"http","channel_id":"channel"}`)).WithContext(ctx)
-				c.handleHTTPMessage(response, request)
 			}
 			require.NoError(t, ctx.Err(), "unavailable must be observable before request cancellation")
 			require.Equal(t, http.StatusServiceUnavailable, response.Code, response.Body.String())
@@ -145,40 +139,4 @@ func FuzzLoopOwnerLookup(f *testing.F) {
 		require.Equal(t, 1, reads)
 		require.Equal(t, LoopOwner{LoopID: id, UserID: "owner"}, owner)
 	})
-}
-
-// spec: agentic-dispatch / Dispatch uses one authority-backed current-state projection
-func TestHTTPAutoContinueRefusesUnavailableOrAmbiguousViewWithoutEffects(t *testing.T) {
-	for _, ambiguous := range []bool{false, true} {
-		t.Run(map[bool]string{false: "unavailable", true: "ambiguous"}[ambiguous], func(t *testing.T) {
-			c := newTestComponent(t)
-			records := []*agentic.LoopEntity{
-				{ID: admissionLoopA, UserID: "user", ChannelType: "http", ChannelID: "channel", State: agentic.LoopStateRunning, MaxIterations: 3},
-				{ID: admissionLoopB, UserID: "user", ChannelType: "http", ChannelID: "channel", State: agentic.LoopStateRunning, MaxIterations: 3},
-			}
-			if ambiguous {
-				c = newCurrentLoopTestComponent(t, records...)
-			}
-			c.config.AutoContinue = true
-			c.taskEvidence = emptyRetainedTaskEvidenceReader{}
-			before, err := json.Marshal(records)
-			require.NoError(t, err)
-			body := []byte(`{"content":"continue","user_id":"user","channel_type":"http","channel_id":"channel"}`)
-			response := httptest.NewRecorder()
-			c.handleHTTPMessage(response, httptest.NewRequest(http.MethodPost, "/message", bytes.NewReader(body)))
-			want := http.StatusServiceUnavailable
-			if ambiguous {
-				want = http.StatusConflict
-			}
-			require.Equal(t, want, response.Code, response.Body.String())
-			var result HTTPMessageResponse
-			require.NoError(t, json.Unmarshal(response.Body.Bytes(), &result))
-			require.Equal(t, agentic.ResponseTypeError, result.Type)
-			require.Empty(t, result.InReplyTo, "refusal cannot invent a new loop")
-			require.Zero(t, testutil.ToFloat64(c.metrics.tasksSubmitted))
-			after, err := json.Marshal(records)
-			require.NoError(t, err)
-			require.Equal(t, before, after)
-		})
-	}
 }

@@ -100,7 +100,6 @@
       "config": {
         "default_role": "general",
         "default_tools": [],
-        "auto_continue": false,
         "stream_name": "USER",
         "ports": {
           "inputs": [

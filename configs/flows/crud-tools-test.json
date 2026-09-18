@@ -99,7 +99,6 @@
       "config": {
         "default_role": "general",
         "default_tools": ["create_rule", "list_rules", "get_rule"],
-        "auto_continue": false,
         "stream_name": "USER",
         "ports": {
           "inputs": [

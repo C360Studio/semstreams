@@ -538,7 +538,7 @@ type LifecycleManager interface {
 type ActionExecutor struct {
 	logger        *slog.Logger
 	tripleMutator TripleMutator                // Optional: if nil, triple mutations are logged but not persisted
-	publisher     Publisher                    // Optional: if nil, publish actions are logged but not sent
+	publisher     Publisher                    // Required by publish_agent; other publish actions permit nil
 	kvWriter      KVWriter                     // Optional: if nil, update_kv actions are logged but not executed
 	lifecycle     LifecycleManager             // Optional: if nil, lifecycle_* actions return an error explaining no Manager is wired
 	toolRegistry  component.ToolRegistryReader // Optional: if nil, publish_agent default_tools resolution returns empty
@@ -1893,6 +1893,10 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 	if err := task.Validate(); err != nil {
 		return errs.WrapInvalid(err, "RuleActionExecutor", "publishAgentOnce", "validate substituted task")
 	}
+	if e.publisher == nil {
+		return errs.WrapInvalid(errors.New("publish_agent requires a configured publisher"),
+			"RuleActionExecutor", "publishAgentOnce", "publish agent task")
+	}
 
 	// run_scope=new is intentionally committed only after the complete,
 	// substituted TaskMessage has passed validation. Mint and graph writes are
@@ -1957,31 +1961,21 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 			"entity_id", entityID)
 	}
 
-	// Publish via NATS if publisher is configured
-	published := false
-	if e.publisher != nil {
-		// Wrap task in BaseMessage envelope (required by agentic-loop)
-		baseMsg := message.NewBaseMessage(task.Schema(), &task, "rule-engine")
-		data, err := json.Marshal(baseMsg)
-		if err != nil {
-			return fmt.Errorf("marshal task message: %w", err)
-		}
+	// Wrap task in BaseMessage envelope (required by agentic-loop).
+	baseMsg := message.NewBaseMessage(task.Schema(), &task, "rule-engine")
+	data, err := json.Marshal(baseMsg)
+	if err != nil {
+		return fmt.Errorf("marshal task message: %w", err)
+	}
+	if err := e.publisher.Publish(ctx, subject, data); err != nil {
+		return fmt.Errorf("publish agent task to %s: %w", subject, err)
+	}
 
-		if err := e.publisher.Publish(ctx, subject, data); err != nil {
-			return fmt.Errorf("publish agent task to %s: %w", subject, err)
-		}
-		published = true
-
-		if e.logger != nil {
-			e.logger.Debug("Agent task published",
-				"subject", subject,
-				"task_id", taskID,
-				"size", len(data))
-		}
-	} else if e.logger != nil {
-		e.logger.Debug("Agent task not published (no publisher configured)",
+	if e.logger != nil {
+		e.logger.Debug("Agent task published",
 			"subject", subject,
-			"task_id", taskID)
+			"task_id", taskID,
+			"size", len(data))
 	}
 
 	// Record the spawned task ID back onto the entity so downstream rules can
@@ -1996,9 +1990,9 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 	// on a local subject, and this predicate has no local subject to move to —
 	// a chained rule reading $entity.triple.rule.spawned_task off an imported
 	// entity finds nothing by design.
-	if published && e.tripleMutator != nil && foreignFiring {
+	if e.tripleMutator != nil && foreignFiring {
 		recordForeignSkip("rule.task.spawned")
-	} else if published && e.tripleMutator != nil {
+	} else if e.tripleMutator != nil {
 		spawnedTriple := message.Triple{
 			Subject:    entityID,
 			Predicate:  "rule.task.spawned",

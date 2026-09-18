@@ -46,14 +46,11 @@ type UserMessage struct {
 	PriorMessages []ChatMessage `json:"prior_messages,omitempty"`
 
 	// Context
-	ReplyTo          string            `json:"reply_to,omitempty"`           // loop_id if continuing
 	ThreadID         string            `json:"thread_id,omitempty"`          // for threaded channels
 	Metadata         map[string]string `json:"metadata,omitempty"`           // channel-specific
 	ContextRequestID string            `json:"context_request_id,omitempty"` // links to assembled context
 
-	// Resumable-reply context (gh#256). These are distinct from ReplyTo:
-	// ReplyTo routes the message to a loop to continue; the two below let a
-	// reply re-enter and resume a *paused run*.
+	// Run/reply lineage (gh#256) is independent of the new execution's identity.
 	//
 	// RunID is the bare run anchor the reply should re-attach to. A client
 	// resuming a paused run (ADR-053) echoes the RunID it held from the pause
@@ -64,16 +61,22 @@ type UserMessage struct {
 	// InReplyTo marks this message as a reply to a specific loop's question
 	// (e.g. an ask_user clarification), stamped onto the resumed loop as the
 	// agent.loop.reply_to triple so a rule can fire on it. Deliberately
-	// separate from ReplyTo so ordinary continuations are NOT marked as
-	// replies. Empty for non-reply submissions.
+	// separate from execution targeting. Empty for non-reply submissions.
 	InReplyTo string `json:"in_reply_to,omitempty"`
 
 	// Timing
 	Timestamp time.Time `json:"timestamp"`
+
+	// Presence only: retain no retired target, but let dispatch answer a routable
+	// decoded submission before its durable source is terminated.
+	retiredReplyTo bool
 }
 
 // Validate checks if the UserMessage is valid
 func (m UserMessage) Validate() error {
+	if m.retiredReplyTo {
+		return fmt.Errorf("reply_to is retired; submit a new turn with prior_messages")
+	}
 	if m.MessageID == "" {
 		return fmt.Errorf("message_id required")
 	}
@@ -105,6 +108,16 @@ func (m *UserMessage) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements json.Unmarshaler
 func (m *UserMessage) UnmarshalJSON(data []byte) error {
+	m.retiredReplyTo = false
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for name := range fields {
+		if strings.EqualFold(name, "reply_to") {
+			m.retiredReplyTo = true
+		}
+	}
 	type Alias UserMessage
 	return json.Unmarshal(data, (*Alias)(m))
 }

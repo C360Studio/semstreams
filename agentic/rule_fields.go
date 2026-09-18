@@ -416,7 +416,6 @@ func (m *UserMessage) RuleFields() map[string]any {
 		"channel_id":   m.ChannelID,
 		"user_id":      m.UserID,
 	}
-	putString(fields, "reply_to", m.ReplyTo)
 	putString(fields, "thread_id", m.ThreadID)
 	putString(fields, "context_request_id", m.ContextRequestID)
 	putString(fields, "run_id", m.RunID)

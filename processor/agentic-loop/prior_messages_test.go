@@ -106,7 +106,7 @@ func TestPriorMessagesColdReconstructionAndRestoration(t *testing.T) {
 }
 
 // spec: agentic-loop / A task carries its prior conversational input
-func TestPriorMessagesCannotAttachToDifferentTask(t *testing.T) {
+func TestPriorMessagesCannotRebindDifferentTask(t *testing.T) {
 	h := fenceHandler(t)
 	original := historyTask()
 	_, err := h.HandleTask(t.Context(), original)
@@ -118,8 +118,8 @@ func TestPriorMessagesCannotAttachToDifferentTask(t *testing.T) {
 	next.TaskID = "different-task"
 	next.Prompt = "new question"
 	result, err := h.HandleTask(t.Context(), next)
-	require.True(t, errs.IsInvalid(err), "history-bearing attachment must be invalid: %v", err)
-	require.ErrorContains(t, err, "prior_messages")
+	require.True(t, errs.IsFatal(err), "history must not authorize different-task correlation: %v", err)
+	require.ErrorContains(t, err, "task correlation conflict")
 	require.Empty(t, result.PublishedMessages)
 	after, err := h.GetLoop(original.LoopID)
 	require.NoError(t, err)

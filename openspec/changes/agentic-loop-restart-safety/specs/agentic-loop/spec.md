@@ -1,5 +1,35 @@
 ## ADDED Requirements
 
+### Requirement: A task owns one execution without rebinding
+
+Every new TaskMessage producer execution SHALL mint a fresh canonical v4 LoopID before validation and marshal.
+Retries of the same already-marshaled publication and downstream redelivery SHALL retain its TaskID, LoopID and bytes.
+A fresh execution of an upstream producer remains outside that publication-retry identity claim.
+
+Loop intake SHALL NOT treat existence as permission to attach a different task. CreateLoopWithID SHALL retain
+form-first validation and refuse an existing token before overwriting loop, context or pending-tool state.
+A known different-task correlation SHALL use the existing fatal correlation refusal at durable intake,
+without rebinding, new model work, replacement authority or a terminal result attributed to the wrong task.
+
+Same-task/same-loop recovery, pending-output retry and matching terminal suppression SHALL remain supported.
+Model, tool and approval continuation within that execution SHALL remain unchanged.
+This requirement SHALL NOT promise detection of arbitrary reused identities after all relevant evidence expires.
+
+#### Scenario: A different task cannot steal an existing execution
+
+- **GIVEN** task A owns a known loop, whether running, awaiting approval or terminal
+- **WHEN** task B supplies that LoopID
+- **THEN** intake returns the existing correlation-conflict disposition
+- **AND** A's state, context, pending work and selected terminal outcome remain unchanged
+- **AND** no task-B request or fabricated task-B terminal outcome is published
+
+#### Scenario: Redelivery remains the same work
+
+- **GIVEN** the same TaskID and LoopID are redelivered
+- **WHEN** current or retained evidence establishes their existing execution
+- **THEN** existing deduplication, recovery or terminal-suppression behavior applies
+- **AND** no different task is attached
+
 ### Requirement: A task carries its prior conversational input
 
 TaskMessage SHALL accept optional `PriorMessages []ChatMessage`, serialized as `prior_messages,omitempty`. Missing,
@@ -59,7 +89,7 @@ boundary SHALL NOT silently trim the supplied history or import prior execution 
 
 | Symbol | Wire value | Meaning |
 |---|---|---|
-| LoopStateRunning | running | Nonterminal work not waiting for human approval, including model/tool work, waiting for results and admissible continuation boundaries. |
+| LoopStateRunning | running | Nonterminal work not waiting for human approval, including model/tool work and waiting for results. |
 | LoopStateAwaitingApproval | awaiting_approval | A current tool call is gated on a human decision. |
 | LoopStateComplete | complete | Successful terminal loop outcome. |
 | LoopStateFailed | failed | Failed terminal loop outcome. |
@@ -389,9 +419,9 @@ provider CallID, ordinal, and the existing result-content proof requirements SHA
 ### Requirement: Loop task, request, and tool work use only required correlation
 
 Every TaskMessage producer SHALL supply a nonempty canonical LoopID before validation, envelope marshal, and
-publication. Each execution producing new loop work SHALL mint one random version 4 UUID locally; a continuation
-producer SHALL echo the admitted existing LoopID. Retry of the same already-marshaled publication and downstream
-redelivery of its retained AGENT bytes SHALL reuse those bytes. A fresh execution of an upstream producer is a
+publication. Each execution producing new loop work SHALL mint one fresh random version 4 UUID locally.
+Retry of the same already-marshaled publication and downstream redelivery of its retained AGENT bytes SHALL reuse
+TaskID, LoopID and bytes. No different task may attach to an existing execution. A fresh execution of an upstream producer is a
 separate production attempt outside this identity-reuse claim. Agentic-loop SHALL validate TaskID-to-LoopID mapping,
 SHALL reject conflict, and SHALL NOT mint, derive, scan for, or separately persist a replacement for absent identity.
 Provider work SHALL carry a stable RequestID. Tool work SHALL carry the framework execution identity derived from
@@ -861,7 +891,8 @@ authority.
 Each recovery-dependent dispatch, governance, and loop owner SHALL invoke pure internal
 `agentstreamadmission.ObserveAndValidate` after resolving its own PortFacts and before its own first dependent
 allocation. Stream identity and requirement SHALL derive only from that component's resolved facts and local typed
-AckWait, BackOff, MaxDeliver, maximum work/replay need, and PubAck dependency. No owner SHALL read another config,
+source/evidence retention obligations and PubAck dependency. AckWait, BackOff, MaxDeliver and work timeout SHALL NOT
+be used to infer an elapsed recovery horizon or safety margin. No owner SHALL read another config,
 shared maxima, factory names, or raw JSON. Dispatch SHALL admit its AGENT outputs before USER intake. Non-agentic
 components SHALL perform zero lookup.
 
@@ -869,7 +900,13 @@ The provider-invocation lane, including its response publisher, SHALL NOT depend
 response reuse, permitted reinvocation on typed absence, and required PubAck remain governed by the agentic-model
 settlement and publication requirements.
 
-Admission SHALL require observed DiscardNew, sufficient MaxAge, and no earlier message bound. Refusal SHALL be typed
+Admission SHALL require observed DiscardNew, age/eviction policy compatible with the named source/evidence
+dependency, and no earlier message bound. Passing those policy checks alone SHALL NOT establish identity safety.
+The dispatch source-to-task mapping and loop task-to-current/terminal-authority/request obligations SHALL be
+proved against supported operational redelivery and first-party republication. Initial publication ordering alone
+SHALL NOT stand in for that proof. This requirement introduces no elapsed recovery guarantee or indefinite
+deduplication guarantee for arbitrary caller resubmission after evidence expiry.
+Refusal SHALL be typed
 `agent_stream_replay_inadmissible`, name observed/required values, leave only the affected closure not ready, and
 allocate or positively settle nothing. It SHALL mutate no stream and persist no state. Approval lifetime is excluded
 and belongs only to loop-state acquisition.
@@ -877,7 +914,7 @@ and belongs only to loop-state acquisition.
 For R7 governance re-proposal only, a successful exact retained-verdict lookup returning typed absence SHALL
 permit the same exactly correlated proposal to be evaluated under current policy without a finite
 verdict-retention horizon prerequisite, as specified by the governance correlation requirement.
-Startup admission, local Requirement, MaxAge and safety-margin checks SHALL NOT reintroduce that prerequisite.
+Startup admission, local Requirement and observed-retention checks SHALL NOT reintroduce that prerequisite.
 Observed DiscardNew, required PubAck, #1311 source-to-verdict settlement, separate tool-effect protection,
 other lanes' retention requirements and all other R8 obligations SHALL remain unchanged.
 The provider exception remains separate. No new state, timer, timestamp API, recovery runtime, policy-version
@@ -990,6 +1027,15 @@ refused before consumer allocation; the owner SHALL NOT truncate BackOff or admi
 - **THEN** heartbeat and delivery-count validation pass
 - **AND** setup may allocate the consumer with the unchanged two-entry BackOff
 
+## REMOVED Requirements
+
+### Requirement: Creating a loop that already exists is refused; a continuation attaches to it
+
+**Reason:** Owner comment `5728438234` retires live attachment.
+**Migration:** Submit a new task with a fresh LoopID and optional displayed PriorMessages.
+Create refusal, same-task recovery and terminal suppression are preserved by the replacement requirement
+"A task owns one execution without rebinding".
+
 ## MODIFIED Requirements
 
 ### Requirement: Per-loop in-process state is released at terminal, through the one release point
@@ -1003,7 +1049,7 @@ trajectory step aggregate, and observed-audit-loss marker.
 
 Release changes no durable authority. The exact `AGENT_LOOPS` record and operation-specific committed outputs remain
 readable without process maps. Approval-timeout sweeping remains limited to nonterminal awaiting-approval records.
-Direct create/attach refusal for a settled token remains owned by durable admission; process memory is defense in
+Direct create refusal and different-task correlation refusal remain owned by durable admission; process memory is defense in
 depth only.
 
 A late tool result or model response MUST NOT be positively settled merely because process state is absent or the

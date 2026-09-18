@@ -106,7 +106,6 @@ func TestUserMessage_RunID_InReplyTo_RoundTrip(t *testing.T) {
 		MessageID: "msg-001",
 		UserID:    "operator-1",
 		Content:   "the answer is blue",
-		ReplyTo:   "asking-loop-uuid", // routes to the loop to continue
 		RunID:     "paused-run-uuid",  // re-attaches the resumed loop to its run
 		InReplyTo: "asking-loop-uuid", // marks this message as a reply
 		Timestamp: time.Now().UTC(),
@@ -118,7 +117,6 @@ func TestUserMessage_RunID_InReplyTo_RoundTrip(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &got))
 	assert.Equal(t, "paused-run-uuid", got.RunID)
 	assert.Equal(t, "asking-loop-uuid", got.InReplyTo)
-	assert.Equal(t, "asking-loop-uuid", got.ReplyTo)
 }
 
 func TestUserMessage_RunID_InReplyTo_OmittedWhenEmpty(t *testing.T) {

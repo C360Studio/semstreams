@@ -13,7 +13,6 @@ func TestDefaultConfig(t *testing.T) {
 	config := DefaultConfig()
 
 	assert.Equal(t, "general", config.DefaultRole)
-	assert.False(t, config.AutoContinue)
 	assert.Equal(t, "USER", config.StreamName)
 
 	// Check permissions

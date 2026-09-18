@@ -5,12 +5,6 @@
   "title": "agentic-dispatch Configuration",
   "description": "Routes user messages to agentic loops with command parsing and permissions",
   "properties": {
-    "auto_continue": {
-      "type": "boolean",
-      "description": "Automatically continue last active loop",
-      "default": false,
-      "category": "basic"
-    },
     "consumer_name_suffix": {
       "type": "string",
       "description": "Suffix appended to consumer names for uniqueness",
