@@ -85,6 +85,24 @@ rather than a silent duplicate storm. That is deliberately the blunt answer. L4 
 replay — once each published result carries a deterministic identity, republication is idempotent and the publish
 phase can go back to Retry.
 
+## D8 — the `jetstream-consumer-policy` MODIFY targets L0's text, not today's spec
+
+L0 (#759) ADDs the requirement *shared settlement remains stateless and heartbeat-specific*, whose prose reads "The
+no-heartbeat interpreter SHALL remain private. #759 SHALL add no exported pull settlement operation"
+(`openspec/changes/semantic-jetstream-settlement/specs/jetstream-consumer-policy/spec.md:322` on this branch, which
+carries L0 as its base; L0's own head at the time of writing is `29bd7dae`). This change exports a settlement
+operation, so once L0 archives, that sentence becomes current truth and contradicts the tree.
+
+The MODIFIED block in this change's delta therefore targets a requirement that is not in
+`openspec/specs/jetstream-consumer-policy/spec.md` yet — it arrives there when L0 archives, which happens first
+because this change is stacked on L0's branch. That ordering is the whole reason the MODIFY is written here rather
+than left as a residual: it is only unimplementable if the two land out of order, and they cannot. `openspec
+validate --all --strict` is green with the block in place.
+
+What the MODIFY preserves is the part that is still true and still load-bearing: the interpreter stays private. What
+it corrects is the count — one exported settlement operation, reachable through two entry points that differ only in
+the retry policy, owned by #1327 and not by #759.
+
 ## Not in this layer
 
 `agentic-model`'s request lane still returns Ack from its callback before the response PubAck returns
