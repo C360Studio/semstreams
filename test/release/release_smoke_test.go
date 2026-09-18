@@ -94,7 +94,26 @@ func TestE2ETasksPropagateScenarioFailuresAndCoverAgenticTier(t *testing.T) {
 	assertCleanupBeforeUp(t, "Taskfile.yml e2e:tier", taskBlock(t, readFile(t, filepath.Join(root, "Taskfile.yml")), "e2e:tier"))
 	assertCleanupBeforeUp(t, "core default", taskBlock(t, readFile(t, filepath.Join(root, "taskfiles/e2e/core.yml")), "default"))
 	assertCleanupBeforeUp(t, "structural default", taskBlock(t, readFile(t, filepath.Join(root, "taskfiles/e2e/structural.yml")), "default"))
-	assertCleanupBeforeUp(t, "statistical default", taskBlock(t, readFile(t, filepath.Join(root, "taskfiles/e2e/statistical.yml")), "default"))
+	statisticalTask := taskBlock(t, readFile(t, filepath.Join(root, "taskfiles/e2e/statistical.yml")), "default")
+	const statisticalWrapper = "- bash scripts/e2e-statistical-up.sh"
+	if strings.Count(statisticalTask, statisticalWrapper) != 1 {
+		t.Fatal("statistical default must invoke its compose-up wrapper exactly once")
+	}
+	wrapper := readFile(t, filepath.Join(root, "scripts/e2e-statistical-up.sh"))
+	foundWrappedUp := false
+	for _, line := range strings.Split(wrapper, "\n") {
+		command := strings.TrimPrefix(strings.TrimSpace(line), "exec ")
+		if !strings.HasPrefix(command, "docker compose ") || !strings.Contains(command, " up ") {
+			continue
+		}
+		foundWrappedUp = true
+		// Check every wrapper startup path, including the no-log fallback, against the unchanged Task defer.
+		expanded := strings.Replace(statisticalTask, statisticalWrapper, "- "+command, 1)
+		assertCleanupBeforeUp(t, "statistical default", expanded)
+	}
+	if !foundWrappedUp {
+		t.Error("statistical compose-up wrapper does not contain a compose up command")
+	}
 	semanticTaskfile := readFile(t, filepath.Join(root, "taskfiles/e2e/semantic.yml"))
 	for _, taskName := range []string{"default", "fallback", "compare:statistical", "compare:semantic"} {
 		assertCleanupBeforeUp(t, "semantic "+taskName, taskBlock(t, semanticTaskfile, taskName))

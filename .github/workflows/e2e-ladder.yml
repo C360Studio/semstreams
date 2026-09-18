@@ -114,5 +114,9 @@ jobs:
       - name: Port reservation fixture test
         run: bash scripts/e2e-reserve-ports_fixture_test.sh
 
+      # gh#1317: exercise bounded failure capture and real Task defer ordering without live infrastructure.
+      - name: Bind diagnostics fixture test
+        run: python3 scripts/e2e-statistical-up_fixture_test.py
+
       - name: Run e2e statistical tier
         run: task e2e:statistical
