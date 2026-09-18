@@ -1459,6 +1459,13 @@ Ancestor-route lookup retains its existing fallback and `origin_unresolvable` re
 outcome with no user route settles without `user.response`. Required response publication still receives PubAck
 before source ACK, and remains at-least-once.
 
+Two preconditions are now checked before the route is read at all, and both classify as `routing_malformed` —
+permanent, not retried. The terminal's LoopID must be a canonical framework loop token (ADR-105, #1192): dispatch
+refuses a readable synthetic id without touching `AGENT_LOOPS`. And the loaded record must pass
+`LoopEntity.Validate()` and carry its own key as its ID: a merely decodable record is no longer admitted. Anything
+that seeds `AGENT_LOOPS` directly — a migration script, a replay harness, a test fixture — must write a canonical
+token as the key and a record that validates, or the terminal it names will never produce a `user.response`.
+
 Verify pending approval and explicit continuation after dispatch replacement, unavailable-view 503 responses,
 exact-route auto-continue and its birth gap, and terminal routing after replacement. No beta-state preservation,
 tracker hydration, or compatibility layer is required.
