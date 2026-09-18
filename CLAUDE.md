@@ -53,9 +53,9 @@ task e2e:core           # Docker tiers: core ~10s, structural ~30s, statistical 
 ```
 
 Before every push run `task check:push`: it mirrors CI (build, lint, tagged vet, schema drift, contract, race unit,
-then integration through the canonical runner and its host lock). `task check` is the fast subset. A diff that edits files tests read, including markdown, is a code change for gate
-purposes. Revive warnings fail CI and `go fmt` must be clean. E2E tiers are for final validation, not iteration;
-`task e2e:check-ports` explains port conflicts.
+then integration through the canonical runner and its host lock). `task check` is the fast subset. A diff that edits
+files tests read, including markdown, is a code change for gate purposes. Revive warnings fail CI and `go fmt` must be
+clean. E2E tiers are for final validation, not iteration; `task e2e:check-ports` explains port conflicts.
 
 ## Architecture in five sentences
 
