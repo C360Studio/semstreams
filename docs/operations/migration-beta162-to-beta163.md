@@ -1227,3 +1227,25 @@ by the same PR that migrates its last in-tree caller (`agentic/agentrun/agentrun
 should move to the typed API now. `natsclient/consumer_policy_callsite_test.go` pins the exact remaining caller set
 and fails on any addition, so the set only shrinks. SemStreams owns no non-heartbeat exported settlement operation:
 a lane that does not want a heartbeat keeps owning its own `msg` settlement, as it does today.
+
+## A RequestID's suffix is no longer a UUID (#1328, owner ruling Q4 on #1330)
+
+`agent.request` RequestIDs are minted as `<loopID>:req:<iteration>:<retry>` instead of `<loopID>:req:<uuid>`. The
+two ordinals name the logical work — iteration ordinal within the loop, truncation-retry ordinal within the
+iteration — so a redelivered task republishes the *same* RequestID and agentic-model answers it from the retained
+response instead of calling the provider a second time.
+
+**What did not change.** The `<loopID>:req:` prefix, and therefore everything built on it: the framework's own
+`ExtractLoopIDFromRequest`, the `agent.response.<requestID>` subject grammar, and any consumer that splits a
+RequestID on its first colon to recover the loop token — which is what semspec does. A RequestID is still one NATS
+subject token with no dot in it.
+
+**What to check.** Only a consumer that parsed the *suffix* and expected a canonical UUID. If you validate,
+log-parse, or index on that suffix, treat it as an opaque string, or parse it as `<iteration>:<retry>` with both
+parts non-negative integers.
+
+Each `agent.request` publication now also carries its RequestID as the `Nats-Msg-Id` header. If your AGENT stream
+declares a `Duplicates` window (the NATS server default is 2m when unset), the server rejects a second publish of
+the same logical request inside it. That is a convenience, not a contract: the guarantee that bounds provider work
+is agentic-model's retained-response read, which holds regardless of the window. No stream configuration changes
+here and none is required.
