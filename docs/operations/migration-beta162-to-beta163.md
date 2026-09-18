@@ -1268,3 +1268,34 @@ an execution id is still one dotless subject token.
   found, and the call re-executes once under its new identity. The bucket carries no TTL and no binding MaxBytes
   (`RetentionNoLifecycle`), so those keys persist until an operator removes them; delete the bucket before the
   upgrade if you want it clean, and expect the in-flight calls it covered to execute once more.
+
+## Governance verdicts route on execution identity, and an enforce-mode rule set must be edited first (#1328)
+
+The tool-call governance verdict subjects moved off the two-token `<loop_id>.<call_id>` pair and onto the single
+framework execution id. This is the break most likely to take a deployment down, because the wait is fail-closed.
+
+| | Was | Now |
+|---|---|---|
+| Approve subject | `agent.toolcall.approved.<loop_id>.<call_id>` | `agent.toolcall.approved.<execution_id>` |
+| Reject subject | `agent.toolcall.rejected.<loop_id>.<call_id>` | `agent.toolcall.rejected.<execution_id>` |
+| Rule template | `agent.toolcall.rejected.$message.loop_id.$message.call_id` | `agent.toolcall.rejected.$message.execution_id` |
+| Demux key | `call_id` | `execution_id` (`processor/agentic-loop/component.go:2327`, `effectiveExecutionID`) |
+| Waiter key | proposal `call_id` | `call.ExecutionID` (`processor/agentic-loop/governance_dispatcher.go:401`) |
+
+The proposal payload on `agent.toolcall.proposed` carries `execution_id`, `request_id` and `call_ordinal` alongside
+the existing `loop_id` and `call_id`, so a rule has the token it needs without computing anything. The port
+subscriptions are unchanged — both ports still bind `agent.toolcall.{approved,rejected}.>` — so no stream or
+consumer configuration moves; only the rules that *publish* a verdict do.
+
+**Edit the rules before the upgrade, not after.** `agentic-loop` demuxes an arriving verdict by `execution_id` and
+**terminates** one that carries none, so a rule still templating `$message.loop_id.$message.call_id` publishes to a
+subject no waiter is registered under. In `audit` mode the loop publishes the proposal and does not wait, so tool
+calls continue. In **`enforce` mode the wait is fail-closed** (`governance_dispatcher.go:485`): a verdict that never arrives at the
+waiter's key times out and the call is rejected — so an enforce-mode deployment upgraded without editing its rules
+rejects **every governed tool call** until they are, with `governance verdict timeout after <d> (fail-closed)` as
+the only symptom.
+
+The one-line fix per rule is to replace the two-token suffix with `$message.execution_id`. `docs/operations/17-tool-call-governance.md`
+carries the worked rule set at the new subjects, and `$message.execution_id` is in its token table. An operator who
+cannot edit the rules in the same window should set `tool_call_governance.mode` to `audit` for the upgrade and
+switch back to `enforce` once they are edited; that trades enforcement for availability rather than losing both.
