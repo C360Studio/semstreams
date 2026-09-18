@@ -907,6 +907,8 @@ components:
                                             type: object
                                         call_id:
                                             type: string
+                                        execution_id:
+                                            type: string
                                         reason:
                                             type: string
                                         requested_at:
@@ -918,6 +920,7 @@ components:
                                             type: string
                                       required:
                                         - call_id
+                                        - execution_id
                                         - tool_name
                                         - requested_at
                                       type: object
@@ -1374,6 +1377,8 @@ components:
                                 type: object
                             call_id:
                                 type: string
+                            execution_id:
+                                type: string
                             reason:
                                 type: string
                             requested_at:
@@ -1385,6 +1390,7 @@ components:
                                 type: string
                           required:
                             - call_id
+                            - execution_id
                             - tool_name
                             - requested_at
                           type: object
@@ -1447,6 +1453,8 @@ components:
                                 type: object
                             call_id:
                                 type: string
+                            execution_id:
+                                type: string
                             reason:
                                 type: string
                             requested_at:
@@ -1458,6 +1466,7 @@ components:
                                 type: string
                           required:
                             - call_id
+                            - execution_id
                             - tool_name
                             - requested_at
                           type: object
