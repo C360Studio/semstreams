@@ -642,7 +642,7 @@ func TestEveryRefusalCodeMapsToAnHTTPStatus(t *testing.T) {
 	assert.False(t, ok, "an unclassified error is not one of this package's refusals")
 }
 
-// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
+// spec: agentic-dispatch / Loop existence and ownership come from durable authority alone
 // The two read seams answer from the same exact authority as admission.
 func TestReadSeamsAnswerFromTheDurableRecordAfterReplacement(t *testing.T) {
 	arrange := func(c *Component) {
@@ -685,7 +685,7 @@ func TestReadSeamsAnswerFromTheDurableRecordAfterReplacement(t *testing.T) {
 	})
 }
 
-// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
+// spec: agentic-dispatch / Loop existence and ownership come from durable authority alone
 // /status reports the state the gate READ. It used to print a hardcoded
 // "running" for anything the merged facts did not report settled, while
 // persistedLoopFacts had read record.State and thrown it away — so a user asking
@@ -741,6 +741,57 @@ func TestStatusReportsTheRecordedStateNotAFabricatedRunning(t *testing.T) {
 	}
 }
 
+// /status answers iteration progress and age from the record.
+//
+// At the base these two fields came only from the in-process tracker's
+// LoopInfo, so deleting the tracker silently dropped them from every /status
+// answer — a user could no longer see whether a loop was on iteration 1 or 19
+// of its budget. The durable record carries Iterations, MaxIterations and
+// StartedAt, so the fields exist; nothing was reading them.
+//
+// Age has no substitute clock. The KV revision timestamp advances on every
+// iteration, so a loop whose record carries no StartedAt must be told it has no
+// recorded age rather than shown the age of its last write under that word.
+//
+// spec: agentic-dispatch / Loop existence and ownership come from durable authority alone
+func TestStatusReportsIterationProgressAndAgeFromTheRecord(t *testing.T) {
+	t.Run("a record with a start time reports both", func(t *testing.T) {
+		c, _, _ := newSeamTestComponent(t)
+		withPersistedLoops(c, map[string]*agentic.LoopEntity{seamTestLoopA: {
+			ID: seamTestLoopA, TaskID: "task-x", UserID: "user-a",
+			ChannelType: "http", ChannelID: "session-1", State: agentic.LoopStateExecuting,
+			Iterations: 7, MaxIterations: 19, StartedAt: time.Now().Add(-90 * time.Second),
+		}})
+
+		resp, err := c.handleStatusCommand(context.Background(),
+			seamUserMessage("user-a"), []string{seamTestLoopA}, "")
+
+		require.NoError(t, err)
+		assert.Contains(t, resp.Content, "Iterations: 7/19",
+			"progress against the budget is on the record and belongs in the answer")
+		assert.Contains(t, resp.Content, "Age: 1m30s",
+			"age comes from the record's own start time")
+		assert.NotContains(t, resp.Content, "unknown")
+	})
+
+	t.Run("a record without a start time says so", func(t *testing.T) {
+		c, _, _ := newSeamTestComponent(t)
+		withPersistedLoops(c, map[string]*agentic.LoopEntity{seamTestLoopA: {
+			ID: seamTestLoopA, TaskID: "task-x", UserID: "user-a",
+			ChannelType: "http", ChannelID: "session-1", State: agentic.LoopStateExecuting,
+			Iterations: 2, MaxIterations: 5,
+		}})
+
+		resp, err := c.handleStatusCommand(context.Background(),
+			seamUserMessage("user-a"), []string{seamTestLoopA}, "")
+
+		require.NoError(t, err)
+		assert.Contains(t, resp.Content, "Iterations: 2/5")
+		assert.Contains(t, resp.Content, "Age: unknown (the record carries no start time)",
+			"an absent start time is reported as absent, never filled from another clock")
+	})
+}
+
 // The entity-id-contract spec's path-token scenario. Both endpoints that take a
 // loop id from the URL path refuse a non-canonical token for its FORM, ahead of
 // the existence check, so the caller is told the token is malformed rather than
@@ -777,5 +828,53 @@ func TestLoopEndpointsRefuseNonCanonicalPathToken(t *testing.T) {
 		require.Equal(t, http.StatusBadRequest, resp.Code)
 		assert.Contains(t, resp.Body.String(), "not a loop ID this framework minted")
 		requireSeamRefusal(t, c, rec, seamHTTPLoopApproval, reasonFormMalformed)
+	})
+}
+
+// An unavailable loop view answers 503 with a client-facing phrase, never with
+// framework internals.
+//
+// errs.Wrap renders "<Type>.<Op>: <what> failed: <cause>", so returning
+// err.Error() from these two seams shipped
+// "Component.currentLoopSnapshot: loop projection unavailable failed: …" as the
+// HTTP body. This is not an exotic path: auto_continue defaults to true, so a
+// dispatch whose view is still warming reaches it on the DEFAULT configuration
+// and every adopter would have seen it. The internal type and method names are
+// not a client contract; they go to the log line with the request's own id.
+//
+// spec: agentic-dispatch / Dispatch uses one authority-backed current-state projection
+func TestUnavailableLoopViewAnswersWithoutFrameworkInternals(t *testing.T) {
+	const internalPrefix = "Component.currentLoopSnapshot"
+
+	t.Run("POST /message", func(t *testing.T) {
+		c, _, _ := newSeamTestComponent(t)
+		// The shipped default. The fixture runs no view, which is exactly the
+		// warm-up state this refusal exists for.
+		c.config.AutoContinue = true
+
+		req := httptest.NewRequest(http.MethodPost, "/message",
+			strings.NewReader(`{"content":"keep going","user_id":"user-a","channel_type":"http","channel_id":"session-1"}`))
+		rec := httptest.NewRecorder()
+		c.handleHTTPMessage(rec, req)
+
+		require.Equal(t, http.StatusServiceUnavailable, rec.Code, "%s", rec.Body.String())
+		assert.NotContains(t, rec.Body.String(), internalPrefix,
+			"a framework type and method name reached the client")
+		assert.NotContains(t, rec.Body.String(), "failed:")
+		assert.Contains(t, rec.Body.String(), loopViewUnavailableMessage)
+	})
+
+	t.Run("GET /loops", func(t *testing.T) {
+		c, _, _ := newSeamTestComponent(t)
+
+		req := httptest.NewRequest(http.MethodGet, "/loops", nil)
+		rec := httptest.NewRecorder()
+		c.handleListLoops(rec, req)
+
+		require.Equal(t, http.StatusServiceUnavailable, rec.Code, "%s", rec.Body.String())
+		assert.NotContains(t, rec.Body.String(), internalPrefix,
+			"a framework type and method name reached the client")
+		assert.NotContains(t, rec.Body.String(), "failed:")
+		assert.Contains(t, rec.Body.String(), loopViewUnavailableMessage)
 	})
 }

@@ -38,12 +38,56 @@
       be touched
 - [x] 4.3 `docs/concepts/17-approval-flow.md` states the 12h default and ceiling
 
+## 6. Review round 1
+
+- [x] 6.1 `openspec/specs/agentic-dispatch/spec.md:72-124` "Loop existence and ownership are merged facts, never
+      process memory alone" is RETIRED by a `## REMOVED Requirements` block with Reason and Migration, not left as
+      current truth the code refutes. REMOVED rather than MODIFIED because the heading itself is false once the
+      tracker is gone: there are no merged facts to reword. Its replacement, "Loop existence and ownership come from
+      durable authority alone", is in the ADDED block and carries every surviving obligation
+- [x] 6.2 All eleven `// spec:` annotations retargeted to the new heading, and each checked BY HAND against the
+      scenario it proves — `spec:properties` resolving a heading is not agreement. The mapping:
+
+      | test | scenario it proves |
+      |---|---|
+      | `TestContinuationAfterReplacementIsAdmittedFromDurableRecord` | a continuation after a process replacement is admitted from the durable record |
+      | `TestPreviouslyObservedLoopWithoutDurableRecordIsRefused` | a loop this process admitted before, whose record is now gone, is not found |
+      | `TestUnreadableDurableRecordRefusesTransient` | an unreadable durable record refuses as transient |
+      | `TestPriorAdmissionDoesNotBypassADurableReadFailure` | a prior admission is no fallback for a later read failure |
+      | `TestCurrentOwnerReplacesPreviouslyObservedOwner` | only the current record establishes ownership |
+      | `TestGateTerminalAuthorityRefusesContinuation` | terminal authority refuses continuation and stays readable |
+      | `TestGateReportsExactCurrentStateWithoutMutatingAuthority` | a read reports the exact state and mutates nothing |
+      | `TestStatusReportsTheRecordedStateNotAFabricatedRunning` | a read reports the exact state and mutates nothing |
+      | `TestGateRefusesInvalidCurrentAuthorityBeforeOwnership` | invalid authority refuses before ownership is considered |
+      | `TestLoopAdmissionValidatesPersistedAuthority` | invalid authority refuses before ownership is considered |
+      | `TestReadSeamsAnswerFromTheDurableRecordAfterReplacement` | every read seam answers from the record after replacement |
+      | `TestStatusReportsIterationProgressAndAgeFromTheRecord` | /status reports iteration progress and age from the record |
+
+      `TestPreviouslyObservedLoopWithoutDurableRecordIsRefused` is the one that asserted the exact NEGATION of its
+      old citation ("a live loop with no durable record is admitted from the tracker"); a comment at the site now
+      says so, so the correction cannot be lost in a later sweep
+- [x] 6.3 `/status` answers `Iterations n/m` and `Age` from the durable record again: `loopFacts` carries
+      `Iterations`, `MaxIterations` and `StartedAt`, fed by `persistedLoopFacts`. Age has no substitute clock — an
+      absent `StartedAt` is reported as absent rather than filled from the KV revision timestamp, which advances on
+      every iteration. `TestStatusReportsIterationProgressAndAgeFromTheRecord` covers both arms
+- [x] 6.4 The approval handler decides on the RECORDED STATE before any property of `PendingApproval`: a readable
+      non-awaiting record is 409 regardless of a stale pending block, and 503 is reserved for records that cannot be
+      read or do not validate. Clearing the pending block on a terminal transition is L4's and the reason is in
+      `design.md`. Three table cases cover executing, cancelled and failed
+- [x] 6.5 `POST /message` and `GET /loops` answer an unavailable view with a fixed client phrase; the wrapped
+      internal detail goes to the correlated log line. `TestUnavailableLoopViewAnswersWithoutFrameworkInternals`
+      asserts the body carries no `Component.currentLoopSnapshot` prefix on the DEFAULT `auto_continue` path
+- [x] 6.6 Two unrecorded wire changes recorded: `LoopInfo.CreatedAt` now prefers `LoopEntity.StartedAt` over the KV
+      revision timestamp (migration note), and `docs/advanced/08-agentic-components.md` no longer documents the
+      deleted `semstreams_router_active_loops` gauge. The unreachable `loopLookupConflict` vocabulary is a declared
+      residual in `design.md`, not deleted, because removing it edits the generated OpenAPI surface
+
 ## 5. Gates
 
-- [x] 5.1 `task lint`, `task test`, `task schema:generate` with no drift, `task openspec:validate`,
+- [ ] 5.1 `task lint`, `task test`, `task schema:generate` with no drift, `task openspec:validate`,
       `task spec:properties`
-- [x] 5.2 `task check:push`
-- [x] 5.3 `task e2e:agentic` on the final head — required, both commits are BREAKING. Exit 0,
+- [ ] 5.2 `task check:push`
+- [ ] 5.3 `task e2e:agentic` on the final head — required, both commits are BREAKING. Exit 0,
       `assertions_run=15`, `duration=2m4.80s`, all 17 stages green including
       `verify-stage-a-process-replacement` (78.6s, `dispatch_replacement_user_responses:1`) and
       `walk-approval-path` (`approval_listing_matched:2`)

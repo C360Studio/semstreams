@@ -141,7 +141,7 @@ func TestLoopListDoesNotReportUnreadyAsEmpty(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, w.Code)
 }
 
-// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
+// spec: agentic-dispatch / Loop existence and ownership come from durable authority alone
 func TestLoopAdmissionValidatesPersistedAuthority(t *testing.T) {
 	c := admissionTestComponent(t)
 	withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: {

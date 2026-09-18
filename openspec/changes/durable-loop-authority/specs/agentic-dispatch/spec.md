@@ -48,11 +48,14 @@ exact-read and validate `AGENT_LOOPS/<LoopID>`. A partial, stale, watcher-lost, 
 never be treated as empty.
 
 An approval SHALL read the current durable record on every decision rather than a process-local pending cache, and
-SHALL obtain its CallID from validated `PendingApproval` state. An unreadable, absent, or incoherent record — a
-pending approval outside `awaiting_approval`, or an `awaiting_approval` record whose pending CallID or ExecutionID is
-empty — SHALL refuse as unavailable. A record that is readable but no longer awaiting approval SHALL refuse as
-conflict. Admission and publication SHALL NOT mutate loop authority, so a failed publish leaves the decision
-retryable.
+SHALL obtain its CallID from validated `PendingApproval` state. The RECORDED STATE SHALL decide before any property
+of `PendingApproval` does: a record that is readable but not `awaiting_approval` SHALL refuse as conflict regardless
+of whether it still carries a pending block. An unreadable or invalid record, and an `awaiting_approval` record
+whose pending CallID or ExecutionID is empty, SHALL refuse as unavailable. Admission and publication SHALL NOT
+mutate loop authority, so a failed publish leaves the decision retryable.
+
+An unavailable answer SHALL carry a fixed client-facing phrase. A refusal body SHALL NOT contain framework type or
+method names; the wrapped detail belongs in the log line correlated by request id.
 
 #### Scenario: Approval follows replacement
 
@@ -80,6 +83,20 @@ retryable.
 - **WHEN** a complete or failed event carries a LoopID that is not a canonical framework loop token
 - **THEN** dispatch refuses it as permanently malformed routing without reading `AGENT_LOOPS`
 - **AND** publishes no user response
+
+#### Scenario: A loop that left awaiting-approval still carries its pending block
+
+- **GIVEN** a record whose state is cancelled, failed or executing and whose `PendingApproval` was never cleared
+- **WHEN** an approval decision names it
+- **THEN** dispatch refuses as conflict, because the state is permanent and the caller must not retry it
+- **AND** the unavailable answer is reserved for a record that could not be read or did not validate
+
+#### Scenario: An unavailable answer names no framework internals
+
+- **GIVEN** the shared loop view is not yet available
+- **WHEN** a message submission or a loop listing is refused
+- **THEN** the response body is a fixed retryable phrase
+- **AND** it contains no framework type or method name, which remain in the correlated log line
 
 #### Scenario: A failed publish leaves the decision retryable
 
@@ -122,6 +139,100 @@ retryable.
 - **WHEN** AutoContinue resolves the message
 - **THEN** dispatch refuses with typed ambiguity
 - **AND** does not guess
+
+### Requirement: Loop existence and ownership come from durable authority alone
+
+Dispatch SHALL decide a loop's existence, ownership and state ONLY from the exact `AGENT_LOOPS/<LoopID>` record read
+at decision time. No process-local observation, prior successful admission, or cached fact SHALL establish, extend or
+substitute for that record. This requirement replaces "Loop existence and ownership are merged facts, never process
+memory alone": there is no second source left to merge, because the tracker that was the other half is deleted.
+
+The durable bucket name SHALL be OBSERVED from the component's declared KV read port through the existing port
+projection. No reader SHALL carry a bucket-name default of its own.
+
+Degradation SHALL stay explicit and SHALL NOT collapse into one another. Key absence is the not-found refusal. Any
+other read failure, and any record that is decodable but not valid current authority — a wrong key/ID pairing, a
+non-canonical loop token, a missing or unknown state, a non-positive iteration budget — SHALL refuse as transient and
+unreadable: the request is answerable later and SHALL NOT be admitted on an unread or invalid record. Invalid
+authority SHALL be refused BEFORE ownership is considered, so a refusal never discloses whether the requester owns
+the loop.
+
+A seam that reports a loop's state SHALL report the state it read; it SHALL NOT render one fixed word over
+executing, paused and awaiting-approval. Terminal authority SHALL refuse continuation while remaining readable,
+cancellable and approvable at the gate. Reading authority SHALL NOT mutate it.
+
+#### Scenario: a continuation after a process replacement is admitted from the durable record
+
+- **GIVEN** a loop created before dispatch was replaced, whose `AGENT_LOOPS` record names its owner and route
+- **AND** a replacement process with no memory of that loop
+- **WHEN** that loop's owner continues it by `reply_to`
+- **THEN** the request is admitted with the record's owner, route and state
+- **AND** the test that verifies this is `TestContinuationAfterReplacementIsAdmittedFromDurableRecord`
+
+#### Scenario: a loop this process admitted before, whose record is now gone, is not found
+
+- **GIVEN** a loop this process successfully admitted while its `AGENT_LOOPS` record existed
+- **WHEN** the record is gone and the same request arrives again
+- **THEN** the refusal is not-found, and the earlier observation establishes nothing
+- **AND** the test that verifies this is `TestPreviouslyObservedLoopWithoutDurableRecordIsRefused`
+
+#### Scenario: an unreadable durable record refuses as transient
+
+- **GIVEN** an `AGENT_LOOPS` read that fails with anything other than key absence
+- **WHEN** a request names a loop
+- **THEN** the refusal is classified transient and unreadable, never not-found, and no loop is created for the token
+- **AND** the test that verifies this is `TestUnreadableDurableRecordRefusesTransient`
+
+#### Scenario: a prior admission is no fallback for a later read failure
+
+- **GIVEN** a request that was admitted while the record was readable
+- **WHEN** the same request arrives after the read starts failing
+- **THEN** it refuses as transient and unreadable, carrying no ownership from the earlier admission
+- **AND** the test that verifies this is `TestPriorAdmissionDoesNotBypassADurableReadFailure`
+
+#### Scenario: only the current record establishes ownership
+
+- **GIVEN** a loop whose record named one owner when a request was last admitted
+- **WHEN** the record now names a different owner
+- **THEN** the former owner is refused as not-owner and the current owner is admitted
+- **AND** the test that verifies this is `TestCurrentOwnerReplacesPreviouslyObservedOwner`
+
+#### Scenario: terminal authority refuses continuation and stays readable
+
+- **GIVEN** a record in complete, failed or cancelled state
+- **WHEN** its owner continues it
+- **THEN** the refusal is terminal
+- **AND** read, cancel and approve still resolve that record and report its terminal state
+- **AND** the test that verifies this is `TestGateTerminalAuthorityRefusesContinuation`
+
+#### Scenario: a read reports the exact state and mutates nothing
+
+- **WHEN** a status read resolves a record in any state
+- **THEN** the reported state equals the recorded state and the record is byte-identical afterwards
+- **AND** the tests that verify this are `TestGateReportsExactCurrentStateWithoutMutatingAuthority` and
+  `TestStatusReportsTheRecordedStateNotAFabricatedRunning`
+
+#### Scenario: invalid authority refuses before ownership is considered
+
+- **GIVEN** a record that is absent, keyed under another identity, non-canonically identified, stateless,
+  unknown-stated or without a positive iteration budget
+- **WHEN** a stranger names that loop
+- **THEN** the refusal is unreadable and its message does not say the requester does not own the loop
+- **AND** the tests that verify this are `TestGateRefusesInvalidCurrentAuthorityBeforeOwnership` and
+  `TestLoopAdmissionValidatesPersistedAuthority`
+
+#### Scenario: every read seam answers from the record after replacement
+
+- **GIVEN** a replacement process with no memory of any loop
+- **WHEN** the read seams are asked about a loop whose record exists
+- **THEN** each answers from that record rather than reporting absence
+- **AND** the test that verifies this is `TestReadSeamsAnswerFromTheDurableRecordAfterReplacement`
+
+#### Scenario: /status reports iteration progress and age from the record
+
+- **WHEN** `/status` resolves a loop whose record carries its iteration count, budget and timestamps
+- **THEN** the answer names the iteration progress and the loop's age, as it did before the tracker was removed
+- **AND** neither field is reconstructed from process memory
 
 ### Requirement: The shared view separates current authority from activity
 
@@ -197,3 +308,26 @@ clean write or tombstone heals it.
 - **WHEN** a greater-revision clean value or tombstone lands
 - **THEN** the poison clears
 - **AND** readiness may return after that revision is applied
+
+## REMOVED Requirements
+
+### Requirement: Loop existence and ownership are merged facts, never process memory alone
+
+**Reason**: The requirement mandates deciding from "the union of the process-local loop tracker and the durable
+`AGENT_LOOPS` record" and states that "A tracker hit is sufficient to admit even when the durable read fails
+transiently". This change deletes `LoopTracker`, so there is no second source: `lookupLoop` reads the record and
+nothing else. Two scenarios the requirement names by test —
+`TestLiveLoopWithoutDurableRecordIsAdmitted` and the merge-preference test behind
+`TestMergeLoopStatePrefersSettledThenTheTracker` — are deleted with it, and a third,
+`TestPreviouslyObservedLoopWithoutDurableRecordIsRefused`, now asserts the NEGATION of the scenario "a live loop with
+no durable record is admitted from the tracker". Keeping the requirement as current truth while the code refutes it
+is the failure this block exists to prevent; the heading itself is false once there are no merged facts, so it is
+removed rather than reworded.
+
+**Migration**: "Loop existence and ownership come from durable authority alone" above carries every obligation that
+survives — port-observed bucket name, explicit not-found vs transient degradation, the recorded state reported as
+read, and invalid authority refused before ownership — and adds the ones the union hid: a prior admission is no
+fallback, and only the current record establishes ownership. The admission that used to succeed from a tracker hit
+with no durable record now refuses as not-found; a producer relying on best-effort persistence lagging its loop must
+write the record before the loop is continuable. Adopter-facing consequences are in
+`docs/operations/migration-beta162-to-beta163.md`.

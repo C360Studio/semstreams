@@ -78,6 +78,17 @@ const (
 	requestIDKey contextKey = "request_id"
 )
 
+// loopViewUnavailableMessage is the one client-facing phrase for "the loop
+// authority this answer needs is not readable yet".
+//
+// It exists because the underlying error is wrapped by errs.Wrap, whose format
+// is "<Type>.<Op>: <what> failed: <cause>" — so returning err.Error() ships
+// "Component.currentLoopSnapshot: loop projection unavailable failed: …" to
+// every caller on the DEFAULT configuration during ordinary warm-up. Internal
+// type and method names are not a client contract; they go to the log line,
+// which carries the request id that ties the two together.
+const loopViewUnavailableMessage = "loop state is not available right now; retry shortly"
+
 // extractRequestID extracts or generates a request ID from the HTTP request.
 func extractRequestID(r *http.Request) string {
 	if id := r.Header.Get("X-Request-ID"); id != "" {
@@ -183,11 +194,23 @@ func (c *Component) handleHTTPMessage(w http.ResponseWriter, r *http.Request) {
 	resp, err := c.processMessageSync(ctx, msg)
 	if err != nil {
 		status := http.StatusConflict
+		body := err.Error()
 		if errs.IsTransient(err) {
+			// A transient refusal on this path is the shared loop view not
+			// being caught up, and errs.Wrap renders its cause as
+			// "Component.currentLoopSnapshot: loop projection unavailable
+			// failed: …". That is a framework internal, and the default
+			// configuration reaches it during ordinary warm-up — every adopter
+			// would see it. The detail belongs in the log line; the client gets
+			// a fixed phrase it can retry on.
 			status = http.StatusServiceUnavailable
+			body = loopViewUnavailableMessage
+			c.logger.ErrorContext(ctx, "agentic-dispatch: message refused while loop authority is unavailable",
+				slog.String("message_id", msg.MessageID),
+				slog.String("error", err.Error()))
 		}
 		c.metrics.recordHTTPRequest("/message", "POST", fmt.Sprint(status))
-		c.writeJSONError(w, status, err.Error())
+		c.writeJSONError(w, status, body)
 		return
 	}
 
@@ -576,8 +599,11 @@ func (c *Component) handleListLoops(w http.ResponseWriter, r *http.Request) {
 
 	snapshot, err := c.currentLoopSnapshot(ctx)
 	if err != nil {
+		c.logger.ErrorContext(ctx, "agentic-dispatch: loop listing refused while loop authority is unavailable",
+			slog.String("request_id", requestID),
+			slog.String("error", err.Error()))
 		c.metrics.recordHTTPRequest("/loops", "GET", "503")
-		c.writeJSONError(w, http.StatusServiceUnavailable, err.Error())
+		c.writeJSONError(w, http.StatusServiceUnavailable, loopViewUnavailableMessage)
 		return
 	}
 	loops := currentLoopInfos(snapshot, userID)
@@ -824,12 +850,6 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 			readErr = fmt.Errorf("loop %q vanished between admission and approval", loopID)
 		case persisted.Validate() != nil:
 			readErr = fmt.Errorf("validate loop %q for approval: %w", loopID, persisted.Validate())
-		case persisted.State != agentic.LoopStateAwaitingApproval && persisted.PendingApproval != nil:
-			readErr = fmt.Errorf("loop %q has pending approval outside awaiting-approval state", loopID)
-		case persisted.State == agentic.LoopStateAwaitingApproval &&
-			(persisted.PendingApproval == nil || persisted.PendingApproval.CallID == "" ||
-				persisted.PendingApproval.ExecutionID == ""):
-			readErr = fmt.Errorf("loop %q awaits approval without a pending execution identity", loopID)
 		}
 	}
 	if readErr != nil {
@@ -842,9 +862,32 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 		c.writeJSONError(w, http.StatusServiceUnavailable, "loop record is not readable right now")
 		return
 	}
+	// The recorded state decides before anything about PendingApproval does.
+	// loopOpApprove deliberately skips the gate's terminal check, so a terminal
+	// record reaches here; and no transition clears PendingApproval, so a loop
+	// cancelled while awaiting approval lands `state: cancelled` WITH a pending
+	// block. Reading that combination as incoherence answered 503 "not readable
+	// right now" for a record that read perfectly, forever — a polling client
+	// retrying a permanent state. State first makes it the 409 it is, and keeps
+	// 503 for records that genuinely cannot be read or do not validate.
+	//
+	// Clearing the pending block on a terminal transition is the other half and
+	// is NOT done here: it belongs to the layer that owns terminal/adopt
+	// transitions (L4, #1330). See design.md.
 	if persisted.State != agentic.LoopStateAwaitingApproval {
 		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "409")
 		c.writeJSONError(w, http.StatusConflict, "loop not awaiting approval")
+		return
+	}
+	if persisted.PendingApproval == nil || persisted.PendingApproval.CallID == "" ||
+		persisted.PendingApproval.ExecutionID == "" {
+		c.logger.ErrorContext(ctx, "agentic-dispatch: admitted approval state could not be read",
+			slog.String("request_id", requestID),
+			slog.String("loop_id", loopID),
+			slog.String("error", fmt.Sprintf("loop %q awaits approval without a pending execution identity", loopID)))
+		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "503")
+		c.metrics.recordHTTPDuration("/loops/{id}/approval", "POST", time.Since(startTime).Seconds())
+		c.writeJSONError(w, http.StatusServiceUnavailable, "loop record is not readable right now")
 		return
 	}
 	gated := *persisted.PendingApproval

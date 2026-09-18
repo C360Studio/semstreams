@@ -51,9 +51,22 @@ func TestHandleLoopApproval_CurrentAuthority(t *testing.T) {
 		{name: "pending without execution identity is unreadable", mutate: func(e *agentic.LoopEntity) {
 			e.PendingApproval.ExecutionID = ""
 		}, wantCode: http.StatusServiceUnavailable, wantText: "loop record is not readable right now"},
-		{name: "nonawaiting with pending is incoherent", mutate: func(e *agentic.LoopEntity) {
+		// The recorded state decides before PendingApproval does. Nothing
+		// clears the pending block on a terminal or intermediate transition
+		// (LoopEntity.TransitionTo and LoopManager.CancelLoop both leave it),
+		// and loopOpApprove skips the gate's terminal check, so these records
+		// reach the handler routinely. Reading the combination as incoherence
+		// answered 503 "not readable right now" for a record that read
+		// perfectly — a permanent state a polling client would retry forever.
+		{name: "executing with a stale pending block is a conflict", mutate: func(e *agentic.LoopEntity) {
 			e.State = agentic.LoopStateExecuting
-		}, wantCode: http.StatusServiceUnavailable, wantText: "loop record is not readable right now"},
+		}, wantCode: http.StatusConflict, wantText: "loop not awaiting approval"},
+		{name: "cancelled while awaiting approval is a conflict", mutate: func(e *agentic.LoopEntity) {
+			e.State, e.CancelledBy = agentic.LoopStateCancelled, "user-1"
+		}, wantCode: http.StatusConflict, wantText: "loop not awaiting approval"},
+		{name: "failed while awaiting approval is a conflict", mutate: func(e *agentic.LoopEntity) {
+			e.State = agentic.LoopStateFailed
+		}, wantCode: http.StatusConflict, wantText: "loop not awaiting approval"},
 		{name: "unavailable authority refuses without fallback", readError: errors.New("storage unavailable"),
 			wantCode: http.StatusServiceUnavailable, wantText: "loop record is not readable right now"},
 		{name: "malformed authority refuses without fallback", readError: permanentTerminal("malformed loop JSON"),
