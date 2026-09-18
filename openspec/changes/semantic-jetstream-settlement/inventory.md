@@ -186,3 +186,8 @@ Missing, erroneous, nil, or zero-number metadata fails before Data or work with 
 A redelivery observation is conservative. It does not prove prior work ran because the prior process may have
 stopped before invocation. The observation carries no settlement, lifecycle, replay, checkpoint, or durable-state
 authority.
+
+**Withdrawn 2026-09-18.** This addendum's pins are the pre-change measurement and stand as recorded. The exported
+observation they sized was removed on PR #1331 review evidence — zero production consumers anywhere in the re-land
+stack; see design.md § D2a Amendment 2026-09-18. The metadata validation and its typed
+`DeliveryMetadataUnavailableError` ship; the caller-visible attempt does not.

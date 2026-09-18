@@ -72,7 +72,7 @@ func (h *deliveryOwnerHandle) Closed() <-chan struct{} { return h.closed }
 func TestDeliveryLaneBuffersFatalBeforeHandleAndRefusesLaterDelivery(t *testing.T) {
 	cause := errors.New("ambiguous effect")
 	policy, err := natsclient.ValidateHeartbeatDeliveryPolicy(t.Context(), natsclient.StreamConsumerConfig{}, time.Second,
-		natsclient.ImmediateDeliveryRetry(), func(context.Context, natsclient.DeliveryAttempt, []byte) (natsclient.DeliveryDecision, error) {
+		natsclient.ImmediateDeliveryRetry(), func(context.Context, []byte) (natsclient.DeliveryDecision, error) {
 			return natsclient.DeliveryDecisionQuarantine, cause
 		})
 	require.NoError(t, err)
@@ -129,7 +129,7 @@ func TestDeliveryMetadataFailureBuffersBeforeHandleAndDrainsExactOwner(t *testin
 	metadataCause := errors.New("metadata unavailable")
 	var workCalls atomic.Int32
 	policy, err := natsclient.ValidateHeartbeatDeliveryPolicy(t.Context(), natsclient.StreamConsumerConfig{}, time.Second,
-		natsclient.ImmediateDeliveryRetry(), func(context.Context, natsclient.DeliveryAttempt, []byte) (natsclient.DeliveryDecision, error) {
+		natsclient.ImmediateDeliveryRetry(), func(context.Context, []byte) (natsclient.DeliveryDecision, error) {
 			workCalls.Add(1)
 			return natsclient.DeliveryDecisionAck, nil
 		})
@@ -169,7 +169,7 @@ func TestDeliveryLaneAllowsAlreadyAdmittedWorkToComplete(t *testing.T) {
 	slowEntered := make(chan struct{})
 	releaseSlow := make(chan struct{})
 	policy, err := natsclient.ValidateHeartbeatDeliveryPolicy(t.Context(), natsclient.StreamConsumerConfig{}, time.Second,
-		natsclient.ImmediateDeliveryRetry(), func(_ context.Context, _ natsclient.DeliveryAttempt, data []byte) (natsclient.DeliveryDecision, error) {
+		natsclient.ImmediateDeliveryRetry(), func(_ context.Context, data []byte) (natsclient.DeliveryDecision, error) {
 			if string(data) == "slow" {
 				close(slowEntered)
 				<-releaseSlow
@@ -202,7 +202,7 @@ func TestDeliveryLaneAllowsAlreadyAdmittedWorkToComplete(t *testing.T) {
 
 func TestDeliveryMethodErrorDoesNotCloseAdmission(t *testing.T) {
 	policy, err := natsclient.ValidateHeartbeatDeliveryPolicy(t.Context(), natsclient.StreamConsumerConfig{}, time.Second,
-		natsclient.ImmediateDeliveryRetry(), func(context.Context, natsclient.DeliveryAttempt, []byte) (natsclient.DeliveryDecision, error) {
+		natsclient.ImmediateDeliveryRetry(), func(context.Context, []byte) (natsclient.DeliveryDecision, error) {
 			return natsclient.DeliveryDecisionAck, nil
 		})
 	require.NoError(t, err)

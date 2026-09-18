@@ -32,7 +32,7 @@ func TestIntegrationConsumeDeliveryWithHeartbeatHealthyRenewalPreventsOverlap(t 
 		AckPolicy:     "explicit",
 	}
 
-	started := make(chan DeliveryAttempt, 2)
+	started := make(chan struct{}, 2)
 	release := make(chan struct{})
 	var releaseOnce sync.Once
 	results := make(chan DeliveryResult, 2)
@@ -42,9 +42,9 @@ func TestIntegrationConsumeDeliveryWithHeartbeatHealthyRenewalPreventsOverlap(t 
 		cfg,
 		100*time.Millisecond,
 		ImmediateDeliveryRetry(),
-		func(workCtx context.Context, attempt DeliveryAttempt, _ []byte) (DeliveryDecision, error) {
+		func(workCtx context.Context, _ []byte) (DeliveryDecision, error) {
 			invocations.Add(1)
-			started <- attempt
+			started <- struct{}{}
 			select {
 			case <-release:
 				return DeliveryDecisionAck, nil
@@ -69,8 +69,7 @@ func TestIntegrationConsumeDeliveryWithHeartbeatHealthyRenewalPreventsOverlap(t 
 
 	require.NoError(t, testClient.Client.PublishToStream(ctx, "delivery.renewal", []byte("long-work")))
 	select {
-	case attempt := <-started:
-		require.Equal(t, uint64(1), attempt.Number())
+	case <-started:
 	case <-time.After(5 * time.Second):
 		t.Fatal("first delivery did not start")
 	}
@@ -79,9 +78,9 @@ func TestIntegrationConsumeDeliveryWithHeartbeatHealthyRenewalPreventsOverlap(t 
 	// to overlap the same delivery if InProgress is not renewing its lease.
 	renewalWindow := 3 * firstBackOff
 	select {
-	case attempt := <-started:
+	case <-started:
 		releaseOnce.Do(func() { close(release) })
-		t.Fatalf("healthy renewal allowed overlapping attempt %d", attempt.Number())
+		t.Fatal("healthy renewal allowed an overlapping delivery")
 	case <-time.After(renewalWindow):
 	}
 
@@ -131,7 +130,7 @@ func TestIntegrationConsumeDeliveryWithHeartbeatStoppedRenewalUsesBackOff(t *tes
 		cfg,
 		100*time.Millisecond,
 		retry,
-		func(workCtx context.Context, _ DeliveryAttempt, _ []byte) (DeliveryDecision, error) {
+		func(workCtx context.Context, _ []byte) (DeliveryDecision, error) {
 			started <- time.Now()
 			<-workCtx.Done()
 			return DeliveryDecisionRetry, retryCause
@@ -191,7 +190,7 @@ func TestIntegrationConsumeDeliveryWithHeartbeatStoppedRenewalUsesBackOff(t *tes
 	require.NoError(t, redelivery.Ack())
 }
 
-func TestIntegrationDeliveryAttemptTracksDurableRedelivery(t *testing.T) {
+func TestIntegrationSemanticRetryProducesDurableRedelivery(t *testing.T) {
 	ctx := t.Context()
 	testClient := NewTestClient(t, WithJetStream(), WithStreams(
 		TestStreamConfig{Name: "DELIVERY_ATTEMPT", Subjects: []string{"delivery.attempt"}},
@@ -209,13 +208,12 @@ func TestIntegrationDeliveryAttemptTracksDurableRedelivery(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, testClient.Client.PublishToStream(ctx, "delivery.attempt", []byte("redeliver")))
 
-	attempts := make(chan DeliveryAttempt, 2)
+	var invocations atomic.Int32
 	retryCause := errors.New("retry once")
 	policy, err := ValidateHeartbeatDeliveryPolicy(ctx,
 		StreamConsumerConfig{AckWait: 2 * time.Second}, 500*time.Millisecond, ImmediateDeliveryRetry(),
-		func(_ context.Context, attempt DeliveryAttempt, _ []byte) (DeliveryDecision, error) {
-			attempts <- attempt
-			if attempt.Number() == 1 {
+		func(context.Context, []byte) (DeliveryDecision, error) {
+			if invocations.Add(1) == 1 {
 				return DeliveryDecisionRetry, retryCause
 			}
 			return DeliveryDecisionAck, nil
@@ -223,23 +221,25 @@ func TestIntegrationDeliveryAttemptTracksDurableRedelivery(t *testing.T) {
 	require.NoError(t, err)
 
 	first := fetchOneDelivery(t, consumer)
+	firstMetadata, err := first.Metadata()
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), firstMetadata.NumDelivered)
 	firstResult := ConsumeDeliveryWithHeartbeat(ctx, first, policy)
 	require.Equal(t, DeliveryDecisionRetry, firstResult.Decision())
 	require.ErrorIs(t, firstResult.Err(), retryCause)
 	require.True(t, firstResult.SettlementMethodSucceeded())
 
+	// The explicit Nak, not AckWait expiry, produced this redelivery: the
+	// server counts it as a second delivery of the same message.
 	second := fetchOneDelivery(t, consumer)
+	secondMetadata, err := second.Metadata()
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), secondMetadata.NumDelivered)
+	require.Equal(t, firstMetadata.Sequence.Stream, secondMetadata.Sequence.Stream)
 	secondResult := ConsumeDeliveryWithHeartbeat(ctx, second, policy)
 	require.Equal(t, DeliveryDecisionAck, secondResult.Decision())
 	require.NoError(t, secondResult.Err())
-	firstAttempt := <-attempts
-	require.Equal(t, uint64(1), firstAttempt.Number())
-	require.True(t, firstAttempt.MetadataAvailable())
-	require.False(t, firstAttempt.IsRedelivery())
-	secondAttempt := <-attempts
-	require.Equal(t, uint64(2), secondAttempt.Number())
-	require.True(t, secondAttempt.MetadataAvailable())
-	require.True(t, secondAttempt.IsRedelivery())
+	require.Equal(t, int32(2), invocations.Load())
 }
 
 func fetchOneDelivery(t *testing.T, consumer jetstream.Consumer) jetstream.Msg {

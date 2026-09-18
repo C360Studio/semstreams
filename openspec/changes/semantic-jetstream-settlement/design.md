@@ -112,6 +112,18 @@ before the earlier work call, so it does not prove a prior effect or commit-unkn
 The attempt exposes no `jetstream.Msg`, headers, reply subject, stream or consumer sequence, stream or consumer
 identity, settlement method, or mutable state.
 
+**Amendment 2026-09-18 — the exported attempt is withdrawn; metadata validation stays.** Implementation review of
+PR #1331 measured the consumers: every `DeliveryWork` binding in the whole re-land stack — the five on
+`origin/codex/gh1146-agentic-loop-restart` covering tools, dispatch (two), loop, and model — binds the parameter to
+`_`. `Number()`, `MetadataAvailable()`, and `IsRedelivery()` had no production reader anywhere, and
+`MetadataAvailable()` is constant `true` wherever work could observe it because `ConsumeDeliveryWithHeartbeat`
+rejects `NumDelivered == 0` before calling work. Four exported symbols with zero consumers on Tier 1 `natsclient`
+are a phantom surface, so `DeliveryAttempt` and its methods are removed and `DeliveryWork` is
+`func(context.Context, []byte) (DeliveryDecision, error)`. Everything else in D2a stands: metadata is still read
+exactly once before Data and work, and metadata error, nil metadata, or `NumDelivered == 0` still quarantines with
+`DeliveryMetadataUnavailableError` and stops the exact lane. A later layer that finds a real reader re-enters the
+exported-surface gate with that consumer named.
+
 ### D3 — lease and semantic retry are separate
 
 ```go
@@ -231,9 +243,9 @@ Stage A migrates tools one and dispatch two. Tools ACKs only after completed out
 completed-outcome replay publication may Retry; post-execution outcome-Create ambiguity quarantines. Dispatch retries
 only proven pre-publish failure; unknown PubAck after invocation quarantines before unlimited retry.
 
-Each of the three policy constructions uses a binding-local `DeliveryWork` closure. The closure accepts and ignores
-`DeliveryAttempt`, then delegates unchanged bytes to the existing tools or dispatch domain handler. Transport
-observation does not enter those domain handler signatures or their direct tests.
+Each of the three policy constructions uses a binding-local `DeliveryWork` closure. The closure delegates unchanged
+bytes to the existing tools or dispatch domain handler. Transport observation does not enter those domain handler
+signatures or their direct tests.
 
 The Stage A tools and dispatch bindings establish the typed foundation but do not authorize PR #1156 to merge.
 
@@ -292,8 +304,8 @@ is not reclaimed.
 - Migrate a binding by mechanical nil-to-ACK/error-to-Retry conversion: invents definition of done and replay safety.
 - Pass `jetstream.Msg`, a settlement-capable view, or per-delivery work closure: leaks settlement authority or weakens
   setup-time validation.
-- Export `DeliveryAttempt` fields or a public constructor: permits inconsistent caller-authored observations and
-  turns a framework-observed fact back into caller prediction.
+- Expose the delivery count to work at all (the withdrawn `DeliveryAttempt`, exported fields, or a public
+  constructor): zero measured consumers, and it turns a framework-observed fact back into caller prediction.
 - Treat redelivery as proof prior work ran: process loss before invocation produces the same later observation.
 - Treat deterministic message-ID deduplication as unbounded exactly-once: the server forgets IDs after `Duplicates`.
 - Put generic settlement, heartbeat, lease, or handle mechanics in gated-DAG domain semantics: adopters have different

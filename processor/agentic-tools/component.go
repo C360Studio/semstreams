@@ -423,7 +423,7 @@ func (c *Component) setupConsumer(ctx context.Context, setup consumerSetup) erro
 	}
 	deliveryPolicy, err := natsclient.ValidateHeartbeatDeliveryPolicy(
 		ctx, cfg, heartbeatInterval, retryPolicy,
-		func(workCtx context.Context, _ natsclient.DeliveryAttempt, data []byte) (natsclient.DeliveryDecision, error) {
+		func(workCtx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
 			return c.handleToolDelivery(workCtx, data)
 		},
 	)

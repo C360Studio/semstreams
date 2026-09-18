@@ -73,7 +73,7 @@ retain the exact native handle.
 ### Requirement: semantic heartbeat settlement has one permanent exported surface
 
 The framework SHALL expose `ConsumeDeliveryWithHeartbeat` with validated `HeartbeatDeliveryPolicy`,
-`DeliveryAttempt`, `DeliveryDecision`, and `DeliveryResult`.
+`DeliveryDecision`, and `DeliveryResult`.
 
 `ConsumeWithHeartbeat` and `NewDurableHandler` SHALL NOT exist or have aliases. Every original model, tools, dispatch,
 loop, and AgentRun heartbeat binding SHALL use the permanent typed surface with its owner-specific durable definition
@@ -104,12 +104,12 @@ is branch-staging conformance only and SHALL be zero before archive.
 ### Requirement: delivery work returns a validated decision/error tuple
 
 Typed work SHALL implement
-`DeliveryWork func(context.Context, DeliveryAttempt, []byte) (DeliveryDecision, error)`. The exported decisions
+`DeliveryWork func(context.Context, []byte) (DeliveryDecision, error)`. The exported decisions
 SHALL remain Invalid, ACK, Retry, Terminate, and Quarantine using the exact `DeliveryDecision*` constants.
 
 The framework SHALL validate non-nil work before acquisition. For each admitted delivery it SHALL supply that
-delivery's immutable settlement-authority-free `DeliveryAttempt` and body as read-only invocation-scoped bytes. It
-SHALL NOT expose `jetstream.Msg`, headers, reply subjects, sequences, consumer identity, or another
+delivery's body as read-only invocation-scoped bytes and nothing else. It
+SHALL NOT expose `jetstream.Msg`, headers, reply subjects, sequences, delivery counts, consumer identity, or another
 settlement-capable interface to work.
 
 ACK SHALL require nil error. Retry, Terminate, and Quarantine SHALL require non-nil error. Invalid, unknown, and every
@@ -154,7 +154,7 @@ matrix SHALL make Retry its unclassified default.
 #### Scenario: settlement authority does not escape
 
 - **WHEN** typed work runs
-- **THEN** it receives context, immutable `DeliveryAttempt`, and read-only payload bytes only
+- **THEN** it receives context and read-only payload bytes only
 - **AND** Ack, Nak, Term, InProgress, native message, headers, sequences, and consumer identity remain exclusively
   inside natsclient
 
@@ -183,38 +183,21 @@ matrix SHALL make Retry its unclassified default.
 - **THEN** the result records Quarantine with `DeliveryWorkPanicError`
 - **AND** no terminal method is attempted
 
-### Requirement: delivery attempt is observed before work
+### Requirement: delivery metadata is validated before work
 
-For each valid typed delivery, natsclient SHALL call `msg.Metadata()` exactly once before Data or work. It SHALL
-derive `DeliveryAttempt.Number` from positive `NumDelivered`; `MetadataAvailable` SHALL be true and `IsRedelivery`
-SHALL be true only when Number is greater than one. The zero value SHALL report Number zero, metadata unavailable,
-and not redelivered. Typed work SHALL never receive that zero value.
+For each valid typed delivery, natsclient SHALL call `msg.Metadata()` exactly once before Data or work and SHALL
+require a positive `NumDelivered`. The framework SHALL NOT expose the delivery count, or any other metadata field,
+to work: no production binding reads one, and redelivery is not proof that prior work started or committed.
 
 Metadata error, nil metadata, or zero delivery number SHALL produce Quarantine with typed
 `DeliveryMetadataUnavailableError`, require owner stop, and call neither Data, work, heartbeat, nor a terminal
 settlement method. An underlying metadata error SHALL remain reachable through the typed cause.
 
-`DeliveryAttempt` SHALL expose no native message, header, reply, stream or consumer sequence, stream or consumer
-identity, settlement method, setter, or mutable state. Redelivery SHALL be an observation and SHALL NOT prove that
-prior work started or committed.
+#### Scenario: valid metadata precedes payload and work
 
-#### Scenario: first delivery
-
-- **WHEN** metadata reports `NumDelivered == 1`
-- **THEN** work receives Number 1 with MetadataAvailable true
-- **AND** IsRedelivery is false
-
-#### Scenario: second delivery
-
-- **WHEN** metadata reports `NumDelivered == 2`
-- **THEN** work receives Number 2 with MetadataAvailable true
-- **AND** IsRedelivery is true
-
-#### Scenario: prior process stopped before work
-
-- **WHEN** a first delivery was lost before work invocation and JetStream delivers it again
-- **THEN** the next work invocation observes redelivery
-- **AND** the framework does not claim the prior invocation or effect occurred
+- **WHEN** metadata reports a positive `NumDelivered` on a first or later delivery
+- **THEN** Metadata is read exactly once, before Data and before work
+- **AND** work receives the payload bytes with no delivery-count affordance
 
 #### Scenario: metadata is unavailable
 
@@ -289,9 +272,8 @@ Owner cancellation SHALL cancel work, join it, interpret the exact decision/erro
 Context cancellation SHALL NOT overwrite the joined semantic result. InProgress failure SHALL cancel and join work,
 preserve decision/cause, record control error, attempt no later terminal method, and require owner stop.
 
-These semantics apply after a valid `DeliveryAttempt` has been observed. Panic, owner cancellation, and heartbeat
-control loss SHALL preserve that observation without changing the existing cancel, join, interpret, and
-OwnerStopRequired decisions.
+These semantics apply after valid delivery metadata has been observed. Panic, owner cancellation, and heartbeat
+control loss SHALL NOT change the existing cancel, join, interpret, and OwnerStopRequired decisions.
 
 #### Scenario: heartbeat fails after joined ACK
 

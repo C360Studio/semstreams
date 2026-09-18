@@ -579,7 +579,7 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	}
 	agentCompletePolicy, err := natsclient.ValidateHeartbeatDeliveryPolicy(
 		ctx, agentCompleteCfg, 10*time.Second, terminalRetryPolicy,
-		func(workCtx context.Context, _ natsclient.DeliveryAttempt, data []byte) (natsclient.DeliveryDecision, error) {
+		func(workCtx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
 			return c.handleTerminalDelivery(workCtx, data)
 		},
 	)
@@ -644,7 +644,7 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	}
 	agentFailedPolicy, err := natsclient.ValidateHeartbeatDeliveryPolicy(
 		ctx, agentFailedCfg, 10*time.Second, terminalRetryPolicy,
-		func(workCtx context.Context, _ natsclient.DeliveryAttempt, data []byte) (natsclient.DeliveryDecision, error) {
+		func(workCtx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
 			return c.handleTerminalDelivery(workCtx, data)
 		},
 	)

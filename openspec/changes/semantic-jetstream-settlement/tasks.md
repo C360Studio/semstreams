@@ -20,8 +20,8 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 - [x] 2.1 Characterize every legacy ACK, 30-second retry, Term, 5-second cancellation, InProgress, and error-chain path.
 - [x] 2.2 Add the initial RED contract for all five DeliveryDecision constants, zero/unknown decisions, the
       error-last work result, per-delivery and nil payloads, every valid/invalid tuple, error unwrapping, typed panic
-      quarantine, and no disposition constructor family. Task 2.9 supersedes the initial callback signature with the
-      final `DeliveryWork(context.Context, DeliveryAttempt, []byte)` contract before implementation.
+      quarantine, and no disposition constructor family. The shipped callback contract is
+      `DeliveryWork(context.Context, []byte)` (see 2.9).
 - [x] 2.3 Add the complete DeliveryResult decision/handling truth table: exact requested-decision preservation, typed
       causes, cause reachability, local-method predicates, false server confirmation, quarantine, and
       OwnerStopRequired.
@@ -36,13 +36,15 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       method executor.
 - [x] 2.8 Prove `ConsumeWithHeartbeat`, `TerminateDelivery(error) error`, and `PermanentDeliveryError`
       characterization unchanged after private executor extraction.
-- [x] 2.9 Add failing tests for opaque `DeliveryAttempt`, exact
-      `DeliveryWork(context.Context, DeliveryAttempt, []byte)` signature, nil-impossible value semantics, zero
-      behavior, first delivery, second delivery, and conservative crash-before-call redelivery.
+- [x] 2.9 An exported `DeliveryAttempt` observation was built, then withdrawn on review evidence: no production
+      binding in this stack reads it — every callback on `origin/codex/gh1146-agentic-loop-restart` binds `_`, so it
+      was zero-consumer exported surface on Tier 1 `natsclient`. The shipped signature is
+      `DeliveryWork(context.Context, []byte)`. Metadata validation stays (2.10/2.11); only the caller-visible
+      attempt is gone.
 - [x] 2.10 Add failing tests for metadata error, nil metadata, and zero delivery number. Assert typed
       `DeliveryMetadataUnavailableError`, cause reachability, Quarantine, OwnerStopRequired, one Metadata call, and
-      zero Data, work, heartbeat, or terminal calls.
-- [x] 2.11 Implement metadata observation before Data/work, migrate the three policy bindings through local wrappers
+      zero Data, work, heartbeat, or terminal calls. These hold unchanged after the 2.9 withdrawal.
+- [x] 2.11 Implement metadata validation before Data/work, migrate the three policy bindings through local wrappers
       that leave domain handlers unchanged, migrate settlement fakes, preserve C8/C9, and prove panic, cancellation,
       control-loss, and every started task still join under valid metadata.
 - [x] 2.12 Add the deprecation notice and exact shrinking AST zero-growth staging guard for
@@ -100,12 +102,12 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       unlimited retry.
 - [x] 5.5 Prove owner-fatal control loss, post-latch refusal, exact-handle shutdown, and reconstructed ordinary
       ownership.
-- [x] 5.6 Run `GOFLAGS=-mod=readonly task e2e:agentic`: PASS after DeliveryAttempt admission in 2m03.999s with clean
+- [x] 5.6 Run `GOFLAGS=-mod=readonly task e2e:agentic`: PASS in 2m03.999s with clean
       teardown; completed replay had
       one executor effect, tools BackOff redelivered at 15s with two quarantine attempts, and dispatch emitted one
       replacement response.
-- [x] 5.7 With a real durable consumer, observe Number 1 on first delivery and Number 2 with `IsRedelivery` after
-      explicit retry or missing settlement.
+- [x] 5.7 With a real durable consumer, prove an explicit semantic Retry produces a server-counted second delivery of
+      the same stream sequence, and that the framework exposes no delivery count to work (2.9 withdrawal).
 
 ## 6. Non-default staged integrations
 

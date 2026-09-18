@@ -49,12 +49,8 @@ policy, err := natsclient.ValidateHeartbeatDeliveryPolicy(
 	cfg,
 	heartbeat,
 	natsclient.ImmediateDeliveryRetry(),
-	func(
-		workCtx context.Context,
-		attempt natsclient.DeliveryAttempt,
-		data []byte,
-	) (natsclient.DeliveryDecision, error) {
-		return doDurableWork(workCtx, attempt, data)
+	func(workCtx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
+		return doDurableWork(workCtx, data)
 	},
 )
 if err != nil {
@@ -75,9 +71,8 @@ if err != nil {
 }
 ```
 
-`doDurableWork` and `recordDeliveryResult` are component-private placeholders, not framework APIs. A binding that
-does not use attempt observation accepts and ignores `DeliveryAttempt` before delegating the unchanged bytes to its
-transport-agnostic domain handler.
+`doDurableWork` and `recordDeliveryResult` are component-private placeholders, not framework APIs. Work receives
+context and read-only bytes only; it delegates the unchanged bytes to its transport-agnostic domain handler.
 
 Pass the same `cfg` value to validation and acquisition. Validation rejects nil work, ended context, invalid retry
 policy, nonpositive heartbeat, invalid acknowledgement timing, and heartbeat greater than half the effective
@@ -87,7 +82,7 @@ otherwise positive `AckWait` is effective, with a 30-second default for zero. Eq
 The work callback defines its owner-specific durable consequence and returns ACK, Retry, Terminate, or Quarantine.
 There is no universal nil-means-done contract. A component may ACK only after the durable consequence named by its
 reviewed domain contract is committed; its replay path must consult that same authority before repeating effects.
-`ConsumeDeliveryWithHeartbeat` owns payload extraction, `DeliveryAttempt` observation, InProgress, cancellation,
+`ConsumeDeliveryWithHeartbeat` owns delivery-metadata validation, payload extraction, InProgress, cancellation,
 work join, and the one terminal settlement attempt. Inspect every `DeliveryResult`: preserve its semantic, heartbeat,
 and settlement evidence in existing health/log surfaces. If `OwnerStopRequired` is true, close admission and stop the
 exact retained consume handle outside the callback. A terminal-method error alone does not authorize owner shutdown.

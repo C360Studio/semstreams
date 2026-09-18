@@ -29,26 +29,10 @@ const (
 	DeliveryDecisionQuarantine
 )
 
-// DeliveryAttempt is the server-observed attempt number for one delivery.
-// Its zero value means that valid delivery metadata was not available.
-type DeliveryAttempt struct {
-	number uint64
-}
-
-// Number returns the server-observed delivery attempt number.
-func (a DeliveryAttempt) Number() uint64 { return a.number }
-
-// MetadataAvailable reports whether the server supplied a valid attempt number.
-func (a DeliveryAttempt) MetadataAvailable() bool { return a.number > 0 }
-
-// IsRedelivery reports whether this delivery follows the first attempt.
-func (a DeliveryAttempt) IsRedelivery() bool { return a.number > 1 }
-
-// DeliveryWork performs one delivery's owner-defined work with the immutable
-// server-observed attempt and returns its semantic decision followed by the
-// cause required by that decision. Data is read-only and invocation-scoped;
-// work must not retain or mutate it.
-type DeliveryWork func(context.Context, DeliveryAttempt, []byte) (DeliveryDecision, error)
+// DeliveryWork performs one delivery's owner-defined work and returns its
+// semantic decision followed by the cause required by that decision. Data is
+// read-only and invocation-scoped; work must not retain or mutate it.
+type DeliveryWork func(context.Context, []byte) (DeliveryDecision, error)
 
 // DeliveryMetadataUnavailableError identifies missing or invalid server
 // delivery metadata. The stable token allows callers to classify the failure
@@ -292,9 +276,10 @@ type deliveryWorkResult struct {
 	cause    error
 }
 
-// ConsumeDeliveryWithHeartbeat runs setup-validated work, renews the delivery
-// lease, joins work on cancellation or control loss, and attempts at most one
-// local terminal method. It owns no consumer lifecycle or restart state.
+// ConsumeDeliveryWithHeartbeat validates server delivery metadata, runs
+// setup-validated work, renews the delivery lease, joins work on cancellation
+// or control loss, and attempts at most one local terminal method. It owns no
+// consumer lifecycle or restart state.
 func ConsumeDeliveryWithHeartbeat(
 	ctx context.Context,
 	msg jetstream.Msg,
@@ -316,7 +301,6 @@ func ConsumeDeliveryWithHeartbeat(
 	if metadata.NumDelivered == 0 {
 		return unavailableDeliveryMetadata(errors.New("message delivery attempt is zero"))
 	}
-	attempt := DeliveryAttempt{number: metadata.NumDelivered}
 
 	workCtx, workCancel := context.WithCancel(ctx)
 	defer workCancel()
@@ -337,7 +321,7 @@ func ConsumeDeliveryWithHeartbeat(
 			}
 			done <- result
 		}()
-		result.decision, result.cause = policy.work(workCtx, attempt, data)
+		result.decision, result.cause = policy.work(workCtx, data)
 	}()
 
 	ticker := time.NewTicker(policy.heartbeat)

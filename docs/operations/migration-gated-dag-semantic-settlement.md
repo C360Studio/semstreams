@@ -99,12 +99,8 @@ policy, err := natsclient.ValidateHeartbeatDeliveryPolicy(
 	cfg,
 	heartbeat,
 	natsclient.ImmediateDeliveryRetry(),
-	func(
-		workCtx context.Context,
-		attempt natsclient.DeliveryAttempt,
-		data []byte,
-	) (natsclient.DeliveryDecision, error) {
-		return handleDispatch(workCtx, attempt, data)
+	func(workCtx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
+		return handleDispatch(workCtx, data)
 	},
 )
 if err != nil {
