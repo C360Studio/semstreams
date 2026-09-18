@@ -509,17 +509,29 @@ func (c *Component) recordDeliveryOwnerFatal(result natsclient.DeliveryResult) {
 
 func (c *Component) handleToolDelivery(ctx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
 	err := c.handleToolCall(ctx, data)
+	return classifyToolDeliveryDecision(err), err
+}
+
+// classifyToolDeliveryDecision maps a tool-call failure onto this lane's
+// closed disposition matrix. Go's error interface cannot make that matrix
+// closed at runtime, so an error no arm classifies is not retried: it
+// quarantines, which attempts no ACK/NAK/Term, leaves the delivery pending,
+// latches the lane, and stops the exact handle (#759, fail-closed unclassified
+// errors; its anti-goals forbid blind retry of commit-unknown effects).
+func classifyToolDeliveryDecision(err error) natsclient.DeliveryDecision {
 	if err == nil {
-		return natsclient.DeliveryDecisionAck, nil
+		return natsclient.DeliveryDecisionAck
 	}
 	var permanent *natsclient.PermanentDeliveryError
 	switch {
 	case errors.As(err, &permanent):
-		return natsclient.DeliveryDecisionTerminate, err
+		return natsclient.DeliveryDecisionTerminate
 	case isAmbiguousOutcomeCreateError(err):
-		return natsclient.DeliveryDecisionQuarantine, err
+		return natsclient.DeliveryDecisionQuarantine
+	case isRetryableDeliveryError(err):
+		return natsclient.DeliveryDecisionRetry
 	default:
-		return natsclient.DeliveryDecisionRetry, err
+		return natsclient.DeliveryDecisionQuarantine
 	}
 }
 
@@ -754,10 +766,15 @@ func (c *Component) handleToolCall(ctx context.Context, data []byte) error {
 			// It also gets a distinct message ID so stream dedup cannot suppress
 			// the later terminal result.
 			err := c.publishResultWithMsgID(ctx, result, toolApprovalRequiredMessageID(call.ID))
-			if err == nil && c.metrics != nil {
+			if err != nil {
+				// The approval gate runs before execution, so no effect has
+				// begun and redelivery is proven safe.
+				return retryableDelivery("publish approval-required tool result: %w", err)
+			}
+			if c.metrics != nil {
 				c.metrics.recordOutcome(outcomePathRejection)
 			}
-			return err
+			return nil
 		}
 	}
 
@@ -818,7 +835,10 @@ func (c *Component) loadCompletedOutcome(
 		if c.metrics != nil {
 			c.metrics.recordStoreFailure(operation, storeReasonTransport)
 		}
-		return completedOutcome{}, false, fmt.Errorf("read tool-call outcome: %w", err)
+		// A ledger read fails before this delivery executes anything, and the
+		// read-winner caller runs only after the winning outcome is durable.
+		// Both are replay-safe, so this is one of the two typed retry shapes.
+		return completedOutcome{}, false, retryableDelivery("read tool-call outcome: %w", err)
 	}
 	outcome, err := decodeCompletedOutcome(data, call)
 	if err != nil {
@@ -904,7 +924,7 @@ func (c *Component) persistCompletedOutcome(
 	if effectful {
 		return completedOutcome{}, path, &ambiguousOutcomeCreateError{err: createErr}
 	}
-	return completedOutcome{}, path, createErr
+	return completedOutcome{}, path, &retryableDeliveryError{err: createErr}
 }
 
 func (c *Component) publishCompletedResult(
@@ -918,7 +938,9 @@ func (c *Component) publishCompletedResult(
 		return nil
 	}
 	if !isObservedOversize(err) {
-		return err
+		// The immutable outcome is already durable here, so redelivery
+		// republishes the same result without a second executor effect.
+		return retryableDelivery("publish tool result: %w", err)
 	}
 	// The full immutable authority stays in KV. A publication-only bound gets
 	// exactly one compact transport surrogate using the same call-derived MsgID.

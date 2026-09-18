@@ -19,17 +19,34 @@ const terminalResponseIDPrefix = "terminal-user-response:"
 type permanentTerminalError struct{ err error }
 type unknownTerminalPublicationError struct{ err error }
 
+// transientTerminalError marks a terminal-lane failure observed before any
+// user-facing publication was attempted, so redelivery repeats no effect.
+// #759 admits delayed NAK only for such a typed transient-before-effect
+// result; an error carrying no class fails closed instead.
+type transientTerminalError struct{ err error }
+
 func (e *permanentTerminalError) Error() string          { return e.err.Error() }
 func (e *permanentTerminalError) Unwrap() error          { return e.err }
 func (e *unknownTerminalPublicationError) Error() string { return e.err.Error() }
 func (e *unknownTerminalPublicationError) Unwrap() error { return e.err }
+func (e *transientTerminalError) Error() string          { return e.err.Error() }
+func (e *transientTerminalError) Unwrap() error          { return e.err }
 
 func permanentTerminal(format string, args ...any) error {
 	return &permanentTerminalError{err: fmt.Errorf(format, args...)}
 }
 
+func transientTerminal(format string, args ...any) error {
+	return &transientTerminalError{err: fmt.Errorf(format, args...)}
+}
+
 func isPermanentTerminal(err error) bool {
 	var target *permanentTerminalError
+	return errors.As(err, &target)
+}
+
+func isTransientTerminal(err error) bool {
+	var target *transientTerminalError
 	return errors.As(err, &target)
 }
 
@@ -101,14 +118,14 @@ func (c *Component) loadPersistedLoop(ctx context.Context, loopID string) (*agen
 	}
 	kv, err := c.natsClient.GetKeyValueBucket(ctx, bucket)
 	if err != nil {
-		return nil, fmt.Errorf("access %s: %w", bucket, err)
+		return nil, transientTerminal("access %s: %w", bucket, err)
 	}
 	entry, err := kv.Get(ctx, loopID)
 	if err != nil {
 		if isLoopRecordAbsent(err) {
-			return nil, fmt.Errorf("loop state %q not yet observable: %w", loopID, err)
+			return nil, transientTerminal("loop state %q not yet observable: %w", loopID, err)
 		}
-		return nil, fmt.Errorf("read %s/%s: %w", bucket, loopID, err)
+		return nil, transientTerminal("read %s/%s: %w", bucket, loopID, err)
 	}
 	var persisted agentic.LoopEntity
 	if err := json.Unmarshal(entry.Value(), &persisted); err != nil {

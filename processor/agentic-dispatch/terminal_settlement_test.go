@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -245,11 +246,24 @@ func TestHandleTerminalDeliveryDecisionMatrix(t *testing.T) {
 	t.Run("proven pre-publish failure retries", func(t *testing.T) {
 		c := terminalTestComponent(t)
 		c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
-			return nil, errors.New("read unavailable")
+			return nil, transientTerminal("read unavailable")
 		}
 		decision, err := c.handleTerminalDelivery(t.Context(), completionPayload(t, valid))
 		require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
 		require.Error(t, err)
+	})
+
+	// #759 fail-closed unclassified errors: an untyped read failure carries no
+	// proof that no effect began, so the lane must not NAK it.
+	t.Run("unclassified failure quarantines", func(t *testing.T) {
+		c := terminalTestComponent(t)
+		c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
+			return nil, fmt.Errorf("load loop: %w", errors.New("read unavailable"))
+		}
+		decision, err := c.handleTerminalDelivery(t.Context(), completionPayload(t, valid))
+		require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
+		require.Error(t, err)
+		require.False(t, isTransientTerminal(err), "the unclassified arm must not be typed transient")
 	})
 
 	t.Run("unknown publish outcome quarantines", func(t *testing.T) {
@@ -367,4 +381,19 @@ func TestSettleAgentTerminalRecordsExactlyOneFixedDisposition(t *testing.T) {
 			requireOneTerminalReason(t, c, tt.want, before)
 		})
 	}
+}
+
+// spec: jetstream-consumer-policy / delivery work returns a validated decision/error tuple
+func TestTerminalDeliveryClassificationFailsClosedOnUnclassifiedError(t *testing.T) {
+	ordinary := fmt.Errorf("settle terminal: %w", errors.New("boom"))
+
+	require.Equal(t, natsclient.DeliveryDecisionQuarantine, classifyTerminalDeliveryDecision(ordinary),
+		"an ordinary wrapped error is unclassified and must fail closed rather than NAK")
+	require.Equal(t, natsclient.DeliveryDecisionAck, classifyTerminalDeliveryDecision(nil))
+	require.Equal(t, natsclient.DeliveryDecisionTerminate,
+		classifyTerminalDeliveryDecision(permanentTerminal("poison: %w", ordinary)))
+	require.Equal(t, natsclient.DeliveryDecisionQuarantine,
+		classifyTerminalDeliveryDecision(&unknownTerminalPublicationError{err: ordinary}))
+	require.Equal(t, natsclient.DeliveryDecisionRetry,
+		classifyTerminalDeliveryDecision(transientTerminal("read: %w", ordinary)))
 }

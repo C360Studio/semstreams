@@ -120,6 +120,19 @@ the typed cause. Recovered panic SHALL synthesize Quarantine with `DeliveryWorkP
 Existing `TerminateDelivery(error) error` and `PermanentDeliveryError` SHALL retain their exact behavior and SHALL
 not be deprecated or removed by this change.
 
+An owner's decision matrix SHALL classify every error it settles positively, terminally, or by retry, and SHALL do so
+from a typed cause rather than from the absence of another class. Retry SHALL require a typed result proving that no
+external effect began or that the durable consequence is already committed. An error the matrix does not classify
+SHALL return Quarantine: no terminal method, delivery left pending, lane latched, exact handle stopped. No owner
+matrix SHALL make Retry its unclassified default.
+
+#### Scenario: unclassified owner error fails closed
+
+- **WHEN** a migrated binding's work observes an error its decision matrix does not classify
+- **THEN** it returns Quarantine with that error as the cause
+- **AND** no Ack, Nak, delayed Nak, or Term is attempted
+- **AND** the exact owner stops the lane for explicit reconstruction
+
 #### Scenario: valid ACK
 
 - **WHEN** work returns `DeliveryDecisionAck, nil`

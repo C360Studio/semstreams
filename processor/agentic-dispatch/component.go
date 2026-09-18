@@ -737,15 +737,29 @@ func (c *Component) handleTerminalDelivery(
 	data []byte,
 ) (natsclient.DeliveryDecision, error) {
 	err := c.settleAgentTerminal(workCtx, data)
+	return classifyTerminalDeliveryDecision(err), err
+}
+
+// classifyTerminalDeliveryDecision maps a terminal-lane failure onto this
+// lane's closed disposition matrix. Go's error interface cannot make that
+// matrix closed at runtime, so an error no arm classifies is not retried: it
+// quarantines, which attempts no ACK/NAK/Term, leaves the delivery pending,
+// latches the lane, and stops the exact handle (#759, fail-closed unclassified
+// errors; its anti-goals forbid blind retry of commit-unknown effects). Both
+// terminal lanes run MaxDeliver=0, so a blind NAK here is an unbounded retry
+// of an effect whose commit state is unproven.
+func classifyTerminalDeliveryDecision(err error) natsclient.DeliveryDecision {
 	switch {
 	case err == nil:
-		return natsclient.DeliveryDecisionAck, nil
+		return natsclient.DeliveryDecisionAck
 	case isPermanentTerminal(err):
-		return natsclient.DeliveryDecisionTerminate, err
+		return natsclient.DeliveryDecisionTerminate
 	case isUnknownTerminalPublication(err):
-		return natsclient.DeliveryDecisionQuarantine, err
+		return natsclient.DeliveryDecisionQuarantine
+	case isTransientTerminal(err):
+		return natsclient.DeliveryDecisionRetry
 	default:
-		return natsclient.DeliveryDecisionRetry, err
+		return natsclient.DeliveryDecisionQuarantine
 	}
 }
 

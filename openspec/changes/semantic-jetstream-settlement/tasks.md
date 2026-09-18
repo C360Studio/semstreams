@@ -63,11 +63,13 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 ## 4. Stage A — tools and dispatch
 
 - [x] 4.1 Change tools heartbeat default 120s→5s while preserving AckWait 300s and BackOff 15s/60s.
-- [x] 4.2 Encode tools done matrix: completed-outcome plus result PubAck ACK; completed replay publication Retry;
-      immutable poison Term; post-execution outcome-Create ambiguity Quarantine.
+- [x] 4.2 Encode tools done matrix: completed-outcome plus result PubAck ACK; typed proven-pre-effect or
+      already-durable replay publication Retry; immutable poison Term; post-execution outcome-Create ambiguity
+      Quarantine; any unclassified error Quarantine, never Retry.
 - [x] 4.3 Migrate tools one binding to the permanent typed API and exact-owner control-loss reaction.
-- [x] 4.4 Encode both dispatch terminal done matrices: deterministic response PubAck ACK; proven pre-publish failure
-      Retry; immutable terminal/route poison Term; unknown publish outcome Quarantine before MaxDeliver=0 retry.
+- [x] 4.4 Encode both dispatch terminal done matrices: deterministic response PubAck ACK; typed proven pre-publish
+      failure Retry; immutable terminal/route poison Term; unknown publish outcome Quarantine before MaxDeliver=0
+      retry; any unclassified error Quarantine, never Retry.
 - [x] 4.5 Migrate dispatch two bindings to the permanent typed API and exact-owner control-loss reaction.
 - [x] 4.6 At the foundation checkpoint, assert branch-staged model/loop/AgentRun source, config, settlement,
       cancellation, logs, and health remain unchanged before their separately reviewed migrations.

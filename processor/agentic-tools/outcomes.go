@@ -53,12 +53,30 @@ type irrecoverableOutcomeError struct{ err error }
 type outcomeCollisionError struct{ err error }
 type ambiguousOutcomeCreateError struct{ err error }
 
+// retryableDeliveryError marks the only two failures this component may NAK:
+// one whose external effect is proven not to have begun, and one whose
+// immutable outcome is already durable so redelivery republishes it without a
+// second effect. #759 admits delayed NAK only for a typed transient-before-
+// effect result; every other error is unclassified and fails closed.
+type retryableDeliveryError struct{ err error }
+
 func (e *irrecoverableOutcomeError) Error() string   { return e.err.Error() }
 func (e *irrecoverableOutcomeError) Unwrap() error   { return e.err }
 func (e *outcomeCollisionError) Error() string       { return e.err.Error() }
 func (e *outcomeCollisionError) Unwrap() error       { return e.err }
 func (e *ambiguousOutcomeCreateError) Error() string { return e.err.Error() }
 func (e *ambiguousOutcomeCreateError) Unwrap() error { return e.err }
+func (e *retryableDeliveryError) Error() string      { return e.err.Error() }
+func (e *retryableDeliveryError) Unwrap() error      { return e.err }
+
+func retryableDelivery(format string, args ...any) error {
+	return &retryableDeliveryError{err: fmt.Errorf(format, args...)}
+}
+
+func isRetryableDeliveryError(err error) bool {
+	var target *retryableDeliveryError
+	return errors.As(err, &target)
+}
 
 func isAmbiguousOutcomeCreateError(err error) bool {
 	var target *ambiguousOutcomeCreateError

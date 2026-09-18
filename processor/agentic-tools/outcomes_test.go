@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -347,6 +348,37 @@ func TestHandleToolDeliveryDecisionMatrix(t *testing.T) {
 		require.Error(t, err)
 		require.Equal(t, int32(1), executor.calls.Load())
 	})
+
+	// #759 fail-closed unclassified errors: no arm of the matrix claims this
+	// failure, so the lane must not NAK it for redelivery.
+	t.Run("unclassified ledger failure quarantines", func(t *testing.T) {
+		executor := &countingExecutor{}
+		store := &memoryOutcomeStore{values: make(map[string][]byte), createErr: jetstream.ErrKeyExists}
+		component := &Component{
+			config: DefaultConfig(), registry: NewExecutorRegistry(), decoder: payloadbuiltins.NewTestDecoder(t),
+			logger: slog.Default(), outcomes: store,
+		}
+		require.NoError(t, component.registry.RegisterTool("count", executor))
+		decision, err := component.handleToolDelivery(t.Context(), wire(t, agentic.ToolCall{ID: "vanished", Name: "count"}))
+		require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
+		require.Error(t, err)
+		require.False(t, isRetryableDeliveryError(err), "the unclassified arm must not be typed retryable")
+	})
+}
+
+// spec: jetstream-consumer-policy / delivery work returns a validated decision/error tuple
+func TestToolDeliveryClassificationFailsClosedOnUnclassifiedError(t *testing.T) {
+	ordinary := fmt.Errorf("persist outcome: %w", errors.New("boom"))
+
+	require.Equal(t, natsclient.DeliveryDecisionQuarantine, classifyToolDeliveryDecision(ordinary),
+		"an ordinary wrapped error is unclassified and must fail closed rather than NAK")
+	require.Equal(t, natsclient.DeliveryDecisionAck, classifyToolDeliveryDecision(nil))
+	require.Equal(t, natsclient.DeliveryDecisionTerminate,
+		classifyToolDeliveryDecision(natsclient.TerminateDelivery(ordinary)))
+	require.Equal(t, natsclient.DeliveryDecisionQuarantine,
+		classifyToolDeliveryDecision(&ambiguousOutcomeCreateError{err: ordinary}))
+	require.Equal(t, natsclient.DeliveryDecisionRetry,
+		classifyToolDeliveryDecision(retryableDelivery("read tool-call outcome: %w", ordinary)))
 }
 
 func TestToolCallOutcomeIdentityV1(t *testing.T) {
