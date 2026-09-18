@@ -394,6 +394,13 @@ func (s *Scenario) verifyDispatchRecoveryAfterQuarantine(
 	if err := waitForStreamSubject(ctx, userStream, blockedResponseSubject, 15*time.Second); err != nil {
 		return fmt.Errorf("replacement did not admit later terminal: %w", err)
 	}
+	// A response appearing on the stream does not mean the lane is finished:
+	// delivery and publication both precede the ACK. Counting before the
+	// deliveries settle can read one response while a duplicate is still
+	// inside its callback, about to publish. Settlement is the boundary.
+	if err := waitForConsumerSettled(ctx, consumer, 0, 20*time.Second); err != nil {
+		return fmt.Errorf("replacement deliveries did not settle before counting responses: %w", err)
+	}
 	if count, err := streamSubjectCount(ctx, userStream, responseSubject); err != nil || count != 1 {
 		return fmt.Errorf("replacement user response count = %d, want 1: %w", count, err)
 	}
@@ -406,8 +413,15 @@ func (s *Scenario) verifyDispatchRecoveryAfterQuarantine(
 	if err := s.nats.Publish(ctx, "agent.complete."+terminal.loopID, terminal.wire); err != nil {
 		return fmt.Errorf("republish identical terminal: %w", err)
 	}
-	if err := waitForConsumerDelivered(ctx, consumer, settledInfo.Delivered.Consumer+1, 10*time.Second); err != nil {
-		return fmt.Errorf("identical terminal was not consumed: %w", err)
+	// Wait for the replayed delivery to be ACKNOWLEDGED, not merely delivered.
+	// The dispatch terminal callback publishes its response synchronously and
+	// only then returns the decision the framework ACKs, so an advanced
+	// AckFloor proves any duplicate publish has already happened. Delivery
+	// alone advances before the callback publishes, which is what let this
+	// check count one response while a second was still in flight.
+	replayedSequence := settledInfo.Delivered.Consumer + 1
+	if err := waitForConsumerSettled(ctx, consumer, replayedSequence, 20*time.Second); err != nil {
+		return fmt.Errorf("identical terminal was not settled: %w", err)
 	}
 	if count, err := streamSubjectCount(ctx, userStream, responseSubject); err != nil || count != 1 {
 		return fmt.Errorf("deduplicated user response count = %d, want 1: %w", count, err)
@@ -693,16 +707,23 @@ func waitDuration(ctx context.Context, duration time.Duration) error {
 	}
 }
 
-func waitForConsumerDelivered(
-	ctx context.Context, consumer jetstream.Consumer, want uint64, timeout time.Duration,
+// waitForConsumerSettled waits until the consumer has no outstanding delivery
+// and, when wantAckFloor is nonzero, until its acknowledgement floor has passed
+// that consumer sequence. Settlement is the only boundary that proves a
+// callback finished its synchronous effects; Delivered advances before they
+// run. It polls server state and never sleeps past a condition.
+func waitForConsumerSettled(
+	ctx context.Context, consumer jetstream.Consumer, wantAckFloor uint64, timeout time.Duration,
 ) error {
 	deadline := time.Now().Add(timeout)
-	var last uint64
+	var lastFloor uint64
+	var lastPending int
 	for time.Now().Before(deadline) {
 		info, err := consumer.Info(ctx)
 		if err == nil {
-			last = info.Delivered.Consumer
-			if last >= want {
+			lastFloor = info.AckFloor.Consumer
+			lastPending = info.NumAckPending
+			if lastPending == 0 && lastFloor >= wantAckFloor {
 				return nil
 			}
 		}
@@ -710,7 +731,8 @@ func waitForConsumerDelivered(
 			return err
 		}
 	}
-	return fmt.Errorf("consumer deliveries = %d, want at least %d within %v", last, want, timeout)
+	return fmt.Errorf("consumer ack floor = %d (want at least %d) with %d still pending after %v",
+		lastFloor, wantAckFloor, lastPending, timeout)
 }
 
 func joinHarnessFinalizationError(
