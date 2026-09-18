@@ -117,7 +117,7 @@ func TestWrongPayloadTypeOnHeartbeatLaneTerminatesRatherThanAcking(t *testing.T)
 // A terminal record is the expected settled-drop and ACKs; a live record means
 // this process lost the loop and an ACK would destroy the model's work.
 //
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / A loop absent from process memory is settled from its record
 func TestUncorrelatedResponseSettlesByRecordNotByMemory(t *testing.T) {
 	t.Parallel()
 
@@ -183,7 +183,7 @@ func TestUncorrelatedResponseSettlesByRecordNotByMemory(t *testing.T) {
 // Same pair on the tool-result lane, where an ACK discards an executor's
 // already-completed side effect.
 //
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / A loop absent from process memory is settled from its record
 func TestUncorrelatedToolResultSettlesByRecordNotByMemory(t *testing.T) {
 	t.Parallel()
 
@@ -233,7 +233,7 @@ func TestUncorrelatedToolResultSettlesByRecordNotByMemory(t *testing.T) {
 // call_id grammar carries the loop ID, so the record decides: a finished or
 // foreign loop acknowledges, a live one is still owed the verdict.
 //
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / A loop absent from process memory is settled from its record
 func TestVerdictWithoutWaiterSettlesByRecordNotByWaiterMap(t *testing.T) {
 	t.Parallel()
 
@@ -292,7 +292,7 @@ func TestVerdictWithoutWaiterSettlesByRecordNotByWaiterMap(t *testing.T) {
 // the third case, a loop that is live in another process, still is owed the
 // cancel and must not be acknowledged away with them.
 //
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / A loop absent from process memory is settled from its record
 // Deliberately NOT parallel: loopMetrics counters are process-global, so a
 // before/after delta on one is only meaningful when nothing else is moving it.
 func TestUncancellableLoopSettlesWithoutRetrying(t *testing.T) {

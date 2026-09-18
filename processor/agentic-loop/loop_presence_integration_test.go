@@ -15,6 +15,7 @@ import (
 // settlements, so they are proved against the same real bucket in one test:
 // a terminal record and an absent record are both stale; a non-terminal
 // record is live and must not be acknowledged away.
+// spec: agentic-loop / A loop absent from process memory is settled from its record
 func TestClassifyMissingLoopReadsTheLoopsBucketNotMemory_Integration(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
 	ctx := t.Context()

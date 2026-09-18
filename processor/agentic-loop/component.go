@@ -1797,7 +1797,7 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 
 	// Everything above this line is safe to re-run: persistLoopState and the
 	// completion/failure state writes are KV Puts of the whole current entity
-	// (`c.loopsBucket.Put` at :2107 and :2029/:2056 — last write wins, not an
+	// (`c.loopsBucket.Put` at :2220 and :2142/:2169 — last write wins, not an
 	// append), and the graph stamps go through WriteLoopCompletion/-Failure,
 	// which replace the loop entity's single-valued triples. A Retry re-runs
 	// them to the same values.
@@ -1910,8 +1910,20 @@ func (c *Component) stampLoopFailureWithBudget(ctx context.Context, loopID strin
 }
 
 // runWithBudget runs fn synchronously under a bounded child context. The caller
-// never observes completion while delivery-derived work is still live. Graph
-// dependencies are lifecycle participants and must honor cancellation.
+// never observes completion while delivery-derived work is still live: that is
+// the whole point of the synchronous call, because the goroutine-plus-select
+// shape this replaced returned while the work was still running and let a
+// delivery settle before its own graph write finished.
+//
+// The consequence is that the budget bounds only a callee that honors
+// cancellation. That is a contract, not an assumption: graph dependencies are
+// lifecycle participants under ADR-049 (docs/adr/049-lifecycle-harness.md),
+// which requires Stop and context cancellation to be honored, and a dependency
+// that ignores bctx fails lifecycle review rather than being defended against
+// here. A writer that blocked past the budget would hold the callback past the
+// lane's AckWait and be redelivered while the first attempt still ran — the
+// reason the residual is declared in the change's design.md rather than left
+// implicit.
 //
 // Extracted so the timeout-vs-completion contract is unit-testable
 // without mocking the natsclient or graphWriter. The function is

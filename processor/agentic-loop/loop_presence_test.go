@@ -10,6 +10,7 @@ import (
 // value with no separator yields itself under a naive split. Without the token
 // check a free-form provider call ID would be handed to the loops bucket as if
 // it were a loop key, and its "not found" would read as proof of staleness.
+// spec: agentic-loop / A loop absent from process memory is settled from its record
 func TestLoopIDFromStructuredIDAcceptsOnlyMintedTokens(t *testing.T) {
 	t.Parallel()
 
@@ -39,6 +40,7 @@ func TestLoopIDFromStructuredIDAcceptsOnlyMintedTokens(t *testing.T) {
 
 // Without a bucket there is no authority to ask, and "I could not look" must
 // never render as "it is stale" — that is the fail-open direction.
+// spec: agentic-loop / A loop absent from process memory is settled from its record
 func TestClassifyMissingLoopWithoutBucketIsUnknownNotStale(t *testing.T) {
 	t.Parallel()
 
@@ -49,6 +51,7 @@ func TestClassifyMissingLoopWithoutBucketIsUnknownNotStale(t *testing.T) {
 
 // An input carrying no minted token names no loop any process could hold, so
 // there is nothing to lose by acknowledging it.
+// spec: agentic-loop / A loop absent from process memory is settled from its record
 func TestClassifyMissingLoopWithoutTokenIsStale(t *testing.T) {
 	t.Parallel()
 
