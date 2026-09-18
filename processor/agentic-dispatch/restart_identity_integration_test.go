@@ -45,6 +45,13 @@ func newRestartIdentityDispatch(t *testing.T, client *natsclient.Client) *Compon
 		}
 	}
 
+	// Auto-continue now resolves through the shared loop view, and this fixture
+	// builds a Component directly instead of starting one, so no view is
+	// running. These tests are about task identity across redelivery, never
+	// about continuation; the subtest that does want continuation builds an
+	// activity component over the real KV and opts back in.
+	cfg.AutoContinue = false
+
 	c := &Component{
 		config:        cfg,
 		modelRegistry: newTestRegistry(),

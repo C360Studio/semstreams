@@ -22,8 +22,10 @@
 
 ## 3. Fixtures the base's auto-continue default exposes
 
-- [x] 3.1 `newSeamTestComponent` and `newLoopTokenTestComponent` opt out of auto-continue; both test refusal
-      precedence with no view running, and the reason is written at each site
+- [x] 3.1 `newSeamTestComponent`, `newLoopTokenTestComponent` and `newRestartIdentityDispatch` opt out of
+      auto-continue; all three build a Component directly with no view running and test refusal precedence, token
+      validation, or task identity — never continuation. The reason is written at each site, and the one subtest
+      that does want continuation builds an activity component over the real KV and opts back in
 - [x] 3.2 `restart_identity_integration_test.go` drops the `independent_default` mode and the `prior_messages`
       assertion, which name a field this base does not have
 
