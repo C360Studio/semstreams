@@ -936,6 +936,60 @@ func (c *Component) setupSubscriptions(setupCtx, consumerCtx context.Context) er
 	return nil
 }
 
+// loopLaneDelivery is the delivery posture a single input lane runs under. It
+// is resolved before the consumer config is built so the latency-class rules
+// live in one place rather than inside the setup path.
+type loopLaneDelivery struct {
+	ackWait           time.Duration
+	maxAckPending     int
+	maxDeliver        int
+	msgTimeout        time.Duration
+	backOff           []time.Duration
+	useHeartbeat      bool
+	heartbeatInterval time.Duration
+}
+
+// resolveLoopLaneDelivery differentiates the posture by latency class:
+// long-running ports (task, response, tool.result) need serial processing,
+// heartbeats and graduated backoff to survive LLM-scale latency; the fast
+// ports keep short timeouts and higher concurrency.
+func (c *Component) resolveLoopLaneDelivery(
+	portName string,
+	consumerCfg component.ConsumerConfig,
+	componentMaxAckPending int,
+) loopLaneDelivery {
+	lane := loopLaneDelivery{
+		maxAckPending: componentMaxAckPending,
+		backOff:       []time.Duration{30 * time.Second, 2 * time.Minute},
+	}
+	switch portName {
+	case "agent.task", "agent.response", "tool.result":
+		lane.ackWait = c.config.Consumer.ParsedAckWait()
+		lane.maxDeliver = c.config.Consumer.MaxDeliver
+		// The task adapter (taskInputHandler) owns the ordinary 30m work
+		// deadline; the outer callback stays lifecycle-bound so a timed-out
+		// task is attributed as a work error, not an outer cancellation.
+		lane.msgTimeout = 30 * time.Minute
+		lane.useHeartbeat = true
+		lane.heartbeatInterval = c.config.Consumer.ParsedHeartbeatInterval()
+	default: // agent.signal, agent.approval_response, agent.toolcall.* — fast
+		lane.ackWait = 30 * time.Second
+		// These four lanes are the ones this change gave a Retry
+		// classification to, so they need the same bound the heartbeat lanes
+		// have. Their shipped port definitions carry no consumer config at
+		// all, and MaxDeliver 0 is "unlimited" at natsclient/stream.go:37 — an
+		// unbounded, undelayed redelivery loop for every transient error. The
+		// floor is the BackOff length, the same rule validateLoopRetryPolicy
+		// enforces at setup.
+		lane.maxDeliver = consumerCfg.MaxDeliver
+		if lane.maxDeliver == 0 {
+			lane.maxDeliver = len(lane.backOff)
+		}
+		lane.msgTimeout = c.messageTimeout
+	}
+	return lane
+}
+
 // setupConsumer sets up a JetStream consumer for an input port.
 func (c *Component) setupConsumer(
 	setupCtx context.Context,
@@ -983,57 +1037,7 @@ func (c *Component) setupConsumer(
 		return errs.WrapInvalid(consumerErr, "agentic-loop", "setupConsumer", "resolve consumer config")
 	}
 
-	// Differentiate consumer config by latency class:
-	// - Long-running ports (task, response, tool.result) need serial processing,
-	//   heartbeats, and graduated backoff to handle LLM-scale latency.
-	// - Fast ports (signal) keep short timeouts and higher concurrency.
-	var (
-		ackWait           time.Duration
-		maxAckPending     int
-		maxDeliver        int
-		msgTimeout        time.Duration
-		backOff           []time.Duration
-		useHeartbeat      bool
-		heartbeatInterval time.Duration
-	)
-
-	switch port.Name {
-	case "agent.task":
-		ackWait = c.config.Consumer.ParsedAckWait()
-		maxAckPending = componentMaxAckPending
-		maxDeliver = c.config.Consumer.MaxDeliver
-		// The task adapter (taskInputHandler) owns the ordinary 30m work
-		// deadline; the outer callback stays lifecycle-bound so a timed-out
-		// task is attributed as a work error, not an outer cancellation.
-		msgTimeout = 30 * time.Minute
-		backOff = []time.Duration{30 * time.Second, 2 * time.Minute}
-		useHeartbeat = true
-		heartbeatInterval = c.config.Consumer.ParsedHeartbeatInterval()
-	case "agent.response", "tool.result":
-		ackWait = c.config.Consumer.ParsedAckWait()
-		maxAckPending = componentMaxAckPending
-		maxDeliver = c.config.Consumer.MaxDeliver
-		msgTimeout = 30 * time.Minute
-		backOff = []time.Duration{30 * time.Second, 2 * time.Minute}
-		useHeartbeat = true
-		heartbeatInterval = c.config.Consumer.ParsedHeartbeatInterval()
-	default: // agent.signal, agent.approval_response, agent.toolcall.* — fast
-		ackWait = 30 * time.Second
-		maxAckPending = componentMaxAckPending
-		// These four lanes are the ones L1 gave a Retry classification to, so
-		// they need the same bound the heartbeat lanes have. Their shipped
-		// port definitions carry no consumer config at all, and MaxDeliver 0
-		// is "unlimited" at natsclient/stream.go:37 — an unbounded, undelayed
-		// redelivery loop for every transient error. The floor is the BackOff
-		// length, the same rule validateLoopRetryPolicy enforces below.
-		backOff = []time.Duration{30 * time.Second, 2 * time.Minute}
-		maxDeliver = consumerCfg.MaxDeliver
-		if maxDeliver == 0 {
-			maxDeliver = len(backOff)
-		}
-		msgTimeout = c.messageTimeout
-		useHeartbeat = false
-	}
+	lane := c.resolveLoopLaneDelivery(port.Name, consumerCfg, componentMaxAckPending)
 
 	cfg := natsclient.StreamConsumerConfig{
 		StreamName:     streamName,
@@ -1041,12 +1045,12 @@ func (c *Component) setupConsumer(
 		FilterSubject:  subject,
 		DeliverPolicy:  consumerCfg.DeliverPolicy,
 		AckPolicy:      consumerCfg.AckPolicy,
-		MaxDeliver:     maxDeliver,
-		AckWait:        ackWait,
-		MaxAckPending:  maxAckPending,
-		BackOff:        backOff,
+		MaxDeliver:     lane.maxDeliver,
+		AckWait:        lane.ackWait,
+		MaxAckPending:  lane.maxAckPending,
+		BackOff:        lane.backOff,
 		AutoCreate:     false,
-		MessageTimeout: msgTimeout,
+		MessageTimeout: lane.msgTimeout,
 		// agent.task applies its 30m ordinary-work deadline in taskInputHandler;
 		// its outer context stays lifecycle-bound so the adapter's deadline is
 		// the single authority on task-work timeout attribution.
@@ -1054,8 +1058,8 @@ func (c *Component) setupConsumer(
 	}
 	var handlerFn func(context.Context, jetstream.Msg)
 	var admission *deliveryLaneAdmission
-	if useHeartbeat {
-		policy, policyErr := newLoopHeartbeatDeliveryPolicy(setupCtx, cfg, heartbeatInterval, port.Name, handler)
+	if lane.useHeartbeat {
+		policy, policyErr := newLoopHeartbeatDeliveryPolicy(setupCtx, cfg, lane.heartbeatInterval, port.Name, handler)
 		if policyErr != nil {
 			return policyErr
 		}
