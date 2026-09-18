@@ -415,6 +415,70 @@ func TestToolDeliveryClassificationFailsClosedOnUnclassifiedError(t *testing.T) 
 		classifyToolDeliveryDecision(retryableDelivery("read tool-call outcome: %w", ordinary)))
 }
 
+// The framework execution correlation is checked BEFORE anything reads the
+// outcome ledger or invokes an executor, and an uncorrelated call is
+// terminated rather than retried (#1328; the break the beta162→beta163
+// migration note advertises for anything publishing onto tool.execute.*).
+//
+// The ordering is the whole point, so it is what the fixture pins: the store
+// is armed to fail every Get. If the gate were removed the delivery would
+// reach the ledger, that Get would fail, and the decision would be Retry —
+// and with a working store it would EXECUTE the tool and only fail later at
+// newCompletedOutcome, which is one external effect with no result published.
+//
+// spec: agentic-tools / Tool outcomes preserve framework execution correlation
+func TestUncorrelatedToolCallTerminatesBeforeLedgerOrExecutor(t *testing.T) {
+	correlated := correlatedOutcomeTestCall(agentic.ToolCall{ID: "gate", Name: "count"})
+
+	cases := map[string]func(agentic.ToolCall) agentic.ToolCall{
+		"missing execution id": func(c agentic.ToolCall) agentic.ToolCall { c.ExecutionID = ""; return c },
+		"missing request id":   func(c agentic.ToolCall) agentic.ToolCall { c.RequestID = ""; return c },
+		"zero call ordinal":    func(c agentic.ToolCall) agentic.ToolCall { c.CallOrdinal = 0; return c },
+		"no correlation at all": func(c agentic.ToolCall) agentic.ToolCall {
+			c.RequestID, c.ExecutionID, c.CallOrdinal = "", "", 0
+			return c
+		},
+	}
+
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			executor := &countingExecutor{}
+			published := 0
+			component := &Component{
+				config: DefaultConfig(), registry: NewExecutorRegistry(), decoder: payloadbuiltins.NewTestDecoder(t),
+				logger: slog.Default(),
+				outcomes: &memoryOutcomeStore{
+					values: make(map[string][]byte),
+					getErr: errors.New("outcome ledger must not be read for an uncorrelated call"),
+				},
+			}
+			require.NoError(t, component.registry.RegisterTool("count", executor))
+			component.publishStream = func(context.Context, string, []byte, string) error {
+				published++
+				return nil
+			}
+
+			call := mutate(correlated)
+			base := message.NewBaseMessage(call.Schema(), &call, "test")
+			data, err := json.Marshal(base)
+			require.NoError(t, err)
+
+			decision, err := component.handleToolDelivery(t.Context(), data)
+
+			require.Equal(t, natsclient.DeliveryDecisionTerminate, decision,
+				"an uncorrelated call can never become correlated by redelivery")
+			var permanent *natsclient.PermanentDeliveryError
+			require.ErrorAs(t, err, &permanent)
+			require.ErrorContains(t, err, "validate tool execution correlation")
+			require.NotContains(t, err.Error(), "outcome ledger must not be read",
+				"the gate must refuse before the ledger is consulted")
+			require.Equal(t, int32(0), executor.calls.Load(), "no external effect may precede the refusal")
+			require.Equal(t, 0, published, "a refused call publishes no result")
+			require.Equal(t, int64(1), component.errors, "the refusal is counted as an error")
+		})
+	}
+}
+
 func TestToolCallOutcomeIdentityV1(t *testing.T) {
 	call := correlatedOutcomeTestCall(agentic.ToolCall{
 		ID: "call-123", Name: "lookup", LoopID: "loop-1", TraceID: "trace-1", ApprovedBy: "operator",
