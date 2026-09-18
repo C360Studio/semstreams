@@ -39,6 +39,20 @@ useful retry; Quarantine means collision, impossible correlation, panic, or inva
 - **THEN** it returns Terminate with a non-nil cause
 - **AND** no warning-only return becomes ACK
 
+#### Scenario: A malformed heartbeat-lane input is terminated, never acknowledged as done
+
+- **WHEN** a production heartbeat-lane callback receives bytes that do not decode, or that decode to a payload type
+  the lane does not handle
+- **THEN** the failure is classified as a permanent delivery error and the binding terminates the delivery
+- **AND** the delivery is neither acknowledged nor retried
+
+#### Scenario: A handler result fails after some of its publications have returned PubAck
+
+- **WHEN** a handler result's state has been stamped and its publication phase then fails partway
+- **THEN** the callback reports a fatal-classified error and the binding quarantines the delivery
+- **AND** the owner latches its health fatal and drains that lane, rather than redelivering a callback that would
+  republish results whose PubAcks already returned
+
 #### Scenario: Approval handler panics
 
 - **WHEN** approval work panics
@@ -62,7 +76,42 @@ useful retry; Quarantine means collision, impossible correlation, panic, or inva
   `LastError`, and exactly one increment of the existing error count, before owner-stop observation drains the
   exact handle
 - **AND** a later fatal result in the same or another lane neither overwrites nor recounts that first cause
-- **AND** no metric family, public state, durable state, or communication path is added
+- **AND** the latch itself adds no metric family, public state, durable state, or communication path
+
+### Requirement: A loop absent from process memory is settled from its record
+
+A callback that receives an input naming a loop it does not hold in memory SHALL NOT infer from that absence that
+the loop is finished. It SHALL classify the loop from the loop record: absent or terminal is stale, non-terminal is
+live, and any failed or undecodable read is unknown. A stale loop SHALL be acknowledged and counted as an expected
+drop; a live or unknown loop SHALL be retried, because a positive acknowledgement would discard work this process
+lost rather than work that completed. The classification SHALL perform no recovery: it reconstructs no state,
+re-registers no routing, and reads no retained request. A loop identifier recovered from a structured identifier
+SHALL be a framework-minted token, so a provider-authored identifier is never used as a record key.
+
+#### Scenario: A response or tool result arrives for a loop this process does not hold
+
+- **WHEN** a model response or tool result names a loop absent from process memory
+- **AND** the loop record shows the loop absent or terminal
+- **THEN** the delivery is acknowledged and counted as an expected drop naming a stale identifier
+
+#### Scenario: The named loop is still live
+
+- **WHEN** a model response, tool result, or governance verdict names a loop whose record is non-terminal
+- **THEN** the delivery is retried rather than acknowledged
+- **AND** no expected-drop count is recorded for it
+
+#### Scenario: The loop record cannot be read
+
+- **WHEN** the loop record read fails, or its value does not decode
+- **THEN** the delivery is retried
+- **AND** the failure is never reported as a stale loop
+
+#### Scenario: A cancel signal names a loop that cannot be cancelled
+
+- **WHEN** a cancel signal names a loop that is already terminal
+- **THEN** the signal is acknowledged effect-free and counted as an already-terminal drop
+- **WHEN** a cancel signal names a loop this process does not hold
+- **THEN** the signal is settled by the same record classification as any other input
 
 ### Requirement: Delivery work joins before settlement
 
@@ -110,3 +159,14 @@ refused before consumer allocation; the owner SHALL NOT truncate BackOff or admi
 
 - **WHEN** every shipped loop configuration fixture resolves its consumer config
 - **THEN** each one satisfies the heartbeat ceiling and the delivery floor
+
+#### Scenario: The non-heartbeat lanes are held to the same retry floor
+
+- **WHEN** the cancel-signal, approval-response, approved-verdict, or rejected-verdict lane is set up
+- **THEN** it acquires a consumer carrying a non-empty BackOff and a MaxDeliver covering it
+- **AND** the same validation refuses a configuration below that floor before allocating a consumer
+
+#### Scenario: Retry on a non-heartbeat lane is delayed, not immediate
+
+- **WHEN** a non-heartbeat callback returns Retry
+- **THEN** the binding negatively acknowledges with a delay rather than at line rate

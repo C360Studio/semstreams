@@ -42,7 +42,7 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 
 ## 4. Fatal delivery-owner health latch
 
-- [x] 4.1 Add the private per-component `deliveryLaneAdmission` latch and the per-binding drain observer.
+- [x] 4.1 Add the private per-lane `deliveryLaneAdmission` latch and the per-binding drain observer.
 - [x] 4.2 Latch the first cause once, across lanes, without overwrite or recount:
       `TestDeliveryFatalHealthKeepsFirstCauseAcrossLanes`.
 - [x] 4.3 Prove panic and unavailable-metadata paths stop the exact owner:
@@ -69,16 +69,39 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       `TestShippedModelFixturesResolveValidHeartbeatPolicy`; update the nine `configs/**` files and
       `schemas/agentic-loop.v1.json` in lockstep.
 
-## 6. Gates
+## 6. Review round 1
 
-- [x] 6.1 `task lint`, `task test`, `task schema:generate` with empty `schemas/`/`specs/` drift,
+- [x] 6.1 Classify a missing loop from its record, never from process memory, and use it at every site that
+      previously Acked on a memory miss: `TestClassifyMissingLoopReadsTheRecordNotMemory`,
+      `TestClassifyMissingLoopAgainstRealKV_Integration`, `TestUncorrelatedResponseSettlesByRecordNotByMemory`,
+      `TestUncorrelatedToolResultSettlesByRecordNotByMemory`,
+      `TestVerdictWithoutWaiterSettlesByRecordNotByWaiterMap`, `TestUncancellableLoopSettlesWithoutRetrying`.
+- [x] 6.2 Terminate an undecodable or wrongly-typed input instead of acknowledging it:
+      `TestUndecodableHeartbeatLaneInputTerminatesRatherThanAcking`,
+      `TestWrongPayloadTypeOnHeartbeatLaneTerminatesRatherThanAcking`.
+- [x] 6.3 Quarantine a partially published handler result rather than replaying returned PubAcks:
+      `TestPartialPublishQuarantinesRatherThanRepublishing_Integration`,
+      `TestPrePublishPersistFailureStillRetries_Integration`.
+- [x] 6.4 Bound retry on the four non-heartbeat lanes with a validated BackOff/`max_deliver` floor and a delayed
+      NAK: `TestNonHeartbeatLanesAcquireABoundedConsumer`,
+      `TestNonHeartbeatLaneRefusesSingleDeliveryBeforeAllocation`,
+      `TestSettleDeliveryWithRetryPerformsTheDelayedNak`.
+- [x] 6.5 Give agentic-governance the same private `delivery_owner.go` trio the other three carry, replacing its
+      inline admission locals.
+- [x] 6.6 Record the declared residuals the round surfaced in `design.md`: synchronous `runWithBudget` under
+      ADR-049, the void-returning graph writers, agentic-model's absent panic wrapper, and the four-way duplication
+      of the delivery-owner trio.
+
+## 7. Gates
+
+- [x] 7.1 `task lint`, `task test`, `task schema:generate` with empty `schemas/`/`specs/` drift,
       `task openspec:validate`, `task spec:properties`, `task check:push` — commands and exit codes recorded in
       the PR body.
-- [x] 6.2 Run `task e2e:agentic` on the landing head and record every stage's pass/fail verbatim in the PR body,
+- [x] 7.2 Run `task e2e:agentic` on the landing head and record every stage's pass/fail verbatim in the PR body,
       including the process-replacement recovery stages this layer does not implement.
 
-## 7. Landing
+## 8. Landing
 
-- [ ] 7.1 Complete SemStreams implementation review and resolve findings.
-- [ ] 7.2 Archive this change (`openspec archive settle-after-durable-effect`) as the final content commit and
+- [ ] 8.1 Complete SemStreams implementation review and resolve findings.
+- [ ] 8.2 Archive this change (`openspec archive settle-after-durable-effect`) as the final content commit and
       obtain the narrow reviewer check of the archive/spec sync.
