@@ -74,15 +74,46 @@ func TestIntegrationConsumeDeliveryWithHeartbeatHealthyRenewalPreventsOverlap(t 
 		t.Fatal("first delivery did not start")
 	}
 
+	// The proof is the SERVER's own view, read while work is still blocked.
+	// Watching the work callback cannot prove this: NATS invokes one
+	// subscription's callbacks serially, so a redelivery the server queued
+	// while the first callback is blocked would never reach `started` inside
+	// the window, and the test would pass on a lease it had already lost.
+	js, err := testClient.Client.JetStream()
+	require.NoError(t, err)
+	stream, err := js.Stream(ctx, "DELIVERY_RENEWAL")
+	require.NoError(t, err)
+	consumer, err := stream.Consumer(ctx, "delivery-renewal")
+	require.NoError(t, err)
+
 	// Three full first-redelivery intervals give the server repeated chances
-	// to overlap the same delivery if InProgress is not renewing its lease.
+	// to redeliver the same message if InProgress is not renewing its lease.
 	renewalWindow := 3 * firstBackOff
-	select {
-	case <-started:
-		releaseOnce.Do(func() { close(release) })
-		t.Fatal("healthy renewal allowed an overlapping delivery")
-	case <-time.After(renewalWindow):
+	deadline := time.Now().Add(renewalWindow)
+	for time.Now().Before(deadline) {
+		info, infoErr := consumer.Info(ctx)
+		require.NoError(t, infoErr)
+		if info.NumRedelivered != 0 || info.Delivered.Consumer != 1 {
+			releaseOnce.Do(func() { close(release) })
+			t.Fatalf("healthy renewal allowed a redelivery: num_redelivered=%d delivered=%d ack_pending=%d",
+				info.NumRedelivered, info.Delivered.Consumer, info.NumAckPending)
+		}
+		select {
+		case <-ctx.Done():
+			releaseOnce.Do(func() { close(release) })
+			t.Fatalf("context ended during the renewal window: %v", ctx.Err())
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
+
+	// Still blocked, still exactly one outstanding delivery: the lease was
+	// renewed for the whole window rather than expiring into BackOff.
+	blocked, err := consumer.Info(ctx)
+	require.NoError(t, err)
+	require.Zero(t, blocked.NumRedelivered, "renewed lease must not redeliver")
+	require.Equal(t, uint64(1), blocked.Delivered.Consumer, "renewed lease must not re-deliver a second time")
+	require.Equal(t, 1, blocked.NumAckPending, "the delivery must still be outstanding and unsettled")
+	require.Zero(t, blocked.AckFloor.Consumer, "nothing may be acknowledged while work is blocked")
 
 	releaseOnce.Do(func() { close(release) })
 	select {
@@ -93,6 +124,13 @@ func TestIntegrationConsumeDeliveryWithHeartbeatHealthyRenewalPreventsOverlap(t 
 		t.Fatal("renewed delivery did not settle")
 	}
 	require.Equal(t, int32(1), invocations.Load())
+
+	// After the ACK the server agrees the single delivery is settled.
+	require.Eventually(t, func() bool {
+		settled, infoErr := consumer.Info(ctx)
+		return infoErr == nil && settled.NumAckPending == 0 && settled.AckFloor.Consumer == 1 &&
+			settled.NumRedelivered == 0 && settled.Delivered.Consumer == 1
+	}, 5*time.Second, 25*time.Millisecond, "the renewed delivery must settle exactly once")
 }
 
 func TestIntegrationConsumeDeliveryWithHeartbeatStoppedRenewalUsesBackOff(t *testing.T) {
