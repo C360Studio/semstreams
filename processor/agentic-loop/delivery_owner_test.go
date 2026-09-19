@@ -122,7 +122,7 @@ func (b *recordingLoopBucket) written() []string {
 // redelivery with a healed bucket and asserts the completion record is absent,
 // which is what a Retry would have settled as done.
 //
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
 func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 	newPolicy := func(t *testing.T, port string, handler inputHandler) natsclient.HeartbeatDeliveryPolicy {
 		t.Helper()
@@ -203,7 +203,7 @@ func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 	})
 }
 
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
 func TestLoopUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner(t *testing.T) {
 	retry, err := natsclient.DelayedDeliveryRetry(30 * time.Second)
 	require.NoError(t, err)
@@ -252,7 +252,7 @@ func TestLoopUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner(t *testing
 	<-binding.observerDone
 }
 
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
 func TestLoopSetupWiresMetadataFailureToAcquiredOwner(t *testing.T) {
 	handles := []*loopPolicyHandle{
 		{closed: make(chan struct{})},
@@ -331,7 +331,7 @@ func TestLoopSetupWiresMetadataFailureToAcquiredOwner(t *testing.T) {
 	}
 }
 
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
 func TestLoopProductionCallbacksTerminateMalformedNonHeartbeatInputs(t *testing.T) {
 	discoverable, err := NewComponent([]byte(`{}`), component.Dependencies{
 		NATSClient: &natsclient.Client{}, PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
@@ -393,7 +393,7 @@ func (d *settlementVerdictDispatcher) HandleVerdict(decision, callID string, _ [
 }
 func (*settlementVerdictDispatcher) Mode() string { return "enforce" }
 
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
 // scenario: Approval handler panics
 func TestLoopApprovalPanicProductionCallbackQuarantinesExactOwner(t *testing.T) {
 	discoverable, err := NewComponent([]byte(`{}`), component.Dependencies{
@@ -444,7 +444,7 @@ func TestLoopApprovalPanicProductionCallbackQuarantinesExactOwner(t *testing.T) 
 	}
 }
 
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
 func TestLoopCancellationUnknownPublicationQuarantinesWithoutReleasingTransientState(t *testing.T) {
 	discoverable, err := NewComponent([]byte(`{}`), component.Dependencies{
 		NATSClient: &natsclient.Client{}, PayloadRegistry: payloadbuiltins.NewTestRegistry(t),

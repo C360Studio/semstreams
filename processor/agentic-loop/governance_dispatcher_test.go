@@ -24,7 +24,7 @@ type mockVerdictPublisher struct {
 	err       error
 }
 
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
 func TestGovernanceDispatcherHandleVerdictDeclaresDeliveryOutcome(t *testing.T) {
 	t.Parallel()
 

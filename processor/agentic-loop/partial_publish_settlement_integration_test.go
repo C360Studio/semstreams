@@ -23,7 +23,7 @@ import (
 // The stream here accepts agent.> only, so the second of three publishes is
 // the one that fails — the partial case, not an all-or-nothing one.
 //
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
 func TestIntegrationPartialPublishQuarantinesRatherThanRetrying(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV(), natsclient.WithStreams(
 		natsclient.TestStreamConfig{Name: "AGENT", Subjects: []string{"agent.>"}},

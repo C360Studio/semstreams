@@ -2,7 +2,7 @@
 
 ## ADDED Requirements
 
-### Requirement: All six loop input classes settle after owner-specific durable done
+### Requirement: Loop input classes settle after owner-specific durable done
 
 Agentic-loop SHALL classify task, response, tool-result, cancel-signal, approval-response, and governance-verdict
 deliveries through their existing binding owners, and SHALL NOT positively acknowledge a delivery on a converted
@@ -107,6 +107,7 @@ reads as covering it. An undecodable task envelope, a task payload of the wrong 
 failed first publication or loop-state write SHALL keep their pre-existing log-and-acknowledge settlement. Converting
 them is not a classification change: a redelivered task deduplicates against the loop its first delivery already
 created and acknowledges without publishing, so the lane needs resumable intake before a Retry can mean anything.
+The exemption is tracked as issue #1345 and is not a permanent property of the lane.
 The birth-failure and transient-lineage paths of the same lane are NOT exempt — they settle on their durable effect
 today.
 
@@ -115,7 +116,8 @@ today.
 - **WHEN** task intake fails to decode its envelope, fails in its handler, or cannot publish its first request or
   write its loop state
 - **THEN** the failure is logged and the delivery is positively acknowledged
-- **AND** the exemption is recorded here, with resumable intake named as its precondition
+- **AND** the exemption is recorded here and tracked as issue #1345, with resumable intake named as its
+  precondition
 
 #### Scenario: A loop-execution birth failure is not exempt
 

@@ -24,7 +24,7 @@ import (
 // terminal result and settles on that write; anything else is commit-unknown
 // and quarantines, with cancellation the one ordinary Retry.
 //
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
 func TestToolResultHandlerFailureSettlesOnTheDurableRecord(t *testing.T) {
 	newPolicy := func(t *testing.T, handler inputHandler) natsclient.HeartbeatDeliveryPolicy {
 		t.Helper()

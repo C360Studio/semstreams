@@ -72,7 +72,7 @@ func baseMessageBytes(t *testing.T, payload message.Payload) []byte {
 // Before this, both heartbeat lanes logged and returned nil, which the policy
 // read as done and ACKed — the exact log-only-to-ACK shape the change removes.
 //
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
 func TestUndecodableHeartbeatLaneInputTerminatesRatherThanAcking(t *testing.T) {
 	t.Parallel()
 
@@ -99,7 +99,7 @@ func TestUndecodableHeartbeatLaneInputTerminatesRatherThanAcking(t *testing.T) {
 
 // A payload that decodes but is the wrong registered type is equally permanent.
 //
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
 func TestWrongPayloadTypeOnHeartbeatLaneTerminatesRatherThanAcking(t *testing.T) {
 	t.Parallel()
 

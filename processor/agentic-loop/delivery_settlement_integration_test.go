@@ -114,7 +114,7 @@ func TestIntegrationApprovalRejectionJoinsCancelledGraphRequestBeforeQuarantine(
 	}
 }
 
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
 func TestIntegrationLoopSignalAndApprovalCallbacksCommitBeforeAck(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithStreams(
 		natsclient.TestStreamConfig{Name: "AGENT", Subjects: []string{"agent.>", "tool.>"}},

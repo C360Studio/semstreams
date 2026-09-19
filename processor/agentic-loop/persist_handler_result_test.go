@@ -40,7 +40,7 @@ func TestRunWithBudget_ReturnsCompletedFalseWhenFnReturnsFast(t *testing.T) {
 	}
 }
 
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
 func TestPersistHandlerResultReturnsPublicationFailureBeforeTerminalRelease(t *testing.T) {
 	handler := NewMessageHandler(DefaultConfig())
 	loopID := "publish-failure-loop"
@@ -62,7 +62,7 @@ func TestPersistHandlerResultReturnsPublicationFailureBeforeTerminalRelease(t *t
 	require.NoError(t, err, "failed required publication released terminal transient state")
 }
 
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
 func TestRequiredLoopStatePersistenceReturnsErrors(t *testing.T) {
 	want := errors.New("kv unavailable")
 	handler := NewMessageHandler(DefaultConfig())

@@ -25,7 +25,7 @@ import (
 // The end-to-end partial case (first publish durable, second fails) needs a
 // real stream and lives in TestIntegrationPartialPublishQuarantinesRatherThanRetrying.
 //
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
 func TestPublishPhaseFailureLeavesPersistHandlerResultFatalClassified(t *testing.T) {
 	t.Parallel()
 
@@ -65,7 +65,7 @@ func TestPublishPhaseFailureLeavesPersistHandlerResultFatalClassified(t *testing
 // delivery error. If the errs.IsFatal arm moved below the PermanentDeliveryError
 // arm — or were deleted — this settles Terminate instead of Quarantine.
 //
-// spec: agentic-loop / All six loop input classes settle after owner-specific durable done
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
 func TestHeartbeatWorkMapsFatalToQuarantineAheadOfPermanentAndRetry(t *testing.T) {
 	t.Parallel()
 
