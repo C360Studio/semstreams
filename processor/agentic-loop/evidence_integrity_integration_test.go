@@ -108,6 +108,7 @@ func newStampTestComponent(t *testing.T, client *natsclient.Client, config Confi
 		platform:   types.PlatformMeta{Org: "acme", Platform: "ops"},
 		logger:     discardLogger(),
 	}
+	stampDeclaredPorts(t, c)
 	return c
 }
 

@@ -18,6 +18,7 @@ import (
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/require"
 )
 
 // terminalReaderProbe is a trajectory fact bucket that snapshots the loop's
@@ -189,7 +190,7 @@ func releaseTestComponent(t *testing.T, h *MessageHandler) *Component {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	h.logger = logger
-	return &Component{
+	c := &Component{
 		config:    DefaultConfig(),
 		handler:   h,
 		logger:    logger,
@@ -197,6 +198,20 @@ func releaseTestComponent(t *testing.T, h *MessageHandler) *Component {
 		started:   true,
 		startTime: time.Now(),
 	}
+	stampDeclaredPorts(t, c)
+	return c
+}
+
+// stampDeclaredPorts gives a hand-built Component the output ports a
+// production one is constructed with. The loops kv-write output is where the
+// loop bucket name comes from (#1329) — a Component assembled field by field
+// declares none, so any seam that resolves the bucket refuses it as
+// unconfigured rather than exercising what the test names.
+func stampDeclaredPorts(t *testing.T, c *Component) {
+	t.Helper()
+	_, _, outputs, err := resolveConfig([]byte(`{}`))
+	require.NoError(t, err)
+	c.outputPorts = outputs
 }
 
 // TestTerminalReleaseClearsEveryPerLoopMap is the #1233 claim: a settled loop
