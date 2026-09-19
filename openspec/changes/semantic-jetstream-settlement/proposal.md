@@ -67,11 +67,14 @@ no-heartbeat workaround.
 
 ## Non-goals
 
-- No merge of PR #1156 while exported `ConsumeWithHeartbeat` or any production caller remains.
-- No API allowlist or compatibility status derived from the branch-staging zero-growth guard.
+- No removal of exported `ConsumeWithHeartbeat` at this layer, and therefore no zero-production-caller archive gate
+  here: that gate belongs to the #1249 removal layer (owner ruling 2026-09-18 on #759).
+- No API allowlist or compatibility status derived from the zero-growth ratchet.
 - No mechanical ACK conversion.
 - No raw-message settlement escape or unreviewed exported no-heartbeat API.
-- No child-PR merge directly to `main` and no intermediate accepted dual-API state.
+- No intermediate state that advertises two settlement APIs: `main` carries the legacy helper unadvertised and
+  ratcheted until #1249 deletes it. (The earlier "no child-PR merge directly to `main`" restriction belonged to the
+  abandoned integration-trunk topology and is superseded 2026-09-18; every layer now merges to `main` on its own.)
 - No shared admission gate, handle owner, supervisor, rule, workflow, state-machine runtime, checkpoint, outbox,
   CQRS layer, or event-sourced loop.
 - No durable quarantine bucket, stream, subject, payload, entity, ObjectStore record, or unapproved AgentRun receipt

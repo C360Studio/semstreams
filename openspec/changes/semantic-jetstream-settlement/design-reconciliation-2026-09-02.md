@@ -1,5 +1,12 @@
 # Design reconciliation: Stage A settlement landing
 
+> **Historical, superseded 2026-09-18.** The trunk-and-one-squash topology recorded here — the non-default
+> `codex/gh759-semantic-settlement` integration branch, child PRs merging into it, and PR #1156 as the single landing
+> that closes #759 — is dead. The work re-landed as layers on `main`: PR #1331 (this foundation), then #1327 and
+> #1249, each claimed, reviewed, and archived on its own, and #1249 removes `ConsumeWithHeartbeat`. Owner ruling
+> 2026-09-18 on #759. This file is retained as evidence of how the decision was reached; the live instructions are
+> `design.md` § Decisions (D0) and `tasks.md` § 6. Nothing here is an instruction to follow.
+
 ## Evidence checkpoint
 
 This design incorporates

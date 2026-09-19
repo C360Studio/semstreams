@@ -1,6 +1,10 @@
 # Inventory: #759 held semantic-settlement bindings after #1210 and #1231
 base: 39444c9de649775a4be6866a946b7d73400f4639
 
+> **Historical snapshot, 2026-09-02.** The code and sister-repository evidence below is pinned to the base above and
+> stays valid as evidence. The claim/PR rows are not: PR #1156 and `codex/gh759-semantic-settlement` are abandoned,
+> and the live claim is PR #1331 on `main` (superseded 2026-09-18, owner ruling on #759).
+
 ## Reproducible read-only sister checkpoints
 
 | Repository | Checkpoint | Porcelain state | Working-tree diff SHA-256 | Staged diff SHA-256 | Untracked-content SHA-256 | Porcelain-state SHA-256 |

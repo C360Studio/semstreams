@@ -250,7 +250,8 @@ Each of the three policy constructions uses a binding-local `DeliveryWork` closu
 bytes to the existing tools or dispatch domain handler. Transport observation does not enter those domain handler
 signatures or their direct tests.
 
-The Stage A tools and dispatch bindings establish the typed foundation but do not authorize PR #1156 to merge.
+The Stage A tools and dispatch bindings establish the typed foundation but settle no other binding; each later layer
+carries its own proof before it merges. (PR #1156 is abandoned; superseded 2026-09-18, see D0.)
 
 #1146 retains its full accepted intake, command, model, loop, tools, signal, approval, projection, governance, replay,
 and context/lifecycle scope. Its model and three loop heartbeat migrations are additive. It rebases onto the reviewed
@@ -347,9 +348,12 @@ is reversed. Any layer that adds an effect site to this lane classifies it above
 - #1155 Stage A process replacement with one tools effect and no duplicate dispatch response, followed by every
   remaining replacement-proof row before final landing.
 - `task e2e:agentic` after Stage A and every later admitted stage.
-- During staging, exact AST zero-growth guard: legacy remains only in model, loop, and AgentRun with no new production
-  caller or alias. Before archive, zero production callers and no exported declaration or alias.
+- Exact AST zero-growth guard at every layer: legacy remains only in model, loop, and AgentRun with no new production
+  caller or alias. "Zero production callers and no exported declaration or alias" is the **#1249 removal layer's**
+  archive gate, not this foundation's: this change archives with those three ratcheted caller files intact (owner
+  ruling 2026-09-18 on #759; the trunk-wide before-archive gate is superseded 2026-09-19).
 - Gated-DAG capability validation and a reproducible, SemStreams-owned sister migration record.
-- Separate implementation and archive/spec-sync review for #1146 and #1249 on the non-default integration trunk.
+- Separate implementation and archive/spec-sync review for #1327/#1146 and #1249, each in its own PR stacked on
+  `main`. The non-default integration trunk that this gate named is superseded 2026-09-18 (see D0).
 - Final integrated implementation review, owner-requested cross-agent review, then final-content archive and narrow
   archive/spec-sync review.
