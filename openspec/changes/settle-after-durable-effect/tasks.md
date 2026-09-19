@@ -86,8 +86,10 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 - [x] 6.2 Terminate an undecodable or wrongly-typed input instead of acknowledging it:
       `TestUndecodableHeartbeatLaneInputTerminatesRatherThanAcking`,
       `TestWrongPayloadTypeOnHeartbeatLaneTerminatesRatherThanAcking`.
-- [x] 6.3 Quarantine a partially published handler result rather than replaying returned PubAcks, while a
-      pre-publish failure still retries: `TestIntegrationPartialPublishQuarantinesRatherThanRetrying`.
+- [x] 6.3 Quarantine a handler result that fails at either phase rather than replaying returned PubAcks — the
+      pre-publish half too, per 8c.1: the whole-entity write is replayable but the delivery is not, so a
+      redelivery meets the handler's terminal guard and acknowledges an empty result.
+      `TestIntegrationPartialPublishQuarantinesRatherThanRetrying` asserts both halves.
 - [x] 6.4 Bound retry on the four non-heartbeat lanes with a validated BackOff/`max_deliver` floor and a delayed
       NAK: `TestNonHeartbeatLanesAcquireABoundedConsumer`,
       `TestNonHeartbeatLaneRefusesSingleDeliveryBeforeAllocation`,
@@ -159,7 +161,8 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 - [x] 8c.3 (R1 sibling, #1343) The tool-result handler-error branch logged and returned nil. A terminal result —
       `HandleToolResult`'s timeout branch builds one, with its failure record and publications — now goes through
       `persistHandlerResult` and settles on that write; a non-terminal error quarantines; cancellation retries so a
-      clean stop cannot latch a false ownership fatal. `TestToolResultHandlerFailureSettlesOnTheDurableRecord`.
+      clean stop cannot latch a false ownership fatal. **Narrowed by 8e.3**: only a cancellation observed before
+      the handler mutated anything. `TestToolResultHandlerFailureSettlesOnTheDurableRecord`.
       Mutation: restore the swallow → two subtests red. This closes #1343 rather than scoping the loop delta
       around it
 - [x] 8c.4 (R2) A user acknowledgement that failed after the task took its PubAck (`component.go:1136`) returned
@@ -273,6 +276,18 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       `ctx.Err()` at `:2209` → the pre-mutation subtest flips to Quarantine; drop the marker check in
       `settleFailedToolResult` → the post-mutation subtest flips to Retry. The cost and the two topology facts
       that size it are a declared residual in `design.md`
+- [x] 8e.4 (R4, P2) Three published contracts contradicted the implemented behaviour, and OpenSpec's syntax and
+      citation checks cannot see a behavioural contradiction. `proposal.md:45-47` said the stamp phase "stays
+      retryable" where D7 and `persistHandlerResult` quarantine; task 6.3 said "a pre-publish failure still
+      retries" while citing the test that now requires Quarantine; the dispatch delta's unauthorized-input
+      scenario promised a deterministic error "before termination" where every `ResponseID` on that lane is
+      `uuid.New()` (`component.go:918`, `:931`, `:956`, `:970`, `:1088`, `commands.go` ×9) and a published refusal
+      Acks. All three now say what the code does. The sweep behind them was
+      `grep -n -iE 'retr|determinis'` over the whole change directory: the remaining hits are accurate, including
+      two that read as suspect and are not — the terminal lane's response identity really is source-derived
+      (`terminal_settlement.go:17,219`, `terminal-user-response:<source_message_id>`), and the loop's terminal
+      event really is keyed by loop id rather than a minted UUID. Response identity for the rest of the lanes is
+      L2's (#1328), and the delta now says so rather than claiming it
 
 ## 9. Landing
 

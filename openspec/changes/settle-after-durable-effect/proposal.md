@@ -42,9 +42,13 @@ running, and `max_deliver: 1` silently truncated a two-entry BackOff to a single
   a stale loop is Acked and counted as an expected drop, and one naming a live loop is retried. It performs no
   recovery. The six call sites that previously Acked on a memory miss — uncorrelated model response, uncorrelated
   tool result, waiter-less governance verdict, and the cancel signal's not-found and already-terminal arms — use it.
-- **A partially published result quarantines.** `persistHandlerResult`'s stamp phase is a whole-entity upsert and
-  stays retryable; its publish phase is not, so a failure there is fatal-wrapped and settles as Quarantine rather
-  than replaying publications whose PubAcks already returned.
+- **A handler result that fails at either phase quarantines.** The publish phase is the obvious one: a failure on
+  result k leaves 1..k-1 already durable, so replaying it re-emits publications whose PubAcks returned. The stamp
+  phase is the one that looks safe and is not. Each write is a whole-entity upsert, so the WRITE is replayable —
+  but the DELIVERY is not, and the delivery is what a classification answers for. The handler has already moved
+  the loop in memory, so the redelivery meets a terminal guard, returns an empty result, and acknowledges with the
+  completion the first attempt built gone. Both phases are fatal-wrapped; L4 (#1330) is what relaxes either to
+  Retry, by making a replay reproduce the original result.
 - **Retry on the non-heartbeat lanes is delayed and scheduled.** Those four lanes shipped with no consumer
   configuration, so they carried no BackOff at all and `SettleDelivery`'s Retry was a bare, undelayed NAK: every
   transient error was redelivered at line rate until `component.GetConsumerConfig`'s default `max_deliver: 3`

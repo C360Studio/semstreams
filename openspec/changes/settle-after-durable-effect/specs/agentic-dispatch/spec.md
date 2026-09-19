@@ -59,8 +59,11 @@ family, public state, durable state, or communication path.
 #### Scenario: Invalid user input receives its negative consequence
 
 - **WHEN** a user message is permanently invalid or unauthorized
-- **THEN** its deterministic typed user error receives PubAck before termination
+- **THEN** its typed user error receives PubAck before the delivery is acknowledged, and a publication that fails
+  is classified rather than swallowed
 - **AND** tracker and gauge state remain unchanged
+- **AND** the response identity is minted per publication on this lane; the deterministic source-derived identity
+  belongs to the terminal lane, and extending it to the rest is L2's (#1328)
 
 #### Scenario: Terminal publication is uncertain
 
