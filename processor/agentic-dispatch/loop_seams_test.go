@@ -695,7 +695,6 @@ func TestStatusReportsTheRecordedStateNotAFabricatedRunning(t *testing.T) {
 		state agentic.LoopState
 	}{
 		{"awaiting approval", agentic.LoopStateAwaitingApproval},
-		{"paused", agentic.LoopStatePaused},
 		{"executing", agentic.LoopStateExecuting},
 		{"complete", agentic.LoopStateComplete},
 	} {

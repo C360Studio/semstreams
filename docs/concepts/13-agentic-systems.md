@@ -99,7 +99,7 @@ Agentic systems use a state machine to track progress through well-defined phase
                                                     ┌───────────────────────────┐
                                                     │complete│failed│cancelled  │
                                                     ├───────────────────────────┤
-                                                    │paused │ awaiting_approval │
+                                                    │    awaiting_approval      │
                                                     └───────────────────────────┘
 ```
 
@@ -115,8 +115,13 @@ Agentic systems use a state machine to track progress through well-defined phase
 | `complete` | Yes | Successfully finished |
 | `failed` | Yes | Failed due to error or max iterations |
 | `cancelled` | Yes | Cancelled by user signal |
-| `paused` | No | Paused by user signal, can resume |
 | `awaiting_approval` | No | Waiting for user approval |
+
+There is no `paused` state. SemStreams supports cancellation, durable human approval, safe retry/restart
+and operational quiescing; it does not support arbitrary execution pause/resume, and a state with no
+framework semantics is not kept as a valid value (owner ruling, #1239, 2026-09-03). Exported transitions
+refuse `paused` and a persisted `"state":"paused"` fails validation — there is no shim, alias or
+reserved enum.
 
 **Why states matter:**
 
@@ -138,16 +143,16 @@ Users can send control signals to affect running loops:
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
 │  cancel  ──▶  Stop execution immediately (→ cancelled)      │
-│  pause   ──▶  Pause at next checkpoint (→ paused)           │
-│  resume  ──▶  Continue paused loop (→ previous state)       │
-│  approve ──▶  Approve pending result (→ complete)           │
-│  reject  ──▶  Reject with reason (→ failed)                 │
-│  retry   ──▶  Retry failed loop (→ exploring)               │
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-Signals are published to `agent.signal.{loop_id}` and processed by the loop orchestrator.
+Signals are published to `agent.signal.{loop_id}` and processed by the loop orchestrator. `cancel` is the
+entire vocabulary — a `UserSignal` carrying any other verb fails `Validate()`.
+
+**Approval and rejection are not signals.** They travel as `ApprovalResponse` on
+`agent.approval_response.*` (ADR-039), a different payload with a real handler. `feedback` and `retry` were
+advertised on this subject and never implemented; they are gone (#1239).
 
 ### Tool Abstraction
 
@@ -383,7 +388,7 @@ The agentic-loop manages its own state machine internally. State transitions hap
 │                                                                      │
 │   All Tools Complete ─────────────▶  Increment iteration, continue  │
 │   Max Iterations     ─────────────▶  Mark failed                    │
-│   User Signal        ─────────────▶  Handle cancel/pause/resume     │
+│   User Signal        ─────────────▶  Handle cancel                  │
 │                                                                      │
 │   No rules required. No external state machine driver.              │
 │                                                                      │

@@ -3,8 +3,10 @@
 package agenticdispatch
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
@@ -13,10 +15,13 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/looptoken"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -143,6 +148,71 @@ func TestIntegrationPersistedLoopMalformedJSONAndIDMismatchArePermanent(t *testi
 	require.True(t, isPermanentTerminal(err))
 	require.ErrorContains(t, err, `contains loop id "other-loop"`)
 }
+
+// A record that decodes and whose ID matches can still be one this component
+// must not act on. The owner ruling of 2026-09-03 (#1239) removed the paused
+// state with no compatibility machinery, so a record written before the
+// removal is refused HERE rather than carried into the seams: /status would
+// otherwise report a state the vocabulary no longer defines, and the admission
+// gate would reason about it. It takes the reader's existing permanent
+// classification — a state outside the vocabulary never becomes valid — and no
+// new one is invented for it.
+// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
+func TestIntegrationPersistedInvalidStateIsPermanent(t *testing.T) {
+	ctx := t.Context()
+	tc := natsclient.NewTestClient(t, natsclient.WithKVBuckets(defaultAgentLoopsBucket(t)))
+	c := terminalTestComponent(t)
+	c.natsClient = tc.Client
+	kv, err := tc.GetKVBucket(ctx, defaultAgentLoopsBucket(t))
+	require.NoError(t, err)
+
+	// Both fixtures are keyed by canonical loop tokens. This test's claim is
+	// about the STATE, so its records must not fail for a reason the claim does
+	// not name: #1329 adds a canonical-token precondition ahead of the bucket
+	// read, and a fixture keyed "paused-loop" would be refused for its identity
+	// before its state was ever decoded — the assertion below would then pass or
+	// fail for the wrong reason. Asserted rather than assumed, so a later re-key
+	// to a readable-looking string fails here instead of on that rebase.
+	require.True(t, looptoken.Valid(invalidStateLoopID))
+	require.True(t, looptoken.Valid(liveStateLoopID))
+
+	// Written by hand, not through LoopEntity: the whole point is a record the
+	// current vocabulary cannot produce.
+	_, err = kv.Put(ctx, invalidStateLoopID,
+		[]byte(`{"id":"`+invalidStateLoopID+`","state":"paused","max_iterations":20}`))
+	require.NoError(t, err)
+
+	_, err = c.loadPersistedLoop(ctx, invalidStateLoopID)
+	require.Error(t, err, "a persisted paused record must be refused by the reader, not returned")
+	require.True(t, isPermanentTerminal(err),
+		"an invalid state never becomes valid, so it takes the same permanent class as a malformed record")
+	require.ErrorContains(t, err,
+		fmt.Sprintf("invalid %s/%s: invalid state: paused", defaultAgentLoopsBucket(t), invalidStateLoopID),
+		"the refusal must name the state, not the identity or the bucket path")
+
+	// The same reader still returns a record whose state IS in the vocabulary,
+	// so the refusal above is the state's and not the path's. Full loop shape:
+	// a record that differs from the one above in its state alone isolates the
+	// state as the cause.
+	valid, err := json.Marshal(agentic.LoopEntity{
+		ID: liveStateLoopID, TaskID: "task", State: agentic.LoopStateAwaitingApproval, MaxIterations: 20,
+		ChannelType: "http", ChannelID: "channel", UserID: "user-a",
+	})
+	require.NoError(t, err)
+	_, err = kv.Put(ctx, liveStateLoopID, valid)
+	require.NoError(t, err)
+	record, err := c.loadPersistedLoop(ctx, liveStateLoopID)
+	require.NoError(t, err)
+	require.Equal(t, agentic.LoopStateAwaitingApproval, record.State)
+	require.Equal(t, liveStateLoopID, record.ID)
+}
+
+// Canonical loop tokens for the state-refusal fixtures: 36 bytes, lowercase,
+// hyphenated, equal to their own canonical re-rendering (internal/looptoken).
+const (
+	invalidStateLoopID = "64521acd-5b97-4cd1-b98c-d79ddadfde62"
+	liveStateLoopID    = "33b4eb6a-ff08-4c9a-9c4d-8c7aa0339eda"
+)
 
 func TestIntegrationInvalidTerminalIsTerminated(t *testing.T) {
 	ctx := t.Context()
@@ -399,4 +469,57 @@ func startProductionTerminalDispatch(
 	require.NoError(t, c.Start(ctx))
 	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 	return c
+}
+
+// A permanently defective durable record reaches the admission gate's ONE
+// tolerated-failure branch, which was built for transient failures. This pins
+// what that combination does today, because nothing did: the record is refused
+// by the reader, the tracker answers, the request is admitted, and the refused
+// record contributes NO facts to the merge — so no seam reports a state the
+// vocabulary no longer defines. The operator's only signal is the tolerated
+// WARN, which must at least carry the permanent cause; whether this class earns
+// its own metric or its own message is #1329's question, since that change
+// rewrites this path.
+//
+// Driven through the real reader against a real bucket on purpose: the unit
+// seam (withPersistedLoops) replaces loadPersistedLoop wholesale, so a unit
+// test here would assert an error it wrote itself.
+//
+// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
+func TestIntegrationInvalidPersistedRecordIsToleratedOnlyBecauseTheTrackerAnswers(t *testing.T) {
+	ctx := t.Context()
+	tc := natsclient.NewTestClient(t, natsclient.WithKVBuckets(defaultAgentLoopsBucket(t)))
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads)
+	c := &Component{
+		config: DefaultConfig(), decoder: message.NewDecoder(reg), natsClient: tc.Client,
+		logger: logger, loopTracker: NewLoopTrackerWithLogger(logger), metrics: getMetrics(metric.NewMetricsRegistry()),
+	}
+
+	kv, err := tc.GetKVBucket(ctx, defaultAgentLoopsBucket(t))
+	require.NoError(t, err)
+	_, err = kv.Put(ctx, admissionLoopA,
+		[]byte(`{"id":"`+admissionLoopA+`","state":"paused","max_iterations":20}`))
+	require.NoError(t, err)
+	c.loopTracker.Track(&LoopInfo{
+		LoopID: admissionLoopA, UserID: "user-a", ChannelType: "cli", ChannelID: "s1", State: "executing",
+	})
+
+	facts, err := c.admitLoopRequest(ctx, loopAdmissionRequest{
+		Seam: "channel_submission", Field: "reply_to", Operation: loopOpContinue,
+		LoopID: admissionLoopA, Requester: "user-a",
+	})
+
+	require.NoError(t, err, "a tracker hit admits; a defective durable record must not refuse a live loop")
+	require.True(t, facts.Tracked)
+	require.False(t, facts.Persisted, "the refused record must not enter the merge")
+	require.Equal(t, agentic.LoopStateExecuting, facts.State,
+		"the state a seam reports comes from the tracker, never from the record that was refused")
+	require.Equal(t, 0, testutil.CollectAndCount(c.metrics.loopAdmissionRefusals),
+		"tolerating the read is not a refusal and must not be counted as one")
+
+	require.Contains(t, logs.String(), loopDurableReadToleratedLogMessage)
+	require.Contains(t, logs.String(), "invalid state: paused",
+		"the tolerated WARN must carry the permanent cause, or the operator cannot tell a blip from a record that needs rewriting")
 }

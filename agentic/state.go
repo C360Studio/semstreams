@@ -26,8 +26,12 @@ const (
 	LoopStateFailed    LoopState = "failed"
 	LoopStateCancelled LoopState = "cancelled" // Cancelled by user signal
 
-	// Signal-related states
-	LoopStatePaused           LoopState = "paused"            // Paused by user signal
+	// Approval states
+	//
+	// There is no paused state. SemStreams supports cancellation, durable
+	// human approval, safe retry/restart and operational quiescing; it does
+	// not support arbitrary execution pause/resume, so no value in this
+	// vocabulary may advertise one (owner ruling, #1239, 2026-09-03).
 	LoopStateAwaitingApproval LoopState = "awaiting_approval" // Waiting for user approval
 )
 
@@ -63,11 +67,8 @@ type LoopEntity struct {
 	MaxDepth int `json:"max_depth,omitempty"` // Maximum allowed depth for spawned agents
 
 	// Signal support fields
-	PauseRequested   bool      `json:"pause_requested,omitempty"`    // Pause requested, will pause at next checkpoint
-	PauseRequestedBy string    `json:"pause_requested_by,omitempty"` // User who requested pause
-	StateBeforePause LoopState `json:"state_before_pause,omitempty"` // State before pause (for resume)
-	CancelledBy      string    `json:"cancelled_by,omitempty"`       // User who cancelled the loop
-	CancelledAt      time.Time `json:"cancelled_at,omitempty"`       // When the loop was cancelled
+	CancelledBy string    `json:"cancelled_by,omitempty"` // User who cancelled the loop
+	CancelledAt time.Time `json:"cancelled_at,omitempty"` // When the loop was cancelled
 
 	// Approval-gating fields (set when a tool call is rejected by the
 	// agentic-tools approval filter). The loop transitions to
@@ -117,7 +118,7 @@ func isValidLoopState(s LoopState) bool {
 	switch s {
 	case LoopStateExploring, LoopStatePlanning, LoopStateArchitecting,
 		LoopStateExecuting, LoopStateReviewing, LoopStateComplete,
-		LoopStateFailed, LoopStateCancelled, LoopStatePaused,
+		LoopStateFailed, LoopStateCancelled,
 		LoopStateAwaitingApproval:
 		return true
 	default:
@@ -125,8 +126,24 @@ func isValidLoopState(s LoopState) bool {
 	}
 }
 
-// TransitionTo transitions the entity to a new state
+// TransitionTo transitions the entity to a new state.
+//
+// The target is validated against the state vocabulary. Before this the method
+// took any string, which is how "paused" stayed reachable through an exported
+// API after the pause semantics were deleted: removing the constant alone
+// leaves LoopState("paused") settable by any caller. Validating the argument
+// refuses that and every other value the vocabulary does not define, rather
+// than special-casing one string — a reserved-enum shim in reverse is still a
+// compatibility shim (owner ruling, #1239, 2026-09-03).
 func (e *LoopEntity) TransitionTo(newState LoopState) error {
+	// The vocabulary check comes first, ahead of the same-state no-op. An
+	// entity decoded from a durable record can already be holding a value the
+	// vocabulary does not define, and answering nil to "move it to paused"
+	// because it is already paused is the acceptance this ruling removes: the
+	// caller cannot tell that answer apart from a state that was allowed.
+	if !isValidLoopState(newState) {
+		return fmt.Errorf("invalid state: %s", newState)
+	}
 	// Allow same-state transitions (no-op)
 	if e.State == newState {
 		return nil
@@ -148,7 +165,7 @@ type PendingApprovalState struct {
 	ToolName    string         `json:"tool_name"`
 	Arguments   map[string]any `json:"arguments,omitempty"`
 	Reason      string         `json:"reason,omitempty"`   // Original "approval_required: ..." rejection reason
-	RequestedAt time.Time      `json:"requested_at"`       // When the rejection arrived and the loop paused
+	RequestedAt time.Time      `json:"requested_at"`       // When the rejection arrived and the loop gated
 	Timeout     time.Duration  `json:"timeout,omitempty"`  // Auto-reject deadline; zero means wait indefinitely
 	TraceID     string         `json:"trace_id,omitempty"` // Propagated for audit correlation
 }

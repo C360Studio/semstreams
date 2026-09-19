@@ -184,7 +184,7 @@ type CommandConfig struct {
 | `user.message.{channel}.{id}` | Subscribe | User input from channels |
 | `user.response.{channel}.{id}` | Publish | Responses to users |
 | `agent.task.{task_id}` | Publish | Task dispatch |
-| `agent.signal.{loop_id}` | Publish | Signals (cancel, pause) |
+| `agent.signal.{loop_id}` | Publish | Signals (cancel) |
 | `agent.complete.{loop_id}` | Subscribe | Success and cancellation terminal events |
 | `agent.failed.{loop_id}` | Subscribe | Failure terminal events |
 

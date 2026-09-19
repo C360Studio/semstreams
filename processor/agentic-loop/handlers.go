@@ -2327,14 +2327,15 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 
 // checkApprovalGate implements the awaiting-approval branch logic
 // extracted from HandleToolResult. Returns true when the caller
-// should stop processing this result (either we just paused, or the
-// loop is already paused and this is a sibling result). Mutates
-// result.State and result.PublishedMessages when transitioning.
+// should stop processing this result (either this result just gated
+// the loop on approval, or the loop is already gated and this is a
+// sibling result). Mutates result.State and result.PublishedMessages
+// when transitioning.
 func (h *MessageHandler) checkApprovalGate(loopID string, entity *agentic.LoopEntity, toolResult agentic.ToolResult, result *HandlerResult) bool {
 	// If the loop is already awaiting approval, store the result and
 	// the trajectory step (done by caller) but stop here. Sibling
-	// tool results from the same batch can land after we paused on
-	// the first approval_required hit — they must not advance the
+	// tool results from the same batch can land after the first
+	// approval_required hit gated the loop — they must not advance the
 	// loop or trigger the next model request. The pending approval
 	// handler drains PendingToolResults when the loop resumes.
 	if entity.State == agentic.LoopStateAwaitingApproval {

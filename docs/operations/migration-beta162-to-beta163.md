@@ -941,13 +941,177 @@ POST <prefix>message   {"content": "/cancel <loop_id>", "user_id": "<the loop's 
 That routes through the command registry and publishes a correct `agentic.UserSignal`. Same HTTP surface, same
 component, already permissioned.
 
-**Publishing `agentic.UserSignal` on `agent.signal.<loop_id>` yourself also still works and is untouched.** Two
-sisters already do exactly that — `semdragon/processor/questdagexec/handler.go:1190` and
-`semsage/processor/ui-api/http.go:195`. Neither is affected by this removal.
+**Publishing `agentic.UserSignal` on `agent.signal.<loop_id>` yourself still works and the lane is untouched.**
+Two sisters do exactly that. Their exposure to *this* removal differs, and the earlier blanket "neither is
+affected" was written for the #1231 endpoint deletion — it does not hold for #1239:
 
-**`pause` and `resume` have no replacement, because they never had an implementation.** `handlePauseSignal` sets
-`entity.PauseRequested`, and nothing in the tree reads that field. Tracked as **#1239**; do not build on the
-assumption that pausing a loop is available.
+| Sister | Site | Affected by #1239? |
+|---|---|---|
+| semdragon | `processor/questdagexec/handler.go:1190` | **No** — publishes `SignalCancel` only |
+| semsage | `processor/ui-api/http.go:182` | **YES — will not compile** |
+
+### semsage MUST act before it bumps SemStreams
+
+Measured against semsage `4d28b4dc` (2026-03-05). `processor/ui-api/http.go:165` declares
+*"handleLoopSignal publishes a pause/resume/cancel signal for a loop"* and `:182` switches on
+`case agentic.SignalPause, agentic.SignalResume, agentic.SignalCancel:`. **`agentic.SignalPause` and
+`agentic.SignalResume` no longer exist, so that file fails to compile on the next bump** — a build break, not
+a behaviour change, so it cannot be missed.
+
+The migration is semsage's to implement, in its own repository:
+
+1. Remove `agentic.SignalPause` and `agentic.SignalResume` from the `:182` case. Keep `agentic.SignalCancel`
+   if the endpoint survives.
+2. Correct the `:186` operator-facing error text, which currently reads *"must be pause, resume, or cancel"*.
+3. Correct the `:165` doc comment.
+4. Decide the endpoint's disposition. Note that its pause and resume arms **never worked** — they published a
+   signal SemStreams accepted and ignored — so removing them takes away nothing an operator was getting.
+
+SemStreams does not make this change; sister repositories are read-only from here. This section is the
+record of the obligation.
+
+**`pause` and `resume` have no replacement, because they never had an implementation — and as of this release
+they are gone.** `handlePauseSignal` set `entity.PauseRequested`, and nothing in the tree ever read that field.
+Owner ruling on **#1239** (2026-09-02) deleted the surface rather than implement it. Pause is not wanted pre-v1.
+
+What was removed:
+
+- Signal verbs `pause` and `resume` (`agentic.SignalPause`, `agentic.SignalResume`).
+- `LoopEntity` fields `PauseRequested`, `PauseRequestedBy`, `StateBeforePause` — and with them the persisted
+  JSON keys `pause_requested`, `pause_requested_by`, `state_before_pause`.
+- The handlers `handlePauseSignal` / `handleResumeSignal`.
+
+**What you must do.** Nothing, if you never sent `pause` or `resume` — and nothing could have worked if you did.
+If you *do* still publish an `agentic.UserSignal` with `type: "pause"` or `"resume"`, the behaviour changes
+from *silently accepted and ignored* to **rejected by `UserSignal.Validate()`**. That is deliberate: an
+unimplemented verb that answers `200` is how this defect survived unnoticed for months. Remove the call; there
+is nothing to migrate it to.
+
+**Persisted records.** The three JSON keys were written only by the deleted handlers — but `handlePauseSignal`
+set `PauseRequested = true` and persisted the loop, so **an existing `AGENT_LOOPS` record may well carry
+non-zero values for them**, not merely absent or falsy ones. That is the case the compatibility test uses.
+Decoding ignores unknown keys —
+no `DisallowUnknownFields` sits on the `LoopEntity` decode path — so old records load unchanged and no backfill
+or migration job is required.
+
+#### `LoopState` `paused` is removed — this part is NOT a no-op for your data
+
+`agentic.LoopStatePaused` is deleted from the state vocabulary. The framework supports cancellation, durable human
+approval, safe retry/restart and operational quiescing; it does not support arbitrary execution pause/resume, and a
+state carrying no framework semantics is not kept as a valid value
+([owner ruling, 2026-09-03](https://github.com/C360Studio/semstreams/issues/1239#issuecomment-5526837992)). No shim,
+alias, reserved enum, migration job or legacy-valid exception is provided, and none will be.
+
+What changes for you:
+
+| You do this | Before | Now |
+|---|---|---|
+| `entity.TransitionTo(agentic.LoopStatePaused)` | compiles | **does not compile** — the constant is gone |
+| `entity.TransitionTo(agentic.LoopState("paused"))` | accepted, state set | **error** `invalid state: paused`, entity unchanged |
+| the same call on an entity *already* holding `"paused"` | `nil` (same-state no-op) | **error** `invalid state: paused` — the vocabulary check runs ahead of the no-op |
+| `manager.TransitionLoop(id, "paused")` | accepted | **error** `invalid state: paused` |
+| a persisted `{"state":"paused"}` record | decoded and validated | decodes, then **fails `LoopEntity.Validate()`** |
+| dispatch reads that record | returned to the seams | **refused** with the reader's permanent classification |
+| `GET /loops?state=paused` | advertised in the OpenAPI description | no longer advertised |
+
+`LoopState` is a plain string type with no `UnmarshalJSON`, so a stored `"paused"` still *decodes* — JSON cannot
+refuse a string. Validation is the refusal boundary, and it is where every caller meets it.
+
+**Migration: drop the value.** A loop still sitting in `paused` when you upgrade was, by construction, not running —
+nothing in the framework moved it and nothing would have resumed it. Rewrite those `AGENT_LOOPS` records to the
+state that describes them (`cancelled` if you are abandoning the work, or the pre-pause working state if you intend
+to continue it), or delete them. There is no automatic rewrite because only you know which of those two it is.
+
+**What a hand-written replacement must satisfy.** `processor/agentic-dispatch`'s persisted-loop reader now
+validates the whole `LoopEntity`, not just its state, so a record you edit by hand is refused — **permanently**,
+the same class a malformed record gets — unless all three hold:
+
+| Field | Requirement | Refusal you will see |
+|---|---|---|
+| `id` | equal to the KV key it is stored under (so: non-empty) | `AGENT_LOOPS/<key> contains loop id "<id>"` — an empty `id` reports the same way, because the key comparison runs before validation |
+| `state` | one of `exploring`, `planning`, `architecting`, `executing`, `reviewing`, `awaiting_approval`, `complete`, `failed`, `cancelled` | `invalid AGENT_LOOPS/<key>: invalid state: <value>` |
+| `max_iterations` | present and greater than 0 | `invalid AGENT_LOOPS/<key>: max_iterations must be greater than 0` |
+
+This matters here specifically because hand-editing JSON is how a field the framework used to tolerate on read
+gets dropped. Before beta.163 the reader returned whatever decoded; now it refuses, and a permanent refusal is
+not retried — the record stays unreadable until you fix it. Copy the surrounding fields from a healthy record
+rather than writing one from scratch.
+
+Note the interaction with the previous paragraph: the three `PauseRequested`/`ResumeRequested`/`PausedAt` **keys**
+are ignored on decode and need no action, but the **state value** does. They are separate migrations.
+
+##### Measured impact across the family
+
+One read-only pass over every sister checkout (`git grep -l` for `LoopStatePaused` and for the quoted `"paused"`
+state literal; the three non-git working copies read with `grep -r`, `node_modules` excluded). Counts are **files**,
+and the classification says whether the hit is this state or a same-named concept:
+
+| Repository | `LoopStatePaused` | `"paused"` files | Affected? |
+|---|---|---|---|
+| semteams | 0 | 8 | **Yes — 3 source files + 1 CSS rule.** See the breakdown below |
+| semspec | 0 | 1 | **Its own type.** `vocabulary/semspec/enums.go:57` declares `LoopStatusPaused LoopStatus = "paused"` — semspec's vocabulary, not `agentic.LoopState`. It does not break, but it now advertises a status the framework will never produce |
+| semspec-ui-bmad, semspec-ui-run-visibility | 0 | 1 each | The same `vocabulary/semspec/enums.go:57` line, vendored |
+| semdragon | 0 | 6 | **No.** Board-control pause (`processor/boardcontrol/pause.go`), an unrelated simulation control |
+| semsource | 0 | 1 | **No.** A project *phase* enum in the UI |
+| semmem | 0 | 1 | **No.** A match inside a committed binary, not source |
+| semboids, semconnect, semdev, semdocs, semembed, seminstruct, semlink, semmachina, semops, semsage, semstreams-ui, semsummarize, servicesim, c360studio.github.io | 0 | 0 | **No** |
+
+**semteams breakdown.** The quoted-literal sweep under-reports: a CSS class is `\.state-badge.paused`, not
+`"paused"`. Re-swept case-insensitively for `paus`:
+
+| File | What it is | Action |
+|---|---|---|
+| `ui/src/lib/types/agent.ts:7` | `"paused"` member of the `AgentLoopState` union | drop the member |
+| `ui/src/lib/types/task.ts:91` | `case "paused":` falling through to `"needs_you"` | drop the case; `awaiting_approval` above it already carries that arm |
+| `ui/src/lib/components/board/TaskDetailPanel.svelte:268` | `{:else if task.state === "paused"}` render branch | drop the branch |
+| `ui/src/lib/components/chat/AgentLoopCard.svelte:73-74` | `.state-badge.paused` CSS rule (amber) | dead once the union member goes |
+
+Five `.test.ts` files also carry the literal — `agent.test.ts:37`, `task.test.ts:47,67,346`,
+`TaskDetailPanel.test.ts:209`, `AgentLoopCard.test.ts:233`, `agentChatBridge.test.ts:227,263` — and follow their
+subjects. **`agentChatBridge.ts` itself has zero `paus` hits**; only its test does.
+
+Not affected, despite the name: semteams' own `RunPause` type and `RunWaitingSection.svelte` model a run waiting
+on a person (`cause: "clarification" | "tool_gate"`). That is semteams' vocabulary for the mechanism SemStreams
+calls `awaiting_approval`, not `agentic.LoopState`, and it is unchanged by this release.
+
+**No sister references `agentic.LoopStatePaused`**, so nothing fails to compile on upgrade. The one real migration
+is semteams' four-site UI change above, and the one advisory is semspec's parallel `LoopStatus` vocabulary. Applying either
+is the sister owner's call; this note is the record, not a change to those repositories.
+
+### `cancel` is now the entire signal vocabulary
+
+Removing pause/resume exposed that the same measurement had never been applied to the rest of the list.
+`agentic.UserSignal` advertised seven verbs. The loop's signal consumer
+(`processor/agentic-loop/component.go`) switches on **`cancel` alone**; every other verb fell to the default
+arm, logged `"Unsupported signal type"`, and — because the handler returns nothing and the consumer ACKs on
+a nil return — **was acknowledged as successfully delivered**. A caller sending `approve` got a valid signal,
+a successful publish, a successful ack, and no effect. That is the #1239 defect, four more times.
+
+Owner ruling (2026-09-02): reconcile the vocabulary with the handler rather than carry the advertisement.
+**`SignalApprove`, `SignalReject`, `SignalFeedback` and `SignalRetry` are removed**, alongside
+`SignalPause`/`SignalResume`. `SignalCancel` remains.
+
+**Approval and rejection are not affected, because they were never really here.** The working approval lane is
+`ApprovalResponse` on `agent.approval_response.*` (ADR-039), a different payload with a real handler. If you
+approve or reject tool calls today, you are already using it and nothing changes.
+
+**What you must do.** Nothing, if you only ever published `cancel` — which is the only verb that ever did
+anything. If you publish any of the other six, `UserSignal.Validate()` now refuses it and names it as removed.
+Delete the call; there is no replacement, because there was never an implementation. If the intent was
+approval, move to `ApprovalResponse`.
+
+**No sister publishes the four.** Swept read-only across `/Users/coby/Code/c360`: no sister references
+`SignalApprove`, `SignalReject`, `SignalFeedback` or `SignalRetry`. The only sister break from this release is
+semsage's pause/resume compile failure, recorded above.
+
+**Recorded residual — `ResponseAction.Signal`.** The interactive-affordance field on `UserResponse` is a
+free-form string and is deliberately not validated against the signal vocabulary: an affordance may map to a
+signal, to an `ApprovalResponse`, or to something the framework has never heard of, so validating it would be
+the framework predicting a value it does not own. An existing payload still round-trips. The consequence,
+stated rather than hidden: an adopter who sets `Signal: "approve"` gets no compile error, no runtime error,
+and a button that silently does nothing. Nothing in this tree produces one, so the defect is dormant rather
+than live — but point approval affordances at `ApprovalResponse`, and revisit this the moment a production
+producer appears.
 
 ### 2. Newly enforced: the `approve` permission
 
@@ -1020,7 +1184,7 @@ Exactly one payload type now travels that subject.
 - **`/status` reports the state it read.** For a loop this process is not running — after dispatch was replaced,
   say — `/status` used to print `State: running` for anything not settled, so a loop actually sitting in
   `awaiting_approval` told the user to wait for an agent that was waiting for them. It now prints the recorded
-  state (`executing`, `paused`, `awaiting_approval`, `complete`, …), or `unknown` when the record carries none.
+  state (`executing`, `awaiting_approval`, `complete`, …), or `unknown` when the record carries none.
   Anything parsing that text for the literal `running` needs updating.
 - **A NATS outage now answers 503, not 404.** When a loop's durable state cannot be read, the loop endpoints answer
   `503` with a transient classification. Previously an unreadable record was indistinguishable from an absent one,

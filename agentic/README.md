@@ -70,7 +70,7 @@ These components communicate over NATS JetStream using the types defined here.
 | Type | Description |
 |------|-------------|
 | `UserMessage` | Normalized input from any channel |
-| `UserSignal` | Control signal (cancel, pause, resume, approve) |
+| `UserSignal` | Control signal — `cancel` only; approve/reject travel as `ApprovalResponse` (ADR-039) |
 | `UserResponse` | Response sent back to user |
 | `TaskMessage` | Task to execute by agentic loop |
 | `Attachment` | File or media attached to a message |
@@ -165,10 +165,15 @@ The state machine supports these states:
 | `complete` | Successfully finished (terminal) |
 | `failed` | Failed execution (terminal) |
 | `cancelled` | Cancelled by user (terminal) |
-| `paused` | Paused by user signal |
 | `awaiting_approval` | Waiting for user approval |
 
 States are fluid checkpoints. The loop can move backward except from terminal states.
+
+There is no `paused` state. SemStreams supports cancellation, durable human approval, safe retry/restart
+and operational quiescing; it does not support arbitrary execution pause/resume, and a state with no
+framework semantics is not kept as a valid value (owner ruling, #1239, 2026-09-03). Exported transitions
+refuse `paused` and a persisted `"state":"paused"` fails validation — there is no shim, alias or
+reserved enum.
 
 ## NATS Subject Patterns
 
@@ -197,12 +202,10 @@ Control signals for user interaction:
 | Signal | Description |
 |--------|-------------|
 | `cancel` | Stop execution immediately |
-| `pause` | Pause at next checkpoint |
-| `resume` | Continue paused loop |
-| `approve` | Approve pending result |
-| `reject` | Reject with optional reason |
-| `feedback` | Add feedback without decision |
-| `retry` | Retry failed loop |
+
+Approval and rejection are **not** signals. They travel as `ApprovalResponse` on
+`agent.approval_response.*` (ADR-039), which has a real handler. `feedback` and `retry` were advertised here
+and never implemented; they are gone (#1239).
 
 ## Thread Safety
 

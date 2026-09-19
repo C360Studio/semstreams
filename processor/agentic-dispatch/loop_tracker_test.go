@@ -402,7 +402,6 @@ func TestIsTerminalState(t *testing.T) {
 	}{
 		{"pending", false},
 		{"executing", false},
-		{"paused", false},
 		{"complete", true},
 		{"failed", true},
 		{"cancelled", true},
