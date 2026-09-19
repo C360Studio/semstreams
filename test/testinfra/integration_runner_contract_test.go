@@ -40,6 +40,11 @@ func TestIntegrationRunner_CanonicalCommandAndRyukPolicy(t *testing.T) {
 		"-tags=integration",
 		"-timeout=20m",
 		"-count=1",
+		// gh#736: at most two test packages at a time. Uncapped, every
+		// Docker-backed package boots containers concurrently and container
+		// starts miss their own budgets.
+		"-p",
+		"2",
 		"./...",
 		"",
 	}, "\n")
