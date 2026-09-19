@@ -1036,7 +1036,7 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 					Tags:        []string{"AgenticDispatch"},
 					Parameters: []service.ParameterSpec{
 						{Name: "user_id", In: "query", Description: "Filter by user ID"},
-						{Name: "state", In: "query", Description: "Filter by loop state (pending, executing, awaiting_approval, complete, failed, cancelled)"},
+						{Name: "state", In: "query", Description: "Filter by loop state (pending, exploring, planning, architecting, executing, reviewing, awaiting_approval, complete, failed, cancelled)"},
 					},
 					Responses: map[string]service.ResponseSpec{
 						"200": {

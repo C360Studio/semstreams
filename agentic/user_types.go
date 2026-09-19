@@ -50,13 +50,18 @@ type UserMessage struct {
 
 	// Resumable-reply context (gh#256). These are distinct from ReplyTo:
 	// ReplyTo routes the message to a loop to continue; the two below let a
-	// reply re-enter and resume a *paused run*.
+	// reply re-enter a run that ended awaiting one.
 	//
 	// RunID is the bare run anchor the reply should re-attach to. A client
-	// resuming a paused run (ADR-053) echoes the RunID it held from the pause
-	// state so the resumed loop carries agent.loop.run / agent.run.entity-id even
-	// when the prior loop entity was evicted during the pause. Empty for
-	// non-run submissions.
+	// answering a run that stopped for its reply (ADR-053) echoes the RunID it
+	// held from that run so the resumed loop carries agent.loop.run /
+	// agent.run.entity-id even when the prior loop entity was evicted between
+	// submissions. Empty for non-run submissions.
+	//
+	// There is no pause state to hold a RunID from: ADR-053 defers pause/resume
+	// semantics (docs/adr/053-agent-run-substrate.md:280) and #1239 removed the
+	// vocabulary that advertised one. The mechanism here is a run that ended
+	// waiting on a person, not a run someone suspended.
 	RunID string `json:"run_id,omitempty"`
 	// InReplyTo marks this message as a reply to a specific loop's question
 	// (e.g. an ask_user clarification), stamped onto the resumed loop as the
@@ -349,7 +354,7 @@ type TaskMessage struct {
 	// entity reference, mirroring agent.loop.parent) on the spawned loop so a
 	// rule can detect a reply via $entity.triple.agent.loop.reply_to. Empty
 	// for non-reply tasks. Distinct from ParentLoopID (tree ancestry) — a
-	// reply re-enters a paused run rather than nesting under a parent.
+	// reply re-enters the run it answers rather than nesting under a parent.
 	InReplyTo string `json:"in_reply_to,omitempty"`
 
 	// Pre-constructed context (optional, skips discovery if present)

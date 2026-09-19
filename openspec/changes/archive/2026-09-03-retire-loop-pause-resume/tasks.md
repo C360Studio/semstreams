@@ -36,7 +36,44 @@
 - [x] 2.6 Remove `LoopStatePaused` under R4: delete the constant and its `isValidLoopState` entry, validate
   `LoopEntity.TransitionTo`'s argument against the vocabulary, refuse an invalid persisted state in
   `processor/agentic-dispatch`'s loop reader under its existing permanent classification, and strip the state
-  from the four documentation tables, the godoc list, the OpenAPI query description and the migration note.
+  from the three documentation tables (`agentic/README.md`, `docs/concepts/13-agentic-systems.md`,
+  `processor/agentic-loop/README.md`), the ASCII state diagram at `docs/concepts/13-agentic-systems.md:102`, the
+  godoc list, the OpenAPI query description and the migration note.
   Proved by `TestPausedIsRefusedAtTheExportedTransition`, `TestUndefinedStatesAreRefusedAtTheExportedTransition`,
   `TestPausedIsRefusedEvenWhenTheEntityAlreadyHoldsIt`, `TestPersistedPausedRecordFailsValidation`,
   `TestTransitionLoopRefusesPaused` and `TestIntegrationPersistedInvalidStateIsPermanent`
+
+## 3. Review round 2 (2026-09-19, PR #1339)
+
+- [x] 3.1 The reader validates the WHOLE persisted entity, not only its state. The round-1 narrowing to a
+  state-only check named `research-graph-route`/`-execute` as writers of the records this reader loads; verified
+  and false. Every AGENT_LOOPS writer but `persistLoopState` (`processor/agentic-loop/component.go:2032`) uses a
+  PREFIXED key — `COMPLETE_<id>` (`component.go:1951,1978,2003`), `research.request.received.<id>`
+  (`frameworkcapabilities/graphresearch/register_tool.go:101`), `classify./route./execute.<id>`
+  (`research-graph-route/adapters.go:81-84`, `research-graph-execute/adapters.go:366-368`) — while the reader
+  Gets the bare loop id and rejects an id mismatch. `NewLoopEntity` floors `max_iterations` at 20
+  (`agentic/state.go:263-267`), so no production record can fail validation on that field; the records the wider
+  check refused were this reader's own test fixtures, now repaired to a full loop shape as #1329 repaired its own
+- [x] 3.2 `agentic.LoopState.IsValid` deleted with the narrowing that motivated it. Zero consumers remained, and
+  a phantom export on a Tier 1 package owes an ADR-106 RC-6 walked path for surface nobody calls
+- [x] 3.3 The archived `agentic-dispatch` delta gained a `## MODIFIED Requirements` block for *Loop existence and
+  ownership are merged facts, never process memory alone*. The applied spec had gained that requirement's new
+  normative paragraph with no delta behind it — current truth the record could not reconstruct. All five existing
+  scenarios are restated verbatim and a sixth names `TestIntegrationPersistedInvalidStateIsPermanent`. Dated
+  amendment record in `proposal.md`
+- [x] 3.4 `agentic/user_types.go:53-58,352` no longer advertises "a paused run" or "the RunID it held from the
+  pause state". ADR-053 lists pause/resume under Deferred (`docs/adr/053-agent-run-substrate.md:280`); the
+  mechanism is a run that ended awaiting a reply, and only the vocabulary was the deleted one
+- [x] 3.5 The semteams migration row is re-measured case-insensitively for `paus`, not by quoted literal: the
+  literal sweep missed `AgentLoopCard.svelte:73-74`'s `.state-badge.paused` CSS rule and
+  `TaskDetailPanel.svelte:268`'s branch, and named `agentChatBridge` — which has zero hits outside its test
+- [x] 3.6 `TestIntegrationInvalidPersistedRecordIsToleratedOnlyBecauseTheTrackerAnswers` pins the combination
+  nothing covered: a tracker hit plus a permanently defective durable record. The request is admitted from the
+  tracker, the refused record contributes no facts, and the tolerated WARN carries the permanent cause
+- [ ] 3.7 **Deleted by #1329, not here.** `processor/agentic-dispatch/loop_tracker.go:572-579`'s `isTerminalState`
+  duplicates `agentic.LoopState.IsTerminal` (`agentic/state.go:42-44`) as raw string literals, read by
+  `trackerLoopFacts` and `persistedLoopFacts` (`loop_admission.go:385`). #1329 deletes the tracker outright, so
+  migrating it here would be work thrown away; recorded rather than edited
+- [x] 3.8 The OpenAPI loop-state filter enumeration completed: it listed six of the ten values a caller can pass,
+  omitting `exploring`, `planning`, `architecting` and `reviewing`. Pre-existing, fixed on the line this change
+  already rewrote (`processor/agentic-dispatch/http.go:1039` → `specs/openapi.v3.yaml:339`)

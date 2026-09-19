@@ -1033,7 +1033,7 @@ and the classification says whether the hit is this state or a same-named concep
 
 | Repository | `LoopStatePaused` | `"paused"` files | Affected? |
 |---|---|---|---|
-| semteams | 0 | 8 | **Yes — 4 files.** `ui/src/lib/types/agent.ts` carries `"paused"` in its `AgentLoopState` union, and `AgentLoopCard`, `agentChatBridge` and `task.ts` branch on it. Drop the member; the union already models the states that remain |
+| semteams | 0 | 8 | **Yes — 3 source files + 1 CSS rule.** See the breakdown below |
 | semspec | 0 | 1 | **Its own type.** `vocabulary/semspec/enums.go:57` declares `LoopStatusPaused LoopStatus = "paused"` — semspec's vocabulary, not `agentic.LoopState`. It does not break, but it now advertises a status the framework will never produce |
 | semspec-ui-bmad, semspec-ui-run-visibility | 0 | 1 each | The same `vocabulary/semspec/enums.go:57` line, vendored |
 | semdragon | 0 | 6 | **No.** Board-control pause (`processor/boardcontrol/pause.go`), an unrelated simulation control |
@@ -1041,8 +1041,26 @@ and the classification says whether the hit is this state or a same-named concep
 | semmem | 0 | 1 | **No.** A match inside a committed binary, not source |
 | semboids, semconnect, semdev, semdocs, semembed, seminstruct, semlink, semmachina, semops, semsage, semstreams-ui, semsummarize, servicesim, c360studio.github.io | 0 | 0 | **No** |
 
+**semteams breakdown.** The quoted-literal sweep under-reports: a CSS class is `\.state-badge.paused`, not
+`"paused"`. Re-swept case-insensitively for `paus`:
+
+| File | What it is | Action |
+|---|---|---|
+| `ui/src/lib/types/agent.ts:7` | `"paused"` member of the `AgentLoopState` union | drop the member |
+| `ui/src/lib/types/task.ts:91` | `case "paused":` falling through to `"needs_you"` | drop the case; `awaiting_approval` above it already carries that arm |
+| `ui/src/lib/components/board/TaskDetailPanel.svelte:268` | `{:else if task.state === "paused"}` render branch | drop the branch |
+| `ui/src/lib/components/chat/AgentLoopCard.svelte:73-74` | `.state-badge.paused` CSS rule (amber) | dead once the union member goes |
+
+Five `.test.ts` files also carry the literal — `agent.test.ts:37`, `task.test.ts:47,67,346`,
+`TaskDetailPanel.test.ts:209`, `AgentLoopCard.test.ts:233`, `agentChatBridge.test.ts:227,263` — and follow their
+subjects. **`agentChatBridge.ts` itself has zero `paus` hits**; only its test does.
+
+Not affected, despite the name: semteams' own `RunPause` type and `RunWaitingSection.svelte` model a run waiting
+on a person (`cause: "clarification" | "tool_gate"`). That is semteams' vocabulary for the mechanism SemStreams
+calls `awaiting_approval`, not `agentic.LoopState`, and it is unchanged by this release.
+
 **No sister references `agentic.LoopStatePaused`**, so nothing fails to compile on upgrade. The one real migration
-is semteams' TypeScript union, and the one advisory is semspec's parallel `LoopStatus` vocabulary. Applying either
+is semteams' four-site UI change above, and the one advisory is semspec's parallel `LoopStatus` vocabulary. Applying either
 is the sister owner's call; this note is the record, not a change to those repositories.
 
 ### `cancel` is now the entire signal vocabulary
