@@ -268,14 +268,8 @@ func TestVerdictWithoutWaiterSettlesByRecordNotByWaiterMap(t *testing.T) {
 		c := releaseTestComponent(t, handler)
 		c.config = config
 		c.loopsBucket = bucket
-		payload := map[string]any{
-			"decision":     "approved",
-			"execution_id": "tool-exec-v1-" + strings.Repeat("a", 52),
-		}
-		maps.Copy(payload, loopHint)
-		data, err := json.Marshal(payload)
-		require.NoError(t, err)
-		return c.handleToolCallVerdictMessage(t.Context(), data)
+		decision, err := settleOn(t, c, loopHint)
+		return decision, err
 	}
 
 	t.Run("finished or foreign loop acknowledges", func(t *testing.T) {
@@ -285,11 +279,44 @@ func TestVerdictWithoutWaiterSettlesByRecordNotByWaiterMap(t *testing.T) {
 		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
 	})
 
-	t.Run("a provider-authored call id with no minted token acknowledges", func(t *testing.T) {
+	t.Run("a verdict with no recoverable loop identity terminates as malformed", func(t *testing.T) {
 		t.Parallel()
-		decision, err := settle(t, map[string]any{"call_id": "toolu_model_authored"})
-		require.NoError(t, err)
-		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+		// A provider-authored call id is not a loop token and no rule
+		// template produces one that is, so this payload names no loop any
+		// record could answer for. Acknowledging it would be
+		// indistinguishable from "that loop finished" — the adopter whose
+		// rule echoes a non-canonical loop_id would lose every verdict with
+		// no signal saying why. It is malformed input, like an undecodable
+		// verdict, and it carries its own metric reason.
+		config := DefaultConfig()
+		config.ToolCallGovernance.Mode = ToolCallGovernanceModeEnforce
+		config.ToolCallGovernance.Timeout = "1s"
+		handler := NewMessageHandler(config)
+		handler.SetGovernanceDispatcher(NewGovernanceDispatcher(
+			config.ToolCallGovernance, nil, discardLogger(), nil))
+		c := releaseTestComponent(t, handler)
+		c.config = config
+		c.loopsBucket = bucket
+		c.metrics = getMetrics(nil)
+
+		// Deltas, not absolutes: getMetrics is a package singleton shared by
+		// the whole test binary.
+		reason := func(label string) float64 {
+			return testutil.ToFloat64(
+				c.metrics.governanceSubscribeBeforePublishFailures.WithLabelValues(label))
+		}
+		beforeIdentity, beforeWaiter := reason(verdictDropUnrecoverableIdentity), reason(verdictDropMissingWaiter)
+		decision, err := settleOn(t, c, map[string]any{"call_id": "toolu_model_authored"})
+
+		require.Error(t, err)
+		require.Equal(t, natsclient.DeliveryDecisionTerminate, decision,
+			"an unattributable verdict is malformed input, not a settled loop")
+		require.ErrorIs(t, err, ErrNoGovernanceWaiter, "the waiter-miss cause is still carried")
+		require.ErrorContains(t, err, "carries no recoverable loop identity")
+		require.Equal(t, beforeIdentity+1, reason(verdictDropUnrecoverableIdentity),
+			"the identity loss must be countable apart from a waiter miss")
+		require.Equal(t, beforeWaiter, reason(verdictDropMissingWaiter),
+			"and must not be counted as one")
 	})
 
 	t.Run("live loop is still owed the verdict", func(t *testing.T) {
@@ -302,15 +329,47 @@ func TestVerdictWithoutWaiterSettlesByRecordNotByWaiterMap(t *testing.T) {
 
 	t.Run("a rule that echoes only request_id still finds the loop", func(t *testing.T) {
 		t.Parallel()
-		// The canonical rule set echoes loop_id, but a minimal rule may
-		// carry only request_id. Its grammar is <loopID>:req:<n>:<n>, so
-		// the record is still reachable and a live loop still Retries —
-		// without this fallback the verdict would Ack and be lost.
+		// A minimal approve-action rule may carry only request_id at the
+		// top level. Its grammar is <loopID>:req:<n>:<n>, so the record is
+		// still reachable and a live loop still Retries.
 		decision, err := settle(t, map[string]any{"request_id": liveLoopID + ":req:2:0"})
 		require.Error(t, err)
 		require.ErrorIs(t, err, ErrNoGovernanceWaiter)
 		require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
 	})
+
+	t.Run("the publish-action shape finds the loop under properties", func(t *testing.T) {
+		t.Parallel()
+		// This is the shape the canonical ADR-039 reject rule actually
+		// produces: the `publish` action nests every field under
+		// `properties`, and none of the seven templates in
+		// docs/operations/17-tool-call-governance.md carries loop_id — so
+		// properties.request_id is the ONLY source for an operator using the
+		// documented rule set. Without this read, a live loop's rejection
+		// would terminate as unattributable and the loop would hang at its
+		// governance gate until the timeout rejected it fail-closed.
+		decision, err := settle(t, map[string]any{
+			"properties": map[string]any{"request_id": liveLoopID + ":req:2:0"},
+		})
+		require.Error(t, err)
+		require.ErrorIs(t, err, ErrNoGovernanceWaiter)
+		require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
+	})
+}
+
+// settleOn drives one verdict through the production seam on a caller-supplied
+// component, so a test that needs to read the component's metrics afterwards
+// can keep the same wire shape as the table above.
+func settleOn(t *testing.T, c *Component, loopHint map[string]any) (natsclient.DeliveryDecision, error) {
+	t.Helper()
+	payload := map[string]any{
+		"decision":     "approved",
+		"execution_id": "tool-exec-v1-" + strings.Repeat("a", 52),
+	}
+	maps.Copy(payload, loopHint)
+	data, err := json.Marshal(payload)
+	require.NoError(t, err)
+	return c.handleToolCallVerdictMessage(t.Context(), data)
 }
 
 // CancelLoop refuses for two permanent reasons, and handleSignalMessage maps

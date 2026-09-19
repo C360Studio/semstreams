@@ -1294,8 +1294,8 @@ framework execution id. This is the break most likely to take a deployment down,
 | Approve subject | `agent.toolcall.approved.<loop_id>.<call_id>` | `agent.toolcall.approved.<execution_id>` |
 | Reject subject | `agent.toolcall.rejected.<loop_id>.<call_id>` | `agent.toolcall.rejected.<execution_id>` |
 | Rule template | `agent.toolcall.rejected.$message.loop_id.$message.call_id` | `agent.toolcall.rejected.$message.execution_id` |
-| Demux key | `call_id` | `execution_id` (`processor/agentic-loop/component.go:2327`, `effectiveExecutionID`) |
-| Waiter key | proposal `call_id` | `call.ExecutionID` (`processor/agentic-loop/governance_dispatcher.go:413`) |
+| Demux key | `call_id` | `execution_id` (`processor/agentic-loop/component.go:2480`, `effectiveExecutionID`) |
+| Waiter key | proposal `call_id` | `call.ExecutionID` (`processor/agentic-loop/governance_dispatcher.go:465`) |
 
 The proposal payload on `agent.toolcall.proposed` carries `execution_id`, `request_id` and `call_ordinal` alongside
 the existing `loop_id` and `call_id`, so a rule has the token it needs without computing anything. The port
@@ -1305,7 +1305,7 @@ consumer configuration moves; only the rules that *publish* a verdict do.
 **Edit the rules before the upgrade, not after.** `agentic-loop` demuxes an arriving verdict by `execution_id` and
 **terminates** one that carries none, so a rule still templating `$message.loop_id.$message.call_id` publishes to a
 subject no waiter is registered under. In `audit` mode the loop publishes the proposal and does not wait, so tool
-calls continue. In **`enforce` mode the wait is fail-closed** (`governance_dispatcher.go:491-497`): a verdict that never arrives at the
+calls continue. In **`enforce` mode the wait is fail-closed** (`governance_dispatcher.go:544-549`): a verdict that never arrives at the
 waiter's key times out and the call is rejected — so an enforce-mode deployment upgraded without editing its rules
 rejects **every governed tool call** until they are, with `governance verdict timeout after <d> (fail-closed)` as
 the only symptom.
@@ -1314,6 +1314,22 @@ The one-line fix per rule is to replace the two-token suffix with `$message.exec
 carries the worked rule set at the new subjects, and `$message.execution_id` is in its token table. An operator who
 cannot edit the rules in the same window should set `tool_call_governance.mode` to `audit` for the upgrade and
 switch back to `enforce` once they are edited; that trades enforcement for availability rather than losing both.
+
+### `tool_call_governance_subscribe_before_publish_failures_total` gains a `reason` label
+
+The counter was unlabelled at beta.162 and is now a `CounterVec` over `reason`, with two values:
+
+| `reason` | Means |
+|---|---|
+| `missing_waiter` | The verdict reached no waiter: the subscribe-before-publish race (ADR-039 race-fix option 3) or a late arrival. The loop record then decides ack-vs-retry. |
+| `unrecoverable_loop_identity` | The verdict carries neither a canonical `loop_id` nor a `request_id` in the `<loopID>:req:<iteration>:<retry>` grammar, so no loop record can be read for it. The delivery **terminates as malformed** rather than acknowledging as if the loop had settled. |
+
+A PromQL selector that names the metric keeps matching, but it now returns one series per reason instead of one
+series total. An alert written as a bare `rate(...) > 0` still fires; a recording rule or dashboard panel that
+assumed a single series should wrap it in `sum(...)` or add `by (reason)`. Both reasons mean investigate, and they
+mean different things: `missing_waiter` points at the loop process or delivery timing, `unrecoverable_loop_identity`
+points at a *rule* — it is the observable symptom of a verdict rule that echoes neither identity, which is the same
+edit this section already asks for.
 
 Every line pin in this section was re-derived with `sed -n '<n>p'` against the head it ships on, not carried
 forward: one of them (`governance_dispatcher.go:401`) had already drifted onto a comment line before anyone read

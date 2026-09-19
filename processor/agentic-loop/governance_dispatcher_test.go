@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -562,30 +563,58 @@ func TestDecisionFromVerdictSubject(t *testing.T) {
 func TestVerdictPayload_EffectiveAccessors(t *testing.T) {
 	t.Parallel()
 
+	const loopToken = "b0f7a1e2-2c4d-4a5b-8e6f-1d2c3b4a5e60"
+
 	t.Run("top-level shape (approve action)", func(t *testing.T) {
 		t.Parallel()
 		p := VerdictPayload{
-			Decision: "approved",
-			CallID:   "call-1",
-			Reason:   "policy permits",
+			Decision:    "approved",
+			CallID:      "call-1",
+			Reason:      "policy permits",
+			LoopID:      loopToken,
+			ExecutionID: "tool-exec-v1-" + strings.Repeat("a", 52),
 		}
 		assert.Equal(t, "approved", p.EffectiveDecision())
 		assert.Equal(t, "call-1", p.EffectiveCallID())
 		assert.Equal(t, "policy permits", p.EffectiveReason())
+		assert.Equal(t, loopToken, p.effectiveLoopID())
+		assert.Equal(t, "tool-exec-v1-"+strings.Repeat("a", 52), p.effectiveExecutionID())
 	})
 
 	t.Run("nested shape (publish action)", func(t *testing.T) {
 		t.Parallel()
 		p := VerdictPayload{
 			Properties: map[string]any{
-				"decision": "rejected",
-				"call_id":  "call-2",
-				"reason":   "blocked",
+				"decision":     "rejected",
+				"call_id":      "call-2",
+				"reason":       "blocked",
+				"request_id":   loopToken + ":req:3:1",
+				"execution_id": "tool-exec-v1-" + strings.Repeat("b", 52),
 			},
 		}
 		assert.Equal(t, "rejected", p.EffectiveDecision())
 		assert.Equal(t, "call-2", p.EffectiveCallID())
 		assert.Equal(t, "blocked", p.EffectiveReason())
+		// No canonical reject rule carries loop_id; the loop rides the
+		// RequestID grammar under properties instead.
+		assert.Equal(t, loopToken, p.effectiveLoopID())
+		assert.Equal(t, "tool-exec-v1-"+strings.Repeat("b", 52), p.effectiveExecutionID())
+	})
+
+	t.Run("loop id resolves only from the two produced sources", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, loopToken,
+			VerdictPayload{RequestID: loopToken + ":req:0:0"}.effectiveLoopID(),
+			"top-level request_id is the approve-action fallback")
+		assert.Empty(t,
+			VerdictPayload{Properties: map[string]any{"loop_id": loopToken}}.effectiveLoopID(),
+			"properties.loop_id has no producer in this tree and must not resolve")
+		assert.Empty(t,
+			VerdictPayload{CallID: loopToken + ":tool:0:0"}.effectiveLoopID(),
+			"call ids are provider-authored; none carries a framework loop token")
+		assert.Empty(t,
+			VerdictPayload{LoopID: "b0f7a1e2"}.effectiveLoopID(),
+			"a truncated loop id is not a loop token (ADR-105)")
 	})
 
 	t.Run("top-level wins over nested", func(t *testing.T) {
@@ -605,6 +634,8 @@ func TestVerdictPayload_EffectiveAccessors(t *testing.T) {
 		assert.Empty(t, p.EffectiveDecision())
 		assert.Empty(t, p.EffectiveCallID())
 		assert.Empty(t, p.EffectiveReason())
+		assert.Empty(t, p.effectiveLoopID())
+		assert.Empty(t, p.effectiveExecutionID())
 	})
 }
 

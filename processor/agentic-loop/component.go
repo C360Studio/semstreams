@@ -2640,10 +2640,26 @@ func (c *Component) handleToolCallVerdictMessage(ctx context.Context, data []byt
 // The execution identity cannot answer that question — it is an opaque digest
 // with no loop in it — so the loop comes from the payload's own loop_id, or
 // from the RequestID grammar when a rule echoes only that.
+//
+// A payload carrying neither is malformed input, not a settled loop, and is
+// terminated the way an undecodable verdict already is. Acknowledging it would
+// be indistinguishable from "this loop finished", which is how an adopter rule
+// echoing a non-canonical loop_id — an uppercase UUID, a braced form, a legacy
+// token — would lose every verdict with no signal naming why.
 func (c *Component) settleVerdictWithoutWaiter(
 	ctx context.Context, payload VerdictPayload, executionID string, cause error,
 ) (natsclient.DeliveryDecision, error) {
 	loopID := payload.effectiveLoopID()
+	if loopID == "" {
+		if c.metrics != nil {
+			c.metrics.recordVerdictIdentityUnrecoverable()
+		}
+		c.logger.WarnContext(ctx, "Verdict carries no recoverable loop identity; terminating as malformed",
+			slog.String("execution_id", executionID),
+			slog.String("hint", "the rule must echo loop_id as the framework minted it, or request_id in the <loopID>:req:<iteration>:<retry> grammar"))
+		return natsclient.DeliveryDecisionTerminate,
+			fmt.Errorf("tool-call verdict for execution_id %q carries no recoverable loop identity: %w", executionID, cause)
+	}
 	if c.classifyMissingLoop(ctx, loopID) == loopPresenceStale {
 		c.logger.Debug("Verdict has no waiter and its loop is finished or foreign; acknowledging",
 			slog.String("execution_id", executionID), slog.String("loop_id", loopID))

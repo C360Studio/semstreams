@@ -181,23 +181,32 @@ func (v VerdictPayload) EffectiveCallID() string {
 	return ""
 }
 
-// effectiveLoopID returns the loop this verdict belongs to, with the same
-// two-shape fall-through as EffectiveCallID. Routing never uses it — that is
-// execution identity alone — but a verdict whose waiter is gone has to be
-// classified against the loop record, and the execution identity is an opaque
-// digest that carries no loop. The proposal publishes loop_id and request_id
-// beside execution_id for exactly this, and the RequestID grammar
-// (<loopID>:req:<iteration>:<retry>) is the fallback when a rule echoes only
-// that. Returns "" when no framework-minted loop token can be recovered;
-// classifyMissingLoop reads that as "names no loop any process holds".
+// effectiveLoopID returns the loop this verdict belongs to. Routing never uses
+// it — that is execution identity alone — but a verdict whose waiter is gone
+// has to be classified against the loop record, and the execution identity is
+// an opaque digest that carries no loop.
+//
+// Exactly two sources, because exactly two are produced:
+//
+//   - `loop_id`, echoed by the approve action out of the proposed payload
+//     (processor/rule/actions.go:2213-2215; the in-tree rule is
+//     configs/agentic.json:293-296).
+//   - the RequestID grammar <loopID>:req:<iteration>:<retry>, top-level or
+//     under `properties` — the publish-action shape every canonical reject
+//     rule in docs/operations/17-tool-call-governance.md uses, none of which
+//     carries loop_id.
+//
+// A `properties.loop_id` tier and a <loopID>:tool: call-id tier were carried
+// here briefly and removed: no rule template in this tree or its docs produces
+// the first, and GenerateToolCallID has no caller anywhere, so provider call
+// ids are the only call ids that exist and looptoken.Valid refuses them. A
+// fallback nothing produces is dead code wearing resilience as a costume.
+//
+// Returns "" when no framework-minted loop token can be recovered; the caller
+// treats that as malformed input rather than as a settled loop.
 func (v VerdictPayload) effectiveLoopID() string {
 	if looptoken.Valid(v.LoopID) {
 		return v.LoopID
-	}
-	if v.Properties != nil {
-		if id, ok := v.Properties["loop_id"].(string); ok && looptoken.Valid(id) {
-			return id
-		}
 	}
 	requestID := v.RequestID
 	if requestID == "" && v.Properties != nil {
@@ -205,10 +214,7 @@ func (v VerdictPayload) effectiveLoopID() string {
 			requestID = id
 		}
 	}
-	if id := loopIDFromStructuredID(requestID, ":req:"); id != "" {
-		return id
-	}
-	return loopIDFromStructuredID(v.EffectiveCallID(), ":tool:")
+	return loopIDFromStructuredID(requestID, ":req:")
 }
 
 // EffectiveDecision returns the routing decision from the payload,
