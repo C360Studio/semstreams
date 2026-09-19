@@ -45,15 +45,41 @@
 
 ## 3. Review round 2 (2026-09-19, PR #1339)
 
-- [x] 3.1 The reader validates the WHOLE persisted entity, not only its state. The round-1 narrowing to a
-  state-only check named `research-graph-route`/`-execute` as writers of the records this reader loads; verified
-  and false. Every AGENT_LOOPS writer but `persistLoopState` (`processor/agentic-loop/component.go:2032`) uses a
-  PREFIXED key — `COMPLETE_<id>` (`component.go:1951,1978,2003`), `research.request.received.<id>`
-  (`frameworkcapabilities/graphresearch/register_tool.go:101`), `classify./route./execute.<id>`
-  (`research-graph-route/adapters.go:81-84`, `research-graph-execute/adapters.go:366-368`) — while the reader
-  Gets the bare loop id and rejects an id mismatch. `NewLoopEntity` floors `max_iterations` at 20
-  (`agentic/state.go:263-267`), so no production record can fail validation on that field; the records the wider
-  check refused were this reader's own test fixtures, now repaired to a full loop shape as #1329 repaired its own
+- [x] 3.1 The reader validates the WHOLE persisted entity, not only its state. The records the wider check
+  refused were this reader's own test fixtures, now repaired to a full loop shape as #1329 repaired its own
+
+  **The bare-key writer census, re-derived twice.** Round 1 justified a state-only narrowing by naming
+  `research-graph-route`/`-execute` as writers of the records this reader loads — false, they are prefixed.
+  Round 2 replaced that with "`persistLoopState` is the only bare-key writer" — also false, because the census
+  grepped `.Put(` and a KV write can be a `Create`. Re-derive it by KEY SHAPE, never by package name:
+
+  ```bash
+  # every KV write verb in non-test Go, then classify each key expression
+  git grep -nE '\.(Create|Put|Update)\(ctx' -- '*.go' ':!*_test.go' ':!test/*'
+  # narrow to handles bound to the loops bucket (AGENT_LOOPS by default)
+  git grep -nE '\.(Create|Put|Update)\(ctx' -- 'frameworkcapabilities/graphresearch/*.go' \
+      'processor/agentic-loop/*.go' 'processor/research-graph-*/*.go' ':!*_test.go'
+  # and read every key helper it reaches
+  git grep -nE 'func loopStoreKey[A-Za-z]*\(|KeyPrefix = ' -- 'processor/research-graph-*/*.go' \
+      'frameworkcapabilities/graphresearch/*.go'
+  ```
+
+  Result at this head — **two** bare-key writers, everything else prefixed:
+
+  | Writer | Key | Bare? |
+  |---|---|---|
+  | `processor/agentic-loop/component.go:2032` (`persistLoopState`) | `loopID` | **yes** |
+  | `frameworkcapabilities/graphresearch/register_tool.go:92` (`CreateLoopEntity`), from `executor.go:267` | `loopID` | **yes** |
+  | `processor/agentic-loop/component.go:1951,1978,2003` | `COMPLETE_<id>` | no |
+  | `frameworkcapabilities/graphresearch/register_tool.go:101` (`PutResearchTrigger`) | `research.request.received.<id>` | no |
+  | `research-graph-{route,execute,classify,assess,synthesize}/adapters.go` | `classify./route./execute./assess./synthesize.{complete,snapshot}.<id>`, `COMPLETE_<id>` | no |
+
+  **The safety argument is the constructor, not the component.** Both bare-key writers marshal an entity built by
+  `agentic.NewLoopEntity`, whose `max_iterations` floor (`agentic/state.go:253-256`) cannot yield a non-positive
+  value, and both set a state from the vocabulary — so neither can produce a record this reader now refuses.
+  Recorded for whoever widens `Validate` next: the research record carries `TaskID: ""`
+  (`frameworkcapabilities/graphresearch/executor.go:248`), so a task-id check would break a production record
+  this reader loads. #1329 is tightening this same function and needs that fact
 - [x] 3.2 `agentic.LoopState.IsValid` deleted with the narrowing that motivated it. Zero consumers remained, and
   a phantom export on a Tier 1 package owes an ADR-106 RC-6 walked path for surface nobody calls
 - [x] 3.3 The archived `agentic-dispatch` delta gained a `## MODIFIED Requirements` block for *Loop existence and

@@ -167,15 +167,26 @@ func (c *Component) loadPersistedLoop(ctx context.Context, loopID string) (*agen
 	// stops a persisted "paused" from re-entering through a reader after the
 	// state was removed (owner ruling, #1239, 2026-09-03).
 	//
-	// The whole entity is validated, not just the state. Every production
-	// record on this key is written by agentic-loop's persistLoopState
-	// (processor/agentic-loop/component.go:2032) from an entity the manager
-	// built, and NewLoopEntity floors max_iterations at 20 unless given a
-	// positive override (agentic/state.go:263-267), so a production record
-	// satisfies Validate in full. The other AGENT_LOOPS writers cannot reach
-	// this key at all: they are prefixed (COMPLETE_<id>, research.request.
-	// received.<id>, classify./route./execute.<id>) and this reader Gets the
-	// bare loop id.
+	// The whole entity is validated, not just the state. TWO production
+	// writers put a record on this bare key, and the safety argument is the
+	// constructor they share, not the component they live in:
+	//
+	//   - agentic-loop's persistLoopState (processor/agentic-loop/component.go:2032)
+	//   - graphresearch's CreateLoopEntity (frameworkcapabilities/graphresearch/
+	//     register_tool.go:92), called from executor.go:267 for a
+	//     research-pipeline loop
+	//
+	// Both marshal an agentic.LoopEntity built by NewLoopEntity, whose
+	// max_iterations floor (agentic/state.go:253-256) cannot yield a
+	// non-positive value, and both set a state from the vocabulary. Every
+	// OTHER writer of this bucket is prefixed — COMPLETE_<id>,
+	// research.request.received.<id>, classify./route./execute./assess./
+	// synthesize.<id> — so a bare Get cannot return one.
+	//
+	// The research record carries TaskID "" (executor.go:248). Validate does
+	// not check task_id today; an author who adds that check would break a
+	// production record this reader loads. The census command that finds every
+	// writer is in the archived change's tasks.md (section 3.1).
 	if err := persisted.Validate(); err != nil {
 		return nil, permanentTerminal("invalid %s/%s: %w", bucket, loopID, err)
 	}

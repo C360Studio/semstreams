@@ -1,7 +1,7 @@
 package agentic_test
 
 // gh#256 — resumable-reply wire plumbing tests.
-// Covers the two fields a reply must carry to re-enter and resume a paused run
+// Covers the two fields a reply must carry to re-enter a run that ended awaiting one
 // (ADR-053 §4b-2): the run anchor (RunID, already exercised by run_id_test.go)
 // and the reply marker (InReplyTo, new here). Asserts:
 //  1. TaskMessage.InReplyTo JSON round-trip + omitempty discipline.
@@ -32,7 +32,7 @@ func TestTaskMessage_InReplyTo_RoundTrip(t *testing.T) {
 		Role:      "coordinator",
 		Model:     "model-a",
 		Prompt:    "here is my clarification answer",
-		RunID:     "paused-run-uuid",
+		RunID:     "waiting-run-uuid",
 		InReplyTo: "asking-loop-uuid",
 	}
 	data, err := json.Marshal(&task)
@@ -41,7 +41,7 @@ func TestTaskMessage_InReplyTo_RoundTrip(t *testing.T) {
 	var got agentic.TaskMessage
 	require.NoError(t, json.Unmarshal(data, &got))
 	assert.Equal(t, "asking-loop-uuid", got.InReplyTo)
-	assert.Equal(t, "paused-run-uuid", got.RunID)
+	assert.Equal(t, "waiting-run-uuid", got.RunID)
 }
 
 func TestTaskMessage_InReplyTo_OmittedWhenEmpty(t *testing.T) {
@@ -69,11 +69,11 @@ func TestTaskMessage_InReplyTo_ProductionWire(t *testing.T) {
 		TaskID: "task-wire-001",
 		Role:   "coordinator",
 		Model:  "model-a",
-		Prompt: "resume the paused run",
+		Prompt: "answer the waiting run",
 		// Both anchors are loop instance tokens, so both are framework-minted
 		// canonical UUIDs (ADR-105, #1192). The BaseMessage envelope validates
 		// the payload on the way out, which is the path under test.
-		RunID:     wirePausedRunToken,
+		RunID:     wireWaitingRunToken,
 		InReplyTo: wireAskingLoopToken,
 	}
 	envelope := message.NewBaseMessage(task.Schema(), task, "agentic-dispatch-test")
@@ -87,14 +87,14 @@ func TestTaskMessage_InReplyTo_ProductionWire(t *testing.T) {
 	got, ok := decoded.Payload().(*agentic.TaskMessage)
 	require.True(t, ok, "decoded payload is not *agentic.TaskMessage")
 	assert.Equal(t, wireAskingLoopToken, got.InReplyTo)
-	assert.Equal(t, wirePausedRunToken, got.RunID)
+	assert.Equal(t, wireWaitingRunToken, got.RunID)
 }
 
 // Loop instance tokens carried through the production wire path are canonical
 // UUIDs (ADR-105, #1192).
 const (
 	wireAskingLoopToken = "a1b2c3d4-e5f6-4708-9a1b-2c3d4e5f6071"
-	wirePausedRunToken  = "b2c3d4e5-f607-4819-8b2c-3d4e5f607182"
+	wireWaitingRunToken = "b2c3d4e5-f607-4819-8b2c-3d4e5f607182"
 )
 
 // --- UserMessage.RunID + InReplyTo (dispatch-inbound shape) ---
@@ -106,7 +106,7 @@ func TestUserMessage_RunID_InReplyTo_RoundTrip(t *testing.T) {
 		UserID:    "operator-1",
 		Content:   "the answer is blue",
 		ReplyTo:   "asking-loop-uuid", // routes to the loop to continue
-		RunID:     "paused-run-uuid",  // re-attaches the resumed loop to its run
+		RunID:     "waiting-run-uuid", // re-attaches the resumed loop to its run
 		InReplyTo: "asking-loop-uuid", // marks this message as a reply
 		Timestamp: time.Now().UTC(),
 	}
@@ -115,7 +115,7 @@ func TestUserMessage_RunID_InReplyTo_RoundTrip(t *testing.T) {
 
 	var got agentic.UserMessage
 	require.NoError(t, json.Unmarshal(data, &got))
-	assert.Equal(t, "paused-run-uuid", got.RunID)
+	assert.Equal(t, "waiting-run-uuid", got.RunID)
 	assert.Equal(t, "asking-loop-uuid", got.InReplyTo)
 	assert.Equal(t, "asking-loop-uuid", got.ReplyTo)
 }

@@ -1022,6 +1022,21 @@ nothing in the framework moved it and nothing would have resumed it. Rewrite tho
 state that describes them (`cancelled` if you are abandoning the work, or the pre-pause working state if you intend
 to continue it), or delete them. There is no automatic rewrite because only you know which of those two it is.
 
+**What a hand-written replacement must satisfy.** `processor/agentic-dispatch`'s persisted-loop reader now
+validates the whole `LoopEntity`, not just its state, so a record you edit by hand is refused — **permanently**,
+the same class a malformed record gets — unless all three hold:
+
+| Field | Requirement | Refusal you will see |
+|---|---|---|
+| `id` | equal to the KV key it is stored under (so: non-empty) | `AGENT_LOOPS/<key> contains loop id "<id>"` — an empty `id` reports the same way, because the key comparison runs before validation |
+| `state` | one of `exploring`, `planning`, `architecting`, `executing`, `reviewing`, `awaiting_approval`, `complete`, `failed`, `cancelled` | `invalid AGENT_LOOPS/<key>: invalid state: <value>` |
+| `max_iterations` | present and greater than 0 | `invalid AGENT_LOOPS/<key>: max_iterations must be greater than 0` |
+
+This matters here specifically because hand-editing JSON is how a field the framework used to tolerate on read
+gets dropped. Before beta.163 the reader returned whatever decoded; now it refuses, and a permanent refusal is
+not retried — the record stays unreadable until you fix it. Copy the surrounding fields from a healthy record
+rather than writing one from scratch.
+
 Note the interaction with the previous paragraph: the three `PauseRequested`/`ResumeRequested`/`PausedAt` **keys**
 are ignored on decode and need no action, but the **state value** does. They are separate migrations.
 
