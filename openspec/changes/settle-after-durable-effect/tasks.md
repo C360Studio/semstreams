@@ -213,7 +213,7 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       and answers without publishing a second signal (`commands.go:136-148`), and a signal that races the loop's
       own settlement is dropped effect-free by the loop's cancel owner. Named in `design.md` D7 and in the
       dispatch delta; `TestIntegrationPublishedCancelWithFailedResponseRetries` holds the Retry and the
-      effect-free redelivery
+      effect-free redelivery. **Narrowed by 8e.1**: that argument holds only for the named form
 - [x] 8d.4 (MEDIUM-2) The loop delta's heading claimed "All six loop input classes" two requirements above its own
       task-intake exemption. Renamed to *Loop input classes settle after owner-specific durable done* across the
       delta and its 16 citations
@@ -229,6 +229,19 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       HTTP lanes over a three-constant block; and the terminal-business-failure scenario the round-3
       spawn-identity edit left uncited is cited by the new `response_handler_failure_test.go`, which is where that
       scenario is now observed on the response lane
+
+## 8e. Cross-agent implementation round 3 (2026-09-19)
+
+- [x] 8e.1 (R1, P1) 8d.3's effect-free argument assumed the target stays fixed across a redelivery, which is only
+      true of `/cancel <loop_id>`. `handleCommand:941-951` resolves a bare `/cancel` from the tracker, and
+      `GetActiveLoop` (`loop_tracker.go:204-226`) prefers the channel's loop only while it is non-terminal, then
+      falls back to the user's most recent loop — so this delivery's own effect (loop A terminal) is what makes
+      the redelivery resolve to a live loop B and cancel it. The resolved-target form now quarantines
+      (`component.go:985-1010`, target provenance recorded at the resolution site); the named form keeps Retry.
+      No durable selection record: that would write on every bare command for a rare path, and L4 (#1330) is
+      where identity-preserving replay removes the need. `TestIntegrationBareCancelWithFailedResponseQuarantines`
+      — two live loops, one user, redelivery conditional on the decision because that is what production does.
+      Mutation: drop the `targetFromTracker` arm → the test sees B signalled
 
 ## 9. Landing
 

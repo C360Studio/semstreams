@@ -938,12 +938,16 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 		})
 	}
 
-	// Resolve loop ID
+	// Resolve loop ID. Whether the target came from the message or from the
+	// tracker decides how a failed response settles below, so the answer is
+	// recorded here rather than re-derived from args at the call site.
 	loopID := ""
+	targetFromTracker := false
 	if len(args) > 0 && args[0] != "" {
 		loopID = args[0]
 	} else if c.config.AutoContinue {
 		loopID = c.loopTracker.GetActiveLoop(msg.UserID, msg.ChannelID)
+		targetFromTracker = loopID != ""
 	}
 
 	// Check if loop is required
@@ -973,17 +977,36 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 		})
 	}
 
-	// An ordinary error, so the delivery retries — deliberately, not by
-	// default. This is also a post-effect response failure for the one command
-	// that has an effect: /cancel publishes its signal at commands.go:179
-	// before this response is built. It is not the task lane's case
-	// (:1145-1168) because the redelivery is effect-free — the gate re-reads
-	// the loop, finds it terminal once the cancel took effect, and answers
-	// "already settled" without publishing anything (commands.go:136-148) —
-	// and because the user has been told nothing at all, so the redelivery is
-	// what gets them their answer. A signal that races the loop's own
-	// settlement is dropped effect-free by the loop's cancel owner.
+	// A post-effect response failure, for the one command that has an effect:
+	// /cancel publishes its signal at commands.go:179 before this response is
+	// built. It settles two ways, and which one depends on whether the message
+	// names its own target.
+	//
+	// Named target (`/cancel <loop_id>`): Retry. The redelivery is effect-free
+	// — the gate re-reads THAT loop, finds it terminal once the cancel took
+	// effect, and answers "already settled" without publishing anything
+	// (commands.go:136-148); a signal that races the loop's own settlement is
+	// dropped effect-free by the loop's cancel owner. The user has been told
+	// nothing, so the redelivery is what gets them their answer.
+	//
+	// Target resolved from the tracker (bare `/cancel`): Quarantine. The
+	// message does not carry the identity the first delivery acted on, and
+	// resolution is not stable across it: GetActiveLoop prefers the channel's
+	// loop only while that loop is non-terminal and otherwise falls back to the
+	// user's most recent one (loop_tracker.go:204-226). So the very effect this
+	// delivery had — loop A now terminal — is what makes the redelivery resolve
+	// to a DIFFERENT live loop B and cancel it, and A's terminal guard cannot
+	// protect B. The burden of proof is on the Retry and it cannot be met from
+	// the message, so the lane stops instead. Recovering the target would mean
+	// a durable per-command selection record on every bare command for a rare
+	// path; L4 (#1330) is where identity-preserving replay makes that
+	// unnecessary.
 	if err := c.sendResponse(ctx, resp); err != nil {
+		if targetFromTracker {
+			return errs.WrapFatal(err, "Component", "handleCommand", fmt.Sprintf(
+				"command %s acted on loop %s, which this message does not name, and its acknowledgement is not published",
+				name, loopID))
+		}
 		return err
 	}
 

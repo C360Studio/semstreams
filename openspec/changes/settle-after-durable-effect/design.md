@@ -104,18 +104,31 @@ from the loop record. The tool-result handler-error branch (#1343) persists a te
 `persistHandlerResult` and settles on that write; its non-terminal errors quarantine, except cancellation, which
 stays a Retry so a clean shutdown cannot latch a false `delivery ownership lost`.
 
-The one post-effect response failure that is deliberately NOT Quarantine is the command lane's
-(`component.go:976`). `/cancel` publishes its signal at `commands.go:179` and then builds its success response, so
-a failed response publication is also a post-effect failure — the difference is that its redelivery is effect-free.
-The gate re-reads the loop from merged facts, finds it terminal once the first signal took effect, and answers
-"Loop … has already settled" without publishing anything (`commands.go:136-148`); a second signal that does race
-the loop's own settlement is dropped effect-free by the loop's cancel owner, which is the loop delta's scenario *A
-cancel signal names a loop that cannot be cancelled*
-(`specs/agentic-loop/spec.md`, requirement *A loop absent from process memory is settled from its record*). The
-user has received nothing in either case, so a redelivery is what actually gets them their answer — and unlike the
-task lane there is no new identity to mint. Retry stays, named rather than defaulted, and
-`TestIntegrationPublishedCancelWithFailedResponseRetries` holds both halves: the Retry and the effect-free
-redelivery.
+The command lane's post-effect response failure splits, and the split is the whole rule stated twice.
+`/cancel` publishes its signal at `commands.go:179` and then builds its success response, so a failed response
+publication there is a post-effect failure like the task lane's — but only the **named** form,
+`/cancel <loop_id>`, can prove its redelivery effect-free. For that form the gate re-reads THAT loop from merged
+facts, finds it terminal once the first signal took effect, and answers "Loop … has already settled" without
+publishing anything (`commands.go:136-148`); a second signal that does race the loop's own settlement is dropped
+effect-free by the loop's cancel owner, which is the loop delta's scenario *A cancel signal names a loop that
+cannot be cancelled* (`specs/agentic-loop/spec.md`, requirement *A loop absent from process memory is settled from
+its record*). The user has received nothing, so the redelivery is what actually gets them their answer, and unlike
+the task lane there is no new identity to mint. Retry, named rather than defaulted.
+
+The **bare** form cannot make that argument, and round 2 of the owner's cross-agent review is where it broke.
+`handleCommand:941-951` resolves an omitted target from the tracker, and `GetActiveLoop`
+(`loop_tracker.go:204-226`) prefers the channel's loop only while it is non-terminal, then falls back to the
+user's most recent one. The effect this delivery had — loop A now terminal — is therefore the very thing that
+makes the redelivery resolve to a different live loop B and cancel it; A's terminal guard cannot protect B. The
+burden of proof is on the Retry and the message cannot meet it, so the resolved-target form is `errs.WrapFatal` →
+Quarantine (`component.go:985-1010`). The alternative — a durable "selected target" record written on every bare
+command so a replay could recover it — adds a write to the common path for a rare one; L4 (#1330) is where
+identity-preserving replay makes it unnecessary. The rule the two arms share: a delivery Retries only where the
+redelivery is provably effect-free, and a target the message does not carry is not provable.
+
+`TestIntegrationPublishedCancelWithFailedResponseRetries` holds the named form (the Retry and the effect-free
+redelivery); `TestIntegrationBareCancelWithFailedResponseQuarantines` holds the resolved form with two live loops,
+and its redelivery is conditional on the decision, because that is what production does with each.
 
 ## D8 — the `jetstream-consumer-policy` MODIFY corrects a requirement L0 just made current
 
