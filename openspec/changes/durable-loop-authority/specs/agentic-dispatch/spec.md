@@ -316,13 +316,18 @@ clean write or tombstone heals it.
 **Reason**: The requirement mandates deciding from "the union of the process-local loop tracker and the durable
 `AGENT_LOOPS` record" and states that "A tracker hit is sufficient to admit even when the durable read fails
 transiently". This change deletes `LoopTracker`, so there is no second source: `lookupLoop` reads the record and
-nothing else. THREE tests the requirement rests on are deleted with it —
+nothing else. FOUR tests the requirement rests on are deleted with it —
 `TestLiveLoopWithoutDurableRecordIsAdmitted`, the merge-preference test behind
-`TestMergeLoopStatePrefersSettledThenTheTracker`, and `TestConflictingOwnersAcrossSourcesAreRefused`, whose scenario
+`TestMergeLoopStatePrefersSettledThenTheTracker`, `TestConflictingOwnersAcrossSourcesAreRefused`, whose scenario
 "conflicting owners across the two sources" cannot arise when there is one source (the surviving conflict, a terminal
 event disagreeing with the record, was never this requirement's: it is `mergeRouteField` at
-`terminal_settlement.go:48`, specified in `openspec/specs/agentic-terminal-events/spec.md` and untouched here). A
-fourth, `TestPreviouslyObservedLoopWithoutDurableRecordIsRefused`, survives and now asserts the NEGATION of the
+`terminal_settlement.go:48`, specified in `openspec/specs/agentic-terminal-events/spec.md` and untouched here), and
+`TestIntegrationInvalidPersistedRecordIsToleratedOnlyBecauseTheTrackerAnswers`, added under the requirement's sixth
+scenario by the paused-state removal: its whole assertion is that a defective record is TOLERATED because the tracker
+answers instead, `facts.Tracked` true and `facts.Persisted` false. With no tracker there is nothing to answer, and
+the record's refusal is the whole outcome — which is what `TestIntegrationPersistedInvalidStateIsPermanent`, the
+surviving half of that pair, already asserts. A fifth,
+`TestPreviouslyObservedLoopWithoutDurableRecordIsRefused`, survives and now asserts the NEGATION of the
 scenario "a live loop with no durable record is admitted from the tracker". Keeping the requirement as current truth
 while the code refutes it is the failure this block exists to prevent; the heading itself is false once there are no
 merged facts, so it is removed rather than reworded.

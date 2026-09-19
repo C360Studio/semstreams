@@ -15,6 +15,7 @@ import (
 )
 
 // spec: agentic-dispatch / The shared view separates current authority from activity
+// spec: agentic-dispatch / The shared loop view classifies the mixed bucket
 func TestLoopProjectionClassifiesCurrentAuthority(t *testing.T) {
 	c := terminalTestComponent(t)
 	valid := agentic.LoopEntity{ID: admissionLoopA, State: agentic.LoopStateExecuting, MaxIterations: 20}
@@ -153,7 +154,7 @@ func TestLoopAdmissionValidatesPersistedAuthority(t *testing.T) {
 	})
 	require.Error(t, err, "a decodable but wrong-key record is not current loop authority")
 	withPersistedLoops(c, map[string]*agentic.LoopEntity{admissionLoopA: {
-		ID: admissionLoopA, UserID: "user-a", State: agentic.LoopStatePaused, MaxIterations: 20,
+		ID: admissionLoopA, UserID: "user-a", State: agentic.LoopState("paused"), MaxIterations: 20,
 	}})
 	_, err = c.loadPersistedLoop(t.Context(), admissionLoopA)
 	require.Error(t, err, "the exact reader shares retired-state validation")

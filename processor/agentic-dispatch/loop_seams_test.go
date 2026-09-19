@@ -722,7 +722,7 @@ func TestStatusReportsTheRecordedStateNotAFabricatedRunning(t *testing.T) {
 		})
 	}
 
-	for _, state := range []agentic.LoopState{"", "unknown", agentic.LoopStatePaused} {
+	for _, state := range []agentic.LoopState{"", "unknown", "paused"} {
 		t.Run("invalid state "+string(state), func(t *testing.T) {
 			c, _, _ := newSeamTestComponent(t)
 			withPersistedLoops(c, map[string]*agentic.LoopEntity{seamTestLoopA: {
