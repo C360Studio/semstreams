@@ -256,6 +256,14 @@
 - [x] 9.7 Migration-note pin drift from the replay: the demux pin moved `component.go:2480` → `:2618`, re-derived
       with `sed -n`. The waiter key (`governance_dispatcher.go:465`) and the fail-closed enforce wait (`:544-549`)
       were re-read on this head and are unchanged
+- [x] 9.9 A third L1 test, `TestIntegrationTerminalFailureRecordPrecedesItsPublication`, carried the same
+      CallID-only fixture and failed the same way — and it stayed hidden through one whole gate, because the
+      integration runner stopped at `agentic-dispatch` before reaching `agentic-loop`. Its first subtest asserts
+      Ack, which an expected settled-drop also returns, so only the `COMPLETE_<loopID>` check exposed a lane that
+      never ran. `grep -rn "TrackToolCall(" --include='*_test.go'` then confirmed no fourth fixture of that shape
+      remains, and all five agentic packages were run under `-tags=integration -race` rather than the one package
+      the failure named
+
 - [x] 9.8 Mutation evidence for the re-homed counterfactual (`cp` backup + `md5 -q` verified restore, no stash, no
       checkout; `component.go` baseline `7fb1195f…`, `task_recovery.go` baseline `1e442f18…`, both restored and
       `git status --porcelain` empty afterwards). Each mutation names the half of the claim it kills, so "the
