@@ -85,27 +85,25 @@ rather than a silent duplicate storm. That is deliberately the blunt answer. L4 
 replay — once each published result carries a deterministic identity, republication is idempotent and the publish
 phase can go back to Retry.
 
-## D8 — the `jetstream-consumer-policy` MODIFY targets L0's text, not today's spec
+## D8 — the `jetstream-consumer-policy` MODIFY corrects a requirement L0 just made current
 
-L0 (#759) ADDs the requirement *shared settlement remains stateless and heartbeat-specific*, whose prose reads "The
-no-heartbeat interpreter SHALL remain private. #759 SHALL add no exported pull settlement operation"
-(`openspec/changes/semantic-jetstream-settlement/specs/jetstream-consumer-policy/spec.md:324-325` on this branch,
-which carries L0 as its base; the same two sentences are at `:333-334` in L0's own tree at its head `759bd596`,
-byte-identical). This change exports a settlement operation, so once L0 archives, that sentence becomes current
-truth and contradicts the tree.
+L0 (#759) squash-merged as `f4d66934` and its archive promoted *shared settlement remains stateless and
+heartbeat-specific* into the live capability spec, where it now reads "The typed path SHALL use only a private
+terminal-method executor. The no-heartbeat interpreter SHALL remain private. #759 SHALL add no exported pull
+settlement operation and SHALL not modify OTEL production settlement."
+(`openspec/specs/jetstream-consumer-policy/spec.md:644-645`; the requirement heading is `:642`). This change
+exports a settlement operation, so that sentence is current truth and contradicts the tree until the MODIFY lands
+with it.
 
-Both pins are of a live branch and will move again. The requirement heading — `:322` here, `:331` in L0's tree — is
-the durable handle; the line numbers are there to be re-derived with `sed -n`, not trusted.
+The MODIFIED block was written while L0 was still unarchived and the target existed only in L0's delta; it now
+targets the live spec, and the requirement's single scenario — *terminal execution is shared privately*
+(`:647`) — is restated verbatim, which is what openspec 1.7.0 requires of a MODIFIED block. Line numbers here are
+of a file that will move; the requirement heading is the durable handle and the pins are meant to be re-derived
+with `sed -n`.
 
-The MODIFIED block in this change's delta therefore targets a requirement that is not in
-`openspec/specs/jetstream-consumer-policy/spec.md` yet — it arrives there when L0 archives, which happens first
-because this change is stacked on L0's branch. That ordering is the whole reason the MODIFY is written here rather
-than left as a residual: it is only unimplementable if the two land out of order, and they cannot. `openspec
-validate --all --strict` is green with the block in place.
-
-What the MODIFY preserves is the part that is still true and still load-bearing: the interpreter stays private. What
-it corrects is the count — one exported settlement operation, reachable through two entry points that differ only in
-the retry policy, owned by #1327 and not by #759.
+What the MODIFY preserves is the part that is still true and still load-bearing: the interpreter stays private.
+What it corrects is the count — one exported settlement operation, reachable through two entry points that differ
+only in the retry policy, owned by #1327 and not by #759.
 
 ## Not in this layer
 
