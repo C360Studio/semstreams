@@ -104,3 +104,57 @@
       `verify-stage-a-process-replacement` (78.679s, `dispatch_replacement_user_responses:1`),
       `verify-durable-tool-replay` (44.652s) and `walk-approval-path` (`approval_listing_matched:2`)
 - [ ] 5.4 Implementation review resolved; stack rebased onto the reviewed L1 head; archive as the final content commit
+
+## 7. Rebase onto the reviewed L2 head (`7eaff212`)
+
+- [x] 7.1 `git rebase --onto 7eaff212 5188b9c9` — twelve commits, **nine** file conflicts across two of them.
+      Taken to L0.5's side, because its paused-state removal is finished work this layer's older text predates:
+      `agentic/state.go` (the `LoopStatePaused` constant stays deleted), `http.go` and `specs/openapi.v3.yaml`
+      (L0.5's ten-value loop-state filter, which is its own reviewed fix), and
+      `docs/operations/migration-beta162-to-beta163.md` (its measured per-sister section supersedes this layer's
+      three sentences saying the constant cleanup "is tracked in #1146"). Taken as a union:
+      `loop_admission.go` twice — L0.5's `State` doc comment with this layer's one-source `Terminal`, then
+      `Iterations`/`MaxIterations`/`StartedAt` — and `terminal_origin_integration_test.go`, where L0.5 gave the
+      origin-walk fixtures `MaxIterations: 3` and this layer gave them canonical loop tokens, both required once
+      `looptoken.Valid` guards the reader. `loop_tracker_test.go` is a modify/delete: deleted, since this layer
+      deletes the tracker it tests
+- [x] 7.2 The writer census in `validatePersistedLoop` is CORRECTED, not carried. L0.5's comment claimed the other
+      `AGENT_LOOPS` writers "cannot reach this key at all: they are prefixed". **Two** writers use the bare
+      loop-id key: `agentic-loop`'s `persistLoopState` (`processor/agentic-loop/component.go:2235`) and
+      graphresearch's research-pipeline record (`frameworkcapabilities/graphresearch/executor.go:267` through
+      `register_tool.go:91`, `KVStore.Create` on the bare id). The research record is NOT refused — its id is a
+      full canonical UUID (`executor.go:231`), its state is `executing`, and `NewLoopEntity` floors
+      `max_iterations` at 20 (`agentic/state.go:256-257`) — and its empty `TaskID` is not a defect, because
+      `Validate` requires id, a known state and a positive budget and says nothing about `task_id`
+- [x] 7.3 `TestIntegrationInvalidPersistedRecordIsToleratedOnlyBecauseTheTrackerAnswers` is deleted and named as
+      the FOURTH deletion in the `## REMOVED Requirements` reason. Its assertion is that a defective record is
+      TOLERATED because the tracker answers instead (`facts.Tracked` true, `facts.Persisted` false); with no
+      tracker there is nothing to answer, and its surviving sibling
+      `TestIntegrationPersistedInvalidStateIsPermanent` already asserts the record's refusal. Only
+      `go vet -tags=integration` catches this class — the untagged build never compiles the file
+- [x] 7.4 The two `// spec:` citations the removed heading stranded re-home onto "Loop existence and ownership
+      come from durable authority alone", whose invalid-authority scenario already reads "stateless,
+      unknown-stated or without a positive iteration budget". `task spec:properties` is the check and is green
+- [x] 7.5 `recordDeliveryOwnerFatal`'s comment (`processor/agentic-dispatch/component.go:716-723`) named three
+      lanes; `agent.created` and `agent.approval_pending` were deleted with the tracker that fed them, and its
+      only caller is the `user.message` lane at `:569`
+- [x] 7.6 The watch fired and was ruled, not repaired locally:
+      `TestIntegrationPersistedInvalidStateIsPermanent` went red because this layer's canonical-token
+      precondition (`terminal_settlement.go:133-135`) refuses a fixture keyed `"paused-loop"` for its IDENTITY
+      before the state is decoded. L0.5 re-keyed its own fixtures; `a7a2f354` is cherry-picked with `-x` so the
+      later rebase onto main drops it by patch-id
+- [x] 7.7 One production consequence of the cherry-pick, and it is an improvement rather than a concession: the
+      re-keyed test asserts the refusal names bucket AND key, which is what L0.5's inline validation emitted and
+      what the three sibling failures in the same function already emit (`access %s`, `read %s/%s`,
+      `malformed %s/%s`). This layer's shared helper had dropped the bucket (`invalid loop state %q`), so it
+      becomes a method and names it. It does NOT invent one: the requirement forbids a reader carrying a
+      bucket-name default of its own, so an unresolvable bucket falls back to the unqualified message rather than
+      to a guessed `"AGENT_LOOPS"`
+- [x] 7.8 Sibling fixtures re-checked rather than assumed, since a canonical-token precondition refuses early and
+      a test can go green for a reason it does not claim. All four non-canonical keys L0.5 flagged were already
+      re-keyed by this change's own `d147458c`: `restart-loop` → `…-000000000008` (`:48`), `malformed-loop` →
+      `…-000000000009` (`:133`), `expected-loop` → record `…-000000000010` under key `…-000000000011`
+      (`:141`, `:144`), `quarantine-loop` → `…-000000000013` (`:479`). Each still reaches the branch it claims:
+      `:138` asserts `malformed AGENT_LOOPS/…`, which is the JSON-decode branch AFTER the precondition, and
+      `:149` asserts `contains invalid loop identity …`, which is the key/ID branch after it. A sweep of every
+      `kv.Put(ctx, "…")` and `ID: "…"` literal in the file found no remaining non-canonical loop key

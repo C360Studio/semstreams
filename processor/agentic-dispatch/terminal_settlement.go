@@ -138,7 +138,7 @@ func (c *Component) loadPersistedLoop(ctx context.Context, loopID string) (*agen
 		if err != nil {
 			return nil, err
 		}
-		return persisted, validatePersistedLoop(loopID, persisted)
+		return persisted, c.validatePersistedLoop(loopID, persisted)
 	}
 	if c.natsClient == nil {
 		return nil, fmt.Errorf("AGENT_LOOPS client unavailable")
@@ -162,12 +162,17 @@ func (c *Component) loadPersistedLoop(ctx context.Context, loopID string) (*agen
 	if err := json.Unmarshal(entry.Value(), &persisted); err != nil {
 		return nil, permanentTerminal("malformed %s/%s: %w", bucket, loopID, err)
 	}
-	return &persisted, validatePersistedLoop(loopID, &persisted)
+	return &persisted, c.validatePersistedLoop(loopID, &persisted)
 }
 
 // validatePersistedLoop is the current-record contract shared by the exact
 // reader and its declared projection. Neither can admit a merely decodable record.
-func validatePersistedLoop(loopID string, persisted *agentic.LoopEntity) error {
+//
+// A method, not a free function, so every refusal it emits names the bucket and
+// key the way its sibling read failures in loadPersistedLoop already do
+// (`access %s`, `read %s/%s`, `malformed %s/%s`). An operator handed
+// `invalid loop state "<uuid>"` has to go find which bucket that was.
+func (c *Component) validatePersistedLoop(loopID string, persisted *agentic.LoopEntity) error {
 	if persisted == nil {
 		return fmt.Errorf("loop state %q is not observable", loopID)
 	}
@@ -202,7 +207,14 @@ func validatePersistedLoop(loopID string, persisted *agentic.LoopEntity) error {
 	// component.go:2157, :2184, :2208; research.request.received.<id>) and
 	// cannot collide with a bare-id Get.
 	if err := persisted.Validate(); err != nil {
-		return permanentTerminal("invalid loop state %q: %w", loopID, err)
+		// Named when it is known, never invented: this requirement forbids a
+		// reader carrying a bucket-name default of its own, and a message that
+		// guesses the bucket is worse than one that omits it.
+		bucket, bucketErr := c.loopsBucketName()
+		if bucketErr != nil {
+			return permanentTerminal("invalid loop state %q: %w", loopID, err)
+		}
+		return permanentTerminal("invalid %s/%s: %w", bucket, loopID, err)
 	}
 	return nil
 }

@@ -109,7 +109,7 @@ func (c *Component) decodeActivityRecord(key string, value []byte, meta graphvie
 	if err := json.Unmarshal(value, &e); err != nil {
 		return activityRecord{}, false, fmt.Errorf("undecodable loop entity on %s: %w", key, err)
 	}
-	if err := validatePersistedLoop(key, &e); err != nil {
+	if err := c.validatePersistedLoop(key, &e); err != nil {
 		return activityRecord{}, false, err
 	}
 	return activityRecord{
