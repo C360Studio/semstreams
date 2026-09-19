@@ -161,9 +161,11 @@
       absolutes: `getMetrics` is a `metricsOnce` package singleton shared by the whole test binary
 - [x] 8.6 `tool_results_dropped_total` gains its first label observer.
       `TestLateToolResultForSettledLoopIsExpectedDrop` ran with `c.metrics = nil`; it now asserts the
-      `stale_execution` delta is 1 and `loop_held_elsewhere` 0, so renaming the constant an operator alerts on
-      cannot pass silently. `metrics.go` enumerates both emitted reasons on `recordToolResultDropped`, and the
-      migration note records that the governance counter went from one series to one per reason
+      `stale_execution` delta is 1, so renaming the constant an operator alerts on cannot pass silently. The
+      rebase onto L1 (#1327) retired this layer's second reason: a result naming a loop another process holds is
+      warned and retried rather than counted, so `metrics.go` documents the one reason that is emitted and why
+      the other is not. The migration note records that the governance counter went from one series to one per
+      reason
 - [x] 8.7 The last live `stale_callid` citation
       (`docs/proposals/pattern-classification-2026-09/inventory-agentic-loop.md:43`) is retired in place: the pin
       is left unedited because that file is line-pinned at its own base `32aeddf7`, and a note beneath it records
@@ -207,3 +209,50 @@
       `TestIntegrationPersistedInvalidStateIsPermanent` PASS (0.24s) under `-tags=integration`, and
       `paused_state_removal_test.go`'s single case `TestTransitionLoopRefusesPaused` PASS. A suite-level `ok` would
       not have distinguished "passed" from "not compiled into this run"
+
+## 9. Replay onto main after L1 squashed
+
+- [x] 9.1 L1 (#1327, PR #1334) squash-merged to main as `94cd8e4c` and its change `settle-after-durable-effect`
+      archived there, so this branch replayed onto `origin/main` rather than onto L1's branch:
+      `git rebase --onto origin/main fdd645b5`, **19 commits**, one conflicted commit (`5b5a1e65`) in three files.
+      Old head `7eaff212` → `ecab1a72`; backup ref `refs/backup/gh1328-pre-main-rebase-20260919`. Every edit under
+      `openspec/changes/settle-after-durable-effect/` in the replayed range belonged to L1's own commits and
+      dropped with them — `git log f4d66934..<old head> --name-only` on that path lists no commit of this change,
+      so nothing of this change's needed re-homing from that directory
+- [x] 9.2 The one conflict, resolved by the rule "keep L1's classification, re-home this change's identity on top
+      of it": `component.go`'s `settleToolResultWithoutLoop` default arm keeps L1's warn-not-counted text and
+      gains this change's `execution_id` attribute; `metrics.go`'s `toolResultsDropped` help string keeps L1's two
+      sentences with this change's "execution ID" wording; `governance_dispatcher.go` keeps this change's
+      two-tier `effectiveLoopID`
+- [x] 9.3 L1's invariants verified present on the replayed head rather than assumed: `withCommandEffect` at
+      `handleCommand` entry (`component.go:919`), `targetFromTracker` at `:950`/`:955`, the two-conjunct
+      Quarantine arm at `:1025`, `noteSignalPublished` immediately after the cancel `PublishToStream`
+      (`commands.go:185`), `errCancelledBeforeMutation`, and `persistFailureState` before the stamp (`:1893`)
+- [x] 9.4 **The replay broke two of L1's tests and the race unit gate caught it.**
+      `TestToolResultHandlerFailureSettlesOnTheDurableRecord` (four subtests) and
+      `TestToolResultCancellationRetriesOnlyBeforeMutation` (two) all read decision `0x1` where L1 asserts `0x4`
+      or `0x2`: L1's fixtures build a `ToolResult` carrying only the provider `CallID`, and this change routes the
+      lane on framework execution identity (`component.go:2064`), so every result settled as an expected drop
+      without ever reaching the handler — the assertions were not failing on their subject, they were passing over
+      a lane that never ran. Repaired in the fixtures, not in the classification: the results now carry both ids
+      (the loop's pending-tool set is still keyed by `CallID`, `handlers.go:2303`), and the dispatch-driven
+      fixture reads the minted identity back out of the routing map production writes (`dispatchedExecutionID`)
+      rather than re-deriving it from `deriveToolExecutionID`'s inputs. All six subtests verified **by name** with
+      `-v`, since a package-level `ok` cannot distinguish passed from not-compiled-in
+- [x] 9.5 L1's two `design.md` residuals naming this branch are answered in `design.md` § "L1's residuals that
+      name this layer", not left for a reader to infer: the cancel-signal PubAck is owned here (the signal is a
+      `PublishToStream`, `commands.go:179`) and the requirement text now names it; the post-PubAck submission
+      response arm is **not** relaxed from Quarantine to Retry, because recovering task identity removes only one
+      of the effects a redelivery repeats — `Track` replaces the whole `LoopInfo` (`loop_tracker.go:144-153`) and
+      the two started counters re-fire. L1's call-site comment, whose premise ("a redelivery mints a fresh task
+      UUID") this change falsifies, was rewritten in place rather than left to mislead. Main's deferral bullet
+      ("extending it to the rest is L2's") is answered with a disposition: the invalid-input lane keeps its
+      per-publication response id
+- [x] 9.6 `tool_results_dropped_total{reason=loop_held_elsewhere}` lost its producer in the replay — L1 settles
+      both held-elsewhere arms as warned-and-retried — so the label is removed from `metrics.go`'s enumeration and
+      the zero-delta assertion in `TestLateToolResultForSettledLoopIsExpectedDrop` is retired with its reason
+      recorded. A doc comment advertising a series nothing emits is the `class:advertised-absent` defect, and an
+      assertion on a label with no producer is a test that cannot fail
+- [x] 9.7 Migration-note pin drift from the replay: the demux pin moved `component.go:2480` → `:2618`, re-derived
+      with `sed -n`. The waiter key (`governance_dispatcher.go:465`) and the fail-closed enforce wait (`:544-549`)
+      were re-read on this head and are unchanged

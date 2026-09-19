@@ -1208,17 +1208,20 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		Content:     fmt.Sprintf("Task submitted. Loop: %s", loopID),
 		Timestamp:   time.Now(),
 	}); err != nil {
-		// The task already has its PubAck (:1136) and the loop is tracked, so
-		// the delivery that carried this submission can no longer be replayed:
-		// a redelivery mints a fresh task UUID at :1093 and publishes it with
-		// no deduplication id, and with auto_continue=false it creates a second
-		// loop as well. AutoContinue does not save it either — it can reuse the
-		// loop, but downstream deduplication keys on TaskID, so a new TaskID
-		// becomes a continuation of work already accepted. Partial effect,
-		// unknown commit: the lane quarantines and an operator sees a stopped
-		// lane naming the cause. L2 `15825335` (fix(agentic-dispatch): recover
-		// task identity on redelivery) is where identity-preserving replay
-		// lands and may relax this to Retry.
+		// The task already has its PubAck (:1192) and the loop is tracked, so
+		// the delivery that carried this submission can no longer be replayed
+		// free of effect. Identity is no longer the reason it cannot: stable
+		// task identity (#1328) means a redelivery reads its own committed task
+		// back through findRetainedDispatchTask and republishes the same TaskID
+		// and LoopID, which is what downstream deduplication keys on. What a
+		// redelivery does repeat is the tracking at :1178 — Track replaces the
+		// whole LoopInfo, so a loop that has since advanced is reset to
+		// "pending" under a new CreatedAt — and the two started counters at
+		// :1190 and :1198. Partial effect, unknown commit: the lane quarantines
+		// and an operator sees a stopped lane naming the cause. Relaxing this
+		// to Retry needs that re-entry made idempotent, not more identity;
+		// openspec/changes/stable-request-identity/design.md records why this
+		// layer does not take it.
 		return errs.WrapFatal(err, "Component", "handleTaskSubmission",
 			fmt.Sprintf("task %s for loop %s is published but its acknowledgement is not", taskID, loopID))
 	}

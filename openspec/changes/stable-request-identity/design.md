@@ -39,6 +39,44 @@ committed `AgentResponse` for that RequestID acknowledges the redelivery without
 The tests say it in that order — `TestIntegrationRepublishedRequestIDReusesRetainedResponseOutsideAnyWindow`
 proves the guarantee with no window in play; the window test is the bonus.
 
+## L1's residuals that name this layer
+
+L1 (#1327, squash-merged as `94cd8e4c`) left two residuals naming commits of this branch, and its promoted spec
+deferred one identity decision to #1328. All three are answered here.
+
+- **The cancel signal's PubAck** (L1's archived `design.md:220`). Answered in code: `handleCancelCommand`
+  publishes the signal through `natsclient.PublishToStream` (`processor/agentic-dispatch/commands.go:179`), so the
+  signal has synchronous PubAck before `noteSignalPublished` records it and before the command's user response is
+  attempted. L1 recorded the published fact at the publication site so exactly this could tighten without moving
+  the classification, and the classification is unchanged: a named cancel still retries, a resolved one still
+  quarantines. The requirement now names the cancel signal in its PubAck list
+  (`specs/agentic-dispatch/spec.md`, MODIFIED).
+
+- **Identity-preserving replay at the post-PubAck submission response** (L1's archived `design.md:298`). L1
+  quarantined `handleTaskSubmission`'s arm where the task has PubAck and the acknowledging user response does
+  not, on the premise that a redelivery would mint a fresh task UUID and publish it with nothing downstream could
+  deduplicate. **That premise no longer holds** — `findRetainedDispatchTask` reads the committed task back by its
+  stable TaskID and republishes the same TaskID and LoopID — **and the arm still does not relax to Retry**,
+  because identity was not the only effect it repeats. A redelivery re-enters `c.loopTracker.Track`
+  (`component.go:1178`), and `Track` replaces the whole `LoopInfo` held under that LoopID
+  (`loop_tracker.go:144-153`), so a loop that advanced past `pending` between the two deliveries is reset to
+  `pending` under a fresh `CreatedAt`; it also re-fires `recordLoopStarted` (`component.go:1190`) and
+  `recordTaskSubmitted` (`component.go:1198`), so one submission is counted twice. Quarantine is still the honest
+  classification, so no L1 test is relaxed and no proof-of-effect-freedom is claimed. Making that re-entry
+  idempotent — `Track` merging rather than replacing a LoopID it already holds, and the two counters moving only
+  on first commit — changes tracker and gauge behaviour, which is not this layer's subject; it is the precondition
+  for the relaxation and is recorded here rather than taken quietly. The call-site comment carries the same
+  finding so a reader of the code is not left with L1's falsified premise.
+
+- **Deterministic response identity on the invalid-input lane** (main's `openspec/specs/agentic-dispatch/spec.md`,
+  scenario "Invalid user input receives its negative consequence", which reads "extending it to the rest is
+  L2's"). Not extended: `ResponseID` on that lane stays minted per publication. Which refusal a message earns is
+  decided by which check failed, so two deliveries of one source message can carry different refusals; a
+  source-derived identity would give those one name and let a duplicate window suppress the second, which trades a
+  duplicate the user can read for a refusal the user never sees. The deterministic source-derived identity stays
+  with the terminal lane, where one source has exactly one answer. The scenario's deferral bullet is replaced with
+  this disposition rather than left pointing at a layer that has now landed.
+
 ## Declared residuals
 
 - **The retry ordinal is process-local.** After a process replacement mid-iteration the counter is zero, so a

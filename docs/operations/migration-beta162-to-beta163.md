@@ -1294,7 +1294,7 @@ framework execution id. This is the break most likely to take a deployment down,
 | Approve subject | `agent.toolcall.approved.<loop_id>.<call_id>` | `agent.toolcall.approved.<execution_id>` |
 | Reject subject | `agent.toolcall.rejected.<loop_id>.<call_id>` | `agent.toolcall.rejected.<execution_id>` |
 | Rule template | `agent.toolcall.rejected.$message.loop_id.$message.call_id` | `agent.toolcall.rejected.$message.execution_id` |
-| Demux key | `call_id` | `execution_id` (`processor/agentic-loop/component.go:2480`, `effectiveExecutionID`) |
+| Demux key | `call_id` | `execution_id` (`processor/agentic-loop/component.go:2618`, `effectiveExecutionID`) |
 | Waiter key | proposal `call_id` | `call.ExecutionID` (`processor/agentic-loop/governance_dispatcher.go:465`) |
 
 The proposal payload on `agent.toolcall.proposed` carries `execution_id`, `request_id` and `call_ordinal` alongside
