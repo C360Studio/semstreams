@@ -149,7 +149,7 @@ tasks:
       - task: test:default
 
   check:push:
-    desc: "Full pre-push gate, mirrors CI (~8min, needs Docker): build, lint, vet integration+live_llm, schema drift, contract, race unit + integration. Use /preflight for the judgment layer (diff scope, breaking->e2e)."
+    desc: "Full pre-push gate, mirrors CI (~11min, needs Docker): build, lint, vet integration+live_llm, schema drift, contract, race unit + integration. Use /preflight for the judgment layer (diff scope, breaking->e2e)."
     cmds:
       - task: build:default
       - task: lint:default

@@ -244,11 +244,13 @@ task test:integration     # Docker-backed integration suite, race detector, fres
 task check:push           # Full pre-push gate
 ```
 
-The canonical integration runner uses `-race -failfast -tags=integration -timeout=20m -count=1 ./...`. The
+The canonical integration runner uses `-race -failfast -tags=integration -timeout=20m -count=1 -p 2 ./...`. The
 `integration` constraint is additive: this single command runs ordinary unit tests plus integration-tagged tests.
 CI therefore runs the canonical tagged suite once instead of first repeating `go test -race ./...`. `-failfast` stops
-avoidable work after a test failure. The runner does not override Go's package parallelism; changes to concurrency
-MUST be supported by measured container, CPU, memory, and duration evidence.
+avoidable work after a test failure. `-p 2` caps Go's parallelism at two programs — build commands as well as
+test binaries — so at most two packages run tests at once, because uncapped every Docker-backed package boots
+its containers at once and the container starts miss their own budgets (gh#736); changes to concurrency MUST be
+supported by measured container, CPU, memory, and duration evidence.
 
 For focused iteration, preserve the same flags:
 
@@ -493,7 +495,8 @@ restore production state; do not consolidate merely to improve elapsed time.
 3. Add resource-name helpers where they preserve production behavior.
 4. Ratchet package duration and container baselines downward from measured evidence.
 
-Blanket `-p 1` and blanket conversion to shared containers are explicitly out of scope.
+Blanket conversion to shared containers is explicitly out of scope. The runner's `-p 2` package cap is not a
+per-package migration lever; it is a runner-level setting (gh#736).
 
 ## Enforcement Status and Backlog
 

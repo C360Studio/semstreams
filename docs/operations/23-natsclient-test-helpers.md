@@ -47,9 +47,10 @@ image. Set `SEMSTREAMS_INTEGRATION_REFRESH_IMAGE=1` for a deliberate refresh. Th
 under the host lock and bounds it to five minutes.
 
 The runner sets `TESTCONTAINERS_RYUK_DISABLED=false`, while explicit helper cleanup remains primary. It invokes Go with
-`-race -failfast -tags=integration -timeout=20m -count=1` and does not override Go's package parallelism. Because the
-`integration` tag is additive, the default `./...` selection runs the unit and integration-tagged tests together once;
-CI does not run a duplicate untagged unit lane first.
+`-race -failfast -tags=integration -timeout=20m -count=1 -p 2`. `-p` bounds build commands as well as test
+binaries, so at most two packages run tests at once (gh#736).
+Because the `integration` tag is additive, the default `./...` selection runs the unit and integration-tagged tests
+together once; CI does not run a duplicate untagged unit lane first.
 
 Go's `-timeout=20m` applies independently to each package; it does not bound the local aggregate suite. Local callers
 may interrupt an aggregate run. CI's 25-minute outer timeout supplies the whole-job and process-tree bound, including

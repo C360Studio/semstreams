@@ -305,7 +305,9 @@ else
   image_pull_elapsed=$(($(now_milliseconds) - image_pull_started))
   echo "[INTEGRATION] $nats_image pull latency: ${image_pull_elapsed}ms ($latency_resolution)"
 fi
-echo "[INTEGRATION] running Docker-backed tests (-race, integration tag, uncapped package parallelism)"
+# Operator banner only. TestIntegrationRunner_CanonicalCommandAndRyukPolicy pins the argv
+# below, not this line, so a -p change has to be carried here by hand.
+echo "[INTEGRATION] running Docker-backed tests (-race, integration tag, at most 2 packages at a time)"
 
 packages=("$@")
 if (( ${#packages[@]} == 0 )); then
@@ -319,7 +321,12 @@ latency_log=$(mktemp "${TMPDIR:-/tmp}/semstreams-latency.XXXXXX")
 export GRAPH_INDEX_LATENCY_LOG="$latency_log"
 
 set +e
-go test -race -failfast -tags=integration -timeout=20m -count=1 "${packages[@]}"
+# -p 2 caps Go's parallelism at two programs — build commands as well as test
+# binaries (`go help build`) — so at most two packages run tests at once. Uncapped,
+# Go runs GOMAXPROCS of them and every Docker-backed package boots its own containers,
+# so container starts queue behind each other and blow their own start budgets
+# (gh#736). The flag looks like a pessimization; it is not free to remove.
+go test -race -failfast -tags=integration -timeout=20m -count=1 -p 2 "${packages[@]}"
 status=$?
 set -e
 if [[ -s "$latency_log" ]]; then
