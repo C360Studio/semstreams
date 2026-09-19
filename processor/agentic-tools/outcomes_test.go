@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -289,6 +290,115 @@ func TestHandleToolCallPermanentDispositionTable(t *testing.T) {
 	})
 }
 
+func TestHandleToolDeliveryDecisionMatrix(t *testing.T) {
+	wire := func(t *testing.T, call agentic.ToolCall) []byte {
+		base := message.NewBaseMessage(call.Schema(), &call, "test")
+		data, err := json.Marshal(base)
+		require.NoError(t, err)
+		return data
+	}
+
+	t.Run("immutable poison terminates", func(t *testing.T) {
+		component := &Component{decoder: payloadbuiltins.NewTestDecoder(t), logger: slog.Default()}
+		decision, err := component.handleToolDelivery(t.Context(), []byte("not-json"))
+		require.Equal(t, natsclient.DeliveryDecisionTerminate, decision)
+		var permanent *natsclient.PermanentDeliveryError
+		require.ErrorAs(t, err, &permanent)
+	})
+
+	t.Run("proven pre-effect read failure retries", func(t *testing.T) {
+		component := &Component{
+			config: DefaultConfig(), registry: NewExecutorRegistry(), decoder: payloadbuiltins.NewTestDecoder(t),
+			logger: slog.Default(), outcomes: &memoryOutcomeStore{values: make(map[string][]byte), getErr: errors.New("read unavailable")},
+		}
+		decision, err := component.handleToolDelivery(t.Context(), wire(t, agentic.ToolCall{ID: "read", Name: "count"}))
+		require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
+		require.Error(t, err)
+	})
+
+	t.Run("post-effect create ambiguity quarantines", func(t *testing.T) {
+		executor := &countingExecutor{}
+		component := &Component{
+			config: DefaultConfig(), registry: NewExecutorRegistry(), decoder: payloadbuiltins.NewTestDecoder(t),
+			logger: slog.Default(), outcomes: &memoryOutcomeStore{values: make(map[string][]byte), createErr: errors.New("create unknown")},
+		}
+		require.NoError(t, component.registry.RegisterTool("count", executor))
+		decision, err := component.handleToolDelivery(t.Context(), wire(t, agentic.ToolCall{ID: "effect", Name: "count"}))
+		require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
+		require.True(t, isAmbiguousOutcomeCreateError(err))
+		require.Equal(t, int32(1), executor.calls.Load())
+	})
+
+	t.Run("completed replay publication retries without effect", func(t *testing.T) {
+		executor := &countingExecutor{}
+		store := &memoryOutcomeStore{values: make(map[string][]byte)}
+		component := &Component{
+			config: DefaultConfig(), registry: NewExecutorRegistry(), decoder: payloadbuiltins.NewTestDecoder(t),
+			logger: slog.Default(), outcomes: store,
+		}
+		require.NoError(t, component.registry.RegisterTool("count", executor))
+		component.publishStream = func(context.Context, string, []byte, string) error { return nil }
+		data := wire(t, agentic.ToolCall{ID: "replay", Name: "count"})
+		decision, err := component.handleToolDelivery(t.Context(), data)
+		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+		require.NoError(t, err)
+		component.publishStream = func(context.Context, string, []byte, string) error { return errors.New("no puback") }
+		decision, err = component.handleToolDelivery(t.Context(), data)
+		require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
+		require.Error(t, err)
+		require.Equal(t, int32(1), executor.calls.Load())
+	})
+
+	// Owner shutdown during the pre-effect ledger read: nothing executed, so
+	// the delivery belongs to the replacement process. This lane needs no
+	// separate cancellation arm — the read is already typed retryable, and a
+	// cancellation AFTER execution lands on the ambiguous-Create arm instead.
+	t.Run("shutdown during the pre-effect ledger read retries", func(t *testing.T) {
+		executor := &countingExecutor{}
+		workCtx, cancel := context.WithCancel(t.Context())
+		component := &Component{
+			config: DefaultConfig(), registry: NewExecutorRegistry(), decoder: payloadbuiltins.NewTestDecoder(t),
+			logger: slog.Default(), outcomes: &cancellingOutcomeStore{cancel: cancel},
+		}
+		require.NoError(t, component.registry.RegisterTool("count", executor))
+		decision, err := component.handleToolDelivery(workCtx, wire(t, agentic.ToolCall{ID: "shutdown", Name: "count"}))
+		require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Zero(t, executor.calls.Load(), "shutdown must not have executed the tool")
+	})
+
+	// #759 fail-closed unclassified errors: no arm of the matrix claims this
+	// failure, so the lane must not NAK it for redelivery.
+	t.Run("unclassified ledger failure quarantines", func(t *testing.T) {
+		executor := &countingExecutor{}
+		store := &memoryOutcomeStore{values: make(map[string][]byte), createErr: jetstream.ErrKeyExists}
+		component := &Component{
+			config: DefaultConfig(), registry: NewExecutorRegistry(), decoder: payloadbuiltins.NewTestDecoder(t),
+			logger: slog.Default(), outcomes: store,
+		}
+		require.NoError(t, component.registry.RegisterTool("count", executor))
+		decision, err := component.handleToolDelivery(t.Context(), wire(t, agentic.ToolCall{ID: "vanished", Name: "count"}))
+		require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
+		require.Error(t, err)
+		require.False(t, isRetryableDeliveryError(err), "the unclassified arm must not be typed retryable")
+	})
+}
+
+// spec: jetstream-consumer-policy / delivery work returns a validated decision/error tuple
+func TestToolDeliveryClassificationFailsClosedOnUnclassifiedError(t *testing.T) {
+	ordinary := fmt.Errorf("persist outcome: %w", errors.New("boom"))
+
+	require.Equal(t, natsclient.DeliveryDecisionQuarantine, classifyToolDeliveryDecision(ordinary),
+		"an ordinary wrapped error is unclassified and must fail closed rather than NAK")
+	require.Equal(t, natsclient.DeliveryDecisionAck, classifyToolDeliveryDecision(nil))
+	require.Equal(t, natsclient.DeliveryDecisionTerminate,
+		classifyToolDeliveryDecision(natsclient.TerminateDelivery(ordinary)))
+	require.Equal(t, natsclient.DeliveryDecisionQuarantine,
+		classifyToolDeliveryDecision(&ambiguousOutcomeCreateError{err: ordinary}))
+	require.Equal(t, natsclient.DeliveryDecisionRetry,
+		classifyToolDeliveryDecision(retryableDelivery("read tool-call outcome: %w", ordinary)))
+}
+
 func TestToolCallOutcomeIdentityV1(t *testing.T) {
 	call := agentic.ToolCall{
 		ID: "call-123", Name: "lookup", LoopID: "loop-1", TraceID: "trace-1", ApprovedBy: "operator",
@@ -435,4 +545,17 @@ func TestPublicationOversizeUsesOneCompactSurrogateWithoutReplacingAuthority(t *
 	err := component.publishCompletedResult(context.Background(), call, full, outcomePathReplay)
 	var permanent *natsclient.PermanentDeliveryError
 	assert.ErrorAs(t, err, &permanent)
+}
+
+// cancellingOutcomeStore cancels the delivery context from inside the ledger
+// read, the way owner Stop cancels work mid-Get in production.
+type cancellingOutcomeStore struct{ cancel context.CancelFunc }
+
+func (s *cancellingOutcomeStore) Get(ctx context.Context, _ string) ([]byte, error) {
+	s.cancel()
+	return nil, ctx.Err()
+}
+
+func (*cancellingOutcomeStore) Create(ctx context.Context, _ string, _ []byte) error {
+	return ctx.Err()
 }

@@ -172,22 +172,22 @@ func TestIntegrationInvalidTerminalIsTerminated(t *testing.T) {
 	}, 2*time.Second, 25*time.Millisecond)
 }
 
-func TestIntegrationProductionCallbackRetriesKVAndPublishThenAcksAfterPubAck(t *testing.T) {
+func TestIntegrationProductionCallbackRetriesKVThenAcksAfterPubAck(t *testing.T) {
 	ctx := t.Context()
 	tc := natsclient.NewTestClient(t,
 		natsclient.WithKVBuckets(defaultAgentLoopsBucket(t)),
 		natsclient.WithStreams(
 			natsclient.TestStreamConfig{Name: "CALLBACK_AGENT", Subjects: []string{"agent.>"}},
 			natsclient.TestStreamConfig{Name: "CALLBACK_INPUT_USER", Subjects: []string{"user.message.>"}},
+			natsclient.TestStreamConfig{Name: "CALLBACK_USER", Subjects: []string{"callback.response.>"}},
 		),
 	)
-	deliveryDone := make(chan error, 4)
+	deliveryDone := make(chan error, 2)
 	c := startProductionTerminalDispatch(
 		t, ctx, tc, "CALLBACK_AGENT", "CALLBACK_INPUT_USER", "CALLBACK_USER", "retry",
 		func(c *Component) { c.terminalDeliveryDoneFn = func(err error) { deliveryDone <- err } },
 	)
 	routingReadBefore := terminalReasonValue(c, "routing_read_transient")
-	responsePublishBefore := terminalReasonValue(c, "response_publish_transient")
 	responseSettledBefore := terminalReasonValue(c, "response_settled")
 
 	kv, err := tc.GetKVBucket(ctx, defaultAgentLoopsBucket(t))
@@ -201,8 +201,6 @@ func TestIntegrationProductionCallbackRetriesKVAndPublishThenAcksAfterPubAck(t *
 		_, putErr := kv.Put(ctx, loopID, data)
 		require.NoError(t, putErr)
 	}
-	persist("publish-loop", "publish-task", "publish-channel")
-
 	stream, err := tc.Client.GetStream(ctx, "CALLBACK_AGENT")
 	require.NoError(t, err)
 	consumer, err := stream.Consumer(ctx, "agentic-dispatch-agent-complete-retry")
@@ -215,53 +213,94 @@ func TestIntegrationProductionCallbackRetriesKVAndPublishThenAcksAfterPubAck(t *
 		require.NoError(t, tc.Client.PublishToStream(ctx, "agent.complete."+loopID, data))
 	}
 	publishTerminal("kv-loop", "kv-task")
-	publishTerminal("publish-loop", "publish-task")
-
-	for attempt := 1; attempt <= 2; attempt++ {
-		select {
-		case callbackErr := <-deliveryDone:
-			require.Error(t, callbackErr, "transient production callback %d must NAK", attempt)
-		case <-time.After(5 * time.Second):
-			t.Fatalf("transient production callback %d did not finish", attempt)
-		}
+	select {
+	case callbackErr := <-deliveryDone:
+		require.Error(t, callbackErr, "proven pre-publish failure must retry")
+	case <-time.After(5 * time.Second):
+		t.Fatal("transient production callback did not finish")
 	}
 	info, err := consumer.Info(ctx)
 	require.NoError(t, err)
-	require.Equal(t, uint64(2), info.Delivered.Consumer)
-	require.Zero(t, info.AckFloor.Consumer, "transient KV/publish failures must not ACK")
-	require.Equal(t, 2, info.NumAckPending)
+	require.Equal(t, uint64(1), info.Delivered.Consumer)
+	require.Zero(t, info.AckFloor.Consumer, "transient KV failure must not ACK")
+	require.Equal(t, 1, info.NumAckPending)
 	require.Equal(t, routingReadBefore+1, terminalReasonValue(c, "routing_read_transient"))
-	require.Equal(t, responsePublishBefore+1, terminalReasonValue(c, "response_publish_transient"))
 
 	persist("kv-loop", "kv-task", "kv-channel")
-	_, err = tc.Client.EnsureStream(ctx, jetstream.StreamConfig{
-		Name: "CALLBACK_USER", Subjects: []string{"callback.response.>"}, MaxAge: time.Hour,
-		MaxBytes: 1 << 20, Discard: jetstream.DiscardOld,
-	})
-	require.NoError(t, err)
-
-	for attempt := 1; attempt <= 2; attempt++ {
-		select {
-		case callbackErr := <-deliveryDone:
-			require.NoError(t, callbackErr, "recovered production callback %d", attempt)
-		case <-time.After(35 * time.Second):
-			t.Fatalf("recovered production callback %d did not finish", attempt)
-		}
+	select {
+	case callbackErr := <-deliveryDone:
+		require.NoError(t, callbackErr, "recovered production callback")
+	case <-time.After(35 * time.Second):
+		t.Fatal("recovered production callback did not finish")
 	}
 	require.Eventually(t, func() bool {
 		settled, infoErr := consumer.Info(ctx)
-		return infoErr == nil && settled.Delivered.Consumer == 4 &&
-			settled.AckFloor.Consumer == 4 && settled.AckFloor.Stream == 2 && settled.NumAckPending == 0
+		return infoErr == nil && settled.Delivered.Consumer == 2 &&
+			settled.AckFloor.Consumer == 2 && settled.AckFloor.Stream == 1 && settled.NumAckPending == 0
 	}, 3*time.Second, 25*time.Millisecond, "source ACK must follow successful synchronous response PubAck")
-	require.Equal(t, responseSettledBefore+2, terminalReasonValue(c, "response_settled"))
+	require.Equal(t, responseSettledBefore+1, terminalReasonValue(c, "response_settled"))
 	userStream, err := tc.Client.GetStream(ctx, "CALLBACK_USER")
 	require.NoError(t, err)
 	userInfo, err := userStream.Info(ctx)
 	require.NoError(t, err)
-	require.Equal(t, uint64(2), userInfo.State.Msgs)
+	require.Equal(t, uint64(1), userInfo.State.Msgs)
 }
 
-func TestIntegrationProductionCallbackShutdownDelayedNAK(t *testing.T) {
+func TestIntegrationProductionCallbackUnknownPublishQuarantinesExactLane(t *testing.T) {
+	ctx := t.Context()
+	tc := natsclient.NewTestClient(t,
+		natsclient.WithKVBuckets(defaultAgentLoopsBucket(t)),
+		natsclient.WithStreams(
+			natsclient.TestStreamConfig{Name: "QUARANTINE_AGENT", Subjects: []string{"agent.>"}},
+			natsclient.TestStreamConfig{Name: "QUARANTINE_INPUT_USER", Subjects: []string{"user.message.>"}},
+		),
+	)
+	deliveryDone := make(chan error, 1)
+	c := startProductionTerminalDispatch(
+		t, ctx, tc, "QUARANTINE_AGENT", "QUARANTINE_INPUT_USER", "MISSING", "quarantine",
+		func(c *Component) { c.terminalDeliveryDoneFn = func(err error) { deliveryDone <- err } },
+	)
+	kv, err := tc.GetKVBucket(ctx, defaultAgentLoopsBucket(t))
+	require.NoError(t, err)
+	loop := agentic.LoopEntity{
+		ID: "quarantine-loop", TaskID: "quarantine-task", State: agentic.LoopStateComplete, MaxIterations: 3,
+		ChannelType: "http", ChannelID: "channel",
+	}
+	data, err := json.Marshal(loop)
+	require.NoError(t, err)
+	_, err = kv.Put(ctx, loop.ID, data)
+	require.NoError(t, err)
+	payload := terminalEnvelopeForDispatch(t, &agentic.LoopCompletedEvent{
+		LoopID: loop.ID, TaskID: loop.TaskID, Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now(),
+	})
+	require.NoError(t, tc.Client.PublishToStream(ctx, "agent.complete."+loop.ID, payload))
+	select {
+	case callbackErr := <-deliveryDone:
+		require.Error(t, callbackErr)
+		require.True(t, isUnknownTerminalPublication(callbackErr))
+	case <-time.After(5 * time.Second):
+		t.Fatal("unknown publication result was not observed")
+	}
+	require.Len(t, c.consumers, 5)
+	completeClosed := c.consumers[1].handle.Closed()
+	select {
+	case <-completeClosed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("agent.complete exact handle was not drained")
+	}
+	stream, err := tc.Client.GetStream(ctx, "QUARANTINE_AGENT")
+	require.NoError(t, err)
+	consumer, err := stream.Consumer(ctx, "agentic-dispatch-agent-complete-quarantine")
+	require.NoError(t, err)
+	info, err := consumer.Info(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), info.Delivered.Consumer)
+	require.Zero(t, info.AckFloor.Consumer)
+	require.Equal(t, 1, info.NumAckPending)
+	require.Zero(t, info.NumRedelivered)
+}
+
+func TestIntegrationProductionCallbackShutdownUsesSemanticRetry(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	tc := natsclient.NewTestClient(t,
 		natsclient.WithKVBuckets(defaultAgentLoopsBucket(t)),
@@ -307,10 +346,10 @@ func TestIntegrationProductionCallbackShutdownDelayedNAK(t *testing.T) {
 	cleanupCtx, cleanupCancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cleanupCancel()
 	require.NoError(t, comp.Stop(cleanupCtx))
-	redelivery, err := consumer.Fetch(1, jetstream.FetchMaxWait(10*time.Second))
+	redelivery, err := consumer.Fetch(1, jetstream.FetchMaxWait(35*time.Second))
 	require.NoError(t, err)
 	redelivered := <-redelivery.Messages()
-	require.NotNil(t, redelivered, "shutdown must delayed-NAK instead of ACK or Term")
+	require.NotNil(t, redelivered, "shutdown must use the explicit 30-second semantic retry")
 	metadata, err := redelivered.Metadata()
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), metadata.NumDelivered)

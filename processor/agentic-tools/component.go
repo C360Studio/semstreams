@@ -28,6 +28,11 @@ import (
 // agenticToolsSchema defines the configuration schema
 var agenticToolsSchema = component.GenerateConfigSchema(reflect.TypeOf(Config{}))
 
+const (
+	defaultToolsAckWait           = 5 * time.Minute
+	defaultToolsHeartbeatInterval = 5 * time.Second
+)
+
 // Component implements the agentic-tools processor
 type Component struct {
 	name    string
@@ -67,6 +72,7 @@ type Component struct {
 	errors            int64
 	lastActivity      time.Time
 	metrics           *toolsMetrics
+	deliveryFatalErr  error
 
 	// Approval filter (nil when approval_required is empty)
 	approvalFilter *ApprovalFilter
@@ -87,8 +93,9 @@ type requestSubscription interface{ Drain(context.Context) error }
 
 // consumerInfo tracks JetStream consumer details for cleanup
 type streamConsumerBinding struct {
-	handle      jetstream.ConsumeContext
-	drainIssued bool
+	handle       jetstream.ConsumeContext
+	drainOnce    *sync.Once
+	observerDone <-chan struct{}
 }
 
 type consumerSetup struct {
@@ -385,10 +392,6 @@ func (c *Component) setupConsumer(ctx context.Context, setup consumerSetup) erro
 	// AckWait tolerates long-running tools (sandbox bash, deep_research);
 	// HeartbeatInterval new in this PR — without it, a tool taking longer
 	// than AckWait would be redelivered even on a healthy execution.
-	const (
-		defaultToolsAckWait           = 5 * time.Minute
-		defaultToolsHeartbeatInterval = 2 * time.Minute
-	)
 	ackWait := consumerCfg.AckWait
 	if ackWait == 0 {
 		ackWait = defaultToolsAckWait
@@ -414,25 +417,38 @@ func (c *Component) setupConsumer(ctx context.Context, setup consumerSetup) erro
 		AutoCreate:     false,
 		MessageTimeout: 10 * time.Minute,
 	}
+	retryPolicy, err := natsclient.DelayedDeliveryRetry(30 * time.Second)
+	if err != nil {
+		return errs.WrapFatal(err, "Component", "setupConsumer", "construct semantic retry policy")
+	}
+	deliveryPolicy, err := natsclient.ValidateHeartbeatDeliveryPolicy(
+		ctx, cfg, heartbeatInterval, retryPolicy,
+		func(workCtx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
+			return c.handleToolDelivery(workCtx, data)
+		},
+	)
+	if err != nil {
+		return errs.WrapInvalid(err, "Component", "setupConsumer", "validate heartbeat delivery policy")
+	}
+	lane := setup.port.Name
+	admission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal, func(subject string) {
+		c.recordDeliveryRefused(lane, subject)
+	})
 
-	// Wrap handler in ConsumeWithHeartbeat so long-running tools fire
-	// msg.InProgress() at heartbeatInterval and reset the AckWait clock.
+	// The typed heartbeat helper owns delivery control; work receives payload
+	// bytes only and returns the owner-defined semantic decision. It calls
+	// msg.InProgress() at heartbeatInterval to reset the AckWait clock.
 	// Without heartbeat, any tool exceeding AckWait gets redelivered
 	// while the original handler is still working — duplicate work +
-	// potential duplicate publishes. ConsumeWithHeartbeat owns ack/nak;
-	// The handler's error is the delivery disposition contract: nil ACKs,
-	// transient failures delayed-NAK, and PermanentDeliveryError Terms.
+	// potential duplicate publishes.
 	consume := c.natsClient.ConsumeStreamWithConfig
 	if c.consumeStream != nil {
 		consume = c.consumeStream
 	}
 	handle, err := consume(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: setup.port.Name, ComponentOwned: true}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		if hbErr := natsclient.ConsumeWithHeartbeat(msgCtx, msg, heartbeatInterval,
-			func(workCtx context.Context) error {
-				return c.handleToolCall(workCtx, msg.Data())
-			},
-		); hbErr != nil {
-			c.recordHandlerError(msgCtx, hbErr)
+		result, admitted := consumeAdmittedDelivery(msgCtx, msg, deliveryPolicy, admission)
+		if admitted && !result.OwnerStopRequired() && result.Err() != nil {
+			c.recordHandlerError(msgCtx, result.Err())
 		}
 	})
 	if err != nil {
@@ -440,8 +456,10 @@ func (c *Component) setupConsumer(ctx context.Context, setup consumerSetup) erro
 	}
 
 	// Track consumer for cleanup in Stop()
+	binding := newStreamConsumerBinding(handle)
+	c.observeDeliveryLane(ctx, &binding, admission)
 	c.lifecycleMu.Lock()
-	c.consumers = append(c.consumers, streamConsumerBinding{handle: handle})
+	c.consumers = append(c.consumers, binding)
 	c.lifecycleMu.Unlock()
 
 	c.logger.Info("Subscribed to tool calls (JetStream)",
@@ -478,6 +496,64 @@ func (c *Component) recordHandlerError(ctx context.Context, err error) {
 		c.logger.Error("Tool delivery interrupted by shutdown", "error", err, "ambiguous_effect", true)
 	default:
 		c.logger.Error("Tool handler error", "error", err)
+	}
+}
+
+// recordDeliveryRefused declares a delivery the latched lane refused. The
+// exact handle is drained rather than stopped (tasks.md 4.7), so buffered
+// deliveries keep arriving after the first fatal; refusing them is safe
+// because no terminal method is attempted — each stays pending for redelivery
+// to the reconstructed owner. Without this line the refusals are a silent
+// drop: both call sites guard every branch on admission.
+func (c *Component) recordDeliveryRefused(lane, subject string) {
+	if c.metrics != nil {
+		c.metrics.recordDeliveryRefused(lane)
+	}
+	if c.logger != nil {
+		c.logger.Warn("Tool delivery refused by latched lane",
+			"lane", lane,
+			"subject", subject,
+			"settled", false,
+			"resolution", "left pending for redelivery after explicit lane reconstruction")
+	}
+}
+
+func (c *Component) recordDeliveryOwnerFatal(result natsclient.DeliveryResult) {
+	err := result.Err()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.deliveryFatalErr != nil {
+		return
+	}
+	c.deliveryFatalErr = err
+	c.errors++
+}
+
+func (c *Component) handleToolDelivery(ctx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
+	err := c.handleToolCall(ctx, data)
+	return classifyToolDeliveryDecision(err), err
+}
+
+// classifyToolDeliveryDecision maps a tool-call failure onto this lane's
+// closed disposition matrix. Go's error interface cannot make that matrix
+// closed at runtime, so an error no arm classifies is not retried: it
+// quarantines, which attempts no ACK/NAK/Term, leaves the delivery pending,
+// latches the lane, and stops the exact handle (#759, fail-closed unclassified
+// errors; its anti-goals forbid blind retry of commit-unknown effects).
+func classifyToolDeliveryDecision(err error) natsclient.DeliveryDecision {
+	if err == nil {
+		return natsclient.DeliveryDecisionAck
+	}
+	var permanent *natsclient.PermanentDeliveryError
+	switch {
+	case errors.As(err, &permanent):
+		return natsclient.DeliveryDecisionTerminate
+	case isAmbiguousOutcomeCreateError(err):
+		return natsclient.DeliveryDecisionQuarantine
+	case isRetryableDeliveryError(err):
+		return natsclient.DeliveryDecisionRetry
+	default:
+		return natsclient.DeliveryDecisionQuarantine
 	}
 }
 
@@ -593,10 +669,7 @@ func (c *Component) cleanup(ctx context.Context) error {
 
 	for i := range c.consumers {
 		binding := &c.consumers[i]
-		if !binding.drainIssued {
-			binding.handle.Drain()
-			binding.drainIssued = true
-		}
+		binding.drain()
 		closed := binding.handle.Closed()
 		if c.waitConsumerClosed != nil {
 			cleanupErr = errors.Join(cleanupErr, c.waitConsumerClosed(ctx, closed))
@@ -610,6 +683,11 @@ func (c *Component) cleanup(ctx context.Context) error {
 	}
 	if c.cancel != nil {
 		c.cancel()
+	}
+	for i := range c.consumers {
+		if done := c.consumers[i].observerDone; done != nil {
+			<-done
+		}
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		cleanupErr = errors.Join(cleanupErr, ctxErr)
@@ -710,10 +788,15 @@ func (c *Component) handleToolCall(ctx context.Context, data []byte) error {
 			// It also gets a distinct message ID so stream dedup cannot suppress
 			// the later terminal result.
 			err := c.publishResultWithMsgID(ctx, result, toolApprovalRequiredMessageID(call.ID))
-			if err == nil && c.metrics != nil {
+			if err != nil {
+				// The approval gate runs before execution, so no effect has
+				// begun and redelivery is proven safe.
+				return retryableDelivery("publish approval-required tool result: %w", err)
+			}
+			if c.metrics != nil {
 				c.metrics.recordOutcome(outcomePathRejection)
 			}
-			return err
+			return nil
 		}
 	}
 
@@ -774,7 +857,10 @@ func (c *Component) loadCompletedOutcome(
 		if c.metrics != nil {
 			c.metrics.recordStoreFailure(operation, storeReasonTransport)
 		}
-		return completedOutcome{}, false, fmt.Errorf("read tool-call outcome: %w", err)
+		// A ledger read fails before this delivery executes anything, and the
+		// read-winner caller runs only after the winning outcome is durable.
+		// Both are replay-safe, so this is one of the two typed retry shapes.
+		return completedOutcome{}, false, retryableDelivery("read tool-call outcome: %w", err)
 	}
 	outcome, err := decodeCompletedOutcome(data, call)
 	if err != nil {
@@ -852,10 +938,15 @@ func (c *Component) persistCompletedOutcome(
 		}
 		c.logger.Error("Tool outcome persistence failed after execution", "error", err, "ambiguous_effect", true)
 	}
-	// A failed Create after external execution is intentionally transient. The
-	// next delivery cannot know whether an external effect happened; executors
-	// use ToolCall.ID for downstream idempotency across this ambiguity window.
-	return completedOutcome{}, path, fmt.Errorf("create tool-call outcome: %w", err)
+	// A failed Create after external execution is ambiguous: the lane must stop
+	// without settlement because replay safety is not proven. Pre-effect Create
+	// failures remain retryable. Executors still use ToolCall.ID as their
+	// downstream idempotency key across crash-redelivery windows.
+	createErr := fmt.Errorf("create tool-call outcome: %w", err)
+	if effectful {
+		return completedOutcome{}, path, &ambiguousOutcomeCreateError{err: createErr}
+	}
+	return completedOutcome{}, path, &retryableDeliveryError{err: createErr}
 }
 
 func (c *Component) publishCompletedResult(
@@ -869,7 +960,9 @@ func (c *Component) publishCompletedResult(
 		return nil
 	}
 	if !isObservedOversize(err) {
-		return err
+		// The immutable outcome is already durable here, so redelivery
+		// republishes the same result without a second executor effect.
+		return retryableDelivery("publish tool result: %w", err)
 	}
 	// The full immutable authority stays in KV. A publication-only bound gets
 	// exactly one compact transport surrogate using the same call-derived MsgID.
@@ -1342,10 +1435,16 @@ func (c *Component) Health() component.HealthStatus {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
+	healthy := c.running && c.deliveryFatalErr == nil
+	lastError := ""
+	if c.deliveryFatalErr != nil {
+		lastError = c.deliveryFatalErr.Error()
+	}
 	return component.HealthStatus{
-		Healthy:    c.running,
+		Healthy:    healthy,
 		LastCheck:  time.Now(),
 		ErrorCount: int(c.errors),
+		LastError:  lastError,
 		Uptime:     time.Since(c.startTime),
 		Status:     c.getStatus(),
 	}
@@ -1353,6 +1452,9 @@ func (c *Component) Health() component.HealthStatus {
 
 // getStatus returns a status string
 func (c *Component) getStatus() string {
+	if c.deliveryFatalErr != nil {
+		return "delivery ownership lost"
+	}
 	if c.running {
 		return "running"
 	}

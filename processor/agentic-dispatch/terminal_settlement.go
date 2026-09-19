@@ -17,16 +17,67 @@ import (
 const terminalResponseIDPrefix = "terminal-user-response:"
 
 type permanentTerminalError struct{ err error }
+type unknownTerminalPublicationError struct{ err error }
 
-func (e *permanentTerminalError) Error() string { return e.err.Error() }
-func (e *permanentTerminalError) Unwrap() error { return e.err }
+// transientTerminalError marks a terminal-lane failure observed before any
+// user-facing publication was attempted, so redelivery repeats no effect.
+// #759 admits delayed NAK only for such a typed transient-before-effect
+// result; an error carrying no class fails closed instead.
+type transientTerminalError struct{ err error }
+
+func (e *permanentTerminalError) Error() string          { return e.err.Error() }
+func (e *permanentTerminalError) Unwrap() error          { return e.err }
+func (e *unknownTerminalPublicationError) Error() string { return e.err.Error() }
+func (e *unknownTerminalPublicationError) Unwrap() error { return e.err }
+func (e *transientTerminalError) Error() string          { return e.err.Error() }
+func (e *transientTerminalError) Unwrap() error          { return e.err }
 
 func permanentTerminal(format string, args ...any) error {
 	return &permanentTerminalError{err: fmt.Errorf(format, args...)}
 }
 
+func transientTerminal(format string, args ...any) error {
+	return &transientTerminalError{err: fmt.Errorf(format, args...)}
+}
+
 func isPermanentTerminal(err error) bool {
 	var target *permanentTerminalError
+	return errors.As(err, &target)
+}
+
+func isTransientTerminal(err error) bool {
+	var target *transientTerminalError
+	return errors.As(err, &target)
+}
+
+// isShutdownCancellation reports a terminal-lane failure that is the owner's
+// own cancellation surfacing through work. It sits on the same footing as
+// transientTerminalError: the framework cancels work during Stop, and the
+// delivery must go back to the server for the replacement process.
+//
+// This is NOT a test that the context error arrived bare. errors.Is unwraps,
+// and both unknownTerminalPublicationError and permanentTerminalError
+// implement Unwrap, so a publish cancelled mid-flight also satisfies this
+// predicate. What keeps that case safe is arm ORDER in
+// classifyTerminalDeliveryDecision (component.go): isUnknownTerminalPublication
+// is checked, and quarantines, before this arm is reached. The ordering is the
+// mechanism, and the guard on it is
+// TestHandleTerminalDeliveryDecisionMatrix/cancellation_during_publish_still_quarantines
+// — not this function.
+//
+// In production this arm is defensive rather than load-bearing: every context
+// error on this lane already arrives as a transientTerminalError from
+// loadPersistedLoop, which takes the preceding half of the same case. It is
+// reachable only if a future effect site returns a wrapped context error of
+// its own, and the order handles that correctly only for as long as such a
+// site is classified ahead of this arm. Any new effect site therefore adds its
+// typed arm above this one; see design.md § Declared cost.
+func isShutdownCancellation(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func isUnknownTerminalPublication(err error) bool {
+	var target *unknownTerminalPublicationError
 	return errors.As(err, &target)
 }
 
@@ -93,14 +144,14 @@ func (c *Component) loadPersistedLoop(ctx context.Context, loopID string) (*agen
 	}
 	kv, err := c.natsClient.GetKeyValueBucket(ctx, bucket)
 	if err != nil {
-		return nil, fmt.Errorf("access %s: %w", bucket, err)
+		return nil, transientTerminal("access %s: %w", bucket, err)
 	}
 	entry, err := kv.Get(ctx, loopID)
 	if err != nil {
 		if isLoopRecordAbsent(err) {
-			return nil, fmt.Errorf("loop state %q not yet observable: %w", loopID, err)
+			return nil, transientTerminal("loop state %q not yet observable: %w", loopID, err)
 		}
-		return nil, fmt.Errorf("read %s/%s: %w", bucket, loopID, err)
+		return nil, transientTerminal("read %s/%s: %w", bucket, loopID, err)
 	}
 	var persisted agentic.LoopEntity
 	if err := json.Unmarshal(entry.Value(), &persisted); err != nil {
@@ -148,7 +199,10 @@ func terminalResponse(event agentterminal.Event, route terminalRoute) agentic.Us
 
 func (c *Component) publishTerminalResponse(ctx context.Context, response agentic.UserResponse, msgID string) error {
 	if c.sendTerminalResponseFn != nil {
-		return c.sendTerminalResponseFn(ctx, response, msgID)
+		if err := c.sendTerminalResponseFn(ctx, response, msgID); err != nil {
+			return &unknownTerminalPublicationError{err: fmt.Errorf("publish terminal response: %w", err)}
+		}
+		return nil
 	}
 	responseMessage := message.NewBaseMessage(response.Schema(), &response, "agentic-dispatch")
 	data, err := json.Marshal(responseMessage)
@@ -160,7 +214,7 @@ func (c *Component) publishTerminalResponse(ctx context.Context, response agenti
 		return permanentTerminal("resolve terminal response subject: %w", err)
 	}
 	if err := c.natsClient.PublishToStreamWithMsgID(ctx, subject, data, msgID); err != nil {
-		return fmt.Errorf("publish terminal response: %w", err)
+		return &unknownTerminalPublicationError{err: fmt.Errorf("publish terminal response: %w", err)}
 	}
 	return nil
 }

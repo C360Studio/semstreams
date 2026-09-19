@@ -6,7 +6,7 @@ version: "3"
 
 tasks:
   default:
-    desc: "Agentic tier: Agent loop + tools (~30s)"
+    desc: "Agentic tier: Agent loop + tools + process replacement (~2m)"
     silent: false
     deps:
       - task: ":e2e:check-ports"

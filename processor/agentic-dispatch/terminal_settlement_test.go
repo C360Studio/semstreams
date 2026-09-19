@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/internal/agentterminal"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -231,6 +233,95 @@ func TestSettleAgentTerminalDispositionClasses(t *testing.T) {
 	})
 }
 
+func TestHandleTerminalDeliveryDecisionMatrix(t *testing.T) {
+	valid := &agentic.LoopCompletedEvent{LoopID: "loop-decision", TaskID: "task-decision", Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now()}
+
+	t.Run("immutable terminal poison", func(t *testing.T) {
+		c := terminalTestComponent(t)
+		decision, err := c.handleTerminalDelivery(t.Context(), []byte(`{"bad":true}`))
+		require.Equal(t, natsclient.DeliveryDecisionTerminate, decision)
+		require.True(t, isPermanentTerminal(err))
+	})
+
+	t.Run("proven pre-publish failure retries", func(t *testing.T) {
+		c := terminalTestComponent(t)
+		c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
+			return nil, transientTerminal("read unavailable")
+		}
+		decision, err := c.handleTerminalDelivery(t.Context(), completionPayload(t, valid))
+		require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
+		require.Error(t, err)
+	})
+
+	// Owner shutdown cancels work; the delivery belongs to the replacement
+	// process, so it NAKs rather than latching the lane.
+	t.Run("shutdown cancellation retries", func(t *testing.T) {
+		c := terminalTestComponent(t)
+		workCtx, cancel := context.WithCancel(t.Context())
+		c.loadPersistedLoopFn = func(ctx context.Context, _ string) (*agentic.LoopEntity, error) {
+			cancel()
+			return nil, ctx.Err()
+		}
+		decision, err := c.handleTerminalDelivery(workCtx, completionPayload(t, valid))
+		require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	// Ordering matters: a cancellation that interrupted the publish leaves the
+	// commit state unknown, so unknown publication must win over the
+	// cancellation arm.
+	t.Run("cancellation during publish still quarantines", func(t *testing.T) {
+		c := terminalTestComponent(t)
+		c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
+			return &agentic.LoopEntity{
+				ID: valid.LoopID, TaskID: valid.TaskID, State: agentic.LoopStateComplete,
+				MaxIterations: 3, ChannelType: "http", ChannelID: "id",
+			}, nil
+		}
+		c.sendTerminalResponseFn = func(context.Context, agentic.UserResponse, string) error {
+			return context.Canceled
+		}
+		decision, err := c.handleTerminalDelivery(t.Context(), completionPayload(t, valid))
+		require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
+		require.True(t, isUnknownTerminalPublication(err))
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	// #759 fail-closed unclassified errors: an untyped read failure carries no
+	// proof that no effect began, so the lane must not NAK it.
+	t.Run("unclassified failure quarantines", func(t *testing.T) {
+		c := terminalTestComponent(t)
+		c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
+			return nil, fmt.Errorf("load loop: %w", errors.New("read unavailable"))
+		}
+		decision, err := c.handleTerminalDelivery(t.Context(), completionPayload(t, valid))
+		require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
+		require.Error(t, err)
+		require.False(t, isTransientTerminal(err), "the unclassified arm must not be typed transient")
+	})
+
+	t.Run("unknown publish outcome quarantines", func(t *testing.T) {
+		c := terminalTestComponent(t)
+		c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
+			return &agentic.LoopEntity{ID: valid.LoopID, TaskID: valid.TaskID, State: agentic.LoopStateComplete, MaxIterations: 3, ChannelType: "http", ChannelID: "id"}, nil
+		}
+		c.sendTerminalResponseFn = func(context.Context, agentic.UserResponse, string) error { return errors.New("no puback") }
+		decision, err := c.handleTerminalDelivery(t.Context(), completionPayload(t, valid))
+		require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
+		require.True(t, isUnknownTerminalPublication(err))
+	})
+
+	t.Run("durable non-publish completion acks", func(t *testing.T) {
+		c := terminalTestComponent(t)
+		c.loadPersistedLoopFn = func(context.Context, string) (*agentic.LoopEntity, error) {
+			return &agentic.LoopEntity{ID: valid.LoopID, TaskID: valid.TaskID, State: agentic.LoopStateComplete, MaxIterations: 3}, nil
+		}
+		decision, err := c.handleTerminalDelivery(t.Context(), completionPayload(t, valid))
+		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+		require.NoError(t, err)
+	})
+}
+
 func TestSettleAgentTerminalRecordsExactlyOneFixedDisposition(t *testing.T) {
 	valid := &agentic.LoopCompletedEvent{
 		LoopID: "loop-m", TaskID: "task-m", Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now(),
@@ -324,4 +415,28 @@ func TestSettleAgentTerminalRecordsExactlyOneFixedDisposition(t *testing.T) {
 			requireOneTerminalReason(t, c, tt.want, before)
 		})
 	}
+}
+
+// spec: jetstream-consumer-policy / delivery work returns a validated decision/error tuple
+func TestTerminalDeliveryClassificationFailsClosedOnUnclassifiedError(t *testing.T) {
+	ordinary := fmt.Errorf("settle terminal: %w", errors.New("boom"))
+
+	require.Equal(t, natsclient.DeliveryDecisionQuarantine, classifyTerminalDeliveryDecision(ordinary),
+		"an ordinary wrapped error is unclassified and must fail closed rather than NAK")
+	require.Equal(t, natsclient.DeliveryDecisionAck, classifyTerminalDeliveryDecision(nil))
+	require.Equal(t, natsclient.DeliveryDecisionTerminate,
+		classifyTerminalDeliveryDecision(permanentTerminal("poison: %w", ordinary)))
+	require.Equal(t, natsclient.DeliveryDecisionQuarantine,
+		classifyTerminalDeliveryDecision(&unknownTerminalPublicationError{err: ordinary}))
+	require.Equal(t, natsclient.DeliveryDecisionRetry,
+		classifyTerminalDeliveryDecision(transientTerminal("read: %w", ordinary)))
+	require.Equal(t, natsclient.DeliveryDecisionRetry,
+		classifyTerminalDeliveryDecision(fmt.Errorf("read loop: %w", context.Canceled)),
+		"owner shutdown is transient: the delivery belongs to the replacement process")
+	require.Equal(t, natsclient.DeliveryDecisionRetry,
+		classifyTerminalDeliveryDecision(fmt.Errorf("read loop: %w", context.DeadlineExceeded)))
+	require.Equal(t, natsclient.DeliveryDecisionQuarantine,
+		classifyTerminalDeliveryDecision(&unknownTerminalPublicationError{
+			err: fmt.Errorf("publish terminal response: %w", context.Canceled),
+		}), "an unknown publish outcome outranks the cancellation arm")
 }

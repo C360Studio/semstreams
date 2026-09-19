@@ -1046,3 +1046,20 @@ A settled loop now releases its in-process footprint — conversation context, p
 maps. Long-running processes no longer retain every loop they have ever run. A late tool result, approval response,
 or model response arriving for an already-settled loop is now an expected, logged and counted drop rather than an
 error.
+
+## Semantic JetStream settlement (#759) — `ConsumeWithHeartbeat` is removed without a deprecation period
+
+The durable-consumer boundary is now a semantic decision rather than an ack/nak mechanic. An adopter that binds a
+JetStream consumer through `natsclient` validates a `HeartbeatDeliveryPolicy` from the same `StreamConsumerConfig`
+it acquires with, and calls `ConsumeDeliveryWithHeartbeat`, whose work returns
+`(natsclient.DeliveryDecision, error)` — ACK, Retry, Terminate, or Quarantine — instead of a bare `error` the
+framework has to interpret. `NewDurableHandler` and its `consume_durable*.go` surface are already gone in this
+range; `docs/operations/migration-restart-safe-nats-client.md` carries the complete composition, including the
+`DeliveryResult` inspection and the exact-handle stop that `OwnerStopRequired` demands.
+
+`ConsumeWithHeartbeat` is still exported at this tag but is **removed without a deprecation period**: it is deleted
+by the same PR that migrates its last in-tree caller (`agentic/agentrun/agentrun.go`, the #1249 layer). There is no
+`Deprecated:` window, no alias, and no compatibility shim to migrate against later — an adopter still calling it
+should move to the typed API now. `natsclient/consumer_policy_callsite_test.go` pins the exact remaining caller set
+and fails on any addition, so the set only shrinks. SemStreams owns no non-heartbeat exported settlement operation:
+a lane that does not want a heartbeat keeps owning its own `msg` settlement, as it does today.

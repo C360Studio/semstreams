@@ -61,11 +61,11 @@ services:
   # SemStreams Application with Agentic Components
   semstreams:
     # Per-target image tag — see docker/compose/e2e.yml for rationale.
-    image: c360studio/semstreams:e2e-production
+    image: c360studio/semstreams:e2e-process-barrier
     build:
       context: ../..
       dockerfile: docker/Dockerfile
-      target: production
+      target: e2e-process-barrier
     container_name: semstreams-agentic-app
     command: ["--config", "/app/configs/agentic.json"]
     depends_on:

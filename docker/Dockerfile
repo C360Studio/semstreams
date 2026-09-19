@@ -175,6 +175,27 @@ LABEL org.opencontainers.image.title="SemStreams" \
       org.opencontainers.image.licenses="MIT"
 
 # ============================================================================
+# Tagged production-root image for the agentic process-replacement E2E gate.
+# The default production target above remains an ordinary cmd/semstreams build;
+# only this later target imports and registers the test-only barrier executor.
+# ============================================================================
+FROM builder AS process-barrier-builder
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+    -tags=e2e_process_barrier \
+    -ldflags="-w -s \
+      -X main.Version=${VERSION} \
+      -X main.GitCommit=${COMMIT_SHA} \
+      -X main.BuildTime=${BUILD_DATE}" \
+    -o /build/semstreams-process-barrier-bin \
+    ./cmd/semstreams
+
+FROM production AS e2e-process-barrier
+
+COPY --from=process-barrier-builder --chown=semstreams:semstreams \
+    /build/semstreams-process-barrier-bin /app/semstreams
+
+# ============================================================================
 # Tagged product-assembly stage for the isolated slow-consumer E2E gate
 # ============================================================================
 FROM builder AS slow-consumer-builder

@@ -1,8 +1,7 @@
-# gated-dag-dispatch Specification
+# gated-dag-dispatch Delta
 
-## Purpose
-Current-truth for how the gated-DAG executor dispatches units: durable at-least-once over a JetStream stream (idempotent publish, claim rollback on publish failure, the durable-consumer + ack-after-marker contract, and the stranded-unit stall detector). ADR-070 (amends ADR-046).
-## Requirements
+## MODIFIED Requirements
+
 ### Requirement: Dispatch is durable at-least-once
 
 The gated-DAG executor MUST publish each unit dispatch to its JetStream stream through the synchronous,
@@ -67,27 +66,7 @@ while that durable claim remains.
 - **THEN** it surfaces the rollback failure and leaves the durable claim intact
 - **AND** the stranded-unit detector, not an unsafe automatic redispatch claim, provides visibility
 
-### Requirement: A stranded unit surfaces as a stall alert
-
-The executor MUST surface a unit that is claimed, non-terminal, non-dirtied, and
-older than a configured `stranded_after` threshold as a stall alert rather than
-suppressing it (as it does today, where any claimed non-terminal unit reads as
-healthy in-flight). This is alert-only — never auto-re-dispatch. A zero threshold
-disables the check (back-compat).
-
-#### Scenario: a long-stranded unit is alerted, not hidden
-
-- **GIVEN** a unit claimed longer ago than `stranded_after`, with no terminal
-  marker and not dirtied
-- **WHEN** the executor evaluates stall
-- **THEN** the unit is reported as stalled (not suppressed as in-flight)
-
-#### Scenario: a fresh claimed unit is still treated as in-flight
-
-- **GIVEN** a claimed non-terminal unit whose claim is newer than `stranded_after`
-- **WHEN** the executor evaluates stall
-- **THEN** the unit does not trigger a stall (a healthy in-flight unit is not
-  falsely alerted)
+## ADDED Requirements
 
 ### Requirement: Each adopter owns its durable definition of done and replay
 
@@ -114,3 +93,23 @@ Generic settlement, heartbeat, lease validation, and exact native consume-handle
 - **THEN** the adopter follows its reviewed already-complete decision without repeating the effect
 - **AND** the server dedupe window is not treated as the durable completion authority
 
+## REMOVED Requirements
+
+### Requirement: The framework provides a typed durable-consume primitive
+
+**Reason**: The gated-DAG domain capability cannot define one generic nil-to-Ack/error-to-Nak contract for unlike
+adopters. The permanent typed settlement policy, heartbeat, lease, and exact-handle mechanics are transport concerns
+owned by `jetstream-consumer-policy`.
+
+**Migration**: Each adopter defines its domain durable consequence and replay matrix, then composes
+`DeliveryWork`, `ValidateHeartbeatDeliveryPolicy`, `ConsumeDeliveryWithHeartbeat`, and an exact owner-held canonical
+consume handle as documented in `docs/operations/migration-gated-dag-semantic-settlement.md`.
+
+### Requirement: Heartbeat interval is enforced below AckWait
+
+**Reason**: Heartbeat validation remains required, but effective lease timing includes BackOff and belongs to the
+generic `jetstream-consumer-policy` capability rather than gated-DAG domain semantics.
+
+**Migration**: Validate heartbeat from the exact `StreamConsumerConfig` used for acquisition. The transport policy
+requires a positive heartbeat no greater than half the shortest positive BackOff entry, otherwise half positive
+AckWait, otherwise half the 30-second default.
