@@ -9,8 +9,8 @@ Dispatch SHALL classify `user.message`, `agent.created`, `agent.approval_pending
 committed. Business handlers SHALL receive only an immutable owner-supplied work view and SHALL return a typed
 semantic outcome. Native message and settlement methods SHALL NOT escape the owner.
 
-A `UserMessage` SHALL not be positively acknowledged until every required task, cancel signal, approval response,
-and user-response publication has synchronous JetStream PubAck. Terminal events SHALL retain their typed ancestry
+A `UserMessage` SHALL not be positively acknowledged until every required task, approval response, and
+user-response publication has synchronous JetStream PubAck. Terminal events SHALL retain their typed ancestry
 and deterministic response contract. No void, log-only, or core-NATS publication failure SHALL become ACK.
 
 The `user.message`, `agent.created`, and `agent.approval_pending` subscriptions SHALL invoke their typed business

@@ -114,6 +114,34 @@ is L2's (`af829616`) subject, not a gap here — L1 touches agentic-model only f
 delivery-owner health latch, and this change's `specs/agentic-model/` delta is scoped to exactly those two. Landing
 the request-lane half here would split one component's settlement across two changes.
 
+## Declared residual — the cancel signal's own publication is L2's
+
+This change's `agentic-dispatch` delta originally required PubAck for the **cancel signal** alongside the task,
+approval-response and user-response publications. It does not hold at this layer's head:
+`processor/agentic-dispatch/commands.go:179` publishes the signal with `c.natsClient.Publish` — core NATS, no
+JetStream context, no PubAck (`natsclient/client.go:858-864`) — and this change does not touch that file
+(`git diff --name-only origin/main..HEAD -- processor/agentic-dispatch/commands.go` is empty). The clause is
+struck rather than satisfied here, because spec follows code at each layer and an archived spec asserting a gate
+the tree does not have is worse than a recorded gap.
+
+Its home is **L2 `23f7eb08`** (`fix(agentic): require durable cancel settlement`), which changes exactly that line
+to `PublishToStream` and adds the publication-semantics tests. The delta clause moves with it.
+
+Two consequences worth naming so they are not rediscovered:
+
+- The sentence "No void, log-only, or core-NATS publication failure SHALL become ACK" stays, and `commands.go:179`
+  is the **only** core-NATS publication left in dispatch — every other required publication on these lanes already
+  goes through `PublishToStream`. L2 is what makes that sentence literally true of the whole component rather than
+  forward-looking. The clause is not weakened here; its one outstanding referent is named.
+- A cancel publish that fails today is not silent: the error returns at `commands.go:180` and
+  `component.go:963-974` converts it into a `ResponseTypeError` user response, which is itself PubAck-gated before
+  the `UserMessage` Acks. What L1 cannot promise is the *success* case — a core-NATS publish to a subject no
+  stream is capturing returns nil, the user is told "Cancel signal sent", and nothing was durably enqueued.
+
+The loop-side cancel clauses in `specs/agentic-loop/spec.md:10,32,109-113` are unaffected and stay: they govern how
+the loop **handles an admitted cancel signal** — its cancellation state, `COMPLETE_<loopID>`, and the terminal
+event's PubAck before source ACK — and claim nothing about how dispatch published it.
+
 ## Declared cost
 
 - The nine shipped `configs/**` fixtures are edited in lockstep with the new floor, and a test holds them to it.

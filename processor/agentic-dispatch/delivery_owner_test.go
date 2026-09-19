@@ -71,6 +71,59 @@ func TestDispatchProductionCallbacksDoNotAckFalseDone(t *testing.T) {
 		}
 	})
 
+	// The response-PubAck gate (component.go:1284 -> Ack :910) had no observer:
+	// the sendResponseFn seam short-circuits sendResponse before PublishToStream
+	// (:1270-1273), so a test using it cannot see the publish at all. The
+	// unknown-command path reaches the production sendResponse with the user
+	// response as its ONLY required publication, which isolates that gate: if
+	// the publish fails and the callback still Acks, the user was told nothing
+	// and the input is gone.
+	t.Run("failed user-response publication retries, never acks", func(t *testing.T) {
+		deps := componentDependenciesForCausalTest()
+		deps.PayloadRegistry = payloadbuiltins.NewTestRegistry(t)
+		discoverable, err := NewComponent([]byte(`{}`), deps)
+		require.NoError(t, err)
+		c := discoverable.(*Component)
+		c.modelRegistry = newTestRegistry()
+		require.Nil(t, c.sendResponseFn,
+			"this case must run the production sendResponse; the test seam would skip the publish it exists to observe")
+		c.waitForStreamInput = func(context.Context, string) error { return nil }
+		callbacks := make(map[string]func(context.Context, jetstream.Msg))
+		handles := make(map[string]*causalConsumeHandle)
+		c.consumeStream = func(_ context.Context, owner natsclient.PortConsumerContext, _ natsclient.StreamConsumerConfig, callback func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
+			handle := &causalConsumeHandle{closed: make(chan struct{}), closedCalls: make(chan struct{}, 1)}
+			callbacks[owner.Port] = callback
+			handles[owner.Port] = handle
+			return handle, nil
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		require.NoError(t, c.setupSubscriptions(ctx))
+
+		// An unrecognised command: handleCommand answers it with a typed error
+		// response (component.go:916-926) and publishes nothing else, so the
+		// failing publish below is the user response and only the user response.
+		msg := &dispatchSettlementMsg{data: mustMarshalDispatchSettlementPayload(t, &agentic.UserMessage{
+			MessageID: "message-response-publish-fails", ChannelType: "cli", ChannelID: "channel-1", UserID: "user-1",
+			Content: "/not-a-command", Timestamp: time.Now().UTC(),
+		})}
+		callbacks["user.message"](ctx, msg)
+
+		require.Zero(t, msg.acks.Load(),
+			"a user response that did not reach the stream must not settle its source as done")
+		require.Equal(t, int32(1), msg.naks.Load(),
+			"a failed required publication is transient: Retry, per the matrix that reserves Quarantine for unknown durable state")
+		require.Zero(t, msg.terms.Load())
+		require.NotContains(t, c.Health().LastError, "unknown durable state",
+			"a response publish failure is not an owner-fatal latch")
+		for port, handle := range handles {
+			require.Zero(t, handle.drains.Load(), "a retryable publish failure must not drain owner %s", port)
+		}
+		cancel()
+		for _, binding := range c.consumers {
+			<-binding.observerDone
+		}
+	})
+
 	t.Run("unaccepted pending projection retries", func(t *testing.T) {
 		deps := componentDependenciesForCausalTest()
 		deps.PayloadRegistry = payloadbuiltins.NewTestRegistry(t)

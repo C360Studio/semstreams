@@ -117,6 +117,22 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 - [x] 8.2 Run `task e2e:agentic` on the landing head and record every stage's pass/fail verbatim in the PR body,
       including the process-replacement recovery stages this layer does not implement.
 
+## 8b. Durability judge round (2026-09-19)
+
+- [x] 8b.1 Strike **cancel signal** from the `agentic-dispatch` delta's PubAck clause. The clause required
+      synchronous JetStream PubAck for the cancel signal, but `processor/agentic-dispatch/commands.go:179`
+      publishes it with core-NATS `c.natsClient.Publish` (`natsclient/client.go:858-864`, no JetStream context,
+      no PubAck), and this change does not touch that file. Its home is L2 `23f7eb08`, which changes exactly that
+      line to `PublishToStream`. Residual recorded in `design.md`; spec follows code at each layer. The
+      loop-lane cancel clauses (`specs/agentic-loop/spec.md:10,32,109-113`) are unaffected — they govern the
+      loop's handling of an **admitted** signal, not dispatch's publication of it
+- [x] 8b.2 `TestDispatchProductionCallbacksDoNotAckFalseDone/failed user-response publication retries, never acks`
+      — the response-PubAck gate (`component.go:1284` → Ack `:910`) had no observer, because the `sendResponseFn`
+      seam short-circuits `sendResponse` before the publish. The new case drives the production `sendResponse`
+      through the unknown-command path, where the user response is the only required publication, and asserts
+      Retry with zero Acks. Mutation: returning Ack from the non-fatal arm of `handleUserMessage` makes exactly
+      this case red
+
 ## 9. Landing
 
 - [ ] 9.1 Complete SemStreams implementation review and resolve findings.
