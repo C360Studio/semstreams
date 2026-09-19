@@ -57,6 +57,27 @@ so returning `err.Error()` from `POST /message` and `GET /loops` shipped
 `auto_continue` defaults to true here, a dispatch whose view is still warming reaches it on the *default*
 configuration. Internal type and method names are not a client contract; they moved to the log line.
 
+## Why the MODIFIED block reads ahead of `openspec/specs/`
+
+The `## MODIFIED Requirements` block for "Every dispatch durable input settles through its owner" restates **L2's
+delta text** (`openspec/changes/stable-request-identity/specs/agentic-dispatch/spec.md`), not the text currently in
+`openspec/specs/agentic-dispatch/spec.md`. This change archives after #1328, so L2's block is the spec that will be
+current when this one applies; restating main's would silently revert L2's four edits. An archiver reading this
+ahead of L2's merge should expect the two clauses that differ from main — the cancel signal in the PubAck list and
+the response-identity disposition on the invalid-input lane — to already be there.
+
+Two scenarios in that requirement are modified here because this change makes their stated reasons false, not
+because their outcomes move. Both outcomes are carried unchanged:
+
+- *Task publication succeeds but user response fails* quarantines for one surviving effect, the submission
+  counter, rather than two: retiring the tracker removes the tracked `LoopInfo` being replaced under a loop that
+  had advanced.
+- *A cancel command whose target was resolved rather than named* quarantines because the message does not carry
+  the identity the delivery acted on. It no longer quarantines because the resolution would *fall through to the
+  user's next live loop*: `activeLoop` matches an exact user/channel route and refuses ambiguity, with no
+  user-scoped fallback, so the hazard L1 named cannot occur. The narrower obligation is stated so a later widening
+  back to a user-scoped fallback fails the spec and not just a test.
+
 ## Declared residuals
 
 - **`loopLookupConflict` and `codeLoopOwnerConflict` are unreachable.** `lookupLoop` has exactly three producers
@@ -77,8 +98,22 @@ configuration. Internal type and method names are not a client contract; they mo
   defence rather than deleted, because the alternative is printing an empty field if a future caller builds
   `loopFacts` without validating first. Noted here so it is a recorded vestige, not an unexplained branch.
 
+- **Whether one surviving effect still warrants Quarantine is not decided here.** L1 chose Quarantine for the
+  "task published, user response failed" arm when a redelivery would repeat two effects: the submission counter and
+  the tracked `LoopInfo` being replaced under a loop that had advanced. On this head the second is gone — loop state
+  is durable and its write is idempotent — so a redelivery repeats only `tasks_submitted_total`. The classification
+  is carried unchanged rather than relaxed, because relaxing an owner-stop to a retry is a durability decision and
+  this change's subject is the authority for loop identity, not the settlement grade of the dispatch response lane.
+  `processor/agentic-dispatch/component.go`'s post-PubAck comment points here. A change that owns that arm should
+  decide it; a rebase must not.
+
 ## Declared cost
 
-The stack's L1 (#1327) is receiving review fixes after this branch was cut. This layer was built on the L1 head
-`0053183d` deliberately, so a rebase of the whole stack onto the reviewed L1 head is owed before merge. Nothing here
-depends on the fixes' shape; the rebase is bookkeeping, not redesign.
+This layer was cut on the L1 head `0053183d`, before L1 (#1327) and L2 (#1328) took their review rounds. That debt
+is now paid: this branch is rebased onto the reviewed L2 head, which itself sits on the L1 squash on main. Two
+carried premises were falsified by the layers below and are corrected in place rather than left standing — L1's
+two-conjunct justification for the Quarantine arm (above), and L1's "falls through to the user's next live loop"
+reason for quarantining a resolved-target cancel. In both cases the outcome is unchanged and only the stated reason
+moves; the residual above records the one that is still open.
+
+PR #1338 stays based on `claude/gh1328-stable-identity` until L2 merges to main.

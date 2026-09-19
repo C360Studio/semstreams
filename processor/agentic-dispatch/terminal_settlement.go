@@ -197,7 +197,7 @@ func validatePersistedLoop(bucket, loopID string, persisted *agentic.LoopEntity)
 	// writers put a record on this bare key, and the safety argument is the
 	// constructor they share, not the component they live in:
 	//
-	//   - agentic-loop's persistLoopState (processor/agentic-loop/component.go:2358)
+	//   - agentic-loop's persistLoopState (processor/agentic-loop/component.go:2389)
 	//   - graphresearch's CreateLoopEntity (frameworkcapabilities/graphresearch/
 	//     register_tool.go:92), called from executor.go:267 for a
 	//     research-pipeline loop

@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
@@ -33,12 +32,14 @@ import (
 // executed twice. Stable task identity removes exactly that effect: the
 // redelivery reads its own committed task back and republishes it under the
 // same TaskID and LoopID, which is what downstream deduplication keys on.
-// Quarantine still stands, on the effects identity does not cover — the
-// redelivery replaces the tracked LoopInfo, resetting a loop that has since
-// advanced, and counts the submission a second time. The subtests are the pair:
-// the first delivery quarantines with exactly one task on the stream, and the
-// counterfactual drives the redelivery Retry would have asked for and observes
-// both halves, the identity that is recovered and the tracking that is not.
+// Quarantine still stands, on the effect identity does not cover. Under #1328
+// that was two effects, the tracked LoopInfo being replaced and the submission
+// being counted again; #1329 retires the in-process tracker, so on this head
+// only the counter survives — `tasks_submitted_total` moves twice for one
+// submission. The subtests are the pair: the first delivery quarantines with
+// exactly one task on the stream, and the counterfactual drives the redelivery
+// Retry would have asked for and observes what it costs — the identity that is
+// recovered, and the count that is not.
 //
 // spec: agentic-dispatch / Every dispatch durable input settles through its owner
 func TestIntegrationPublishedTaskWithFailedResponseQuarantines(t *testing.T) {
@@ -54,7 +55,6 @@ func TestIntegrationPublishedTaskWithFailedResponseQuarantines(t *testing.T) {
 			config:        DefaultConfig(),
 			decoder:       message.NewDecoder(reg),
 			logger:        logger,
-			loopTracker:   NewLoopTrackerWithLogger(logger),
 			metrics:       getMetrics(metric.NewMetricsRegistry()),
 			modelRegistry: newTestRegistry(),
 			natsClient:    tc.Client,
@@ -107,20 +107,13 @@ func TestIntegrationPublishedTaskWithFailedResponseQuarantines(t *testing.T) {
 		require.Len(t, tasks, 1, "no second task is published for one user message")
 	})
 
-	t.Run("the counterfactual: a redelivery recovers the identity but re-enters the tracking", func(t *testing.T) {
+	t.Run("the counterfactual: a redelivery recovers the identity and re-counts the submission", func(t *testing.T) {
 		c, tc := newComponent(t)
 		data := userMessageBytes(t, "msg-1")
 
 		first, err := c.handleUserMessage(t.Context(), data)
 		require.Equal(t, natsclient.DeliveryDecisionQuarantine, first)
 		require.Error(t, err)
-
-		// The loop advances, as it would while an unacknowledged delivery
-		// waited to be redelivered. Without this the reset below is invisible.
-		tracked := c.loopTracker.GetAllLoops()
-		require.Len(t, tracked, 1)
-		loopID := tracked[0].LoopID
-		c.loopTracker.UpdateState(loopID, "exploring")
 
 		// Exactly what Retry would have caused: the same bytes again.
 		second, err := c.handleUserMessage(t.Context(), data)
@@ -134,9 +127,10 @@ func TestIntegrationPublishedTaskWithFailedResponseQuarantines(t *testing.T) {
 		require.Equal(t, tasks[0].LoopID, tasks[1].LoopID,
 			"the committed LoopID is recovered, so no second loop is created")
 
-		// The effects identity does not cover, and the reason Quarantine stands.
-		require.Equal(t, "pending", c.loopTracker.Get(loopID).State,
-			"the redelivery replaced the tracked LoopInfo, resetting a loop that had advanced")
+		// The effect identity does not cover, and the reason Quarantine stands
+		// on this head. #1328's other effect — the tracked LoopInfo being
+		// replaced under a loop that had advanced — cannot be asserted here
+		// because #1329 retires the tracker that held it.
 		assert.Equal(t, float64(2), testutil.ToFloat64(c.metrics.tasksSubmitted),
 			"the redelivery counted one submission twice")
 	})
@@ -174,7 +168,6 @@ func TestIntegrationPublishedCancelWithFailedResponseRetries(t *testing.T) {
 			config:        DefaultConfig(),
 			decoder:       message.NewDecoder(reg),
 			logger:        logger,
-			loopTracker:   NewLoopTrackerWithLogger(logger),
 			metrics:       getMetrics(metric.NewMetricsRegistry()),
 			modelRegistry: newTestRegistry(),
 			natsClient:    tc.Client,
@@ -182,15 +175,10 @@ func TestIntegrationPublishedCancelWithFailedResponseRetries(t *testing.T) {
 		}
 		c.config.Permissions.CancelOwn = true
 		c.registerBuiltinCommands()
-		c.loopTracker.Track(&LoopInfo{
-			LoopID:      cancelLoopID,
-			TaskID:      "task-cancel",
-			UserID:      "operator-1",
-			ChannelType: "http",
-			ChannelID:   "session-cancel",
-			State:       "executing",
-			CreatedAt:   time.Now(),
-		})
+		// The command names its loop, so the gate reads that record and nothing
+		// resolves a target: each subtest supplies the record it needs through
+		// persistLoopState. Under #1329 there is no second, process-local
+		// source to seed.
 		return c, tc
 	}
 	persistLoopState := func(c *Component, state agentic.LoopState) {
@@ -262,8 +250,8 @@ func TestIntegrationPublishedCancelWithFailedResponseRetries(t *testing.T) {
 		require.Error(t, err)
 
 		// What the first signal causes: the loop cancels and records it. The
-		// redelivery Retry asked for now meets a terminal loop.
-		c.loopTracker.Remove(cancelLoopID)
+		// redelivery Retry asked for now meets a terminal loop — in the record,
+		// which under #1329 is the only place it could be.
 		persistLoopState(c, agentic.LoopStateCancelled)
 
 		second, err := c.handleUserMessage(t.Context(), cancelCommandBytes(t))
@@ -292,19 +280,29 @@ func TestIntegrationHTTPSubmissionResponseFailureNamesItsOwnLane(t *testing.T) {
 		config:        DefaultConfig(),
 		decoder:       message.NewDecoder(payloadregistry.NewWithSubset(t, agentic.RegisterPayloads)),
 		logger:        logger,
-		loopTracker:   NewLoopTrackerWithLogger(logger),
 		metrics:       getMetrics(metric.NewMetricsRegistry()),
 		modelRegistry: newTestRegistry(),
 		natsClient:    tc.Client,
 	}
 
-	resp := c.processTaskSubmissionSync(t.Context(), agentic.UserMessage{
+	// A submission with auto-continue on resolves a continuation through
+	// durable authority before it publishes (#1329), so the lane needs a live
+	// projection even while it holds no loops: without one the submission is
+	// refused for an unreadable authority and never reaches the response
+	// publication this test is about.
+	seedCurrentLoops(t, c)
+
+	// The refusal is returned separately under #1329; this lane's subject is
+	// the accepted submission whose async response publication fails, so a
+	// refusal here would mean the fixture, not the lane, is what broke.
+	resp, err := c.processTaskSubmissionSync(t.Context(), agentic.UserMessage{
 		MessageID:   "msg-http-submission",
 		ChannelType: "http",
 		ChannelID:   "session-http",
 		UserID:      "operator-1",
 		Content:     "run the analysis",
 	})
+	require.NoError(t, err)
 
 	require.Equal(t, agentic.ResponseTypeStatus, resp.Type,
 		"the submission was accepted and its synchronous answer must stand")
@@ -315,12 +313,23 @@ func TestIntegrationHTTPSubmissionResponseFailureNamesItsOwnLane(t *testing.T) {
 }
 
 // Bare `/cancel` is the supported form whose target the message does NOT
-// carry: handleCommand resolves it from the tracker (component.go:941-951),
-// and that resolution is not stable across a redelivery. GetActiveLoop prefers
-// the channel's loop only while it is non-terminal, then falls back to the
-// user's most recent one (loop_tracker.go:204-226) — so the effect the first
-// delivery had, loop A now terminal, is exactly what makes the redelivery
-// resolve to a different live loop B and cancel it.
+// carry: handleCommand resolves it from durable loop authority, and that
+// resolution is not stable across a redelivery, because this delivery's own
+// effect changes what the next read returns. Loop A is terminal once the
+// signal lands, so the redelivery resolves against a changed world rather than
+// against the message.
+//
+// #1329 narrows the hazard without removing the reason. Under the tracker,
+// GetActiveLoop fell back to the user's most recent loop across channels, so
+// the redelivery could cancel loop B — a loop in another channel the user
+// never named. activeLoop (http_activity.go:311-328) has no user fallback: it
+// requires an exact user/channel-type/channel match and refuses ambiguity, so
+// B is now unreachable from session-a and the second loop cannot be cancelled
+// by accident. What survives is the first half: the message does not carry the
+// identity this delivery acted on, so a redelivery resolves afresh rather than
+// repeating what was done. B stays in the fixture because it is the loop that
+// must NOT be signalled, and the assertion that it never is remains the one
+// that would catch a widening back to a user-scoped fallback.
 //
 // The redelivery here is conditional on the decision on purpose: that is what
 // production does. A quarantined delivery is never redelivered — the lane
@@ -345,7 +354,6 @@ func TestIntegrationBareCancelWithFailedResponseQuarantines(t *testing.T) {
 		config:        DefaultConfig(),
 		decoder:       message.NewDecoder(payloadregistry.NewWithSubset(t, agentic.RegisterPayloads)),
 		logger:        logger,
-		loopTracker:   NewLoopTrackerWithLogger(logger),
 		metrics:       getMetrics(metric.NewMetricsRegistry()),
 		modelRegistry: newTestRegistry(),
 		natsClient:    tc.Client,
@@ -357,16 +365,17 @@ func TestIntegrationBareCancelWithFailedResponseQuarantines(t *testing.T) {
 	require.True(t, c.config.AutoContinue, "the bare form needs the default auto_continue")
 	c.registerBuiltinCommands()
 
-	// A is this channel's loop; B is the same user's newer loop elsewhere, so
-	// the tracker's user fallback points at B from the start.
-	track := func(loopID, channelID string) {
-		c.loopTracker.Track(&LoopInfo{
-			LoopID: loopID, TaskID: "task-" + loopID, UserID: "operator-1",
-			ChannelType: "http", ChannelID: channelID, State: "executing", CreatedAt: time.Now(),
+	// A is this channel's loop; B is the same user's loop elsewhere — the one a
+	// user-scoped fallback would reach and this resolution must not.
+	seedCurrentLoops(t, c,
+		&agentic.LoopEntity{
+			ID: loopA, TaskID: "task-" + loopA, UserID: "operator-1", ChannelType: "http",
+			ChannelID: "session-a", State: agentic.LoopStateExecuting, MaxIterations: 5,
+		},
+		&agentic.LoopEntity{
+			ID: loopB, TaskID: "task-" + loopB, UserID: "operator-1", ChannelType: "http",
+			ChannelID: "session-b", State: agentic.LoopStateExecuting, MaxIterations: 5,
 		})
-	}
-	track(loopA, "session-a")
-	track(loopB, "session-b")
 	persisted := map[string]*agentic.LoopEntity{
 		loopA: {
 			ID: loopA, UserID: "operator-1", ChannelType: "http", ChannelID: "session-a",
@@ -422,7 +431,6 @@ func TestIntegrationBareCancelWithFailedResponseQuarantines(t *testing.T) {
 	// Production redelivers a Retry and never redelivers a Quarantine.
 	if decision == natsclient.DeliveryDecisionRetry {
 		// What the first delivery's effect does to the next resolution.
-		c.loopTracker.UpdateState(loopA, "cancelled")
 		persisted[loopA].State = agentic.LoopStateCancelled
 		_, err = c.handleUserMessage(t.Context(), bareCancel)
 		require.Error(t, err)

@@ -16,6 +16,7 @@ import (
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
+	"github.com/c360studio/semstreams/pkg/graphview"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -363,11 +364,12 @@ func TestEffectFreeCommandWithFailedResponseRetries(t *testing.T) {
 		require.NoError(t, c.setupSubscriptions(ctx))
 		return c, callbacks["user.message"], handles, ctx, cancel
 	}
-	trackLoop := func(c *Component, loopID string) {
-		c.loopTracker.Track(&LoopInfo{
-			LoopID: loopID, TaskID: "task-" + loopID, UserID: "user-1",
-			ChannelType: "cli", ChannelID: "channel-1", State: "executing", CreatedAt: time.Now(),
-		})
+	currentLoop := func(loopID string) *agentic.LoopEntity {
+		return &agentic.LoopEntity{
+			ID: loopID, TaskID: "task-" + loopID, UserID: "user-1",
+			ChannelType: "cli", ChannelID: "channel-1",
+			State: agentic.LoopStateExecuting, MaxIterations: 5,
+		}
 	}
 	command := func(t *testing.T, id, content string) *dispatchSettlementMsg {
 		t.Helper()
@@ -396,14 +398,19 @@ func TestEffectFreeCommandWithFailedResponseRetries(t *testing.T) {
 		}
 	}
 
-	t.Run("a read-only command whose target came from the tracker", func(t *testing.T) {
+	t.Run("a read-only command whose target was resolved, not named", func(t *testing.T) {
 		c, deliver, handles, ctx, cancel := newLane(t)
 		defer cancel()
-		// A live loop in this channel, so handleCommand's tracker branch
+		// A current loop on this route, so handleCommand's auto-continue branch
 		// resolves a target for the argument-less /help — the exact condition
-		// that used to be sufficient to quarantine.
-		trackLoop(c, activeLoopID)
-		require.Equal(t, activeLoopID, c.loopTracker.GetActiveLoop("user-1", "channel-1"))
+		// that used to be sufficient to quarantine. The source moved from the
+		// process-local tracker to durable authority (#1329); the provenance
+		// fact the quarantine arm reads did not.
+		seedCurrentLoops(t, c, currentLoop(activeLoopID))
+		resolved, err := c.activeLoop(ctx, agentic.UserMessage{
+			UserID: "user-1", ChannelType: "cli", ChannelID: "channel-1"})
+		require.NoError(t, err)
+		require.Equal(t, activeLoopID, resolved)
 
 		msg := command(t, "message-help", "/help")
 		deliver(ctx, msg)
@@ -420,12 +427,19 @@ func TestEffectFreeCommandWithFailedResponseRetries(t *testing.T) {
 	t.Run("a bare cancel whose loop has already settled", func(t *testing.T) {
 		c, deliver, handles, ctx, cancel := newLane(t)
 		defer cancel()
-		// Tracked as live, settled in the record: the gate reports terminal
-		// from either source, so handleCancelCommand answers "already settled"
-		// and returns BEFORE the publish at commands.go:185.
-		trackLoop(c, settledLoopID)
-		require.Equal(t, settledLoopID, c.loopTracker.GetActiveLoop("user-1", "channel-1"),
-			"the target must be tracker-resolved, or this case cannot discriminate")
+		// Current in the shared projection, settled in the exact record: the
+		// gate reads the record and answers "already settled", so
+		// handleCancelCommand returns BEFORE the publish at commands.go:179.
+		// The two reads are the view and the exact Get — under #1329 that skew
+		// is the projection lagging its own bucket, not a second source of
+		// truth, and it is what lets this case resolve a target and still
+		// publish nothing.
+		seedCurrentLoops(t, c, currentLoop(settledLoopID))
+		resolved, err := c.activeLoop(ctx, agentic.UserMessage{
+			UserID: "user-1", ChannelType: "cli", ChannelID: "channel-1"})
+		require.NoError(t, err)
+		require.Equal(t, settledLoopID, resolved,
+			"the target must be resolved rather than named, or this case cannot discriminate")
 		withPersistedLoops(c, map[string]*agentic.LoopEntity{settledLoopID: {
 			ID: settledLoopID, UserID: "user-1", ChannelType: "cli", ChannelID: "channel-1",
 			State: agentic.LoopStateComplete, MaxIterations: 5,
@@ -444,6 +458,7 @@ func TestEffectFreeCommandWithFailedResponseRetries(t *testing.T) {
 	t.Run("a bare cancel with no loop to resolve", func(t *testing.T) {
 		c, deliver, handles, ctx, cancel := newLane(t)
 		defer cancel()
+		seedCurrentLoops(t, c)
 		withPersistedLoops(c, nil)
 
 		msg := command(t, "message-bare-cancel-none", "/cancel")
@@ -451,4 +466,39 @@ func TestEffectFreeCommandWithFailedResponseRetries(t *testing.T) {
 
 		requireRetriedWithLaneIntact(t, c, msg, handles)
 	})
+}
+
+// seedCurrentLoops attaches the shared activity view to a component built for
+// the production callbacks and seeds it with current loop records. Under #1329
+// this is where an argument-less command's target comes from: handleCommand
+// resolves it through activeLoop, which reads this projection, so a lane test
+// that needs a resolvable target supplies one here rather than in a
+// process-local tracker. It seeds the view only — the exact-read seam is the
+// caller's, because the cases that matter here are the ones where the two
+// disagree.
+func seedCurrentLoops(t *testing.T, c *Component, records ...*agentic.LoopEntity) {
+	t.Helper()
+	source := newFakeActivitySource()
+	c.activityViewSource = source
+	c.activityViewOpts = []graphview.Option{graphview.WithTickInterval(2 * time.Millisecond)}
+	activityCtx, cancel := context.WithCancel(t.Context())
+	c.activityCommands = make(chan activityViewCommand)
+	c.activityDone = make(chan struct{})
+	c.activityCancel = cancel
+	go c.runActivityViewControl(activityCtx, c.activityCommands, c.activityDone)
+	t.Cleanup(c.stopActivityView)
+
+	ctx, cancelWait := context.WithTimeout(t.Context(), activityTestWait)
+	defer cancelWait()
+	view, err := c.ensureActivityView(ctx)
+	require.NoError(t, err)
+	watcher := source.waitWatcher(t, 1)
+	for i, record := range records {
+		require.NoError(t, record.Validate())
+		data, err := json.Marshal(record)
+		require.NoError(t, err)
+		watcher.updates <- putEntry(record.ID, data, uint64(i+1))
+	}
+	watcher.updates <- nil
+	require.NoError(t, view.WaitCaughtUp(ctx))
 }

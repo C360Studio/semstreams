@@ -1143,22 +1143,22 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		Content:     fmt.Sprintf("Task submitted. Loop: %s", loopID),
 		Timestamp:   time.Now(),
 	}); err != nil {
-		// The task already has its PubAck (:1192) and the loop is tracked, so
-		// the delivery that carried this submission can no longer be replayed
-		// free of effect. Identity is no longer the reason it cannot: stable
-		// task identity (#1328) means a redelivery reads its own committed task
-		// back through findRetainedDispatchTask and republishes the same TaskID
-		// and LoopID, which is what downstream deduplication keys on. What a
-		// redelivery does repeat is the tracking at :1178 — Track replaces the
-		// whole LoopInfo, so a loop that has since advanced is reset to
-		// "pending" under a new CreatedAt — and the two started records at :1190
-		// and :1198: tasks_submitted_total counts one submission twice, and
-		// active_loops is a GAUGE, so a second Inc against one later Dec leaks
-		// it upward for the process's life. Partial effect, unknown commit: the
-		// lane quarantines and an operator sees a stopped lane naming the cause.
-		// Relaxing this to Retry needs that re-entry made idempotent, not more
-		// identity; openspec/changes/stable-request-identity/design.md records
-		// why this layer does not take it.
+		// The task already has its PubAck (:1112), so the delivery that carried
+		// this submission can no longer be replayed free of effect. Two of the
+		// three effects #1328 named here are gone: identity, because a
+		// redelivery reads its own committed task back through
+		// findRetainedDispatchTask and republishes the same TaskID and LoopID,
+		// which is what downstream deduplication keys on; and the tracked
+		// LoopInfo being replaced under a loop that had advanced, because
+		// #1329 retires the in-process tracker and loop state is durable. What
+		// survives is the counter at :1118 — tasks_submitted_total moves twice
+		// for one submission. Partial effect, unknown commit: the lane
+		// quarantines and an operator sees a stopped lane naming the cause.
+		// The classification is carried, not re-derived: whether one counter is
+		// still reason enough now that the durable state is idempotent is a
+		// question for a change that owns this arm, and
+		// openspec/changes/durable-loop-authority/design.md records it as a
+		// residual rather than deciding it in a rebase.
 		return errs.WrapFatal(err, "Component", "handleTaskSubmission",
 			fmt.Sprintf("task %s for loop %s is published but its acknowledgement is not", taskID, loopID))
 	}
