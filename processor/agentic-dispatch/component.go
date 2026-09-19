@@ -973,6 +973,16 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 		})
 	}
 
+	// An ordinary error, so the delivery retries — deliberately, not by
+	// default. This is also a post-effect response failure for the one command
+	// that has an effect: /cancel publishes its signal at commands.go:179
+	// before this response is built. It is not the task lane's case
+	// (:1145-1168) because the redelivery is effect-free — the gate re-reads
+	// the loop, finds it terminal once the cancel took effect, and answers
+	// "already settled" without publishing anything (commands.go:136-148) —
+	// and because the user has been told nothing at all, so the redelivery is
+	// what gets them their answer. A signal that races the loop's own
+	// settlement is dropped effect-free by the loop's cancel owner.
 	if err := c.sendResponse(ctx, resp); err != nil {
 		return err
 	}

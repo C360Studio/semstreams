@@ -10,7 +10,9 @@ committed. Business handlers SHALL receive only an immutable owner-supplied work
 semantic outcome. Native message and settlement methods SHALL NOT escape the owner.
 
 A `UserMessage` SHALL not be positively acknowledged until every required task, approval response, and
-user-response publication has synchronous JetStream PubAck. Terminal events SHALL retain their typed ancestry
+user-response publication has synchronous JetStream PubAck. Whether an unacknowledged publication retries or
+quarantines SHALL be decided by whether its redelivery is effect-free, and that decision SHALL be recorded at the
+call site rather than taken by default. Terminal events SHALL retain their typed ancestry
 and deterministic response contract. No void, log-only, or core-NATS publication failure SHALL become ACK.
 
 The `user.message`, `agent.created`, and `agent.approval_pending` subscriptions SHALL invoke their typed business
@@ -35,6 +37,15 @@ family, public state, durable state, or communication path.
 - **THEN** the delivery quarantines rather than retrying the UserMessage
 - **AND** no second task is published, because a redelivery would mint a new task identity that nothing downstream
   could deduplicate
+
+#### Scenario: A cancel command's signal is published but its response is not
+
+- **WHEN** a `/cancel` command publishes its signal and the required user response does not receive PubAck
+- **THEN** the delivery retries rather than quarantining, and the classification is recorded at the call site so
+  the two post-effect response failures in this component are told apart deliberately
+- **AND** Retry is conditioned on the redelivery being effect-free: the loop gate reports the settled loop
+  terminal and answers without publishing a second signal, and a signal that races the loop's own settlement is
+  dropped effect-free by the loop's cancel owner
 
 #### Scenario: Invalid user input receives its negative consequence
 

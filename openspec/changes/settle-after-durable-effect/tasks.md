@@ -145,9 +145,11 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       built its completion record, and the redelivered response meets the terminal guard
       (`handlers.go:1179-1185`) and returns an empty result, so the second attempt writes the loop key, publishes
       nothing and ACKs. The phase now wraps `errs.WrapFatal` like the publish phase. Observed by
-      `TestResponseAndToolResultPersistenceFailureCannotAck`, whose counterfactual drives the redelivery against a
-      healed bucket and asserts no `COMPLETE_` record is written. Mutation: return the stamp error unwrapped →
-      both subtests red
+      `TestResponseAndToolResultPersistenceFailureCannotAck`. Production no longer reaches that guard at all: the
+      first delivery quarantines, the lane latches, and `consumeAdmittedDelivery:80-82` refuses the redelivery —
+      which the test asserts before it drives the counterfactual (same bytes, healed bucket, an admission that had
+      not latched) and shows the loop key written with no `COMPLETE_` record. Mutation: return the stamp error
+      unwrapped → both subtests red
 - [x] 8c.2 (R1 sibling) `handleLoopFailure` was void and `publishFailureEvents` logged its failed PubAcks, so
       `handleResponseMessage` returned nil for a business failure nothing downstream could observe.
       `persistFailureState` was still log-only while its two siblings returned errors. All three report now; the
@@ -177,7 +179,8 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 - [x] 8c.7 (R5) `model_responses_dropped_total` and `tool_results_dropped_total` counted every retry of a
       live-elsewhere or unreadable record as a drop, against this change's own delta. The counters keep the stale
       case and lose the retry; both help texts now say what `signals_dropped_total` already said.
-      `TestRetriedInputsAreNotCountedAsDrops`. Mutation: restore either increment → three subtests red
+      `TestRetriedInputsAreNotCountedAsDrops`. Mutation: restore the response increment → two subtests red,
+      restore the tool-result one → one; all three only when both are restored
 - [x] 8c.8 (R6) Spec follows code: the governance delta said Retry where `component.go:444-447` quarantines; the
       dispatch delta said one cause across all owners where `component.go:321-339` keeps three latches,
       concatenates causes and preserves the terminal-only status; the dispatch delta's task/response scenario said
@@ -189,7 +192,38 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       change — `HandleTask` dedups a redelivered task against the loop its first delivery created
       (`handlers.go` `HasActiveLoopForTask`) and `handleTaskMessage:1320-1327` then acknowledges without
       publishing — so it needs resumable intake, which `rememberPendingTaskResult` already prototypes for the
-      transient-lineage case. Needs an issue and a layer
+      transient-lineage case. Filed as **#1345** (beta.163, `class:swallowed-degrade`, placement candidate L4) and
+      cited from the loop delta's exemption requirement and `design.md`; the layer placement is the owner's
+
+## 8d. Cross-agent implementation round 4 (2026-09-19)
+
+- [x] 8d.1 (B2, blocking) The model-response lane's `handleLoopFailure` wiring (`component.go:1519-1525`) had no
+      test of its own: reverting it to `_ = c.handleLoopFailure(...); return nil` left the whole package green
+      under both tag sets, because the only kill ran through `handleSpawnIdentityFailure` (the task lane) and the
+      two response-lane callers in `terminal_release_test.go:420,478` discard the return by construction.
+      `TestResponseHandlerFailureSettlesOnTheDurableRecord` drives the production callback through
+      `consumeAdmittedDelivery` on `agent.response`. Mutation: the same revert → the quarantine subtest red
+      (`expected 0x4, actual 0x1`)
+- [x] 8d.2 (B1, blocking) R2's Quarantine had no declared residual. `design.md` now names L2 `15825335`
+      (`fix(agentic-dispatch): recover task identity on redelivery`) as the home of identity-preserving replay and
+      says the relaxation to Retry is a decision to be taken there, in the same shape as the cancel-signal
+      residual
+- [x] 8d.3 (MEDIUM-1) `component.go:976` — the command lane's post-effect response failure — was Retry by
+      default. It stays Retry by decision: the redelivery is effect-free, because the gate finds the loop terminal
+      and answers without publishing a second signal (`commands.go:136-148`), and a signal that races the loop's
+      own settlement is dropped effect-free by the loop's cancel owner. Named in `design.md` D7 and in the
+      dispatch delta; `TestIntegrationPublishedCancelWithFailedResponseRetries` holds the Retry and the
+      effect-free redelivery
+- [x] 8d.4 (MEDIUM-2) The loop delta's heading claimed "All six loop input classes" two requirements above its own
+      task-intake exemption. Renamed to *Loop input classes settle after owner-specific durable done* across the
+      delta and its 16 citations
+- [x] 8d.5 (MEDIUM-3) Two of the three `response_publish_failures_total{lane}` label values were unobserved.
+      `TestResponsePublishFailureIsObserved` now asserts each lane label once
+- [x] 8d.6 (MEDIUM-4) #1345 is cited from the loop delta's exemption requirement, `design.md`'s task-intake
+      residual and 8c.9, so the exemption points at a tracked home rather than prose
+- [x] 8d.7 (NITs) 8c.1's counterfactual wording and 8c.7's mutation arithmetic corrected; `http.go:22` said "two"
+      HTTP lanes over a three-constant block; the response-lane test carries the `// spec:` citation the round-3
+      spawn-identity edit left off
 
 ## 9. Landing
 

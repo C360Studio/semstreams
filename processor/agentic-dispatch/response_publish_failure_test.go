@@ -70,3 +70,38 @@ func TestHTTPResponsePublicationFailureIsObservedWithoutChangingTheResult(t *tes
 	require.Contains(t, logged.String(), responseLaneHTTPCommand,
 		"the log must name the lane the response was lost on")
 }
+
+// The loop user-channel copy is the third lane label, and it is the one whose
+// call site is void by signature: before this change it discarded the error
+// with nothing at all, which is the silence the other two at least used to log
+// from inside sendResponse. Its label is asserted here rather than left to the
+// other two lanes' tests, because a label value nothing observes is a metric
+// nobody can trust the shape of.
+//
+// spec: agentic-dispatch / Every dispatch durable input settles through its owner
+func TestLoopUserChannelResponseFailureNamesItsOwnLane(t *testing.T) {
+	var logged bytes.Buffer
+	c := &Component{
+		config:  DefaultConfig(),
+		logger:  slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		metrics: getMetrics(metric.NewMetricsRegistry()),
+		// Constructed, never connected: the response publish is the only
+		// publish on this path, so it is the one that fails.
+		natsClient:  &natsclient.Client{},
+		loopTracker: NewLoopTracker(),
+	}
+
+	c.sendUserResponseForLoop(t.Context(), &LoopInfo{
+		LoopID:      "0e0b3f52-6f4a-4c6f-9c3f-1f2d3a4b5c6d",
+		UserID:      "operator-1",
+		ChannelType: "http",
+		ChannelID:   "session-loop",
+	}, agentic.ResponseTypeStatus, "loop completed")
+
+	require.Equal(t, 1, testutil.CollectAndCount(c.metrics.responsePublishFailures),
+		"exactly one lane series moved")
+	require.InDelta(t, 1.0,
+		testutil.ToFloat64(c.metrics.responsePublishFailures.WithLabelValues(responseLaneLoopUserChannel)), 0.0001)
+	require.Contains(t, logged.String(), responseLaneLoopUserChannel,
+		"the log must name the lane the response was lost on")
+}

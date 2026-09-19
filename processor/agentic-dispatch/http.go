@@ -19,9 +19,12 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// The two HTTP lanes whose async user-response copy is optional: their caller
-// already has the same response synchronously, so a failed publication is
-// counted and logged rather than changing an accepted operation.
+// The lanes whose user-response publication is observed rather than settled on.
+// The two HTTP lanes' callers already have the same response synchronously, so
+// a failed publication is counted and logged rather than changing an accepted
+// operation; the loop user-channel copy is void by signature and not on a
+// delivery path today (component.go:1347-1351), so it takes the same
+// observation rather than a silent discard.
 const (
 	responseLaneHTTPCommand     = "http_command"
 	responseLaneHTTPSubmission  = "http_submission"

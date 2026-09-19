@@ -104,6 +104,19 @@ from the loop record. The tool-result handler-error branch (#1343) persists a te
 `persistHandlerResult` and settles on that write; its non-terminal errors quarantine, except cancellation, which
 stays a Retry so a clean shutdown cannot latch a false `delivery ownership lost`.
 
+The one post-effect response failure that is deliberately NOT Quarantine is the command lane's
+(`component.go:976`). `/cancel` publishes its signal at `commands.go:179` and then builds its success response, so
+a failed response publication is also a post-effect failure — the difference is that its redelivery is effect-free.
+The gate re-reads the loop from merged facts, finds it terminal once the first signal took effect, and answers
+"Loop … has already settled" without publishing anything (`commands.go:136-148`); a second signal that does race
+the loop's own settlement is dropped effect-free by the loop's cancel owner, which is the loop delta's scenario *A
+cancel signal names a loop that cannot be cancelled*
+(`specs/agentic-loop/spec.md`, requirement *A loop absent from process memory is settled from its record*). The
+user has received nothing in either case, so a redelivery is what actually gets them their answer — and unlike the
+task lane there is no new identity to mint. Retry stays, named rather than defaulted, and
+`TestIntegrationPublishedCancelWithFailedResponseRetries` holds both halves: the Retry and the effect-free
+redelivery.
+
 ## D8 — the `jetstream-consumer-policy` MODIFY corrects a requirement L0 just made current
 
 L0 (#759) squash-merged as `f4d66934` and its archive promoted *shared settlement remains stateless and
@@ -177,7 +190,22 @@ first. The mechanism already exists in miniature: `rememberPendingTaskResult` / 
 result for the transient-lineage case and `:1320-1331` resumes it, which is exactly the shape the other four need.
 
 The loop delta names this exemption as a requirement rather than leaving it to the absence of a scenario, because
-the requirement above it reads as covering the class. Sizing and placing the conversion is the owner's.
+the requirement above it reads as covering the class. It is tracked as **#1345** (beta.163,
+`class:swallowed-degrade`, placement candidate L4); sizing and placing the conversion is the owner's.
+
+## Declared residual — identity-preserving task replay is L2's
+
+R2 made `handleTaskSubmission`'s post-PubAck acknowledgement failure fatal (`component.go:1145-1168`), which is
+the bluntest answer in this change: the task is on the stream and its user response is not, so the lane stops
+rather than replaying a delivery that would mint a second identity. The blunt part is not the classification, it
+is that the alternative does not exist yet — a redelivery mints a fresh task UUID at `:1093` and publishes it with
+no deduplication id, and with `auto_continue=false` it creates a second loop as well, so Retry means "accept this
+work twice".
+
+Its home is **L2 `15825335`** (`fix(agentic-dispatch): recover task identity on redelivery`). Once a redelivered
+`UserMessage` recovers the task identity its first delivery minted, the publication is idempotent downstream and
+this branch may be relaxed to Retry there. Recorded here so the relaxation is a decision someone takes with the
+reason in front of them, rather than a Quarantine that looks permanent because nothing says otherwise.
 
 ## Declared cost
 
