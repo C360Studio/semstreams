@@ -113,6 +113,17 @@ func (e *LoopEntity) Validate() error {
 	return nil
 }
 
+// IsValid reports whether the state is one the vocabulary defines.
+//
+// Exported because the vocabulary is the only correct place to answer this and
+// more than one package must ask: LoopEntity.Validate and TransitionTo are the
+// write-side gates, and a component reading a durable record needs the same
+// question without re-listing the constants, which is how a second copy of a
+// vocabulary drifts from the first.
+func (s LoopState) IsValid() bool {
+	return isValidLoopState(s)
+}
+
 // isValidLoopState checks if the state is a valid LoopState
 func isValidLoopState(s LoopState) bool {
 	switch s {

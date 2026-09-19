@@ -166,8 +166,16 @@ func (c *Component) loadPersistedLoop(ctx context.Context, loopID string) (*agen
 	// transient one — and it is refused rather than carried, which is what
 	// stops a persisted "paused" from re-entering through a reader after the
 	// state was removed (owner ruling, #1239, 2026-09-03).
-	if err := persisted.Validate(); err != nil {
-		return nil, permanentTerminal("invalid %s/%s: %w", bucket, loopID, err)
+	//
+	// The STATE is checked, not the whole entity. AGENT_LOOPS has writers
+	// besides the loop manager — research-graph-route and -execute hold a
+	// LoopStore write surface, and the ancestry records this reader walks
+	// legitimately carry identity and lineage without a full loop shape — so
+	// running LoopEntity.Validate here would refuse records this component has
+	// always read. The ruling is about the state vocabulary; widening it to
+	// every field would be a different change.
+	if !persisted.State.IsValid() {
+		return nil, permanentTerminal("invalid state in %s/%s: %s", bucket, loopID, persisted.State)
 	}
 	return &persisted, nil
 }

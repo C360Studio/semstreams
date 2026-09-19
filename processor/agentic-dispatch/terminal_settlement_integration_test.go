@@ -170,7 +170,20 @@ func TestIntegrationPersistedInvalidStateIsPermanent(t *testing.T) {
 	require.Error(t, err, "a persisted paused record must be refused by the reader, not returned")
 	require.True(t, isPermanentTerminal(err),
 		"an invalid state never becomes valid, so it takes the same permanent class as a malformed record")
-	require.ErrorContains(t, err, "invalid state: paused")
+	require.ErrorContains(t, err, "invalid state in AGENT_LOOPS/paused-loop: paused")
+
+	// An ancestry record carrying identity and lineage but no full loop shape
+	// is still returned: the refusal above is the STATE's, and widening it to
+	// every LoopEntity field would refuse records this reader has always read
+	// (chain ancestry is written without max_iterations).
+	lineage, err := json.Marshal(agentic.LoopEntity{
+		ID: "chain-ancestor", TaskID: "task", State: agentic.LoopStateComplete, ParentLoopID: "chain-root",
+	})
+	require.NoError(t, err)
+	_, err = kv.Put(ctx, "chain-ancestor", lineage)
+	require.NoError(t, err)
+	_, err = c.loadPersistedLoop(ctx, "chain-ancestor")
+	require.NoError(t, err, "an ancestry record without a full loop shape must still be readable")
 
 	// The same reader still returns a record whose state IS in the vocabulary,
 	// so the refusal above is the state's and not the path's.
