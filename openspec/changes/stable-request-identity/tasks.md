@@ -127,7 +127,7 @@
       | drop the `proposal_fingerprint` attribute from the audit verdict line | `TestProposalFingerprintIsCarriedAndNotVerified/audit_mode_reads_the_decoded_fingerprint_onto_its_verdict_line` at `proposal_fingerprint_test.go:137` — expected `sha256:audited-digest`, actual `<nil>` |
       | delete the `StatusToolCall` forward-progress `ResetTruncationRetry` at `handlers.go:1255` | `TestMintedRequestIDsAreInjectiveAcrossTheHandlerPath` at `request_identity_mint_test.go:170` — post-retry continuation `:req:3:1`, want `:req:3:0` |
 
-## 8. Rebase onto L1 (`20fe8d09`) and review round 3
+## 8. Rebase onto L1 (`20fe8d09`, superseded by `73b54da9`) and review round 3
 
 - [x] 8.1 `git rebase --onto 20fe8d09 0053183d` replayed this branch's own fourteen commits onto the reviewed L1
       head. Old head `87828b06` → `5188b9c9`; `backup/gh1328-stable-identity-pre-rebase-20260919` holds the
@@ -190,3 +190,12 @@
       | `effectiveLoopID` reads only top-level `RequestID` (delete the `Properties["request_id"]` fallback) | `TestVerdictPayload_EffectiveAccessors/nested_shape_(publish_action)` at `governance_dispatcher_test.go:600` — expected the loop token, actual `""`; and `TestVerdictWithoutWaiterSettlesByRecordNotByWaiterMap/the_publish-action_shape_finds_the_loop_under_properties` at `missing_loop_settlement_test.go:354` — expected `0x2` (Retry), actual `0x3` (Terminate) |
       | delete the whole unrecoverable-identity guard from `settleVerdictWithoutWaiter` | `…/a_verdict_with_no_recoverable_loop_identity_terminates_as_malformed` at `missing_loop_settlement_test.go:309` — "An error is expected but got nil", which is the silent Ack this task removed |
       | `recordToolResultDropped("stale_execution")` reverts to `"stale_callid"` | `TestLateToolResultForSettledLoopIsExpectedDrop` at `terminal_release_test.go:446` — `tool_results_dropped_total{reason=stale_execution} delta = 0, want 1` |
+
+- [ ] 8.11 **A second rebase is owed and deliberately held.** L1 was rewritten after this branch replayed onto it:
+      `20fe8d09` → `73b54da9`, same commit subjects but not the same content (`git diff --stat 20fe8d09 73b54da9`
+      = 21 files, +358/-46 — `agentic/state.go`, `terminal_settlement.go`, `paused_state_removal_test.go` and the
+      migration note among them, which is the L0.5 reader-narrowing revert plus `LoopEntity.Validate()`). PR #1335
+      therefore reads `CONFLICTING` against its base, and GitHub creates no `pull_request` check runs for a
+      conflicting PR, so the last E2E Ladder artifact is the green one on `5188b9c9`. The round-3 fixes are pushed
+      green on the `20fe8d09` line as instructed; the `--onto` replay waits for the final L1 head rather than
+      chasing a moving one
