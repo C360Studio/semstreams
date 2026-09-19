@@ -77,6 +77,21 @@ already on `main`, not this change's.
 | `LoopEntity.StateBeforePause` | `agentic/state.go:68` | R3, by name |
 | `LoopStatePaused` | `agentic/state.go:33` | R4, by name |
 
+## Amendment record
+
+This change was archived on 2026-09-03 under the September 2 position, which retained `LoopStatePaused`. The
+owner's September 3 rulings on #1239 superseded that position after the archive, so the change is **amended**
+here rather than rewritten: R3's text stands as what was ruled then, R4 records what superseded it, and the
+2026-09-03 date on the archive is unchanged because the rulings are that day's.
+
+| Date | PR | What was amended |
+|---|---|---|
+| 2026-09-19 | [#1339](https://github.com/C360Studio/semstreams/pull/1339) | R4 added; `LoopStatePaused` added to the conformance table as the tenth removal; task 2.6 added; the `agentic-dispatch` delta gained a `## MODIFIED Requirements` block for *Loop existence and ownership are merged facts, never process memory alone*, restating all five existing scenarios verbatim and adding *a persisted record whose state is outside the vocabulary is refused permanently* |
+
+The delta block was added because the applied spec had gained that requirement's new paragraph with no change
+behind it — current truth the record could not reconstruct. `openspec validate --strict` and `task spec:properties`
+were both green over that defect; neither tool compares the applied spec against the deltas that authored it.
+
 **`LoopStatePaused` is removed.** R3 retained it, and this change's first landing carried that retention. R4
 supersedes it: a state with no framework semantics must not remain a valid value. `isValidLoopState` no longer
 lists it, `LoopEntity.TransitionTo` validates its argument against the vocabulary — removing the constant alone

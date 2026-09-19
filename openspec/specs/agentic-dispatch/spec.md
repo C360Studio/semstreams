@@ -94,10 +94,12 @@ existence was merged. A merged observation that carries no state MUST say so rat
 sources report a state they reconcile on the same fail-closed rule terminality uses: a settled observation in
 either source wins.
 
-A durable record whose state is outside the loop state vocabulary MUST be refused by the reader under the same
-permanent classification a malformed record receives, and MUST NOT reach the merge or any seam. It never becomes
-valid, so retrying it is not an answer, and reporting it would republish a state the framework no longer
-defines.
+A durable record that decodes but does not validate as a loop entity MUST be refused by the reader under the
+same permanent classification a malformed record receives, and MUST NOT reach the merge or any seam. A state
+outside the loop state vocabulary is the case this change adds: it never becomes valid, so retrying it is not
+an answer, and reporting it would republish a state the framework no longer defines. The refusal is the whole
+entity's, not one field's — every production record on this key is a marshalled loop entity, so a record that
+fails validation is a record no seam should reason about.
 
 #### Scenario: a continuation after a process replacement is admitted from the durable record
 
@@ -137,6 +139,17 @@ defines.
 - **WHEN** the gate admits a request naming it
 - **THEN** the request is refused with the conflict reason rather than one source being silently preferred
 - **AND** the test that verifies this is `TestConflictingOwnersAcrossSourcesAreRefused`
+
+#### Scenario: a persisted record whose state is outside the vocabulary is refused permanently
+
+- **GIVEN** an `AGENT_LOOPS` record written before the paused state was removed, carrying `"state":"paused"`
+- **WHEN** the dispatch reader loads it
+- **THEN** it is refused under the reader's permanent classification — the same one a malformed record
+  receives — and no new class is invented for it
+- **AND** the record does not reach the merge, `/status`, or any other seam
+- **AND** a record whose state IS in the vocabulary is still returned by the same reader, so the refusal is the
+  state's and not the path's
+- **AND** the test that verifies this is `TestIntegrationPersistedInvalidStateIsPermanent`
 
 ### Requirement: The ownership model binds the user lane, and approval is deliberately not owner-scoped
 

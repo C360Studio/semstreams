@@ -152,6 +152,7 @@ func TestIntegrationPersistedLoopMalformedJSONAndIDMismatchArePermanent(t *testi
 // gate would reason about it. It takes the reader's existing permanent
 // classification — a state outside the vocabulary never becomes valid — and no
 // new one is invented for it.
+// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
 func TestIntegrationPersistedInvalidStateIsPermanent(t *testing.T) {
 	ctx := t.Context()
 	tc := natsclient.NewTestClient(t, natsclient.WithKVBuckets(defaultAgentLoopsBucket(t)))
