@@ -82,13 +82,19 @@ func TestIntegrationPartialPublishQuarantinesRatherThanRetrying(t *testing.T) {
 	require.False(t, health.Healthy)
 	require.Contains(t, health.LastError, "unknown durability")
 
-	// The other half of the ruling: a failure BEFORE the first publish is
-	// still safe to re-run, so it stays Retry.
+	// The other half, corrected in round 1: a failure BEFORE the first publish
+	// is safe to re-WRITE — every stamp is a whole-value Put — but the delivery
+	// that would re-run it is not safe to re-deliver. The handler has already
+	// moved the loop, so the redelivery is answered from its new state and the
+	// result the first attempt built cannot be rebuilt. Same partial effect,
+	// same quarantine, different reason; only the cause text separates them.
 	c.loopsBucket = failingLoopBucket{err: errors.New("kv unavailable")}
 	preMsg := &loopDeliveryOwnerMsg{data: []byte("{}")}
 	prePublish, admitted := consumeAdmittedDelivery(ctx, preMsg, policy, newDeliveryLaneAdmission(nil))
 	require.True(t, admitted)
-	require.Equal(t, natsclient.DeliveryDecisionRetry, prePublish.Decision())
-	require.Equal(t, int32(1), preMsg.naks.Load())
-	require.Zero(t, preMsg.acks.Load()+preMsg.terms.Load())
+	require.Equal(t, natsclient.DeliveryDecisionQuarantine, prePublish.Decision())
+	require.Zero(t, preMsg.acks.Load()+preMsg.naks.Load()+preMsg.terms.Load())
+	require.Contains(t, prePublish.Err().Error(), "after the loop was already mutated")
+	require.NotContains(t, prePublish.Err().Error(), "published results",
+		"the stamp phase and the publish phase must stay distinguishable by cause")
 }
