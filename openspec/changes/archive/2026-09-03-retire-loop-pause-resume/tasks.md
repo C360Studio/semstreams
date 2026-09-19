@@ -38,5 +38,5 @@
   `processor/agentic-dispatch`'s loop reader under its existing permanent classification, and strip the state
   from the four documentation tables, the godoc list, the OpenAPI query description and the migration note.
   Proved by `TestPausedIsRefusedAtTheExportedTransition`, `TestUndefinedStatesAreRefusedAtTheExportedTransition`,
-  `TestPersistedPausedRecordFailsValidation`, `TestTransitionLoopRefusesPaused` and
-  `TestIntegrationPersistedInvalidStateIsPermanent`
+  `TestPausedIsRefusedEvenWhenTheEntityAlreadyHoldsIt`, `TestPersistedPausedRecordFailsValidation`,
+  `TestTransitionLoopRefusesPaused` and `TestIntegrationPersistedInvalidStateIsPermanent`

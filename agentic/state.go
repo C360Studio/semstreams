@@ -147,12 +147,17 @@ func isValidLoopState(s LoopState) bool {
 // than special-casing one string — a reserved-enum shim in reverse is still a
 // compatibility shim (owner ruling, #1239, 2026-09-03).
 func (e *LoopEntity) TransitionTo(newState LoopState) error {
+	// The vocabulary check comes first, ahead of the same-state no-op. An
+	// entity decoded from a durable record can already be holding a value the
+	// vocabulary does not define, and answering nil to "move it to paused"
+	// because it is already paused is the acceptance this ruling removes: the
+	// caller cannot tell that answer apart from a state that was allowed.
+	if !isValidLoopState(newState) {
+		return fmt.Errorf("invalid state: %s", newState)
+	}
 	// Allow same-state transitions (no-op)
 	if e.State == newState {
 		return nil
-	}
-	if !isValidLoopState(newState) {
-		return fmt.Errorf("invalid state: %s", newState)
 	}
 	// Prevent transitions from terminal states
 	if e.State.IsTerminal() {

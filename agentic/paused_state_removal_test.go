@@ -52,6 +52,25 @@ func TestUndefinedStatesAreRefusedAtTheExportedTransition(t *testing.T) {
 	}
 }
 
+// The same-state no-op is not a back door. An entity decoded from a durable
+// record can already be holding "paused"; asking to move it there must still
+// be refused, because a nil answer is indistinguishable from an accepted
+// state.
+func TestPausedIsRefusedEvenWhenTheEntityAlreadyHoldsIt(t *testing.T) {
+	t.Parallel()
+
+	var entity agentic.LoopEntity
+	require.NoError(t, json.Unmarshal(
+		[]byte(`{"id":"loop-stuck","state":"paused","max_iterations":20}`), &entity))
+
+	require.ErrorContains(t, entity.TransitionTo(agentic.LoopState("paused")), "invalid state: paused",
+		"a same-state no-op must not answer nil for a state outside the vocabulary")
+
+	// A state that IS in the vocabulary still no-ops against itself.
+	entity.State = agentic.LoopStateExecuting
+	require.NoError(t, entity.TransitionTo(agentic.LoopStateExecuting))
+}
+
 // A record written before the removal decodes — JSON cannot refuse a string —
 // so validation is where it is refused. No shim, alias or legacy-valid
 // exception carries it through.

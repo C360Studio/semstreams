@@ -1008,6 +1008,7 @@ What changes for you:
 |---|---|---|
 | `entity.TransitionTo(agentic.LoopStatePaused)` | compiles | **does not compile** — the constant is gone |
 | `entity.TransitionTo(agentic.LoopState("paused"))` | accepted, state set | **error** `invalid state: paused`, entity unchanged |
+| the same call on an entity *already* holding `"paused"` | `nil` (same-state no-op) | **error** `invalid state: paused` — the vocabulary check runs ahead of the no-op |
 | `manager.TransitionLoop(id, "paused")` | accepted | **error** `invalid state: paused` |
 | a persisted `{"state":"paused"}` record | decoded and validated | decodes, then **fails `LoopEntity.Validate()`** |
 | dispatch reads that record | returned to the seams | **refused** with the reader's permanent classification |
