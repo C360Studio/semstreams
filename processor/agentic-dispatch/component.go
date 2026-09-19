@@ -988,7 +988,7 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 	//     itself (commands.go:185), never inferred from the command name or
 	//     the response text; and
 	//  2. its target was resolved from the tracker rather than named by the
-	//     message (:945-951).
+	//     message (:945-955).
 	//
 	// With both, the replay is unsound: the message does not carry the identity
 	// the first delivery acted on, and resolution is not stable across it.

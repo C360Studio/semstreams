@@ -7,8 +7,9 @@
 `SettleDelivery` SHALL validate the existing closed decision/error tuple and attempt at most one local terminal
 method. Ack with nil cause SHALL call Ack; Retry with non-nil cause SHALL call Nak under the operation's retry
 policy, immediate for `SettleDelivery` and delayed by the caller's interval for `SettleDeliveryWithRetry`;
-Terminate with non-nil cause SHALL call Term. Quarantine with non-nil cause, invalid tuples, and nil message SHALL attempt no terminal method
-and SHALL return quarantined owner-stop evidence. Terminal-method errors SHALL remain local, unconfirmed evidence.
+Terminate with non-nil cause SHALL call Term. Quarantine with non-nil cause, invalid tuples, and nil message
+SHALL attempt no terminal method and SHALL return quarantined owner-stop evidence. Terminal-method errors SHALL
+remain local, unconfirmed evidence.
 
 The function SHALL NOT invoke work, read payload or metadata, create context, derive a deadline from consumer policy,
 send heartbeat, or own consumer lifecycle. Its caller SHALL invoke and join delivery work before settlement and SHALL

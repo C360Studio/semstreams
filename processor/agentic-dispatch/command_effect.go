@@ -19,10 +19,17 @@ import (
 // would be a parser over prose.
 //
 // It rides the context rather than the CommandHandler signature because
-// processor/agentic-dispatch is Tier 1 (release/tier1-packages.txt:36) and
-// CommandHandler is exported: adding a return value would break every adopter
-// that registers a command, to carry a fact the framework's own publish site
-// already knows. The value is per delivery, never shared.
+// processor/agentic-dispatch is Tier 1 (release/tier1-packages.txt:74) and
+// CommandHandler is exported. What binds is ADR-106 RC-4: the incompatible Tier 1
+// change count must descend to zero and stay there 30 days, and a return-value
+// change adds one to it. CI would not have caught it — the apidiff job runs
+// continue-on-error with API_COMPAT_MODE=report (.github/workflows/ci.yml:236-238,
+// taskfiles/apicompat.yml:9-12), so the count is a governed number, not a gate.
+// The break would be real but narrower than "every adopter": a handler literal
+// passed to CommandRegistry().Register would stop compiling, while the
+// CommandExecutor path adapts inside this package (component.go:1565-1569). None
+// of it buys anything, because the framework's own publish site already knows the
+// fact. The value is per delivery, never shared.
 type commandEffect struct {
 	signalPublished atomic.Bool
 }

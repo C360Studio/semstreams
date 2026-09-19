@@ -12,12 +12,14 @@ semantic outcome. Native message and settlement methods SHALL NOT escape the own
 A `UserMessage` SHALL not be positively acknowledged until every required task, approval response, and
 user-response publication has synchronous JetStream PubAck. Whether an unacknowledged publication retries or
 quarantines SHALL be decided by whether its redelivery is effect-free, and that decision SHALL be recorded at the
-call site rather than taken by default. A command SHALL NOT be retried when both of two facts hold: the delivery
-published a signal, and its target was resolved rather than named by the message. The published fact SHALL be
-recorded where the publication happens, never inferred from the command name or the response text, because a
-command that published nothing is replayable no matter how its target was chosen. Terminal events SHALL retain
-their typed ancestry and deterministic response contract. No void, log-only, or core-NATS publication failure
-SHALL become ACK.
+call site rather than taken by default. A command SHALL NOT be retried when both of two facts hold: this component
+published a signal during the delivery, and its target was resolved rather than named by the message. That
+published fact SHALL be recorded where this component's own publication happens, never inferred from the command
+name or the response text, because a command that published nothing is replayable no matter how its target was
+chosen. The recorder is internal to this component, so a command handler an adopter registers cannot record a
+publication of its own: its failed response after a durable publication retries exactly as it did before this
+change, and exporting the recorder is an addition a later change owns. Terminal events SHALL retain their typed
+ancestry and deterministic response contract. No void, log-only, or core-NATS publication failure SHALL become ACK.
 
 The `user.message`, `agent.created`, and `agent.approval_pending` subscriptions SHALL invoke their typed business
 handlers using the callback installed by each production setup branch. All delivery-derived work SHALL join before

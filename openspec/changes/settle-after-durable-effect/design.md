@@ -144,13 +144,30 @@ burden of proof for all of them, and quarantining one latches the whole `user.me
 to a read-only command. The predicate is therefore two conjuncts: **this delivery published a signal AND its
 target was resolved rather than named.**
 
-The published half is recorded where the publication happens (`commands.go:185`), carried on a per-delivery
-recorder in the context (`command_effect.go`), and read once at the settlement site. It is deliberately not
+The published half is recorded where this component's publication happens (`commands.go:185`), carried on a
+per-delivery recorder in the context (`command_effect.go`), and read once at the settlement site. It is deliberately not
 derived from the command name — that would be a second spelling of "which commands publish", which drifts — nor
 from the response text, which would be a parser over prose. It rides the context rather than the
-`CommandHandler` signature because `processor/agentic-dispatch` is Tier 1 (`release/tier1-packages.txt`) and
-`CommandHandler` is exported: adding a return value would break every adopter that registers a command in order
-to carry a fact the framework's own publish site already has.
+`CommandHandler` signature because `processor/agentic-dispatch` is Tier 1 (`release/tier1-packages.txt:74`) and
+`CommandHandler` is exported. What binds is not CI — the apidiff job is advisory until RC, run
+`continue-on-error: true` (`.github/workflows/ci.yml:236-238`) over `API_COMPAT_MODE=report`
+(`taskfiles/apicompat.yml:9-12`) — but ADR-106 RC-4, which requires the incompatible Tier 1 change count to
+descend to zero and hold there for 30 days. A return value on `CommandHandler` adds one to that count and breaks
+the direct registration path, where a handler literal is passed to `CommandRegistry().Register`; the
+`CommandExecutor` path is adapted inside this package (`component.go:1565-1569`) and would keep compiling. Either
+way it would be paid to carry a fact the framework's own publish site already has.
+
+**Residual — an adopter-registered handler cannot record its own publication.** `noteSignalPublished` is
+unexported, so a handler installed through `CommandRegistry().Register` or `RegisterCommand` that publishes
+durably leaves the published conjunct false: its failed response after that publication Retries, which is exactly
+what every command did before this change, so nothing regresses. The measured sister that registers commands,
+`semteams`, loses nothing by it: `teamhint` registers a pattern that requires a capture
+(`cmd/semteams/commands/teamhint/command.go:57`), so `args[0]` is never empty and the tracker conjunct is never
+true for it; `implementspec` makes its capture optional (`cmd/semteams/commands/implementspec/command.go:115`)
+and appends triples before responding (`:172`), but it takes its target from `msg.RunID` (`:212`) — which the
+message names — so a redelivery acts on the same run. Both keep the Retry they already had. Closing the gap means
+exporting a recorder, which is a new exported symbol on a frozen package: an addition that belongs to a change
+owning that decision under ADR-106 RC-4, not to this one.
 
 The rule both arms share: a delivery Retries only where the redelivery is provably effect-free — and the proof is
 about what the delivery DID, not about how its request was shaped.
@@ -210,7 +227,7 @@ Two consequences worth naming so they are not rediscovered:
   goes through `PublishToStream`. L2 is what makes that sentence literally true of the whole component rather than
   forward-looking. The clause is not weakened here; its one outstanding referent is named.
 - A cancel publish that fails today is not silent: the error returns at `commands.go:180` and
-  `component.go:963-974` converts it into a `ResponseTypeError` user response, which is itself PubAck-gated before
+  `component.go:972-983` converts it into a `ResponseTypeError` user response, which is itself PubAck-gated before
   the `UserMessage` Acks. What L1 cannot promise is the *success* case — a core-NATS publish to a subject no
   stream is capturing returns nil, the user is told "Cancel signal sent", and nothing was durably enqueued.
 
@@ -271,7 +288,7 @@ in a process that is still running.
 
 ## Declared residual — identity-preserving task replay is L2's
 
-R2 made `handleTaskSubmission`'s post-PubAck acknowledgement failure fatal (`component.go:1145-1168`), which is
+R2 made `handleTaskSubmission`'s post-PubAck acknowledgement failure fatal (`component.go:1193-1217`), which is
 the bluntest answer in this change: the task is on the stream and its user response is not, so the lane stops
 rather than replaying a delivery that would mint a second identity. The blunt part is not the classification, it
 is that the alternative does not exist yet — a redelivery mints a fresh task UUID at `:1093` and publishes it with

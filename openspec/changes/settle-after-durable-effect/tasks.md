@@ -134,11 +134,11 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       loop-lane cancel clauses (`specs/agentic-loop/spec.md:10,32,109-113`) are unaffected — they govern the
       loop's handling of an **admitted** signal, not dispatch's publication of it
 - [x] 8b.2 `TestDispatchProductionCallbacksDoNotAckFalseDone/failed user-response publication retries, never acks`
-      — the response-PubAck gate (`component.go:1284` → Ack `:910`) had no observer, because the `sendResponseFn`
-      seam short-circuits `sendResponse` before the publish. The new case drives the production `sendResponse`
-      through the unknown-command path, where the user response is the only required publication, and asserts
-      Retry with zero Acks. Mutation: returning Ack from the non-fatal arm of `handleUserMessage` makes exactly
-      this case red
+      — the response-PubAck gate (`sendResponse`, `component.go:1330` → Ack `:910`) had no observer, because the
+      `sendResponseFn` seam short-circuits `sendResponse` before the publish. The new case drives the production
+      `sendResponse` through the unknown-command path, where the user response is the only required publication, and
+      asserts Retry with zero Acks. Mutation: returning Ack from the non-fatal arm of `handleUserMessage` makes
+      exactly this case red
 
 ## 8c. Cross-agent implementation round 1 (2026-09-19)
 
@@ -165,7 +165,7 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       the handler mutated anything. `TestToolResultHandlerFailureSettlesOnTheDurableRecord`.
       Mutation: restore the swallow → two subtests red. This closes #1343 rather than scoping the loop delta
       around it
-- [x] 8c.4 (R2) A user acknowledgement that failed after the task took its PubAck (`component.go:1136`) returned
+- [x] 8c.4 (R2) A user acknowledgement that failed after the task took its PubAck (`component.go:1185-1187`) returned
       an ordinary error, and the redelivery mints a new task UUID at `:1093` with no dedup id — and a second loop
       when `auto_continue=false`. Now fatal. `TestIntegrationPublishedTaskWithFailedResponseQuarantines` is an
       integration test because a unit seam cannot produce a successful task publish followed by a failed response:
@@ -211,7 +211,7 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       (`fix(agentic-dispatch): recover task identity on redelivery`) as the home of identity-preserving replay and
       says the relaxation to Retry is a decision to be taken there, in the same shape as the cancel-signal
       residual
-- [x] 8d.3 (MEDIUM-1) `component.go:976` — the command lane's post-effect response failure — was Retry by
+- [x] 8d.3 (MEDIUM-1) `component.go:1020` — the command lane's post-effect response failure — was Retry by
       default. It stays Retry by decision: the redelivery is effect-free, because the gate finds the loop terminal
       and answers without publishing a second signal (`commands.go:136-148`), and a signal that races the loop's
       own settlement is dropped effect-free by the loop's cancel owner. Named in `design.md` D7 and in the
@@ -236,7 +236,7 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 ## 8e. Cross-agent implementation round 3 (2026-09-19)
 
 - [x] 8e.1 (R1, P1) 8d.3's effect-free argument assumed the target stays fixed across a redelivery, which is only
-      true of `/cancel <loop_id>`. `handleCommand:941-951` resolves a bare `/cancel` from the tracker, and
+      true of `/cancel <loop_id>`. `handleCommand:945-955` resolves a bare `/cancel` from the tracker, and
       `GetActiveLoop` (`loop_tracker.go:204-226`) prefers the channel's loop only while it is non-terminal, then
       falls back to the user's most recent loop — so this delivery's own effect (loop A terminal) is what makes
       the redelivery resolve to a live loop B and cancel it. That form now quarantines; the named form keeps
@@ -281,7 +281,7 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       retryable" where D7 and `persistHandlerResult` quarantine; task 6.3 said "a pre-publish failure still
       retries" while citing the test that now requires Quarantine; the dispatch delta's unauthorized-input
       scenario promised a deterministic error "before termination" where every `ResponseID` on that lane is
-      `uuid.New()` (`component.go:918`, `:931`, `:956`, `:970`, `:1088`, `commands.go` ×9) and a published refusal
+      `uuid.New()` (`component.go:922`, `:935`, `:960`, `:974`, `:1104`, `commands.go` ×9) and a published refusal
       Acks. All three now say what the code does. The sweep behind them was
       `grep -n -iE 'retr|determinis'` over the whole change directory: the remaining hits are accurate, including
       two that read as suspect and are not — the terminal lane's response identity really is source-derived
@@ -299,10 +299,14 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       PUBLISHED a signal AND its target was resolved rather than named. The published half is recorded at the
       publish site (`commands.go:185`) on a per-delivery recorder carried in the context (`command_effect.go`),
       never inferred from the command name or the response text. It is not a `CommandHandler` return value
-      because `processor/agentic-dispatch` is Tier 1 and that type is exported — the reviewer offered the
-      signature change and the ruling allowed it, but it would break every adopter that registers a command to
-      carry a fact the publish site already has. `TestEffectFreeCommandWithFailedResponseRetries` (three
-      subtests, each asserting the lane is not latched). Mutations: drop the published conjunct → the `/help`
+      because `processor/agentic-dispatch` is Tier 1 (`release/tier1-packages.txt:74`) and that type is exported
+      — the reviewer offered the signature change and the ruling allowed it. What binds is ADR-106 RC-4, whose
+      incompatible Tier 1 count must descend to zero and hold 30 days, not CI: the apidiff job is advisory until
+      RC (`.github/workflows/ci.yml:236-238` over `API_COMPAT_MODE=report`, `taskfiles/apicompat.yml:9-12`). The
+      break is real but narrower than "every adopter" — a handler literal passed to `CommandRegistry().Register`
+      stops compiling; the `CommandExecutor` path is adapted inside this package (`component.go:1565-1569`).
+      `TestEffectFreeCommandWithFailedResponseRetries` (three subtests, each asserting the lane is not latched).
+      Mutations: drop the published conjunct → the `/help`
       subtest quarantines and latches; drop the tracker conjunct →
       `TestIntegrationPublishedCancelWithFailedResponseRetries` quarantines
 - [x] 8f.2 (HIGH-2) The breaking-change E2E evidence predated all three round-3 production commits, and R3
@@ -311,6 +315,35 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       fix; tier, head, exit code and duration are in the PR body's gate table, replacing the `20fe8d09` claim
 - [x] 8f.3 (NIT-1, NIT-2) Every pin in `design.md`'s R3 residual and the PR body regenerated with
       `sed -n "${n}p"` after the code settled, never transcribed; the 139-character delta line re-wrapped
+
+## 8g. Cross-agent implementation round 5 (2026-09-19)
+
+- [x] 8g.1 (HIGH-1) The delta said the published fact "SHALL be recorded where the publication happens", which no
+      adopter can satisfy: `noteSignalPublished` is unexported, so a handler registered through
+      `CommandRegistry().Register` or `RegisterCommand` cannot record its own publication. The clause now binds
+      only the publications this component makes, and both the delta and `design.md` carry the residual: such a
+      handler's failed response after a durable publication Retries exactly as every command did before this
+      change, and exporting the recorder is an addition a later change owns. Measured: `semteams` loses nothing —
+      `teamhint`'s pattern requires a capture (`cmd/semteams/commands/teamhint/command.go:57`), and
+      `implementspec` takes its target from `msg.RunID` (`cmd/semteams/commands/implementspec/command.go:212`),
+      which the message names
+- [x] 8g.2 (MEDIUM) The Tier 1 rationale overstated in three landing places (`command_effect.go`, `design.md`,
+      8f.1 above) and in the PR body: apidiff would NOT have failed CI (report mode, `continue-on-error`), and
+      not "every adopter" would break. Rewritten to ADR-106 RC-4's descending incompatible count and to the one
+      path that actually stops compiling
+- [x] 8g.3 (MEDIUM) `command_effect.go` pinned `release/tier1-packages.txt:36`, a "NOT covered by this file"
+      comment; the package is at `:74`. Re-pinned, and every stale `component.go` pin in `tasks.md` and
+      `design.md` regenerated with `sed -n "${n}p"` after HIGH-1's insert moved them
+- [x] 8g.4 (MEDIUM) `specs/jetstream-consumer-policy/spec.md`'s 141-character line — this branch's own, inside
+      the ADDED block — re-wrapped; the PR body's "pre-existing, inside MODIFIED" justification was false on both
+      clauses and is corrected
+- [x] 8g.5 (MEDIUM) `resolveConfig` does not apply the advertised `auto_continue` default; filed as #1348 and
+      pointed at from the test that sets it explicitly. No production change here
+- [x] 8g.6 (NIT-1, NIT-2, NIT-3) `requireRetriedWithLaneIntact` led with `require` on the decision, so the three
+      lane-latch consequence assertions never reported when it flipped; now `assert` for the decision and
+      `require` for the consequences, and the mutation re-run prints the latched cause as well as the decision.
+      `commands.go:181` (a closing brace) re-pinned to `:179`; subtest 3 says in one sentence that it
+      discriminates neither mutation, so it is never read as coverage
 
 ## 9. Landing
 
