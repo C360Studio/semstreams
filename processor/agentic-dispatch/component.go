@@ -713,11 +713,14 @@ func (c *Component) recordAgentFailedFatal(result natsclient.DeliveryResult) {
 	}
 }
 
-// recordDeliveryOwnerFatal is the component-wide latch for the three lanes
-// this change brings under settlement (user.message, agent.created,
-// agent.approval_pending). The two terminal lanes keep their own per-lane
-// fields above: those are read by the terminal-lane health projection, and
-// collapsing them into this one would lose which terminal lane failed.
+// recordDeliveryOwnerFatal is the component-wide latch for the user.message
+// lane, its only caller (:569). It was written for three — the agent.created
+// and agent.approval_pending lanes were deleted with the in-process loop
+// tracker they fed, and naming them here would send a reader looking for
+// subscriptions that no longer exist. The two terminal lanes keep their own
+// per-lane fields above: those are read by the terminal-lane health
+// projection, and collapsing them into this one would lose which terminal
+// lane failed.
 func (c *Component) recordDeliveryOwnerFatal(result natsclient.DeliveryResult) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

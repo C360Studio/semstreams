@@ -3,7 +3,6 @@
 package agenticdispatch
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,11 +15,9 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
-	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/nats-io/nats.go/jetstream"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -158,7 +155,7 @@ func TestIntegrationPersistedLoopMalformedJSONAndIDMismatchArePermanent(t *testi
 // gate would reason about it. It takes the reader's existing permanent
 // classification — a state outside the vocabulary never becomes valid — and no
 // new one is invented for it.
-// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
+// spec: agentic-dispatch / Loop existence and ownership come from durable authority alone
 func TestIntegrationPersistedInvalidStateIsPermanent(t *testing.T) {
 	ctx := t.Context()
 	tc := natsclient.NewTestClient(t, natsclient.WithKVBuckets(defaultAgentLoopsBucket(t)))
@@ -590,57 +587,4 @@ func startProductionTerminalDispatch(
 	require.NoError(t, c.Start(ctx))
 	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 	return c
-}
-
-// A permanently defective durable record reaches the admission gate's ONE
-// tolerated-failure branch, which was built for transient failures. This pins
-// what that combination does today, because nothing did: the record is refused
-// by the reader, the tracker answers, the request is admitted, and the refused
-// record contributes NO facts to the merge — so no seam reports a state the
-// vocabulary no longer defines. The operator's only signal is the tolerated
-// WARN, which must at least carry the permanent cause; whether this class earns
-// its own metric or its own message is #1329's question, since that change
-// rewrites this path.
-//
-// Driven through the real reader against a real bucket on purpose: the unit
-// seam (withPersistedLoops) replaces loadPersistedLoop wholesale, so a unit
-// test here would assert an error it wrote itself.
-//
-// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
-func TestIntegrationInvalidPersistedRecordIsToleratedOnlyBecauseTheTrackerAnswers(t *testing.T) {
-	ctx := t.Context()
-	tc := natsclient.NewTestClient(t, natsclient.WithKVBuckets(defaultAgentLoopsBucket(t)))
-	var logs bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads)
-	c := &Component{
-		config: DefaultConfig(), decoder: message.NewDecoder(reg), natsClient: tc.Client,
-		logger: logger, loopTracker: NewLoopTrackerWithLogger(logger), metrics: getMetrics(metric.NewMetricsRegistry()),
-	}
-
-	kv, err := tc.GetKVBucket(ctx, defaultAgentLoopsBucket(t))
-	require.NoError(t, err)
-	_, err = kv.Put(ctx, admissionLoopA,
-		[]byte(`{"id":"`+admissionLoopA+`","state":"paused","max_iterations":20}`))
-	require.NoError(t, err)
-	c.loopTracker.Track(&LoopInfo{
-		LoopID: admissionLoopA, UserID: "user-a", ChannelType: "cli", ChannelID: "s1", State: "executing",
-	})
-
-	facts, err := c.admitLoopRequest(ctx, loopAdmissionRequest{
-		Seam: "channel_submission", Field: "reply_to", Operation: loopOpContinue,
-		LoopID: admissionLoopA, Requester: "user-a",
-	})
-
-	require.NoError(t, err, "a tracker hit admits; a defective durable record must not refuse a live loop")
-	require.True(t, facts.Tracked)
-	require.False(t, facts.Persisted, "the refused record must not enter the merge")
-	require.Equal(t, agentic.LoopStateExecuting, facts.State,
-		"the state a seam reports comes from the tracker, never from the record that was refused")
-	require.Equal(t, 0, testutil.CollectAndCount(c.metrics.loopAdmissionRefusals),
-		"tolerating the read is not a refusal and must not be counted as one")
-
-	require.Contains(t, logs.String(), loopDurableReadToleratedLogMessage)
-	require.Contains(t, logs.String(), "invalid state: paused",
-		"the tolerated WARN must carry the permanent cause, or the operator cannot tell a blip from a record that needs rewriting")
 }
