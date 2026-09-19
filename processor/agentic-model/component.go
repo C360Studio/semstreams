@@ -72,6 +72,7 @@ type Component struct {
 	errors            int64
 	lastActivity      time.Time
 	metrics           *modelMetrics
+	deliveryFatalErr  error
 }
 
 // Option configures optional Component behavior at construction time.
@@ -99,8 +100,9 @@ func (c *Component) HealthPolicy() model.HealthPolicy { return c.healthPolicy }
 
 // consumerInfo tracks JetStream consumer details for cleanup
 type streamConsumerBinding struct {
-	handle      jetstream.ConsumeContext
-	drainIssued bool
+	handle       jetstream.ConsumeContext
+	drainOnce    *sync.Once
+	observerDone <-chan struct{}
 }
 
 // NewComponent creates a new agentic-model processor component
@@ -353,16 +355,11 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port) erro
 
 	// Per-component defaults for tunables that were previously hardcoded.
 	// Operators tune via JetStreamPort.AckWait / .HeartbeatInterval; the
-	// fallbacks here are the historical hardcoded values, preserved so a
-	// zero-config deployment behaves identically to pre-port-config builds.
+	// fallbacks here keep zero-config deployments on the declared policy.
 	// AckWait must comfortably exceed the longest legitimate per-task
 	// LLM wallclock budget — see docs/operations/14-timeout-chain.md and
 	// resolveTimeout's 110s fallback (10s strictly below the 120s default
 	// here).
-	const (
-		defaultModelAckWait           = 2 * time.Minute
-		defaultModelHeartbeatInterval = 90 * time.Second
-	)
 	ackWait := consumerCfg.AckWait
 	if ackWait == 0 {
 		ackWait = defaultModelAckWait
@@ -390,27 +387,44 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port) erro
 		AutoCreate:     false,
 		MessageTimeout: 30 * time.Minute,
 	}
+	policy, policyErr := natsclient.ValidateHeartbeatDeliveryPolicy(
+		ctx,
+		cfg,
+		heartbeatInterval,
+		natsclient.ImmediateDeliveryRetry(),
+		func(workCtx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
+			c.handleRequest(workCtx, data)
+			return natsclient.DeliveryDecisionAck, nil
+		},
+	)
+	if policyErr != nil {
+		return errs.WrapInvalid(
+			policyErr,
+			"agentic-model",
+			"setupConsumer",
+			fmt.Sprintf("validate heartbeat delivery policy for port %s", port.Name),
+		)
+	}
+	admission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
 
 	consume := c.natsClient.ConsumeStreamWithConfig
 	if c.consumeStream != nil {
 		consume = c.consumeStream
 	}
 	handle, err := consume(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name, ComponentOwned: true}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		if hbErr := natsclient.ConsumeWithHeartbeat(msgCtx, msg, heartbeatInterval,
-			func(workCtx context.Context) error {
-				c.handleRequest(workCtx, msg.Data())
-				return nil
-			},
-		); hbErr != nil {
-			c.logger.Error("Model handler error", "error", hbErr)
+		result, admitted := consumeAdmittedDelivery(msgCtx, msg, policy, admission)
+		if admitted && result.Err() != nil && !result.OwnerStopRequired() {
+			c.logger.Error("Model handler error", "error", result.Err())
 		}
 	})
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupConsumer", fmt.Sprintf("setup consumer for stream %s", streamName))
 	}
 
+	binding := newStreamConsumerBinding(handle)
+	c.observeDeliveryLane(ctx, &binding, admission)
 	c.lifecycleMu.Lock()
-	c.consumers = append(c.consumers, streamConsumerBinding{handle: handle})
+	c.consumers = append(c.consumers, binding)
 	c.lifecycleMu.Unlock()
 
 	c.logger.Info("Subscribed to agent requests (JetStream)",
@@ -524,10 +538,7 @@ func (c *Component) cleanup(ctx context.Context) error {
 	var cleanupErr error
 	for i := range c.consumers {
 		binding := &c.consumers[i]
-		if !binding.drainIssued {
-			binding.handle.Drain()
-			binding.drainIssued = true
-		}
+		binding.drain()
 		closed := binding.handle.Closed()
 		if c.waitConsumerClosed != nil {
 			cleanupErr = errors.Join(cleanupErr, c.waitConsumerClosed(ctx, closed))
@@ -541,6 +552,15 @@ func (c *Component) cleanup(ctx context.Context) error {
 	}
 	if c.cancel != nil {
 		c.cancel()
+	}
+	for i := range c.consumers {
+		if done := c.consumers[i].observerDone; done != nil {
+			select {
+			case <-done:
+			case <-ctx.Done():
+				cleanupErr = errors.Join(cleanupErr, ctx.Err())
+			}
+		}
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		cleanupErr = errors.Join(cleanupErr, ctxErr)
@@ -1115,10 +1135,16 @@ func (c *Component) Health() component.HealthStatus {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
+	healthy := c.running && c.deliveryFatalErr == nil
+	lastError := ""
+	if c.deliveryFatalErr != nil {
+		lastError = c.deliveryFatalErr.Error()
+	}
 	return component.HealthStatus{
-		Healthy:    c.running,
+		Healthy:    healthy,
 		LastCheck:  time.Now(),
 		ErrorCount: int(c.errors),
+		LastError:  lastError,
 		Uptime:     time.Since(c.startTime),
 		Status:     c.getStatus(),
 	}
@@ -1126,6 +1152,9 @@ func (c *Component) Health() component.HealthStatus {
 
 // getStatus returns a status string
 func (c *Component) getStatus() string {
+	if c.deliveryFatalErr != nil {
+		return "delivery ownership lost"
+	}
 	if c.running {
 		return "running"
 	}

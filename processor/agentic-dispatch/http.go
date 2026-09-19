@@ -19,6 +19,18 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+// The lanes whose user-response publication is observed rather than settled on.
+// The two HTTP lanes' callers already have the same response synchronously, so
+// a failed publication is counted and logged rather than changing an accepted
+// operation; the loop user-channel copy is void by signature and not on a
+// delivery path today (component.go:1347-1351), so it takes the same
+// observation rather than a silent discard.
+const (
+	responseLaneHTTPCommand     = "http_command"
+	responseLaneHTTPSubmission  = "http_submission"
+	responseLaneLoopUserChannel = "loop_user_channel"
+)
+
 func init() {
 	service.RegisterOpenAPISpec("agentic-dispatch", agenticDispatchOpenAPISpec())
 }
@@ -272,7 +284,9 @@ func (c *Component) processCommandSync(ctx context.Context, msg agentic.UserMess
 		slog.String("user_id", msg.UserID))
 
 	// Also publish to stream for async consumers (optional - allows CLI, other services to see responses)
-	c.sendResponse(ctx, resp)
+	if err := c.sendResponse(ctx, resp); err != nil {
+		c.noteUnpublishedResponse(responseLaneHTTPCommand, resp, err)
+	}
 
 	return resp
 }
@@ -407,7 +421,9 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 	}
 
 	// Also publish acknowledgment to stream
-	c.sendResponse(ctx, resp)
+	if err := c.sendResponse(ctx, resp); err != nil {
+		c.noteUnpublishedResponse(responseLaneHTTPSubmission, resp, err)
+	}
 
 	return resp
 }

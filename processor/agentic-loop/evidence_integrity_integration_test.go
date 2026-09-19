@@ -271,7 +271,12 @@ func TestStartWithoutUsableTrajectoryBucketMarksEveryLoop_Integration(t *testing
 	require.True(t, c.trajectoryAuditLoss.observed("loop-never-seen"),
 		"component-wide loss does not cover loops the marker has never seen")
 
-	const loopID = "loop-total-loss"
+	// The "total loss" this test names is the trajectory bucket, not the loop
+	// record. The loop itself must exist: a loop that was never created cannot
+	// be completed, and persistHandlerResult now fails closed on that rather
+	// than stamping a terminal for a loop it cannot read.
+	loopID, err := c.handler.loopManager.CreateLoop("task-total-loss", "role", "model", 3)
+	require.NoError(t, err)
 	_, err = c.handler.trajectoryManager.startTrajectory(loopID)
 	require.NoError(t, err)
 

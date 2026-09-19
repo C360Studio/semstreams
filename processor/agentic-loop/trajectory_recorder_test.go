@@ -424,7 +424,7 @@ func TestTrajectoryAuditBudgetPreservesUsefulDeliveryContext(t *testing.T) {
 			var transitioned atomic.Bool
 			var published atomic.Bool
 
-			err := consumeLongRunningInput(parent, msg, time.Hour, func(workCtx context.Context, _ []byte) error {
+			err := consumeTypedLongRunningInput(parent, msg, time.Hour, func(workCtx context.Context, _ []byte) error {
 				c.recordTrajectoryObservations(workCtx, HandlerResult{trajectoryObservations: []trajectoryObservation{{
 					LoopID: "loop-budget", Kind: agentic.TrajectoryKindModelCompleted,
 					CausalPhase: agentic.TrajectoryPhaseModelResult, Evidence: map[string]string{"response": "full"},

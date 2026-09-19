@@ -391,6 +391,13 @@ func TestLateToolResultForSettledLoopIsExpectedDrop(t *testing.T) {
 	if err := h.loopManager.TransitionLoop(loopID, agentic.LoopStateComplete); err != nil {
 		t.Fatalf("TransitionLoop: %v", err)
 	}
+	// The settled loop's record is what makes these drops *expected*. Memory
+	// absence alone cannot say whether a loop finished or was lost by this
+	// process, so the durable record is the fixture's precondition, not
+	// decoration.
+	c.loopsBucket = recordLoopBucket{records: map[string]agentic.LoopEntity{
+		loopID: {ID: loopID, State: agentic.LoopStateComplete},
+	}}
 	c.releaseLoopTransientState(loopID)
 
 	toolResult := agentic.ToolResult{CallID: "toolu_model_authored", Name: "search", Content: "late"}
@@ -454,6 +461,9 @@ func TestLateModelResponseForSettledLoopIsExpectedDrop(t *testing.T) {
 	if err := h.loopManager.TransitionLoop(loopID, agentic.LoopStateComplete); err != nil {
 		t.Fatalf("TransitionLoop: %v", err)
 	}
+	c.loopsBucket = recordLoopBucket{records: map[string]agentic.LoopEntity{
+		loopID: {ID: loopID, State: agentic.LoopStateComplete},
+	}}
 	c.releaseLoopTransientState(loopID)
 
 	response := agentic.AgentResponse{

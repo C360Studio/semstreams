@@ -160,13 +160,15 @@ func (c *ToolCallGovernanceConfig) EnsureDefaults() {
 	}
 }
 
+const defaultLoopHeartbeatInterval = 15 * time.Second
+
 // ConsumerConfig holds JetStream consumer tuning for long-running ports.
-// Deployments with slow LLMs (local Ollama, constrained GPUs) should increase
-// ack_wait and heartbeat_interval to prevent premature redelivery.
+// The heartbeat must remain no greater than half the shortest BackOff interval;
+// increasing AckWait does not relax that ceiling while BackOff is configured.
 type ConsumerConfig struct {
 	AckWait           string `json:"ack_wait,omitempty" schema:"type:string,description:AckWait duration for long-running consumers (e.g. 90s or 5m),default:90s,category:advanced"`
-	HeartbeatInterval string `json:"heartbeat_interval,omitempty" schema:"type:string,description:InProgress heartbeat interval (e.g. 60s or 2m). Must be less than ack_wait,default:60s,category:advanced"`
-	MaxDeliver        int    `json:"max_deliver,omitempty" schema:"type:int,description:Maximum redelivery attempts for long-running consumers,default:2,min:1,max:10,category:advanced"`
+	HeartbeatInterval string `json:"heartbeat_interval,omitempty" schema:"type:string,description:InProgress heartbeat interval for long-running consumers. Must be no more than half the shortest configured BackOff interval,default:15s,category:advanced"`
+	MaxDeliver        int    `json:"max_deliver,omitempty" schema:"type:int,description:Maximum redelivery attempts for long-running consumers. Must cover the fixed two-entry BackOff,default:2,min:2,max:10,category:advanced"`
 }
 
 // ContextConfig represents configuration for context memory management.
@@ -308,8 +310,11 @@ func (c ConsumerConfig) Validate() error {
 			return errs.WrapInvalid(fmt.Errorf("heartbeat_interval must be at least 5s"), "ConsumerConfig", "Validate", "check heartbeat_interval")
 		}
 	}
-	if c.MaxDeliver < 0 {
-		return errs.WrapInvalid(fmt.Errorf("max_deliver must be non-negative"), "ConsumerConfig", "Validate", "check max_deliver")
+	if c.MaxDeliver != 0 && c.MaxDeliver < 2 {
+		return errs.WrapInvalid(
+			fmt.Errorf("max_deliver %d is below required minimum %d", c.MaxDeliver, 2),
+			"ConsumerConfig", "Validate", "check max_deliver",
+		)
 	}
 	return nil
 }
@@ -341,11 +346,11 @@ func (c ConsumerConfig) ParsedHeartbeatInterval() time.Duration {
 }
 
 // DefaultConsumerConfig returns the default consumer configuration.
-// These defaults match the original hardcoded values.
+// The heartbeat is half the shortest long-running consumer BackOff interval.
 func DefaultConsumerConfig() ConsumerConfig {
 	return ConsumerConfig{
 		AckWait:           "90s",
-		HeartbeatInterval: "60s",
+		HeartbeatInterval: defaultLoopHeartbeatInterval.String(),
 		MaxDeliver:        2,
 	}
 }

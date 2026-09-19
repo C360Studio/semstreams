@@ -2190,11 +2190,24 @@ func (h *MessageHandler) handleCompleteResponse(result *HandlerResult, loopID st
 	return nil
 }
 
+// errCancelledBeforeMutation marks the ONE cancellation this handler can prove
+// happened before it touched anything. HandleToolResult checks its context
+// three times — here, and twice inside handleToolsComplete (:2472, :2555) after
+// StoreToolResult, RemovePendingTool, IncrementIteration and
+// GetAndClearToolResults have already moved in-process state. Only the first
+// check can say "nothing happened yet", and only that one may be retried: the
+// other two are cancellations after a mutation the message cannot rebuild, and
+// a replay of those lands on a loop that has already advanced.
+//
+// The marker wraps the context error rather than replacing it, so every
+// existing errors.Is(err, context.Canceled) reader is unaffected.
+var errCancelledBeforeMutation = errors.New("cancelled before any loop mutation")
+
 // HandleToolResult processes a tool execution result
 func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, toolResult agentic.ToolResult) (HandlerResult, error) {
 	// Check for cancellation before processing
 	if err := ctx.Err(); err != nil {
-		return HandlerResult{}, err
+		return HandlerResult{}, fmt.Errorf("%w: %w", errCancelledBeforeMutation, err)
 	}
 	originalToolResult := toolResult
 	entity, err := h.loopManager.GetLoop(loopID)

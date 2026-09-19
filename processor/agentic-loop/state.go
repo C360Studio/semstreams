@@ -1255,7 +1255,11 @@ func (m *LoopManager) CancelLoop(loopID, cancelledBy string) (agentic.LoopEntity
 
 	entity, exists := m.loops[loopID]
 	if !exists {
-		return agentic.LoopEntity{}, errs.Wrap(fmt.Errorf("loop %s not found", loopID), "LoopManager", "CancelLoop", "find loop")
+		// The typed sentinel, not a bare error: the caller must be able to
+		// tell "this process does not have it" from a transient failure,
+		// because the two settle in opposite directions.
+		return agentic.LoopEntity{}, errs.Wrap(
+			fmt.Errorf("loop %s: %w", loopID, ErrLoopNotFound), "LoopManager", "CancelLoop", "find loop")
 	}
 
 	if entity.State.IsTerminal() {
