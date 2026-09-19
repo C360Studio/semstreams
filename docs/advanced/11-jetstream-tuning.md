@@ -129,12 +129,8 @@ policy, err := natsclient.ValidateHeartbeatDeliveryPolicy(
     cfg, // the exact StreamConsumerConfig passed to acquisition
     heartbeatInterval,
     natsclient.ImmediateDeliveryRetry(),
-    func(
-        workCtx context.Context,
-        attempt natsclient.DeliveryAttempt,
-        data []byte,
-    ) (natsclient.DeliveryDecision, error) {
-        if err := process(workCtx, attempt, data); err != nil {
+    func(workCtx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
+        if err := process(workCtx, data); err != nil {
             return natsclient.DeliveryDecisionRetry, err
         }
         return natsclient.DeliveryDecisionAck, nil
@@ -147,7 +143,8 @@ if err != nil {
 result := natsclient.ConsumeDeliveryWithHeartbeat(messageCtx, msg, policy)
 ```
 
-The component-private binding owner observes `result`. When `OwnerStopRequired` is true, it closes local admission
+Work sees the delivery-derived context and the delivery's read-only bytes, and nothing else: no native message,
+no settlement method, no delivery number. The component-private binding owner observes `result`. When `OwnerStopRequired` is true, it closes local admission
 and drains that exact consume handle; it does not expose the handle or raw settlement methods to business work.
 
 **How InProgress works:** Sends `+WPI` reply to the server, which resets the AckWait timer for that specific

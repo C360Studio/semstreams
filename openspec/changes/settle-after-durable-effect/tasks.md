@@ -51,8 +51,13 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       `TestLoopUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner`,
       `TestModelUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner`,
       `TestLoopSetupWiresMetadataFailureToAcquiredOwner`, `TestModelSetupWiresMetadataFailureToAcquiredOwner`.
-- [x] 4.4 Prove the delivery-attempt view stays immutable and bounded:
-      `TestDeliveryAttemptExposesOnlyImmutableAttemptObservation`.
+- [x] 4.4 Prove delivery work observes only its context and its bytes. The observation is the `DeliveryWork`
+      signature itself — `func(context.Context, []byte) (DeliveryDecision, error)`
+      (`natsclient/delivery_settlement.go:35`), held by `TestDeliveryDecisionConstants`. The exported
+      `DeliveryAttempt` view this task first cited was withdrawn with its test before this change began
+      (`openspec/changes/archive/2026-09-19-semantic-jetstream-settlement/tasks.md` 2.9); neither the type nor
+      `TestDeliveryAttemptExposesOnlyImmutableAttemptObservation` exists in the tree, so the citation was to
+      nothing.
 
 ## 5. Heartbeat lease validation and retry floor
 

@@ -4,8 +4,8 @@
 
 ### Requirement: The model delivery owner latches its first fatal result into health
 
-Agentic-model SHALL receive immutable delivery-attempt observation from the accepted settlement adapter. It SHALL
-NOT receive or retain native message or settlement authority.
+Agentic-model SHALL receive only the delivery-derived context and the delivery's read-only bytes from the accepted
+settlement adapter. It SHALL NOT receive or retain native message or settlement authority.
 
 The first fatal result from the model delivery owner SHALL synchronously latch into the component's existing health
 surface before owner-stop observation can drain the handle. Health SHALL report `Healthy=false`, status
@@ -23,10 +23,10 @@ public state, durable state, or communication path.
 - **AND** drains the exact consume handle
 - **AND** component health becomes negative with the exact cause and one error-count increment
 
-#### Scenario: Delivery attempt observation is immutable and bounded
+#### Scenario: Delivery work observes only its context and its bytes
 
-- **WHEN** agentic-model receives delivery-attempt observation
-- **THEN** it may observe only `Number`, `MetadataAvailable`, and `IsRedelivery`
+- **WHEN** agentic-model work is invoked for one delivery
+- **THEN** it receives the delivery-derived context and that delivery's read-only bytes, and nothing else
 - **AND** it cannot access a native message, settlement method, sequence, consumer identity, header, or mutable state
 
 ### Requirement: Model heartbeat policy is valid before acquisition
