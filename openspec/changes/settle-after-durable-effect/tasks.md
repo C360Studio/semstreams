@@ -217,13 +217,18 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 - [x] 8d.4 (MEDIUM-2) The loop delta's heading claimed "All six loop input classes" two requirements above its own
       task-intake exemption. Renamed to *Loop input classes settle after owner-specific durable done* across the
       delta and its 16 citations
-- [x] 8d.5 (MEDIUM-3) Two of the three `response_publish_failures_total{lane}` label values were unobserved.
-      `TestResponsePublishFailureIsObserved` now asserts each lane label once
+- [x] 8d.5 (MEDIUM-3) Two of the three `response_publish_failures_total{lane}` label values were unobserved. Each
+      is now asserted once, by one test per lane: `http_command` by
+      `TestHTTPResponsePublicationFailureIsObservedWithoutChangingTheResult` (8c.5), `loop_user_channel` by
+      `TestLoopUserChannelResponseFailureNamesItsOwnLane`, and `http_submission` by
+      `TestIntegrationHTTPSubmissionResponseFailureNamesItsOwnLane` — an integration test because an unconnected
+      client fails the task publish before the response copy can be the thing that fails
 - [x] 8d.6 (MEDIUM-4) #1345 is cited from the loop delta's exemption requirement, `design.md`'s task-intake
       residual and 8c.9, so the exemption points at a tracked home rather than prose
 - [x] 8d.7 (NITs) 8c.1's counterfactual wording and 8c.7's mutation arithmetic corrected; `http.go:22` said "two"
-      HTTP lanes over a three-constant block; the response-lane test carries the `// spec:` citation the round-3
-      spawn-identity edit left off
+      HTTP lanes over a three-constant block; and the terminal-business-failure scenario the round-3
+      spawn-identity edit left uncited is cited by the new `response_handler_failure_test.go`, which is where that
+      scenario is now observed on the response lane
 
 ## 9. Landing
 
