@@ -261,6 +261,18 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       published" is a measurement rather than a nil client) plus the record assertion added to
       `TestToolResultHandlerFailureSettlesOnTheDurableRecord`. Mutation: remove the `persistFailureState` call →
       the presence assertions fail and the failure event is published with no record
+- [x] 8e.3 (R3, P1) `settleFailedToolResult` retried ANY `context.Canceled`/`DeadlineExceeded`, but
+      `HandleToolResult` checks its context three times and two of them (`handlers.go:2472`, `:2555`, inside
+      `handleToolsComplete`) run after `StoreToolResult`, `RemovePendingTool`, `IncrementIteration` and
+      `GetAndClearToolResults`. The first check (`:2209`) now returns `errCancelledBeforeMutation` wrapped around
+      the context error — so every `errors.Is(err, context.Canceled)` reader is unaffected — and only that marker
+      retries; every other cancellation is `errs.WrapFatal` → Quarantine.
+      `TestToolResultCancellationRetriesOnlyBeforeMutation` drives the post-mutation case through the production
+      `TodoReader` seam (`prependIterationContext` runs two lines before the `:2555` check) and asserts the
+      iteration ADVANCED, so the fixture is proven post-mutation rather than assumed. Mutations: return a plain
+      `ctx.Err()` at `:2209` → the pre-mutation subtest flips to Quarantine; drop the marker check in
+      `settleFailedToolResult` → the post-mutation subtest flips to Retry. The cost and the two topology facts
+      that size it are a declared residual in `design.md`
 
 ## 9. Landing
 

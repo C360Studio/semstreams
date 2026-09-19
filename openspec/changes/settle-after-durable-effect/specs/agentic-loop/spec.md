@@ -119,6 +119,14 @@ today.
 - **AND** the exemption is recorded here and tracked as issue #1345, with resumable intake named as its
   precondition
 
+#### Scenario: A tool result is cancelled after the loop has advanced
+
+- **WHEN** delivery work for a tool result is cancelled after the handler has stored the result, advanced the
+  iteration, or drained accumulated results
+- **THEN** the delivery quarantines, because a replay meets a loop that has already moved
+- **AND** only a cancellation the handler observed before it touched anything is retried, so a clean stop that
+  mutated nothing does not latch delivery ownership lost
+
 #### Scenario: A terminal failure's record is written before its event is published
 
 - **WHEN** a terminal handler result carries a failure state

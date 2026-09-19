@@ -2130,10 +2130,24 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 // got — StoreToolResult may have landed while RemovePendingTool did not, a
 // queued call may have been popped and not dispatched — so the commit is
 // unknown and the lane quarantines rather than ACKing work the executor really
-// did. Cancellation is the exception and stays an ordinary Retry: HandleToolResult
-// checks ctx before it touches anything, so a shutting-down process has mutated
-// nothing, and quarantining there would latch a false delivery-ownership fatal
-// on every clean stop that catches a tool result in flight.
+// did.
+//
+// Cancellation is the one exception, and only the kind that is provably
+// pre-mutation. HandleToolResult checks its context three times: once before it
+// touches anything (handlers.go:2209) and twice inside handleToolsComplete
+// (handlers.go:2472, :2555), after StoreToolResult, RemovePendingTool,
+// IncrementIteration and GetAndClearToolResults have moved in-process state.
+// Only the first carries errCancelledBeforeMutation, and only it retries: a
+// shutting-down process that mutated nothing must not latch a false
+// delivery-ownership fatal on every clean stop that catches a tool result in
+// flight. The other two are cancellations after a mutation the message cannot
+// rebuild — the probe in round 3 drove iterations 0 → 1 with zero publications,
+// and the replay then hit the iteration budget and returned terminal
+// max_iterations without ever issuing the request it interrupted — so they take
+// the same Quarantine as any other partial effect. The cancellation is not
+// always a shutdown either: delivery_settlement.go:366-373 cancels the work
+// context when a heartbeat InProgress fails, in a process that is still alive.
+// L4 (#1330) is what relaxes this to replay.
 func (c *Component) settleFailedToolResult(
 	ctx context.Context, loopID string, result HandlerResult, cause error,
 ) error {
@@ -2146,7 +2160,7 @@ func (c *Component) settleFailedToolResult(
 	}
 
 	c.recordHandlerResultTrajectory(ctx, result)
-	if errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
+	if errors.Is(cause, errCancelledBeforeMutation) {
 		return cause
 	}
 	return errs.WrapFatal(cause, "agentic-loop", "handleToolResultMessage",

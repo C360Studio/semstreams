@@ -3,12 +3,14 @@ package agenticloop
 import (
 	"context"
 	"encoding/json"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -125,5 +127,108 @@ func TestToolResultHandlerFailureSettlesOnTheDurableRecord(t *testing.T) {
 			"a clean shutdown must not latch delivery ownership lost")
 		require.Equal(t, int32(1), msg.naks.Load())
 		require.Zero(t, msg.acks.Load()+msg.terms.Load())
+	})
+}
+
+// cancellingTodoReader fires a cancellation from inside HandleToolResult, at
+// the one point production reads it: prependIterationContext
+// (handlers.go:2551) runs after IncrementIteration and GetAndClearToolResults
+// have already moved this loop, and the ctx check that observes the
+// cancellation is the one two lines later. It is the smallest production seam
+// that produces a post-mutation cancel without a fake handler.
+type cancellingTodoReader struct {
+	cancel context.CancelFunc
+	calls  atomic.Int32
+}
+
+func (r *cancellingTodoReader) ReadTodos(_ context.Context, _ string) ([]TodoState, error) {
+	r.calls.Add(1)
+	r.cancel()
+	return nil, nil
+}
+
+// Cancellation is the one Retry carved out of "otherwise Quarantine", and it is
+// only sound where the cancellation preceded every mutation. HandleToolResult
+// checks its context three times and the other two run after StoreToolResult,
+// RemovePendingTool, IncrementIteration and GetAndClearToolResults — a replay
+// of those lands on a loop that has already advanced, which the round-3 probe
+// measured: iterations 0 → 1 with zero publications, then a replay that hit the
+// budget and returned terminal max_iterations without ever issuing the
+// interrupted request.
+//
+// The cancellation source is not only shutdown: delivery_settlement.go:366-373
+// cancels the work context when a heartbeat InProgress fails, in a live
+// process.
+//
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
+func TestToolResultCancellationRetriesOnlyBeforeMutation(t *testing.T) {
+	toolResultBytes := func(t *testing.T, callID string) []byte {
+		t.Helper()
+		toolResult := &agentic.ToolResult{CallID: callID, Name: "search", Content: "executor ran this"}
+		data, err := json.Marshal(message.NewBaseMessage(toolResult.Schema(), toolResult, "test"))
+		require.NoError(t, err)
+		return data
+	}
+	// A loop with one dispatched tool call, so the arriving result completes
+	// the batch and drives handleToolsComplete.
+	loopAwaitingItsOnlyTool := func(t *testing.T) (*Component, *MessageHandler, string, string) {
+		t.Helper()
+		handler := NewMessageHandler(DefaultConfig())
+		handler.SetPlatform(types.PlatformMeta{Org: "acme", Platform: "ops"})
+		loopID, err := handler.loopManager.CreateLoop("task-cancel-boundary", "general", "model", 3)
+		require.NoError(t, err)
+		callID := "call-cancel-boundary"
+		_, err = handler.HandleModelResponse(t.Context(), loopID, agentic.AgentResponse{
+			RequestID: "request-cancel-boundary", Status: "tool_call",
+			Message: agentic.ChatMessage{Role: "assistant", ToolCalls: []agentic.ToolCall{{ID: callID, Name: "search"}}},
+		})
+		require.NoError(t, err)
+		c := releaseTestComponent(t, handler)
+		c.loopsBucket = &recordingLoopBucket{}
+		return c, handler, loopID, callID
+	}
+
+	t.Run("cancelled after the loop advanced, so the delivery quarantines", func(t *testing.T) {
+		c, handler, loopID, callID := loopAwaitingItsOnlyTool(t)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		reader := &cancellingTodoReader{cancel: cancel}
+		handler.SetTodoReader(reader)
+
+		before := handler.loopManager.GetCurrentIteration(loopID)
+		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, callID)}
+		result, admitted := consumeAdmittedDelivery(
+			ctx, msg, heartbeatPolicyForTest(t, "tool.result", c.handleToolResultMessage),
+			newDeliveryLaneAdmission(nil))
+		require.True(t, admitted)
+		require.Positive(t, reader.calls.Load(), "the fixture must cancel from inside the handler")
+
+		// The mutation this delivery cannot rebuild, measured rather than
+		// assumed: the loop advanced and nothing was published for it.
+		require.Greater(t, handler.loopManager.GetCurrentIteration(loopID), before,
+			"the fixture must cancel AFTER the iteration advanced, or it proves nothing")
+
+		require.Equal(t, natsclient.DeliveryDecisionQuarantine, result.Decision(),
+			"a cancellation after the loop advanced is a partial effect, not a clean stop")
+		require.True(t, result.OwnerStopRequired())
+		require.Zero(t, msg.acks.Load()+msg.naks.Load()+msg.terms.Load())
+	})
+
+	t.Run("cancelled before the handler touched anything, so the delivery retries", func(t *testing.T) {
+		c, handler, loopID, callID := loopAwaitingItsOnlyTool(t)
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		before := handler.loopManager.GetCurrentIteration(loopID)
+		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, callID)}
+		result, admitted := consumeAdmittedDelivery(
+			ctx, msg, heartbeatPolicyForTest(t, "tool.result", c.handleToolResultMessage),
+			newDeliveryLaneAdmission(nil))
+		require.True(t, admitted)
+		require.Equal(t, natsclient.DeliveryDecisionRetry, result.Decision(),
+			"a clean stop that mutated nothing must not latch delivery ownership lost")
+		require.Equal(t, int32(1), msg.naks.Load())
+		require.Equal(t, before, handler.loopManager.GetCurrentIteration(loopID),
+			"the pre-mutation case is only retryable because nothing moved")
 	})
 }

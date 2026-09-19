@@ -108,8 +108,13 @@ business failure (`handleLoopFailure`) is durable only once its failed loop stat
 and its failure events have committed, so that function reports rather than returning void — with one carve-out: a
 loop that could not be transitioned at all wrote nothing, so it is an ordinary Retry and the redelivery is settled
 from the loop record. The tool-result handler-error branch (#1343) persists a terminal result through
-`persistHandlerResult` and settles on that write; its non-terminal errors quarantine, except cancellation, which
-stays a Retry so a clean shutdown cannot latch a false `delivery ownership lost`.
+`persistHandlerResult` and settles on that write; its non-terminal errors quarantine, except a cancellation the
+handler can prove preceded every mutation, which stays a Retry so a clean shutdown cannot latch a false
+`delivery ownership lost`. "Preceded every mutation" is a marker, not an error class: `HandleToolResult` checks
+its context three times, and only the first — `handlers.go:2209`, before it touches anything — returns
+`errCancelledBeforeMutation`. The two inside `handleToolsComplete` (`:2472`, `:2555`) run after
+`StoreToolResult`, `RemovePendingTool`, `IncrementIteration` and `GetAndClearToolResults`, so they are partial
+effects and take the same Quarantine as any other.
 
 The command lane's post-effect response failure splits, and the split is the whole rule stated twice.
 `/cancel` publishes its signal at `commands.go:179` and then builds its success response, so a failed response
@@ -212,6 +217,37 @@ result for the transient-lineage case and `:1320-1331` resumes it, which is exac
 The loop delta names this exemption as a requirement rather than leaving it to the absence of a scenario, because
 the requirement above it reads as covering the class. It is tracked as **#1345** (beta.163,
 `class:swallowed-degrade`, placement candidate L4); sizing and placing the conversion is the owner's.
+
+## Declared residual — a cancelled tool result after mutation rides to its timeout
+
+The R3 ruling costs something and the cost is named here rather than discovered. A clean stop that cancels
+`HandleToolResult` after `StoreToolResult` quarantines that delivery: the lane latches, the tool result is gone,
+and the loop rides to its own timeout instead of continuing. That is the deliberate trade — a lost iteration
+against a silently duplicated one — and L4 (#1330) is what relaxes it, by making the replay reproduce the
+interrupted operation rather than re-running from a loop that has already advanced.
+
+Two facts about the topology decide how bad the residual is. They are recorded as FACTS, not as gates; neither
+changes the ruling:
+
+- **(a) No durable write is reachable inside `HandleToolResult`.** `loopsBucket` is a `Component` field and
+  `handlers.go` never names it; every `Put` site is in `component.go` (`:2267` completion, `:2298` failure,
+  `:2322` cancellation, `:2349` loop state) and each is called by a `Component` method after the handler has
+  returned. So the mutation a post-mutation cancellation leaves behind — stored tool result, removed pending tool,
+  incremented iteration, drained results — is entirely in-process.
+- **(b) The loop manager is never reloaded from KV.** The `MessageHandler` and its `LoopManager` are constructed
+  once in `NewComponent` (`component.go:297`); `Start` and `initializeKVBuckets` do not restore loops, and the
+  package has no restore path at all (`restoreLoops`, `rehydrate`, `loadLoopsFromKV` match nothing). So a
+  Stop/Start inside one process reuses the mutated in-memory state, and a replay meets the advanced loop.
+
+Together: the interrupted state is in-memory and survives a restart of the component within the process, so the
+replay Codex measured — iterations 0 → 1, zero publications, then terminal `max_iterations` without the request
+ever being issued — is the real behaviour, not an artifact of the probe. After a process restart the in-memory
+state is gone and the durable record is whatever the last `persistLoopState` wrote, which is a different recovery
+problem and also L4's.
+
+The cancellation source is not only shutdown: `natsclient/delivery_settlement.go:345-380` derives the work context
+per delivery and cancels it both on `ctx.Done()` and on a failed heartbeat `InProgress` (`:366-373`), the second
+in a process that is still running.
 
 ## Declared residual — identity-preserving task replay is L2's
 
