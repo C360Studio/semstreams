@@ -113,9 +113,17 @@ because this change makes the old one false. No outcome moves in any of the four
 
 This layer was cut on the L1 head `0053183d`, before L1 (#1327) and L2 (#1328) took their review rounds. That debt
 is now paid: this branch is rebased onto the reviewed L2 head, which itself sits on the L1 squash on main. Two
-carried premises were falsified by the layers below and are corrected in place rather than left standing — L1's
-two-conjunct justification for the Quarantine arm (above), and L1's "falls through to the user's next live loop"
-reason for quarantining a resolved-target cancel. In both cases the outcome is unchanged and only the stated reason
-moves; the residual above records the one that is still open.
+carried premises were falsified by the layers below and are corrected rather than left standing — L1's two-conjunct
+justification for the Quarantine arm (above), and L1's "falls through to the user's next live loop" reason for
+quarantining a resolved-target cancel. In both cases the outcome is unchanged and only the stated reason moves; the
+residual above records the one that is still open.
+
+"Corrected" means in **all three** places the premise is written down, which is what the rebase's first pass got
+wrong: the spec delta, the test header, and the production comment at the arm itself
+(`processor/agentic-dispatch/component.go`, the two-conjunct block above `sendResponse` in `handleCommand`). The
+first pass reached the first two and left the third citing `GetActiveLoop` and `loop_tracker.go:204-226`, both
+deleted by this change — so the change shipped two accounts of its own Quarantine arm and the stale one was the one
+an implementer reads. § 9.1 of `tasks.md` records the fix. A premise correction that stops at the spec is not a
+correction; the code is where the next reader looks first.
 
 PR #1338 stays based on `claude/gh1328-stable-identity` until L2 merges to main.

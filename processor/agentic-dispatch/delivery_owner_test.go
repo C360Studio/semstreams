@@ -321,7 +321,7 @@ var _ component.Discoverable = (*Component)(nil)
 //
 // The predicate is now two conjuncts, and this test holds the half that must
 // NOT quarantine. The published fact comes from the publish site itself
-// (commands.go:191), so these cases are distinguished by what they did rather
+// (commands.go:193), so these cases are distinguished by what they did rather
 // than by what they were called.
 //
 // spec: agentic-dispatch / Every dispatch durable input settles through its owner
@@ -429,7 +429,7 @@ func TestEffectFreeCommandWithFailedResponseRetries(t *testing.T) {
 		defer cancel()
 		// Current in the shared projection, settled in the exact record: the
 		// gate reads the record and answers "already settled", so
-		// handleCancelCommand returns BEFORE the publish at commands.go:179.
+		// handleCancelCommand returns BEFORE the publish at commands.go:187.
 		// The two reads are the view and the exact Get — under #1329 that skew
 		// is the projection lagging its own bucket, not a second source of
 		// truth, and it is what lets this case resolve a target and still
@@ -452,7 +452,7 @@ func TestEffectFreeCommandWithFailedResponseRetries(t *testing.T) {
 	})
 
 	// This one discriminates neither predicate: with no loop to resolve,
-	// targetFromTracker is false, so the old provenance-only arm retried it too.
+	// targetResolved is false, so the old provenance-only arm retried it too.
 	// It pins the no-loop path against a future widening, and is not coverage of
 	// the two-conjunct rule — the two subtests above are.
 	t.Run("a bare cancel with no loop to resolve", func(t *testing.T) {

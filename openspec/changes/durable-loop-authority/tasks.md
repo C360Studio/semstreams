@@ -188,11 +188,14 @@ round, not restated.
 - [x] 8.1 `git rebase --onto origin/claude/gh1328-stable-identity 7eaff212`, backup ref
       `refs/backup/gh1329-pre-l2main-rebase-20260919` = `b7b3de13`. **Sixteen** own commits in, **fifteen** out:
       the `cherry-pick -x` of L0.5's fixture re-key (`a7a2f354`, carried as `9d190ca5`) dropped by patch-id, as
-      § 7.6 predicted it would once the rebase reached a base that already carried L0.5. Verified rather than
-      assumed: `a7a2f354` is reachable from `origin/main`, `9d190ca5` touched only
-      `terminal_settlement_integration_test.go` and nothing else, and the `:191` failure-message fix the brief
-      asked to preserve is NOT in that pick — it is its own commit (`9cb40d64` before the rebase), which replays
-      intact
+      § 7.6 predicted it would once the rebase reached a base that already carried L0.5. The commit object is NOT
+      an ancestor of `origin/main` — `git merge-base --is-ancestor a7a2f354 origin/main` exits **1**, and
+      `git branch -a --contains` lists only `claude/gh1239-signal-vocabulary` — which is exactly what a squash
+      merge produces: L0.5 landed as `8820ac51` (#1339), carrying the content. The evidence that nothing was lost
+      is the tree, not the ancestry: `9d190ca5` touched `terminal_settlement_integration_test.go` and nothing
+      else, and that file is byte-identical across the rebase (`md5 17aae63b7a8f6e2b0e710c2bb04ec399` at both
+      `b7b3de13` and the post-rebase head). The `:191` failure-message fix the brief asked to preserve is NOT in
+      that pick — it is its own commit (`9cb40d64` before the rebase), which replays intact
 - [x] 8.2 Every edit under `openspec/changes/settle-after-durable-effect/` dropped: that change is archived on
       main. What this layer still needs from it is a `## MODIFIED Requirements` block here instead
 - [x] 8.3 `handleTaskSubmission`'s post-PubAck comment carried three repeated effects. TWO are now false:
@@ -234,3 +237,63 @@ round, not restated.
       and every one reports `--- PASS`, read per test rather than from the package `ok`, including
       `TestIntegrationPersistedInvalidStateIsPermanent`, which § 7.6 recorded RED and which the dropped
       cherry-pick is no longer needed to fix
+
+## 9. Review round on the rebase (1 HIGH, 4 MEDIUM, 1 NIT — no functional defect)
+
+The reviewer found the rebase mechanics correct, every L1/L2 guarantee intact under mutation, `seedCurrentLoops` a
+production seam, and the `## MODIFIED Requirements` block exact. Every finding was a claim-accuracy one: the code
+does the right thing and said the wrong thing about why.
+
+- [x] 9.1 **HIGH.** The Quarantine arm's only in-code justification cited `GetActiveLoop` and
+      `loop_tracker.go:204-226` — a symbol and a file THIS change deletes — and described a fall-through to the
+      user's most recent loop that `activeLoop` refuses. `design.md` § "Declared cost" claimed that premise was
+      "corrected in place"; the correction had reached the spec delta and the test header but not the comment an
+      implementer reads, so the change shipped two accounts and the stale one was in the code. Rewritten to the
+      mechanism that survives: the message does not carry the identity the delivery acted on, `activeLoop` kills
+      the cross-channel form of the hazard, and what remains is **same-route rebirth** — a loop started on THIS
+      user/channel route between the two deliveries is current when the redelivery reads and would be cancelled
+      having never been named. The classification does not move
+- [x] 9.2 **MEDIUM.** Eight `file:line` pins were staled by this change's own edits — five that were exact at L2,
+      one **out of range** (`component.go:1565-1569` against a 1,406-line file), and one written by the rebase
+      round that recorded "pins re-derived" in § 8.8. All re-derived with `sed -n "${n}p"` on this head, then
+      re-derived AGAIN after the comment rewrite, which shifted `component.go` by +4:
+
+      | site | was | now | resolves to |
+      |---|---|---|---|
+      | `command_effect.go:16` | `commands.go:185` | `commands.go:187` | `noteSignalPublished(ctx)` |
+      | `component.go` conjunct 1 | `commands.go:185` | `commands.go:187` | `noteSignalPublished(ctx)` |
+      | `delivery_owner_test.go` | `commands.go:185` | `commands.go:187` | `noteSignalPublished(ctx)` |
+      | `delivery_owner_test.go` | `commands.go:179` | `commands.go:181` | `c.natsClient.PublishToStream(ctx, subject, signalData)` |
+      | `task_submission_settlement_integration_test.go` | `commands.go:179` | `commands.go:181` | same |
+      | `component.go` conjunct 2 | `:945-955` (inside its own comment) | `:875-890` | `loopID := ""` … closing `}` of the resolution block |
+      | `command_effect.go:30` | `component.go:1565-1569` (out of range) | `component.go:1398-1402` | `handler := func(exec CommandExecutor) CommandHandler {` … `}(executor)` |
+      | `task_submission_settlement_integration_test.go` | `http_activity.go:311-328` | `http_activity.go:321-339` | `func (c *Component) activeLoop(…)` … its closing `}` |
+
+      Three non-Go pins in the same comment block were swept too and all still land:
+      `release/tier1-packages.txt:74`, `.github/workflows/ci.yml:236-238`, `taskfiles/apicompat.yml:9-12`.
+      `commands.go:136-148` was checked and left: it is a range that still covers the `facts.Terminal` gate
+- [x] 9.3 **MEDIUM.** § 8.1's "Verified rather than assumed: `a7a2f354` is reachable from `origin/main`" was
+      **false** — `git merge-base --is-ancestor` exits 1, because L0.5 squash-landed as `8820ac51`. Corrected in
+      place to the proof actually held: the byte-identical fixture file across the rebase. A phrase asserting
+      verification is the one a later reader trusts without re-checking, so it costs more wrong than a plain claim
+- [x] 9.4 **MEDIUM.** The reworded carry commit cites **#1138** for the paused-state removal; the issue is
+      **#1239** (PR #1339, which #1138 is unrelated to). Not amended: rewriting branch history a second time to
+      fix a citation is worse than the citation. The coordinator authors the squash body with `--body-file`, so
+      branch messages do not reach `main`; the miscitation is recorded in PR #1338's provenance section instead.
+      It has not propagated — `git grep 1138` over this change directory and both packages returns nothing
+- [x] 9.5 **MEDIUM.** `TestIntegrationBareCancelWithFailedResponseQuarantines`'s header credited the wrong
+      assertion. The reviewer proved by mutation (drop the `ChannelID` conjunct from `activeLoop`) that a widening
+      makes loop A and loop B BOTH match the route, so `activeLoop` refuses with `loop_route_ambiguous` and the
+      command errors before publishing: what dies is the Quarantine assertion at `:436` and "the first delivery
+      cancelled this channel's loop" at `:439`. The `require.NotContains` at `:449` — the assertion the header
+      named as the guard — stays GREEN under that mutation, and under a classification mutation too, because its
+      whole block is inside `if decision == Retry`. Header rewritten to credit `:436`/`:439` and to name `:449` as
+      the inert belt-and-braces check, so a later author does not read it as the test's teeth. The fixture's second
+      session stays: it is what makes a widened resolver ambiguous
+- [x] 9.6 **NIT.** The spec delta says "resolved from durable loop authority" while the code still said "tracker"
+      in the present tense at five sites. `targetFromTracker` renamed to `targetResolved` and all five rewritten.
+      The package's other tracker mentions were checked and are correctly past-tense
+- [x] 9.7 Gates after the round, exit codes read: `task lint` 0; `go test -race -count=1
+      ./processor/agentic-dispatch/` 0; the three named dispatch tests by name under
+      `-tags=integration -race -count=1 -p 2 -v`, all PASS; `openspec validate durable-loop-authority --strict` 0;
+      `task spec:properties` 244/244; `task schema:generate` then `git diff --exit-code schemas/ specs/` 0

@@ -875,11 +875,12 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 		})
 	}
 
-	// Resolve loop ID. Whether the target came from the message or from the
-	// tracker decides how a failed response settles below, so the answer is
-	// recorded here rather than re-derived from args at the call site.
+	// Resolve loop ID. Whether the target was named by the message or resolved
+	// here from durable loop authority decides how a failed response settles
+	// below, so the answer is recorded now rather than re-derived from args at
+	// the call site.
 	loopID := ""
-	targetFromTracker := false
+	targetResolved := false
 	if len(args) > 0 && args[0] != "" {
 		loopID = args[0]
 	} else if c.config.AutoContinue {
@@ -888,11 +889,11 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 		if err != nil {
 			return err
 		}
-		// The resolution SOURCE moved to durable loop authority (#1329); the
-		// fact L1's quarantine arm reads is unchanged and still recorded here —
-		// this target was resolved by us, not named by the message, so a
-		// redelivery would resolve it again against a changed world.
-		targetFromTracker = loopID != ""
+		// Resolved by us, not named by the message. L1 recorded this same fact
+		// when the source was the in-process tracker; #1329 moves the source to
+		// durable loop authority and leaves the fact, and the arm that reads it,
+		// unchanged.
+		targetResolved = loopID != ""
 	}
 
 	// Check if loop is required
@@ -937,19 +938,22 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 	// delivery may be replayed takes TWO conjuncts, and it needs both:
 	//
 	//  1. this delivery published a signal — recorded at the publish site
-	//     itself (commands.go:191), never inferred from the command name or
+	//     itself (commands.go:193), never inferred from the command name or
 	//     the response text; and
-	//  2. its target was resolved from the tracker rather than named by the
-	//     message (:953-963).
+	//  2. its target was resolved here rather than named by the message
+	//     (:875-890).
 	//
 	// With both, the replay is unsound: the message does not carry the identity
-	// the first delivery acted on, and resolution is not stable across it.
-	// GetActiveLoop prefers the channel's loop only while that loop is
-	// non-terminal and otherwise falls back to the user's most recent one
-	// (loop_tracker.go:212-233), so the very effect this delivery had — loop A
-	// now terminal — is what makes the redelivery resolve to a DIFFERENT live
-	// loop B and cancel it. A's terminal guard cannot protect B. The burden of
-	// proof is on the Retry and the message cannot meet it, so the lane stops.
+	// the first delivery acted on, so a redelivery cannot repeat what this
+	// delivery did — it resolves afresh against a world this delivery changed.
+	// activeLoop (http_activity.go:321-339) matches the exact user, channel
+	// type and channel and refuses ambiguity, so the widest form of the hazard
+	// is gone: the redelivery cannot fall through to a live loop on some other
+	// channel of the same user. What survives is same-route rebirth — a loop
+	// started on THIS route between the two deliveries is the current one when
+	// the redelivery reads, and it would be cancelled having never been named.
+	// The burden of proof is on the Retry and the message cannot meet it, so
+	// the lane stops.
 	//
 	// Without both, the redelivery is provably effect-free and Retry is the
 	// right answer — the user has been told nothing, so the redelivery is what
@@ -970,7 +974,7 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 	// selection record written on every bare command for a rare path; L4
 	// (#1330) is where identity-preserving replay makes that unnecessary.
 	if err := c.sendResponse(ctx, resp); err != nil {
-		if effect.signalled() && targetFromTracker {
+		if effect.signalled() && targetResolved {
 			return errs.WrapFatal(err, "Component", "handleCommand", fmt.Sprintf(
 				"command %s signalled loop %s, which this message does not name, and its acknowledgement is not published",
 				name, loopID))

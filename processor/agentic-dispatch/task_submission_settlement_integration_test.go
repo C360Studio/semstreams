@@ -138,7 +138,7 @@ func TestIntegrationPublishedTaskWithFailedResponseQuarantines(t *testing.T) {
 
 // The command lane's post-effect response failure is the counterpart decision
 // to the task lane's, and it goes the other way. `/cancel` publishes its signal
-// at commands.go:185 and then builds its success response, so a failed response
+// at commands.go:187 and then builds its success response, so a failed response
 // publication is also a failure after an effect — but its redelivery is
 // effect-free, and the user has been told nothing, so Retry is what actually
 // delivers their answer.
@@ -322,20 +322,30 @@ func TestIntegrationHTTPSubmissionResponseFailureNamesItsOwnLane(t *testing.T) {
 // #1329 narrows the hazard without removing the reason. Under the tracker,
 // GetActiveLoop fell back to the user's most recent loop across channels, so
 // the redelivery could cancel loop B — a loop in another channel the user
-// never named. activeLoop (http_activity.go:311-328) has no user fallback: it
+// never named. activeLoop (http_activity.go:321-339) has no user fallback: it
 // requires an exact user/channel-type/channel match and refuses ambiguity, so
 // B is now unreachable from session-a and the second loop cannot be cancelled
 // by accident. What survives is the first half: the message does not carry the
 // identity this delivery acted on, so a redelivery resolves afresh rather than
-// repeating what was done. B stays in the fixture because it is the loop that
-// must NOT be signalled, and the assertion that it never is remains the one
-// that would catch a widening back to a user-scoped fallback.
+// repeating what was done.
 //
-// The redelivery here is conditional on the decision on purpose: that is what
-// production does. A quarantined delivery is never redelivered — the lane
-// latches and refuses further work — while a Retry is redelivered by
-// JetStream. So the assertion "B was never signalled" is a claim about the
-// classification, not about the test harness declining to call the function.
+// B stays in the fixture and is load-bearing, but not for the reason an earlier
+// version of this header gave. With two loops on two channels, a resolver
+// widened back to a user-scoped fallback matches BOTH, so activeLoop refuses
+// with loop_route_ambiguous and the command errors before publishing anything.
+// What a widening turns red is the Quarantine assertion at :436 and "the
+// first delivery cancelled this channel's loop" at :439. That is mutation
+// evidence rather than a reading: dropping the ChannelID conjunct from
+// activeLoop fails exactly those two.
+//
+// The NotContains at :449 is the inert one, and is named as such so a later
+// author does not read it as this test's teeth. Its redelivery is conditional
+// on a Retry because that is what production does — a quarantined delivery is
+// never redelivered, the lane latches — so under the classification asserted
+// here the block above it never runs. It does not discriminate the
+// classification either: flip Quarantine to Retry and the redelivery finds A
+// terminal, activeLoop matches nothing left on this route, and nothing is
+// signalled. It is a belt-and-braces guard on the Retry branch.
 //
 // spec: agentic-dispatch / Every dispatch durable input settles through its owner
 func TestIntegrationBareCancelWithFailedResponseQuarantines(t *testing.T) {
