@@ -131,6 +131,10 @@ on #1230, Option 1). These tasks assert only branch-checkable facts.
       the #1249 AgentRun layer — and not to this change (owner ruling 2026-09-18 on #759). No deprecation period is
       offered to adopters; `docs/operations/migration-beta162-to-beta163.md` names the removal, and the AST ratchet
       in `natsclient/consumer_policy_callsite_test.go` forbids any new caller until then.
-- [ ] 6.4 Apply every SemStreams implementation-review finding on PR #1331 and obtain re-review of the fixes.
-- [ ] 6.5 Archive `semantic-jetstream-settlement` as PR #1331's final content commit and obtain the narrow
-      archive/spec-sync review, with no later content commit.
+- [x] 6.4 Apply every SemStreams implementation-review finding on PR #1331 and obtain re-review of the fixes.
+      Four rounds: the SemStreams implementation review (four MAJOR, four MINOR), the owner's no-deprecation ruling,
+      and two owner-run cross-agent rounds (three P2 then one P2). Round 3 at `c3a15cad` reports no remaining
+      actionable findings.
+- [x] 6.5 Archive `semantic-jetstream-settlement` as PR #1331's final content commit, with no later content commit.
+      The narrow archive/spec-sync review of that commit is owed and belongs to the reviewer, not to this checkbox
+      (this section asserts only branch-checkable facts).

@@ -37,6 +37,14 @@ If durable `Unclaim` fails, the executor MUST clear only its local in-flight hin
 The stranded-unit detector owns visibility of the durable claimed unit; automatic redispatch MUST NOT be claimed safe
 while that durable claim remains.
 
+#### Scenario: publish-ack failure re-arms the unit
+
+- **GIVEN** the executor committed a unit's claim and then the dispatch publish
+  failed to ack
+- **WHEN** the next evaluation runs
+- **THEN** the unit's claim has been cleared
+- **AND** the unit is re-selected for dispatch (not skipped as claimed)
+
 #### Scenario: publish error re-arms the unit inside the dedupe window
 
 - **GIVEN** the executor committed a unit's claim and the synchronous dispatch publish returned an error
