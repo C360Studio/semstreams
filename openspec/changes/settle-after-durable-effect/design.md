@@ -81,7 +81,7 @@ durable on the stream with no record of how far it got, so redelivering that cal
 `tool.execute` messages whose executors are running.
 
 The stamp phase looked safe and is not, which round 1 caught (finding 1). The write itself is a whole-entity upsert
-(`component.go:2314`, `:2235`, `:2267` write the full record, not a delta), so replaying the WRITE is harmless. The
+(`component.go:2348`, `:2269`, `:2301` write the full record, not a delta), so replaying the WRITE is harmless. The
 delivery is what cannot be replayed. The handler has already moved the loop in memory before `persistHandlerResult`
 is called, so a redelivered model response meets `HandleModelResponse`'s terminal guard
 (`handlers.go:1179-1185`), which returns an empty result: no completion record, no publication. The second attempt
@@ -249,10 +249,11 @@ Two facts about the topology decide how bad the residual is. They are recorded a
 changes the ruling:
 
 - **(a) No durable write is reachable inside `HandleToolResult`.** `loopsBucket` is a `Component` field and
-  `handlers.go` never names it; every `Put` site is in `component.go` (`:2267` completion, `:2298` failure,
-  `:2322` cancellation, `:2349` loop state) and each is called by a `Component` method after the handler has
-  returned. So the mutation a post-mutation cancellation leaves behind — stored tool result, removed pending tool,
-  incremented iteration, drained results — is entirely in-process.
+  `handlers.go` never names it; every `Put` site is in `component.go` (`:2281` completion, `:2312` failure,
+  `:2336` cancellation, `:2363` loop state — inside `persistCompletionState:2269`, `persistFailureState:2301`,
+  `persistCancellationState:2325` and `persistLoopState:2348`, each called by a `Component` method after the
+  handler has returned. So the mutation a post-mutation cancellation leaves behind — stored tool result, removed
+  pending tool, incremented iteration, drained results — is entirely in-process.
 - **(b) The loop manager is never reloaded from KV.** The `MessageHandler` and its `LoopManager` are constructed
   once in `NewComponent` (`component.go:297`); `Start` and `initializeKVBuckets` do not restore loops, and the
   package has no restore path at all (`restoreLoops`, `rehydrate`, `loadLoopsFromKV` match nothing). So a

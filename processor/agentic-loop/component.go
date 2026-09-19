@@ -1816,8 +1816,8 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 
 	c.recordHandlerResultTrajectory(ctx, result)
 
-	// The stamp phase is re-runnable in isolation: persistLoopState (:2314),
-	// persistCompletionState (:2235) and persistFailureState (:2267) each do a
+	// The stamp phase is re-runnable in isolation: persistLoopState (:2348),
+	// persistCompletionState (:2269) and persistFailureState (:2301) each do a
 	// single c.loopsBucket.Put of the whole current entity — last write wins,
 	// not an append — and the graph stamps go through
 	// WriteLoopCompletion and WriteLoopFailure, which replace the loop entity's
@@ -2115,7 +2115,7 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 // This branch used to record the trajectory, log, and return nil, which is ACK:
 // an executor's completed work was discarded behind a log line, and the worst
 // case was the terminal one. HandleToolResult's timeout branch
-// (handlers.go:2234-2243) transitions the loop to failed, builds its failure
+// (handlers.go:2245-2259) transitions the loop to failed, builds its failure
 // record and its failure publications, and returns them WITH the error — so the
 // old branch acknowledged a terminal failure that was never written and never
 // published. The loop record stayed non-terminal forever while the input that

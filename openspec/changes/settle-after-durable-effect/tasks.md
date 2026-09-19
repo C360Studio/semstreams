@@ -255,8 +255,8 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       |---|---|---|---|---|---|
       | `handlers.go:1173` | `HandleModelResponse` timeout | `(result, fatal)` | no — the error routes to `handleLoopFailure` | yes (`component.go:1655`) | `publishFailureEvents`; this result's own messages are dropped with it |
       | `handlers.go:1983` | `failLoop`, from `StatusError` and `StatusLengthTruncated` | `nil` whenever `FailureState` is set — its one error return precedes the assignment | yes | no | `publishResults` |
-      | `handlers.go:2243` | `HandleToolResult` timeout | `(result, fatal)` → `settleFailedToolResult` terminal | yes | no | `publishResults` |
-      | `handlers.go:2500` | `handleToolsComplete` max-iterations | `(*result, nil)` | yes | no | `publishResults` |
+      | `handlers.go:2256` | `HandleToolResult` timeout | `(result, fatal)` → `settleFailedToolResult` terminal | yes | no | `publishResults` |
+      | `handlers.go:2513` | `handleToolsComplete` max-iterations | `(*result, nil)` | yes | no | `publishResults` |
 
       The two columns are disjoint: the only writer that reaches `publishFailureEvents` is the only one that does
       not reach `persistResultState`, so the record is written exactly once and the event published exactly once
