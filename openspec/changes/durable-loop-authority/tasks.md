@@ -178,3 +178,57 @@
       `:2188`, `:2215`, `:2239` (were `:2157`, `:2184`, `:2208`), in both the code comment and § 7.2. The
       graphresearch pins still hold byte-identical (`executor.go:231`, `:267`, `register_tool.go:91`,
       `agentic/state.go:256-257`)
+
+## 8. Rebase onto the rewritten L2 head (`e0f0bdf2`)
+
+L2 (#1328) took its own review round and was rebased onto main, so `7eaff212` — the head § 7 replayed onto — no
+longer exists on the branch. This section supersedes § 7's pins and gate counts; § 7 is left as the record of that
+round, not restated.
+
+- [x] 8.1 `git rebase --onto origin/claude/gh1328-stable-identity 7eaff212`, backup ref
+      `refs/backup/gh1329-pre-l2main-rebase-20260919` = `b7b3de13`. **Sixteen** own commits in, **fifteen** out:
+      the `cherry-pick -x` of L0.5's fixture re-key (`a7a2f354`, carried as `9d190ca5`) dropped by patch-id, as
+      § 7.6 predicted it would once the rebase reached a base that already carried L0.5. Verified rather than
+      assumed: `a7a2f354` is reachable from `origin/main`, `9d190ca5` touched only
+      `terminal_settlement_integration_test.go` and nothing else, and the `:191` failure-message fix the brief
+      asked to preserve is NOT in that pick — it is its own commit (`9cb40d64` before the rebase), which replays
+      intact
+- [x] 8.2 Every edit under `openspec/changes/settle-after-durable-effect/` dropped: that change is archived on
+      main. What this layer still needs from it is a `## MODIFIED Requirements` block here instead
+- [x] 8.3 `handleTaskSubmission`'s post-PubAck comment carried three repeated effects. TWO are now false:
+      identity, made recoverable by #1328's `findRetainedDispatchTask`, and the tracked `LoopInfo` replaced under
+      an advanced loop, retired with the tracker by this change (`recordLoopStarted` and the `active_loops` gauge
+      are both gone from this package — `grep -rn 'recordLoopStarted\|activeLoops' processor/agentic-dispatch/`
+      returns only `intent_classifier.go`'s unrelated parameter). Only `tasks_submitted_total` survives. The
+      Quarantine classification is CARRIED, not relaxed; the open question is a declared residual in `design.md`
+- [x] 8.4 Three test files reached for `c.loopTracker`. Re-homed onto durable authority through a new
+      `seedCurrentLoops` helper that drives the real `runActivityViewControl` loop and waits for
+      `view.WaitCaughtUp`, so the fixture proves the route production takes. Two of them needed the view running
+      at all — an argument-less command now resolves its target through `activeLoop`, which fails with "activity
+      view lifecycle is not running" before reaching the assertion
+- [x] 8.5 `delivery_owner_test.go`'s "unaccepted pending projection retries" subtest deleted, not re-homed: its
+      whole discrimination was tracker-vs-durable. L1's "failed user-response publication retries, never acks"
+      subtest kept unchanged. The bare-cancel integration fixture now seeds loopA on `session-a` and loopB on
+      `session-b` and its header records WHY B is unreachable: `activeLoop` matches an exact user/channel route
+      with no user-scoped fallback
+- [x] 8.6 L2's counterfactual in `task_submission_settlement_integration_test.go` keeps `tasks_submitted_total == 2`
+      and its `Equal(TaskID)` assertion and loses only its tracker assertions; the three fixtures L2 re-homed onto
+      ExecutionID (`tool_result_handler_failure_test.go`, `terminal_release_test.go`,
+      `terminal_failure_record_integration_test.go`) keep L2's shape untouched
+- [x] 8.7 A `## MODIFIED Requirements` block for "Every dispatch durable input settles through its owner"
+      restates **L2's delta text**, not `openspec/specs/`'s, because this change archives after #1328. Two of its
+      eight scenarios change their stated REASON with no change of outcome; `design.md` § "Why the MODIFIED block
+      reads ahead of `openspec/specs/`" says so for the archiver
+- [x] 8.8 Census pins re-derived with `sed -n "${n}p"` on this head, superseding § 7.2 and § 7.10:
+      `persistLoopState` is `processor/agentic-loop/component.go:2389` and its bare-key `Put` is `:2404`; the
+      three `COMPLETE_` key constructions are `:2321`, `:2352`, `:2376`. `register_tool.go:92`,
+      `executor.go:231`/`:248`/`:267` and `agentic/state.go:256-258` still hold byte-identical
+- [x] 8.9 Gates on this head, exit codes read: `task lint` 0; `go test -race -count=1` on `agentic-loop` and
+      `agentic-dispatch` 0; `openspec validate durable-loop-authority --strict` 0; `task openspec:validate`
+      **57/57**; `task spec:properties` **244/244**; `task schema:generate` then
+      `git diff --exit-code schemas/ specs/` 0. Twenty tests the three layers share run BY NAME with `-v` under
+      `-tags=integration -race -count=1 -p 2` — nineteen integration plus the unit
+      `TestEffectFreeCommandWithFailedResponseRetries`, one of the three the brief required to keep its meaning —
+      and every one reports `--- PASS`, read per test rather than from the package `ok`, including
+      `TestIntegrationPersistedInvalidStateIsPermanent`, which § 7.6 recorded RED and which the dropped
+      cherry-pick is no longer needed to fix
