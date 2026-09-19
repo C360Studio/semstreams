@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/looptoken"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
@@ -164,30 +166,53 @@ func TestIntegrationPersistedInvalidStateIsPermanent(t *testing.T) {
 	kv, err := tc.GetKVBucket(ctx, defaultAgentLoopsBucket(t))
 	require.NoError(t, err)
 
+	// Both fixtures are keyed by canonical loop tokens. This test's claim is
+	// about the STATE, so its records must not fail for a reason the claim does
+	// not name: #1329 adds a canonical-token precondition ahead of the bucket
+	// read, and a fixture keyed "paused-loop" would be refused for its identity
+	// before its state was ever decoded — the assertion below would then pass or
+	// fail for the wrong reason. Asserted rather than assumed, so a later re-key
+	// to a readable-looking string fails here instead of on that rebase.
+	require.True(t, looptoken.Valid(invalidStateLoopID))
+	require.True(t, looptoken.Valid(liveStateLoopID))
+
 	// Written by hand, not through LoopEntity: the whole point is a record the
 	// current vocabulary cannot produce.
-	_, err = kv.Put(ctx, "paused-loop",
-		[]byte(`{"id":"paused-loop","state":"paused","max_iterations":20}`))
+	_, err = kv.Put(ctx, invalidStateLoopID,
+		[]byte(`{"id":"`+invalidStateLoopID+`","state":"paused","max_iterations":20}`))
 	require.NoError(t, err)
 
-	_, err = c.loadPersistedLoop(ctx, "paused-loop")
+	_, err = c.loadPersistedLoop(ctx, invalidStateLoopID)
 	require.Error(t, err, "a persisted paused record must be refused by the reader, not returned")
 	require.True(t, isPermanentTerminal(err),
 		"an invalid state never becomes valid, so it takes the same permanent class as a malformed record")
-	require.ErrorContains(t, err, "invalid AGENT_LOOPS/paused-loop: invalid state: paused")
+	require.ErrorContains(t, err,
+		fmt.Sprintf("invalid %s/%s: invalid state: paused", defaultAgentLoopsBucket(t), invalidStateLoopID),
+		"the refusal must name the state, not the identity or the bucket path")
 
 	// The same reader still returns a record whose state IS in the vocabulary,
-	// so the refusal above is the state's and not the path's.
+	// so the refusal above is the state's and not the path's. Full loop shape:
+	// a record that differs from the one above in its state alone isolates the
+	// state as the cause.
 	valid, err := json.Marshal(agentic.LoopEntity{
-		ID: "live-loop", TaskID: "task", State: agentic.LoopStateAwaitingApproval, MaxIterations: 20,
+		ID: liveStateLoopID, TaskID: "task", State: agentic.LoopStateAwaitingApproval, MaxIterations: 20,
+		ChannelType: "http", ChannelID: "channel", UserID: "user-a",
 	})
 	require.NoError(t, err)
-	_, err = kv.Put(ctx, "live-loop", valid)
+	_, err = kv.Put(ctx, liveStateLoopID, valid)
 	require.NoError(t, err)
-	record, err := c.loadPersistedLoop(ctx, "live-loop")
+	record, err := c.loadPersistedLoop(ctx, liveStateLoopID)
 	require.NoError(t, err)
 	require.Equal(t, agentic.LoopStateAwaitingApproval, record.State)
+	require.Equal(t, liveStateLoopID, record.ID)
 }
+
+// Canonical loop tokens for the state-refusal fixtures: 36 bytes, lowercase,
+// hyphenated, equal to their own canonical re-rendering (internal/looptoken).
+const (
+	invalidStateLoopID = "64521acd-5b97-4cd1-b98c-d79ddadfde62"
+	liveStateLoopID    = "33b4eb6a-ff08-4c9a-9c4d-8c7aa0339eda"
+)
 
 func TestIntegrationInvalidTerminalIsTerminated(t *testing.T) {
 	ctx := t.Context()
