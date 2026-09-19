@@ -1299,6 +1299,28 @@ func (c *Component) sendResponse(ctx context.Context, resp agentic.UserResponse)
 	return nil
 }
 
+// noteUnpublishedResponse records a user response that did not reach the USER
+// stream on a lane whose operation is already accepted and cannot be undone.
+//
+// sendResponse returns its publication error rather than logging it, because
+// the lanes that settle a delivery on that response need to classify it. These
+// two HTTP lanes cannot: the caller already holds the same response
+// synchronously and the operation succeeded, so the async copy is the only
+// thing lost. Losing it silently is what the returned error made possible —
+// the log line the old sendResponse emitted lived inside sendResponse — so the
+// diagnostic is restored here, with the lane named, plus a count. A USER-stream
+// capacity rejection is the concrete case: it is deliberately circuit-neutral
+// at the client (natsclient/client.go:314-333), so no other signal exists.
+func (c *Component) noteUnpublishedResponse(lane string, resp agentic.UserResponse, err error) {
+	c.logger.Error("Failed to publish response",
+		slog.String("error", err.Error()),
+		slog.String("lane", lane),
+		slog.String("response_type", string(resp.Type)),
+		slog.String("channel_type", resp.ChannelType),
+		slog.String("channel_id", resp.ChannelID))
+	c.metrics.recordResponsePublishFailure(lane)
+}
+
 // sendUserResponseForLoop sends a response only if the loop has a user channel.
 // This prevents invalid NATS subjects like "user.response.." for loops without user routing.
 // Workflow-initiated loops that lack user routing are silently skipped.
@@ -1312,7 +1334,7 @@ func (c *Component) sendUserResponseForLoop(ctx context.Context, loopInfo *LoopI
 		return
 	}
 
-	c.sendResponse(ctx, agentic.UserResponse{
+	resp := agentic.UserResponse{
 		ResponseID:  uuid.New().String(),
 		ChannelType: loopInfo.ChannelType,
 		ChannelID:   loopInfo.ChannelID,
@@ -1321,7 +1343,12 @@ func (c *Component) sendUserResponseForLoop(ctx context.Context, loopInfo *LoopI
 		Type:        respType,
 		Content:     content,
 		Timestamp:   time.Now(),
-	})
+	}
+	// Void by signature and not on a delivery path today, so it takes the same
+	// observation the two HTTP lanes take rather than a silent discard.
+	if err := c.sendResponse(ctx, resp); err != nil {
+		c.noteUnpublishedResponse(responseLaneLoopUserChannel, resp, err)
+	}
 }
 
 // hasPermission checks if a user has a specific permission
