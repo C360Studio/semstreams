@@ -45,7 +45,7 @@
       current truth the code refutes. REMOVED rather than MODIFIED because the heading itself is false once the
       tracker is gone: there are no merged facts to reword. Its replacement, "Loop existence and ownership come from
       durable authority alone", is in the ADDED block and carries every surviving obligation
-- [x] 6.2 All eleven `// spec:` annotations retargeted to the new heading, and each checked BY HAND against the
+- [x] 6.2 All twelve `// spec:` annotations retargeted to the new heading, and each checked BY HAND against the
       scenario it proves — `spec:properties` resolving a heading is not agreement. The mapping:
 
       | test | scenario it proves |

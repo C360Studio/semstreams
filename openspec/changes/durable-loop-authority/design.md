@@ -60,11 +60,22 @@ configuration. Internal type and method names are not a client contract; they mo
 ## Declared residuals
 
 - **`loopLookupConflict` and `codeLoopOwnerConflict` are unreachable.** `lookupLoop` has exactly three producers
-  (`loop_admission.go:299,:301,:303`) and none of them is the conflict outcome, because there is no second source
-  left to conflict with. The vocabulary, the `/loops/{id}` `"500"` OpenAPI response at `http.go:1100` and
-  `loop_seams_test.go:630` are retained rather than deleted in this round: removing them edits the generated OpenAPI
-  surface, which is a separate reviewable change from the one this PR is. Whoever removes them should do all three
-  together.
+  (`loop_admission.go:315,:317,:319`) and none of them is the conflict outcome, because there is no second source
+  left to conflict with. The vocabulary (`loop_admission.go:31,:170,:228-229`), the `/loops/{id}` `"500"` OpenAPI
+  response at `http.go:1143` — the one under `"/loops/{id}"` at `:1123`, NOT the `/loops/{id}/approval` `"500"` at
+  `:1182` — and `loop_seams_test.go:630` are retained rather than deleted in this round: removing them edits the
+  generated OpenAPI surface, which is a separate reviewable change from the one this PR is. Whoever removes them
+  should do all three together.
+
+  Every pin in this bullet was re-derived with `sed -n '<n>p'` against the head it ships on, not transcribed: the
+  first three had already drifted by 16 lines within this PR's own round-1 commit. Re-derive before acting on
+  them — a stale pin in a "remove these together" note defeats the note.
+
+- **`loopStatusFromFacts`'s empty-state fallback is unreachable** (`commands.go:82-83`). It is the vestige of the
+  retired scenario "a record carrying no state is reported as unknown": `validatePersistedLoop` now refuses a record
+  whose state fails `isValidLoopState`, so a `loopFacts` reaching `/status` always carries one. Kept as a cheap
+  defence rather than deleted, because the alternative is printing an empty field if a future caller builds
+  `loopFacts` without validating first. Noted here so it is a recorded vestige, not an unexplained branch.
 
 ## Declared cost
 
