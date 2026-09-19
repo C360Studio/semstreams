@@ -13,8 +13,8 @@ setup branch. All delivery-derived work SHALL join before the private callback p
 `natsclient.SettleDelivery`. JetStream consumer configuration owns AckWait and redelivery; governance SHALL NOT
 derive a universal work deadline from AckWait. An operation MAY use an ordinary business timeout.
 
-For an allowed message, done SHALL require deterministic publication through the declared JetStream output and
-synchronous PubAck. For a blocked message, done SHALL be the completed policy decision and deliberate
+For an allowed message, done SHALL require publication through the declared JetStream output and synchronous
+PubAck. For a blocked message, done SHALL be the completed policy decision and deliberate
 non-forwarding. The existing audit contract remains nonblocking, but decode, filter, output-subject, marshal, and
 required publication failures SHALL NOT become ACK.
 
@@ -28,7 +28,8 @@ durable state, or communication path is added.
 
 - **WHEN** policy allows a message
 - **AND** its declared validated output does not receive PubAck
-- **THEN** the source retries with the same semantic output identity
+- **THEN** the delivery quarantines and the exact owner stops, because the publication's durable state is unknown and
+  the validated output carries no identity a redelivery could republish against
 - **AND** no core-NATS fallback authorizes ACK
 
 #### Scenario: Policy blocks a message

@@ -19,18 +19,22 @@ the private callback passes its decision and cause to `natsclient.SettleDelivery
 owns AckWait and redelivery; dispatch SHALL NOT derive a universal work deadline from AckWait. An operation MAY use
 an ordinary business timeout.
 
-The first owner-fatal result from any dispatch delivery owner SHALL synchronously latch before the exact handle is
-drained. Existing Health SHALL report `Healthy=false`, status `delivery ownership lost`, the exact first cause in
-`LastError`, and exactly one owner-loss error count. Later owner-fatal results SHALL neither overwrite nor recount
-the first cause. This replaces per-lane fatal aggregation and adds no metric family, public state, durable state, or
-communication path.
+The first owner-fatal result in an owner family SHALL synchronously latch before the exact handle is drained, and
+later fatal results in that family SHALL neither overwrite nor recount it. Existing Health SHALL report
+`Healthy=false`. The three lanes this change brings under settlement share one latch whose status is
+`delivery ownership lost`; the two terminal lanes keep the separate latches they already had, so their loss alone
+keeps the narrower `terminal delivery ownership lost` status — it is the whole truth only while no other lane has
+lost ownership. `LastError` SHALL carry every latched cause and the error count SHALL be the number of owner
+families that lost ownership, so per-family aggregation is preserved rather than replaced. This adds no metric
+family, public state, durable state, or communication path.
 
 #### Scenario: Task publication succeeds but user response fails
 
-- **WHEN** the deterministic TaskMessage receives PubAck
+- **WHEN** the TaskMessage receives PubAck
 - **AND** the required user response does not receive PubAck
-- **THEN** dispatch retries the UserMessage
-- **AND** republishes the same task and response identities
+- **THEN** the delivery quarantines rather than retrying the UserMessage
+- **AND** no second task is published, because a redelivery would mint a new task identity that nothing downstream
+  could deduplicate
 
 #### Scenario: Invalid user input receives its negative consequence
 

@@ -5,20 +5,29 @@
 ### Requirement: All six loop input classes settle after owner-specific durable done
 
 Agentic-loop SHALL classify task, response, tool-result, cancel-signal, approval-response, and governance-verdict
-deliveries through their existing binding owners, and SHALL NOT positively acknowledge any of them before that
-lane's durable effect has committed. Task, response, and tool-result SHALL use the permanent typed heartbeat owner.
-Cancel signal, approval response, approved verdict, and rejected verdict SHALL retain native settlement only in
-their four private binding owners and SHALL expose no native message or work-owning no-heartbeat adapter.
+deliveries through their existing binding owners, and SHALL NOT positively acknowledge a delivery on a converted
+class before that lane's durable effect has committed. Task intake is classified through the same owner but is not
+converted here; the requirement below names it. Task, response, and tool-result SHALL use the permanent typed
+heartbeat owner. Cancel signal, approval response, approved verdict, and rejected verdict SHALL retain native
+settlement only in their four private binding owners and SHALL expose no native message or work-owning no-heartbeat
+adapter.
 
 Each non-heartbeat physical subscription SHALL invoke its typed business handler using the callback installed by its
 production setup branch. All delivery-derived work SHALL join before the private callback passes its decision and
 cause to `natsclient.SettleDelivery`. JetStream consumer configuration owns AckWait and redelivery; agentic-loop
 SHALL NOT derive a universal work deadline from AckWait. An operation MAY use an ordinary business timeout.
 
-Decode, correlation, KV, Store, transition, and required publication failures SHALL NOT become successful callback
-completion. ACK means the lane-specific durable transition or defined refusal and every required PubAck completed;
-Retry means stable identity and reconciliation make re-execution safe; Terminate means permanently invalid with no
-useful retry; Quarantine means collision, impossible correlation, panic, or invariant failure prevents a safe choice.
+Decode, correlation, KV, Store, transition, and required publication failures on a converted class SHALL NOT become
+successful callback completion. ACK means the lane-specific durable transition or defined refusal and every required
+PubAck completed; Retry means stable identity and reconciliation make re-execution safe; Terminate means permanently
+invalid with no useful retry; Quarantine means collision, impossible correlation, panic, or invariant failure
+prevents a safe choice.
+
+A failure that arrives after a handler has already moved its loop in memory SHALL be treated as a partial effect and
+quarantined, never retried: the redelivery does not reach the loop the first attempt left, so the handler answers it
+from the loop's new terminal state and the result the first attempt built cannot be rebuilt. A loop's terminal
+business failure SHALL be positively acknowledged only once its failed loop state, its terminal record and its
+failure events have committed.
 
 #### Scenario: Required output publication fails
 
@@ -45,6 +54,19 @@ useful retry; Quarantine means collision, impossible correlation, panic, or inva
   the lane does not handle
 - **THEN** the failure is classified as a permanent delivery error and the binding terminates the delivery
 - **AND** the delivery is neither acknowledged nor retried
+
+#### Scenario: A handler result fails before any of its publications
+
+- **WHEN** a handler has moved its loop in memory and the loop-state, terminal-record or graph write then fails
+- **THEN** the callback reports a fatal-classified error and the binding quarantines the delivery
+- **AND** the delivery is not retried into a handler whose terminal guard would answer it with an empty result
+
+#### Scenario: A terminal business failure cannot be recorded
+
+- **WHEN** a handler error fails its loop and the failed loop state, terminal record or failure event does not commit
+- **THEN** the source is not positively acknowledged
+- **AND** a loop that could not be transitioned at all is retried rather than quarantined, because no effect was
+  written and the redelivery is settled from the loop record
 
 #### Scenario: A handler result fails after some of its publications have returned PubAck
 
@@ -77,6 +99,29 @@ useful retry; Quarantine means collision, impossible correlation, panic, or inva
   exact handle
 - **AND** a later fatal result in the same or another lane neither overwrites nor recounts that first cause
 - **AND** the latch itself adds no metric family, public state, durable state, or communication path
+
+### Requirement: Task intake is the one loop input class this layer does not convert
+
+Task intake SHALL be named as an exemption rather than left to the absence of a scenario, because the rule above
+reads as covering it. An undecodable task envelope, a task payload of the wrong type, a `HandleTask` failure, and a
+failed first publication or loop-state write SHALL keep their pre-existing log-and-acknowledge settlement. Converting
+them is not a classification change: a redelivered task deduplicates against the loop its first delivery already
+created and acknowledges without publishing, so the lane needs resumable intake before a Retry can mean anything.
+The birth-failure and transient-lineage paths of the same lane are NOT exempt — they settle on their durable effect
+today.
+
+#### Scenario: A task delivery fails after its loop exists
+
+- **WHEN** task intake fails to decode its envelope, fails in its handler, or cannot publish its first request or
+  write its loop state
+- **THEN** the failure is logged and the delivery is positively acknowledged
+- **AND** the exemption is recorded here, with resumable intake named as its precondition
+
+#### Scenario: A loop-execution birth failure is not exempt
+
+- **WHEN** a task's graph birth or lineage write fails
+- **THEN** the loop's terminal business failure is established before the delivery is acknowledged
+- **AND** a failure that could not be recorded quarantines instead
 
 ### Requirement: A loop absent from process memory is settled from its record
 

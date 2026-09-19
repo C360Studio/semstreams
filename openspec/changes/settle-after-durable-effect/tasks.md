@@ -138,6 +138,59 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       Retry with zero Acks. Mutation: returning Ack from the non-fatal arm of `handleUserMessage` makes exactly
       this case red
 
+## 8c. Cross-agent implementation round 1 (2026-09-19)
+
+- [x] 8c.1 (R1, blocking) A stamp-phase failure in `persistHandlerResult` classified as Retry, but the redelivery
+      does not reach the loop the first attempt left: a complete model response has already moved the loop and
+      built its completion record, and the redelivered response meets the terminal guard
+      (`handlers.go:1179-1185`) and returns an empty result, so the second attempt writes the loop key, publishes
+      nothing and ACKs. The phase now wraps `errs.WrapFatal` like the publish phase. Observed by
+      `TestResponseAndToolResultPersistenceFailureCannotAck`, whose counterfactual drives the redelivery against a
+      healed bucket and asserts no `COMPLETE_` record is written. Mutation: return the stamp error unwrapped →
+      both subtests red
+- [x] 8c.2 (R1 sibling) `handleLoopFailure` was void and `publishFailureEvents` logged its failed PubAcks, so
+      `handleResponseMessage` returned nil for a business failure nothing downstream could observe.
+      `persistFailureState` was still log-only while its two siblings returned errors. All three report now; the
+      caller quarantines an unestablished failure and retries only the case where the transition itself did not
+      take, since nothing was written then. Mutation: swallow the established error → the operational
+      spawn-identity test red
+- [x] 8c.3 (R1 sibling, #1343) The tool-result handler-error branch logged and returned nil. A terminal result —
+      `HandleToolResult`'s timeout branch builds one, with its failure record and publications — now goes through
+      `persistHandlerResult` and settles on that write; a non-terminal error quarantines; cancellation retries so a
+      clean stop cannot latch a false ownership fatal. `TestToolResultHandlerFailureSettlesOnTheDurableRecord`.
+      Mutation: restore the swallow → two subtests red. This closes #1343 rather than scoping the loop delta
+      around it
+- [x] 8c.4 (R2) A user acknowledgement that failed after the task took its PubAck (`component.go:1136`) returned
+      an ordinary error, and the redelivery mints a new task UUID at `:1093` with no dedup id — and a second loop
+      when `auto_continue=false`. Now fatal. `TestIntegrationPublishedTaskWithFailedResponseQuarantines` is an
+      integration test because a unit seam cannot produce a successful task publish followed by a failed response:
+      both go through one client. L2 `15825335` (recover task identity on redelivery) is where identity-preserving
+      replay lands and may relax this to Retry
+- [x] 8c.5 (R3) `sendResponse` returns its publication error, and the two live HTTP callers
+      (`http.go:283`, `:420`) discarded it — quieter than before, because the log line the old sendResponse
+      emitted lived inside it. Both observe it through `noteUnpublishedResponse` (log at the old level with the
+      lane named, plus `response_publish_failures_total{lane}`), leaving the accepted HTTP operation alone.
+      `sendUserResponseForLoop` took the same observation rather than staying the one silent discard
+- [x] 8c.6 (R4) Three artifacts still described the withdrawn `DeliveryAttempt` surface: the tuning guide's
+      example, the `agentic-model` delta's observation scenario, and task 4.4's citation of a deleted test. All
+      three now describe `DeliveryWork(ctx, []byte)`
+- [x] 8c.7 (R5) `model_responses_dropped_total` and `tool_results_dropped_total` counted every retry of a
+      live-elsewhere or unreadable record as a drop, against this change's own delta. The counters keep the stale
+      case and lose the retry; both help texts now say what `signals_dropped_total` already said.
+      `TestRetriedInputsAreNotCountedAsDrops`. Mutation: restore either increment → three subtests red
+- [x] 8c.8 (R6) Spec follows code: the governance delta said Retry where `component.go:444-447` quarantines; the
+      dispatch delta said one cause across all owners where `component.go:321-339` keeps three latches,
+      concatenates causes and preserves the terminal-only status; the dispatch delta's task/response scenario said
+      Retry, which 8c.4 changed; and the loop delta's six-class guarantee is now true for every class except task
+      intake, which is named as an exemption with resumable intake as its precondition
+- [ ] 8c.9 (R6c residual, owner) Task intake's own swallows are unconverted and now named in the loop delta:
+      `component.go:1279-1282` (decode), `:1284-1288` (wrong payload type), `:1304-1318` (handler failure),
+      `:1387` (first publication) and `:1390` (loop-state write) all log and ACK. This is not a classification
+      change — `HandleTask` dedups a redelivered task against the loop its first delivery created
+      (`handlers.go` `HasActiveLoopForTask`) and `handleTaskMessage:1320-1327` then acknowledges without
+      publishing — so it needs resumable intake, which `rememberPendingTaskResult` already prototypes for the
+      transient-lineage case. Needs an issue and a layer
+
 ## 9. Landing
 
 - [ ] 9.1 Complete SemStreams implementation review and resolve findings.

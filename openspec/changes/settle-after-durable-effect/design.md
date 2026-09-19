@@ -71,19 +71,38 @@ cancellation. That is not an assumption: graph dependencies are lifecycle partic
 *requires* cancellation to be honoured, and a component that ignores it fails lifecycle review rather than being
 defended against here. Declared residual below.
 
-## D7 — a partial publish is Quarantine, not Retry
+## D7 — a handler result that fails at either phase is Quarantine, not Retry
 
-`persistHandlerResult` stamps the loop entity and then publishes. The stamp is a whole-entity upsert
-(`component.go:2224`, `:2146`, `:2173` write the full record, not a delta), so replaying it is harmless. The publish
-phase is not: it emits N results in a loop, and a failure on result k leaves 1..k-1 already durable on the stream
-with no record of how far it got. Redelivering that callback republishes them. So the two phases now classify
-differently — a pre-publish failure wraps to Retry as before, and a publish-phase failure wraps
-`errs.WrapFatal(..., "published results have unknown durability")`, which the heartbeat work func maps to
+`persistHandlerResult` stamps the loop entity and then publishes, and both phases are commit-unknown for different
+reasons.
+
+The publish phase is the obvious one: it emits N results in a loop, and a failure on result k leaves 1..k-1 already
+durable on the stream with no record of how far it got, so redelivering that callback republishes them — including
+`tool.execute` messages whose executors are running.
+
+The stamp phase looked safe and is not, which round 1 caught (finding 1). The write itself is a whole-entity upsert
+(`component.go:2314`, `:2235`, `:2267` write the full record, not a delta), so replaying the WRITE is harmless. The
+delivery is what cannot be replayed. The handler has already moved the loop in memory before `persistHandlerResult`
+is called, so a redelivered model response meets `HandleModelResponse`'s terminal guard
+(`handlers.go:1179-1185`), which returns an empty result: no completion record, no publication. The second attempt
+writes the loop key, publishes nothing and ACKs, and the completion the first attempt built is gone with the
+delivery that carried it. Idempotence of the write was never the question; reachability of the result was.
+
+So both phases wrap `errs.WrapFatal` — `"handler result state has unknown durability after the loop was already
+mutated"` and `"published results have unknown durability"` — which the heartbeat work func maps to
 `DeliveryDecisionQuarantine` **before** the `PermanentDeliveryError` and Retry arms. Quarantine terminates that
 delivery, latches the owner's health fatal and drains the lane: an operator sees a stopped lane naming the cause
-rather than a silent duplicate storm. That is deliberately the blunt answer. L4 (#1330) relaxes it to identity-based
-replay — once each published result carries a deterministic identity, republication is idempotent and the publish
-phase can go back to Retry.
+rather than a silent duplicate storm or a silently missing completion. That is deliberately the blunt answer. L4
+(#1330) relaxes it to identity-based replay — once a redelivery can reproduce the original result and each
+published result carries a deterministic identity, both phases can go back to Retry.
+
+The same rule reaches the two paths that produce a terminal state without going through this function. A loop's
+business failure (`handleLoopFailure`) is durable only once its failed loop state, its `COMPLETE_<loopID>` record
+and its failure events have committed, so that function reports rather than returning void — with one carve-out: a
+loop that could not be transitioned at all wrote nothing, so it is an ordinary Retry and the redelivery is settled
+from the loop record. The tool-result handler-error branch (#1343) persists a terminal result through
+`persistHandlerResult` and settles on that write; its non-terminal errors quarantine, except cancellation, which
+stays a Retry so a clean shutdown cannot latch a false `delivery ownership lost`.
 
 ## D8 — the `jetstream-consumer-policy` MODIFY corrects a requirement L0 just made current
 
@@ -141,6 +160,24 @@ Two consequences worth naming so they are not rediscovered:
 The loop-side cancel clauses in `specs/agentic-loop/spec.md:10,32,109-113` are unaffected and stay: they govern how
 the loop **handles an admitted cancel signal** — its cancellation state, `COMPLETE_<loopID>`, and the terminal
 event's PubAck before source ACK — and claim nothing about how dispatch published it.
+
+## Declared residual — task intake is the one loop input class this layer does not convert
+
+`handleTaskMessage` still answers five failures with a log line and an ACK: an undecodable envelope
+(`component.go:1279-1282`), a payload of the wrong type (`:1284-1288`), a `HandleTask` failure (`:1304-1318`), a
+failed first publication (`:1387`) and a failed loop-state write (`:1390`). The lane is classified through the same
+permanent typed heartbeat owner as response and tool-result, and its birth-failure and transient-lineage paths do
+settle on their durable effect, but these five do not.
+
+They are not a classification change, which is why they are recorded rather than fixed here. A redelivered task
+deduplicates against the loop its first delivery already created — `HandleTask` returns the existing loop with
+`Created=false`, and `:1320-1327` then acknowledges without publishing — so returning Retry from these branches
+would produce a redelivery that silently drops the task instead of resuming it. The lane needs resumable intake
+first. The mechanism already exists in miniature: `rememberPendingTaskResult` / `pendingTaskResult` retains the
+result for the transient-lineage case and `:1320-1331` resumes it, which is exactly the shape the other four need.
+
+The loop delta names this exemption as a requirement rather than leaving it to the absence of a scenario, because
+the requirement above it reads as covering the class. Sizing and placing the conversion is the owner's.
 
 ## Declared cost
 
