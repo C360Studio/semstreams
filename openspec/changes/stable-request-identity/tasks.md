@@ -52,6 +52,13 @@
       `TestIntegrationProviderErrorPubAckPrecedesSourceAck` and
       `TestIntegrationPostProviderPrePubAckReplacementMayInvokeAgain`
 
+## 5. Gates
+
+- [x] 5.1 `task lint` 0, `task schema:generate` with no drift, `task openspec:validate` 0 (56/56),
+      `task spec:properties` 0 (176/176), `go test -race ./processor/agentic-tools/... ./processor/agentic-loop/...` 0
+- [x] 5.2 `task check:push` 0 on the round-1 head, zero FAIL lines, 310 `ok`, `[INTEGRATION] tests complete`
+- [ ] 5.3 Implementation review resolved; archive as the final content commit
+
 ## 6. Review round 1
 
 - [x] 6.1 The ruled correlation gate is observed at the unit tier:
@@ -92,9 +99,30 @@
       | delete the whole `validateToolExecutionCorrelation` block from `handleToolDelivery` | all four `TestUncorrelatedToolCallTerminatesBeforeLedgerOrExecutor` cases at `outcomes_test.go:418` — "an uncorrelated call can never become correlated by redelivery" |
       | replace the tools-complete mint with the literal `loopID + ":req:1:0"` | `TestMintedRequestIDsAreInjectiveAcrossTheHandlerPath` at `request_identity_mint_test.go:107` — continuation RequestID `:req:1:0`, want `:req:2:0` |
 
-## 5. Gates
+## 7. Review round 2 (APPROVE with residuals)
 
-- [x] 5.1 `task lint` 0, `task schema:generate` with no drift, `task openspec:validate` 0 (56/56),
-      `task spec:properties` 0 (176/176), `go test -race ./processor/agentic-tools/... ./processor/agentic-loop/...` 0
-- [x] 5.2 `task check:push` 0 on the round-1 head, zero FAIL lines, 310 `ok`, `[INTEGRATION] tests complete`
-- [ ] 5.3 Implementation review resolved; archive as the final content commit
+- [x] 7.1 The spec sentence "agentic-loop decodes it as audit context" is made true rather than reworded: the
+      decode at `component.go:2392` had no reader, so `auditDispatcher.HandleVerdict` now carries
+      `proposal_fingerprint` as a `slog` attribute on its observed-verdict line
+      (`governance_dispatcher.go:342`). The verdict-side field is KEPT — it is the wire token the rule echoes
+- [x] 7.2 The verification deferral now names its home the way the retry-ordinal residual names L4's
+      `PublishedRequestID`: no layer of this stack verifies the fingerprint. L4 (#1330) carries durable LOOP
+      state, not durable per-call proposal state, so absent a new issue claiming it the fingerprint is an audit
+      token only — stated in `specs/agentic-governance/spec.md` and at the test's head comment
+- [x] 7.3 Migration-note pin drift fixed: the waiter registration is `governance_dispatcher.go:413`
+      (`:401` had drifted onto a comment line, and the fingerprint attribute moved it again). Every pin in that
+      section was re-derived with `sed -n '<n>p'` on the shipping head — `component.go:2327`
+      (`executionID := payload.effectiveExecutionID()`), `governance_dispatcher.go:413`
+      (`channels[call.ExecutionID] = d.registerWaiter(...)`), and the fail-closed wait re-pinned from `:485` to
+      the timer branch `:491-497`, whose `:497` is the quoted symptom string. A one-line note tells the next
+      reader to re-derive rather than trust
+- [x] 7.4 The retry-ordinal RESET now has a wire assertion, not only a manager-level one:
+      `TestMintedRequestIDsAreInjectiveAcrossTheHandlerPath` takes one more turn — forward progress after the
+      truncation retry mints `:req:3:0`, not `:3:1`
+- [x] 7.5 Mutation evidence (`cp` + `md5 -q`; `governance_dispatcher.go` baseline `d8e74bb5…`, `handlers.go`
+      baseline `abe5c294…`, both restored, porcelain empty):
+
+      | mutation | test that dies |
+      |---|---|
+      | drop the `proposal_fingerprint` attribute from the audit verdict line | `TestProposalFingerprintIsCarriedAndNotVerified/audit_mode_reads_the_decoded_fingerprint_onto_its_verdict_line` at `proposal_fingerprint_test.go:137` — expected `sha256:audited-digest`, actual `<nil>` |
+      | delete the `StatusToolCall` forward-progress `ResetTruncationRetry` at `handlers.go:1255` | `TestMintedRequestIDsAreInjectiveAcrossTheHandlerPath` at `request_identity_mint_test.go:170` — post-retry continuation `:req:3:1`, want `:req:3:0` |
