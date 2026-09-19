@@ -74,7 +74,7 @@ payload — both approve-action (top-level) and publish-action (nested
 {
   "loop_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
   "parent_loop_id": "ee72d8e2-5796-4936-861f-68c673cf1a5a",
-  "request_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7:req:request-uuid",
+  "request_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7:req:2:0",
   "execution_id": "tool-exec-v1-identity-digest",
   "call_id": "call-001",
   "call_ordinal": 1,
@@ -103,7 +103,7 @@ The loop accepts two payload shapes for the verdict:
   "decision": "approved",
   "call_id": "call-001",
   "loop_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
-  "request_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7:req:request-uuid",
+  "request_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7:req:2:0",
   "execution_id": "tool-exec-v1-identity-digest",
   "proposal_fingerprint": "sha256:proposal-digest",
   "rule_id": "allow-readonly-tools",
@@ -120,7 +120,7 @@ The loop accepts two payload shapes for the verdict:
   "source": "rule_engine",
   "properties": {
     "decision": "rejected",
-    "request_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7:req:request-uuid",
+    "request_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7:req:2:0",
     "execution_id": "tool-exec-v1-identity-digest",
     "call_id": "call-001",
     "proposal_fingerprint": "sha256:proposal-digest",
@@ -318,7 +318,7 @@ resolve against the proposed-call payload:
 | Token | Resolves to |
 |---|---|
 | `$message.loop_id` | The loop's bare UUID |
-| `$message.request_id` | The provider request identity |
+| `$message.request_id` | The provider request identity, `<loop_id>:req:<iteration>:<retry>`. **Echo it on any rule that does not echo `loop_id`** — it is the only other place the loop survives, and a verdict that arrives after its waiter is gone carrying neither is terminated as malformed |
 | `$message.execution_id` | The framework tool-execution identity — required for verdict subjects |
 | `$message.call_id` | The provider's request-scoped tool-call ID |
 | `$message.proposal_fingerprint` | The canonical proposed-call fingerprint. Echo it: it is carried as audit context, and nothing compares it to the proposal today, so a wrong value is not refused — verdicts route on `execution_id` alone |

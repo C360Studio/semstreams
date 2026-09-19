@@ -189,7 +189,7 @@ func (v VerdictPayload) EffectiveCallID() string {
 // Exactly two sources, because exactly two are produced:
 //
 //   - `loop_id`, echoed by the approve action out of the proposed payload
-//     (processor/rule/actions.go:2213-2215; the in-tree rule is
+//     (processor/rule/actions.go:2215-2217; the in-tree rule is
 //     configs/agentic.json:293-296).
 //   - the RequestID grammar <loopID>:req:<iteration>:<retry>, top-level or
 //     under `properties` — the publish-action shape every canonical reject

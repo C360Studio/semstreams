@@ -126,3 +126,67 @@
       |---|---|
       | drop the `proposal_fingerprint` attribute from the audit verdict line | `TestProposalFingerprintIsCarriedAndNotVerified/audit_mode_reads_the_decoded_fingerprint_onto_its_verdict_line` at `proposal_fingerprint_test.go:137` — expected `sha256:audited-digest`, actual `<nil>` |
       | delete the `StatusToolCall` forward-progress `ResetTruncationRetry` at `handlers.go:1255` | `TestMintedRequestIDsAreInjectiveAcrossTheHandlerPath` at `request_identity_mint_test.go:170` — post-retry continuation `:req:3:1`, want `:req:3:0` |
+
+## 8. Rebase onto L1 (`20fe8d09`) and review round 3
+
+- [x] 8.1 `git rebase --onto 20fe8d09 0053183d` replayed this branch's own fourteen commits onto the reviewed L1
+      head. Old head `87828b06` → `5188b9c9`; `backup/gh1328-stable-identity-pre-rebase-20260919` holds the
+      pre-rebase tip. **Seven** files conflicted (the PR body's prose said five over a seven-row table; corrected):
+      `governance_dispatcher.go` twice (interface doc + `HandleVerdict` signature; waiter-miss return),
+      `component.go` twice (tool-result lookup; `handleToolCallVerdictMessage`), `agentic-tools/component.go`
+      (approval-required publish), `agentic-model/component.go` (consumer callback), and
+      `docs/operations/migration-beta162-to-beta163.md` (two sections kept in order). Every resolution keeps both
+      sides' behaviour; the table is in the PR body
+- [x] 8.2 The rebase's real finding, carried in `5188b9c9`: L1 recovered the loop from the structured `call_id`,
+      but under execution identity that is an opaque digest carrying no loop, so **every waiter-less verdict would
+      have Acked and been lost**. `VerdictPayload.effectiveLoopID` closes it
+- [x] 8.3 `effectiveLoopID` reduced to the two sources this tree actually produces: `loop_id` as the approve
+      action echoes it (`processor/rule/actions.go:2215-2217`, `configs/agentic.json:293-296`) and the RequestID
+      grammar `<loopID>:req:<iteration>:<retry>`, top-level or under `properties` — the publish-action shape every
+      canonical reject rule in `docs/operations/17-tool-call-governance.md` uses. A `properties.loop_id` tier and
+      a `<loopID>:tool:` call-id tier are deleted: no rule template in this tree or its docs writes the first, and
+      `GenerateToolCallID` has no caller, so every call id on the wire is provider-authored and `looptoken.Valid`
+      refuses it. A fallback nothing produces is untested code on a settlement path
+- [x] 8.4 Deleting those tiers exposed the case they hid. `classifyMissingLoop("")` returns `loopPresenceStale`
+      (`loop_presence.go:67-70`), so a verdict carrying neither identity acknowledged exactly like a settled loop.
+      `settleVerdictWithoutWaiter` now **Terminates** it as malformed input, with a reason label on the existing
+      counter (`unrecoverable_loop_identity` beside `missing_waiter` — no new metric) and a `WarnContext` audit
+      line carrying `execution_id`, the only identity such a payload still has, plus a hint naming the two shapes
+      a rule may echo
+- [x] 8.5 Observers, one per claim: `TestVerdictWithoutWaiterSettlesByRecordNotByWaiterMap` gains the malformed
+      case (Terminate, `ErrNoGovernanceWaiter`, +1 on `unrecoverable_loop_identity` and no change to
+      `missing_waiter`) and the publish-action case whose loop rides only `properties.request_id`;
+      `TestVerdictPayload_EffectiveAccessors` gains `effectiveLoopID`/`effectiveExecutionID` rows for both wire
+      shapes and a row asserting the two removed tiers resolve to `""`. Counter assertions are **deltas**, not
+      absolutes: `getMetrics` is a `metricsOnce` package singleton shared by the whole test binary
+- [x] 8.6 `tool_results_dropped_total` gains its first label observer.
+      `TestLateToolResultForSettledLoopIsExpectedDrop` ran with `c.metrics = nil`; it now asserts the
+      `stale_execution` delta is 1 and `loop_held_elsewhere` 0, so renaming the constant an operator alerts on
+      cannot pass silently. `metrics.go` enumerates both emitted reasons on `recordToolResultDropped`, and the
+      migration note records that the governance counter went from one series to one per reason
+- [x] 8.7 The last live `stale_callid` citation
+      (`docs/proposals/pattern-classification-2026-09/inventory-agentic-loop.md:43`) is retired in place: the pin
+      is left unedited because that file is line-pinned at its own base `32aeddf7`, and a note beneath it records
+      that the emitted reason is now `stale_execution` and that no alert should be written against the old word.
+      The two remaining occurrences are inside `openspec/changes/archive/`, which is frozen history
+- [x] 8.7b `docs/operations/17-tool-call-governance.md` caught up to the Q4 grammar it documents: three payload
+      examples still showed `:req:request-uuid` (the pre-Q4 UUID suffix) and the `$message.request_id` token row
+      described it as "the provider request identity" with no shape. The row now carries
+      `<loop_id>:req:<iteration>:<retry>` and tells a rule author *why* to echo it — it is the only place the loop
+      survives on a rule that does not echo `loop_id`, and a waiter-less verdict carrying neither is terminated
+- [x] 8.8 Migration-note pins re-derived again with `sed -n '<n>p'` on this head — the round-2 values all drifted
+      when `effectiveLoopID` gained its doc comment: demux `component.go:2327` → `:2480`, waiter key
+      `governance_dispatcher.go:413` → `:465`, fail-closed wait `:491-497` → `:544-549`. This supersedes 7.3
+- [x] 8.9 Gates measured on this head, not carried forward: `task openspec:validate` 0 — **55 passed, 0 failed**,
+      not the 56 recorded at 5.1 and 7.x, because L0's change archived into live spec; `task spec:properties` 0 —
+      **194/194**, not the 176/176 recorded at 5.1, because this branch's own citations and L1's retargeted ones
+      are both counted now
+- [x] 8.10 Mutation evidence (`cp` backup + `md5 -q` verified restore, no stash, no checkout;
+      `governance_dispatcher.go` baseline `ad206c37…`, `component.go` baseline `b6d17327…`, both restored and
+      `git status --porcelain` empty afterwards):
+
+      | mutation | test that dies |
+      |---|---|
+      | `effectiveLoopID` reads only top-level `RequestID` (delete the `Properties["request_id"]` fallback) | `TestVerdictPayload_EffectiveAccessors/nested_shape_(publish_action)` at `governance_dispatcher_test.go:600` — expected the loop token, actual `""`; and `TestVerdictWithoutWaiterSettlesByRecordNotByWaiterMap/the_publish-action_shape_finds_the_loop_under_properties` at `missing_loop_settlement_test.go:354` — expected `0x2` (Retry), actual `0x3` (Terminate) |
+      | delete the whole unrecoverable-identity guard from `settleVerdictWithoutWaiter` | `…/a_verdict_with_no_recoverable_loop_identity_terminates_as_malformed` at `missing_loop_settlement_test.go:309` — "An error is expected but got nil", which is the silent Ack this task removed |
+      | `recordToolResultDropped("stale_execution")` reverts to `"stale_callid"` | `TestLateToolResultForSettledLoopIsExpectedDrop` at `terminal_release_test.go:446` — `tool_results_dropped_total{reason=stale_execution} delta = 0, want 1` |
