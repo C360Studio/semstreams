@@ -724,7 +724,7 @@ func TestDecodeActivityRecord(t *testing.T) {
 	meta := graphview.EntryMeta{Revision: 3, Created: created}
 
 	t.Run("live loop entity decodes and projects", func(t *testing.T) {
-		rec, keep, err := comp.decodeActivityRecord("00000000-0000-4000-8000-000000000001", loopEntityJSON(t, "00000000-0000-4000-8000-000000000001", agentic.LoopStateExecuting, 3), meta)
+		rec, keep, err := comp.decodeActivityRecord(activityTestBucket, "00000000-0000-4000-8000-000000000001", loopEntityJSON(t, "00000000-0000-4000-8000-000000000001", agentic.LoopStateExecuting, 3), meta)
 		require.NoError(t, err)
 		require.True(t, keep)
 		assert.Equal(t, "00000000-0000-4000-8000-000000000001", rec.loop.LoopID)
@@ -734,7 +734,7 @@ func TestDecodeActivityRecord(t *testing.T) {
 	})
 
 	t.Run("completion payload decodes with bare loop id", func(t *testing.T) {
-		rec, keep, err := comp.decodeActivityRecord("COMPLETE_00000000-0000-4000-8000-000000000001", loopCompletionJSON(t, "00000000-0000-4000-8000-000000000001"), meta)
+		rec, keep, err := comp.decodeActivityRecord(activityTestBucket, "COMPLETE_00000000-0000-4000-8000-000000000001", loopCompletionJSON(t, "00000000-0000-4000-8000-000000000001"), meta)
 		require.NoError(t, err)
 		require.True(t, keep)
 		assert.Equal(t, "00000000-0000-4000-8000-000000000001", rec.loop.LoopID)
@@ -743,17 +743,17 @@ func TestDecodeActivityRecord(t *testing.T) {
 	})
 
 	t.Run("malformed loop entity poisons", func(t *testing.T) {
-		_, _, err := comp.decodeActivityRecord("00000000-0000-4000-8000-000000000004", []byte("{not json"), meta)
+		_, _, err := comp.decodeActivityRecord(activityTestBucket, "00000000-0000-4000-8000-000000000004", []byte("{not json"), meta)
 		require.Error(t, err)
 	})
 
 	t.Run("malformed completion poisons", func(t *testing.T) {
-		_, _, err := comp.decodeActivityRecord("COMPLETE_00000000-0000-4000-8000-000000000004", []byte("{not json"), meta)
+		_, _, err := comp.decodeActivityRecord(activityTestBucket, "COMPLETE_00000000-0000-4000-8000-000000000004", []byte("{not json"), meta)
 		require.Error(t, err)
 	})
 
 	t.Run("completion without loop_id poisons", func(t *testing.T) {
-		_, _, err := comp.decodeActivityRecord("COMPLETE_00000000-0000-4000-8000-000000000004", []byte("{}"), meta)
+		_, _, err := comp.decodeActivityRecord(activityTestBucket, "COMPLETE_00000000-0000-4000-8000-000000000004", []byte("{}"), meta)
 		require.Error(t, err)
 	})
 }

@@ -94,10 +94,12 @@
 
 ## 5. Gates
 
-- [x] 5.1 Re-run on the round-1 head: `task lint` 0, `task openspec:validate` 0 (57 passed, 0 failed),
-      `task spec:properties` 0 (213/213 citations resolve),
+- [x] 5.1 Re-run on the round-1 head: `task lint` 0, `task openspec:validate` 0, `task spec:properties` 0,
       `go test -race -count=1 ./processor/agentic-dispatch/... ./processor/agentic-loop/...` 0 (five packages `ok`,
-      no `FAIL`). `task schema:generate` with no drift is covered inside `check:push` by `schema:check-changes`
+      no `FAIL`). `task schema:generate` with no drift is covered inside `check:push` by `schema:check-changes`.
+      The counts that used to sit on this line — 57 passed and 213/213 — were the round-1 base's and are not
+      re-stated here, because a count carried across two rebases is not a measurement: § 7.9 carries the numbers
+      measured on the head that ships (56/56 and 232/232)
 - [x] 5.2 `task check:push` 0 on the round-1 head: zero `FAIL` lines, 312 `ok`, `[INTEGRATION] tests complete`
 - [x] 5.3 `task e2e:agentic` on the final head — required, both commits are BREAKING. Exit 0,
       `assertions_run=15`, `duration=2m4.752573667s`, all 17 stages green including
@@ -120,7 +122,7 @@
       deletes the tracker it tests
 - [x] 7.2 The writer census in `validatePersistedLoop` is CORRECTED, not carried. L0.5's comment claimed the other
       `AGENT_LOOPS` writers "cannot reach this key at all: they are prefixed". **Two** writers use the bare
-      loop-id key: `agentic-loop`'s `persistLoopState` (`processor/agentic-loop/component.go:2235`) and
+      loop-id key: `agentic-loop`'s `persistLoopState` (`processor/agentic-loop/component.go:2266`) and
       graphresearch's research-pipeline record (`frameworkcapabilities/graphresearch/executor.go:267` through
       `register_tool.go:91`, `KVStore.Create` on the bare id). The research record is NOT refused — its id is a
       full canonical UUID (`executor.go:231`), its state is `executing`, and `NewLoopEntity` floors
@@ -158,3 +160,21 @@
       `:138` asserts `malformed AGENT_LOOPS/…`, which is the JSON-decode branch AFTER the precondition, and
       `:149` asserts `contains invalid loop identity …`, which is the key/ID branch after it. A sweep of every
       `kv.Put(ctx, "…")` and `ID: "…"` literal in the file found no remaining non-canonical loop key
+- [x] 7.9 Second-delta review (APPROVE with residuals). The unqualified fallback inside `validatePersistedLoop`
+      had **no producer**: every call site holds a bucket a successful resolution in the same instance produced,
+      `loopsBucketFromPorts` is pure over `c.config.Ports` and that field is never reassigned after `Configure`,
+      and the reviewer's panic probe on the arm left the package green. Removed by passing the already-observed
+      bucket in — `validatePersistedLoop(bucket, loopID, persisted)`, a free function again — which deletes the
+      dead arm and the second resolution together. `loadPersistedLoop` resolves once ahead of both paths; the
+      activity view carries the name its own handle was opened under on `activityViewCommand`, because
+      `graphview.WatcherSource` is deliberately narrow (`WatchAll` only) and widening a Tier 1 interface to carry
+      a name for an error message is not worth it. The message format the cherry-picked test asserts
+      (`invalid %s/%s: %w`) is unchanged, and the projection's `undecodable` message gains the same qualification
+      so the threaded value has more than one consumer. Gate counts re-measured on this head: `openspec:validate`
+      **56/56**, `spec:properties` **232/232**; § 5.1's 57 and 213/213 were the round-1 base's and are retired
+      there rather than restated
+- [x] 7.10 Census pins re-derived with `sed -n "${n}p"` after `a49607bc` shifted `agentic-loop/component.go` by
+      +31: `persistLoopState`'s bare-key `Put` is `:2266` (was `:2235`) and the three `COMPLETE_` writers are
+      `:2188`, `:2215`, `:2239` (were `:2157`, `:2184`, `:2208`), in both the code comment and § 7.2. The
+      graphresearch pins still hold byte-identical (`executor.go:231`, `:267`, `register_tool.go:91`,
+      `agentic/state.go:256-257`)

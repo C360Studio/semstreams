@@ -40,7 +40,11 @@ type activityRecord struct {
 }
 
 type activityViewCommand struct {
-	source  graphview.WatcherSource
+	source graphview.WatcherSource
+	// bucket is the name the source was opened under, carried so the decoder's
+	// refusals can name it. WatcherSource is deliberately narrow (WatchAll
+	// only), so the name travels beside the handle rather than out of it.
+	bucket  string
 	replace *graphview.View[activityRecord]
 	result  chan activityViewResult
 }
@@ -73,7 +77,7 @@ func (c *Component) runActivityViewControl(
 			}
 			if view == nil {
 				opts := append([]graphview.Option{graphview.WithHooks(c.activityViewHooks())}, c.activityViewOpts...)
-				created, err := graphview.New[activityRecord](command.source, c.decodeActivityRecord, opts...)
+				created, err := graphview.New[activityRecord](command.source, c.activityRecordDecoder(command.bucket), opts...)
 				if err == nil {
 					err = created.Start(runCtx)
 				}
@@ -94,7 +98,13 @@ func (c *Component) runActivityViewControl(
 // decodeActivityRecord validates canonical current-loop and completion records.
 // Other keys are outside current-loop authority and are excluded before decoding.
 // Malformed admitted records remain poison until a clean write or deletion.
-func (c *Component) decodeActivityRecord(key string, value []byte, meta graphview.EntryMeta) (activityRecord, bool, error) {
+func (c *Component) activityRecordDecoder(bucket string) graphview.DecodeFunc[activityRecord] {
+	return func(key string, value []byte, meta graphview.EntryMeta) (activityRecord, bool, error) {
+		return c.decodeActivityRecord(bucket, key, value, meta)
+	}
+}
+
+func (c *Component) decodeActivityRecord(bucket, key string, value []byte, meta graphview.EntryMeta) (activityRecord, bool, error) {
 	if strings.HasPrefix(key, completeKeyPrefix) {
 		loop, err := c.loopFromCompletion(key, value)
 		if err != nil {
@@ -107,9 +117,9 @@ func (c *Component) decodeActivityRecord(key string, value []byte, meta graphvie
 	}
 	var e agentic.LoopEntity
 	if err := json.Unmarshal(value, &e); err != nil {
-		return activityRecord{}, false, fmt.Errorf("undecodable loop entity on %s: %w", key, err)
+		return activityRecord{}, false, fmt.Errorf("undecodable loop entity on %s/%s: %w", bucket, key, err)
 	}
-	if err := c.validatePersistedLoop(key, &e); err != nil {
+	if err := validatePersistedLoop(bucket, key, &e); err != nil {
 		return activityRecord{}, false, err
 	}
 	return activityRecord{
@@ -198,13 +208,13 @@ func (c *Component) requestActivityView(ctx context.Context, replace *graphview.
 	// Resolve the bucket handle OUTSIDE the mutex (double-checked init): a
 	// hung NATS API call must not serialize first-attaches behind one caller
 	// or block stopActivityView/Component.Stop on the same mutex.
+	bucket, bucketErr := c.loopsBucketName()
+	if bucketErr != nil {
+		return nil, fmt.Errorf("resolve activity bucket: %w", bucketErr)
+	}
 	if source == nil {
 		if c.natsClient == nil {
 			return nil, ErrNATSClientNil
-		}
-		bucket, bucketErr := c.loopsBucketName()
-		if bucketErr != nil {
-			return nil, fmt.Errorf("resolve activity bucket: %w", bucketErr)
 		}
 		kv, err := c.natsClient.GetKeyValueBucket(ctx, bucket)
 		if err != nil {
@@ -215,7 +225,7 @@ func (c *Component) requestActivityView(ctx context.Context, replace *graphview.
 
 	result := make(chan activityViewResult, 1)
 	select {
-	case commands <- activityViewCommand{source: source, replace: replace, result: result}:
+	case commands <- activityViewCommand{source: source, bucket: bucket, replace: replace, result: result}:
 	case <-done:
 		return nil, errors.New("activity view lifecycle stopped")
 	case <-ctx.Done():

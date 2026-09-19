@@ -133,19 +133,23 @@ func (c *Component) loadPersistedLoop(ctx context.Context, loopID string) (*agen
 	if !looptoken.Valid(loopID) {
 		return nil, permanentTerminal("invalid loop id %q", loopID)
 	}
-	if c.loadPersistedLoopFn != nil {
-		persisted, err := c.loadPersistedLoopFn(ctx, loopID)
-		if err != nil {
-			return nil, err
-		}
-		return persisted, c.validatePersistedLoop(loopID, persisted)
-	}
-	if c.natsClient == nil {
-		return nil, fmt.Errorf("AGENT_LOOPS client unavailable")
-	}
+	// Resolved once, ahead of both paths, and handed to every refusal that
+	// names a location. loopsBucketFromPorts is pure over c.config.Ports, which
+	// is never reassigned after Configure, so a second resolution could only
+	// ever return this same value.
 	bucket, err := c.loopsBucketName()
 	if err != nil {
 		return nil, permanentTerminal("resolve agent loops bucket: %w", err)
+	}
+	if c.loadPersistedLoopFn != nil {
+		persisted, fnErr := c.loadPersistedLoopFn(ctx, loopID)
+		if fnErr != nil {
+			return nil, fnErr
+		}
+		return persisted, validatePersistedLoop(bucket, loopID, persisted)
+	}
+	if c.natsClient == nil {
+		return nil, fmt.Errorf("AGENT_LOOPS client unavailable")
 	}
 	kv, err := c.natsClient.GetKeyValueBucket(ctx, bucket)
 	if err != nil {
@@ -162,17 +166,20 @@ func (c *Component) loadPersistedLoop(ctx context.Context, loopID string) (*agen
 	if err := json.Unmarshal(entry.Value(), &persisted); err != nil {
 		return nil, permanentTerminal("malformed %s/%s: %w", bucket, loopID, err)
 	}
-	return &persisted, c.validatePersistedLoop(loopID, &persisted)
+	return &persisted, validatePersistedLoop(bucket, loopID, &persisted)
 }
 
 // validatePersistedLoop is the current-record contract shared by the exact
 // reader and its declared projection. Neither can admit a merely decodable record.
 //
-// A method, not a free function, so every refusal it emits names the bucket and
-// key the way its sibling read failures in loadPersistedLoop already do
-// (`access %s`, `read %s/%s`, `malformed %s/%s`). An operator handed
-// `invalid loop state "<uuid>"` has to go find which bucket that was.
-func (c *Component) validatePersistedLoop(loopID string, persisted *agentic.LoopEntity) error {
+// bucket is the caller's already-observed bucket, passed rather than resolved
+// again, so every refusal names bucket and key the way the sibling read failures
+// in loadPersistedLoop already do (`access %s`, `read %s/%s`, `malformed %s/%s`).
+// An operator handed `invalid loop state "<uuid>"` has to go find which bucket
+// that was. Taking it as an argument also leaves no unreachable fallback for a
+// resolution that cannot fail here: both callers hold a bucket a successful
+// resolution in the same instance produced.
+func validatePersistedLoop(bucket, loopID string, persisted *agentic.LoopEntity) error {
 	if persisted == nil {
 		return fmt.Errorf("loop state %q is not observable", loopID)
 	}
@@ -207,13 +214,6 @@ func (c *Component) validatePersistedLoop(loopID string, persisted *agentic.Loop
 	// production record this reader loads. The census command that finds every
 	// writer is in the archived change's tasks.md (section 3.1).
 	if err := persisted.Validate(); err != nil {
-		// Named when it is known, never invented: this requirement forbids a
-		// reader carrying a bucket-name default of its own, and a message that
-		// guesses the bucket is worse than one that omits it.
-		bucket, bucketErr := c.loopsBucketName()
-		if bucketErr != nil {
-			return permanentTerminal("invalid loop state %q: %w", loopID, err)
-		}
 		return permanentTerminal("invalid %s/%s: %w", bucket, loopID, err)
 	}
 	return nil
