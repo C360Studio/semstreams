@@ -88,7 +88,8 @@ const (
 
 	// toolStream carries tool.execute.> and tool.result.> in this tier
 	// (configs/agentic.json streams.TOOL). The approved call's RESULT lands on
-	// tool.result.<call_id>, which is what lets this walk read what the tool
+	// tool.result.<execution_id> (#1328 moved the result address off the
+	// provider call id), which is what lets this walk read what the tool
 	// actually answered instead of only that it answered.
 	toolStream = "TOOL"
 
@@ -205,6 +206,18 @@ func (s *Scenario) walkApprovalPath(ctx context.Context, result *scenarios.Resul
 	if parked.UserID != approvalLoopOwner {
 		return fmt.Errorf("parked loop user_id = %q, want %q", parked.UserID, approvalLoopOwner)
 	}
+	// The durable pending record is the only carrier of the gated call's
+	// EXECUTION id: ApprovalPendingEvent publishes the provider call id, and
+	// #1328 addresses the result off the execution id the loop re-dispatches
+	// under (approval_response_handler.go rebuilds the call from this record).
+	if parked.PendingApproval == nil || parked.PendingApproval.ExecutionID == "" {
+		return fmt.Errorf("parked loop %q carries no pending execution identity to read a result under", task.LoopID)
+	}
+	gatedExecutionID := parked.PendingApproval.ExecutionID
+	if parked.PendingApproval.CallID != pending.CallID {
+		return fmt.Errorf("parked pending call %q does not match the published approval-pending call %q",
+			parked.PendingApproval.CallID, pending.CallID)
+	}
 
 	if err := s.submitApproval(ctx, task.LoopID, agentic.ApprovalDecisionApprove); err != nil {
 		return err
@@ -229,7 +242,7 @@ func (s *Scenario) walkApprovalPath(ctx context.Context, result *scenarios.Resul
 		return fmt.Errorf("approved loop outcome = %q, want %q", outcome, agentic.OutcomeSuccess)
 	}
 
-	if err := s.verifyServedTypeListing(ctx, result, pending.CallID); err != nil {
+	if err := s.verifyServedTypeListing(ctx, result, gatedExecutionID); err != nil {
 		return err
 	}
 
@@ -250,13 +263,13 @@ func (s *Scenario) walkApprovalPath(ctx context.Context, result *scenarios.Resul
 // entity among the identities returned. That entity is the one
 // verify-graph-triples proved resident five stages earlier, so the assertion
 // closes over a fact this tier already established rather than a new one.
-func (s *Scenario) verifyServedTypeListing(ctx context.Context, result *scenarios.Result, callID string) error {
+func (s *Scenario) verifyServedTypeListing(ctx context.Context, result *scenarios.Result, executionID string) error {
 	wantID, _ := result.Details["graph_loop_entity_id"].(string)
 	if wantID == "" {
 		return fmt.Errorf("served-listing proof requires the loop entity id verify-graph-triples recorded")
 	}
 
-	toolResult, err := s.awaitToolResult(ctx, callID)
+	toolResult, err := s.awaitToolResult(ctx, executionID)
 	if err != nil {
 		return err
 	}
@@ -298,10 +311,10 @@ func (s *Scenario) verifyServedTypeListing(ctx context.Context, result *scenario
 	return nil
 }
 
-// awaitToolResult polls the TOOL stream for the result of one tool call and
-// decodes the ToolResult out of its envelope. Absence is retried; any other
-// read failure returns immediately.
-func (s *Scenario) awaitToolResult(ctx context.Context, callID string) (*agentic.ToolResult, error) {
+// awaitToolResult polls the TOOL stream for the result of one tool execution
+// and decodes the ToolResult out of its envelope. Absence is retried; any
+// other read failure returns immediately.
+func (s *Scenario) awaitToolResult(ctx context.Context, executionID string) (*agentic.ToolResult, error) {
 	js, err := s.nats.Client().JetStream()
 	if err != nil {
 		return nil, fmt.Errorf("open JetStream: %w", err)
@@ -310,7 +323,7 @@ func (s *Scenario) awaitToolResult(ctx context.Context, callID string) (*agentic
 	if err != nil {
 		return nil, fmt.Errorf("open %s stream: %w", toolStream, err)
 	}
-	subject := "tool.result." + callID
+	subject := "tool.result." + executionID
 	deadline := time.Now().Add(s.config.TaskTimeout)
 	for {
 		stored, getErr := stream.GetLastMsgForSubject(ctx, subject)

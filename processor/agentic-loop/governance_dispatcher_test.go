@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -22,6 +23,13 @@ type mockVerdictPublisher struct {
 	mu        sync.Mutex
 	published []publishedVerdict
 	err       error
+}
+
+func governanceTestCall(id, name string) agentic.ToolCall {
+	return agentic.ToolCall{
+		ID: id, Name: name, RequestID: "request-" + id,
+		ExecutionID: "execution-" + id, CallOrdinal: 1,
+	}
 }
 
 // spec: agentic-loop / All six loop input classes settle after owner-specific durable done
@@ -121,9 +129,11 @@ func TestDispatcher_AuditModePublishesAndPassesThrough(t *testing.T) {
 	d := NewGovernanceDispatcher(ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeAudit}, pub, slog.Default(), nil)
 
 	calls := []agentic.ToolCall{
-		{ID: "c1", Name: "bash", Arguments: map[string]any{"command": "ls /tmp"}},
-		{ID: "c2", Name: "http_request", Arguments: map[string]any{"url": "https://example.com"}},
+		governanceTestCall("c1", "bash"),
+		governanceTestCall("c2", "http_request"),
 	}
+	calls[0].Arguments = map[string]any{"command": "ls /tmp"}
+	calls[1].Arguments = map[string]any{"url": "https://example.com"}
 	result, err := d.Propose(context.Background(), "loop-abc", "parent-loop", calls)
 	require.NoError(t, err)
 
@@ -182,7 +192,7 @@ func TestDispatcher_AuditModeIgnoresPublishFailure(t *testing.T) {
 	pub := &mockVerdictPublisher{err: errors.New("nats unavailable")}
 	d := NewGovernanceDispatcher(ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeAudit}, pub, slog.Default(), nil)
 
-	calls := []agentic.ToolCall{{ID: "c1", Name: "bash"}}
+	calls := []agentic.ToolCall{governanceTestCall("c1", "bash")}
 	result, err := d.Propose(context.Background(), "loop-1", "", calls)
 	require.NoError(t, err, "audit publish failure must not propagate")
 	assert.Equal(t, calls, result.Approved, "audit must still pass calls through even when publish fails")
@@ -199,7 +209,7 @@ func TestDispatcher_EnforceModeWaitsForApproveVerdict(t *testing.T) {
 		pub, slog.Default(), nil,
 	)
 
-	calls := []agentic.ToolCall{{ID: "call-001", Name: "bash"}}
+	calls := []agentic.ToolCall{governanceTestCall("call-001", "bash")}
 
 	// Simulate an approve verdict arriving 50ms after Propose starts.
 	// HandleVerdict runs on a separate goroutine (in production, the
@@ -210,7 +220,7 @@ func TestDispatcher_EnforceModeWaitsForApproveVerdict(t *testing.T) {
 		payload, _ := json.Marshal(VerdictPayload{
 			Decision: "approved", RuleID: "rule-allow", Reason: "policy permits",
 		})
-		d.HandleVerdict("approved", "call-001", payload)
+		d.HandleVerdict("approved", "execution-call-001", payload)
 	}()
 
 	result, err := d.Propose(context.Background(), "loop-1", "", calls)
@@ -230,14 +240,14 @@ func TestDispatcher_EnforceModeRejectsOnDenyVerdict(t *testing.T) {
 		pub, slog.Default(), nil,
 	)
 
-	calls := []agentic.ToolCall{{ID: "call-001", Name: "bash"}}
+	calls := []agentic.ToolCall{governanceTestCall("call-001", "bash")}
 
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		payload, _ := json.Marshal(VerdictPayload{
 			Decision: "rejected", RuleID: "block-bash", Reason: "bash disallowed",
 		})
-		d.HandleVerdict("rejected", "call-001", payload)
+		d.HandleVerdict("rejected", "execution-call-001", payload)
 	}()
 
 	result, err := d.Propose(context.Background(), "loop-1", "", calls)
@@ -262,7 +272,7 @@ func TestDispatcher_EnforceModeFailsClosedOnTimeout(t *testing.T) {
 		pub, slog.Default(), nil,
 	)
 
-	calls := []agentic.ToolCall{{ID: "call-001", Name: "bash"}}
+	calls := []agentic.ToolCall{governanceTestCall("call-001", "bash")}
 
 	start := time.Now()
 	result, err := d.Propose(context.Background(), "loop-1", "", calls)
@@ -291,9 +301,9 @@ func TestDispatcher_EnforceModeMixedVerdictsPreserveOrder(t *testing.T) {
 	)
 
 	calls := []agentic.ToolCall{
-		{ID: "c1", Name: "bash"},
-		{ID: "c2", Name: "http_request"},
-		{ID: "c3", Name: "bash"},
+		governanceTestCall("c1", "bash"),
+		governanceTestCall("c2", "http_request"),
+		governanceTestCall("c3", "bash"),
 	}
 
 	// Race-fix: send the verdicts AFTER Propose has registered all
@@ -305,9 +315,9 @@ func TestDispatcher_EnforceModeMixedVerdictsPreserveOrder(t *testing.T) {
 		// re-orders by request, not by arrival.
 		approvedPayload, _ := json.Marshal(VerdictPayload{Decision: "approved"})
 		rejectedPayload, _ := json.Marshal(VerdictPayload{Decision: "rejected", Reason: "blocked"})
-		d.HandleVerdict("approved", "c3", approvedPayload)
-		d.HandleVerdict("rejected", "c2", rejectedPayload)
-		d.HandleVerdict("approved", "c1", approvedPayload)
+		d.HandleVerdict("approved", "execution-c3", approvedPayload)
+		d.HandleVerdict("rejected", "execution-c2", rejectedPayload)
+		d.HandleVerdict("approved", "execution-c1", approvedPayload)
 	}()
 
 	result, err := d.Propose(context.Background(), "loop-1", "", calls)
@@ -337,15 +347,15 @@ func TestDispatcher_EnforceModePartialPublishFailure(t *testing.T) {
 	)
 
 	calls := []agentic.ToolCall{
-		{ID: "c1", Name: "bash"},
-		{ID: "c2", Name: "bash"},
+		governanceTestCall("c1", "bash"),
+		governanceTestCall("c2", "bash"),
 	}
 
 	go func() {
 		time.Sleep(30 * time.Millisecond)
 		payload, _ := json.Marshal(VerdictPayload{Decision: "approved"})
 		// Only c1 will have a verdict subscribe path — c2's publish failed.
-		d.HandleVerdict("approved", "c1", payload)
+		d.HandleVerdict("approved", "execution-c1", payload)
 	}()
 
 	result, err := d.Propose(context.Background(), "loop-1", "", calls)
@@ -370,14 +380,14 @@ func TestDispatcher_EnforceModeVerdictBeforeSelectArrival(t *testing.T) {
 		pub, slog.Default(), nil,
 	)
 
-	calls := []agentic.ToolCall{{ID: "fast-call", Name: "bash"}}
+	calls := []agentic.ToolCall{governanceTestCall("fast-call", "bash")}
 
 	// raceTestPublisher fires the verdict from INSIDE PublishToStream —
 	// before Propose returns from publish and enters the select. The
 	// buffered waiter channel must absorb this.
 	pub.onPublish = func() {
 		payload, _ := json.Marshal(VerdictPayload{Decision: "approved", RuleID: "fast-rule"})
-		d.HandleVerdict("approved", "fast-call", payload)
+		d.HandleVerdict("approved", "execution-fast-call", payload)
 	}
 
 	result, err := d.Propose(context.Background(), "loop-1", "", calls)
@@ -400,13 +410,13 @@ func TestDispatcher_EnforceModeLateVerdictIsNoOp(t *testing.T) {
 
 	// Propose returns via timeout (no verdict sent inside).
 	result, err := d.Propose(context.Background(), "loop-1", "",
-		[]agentic.ToolCall{{ID: "late-call", Name: "bash"}})
+		[]agentic.ToolCall{governanceTestCall("late-call", "bash")})
 	require.NoError(t, err)
 	require.Len(t, result.Rejected, 1)
 
 	// Now fire a late verdict — must not panic.
 	payload, _ := json.Marshal(VerdictPayload{Decision: "approved"})
-	d.HandleVerdict("approved", "late-call", payload)
+	d.HandleVerdict("approved", "execution-late-call", payload)
 }
 
 // --- metrics integration --------------------------------------------
@@ -455,11 +465,11 @@ func TestDispatcher_EnforceModeRecordsApprovedVerdictMetric(t *testing.T) {
 		pub, slog.Default(), mx,
 	)
 
-	calls := []agentic.ToolCall{{ID: "c1", Name: "bash"}}
+	calls := []agentic.ToolCall{governanceTestCall("c1", "bash")}
 	go func() {
 		time.Sleep(30 * time.Millisecond)
 		payload, _ := json.Marshal(VerdictPayload{Decision: "approved"})
-		d.HandleVerdict("approved", "c1", payload)
+		d.HandleVerdict("approved", "execution-c1", payload)
 	}()
 
 	_, err := d.Propose(context.Background(), "loop-1", "", calls)
@@ -482,7 +492,7 @@ func TestDispatcher_EnforceModeRecordsTimeoutVerdictMetric(t *testing.T) {
 		pub, slog.Default(), mx,
 	)
 
-	calls := []agentic.ToolCall{{ID: "c1", Name: "bash"}}
+	calls := []agentic.ToolCall{governanceTestCall("c1", "bash")}
 	_, err := d.Propose(context.Background(), "loop-1", "", calls)
 	require.NoError(t, err)
 
@@ -507,13 +517,13 @@ func TestDispatcher_LateVerdictIncrementsMissingWaiterMetric(t *testing.T) {
 
 	// Propose returns via timeout first.
 	_, err := d.Propose(context.Background(), "loop-1", "",
-		[]agentic.ToolCall{{ID: "late-call", Name: "bash"}})
+		[]agentic.ToolCall{governanceTestCall("late-call", "bash")})
 	require.NoError(t, err)
 
 	// Late verdict — waiter already released by defer. Must increment
 	// the missing-waiter counter, not panic.
 	payload, _ := json.Marshal(VerdictPayload{Decision: "approved"})
-	d.HandleVerdict("approved", "late-call", payload)
+	d.HandleVerdict("approved", "execution-late-call", payload)
 
 	assert.Equal(t, 1, mx.missingWaiterCalls,
 		"late verdict for released waiter must increment subscribe-before-publish counter")
@@ -553,30 +563,58 @@ func TestDecisionFromVerdictSubject(t *testing.T) {
 func TestVerdictPayload_EffectiveAccessors(t *testing.T) {
 	t.Parallel()
 
+	const loopToken = "b0f7a1e2-2c4d-4a5b-8e6f-1d2c3b4a5e60"
+
 	t.Run("top-level shape (approve action)", func(t *testing.T) {
 		t.Parallel()
 		p := VerdictPayload{
-			Decision: "approved",
-			CallID:   "call-1",
-			Reason:   "policy permits",
+			Decision:    "approved",
+			CallID:      "call-1",
+			Reason:      "policy permits",
+			LoopID:      loopToken,
+			ExecutionID: "tool-exec-v1-" + strings.Repeat("a", 52),
 		}
 		assert.Equal(t, "approved", p.EffectiveDecision())
 		assert.Equal(t, "call-1", p.EffectiveCallID())
 		assert.Equal(t, "policy permits", p.EffectiveReason())
+		assert.Equal(t, loopToken, p.effectiveLoopID())
+		assert.Equal(t, "tool-exec-v1-"+strings.Repeat("a", 52), p.effectiveExecutionID())
 	})
 
 	t.Run("nested shape (publish action)", func(t *testing.T) {
 		t.Parallel()
 		p := VerdictPayload{
 			Properties: map[string]any{
-				"decision": "rejected",
-				"call_id":  "call-2",
-				"reason":   "blocked",
+				"decision":     "rejected",
+				"call_id":      "call-2",
+				"reason":       "blocked",
+				"request_id":   loopToken + ":req:3:1",
+				"execution_id": "tool-exec-v1-" + strings.Repeat("b", 52),
 			},
 		}
 		assert.Equal(t, "rejected", p.EffectiveDecision())
 		assert.Equal(t, "call-2", p.EffectiveCallID())
 		assert.Equal(t, "blocked", p.EffectiveReason())
+		// No canonical reject rule carries loop_id; the loop rides the
+		// RequestID grammar under properties instead.
+		assert.Equal(t, loopToken, p.effectiveLoopID())
+		assert.Equal(t, "tool-exec-v1-"+strings.Repeat("b", 52), p.effectiveExecutionID())
+	})
+
+	t.Run("loop id resolves only from the two produced sources", func(t *testing.T) {
+		t.Parallel()
+		assert.Equal(t, loopToken,
+			VerdictPayload{RequestID: loopToken + ":req:0:0"}.effectiveLoopID(),
+			"top-level request_id is the approve-action fallback")
+		assert.Empty(t,
+			VerdictPayload{Properties: map[string]any{"loop_id": loopToken}}.effectiveLoopID(),
+			"properties.loop_id has no producer in this tree and must not resolve")
+		assert.Empty(t,
+			VerdictPayload{CallID: loopToken + ":tool:0:0"}.effectiveLoopID(),
+			"call ids are provider-authored; none carries a framework loop token")
+		assert.Empty(t,
+			VerdictPayload{LoopID: "b0f7a1e2"}.effectiveLoopID(),
+			"a truncated loop id is not a loop token (ADR-105)")
 	})
 
 	t.Run("top-level wins over nested", func(t *testing.T) {
@@ -596,6 +634,8 @@ func TestVerdictPayload_EffectiveAccessors(t *testing.T) {
 		assert.Empty(t, p.EffectiveDecision())
 		assert.Empty(t, p.EffectiveCallID())
 		assert.Empty(t, p.EffectiveReason())
+		assert.Empty(t, p.effectiveLoopID())
+		assert.Empty(t, p.effectiveExecutionID())
 	})
 }
 

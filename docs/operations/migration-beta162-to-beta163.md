@@ -1212,3 +1212,110 @@ by the same PR that migrates its last in-tree caller (`agentic/agentrun/agentrun
 should move to the typed API now. `natsclient/consumer_policy_callsite_test.go` pins the exact remaining caller set
 and fails on any addition, so the set only shrinks. SemStreams owns no non-heartbeat exported settlement operation:
 a lane that does not want a heartbeat keeps owning its own `msg` settlement, as it does today.
+
+## A RequestID's suffix is no longer a UUID (#1328, owner ruling Q4 on #1330)
+
+`agent.request` RequestIDs are minted as `<loopID>:req:<iteration>:<retry>` instead of `<loopID>:req:<uuid>`. The
+two ordinals name the logical work — iteration ordinal within the loop, truncation-retry ordinal within the
+iteration — so a redelivered task republishes the *same* RequestID and agentic-model answers it from the retained
+response instead of calling the provider a second time.
+
+**What did not change.** The `<loopID>:req:` prefix, and therefore everything built on it: the framework's own
+`ExtractLoopIDFromRequest`, the `agent.response.<requestID>` subject grammar, and any consumer that splits a
+RequestID on its first colon to recover the loop token — which is what semspec does. A RequestID is still one NATS
+subject token with no dot in it.
+
+**What to check.** Only a consumer that parsed the *suffix* and expected a canonical UUID. If you validate,
+log-parse, or index on that suffix, treat it as an opaque string, or parse it as `<iteration>:<retry>` with both
+parts non-negative integers.
+
+Each `agent.request` publication now also carries its RequestID as the `Nats-Msg-Id` header. If your AGENT stream
+declares a `Duplicates` window (the NATS server default is 2m when unset), the server rejects a second publish of
+the same logical request inside it. That is a convenience, not a contract: the guarantee that bounds provider work
+is agentic-model's retained-response read, which holds regardless of the window. No stream configuration changes
+here and none is required.
+
+## Tool results are addressed by execution identity, and an uncorrelated tool call is refused (#1328)
+
+Every `ToolCall` the framework dispatches now carries three correlation fields — `request_id`, `execution_id`
+(`tool-exec-v1-<digest>`, derived by agentic-loop from RequestID + provider CallID + call ordinal) and a 1-based
+`call_ordinal`. Three addresses moved off the provider `call_id` and onto `execution_id`:
+
+| Address | Was | Now |
+|---|---|---|
+| Result subject | `tool.result.<call_id>` | `tool.result.<execution_id>` |
+| Result `Nats-Msg-Id` | `tool-result/v1/<digest of call_id>` | `tool-result/v1/<digest of execution_id>` |
+| `TOOL_CALL_OUTCOMES` key | `v1.<digest of call_id>` | `v1.<digest of execution_id>` |
+
+The digest is unchanged (sha256, lowercase unpadded base32); only its input moved. The `tool.result.*` and
+`tool.result.>` subject families are unchanged, so a stream or consumer that binds the family needs no edit —
+an execution id is still one dotless subject token.
+
+**What to check.**
+
+- **A consumer that reads one call's result by exact subject** — `GetLastMsgForSubject("tool.result." + callID)`
+  finds nothing now. Read the `execution_id` off the `ToolCall` (or, for an approval-gated call, off the loop's
+  persisted `pending_approval.execution_id`; `ApprovalPendingEvent` still publishes only the provider `call_id`)
+  and address the result under that. Every `ToolResult` carries `request_id`, `execution_id` and `call_ordinal`,
+  so a consumer that scans the family can correlate without predicting a subject.
+- **Anything that publishes a `ToolCall` directly onto `tool.execute.*`** — a harness, a replay tool, a fixture.
+  agentic-tools now validates the correlation before executing and **terminates** a delivery whose `request_id`
+  or `execution_id` is empty or whose `call_ordinal` is zero: the call is not retried and no result is ever
+  published. Stamp all three. Executors are unaffected — agentic-tools copies the correlation from the call onto
+  whatever result the executor returns, so no executor signature changes.
+- **`TOOL_CALL_OUTCOMES` written before this change** is keyed under the old digest. Nothing recomputes an old
+  key, so no rekey or backfill is required and no replay regresses — a pre-upgrade outcome simply stops being
+  found, and the call re-executes once under its new identity. The bucket carries no TTL and no binding MaxBytes
+  (`RetentionNoLifecycle`), so those keys persist until an operator removes them; delete the bucket before the
+  upgrade if you want it clean, and expect the in-flight calls it covered to execute once more.
+
+## Governance verdicts route on execution identity, and an enforce-mode rule set must be edited first (#1328)
+
+The tool-call governance verdict subjects moved off the two-token `<loop_id>.<call_id>` pair and onto the single
+framework execution id. This is the break most likely to take a deployment down, because the wait is fail-closed.
+
+| | Was | Now |
+|---|---|---|
+| Approve subject | `agent.toolcall.approved.<loop_id>.<call_id>` | `agent.toolcall.approved.<execution_id>` |
+| Reject subject | `agent.toolcall.rejected.<loop_id>.<call_id>` | `agent.toolcall.rejected.<execution_id>` |
+| Rule template | `agent.toolcall.rejected.$message.loop_id.$message.call_id` | `agent.toolcall.rejected.$message.execution_id` |
+| Demux key | `call_id` | `execution_id` (`processor/agentic-loop/component.go:2480`, `effectiveExecutionID`) |
+| Waiter key | proposal `call_id` | `call.ExecutionID` (`processor/agentic-loop/governance_dispatcher.go:465`) |
+
+The proposal payload on `agent.toolcall.proposed` carries `execution_id`, `request_id` and `call_ordinal` alongside
+the existing `loop_id` and `call_id`, so a rule has the token it needs without computing anything. The port
+subscriptions are unchanged — both ports still bind `agent.toolcall.{approved,rejected}.>` — so no stream or
+consumer configuration moves; only the rules that *publish* a verdict do.
+
+**Edit the rules before the upgrade, not after.** `agentic-loop` demuxes an arriving verdict by `execution_id` and
+**terminates** one that carries none, so a rule still templating `$message.loop_id.$message.call_id` publishes to a
+subject no waiter is registered under. In `audit` mode the loop publishes the proposal and does not wait, so tool
+calls continue. In **`enforce` mode the wait is fail-closed** (`governance_dispatcher.go:544-549`): a verdict that never arrives at the
+waiter's key times out and the call is rejected — so an enforce-mode deployment upgraded without editing its rules
+rejects **every governed tool call** until they are, with `governance verdict timeout after <d> (fail-closed)` as
+the only symptom.
+
+The one-line fix per rule is to replace the two-token suffix with `$message.execution_id`. `docs/operations/17-tool-call-governance.md`
+carries the worked rule set at the new subjects, and `$message.execution_id` is in its token table. An operator who
+cannot edit the rules in the same window should set `tool_call_governance.mode` to `audit` for the upgrade and
+switch back to `enforce` once they are edited; that trades enforcement for availability rather than losing both.
+
+### `tool_call_governance_subscribe_before_publish_failures_total` gains a `reason` label
+
+The counter was unlabelled at beta.162 and is now a `CounterVec` over `reason`, with two values:
+
+| `reason` | Means |
+|---|---|
+| `missing_waiter` | The verdict reached no waiter: the subscribe-before-publish race (ADR-039 race-fix option 3) or a late arrival. The loop record then decides ack-vs-retry. |
+| `unrecoverable_loop_identity` | The verdict carries neither a canonical `loop_id` nor a `request_id` in the `<loopID>:req:<iteration>:<retry>` grammar, so no loop record can be read for it. The delivery **terminates as malformed** rather than acknowledging as if the loop had settled. |
+
+A PromQL selector that names the metric keeps matching, but it now returns one series per reason instead of one
+series total. An alert written as a bare `rate(...) > 0` still fires; a recording rule or dashboard panel that
+assumed a single series should wrap it in `sum(...)` or add `by (reason)`. Both reasons mean investigate, and they
+mean different things: `missing_waiter` points at the loop process or delivery timing, `unrecoverable_loop_identity`
+points at a *rule* — it is the observable symptom of a verdict rule that echoes neither identity, which is the same
+edit this section already asks for.
+
+Every line pin in this section was re-derived with `sed -n '<n>p'` against the head it ships on, not carried
+forward: one of them (`governance_dispatcher.go:401`) had already drifted onto a comment line before anyone read
+it. Re-derive rather than trust when you cite this section from anywhere else.

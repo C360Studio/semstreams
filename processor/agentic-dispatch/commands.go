@@ -176,7 +176,7 @@ func (c *Component) handleCancelCommand(ctx context.Context, msg agentic.UserMes
 	if err != nil {
 		return agentic.UserResponse{}, errs.WrapInvalid(err, "Component", "handleCancelCommand", "resolve signal subject")
 	}
-	if err := c.natsClient.Publish(ctx, subject, signalData); err != nil {
+	if err := c.natsClient.PublishToStream(ctx, subject, signalData); err != nil {
 		return agentic.UserResponse{}, errs.WrapTransient(err, "Component", "handleCancelCommand", "publish signal")
 	}
 
