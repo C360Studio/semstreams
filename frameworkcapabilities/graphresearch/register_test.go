@@ -286,6 +286,7 @@ func completeConfig(t *testing.T) *config.Config {
 	for _, name := range append(append([]string{}, stageFactories...), requiredRuntimeComponents...) {
 		components[name] = enabledComponent(name, map[string]any{"loops_bucket": "AGENT_LOOPS"})
 	}
+	components["agentic-loop"] = enabledComponent("agentic-loop", map[string]any{})
 	components["agentic-tools"] = enabledComponent("agentic-tools", map[string]any{
 		"allowed_tools": []string{"research_graph", "read_loop_result", "decide"},
 		"loops_bucket":  "AGENT_LOOPS",

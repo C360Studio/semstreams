@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/service"
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
@@ -64,6 +65,17 @@ const (
 	// requestIDKey is the context key for request ID.
 	requestIDKey contextKey = "request_id"
 )
+
+// loopViewUnavailableMessage is the one client-facing phrase for "the loop
+// authority this answer needs is not readable yet".
+//
+// It exists because the underlying error is wrapped by errs.Wrap, whose format
+// is "<Type>.<Op>: <what> failed: <cause>" — so returning err.Error() ships
+// "Component.currentLoopSnapshot: loop projection unavailable failed: …" to
+// every caller on the DEFAULT configuration during ordinary warm-up. Internal
+// type and method names are not a client contract; they go to the log line,
+// which carries the request id that ties the two together.
+const loopViewUnavailableMessage = "loop state is not available right now; retry shortly"
 
 // extractRequestID extracts or generates a request ID from the HTTP request.
 func extractRequestID(r *http.Request) string {
@@ -167,7 +179,28 @@ func (c *Component) handleHTTPMessage(w http.ResponseWriter, r *http.Request) {
 		slog.String("content_preview", truncate(msg.Content, 50)))
 
 	// Process the message and get response synchronously
-	resp := c.processMessageSync(ctx, msg)
+	resp, err := c.processMessageSync(ctx, msg)
+	if err != nil {
+		status := http.StatusConflict
+		body := err.Error()
+		if errs.IsTransient(err) {
+			// A transient refusal on this path is the shared loop view not
+			// being caught up, and errs.Wrap renders its cause as
+			// "Component.currentLoopSnapshot: loop projection unavailable
+			// failed: …". That is a framework internal, and the default
+			// configuration reaches it during ordinary warm-up — every adopter
+			// would see it. The detail belongs in the log line; the client gets
+			// a fixed phrase it can retry on.
+			status = http.StatusServiceUnavailable
+			body = loopViewUnavailableMessage
+			c.logger.ErrorContext(ctx, "agentic-dispatch: message refused while loop authority is unavailable",
+				slog.String("message_id", msg.MessageID),
+				slog.String("error", err.Error()))
+		}
+		c.metrics.recordHTTPRequest("/message", "POST", fmt.Sprint(status))
+		c.writeJSONError(w, status, body)
+		return
+	}
 
 	// Record routing duration
 	duration := time.Since(startTime).Seconds()
@@ -191,7 +224,7 @@ func (c *Component) handleHTTPMessage(w http.ResponseWriter, r *http.Request) {
 
 // processMessageSync processes a message and returns the response synchronously.
 // This is used by the HTTP handler to avoid the pub/sub response path.
-func (c *Component) processMessageSync(ctx context.Context, msg agentic.UserMessage) agentic.UserResponse {
+func (c *Component) processMessageSync(ctx context.Context, msg agentic.UserMessage) (agentic.UserResponse, error) {
 	// Check if it's a command
 	if strings.HasPrefix(msg.Content, "/") {
 		return c.processCommandSync(ctx, msg)
@@ -202,7 +235,7 @@ func (c *Component) processMessageSync(ctx context.Context, msg agentic.UserMess
 }
 
 // processCommandSync processes a command and returns the response synchronously.
-func (c *Component) processCommandSync(ctx context.Context, msg agentic.UserMessage) agentic.UserResponse {
+func (c *Component) processCommandSync(ctx context.Context, msg agentic.UserMessage) (agentic.UserResponse, error) {
 	name, cmd, args, found := c.registry.Match(msg.Content)
 	if !found {
 		return agentic.UserResponse{
@@ -213,7 +246,7 @@ func (c *Component) processCommandSync(ctx context.Context, msg agentic.UserMess
 			Type:        agentic.ResponseTypeError,
 			Content:     "Unknown command. Type /help for available commands.",
 			Timestamp:   time.Now(),
-		}
+		}, nil
 	}
 
 	// Check permission
@@ -226,7 +259,7 @@ func (c *Component) processCommandSync(ctx context.Context, msg agentic.UserMess
 			Type:        agentic.ResponseTypeError,
 			Content:     fmt.Sprintf("Permission denied: requires '%s'", cmd.Config.Permission),
 			Timestamp:   time.Now(),
-		}
+		}, nil
 	}
 
 	// Resolve loop ID
@@ -234,7 +267,11 @@ func (c *Component) processCommandSync(ctx context.Context, msg agentic.UserMess
 	if len(args) > 0 && args[0] != "" {
 		loopID = args[0]
 	} else if c.config.AutoContinue {
-		loopID = c.loopTracker.GetActiveLoop(msg.UserID, msg.ChannelID)
+		var err error
+		loopID, err = c.activeLoop(ctx, msg)
+		if err != nil {
+			return agentic.UserResponse{}, err
+		}
 	}
 
 	// Check if loop is required
@@ -247,12 +284,15 @@ func (c *Component) processCommandSync(ctx context.Context, msg agentic.UserMess
 			Type:        agentic.ResponseTypeError,
 			Content:     "No active loop. Specify a loop_id or start a task first.",
 			Timestamp:   time.Now(),
-		}
+		}, nil
 	}
 
 	// Execute handler
 	resp, err := cmd.Handler(ctx, msg, args, loopID)
 	if err != nil {
+		if errs.IsTransient(err) {
+			return agentic.UserResponse{}, err
+		}
 		return agentic.UserResponse{
 			ResponseID:  uuid.New().String(),
 			ChannelType: msg.ChannelType,
@@ -261,7 +301,7 @@ func (c *Component) processCommandSync(ctx context.Context, msg agentic.UserMess
 			Type:        agentic.ResponseTypeError,
 			Content:     fmt.Sprintf("Command failed: %s", err.Error()),
 			Timestamp:   time.Now(),
-		}
+		}, nil
 	}
 
 	// Record command executed
@@ -274,7 +314,7 @@ func (c *Component) processCommandSync(ctx context.Context, msg agentic.UserMess
 	// Also publish to stream for async consumers (optional - allows CLI, other services to see responses)
 	c.sendResponse(ctx, resp)
 
-	return resp
+	return resp, nil
 }
 
 // refusedSubmissionResponse is the HTTP submission lane's typed answer to a
@@ -298,11 +338,11 @@ func refusedSubmissionResponse(msg agentic.UserMessage, refusal error) agentic.U
 
 // processTaskSubmissionSync processes a task submission and returns acknowledgment.
 // The actual task execution happens asynchronously via NATS.
-func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.UserMessage) agentic.UserResponse {
+func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.UserMessage) (agentic.UserResponse, error) {
 	prepared, vacant, found, err := c.findRetainedDispatchTask(ctx, msg)
 	if err != nil {
 		return refusedSubmissionResponse(msg,
-			c.refuseSubmission(seamHTTPSubmission, msg.ReplyTo, codeSubmissionInvalid, err))
+			c.refuseSubmission(seamHTTPSubmission, msg.ReplyTo, codeSubmissionInvalid, err)), nil
 	}
 
 	// Check submit permission
@@ -315,7 +355,7 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 			Type:        agentic.ResponseTypeError,
 			Content:     "Permission denied: cannot submit tasks",
 			Timestamp:   time.Now(),
-		}
+		}, nil
 	}
 
 	// Resolve a continuation only after exact retained absence. An empty result
@@ -326,7 +366,10 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 		if msg.ReplyTo != "" {
 			loopID = msg.ReplyTo
 		} else if c.config.AutoContinue {
-			loopID = c.loopTracker.GetActiveLoop(msg.UserID, msg.ChannelID)
+			loopID, err = c.activeLoop(ctx, msg)
+			if err != nil {
+				return agentic.UserResponse{}, err
+			}
 		}
 
 		if loopID != "" {
@@ -341,14 +384,14 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 				// The client hears about it here, synchronously, in the response it is
 				// already waiting on, naming the field — rather than "Task submitted"
 				// followed by an async TERM it never sees (ADR-105, #1192).
-				return refusedSubmissionResponse(msg, err)
+				return refusedSubmissionResponse(msg, err), nil
 			}
 		}
 
 		prepared, err = c.prepareNewDispatchTask(ctx, msg, loopID, vacant)
 		if err != nil {
 			return refusedSubmissionResponse(msg,
-				c.refuseSubmission(seamHTTPSubmission, loopID, codeSubmissionInvalid, err))
+				c.refuseSubmission(seamHTTPSubmission, loopID, codeSubmissionInvalid, err)), nil
 		}
 		loopID = prepared.task.LoopID
 	}
@@ -356,25 +399,9 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 	taskID := task.TaskID
 	loopID = task.LoopID
 
-	// Track the loop and count it started — after the task is assembled and
-	// addressable, before the publish. See the channel path for why this window
-	// is the safe one (#1225).
-	c.loopTracker.Track(&LoopInfo{
-		LoopID:           loopID,
-		TaskID:           taskID,
-		UserID:           msg.UserID,
-		ChannelType:      msg.ChannelType,
-		ChannelID:        msg.ChannelID,
-		State:            "pending",
-		MaxIterations:    20,
-		ContextRequestID: msg.ContextRequestID,
-		CreatedAt:        time.Now(),
-	})
-	c.metrics.recordLoopStarted()
-
 	if err := c.natsClient.PublishToStream(ctx, prepared.subject, prepared.data); err != nil {
 		return refusedSubmissionResponse(msg,
-			c.refuseSubmission(seamHTTPSubmission, loopID, codeSubmissionUndeliverable, err))
+			c.refuseSubmission(seamHTTPSubmission, loopID, codeSubmissionUndeliverable, err)), nil
 	}
 
 	// Record task submitted
@@ -400,7 +427,7 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 	// Also publish acknowledgment to stream
 	c.sendResponse(ctx, resp)
 
-	return resp
+	return resp, nil
 }
 
 // handleListCommands returns the list of available commands.
@@ -542,12 +569,16 @@ func (c *Component) handleListLoops(w http.ResponseWriter, r *http.Request) {
 		slog.String("user_id", userID),
 		slog.String("state", state))
 
-	var loops []*LoopInfo
-	if userID != "" {
-		loops = c.loopTracker.GetUserLoops(userID)
-	} else {
-		loops = c.loopTracker.GetAllLoops()
+	snapshot, err := c.currentLoopSnapshot(ctx)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "agentic-dispatch: loop listing refused while loop authority is unavailable",
+			slog.String("request_id", requestID),
+			slog.String("error", err.Error()))
+		c.metrics.recordHTTPRequest("/loops", "GET", "503")
+		c.writeJSONError(w, http.StatusServiceUnavailable, loopViewUnavailableMessage)
+		return
 	}
+	loops := currentLoopInfos(snapshot, userID)
 
 	// Apply state filter if specified
 	if state != "" {
@@ -627,9 +658,8 @@ func (c *Component) handleGetLoop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Existence is merged, so an admitted loop may live only in the durable
-	// record. Answering 404 here would contradict the admission that just
-	// succeeded, so the durable record is projected onto the same wire type.
+	// Admission observed the exact persisted authority. Re-read for its wire
+	// projection; a changed or unavailable observation is reported below.
 	wireLoop, projectErr := c.loopWireByID(ctx, loopID)
 	if projectErr != nil {
 		// The one failure this endpoint answers without refusing through the
@@ -660,8 +690,7 @@ func (c *Component) handleGetLoop(w http.ResponseWriter, r *http.Request) {
 }
 
 // loopWireByID projects an ADMITTED loop onto the canonical wire type. The
-// tracker is preferred because it is the live record; a loop the gate admitted
-// from the durable record alone is re-read and projected from there.
+// exact persisted authority is re-read and projected without a memory fallback.
 //
 // It returns the CAUSE rather than a bare ok, because the caller answers a
 // single transient status for three different failures — the bucket was
@@ -671,9 +700,6 @@ func (c *Component) handleGetLoop(w http.ResponseWriter, r *http.Request) {
 // answers. Absence was already ruled out by admission, so a vanished record is
 // still answered as transient; it is just no longer silent.
 func (c *Component) loopWireByID(ctx context.Context, loopID string) (Loop, error) {
-	if tracked := c.loopTracker.Get(loopID); tracked != nil {
-		return loopFromInfo(tracked), nil
-	}
 	persisted, err := c.loadPersistedLoop(ctx, loopID)
 	if err != nil {
 		return Loop{}, fmt.Errorf("read loop %q from the durable record: %w", loopID, err)
@@ -753,20 +779,59 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Atomic CallID snapshot. The previous Get→deref pattern read
-	// loop.PendingApproval outside the tracker's lock and races
-	// against concurrent SetPendingApproval / UpdateCompletion /
-	// ClearPendingApproval mutations. Returns ("", false) when the
-	// loop is no longer awaiting approval — the cache divergence
-	// case (process restart, race lost, already resolved). 409
-	// Conflict is the right REST signal for "resource exists but is
-	// in the wrong state for this operation."
-	callID, awaiting := c.loopTracker.GetPendingApprovalCallID(loopID)
-	if !awaiting {
+	// Approval follows current durable authority. This process may never have
+	// received the already-settled pending event, and after a replacement it
+	// certainly has not: there is no process-local cache left to diverge from
+	// the record, so the record is read on every decision. An unreadable or
+	// incoherent record refuses as unavailable rather than guessing.
+	persisted, readErr := c.loadPersistedLoop(ctx, loopID)
+	if readErr == nil {
+		switch {
+		case persisted == nil:
+			readErr = fmt.Errorf("loop %q vanished between admission and approval", loopID)
+		case persisted.Validate() != nil:
+			readErr = fmt.Errorf("validate loop %q for approval: %w", loopID, persisted.Validate())
+		}
+	}
+	if readErr != nil {
+		c.logger.ErrorContext(ctx, "agentic-dispatch: admitted approval state could not be read",
+			slog.String("request_id", requestID),
+			slog.String("loop_id", loopID),
+			slog.String("error", readErr.Error()))
+		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "503")
+		c.metrics.recordHTTPDuration("/loops/{id}/approval", "POST", time.Since(startTime).Seconds())
+		c.writeJSONError(w, http.StatusServiceUnavailable, "loop record is not readable right now")
+		return
+	}
+	// The recorded state decides before anything about PendingApproval does.
+	// loopOpApprove deliberately skips the gate's terminal check, so a terminal
+	// record reaches here; and no transition clears PendingApproval, so a loop
+	// cancelled while awaiting approval lands `state: cancelled` WITH a pending
+	// block. Reading that combination as incoherence answered 503 "not readable
+	// right now" for a record that read perfectly, forever — a polling client
+	// retrying a permanent state. State first makes it the 409 it is, and keeps
+	// 503 for records that genuinely cannot be read or do not validate.
+	//
+	// Clearing the pending block on a terminal transition is the other half and
+	// is NOT done here: it belongs to the layer that owns terminal/adopt
+	// transitions (L4, #1330). See design.md.
+	if persisted.State != agentic.LoopStateAwaitingApproval {
 		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "409")
 		c.writeJSONError(w, http.StatusConflict, "loop not awaiting approval")
 		return
 	}
+	if persisted.PendingApproval == nil || persisted.PendingApproval.CallID == "" ||
+		persisted.PendingApproval.ExecutionID == "" {
+		c.logger.ErrorContext(ctx, "agentic-dispatch: admitted approval state could not be read",
+			slog.String("request_id", requestID),
+			slog.String("loop_id", loopID),
+			slog.String("error", fmt.Sprintf("loop %q awaits approval without a pending execution identity", loopID)))
+		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "503")
+		c.metrics.recordHTTPDuration("/loops/{id}/approval", "POST", time.Since(startTime).Seconds())
+		c.writeJSONError(w, http.StatusServiceUnavailable, "loop record is not readable right now")
+		return
+	}
+	callID := persisted.PendingApproval.CallID
 
 	c.logger.DebugContext(ctx, "submitting approval response for loop",
 		slog.String("request_id", requestID),
@@ -787,13 +852,6 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 		c.writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	// Clear the local cache after a successful publish so a fast-
-	// follow duplicate HTTP request doesn't re-publish for the same
-	// CallID. The framework's ResolveApprovalIfPending arbitrates
-	// duplicates atomically anyway, but clearing here saves a NATS
-	// round-trip + metric noise.
-	c.loopTracker.ClearPendingApproval(loopID)
 
 	c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "200")
 	c.metrics.recordHTTPDuration("/loops/{id}/approval", "POST", time.Since(startTime).Seconds())
@@ -892,14 +950,16 @@ func activityEventTypeAndID(key string, op jetstream.KeyValueOp, revision uint64
 
 // DebugState represents the internal state of the component for debugging.
 type DebugState struct {
-	Started      bool        `json:"started"`
-	StartTime    time.Time   `json:"start_time,omitempty"`
-	Uptime       string      `json:"uptime,omitempty"`
-	LoopCount    int         `json:"loop_count"`
-	CommandCount int         `json:"command_count"`
-	Loops        []*LoopInfo `json:"loops"`
-	Commands     []string    `json:"commands"`
-	Config       DebugConfig `json:"config"`
+	LoopProjectionReady    bool        `json:"loop_projection_ready"`
+	LoopProjectionPoisoned int         `json:"loop_projection_poisoned"`
+	Started                bool        `json:"started"`
+	StartTime              time.Time   `json:"start_time,omitempty"`
+	Uptime                 string      `json:"uptime,omitempty"`
+	LoopCount              int         `json:"loop_count"`
+	CommandCount           int         `json:"command_count"`
+	Loops                  []*LoopInfo `json:"loops"`
+	Commands               []string    `json:"commands"`
+	Config                 DebugConfig `json:"config"`
 }
 
 // DebugConfig contains non-sensitive configuration for debugging.
@@ -935,14 +995,23 @@ func (c *Component) handleDebugState(w http.ResponseWriter, r *http.Request) {
 		commandNames = append(commandNames, name)
 	}
 
+	snapshot, projectionErr := c.currentLoopSnapshot(ctx)
+	loops := currentLoopInfos(snapshot, "")
+	if projectionErr != nil {
+		loops = nil
+		c.logger.WarnContext(ctx, "debug loop projection unavailable", slog.Any("error", projectionErr))
+		c.metrics.recordHTTPRequest("/debug/state", "GET", "503")
+	}
 	state := DebugState{
-		Started:      started,
-		StartTime:    startTime,
-		Uptime:       uptime,
-		LoopCount:    c.loopTracker.Count(),
-		CommandCount: c.registry.Count(),
-		Loops:        c.loopTracker.GetAllLoops(),
-		Commands:     commandNames,
+		LoopProjectionReady:    projectionErr == nil,
+		LoopProjectionPoisoned: len(snapshot.Poisoned),
+		Started:                started,
+		StartTime:              startTime,
+		Uptime:                 uptime,
+		LoopCount:              len(loops),
+		CommandCount:           c.registry.Count(),
+		Loops:                  loops,
+		Commands:               commandNames,
 		Config: DebugConfig{
 			DefaultRole:  c.config.DefaultRole,
 			DefaultModel: c.resolveModel(),
@@ -952,6 +1021,9 @@ func (c *Component) handleDebugState(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	if projectionErr != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
 	if err := json.NewEncoder(w).Encode(state); err != nil {
 		c.logger.ErrorContext(ctx, "failed to encode debug state",
 			slog.String("request_id", requestID),
@@ -988,6 +1060,12 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 						"400": {
 							Description: "Invalid request",
 						},
+						"409": {
+							Description: "The current loop route is ambiguous or conflicts with the request; no task is published",
+						},
+						"503": {
+							Description: "Required loop authority is unavailable, not caught up, or poisoned; no task is published",
+						},
 					},
 				},
 			},
@@ -1022,8 +1100,8 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 			},
 			"/loops": {
 				GET: &service.OperationSpec{
-					Summary:     "List all tracked loops",
-					Description: "Returns all active and recent loops. Supports optional filtering by user_id and state query parameters.",
+					Summary:     "List current persisted loops",
+					Description: "Returns the authoritative current loop projection. Supports optional filtering by user_id and state query parameters.",
 					Tags:        []string{"AgenticDispatch"},
 					Parameters: []service.ParameterSpec{
 						{Name: "user_id", In: "query", Description: "Filter by user ID"},
@@ -1035,6 +1113,9 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 							ContentType: "application/json",
 							SchemaRef:   "#/components/schemas/Loop",
 							IsArray:     true,
+						},
+						"503": {
+							Description: "The current loop projection is unavailable, not caught up, or poisoned",
 						},
 					},
 				},
@@ -1060,7 +1141,7 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 							Description: "Loop not found",
 						},
 						"500": {
-							Description: "The tracker and the durable record disagree about this loop's route; no caller action resolves it",
+							Description: "The current loop authority is inconsistent; no caller action resolves it",
 						},
 						"503": {
 							Description: "Loop state is not readable right now; retry",
@@ -1110,7 +1191,7 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 			"/activity": {
 				GET: &service.OperationSpec{
 					Summary:     "Real-time activity events (SSE)",
-					Description: "Server-Sent Events stream of loop activity. Event types: loop_created, loop_updated, loop_deleted, loop_completed. loop_completed fires when a COMPLETE_<id> KV key is written; the envelope loop_id is the bare id (prefix stripped) matching data.loop_id — use event.type==\"loop_completed\" to detect terminal entries. When type is loop_completed, data.outcome carries the verdict (\"success\", \"failed\", or \"cancelled\"); data.state is NOT populated on terminal events. Each event's data field is an ActivityEvent whose data field is a Loop (see #/components/schemas/Loop and #/components/schemas/ActivityEvent). Connect with EventSource or curl -N. Note: OpenAPI 3.0 cannot express per-event SSE JSON schema; consult the ActivityEvent and Loop component schemas.",
+					Description: "Server-Sent Events stream of loop activity. Event types: loop_created, loop_updated, loop_deleted, loop_completed. loop_completed fires when a valid ordinary completion is written to a COMPLETE_<id> KV key; the envelope loop_id is the bare id (prefix stripped) matching data.loop_id — use event.type==\"loop_completed\" to detect terminal entries. When type is loop_completed, data.outcome carries the verdict (\"success\", \"failed\", or \"cancelled\"). Unsupported or malformed completion records produce per-key error events. Each event's data field is an ActivityEvent whose data field is a Loop (see #/components/schemas/Loop and #/components/schemas/ActivityEvent). Connect with EventSource or curl -N. Note: OpenAPI 3.0 cannot express per-event SSE JSON schema; consult the ActivityEvent and Loop component schemas.",
 					Tags:        []string{"AgenticDispatch"},
 					Responses: map[string]service.ResponseSpec{
 						"200": {
@@ -1123,12 +1204,18 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 			"/debug/state": {
 				GET: &service.OperationSpec{
 					Summary:     "Internal component state for debugging",
-					Description: "Returns internal state including active loops, registered commands, configuration, and uptime. Useful for debugging and monitoring.",
+					Description: "Returns current loop projection readiness and poison count, registered commands, configuration, and uptime. An unavailable projection returns diagnostics with HTTP 503.",
 					Tags:        []string{"AgenticDispatch"},
 					Responses: map[string]service.ResponseSpec{
 						"200": {
 							Description: "Debug state",
 							ContentType: "application/json",
+							SchemaRef:   "#/components/schemas/DebugState",
+						},
+						"503": {
+							Description: "Loop projection unavailable, not caught up, or poisoned; readiness is false",
+							ContentType: "application/json",
+							SchemaRef:   "#/components/schemas/DebugState",
 						},
 					},
 				},
@@ -1140,6 +1227,7 @@ func agenticDispatchOpenAPISpec() *service.OpenAPISpec {
 			reflect.TypeOf(HTTPMessageResponse{}),
 			reflect.TypeOf(ActivityEvent{}),
 			reflect.TypeOf(ApprovalAcceptResponse{}),
+			reflect.TypeOf(DebugState{}),
 		},
 		RequestBodyTypes: []reflect.Type{
 			reflect.TypeOf(HTTPMessageRequest{}),

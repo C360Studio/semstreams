@@ -60,7 +60,6 @@ func TestIntegration_CancelMidExecution_NoOrphanToolCalls(t *testing.T) {
 		Timeout:            "60s",
 		StreamName:         "AGENT",
 		ConsumerNameSuffix: "cancel-mid-test",
-		LoopsBucket:        "AGENT_LOOPS",
 	}
 
 	rawConfig, err := json.Marshal(config)

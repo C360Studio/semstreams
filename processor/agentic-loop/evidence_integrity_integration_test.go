@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/component"
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/types"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 	"github.com/nats-io/nats.go/jetstream"
@@ -106,6 +108,7 @@ func newStampTestComponent(t *testing.T, client *natsclient.Client, config Confi
 		platform:   types.PlatformMeta{Org: "acme", Platform: "ops"},
 		logger:     discardLogger(),
 	}
+	stampDeclaredPorts(t, c)
 	return c
 }
 
@@ -259,8 +262,12 @@ func TestStartWithoutUsableTrajectoryBucketMarksEveryLoop_Integration(t *testing
 	})
 	require.NoError(t, err)
 
-	c := newStampTestComponent(t, tc.Client, DefaultConfig())
-	c.natsClient = tc.Client
+	discoverable, err := NewComponent([]byte(`{}`), component.Dependencies{
+		NATSClient: tc.Client, PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+		Platform: component.PlatformMeta{Org: "acme", Platform: "ops"},
+	})
+	require.NoError(t, err)
+	c := discoverable.(*Component)
 
 	// Start must NOT fail on unusable audit state — that contract is
 	// unchanged, and it is exactly why the condition is needed.

@@ -16,7 +16,7 @@ func TestConfig_JSONSerialization(t *testing.T) {
 		{
 			name: "minimal config",
 			modify: func(c *agenticloop.Config) {
-				c.LoopsBucket = ""
+				c.Ports = nil
 			},
 		},
 		{
@@ -31,7 +31,7 @@ func TestConfig_JSONSerialization(t *testing.T) {
 			modify: func(c *agenticloop.Config) {
 				c.MaxIterations = 50
 				c.Timeout = "300s"
-				c.LoopsBucket = "CUSTOM_LOOPS"
+				c.Ports = &component.PortConfig{Outputs: []component.PortDefinition{{Name: "loops", Config: component.KVWritePort{Bucket: "CUSTOM_LOOPS"}}}}
 			},
 		},
 	}
@@ -62,8 +62,16 @@ func TestConfig_JSONSerialization(t *testing.T) {
 			if decoded.Timeout != config.Timeout {
 				t.Errorf("Timeout = %v, want %v", decoded.Timeout, config.Timeout)
 			}
-			if decoded.LoopsBucket != config.LoopsBucket {
-				t.Errorf("LoopsBucket = %v, want %v", decoded.LoopsBucket, config.LoopsBucket)
+			originalPorts, err := json.Marshal(config.Ports)
+			if err != nil {
+				t.Fatal(err)
+			}
+			roundTripPorts, err := json.Marshal(decoded.Ports)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(roundTripPorts) != string(originalPorts) {
+				t.Errorf("Ports = %s, want %s", roundTripPorts, originalPorts)
 			}
 		})
 	}
@@ -129,12 +137,12 @@ func TestConfig_Validate(t *testing.T) {
 			errMsg:  "timeout",
 		},
 		{
-			name: "empty loops bucket",
+			name: "empty approval timeout",
 			modify: func(c *agenticloop.Config) {
-				c.LoopsBucket = ""
+				c.ApprovalTimeoutStr = ""
 			},
 			wantErr: true,
-			errMsg:  "loops_bucket",
+			errMsg:  "approval_timeout",
 		},
 		{
 			name: "valid edge case max iterations (1)",
@@ -192,9 +200,9 @@ func TestDefaultConfig(t *testing.T) {
 		t.Errorf("DefaultConfig() timeout = %s, want 120s", cfg.Timeout)
 	}
 
-	// Verify default loops bucket
-	if cfg.LoopsBucket != "AGENT_LOOPS" {
-		t.Errorf("DefaultConfig() loops_bucket = %s, want AGENT_LOOPS", cfg.LoopsBucket)
+	// Verify default finite approval wait; bucket identity lives in the port.
+	if cfg.ApprovalTimeoutStr != "12h" {
+		t.Errorf("DefaultConfig() approval_timeout = %s, want 12h", cfg.ApprovalTimeoutStr)
 	}
 
 	// Verify ports are configured
@@ -365,9 +373,12 @@ func TestConfig_BucketNames(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config := validBaseConfig()
-			config.LoopsBucket = tt.loopsBucket
+			config.Ports = &component.PortConfig{Outputs: []component.PortDefinition{{Name: "loops", Config: component.KVWritePort{Bucket: tt.loopsBucket}}}}
 
-			err := config.Validate()
+			raw, err := json.Marshal(config)
+			if err == nil {
+				_, err = agenticloop.DeclarePorts(raw, "loop")
+			}
 			isValid := err == nil
 
 			if isValid != tt.wantValid {
@@ -395,7 +406,7 @@ func validBaseConfig() agenticloop.Config {
 		TrajectoryEvidenceStorageInstance: "objectstore",
 		MaxIterations:                     20,
 		Timeout:                           "120s",
-		LoopsBucket:                       "AGENT_LOOPS",
+		ApprovalTimeoutStr:                "12h",
 		Context:                           agenticloop.DefaultContextConfig(),
 	}
 }

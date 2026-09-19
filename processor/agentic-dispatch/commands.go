@@ -70,19 +70,7 @@ func commandRefusalResponse(msg agentic.UserMessage, refusal error) agentic.User
 	}
 }
 
-// loopStatusFromTracker renders the live status line: this process is running
-// the loop, so iteration counts and age exist.
-func loopStatusFromTracker(info *LoopInfo) string {
-	age := time.Since(info.CreatedAt).Truncate(time.Second)
-	return fmt.Sprintf("Loop: %s\nState: %s\nIterations: %d/%d\nAge: %s\nUser: %s",
-		info.LoopID, info.State, info.Iterations, info.MaxIterations, age, info.UserID)
-}
-
-// loopStatusFromFacts renders what /status can say about a loop the gate
-// admitted from the durable record alone — this process never tracked it, so
-// iteration counts and age do not exist here. Naming the fields it does have
-// beats the "Loop %s not found" this seam answered before existence was merged,
-// which contradicted the admission that had just succeeded.
+// loopStatusFromFacts renders the exact persisted facts admitted by the gate.
 //
 // The state is the one the gate READ, never one derived from terminality. This
 // seam used to print a hardcoded "running" for anything not settled, so a user
@@ -94,8 +82,22 @@ func loopStatusFromFacts(facts loopFacts) string {
 	if state == "" {
 		state = "unknown"
 	}
-	return fmt.Sprintf("Loop: %s\nState: %s (from the durable record; this process is not running it)\nUser: %s",
-		facts.LoopID, state, facts.UserID)
+	return fmt.Sprintf("Loop: %s\nState: %s (from the durable record)\nIterations: %d/%d\nAge: %s\nUser: %s",
+		facts.LoopID, state, facts.Iterations, facts.MaxIterations, loopAgeLabel(facts.StartedAt), facts.UserID)
+}
+
+// loopAgeLabel renders a loop's age from its recorded start, or says the record
+// does not carry one.
+//
+// There is no substitute clock. The KV revision timestamp advances on every
+// iteration, so using it would report the age of the last write under the word
+// "Age"; a status line that answers the wrong question confidently is worse
+// than one that admits the field is absent.
+func loopAgeLabel(startedAt time.Time) string {
+	if startedAt.IsZero() {
+		return "unknown (the record carries no start time)"
+	}
+	return time.Since(startedAt).Truncate(time.Second).String()
 }
 
 // handleCancelCommand handles the /cancel command
@@ -135,8 +137,8 @@ func (c *Component) handleCancelCommand(ctx context.Context, msg agentic.UserMes
 
 	// A settled loop is not a refusal on this operation — cancelling something
 	// already finished is a no-op the caller should simply be told about. The
-	// gate reports terminality from BOTH sources, so this answers correctly for
-	// a loop this process never tracked.
+	// gate reads terminality from current KV authority, including a loop this
+	// process never handled.
 	if facts.Terminal {
 		return agentic.UserResponse{
 			ResponseID:  uuid.New().String(),
@@ -149,7 +151,7 @@ func (c *Component) handleCancelCommand(ctx context.Context, msg agentic.UserMes
 		}, nil
 	}
 
-	// Send cancel signal. The route comes from the gate's merged facts for the
+	// Send cancel signal. The route comes from the gate's persisted facts for the
 	// same reason the HTTP lane's does — the gate already read it — but the
 	// signal's user is the REQUESTER, so a cancel_any operator cancelling
 	// someone else's loop is attributed to the operator.
@@ -218,8 +220,7 @@ func (c *Component) handleStatusCommand(ctx context.Context, msg agentic.UserMes
 
 	// Reading is gated for form and existence only — ownership is deliberately
 	// not consulted, exactly as GET /loops/{id} is not (the ownership model's
-	// read row). Existence is merged, so a loop this process never tracked is
-	// still found.
+	// read row). The exact persisted authority determines existence.
 	facts, err := c.admitLoopRequest(ctx, loopAdmissionRequest{
 		Seam:      seamStatusCommand,
 		Field:     "loop_id",
@@ -232,9 +233,6 @@ func (c *Component) handleStatusCommand(ctx context.Context, msg agentic.UserMes
 	}
 
 	content := loopStatusFromFacts(facts)
-	if loopInfo := c.loopTracker.Get(targetLoopID); loopInfo != nil {
-		content = loopStatusFromTracker(loopInfo)
-	}
 
 	return agentic.UserResponse{
 		ResponseID:  uuid.New().String(),
@@ -250,7 +248,11 @@ func (c *Component) handleStatusCommand(ctx context.Context, msg agentic.UserMes
 
 // handleLoopsCommand handles the /loops command
 func (c *Component) handleLoopsCommand(ctx context.Context, msg agentic.UserMessage, _ []string, _ string) (agentic.UserResponse, error) {
-	loops := c.loopTracker.GetUserLoops(msg.UserID)
+	snapshot, err := c.currentLoopSnapshot(ctx)
+	if err != nil {
+		return agentic.UserResponse{}, err
+	}
+	loops := currentLoopInfos(snapshot, msg.UserID)
 
 	c.logger.DebugContext(ctx, "Loops command executed",
 		slog.String("user_id", msg.UserID),
