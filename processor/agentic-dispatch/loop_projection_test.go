@@ -14,6 +14,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// activityTestBucket is what the view's own bucket handle was opened under in
+// production: the decoder takes the observed name rather than re-resolving it,
+// so a test supplies the same value the lifecycle would.
+var activityTestBucket = mustDefaultLoopsBucket()
+
+func mustDefaultLoopsBucket() string {
+	bucket, err := loopsBucketFromPorts(DefaultConfig().Ports)
+	if err != nil {
+		panic(err)
+	}
+	return bucket
+}
+
 // spec: agentic-dispatch / The shared view separates current authority from activity
 // spec: agentic-dispatch / The shared loop view classifies the mixed bucket
 func TestLoopProjectionClassifiesCurrentAuthority(t *testing.T) {
@@ -47,7 +60,7 @@ func TestLoopProjectionClassifiesCurrentAuthority(t *testing.T) {
 		}), false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			record, keep, err := c.decodeActivityRecord(tc.key, tc.data, graphview.EntryMeta{})
+			record, keep, err := c.decodeActivityRecord(activityTestBucket, tc.key, tc.data, graphview.EntryMeta{})
 			if tc.invalid {
 				require.Error(t, err)
 				require.False(t, keep)
@@ -94,13 +107,13 @@ func TestLoopProjectionPreservesOrdinaryCompletionRepresentations(t *testing.T) 
 			require.NoError(t, err)
 			for name, wire := range map[string][]byte{"raw": raw, "registered": terminalEnvelopeForDispatch(t, tc.payload)} {
 				t.Run(name, func(t *testing.T) {
-					record, keep, err := c.decodeActivityRecord("COMPLETE_"+admissionLoopA, wire, graphview.EntryMeta{Created: at})
+					record, keep, err := c.decodeActivityRecord(activityTestBucket, "COMPLETE_"+admissionLoopA, wire, graphview.EntryMeta{Created: at})
 					require.NoError(t, err)
 					require.True(t, keep)
 					require.Nil(t, record.entity)
 					require.Equal(t, tc.want, record.loop)
 					require.Equal(t, at, record.createdAt)
-					_, _, err = c.decodeActivityRecord("COMPLETE_"+admissionLoopB, wire, graphview.EntryMeta{})
+					_, _, err = c.decodeActivityRecord(activityTestBucket, "COMPLETE_"+admissionLoopB, wire, graphview.EntryMeta{})
 					require.Error(t, err, "both representations require canonical key/payload identity agreement")
 				})
 			}
@@ -125,7 +138,7 @@ func TestLoopProjectionRejectsInvalidRegisteredCompletion(t *testing.T) {
 			}
 			invalid, err := json.Marshal(envelope)
 			require.NoError(t, err)
-			record, keep, err := c.decodeActivityRecord("COMPLETE_"+admissionLoopA, invalid, graphview.EntryMeta{})
+			record, keep, err := c.decodeActivityRecord(activityTestBucket, "COMPLETE_"+admissionLoopA, invalid, graphview.EntryMeta{})
 			require.Error(t, err)
 			require.False(t, keep)
 			require.Nil(t, record.entity)
