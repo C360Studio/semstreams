@@ -1,6 +1,7 @@
 package agenticloop
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -17,15 +18,21 @@ import (
 //
 // Carried: agentic-loop mints it onto every proposed call, the rule engine
 // echoes it back on the verdict (processor/rule/actions.go:2218) and
-// agentic-loop decodes it into VerdictPayload (component.go:2391). Two
-// consumers already read the field off the wire, so it is not dead surface.
+// agentic-loop decodes it into VerdictPayload (component.go:2391), where
+// audit mode logs it as context on the observed-verdict line
+// (governance_dispatcher.go:342). Three consumers read the field, so it is
+// not dead surface — and the decoded half has an observer, so "decodes it as
+// audit context" is a claim the code backs rather than a sentence about it.
 //
 // Not verified: nothing compares the verdict's fingerprint against the
 // proposal's, so a verdict that disagrees is still delivered to its waiter.
 // Enforcing the comparison needs the proposal's fingerprint to outlive the
-// process that registered the waiter, which is durable-loop work this change
-// does not own. The last subtest is the observer that will fail the day
-// someone implements it, forcing the spec to move with the code.
+// process that registered the waiter — durable per-call governance state this
+// change does not own. NO LAYER OF THIS STACK VERIFIES IT: L4 (#1330) carries
+// durable loop state, not durable per-call proposal state, so absent a new
+// issue the fingerprint is an audit token only. The last subtest is the
+// observer that will fail the day someone implements a comparison, forcing
+// the spec to move with the code.
 //
 // spec: agentic-governance / Governance publications are durably at-least-once
 func TestProposalFingerprintIsCarriedAndNotVerified(t *testing.T) {
@@ -99,4 +106,57 @@ func TestProposalFingerprintIsCarriedAndNotVerified(t *testing.T) {
 			"routing is by execution identity alone; the fingerprint is audit context")
 		require.Equal(t, "approved", (<-waiter).decision)
 	})
+
+	t.Run("audit mode reads the decoded fingerprint onto its verdict line", func(t *testing.T) {
+		// The decode at component.go:2392 had no reader: the field was
+		// assigned and dropped. "Audit context" is only true if something
+		// audits it, so the observed-verdict line carries it and this
+		// asserts the emitted record rather than the struct field.
+		var logs bytes.Buffer
+		dispatcher := NewGovernanceDispatcher(
+			ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeAudit},
+			&mockVerdictPublisher{},
+			slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})),
+			nil,
+		)
+
+		wire, err := json.Marshal(map[string]any{
+			"decision":             "rejected",
+			"execution_id":         "execution-fp-audit",
+			"rule_id":              "rule-fp-audit",
+			"reason":               "denied by policy",
+			"proposal_fingerprint": "sha256:audited-digest",
+		})
+		require.NoError(t, err)
+
+		decision, err := dispatcher.HandleVerdict("rejected", "execution-fp-audit", wire)
+		require.NoError(t, err)
+		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+
+		record := auditVerdictRecord(t, logs.Bytes())
+		require.Equal(t, "sha256:audited-digest", record["proposal_fingerprint"],
+			"the decoded fingerprint must reach the audit line, or nothing reads it")
+		require.Equal(t, "execution-fp-audit", record["execution_id"],
+			"the audit line still identifies the call by execution identity")
+	})
+}
+
+// auditVerdictRecord returns the one "Audit-mode verdict observed" record in a
+// JSON log stream, failing if there is not exactly one.
+func auditVerdictRecord(t *testing.T, logs []byte) map[string]any {
+	t.Helper()
+
+	var found []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(string(logs)), "\n") {
+		if line == "" {
+			continue
+		}
+		var record map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &record), "log line %q is not JSON", line)
+		if record["msg"] == "Audit-mode verdict observed" {
+			found = append(found, record)
+		}
+	}
+	require.Len(t, found, 1, "want exactly one audit verdict record, got %d", len(found))
+	return found[0]
 }

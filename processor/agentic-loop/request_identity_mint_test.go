@@ -134,4 +134,39 @@ func TestMintedRequestIDsAreInjectiveAcrossTheHandlerPath(t *testing.T) {
 	if retry == continuation {
 		t.Fatalf("the retry reused the truncated request's name %q", continuation)
 	}
+
+	// Forward progress after a retry: the NEXT iteration starts at retry
+	// ordinal 0 again. Without the reset the mint would read :3:1 — still
+	// injective, so no collision and no stall, but it would name a first
+	// attempt a retry, and an operator reading request names would count
+	// retries that never happened. The manager-level test covers the reset;
+	// this is the only assertion that it reaches the wire.
+	secondDispatch, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+		RequestID: retry,
+		Status:    agentic.StatusToolCall,
+		Message: agentic.ChatMessage{
+			Role:      "assistant",
+			ToolCalls: []agentic.ToolCall{{ID: "call-mint-2", Name: "test_tool"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("HandleModelResponse(tool_call, after retry): %v", err)
+	}
+	secondCall := dispatchedToolCallFromResult(t, secondDispatch)
+
+	afterRetry, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
+		CallID:      secondCall.ID,
+		Name:        secondCall.Name,
+		Content:     "tool answered again",
+		RequestID:   secondCall.RequestID,
+		ExecutionID: secondCall.ExecutionID,
+		CallOrdinal: secondCall.CallOrdinal,
+	})
+	if err != nil {
+		t.Fatalf("HandleToolResult(after retry): %v", err)
+	}
+	nextTurn := oneMintedRequestID(t, "tools complete after retry", afterRetry)
+	if want := loopID + ":req:3:0"; nextTurn != want {
+		t.Fatalf("post-retry continuation RequestID = %q, want %q", nextTurn, want)
+	}
 }

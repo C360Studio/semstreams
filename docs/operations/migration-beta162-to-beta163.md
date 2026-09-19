@@ -1280,7 +1280,7 @@ framework execution id. This is the break most likely to take a deployment down,
 | Reject subject | `agent.toolcall.rejected.<loop_id>.<call_id>` | `agent.toolcall.rejected.<execution_id>` |
 | Rule template | `agent.toolcall.rejected.$message.loop_id.$message.call_id` | `agent.toolcall.rejected.$message.execution_id` |
 | Demux key | `call_id` | `execution_id` (`processor/agentic-loop/component.go:2327`, `effectiveExecutionID`) |
-| Waiter key | proposal `call_id` | `call.ExecutionID` (`processor/agentic-loop/governance_dispatcher.go:401`) |
+| Waiter key | proposal `call_id` | `call.ExecutionID` (`processor/agentic-loop/governance_dispatcher.go:413`) |
 
 The proposal payload on `agent.toolcall.proposed` carries `execution_id`, `request_id` and `call_ordinal` alongside
 the existing `loop_id` and `call_id`, so a rule has the token it needs without computing anything. The port
@@ -1290,7 +1290,7 @@ consumer configuration moves; only the rules that *publish* a verdict do.
 **Edit the rules before the upgrade, not after.** `agentic-loop` demuxes an arriving verdict by `execution_id` and
 **terminates** one that carries none, so a rule still templating `$message.loop_id.$message.call_id` publishes to a
 subject no waiter is registered under. In `audit` mode the loop publishes the proposal and does not wait, so tool
-calls continue. In **`enforce` mode the wait is fail-closed** (`governance_dispatcher.go:485`): a verdict that never arrives at the
+calls continue. In **`enforce` mode the wait is fail-closed** (`governance_dispatcher.go:491-497`): a verdict that never arrives at the
 waiter's key times out and the call is rejected — so an enforce-mode deployment upgraded without editing its rules
 rejects **every governed tool call** until they are, with `governance verdict timeout after <d> (fail-closed)` as
 the only symptom.
@@ -1299,3 +1299,7 @@ The one-line fix per rule is to replace the two-token suffix with `$message.exec
 carries the worked rule set at the new subjects, and `$message.execution_id` is in its token table. An operator who
 cannot edit the rules in the same window should set `tool_call_governance.mode` to `audit` for the upgrade and
 switch back to `enforce` once they are edited; that trades enforcement for availability rather than losing both.
+
+Every line pin in this section was re-derived with `sed -n '<n>p'` against the head it ships on, not carried
+forward: one of them (`governance_dispatcher.go:401`) had already drifted onto a comment line before anyone read
+it. Re-derive rather than trust when you cite this section from anywhere else.

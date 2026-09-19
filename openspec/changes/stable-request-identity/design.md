@@ -63,9 +63,12 @@ proves the guarantee with no window in play; the window test is the bonus.
   serve — recovering the retry ordinal after a replacement — is L4's `LoopEntity.PublishedRequestID`, which carries
   the whole previous RequestID rather than requiring the suffix be re-derived. The grammar is documented in the
   migration note for the only consumer class that exists: a log or index that must treat the suffix as opaque.
+  **Accepted at review round 2 and recorded on #1328**: L4 adds `internal/looprequest` beside its first reader, so
+  the parser is born with a consumer rather than ahead of one.
 - **`GenerateRequestID` derives both ordinals instead of taking them from its callers.** Recorded in full in the PR
   body; the short reason is that the three call sites' locals disagree — `handleToolsComplete`'s post-increment
   `newIteration` is 1 for the *second* request — so only manager-held state is injective across all three.
+  **Accepted at review round 2.**
 
 ## Declared cost
 

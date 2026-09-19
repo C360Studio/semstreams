@@ -19,10 +19,13 @@ SECOND verdict under one execution identity SHALL quarantine, because only one o
 and which one is not knowable from the message.
 
 `ProposalFingerprint` SHALL be carried, not verified: agentic-loop mints it onto the proposal, the rule engine
-echoes it onto the verdict, and agentic-loop decodes it as audit context. Routing SHALL use the execution identity
-alone, so a verdict whose fingerprint disagrees with its proposal SHALL still reach its waiter. Enforcing the
-comparison requires the proposal's fingerprint to outlive the process that registered the waiter, which this change
-does not own.
+echoes it onto the verdict, and agentic-loop decodes it as audit context — audit mode SHALL record it on the
+observed-verdict log line, which is the whole of what "audit context" means here. Routing SHALL use the execution
+identity alone, so a verdict whose fingerprint disagrees with its proposal SHALL still reach its waiter. Enforcing
+the comparison requires the proposal's fingerprint to outlive the process that registered the waiter — durable
+per-call governance state that NO layer of this stack owns: L4 (#1330) carries durable loop state, not durable
+per-call proposal state. Absent a new issue claiming it, the fingerprint is an audit token only, and no layer
+verifies it.
 
 #### Scenario: Validated output may repeat
 

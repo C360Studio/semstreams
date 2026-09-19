@@ -376,10 +376,16 @@ func (d *auditDispatcher) HandleVerdict(decision, executionID string, data []byt
 	// gating real traffic.
 	var payload VerdictPayload
 	_ = json.Unmarshal(data, &payload)
+	// The fingerprint is audit context and nothing else: it is not
+	// compared, and routing is by execution identity alone. Logging it here
+	// is the whole of "agentic-loop decodes it as audit context" — without
+	// this attribute the decoded field has no reader and the claim is a
+	// sentence the code does not back.
 	d.logger.Info("Audit-mode verdict observed",
 		slog.String("decision", decision),
 		slog.String("execution_id", executionID),
 		slog.String("rule_id", payload.RuleID),
+		slog.String("proposal_fingerprint", payload.ProposalFingerprint),
 		slog.String("reason", payload.EffectiveReason()))
 	if d.metrics != nil {
 		// Audit mode can't measure latency (no per-call start time
