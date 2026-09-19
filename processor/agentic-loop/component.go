@@ -91,7 +91,8 @@ type Component struct {
 	sweeperDone   chan struct{}
 
 	// Metrics
-	metrics *loopMetrics
+	metrics          *loopMetrics
+	deliveryFatalErr error
 
 	// Graph writer for model endpoint and loop execution entities
 	graphWriter *graphWriter
@@ -113,8 +114,9 @@ type Component struct {
 }
 
 type streamConsumerBinding struct {
-	handle      jetstream.ConsumeContext
-	drainIssued bool
+	handle       jetstream.ConsumeContext
+	drainOnce    *sync.Once
+	observerDone <-chan struct{}
 }
 type requestSubscription interface{ Drain(context.Context) error }
 
@@ -431,7 +433,12 @@ func (c *Component) Health() component.HealthStatus {
 		status = "running"
 	}
 	errorCount, lastError := c.trajectoryAuditHealth.snapshot()
-	if healthy && (!c.trajectoryProviderAvailable() || errorCount > 0) {
+	if c.deliveryFatalErr != nil {
+		healthy = false
+		status = "delivery ownership lost"
+		errorCount++
+		lastError = c.deliveryFatalErr.Error()
+	} else if healthy && (!c.trajectoryProviderAvailable() || errorCount > 0) {
 		healthy = false
 		status = "degraded"
 		if !c.trajectoryProviderAvailable() && lastError == "" {
@@ -723,10 +730,7 @@ func (c *Component) cleanup(ctx context.Context) error {
 	}
 	for i := range c.consumers {
 		binding := &c.consumers[i]
-		if !binding.drainIssued {
-			binding.handle.Drain()
-			binding.drainIssued = true
-		}
+		binding.drain()
 		closed := binding.handle.Closed()
 		if c.waitConsumerClosed != nil {
 			cleanupErr = errors.Join(cleanupErr, c.waitConsumerClosed(ctx, closed))
@@ -743,6 +747,15 @@ func (c *Component) cleanup(ctx context.Context) error {
 	}
 	if c.cancel != nil {
 		c.cancel()
+	}
+	for i := range c.consumers {
+		if observerDone := c.consumers[i].observerDone; observerDone != nil {
+			select {
+			case <-observerDone:
+			case <-ctx.Done():
+				cleanupErr = errors.Join(cleanupErr, ctx.Err())
+			}
+		}
 	}
 	if done != nil {
 		select {
@@ -884,20 +897,23 @@ func (c *Component) setupSubscriptions(setupCtx, consumerCtx context.Context) er
 		}
 		subject := stream.Subjects()[0]
 
-		var handler inputHandler
+		var (
+			handler         inputHandler
+			settleHandlerFn func(context.Context, []byte) (natsclient.DeliveryDecision, error)
+		)
 
 		// Route to appropriate handler based on port name
 		switch port.Name {
 		case "agent.task":
 			handler = c.taskInputHandler(30 * time.Minute)
 		case "agent.response":
-			handler = adaptVoidInputHandler(c.handleResponseMessage)
+			handler = c.handleResponseMessage
 		case "tool.result":
-			handler = adaptVoidInputHandler(c.handleToolResultMessage)
+			handler = c.handleToolResultMessage
 		case "agent.signal":
-			handler = adaptVoidInputHandler(c.handleSignalMessage)
+			settleHandlerFn = c.handleSignalMessage
 		case "agent.approval_response":
-			handler = adaptVoidInputHandler(c.handleApprovalResponseMessage)
+			settleHandlerFn = c.handleApprovalResponseMessage
 		case "agent.toolcall.approved", "agent.toolcall.rejected":
 			// Verdicts from rule-driven tool-call governance (ADR-039).
 			// Both subjects route into the same demux — the dispatcher
@@ -906,13 +922,13 @@ func (c *Component) setupSubscriptions(setupCtx, consumerCtx context.Context) er
 			// no fallback construction); the wildcard subscription is
 			// still cheap to bind but never gets traffic in disabled
 			// mode because nothing publishes to proposed.
-			handler = adaptVoidInputHandler(c.handleToolCallVerdictMessage)
+			settleHandlerFn = c.handleToolCallVerdictMessage
 		default:
 			c.logger.Warn("Unknown input port", "port", port.Name)
 			continue
 		}
 
-		if err := c.setupConsumer(setupCtx, consumerCtx, port, subject, handler); err != nil {
+		if err := c.setupConsumer(setupCtx, consumerCtx, port, subject, handler, settleHandlerFn); err != nil {
 			return errs.Wrap(err, "agentic-loop", "setupSubscriptions", fmt.Sprintf("setup consumer for %s", subject))
 		}
 	}
@@ -920,8 +936,70 @@ func (c *Component) setupSubscriptions(setupCtx, consumerCtx context.Context) er
 	return nil
 }
 
+// loopLaneDelivery is the delivery posture a single input lane runs under. It
+// is resolved before the consumer config is built so the latency-class rules
+// live in one place rather than inside the setup path.
+type loopLaneDelivery struct {
+	ackWait           time.Duration
+	maxAckPending     int
+	maxDeliver        int
+	msgTimeout        time.Duration
+	backOff           []time.Duration
+	useHeartbeat      bool
+	heartbeatInterval time.Duration
+}
+
+// resolveLoopLaneDelivery differentiates the posture by latency class:
+// long-running ports (task, response, tool.result) need serial processing,
+// heartbeats and graduated backoff to survive LLM-scale latency; the fast
+// ports keep short timeouts and higher concurrency.
+func (c *Component) resolveLoopLaneDelivery(
+	portName string,
+	consumerCfg component.ConsumerConfig,
+	componentMaxAckPending int,
+) loopLaneDelivery {
+	lane := loopLaneDelivery{
+		maxAckPending: componentMaxAckPending,
+		backOff:       []time.Duration{30 * time.Second, 2 * time.Minute},
+	}
+	switch portName {
+	case "agent.task", "agent.response", "tool.result":
+		lane.ackWait = c.config.Consumer.ParsedAckWait()
+		lane.maxDeliver = c.config.Consumer.MaxDeliver
+		// The task adapter (taskInputHandler) owns the ordinary 30m work
+		// deadline; the outer callback stays lifecycle-bound so a timed-out
+		// task is attributed as a work error, not an outer cancellation.
+		lane.msgTimeout = 30 * time.Minute
+		lane.useHeartbeat = true
+		lane.heartbeatInterval = c.config.Consumer.ParsedHeartbeatInterval()
+	default: // agent.signal, agent.approval_response, agent.toolcall.* — fast
+		lane.ackWait = 30 * time.Second
+		// These four lanes are the ones this change gave a Retry
+		// classification to, so they need the same bound the heartbeat lanes
+		// have. What they were missing was not a delivery ceiling —
+		// component.GetConsumerConfig already defaults MaxDeliver to 3
+		// (component/port_jetstream.go:130), and these ports declare no
+		// consumer config to override it — but a BackOff and a delay: their
+		// Retry was a bare Nak against an empty BackOff, so every transient
+		// error was redelivered at line rate until the ceiling burned through.
+		// The resolved MaxDeliver is passed through and then held to the
+		// BackOff length by validateLoopRetryPolicy at setup, which refuses
+		// rather than repairs.
+		lane.maxDeliver = consumerCfg.MaxDeliver
+		lane.msgTimeout = c.messageTimeout
+	}
+	return lane
+}
+
 // setupConsumer sets up a JetStream consumer for an input port.
-func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port component.Port, subject string, handler inputHandler) error {
+func (c *Component) setupConsumer(
+	setupCtx context.Context,
+	consumerCtx context.Context,
+	port component.Port,
+	subject string,
+	handler inputHandler,
+	settleHandlerFn func(context.Context, []byte) (natsclient.DeliveryDecision, error),
+) error {
 	facts, err := port.Facts()
 	if err != nil {
 		return err
@@ -960,47 +1038,7 @@ func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port co
 		return errs.WrapInvalid(consumerErr, "agentic-loop", "setupConsumer", "resolve consumer config")
 	}
 
-	// Differentiate consumer config by latency class:
-	// - Long-running ports (task, response, tool.result) need serial processing,
-	//   heartbeats, and graduated backoff to handle LLM-scale latency.
-	// - Fast ports (signal) keep short timeouts and higher concurrency.
-	var (
-		ackWait           time.Duration
-		maxAckPending     int
-		maxDeliver        int
-		msgTimeout        time.Duration
-		backOff           []time.Duration
-		useHeartbeat      bool
-		heartbeatInterval time.Duration
-	)
-
-	switch port.Name {
-	case "agent.task":
-		ackWait = c.config.Consumer.ParsedAckWait()
-		maxAckPending = componentMaxAckPending
-		maxDeliver = c.config.Consumer.MaxDeliver
-		// The task adapter (taskInputHandler) owns the ordinary 30m work
-		// deadline; the outer callback stays lifecycle-bound so a timed-out
-		// task is attributed as a work error, not an outer cancellation.
-		msgTimeout = 30 * time.Minute
-		backOff = []time.Duration{30 * time.Second, 2 * time.Minute}
-		useHeartbeat = true
-		heartbeatInterval = c.config.Consumer.ParsedHeartbeatInterval()
-	case "agent.response", "tool.result":
-		ackWait = c.config.Consumer.ParsedAckWait()
-		maxAckPending = componentMaxAckPending
-		maxDeliver = c.config.Consumer.MaxDeliver
-		msgTimeout = 30 * time.Minute
-		backOff = []time.Duration{30 * time.Second, 2 * time.Minute}
-		useHeartbeat = true
-		heartbeatInterval = c.config.Consumer.ParsedHeartbeatInterval()
-	default: // agent.signal — fast, advisory
-		ackWait = 30 * time.Second
-		maxAckPending = componentMaxAckPending
-		maxDeliver = consumerCfg.MaxDeliver
-		msgTimeout = c.messageTimeout
-		useHeartbeat = false
-	}
+	lane := c.resolveLoopLaneDelivery(port.Name, consumerCfg, componentMaxAckPending)
 
 	cfg := natsclient.StreamConsumerConfig{
 		StreamName:     streamName,
@@ -1008,35 +1046,56 @@ func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port co
 		FilterSubject:  subject,
 		DeliverPolicy:  consumerCfg.DeliverPolicy,
 		AckPolicy:      consumerCfg.AckPolicy,
-		MaxDeliver:     maxDeliver,
-		AckWait:        ackWait,
-		MaxAckPending:  maxAckPending,
-		BackOff:        backOff,
+		MaxDeliver:     lane.maxDeliver,
+		AckWait:        lane.ackWait,
+		MaxAckPending:  lane.maxAckPending,
+		BackOff:        lane.backOff,
 		AutoCreate:     false,
-		MessageTimeout: msgTimeout,
+		MessageTimeout: lane.msgTimeout,
 		// agent.task applies its 30m ordinary-work deadline in taskInputHandler;
 		// its outer context stays lifecycle-bound so the adapter's deadline is
 		// the single authority on task-work timeout attribution.
 		DisableMessageTimeout: port.Name == "agent.task",
 	}
-
 	var handlerFn func(context.Context, jetstream.Msg)
-	if useHeartbeat {
-		hi := heartbeatInterval
+	var admission *deliveryLaneAdmission
+	if lane.useHeartbeat {
+		policy, policyErr := newLoopHeartbeatDeliveryPolicy(setupCtx, cfg, lane.heartbeatInterval, port.Name, handler)
+		if policyErr != nil {
+			return policyErr
+		}
+		admission = newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
 		handlerFn = func(msgCtx context.Context, msg jetstream.Msg) {
-			if err := consumeLongRunningInput(msgCtx, msg, hi, handler); err != nil {
-				c.logger.Error("Message handler error", "port", port.Name, "error", err)
+			result, admitted := consumeAdmittedDelivery(msgCtx, msg, policy, admission)
+			if admitted && result.Err() != nil && !result.OwnerStopRequired() {
+				c.logger.Error("Message handler error", "port", port.Name, "error", result.Err())
 			}
 		}
 	} else {
+		if settleHandlerFn == nil {
+			return errs.WrapInvalid(fmt.Errorf("input port %q has no typed settlement handler", port.Name),
+				"agentic-loop", "setupConsumer", "missing settlement handler")
+		}
+		if err := validateLoopRetryPolicy(port.Name, cfg); err != nil {
+			return err
+		}
+		// Same 30s delay the heartbeat lanes use. Without it a Retry is a bare
+		// Nak, redelivered at line rate.
+		settleRetry, retryErr := natsclient.DelayedDeliveryRetry(30 * time.Second)
+		if retryErr != nil {
+			return errs.WrapInvalid(retryErr, "agentic-loop", "setupConsumer",
+				"construct settlement retry policy")
+		}
+		admission = newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
 		handlerFn = func(msgCtx context.Context, msg jetstream.Msg) {
-			if err := handler(msgCtx, msg.Data()); err != nil {
-				_ = msg.Nak()
-				c.logger.Error("Message handler error", "port", port.Name, "error", err)
+			if !admission.admit() {
 				return
 			}
-			if ackErr := msg.Ack(); ackErr != nil {
-				c.logger.Error("Failed to ack JetStream message", "error", ackErr)
+			decision, cause := runLoopDeliveryWork(msgCtx, msg.Data(), settleHandlerFn)
+			result := natsclient.SettleDeliveryWithRetry(msg, settleRetry, decision, cause)
+			admission.latch(result)
+			if result.Err() != nil && !result.OwnerStopRequired() {
+				c.logger.Error("Message delivery did not settle cleanly", "port", port.Name, "error", result.Err())
 			}
 		}
 	}
@@ -1050,9 +1109,13 @@ func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port co
 		return errs.Wrap(err, "agentic-loop", "setupConsumer", fmt.Sprintf("setup consumer for stream %s", streamName))
 	}
 
+	binding := newStreamConsumerBinding(handle)
+	if admission != nil {
+		c.observeDeliveryLane(consumerCtx, &binding, admission, port.Name)
+	}
 	// Track consumer for cleanup in Stop()
 	c.lifecycleMu.Lock()
-	c.consumers = append(c.consumers, streamConsumerBinding{handle: handle})
+	c.consumers = append(c.consumers, binding)
 	c.lifecycleMu.Unlock()
 	c.mu.Lock()
 	c.consumerInfos = append(c.consumerInfos, consumerInfo{
@@ -1087,15 +1150,68 @@ func agenticLoopConsumerPolicy(port component.Port) (component.ConsumerConfig, i
 	return consumerConfig, fixed, nil
 }
 
-func consumeLongRunningInput(
+func validateLoopRetryPolicy(portName string, cfg natsclient.StreamConsumerConfig) error {
+	if cfg.MaxDeliver >= len(cfg.BackOff) {
+		return nil
+	}
+	return errs.WrapInvalid(
+		fmt.Errorf("max_deliver %d is below required minimum %d for fixed BackOff", cfg.MaxDeliver, len(cfg.BackOff)),
+		"agentic-loop",
+		"setupConsumer",
+		fmt.Sprintf("validate delivery policy for port %s", portName),
+	)
+}
+
+func newLoopHeartbeatDeliveryPolicy(
 	ctx context.Context,
-	msg jetstream.Msg,
+	cfg natsclient.StreamConsumerConfig,
 	heartbeatInterval time.Duration,
+	portName string,
 	handler inputHandler,
-) error {
-	return natsclient.ConsumeWithHeartbeat(ctx, msg, heartbeatInterval, func(workCtx context.Context) error {
-		return handler(workCtx, msg.Data())
-	})
+) (natsclient.HeartbeatDeliveryPolicy, error) {
+	if err := validateLoopRetryPolicy(portName, cfg); err != nil {
+		return natsclient.HeartbeatDeliveryPolicy{}, err
+	}
+	retryPolicy, err := natsclient.DelayedDeliveryRetry(30 * time.Second)
+	if err != nil {
+		return natsclient.HeartbeatDeliveryPolicy{}, errs.WrapInvalid(
+			err, "agentic-loop", "setupConsumer", "construct delivery retry policy",
+		)
+	}
+	policy, err := natsclient.ValidateHeartbeatDeliveryPolicy(
+		ctx,
+		cfg,
+		heartbeatInterval,
+		retryPolicy,
+		func(workCtx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
+			handlerErr := handler(workCtx, data)
+			if handlerErr == nil {
+				return natsclient.DeliveryDecisionAck, nil
+			}
+			// Fatal is checked first and means one thing here: an external
+			// effect may already have happened and we cannot tell. Retry is
+			// only safe when re-execution is, so a commit-unknown error can
+			// never fall through to it. The cancel lane already made this
+			// call; the heartbeat lanes were the ones still blind-retrying.
+			if errs.IsFatal(handlerErr) {
+				return natsclient.DeliveryDecisionQuarantine, handlerErr
+			}
+			var permanent *natsclient.PermanentDeliveryError
+			if errors.As(handlerErr, &permanent) {
+				return natsclient.DeliveryDecisionTerminate, handlerErr
+			}
+			return natsclient.DeliveryDecisionRetry, handlerErr
+		},
+	)
+	if err != nil {
+		return natsclient.HeartbeatDeliveryPolicy{}, errs.WrapInvalid(
+			err,
+			"agentic-loop",
+			"setupConsumer",
+			fmt.Sprintf("validate heartbeat delivery policy for port %s", portName),
+		)
+	}
+	return policy, nil
 }
 
 // waitForStream waits for a JetStream stream to be available
@@ -1385,15 +1501,17 @@ func (c *Component) handleSpawnIdentityFailure(ctx context.Context, loopID strin
 	if c.metrics != nil && entity.ID != "" {
 		c.metrics.recordLoopCreated()
 	}
-	c.handleLoopFailure(ctx, loopID, entity, reason, err)
-	return nil
+	return c.handleLoopFailure(ctx, loopID, entity, reason, err)
 }
 
 // handleResponseMessage processes incoming agent response messages
-func (c *Component) handleResponseMessage(ctx context.Context, data []byte) {
-	response, loopID, ok := c.extractAgentResponse(data)
-	if !ok {
-		return
+func (c *Component) handleResponseMessage(ctx context.Context, data []byte) error {
+	response, loopID, err := c.extractAgentResponse(data)
+	if err != nil {
+		return err
+	}
+	if loopID == "" {
+		return c.settleResponseWithoutLoop(ctx, response.RequestID)
 	}
 
 	entity, _ := c.handler.GetLoop(loopID)
@@ -1401,12 +1519,14 @@ func (c *Component) handleResponseMessage(ctx context.Context, data []byte) {
 	result, err := c.handler.HandleModelResponse(ctx, loopID, *response)
 	if err != nil {
 		c.recordTrajectoryObservations(ctx, result)
-		c.handleLoopFailure(ctx, loopID, entity, failureReasonForHandlerError(err), err)
-		return
+		// A handler error is this loop's business failure, and the delivery
+		// that carried it is done once that failure is durable — not once it
+		// has been logged. handleLoopFailure answers for the difference.
+		return c.handleLoopFailure(ctx, loopID, entity, failureReasonForHandlerError(err), err)
 	}
 
 	c.recordResponseMetrics(response, result, entity)
-	c.persistHandlerResult(ctx, result)
+	return c.persistHandlerResult(ctx, result)
 }
 
 // failureReasonForHandlerError classifies a HandleModelResponse error into
@@ -1423,33 +1543,33 @@ func failureReasonForHandlerError(err error) string {
 }
 
 // extractAgentResponse parses an agent response message and finds its loop.
-// Returns the response, loop ID, and success flag.
-func (c *Component) extractAgentResponse(data []byte) (*agentic.AgentResponse, string, bool) {
+//
+// A decode or payload-type failure is returned as a PermanentDeliveryError:
+// the bytes on this message will never decode, so the heartbeat policy
+// terminates the delivery rather than discarding it behind a log line.
+//
+// An empty loop ID with a nil error is NOT a failure and not a decision — it
+// means only that process memory does not route this RequestID. The caller
+// classifies that against the loops bucket, because memory alone cannot tell a
+// settled loop from one this process lost.
+func (c *Component) extractAgentResponse(data []byte) (*agentic.AgentResponse, string, error) {
 	baseMsg, err := c.decoder.Decode(data)
 	if err != nil {
 		c.logger.Error("Failed to unmarshal BaseMessage", "error", err)
-		return nil, "", false
+		return nil, "", natsclient.TerminateDelivery(
+			fmt.Errorf("decode agent response BaseMessage: %w", err))
 	}
 
 	responsePtr, ok := baseMsg.Payload().(*agentic.AgentResponse)
 	if !ok {
 		c.logger.Error("Unexpected payload type", "type", fmt.Sprintf("%T", baseMsg.Payload()))
-		return nil, "", false
+		return nil, "", natsclient.TerminateDelivery(
+			fmt.Errorf("agent response payload is %T, not *agentic.AgentResponse", baseMsg.Payload()))
 	}
 
-	// No loop for this request is an EXPECTED settled-drop, not a fault. A
-	// terminal loop's per-loop state is released (#1233), which takes its
-	// request routing with it, so a model response that arrives after the loop
-	// settled — or after a process replacement — resolves nothing. Warn and
-	// drop: absence here must look the same as a terminal loop still present,
-	// and neither is an error the operator can act on.
 	loopID := c.findLoopIDForRequest(responsePtr.RequestID)
 	if loopID == "" {
-		c.logger.Warn("No loop found for request", "request_id", responsePtr.RequestID)
-		if c.metrics != nil {
-			c.metrics.recordModelResponseDropped("stale_request_id")
-		}
-		return nil, "", false
+		return responsePtr, "", nil
 	}
 
 	c.logger.Debug("Processing model response",
@@ -1457,11 +1577,54 @@ func (c *Component) extractAgentResponse(data []byte) (*agentic.AgentResponse, s
 		slog.String("request_id", responsePtr.RequestID),
 		slog.String("status", responsePtr.Status))
 
-	return responsePtr, loopID, true
+	return responsePtr, loopID, nil
 }
 
-// handleLoopFailure records failure metrics and publishes failure events.
-func (c *Component) handleLoopFailure(ctx context.Context, loopID string, entity agentic.LoopEntity, reason string, err error) {
+// settleResponseWithoutLoop decides a model response whose RequestID routes to
+// no loop in this process. A terminal loop's per-loop state is released
+// (#1233), which takes its request routing with it, so a response arriving
+// after settlement resolves nothing and is an expected drop. A response
+// arriving after process replacement looks identical from memory and is the
+// opposite case — the loop is live and still owed this response.
+func (c *Component) settleResponseWithoutLoop(ctx context.Context, requestID string) error {
+	loopID := loopIDFromStructuredID(requestID, ":req:")
+	switch c.classifyMissingLoop(ctx, loopID) {
+	case loopPresenceStale:
+		c.logger.Warn("No loop found for request", "request_id", requestID)
+		if c.metrics != nil {
+			c.metrics.recordModelResponseDropped("stale_request_id")
+		}
+		return nil
+	default:
+		// Warned, not counted. The delivery is still outstanding — it retries —
+		// and model_responses_dropped_total means work this process decided not
+		// to do. Counting a retry there would report one discarded response per
+		// redelivery for a response nothing has discarded, and the active
+		// delta says a live loop carries no expected-drop count at all. The
+		// cancel lane already drew this line (signals_dropped_total's help
+		// text); these two lanes had not.
+		c.logger.Warn("Model response names a loop this process does not hold",
+			"request_id", requestID, "loop_id", loopID)
+		return fmt.Errorf("loop %q for request %q is not held by this process", loopID, requestID)
+	}
+}
+
+// handleLoopFailure records failure metrics and publishes failure events, and
+// reports whether this loop's terminal failure was durably established.
+//
+// nil means the failed loop entity, its `COMPLETE_<loopID>` record, its graph
+// stamp and every failure event are committed: the business failure is a
+// finished effect and the delivery that produced it may ACK. A fatal-classified
+// error means the loop is failed in memory behind a partial or absent durable
+// record, which is the partial effect the lane quarantines — acknowledging it
+// would settle a failure nothing downstream can observe, and redelivering it
+// would meet a loop this process has already released. The one ordinary error
+// is a loop that could not be transitioned at all: nothing was written, so
+// there is no partial effect, and the redelivery resolves against the loop
+// record instead of memory.
+func (c *Component) handleLoopFailure(
+	ctx context.Context, loopID string, entity agentic.LoopEntity, reason string, err error,
+) error {
 	// Failure-event construction reads token totals twice below. Release the
 	// active aggregate only after those terminal consumers have returned.
 	defer c.releaseLoopTransientState(loopID)
@@ -1471,10 +1634,13 @@ func (c *Component) handleLoopFailure(ctx context.Context, loopID string, entity
 	// Transition loop to failed and persist — without this, the loop entity
 	// in AGENT_LOOPS KV stays at state=running and downstream watchers
 	// (execution-manager) never see the terminal state.
-	if transErr := c.handler.loopManager.TransitionLoop(loopID, agentic.LoopStateFailed); transErr == nil {
-		c.handler.loopManager.UpdateCompletion(loopID, agentic.OutcomeFailed, "", err.Error())
-		c.persistLoopState(ctx, loopID)
+	if transErr := c.handler.loopManager.TransitionLoop(loopID, agentic.LoopStateFailed); transErr != nil {
+		c.logger.Warn("Loop could not be transitioned to failed",
+			"error", transErr, "loop_id", loopID, "reason", reason)
+		return fmt.Errorf("transition loop %s to failed: %w", loopID, transErr)
 	}
+	c.handler.loopManager.UpdateCompletion(loopID, agentic.OutcomeFailed, "", err.Error())
+	established := c.persistLoopState(ctx, loopID)
 
 	if c.metrics != nil && entity.ID != "" {
 		duration := time.Since(entity.StartedAt).Seconds()
@@ -1485,7 +1651,15 @@ func (c *Component) handleLoopFailure(ctx context.Context, loopID string, entity
 	c.recordTerminalObservation(ctx, loopID, agentic.TrajectoryStatusFailed, agentic.TrajectoryErrorUnknown,
 		trajectoryTerminalEvidence{Loop: latest, Failure: failure})
 
-	c.publishFailureEvents(ctx, loopID, reason, err.Error())
+	// Every step still runs; the first failure is what the caller settles on.
+	if publishErr := c.publishFailureEvents(ctx, loopID, reason, err.Error()); established == nil {
+		established = publishErr
+	}
+	if established == nil {
+		return nil
+	}
+	return errs.WrapFatal(established, "agentic-loop", "handleLoopFailure",
+		"loop failure was not durably established")
 }
 
 // publishFailureEvents publishes failure events including workflow callback.
@@ -1503,21 +1677,29 @@ func (c *Component) handleLoopFailure(ctx context.Context, loopID string, entity
 // stampLoopCompletionWithBudget pattern). KV write is a single fast Put;
 // the existing errorCtx 5s detached timeout already bounds the whole
 // function so no separate budget is needed.
-func (c *Component) publishFailureEvents(ctx context.Context, loopID, reason, errorMsg string) {
+//
+// It returns the first step that did not commit, and attempts every later step
+// anyway: a failure event that can still be published is worth publishing even
+// though the delivery behind it will not ACK. A nil return is what lets
+// handleLoopFailure claim the failure is durable.
+func (c *Component) publishFailureEvents(ctx context.Context, loopID, reason, errorMsg string) error {
 	errorCtx, cancel := natsclient.DetachContextWithTrace(ctx, 5*time.Second)
 	defer cancel()
 
 	failure, failMsgs, err := c.handler.BuildFailureMessages(loopID, reason, errorMsg)
 	if err != nil {
 		c.logger.Warn("Failed to build failure event", "error", err, "loop_id", loopID)
-		return
+		return fmt.Errorf("build failure event for loop %s: %w", loopID, err)
 	}
 
+	var firstUncommitted error
 	// Persist failure to KV first so watchers (rules engine,
 	// execution-manager) see COMPLETE_{loopID} when they react to the
 	// failure event below.
 	if failure != nil {
-		c.persistFailureState(errorCtx, loopID, failure)
+		if persistErr := c.persistFailureState(errorCtx, loopID, failure); persistErr != nil {
+			firstUncommitted = persistErr
+		}
 	}
 
 	// Stamp graph triples second (under budget). The reorder is the
@@ -1525,20 +1707,26 @@ func (c *Component) publishFailureEvents(ctx context.Context, loopID, reason, er
 	// path's stampLoopCompletionWithBudget so a slow graph-gateway can't
 	// stall the publish.
 	if failure != nil {
-		c.stampLoopFailureWithBudget(errorCtx, loopID, failure)
+		if stampErr := c.stampLoopFailureWithBudget(errorCtx, loopID, failure); stampErr != nil && firstUncommitted == nil {
+			firstUncommitted = stampErr
+		}
 	}
 
 	// Publish last — every observable side effect is now in place.
 	// NATS-less deployments (test scaffolding) skip the publish, matching
 	// publishResults' nil-client guard.
 	if c.natsClient == nil {
-		return
+		return firstUncommitted
 	}
 	for _, msg := range failMsgs {
 		if pubErr := c.natsClient.PublishToStream(errorCtx, msg.Subject, msg.Data); pubErr != nil {
 			c.logger.Error("Failed to publish failure event", "error", pubErr, "loop_id", loopID)
+			if firstUncommitted == nil {
+				firstUncommitted = fmt.Errorf("publish failure event %s: %w", msg.Subject, pubErr)
+			}
 		}
 	}
+	return firstUncommitted
 }
 
 // recordResponseMetrics records metrics and logs for a successful response.
@@ -1606,7 +1794,7 @@ func (c *Component) recordTerminalState(result HandlerResult, entity agentic.Loo
 //
 // 2s is generous for healthy graph-gateway (a typical completion stamps
 // ~10-15 triples in well under a second). When the budget expires we
-// publish anyway and emit a Prom counter so operators can dashboard
+// fail the joined delivery and emit a Prom counter so operators can dashboard
 // the tail. Tighten if production sees significant tail; widen only
 // after confirming the writer's retry budget is the actual bottleneck.
 const graphWritePublishBudget = 2 * time.Second
@@ -1621,47 +1809,112 @@ const graphWritePublishBudget = 2 * time.Second
 // missing parent triple. Concrete consumer was semteams ADR-038 PR B
 // chain.evidence.* (project_open_work_2026_05_08.md bug class 4).
 //
-// runWithBudget caps how long we delay the publish on a slow graph
-// write — graph-gateway hiccups must NOT silently swallow the
-// agent.complete.* event downstream rules wait on. On budget timeout,
-// publish proceeds with a loud log and Prom counter increment.
-func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResult) {
-	if result.State == agentic.LoopStateComplete || result.State == agentic.LoopStateFailed {
-		// MessageHandler has already extracted terminal token/step data into
-		// result. Keep the aggregate alive through persistence/publication, then
-		// release it even when an adjacent terminal side effect degrades.
-		defer c.releaseLoopTransientState(result.LoopID)
-	}
+// A required persistence or publication failure leaves the joined delivery in
+// an unknown partial state; the caller quarantines rather than claiming done.
+func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResult) error {
+	terminal := result.State == agentic.LoopStateComplete || result.State == agentic.LoopStateFailed
 
 	c.recordHandlerResultTrajectory(ctx, result)
-	c.persistLoopState(ctx, result.LoopID)
 
-	if result.State == agentic.LoopStateComplete || result.State == agentic.LoopStateFailed {
-		if result.CompletionState != nil {
-			c.persistCompletionState(ctx, result.LoopID, result.CompletionState)
-			c.stampLoopCompletionWithBudget(ctx, result.LoopID, result.CompletionState)
-		} else if result.FailureState != nil {
-			c.stampLoopFailureWithBudget(ctx, result.LoopID, result.FailureState)
-		}
-		// Terminal-tool-less synthesis (#133). Detected in
-		// handleCompleteResponse; emitted here on the graph path so the
-		// triples ride the same publish budget as the loop completion
-		// stamp and downstream rules see them on the same KV revision
-		// the agent.complete.* event refers to.
-		if result.SyntheticDecide != nil {
-			c.stampSyntheticDecideWithBudget(ctx, result.SyntheticDecide)
-		}
+	// The stamp phase is re-runnable in isolation: persistLoopState (:2348),
+	// persistCompletionState (:2269) and persistFailureState (:2301) each do a
+	// single c.loopsBucket.Put of the whole current entity — last write wins,
+	// not an append — and the graph stamps go through
+	// WriteLoopCompletion and WriteLoopFailure, which replace the loop entity's
+	// single-valued triples.
+	//
+	// The DELIVERY that would re-run it is not, and the classification answers
+	// for the delivery. The handler has already moved this loop in memory
+	// before we are called, so the redelivery does not arrive at the same loop
+	// it left: a redelivered model response meets the terminal guard
+	// (handlers.go:1179-1185) and returns an empty result — no completion
+	// record, no publication — which persists nothing, publishes nothing and
+	// ACKs. The completion the first attempt built is then gone, and
+	// COMPLETE_<loopID> and agent.complete were never emitted. So a stamp
+	// failure is a partial effect whose commit is unknown, and the lane
+	// quarantines rather than retrying into a handler that will refuse to
+	// rebuild the result. L4 (#1330) — replay that reproduces the original
+	// result — is what relaxes this to Retry.
+	if err := c.persistResultState(ctx, result, terminal); err != nil {
+		return errs.WrapFatal(err, "agentic-loop", "persistHandlerResult",
+			"handler result state has unknown durability after the loop was already mutated")
 	}
 
-	c.publishResults(ctx, result)
+	// publishResults is commit-unknown for its own second reason. It publishes
+	// result.PublishedMessages one at a time, so a failure on the third leaves
+	// two already PubAck'd — including tool.execute messages whose executors
+	// are running. Until deterministic tool-call identity lands (L2) the re-run
+	// mints fresh call IDs, so a Retry here would run the first two tools twice
+	// and TOOL_CALL_OUTCOMES could not dedupe them: different CallIDs are
+	// different calls. L4 (#1330) relaxes this to identity-based replay.
+	if err := c.publishResults(ctx, result); err != nil {
+		return errs.WrapFatal(err, "agentic-loop", "persistHandlerResult",
+			"published results have unknown durability")
+	}
+	if terminal {
+		c.releaseLoopTransientState(result.LoopID)
+	}
+	return nil
+}
+
+// persistResultState runs the whole stamp phase for one handler result: the
+// loop entity, then — for a terminal result — its completion or failure record
+// and the matching graph stamps. Every step writes a whole value, so the phase
+// is idempotent on its own; its caller decides what a failure means for the
+// delivery that produced it.
+func (c *Component) persistResultState(ctx context.Context, result HandlerResult, terminal bool) error {
+	if err := c.persistLoopState(ctx, result.LoopID); err != nil {
+		return err
+	}
+	if !terminal {
+		return nil
+	}
+	if result.CompletionState != nil {
+		if err := c.persistCompletionState(ctx, result.LoopID, result.CompletionState); err != nil {
+			return err
+		}
+		if err := c.stampLoopCompletionWithBudget(ctx, result.LoopID, result.CompletionState); err != nil {
+			return err
+		}
+	} else if result.FailureState != nil {
+		// The terminal RECORD before its graph triples, mirroring the
+		// completion branch above. Without this the failure branch stamped
+		// triples and ACKed with COMPLETE_<loopID> absent, so every watcher
+		// that reads the terminal record out of KV — rules engine,
+		// execution-manager, the SSE path — saw a loop that ended and no
+		// result for it. persistFailureState is otherwise reachable only from
+		// publishFailureEvents (:1700), which this route never enters: the
+		// three results that carry a FailureState here return no error to
+		// handleLoopFailure, and the one that does (HandleModelResponse's
+		// timeout, handlers.go:1173) never reaches this function. So the write
+		// happens exactly once on every path, and the failure event is
+		// published exactly once — by publishResults here, or by
+		// publishFailureEvents there, never both.
+		if err := c.persistFailureState(ctx, result.LoopID, result.FailureState); err != nil {
+			return err
+		}
+		if err := c.stampLoopFailureWithBudget(ctx, result.LoopID, result.FailureState); err != nil {
+			return err
+		}
+	}
+	// Terminal-tool-less synthesis (#133). Detected in
+	// handleCompleteResponse; emitted here on the graph path so the
+	// triples ride the same publish budget as the loop completion
+	// stamp and downstream rules see them on the same KV revision
+	// the agent.complete.* event refers to.
+	if result.SyntheticDecide != nil {
+		if err := c.stampSyntheticDecideWithBudget(ctx, result.SyntheticDecide); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // stampLoopCompletionWithBudget invokes WriteLoopCompletion under the
-// graphWritePublishBudget. Records a Prom timeout when the budget
-// expires before the writer returns; publish proceeds either way.
-func (c *Component) stampLoopCompletionWithBudget(ctx context.Context, loopID string, completion *agentic.LoopCompletedEvent) {
+// graphWritePublishBudget and reports cancellation instead of publishing past it.
+func (c *Component) stampLoopCompletionWithBudget(ctx context.Context, loopID string, completion *agentic.LoopCompletedEvent) error {
 	if c.graphWriter == nil {
-		return
+		return nil
 	}
 	// Read the observed-audit-loss answer HERE, on the component that owns
 	// it, and hand the writer the result. loopAuditLoss answers for both
@@ -1677,39 +1930,45 @@ func (c *Component) stampLoopCompletionWithBudget(ctx context.Context, loopID st
 		c.graphWriter.WriteLoopCompletion(bctx, completion, evidenceIncomplete)
 	})
 	if timedOut {
-		c.logger.Warn("graph write budget expired before completion stamp returned; publishing agent.complete anyway",
+		c.logger.Warn("graph write budget expired before completion stamp returned",
 			"loop_id", loopID,
 			"budget", graphWritePublishBudget,
 			"state", "complete")
 		if c.metrics != nil {
 			c.metrics.recordGraphWritePublishTimeout("complete")
 		}
+		return fmt.Errorf("completion graph stamp for loop %s did not complete within lifecycle budget: %w",
+			loopID, errors.Join(context.DeadlineExceeded, ctx.Err()))
 	}
+	return nil
 }
 
 // stampSyntheticDecideWithBudget invokes WriteSyntheticDecide under the
 // graphWritePublishBudget. Records a Prom timeout when the budget
-// expires before the writer returns; publish proceeds either way. Same
+// expires before the writer returns; publication is withheld. Same
 // shape as stampLoopCompletionWithBudget — the synthetic-decide triples
 // must reach the graph before downstream rules wake on the
 // agent.complete.* event, otherwise the recovery rule fires before
 // coordinator.next_action="needs_clarification" is visible.
-func (c *Component) stampSyntheticDecideWithBudget(ctx context.Context, req *SyntheticDecideRequest) {
+func (c *Component) stampSyntheticDecideWithBudget(ctx context.Context, req *SyntheticDecideRequest) error {
 	if c.graphWriter == nil {
-		return
+		return nil
 	}
 	timedOut := runWithBudget(ctx, graphWritePublishBudget, func(bctx context.Context) {
 		c.graphWriter.WriteSyntheticDecide(bctx, req.LoopID, req.Reason)
 	})
 	if timedOut {
-		c.logger.Warn("graph write budget expired before synthetic decide stamp returned; publishing agent.complete anyway",
+		c.logger.Warn("graph write budget expired before synthetic decide stamp returned",
 			"loop_id", req.LoopID,
 			"budget", graphWritePublishBudget,
 			"state", "synthetic_decide")
 		if c.metrics != nil {
 			c.metrics.recordGraphWritePublishTimeout("synthetic_decide")
 		}
+		return fmt.Errorf("synthetic decide graph stamp for loop %s did not complete within lifecycle budget: %w",
+			req.LoopID, errors.Join(context.DeadlineExceeded, ctx.Err()))
 	}
+	return nil
 }
 
 // stampLoopFailureWithBudget mirrors stampLoopCompletionWithBudget for
@@ -1717,29 +1976,43 @@ func (c *Component) stampSyntheticDecideWithBudget(ctx context.Context, req *Syn
 // researcher-failure specifically (failed loops still need
 // agent.loop.parent visible for ancestry walks), so the failure path
 // gets the same budgeted-write treatment as completion.
-func (c *Component) stampLoopFailureWithBudget(ctx context.Context, loopID string, failure *agentic.LoopFailedEvent) {
+func (c *Component) stampLoopFailureWithBudget(ctx context.Context, loopID string, failure *agentic.LoopFailedEvent) error {
 	if c.graphWriter == nil {
-		return
+		return nil
 	}
 	evidenceIncomplete := c.trajectoryAuditLoss.observed(loopID)
 	timedOut := runWithBudget(ctx, graphWritePublishBudget, func(bctx context.Context) {
 		c.graphWriter.WriteLoopFailure(bctx, failure, evidenceIncomplete)
 	})
 	if timedOut {
-		c.logger.Warn("graph write budget expired before failure stamp returned; publishing agent.complete anyway",
+		c.logger.Warn("graph write budget expired before failure stamp returned",
 			"loop_id", loopID,
 			"budget", graphWritePublishBudget,
 			"state", "failure")
 		if c.metrics != nil {
 			c.metrics.recordGraphWritePublishTimeout("failure")
 		}
+		return fmt.Errorf("failure graph stamp for loop %s did not complete within lifecycle budget: %w",
+			loopID, errors.Join(context.DeadlineExceeded, ctx.Err()))
 	}
+	return nil
 }
 
-// runWithBudget runs fn in a goroutine and waits for it to return,
-// bounded by budget. Returns true if the budget expired before fn
-// returned (the goroutine continues running with a cancelled child
-// context; its inner NATS calls will see ctx.Done and abort cleanly).
+// runWithBudget runs fn synchronously under a bounded child context. The caller
+// never observes completion while delivery-derived work is still live: that is
+// the whole point of the synchronous call, because the goroutine-plus-select
+// shape this replaced returned while the work was still running and let a
+// delivery settle before its own graph write finished.
+//
+// The consequence is that the budget bounds only a callee that honors
+// cancellation. That is a contract, not an assumption: graph dependencies are
+// lifecycle participants under ADR-049 (docs/adr/049-lifecycle-harness.md),
+// which requires Stop and context cancellation to be honored, and a dependency
+// that ignores bctx fails lifecycle review rather than being defended against
+// here. A writer that blocked past the budget would hold the callback past the
+// lane's AckWait and be redelivered while the first attempt still ran — the
+// reason the residual is declared in the change's design.md rather than left
+// implicit.
 //
 // Extracted so the timeout-vs-completion contract is unit-testable
 // without mocking the natsclient or graphWriter. The function is
@@ -1750,44 +2023,24 @@ func (c *Component) stampLoopFailureWithBudget(ctx context.Context, loopID strin
 func runWithBudget(ctx context.Context, budget time.Duration, fn func(context.Context)) (timedOut bool) {
 	bctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		fn(bctx)
-	}()
-
-	select {
-	case <-done:
-		// fn returned. But "returned" is ambiguous when bctx was
-		// cancelled before/while fn ran — the goroutine may have
-		// observed bctx.Done() and returned promptly, which is the
-		// timed-out (or parent-cancelled) case, NOT a within-budget
-		// completion. When parent ctx is pre-cancelled, bctx is born
-		// cancelled and both channels become ready simultaneously;
-		// Go's select picks one at random, so without this check the
-		// function returns the wrong answer ~50% of the time on the
-		// pre-cancel path (caught by
-		// TestRunWithBudget_ParentContextCancellationPropagates
-		// flaking on CI). Inspect bctx to disambiguate.
-		return bctx.Err() != nil
-	case <-bctx.Done():
-		return true
-	}
+	fn(bctx)
+	return bctx.Err() != nil
 }
 
 // handleToolResultMessage processes incoming tool result messages
-func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) {
+func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) error {
 	baseMsg, err := c.decoder.Decode(data)
 	if err != nil {
 		c.logger.Error("Failed to unmarshal BaseMessage", "error", err)
-		return
+		return natsclient.TerminateDelivery(
+			fmt.Errorf("decode tool result BaseMessage: %w", err))
 	}
 
 	toolResultPtr, ok := baseMsg.Payload().(*agentic.ToolResult)
 	if !ok {
 		c.logger.Error("Unexpected payload type", "type", fmt.Sprintf("%T", baseMsg.Payload()))
-		return
+		return natsclient.TerminateDelivery(
+			fmt.Errorf("tool result payload is %T, not *agentic.ToolResult", baseMsg.Payload()))
 	}
 	toolResult := *toolResultPtr
 
@@ -1803,13 +2056,12 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) {
 	// routing entry for model-authored call IDs as well as structured ones, so
 	// recovery cannot resolve a loop that is gone and hand it to
 	// HandleToolResult, which would fail instead of dropping.
+	// The fourth case the comment above did not name: the loop is live and
+	// this process is simply not the one holding it. Memory reads identically
+	// to the three expected drops, so the loops bucket decides.
 	loopID := c.findLoopIDForToolCall(toolResult.CallID)
 	if loopID == "" {
-		c.logger.Warn("No loop found for tool call", "call_id", toolResult.CallID)
-		if c.metrics != nil {
-			c.metrics.recordToolResultDropped("stale_callid")
-		}
-		return
+		return c.settleToolResultWithoutLoop(ctx, toolResult)
 	}
 
 	hasError := toolResult.Error != ""
@@ -1831,15 +2083,7 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) {
 	// Handle the tool result using the message handler
 	result, err := c.handler.HandleToolResult(ctx, loopID, toolResult)
 	if err != nil {
-		c.recordHandlerResultTrajectory(ctx, result)
-		if result.State.IsTerminal() {
-			// The handler has already built terminal failure state (including
-			// token totals). This error branch bypasses persistHandlerResult, so
-			// release the active aggregate after its terminal audit completes.
-			c.releaseLoopTransientState(loopID)
-		}
-		c.logger.Error("Failed to handle tool result", "error", err, "loop_id", loopID)
-		return
+		return c.settleFailedToolResult(ctx, loopID, result, err)
 	}
 
 	// Decrement active_loops if HandleToolResult drove the loop to a terminal
@@ -1862,7 +2106,92 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) {
 	// persistHandlerResult covers publishResults + persistLoopState for all states,
 	// plus finalization and completion-state persistence
 	// when the loop reaches a terminal state.
-	c.persistHandlerResult(ctx, result)
+	return c.persistHandlerResult(ctx, result)
+}
+
+// settleFailedToolResult decides a tool result whose handler returned an error
+// (#1343).
+//
+// This branch used to record the trajectory, log, and return nil, which is ACK:
+// an executor's completed work was discarded behind a log line, and the worst
+// case was the terminal one. HandleToolResult's timeout branch
+// (handlers.go:2245-2259) transitions the loop to failed, builds its failure
+// record and its failure publications, and returns them WITH the error — so the
+// old branch acknowledged a terminal failure that was never written and never
+// published. The loop record stayed non-terminal forever while the input that
+// would have settled it was gone.
+//
+// A terminal result is therefore persisted like any other terminal result, and
+// the delivery settles on what that returns: nil once the record and its
+// publications are committed, and persistHandlerResult's own fatal
+// classification when the write or the publish left the commit unknown.
+//
+// A non-terminal handler error produced nothing to persist and got as far as it
+// got — StoreToolResult may have landed while RemovePendingTool did not, a
+// queued call may have been popped and not dispatched — so the commit is
+// unknown and the lane quarantines rather than ACKing work the executor really
+// did.
+//
+// Cancellation is the one exception, and only the kind that is provably
+// pre-mutation. HandleToolResult checks its context three times: once before it
+// touches anything (handlers.go:2209) and twice inside handleToolsComplete
+// (handlers.go:2472, :2555), after StoreToolResult, RemovePendingTool,
+// IncrementIteration and GetAndClearToolResults have moved in-process state.
+// Only the first carries errCancelledBeforeMutation, and only it retries: a
+// shutting-down process that mutated nothing must not latch a false
+// delivery-ownership fatal on every clean stop that catches a tool result in
+// flight. The other two are cancellations after a mutation the message cannot
+// rebuild — the probe in round 3 drove iterations 0 → 1 with zero publications,
+// and the replay then hit the iteration budget and returned terminal
+// max_iterations without ever issuing the request it interrupted — so they take
+// the same Quarantine as any other partial effect. The cancellation is not
+// always a shutdown either: delivery_settlement.go:366-373 cancels the work
+// context when a heartbeat InProgress fails, in a process that is still alive.
+// L4 (#1330) is what relaxes this to replay.
+func (c *Component) settleFailedToolResult(
+	ctx context.Context, loopID string, result HandlerResult, cause error,
+) error {
+	c.logger.Error("Failed to handle tool result", "error", cause, "loop_id", loopID)
+
+	if result.State.IsTerminal() {
+		// persistHandlerResult records the trajectory and releases the
+		// per-loop aggregate itself once the terminal state is durable.
+		return c.persistHandlerResult(ctx, result)
+	}
+
+	c.recordHandlerResultTrajectory(ctx, result)
+	if errors.Is(cause, errCancelledBeforeMutation) {
+		return cause
+	}
+	return errs.WrapFatal(cause, "agentic-loop", "handleToolResultMessage",
+		"tool result handling left this loop in an unknown state")
+}
+
+// settleToolResultWithoutLoop decides a tool result whose CallID routes to no
+// loop in this process. The ToolResult payload carries its own LoopID, and the
+// structured CallID grammar carries one too; either identifies the record to
+// read. Stale is the expected settled-drop the surrounding comment describes;
+// live means an executor's completed work would be destroyed by an ACK.
+func (c *Component) settleToolResultWithoutLoop(ctx context.Context, toolResult agentic.ToolResult) error {
+	loopID := toolResult.LoopID
+	if loopID == "" {
+		loopID = loopIDFromStructuredID(toolResult.CallID, ":tool:")
+	}
+	switch c.classifyMissingLoop(ctx, loopID) {
+	case loopPresenceStale:
+		c.logger.Warn("No loop found for tool call", "call_id", toolResult.CallID)
+		if c.metrics != nil {
+			c.metrics.recordToolResultDropped("stale_callid")
+		}
+		return nil
+	default:
+		// Warned, not counted, for the same reason as the response lane above:
+		// a retried tool result is not a dropped one, and an executor's work is
+		// still owed to whichever process holds that loop.
+		c.logger.Warn("Tool result names a loop this process does not hold",
+			"call_id", toolResult.CallID, "loop_id", loopID)
+		return fmt.Errorf("loop %q for tool call %q is not held by this process", loopID, toolResult.CallID)
+	}
 }
 
 // publishResults publishes all output messages from a handler result using JetStream.
@@ -1870,14 +2199,14 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) {
 // Components without one, and the approval-timeout sweeper goroutine
 // can race with Stop's natsClient teardown. Mirrors the existing
 // persistLoopState's loopsBucket-nil guard pattern.
-func (c *Component) publishResults(ctx context.Context, result HandlerResult) {
+func (c *Component) publishResults(ctx context.Context, result HandlerResult) error {
 	if c.natsClient == nil {
-		return
+		return nil
 	}
 	for _, msg := range result.PublishedMessages {
 		// Use JetStream for publishing to ensure delivery
 		if err := c.natsClient.PublishToStream(ctx, msg.Subject, msg.Data); err != nil {
-			c.logger.Error("Failed to publish message", "error", err, "subject", msg.Subject)
+			return fmt.Errorf("publish result %s: %w", msg.Subject, err)
 		}
 	}
 
@@ -1885,30 +2214,32 @@ func (c *Component) publishResults(ctx context.Context, result HandlerResult) {
 	// observability consumers — the OTel span collector (output/otel) enriches
 	// the active loop span with each event via its agent.> subscription.
 	for _, event := range result.ContextEvents {
-		c.publishContextEvent(ctx, event)
+		if err := c.publishContextEvent(ctx, event); err != nil {
+			return err
+		}
 	}
 
 	// Emit context management metrics from events
 	c.emitContextMetrics(result)
+	return nil
 }
 
 // publishContextEvent publishes a context management event
-func (c *Component) publishContextEvent(ctx context.Context, event agentic.ContextEvent) {
+func (c *Component) publishContextEvent(ctx context.Context, event agentic.ContextEvent) error {
 	eventMsg := message.NewBaseMessage(event.Schema(), &event, "agentic-loop")
 	data, err := json.Marshal(eventMsg)
 	if err != nil {
-		c.logger.Error("Failed to marshal context event", "error", err, "type", event.Type)
-		return
+		return fmt.Errorf("marshal context event %s: %w", event.Type, err)
 	}
 
 	subject, err := component.ResolveSubject(c.config.Ports.Outputs, "agent.context.compaction", event.LoopID)
 	if err != nil {
-		c.logger.Error("Failed to resolve context event subject", "error", err)
-		return
+		return fmt.Errorf("resolve context event subject: %w", err)
 	}
 	if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {
-		c.logger.Error("Failed to publish context event", "error", err, "subject", subject)
+		return fmt.Errorf("publish context event %s: %w", subject, err)
 	}
+	return nil
 }
 
 // emitContextMetrics emits Prometheus metrics from context management events.
@@ -1935,103 +2266,104 @@ func (c *Component) emitContextMetrics(result HandlerResult) {
 // persistCompletionState persists the enriched completion state to KV.
 // Key pattern: COMPLETE_{loopID} for rules engine to watch.
 // The rules engine can then trigger follow-up actions based on completion data.
-func (c *Component) persistCompletionState(ctx context.Context, loopID string, completion *agentic.LoopCompletedEvent) {
+func (c *Component) persistCompletionState(ctx context.Context, loopID string, completion *agentic.LoopCompletedEvent) error {
 	if c.loopsBucket == nil || completion == nil {
-		return
+		return nil
 	}
 
 	data, err := json.Marshal(completion)
 	if err != nil {
-		c.logger.Error("Failed to marshal completion state", "error", err, "loop_id", loopID)
-		return
+		return fmt.Errorf("marshal completion state for loop %s: %w", loopID, err)
 	}
 
 	// Key pattern: COMPLETE_{loopID} for rules engine to watch
 	key := fmt.Sprintf("COMPLETE_%s", loopID)
 	if _, err := c.loopsBucket.Put(ctx, key, data); err != nil {
-		c.logger.Error("Failed to persist completion state", "error", err, "loop_id", loopID)
-		return
+		return fmt.Errorf("persist completion state for loop %s: %w", loopID, err)
 	}
 
 	c.logger.Debug("Persisted completion state",
 		slog.String("loop_id", loopID),
 		slog.String("key", key),
 		slog.String("role", completion.Role))
+	return nil
 }
 
 // persistFailureState persists the failure state to KV.
 // Key pattern: COMPLETE_{loopID} — same as success, so watchers don't need
 // to distinguish between success/failure key patterns. The outcome field
 // in the serialized event tells them what happened.
-func (c *Component) persistFailureState(ctx context.Context, loopID string, failure *agentic.LoopFailedEvent) {
+//
+// It reports its failure for the same reason persistCompletionState and
+// persistCancellationState do: this record is what every downstream watcher
+// reads to learn the loop is over, so a Put that did not land cannot be a log
+// line under a delivery that then ACKs.
+func (c *Component) persistFailureState(ctx context.Context, loopID string, failure *agentic.LoopFailedEvent) error {
 	if c.loopsBucket == nil || failure == nil {
-		return
+		return nil
 	}
 
 	data, err := json.Marshal(failure)
 	if err != nil {
-		c.logger.Error("Failed to marshal failure state", "error", err, "loop_id", loopID)
-		return
+		return fmt.Errorf("marshal failure state for loop %s: %w", loopID, err)
 	}
 
 	key := fmt.Sprintf("COMPLETE_%s", loopID)
 	if _, err := c.loopsBucket.Put(ctx, key, data); err != nil {
-		c.logger.Error("Failed to persist failure state", "error", err, "loop_id", loopID)
-		return
+		return fmt.Errorf("persist failure state for loop %s: %w", loopID, err)
 	}
 
 	c.logger.Debug("Persisted failure state",
 		slog.String("loop_id", loopID),
 		slog.String("key", key),
 		slog.String("reason", failure.Reason))
+	return nil
 }
 
 // persistCancellationState persists the cancellation state to KV.
 // Uses same COMPLETE_{loopID} key pattern so watchers handle all terminal states uniformly.
-func (c *Component) persistCancellationState(ctx context.Context, loopID string, cancelled *agentic.LoopCancelledEvent) {
+func (c *Component) persistCancellationState(ctx context.Context, loopID string, cancelled *agentic.LoopCancelledEvent) error {
 	if c.loopsBucket == nil || cancelled == nil {
-		return
+		return nil
 	}
 
 	data, err := json.Marshal(cancelled)
 	if err != nil {
-		c.logger.Error("Failed to marshal cancellation state", "error", err, "loop_id", loopID)
-		return
+		return fmt.Errorf("marshal cancellation state for loop %s: %w", loopID, err)
 	}
 
 	key := fmt.Sprintf("COMPLETE_%s", loopID)
 	if _, err := c.loopsBucket.Put(ctx, key, data); err != nil {
-		c.logger.Error("Failed to persist cancellation state", "error", err, "loop_id", loopID)
-		return
+		return fmt.Errorf("persist cancellation state for loop %s: %w", loopID, err)
 	}
 
 	c.logger.Debug("Persisted cancellation state",
 		slog.String("loop_id", loopID),
 		slog.String("key", key),
 		slog.String("cancelled_by", cancelled.CancelledBy))
+	return nil
 }
 
 // persistLoopState persists the loop state to KV
-func (c *Component) persistLoopState(ctx context.Context, loopID string) {
+func (c *Component) persistLoopState(ctx context.Context, loopID string) error {
 	if c.loopsBucket == nil {
-		return
+		return nil
 	}
 
 	entity, err := c.handler.GetLoop(loopID)
 	if err != nil {
-		c.logger.Error("Failed to get loop for persistence", "error", err, "loop_id", loopID)
-		return
+		return fmt.Errorf("get loop %s for persistence: %w", loopID, err)
 	}
 
 	data, err := json.Marshal(entity)
 	if err != nil {
-		c.logger.Error("Failed to marshal loop entity", "error", err, "loop_id", loopID)
-		return
+		return fmt.Errorf("marshal loop entity %s: %w", loopID, err)
 	}
 
 	if _, err := c.loopsBucket.Put(ctx, loopID, data); err != nil {
-		c.logger.Error("Failed to persist loop state", "error", err, "loop_id", loopID)
+		return fmt.Errorf("persist loop state %s: %w", loopID, err)
 	}
+	return nil
 }
 
 // handleTrajectoryQuery handles NATS request/reply for trajectory queries.
@@ -2094,17 +2426,15 @@ func (c *Component) findLoopIDForToolCall(callID string) string {
 
 // handleSignalMessage processes incoming signal messages. Cancel is the only
 // loop-control verb; pause/resume were deleted in #1239.
-func (c *Component) handleSignalMessage(ctx context.Context, data []byte) {
+func (c *Component) handleSignalMessage(ctx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
 	baseMsg, err := c.decoder.Decode(data)
 	if err != nil {
-		c.logger.Error("Failed to unmarshal BaseMessage", "error", err)
-		return
+		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("decode signal message: %w", err)
 	}
 
 	signalPtr, ok := baseMsg.Payload().(*agentic.UserSignal)
 	if !ok {
-		c.logger.Error("Unexpected payload type", "type", fmt.Sprintf("%T", baseMsg.Payload()))
-		return
+		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("unexpected signal payload type %T", baseMsg.Payload())
 	}
 	signal := *signalPtr
 
@@ -2117,16 +2447,50 @@ func (c *Component) handleSignalMessage(ctx context.Context, data []byte) {
 	// Handle based on signal type
 	switch signal.Type {
 	case agentic.SignalCancel:
-		c.handleCancelSignal(ctx, signal)
+		if err := c.handleCancelSignal(ctx, signal); err != nil {
+			if errs.IsFatal(err) {
+				return natsclient.DeliveryDecisionQuarantine, err
+			}
+			return natsclient.DeliveryDecisionRetry, err
+		}
+		return natsclient.DeliveryDecisionAck, nil
 	default:
-		c.logger.Warn("Unsupported signal type",
-			slog.String("type", signal.Type),
-			slog.String("loop_id", signal.LoopID))
+		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("unsupported signal type %q for loop %q", signal.Type, signal.LoopID)
 	}
 }
 
+// settleUncancellableLoop decides a cancel whose CancelLoop refused. Neither
+// refusal is transient, and handleSignalMessage maps every non-fatal error to
+// Retry, so a bare wrap left the signal redelivering against a decision that
+// can never change.
+//
+// Already terminal is idempotent success: the loop is in exactly the state the
+// operator asked for. Not found in memory is the same two-case question every
+// other lane asks, and the loops bucket answers it: no record means nothing to
+// cancel anywhere; a live record means the loop is running in another process
+// and the cancel is still owed to it.
+func (c *Component) settleUncancellableLoop(ctx context.Context, loopID string, cause error) error {
+	if errs.IsInvalid(cause) {
+		c.logger.Info("Cancel signal for an already-terminal loop; acknowledging without effect",
+			"loop_id", loopID, "reason", cause)
+		if c.metrics != nil {
+			c.metrics.recordSignalDropped("already_terminal")
+		}
+		return nil
+	}
+	if errors.Is(cause, ErrLoopNotFound) && c.classifyMissingLoop(ctx, loopID) == loopPresenceStale {
+		c.logger.Warn("Cancel signal for a loop with no durable record; acknowledging without effect",
+			"loop_id", loopID)
+		if c.metrics != nil {
+			c.metrics.recordSignalDropped("stale_loop_id")
+		}
+		return nil
+	}
+	return fmt.Errorf("cancel loop %q: %w", loopID, cause)
+}
+
 // handleCancelSignal handles a cancel signal for a loop
-func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserSignal) {
+func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserSignal) error {
 	loopID := signal.LoopID
 
 	// Drain any in-flight tool calls into synth-results BEFORE the
@@ -2140,18 +2504,12 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 	// Atomically cancel the loop and get the updated entity
 	entity, err := c.handler.CancelLoop(loopID, signal.UserID)
 	if err != nil {
-		c.logger.Error("Failed to cancel loop",
-			slog.String("error", err.Error()),
-			slog.String("loop_id", loopID))
-		return
+		return c.settleUncancellableLoop(ctx, loopID, err)
 	}
-	// Cancellation has no aggregate token/step consumer. Defer cleanup so all
-	// terminal observation and publication work sees a stable active-loop
-	// lifetime, including early-return degradation paths below.
-	defer c.releaseLoopTransientState(loopID)
-
 	// Persist loop state to KV
-	c.persistLoopState(ctx, loopID)
+	if err := c.persistLoopState(ctx, loopID); err != nil {
+		return errs.WrapFatal(err, "agentic-loop", "handleCancelSignal", "cancelled loop state has unknown durability")
+	}
 
 	// Record metrics
 	if c.metrics != nil {
@@ -2179,22 +2537,15 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 	completionMsg := message.NewBaseMessage(completion.Schema(), &completion, "agentic-loop")
 	completionData, err := json.Marshal(completionMsg)
 	if err != nil {
-		c.logger.Error("Failed to marshal completion",
-			slog.String("error", err.Error()),
-			slog.String("loop_id", loopID))
-		return
+		return errs.WrapFatal(err, "agentic-loop", "handleCancelSignal", "marshal cancellation after state transition")
 	}
 
 	subject, err := component.ResolveSubject(c.config.Ports.Outputs, "agent.complete", loopID)
 	if err != nil {
-		c.logger.Error("Failed to resolve completion subject", slog.String("error", err.Error()))
-		return
+		return errs.WrapFatal(err, "agentic-loop", "handleCancelSignal", "resolve cancellation subject after state transition")
 	}
 	if err := c.natsClient.PublishToStream(ctx, subject, completionData); err != nil {
-		c.logger.Error("Failed to publish completion",
-			slog.String("error", err.Error()),
-			slog.String("loop_id", loopID))
-		return
+		return errs.WrapFatal(err, "agentic-loop", "handleCancelSignal", "cancellation completion has unknown durability")
 	}
 
 	// Emit cancellation entity to graph (non-fatal)
@@ -2202,13 +2553,20 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 	// observation above runs before this write.
 	if c.graphWriter != nil {
 		c.graphWriter.WriteLoopCancellation(ctx, &completion, c.trajectoryAuditLoss.observed(loopID))
+		if err := ctx.Err(); err != nil {
+			return errs.WrapFatal(err, "agentic-loop", "handleCancelSignal", "cancellation graph write has unknown durability")
+		}
 	}
 
 	// Persist cancellation to KV so watchers detect it
-	c.persistCancellationState(ctx, loopID, &completion)
+	if err := c.persistCancellationState(ctx, loopID, &completion); err != nil {
+		return errs.WrapFatal(err, "agentic-loop", "handleCancelSignal", "cancellation terminal state has unknown durability")
+	}
+	c.releaseLoopTransientState(loopID)
 	c.logger.Info("Loop cancelled",
 		slog.String("loop_id", loopID),
 		slog.String("cancelled_by", signal.UserID))
+	return nil
 }
 
 // handleToolCallVerdictMessage routes inbound verdicts from
@@ -2234,29 +2592,51 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 // No-op when the dispatcher is nil (disabled-mode-without-construction
 // edge case; should not occur in production because NewComponent always
 // constructs a dispatcher).
-func (c *Component) handleToolCallVerdictMessage(_ context.Context, data []byte) {
+func (c *Component) handleToolCallVerdictMessage(ctx context.Context, data []byte) (natsclient.DeliveryDecision, error) {
 	dispatcher := c.handler.GovernanceDispatcher()
 	if dispatcher == nil {
-		return
+		return natsclient.DeliveryDecisionQuarantine, errors.New("tool-call verdict dispatcher is unavailable")
 	}
 
 	payload, ok := decodeVerdictPayload(c.decoder, data)
 	if !ok {
-		c.logger.Warn("Failed to decode tool-call verdict payload; ignoring",
-			slog.Int("size", len(data)))
-		return
+		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("decode tool-call verdict payload of %d bytes", len(data))
 	}
 
 	decision := payload.EffectiveDecision()
 	callID := payload.EffectiveCallID()
 	if decision == "" || callID == "" {
-		c.logger.Warn("Tool-call verdict payload missing decision or call_id; ignoring",
-			slog.String("decision", decision),
-			slog.String("call_id", callID))
-		return
+		return natsclient.DeliveryDecisionTerminate,
+			fmt.Errorf("tool-call verdict payload missing decision or call_id (decision=%q call_id=%q)", decision, callID)
 	}
 
-	dispatcher.HandleVerdict(decision, callID, data)
+	settled, err := dispatcher.HandleVerdict(decision, callID, data)
+	if errors.Is(err, ErrNoGovernanceWaiter) {
+		return c.settleVerdictWithoutWaiter(ctx, callID, err)
+	}
+	return settled, err
+}
+
+// settleVerdictWithoutWaiter decides a verdict whose call_id has no waiter
+// here. The dispatcher's own doc comment says such verdicts are expected in
+// normal operation — audit mode, late arrivals, verdicts for other components'
+// loops on a shared stream — and the RecordGovernanceVerdictMissingWaiter
+// counter exists for exactly that, so Retrying them made a documented-normal
+// input a hot redelivery loop. But the fourth case is real: after process
+// replacement the loop is still waiting and the verdict is still owed. The
+// call_id grammar carries the loop ID, so the record decides which it is.
+func (c *Component) settleVerdictWithoutWaiter(
+	ctx context.Context, callID string, cause error,
+) (natsclient.DeliveryDecision, error) {
+	loopID := loopIDFromStructuredID(callID, ":tool:")
+	if c.classifyMissingLoop(ctx, loopID) == loopPresenceStale {
+		c.logger.Debug("Verdict has no waiter and its loop is finished or foreign; acknowledging",
+			slog.String("call_id", callID), slog.String("loop_id", loopID))
+		return natsclient.DeliveryDecisionAck, nil
+	}
+	c.logger.Warn("Verdict names a live loop this process does not hold",
+		slog.String("call_id", callID), slog.String("loop_id", loopID))
+	return natsclient.DeliveryDecisionRetry, cause
 }
 
 // decodeVerdictPayload reads a VerdictPayload from wire bytes,

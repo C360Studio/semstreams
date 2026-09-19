@@ -272,6 +272,39 @@ func TestPostFoundationBExternalBoundaryAmendmentIsExact(t *testing.T) {
 	}
 }
 
+// spec: agentic-model / Model heartbeat policy is valid before acquisition
+func TestPostFoundationBAgenticModelHeartbeatPolicyAmendmentIsExact(t *testing.T) {
+	t.Parallel()
+
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := LoadPlan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configItems, err := indexItems(plan.ConfigItems())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(postFoundationBAgenticModelHeartbeatPolicyAmendments) != 9 {
+		t.Fatalf("agentic-model heartbeat-policy amendments=%d, want 9",
+			len(postFoundationBAgenticModelHeartbeatPolicyAmendments))
+	}
+	for id := range postFoundationBAgenticModelHeartbeatPolicyAmendments {
+		item, ok := configItems[id]
+		if !ok {
+			t.Fatalf("agentic-model heartbeat-policy amendment %s is not a frozen config identity", id)
+		}
+		if item.Enclosing != "agentic-model" || item.Lane != "inputs" || item.Name != "agent.request" ||
+			item.CurrentKind != "jetstream" {
+			t.Fatalf("agentic-model heartbeat-policy amendment %s has enclosing/lane/name/kind %s/%s/%s/%s",
+				id, item.Enclosing, item.Lane, item.Name, item.CurrentKind)
+		}
+	}
+}
+
 func TestPostFoundationBResearchDispatchSubjectAmendmentIsExact(t *testing.T) {
 	t.Parallel()
 
@@ -1287,6 +1320,23 @@ var postFoundationBExternalBoundaryAmendments = map[string]struct{}{
 	"config:configs/research-graph-e2e.json#/components/agentic-dispatch/config/ports/inputs/0":               {},
 }
 
+// postFoundationBAgenticModelHeartbeatPolicyAmendments records the nine
+// shipped agent.request rows that now declare the model component's validated
+// 120-second AckWait and 60-second heartbeat policy explicitly. The immutable
+// Foundation B worklist remains historical evidence; the amendment is exact
+// so unrelated frozen port identity cannot drift under this change.
+var postFoundationBAgenticModelHeartbeatPolicyAmendments = map[string]struct{}{
+	"config:configs/agentic.json#/components/agentic-model/config/ports/inputs/0":                          {},
+	"config:configs/examples/research-graph-pipeline.json#/components/agentic-model/config/ports/inputs/0": {},
+	"config:configs/flows/crud-tools-test.json#/components/agentic-model/config/ports/inputs/0":            {},
+	"config:configs/flows/deep-research-test.json#/components/agentic-model/config/ports/inputs/0":         {},
+	"config:configs/flows/deep-research.json#/components/agentic-model/config/ports/inputs/0":              {},
+	"config:configs/flows/lesson-example.json#/components/agentic-model/config/ports/inputs/0":             {},
+	"config:configs/flows/ops-agent-test.json#/components/agentic-model/config/ports/inputs/0":             {},
+	"config:configs/flows/ops-agent.json#/components/agentic-model/config/ports/inputs/0":                  {},
+	"config:configs/research-graph-e2e.json#/components/agentic-model/config/ports/inputs/0":               {},
+}
+
 // postFoundationBResearchDispatchSubjectAmendments records the two frozen
 // rule-processor `component.dispatch` output rows whose subject changed from
 // the 2-token `component.*` to `component.>` (ADR-100 review H1, 2026-08-26):
@@ -1407,11 +1457,30 @@ func targetForConfigItem(item WorkItem, dispositions map[string]Disposition) (ta
 	if err != nil {
 		return targetConfigItem{}, err
 	}
-	return correctResearchDispatchSubject(correctExternalBoundaryInput(correctComponentPortName(correctJetStreamInputIdentity(correctMissionCommandPrimitive(targetConfigItem{
+	return correctResearchDispatchSubject(correctExternalBoundaryInput(correctAgenticModelHeartbeatPolicy(correctComponentPortName(correctJetStreamInputIdentity(correctMissionCommandPrimitive(targetConfigItem{
 		workItem: item,
 		lane:     lane,
 		row:      canonicalRow(legacy, item.CurrentKind, data),
-	})))))
+	}))))))
+}
+
+// correctAgenticModelHeartbeatPolicy applies only the named shipped-config
+// declarations. The model default carries the same values, but complete named
+// overrides must declare them because port config replacement is atomic.
+func correctAgenticModelHeartbeatPolicy(target targetConfigItem, err error) (targetConfigItem, error) {
+	if err != nil {
+		return targetConfigItem{}, err
+	}
+	if _, amended := postFoundationBAgenticModelHeartbeatPolicyAmendments[target.workItem.RecordID]; !amended || target.row == nil {
+		return target, nil
+	}
+	config, ok := target.row["config"].(map[string]any)
+	if !ok || stringValue(config["kind"]) != "jetstream" {
+		return targetConfigItem{}, fmt.Errorf("agentic-model heartbeat-policy amendment %s is not a jetstream row", target.workItem.RecordID)
+	}
+	config["ack_wait"] = "120s"
+	config["heartbeat_interval"] = "60s"
+	return target, nil
 }
 
 // correctExternalBoundaryInput applies the owner-approved external-boundary

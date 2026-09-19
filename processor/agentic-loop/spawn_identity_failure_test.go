@@ -34,11 +34,13 @@ type inputAckMsg struct {
 	progress   chan struct{}
 }
 
-func (m *inputAckMsg) Data() []byte                              { return m.data }
-func (m *inputAckMsg) Subject() string                           { return "agent.task.test" }
-func (m *inputAckMsg) Reply() string                             { return "" }
-func (m *inputAckMsg) Headers() nats.Header                      { return nil }
-func (m *inputAckMsg) Metadata() (*jetstream.MsgMetadata, error) { return nil, nil }
+func (m *inputAckMsg) Data() []byte         { return m.data }
+func (m *inputAckMsg) Subject() string      { return "agent.task.test" }
+func (m *inputAckMsg) Reply() string        { return "" }
+func (m *inputAckMsg) Headers() nats.Header { return nil }
+func (m *inputAckMsg) Metadata() (*jetstream.MsgMetadata, error) {
+	return &jetstream.MsgMetadata{NumDelivered: 1}, nil
+}
 func (m *inputAckMsg) Ack() error {
 	m.acked.Store(true)
 	return nil
@@ -171,6 +173,12 @@ func TestHandleSpawnIdentityFailure_OperationalErrorUsesBusinessFailurePath(t *t
 	// Force failure-event serialization to stop before NATS output. The loop
 	// transition and completion mutation occur first, which is the business
 	// failure routing this test locks without needing an external broker.
+	//
+	// That fixture also decides the delivery: a loop whose failure event cannot
+	// be built has no record any watcher can read, so the failure is not
+	// durably established and the callback must say so rather than ACK. The
+	// assertion below is that pair — business routing happened, and the
+	// unrecordable half is reported fatal-classified.
 	entity.Metadata = map[string]any{"unserializable": func() {}}
 	if err := loopManager.UpdateLoop(entity); err != nil {
 		t.Fatalf("UpdateLoop() error = %v", err)
@@ -189,8 +197,12 @@ func TestHandleSpawnIdentityFailure_OperationalErrorUsesBusinessFailurePath(t *t
 	// terminal observation, because the release clears the map on return.
 	probe := newTerminalReaderProbe(c, loopID)
 
-	if err := c.handleSpawnIdentityFailure(context.Background(), loopID, entity, errors.New("temporary graph request failure")); err != nil {
-		t.Fatalf("operational birth failure returned consumer error: %v", err)
+	settleErr := c.handleSpawnIdentityFailure(context.Background(), loopID, entity, errors.New("temporary graph request failure"))
+	if settleErr == nil {
+		t.Fatal("a loop failure whose event cannot even be built settled as done")
+	}
+	if !errs.IsFatal(settleErr) {
+		t.Fatalf("handleSpawnIdentityFailure() error = %v, want fatal-classified so the lane quarantines rather than retries", settleErr)
 	}
 
 	after := probe.terminalLoop(t)
@@ -259,7 +271,7 @@ func TestGraphStatePoisonFailsLoopWhileIntakeContinues(t *testing.T) {
 			t.Fatal(err)
 		}
 		msg := &inputAckMsg{data: data}
-		if err := consumeLongRunningInput(context.Background(), msg, time.Hour,
+		if err := consumeTypedLongRunningInput(context.Background(), msg, time.Hour,
 			c.taskInputHandler(time.Minute)); err != nil {
 			t.Fatalf("consume(%s) error = %v, want nil", taskID, err)
 		}

@@ -36,6 +36,7 @@ type loopMetrics struct {
 
 	// Model responses
 	modelResponsesDropped *prometheus.CounterVec
+	signalsDropped        *prometheus.CounterVec
 
 	// Token usage per LLM request
 	requestTokensIn  prometheus.Histogram
@@ -166,14 +167,21 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "tool_results_dropped_total",
-				Help:      "Total tool results dropped at the wire because no loop mapping exists for the CallID. Sustained non-zero rate points at NATS redelivery or executor double-publish.",
+				Help:      "Total tool results dropped at the wire because no loop mapping exists for the CallID and the loop record is absent or terminal. Sustained non-zero rate points at NATS redelivery or executor double-publish. A result for a loop that is live but held by another process is NOT counted here: it is retried, not dropped.",
 			}, []string{"reason"}),
 
 			modelResponsesDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "model_responses_dropped_total",
-				Help:      "Total model responses dropped at the wire because no loop maps to the RequestID. Expected after a loop settles and releases its per-loop state, or after a process replacement; a sustained rate against live loops points at NATS redelivery.",
+				Help:      "Total model responses dropped at the wire because no loop maps to the RequestID and the loop record is absent or terminal. Expected after a loop settles and releases its per-loop state; a sustained rate points at NATS redelivery. A response for a loop that is live but held by another process is NOT counted here: it is retried, not dropped.",
+			}, []string{"reason"}),
+
+			signalsDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_loop",
+				Name:      "signals_dropped_total",
+				Help:      "Total control signals acknowledged without effect because the loop they name cannot receive one. reason=\"already_terminal\" is a cancel for a loop that already finished — idempotent and expected on redelivery; reason=\"stale_loop_id\" is a signal whose loop has no durable record at all. A signal for a loop that is live but held by another process is NOT counted here: it is retried, not dropped.",
 			}, []string{"reason"}),
 
 			requestTokensIn: prometheus.NewHistogram(prometheus.HistogramOpts{
@@ -232,7 +240,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "graph_write_publish_timeout_total",
-				Help:      "Total times the graph-write-before-publish budget expired before WriteLoopCompletion/WriteLoopFailure returned. The agent.complete.* event was published anyway (best-effort preserved), but the loop entity's graph triples may not yet be visible to subscribers walking ancestry. Sustained non-zero rate points at graph-gateway latency or NATS subscription propagation issues; a tightenable budget is at graphWritePublishBudget in component.go.",
+				Help:      "Total times the graph-write-before-publish budget expired before WriteLoopCompletion/WriteLoopFailure returned. The agent.complete.* event is withheld and the joined delivery fails closed. Sustained non-zero rate points at graph-gateway latency or NATS subscription propagation issues; a tightenable budget is at graphWritePublishBudget in component.go.",
 			}, []string{"state"}),
 
 			taskIntakeRejections: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -292,6 +300,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = registry.RegisterCounterVec("agentic-loop", "tool_results_received_total", metrics.toolResultsReceived)
 			_ = registry.RegisterCounterVec("agentic-loop", "tool_results_dropped_total", metrics.toolResultsDropped)
 			_ = registry.RegisterCounterVec("agentic-loop", "model_responses_dropped_total", metrics.modelResponsesDropped)
+			_ = registry.RegisterCounterVec("agentic-loop", "signals_dropped_total", metrics.signalsDropped)
 			_ = registry.RegisterHistogram("agentic-loop", "request_tokens_in", metrics.requestTokensIn)
 			_ = registry.RegisterHistogram("agentic-loop", "request_tokens_out", metrics.requestTokensOut)
 			_ = registry.RegisterCounter("agentic-loop", "tool_results_truncated_total", metrics.toolResultsTruncated)
@@ -321,6 +330,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.toolResultsReceived)
 			_ = prometheus.DefaultRegisterer.Register(metrics.toolResultsDropped)
 			_ = prometheus.DefaultRegisterer.Register(metrics.modelResponsesDropped)
+			_ = prometheus.DefaultRegisterer.Register(metrics.signalsDropped)
 			_ = prometheus.DefaultRegisterer.Register(metrics.requestTokensIn)
 			_ = prometheus.DefaultRegisterer.Register(metrics.requestTokensOut)
 			_ = prometheus.DefaultRegisterer.Register(metrics.toolResultsTruncated)
@@ -496,6 +506,10 @@ func (m *loopMetrics) recordToolResultDropped(reason string) {
 // after the loop settled resolves nothing. The drop is deliberate and safe — the
 // loop's outcome is already recorded — and it is counted so that "safe" stays a
 // claim an operator can check rather than one only the code makes.
+func (m *loopMetrics) recordSignalDropped(reason string) {
+	m.signalsDropped.WithLabelValues(reason).Inc()
+}
+
 func (m *loopMetrics) recordModelResponseDropped(reason string) {
 	m.modelResponsesDropped.WithLabelValues(reason).Inc()
 }

@@ -19,6 +19,15 @@ type routerMetrics struct {
 	terminalSettlements *prometheus.CounterVec
 	deliveryRefusals    *prometheus.CounterVec
 
+	// responsePublishFailures counts user responses that did not reach the
+	// USER stream on a lane whose operation is already accepted, by that lane.
+	// The lanes that can settle their source on the publication classify it
+	// instead; this counter is for the ones that cannot, where the alternative
+	// is a response that disappears with no record. A stream capacity rejection
+	// is the case to watch: it is deliberately circuit-neutral at the client
+	// (natsclient/client.go:314-333), so nothing else in the component sees it.
+	responsePublishFailures *prometheus.CounterVec
+
 	// HTTP endpoint metrics
 	httpRequestsTotal   *prometheus.CounterVec
 	httpRequestDuration *prometheus.HistogramVec
@@ -141,6 +150,13 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 			Help:      "Deliveries refused unsettled by a latched terminal lane, by port",
 		}, []string{"lane"}),
 
+		responsePublishFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "semstreams",
+			Subsystem: "router",
+			Name:      "response_publish_failures_total",
+			Help:      "User responses that did not reach the stream on an already-accepted lane, by lane",
+		}, []string{"lane"}),
+
 		// HTTP endpoint metrics
 		httpRequestsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "semstreams",
@@ -256,6 +272,7 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 		_ = registry.RegisterCounterVec("router", "completions_received_total", m.completionsReceived)
 		_ = registry.RegisterCounterVec("router", "terminal_settlement_total", m.terminalSettlements)
 		_ = registry.RegisterCounterVec("router", "delivery_refusals_total", m.deliveryRefusals)
+		_ = registry.RegisterCounterVec("router", "response_publish_failures_total", m.responsePublishFailures)
 		_ = registry.RegisterCounterVec("router", "http_requests_total", m.httpRequestsTotal)
 		_ = registry.RegisterHistogramVec("router", "http_request_duration_seconds", m.httpRequestDuration)
 		_ = registry.RegisterCounterVec("router", "loop_approvals_submitted_total", m.loopApprovalsSubmitted)
@@ -280,6 +297,7 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 		_ = prometheus.DefaultRegisterer.Register(m.completionsReceived)
 		_ = prometheus.DefaultRegisterer.Register(m.terminalSettlements)
 		_ = prometheus.DefaultRegisterer.Register(m.deliveryRefusals)
+		_ = prometheus.DefaultRegisterer.Register(m.responsePublishFailures)
 		_ = prometheus.DefaultRegisterer.Register(m.httpRequestsTotal)
 		_ = prometheus.DefaultRegisterer.Register(m.httpRequestDuration)
 		_ = prometheus.DefaultRegisterer.Register(m.loopApprovalsSubmitted)
@@ -340,6 +358,10 @@ func (m *routerMetrics) recordTerminalSettlement(reason string) {
 
 func (m *routerMetrics) recordDeliveryRefused(lane string) {
 	m.deliveryRefusals.WithLabelValues(lane).Inc()
+}
+
+func (m *routerMetrics) recordResponsePublishFailure(lane string) {
+	m.responsePublishFailures.WithLabelValues(lane).Inc()
 }
 
 // recordHTTPRequest records an HTTP request with endpoint, method, and status.

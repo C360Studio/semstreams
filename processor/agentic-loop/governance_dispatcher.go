@@ -56,6 +56,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/natsclient"
 )
 
 // VerdictPublisher is the minimum surface the governance dispatcher
@@ -207,16 +208,31 @@ type GovernanceDispatcher interface {
 	// verdict, after extracting the decision and call_id from the
 	// payload via VerdictPayload.EffectiveCallID/EffectiveDecision.
 	// The dispatcher demuxes by call_id to the appropriate waiter
-	// channel. No-op when no waiter is registered for the call_id
-	// (audit mode, late arrivals, verdicts for other components'
-	// loops on a shared stream). Data is retained for audit logging
-	// only — routing decisions are made from decision + callID.
-	HandleVerdict(decision, callID string, data []byte)
+	// channel. Data is retained for audit logging only — routing
+	// decisions are made from decision + callID.
+	//
+	// When no waiter is registered for the call_id the dispatcher
+	// cannot decide the settlement, because the two reasons a waiter
+	// is missing settle in opposite directions: the verdict is late
+	// or belongs to another component's loop on the shared stream
+	// (nothing to deliver it to, ever), or this process was replaced
+	// and the loop is still waiting somewhere. The dispatcher owns no
+	// durable state and cannot tell those apart, so it returns an
+	// error wrapping ErrNoGovernanceWaiter and the Component — which
+	// owns the loops bucket — classifies it.
+	HandleVerdict(decision, callID string, data []byte) (natsclient.DeliveryDecision, error)
 
 	// Mode returns the configured mode for inspection. Useful for
 	// observability gauges and conditional logging in the handler.
 	Mode() string
 }
+
+// ErrNoGovernanceWaiter reports that a verdict arrived for a call_id with no
+// registered waiter in this process. It is not itself a settlement: the
+// Component resolves it against the loops bucket, because a verdict for a
+// finished or foreign loop and a verdict for a loop this process lost look
+// identical from the waiter map alone.
+var ErrNoGovernanceWaiter = errors.New("no active governance waiter")
 
 // NewGovernanceDispatcher constructs the dispatcher matching the
 // configured mode. Publisher may be nil in disabled mode (no publishes
@@ -263,13 +279,14 @@ func (d *disabledDispatcher) Propose(_ context.Context, _, _ string, calls []age
 	return DispatcherResult{Approved: calls}, nil
 }
 
-func (d *disabledDispatcher) HandleVerdict(decision, callID string, _ []byte) {
+func (d *disabledDispatcher) HandleVerdict(decision, callID string, _ []byte) (natsclient.DeliveryDecision, error) {
 	// No-op: in disabled mode the loop didn't publish a proposed call,
 	// so any verdict arriving is from another flow (or a misconfigured
 	// rule). Log at Debug only — not actionable.
 	d.logger.Debug("Verdict received in disabled-mode governance dispatcher; ignoring",
 		slog.String("decision", decision),
 		slog.String("call_id", callID))
+	return natsclient.DeliveryDecisionAck, nil
 }
 
 func (d *disabledDispatcher) Mode() string { return ToolCallGovernanceModeDisabled }
@@ -299,7 +316,7 @@ func (d *auditDispatcher) Propose(ctx context.Context, loopID, parentLoopID stri
 	return DispatcherResult{Approved: calls}, nil
 }
 
-func (d *auditDispatcher) HandleVerdict(decision, callID string, data []byte) {
+func (d *auditDispatcher) HandleVerdict(decision, callID string, data []byte) (natsclient.DeliveryDecision, error) {
 	// Audit mode logs verdicts for visibility but takes no action.
 	// Operators developing rules see their verdicts firing without
 	// gating real traffic.
@@ -316,6 +333,7 @@ func (d *auditDispatcher) HandleVerdict(decision, callID string, data []byte) {
 		// histogram is still useful for verdict-arrival rate visualisation.
 		d.metrics.RecordGovernanceVerdict(decision, ToolCallGovernanceModeAudit, 0)
 	}
+	return natsclient.DeliveryDecisionAck, nil
 }
 
 func (d *auditDispatcher) Mode() string { return ToolCallGovernanceModeAudit }
@@ -465,12 +483,12 @@ func (d *enforceDispatcher) awaitVerdict(ctx context.Context, ch chan verdictArr
 	}
 }
 
-func (d *enforceDispatcher) HandleVerdict(decision, callID string, data []byte) {
+func (d *enforceDispatcher) HandleVerdict(decision, callID string, data []byte) (natsclient.DeliveryDecision, error) {
 	if decision == "" || callID == "" {
 		d.logger.Warn("Verdict missing decision or call_id; ignoring",
 			slog.String("decision", decision),
 			slog.String("call_id", callID))
-		return
+		return natsclient.DeliveryDecisionTerminate, errors.New("verdict missing decision or call_id")
 	}
 
 	// Payload is optional audit context — routing relies on the
@@ -491,7 +509,17 @@ func (d *enforceDispatcher) HandleVerdict(decision, callID string, data []byte) 
 		if d.metrics != nil {
 			d.metrics.RecordGovernanceVerdictMissingWaiter()
 		}
-		return
+		// Quarantine is the fail-closed placeholder, not an "unset"
+		// decision: it is the most severe decision in the vocabulary, and
+		// a caller that settled it directly would latch owner-fatal health
+		// and drain the lane on a documented-normal input. It is paired
+		// with ErrNoGovernanceWaiter precisely so the caller must notice —
+		// handleToolCallVerdictMessage checks the sentinel and replaces
+		// this decision with one taken from the loop record. The previous
+		// Retry was worse: it made the same normal input a hot redelivery
+		// loop that no record could ever end.
+		return natsclient.DeliveryDecisionQuarantine,
+			fmt.Errorf("%w for call_id %q", ErrNoGovernanceWaiter, callID)
 	}
 
 	// Non-blocking send via the buffered channel. If somehow a second
@@ -500,9 +528,11 @@ func (d *enforceDispatcher) HandleVerdict(decision, callID string, data []byte) 
 	// first wins. Same as the natsclient request/response convention.
 	select {
 	case ch <- verdictArrival{decision: decision, reason: payload.EffectiveReason(), ruleID: payload.RuleID}:
+		return natsclient.DeliveryDecisionAck, nil
 	default:
 		d.logger.Debug("Verdict channel already full (duplicate verdict?); dropping",
 			slog.String("call_id", callID))
+		return natsclient.DeliveryDecisionQuarantine, fmt.Errorf("governance waiter for call_id %q is full", callID)
 	}
 }
 
