@@ -41,6 +41,10 @@ Named sites
 - `processor/agentic-loop/component.go:894` — `handler = adaptVoidInputHandler(c.handleResponseMessage)`
 - `processor/agentic-loop/component.go:1808` — `c.logger.Warn("No loop found for tool call", "call_id", toolResult.CallID)`
 - `processor/agentic-loop/component.go:1810` — `c.metrics.recordToolResultDropped("stale_callid")`
+  - Superseded since this inventory's base `32aeddf7`: the reader routes on framework execution
+    identity, so the emitted reason is now `"stale_execution"` (`stable-request-identity`, #1328).
+    The pin above is retained unedited as the 2026-09 evidence; `stale_callid` is no longer a label
+    this tree emits, and no alert should be written against it.
 - `processor/agentic-loop/approval_response_handler.go:161` — `func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []byte) {`
 - `processor/agentic-loop/component.go:1991` — `func (c *Component) persistCancellationState(ctx context.Context, loopID string, cancelled *agentic.LoopCancelledEvent) {`
 - `docs/concepts/03-streams-vs-kv-watches.md:184` — ``AGENT_LOOPS` stores the current state of each loop entity: which phase it's in, how many`

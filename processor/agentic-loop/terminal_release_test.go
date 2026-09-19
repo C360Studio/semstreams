@@ -374,6 +374,11 @@ func TestLateApprovalResponseForSettledLoopIsExpectedDrop(t *testing.T) {
 // TestLateToolResultForSettledLoopIsExpectedDrop is I8 for the tool-result and
 // model-response readers. Both resolve a loop from a routing map the release
 // clears; the drop is counted and warned, never an error.
+//
+// It is also the only observer of tool_results_dropped_total's label set. The
+// reader routes on framework execution identity now, so the settled-drop reason
+// reads "stale_execution"; the assertion is here so renaming that constant in
+// metrics.go cannot pass silently — an operator's alert is keyed on the string.
 func TestLateToolResultForSettledLoopIsExpectedDrop(t *testing.T) {
 	ctx := context.Background()
 	h := NewMessageHandler(DefaultConfig())
@@ -383,7 +388,13 @@ func TestLateToolResultForSettledLoopIsExpectedDrop(t *testing.T) {
 	// AFTER releaseTestComponent, which installs its own discarding logger.
 	h.logger = logger
 	c.logger = logger
-	c.metrics = nil
+	c.metrics = getMetrics(nil)
+	// Deltas, not absolutes: getMetrics is a package singleton shared by the
+	// whole test binary.
+	dropped := func(reason string) float64 {
+		return testutil.ToFloat64(c.metrics.toolResultsDropped.WithLabelValues(reason))
+	}
+	beforeStale, beforeHeld := dropped("stale_execution"), dropped("loop_held_elsewhere")
 	loopID := populatedLoop(t, h)
 	requestID := h.loopManager.GenerateRequestID(loopID)
 	h.loopManager.TrackRequest(requestID, loopID)
@@ -430,6 +441,14 @@ func TestLateToolResultForSettledLoopIsExpectedDrop(t *testing.T) {
 	}
 	if !strings.Contains(out, "No loop found for request") {
 		t.Fatalf("late model response was not declared as a drop:\n%s", out)
+	}
+	if d := dropped("stale_execution") - beforeStale; d != 1 {
+		t.Fatalf("tool_results_dropped_total{reason=stale_execution} delta = %v, want 1 — "+
+			"the settled drop is logged but not countable under the label operators alert on", d)
+	}
+	if d := dropped("loop_held_elsewhere") - beforeHeld; d != 0 {
+		t.Fatalf("tool_results_dropped_total{reason=loop_held_elsewhere} delta = %v, want 0 — "+
+			"an idempotent late arrival must not read as a two-owner split", d)
 	}
 	// The loop must stay gone: a late arrival never resurrects per-loop state.
 	if held := perLoopMapCount(h.loopManager, loopID); len(held) != 0 {
