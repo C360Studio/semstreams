@@ -400,18 +400,19 @@ family, public state, durable state, or communication path.
 
 #### Scenario: A cancel command whose target was resolved rather than named
 
-- **WHEN** a bare `/cancel` resolves its target from the tracker, publishes that loop's signal, and the required
-  user response does not receive PubAck
+- **WHEN** a bare `/cancel` resolves its target from durable loop authority, publishes that loop's signal, and the
+  required user response does not receive PubAck
 - **THEN** the delivery quarantines, because the message does not carry the identity the delivery acted on
-- **AND** the redelivery is not effect-free: the message does not carry the identity this delivery acted on, so a
-  redelivery resolves afresh against a world this delivery changed rather than repeating what it did
+- **AND** the redelivery is not effect-free: it resolves afresh against a world this delivery changed rather than
+  repeating what this delivery did
 - **AND** resolution SHALL be scoped to the exact user and channel route, never widened to the user's other
   channels, so the terminal loop resolves to nothing rather than falling through to a loop the user never named
 
 #### Scenario: A command that resolved a target and published nothing
 
-- **WHEN** a command whose target was resolved from the tracker publishes no signal — a read-only command, or a
-  cancel that was refused, found no loop, or found one already settled — and its response does not receive PubAck
+- **WHEN** a command whose target was resolved from durable loop authority publishes no signal — a read-only
+  command, or a cancel that was refused, found no loop, or found one already settled — and its response does not
+  receive PubAck
 - **THEN** the delivery retries, because a command that did nothing can be replayed whatever its target was
 - **AND** the lane is not latched, so later user messages are still admitted
 
@@ -420,7 +421,9 @@ family, public state, durable state, or communication path.
 - **WHEN** a user message is permanently invalid or unauthorized
 - **THEN** its typed user error receives PubAck before the delivery is acknowledged, and a publication that fails
   is classified rather than swallowed
-- **AND** tracker and gauge state remain unchanged
+- **AND** no loop bookkeeping moves: the in-process tracker and the `active_loops` gauge this clause used to name
+  are deleted by this change, and the obligation survives them as no durable loop record written and no
+  submission counted for a message that was refused
 - **AND** the response identity is minted per publication on this lane, and #1328 leaves it that way: which
   refusal a message earns is decided by which check failed, so two deliveries of one source message can carry
   different refusals, and a source-derived identity would give those one name and let a duplicate window suppress

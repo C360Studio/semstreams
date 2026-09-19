@@ -66,8 +66,10 @@ current when this one applies; restating main's would silently revert L2's four 
 ahead of L2's merge should expect the two clauses that differ from main — the cancel signal in the PubAck list and
 the response-identity disposition on the invalid-input lane — to already be there.
 
-Two scenarios in that requirement are modified here because this change makes their stated reasons false, not
-because their outcomes move. Both outcomes are carried unchanged:
+Four of its eight scenarios change. Two of them only replace vocabulary this change deletes — "resolved from the
+tracker" becomes "resolved from durable loop authority", and "tracker and gauge state remain unchanged" becomes the
+obligation that survives the tracker and the `active_loops` gauge being gone. The other two change a stated REASON
+because this change makes the old one false. No outcome moves in any of the four:
 
 - *Task publication succeeds but user response fails* quarantines for one surviving effect, the submission
   counter, rather than two: retiring the tracker removes the tracked `LoopInfo` being replaced under a loop that

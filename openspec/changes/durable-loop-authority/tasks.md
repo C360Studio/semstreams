@@ -216,9 +216,11 @@ round, not restated.
       ExecutionID (`tool_result_handler_failure_test.go`, `terminal_release_test.go`,
       `terminal_failure_record_integration_test.go`) keep L2's shape untouched
 - [x] 8.7 A `## MODIFIED Requirements` block for "Every dispatch durable input settles through its owner"
-      restates **L2's delta text**, not `openspec/specs/`'s, because this change archives after #1328. Two of its
-      eight scenarios change their stated REASON with no change of outcome; `design.md` § "Why the MODIFIED block
-      reads ahead of `openspec/specs/`" says so for the archiver
+      restates **L2's delta text**, not `openspec/specs/`'s, because this change archives after #1328. FOUR of its
+      eight scenarios change and no outcome moves: two only replace vocabulary this change deletes ("resolved from
+      the tracker", "tracker and gauge state remain unchanged"), two change a stated REASON this change makes
+      false. `design.md` § "Why the MODIFIED block reads ahead of `openspec/specs/`" says so for the archiver. The
+      other four scenarios are byte-identical to L2's, checked by `diff -u` of the two blocks rather than by eye
 - [x] 8.8 Census pins re-derived with `sed -n "${n}p"` on this head, superseding § 7.2 and § 7.10:
       `persistLoopState` is `processor/agentic-loop/component.go:2389` and its bare-key `Put` is `:2404`; the
       three `COMPLETE_` key constructions are `:2321`, `:2352`, `:2376`. `register_tool.go:92`,
