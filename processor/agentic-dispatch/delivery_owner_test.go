@@ -20,6 +20,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -381,11 +382,13 @@ func TestEffectFreeCommandWithFailedResponseRetries(t *testing.T) {
 		c.modelRegistry = newTestRegistry()
 		require.Nil(t, c.sendResponseFn,
 			"this case must run the production sendResponse; the seam would skip the publish it exists to observe")
-		// resolveConfig (component.go:236-246) defaults DefaultRole, StreamName
-		// and Permissions but NOT AutoContinue, so a component built from `{}`
-		// has it false while DefaultConfig() has it true. The hazard this test
-		// covers needs the tracker branch reachable, which is what the flag
-		// turns on — so it is set here deliberately rather than inherited.
+		// resolveConfig defaults DefaultRole, StreamName and Permissions but NOT
+		// AutoContinue, so a component built from `{}` has it false while
+		// DefaultConfig(), the struct tag and the published schema all say true
+		// (#1348: resolveConfig does not apply the advertised default). The
+		// hazard this test covers needs the tracker branch reachable, which is
+		// what the flag turns on — so it is set here deliberately rather than
+		// inherited.
 		c.config.AutoContinue = true
 		c.waitForStreamInput = func(context.Context, string) error { return nil }
 		callbacks := make(map[string]func(context.Context, jetstream.Msg))
@@ -415,9 +418,13 @@ func TestEffectFreeCommandWithFailedResponseRetries(t *testing.T) {
 	}
 	requireRetriedWithLaneIntact := func(t *testing.T, c *Component, msg *dispatchSettlementMsg, handles map[string]*causalConsumeHandle) {
 		t.Helper()
-		require.Equal(t, int32(1), msg.naks.Load(),
+		// assert, not require: when the decision flips, the three consequence
+		// assertions below are the ones that say what it COSTS — the latched
+		// fatal and the drained owner — and a require here would abort before
+		// any of them ran.
+		assert.Equal(t, int32(1), msg.naks.Load(),
 			"a command that published nothing is replayable: its failed response is an ordinary Retry")
-		require.Zero(t, msg.acks.Load()+msg.terms.Load())
+		assert.Zero(t, msg.acks.Load()+msg.terms.Load())
 		// Health().Healthy also requires c.started, which this harness does not
 		// set (it binds the production callbacks without Start), so the latch
 		// itself is the assertion: deliveryFatalErr is what a Quarantine here
@@ -455,7 +462,7 @@ func TestEffectFreeCommandWithFailedResponseRetries(t *testing.T) {
 		defer cancel()
 		// Tracked as live, settled in the record: the gate reports terminal
 		// from either source, so handleCancelCommand answers "already settled"
-		// and returns BEFORE the publish at commands.go:181.
+		// and returns BEFORE the publish at commands.go:179.
 		trackLoop(c, settledLoopID)
 		require.Equal(t, settledLoopID, c.loopTracker.GetActiveLoop("user-1", "channel-1"),
 			"the target must be tracker-resolved, or this case cannot discriminate")
@@ -470,6 +477,10 @@ func TestEffectFreeCommandWithFailedResponseRetries(t *testing.T) {
 		requireRetriedWithLaneIntact(t, c, msg, handles)
 	})
 
+	// This one discriminates neither predicate: with no loop to resolve,
+	// targetFromTracker is false, so the old provenance-only arm retried it too.
+	// It pins the no-loop path against a future widening, and is not coverage of
+	// the two-conjunct rule — the two subtests above are.
 	t.Run("a bare cancel with no loop to resolve", func(t *testing.T) {
 		c, deliver, handles, ctx, cancel := newLane(t)
 		defer cancel()
