@@ -1216,12 +1216,14 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		// and LoopID, which is what downstream deduplication keys on. What a
 		// redelivery does repeat is the tracking at :1178 — Track replaces the
 		// whole LoopInfo, so a loop that has since advanced is reset to
-		// "pending" under a new CreatedAt — and the two started counters at
-		// :1190 and :1198. Partial effect, unknown commit: the lane quarantines
-		// and an operator sees a stopped lane naming the cause. Relaxing this
-		// to Retry needs that re-entry made idempotent, not more identity;
-		// openspec/changes/stable-request-identity/design.md records why this
-		// layer does not take it.
+		// "pending" under a new CreatedAt — and the two started records at :1190
+		// and :1198: tasks_submitted_total counts one submission twice, and
+		// active_loops is a GAUGE, so a second Inc against one later Dec leaks
+		// it upward for the process's life. Partial effect, unknown commit: the
+		// lane quarantines and an operator sees a stopped lane naming the cause.
+		// Relaxing this to Retry needs that re-entry made idempotent, not more
+		// identity; openspec/changes/stable-request-identity/design.md records
+		// why this layer does not take it.
 		return errs.WrapFatal(err, "Component", "handleTaskSubmission",
 			fmt.Sprintf("task %s for loop %s is published but its acknowledgement is not", taskID, loopID))
 	}

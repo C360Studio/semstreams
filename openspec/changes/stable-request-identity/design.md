@@ -61,7 +61,9 @@ deferred one identity decision to #1328. All three are answered here.
   (`component.go:1178`), and `Track` replaces the whole `LoopInfo` held under that LoopID
   (`loop_tracker.go:144-153`), so a loop that advanced past `pending` between the two deliveries is reset to
   `pending` under a fresh `CreatedAt`; it also re-fires `recordLoopStarted` (`component.go:1190`) and
-  `recordTaskSubmitted` (`component.go:1198`), so one submission is counted twice. Quarantine is still the honest
+  `recordTaskSubmitted` (`component.go:1198`), which are not the same kind of harm: `tasks_submitted_total` counts
+  one submission twice, while `recordLoopStarted` increments the `active_loops` **gauge**, and one loop ends once,
+  so the second increment is never taken back and the gauge leaks upward. Quarantine is still the honest
   classification, so no L1 test is relaxed and no proof-of-effect-freedom is claimed. Making that re-entry
   idempotent — `Track` merging rather than replacing a LoopID it already holds, and the two counters moving only
   on first commit — changes tracker and gauge behaviour, which is not this layer's subject; it is the precondition

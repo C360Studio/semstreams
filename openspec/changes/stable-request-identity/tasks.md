@@ -248,22 +248,17 @@
       UUID") this change falsifies, was rewritten in place rather than left to mislead. Main's deferral bullet
       ("extending it to the rest is L2's") is answered with a disposition: the invalid-input lane keeps its
       per-publication response id
-- [x] 9.6 `tool_results_dropped_total{reason=loop_held_elsewhere}` lost its producer in the replay — L1 settles
-      both held-elsewhere arms as warned-and-retried — so the label is removed from `metrics.go`'s enumeration and
-      the zero-delta assertion in `TestLateToolResultForSettledLoopIsExpectedDrop` is retired with its reason
-      recorded. A doc comment advertising a series nothing emits is the `class:advertised-absent` defect, and an
-      assertion on a label with no producer is a test that cannot fail
+- [x] 9.6 `tool_results_dropped_total{reason=loop_held_elsewhere}` **never reached main** and is removed from
+      `metrics.go`'s enumeration here. Both of its producers lived on L1's discarded pre-round-1 line
+      (`fdd645b5`); `git log --oneline -S loop_held_elsewhere origin/main -- .` returns nothing, and L1's merged
+      form settles both held-elsewhere arms as warned-and-retried. So no operator ever ran a build that emitted
+      it, nothing was removed from an operator's view, and no migration note is owed — this is a doc comment and a
+      test assertion being brought back in line with the producers that exist, not a retired series. The zero-delta
+      assertion in `TestLateToolResultForSettledLoopIsExpectedDrop` goes with it: an assertion on a label with no
+      producer is a test that cannot fail
 - [x] 9.7 Migration-note pin drift from the replay: the demux pin moved `component.go:2480` → `:2618`, re-derived
       with `sed -n`. The waiter key (`governance_dispatcher.go:465`) and the fail-closed enforce wait (`:544-549`)
       were re-read on this head and are unchanged
-- [x] 9.9 A third L1 test, `TestIntegrationTerminalFailureRecordPrecedesItsPublication`, carried the same
-      CallID-only fixture and failed the same way — and it stayed hidden through one whole gate, because the
-      integration runner stopped at `agentic-dispatch` before reaching `agentic-loop`. Its first subtest asserts
-      Ack, which an expected settled-drop also returns, so only the `COMPLETE_<loopID>` check exposed a lane that
-      never ran. `grep -rn "TrackToolCall(" --include='*_test.go'` then confirmed no fourth fixture of that shape
-      remains, and all five agentic packages were run under `-tags=integration -race` rather than the one package
-      the failure named
-
 - [x] 9.8 Mutation evidence for the re-homed counterfactual (`cp` backup + `md5 -q` verified restore, no stash, no
       checkout; `component.go` baseline `7fb1195f…`, `task_recovery.go` baseline `1e442f18…`, both restored and
       `git status --porcelain` empty afterwards). Each mutation names the half of the claim it kills, so "the
@@ -274,3 +269,41 @@
       | `stableDispatchTaskID` returns `dispatch-` + a fresh UUID (L1's world) | `tasks[0].TaskID == tasks[1].TaskID` — "the redelivery republishes the committed task identity, which downstream deduplicates" |
       | `handleTaskSubmission` discards the recovery (`prepared, found = preparedDispatchTask{}, false`) at the call site | `tasks[0].LoopID == tasks[1].LoopID` — the stable TaskID alone keeps the subject, so only the LoopID assertion falls, which is exactly the half `findRetainedDispatchTask` owns |
       | `Track` and `recordLoopStarted` run only when the task was not recovered | `"pending" == tracker.Get(loopID).State` — expected `"pending"`, actual `"exploring"`: the reset this arm quarantines for is real, and an idempotent re-entry would remove it |
+
+- [x] 9.9 A third L1 test, `TestIntegrationTerminalFailureRecordPrecedesItsPublication`, carried the same
+      CallID-only fixture and failed the same way — and it stayed hidden through one whole gate, because the
+      integration runner stopped at `agentic-dispatch` before reaching `agentic-loop`. Its first subtest asserts
+      Ack, which an expected settled-drop also returns, so only the `COMPLETE_<loopID>` check exposed a lane that
+      never ran. `grep -rn "TrackToolCall(" --include='*_test.go'` then confirmed no fourth fixture of that shape
+      remains, and all five agentic packages were run under `-tags=integration -race` rather than the one package
+      the failure named
+
+- [x] 9.10 Gates measured on the head that ships (§ 8.9's rule applied to this round, since both surviving counts
+      were wrong for it): `openspec validate --all --strict` 0 — **56 passed, 0 failed**, not the 55 at § 8.9,
+      because this round's MODIFIED block is a new delta item; `openspec validate stable-request-identity
+      --strict` 0; `task spec:properties` 0 — **208/208**, not the 196/196 at § 8.9; `task lint` 0;
+      `task schema:generate` 0 with `git diff --exit-code schemas/ specs/` 0. **`task check:push` exit 201**, red
+      only in the integration phase and only in `natsclient`, twice, on container startup:
+      `create container: reaper: context deadline exceeded`, then `resolve required mapped ports: … inspect
+      container port snapshot: … context deadline exceeded`. Every earlier phase was green — build, `go vet
+      ./...`, `go fmt`, revive, the fixed-port and raw-Request guards, `go vet -tags=integration ./...`,
+      `-tags=live_llm`, schema generate with a clean drift check, `./test/contract/...`, `go test -race ./...` —
+      and so were all five agentic packages under `-tags=integration -race` (loop 38.160s, dispatch 78.360s,
+      tools 59.533s, model 19.877s, governance 2.750s)
+- [x] 9.11 The `natsclient` red is not this branch's, and the reason first given for that was false. This branch
+      **does** touch that package: `d6fe545d` edits `natsclient/publish_msgid_integration_test.go` (+16/-3). The
+      attribution survives on better evidence. Both failures are container *startup* — reaper timeout and mapped
+      ports never resolving — which happen before any test body runs, so no edit to a test file can reach them.
+      The edited test passes 3/3 in isolation here (2.67s, 0.67s, 0.70s; the first carries container warm-up) and
+      its one wall-clock assertion polls a 250ms `Duplicates` window under a 3s `require.Eventually` budget, 12x
+      headroom. `natsclient` as a whole passes in isolation on this head (`ok … 78.369s`), Docker reported zero
+      containers between runs, and the shape is open #736 ("The integration suite oversubscribes Docker under
+      package parallelism"). Not rerun to green: CI
+      [35468157590](https://github.com/C360Studio/semstreams/actions/runs/35468157590) is green on all six jobs at
+      `41615bdc`, and its Test job runs the same `scripts/run-integration-tests.sh`
+- [x] 9.12 `docs/operations/migration-beta162-to-beta163.md` records the one operator-visible metric change this
+      round had left undocumented: `tool_results_dropped_total{reason}`'s only value moved `stale_callid` →
+      `stale_execution`. The old value shipped from **beta.46** (`913cf209`, 2026-05-06) and is in 116 tags
+      through beta.162, so a selector naming it is valid PromQL that reads zero forever with no error — the same
+      `class:advertised-absent` shape this change's own § 9.6 names, applied to the one label with an operator
+      behind it. No note is owed for `loop_held_elsewhere`: it never reached main (§ 9.6)

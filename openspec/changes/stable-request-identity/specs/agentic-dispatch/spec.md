@@ -47,8 +47,8 @@ and user-response publication has synchronous JetStream PubAck. The cancel signa
 PubAck rather than as a core publication, so the published fact a classification reads names a durable effect
 rather than a hope. Whether an unacknowledged publication retries or quarantines SHALL be decided by whether its
 redelivery is effect-free, and that decision SHALL be recorded at the call site rather than taken by default. A
-command SHALL NOT be retried when both of two facts hold: this component
-published a signal during the delivery, and its target was resolved rather than named by the message. That
+command SHALL NOT be retried when both of two facts hold: this component published a signal during the delivery,
+and its target was resolved rather than named by the message. That
 published fact SHALL be recorded where this component's own publication happens, never inferred from the command
 name or the response text, because a command that published nothing is replayable no matter how its target was
 chosen. The recorder is internal to this component, so a command handler an adopter registers cannot record a

@@ -1284,6 +1284,26 @@ an execution id is still one dotless subject token.
   (`RetentionNoLifecycle`), so those keys persist until an operator removes them; delete the bucket before the
   upgrade if you want it clean, and expect the in-flight calls it covered to execute once more.
 
+### `tool_results_dropped_total`'s only `reason` value is renamed
+
+The routing key moved, and the drop reason that names it moved with it. The one value
+`semstreams_agentic_loop_tool_results_dropped_total{reason}` emits is now `stale_execution`; it was `stale_callid`
+from beta.46 (`913cf209`, 2026-05-06) through beta.162, so this is a rename of a value that has shipped in 116
+tags, not a new series.
+
+| | Was | Now |
+|---|---|---|
+| `reason` value | `stale_callid` | `stale_execution` |
+
+The meaning is unchanged — a tool result arrived with no loop mapping for its routing key, the expected case once
+`GetAndClearToolResults` has evicted a drained execution — and the metric name, the label name and the cardinality
+are unchanged. Only the value moved, which is why it needs saying: **a selector naming the old value is still
+valid PromQL and reads zero forever.** An alert written as
+`rate(semstreams_agentic_loop_tool_results_dropped_total{reason="stale_callid"}[5m]) > 0` never fires again and a
+panel filtered to it draws a flat line that reads as "no drops are happening". Nothing errors, and nothing in the
+upgrade tells you. Edit the selector to `reason="stale_execution"`, or drop the matcher and aggregate
+`by (reason)`; `stale_execution` is the only value this build emits, so that aggregation returns one series.
+
 ## Governance verdicts route on execution identity, and an enforce-mode rule set must be edited first (#1328)
 
 The tool-call governance verdict subjects moved off the two-token `<loop_id>.<call_id>` pair and onto the single
