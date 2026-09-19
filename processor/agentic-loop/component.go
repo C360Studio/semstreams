@@ -1596,11 +1596,15 @@ func (c *Component) settleResponseWithoutLoop(ctx context.Context, requestID str
 		}
 		return nil
 	default:
+		// Warned, not counted. The delivery is still outstanding — it retries —
+		// and model_responses_dropped_total means work this process decided not
+		// to do. Counting a retry there would report one discarded response per
+		// redelivery for a response nothing has discarded, and the active
+		// delta says a live loop carries no expected-drop count at all. The
+		// cancel lane already drew this line (signals_dropped_total's help
+		// text); these two lanes had not.
 		c.logger.Warn("Model response names a loop this process does not hold",
 			"request_id", requestID, "loop_id", loopID)
-		if c.metrics != nil {
-			c.metrics.recordModelResponseDropped("loop_held_elsewhere")
-		}
 		return fmt.Errorf("loop %q for request %q is not held by this process", loopID, requestID)
 	}
 }
@@ -2151,11 +2155,11 @@ func (c *Component) settleToolResultWithoutLoop(ctx context.Context, toolResult 
 		}
 		return nil
 	default:
+		// Warned, not counted, for the same reason as the response lane above:
+		// a retried tool result is not a dropped one, and an executor's work is
+		// still owed to whichever process holds that loop.
 		c.logger.Warn("Tool result names a loop this process does not hold",
 			"call_id", toolResult.CallID, "loop_id", loopID)
-		if c.metrics != nil {
-			c.metrics.recordToolResultDropped("loop_held_elsewhere")
-		}
 		return fmt.Errorf("loop %q for tool call %q is not held by this process", loopID, toolResult.CallID)
 	}
 }

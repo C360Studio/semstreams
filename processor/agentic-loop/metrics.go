@@ -167,14 +167,14 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "tool_results_dropped_total",
-				Help:      "Total tool results dropped at the wire because no loop mapping exists for the CallID. Sustained non-zero rate points at NATS redelivery or executor double-publish.",
+				Help:      "Total tool results dropped at the wire because no loop mapping exists for the CallID and the loop record is absent or terminal. Sustained non-zero rate points at NATS redelivery or executor double-publish. A result for a loop that is live but held by another process is NOT counted here: it is retried, not dropped.",
 			}, []string{"reason"}),
 
 			modelResponsesDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "model_responses_dropped_total",
-				Help:      "Total model responses dropped at the wire because no loop maps to the RequestID. Expected after a loop settles and releases its per-loop state, or after a process replacement; a sustained rate against live loops points at NATS redelivery.",
+				Help:      "Total model responses dropped at the wire because no loop maps to the RequestID and the loop record is absent or terminal. Expected after a loop settles and releases its per-loop state; a sustained rate points at NATS redelivery. A response for a loop that is live but held by another process is NOT counted here: it is retried, not dropped.",
 			}, []string{"reason"}),
 
 			signalsDropped: prometheus.NewCounterVec(prometheus.CounterOpts{

@@ -11,7 +11,9 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -355,5 +357,100 @@ func TestUncancellableLoopSettlesWithoutRetrying(t *testing.T) {
 		after := testutil.ToFloat64(c.metrics.signalsDropped.WithLabelValues("stale_loop_id")) +
 			testutil.ToFloat64(c.metrics.signalsDropped.WithLabelValues("already_terminal"))
 		require.Equal(t, before, after, "a retried signal is not a dropped one")
+	})
+}
+
+// The dropped counters mean work this process decided not to do, and the
+// response and tool-result lanes were incrementing them on their way to a
+// Retry — one reported discard per redelivery for an input nothing had
+// discarded. The cancel lane already drew this line
+// (signals_dropped_total's help text); this holds all three to it.
+//
+// Deliberately NOT parallel: loopMetrics counters are process-global, so a
+// before/after delta on one is only meaningful when nothing else is moving it.
+//
+// spec: agentic-loop / A loop absent from process memory is settled from its record
+func TestRetriedInputsAreNotCountedAsDrops(t *testing.T) {
+	const (
+		terminalLoopID = "c1e8b2f3-3d5e-4b6c-9f70-2e3d4c5b6f71"
+		liveLoopID     = "b0f7a1e2-2c4d-4a5b-8e6f-1d2c3b4a5e60"
+	)
+	newComponent := func(t *testing.T, bucket jetstream.KeyValue) *Component {
+		t.Helper()
+		c := releaseTestComponent(t, NewMessageHandler(DefaultConfig()))
+		c.metrics = getMetrics(nil)
+		c.loopsBucket = bucket
+		return c
+	}
+	records := recordLoopBucket{records: map[string]agentic.LoopEntity{
+		terminalLoopID: {ID: terminalLoopID, State: agentic.LoopStateComplete},
+		liveLoopID:     {ID: liveLoopID, State: agentic.LoopStateExploring},
+	}}
+	unreadable := recordLoopBucket{getErr: errors.New("kv unavailable")}
+	responseBytes := func(t *testing.T, loopID string) []byte {
+		t.Helper()
+		return baseMessageBytes(t, &agentic.AgentResponse{
+			RequestID: loopID + ":req:1", Status: agentic.StatusComplete,
+			Message: agentic.ChatMessage{Role: "assistant", Content: "done"},
+		})
+	}
+	toolResultBytes := func(t *testing.T, loopID string) []byte {
+		t.Helper()
+		return baseMessageBytes(t, &agentic.ToolResult{
+			CallID: loopID + ":tool:1", Name: "search", Content: "result", LoopID: loopID,
+		})
+	}
+	// Every label value, not a named one: the point is that no drop of any
+	// reason is recorded, including a reason a later change might invent.
+	drops := func(t *testing.T, vec *prometheus.CounterVec) float64 {
+		t.Helper()
+		collected := make(chan prometheus.Metric, 64)
+		vec.Collect(collected)
+		close(collected)
+		total := 0.0
+		for metric := range collected {
+			var measured dto.Metric
+			require.NoError(t, metric.Write(&measured))
+			total += measured.GetCounter().GetValue()
+		}
+		return total
+	}
+	responseDrops := func(t *testing.T, c *Component) float64 { return drops(t, c.metrics.modelResponsesDropped) }
+	toolDrops := func(t *testing.T, c *Component) float64 { return drops(t, c.metrics.toolResultsDropped) }
+
+	t.Run("a stale response is still a counted drop", func(t *testing.T) {
+		c := newComponent(t, records)
+		before := responseDrops(t, c)
+		require.NoError(t, c.handleResponseMessage(t.Context(), responseBytes(t, terminalLoopID)))
+		require.Equal(t, float64(1), responseDrops(t, c)-before,
+			"an acknowledged stale input is exactly what this counter is for")
+	})
+
+	t.Run("a live response retries without a drop", func(t *testing.T) {
+		c := newComponent(t, records)
+		before := responseDrops(t, c)
+		require.Error(t, c.handleResponseMessage(t.Context(), responseBytes(t, liveLoopID)))
+		require.Equal(t, before, responseDrops(t, c), "a retried response is not a dropped one")
+	})
+
+	t.Run("an unreadable record retries without a drop", func(t *testing.T) {
+		c := newComponent(t, unreadable)
+		before := responseDrops(t, c)
+		require.Error(t, c.handleResponseMessage(t.Context(), responseBytes(t, liveLoopID)))
+		require.Equal(t, before, responseDrops(t, c), "an unknown record is not a discarded response")
+	})
+
+	t.Run("a stale tool result is still a counted drop", func(t *testing.T) {
+		c := newComponent(t, records)
+		before := toolDrops(t, c)
+		require.NoError(t, c.handleToolResultMessage(t.Context(), toolResultBytes(t, terminalLoopID)))
+		require.Equal(t, float64(1), toolDrops(t, c)-before)
+	})
+
+	t.Run("a live tool result retries without a drop", func(t *testing.T) {
+		c := newComponent(t, records)
+		before := toolDrops(t, c)
+		require.Error(t, c.handleToolResultMessage(t.Context(), toolResultBytes(t, liveLoopID)))
+		require.Equal(t, before, toolDrops(t, c), "a retried tool result is not a dropped one")
 	})
 }
