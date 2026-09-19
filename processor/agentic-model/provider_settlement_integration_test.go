@@ -188,7 +188,7 @@ func (r blockingRetainedResponseReader) ReadRetainedResponse(
 	return retainedResponseEvidence{}, false, errors.New("process replaced before retained lookup completed")
 }
 
-// spec: agentic-model / Model request settlement is bound to a durable response
+// spec: agentic-model / Request delivery settles only on its own response
 func TestIntegrationMatchingRetainedResponseSkipsProviderAndAcknowledgesSource(t *testing.T) {
 	tc := newProviderSettlementNATS(t)
 	var calls atomic.Int32
@@ -277,7 +277,7 @@ func TestIntegrationProviderErrorPubAckPrecedesSourceAck(t *testing.T) {
 	require.Equal(t, int32(1), calls.Load())
 }
 
-// spec: agentic-model / Model request settlement is bound to a durable response
+// spec: agentic-model / Request delivery settles only on its own response
 func TestIntegrationRetainedResponseRequestIDConflictQuarantinesWithoutProvider(t *testing.T) {
 	tc := newProviderSettlementNATS(t)
 	var calls atomic.Int32
@@ -304,7 +304,7 @@ func TestIntegrationRetainedResponseRequestIDConflictQuarantinesWithoutProvider(
 	require.Zero(t, calls.Load())
 }
 
-// spec: agentic-model / Model request settlement is bound to a durable response
+// spec: agentic-model / Request delivery settles only on its own response
 func TestIntegrationRetainedResponseLookupFailureRetriesWithoutProvider(t *testing.T) {
 	tc := newProviderSettlementNATS(t)
 	var calls atomic.Int32
@@ -326,7 +326,7 @@ func TestIntegrationRetainedResponseLookupFailureRetriesWithoutProvider(t *testi
 	require.Zero(t, calls.Load())
 }
 
-// spec: agentic-model / Model request settlement is bound to a durable response
+// spec: agentic-model / Request delivery settles only on its own response
 // spec: agentic-model / Started markers do not claim invocation certainty
 func TestIntegrationPreProviderReplacementSeesAbsenceAndInvokesOnce(t *testing.T) {
 	tc := newProviderSettlementNATS(t)

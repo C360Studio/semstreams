@@ -76,7 +76,7 @@ func TestUnparseableRequestTerminatesWithoutRetainedLookup(t *testing.T) {
 	require.Zero(t, reader.calls, "a request that cannot be parsed has no identity to look up")
 }
 
-// spec: agentic-model / Model request settlement is bound to a durable response
+// spec: agentic-model / Request delivery settles only on its own response
 func TestMatchingRetainedResponseAcknowledgesWithoutProviderWork(t *testing.T) {
 	req := providerSettlementRequest()
 	response := agentic.AgentResponse{
@@ -100,7 +100,7 @@ func TestMatchingRetainedResponseAcknowledgesWithoutProviderWork(t *testing.T) {
 	require.Equal(t, 1, reader.calls)
 }
 
-// spec: agentic-model / Model request settlement is bound to a durable response
+// spec: agentic-model / Request delivery settles only on its own response
 func TestRetainedResponseCorrelationConflictQuarantinesBeforeProviderWork(t *testing.T) {
 	req := providerSettlementRequest()
 	tests := []struct {
@@ -148,7 +148,7 @@ func TestRetainedResponseCorrelationConflictQuarantinesBeforeProviderWork(t *tes
 	}
 }
 
-// spec: agentic-model / Model request settlement is bound to a durable response
+// spec: agentic-model / Request delivery settles only on its own response
 func TestRetainedResponseLookupFailureRetriesBeforeProviderWork(t *testing.T) {
 	req := providerSettlementRequest()
 	lookupErr := errors.New("retained response unavailable")
@@ -163,7 +163,7 @@ func TestRetainedResponseLookupFailureRetriesBeforeProviderWork(t *testing.T) {
 	require.Equal(t, 1, reader.calls)
 }
 
-// spec: agentic-model / Model request settlement is bound to a durable response
+// spec: agentic-model / Request delivery settles only on its own response
 func TestTypedRetainedResponseAbsencePermitsProviderPath(t *testing.T) {
 	req := providerSettlementRequest()
 	reader := &stubRetainedResponseReader{}

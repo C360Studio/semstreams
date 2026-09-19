@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
+	"strings"
 	"testing"
 	"time"
 
@@ -232,8 +234,13 @@ func TestUncorrelatedToolResultSettlesByRecordNotByMemory(t *testing.T) {
 // A verdict with no waiter was documented as expected-in-normal-operation and
 // settled as Retry, which on an unbounded lane is a hot loop for exactly the
 // inputs the RecordGovernanceVerdictMissingWaiter counter exists to count. The
-// call_id grammar carries the loop ID, so the record decides: a finished or
-// foreign loop acknowledges, a live one is still owed the verdict.
+// record decides instead: a finished or foreign loop acknowledges, a live one
+// is still owed the verdict.
+//
+// Routing is by execution identity (#1328), which is an opaque digest carrying
+// no loop, so the loop comes from the payload: loop_id when the rule echoes it,
+// else the RequestID grammar, else the legacy structured call_id. A payload
+// with none of the three names no loop and acknowledges.
 //
 // spec: agentic-loop / A loop absent from process memory is settled from its record
 func TestVerdictWithoutWaiterSettlesByRecordNotByWaiterMap(t *testing.T) {
@@ -248,7 +255,9 @@ func TestVerdictWithoutWaiterSettlesByRecordNotByWaiterMap(t *testing.T) {
 		liveLoopID:     {ID: liveLoopID, State: agentic.LoopStateExploring},
 	}}
 
-	settle := func(t *testing.T, callID string) (natsclient.DeliveryDecision, error) {
+	// Every verdict routes on execution_id; the loop hint under test is
+	// whatever else the payload carries.
+	settle := func(t *testing.T, loopHint map[string]any) (natsclient.DeliveryDecision, error) {
 		t.Helper()
 		config := DefaultConfig()
 		config.ToolCallGovernance.Mode = ToolCallGovernanceModeEnforce
@@ -259,7 +268,11 @@ func TestVerdictWithoutWaiterSettlesByRecordNotByWaiterMap(t *testing.T) {
 		c := releaseTestComponent(t, handler)
 		c.config = config
 		c.loopsBucket = bucket
-		payload := map[string]any{"decision": "approved", "call_id": callID}
+		payload := map[string]any{
+			"decision":     "approved",
+			"execution_id": "tool-exec-v1-" + strings.Repeat("a", 52),
+		}
+		maps.Copy(payload, loopHint)
 		data, err := json.Marshal(payload)
 		require.NoError(t, err)
 		return c.handleToolCallVerdictMessage(t.Context(), data)
@@ -267,21 +280,33 @@ func TestVerdictWithoutWaiterSettlesByRecordNotByWaiterMap(t *testing.T) {
 
 	t.Run("finished or foreign loop acknowledges", func(t *testing.T) {
 		t.Parallel()
-		decision, err := settle(t, terminalLoopID+":tool:1")
+		decision, err := settle(t, map[string]any{"loop_id": terminalLoopID})
 		require.NoError(t, err)
 		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
 	})
 
 	t.Run("a provider-authored call id with no minted token acknowledges", func(t *testing.T) {
 		t.Parallel()
-		decision, err := settle(t, "toolu_model_authored")
+		decision, err := settle(t, map[string]any{"call_id": "toolu_model_authored"})
 		require.NoError(t, err)
 		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
 	})
 
 	t.Run("live loop is still owed the verdict", func(t *testing.T) {
 		t.Parallel()
-		decision, err := settle(t, liveLoopID+":tool:1")
+		decision, err := settle(t, map[string]any{"loop_id": liveLoopID})
+		require.Error(t, err)
+		require.ErrorIs(t, err, ErrNoGovernanceWaiter)
+		require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
+	})
+
+	t.Run("a rule that echoes only request_id still finds the loop", func(t *testing.T) {
+		t.Parallel()
+		// The canonical rule set echoes loop_id, but a minimal rule may
+		// carry only request_id. Its grammar is <loopID>:req:<n>:<n>, so
+		// the record is still reachable and a live loop still Retries —
+		// without this fallback the verdict would Ack and be lost.
+		decision, err := settle(t, map[string]any{"request_id": liveLoopID + ":req:2:0"})
 		require.Error(t, err)
 		require.ErrorIs(t, err, ErrNoGovernanceWaiter)
 		require.Equal(t, natsclient.DeliveryDecisionRetry, decision)

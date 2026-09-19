@@ -377,7 +377,7 @@ func TestHandleToolDeliveryDecisionMatrix(t *testing.T) {
 			logger: slog.Default(), outcomes: &cancellingOutcomeStore{cancel: cancel},
 		}
 		require.NoError(t, component.registry.RegisterTool("count", executor))
-		decision, err := component.handleToolDelivery(workCtx, wire(t, agentic.ToolCall{ID: "shutdown", Name: "count"}))
+		decision, err := component.handleToolDelivery(workCtx, wire(t, correlatedOutcomeTestCall(agentic.ToolCall{ID: "shutdown", Name: "count"})))
 		require.Equal(t, natsclient.DeliveryDecisionRetry, decision)
 		require.ErrorIs(t, err, context.Canceled)
 		require.Zero(t, executor.calls.Load(), "shutdown must not have executed the tool")
@@ -393,7 +393,7 @@ func TestHandleToolDeliveryDecisionMatrix(t *testing.T) {
 			logger: slog.Default(), outcomes: store,
 		}
 		require.NoError(t, component.registry.RegisterTool("count", executor))
-		decision, err := component.handleToolDelivery(t.Context(), wire(t, agentic.ToolCall{ID: "vanished", Name: "count"}))
+		decision, err := component.handleToolDelivery(t.Context(), wire(t, correlatedOutcomeTestCall(agentic.ToolCall{ID: "vanished", Name: "count"})))
 		require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
 		require.Error(t, err)
 		require.False(t, isRetryableDeliveryError(err), "the unclassified arm must not be typed retryable")
