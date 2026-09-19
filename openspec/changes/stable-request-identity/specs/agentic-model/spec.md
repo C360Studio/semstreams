@@ -41,6 +41,18 @@ provider work under at-least-once delivery (owner ruling 2026-09-05 on #1146).
 - **AND** the replacement repeats the retained-response check, whose typed absence may invoke the provider again
   under the accepted at-least-once contract
 
+#### Scenario: A retained response disagrees with the request it claims to answer
+
+- **WHEN** a retained response is found whose correlation does not match the request that looked it up
+- **THEN** agentic-model quarantines the delivery before any provider call
+- **AND** invokes no provider, because a conflicting answer is not evidence about this request either way
+
+#### Scenario: The retained-response lookup itself fails
+
+- **WHEN** the retained-response read fails rather than reporting a typed absence
+- **THEN** agentic-model retries the delivery before any provider call
+- **AND** invokes no provider, because an unread ledger is not an absent answer
+
 #### Scenario: A republished request is answered from its retained response
 
 - **WHEN** the same RequestID is delivered again as a new stream message, with no duplicate-window suppression
