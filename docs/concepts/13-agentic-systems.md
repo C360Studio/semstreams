@@ -99,7 +99,7 @@ Agentic systems use a state machine to track progress through well-defined phase
                                                     ┌───────────────────────────┐
                                                     │complete│failed│cancelled  │
                                                     ├───────────────────────────┤
-                                                    │paused │ awaiting_approval │
+                                                    │    awaiting_approval      │
                                                     └───────────────────────────┘
 ```
 
@@ -115,8 +115,13 @@ Agentic systems use a state machine to track progress through well-defined phase
 | `complete` | Yes | Successfully finished |
 | `failed` | Yes | Failed due to error or max iterations |
 | `cancelled` | Yes | Cancelled by user signal |
-| `paused` | No | Legacy-valid; exported transitions accept it; no framework-owned pause signal or semantics (#1239) |
 | `awaiting_approval` | No | Waiting for user approval |
+
+There is no `paused` state. SemStreams supports cancellation, durable human approval, safe retry/restart
+and operational quiescing; it does not support arbitrary execution pause/resume, and a state with no
+framework semantics is not kept as a valid value (owner ruling, #1239, 2026-09-03). Exported transitions
+refuse `paused` and a persisted `"state":"paused"` fails validation — there is no shim, alias or
+reserved enum.
 
 **Why states matter:**
 

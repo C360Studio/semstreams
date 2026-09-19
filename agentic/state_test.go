@@ -51,7 +51,6 @@ func TestLoopState_IsTerminal(t *testing.T) {
 		{"complete is terminal", agentic.LoopStateComplete, true},
 		{"failed is terminal", agentic.LoopStateFailed, true},
 		{"cancelled is terminal", agentic.LoopStateCancelled, true},
-		{"paused not terminal", agentic.LoopStatePaused, false},
 		{"awaiting_approval not terminal", agentic.LoopStateAwaitingApproval, false},
 	}
 

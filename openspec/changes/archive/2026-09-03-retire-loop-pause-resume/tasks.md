@@ -30,6 +30,13 @@
   "(approve, reject, etc.)". Found by an independent per-verb sweep, not named in the review
 - [x] 2.4 `processor/agentic-dispatch/intent_classifier_test.go:52` — the `extractJSON` fixture carried
   `signal_type: approve`; the payload is arbitrary to that test, so it now spells `cancel`
-- [x] 2.5 Record the ruling-to-file conformance table in `proposal.md`, covering all nine Tier 1 removals and
-  the semsage obligation. The owner's follow-up ruling explicitly authorizes `LoopEntity.StateBeforePause`
-  removal while retaining `LoopStatePaused`
+- [x] 2.5 Record the ruling-to-file conformance table in `proposal.md`, covering all ten Tier 1 removals and
+  the semsage obligation. R3 authorized `LoopEntity.StateBeforePause` removal while retaining `LoopStatePaused`;
+  R4 (2026-09-03) superseded that retention and the table now carries `LoopStatePaused` as the tenth removal
+- [x] 2.6 Remove `LoopStatePaused` under R4: delete the constant and its `isValidLoopState` entry, validate
+  `LoopEntity.TransitionTo`'s argument against the vocabulary, refuse an invalid persisted state in
+  `processor/agentic-dispatch`'s loop reader under its existing permanent classification, and strip the state
+  from the four documentation tables, the godoc list, the OpenAPI query description and the migration note.
+  Proved by `TestPausedIsRefusedAtTheExportedTransition`, `TestUndefinedStatesAreRefusedAtTheExportedTransition`,
+  `TestPersistedPausedRecordFailsValidation`, `TestTransitionLoopRefusesPaused` and
+  `TestIntegrationPersistedInvalidStateIsPermanent`

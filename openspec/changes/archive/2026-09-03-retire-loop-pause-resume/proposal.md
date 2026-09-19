@@ -55,6 +55,14 @@ already on `main`, not this change's.
   [`issuecomment-5519154352`](https://github.com/C360Studio/semstreams/issues/1239#issuecomment-5519154352)
   (2026-09-02). Explicitly authorizes removal of `LoopEntity.StateBeforePause` while retaining
   `LoopStatePaused` as a legacy-valid state accepted by exported transition APIs.
+- **R4** — no legacy paused-state compatibility,
+  [`issuecomment-5526761449`](https://github.com/C360Studio/semstreams/issues/1239#issuecomment-5526761449)
+  (2026-09-03), and the pause product position,
+  [`issuecomment-5526837992`](https://github.com/C360Studio/semstreams/issues/1239#issuecomment-5526837992)
+  (2026-09-03). **These supersede R3's retention clause.** The framework is greenfield: remove `LoopStatePaused`
+  from the valid vocabulary and from every API, schema and documentation advertisement; exported transitions
+  refuse `paused`; persisted `"state":"paused"` records get no shim, alias, migration, reserved enum or
+  legacy-valid exception.
 
 | Removed symbol | Declared on `main` at | Authorized by |
 |---|---|---|
@@ -67,10 +75,19 @@ already on `main`, not this change's.
 | `LoopEntity.PauseRequested` | `agentic/state.go:66` | R1, by name |
 | `LoopEntity.PauseRequestedBy` | `agentic/state.go:67` | R1, by name |
 | `LoopEntity.StateBeforePause` | `agentic/state.go:68` | R3, by name |
+| `LoopStatePaused` | `agentic/state.go:33` | R4, by name |
 
-**`LoopStatePaused` remains.** R3 does not authorize its removal: it remains legacy-valid and the exported
-transition APIs still accept it. This change removes the framework-owned pause/resume signal path and pause
-semantics, not the state vocabulary.
+**`LoopStatePaused` is removed.** R3 retained it, and this change's first landing carried that retention. R4
+supersedes it: a state with no framework semantics must not remain a valid value. `isValidLoopState` no longer
+lists it, `LoopEntity.TransitionTo` validates its argument against the vocabulary — removing the constant alone
+would leave `LoopState("paused")` settable, because `LoopState` is a plain string type — and
+`processor/agentic-dispatch`'s persisted-loop reader refuses a record whose state is outside the vocabulary under
+its existing permanent classification. No value is special-cased: every undefined state is refused the same way,
+which is what keeps this from being a reserved-enum shim in reverse.
+
+Adopter impact is not a no-op for stored data, and the migration is to drop the value rather than to translate it:
+`docs/operations/migration-beta162-to-beta163.md` carries the before/after table, the rewrite instruction, and a
+measured per-sister count.
 
 **semsage migration obligation.** semsage `processor/ui-api/http.go:182` cases on `agentic.SignalPause` and
 `agentic.SignalResume` and **will not compile** on its next bump. Sister repositories are read-only to

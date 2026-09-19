@@ -26,11 +26,12 @@ const (
 	LoopStateFailed    LoopState = "failed"
 	LoopStateCancelled LoopState = "cancelled" // Cancelled by user signal
 
-	// Signal-related states
-	// LoopStatePaused remains legacy-valid and is accepted by the exported
-	// transition APIs. #1239 removes the framework-owned pause/resume signal path
-	// and pause semantics; callers may still explicitly transition a loop to it.
-	LoopStatePaused           LoopState = "paused"
+	// Approval states
+	//
+	// There is no paused state. SemStreams supports cancellation, durable
+	// human approval, safe retry/restart and operational quiescing; it does
+	// not support arbitrary execution pause/resume, so no value in this
+	// vocabulary may advertise one (owner ruling, #1239, 2026-09-03).
 	LoopStateAwaitingApproval LoopState = "awaiting_approval" // Waiting for user approval
 )
 
@@ -117,7 +118,7 @@ func isValidLoopState(s LoopState) bool {
 	switch s {
 	case LoopStateExploring, LoopStatePlanning, LoopStateArchitecting,
 		LoopStateExecuting, LoopStateReviewing, LoopStateComplete,
-		LoopStateFailed, LoopStateCancelled, LoopStatePaused,
+		LoopStateFailed, LoopStateCancelled,
 		LoopStateAwaitingApproval:
 		return true
 	default:
@@ -125,11 +126,22 @@ func isValidLoopState(s LoopState) bool {
 	}
 }
 
-// TransitionTo transitions the entity to a new state
+// TransitionTo transitions the entity to a new state.
+//
+// The target is validated against the state vocabulary. Before this the method
+// took any string, which is how "paused" stayed reachable through an exported
+// API after the pause semantics were deleted: removing the constant alone
+// leaves LoopState("paused") settable by any caller. Validating the argument
+// refuses that and every other value the vocabulary does not define, rather
+// than special-casing one string — a reserved-enum shim in reverse is still a
+// compatibility shim (owner ruling, #1239, 2026-09-03).
 func (e *LoopEntity) TransitionTo(newState LoopState) error {
 	// Allow same-state transitions (no-op)
 	if e.State == newState {
 		return nil
+	}
+	if !isValidLoopState(newState) {
+		return fmt.Errorf("invalid state: %s", newState)
 	}
 	// Prevent transitions from terminal states
 	if e.State.IsTerminal() {
@@ -148,7 +160,7 @@ type PendingApprovalState struct {
 	ToolName    string         `json:"tool_name"`
 	Arguments   map[string]any `json:"arguments,omitempty"`
 	Reason      string         `json:"reason,omitempty"`   // Original "approval_required: ..." rejection reason
-	RequestedAt time.Time      `json:"requested_at"`       // When the rejection arrived and the loop paused
+	RequestedAt time.Time      `json:"requested_at"`       // When the rejection arrived and the loop gated
 	Timeout     time.Duration  `json:"timeout,omitempty"`  // Auto-reject deadline; zero means wait indefinitely
 	TraceID     string         `json:"trace_id,omitempty"` // Propagated for audit correlation
 }

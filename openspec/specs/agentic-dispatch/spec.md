@@ -87,12 +87,17 @@ the request is answerable later and MUST NOT be admitted on an unread record. A 
 read that reports key absence is the not-found refusal.
 
 The merged facts MUST carry the loop's recorded STATE, not only whether it has settled, and a seam that reports
-a loop's state to a caller MUST report the state that was read. "Not settled" covers executing, paused, and
-awaiting approval; a seam that renders one fixed word for all three tells a user whose loop is waiting on their
-own approval to go on waiting for the agent — a fabricated fact, and worse than the not-found this seam
-answered before existence was merged. A merged observation that carries no state MUST say so rather than name
-one. When both sources report a state they reconcile on the same fail-closed rule terminality uses: a settled
-observation in either source wins.
+a loop's state to a caller MUST report the state that was read. "Not settled" covers executing and awaiting
+approval; a seam that renders one fixed word for both tells a user whose loop is waiting on their own approval
+to go on waiting for the agent — a fabricated fact, and worse than the not-found this seam answered before
+existence was merged. A merged observation that carries no state MUST say so rather than name one. When both
+sources report a state they reconcile on the same fail-closed rule terminality uses: a settled observation in
+either source wins.
+
+A durable record whose state is outside the loop state vocabulary MUST be refused by the reader under the same
+permanent classification a malformed record receives, and MUST NOT reach the merge or any seam. It never becomes
+valid, so retrying it is not an answer, and reporting it would republish a state the framework no longer
+defines.
 
 #### Scenario: a continuation after a process replacement is admitted from the durable record
 

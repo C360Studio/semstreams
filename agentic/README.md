@@ -165,10 +165,15 @@ The state machine supports these states:
 | `complete` | Successfully finished (terminal) |
 | `failed` | Failed execution (terminal) |
 | `cancelled` | Cancelled by user (terminal) |
-| `paused` | Legacy-valid; exported transitions accept it; no framework-owned pause signal or semantics (#1239) |
 | `awaiting_approval` | Waiting for user approval |
 
 States are fluid checkpoints. The loop can move backward except from terminal states.
+
+There is no `paused` state. SemStreams supports cancellation, durable human approval, safe retry/restart
+and operational quiescing; it does not support arbitrary execution pause/resume, and a state with no
+framework semantics is not kept as a valid value (owner ruling, #1239, 2026-09-03). Exported transitions
+refuse `paused` and a persisted `"state":"paused"` fails validation — there is no shim, alias or
+reserved enum.
 
 ## NATS Subject Patterns
 

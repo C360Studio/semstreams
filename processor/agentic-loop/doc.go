@@ -69,13 +69,16 @@
 //   - complete: Successfully finished (terminal)
 //   - failed: Failed due to error or max iterations (terminal)
 //   - cancelled: Cancelled by user signal (terminal)
-//   - paused: Legacy-valid and accepted by transition APIs; #1239 removes the
-//     framework-owned signal path and pause semantics
 //   - awaiting_approval: Waiting for user approval
 //
 // States are fluid checkpoints - the loop can transition backward (e.g., from
 // executing back to exploring) to support agent rethinking. Only terminal states
 // (complete, failed, cancelled) prevent further transitions.
+//
+// There is no paused state: the framework supports cancellation, durable human
+// approval, safe retry/restart and operational quiescing, not arbitrary
+// execution pause/resume (owner ruling, #1239, 2026-09-03). Exported
+// transitions refuse it and a persisted "paused" record fails validation.
 //
 // State transitions are managed by the LoopManager and persisted to NATS KV.
 //

@@ -144,6 +144,47 @@ func TestIntegrationPersistedLoopMalformedJSONAndIDMismatchArePermanent(t *testi
 	require.ErrorContains(t, err, `contains loop id "other-loop"`)
 }
 
+// A record that decodes and whose ID matches can still be one this component
+// must not act on. The owner ruling of 2026-09-03 (#1239) removed the paused
+// state with no compatibility machinery, so a record written before the
+// removal is refused HERE rather than carried into the seams: /status would
+// otherwise report a state the vocabulary no longer defines, and the admission
+// gate would reason about it. It takes the reader's existing permanent
+// classification — a state outside the vocabulary never becomes valid — and no
+// new one is invented for it.
+func TestIntegrationPersistedInvalidStateIsPermanent(t *testing.T) {
+	ctx := t.Context()
+	tc := natsclient.NewTestClient(t, natsclient.WithKVBuckets(defaultAgentLoopsBucket(t)))
+	c := terminalTestComponent(t)
+	c.natsClient = tc.Client
+	kv, err := tc.GetKVBucket(ctx, defaultAgentLoopsBucket(t))
+	require.NoError(t, err)
+
+	// Written by hand, not through LoopEntity: the whole point is a record the
+	// current vocabulary cannot produce.
+	_, err = kv.Put(ctx, "paused-loop",
+		[]byte(`{"id":"paused-loop","state":"paused","max_iterations":20}`))
+	require.NoError(t, err)
+
+	_, err = c.loadPersistedLoop(ctx, "paused-loop")
+	require.Error(t, err, "a persisted paused record must be refused by the reader, not returned")
+	require.True(t, isPermanentTerminal(err),
+		"an invalid state never becomes valid, so it takes the same permanent class as a malformed record")
+	require.ErrorContains(t, err, "invalid state: paused")
+
+	// The same reader still returns a record whose state IS in the vocabulary,
+	// so the refusal above is the state's and not the path's.
+	valid, err := json.Marshal(agentic.LoopEntity{
+		ID: "live-loop", TaskID: "task", State: agentic.LoopStateAwaitingApproval, MaxIterations: 20,
+	})
+	require.NoError(t, err)
+	_, err = kv.Put(ctx, "live-loop", valid)
+	require.NoError(t, err)
+	record, err := c.loadPersistedLoop(ctx, "live-loop")
+	require.NoError(t, err)
+	require.Equal(t, agentic.LoopStateAwaitingApproval, record.State)
+}
+
 func TestIntegrationInvalidTerminalIsTerminated(t *testing.T) {
 	ctx := t.Context()
 	tc := natsclient.NewTestClient(t,

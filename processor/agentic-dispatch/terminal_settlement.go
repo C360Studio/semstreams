@@ -160,6 +160,15 @@ func (c *Component) loadPersistedLoop(ctx context.Context, loopID string) (*agen
 	if persisted.ID != loopID {
 		return nil, permanentTerminal("%s/%s contains loop id %q", bucket, loopID, persisted.ID)
 	}
+	// A record that decodes is not yet a record this component may act on. A
+	// state outside the vocabulary will never become valid, so it takes the
+	// same permanent classification as a malformed record rather than a
+	// transient one — and it is refused rather than carried, which is what
+	// stops a persisted "paused" from re-entering through a reader after the
+	// state was removed (owner ruling, #1239, 2026-09-03).
+	if err := persisted.Validate(); err != nil {
+		return nil, permanentTerminal("invalid %s/%s: %w", bucket, loopID, err)
+	}
 	return &persisted, nil
 }
 

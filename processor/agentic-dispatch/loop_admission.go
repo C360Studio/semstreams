@@ -157,8 +157,8 @@ type loopFacts struct {
 	// State is the loop's recorded state, carried so a seam that must SAY what
 	// the loop is doing reports what was read instead of inventing a value.
 	// Terminal answers the gate's question — may this be continued — and cannot
-	// answer /status's: "not settled" covers executing, paused, and
-	// awaiting_approval, and telling a user "running" for the last of those
+	// answer /status's: "not settled" covers executing and
+	// awaiting_approval, and telling a user "running" for the second of those
 	// sends them to wait for an agent that is waiting for them.
 	State agentic.LoopState
 	// Tracked and Persisted report which sources held the loop. Both false never

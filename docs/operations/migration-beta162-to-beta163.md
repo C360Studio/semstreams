@@ -994,12 +994,55 @@ Decoding ignores unknown keys —
 no `DisallowUnknownFields` sits on the `LoopEntity` decode path — so old records load unchanged and no backfill
 or migration job is required.
 
-`LoopState` `paused` deliberately remains legacy-valid. The exported transition APIs still accept it; #1239
-removes the framework-owned pause/resume signal path and pause semantics, not the state vocabulary. Preserving
-the state is required for **validation, not deserialization**: `LoopState` is a plain string type with no
-`UnmarshalJSON`, so a persisted `"state":"paused"` would decode either way. But `LoopEntity.Validate()` rejects
-any state that `isValidLoopState` does not list (`agentic/state.go:106,116`), so dropping the constant would make
-every pre-existing `paused` record invalid. Keeping it is what makes this migration a no-op for your data.
+#### `LoopState` `paused` is removed — this part is NOT a no-op for your data
+
+`agentic.LoopStatePaused` is deleted from the state vocabulary. The framework supports cancellation, durable human
+approval, safe retry/restart and operational quiescing; it does not support arbitrary execution pause/resume, and a
+state carrying no framework semantics is not kept as a valid value
+([owner ruling, 2026-09-03](https://github.com/C360Studio/semstreams/issues/1239#issuecomment-5526837992)). No shim,
+alias, reserved enum, migration job or legacy-valid exception is provided, and none will be.
+
+What changes for you:
+
+| You do this | Before | Now |
+|---|---|---|
+| `entity.TransitionTo(agentic.LoopStatePaused)` | compiles | **does not compile** — the constant is gone |
+| `entity.TransitionTo(agentic.LoopState("paused"))` | accepted, state set | **error** `invalid state: paused`, entity unchanged |
+| `manager.TransitionLoop(id, "paused")` | accepted | **error** `invalid state: paused` |
+| a persisted `{"state":"paused"}` record | decoded and validated | decodes, then **fails `LoopEntity.Validate()`** |
+| dispatch reads that record | returned to the seams | **refused** with the reader's permanent classification |
+| `GET /loops?state=paused` | advertised in the OpenAPI description | no longer advertised |
+
+`LoopState` is a plain string type with no `UnmarshalJSON`, so a stored `"paused"` still *decodes* — JSON cannot
+refuse a string. Validation is the refusal boundary, and it is where every caller meets it.
+
+**Migration: drop the value.** A loop still sitting in `paused` when you upgrade was, by construction, not running —
+nothing in the framework moved it and nothing would have resumed it. Rewrite those `AGENT_LOOPS` records to the
+state that describes them (`cancelled` if you are abandoning the work, or the pre-pause working state if you intend
+to continue it), or delete them. There is no automatic rewrite because only you know which of those two it is.
+
+Note the interaction with the previous paragraph: the three `PauseRequested`/`ResumeRequested`/`PausedAt` **keys**
+are ignored on decode and need no action, but the **state value** does. They are separate migrations.
+
+##### Measured impact across the family
+
+One read-only pass over every sister checkout (`git grep -l` for `LoopStatePaused` and for the quoted `"paused"`
+state literal; the three non-git working copies read with `grep -r`, `node_modules` excluded). Counts are **files**,
+and the classification says whether the hit is this state or a same-named concept:
+
+| Repository | `LoopStatePaused` | `"paused"` files | Affected? |
+|---|---|---|---|
+| semteams | 0 | 8 | **Yes — 4 files.** `ui/src/lib/types/agent.ts` carries `"paused"` in its `AgentLoopState` union, and `AgentLoopCard`, `agentChatBridge` and `task.ts` branch on it. Drop the member; the union already models the states that remain |
+| semspec | 0 | 1 | **Its own type.** `vocabulary/semspec/enums.go:57` declares `LoopStatusPaused LoopStatus = "paused"` — semspec's vocabulary, not `agentic.LoopState`. It does not break, but it now advertises a status the framework will never produce |
+| semspec-ui-bmad, semspec-ui-run-visibility | 0 | 1 each | The same `vocabulary/semspec/enums.go:57` line, vendored |
+| semdragon | 0 | 6 | **No.** Board-control pause (`processor/boardcontrol/pause.go`), an unrelated simulation control |
+| semsource | 0 | 1 | **No.** A project *phase* enum in the UI |
+| semmem | 0 | 1 | **No.** A match inside a committed binary, not source |
+| semboids, semconnect, semdev, semdocs, semembed, seminstruct, semlink, semmachina, semops, semsage, semstreams-ui, semsummarize, servicesim, c360studio.github.io | 0 | 0 | **No** |
+
+**No sister references `agentic.LoopStatePaused`**, so nothing fails to compile on upgrade. The one real migration
+is semteams' TypeScript union, and the one advisory is semspec's parallel `LoopStatus` vocabulary. Applying either
+is the sister owner's call; this note is the record, not a change to those repositories.
 
 ### `cancel` is now the entire signal vocabulary
 
@@ -1107,7 +1150,7 @@ Exactly one payload type now travels that subject.
 - **`/status` reports the state it read.** For a loop this process is not running — after dispatch was replaced,
   say — `/status` used to print `State: running` for anything not settled, so a loop actually sitting in
   `awaiting_approval` told the user to wait for an agent that was waiting for them. It now prints the recorded
-  state (`executing`, `paused`, `awaiting_approval`, `complete`, …), or `unknown` when the record carries none.
+  state (`executing`, `awaiting_approval`, `complete`, …), or `unknown` when the record carries none.
   Anything parsing that text for the literal `running` needs updating.
 - **A NATS outage now answers 503, not 404.** When a loop's durable state cannot be read, the loop endpoints answer
   `503` with a transient classification. Previously an unreadable record was indistinguishable from an absent one,
