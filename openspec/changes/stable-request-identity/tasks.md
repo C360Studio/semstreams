@@ -127,7 +127,7 @@
       | drop the `proposal_fingerprint` attribute from the audit verdict line | `TestProposalFingerprintIsCarriedAndNotVerified/audit_mode_reads_the_decoded_fingerprint_onto_its_verdict_line` at `proposal_fingerprint_test.go:137` — expected `sha256:audited-digest`, actual `<nil>` |
       | delete the `StatusToolCall` forward-progress `ResetTruncationRetry` at `handlers.go:1255` | `TestMintedRequestIDsAreInjectiveAcrossTheHandlerPath` at `request_identity_mint_test.go:170` — post-retry continuation `:req:3:1`, want `:req:3:0` |
 
-## 8. Rebase onto L1 (`20fe8d09`, superseded by `73b54da9`) and review round 3
+## 8. Rebase onto L1 (`20fe8d09` → `fdd645b5`) and review round 3
 
 - [x] 8.1 `git rebase --onto 20fe8d09 0053183d` replayed this branch's own fourteen commits onto the reviewed L1
       head. Old head `87828b06` → `5188b9c9`; `backup/gh1328-stable-identity-pre-rebase-20260919` holds the
@@ -177,10 +177,11 @@
 - [x] 8.8 Migration-note pins re-derived again with `sed -n '<n>p'` on this head — the round-2 values all drifted
       when `effectiveLoopID` gained its doc comment: demux `component.go:2327` → `:2480`, waiter key
       `governance_dispatcher.go:413` → `:465`, fail-closed wait `:491-497` → `:544-549`. This supersedes 7.3
-- [x] 8.9 Gates measured on this head, not carried forward: `task openspec:validate` 0 — **55 passed, 0 failed**,
-      not the 56 recorded at 5.1 and 7.x, because L0's change archived into live spec; `task spec:properties` 0 —
-      **194/194**, not the 176/176 recorded at 5.1, because this branch's own citations and L1's retargeted ones
-      are both counted now
+- [x] 8.9 Gates measured on the head that ships, not carried forward: `task openspec:validate` 0 — **55 passed,
+      0 failed**, not the 56 recorded at 5.1 and 7.x, because L0's change archived into live spec;
+      `task spec:properties` 0 — **196/196**, not the 176/176 recorded at 5.1 (this branch's own citations and
+      L1's retargeted ones are both counted) and not the 194/194 measured on the interim `20fe8d09` base, because
+      the final L1 head adds two more. A count carried across a rebase is not a measurement
 - [x] 8.10 Mutation evidence (`cp` backup + `md5 -q` verified restore, no stash, no checkout;
       `governance_dispatcher.go` baseline `ad206c37…`, `component.go` baseline `b6d17327…`, both restored and
       `git status --porcelain` empty afterwards):
@@ -191,11 +192,18 @@
       | delete the whole unrecoverable-identity guard from `settleVerdictWithoutWaiter` | `…/a_verdict_with_no_recoverable_loop_identity_terminates_as_malformed` at `missing_loop_settlement_test.go:309` — "An error is expected but got nil", which is the silent Ack this task removed |
       | `recordToolResultDropped("stale_execution")` reverts to `"stale_callid"` | `TestLateToolResultForSettledLoopIsExpectedDrop` at `terminal_release_test.go:446` — `tool_results_dropped_total{reason=stale_execution} delta = 0, want 1` |
 
-- [ ] 8.11 **A second rebase is owed and deliberately held.** L1 was rewritten after this branch replayed onto it:
-      `20fe8d09` → `73b54da9`, same commit subjects but not the same content (`git diff --stat 20fe8d09 73b54da9`
-      = 21 files, +358/-46 — `agentic/state.go`, `terminal_settlement.go`, `paused_state_removal_test.go` and the
-      migration note among them, which is the L0.5 reader-narrowing revert plus `LoopEntity.Validate()`). PR #1335
-      therefore reads `CONFLICTING` against its base, and GitHub creates no `pull_request` check runs for a
-      conflicting PR, so the last E2E Ladder artifact is the green one on `5188b9c9`. The round-3 fixes are pushed
-      green on the `20fe8d09` line as instructed; the `--onto` replay waits for the final L1 head rather than
-      chasing a moving one
+- [x] 8.11 **The second replay landed.** L1 moved twice after this branch first replayed onto it: `20fe8d09` →
+      `73b54da9` → `fdd645b5` (same commit subjects, different content each time — the L0.5 reader-narrowing
+      revert, then `LoopEntity.Validate()` on the dispatch reader with ancestry fixtures carrying
+      `MaxIterations: 3`). Round 3 was pushed green on the `20fe8d09` line as instructed rather than chased onto a
+      moving head, and the replay ran once the final head was named: `git rebase --onto fdd645b5 20fe8d09`,
+      eighteen commits, **zero conflicts**. Old head `8b05a0ef`/`5791e6c4` → `b63df50f`; backup refs
+      `backup/gh1328-stable-identity-pre-rebase-20260919` (`87828b06`) and
+      `backup/gh1328-stable-identity-round3-20260919` (`5791e6c4`)
+- [x] 8.12 The cross-layer watch did **not** fire. L0.5 now runs full `LoopEntity.Validate()` on the same dispatch
+      reader this stack uses, so the three tests named as a design-disagreement tripwire were run by name on the
+      rebased head rather than inferred from a green suite:
+      `TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart` PASS (0.30s) and
+      `TestIntegrationPersistedInvalidStateIsPermanent` PASS (0.24s) under `-tags=integration`, and
+      `paused_state_removal_test.go`'s single case `TestTransitionLoopRefusesPaused` PASS. A suite-level `ok` would
+      not have distinguished "passed" from "not compiled into this run"
