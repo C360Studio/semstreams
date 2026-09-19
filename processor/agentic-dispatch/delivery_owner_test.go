@@ -347,3 +347,137 @@ func mustMarshalDispatchSettlementPayload(t *testing.T, payload message.Payload)
 }
 
 var _ component.Discoverable = (*Component)(nil)
+
+// R1 quarantined a post-effect response failure on the command lane, and round
+// 6 found the predicate too wide: it keyed on where the TARGET came from, which
+// is true of every argument-less command while auto-continue is on — `/help`,
+// `/loops`, a bare `/status` — and of the three arms of bare `/cancel` that
+// publish nothing. None of them can be un-done by a replay, because none of
+// them did anything; quarantining them latches the whole user.message lane on a
+// failed response to a read-only command, and the cause text names a loop they
+// never touched.
+//
+// The predicate is now two conjuncts, and this test holds the half that must
+// NOT quarantine. The published fact comes from the publish site itself
+// (commands.go:185), so these cases are distinguished by what they did rather
+// than by what they were called.
+//
+// spec: agentic-dispatch / Every dispatch durable input settles through its owner
+func TestEffectFreeCommandWithFailedResponseRetries(t *testing.T) {
+	const (
+		activeLoopID  = "00000000-0000-4000-8000-0000000000a1"
+		settledLoopID = "00000000-0000-4000-8000-0000000000a2"
+	)
+	// The production callback, with the production sendResponse: the client is
+	// constructed and never connected, so the user response is the publication
+	// that fails.
+	newLane := func(t *testing.T) (*Component, func(context.Context, jetstream.Msg), map[string]*causalConsumeHandle, context.Context, context.CancelFunc) {
+		t.Helper()
+		deps := componentDependenciesForCausalTest()
+		deps.PayloadRegistry = payloadbuiltins.NewTestRegistry(t)
+		discoverable, err := NewComponent([]byte(`{}`), deps)
+		require.NoError(t, err)
+		c := discoverable.(*Component)
+		c.modelRegistry = newTestRegistry()
+		require.Nil(t, c.sendResponseFn,
+			"this case must run the production sendResponse; the seam would skip the publish it exists to observe")
+		// resolveConfig (component.go:236-246) defaults DefaultRole, StreamName
+		// and Permissions but NOT AutoContinue, so a component built from `{}`
+		// has it false while DefaultConfig() has it true. The hazard this test
+		// covers needs the tracker branch reachable, which is what the flag
+		// turns on — so it is set here deliberately rather than inherited.
+		c.config.AutoContinue = true
+		c.waitForStreamInput = func(context.Context, string) error { return nil }
+		callbacks := make(map[string]func(context.Context, jetstream.Msg))
+		handles := make(map[string]*causalConsumeHandle)
+		c.consumeStream = func(_ context.Context, owner natsclient.PortConsumerContext, _ natsclient.StreamConsumerConfig, callback func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
+			handle := &causalConsumeHandle{closed: make(chan struct{}), closedCalls: make(chan struct{}, 1)}
+			callbacks[owner.Port] = callback
+			handles[owner.Port] = handle
+			return handle, nil
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		require.NoError(t, c.setupSubscriptions(ctx))
+		return c, callbacks["user.message"], handles, ctx, cancel
+	}
+	trackLoop := func(c *Component, loopID string) {
+		c.loopTracker.Track(&LoopInfo{
+			LoopID: loopID, TaskID: "task-" + loopID, UserID: "user-1",
+			ChannelType: "cli", ChannelID: "channel-1", State: "executing", CreatedAt: time.Now(),
+		})
+	}
+	command := func(t *testing.T, id, content string) *dispatchSettlementMsg {
+		t.Helper()
+		return &dispatchSettlementMsg{data: mustMarshalDispatchSettlementPayload(t, &agentic.UserMessage{
+			MessageID: id, ChannelType: "cli", ChannelID: "channel-1", UserID: "user-1",
+			Content: content, Timestamp: time.Now().UTC(),
+		})}
+	}
+	requireRetriedWithLaneIntact := func(t *testing.T, c *Component, msg *dispatchSettlementMsg, handles map[string]*causalConsumeHandle) {
+		t.Helper()
+		require.Equal(t, int32(1), msg.naks.Load(),
+			"a command that published nothing is replayable: its failed response is an ordinary Retry")
+		require.Zero(t, msg.acks.Load()+msg.terms.Load())
+		// Health().Healthy also requires c.started, which this harness does not
+		// set (it binds the production callbacks without Start), so the latch
+		// itself is the assertion: deliveryFatalErr is what a Quarantine here
+		// would set, and it surfaces as LastError plus the drained handle.
+		require.Empty(t, c.Health().LastError,
+			"a read-only command's failed response must not latch a delivery-ownership fatal")
+		for port, handle := range handles {
+			require.Zero(t, handle.drains.Load(), "an effect-free failure must not drain owner %s", port)
+		}
+	}
+
+	t.Run("a read-only command whose target came from the tracker", func(t *testing.T) {
+		c, deliver, handles, ctx, cancel := newLane(t)
+		defer cancel()
+		// A live loop in this channel, so handleCommand's tracker branch
+		// resolves a target for the argument-less /help — the exact condition
+		// that used to be sufficient to quarantine.
+		trackLoop(c, activeLoopID)
+		require.Equal(t, activeLoopID, c.loopTracker.GetActiveLoop("user-1", "channel-1"))
+
+		msg := command(t, "message-help", "/help")
+		deliver(ctx, msg)
+
+		requireRetriedWithLaneIntact(t, c, msg, handles)
+
+		// And the lane still takes work, which is the cost a Quarantine here
+		// would have imposed on every later user message.
+		second := command(t, "message-help-2", "/help")
+		deliver(ctx, second)
+		require.Equal(t, int32(1), second.naks.Load(), "the lane refused a later delivery")
+	})
+
+	t.Run("a bare cancel whose loop has already settled", func(t *testing.T) {
+		c, deliver, handles, ctx, cancel := newLane(t)
+		defer cancel()
+		// Tracked as live, settled in the record: the gate reports terminal
+		// from either source, so handleCancelCommand answers "already settled"
+		// and returns BEFORE the publish at commands.go:181.
+		trackLoop(c, settledLoopID)
+		require.Equal(t, settledLoopID, c.loopTracker.GetActiveLoop("user-1", "channel-1"),
+			"the target must be tracker-resolved, or this case cannot discriminate")
+		withPersistedLoops(c, map[string]*agentic.LoopEntity{settledLoopID: {
+			ID: settledLoopID, UserID: "user-1", ChannelType: "cli", ChannelID: "channel-1",
+			State: agentic.LoopStateComplete, MaxIterations: 5,
+		}})
+
+		msg := command(t, "message-bare-cancel-settled", "/cancel")
+		deliver(ctx, msg)
+
+		requireRetriedWithLaneIntact(t, c, msg, handles)
+	})
+
+	t.Run("a bare cancel with no loop to resolve", func(t *testing.T) {
+		c, deliver, handles, ctx, cancel := newLane(t)
+		defer cancel()
+		withPersistedLoops(c, nil)
+
+		msg := command(t, "message-bare-cancel-none", "/cancel")
+		deliver(ctx, msg)
+
+		requireRetriedWithLaneIntact(t, c, msg, handles)
+	})
+}

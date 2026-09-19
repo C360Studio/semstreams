@@ -12,9 +12,12 @@ semantic outcome. Native message and settlement methods SHALL NOT escape the own
 A `UserMessage` SHALL not be positively acknowledged until every required task, approval response, and
 user-response publication has synchronous JetStream PubAck. Whether an unacknowledged publication retries or
 quarantines SHALL be decided by whether its redelivery is effect-free, and that decision SHALL be recorded at the
-call site rather than taken by default. A command that acted on a target the message does not name SHALL NOT be
-retried, because the resolution is not stable across the effect the delivery already had. Terminal events SHALL retain their typed ancestry
-and deterministic response contract. No void, log-only, or core-NATS publication failure SHALL become ACK.
+call site rather than taken by default. A command SHALL NOT be retried when both of two facts hold: the delivery
+published a signal, and its target was resolved rather than named by the message. The published fact SHALL be
+recorded where the publication happens, never inferred from the command name or the response text, because a
+command that published nothing is replayable no matter how its target was chosen. Terminal events SHALL retain
+their typed ancestry and deterministic response contract. No void, log-only, or core-NATS publication failure
+SHALL become ACK.
 
 The `user.message`, `agent.created`, and `agent.approval_pending` subscriptions SHALL invoke their typed business
 handlers using the callback installed by each production setup branch. All delivery-derived work SHALL join before
@@ -55,6 +58,13 @@ family, public state, durable state, or communication path.
 - **THEN** the delivery quarantines, because the message does not carry the identity the delivery acted on
 - **AND** the redelivery is not effect-free: this delivery's own effect makes the resolution fall through the now
   terminal loop to the user's next live loop, which would be cancelled without ever having been named
+
+#### Scenario: A command that resolved a target and published nothing
+
+- **WHEN** a command whose target was resolved from the tracker publishes no signal — a read-only command, or a
+  cancel that was refused, found no loop, or found one already settled — and its response does not receive PubAck
+- **THEN** the delivery retries, because a command that did nothing can be replayed whatever its target was
+- **AND** the lane is not latched, so later user messages are still admitted
 
 #### Scenario: Invalid user input receives its negative consequence
 

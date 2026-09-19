@@ -239,12 +239,12 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       true of `/cancel <loop_id>`. `handleCommand:941-951` resolves a bare `/cancel` from the tracker, and
       `GetActiveLoop` (`loop_tracker.go:204-226`) prefers the channel's loop only while it is non-terminal, then
       falls back to the user's most recent loop — so this delivery's own effect (loop A terminal) is what makes
-      the redelivery resolve to a live loop B and cancel it. The resolved-target form now quarantines
-      (`component.go:985-1010`, target provenance recorded at the resolution site); the named form keeps Retry.
-      No durable selection record: that would write on every bare command for a rare path, and L4 (#1330) is
-      where identity-preserving replay removes the need. `TestIntegrationBareCancelWithFailedResponseQuarantines`
+      the redelivery resolve to a live loop B and cancel it. That form now quarantines; the named form keeps
+      Retry. No durable selection record: that would write on every bare command for a rare path, and L4 (#1330)
+      is where identity-preserving replay removes the need. `TestIntegrationBareCancelWithFailedResponseQuarantines`
       — two live loops, one user, redelivery conditional on the decision because that is what production does.
-      Mutation: drop the `targetFromTracker` arm → the test sees B signalled
+      Mutation: drop the tracker conjunct → the test sees B signalled. **Narrowed by 8f.1**: provenance alone was
+      not the predicate
 - [x] 8e.2 (R2, P1) `persistResultState`'s `FailureState` branch stamped graph triples and never wrote
       `COMPLETE_<loopID>`, so the tool-result timeout route published `agent.failed` and ACKed with no terminal
       record for any KV watcher to read. `persistFailureState` (`component.go:2271`) now runs before the stamp,
@@ -288,6 +288,29 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       (`terminal_settlement.go:17,219`, `terminal-user-response:<source_message_id>`), and the loop's terminal
       event really is keyed by loop id rather than a minted UUID. Response identity for the rest of the lanes is
       L2's (#1328), and the delta now says so rather than claiming it
+
+## 8f. Cross-agent implementation round 4 (2026-09-19)
+
+- [x] 8f.1 (HIGH-1) 8e.1's arm keyed on where the target came from, which is true of every argument-less command
+      while `auto_continue` is on — `/help`, `/loops`, a bare `/status` — and of the three arms of bare `/cancel`
+      that publish nothing (no active loop, gate refusal, already settled). Each fell through to the same
+      `sendResponse`, so a failed response on a read-only command quarantined and latched the whole `user.message`
+      lane, with a cause naming a loop it never touched. The predicate is now two conjuncts: this delivery
+      PUBLISHED a signal AND its target was resolved rather than named. The published half is recorded at the
+      publish site (`commands.go:185`) on a per-delivery recorder carried in the context (`command_effect.go`),
+      never inferred from the command name or the response text. It is not a `CommandHandler` return value
+      because `processor/agentic-dispatch` is Tier 1 and that type is exported — the reviewer offered the
+      signature change and the ruling allowed it, but it would break every adopter that registers a command to
+      carry a fact the publish site already has. `TestEffectFreeCommandWithFailedResponseRetries` (three
+      subtests, each asserting the lane is not latched). Mutations: drop the published conjunct → the `/help`
+      subtest quarantines and latches; drop the tracker conjunct →
+      `TestIntegrationPublishedCancelWithFailedResponseRetries` quarantines
+- [x] 8f.2 (HIGH-2) The breaking-change E2E evidence predated all three round-3 production commits, and R3
+      re-classifies the clean-stop path `verify-stage-a-process-replacement` drives
+      (`test/e2e/scenarios/agentic/scenario.go:251`). `task e2e:agentic` re-run at the head carrying the HIGH-1
+      fix; tier, head, exit code and duration are in the PR body's gate table, replacing the `20fe8d09` claim
+- [x] 8f.3 (NIT-1, NIT-2) Every pin in `design.md`'s R3 residual and the PR body regenerated with
+      `sed -n "${n}p"` after the code settled, never transcribed; the 139-character delta line re-wrapped
 
 ## 9. Landing
 

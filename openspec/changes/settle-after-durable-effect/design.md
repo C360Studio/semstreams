@@ -128,19 +128,38 @@ its record*). The user has received nothing, so the redelivery is what actually 
 the task lane there is no new identity to mint. Retry, named rather than defaulted.
 
 The **bare** form cannot make that argument, and round 2 of the owner's cross-agent review is where it broke.
-`handleCommand:941-951` resolves an omitted target from the tracker, and `GetActiveLoop`
+`handleCommand` resolves an omitted target from the tracker, and `GetActiveLoop`
 (`loop_tracker.go:204-226`) prefers the channel's loop only while it is non-terminal, then falls back to the
 user's most recent one. The effect this delivery had — loop A now terminal — is therefore the very thing that
 makes the redelivery resolve to a different live loop B and cancel it; A's terminal guard cannot protect B. The
-burden of proof is on the Retry and the message cannot meet it, so the resolved-target form is `errs.WrapFatal` →
-Quarantine (`component.go:985-1010`). The alternative — a durable "selected target" record written on every bare
-command so a replay could recover it — adds a write to the common path for a rare one; L4 (#1330) is where
-identity-preserving replay makes it unnecessary. The rule the two arms share: a delivery Retries only where the
-redelivery is provably effect-free, and a target the message does not carry is not provable.
+alternative — a durable "selected target" record written on every bare command so a replay could recover it —
+adds a write to the common path for a rare one; L4 (#1330) is where identity-preserving replay makes it
+unnecessary.
+
+Round 6 then found the first spelling of that arm too wide, and the correction is the sharper statement of the
+same rule. Keying on where the target came from quarantines every argument-less command while `auto_continue` is
+on — `/help`, `/loops`, a bare `/status` — and the three arms of bare `/cancel` that publish nothing (no active
+loop, gate refusal, already settled). None of those did anything a replay could duplicate, so Retry meets the
+burden of proof for all of them, and quarantining one latches the whole `user.message` lane on a failed response
+to a read-only command. The predicate is therefore two conjuncts: **this delivery published a signal AND its
+target was resolved rather than named.**
+
+The published half is recorded where the publication happens (`commands.go:185`), carried on a per-delivery
+recorder in the context (`command_effect.go`), and read once at the settlement site. It is deliberately not
+derived from the command name — that would be a second spelling of "which commands publish", which drifts — nor
+from the response text, which would be a parser over prose. It rides the context rather than the
+`CommandHandler` signature because `processor/agentic-dispatch` is Tier 1 (`release/tier1-packages.txt`) and
+`CommandHandler` is exported: adding a return value would break every adopter that registers a command in order
+to carry a fact the framework's own publish site already has.
+
+The rule both arms share: a delivery Retries only where the redelivery is provably effect-free — and the proof is
+about what the delivery DID, not about how its request was shaped.
 
 `TestIntegrationPublishedCancelWithFailedResponseRetries` holds the named form (the Retry and the effect-free
-redelivery); `TestIntegrationBareCancelWithFailedResponseQuarantines` holds the resolved form with two live loops,
-and its redelivery is conditional on the decision, because that is what production does with each.
+redelivery); `TestIntegrationBareCancelWithFailedResponseQuarantines` holds the resolved-and-signalled form with
+two live loops, and its redelivery is conditional on the decision, because that is what production does with
+each; `TestEffectFreeCommandWithFailedResponseRetries` holds the three effect-free cases and asserts the lane is
+not latched.
 
 ## D8 — the `jetstream-consumer-policy` MODIFY corrects a requirement L0 just made current
 

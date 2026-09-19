@@ -179,6 +179,10 @@ func (c *Component) handleCancelCommand(ctx context.Context, msg agentic.UserMes
 	if err := c.natsClient.Publish(ctx, subject, signalData); err != nil {
 		return agentic.UserResponse{}, errs.WrapTransient(err, "Component", "handleCancelCommand", "publish signal")
 	}
+	// The effect this delivery can no longer take back, recorded where it
+	// happens. handleCommand settles on it: every arm above returns without
+	// reaching this line, and those arms are replayable.
+	noteSignalPublished(ctx)
 
 	return agentic.UserResponse{
 		ResponseID:  uuid.New().String(),
