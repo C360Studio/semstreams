@@ -119,6 +119,13 @@ today.
 - **AND** the exemption is recorded here and tracked as issue #1345, with resumable intake named as its
   precondition
 
+#### Scenario: A terminal failure's record is written before its event is published
+
+- **WHEN** a terminal handler result carries a failure state
+- **THEN** `COMPLETE_<loopID>` is written before the graph stamp and before any failure event is published
+- **AND** a record write that fails quarantines the delivery with nothing published, so no watcher reads a failure
+  event with no terminal record behind it
+
 #### Scenario: A loop-execution birth failure is not exempt
 
 - **WHEN** a task's graph birth or lineage write fails

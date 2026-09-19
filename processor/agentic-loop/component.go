@@ -1877,6 +1877,22 @@ func (c *Component) persistResultState(ctx context.Context, result HandlerResult
 			return err
 		}
 	} else if result.FailureState != nil {
+		// The terminal RECORD before its graph triples, mirroring the
+		// completion branch above. Without this the failure branch stamped
+		// triples and ACKed with COMPLETE_<loopID> absent, so every watcher
+		// that reads the terminal record out of KV — rules engine,
+		// execution-manager, the SSE path — saw a loop that ended and no
+		// result for it. persistFailureState is otherwise reachable only from
+		// publishFailureEvents (:1700), which this route never enters: the
+		// three results that carry a FailureState here return no error to
+		// handleLoopFailure, and the one that does (HandleModelResponse's
+		// timeout, handlers.go:1173) never reaches this function. So the write
+		// happens exactly once on every path, and the failure event is
+		// published exactly once — by publishResults here, or by
+		// publishFailureEvents there, never both.
+		if err := c.persistFailureState(ctx, result.LoopID, result.FailureState); err != nil {
+			return err
+		}
 		if err := c.stampLoopFailureWithBudget(ctx, result.LoopID, result.FailureState); err != nil {
 			return err
 		}

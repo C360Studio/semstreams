@@ -70,6 +70,19 @@ func TestToolResultHandlerFailureSettlesOnTheDurableRecord(t *testing.T) {
 		var entity agentic.LoopEntity
 		require.NoError(t, json.Unmarshal(persisted, &entity))
 		require.Equal(t, agentic.LoopStateFailed, entity.State)
+
+		// And the terminal RECORD, which is the half round 3 found missing: a
+		// watcher reads the outcome out of COMPLETE_<loopID>, not out of the
+		// loop key, and this branch used to stamp graph triples and ACK
+		// without ever writing it.
+		record, ok := bucket.value("COMPLETE_" + loopID)
+		require.True(t, ok,
+			"terminal tool-result failure acknowledged with COMPLETE_<loopID> absent: "+
+				"every KV watcher sees a loop that ended with no result")
+		var failure agentic.LoopFailedEvent
+		require.NoError(t, json.Unmarshal(record, &failure))
+		require.Equal(t, agentic.OutcomeFailed, failure.Outcome)
+		require.Equal(t, loopID, failure.LoopID)
 	})
 
 	t.Run("a terminal handler failure whose write fails quarantines", func(t *testing.T) {

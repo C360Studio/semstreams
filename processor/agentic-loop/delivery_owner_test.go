@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -66,18 +67,23 @@ func (m *loopDeliveryOwnerMsg) TermWithReason(string) error { return m.Term() }
 // records the keys it is asked to write. Both halves matter: the failure drives
 // the classification, and the key list is how the counterfactual below observes
 // what a Retry would have lost.
+// failPrefix narrows the failure to one key family, which is how a test can
+// fail the terminal RECORD write while every other write on the same path
+// succeeds — the only way to tell "wrote the loop key and ACKed" apart from
+// "wrote both".
 type recordingLoopBucket struct {
 	jetstream.KeyValue
-	mu     sync.Mutex
-	fail   error
-	keys   []string
-	values map[string][]byte
+	mu         sync.Mutex
+	fail       error
+	failPrefix string
+	keys       []string
+	values     map[string][]byte
 }
 
 func (b *recordingLoopBucket) Put(_ context.Context, key string, value []byte) (uint64, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.fail != nil {
+	if b.fail != nil && strings.HasPrefix(key, b.failPrefix) {
 		return 0, b.fail
 	}
 	b.keys = append(b.keys, key)

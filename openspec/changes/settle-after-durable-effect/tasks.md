@@ -242,6 +242,25 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
       where identity-preserving replay removes the need. `TestIntegrationBareCancelWithFailedResponseQuarantines`
       — two live loops, one user, redelivery conditional on the decision because that is what production does.
       Mutation: drop the `targetFromTracker` arm → the test sees B signalled
+- [x] 8e.2 (R2, P1) `persistResultState`'s `FailureState` branch stamped graph triples and never wrote
+      `COMPLETE_<loopID>`, so the tool-result timeout route published `agent.failed` and ACKed with no terminal
+      record for any KV watcher to read. `persistFailureState` (`component.go:2271`) now runs before the stamp,
+      error propagated, mirroring the completion branch. Census of the four `result.FailureState =` writers, which
+      is what proves the new write cannot double-publish a failure event:
+
+      | Writer | Branch | Returns | Reaches `persistResultState` | Reaches `publishFailureEvents` | Event published by |
+      |---|---|---|---|---|---|
+      | `handlers.go:1173` | `HandleModelResponse` timeout | `(result, fatal)` | no — the error routes to `handleLoopFailure` | yes (`component.go:1655`) | `publishFailureEvents`; this result's own messages are dropped with it |
+      | `handlers.go:1983` | `failLoop`, from `StatusError` and `StatusLengthTruncated` | `nil` whenever `FailureState` is set — its one error return precedes the assignment | yes | no | `publishResults` |
+      | `handlers.go:2243` | `HandleToolResult` timeout | `(result, fatal)` → `settleFailedToolResult` terminal | yes | no | `publishResults` |
+      | `handlers.go:2500` | `handleToolsComplete` max-iterations | `(*result, nil)` | yes | no | `publishResults` |
+
+      The two columns are disjoint: the only writer that reaches `publishFailureEvents` is the only one that does
+      not reach `persistResultState`, so the record is written exactly once and the event published exactly once
+      on every path. `TestIntegrationTerminalFailureRecordPrecedesItsPublication` (a broker, so "nothing was
+      published" is a measurement rather than a nil client) plus the record assertion added to
+      `TestToolResultHandlerFailureSettlesOnTheDurableRecord`. Mutation: remove the `persistFailureState` call →
+      the presence assertions fail and the failure event is published with no record
 
 ## 9. Landing
 

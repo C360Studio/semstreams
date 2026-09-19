@@ -96,6 +96,13 @@ rather than a silent duplicate storm or a silently missing completion. That is d
 (#1330) relaxes it to identity-based replay — once a redelivery can reproduce the original result and each
 published result carries a deterministic identity, both phases can go back to Retry.
 
+The failure branch of the stamp phase also had a hole, which round 3 found: it stamped graph triples and left
+`COMPLETE_<loopID>` unwritten, because `persistFailureState` had exactly one caller — `publishFailureEvents`
+(`component.go:1700`) — and the `settleFailedToolResult` → `persistHandlerResult` route never enters it. The branch
+now mirrors the completion branch: record, then triples, error propagated. The census that says this cannot
+double-write or double-publish is in `tasks.md` 8e.2 — of the four results that carry a `FailureState`, exactly
+one reaches `publishFailureEvents`, and it is the one that never reaches `persistResultState`.
+
 The same rule reaches the two paths that produce a terminal state without going through this function. A loop's
 business failure (`handleLoopFailure`) is durable only once its failed loop state, its `COMPLETE_<loopID>` record
 and its failure events have committed, so that function reports rather than returning void — with one carve-out: a
