@@ -512,15 +512,18 @@ func (m *loopMetrics) recordToolResultReceived(hasError bool) {
 }
 
 // recordToolResultDropped records a tool result this process did not route to
-// a loop. Two reasons are emitted, and they mean opposite things:
+// a loop. One reason is emitted:
 //
 //   - "stale_execution" — no loop mapping exists for the execution ID. The
 //     dominant case after GetAndClearToolResults eviction: a re-delivered
 //     result for an already-drained execution. A sustained non-zero rate
 //     points at NATS redelivery or an executor double-publishing.
-//   - "loop_held_elsewhere" — the record names a live loop another process
-//     holds. Not idempotent noise: it is the replacement-window signal, and a
-//     sustained rate means two processes believe they own the same loops.
+//
+// A result naming a live loop another process holds is deliberately not
+// counted here: that delivery returns an error and is retried, and a retried
+// result is not a dropped one. The arm is in settleToolResultWithoutLoop's
+// default branch, which warns with the execution id and leaves the work owed
+// to whichever process holds the loop.
 func (m *loopMetrics) recordToolResultDropped(reason string) {
 	m.toolResultsDropped.WithLabelValues(reason).Inc()
 }

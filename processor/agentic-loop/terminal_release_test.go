@@ -394,7 +394,7 @@ func TestLateToolResultForSettledLoopIsExpectedDrop(t *testing.T) {
 	dropped := func(reason string) float64 {
 		return testutil.ToFloat64(c.metrics.toolResultsDropped.WithLabelValues(reason))
 	}
-	beforeStale, beforeHeld := dropped("stale_execution"), dropped("loop_held_elsewhere")
+	beforeStale := dropped("stale_execution")
 	loopID := populatedLoop(t, h)
 	requestID := h.loopManager.GenerateRequestID(loopID)
 	h.loopManager.TrackRequest(requestID, loopID)
@@ -446,10 +446,10 @@ func TestLateToolResultForSettledLoopIsExpectedDrop(t *testing.T) {
 		t.Fatalf("tool_results_dropped_total{reason=stale_execution} delta = %v, want 1 — "+
 			"the settled drop is logged but not countable under the label operators alert on", d)
 	}
-	if d := dropped("loop_held_elsewhere") - beforeHeld; d != 0 {
-		t.Fatalf("tool_results_dropped_total{reason=loop_held_elsewhere} delta = %v, want 0 — "+
-			"an idempotent late arrival must not read as a two-owner split", d)
-	}
+	// A second reason is deliberately not asserted here: a result naming a loop
+	// another process holds is warned and retried rather than counted (#1327),
+	// so a zero-delta assertion on a label nothing emits could never fail.
+
 	// The loop must stay gone: a late arrival never resurrects per-loop state.
 	if held := perLoopMapCount(h.loopManager, loopID); len(held) != 0 {
 		t.Fatalf("a late arrival re-registered per-loop state: %v", held)
