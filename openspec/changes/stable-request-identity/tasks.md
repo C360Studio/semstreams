@@ -256,3 +256,13 @@
 - [x] 9.7 Migration-note pin drift from the replay: the demux pin moved `component.go:2480` → `:2618`, re-derived
       with `sed -n`. The waiter key (`governance_dispatcher.go:465`) and the fail-closed enforce wait (`:544-549`)
       were re-read on this head and are unchanged
+- [x] 9.8 Mutation evidence for the re-homed counterfactual (`cp` backup + `md5 -q` verified restore, no stash, no
+      checkout; `component.go` baseline `7fb1195f…`, `task_recovery.go` baseline `1e442f18…`, both restored and
+      `git status --porcelain` empty afterwards). Each mutation names the half of the claim it kills, so "the
+      identity is recovered" and "the tracking is not" are separately falsifiable rather than one green:
+
+      | mutation | assertion that dies |
+      |---|---|
+      | `stableDispatchTaskID` returns `dispatch-` + a fresh UUID (L1's world) | `tasks[0].TaskID == tasks[1].TaskID` — "the redelivery republishes the committed task identity, which downstream deduplicates" |
+      | `handleTaskSubmission` discards the recovery (`prepared, found = preparedDispatchTask{}, false`) at the call site | `tasks[0].LoopID == tasks[1].LoopID` — the stable TaskID alone keeps the subject, so only the LoopID assertion falls, which is exactly the half `findRetainedDispatchTask` owns |
+      | `Track` and `recordLoopStarted` run only when the task was not recovered | `"pending" == tracker.Get(loopID).State` — expected `"pending"`, actual `"exploring"`: the reset this arm quarantines for is real, and an idempotent re-entry would remove it |
