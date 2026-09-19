@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,6 +20,10 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
 )
+
+// errKVUnavailable is the shared stand-in for a KV bucket that will not accept
+// a write, used by every settlement test that drives a persistence failure.
+var errKVUnavailable = errors.New("kv unavailable")
 
 type loopDeliveryOwnerMsg struct {
 	data        []byte
@@ -57,6 +62,66 @@ func (m *loopDeliveryOwnerMsg) InProgress() error           { m.heartbeats.Add(1
 func (m *loopDeliveryOwnerMsg) Term() error                 { m.terms.Add(1); m.settlement.Add(1); return nil }
 func (m *loopDeliveryOwnerMsg) TermWithReason(string) error { return m.Term() }
 
+// recordingLoopBucket fails every Put until its error is cleared, and then
+// records the keys it is asked to write. Both halves matter: the failure drives
+// the classification, and the key list is how the counterfactual below observes
+// what a Retry would have lost.
+type recordingLoopBucket struct {
+	jetstream.KeyValue
+	mu     sync.Mutex
+	fail   error
+	keys   []string
+	values map[string][]byte
+}
+
+func (b *recordingLoopBucket) Put(_ context.Context, key string, value []byte) (uint64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.fail != nil {
+		return 0, b.fail
+	}
+	b.keys = append(b.keys, key)
+	if b.values == nil {
+		b.values = map[string][]byte{}
+	}
+	b.values[key] = append([]byte(nil), value...)
+	return uint64(len(b.keys)), nil
+}
+
+func (b *recordingLoopBucket) value(key string) ([]byte, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	value, ok := b.values[key]
+	return value, ok
+}
+
+func (b *recordingLoopBucket) heal() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.fail = nil
+}
+
+func (b *recordingLoopBucket) written() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.keys...)
+}
+
+// A persistence failure arrives AFTER the handler has already moved the loop,
+// so the delivery that produced it can no longer be replayed: this is the R1
+// case, and the classification is Quarantine rather than Retry.
+//
+// The response subtest carries the counterfactual that makes the rule
+// load-bearing rather than stylistic. A complete model response drives the loop
+// to complete in memory and builds its completion record; the KV write then
+// fails. Under the retired Retry classification the redelivery meets
+// HandleModelResponse's terminal guard (handlers.go:1179-1185), which returns an
+// empty result — so the second attempt writes the loop key, writes no
+// COMPLETE_<loopID>, publishes nothing, and ACKs. The completion is gone with
+// the delivery that carried it. The second half of this test drives exactly that
+// redelivery with a healed bucket and asserts the completion record is absent,
+// which is what a Retry would have settled as done.
+//
 // spec: agentic-loop / All six loop input classes settle after owner-specific durable done
 func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 	newPolicy := func(t *testing.T, port string, handler inputHandler) natsclient.HeartbeatDeliveryPolicy {
@@ -75,7 +140,8 @@ func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 		requestID := handler.loopManager.GenerateRequestID(loopID)
 		handler.loopManager.TrackRequest(requestID, loopID)
 		c := releaseTestComponent(t, handler)
-		c.loopsBucket = failingLoopBucket{err: errors.New("kv unavailable")}
+		bucket := &recordingLoopBucket{fail: errors.New("kv unavailable")}
+		c.loopsBucket = bucket
 		response := &agentic.AgentResponse{
 			RequestID: requestID, Status: agentic.StatusComplete,
 			Message: agentic.ChatMessage{Role: "assistant", Content: "done"},
@@ -83,12 +149,34 @@ func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 		data, err := json.Marshal(message.NewBaseMessage(response.Schema(), response, "test"))
 		require.NoError(t, err)
 		msg := &loopDeliveryOwnerMsg{data: data}
-		result, admitted := consumeAdmittedDelivery(t.Context(), msg, newPolicy(t, "agent.response", c.handleResponseMessage), newDeliveryLaneAdmission(nil))
+		admission := newDeliveryLaneAdmission(nil)
+		policy := newPolicy(t, "agent.response", c.handleResponseMessage)
+		result, admitted := consumeAdmittedDelivery(t.Context(), msg, policy, admission)
 		require.True(t, admitted)
-		require.Equal(t, natsclient.DeliveryDecisionRetry, result.Decision())
-		require.Zero(t, msg.acks.Load()+msg.terms.Load())
-		require.Equal(t, int32(1), msg.naks.Load())
+		require.Equal(t, natsclient.DeliveryDecisionQuarantine, result.Decision())
+		require.True(t, result.OwnerStopRequired())
+		require.Zero(t, msg.acks.Load()+msg.naks.Load()+msg.terms.Load(),
+			"a quarantined delivery attempts no terminal method at all")
 		require.Contains(t, result.Err().Error(), "persist loop state")
+		require.Contains(t, result.Err().Error(), "unknown durability")
+
+		// The lane is latched, so this owner runs no further work on it.
+		redelivery := &loopDeliveryOwnerMsg{data: data}
+		_, readmitted := consumeAdmittedDelivery(t.Context(), redelivery, policy, admission)
+		require.False(t, readmitted, "a latched lane admitted more work after a quarantined delivery")
+		require.Zero(t, redelivery.dataCalls.Load())
+
+		// The counterfactual: what the retired Retry would have settled. Same
+		// loop, same bytes, healthy KV, a lane that had not latched.
+		bucket.heal()
+		retried := &loopDeliveryOwnerMsg{data: data}
+		retriedResult, admitted := consumeAdmittedDelivery(
+			t.Context(), retried, policy, newDeliveryLaneAdmission(nil))
+		require.True(t, admitted)
+		require.Equal(t, natsclient.DeliveryDecisionAck, retriedResult.Decision())
+		require.Equal(t, []string{loopID}, bucket.written(),
+			"the redelivered response persisted the loop key and no COMPLETE_ record: "+
+				"a Retry would have acknowledged a completion nothing downstream can read")
 	})
 
 	t.Run("tool result", func(t *testing.T) {
@@ -108,9 +196,9 @@ func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 		msg := &loopDeliveryOwnerMsg{data: data}
 		result, admitted := consumeAdmittedDelivery(t.Context(), msg, newPolicy(t, "tool.result", c.handleToolResultMessage), newDeliveryLaneAdmission(nil))
 		require.True(t, admitted)
-		require.Equal(t, natsclient.DeliveryDecisionRetry, result.Decision())
-		require.Zero(t, msg.acks.Load()+msg.terms.Load())
-		require.Equal(t, int32(1), msg.naks.Load())
+		require.Equal(t, natsclient.DeliveryDecisionQuarantine, result.Decision())
+		require.True(t, result.OwnerStopRequired())
+		require.Zero(t, msg.acks.Load()+msg.naks.Load()+msg.terms.Load())
 		require.Contains(t, result.Err().Error(), "persist loop state")
 	})
 }
