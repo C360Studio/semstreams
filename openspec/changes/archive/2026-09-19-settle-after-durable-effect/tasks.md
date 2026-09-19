@@ -347,6 +347,7 @@ Tasks record work when it happens. No task asserts a post-merge fact; CI and mer
 
 ## 9. Landing
 
-- [ ] 9.1 Complete SemStreams implementation review and resolve findings.
-- [ ] 9.2 Archive this change (`openspec archive settle-after-durable-effect`) as the final content commit and
+- [x] 9.1 Complete SemStreams implementation review and resolve findings. Seven reviewer rounds plus two Codex
+      rounds and a durability judge round; owner approved at `fd728df3`.
+- [x] 9.2 Archive this change (`openspec archive settle-after-durable-effect`) as the final content commit and
       obtain the narrow reviewer check of the archive/spec sync.
