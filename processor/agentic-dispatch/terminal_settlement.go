@@ -160,22 +160,24 @@ func (c *Component) loadPersistedLoop(ctx context.Context, loopID string) (*agen
 	if persisted.ID != loopID {
 		return nil, permanentTerminal("%s/%s contains loop id %q", bucket, loopID, persisted.ID)
 	}
-	// A record that decodes is not yet a record this component may act on. A
-	// state outside the vocabulary will never become valid, so it takes the
-	// same permanent classification as a malformed record rather than a
+	// A record that decodes is not yet a record this component may act on.
+	// Nothing here will make it valid later, so a defect in the record takes
+	// the same permanent classification as a malformed one rather than a
 	// transient one — and it is refused rather than carried, which is what
 	// stops a persisted "paused" from re-entering through a reader after the
 	// state was removed (owner ruling, #1239, 2026-09-03).
 	//
-	// The STATE is checked, not the whole entity. AGENT_LOOPS has writers
-	// besides the loop manager — research-graph-route and -execute hold a
-	// LoopStore write surface, and the ancestry records this reader walks
-	// legitimately carry identity and lineage without a full loop shape — so
-	// running LoopEntity.Validate here would refuse records this component has
-	// always read. The ruling is about the state vocabulary; widening it to
-	// every field would be a different change.
-	if !persisted.State.IsValid() {
-		return nil, permanentTerminal("invalid state in %s/%s: %s", bucket, loopID, persisted.State)
+	// The whole entity is validated, not just the state. Every production
+	// record on this key is written by agentic-loop's persistLoopState
+	// (processor/agentic-loop/component.go:2032) from an entity the manager
+	// built, and NewLoopEntity floors max_iterations at 20 unless given a
+	// positive override (agentic/state.go:263-267), so a production record
+	// satisfies Validate in full. The other AGENT_LOOPS writers cannot reach
+	// this key at all: they are prefixed (COMPLETE_<id>, research.request.
+	// received.<id>, classify./route./execute.<id>) and this reader Gets the
+	// bare loop id.
+	if err := persisted.Validate(); err != nil {
+		return nil, permanentTerminal("invalid %s/%s: %w", bucket, loopID, err)
 	}
 	return &persisted, nil
 }

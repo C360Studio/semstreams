@@ -79,17 +79,20 @@ func TestIntegrationWorkflowTerminalResolvesOriginFromAgentLoopsAfterRestart(t *
 	kv, err := tc.GetKVBucket(ctx, bucket)
 	require.NoError(t, err)
 	// The chain as a rule-spawned workflow persists it: only the root owns a
-	// route; every descendant carries ancestry and nothing else.
+	// route; every descendant carries ancestry and nothing else. Every record
+	// still carries a full loop shape, because loadPersistedLoop validates the
+	// entity and a production record on this key is always a marshalled
+	// LoopEntity the manager built.
 	putLoopRecord(t, ctx, kv, agentic.LoopEntity{
-		ID: "chain-root", TaskID: "task-chain-root", State: agentic.LoopStateComplete,
+		ID: "chain-root", TaskID: "task-chain-root", State: agentic.LoopStateComplete, MaxIterations: 3,
 		ChannelType: "http", ChannelID: "origin-1", UserID: "user-1",
 	})
 	putLoopRecord(t, ctx, kv, agentic.LoopEntity{
-		ID: "chain-mid", TaskID: "task-chain-mid", State: agentic.LoopStateComplete,
+		ID: "chain-mid", TaskID: "task-chain-mid", State: agentic.LoopStateComplete, MaxIterations: 3,
 		ParentLoopID: "chain-root", RunID: "chain-root",
 	})
 	putLoopRecord(t, ctx, kv, agentic.LoopEntity{
-		ID: "chain-terminal", TaskID: "task-chain-terminal", State: agentic.LoopStateComplete,
+		ID: "chain-terminal", TaskID: "task-chain-terminal", State: agentic.LoopStateComplete, MaxIterations: 3,
 		ParentLoopID: "chain-mid", RunID: "chain-root",
 	})
 
@@ -164,7 +167,7 @@ func TestIntegrationDispatchPersistedLoopReadUsesDeclaredAgentLoopsPort(t *testi
 	kv, err := tc.GetKVBucket(ctx, altBucket)
 	require.NoError(t, err)
 	putLoopRecord(t, ctx, kv, agentic.LoopEntity{
-		ID: "alt-loop", TaskID: "task-alt-loop", State: agentic.LoopStateComplete,
+		ID: "alt-loop", TaskID: "task-alt-loop", State: agentic.LoopStateComplete, MaxIterations: 3,
 		ChannelType: "http", ChannelID: "alt-origin", UserID: "alt-user",
 	})
 
