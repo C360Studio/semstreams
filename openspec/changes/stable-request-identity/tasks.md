@@ -805,7 +805,7 @@ public handlers, no restart, no redelivery, no concurrency — and it is a conse
       exactly as the dispatch-failure recovery in `tryDispatchOrSynthesize` (`:1758`) does, so the
       synthetic correlates by `ExecutionID` when
       one was minted and by `CallID` otherwise, and it pairs in `buildToolMessages` by `CallID`
-      (`handlers.go:3039`), which is what `RepairToolPairs` matches on. No new result kind, no new manager
+      (`handlers.go:3040`), which is what `RepairToolPairs` matches on. No new result kind, no new manager
       accessor: `DequeueToolCall` already returns the whole call. The `HasPendingContinuation` read moved to one
       `carrying` local so the synthesis and the carry cannot disagree about which path this is.
       **Nothing misleading is emitted on this path**, checked rather than assumed: `synthesizeToolFailure` only
@@ -829,7 +829,7 @@ public handlers, no restart, no redelivery, no concurrency — and it is a conse
       conversation it persists keeps an assistant `tool_call` with no answering message. Pre-existing, one line
       in `design.md` § Declared residuals rather than a second fix, and pointed at L4 (#1330) with the rest of
       the restore work. `drainPendingToolFailures` already covers the other terminal transitions — fail, cancel,
-      max iterations (`handlers.go:2195`, `:2776`, `component.go:2574`) — and the `StopLoop` completion is the
+      max iterations (`handlers.go:2195`, `:2777`, `component.go:2574`) — and the `StopLoop` completion is the
       one that does not
 - [x] 15.3 Gates on the head that ships, measured before this line was amended into it — the difference is this
       record's own markdown and nothing else, no Go, no spec, no schema: `go build ./...` 0; `task lint` 0;
@@ -844,6 +844,8 @@ public handlers, no restart, no redelivery, no concurrency — and it is a conse
       `assertions_run=15`, `duration=2m4.692062583s`, with `walk-approval-path`,
       `refuse-non-canonical-approval`, `verify-terminal-response`, `verify-stage-a-process-replacement` (78.7s),
       `verify-durable-tool-replay` (44.6s) and `verify-tool-call-governance` all present. Exit codes read from
-      `$?` into a log, never through a pipe. `pgrep -fl e2e.test` was checked FIRST and was empty (exit 1, stderr
-      visible) before `e2e:clean` ran, because that target tears down every compose stack on the host and the
-      round-4 run started while another session's tier was live
+      `$?` into a log, never through a pipe. `pgrep -fl e2e.test` was run before `e2e:clean`, because that target
+      tears down every compose stack on the host and the round-4 run started while another session's tier was
+      live. **That precheck is the author's word, not an artifact**: its output went to the terminal and not into
+      the log, so nothing in `e2e_agentic_r5.log` records it. Re-running it now would prove nothing about then.
+      The next tier run redirects the precheck into the same log as the run it guards

@@ -189,6 +189,20 @@ deferred one identity decision to #1328. All three are answered here.
   `81a5cabb`**, NOT in this one, where that line is an SSE attach error branch). Observed by
   `TestATerminalToolAtTheIterationCeilingKeepsTheDeferredTurnOnTheRecord`, which asserts both halves — the turn
   survives on the record, and a new task naming the settled loop is refused.
+- **Tool messages reach a request in map order, which is not an order.** `GetAndClearToolResults` ranges
+  `entity.PendingToolResults` (`state.go:1106-1109`) and appends, so the slice — and therefore the tool messages
+  `buildToolMessages` builds from it — comes out in Go's randomized map-iteration order. Pre-existing, and
+  harmless while a batch produced one result at a time; the skipped-sibling synthesis is the first change that
+  routinely puts two or more tool messages into a single request, so it is the change that makes the exposure
+  routine. The pairing is unaffected — `RepairToolPairs` and the provider contract match on `ToolCallID`, not on
+  position — but the model reads a batch whose order can differ between two otherwise identical runs.
+  NOT fixed here: it is a Go change, which would owe another agentic-tier run and another review round for what
+  is, today, a NIT. The sort key already exists and this change is what put it on every call:
+  `stampToolExecutionCorrelation` (`execution_identity.go:15-28`) stamps `CallOrdinal` 1..n on the whole batch
+  before any of it is dispatched or queued, `synthesizeToolFailure` carries it onto the synthetic
+  (`handlers.go:1640`), so sorting the drained results by `CallOrdinal` would make the conversation deterministic
+  in one line. `TestATerminalToolCarriesItsOwnResultWhenTheBatchHasQueuedSiblings` asserts the PRESENCE of each
+  result by `ToolCallID`, deliberately not their order, so it does not encode today's accident as a guarantee.
 - **On the COMPLETING terminal-tool path a queued sibling still gets no result.** The carry path now synthesizes
   one per queued call (`synthesizeSkippedQueuedTools`), because the carried request replays the batch and
   `RepairToolPairs` would drop the whole group. The completing path mints no further request, so nothing re-reads
