@@ -384,3 +384,34 @@ re-home commit. Backup ref `refs/backup/gh1329-pre-l2round1-rebase-20260920` = `
       extended to stamp declared output ports, and it passes on the rebased head. `go build ./...` 0,
       `go test -race -count=1 ./processor/agentic-loop/ ./processor/agentic-dispatch/` 0, `task test` 0,
       `task lint` 0, `task spec:properties` 262/262, `task openspec:validate` 57/57, no schema drift
+- [x] 11.6 Re-based again onto L2's round-3 head `4f91f32d` (backup ref
+      `refs/backup/gh1329-pre-l2round3-rebase-20260920` = `48bbbcb1`), 26 commits, head `48fef98d`. TWO
+      conflicts, both the predicted approval-handler pair. `processor/agentic-dispatch/http.go`: L2 round 3
+      requires `execution_id` on `ApprovalRequest` and refuses a mismatch against the gate the tracker reports;
+      this change reads the gate from durable state instead. Resolved to BOTH — L2's required-field 400 (it runs
+      before any state read, so it is layer-independent), then this change's `loadPersistedLoop` → 503
+      unreadable → 409 not-awaiting, and only then the identity check, now against `gated.ExecutionID` off the
+      persisted `PendingApproval`. Order matters and is deliberate: a stale POST at a loop that has since
+      completed answers 409 "loop not awaiting approval", not 409 "execution is not the approval pending", and
+      neither reaches a publish
+- [x] 11.7 `approvalIdentityMismatch` changed signature in the resolution, `(requested string, pending
+      PendingApprovalInfo)` → `(requested, pending string)`: L2's argument is the tracker projection this change
+      deletes. It stays a named function rather than an inline comparison so the two layers keep one shape. Its
+      `pending != ""` arm is L2's and is UNREACHABLE here — the incoherence check above already answers 503 for a
+      record awaiting approval with an empty `ExecutionID` (`approval_handler_test.go`'s "pending without
+      execution identity is unreadable" row pins it) — which is also why L2's third test,
+      `TestApprovalAgainstAGateWithNoExecutionIdentityIsAccepted`, was DROPPED in the resolution rather than
+      re-homed: on durable authority that world cannot be built through the handler
+- [x] 11.8 L2's other two P1-2 tests re-homed onto durable authority in the same resolution:
+      `TestStaleApprovalPOSTIsRefusedAgainstTheGateThatIsPending` and
+      `TestApprovalWithoutAnExecutionIdentityIsRefused` now build their worlds with a local `gatedRecord(loopID,
+      callID, executionID)` and `withPersistedLoops`, drive the production mux through `RegisterHTTPHandlers`,
+      and still assert 409/400 with nothing published. Every body in `approval_handler_test.go` gained the
+      required `execution_id`, naming `approvalTestExecutionID`, and the e2e approval walk sends
+      `gatedExecutionID` (`test/e2e/scenarios/agentic/approval_signal.go:222`) so the 200 path keeps proving the
+      echo
+- [x] 11.9 Gates on `48fef98d`, the head this record then commits on top of, docs only:
+      `go build ./...` 0, `task lint` 0, `task test` 155 ok / 0 FAIL / 0 cached,
+      `go test -race -count=1 ./agentic/... ./processor/agentic-loop/... ./processor/agentic-dispatch/...` 0,
+      `go vet -tags=e2e ./test/e2e/...` and `go vet -tags=integration ./processor/agentic-dispatch/` 0,
+      `task spec:properties` 266/266, `task openspec:validate` 57/57, `task schema:generate` no drift
