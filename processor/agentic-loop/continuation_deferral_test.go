@@ -13,6 +13,10 @@ import (
 // continuationPrompt is long enough to be unmistakable inside a request body.
 const continuationPrompt = "and also summarise the second thing"
 
+// secondContinuationPrompt is the turn typed while the request carrying
+// continuationPrompt is itself still in flight. Shares no substring with it.
+const secondContinuationPrompt = "one more question about the third thing"
+
 // requestBodyContains reports whether any agent.request in the result carries a
 // message with the given content.
 func requestBodyContains(t *testing.T, result agenticloop.HandlerResult, content string) bool {
@@ -307,5 +311,126 @@ func TestTruncationRetryCarriesTheDeferredTurn(t *testing.T) {
 	}
 	if completion.CompletionState == nil {
 		t.Fatal("no completion record was built for a loop with nothing left deferred")
+	}
+}
+
+// Two turns in a row, each typed while the previous one's request was still in
+// flight. The carrier is what makes this decidable, and it is the half a single
+// deferral cannot pin: recording a carrier stops a turn being carried twice,
+// and the record names "the request that carries THIS turn". A turn admitted
+// now is in no request yet — not in the outstanding one, whose bytes were built
+// before it existed — so the record it lands on names no carrier, and the next
+// completion has a turn to carry rather than a loop to settle.
+//
+// Without that reset the second turn inherits the first turn's carrier, the
+// response for that request matches it, SettleRequest clears the deferral as
+// though the turn had been sent, and the loop completes with the second turn
+// sitting in its context, never asked. That is the lost turn the deferral
+// exists to prevent, arriving one admission later.
+//
+// spec: agentic-loop / A logical model request has one deterministic identity
+func TestASecondContinuationUncarriesTheDeferralAndSendsBothTurns(t *testing.T) {
+	handler := agenticloop.NewMessageHandler(createTestConfig())
+	handler.SetToolRegistry(newTestToolRegistry(t))
+	ctx := context.Background()
+
+	loopID, birth, _ := startLoopAndAdmitContinuation(t, handler)
+
+	// The birth response carries turn one into iteration 2 and records that
+	// request as the carrier.
+	firstCarry, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+		RequestID: birth,
+		Status:    agentic.StatusComplete,
+		Message:   agentic.ChatMessage{Role: "assistant", Content: "the first thing is done"},
+	})
+	if err != nil {
+		t.Fatalf("HandleModelResponse(complete birth): %v", err)
+	}
+	carrier := oneMintedRequestID(t, "first carry", firstCarry)
+	if want := loopID + ":req:2:0"; carrier != want {
+		t.Fatalf("first carry RequestID = %q, want %q", carrier, want)
+	}
+	if !requestBodyContains(t, firstCarry, continuationPrompt) {
+		t.Fatalf("the carrying request does not contain turn one %q", continuationPrompt)
+	}
+	entity, err := handler.GetLoop(loopID)
+	if err != nil {
+		t.Fatalf("GetLoop (after first carry): %v", err)
+	}
+	if entity.PendingContinuationRequestID != carrier {
+		t.Fatalf("carrier = %q, want the request carrying turn one %q",
+			entity.PendingContinuationRequestID, carrier)
+	}
+
+	// Someone types again while THAT request is in flight.
+	second, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		TaskID: "task-defer-3",
+		LoopID: loopID,
+		Role:   "general",
+		Model:  "test-model",
+		Prompt: secondContinuationPrompt,
+	})
+	if err != nil {
+		t.Fatalf("HandleTask (second continuation): %v", err)
+	}
+	if !second.Deferred {
+		t.Fatalf("the second continuation was not deferred; state=%s", second.State)
+	}
+	if len(second.PublishedMessages) != 0 {
+		t.Fatalf("the second continuation published %d messages while %q was outstanding",
+			len(second.PublishedMessages), carrier)
+	}
+
+	entity, err = handler.GetLoop(loopID)
+	if err != nil {
+		t.Fatalf("GetLoop (after second continuation): %v", err)
+	}
+	if entity.PendingContinuationRequestID != "" {
+		t.Fatalf("the record still names %q as the carrier of a turn minted after it; "+
+			"that request's response would end the deferral and turn two would never be sent",
+			entity.PendingContinuationRequestID)
+	}
+	if !handler.HasPendingContinuationForTest(loopID) {
+		t.Fatal("the loop reads as carried with a turn nothing has carried")
+	}
+
+	// The carrier's own completion must now carry turn two rather than settle.
+	secondCarry, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+		RequestID: carrier,
+		Status:    agentic.StatusComplete,
+		Message:   agentic.ChatMessage{Role: "assistant", Content: "the second thing is done"},
+	})
+	if err != nil {
+		t.Fatalf("HandleModelResponse(complete carrier): %v", err)
+	}
+	if secondCarry.State.IsTerminal() {
+		t.Fatalf("the loop settled with turn two admitted and never asked; state=%s", secondCarry.State)
+	}
+	if secondCarry.CompletionState != nil {
+		t.Fatal("a completion record was built for a loop that still owes a turn")
+	}
+	next := oneMintedRequestID(t, "second carry", secondCarry)
+	if want := loopID + ":req:3:0"; next != want {
+		t.Fatalf("second carry RequestID = %q, want %q", next, want)
+	}
+	if !requestBodyContains(t, secondCarry, secondContinuationPrompt) {
+		t.Fatalf("the carrying request does not contain turn two %q", secondContinuationPrompt)
+	}
+	// Turn one is not lost to turn two: it went out in `carrier` above and is
+	// still in the conversation this request sends.
+	if !requestBodyContains(t, secondCarry, continuationPrompt) {
+		t.Fatalf("turn one %q is missing from the conversation the carrying request sends", continuationPrompt)
+	}
+
+	entity, err = handler.GetLoop(loopID)
+	if err != nil {
+		t.Fatalf("GetLoop (after second carry): %v", err)
+	}
+	if entity.PendingContinuationRequestID != next {
+		t.Fatalf("carrier = %q, want the request carrying turn two %q",
+			entity.PendingContinuationRequestID, next)
+	}
+	if handler.HasPendingContinuationForTest(loopID) {
+		t.Fatal("the loop still reads as uncarried; the next completion would carry turn two again")
 	}
 }

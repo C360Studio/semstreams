@@ -502,7 +502,7 @@
       integration suite ran once, through the canonical runner and its host lock inside `task check:push` — exit
       0. CI run and job count recorded in the PR body with the head sha
 
-## 12. Internal review of round 2 (docs only — 1 HIGH, 3 MEDIUM, 4 NIT, no code defect)
+## 12. Internal review of round 2 (1 HIGH, 3 MEDIUM, 4 NIT, no code defect; 12.1-12.4 are docs and comments, 12.5 lands the two owed tests)
 
 The review verified every round-2 fix and reproduced every mutation verbatim on `b292f605`, and ran two of its
 own: moving `SettleRequest` ahead of the guard is GREEN (and is PROVABLY equivalent — `carrier != "" ⟹ carrier ==
@@ -542,10 +542,35 @@ is RED in two pre-existing tests, so the empty carve-out is load-bearing and cov
       is the empty carve-out, and inventing a name would put them back in a state production cannot produce — but
       `3e662a28`'s "all 28 now answer the request the loop is actually waiting on" is inaccurate for those two and
       is corrected here
-- [ ] 12.5 **NIT-3 and NIT-4 are OWED, not done: both want a test, and this round is docs and comments only.**
-      NIT-3: the guard's placement ahead of the timeout and terminal checks is a real behavioural difference —
-      a superseded response would otherwise fail a timed-out loop — and nothing observes it; one subtest feeding a
-      superseded response to a timed-out loop closes it. NIT-4: the fourth ordering of the carrier shape (a second
-      continuation admitted while a carrier is outstanding resets the carrier, so the next completion carries
-      again) is the composition of two tested transitions and is killed by no mutation, and it is the ordering
-      HIGH-1 attacks. Both belong in the next code-carrying round on this branch
+- [x] 12.5 **NIT-3 and NIT-4 — CLOSED by the two tests they asked for.** Test-only: no production file changes.
+      NIT-3 → `TestSupersededResponseDoesNotSettleATimedOutLoop` (`superseded_response_test.go`). The fixture
+      leaves a loop waiting on `…:req:2:0` with its deadline already past (`SetTimeout(loopID, -time.Second)`,
+      so `IsTimedOut` is true without the test waiting on a clock) and delivers the answer to the superseded
+      `…:req:1:0` through the real lane. Observed: the delivery ACKs, the drop is counted under
+      `superseded_request`, the persisted record keeps its state, its iteration, an empty `Outcome` and an empty
+      `CompletedAt`, only the loop key is written (a `COMPLETE_` key would mean the loop had been terminated),
+      and the loop still waits on `…:req:2:0`. The component's `natsClient` is constructed and never connected,
+      so any publication this delivery attempted would surface as a Quarantine — the ACK is the "publishes
+      nothing" assertion.
+      **Mutation: `handlers.go` lines 1221-1254, the guard block, moved below the timeout arm's closing brace at
+      line 1301** — the ordering NIT-3 names, and the only direction the move can go, because the timeout arm
+      references `result`, which is declared after the guard. RED at `superseded_response_test.go:190`:
+      `Not equal: expected: 0x1 actual: 0x4` — Ack became Quarantine, because the timeout arm failed the loop on
+      a delivery that does not address it, published failure events and could not confirm them. Package-wide
+      under that mutation exactly ONE test fails, this one.
+      NIT-4 → `TestASecondContinuationUncarriesTheDeferralAndSendsBothTurns` (`continuation_deferral_test.go`).
+      Turn one is carried by `…:req:2:0`; turn two is admitted while that request is still in flight; the record
+      must then name NO carrier and read as pending-and-uncarried again, and `…:req:2:0`'s completion must carry
+      turn two into `…:req:3:0` rather than settle, with turn one still in the conversation that request sends.
+      **Mutation: `state.go:323`, `entity.PendingContinuationRequestID = ""` in `attachContinuation`, deleted.**
+      RED at `continuation_deferral_test.go:389`: `the record still names "<loopID>:req:2:0" as the carrier of a
+      turn minted after it; that request's response would end the deferral and turn two would never be sent`.
+      NIT-4's premise is confirmed rather than assumed: package-wide under that mutation exactly ONE test fails,
+      this one — before it, that line was killed by nothing. A probe run (not committed) that silenced only the
+      carrier assertion shows what the mutation actually costs: `the loop settled with turn two admitted and
+      never asked; state=complete`.
+      One test-fidelity fix rode along, surfaced by the new test: `getMetrics` is a package singleton
+      (`metrics.go:77`, `metricsOnce`), so the superseded-drop counter accumulates across the whole test binary.
+      `TestRedeliveredCarriedCompletionDoesNotCompleteTheLoop` asserted the absolute `1.0` and was green only
+      because it incremented first; both tests now assert a DELTA of one through `supersededDrops`, which is the
+      observation each of them actually owns
