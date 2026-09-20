@@ -1278,11 +1278,19 @@ an execution id is still one dotless subject token.
   or `execution_id` is empty or whose `call_ordinal` is zero: the call is not retried and no result is ever
   published. Stamp all three. Executors are unaffected — agentic-tools copies the correlation from the call onto
   whatever result the executor returns, so no executor signature changes.
-- **`TOOL_CALL_OUTCOMES` written before this change** is keyed under the old digest. Nothing recomputes an old
-  key, so no rekey or backfill is required and no replay regresses — a pre-upgrade outcome simply stops being
-  found, and the call re-executes once under its new identity. The bucket carries no TTL and no binding MaxBytes
-  (`RetentionNoLifecycle`), so those keys persist until an operator removes them; delete the bucket before the
-  upgrade if you want it clean, and expect the in-flight calls it covered to execute once more.
+- **`TOOL_CALL_OUTCOMES` written before this change** is keyed under the old digest — and under the pre-v1
+  cutover there is no such bucket to reason about, because the upgrade starts on newly provisioned NATS storage
+  ("Provision fresh NATS storage", above; `docs/adr/104-unique-platform-authority.md:104-105`, "Fresh storage, no
+  migration"). If you upgrade in place anyway, two things are worth knowing. Nothing recomputes an old key, so no
+  rekey or backfill is possible and none is required; the bucket carries no TTL and no binding MaxBytes
+  (`RetentionNoLifecycle`), so those keys persist until an operator removes them, inert. **And a tool call that
+  was in flight across the upgrade does not re-execute under its new identity — it is terminated.** A `ToolCall`
+  published before this change carries no `request_id`, `execution_id` or `call_ordinal`, and agentic-tools
+  validates that correlation BEFORE it reads the outcome ledger
+  (`processor/agentic-tools/component.go:731`, ahead of the ledger read at `:744`): the delivery terminates, no
+  result is ever published, and the loop waiting on that call waits until its own timeout. Deleting the outcome
+  bucket does not repair it — the ledger was never consulted. Drain in-flight tool calls before the upgrade, or
+  accept that the loops holding them fail on timeout.
 
 ### `tool_results_dropped_total`'s only `reason` value is renamed
 
@@ -1341,8 +1349,9 @@ than deprecated.
   state, so it echoes the same two fields and still resolves the approval it expired. A deployment that configures
   `approval_timeout` keeps exactly the behaviour it had.
 - **No pre-upgrade approval survives to be answered.** Like the rest of this wave, the upgrade starts on newly
-  provisioned NATS storage — the pre-v1 posture this note states throughout: no migration, no alias, no legacy
-  reader — so no `pending_approval` crosses it and no approval UI has to answer one. The matcher does still
+  provisioned NATS storage — the pre-v1 posture, "Fresh storage, no migration"
+  (`docs/adr/104-unique-platform-authority.md:104-105`) — so no `pending_approval` crosses it and no approval UI
+  has to answer one. The matcher does still
   compare `call_id` when the pending state carries no `execution_id`, which is what keeps the new field additive
   rather than a required-field break, but in a correctly cut-over deployment nothing reaches that branch.
 - **A Go embedder calling `(*LoopManager).ResolveApprovalIfPending`** passes a third argument:
@@ -1397,10 +1406,25 @@ waiter's key times out and the call is rejected — so an enforce-mode deploymen
 rejects **every governed tool call** until they are, with `governance verdict timeout after <d> (fail-closed)` as
 the only symptom.
 
-The one-line fix per rule is to replace the two-token suffix with `$message.execution_id`. `docs/operations/17-tool-call-governance.md`
-carries the worked rule set at the new subjects, and `$message.execution_id` is in its token table. An operator who
-cannot edit the rules in the same window should set `tool_call_governance.mode` to `audit` for the upgrade and
-switch back to `enforce` once they are edited; that trades enforcement for availability rather than losing both.
+**Rewriting the subject suffix is not the fix — the payload is.** The loop's consumer never sees the subject: the
+input-port wrapper discards it, so routing reads `execution_id` out of the verdict PAYLOAD and terminates a verdict
+that carries none, whatever the subject says. A `publish`-action rule must therefore carry
+`"execution_id": "$message.execution_id"` in its `properties` as well as in its subject; a rule that changed only
+its suffix still loses every verdict it publishes, and `$message.loop_id.$message.call_id` in the payload is not a
+substitute. The `approve` action echoes `execution_id` for you.
+
+**Carry the loop identity in the payload too.** When a verdict reaches a process that holds no waiter for it — a
+restart, a shared stream, a late arrival — the loop's own record decides whether the delivery retries or
+acknowledges, and the execution identity cannot supply it: it is an opaque digest with no loop in it. A verdict
+carrying neither a canonical `loop_id` nor a `request_id` in the `<loopID>:req:<iteration>:<retry>` grammar is
+**terminated as malformed** and counted under `unrecoverable_loop_identity` (below). Every canonical rule in
+`docs/operations/17-tool-call-governance.md` echoes `"request_id": "$message.request_id"` for exactly this reason;
+keep it when you edit.
+
+`docs/operations/17-tool-call-governance.md` carries the worked rule set at the new subjects and payloads, and
+`$message.execution_id` is in its token table. An operator who cannot edit the rules in the same window should set
+`tool_call_governance.mode` to `audit` for the upgrade and switch back to `enforce` once they are edited; that
+trades enforcement for availability rather than losing both.
 
 ### `tool_call_governance_subscribe_before_publish_failures_total` gains a `reason` label
 

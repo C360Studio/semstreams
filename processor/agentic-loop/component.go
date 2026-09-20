@@ -2647,10 +2647,10 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 //
 // Both wildcard subjects share this single handler because the
 // existing input-port consumer wrapper discards the subject (see
-// setupConsumer's adapter at component.go:805). The verdict's decision
-// is read from the payload via VerdictPayload.EffectiveDecision — both
-// authorship paths (approve action's top-level fields, publish action's
-// nested Properties) are supported.
+// setupConsumer's adapter at component.go:1094, which passes msg.Data() and
+// nothing else). The verdict's decision is read from the payload via
+// VerdictPayload.EffectiveDecision — both authorship paths (approve action's
+// top-level fields, publish action's nested Properties) are supported.
 //
 // Wire format: the rule engine's `approve` action publishes a
 // `core.json.v1` BaseMessage; the canonical ADR-039 reject pattern
