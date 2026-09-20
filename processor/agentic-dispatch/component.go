@@ -916,7 +916,7 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 		// the same hazard. A signal this delivery attempted and cannot account
 		// for is not a delivery that did nothing, however the error reads; the
 		// rule, and why a proven refusal still retries, is on the helper.
-		if fatal := unconfirmedSignalIsFatal(err, effect, targetFromTracker, name, loopID); fatal != nil {
+		if fatal := unconfirmedSignalIsFatal(err, effect, targetResolved, name, loopID); fatal != nil {
 			return fatal
 		}
 		if errs.IsFatal(err) || errs.IsTransient(err) {
