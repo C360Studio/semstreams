@@ -368,3 +368,10 @@ re-home commit. Backup ref `refs/backup/gh1329-pre-l2round1-rebase-20260920` = `
       so every pin § 9.2 and § 10 re-derived still lands. `command_effect.go` grew 17 comment lines ABOVE none of
       its pinned sites (`:22`, `:36`, both before the whitelist). The five `processor/agentic-loop/component.go`
       pins into `handlers.go` that L2 re-derived arrive with L2's own commit and resolve here too
+- [x] 11.4 Re-based again onto L2's docs head `91242905` (backup ref
+      `refs/backup/gh1329-pre-l2docs-rebase-20260920` = `cad02887`). 24 commits, NO conflict: that round is
+      documentation and comments only, and the one comment block this change rewrites was already resolved to
+      this layer's text at 11.1. Nothing in this change restates L2's one-outstanding-request SHALL or pins the
+      two lines its new residual names, so no text here goes stale with it. `go build ./...` 0 and
+      `go test -race -count=1 ./processor/agentic-loop/ ./processor/agentic-dispatch/ ./agentic/` 0 on the
+      rebased head
