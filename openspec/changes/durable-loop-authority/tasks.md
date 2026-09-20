@@ -441,3 +441,14 @@ re-home commit. Backup ref `refs/backup/gh1329-pre-l2round1-rebase-20260920` = `
       `go test -count=1 ./processor/agentic-loop/ ./processor/agentic-dispatch/ ./agentic/` 0;
       `openspec validate durable-loop-authority --strict` 0; `task openspec:validate` 57/57;
       `task spec:properties` **267/267**
+- [x] 11.13 Re-based again onto L2's round-6 head `8f1b2e4c` (backup ref
+      `refs/backup/gh1329-pre-l2round6-rebase-20260920` = `015141c6`). 29 commits, **no conflict**. That round
+      answers the owner's Codex round 3: a terminal tool whose assistant batch still had queued siblings carried
+      a request with no tool messages at all, because `RepairToolPairs` drops a group with one unanswered call.
+      It is entirely inside `agentic-loop`'s tool phase — `handlers.go`, its test, L2's spec delta and records —
+      and this change touches none of it. Checked rather than assumed: nothing under `processor/agentic-dispatch/`
+      references `synthesizeToolFailure`, `ClearQueuedTools`, `DequeueToolCall` or `RepairToolPairs`.
+      Gates on `99d50874`: `go build ./...` 0; `task lint` 0;
+      `go test -count=1 ./processor/agentic-loop/ ./processor/agentic-dispatch/ ./agentic/` 0;
+      `go test -race -count=1` over the same three 0; `openspec validate durable-loop-authority --strict` 0;
+      `task openspec:validate` 57/57; `task spec:properties` **268/268**
