@@ -18,7 +18,7 @@ import (
 // about what reached the stream: with a nil client "nothing was published" is
 // true by construction and proves nothing.
 //
-// The route is the tool-result timeout (handlers.go:2234-2243): HandleToolResult
+// The route is the tool-result timeout (handlers.go:2420-2433): HandleToolResult
 // fails the loop, builds its failure record AND its failure publications, and
 // returns them with a fatal error, so settleFailedToolResult persists the
 // terminal result and settles on it. Before round 3 that branch stamped graph

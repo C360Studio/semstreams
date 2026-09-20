@@ -2879,7 +2879,7 @@ func (h *MessageHandler) carryDeferredContinuation(
 		// is a fact an operator should be able to find.
 		//
 		// Unreachable from the only caller today: HandleModelResponse fails the
-		// delivery at :1313 on the same predicate over the same value, and
+		// delivery at :1330 on the same predicate over the same value, and
 		// nothing between there and here moves Iterations. Kept as a guard, so
 		// a future caller that carries from past that check gets the right
 		// behaviour rather than a lost turn.

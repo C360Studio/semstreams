@@ -121,7 +121,7 @@ func (b *recordingLoopBucket) written() []string {
 // load-bearing rather than stylistic. A complete model response drives the loop
 // to complete in memory and builds its completion record; the KV write then
 // fails. Under the retired Retry classification the redelivery meets
-// HandleModelResponse's terminal guard (handlers.go:1179-1185), which returns an
+// HandleModelResponse's terminal guard (handlers.go:1322-1327), which returns an
 // empty result — so the second attempt writes the loop key, writes no
 // COMPLETE_<loopID>, publishes nothing, and ACKs. The completion is gone with
 // the delivery that carried it. The second half of this test drives exactly that

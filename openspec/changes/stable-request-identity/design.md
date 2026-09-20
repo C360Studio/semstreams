@@ -167,22 +167,22 @@ deferred one identity decision to #1328. All three are answered here.
   change and not this layer's. Recorded rather than fixed here.
 - **The budget-exhausted drop is a guard, not a reachable state.** `carryDeferredContinuation`'s
   `ErrMaxIterationsReached` arm completes the loop and WARNs the dropped turn — but `HandleModelResponse` already
-  returns `WrapFatal` at `handlers.go:1313-1320` when `entity.Iterations >= entity.MaxIterations`, over the same
+  returns `WrapFatal` at `handlers.go:1330-1337` when `entity.Iterations >= entity.MaxIterations`, over the same
   value, and nothing between that check and the carry moves `Iterations`. The arm is therefore unreachable from
   its only caller today, and it is kept deliberately: it is the correct behaviour if a future caller carries from
   somewhere past that check, and failing the loop instead would turn a successful completion into a failure
   because a later message arrived. Corrected at round 2 — the earlier text declared it as a reachable residual.
-- **The admission check and the mint are not one critical section.** `attachContinuation` (`state.go:317`) reads
+- **The admission check and the mint are not one critical section.** `attachContinuation` (`state.go:333`) reads
   `outstandingRequests` under the manager lock and releases it; `HandleModelResponse` clears the mark at
-  `handlers.go:1258` and the carrying request does not re-take it until `TrackRequest` at `handlers.go:2771`,
+  `handlers.go:1275` and the carrying request does not re-take it until `TrackRequest` at `handlers.go:2826`,
   after the context write, `maybeCompact`, `IncrementIteration` and the whole request build. `agent.task` and
   `agent.response` are separate JetStream consumers (`component.go:1103-1108`) and nothing in this package
   serializes per loop across them, so a continuation delivered inside that window is admitted against an empty
   mark and both paths mint `…:req:N:0` from the same iteration counter — the identity collision this change
   closes for the serialized case. The reviewer reproduced it deterministically against the real state machine
   with an overlay probe; what is inferred is only the scheduling of two live consumers. The long windows are
-  already shut: `attachContinuation` refuses with `ErrLoopBusy` while tools are pending (`state.go:297-301`) and
-  while a human approval is outstanding (`:303-307`).
+  already shut: `attachContinuation` refuses with `ErrLoopBusy` while tools are pending (`state.go:313-317`) and
+  while a human approval is outstanding (`:318-322`).
 
   It is NOT closed here, and deliberately: closing it needs either per-loop serialization across the two
   consumers or a durable check-and-set on the mark, and the second comes for free from L4's

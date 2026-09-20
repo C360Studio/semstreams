@@ -140,7 +140,7 @@ func TestToolResultHandlerFailureSettlesOnTheDurableRecord(t *testing.T) {
 
 // cancellingTodoReader fires a cancellation from inside HandleToolResult, at
 // the one point production reads it: prependIterationContext
-// (handlers.go:2551) runs after IncrementIteration and GetAndClearToolResults
+// (handlers.go:2799) runs after IncrementIteration and GetAndClearToolResults
 // have already moved this loop, and the ctx check that observes the
 // cancellation is the one two lines later. It is the smallest production seam
 // that produces a post-mutation cancel without a fake handler.

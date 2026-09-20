@@ -404,7 +404,7 @@
 
 - [x] 11.1 **B1 [BLOCKING] — a redelivered CARRIED completion completed the loop** (`3e662a28`). F1 leaves a
       carried completion NON-TERMINAL at iteration N+1, which is exactly what takes its redelivery out of reach of
-      the terminal guard (`handlers.go:1305`) — the guard `persistHandlerResult`'s classification rationale is
+      the terminal guard (`handlers.go:1322`) — the guard `persistHandlerResult`'s classification rationale is
       written on. The redelivery found no deferral left to carry and settled the loop while `:req:N+1:0`, holding
       the user's turn, was still in flight; that request's answer would then be dropped as terminal. The guard is
       request identity: a response whose RequestID is not the loop's outstanding request is refused, Acked, and
@@ -475,7 +475,7 @@
       mutation-table `handlers.go:1255`→`:1372`. The tools-complete wording now also says which of the two
       context checks is in `handleToolsComplete` and which is in the `publishIterationRequest` it calls.
       NIT 1: the `ErrMaxIterationsReached` arm in `carryDeferredContinuation` is unreachable from its only caller
-      (`handlers.go:1313` fails the delivery on the same predicate first) — kept as a guard and the declared
+      (`handlers.go:1330` fails the delivery on the same predicate first) — kept as a guard and the declared
       residual now says so instead of describing it as reachable. NIT 2: § 10.1's "settles exactly where a
       deduplicated one did" is corrected to "strictly later". NIT 3: a deferred continuation recorded no
       trajectory evidence naming its TaskID, so "which task contributed this turn" was answerable only from a log
@@ -510,9 +510,9 @@ outstanding`, because `TrackRequest` writes both under one lock), while dropping
 is RED in two pre-existing tests, so the empty carve-out is load-bearing and covered.
 
 - [x] 12.1 **HIGH-1 — "at most ONE outstanding `agent.request` per loop" holds only for serialized deliveries.**
-      `attachContinuation` reads the mark under the manager lock and releases it (`state.go:317`);
-      `HandleModelResponse` clears it at `handlers.go:1258` and the carrying request does not re-take it until
-      `TrackRequest` at `handlers.go:2771`. `agent.task` and `agent.response` are separate JetStream consumers
+      `attachContinuation` reads the mark under the manager lock and releases it (`state.go:333`);
+      `HandleModelResponse` clears it at `handlers.go:1275` and the carrying request does not re-take it until
+      `TrackRequest` at `handlers.go:2826`. `agent.task` and `agent.response` are separate JetStream consumers
       (`component.go:1103-1108`) with no per-loop serialization between them, so a continuation delivered inside
       that window is admitted against an empty mark and both paths mint `…:req:N:0`. Reproduced deterministically
       by the reviewer with an overlay probe against the real state machine; the scheduling of two live consumers
@@ -654,7 +654,7 @@ that head, which is the point: these are behaviours no gate was watching.
       tool call into the carried request with no tool message answering it, and `RepairToolPairs` drops the call
       the model just made. The drain is now one home, `absorbToolResultsIntoContext`, called from both paths.
       `LoopCompletedEvent.Decision` deliberately does not travel on the carried iteration: the field is the typed
-      decision of the terminal that ENDED the loop (`agentic/events.go:88-91`), and this one did not end it — the
+      decision of the terminal that ENDED the loop (`agentic/events.go:86-90`), and this one did not end it — the
       call and its result stay in the trajectory and in the conversation. Checked against the ruling's stop-and-ask
       condition: nothing requires the typed payload to be preserved AS a completion event, so no refusal event and
       no new surface was added.
@@ -670,3 +670,17 @@ that head, which is the point: these are behaviours no gate was watching.
       mutation fails exactly ONE test package-wide, this one.
       Spec: the SHALL now names both completion shapes and the tool-message pairing, with a new scenario
       "A terminal tool answers a loop that has a deferred continuation"
+- [x] 13.4 Pins re-derived for round 3's own line moves. P1-1 added 15 lines inside `HandleModelResponse` and P1-3
+      added 22 inside `HandleToolResult`, so every pin below either insertion drifted. Each was re-derived by
+      CONTENT with `grep -n`, then verified by reading the pinned line back with `sed -n '<n>p'`, never transcribed:
+      `handlers.go` terminal guard `:1305-1310`→`:1322-1327`, timeout fatal `:1299`→`:1316`, max-iterations fatal
+      `:1313-1320`→`:1330-1337` (and the bare `:1313` inside `carryDeferredContinuation`'s own comment→`:1330`),
+      `SettleRequest` `:1258`→`:1275`, `TrackRequest` `:2771`→`:2826`, the tool-result timeout branch
+      `:2402-2417`→`:2420-2433`, the three `HandleToolResult` ctx checks `:2367`/`:2638`/`:2747`→
+      `:2384`/`:2684`/`:2802`, `prependIterationContext` `:2551`→`:2799`; `state.go` `attachContinuation`'s mark
+      read `:317`→`:333` and its two `ErrLoopBusy` refusals `:297-301`/`:303-307`→`:313-317`/`:318-322`;
+      `agentic/events.go` `:88-91`→`:86-90`. Two were ALREADY stale at `d127adeb` and are fixed here rather than
+      left: `delivery_owner_test.go:124` cited `handlers.go:1179-1185` for the terminal guard and
+      `terminal_failure_record_integration_test.go:21` cited `:2234-2243` for the tool-result timeout — neither
+      matched the code at the head that shipped them, and the second disagreed with `component.go`'s pin for the
+      same branch

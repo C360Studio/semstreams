@@ -151,7 +151,7 @@ func timedOutLoopWithASupersededRequest(t *testing.T) (*Component, *recordingLoo
 }
 
 // The guard's POSITION, not just its existence. The timeout arm below it
-// (handlers.go:1286-1301) is the one branch that turns reading a response into
+// (handlers.go:1303-1317) is the one branch that turns reading a response into
 // a terminal write — it transitions the loop to failed, builds a failure record
 // and publishes failure events — and the terminal guard after it cannot stand
 // in, because a timed-out loop is not yet in a terminal state. So if identity
