@@ -24,6 +24,12 @@ rule: a terminal tool answered while a turn is pending SHALL carry the turn rath
 request SHALL contain that tool's own result, because a request holding an assistant tool call with no answering
 tool message is a broken pair. Only a loop with nothing deferred completes on either path.
 
+Every OTHER call in that assistant message SHALL be answered on the carried request too. One unanswered call
+invalidates the whole group rather than only itself, so a call that was queued and never dispatched — the terminal
+result cancels it — SHALL receive a result naming the terminal tool as the reason. Without it the repair that
+protects the provider contract removes the assistant message and the terminal tool's own result with it, and the
+carried turn reaches the model with no record of what the agent decided.
+
 The qualifier is the truth about this layer, not a softening. The admission check and the mint are separate
 critical sections, and `agent.task` and `agent.response` are separate JetStream consumers, so a continuation
 delivered between a response clearing the mark and the carrying request re-taking it is admitted against an empty
@@ -98,6 +104,14 @@ settled loop continuable: a task naming a terminal loop is refused as it always 
 - **AND** the loop advances one iteration and publishes `<loopID>:req:N+1:0` carrying both the deferred turn and
   the terminal tool's own result
 - **AND** a terminal tool answering a loop with nothing deferred completes it exactly as before
+
+#### Scenario: A terminal tool ends a batch that still has queued calls
+
+- **WHEN** a tool result that terminates the loop arrives while a continuation is pending, and the same assistant
+  message advertises calls that were queued and never dispatched
+- **THEN** each queued call receives a correlated result naming the terminal tool as the reason it was skipped
+- **AND** the carried request carries the assistant message, the terminal tool's own result and the skipped
+  results as one complete group
 
 #### Scenario: A turn is deferred and its carrying request cannot be confirmed
 

@@ -1688,6 +1688,59 @@ func (h *MessageHandler) drainPendingToolFailures(loopID, reason string) {
 	}
 }
 
+// maxQueuedSkipSynthesis bounds the skipped-queue drain. A provider batch is
+// a handful of calls; the cap exists only so a DequeueToolCall that ever
+// returned ok without consuming cannot spin the loop forever.
+const maxQueuedSkipSynthesis = 256
+
+// synthesizeSkippedQueuedTools gives every still-queued tool call a correlated
+// synthetic result saying the terminal tool ended the iteration, and empties
+// the queue doing it.
+//
+// The caller is the terminal-tool CARRY path and only that path. A queued call
+// was never dispatched, so it is not in the pending set and
+// drainPendingToolFailures cannot see it — but it IS in the assistant message
+// the carried request replays, and a tool_call with no tool result makes
+// RepairToolPairs drop the entire group. The result is a failure rather than a
+// new kind because that is what the model must account for: the call it asked
+// for did not run, and here is why.
+//
+// DequeueToolCall carries the whole call, so the synthetic correlates by
+// ExecutionID when one was minted and by CallID otherwise, exactly as the
+// dispatch-failure recovery does. Defensive cap for the same reason as
+// dispatchedFromQueue: DequeueToolCall is the only queue-shrinking operation,
+// so a future bug that returned ok without consuming would otherwise spin.
+func (h *MessageHandler) synthesizeSkippedQueuedTools(loopID, terminalTool string) {
+	if !h.loopManager.HasQueuedTools(loopID) {
+		return
+	}
+	name := terminalTool
+	if name == "" {
+		name = "a terminal tool"
+	}
+	reason := fmt.Sprintf("skipped because %s ended the iteration", name)
+	for i := 0; i < maxQueuedSkipSynthesis; i++ {
+		next, ok := h.loopManager.DequeueToolCall(loopID)
+		if !ok {
+			return
+		}
+		h.logger.Info("queued tool call skipped by a terminal tool; emitting a synthetic result",
+			slog.String("loop_id", loopID),
+			slog.String("call_id", next.ID),
+			slog.String("tool_name", next.Name),
+			slog.String("terminal_tool", terminalTool))
+		if err := h.synthesizeToolFailure(loopID, next, reason); err != nil {
+			h.logger.Warn("failed to store the synthetic result for a skipped queued call",
+				slog.String("loop_id", loopID),
+				slog.String("call_id", next.ID),
+				slog.String("error", err.Error()))
+		}
+	}
+	h.logger.Warn("skipped-queue synthesis cap hit; the queue may have leaked",
+		slog.String("loop_id", loopID),
+		slog.Int("cap", maxQueuedSkipSynthesis))
+}
+
 // tryDispatchOrSynthesize attempts to dispatch a tool call. On
 // dispatch failure, emits a synthetic failure result so the
 // assistant tool_call has a matching result on the next agent.request,
@@ -2480,6 +2533,24 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 	// are needed (e.g., a terminal action like decompose, submit, approve).
 	// Content becomes the LoopCompletedEvent.Result.
 	if toolResult.StopLoop {
+		// Serial dispatch sends one call of an assistant batch and queues the
+		// rest, so a terminal result arrives with siblings that will never run.
+		// On the CARRY path they must still be accounted for: the carried
+		// request replays this assistant message, and RepairToolPairs
+		// (RepairToolPairs, context_manager.go:292-335) marks the WHOLE group
+		// broken when one
+		// advertised call has no result — removing the assistant message and
+		// the terminal tool's own result with it, so the turn that asked the
+		// agent to explain its decision reached the model without the decision.
+		// Synthesizing a correlated skip result per queued call keeps the batch
+		// complete and says what actually happened. Same recovery shape as the
+		// dispatch failure at :1758, and it runs only when a turn is carried:
+		// the completing path mints no further request, so nothing there
+		// re-reads the batch.
+		carrying := h.loopManager.HasPendingContinuation(loopID)
+		if carrying {
+			h.synthesizeSkippedQueuedTools(loopID, toolResult.Name)
+		}
 		h.loopManager.ClearQueuedTools(loopID)
 
 		// The same disposition as the model-text completion path (:1423). A
@@ -2498,7 +2569,7 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 		// here because this decide did not end the loop — LoopCompletedEvent
 		// .Decision is the terminal that did — and the call and its result
 		// stay in the trajectory and the conversation either way.
-		if h.loopManager.HasPendingContinuation(loopID) {
+		if carrying {
 			cm := h.loopManager.GetContextManager(loopID)
 			h.absorbToolResultsIntoContext(loopID, cm)
 			carried, err := h.carryDeferredContinuation(ctx, loopID, entity, cm, &result)

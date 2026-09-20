@@ -709,3 +709,132 @@ func TestATerminalToolAtTheIterationCeilingKeepsTheDeferredTurnOnTheRecord(t *te
 		t.Fatal("a turn was admitted to a completed loop; the retained marker must not resurrect it")
 	}
 }
+
+// carriedMessages decodes the conversation of the one agent.request the result
+// published. The carry's whole job is what the next request SAYS, so the
+// assertions below read the messages rather than the marker.
+func carriedMessages(t *testing.T, result agenticloop.HandlerResult) []agentic.ChatMessage {
+	t.Helper()
+	var out []agentic.ChatMessage
+	found := 0
+	for _, msg := range result.PublishedMessages {
+		if !strings.Contains(strings.ToLower(msg.Subject), "agent.request") {
+			continue
+		}
+		var envelope struct {
+			Payload agentic.AgentRequest `json:"payload"`
+		}
+		if err := json.Unmarshal(msg.Data, &envelope); err != nil {
+			t.Fatalf("decode agent.request on %s: %v", msg.Subject, err)
+		}
+		out = envelope.Payload.Messages
+		found++
+	}
+	if found != 1 {
+		t.Fatalf("expected exactly one agent.request, got %d", found)
+	}
+	return out
+}
+
+// Serial dispatch sends the first tool call of an assistant batch and QUEUES
+// its siblings. When the first one comes back terminal, the queue is discarded
+// — and on the carry path that left the batch incomplete: the assistant message
+// still advertises a call with no result, so RepairToolPairs removed the whole
+// group on the way out, taking the real terminal result with it. The carried
+// request went to the model with system and user messages only, so the turn
+// that asked the agent to explain its decision arrived without the decision.
+//
+// The fix gives every discarded sibling a correlated synthetic result first, so
+// the batch the model sees is complete and honest: the terminal tool's own
+// result, and a skipped marker for the call that never ran.
+//
+// spec: agentic-loop / A logical model request has one deterministic identity
+func TestATerminalToolCarriesItsOwnResultWhenTheBatchHasQueuedSiblings(t *testing.T) {
+	handler := agenticloop.NewMessageHandler(createTestConfig())
+	handler.SetToolRegistry(newTestToolRegistry(t))
+	ctx := context.Background()
+
+	loopID, birth, _ := startLoopAndAdmitContinuation(t, handler)
+
+	const terminalCallID = "call-terminal-1"
+	const siblingCallID = "call-sibling-1"
+	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+		RequestID: birth,
+		Status:    agentic.StatusToolCall,
+		Message: agentic.ChatMessage{
+			Role: "assistant",
+			ToolCalls: []agentic.ToolCall{
+				{ID: terminalCallID, Name: "test_tool"},
+				{ID: siblingCallID, Name: "test_tool"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("HandleModelResponse(two tool_calls): %v", err)
+	}
+	dispatched := dispatchedToolCallFromResult(t, dispatchResult)
+	if dispatched.ID != terminalCallID {
+		t.Fatalf("serial dispatch sent %q first, want %q; the sibling must be the QUEUED one",
+			dispatched.ID, terminalCallID)
+	}
+
+	const terminalContent = "the first thing is decided"
+	terminal, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
+		CallID:      dispatched.ID,
+		Name:        dispatched.Name,
+		Content:     terminalContent,
+		RequestID:   dispatched.RequestID,
+		ExecutionID: dispatched.ExecutionID,
+		CallOrdinal: dispatched.CallOrdinal,
+		StopLoop:    true,
+	})
+	if err != nil {
+		t.Fatalf("HandleToolResult(StopLoop with a queued sibling): %v", err)
+	}
+	if terminal.State.IsTerminal() {
+		t.Fatalf("the terminal tool settled a loop with an admitted turn; state=%s", terminal.State)
+	}
+
+	messages := carriedMessages(t, terminal)
+	var assistant *agentic.ChatMessage
+	results := map[string]agentic.ChatMessage{}
+	sawTurn := false
+	for i := range messages {
+		m := messages[i]
+		switch {
+		case len(m.ToolCalls) > 0:
+			assistant = &messages[i]
+		case m.Role == "tool":
+			results[m.ToolCallID] = m
+		case m.Role == "user" && strings.Contains(m.Content, continuationPrompt):
+			sawTurn = true
+		}
+	}
+
+	if assistant == nil {
+		t.Fatalf("the carried request lost the assistant tool_call message entirely; "+
+			"RepairToolPairs removed the batch and the model cannot see what it decided. messages=%d",
+			len(messages))
+	}
+	if len(assistant.ToolCalls) != 2 {
+		t.Fatalf("the assistant message carries %d tool calls, want 2", len(assistant.ToolCalls))
+	}
+	terminalMsg, ok := results[terminalCallID]
+	if !ok {
+		t.Fatalf("the carried request lost the terminal tool's own result; results=%v", results)
+	}
+	if !strings.Contains(terminalMsg.Content, terminalContent) {
+		t.Fatalf("the terminal result says %q, want it to carry %q", terminalMsg.Content, terminalContent)
+	}
+	siblingMsg, ok := results[siblingCallID]
+	if !ok {
+		t.Fatalf("the queued sibling has no result, so the batch is incomplete and the next "+
+			"RepairToolPairs will drop the group; results=%v", results)
+	}
+	if siblingMsg.Content == "" {
+		t.Fatal("the sibling's synthetic result carries no diagnostic for the model to read")
+	}
+	if !sawTurn {
+		t.Fatalf("the carried request does not contain the admitted turn %q", continuationPrompt)
+	}
+}

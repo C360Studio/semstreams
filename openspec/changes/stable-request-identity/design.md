@@ -189,6 +189,14 @@ deferred one identity decision to #1328. All three are answered here.
   `81a5cabb`**, NOT in this one, where that line is an SSE attach error branch). Observed by
   `TestATerminalToolAtTheIterationCeilingKeepsTheDeferredTurnOnTheRecord`, which asserts both halves — the turn
   survives on the record, and a new task naming the settled loop is refused.
+- **On the COMPLETING terminal-tool path a queued sibling still gets no result.** The carry path now synthesizes
+  one per queued call (`synthesizeSkippedQueuedTools`), because the carried request replays the batch and
+  `RepairToolPairs` would drop the whole group. The completing path mints no further request, so nothing re-reads
+  the batch in this process and the defect is invisible here — but the conversation it persists keeps an assistant
+  `tool_call` with no answering message, which a restore or replay would have to repair. Pre-existing, unchanged
+  by this round, and deliberately not fixed in it: the fix belongs with whatever restores a loop's context, which
+  is L4's (#1330). `drainPendingToolFailures` already covers the other terminal transitions (fail, cancel, max
+  iterations); the `StopLoop` completion is the one that does not.
 - **A redelivered terminal tool result re-settles an already-complete loop. Pre-existing, examined here, NOT
   fixed here.** This change's own premise — the tool lane is at-least-once, `HandleToolResult` has no
   request-identity guard, and `RemovePendingTool` tolerates a call that is already gone — has a second

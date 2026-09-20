@@ -784,3 +784,66 @@ owner then ruled on the behaviour that claim was about.
       (`handlers.go` `459a683c32e9535c2b31b1225cd0e7bf`, `state.go` `43345bfb7a7092457ca10fbfe54d2f1a`,
       `http.go` `ee7d23bac103cec4afe6d8a7303df511`), all three matching after restore and
       `git status --porcelain` empty
+
+## 15. Owner's Codex review round 3 (PR #1335 on `7069ea0a`, one P1, accepted)
+
+The three earlier reproducers pass. This one is the same class as all of them — a first delivery through the
+public handlers, no restart, no redelivery, no concurrency — and it is a consequence of round 3's own carry.
+
+- [x] 15.1 **A terminal tool whose batch still had queued siblings carried a request with NO tool messages at
+      all.** Serial dispatch sends one call of an assistant batch and queues the rest. When the dispatched one
+      comes back `StopLoop`, `ClearQueuedTools` discarded the siblings with no results — and on the carry path
+      the carried request replays that assistant message, so `RepairToolPairs`
+      (`context_manager.go:292-335`) found one advertised call with no result, marked the WHOLE group broken, and
+      removed the assistant message AND the terminal tool's own result (`removed=2`). `…:req:2:0` went out
+      with system and user messages only: the turn asking the agent to explain its decision reached the model
+      without the decision. Round 3 made this reachable — before the carry there was no next request on this
+      path, so nothing re-read the batch.
+      **Fix as ruled, carry path only:** `synthesizeSkippedQueuedTools(loopID, toolResult.Name)` drains the queue
+      with `DequeueToolCall` and gives each call a correlated synthetic result, reason `skipped because <tool>
+      ended the iteration`, before `ClearQueuedTools` runs. It reuses `synthesizeToolFailure` (`handlers.go:1621`)
+      exactly as the dispatch-failure recovery in `tryDispatchOrSynthesize` (`:1758`) does, so the
+      synthetic correlates by `ExecutionID` when
+      one was minted and by `CallID` otherwise, and it pairs in `buildToolMessages` by `CallID`
+      (`handlers.go:3039`), which is what `RepairToolPairs` matches on. No new result kind, no new manager
+      accessor: `DequeueToolCall` already returns the whole call. The `HasPendingContinuation` read moved to one
+      `carrying` local so the synthesis and the carry cannot disagree about which path this is.
+      **Nothing misleading is emitted on this path**, checked rather than assumed: `synthesizeToolFailure` only
+      calls `StoreToolResult`, which writes one map entry (`state.go:1053-1074`) and records no metric and no
+      trajectory step. The one observable addition is an INFO log per skipped call.
+      Test: `TestATerminalToolCarriesItsOwnResultWhenTheBatchHasQueuedSiblings`
+      (`continuation_deferral_test.go`), terminal-first two-call response, asserting on the DECODED carried
+      conversation rather than on a marker: the assistant message survives with both calls, the terminal result
+      carries its own content, the queued sibling has a result with a diagnostic, and the admitted turn is in the
+      request. It was written before the fix and failed with the finding verbatim —
+      `the carried request lost the assistant tool_call message entirely … messages=3`, with
+      `pre-request tool-pair audit removed orphan messages removed=2` in the log.
+      **Mutation: `handlers.go:2552`, the `h.synthesizeSkippedQueuedTools(loopID, toolResult.Name)` call
+      deleted.** RED at `continuation_deferral_test.go:815`: `the carried request lost the assistant tool_call
+      message entirely; RepairToolPairs removed the batch and the model cannot see what it decided. messages=3`.
+      Exactly ONE test fails package-wide.
+      Spec: the deferral requirement gains a paragraph on answering the whole group and the scenario
+      "A terminal tool ends a batch that still has queued calls"
+- [x] 15.2 The COMPLETING terminal-tool path is deliberately untouched, per the ruling. It mints no further
+      request, so nothing re-reads the batch in this process and `RepairToolPairs` never runs on it — but the
+      conversation it persists keeps an assistant `tool_call` with no answering message. Pre-existing, one line
+      in `design.md` § Declared residuals rather than a second fix, and pointed at L4 (#1330) with the rest of
+      the restore work. `drainPendingToolFailures` already covers the other terminal transitions — fail, cancel,
+      max iterations (`handlers.go:2195`, `:2776`, `component.go:2574`) — and the `StopLoop` completion is the
+      one that does not
+- [x] 15.3 Gates on the head that ships, measured before this line was amended into it — the difference is this
+      record's own markdown and nothing else, no Go, no spec, no schema: `go build ./...` 0; `task lint` 0;
+      `task test` 154 `ok` / 0 `FAIL` (136 cached — packages untouched this round);
+      `go test -race -count=1 ./agentic/... ./processor/agentic-loop/... ./processor/agentic-dispatch/...` 0;
+      `go vet -tags=integration ./processor/agentic-loop/ ./processor/agentic-dispatch/` 0;
+      `openspec validate stable-request-identity --strict` 0; `task openspec:validate` 56/56;
+      `task spec:properties` **233/233**; `task schema:generate` + `git status --porcelain schemas/ specs/` 0,
+      empty; `git diff --check` 0.
+      **This round changes Go after § 14.5's tier ran, so the agentic tier was re-run at this head**:
+      `task e2e:check-ports` **exit 0**, `task e2e:agentic` **exit 0** — `Scenario completed successfully`,
+      `assertions_run=15`, `duration=2m4.692062583s`, with `walk-approval-path`,
+      `refuse-non-canonical-approval`, `verify-terminal-response`, `verify-stage-a-process-replacement` (78.7s),
+      `verify-durable-tool-replay` (44.6s) and `verify-tool-call-governance` all present. Exit codes read from
+      `$?` into a log, never through a pipe. `pgrep -fl e2e.test` was checked FIRST and was empty (exit 1, stderr
+      visible) before `e2e:clean` ran, because that target tears down every compose stack on the host and the
+      round-4 run started while another session's tier was live
