@@ -227,7 +227,7 @@
 - [x] 9.3 L1's invariants verified present on the replayed head rather than assumed: `withCommandEffect` at
       `handleCommand` entry (`component.go:919`), `targetFromTracker` at `:950`/`:955`, the two-conjunct
       Quarantine arm at `:1025`, `noteSignalPublished` immediately after the cancel `PublishToStream`
-      (`commands.go:185`), `errCancelledBeforeMutation`, and `persistFailureState` before the stamp (`:1893`)
+      (`commands.go:191`), `errCancelledBeforeMutation`, and `persistFailureState` before the stamp (`:1893`)
 - [x] 9.4 **The replay broke two of L1's tests and the race unit gate caught it.**
       `TestToolResultHandlerFailureSettlesOnTheDurableRecord` (four subtests) and
       `TestToolResultCancellationRetriesOnlyBeforeMutation` (two) all read decision `0x1` where L1 asserts `0x4`
@@ -241,7 +241,7 @@
       `-v`, since a package-level `ok` cannot distinguish passed from not-compiled-in
 - [x] 9.5 L1's two `design.md` residuals naming this branch are answered in `design.md` § "L1's residuals that
       name this layer", not left for a reader to infer: the cancel-signal PubAck is owned here (the signal is a
-      `PublishToStream`, `commands.go:179`) and the requirement text now names it; the post-PubAck submission
+      `PublishToStream`, `commands.go:185`) and the requirement text now names it; the post-PubAck submission
       response arm is **not** relaxed from Quarantine to Retry, because recovering task identity removes only one
       of the effects a redelivery repeats — `Track` replaces the whole `LoopInfo` (`loop_tracker.go:144-153`) and
       the two started counters re-fire. L1's call-site comment, whose premise ("a redelivery mints a fresh task

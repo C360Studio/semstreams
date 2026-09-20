@@ -139,6 +139,13 @@ type Component struct {
 	// sendResponseFn is a test hook; production leaves this nil. When non-nil
 	// it replaces the NATS-publishing behavior of sendResponse.
 	sendResponseFn func(agentic.UserResponse)
+	// publishSignalFn is a test hook; production leaves this nil. When non-nil
+	// it replaces the JetStream publish in handleCancelCommand. It exists for
+	// the one outcome a real broker cannot be asked to produce: a publish that
+	// STORED the signal and then failed to say so. That is the ambiguity the
+	// settlement rule in handleCommand turns on, and without a seam the only
+	// reachable failures are the ones that prove nothing was stored.
+	publishSignalFn func(ctx context.Context, subject string, data []byte) error
 	// Terminal-only seams preserve production settlement semantics in focused
 	// tests without weakening the normal response API.
 	sendTerminalResponseFn func(context.Context, agentic.UserResponse, string) error
@@ -971,6 +978,13 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 	// Execute handler
 	resp, err := cmd.Handler(ctx, msg, args, loopID)
 	if err != nil {
+		// The handler's own failure is the FIRST of two settlement doors into
+		// the same hazard. A signal this delivery attempted and cannot account
+		// for is not a delivery that did nothing, however the error reads; the
+		// rule, and why a proven refusal still retries, is on the helper.
+		if fatal := unconfirmedSignalIsFatal(err, effect, targetFromTracker, name, loopID); fatal != nil {
+			return fatal
+		}
 		if errs.IsFatal(err) || errs.IsTransient(err) {
 			return err
 		}
@@ -985,11 +999,12 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 		})
 	}
 
-	// The command's answer did not reach the user. Whether that delivery may be
-	// replayed takes TWO conjuncts, and it needs both:
+	// The command's answer did not reach the user — the SECOND door, where the
+	// signal is known published rather than merely attempted. Whether that
+	// delivery may be replayed takes TWO conjuncts, and it needs both:
 	//
 	//  1. this delivery published a signal — recorded at the publish site
-	//     itself (commands.go:185), never inferred from the command name or
+	//     itself (commands.go:191), never inferred from the command name or
 	//     the response text; and
 	//  2. its target was resolved from the tracker rather than named by the
 	//     message (:945-955).

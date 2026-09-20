@@ -75,12 +75,21 @@ L1 (#1327, squash-merged as `94cd8e4c`) left two residuals naming commits of thi
 deferred one identity decision to #1328. All three are answered here.
 
 - **The cancel signal's PubAck** (L1's archived `design.md:220`). Answered in code: `handleCancelCommand`
-  publishes the signal through `natsclient.PublishToStream` (`processor/agentic-dispatch/commands.go:179`), so the
+  publishes the signal through `natsclient.PublishToStream` (`processor/agentic-dispatch/commands.go:185`), so the
   signal has synchronous PubAck before `noteSignalPublished` records it and before the command's user response is
   attempted. L1 recorded the published fact at the publication site so exactly this could tighten without moving
-  the classification, and the classification is unchanged: a named cancel still retries, a resolved one still
-  quarantines. The requirement now names the cancel signal in its PubAck list
-  (`specs/agentic-dispatch/spec.md`, MODIFIED).
+  the classification.
+
+  Review round 1 then found the door a PubAck leaves open. A publish that FAILS reports what the client
+  experienced, not whether the server stored — a lost acknowledgement reads exactly like a signal that never
+  arrived — and the transient error that failure returned retried a bare `/cancel` whose target is resolved
+  afresh: L1's R1 defect reached through an error instead of through a response. The publish site now records the
+  ATTEMPT as well as the publication (`commands.go:184` and `:191`), and a resolved-target command whose attempt
+  cannot be accounted for quarantines — unless the error PROVES the client refused it before the bytes left the
+  process, which is a fail-closed whitelist rather than a judgement about the server (`command_effect.go`,
+  `publishDefinitelyRejected`). A named cancel retries either way: its redelivery re-reads the loop the message
+  names and cannot drift onto another. The requirement now names the cancel signal in its PubAck list and carries
+  the attempt rule (`specs/agentic-dispatch/spec.md`, MODIFIED).
 
 - **Identity-preserving replay at the post-PubAck submission response** (L1's archived `design.md:298`). L1
   quarantined `handleTaskSubmission`'s arm where the task has PubAck and the acknowledging user response does

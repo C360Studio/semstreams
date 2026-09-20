@@ -361,7 +361,7 @@ var _ component.Discoverable = (*Component)(nil)
 //
 // The predicate is now two conjuncts, and this test holds the half that must
 // NOT quarantine. The published fact comes from the publish site itself
-// (commands.go:185), so these cases are distinguished by what they did rather
+// (commands.go:191), so these cases are distinguished by what they did rather
 // than by what they were called.
 //
 // spec: agentic-dispatch / Every dispatch durable input settles through its owner
@@ -463,7 +463,7 @@ func TestEffectFreeCommandWithFailedResponseRetries(t *testing.T) {
 		defer cancel()
 		// Tracked as live, settled in the record: the gate reports terminal
 		// from either source, so handleCancelCommand answers "already settled"
-		// and returns BEFORE the publish at commands.go:179.
+		// and returns BEFORE the publish at commands.go:185.
 		trackLoop(c, settledLoopID)
 		require.Equal(t, settledLoopID, c.loopTracker.GetActiveLoop("user-1", "channel-1"),
 			"the target must be tracker-resolved, or this case cannot discriminate")

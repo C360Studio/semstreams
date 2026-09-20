@@ -1351,6 +1351,26 @@ than deprecated.
   is new and returns the whole pending record — `CallID`, `ExecutionID`, `RequestID` — for a caller that must
   echo the identity; `GetPendingApprovalCallID` is unchanged.
 
+## A bare `/cancel` this process may have sent stops the `user.message` lane (#1328)
+
+Nothing to change; something to recognize in a log. A `/cancel` **with no loop id** has its target chosen by
+agentic-dispatch from the tracker, so the message does not carry the identity the delivery acted on and a
+redelivery picks the target again — against a world the first delivery already changed. Two failures on that lane
+therefore stop it rather than retrying: the signal published and its user response unacknowledged, and the signal
+publish that fails with an error which does not prove the broker stored nothing — a lost PubAck reads exactly like
+a signal that never arrived. Both are new in this wave. The consumer is drained and
+`Health()` reports `delivery ownership lost` with the cause naming the command and the loop.
+
+`/cancel <loop_id>` is unaffected in both cases: a redelivery re-reads the loop the message names, finds it
+settled, and answers without publishing again. So is any command that published nothing — `/help`, `/loops`, a
+bare `/status`, and the arms of a bare `/cancel` that refuse, find no loop, or find one already settled.
+
+A client-side refusal also keeps retrying, because it proves the signal was never sent: the circuit breaker open,
+the client not connected, and the sentinels the NATS client returns before it writes (`ErrConnectionClosed`,
+`ErrMaxPayload` and their siblings). A broker outage of that shape recovers on the redelivery instead of stopping
+the lane. If you see the latch, the fix is the same as for any owner-fatal: restart the component once the broker
+is healthy, and check whether the loop named in the cause is cancelled — the delivery could not tell you.
+
 ## Governance verdicts route on execution identity, and an enforce-mode rule set must be edited first (#1328)
 
 The tool-call governance verdict subjects moved off the two-token `<loop_id>.<call_id>` pair and onto the single

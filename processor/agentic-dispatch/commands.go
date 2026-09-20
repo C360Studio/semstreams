@@ -176,7 +176,13 @@ func (c *Component) handleCancelCommand(ctx context.Context, msg agentic.UserMes
 	if err != nil {
 		return agentic.UserResponse{}, errs.WrapInvalid(err, "Component", "handleCancelCommand", "resolve signal subject")
 	}
-	if err := c.natsClient.PublishToStream(ctx, subject, signalData); err != nil {
+	// The attempt, recorded before the publish. A publish that fails reports
+	// what the CLIENT experienced, and for most failures that says nothing
+	// about whether the server stored the signal — a PubAck lost on the way
+	// back reads exactly like a signal that never arrived. handleCommand needs
+	// the two apart, so both are recorded here where they happen.
+	noteSignalAttempt(ctx)
+	if err := c.publishSignal(ctx, subject, signalData); err != nil {
 		return agentic.UserResponse{}, errs.WrapTransient(err, "Component", "handleCancelCommand", "publish signal")
 	}
 	// The effect this delivery can no longer take back, recorded where it
@@ -194,6 +200,17 @@ func (c *Component) handleCancelCommand(ctx context.Context, msg agentic.UserMes
 		Content:     fmt.Sprintf("Cancel signal sent to loop %s", targetLoopID),
 		Timestamp:   time.Now(),
 	}, nil
+}
+
+// publishSignal puts one user signal on its loop's signal subject with
+// synchronous PubAck. The seam is the only way a test can produce a publish
+// that stored and then failed to report it; production leaves it nil and goes
+// straight to the client.
+func (c *Component) publishSignal(ctx context.Context, subject string, data []byte) error {
+	if c.publishSignalFn != nil {
+		return c.publishSignalFn(ctx, subject, data)
+	}
+	return c.natsClient.PublishToStream(ctx, subject, data)
 }
 
 // handleStatusCommand handles the /status command
