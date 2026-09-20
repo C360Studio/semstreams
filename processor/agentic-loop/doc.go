@@ -169,7 +169,10 @@
 //
 //	handler := NewMessageHandler(config)
 //
-//	// Handle incoming task
+//	// Handle incoming task. NOTE: this is BELOW the delivery seam, so the
+//	// checks the component makes on a decoded delivery — including the
+//	// TaskID/LoopID conflict refusal — do not run. An embedder calling the
+//	// handler directly owns them.
 //	result, err := handler.HandleTask(ctx, TaskMessage{
 //	    TaskID: "task_123",
 //	    Role:   "general",

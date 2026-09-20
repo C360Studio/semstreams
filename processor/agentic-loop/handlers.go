@@ -1066,12 +1066,20 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 // deferredContinuationResult is the empty-handed result a deferred continuation
 // returns: the loop is unchanged except for its context and its pending marker,
 // and nothing is published.
+//
+// Empty-handed on the wire, not in the record. The admitted task contributed a
+// turn to this loop, and the only correlation the carried request later carries
+// is its own RequestID — so without an observation here, "which task
+// contributed this turn" would be answerable from a log line and nowhere else.
+// Agent execution evidence is a first-class capability (openspec/project.md
+// § Purpose) and ADR-098 routes an agent-execution signal to graph conditions
+// rather than to logs.
 func (h *MessageHandler) deferredContinuationResult(loopID, taskID string, entity agentic.LoopEntity) HandlerResult {
 	h.logger.Info("Continuation deferred behind an outstanding model request",
 		slog.String("loop_id", loopID),
 		slog.String("task_id", taskID),
 		slog.Int("iterations", entity.Iterations))
-	return HandlerResult{
+	result := HandlerResult{
 		LoopID:            loopID,
 		State:             entity.State,
 		Deferred:          true,
@@ -1079,6 +1087,32 @@ func (h *MessageHandler) deferredContinuationResult(loopID, taskID string, entit
 		TrajectorySteps:   []agentic.TrajectoryStep{},
 		ContextEvents:     []agentic.ContextEvent{},
 	}
+	appendTrajectoryObservation(&result, trajectoryObservation{
+		LoopID:            loopID,
+		Kind:              agentic.TrajectoryKindLoopStarted,
+		SourceKind:        agentic.TrajectorySourceTask,
+		SourceCorrelation: taskID,
+		CausalIteration:   positiveUint32(entity.Iterations),
+		CausalPhase:       agentic.TrajectoryPhaseLoopStart,
+		// Requested, not completed: the turn is admitted and waiting for a
+		// request to carry it, which is precisely what did NOT happen here.
+		Status: agentic.TrajectoryStatusRequested,
+		Evidence: trajectoryDeferredContinuationEvidence{
+			TaskID:              taskID,
+			OutstandingRequest:  h.loopManager.OutstandingRequest(loopID),
+			LoopStateAtDeferral: string(entity.State),
+		},
+	})
+	return result
+}
+
+// trajectoryDeferredContinuationEvidence names the turn that was admitted and
+// the request it is waiting behind, so the audit answers "why did nothing go
+// out for this task" without a log.
+type trajectoryDeferredContinuationEvidence struct {
+	TaskID              string `json:"task_id"`
+	OutstandingRequest  string `json:"outstanding_request_id"`
+	LoopStateAtDeferral string `json:"loop_state"`
 }
 
 // buildTaskRequest creates the initial agent request, trajectory step, and loop-created
@@ -2788,6 +2822,12 @@ func (h *MessageHandler) carryDeferredContinuation(
 		// so completing is the right outcome and the deferred turn cannot be
 		// carried. It is WARNed rather than swallowed, because a lost user turn
 		// is a fact an operator should be able to find.
+		//
+		// Unreachable from the only caller today: HandleModelResponse fails the
+		// delivery at :1313 on the same predicate over the same value, and
+		// nothing between there and here moves Iterations. Kept as a guard, so
+		// a future caller that carries from past that check gets the right
+		// behaviour rather than a lost turn.
 		if errors.Is(err, agentic.ErrMaxIterationsReached) {
 			h.logger.Warn("deferred continuation dropped — iteration budget exhausted at completion",
 				slog.String("loop_id", loopID),

@@ -1177,10 +1177,14 @@ Exactly one payload type now travels that subject.
   left in place it could only ever read zero. Remove it from dashboards and alerts.
 - **New metric:** `semstreams_router_loop_admission_refusals_total{seam,reason}` — one series for every refusal the
   gate issues, labelled by which seam the request arrived on and why it was refused. The reason set is closed.
-- **New metric:** `semstreams_agentic_loop_model_responses_dropped_total{reason}` — a model response that arrived
-  with no loop mapping for its `RequestID`. Expected after a loop settles and releases its per-loop state, or after
-  a process replacement; a sustained rate against live loops points at NATS redelivery. It is the sibling of the
-  existing `semstreams_agentic_loop_tool_results_dropped_total{reason}`, which the same drop class already had.
+- **New metric:** `semstreams_agentic_loop_model_responses_dropped_total{reason}` — a model response the loop did
+  not act on. `reason="stale_request_id"` is a response with no loop mapping for its `RequestID`, expected after a
+  loop settles and releases its per-loop state or after a process replacement. `reason="superseded_request"` is a
+  response naming a request the loop is no longer waiting on: the loop minted a newer one, most often because a
+  redelivery of an already-handled response arrived after the loop had moved on. Both are Acked, because
+  redelivering them cannot help. A sustained rate against live loops points at NATS redelivery. It is the sibling
+  of the existing `semstreams_agentic_loop_tool_results_dropped_total{reason}`, which the same drop class already
+  had.
 - **`/status` reports the state it read.** For a loop this process is not running — after dispatch was replaced,
   say — `/status` used to print `State: running` for anything not settled, so a loop actually sitting in
   `awaiting_approval` told the user to wait for an agent that was waiting for them. It now prints the recorded

@@ -225,9 +225,11 @@
       sentences with this change's "execution ID" wording; `governance_dispatcher.go` keeps this change's
       two-tier `effectiveLoopID`
 - [x] 9.3 L1's invariants verified present on the replayed head rather than assumed: `withCommandEffect` at
-      `handleCommand` entry (`component.go:919`), `targetFromTracker` at `:950`/`:955`, the two-conjunct
-      Quarantine arm at `:1025`, `noteSignalPublished` immediately after the cancel `PublishToStream`
-      (`commands.go:191`), `errCancelledBeforeMutation`, and `persistFailureState` before the stamp (`:1893`)
+      `handleCommand` entry (`component.go:926`), `targetFromTracker` at `:957`/`:962`, the two-conjunct
+      Quarantine arm at `:1040`, `noteSignalPublished` immediately after the cancel `PublishToStream`
+      (`commands.go:191`), `errCancelledBeforeMutation`, and `persistFailureState` before the stamp (`:1893`).
+      Pins re-derived at round 2 with `sed -n`; the four `component.go` ones had drifted by 7-15 lines inside this
+      change's own commits
 - [x] 9.4 **The replay broke two of L1's tests and the race unit gate caught it.**
       `TestToolResultHandlerFailureSettlesOnTheDurableRecord` (four subtests) and
       `TestToolResultCancellationRetriesOnlyBeforeMutation` (two) all read decision `0x1` where L1 asserts `0x4`
@@ -318,11 +320,16 @@
       right now", which `requestToLoop` cannot: its only delete is `releaseLoop`, so it records "published", never
       "outstanding". `attachContinuation` returns `deferred` instead of refusing; `HandleTask` does everything but
       the publish and marks `LoopEntity.PendingContinuation`; the completion path carries the turn through
-      `carryDeferredContinuation` → `publishIterationRequest`, the one home both it and the tool-results path now
-      use. Tests: `TestContinuationBehindAnOutstandingRequestPublishesNothing`,
+      `carryDeferredContinuation` → `publishIterationRequest`. Tests:
+      `TestContinuationBehindAnOutstandingRequestPublishesNothing`,
       `TestDeferredContinuationIsCarriedByTheCompletionResponse`, `TestDeferredContinuationRidesTheToolCallPath`.
       No STOP was owed: `handleTaskMessage` already discards `persistLoopState`'s error and ACKs, so a deferred
-      task settles exactly where a deduplicated one did
+      task settles no earlier than a deduplicated one — strictly later, in fact: the dedup path returns before
+      `recordTrajectoryObservations` and `persistLoopState`, the deferred path runs both.
+      **Amended at round 2** (§ 11.1-11.3): `publishIterationRequest` was never the one home — the truncation
+      retry and the birth request mint too — so the bookkeeping moved to `TrackRequest`; the marker now records
+      its carrier instead of clearing at build; and a redelivered carried completion is refused by request
+      identity
 - [x] 10.2 **F2 [P1] — human approval matched by provider CallID, not execution identity** (`c300c9bc`).
       `ApprovalPendingEvent` and `ApprovalResponse` gain `ExecutionID`/`RequestID` (additive — `task
       api:compat:report` lists both payloads under *Compatible changes*); the gate stamps them, the HTTP path
@@ -336,29 +343,40 @@
       refusal tests fail. `TestIntegration_ApprovalFlow_Approve` went red on exactly this rule — its fixture
       answered with CallID alone — and now echoes the pending event's execution identity over the wire, the way a
       real approval UI must (`3fbdd21c`). Mutation: `+ "-mutated"` on the pending event's `ExecutionID` → the
-      wire-identity assertion and the re-dispatch both fail
+      wire-identity assertion and the re-dispatch both fail. **The payload half is additive; the change is not.**
+      `(*LoopManager).ResolveApprovalIfPending`'s signature changes on a Tier 1 exported type — one incompatible
+      change, deliberate, because the compatible alternative is the CallID-only matcher the ruling banned. It is
+      in the migration note beside F4's `HandleVerdict` break; under ADR-106 the Tier 1 count descends to zero
+      before RC, so both are named here rather than only the compatible payload additions. `task
+      api:compat:report` exits 0 in report mode whatever the count — the number has to be read out of the log
 - [x] 10.3 **F3 [P1] — an ambiguous cancel publish failure retried an inferred target** (`2e00d00c`). The recorder
       gains the ATTEMPT (`commands.go:184`, before the publish) beside the publication (`:191`). A command whose
       target was resolved rather than named and whose attempt is unaccounted for returns Fatal → Quarantine. The
       exception is a PROVEN refusal, a fail-closed whitelist of errors the client returns before the bytes leave
-      the process: `natsclient.ErrCircuitOpen`, `natsclient.ErrNotConnected` (`natsclient/client.go:971-978`) and
-      the sentinels `nats.Conn.publish` returns before its first write (nats.go v1.52.0 `:4426`, `:4434`, `:4438`,
-      `:4445`, `:4450`, `:4455`, `:4463`, `:4470`). `jetstream.ErrNoStreamResponse` (`jetstream/publish.go:244-246`)
-      and a server `*jetstream.APIError` (`:255-257`) are deliberately NOT on it — neither contract says the store
-      did not run. Test: `TestBareCancelWithUnconfirmedSignalQuarantines`, three subtests. Mutations: delete
+      the process: `natsclient.ErrCircuitOpen` (`natsclient/client.go:972-974`), `natsclient.ErrNotConnected`
+      (`:976-978`) and the sentinels `nats.Conn.publish` returns before its first write (nats.go v1.52.0 `:4426`,
+      `:4434`, `:4438`, `:4445`, `:4455`, `:4463`, `:4470`). `jetstream.ErrNoStreamResponse`
+      (`jetstream/publish.go:244-246`) and a server `*jetstream.APIError` (`:255-257`) are deliberately NOT on it —
+      neither contract says the store did not run. Test:
+      `TestBareCancelWithUnconfirmedSignalQuarantines`, four subtests. Mutations: delete
       `noteSignalAttempt` → the quarantine subtest flips AND its counterfactual cancels loop B; drop the
-      proven-refusal conjunct → the refusal subtest flips
+      proven-refusal conjunct → the refusal subtest flips.
+      **Amended at round 2** (§ 11.4): `nats.ErrConnectionClosed` (`:4450`) came OFF the list — the same sentinel
+      also returns post-write from `RequestMsgWithContext` (`context.go:70`)
 - [x] 10.4 **F4 [P2] — the audit fingerprint was decoded from raw bytes; both production shapes logged empty**
       (`bbb4eae6`). `HandleVerdict` takes the decoded `VerdictPayload`, so the Component's existing
       `decodeVerdictPayload` normalization is the only decode, and the audit line reads every field through the
-      top-level-then-`properties` fall-through. In enforce mode the same defect emptied the REASON that travels to
-      the waiting `Propose` and becomes the refusal text the model reads. The naked-JSON observer test is
+      top-level-then-`properties` fall-through. The naked-JSON observer test is
       REPLACED: `TestProposalFingerprintIsCarriedAndNotVerified` now drives the approve-action envelope and the
       publish-action map, built as `processor/rule/actions.go` builds them, through
-      `handleToolCallVerdictMessage`, and asserts the waiter's reason. Mutations: top-level reads instead of the
-      accessors → the publish-action shape and the waiter reason fail; re-unmarshalling the wire bytes → the
+      `handleToolCallVerdictMessage`. Mutations: top-level reads instead of the
+      accessors → the publish-action shape and the waiter's rule id fail; re-unmarshalling the wire bytes → the
       envelope shape fails. BREAKING on a Tier 1 exported interface; zero sister implementers (grep across all
-      nine); migration note carries the signature
+      nine); migration note carries the signature.
+      **Corrected at round 2** (§ 11.6): the commit's second justification — "in enforce mode the same defect
+      emptied the REASON the model is told" — is FALSE and had been published in four places. `EffectiveReason()`
+      already fell through to `properties`, and the shape that loses everything is the approve action, which
+      cannot carry a rejection
 - [x] 10.5 **F5 [P2] — three spec contradictions, one of them a missing behaviour** (`554581f6`). (c) One TaskID
       naming two LoopIDs now quarantines. The comparison lives at the delivery seam and reads the token the
       PRODUCER sent, not `task.LoopID`: `preflightDecodedTask` reserves a fresh prospective UUID on every delivery
@@ -381,3 +399,96 @@
       pin is re-derived to `:1094`
 - [x] 10.7 Hygiene: the four EOF blank lines `git diff --check origin/main...HEAD` flagged in the spec deltas are
       stripped (folded into 10.5)
+
+## 11. Internal review round 2 (PR #1335, two reviewers: loop half and dispatch half)
+
+- [x] 11.1 **B1 [BLOCKING] — a redelivered CARRIED completion completed the loop** (`3e662a28`). F1 leaves a
+      carried completion NON-TERMINAL at iteration N+1, which is exactly what takes its redelivery out of reach of
+      the terminal guard (`handlers.go:1305`) — the guard `persistHandlerResult`'s classification rationale is
+      written on. The redelivery found no deferral left to carry and settled the loop while `:req:N+1:0`, holding
+      the user's turn, was still in flight; that request's answer would then be dropped as terminal. The guard is
+      request identity: a response whose RequestID is not the loop's outstanding request is refused, Acked, and
+      counted under `model_responses_dropped_total{reason="superseded_request"}`. The empty case is deliberately
+      let through — a NAK/retry of the FIRST delivery arrives after the mark was cleared and is not stale. Test:
+      `TestRedeliveredCarriedCompletionDoesNotCompleteTheLoop`, driven through the delivery seam. Mutation:
+      `false &&` on the identity conjunct → "the redelivery completed a loop whose carried request is still in
+      flight". 28 in-package fixtures invented RequestIDs like `"req-001"`; production routes a response to its
+      loop BY its RequestID, so those were states production cannot produce — they now ask the handler what the
+      loop published (`OutstandingRequestForTest`)
+- [x] 11.2 **H1 — `emitRetryRequest` was a third request-building site** (`e2260b2b`). The truncation retry builds
+      from `cm.GetContext()`, which already holds the deferred turn, and never ended the deferral: the completion
+      that answered the retry deferred again and spent an iteration re-asking with a context that had gained
+      nothing. The bookkeeping moved out of `publishIterationRequest` into `TrackRequest`, the call all three
+      minting sites already make, so "every request that goes out carries the turn" is true by construction rather
+      than by each new site remembering a fourth call. `design.md`'s "the ONE home" claim and the function's doc
+      comment now say what it actually is. Test: `TestTruncationRetryCarriesTheDeferredTurn`. Mutation: clear back
+      in `publishIterationRequest` only → the completion minted `:req:2:0` instead of settling
+- [x] 11.3 **H2 — the marker was cleared at build and persisted before the publish that justified it**
+      (`cdcf9c5a`). `persistResultState` stamps the entity before `publishResults`, and a publish-phase failure is
+      commit-unknown → Quarantine, so the durable record said "nothing deferred" about a send that may never have
+      happened. `LoopEntity.PendingContinuationRequestID` records WHICH request carries the turn;
+      `HasPendingContinuation` means pending AND uncarried; `SettleRequest` clears both when that request's
+      response arrives — the first moment the send is a fact, and before the completion logic, so a completion for
+      the carrier settles normally. A turn admitted while a carrier is outstanding resets the carrier, because
+      that turn is in no request's body. Test:
+      `TestQuarantinedCarryLeavesTheDeferredTurnInTheDurableRecord`. Mutation: clear at build → the quarantined
+      record forgot the waiting turn
+- [x] 11.4 **Dispatch H1 — `nats.ErrConnectionClosed` was not a proven definite rejection** (`a9eca9d8`).
+      `errors.Is` sees the sentinel, not the site: `nats.Conn.publish` returns it pre-write (`nats.go:4450`) and
+      `RequestMsgWithContext` returns the same sentinel post-write (`context.go:70`) when
+      `clearPendingRequestCalls` (`nats.go:5925-5932`) closes the reply channel on close or ForceReconnect. The
+      sync publish path is `js.PublishMsg` → `RequestMsgWithContext`; `UseOldRequestStyle` is never set in this
+      tree. A connection dropped after the signal went out was read as a refusal, retried, and cancelled a loop
+      the message never named. Removed; the doc comment now says membership is a property of the SENTINEL.
+      `m.JetStream()`'s refusal (`natsclient/client.go:980-983`) stays off for the opposite reason: genuinely
+      pre-write, but a `fmt.Errorf` with no sentinel behind it (`client.go:885`), so recognising it would mean
+      matching error text — omitting it over-quarantines, the direction this list fails on purpose. Test: fourth
+      subtest of `TestBareCancelWithUnconfirmedSignalQuarantines`. Mutation: put it back → Retry (`0x2`) and the
+      counterfactual cancels loop B
+- [x] 11.5 **Loop MEDIUMs 1, 2, 5** (`62dc6cd4`). `SettleRequest`'s two id-matches were load-bearing and untested
+      — an unconditional delete passed every other test in this package — and are now pinned in both directions
+      (`TestSettleRequestOnlyClearsTheRequestItNames`, `TestSettleRequestEndsTheDeferralOnlyForTheCarrier`).
+      `GetLoopForRequestWithRecovery` called `TrackRequest` to repair routing, so a READ announced that the loop
+      was waiting on a request its caller had just answered; routing registration and the outstanding mark are
+      separate writes now (`registerRequestRoute`), pinned by
+      `TestRequestRecoveryRepairsRoutingWithoutMarkingOutstanding`. `HasOutstandingRequest`, which had no
+      consumer, became `OutstandingRequest` and is consumed by 11.1's guard. Mutations: all three reproduced
+- [x] 11.6 **Loop MEDIUM 4 — F4's second justification was false and published in four places** (`89bca953`).
+      `VerdictPayload.Properties` carries the json tag `properties`, so the old raw unmarshal populated it and
+      `EffectiveReason()` — pre-existing, unchanged by `bbb4eae6` — already found the publish-action reason; and
+      the envelope shape that does lose everything is the approve action, which hardcodes
+      `"decision": "approved"` (`processor/rule/actions.go:2198`) while `executeDeny` publishes nothing. No
+      rule-engine rejection can ride it. The spec delta, the migration note and the `HandleVerdict` doc comment
+      now say what WAS lost — every field read at the top level: all of them for the envelope, the audit
+      fingerprint and the rule id for the raw map. The subtest that named the false defect passed against it and
+      is re-pointed at the rule id, which the old top-level read dropped. Mutation: `verdict.RuleID` instead of
+      `verdict.effectiveRuleID()` → the waiter is handed `""`
+- [x] 11.7 **Records, pins and NITs** (this commit). Five stale pins re-derived with `sed -n`: § 9.3's three
+      `component.go` pins (`:919`→`:926`, `:950`/`:955`→`:957`/`:962`, `:1025`→`:1040`) and the two in the comment
+      block F3 rewrote (`component.go:1010` `:945-955`→`:953-963`, `:1016` `loop_tracker.go:204-226`→`:212-233`).
+      NIT 1: the `ErrMaxIterationsReached` arm in `carryDeferredContinuation` is unreachable from its only caller
+      (`handlers.go:1313` fails the delivery on the same predicate first) — kept as a guard and the declared
+      residual now says so instead of describing it as reachable. NIT 2: § 10.1's "settles exactly where a
+      deduplicated one did" is corrected to "strictly later". NIT 3: a deferred continuation recorded no
+      trajectory evidence naming its TaskID, so "which task contributed this turn" was answerable only from a log
+      — against `openspec/project.md` § Purpose and ADR-098; it now emits one observation correlated on the task
+      (`TestDeferredContinuationRecordsTheTaskThatContributedTheTurn`). NIT 4: `doc.go`'s embedder example calls
+      `HandleTask` directly, which is BELOW the conflict guard at the delivery seam — the example says so now.
+      Dispatch NIT-2: `docs/operations/17-tool-call-governance.md:322` and `:372` still framed `execution_id` as a
+      subject concern in the table an operator reads while verdicts are being terminated.
+      The published target truth moved with the code: the agentic-loop delta's identity requirement gains the
+      superseded-response rule and the "record the carrier, clear at settle" rule, with two new scenarios (an
+      unconfirmed carry, and a response the loop is not waiting on), and its old "the pending marker is cleared
+      when that request is built" AND-clause is replaced. The migration note's
+      `model_responses_dropped_total{reason}` entry now names both reason values, because
+      `superseded_request` is new operator-visible behaviour and a redelivery is its commonest cause
+- [x] 11.8 **Gates, measured on the head that ships** (§ 8.9's rule: a count carried across a round is not a
+      measurement). `task lint` 0; `openspec validate stable-request-identity --strict` 0;
+      `openspec validate --all --strict` 0 (56 passed, 0 failed); `task spec:properties` 0 (223/223 — round 1
+      measured 217/217, round 2 added six citations); `task schema:generate` 0 with
+      `git diff --exit-code schemas/ specs/` 0; `go run ./cmd/entity-id-audit .` 0 (1332 structured candidates);
+      `git diff --check origin/main...HEAD` 0; `go test -race -count=1` over `./agentic/`,
+      `./processor/agentic-loop/`, `./processor/agentic-dispatch/`, `./processor/agentic-tools/`,
+      `./processor/agentic-model/`, `./processor/rule/` 0. This round touched no integration-tagged file, so the
+      integration suite ran once, through the canonical runner and its host lock inside `task check:push` — exit
+      0. CI run and job count recorded in the PR body with the head sha

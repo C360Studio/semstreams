@@ -18,6 +18,16 @@ Because the ordinals move only when the loop advances, agentic-loop SHALL hold a
 published: its turn is added to the loop's context and recorded on the loop entity as pending, and the outstanding
 response SHALL carry it into the next iteration's request rather than settling the loop.
 
+A response naming a request the loop is NOT waiting on SHALL change nothing and settle as handled, counted under a
+reason label. One outstanding request is what makes that decidable, and it is required because carrying a turn
+leaves the loop non-terminal: the terminal guard that absorbs a redelivered completion does not apply, so without
+the identity check a redelivery would settle a loop whose carrying request is still in flight.
+
+The record of a pending continuation SHALL name the request that carries it, and SHALL NOT be cleared before that
+request's response arrives. The loop entity is persisted before its publications are emitted, so a marker cleared
+when the carrying request is BUILT is durably clear about a publication whose durability is unknown; naming the
+carrier keeps the turn recoverable while still preventing a second carry.
+
 #### Scenario: The same logical request is minted twice
 
 - **WHEN** a task redelivers and agentic-loop mints the request for a loop whose iteration and retry ordinals have
@@ -51,7 +61,22 @@ response SHALL carry it into the next iteration's request rather than settling t
 - **WHEN** the outstanding response would complete the loop and a continuation is pending
 - **THEN** the loop does NOT complete: no completion record is built and no `agent.complete` is published
 - **AND** the loop advances one iteration and publishes `<loopID>:req:N+1:0` carrying the deferred turn
-- **AND** the pending marker is cleared when that request is built, on this path and on the tool-results path alike
+- **AND** the loop entity records that request as the carrier, on this path and on the tool-results path alike, and
+  the pending record is cleared when that request's response arrives
+
+#### Scenario: A turn is deferred and its carrying request cannot be confirmed
+
+- **WHEN** the publication carrying a deferred turn fails with unknown durability and the delivery is quarantined
+- **THEN** the persisted loop entity still records the turn as pending and names the request that was to carry it
+- **AND** no second request is minted for the same turn while that record names a carrier
+
+#### Scenario: A response arrives for a request the loop is not waiting on
+
+- **WHEN** a model response names a request other than the loop's one outstanding request
+- **THEN** the loop is not advanced, not completed, and publishes nothing
+- **AND** the delivery is acknowledged and counted under a drop reason, because redelivering it cannot help
+- **AND** a response arriving when the loop has NO outstanding request is still handled, because the first
+  delivery's retry arrives after the mark was cleared
 
 #### Scenario: A duplicate request publish meets a configured window
 

@@ -1007,13 +1007,13 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 	//     itself (commands.go:191), never inferred from the command name or
 	//     the response text; and
 	//  2. its target was resolved from the tracker rather than named by the
-	//     message (:945-955).
+	//     message (:953-963).
 	//
 	// With both, the replay is unsound: the message does not carry the identity
 	// the first delivery acted on, and resolution is not stable across it.
 	// GetActiveLoop prefers the channel's loop only while that loop is
 	// non-terminal and otherwise falls back to the user's most recent one
-	// (loop_tracker.go:204-226), so the very effect this delivery had — loop A
+	// (loop_tracker.go:212-233), so the very effect this delivery had — loop A
 	// now terminal — is what makes the redelivery resolve to a DIFFERENT live
 	// loop B and cancel it. A's terminal guard cannot protect B. The burden of
 	// proof is on the Retry and the message cannot meet it, so the lane stops.

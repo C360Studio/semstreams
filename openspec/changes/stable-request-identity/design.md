@@ -148,14 +148,19 @@ deferred one identity decision to #1328. All three are answered here.
   the tool-call path has put an admitted turn ahead of its tool results since intake started attaching (#1227).
   Reordering it means holding the turn outside the context until the response lands, which is a context-manager
   change and not this layer's. Recorded rather than fixed here.
-- **A deferred turn at an exhausted iteration budget is dropped, loudly.** When the outstanding response completes
-  and the loop has no iteration left, the turn cannot be carried: the loop completes and a WARN names the dropped
-  turn. Failing the loop instead would turn a successful completion into a failure because a later message
-  arrived, which is worse for the user than the WARN.
+- **The budget-exhausted drop is a guard, not a reachable state.** `carryDeferredContinuation`'s
+  `ErrMaxIterationsReached` arm completes the loop and WARNs the dropped turn — but `HandleModelResponse` already
+  returns `WrapFatal` at `handlers.go:1313-1320` when `entity.Iterations >= entity.MaxIterations`, over the same
+  value, and nothing between that check and the carry moves `Iterations`. The arm is therefore unreachable from
+  its only caller today, and it is kept deliberately: it is the correct behaviour if a future caller carries from
+  somewhere past that check, and failing the loop instead would turn a successful completion into a failure
+  because a later message arrived. Corrected at round 2 — the earlier text declared it as a reachable residual.
 - **The outstanding-request registry is process-local.** `LoopManager.outstandingRequests` answers "is this loop
   waiting on a model right now"; `requestToLoop` cannot, because it is append-only for the loop's whole life. A
   process replacement loses it along with the rest of the loop, and the pending-continuation marker on
-  `LoopEntity` then persists with nothing to clear it. Restoring both is L4's (#1330), with the rest of the loop.
+  `LoopEntity` — with the request that carries it — then persists with nothing to settle it. Restoring both is
+  L4's (#1330), with the rest of the loop. The marker surviving a quarantine is what makes that restoration
+  possible at all: the durable record says which request was supposed to carry the turn.
 
 ## Declared deviations from the brief
 

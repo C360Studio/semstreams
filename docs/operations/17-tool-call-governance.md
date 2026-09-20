@@ -319,7 +319,7 @@ resolve against the proposed-call payload:
 |---|---|
 | `$message.loop_id` | The loop's bare UUID |
 | `$message.request_id` | The provider request identity, `<loop_id>:req:<iteration>:<retry>`. **Echo it on any rule that does not echo `loop_id`** — it is the only other place the loop survives, and a verdict that arrives after its waiter is gone carrying neither is terminated as malformed |
-| `$message.execution_id` | The framework tool-execution identity — required for verdict subjects |
+| `$message.execution_id` | The framework tool-execution identity. **Echo it in the verdict PAYLOAD** — that is where routing reads it. The subject is a delivery address, not the identity: a verdict whose payload omits `execution_id` is lost however its subject is spelled |
 | `$message.call_id` | The provider's request-scoped tool-call ID |
 | `$message.proposal_fingerprint` | The canonical proposed-call fingerprint. Echo it: it is carried as audit context, and nothing compares it to the proposal today, so a wrong value is not refused — verdicts route on `execution_id` alone |
 | `$message.tool_name` | The tool name (`bash`, `http_request`, etc.) |
@@ -368,9 +368,11 @@ The loop is in enforce mode but no rule is firing a verdict. Check:
 1. Is the rule engine running and subscribed to `agent.toolcall.proposed.>`?
 2. Does at least one rule's `subscribe` field include
    `agent.toolcall.proposed.>` (or a more specific match)?
-3. Are rule actions writing to
-   `agent.toolcall.approved.$message.execution_id` or
-   `.rejected.…`?
+3. Do the rule actions put `execution_id` in the verdict PAYLOAD — top level,
+   or under `properties` for a `publish` action? Routing reads the payload, so
+   a verdict missing it is lost even on a perfectly spelled subject. (Then
+   check the subject: `agent.toolcall.approved.$message.execution_id` or
+   `.rejected.…`.)
 4. Is the rule's evaluation triggering? Check
    `semstreams_rule_evaluations_total{rule_name=...,result=triggered}`.
 
