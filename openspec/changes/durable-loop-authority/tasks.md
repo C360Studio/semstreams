@@ -375,3 +375,12 @@ re-home commit. Backup ref `refs/backup/gh1329-pre-l2round1-rebase-20260920` = `
       two lines its new residual names, so no text here goes stale with it. `go build ./...` 0 and
       `go test -race -count=1 ./processor/agentic-loop/ ./processor/agentic-dispatch/ ./agentic/` 0 on the
       rebased head
+- [x] 11.5 Re-based again onto L2's test head `d127adeb` (backup ref
+      `refs/backup/gh1329-pre-l2tests-rebase-20260920` = `d0c70e80`). 25 commits, NO conflict: that round is
+      test-only — two new observations in `superseded_response_test.go` and `continuation_deferral_test.go` plus
+      its own § 12.5 record — and this change touches neither file, nor `state.go`, `handlers.go` or `metrics.go`,
+      which is where their subjects and their mutations live. One real coupling, and it holds: L2's new
+      superseded-response fixture builds its component through `releaseTestComponent`, the helper § 6 here
+      extended to stamp declared output ports, and it passes on the rebased head. `go build ./...` 0,
+      `go test -race -count=1 ./processor/agentic-loop/ ./processor/agentic-dispatch/` 0, `task test` 0,
+      `task lint` 0, `task spec:properties` 262/262, `task openspec:validate` 57/57, no schema drift
