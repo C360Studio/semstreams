@@ -175,7 +175,9 @@ func TestBareCancelWithUnconfirmedSignalQuarantines(t *testing.T) {
 		// createNewRequestAndSend already wrote. errors.Is cannot tell the two
 		// sites apart, so the fixture stores: this is the connection that
 		// dropped with the signal already gone.
-		c, stored := cancelAmbiguityComponent(t, true, nats.ErrConnectionClosed)
+		stored := &[]agentic.UserSignal{}
+		c := cancelAmbiguityWorld(t, true, nats.ErrConnectionClosed, stored,
+			ambiguityLoop(ambiguousLoopA, agentic.LoopStateExecuting))
 
 		decision, err := c.handleUserMessage(t.Context(), cancelCommandMessage(t, "/cancel"))
 
@@ -185,20 +187,14 @@ func TestBareCancelWithUnconfirmedSignalQuarantines(t *testing.T) {
 		require.Equal(t, []string{ambiguousLoopA}, signalledLoopIDs(*stored),
 			"the fixture must have stored, or the test proves nothing about the ambiguous case")
 
-		// The cost of Retry here, driven the same way as the first subtest.
+		// The cost of Retry here, driven the same way as the first subtest:
+		// against the world the first attempt left behind, with B born on the
+		// same route while A was settling.
 		if decision == natsclient.DeliveryDecisionRetry {
-			c.loopTracker.UpdateState(ambiguousLoopA, "cancelled")
-			withPersistedLoops(c, map[string]*agentic.LoopEntity{
-				ambiguousLoopA: {
-					ID: ambiguousLoopA, UserID: "operator-1", ChannelType: "http", ChannelID: "session-a",
-					State: agentic.LoopStateCancelled, MaxIterations: 5,
-				},
-				ambiguousLoopB: {
-					ID: ambiguousLoopB, UserID: "operator-1", ChannelType: "http", ChannelID: "session-b",
-					State: agentic.LoopStateExecuting, MaxIterations: 5,
-				},
-			})
-			_, err = c.handleUserMessage(t.Context(), cancelCommandMessage(t, "/cancel"))
+			redelivery := cancelAmbiguityWorld(t, true, nats.ErrConnectionClosed, stored,
+				ambiguityLoop(ambiguousLoopA, agentic.LoopStateCancelled),
+				ambiguityLoop(ambiguousLoopB, agentic.LoopStateExecuting))
+			_, err = redelivery.handleUserMessage(t.Context(), cancelCommandMessage(t, "/cancel"))
 			require.Error(t, err)
 		}
 		require.NotContains(t, signalledLoopIDs(*stored), ambiguousLoopB,
