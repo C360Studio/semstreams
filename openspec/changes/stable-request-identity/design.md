@@ -39,6 +39,36 @@ committed `AgentResponse` for that RequestID acknowledges the redelivery without
 The tests say it in that order — `TestIntegrationRepublishedRequestIDReusesRetainedResponseOutsideAnyWindow`
 proves the guarantee with no window in play; the window test is the bonus.
 
+## One outstanding request per loop (review round 1, F1)
+
+The Q4 grammar `<loopID>:req:<iteration>:<retry>` is unique only if the loop mints at most one request per
+`(iteration, retry)` pair. Both ordinals move when the LOOP advances — `IncrementIteration` runs on the
+tool-results path, the truncation counter on the retry path — so a second request minted while the first is still
+outstanding carries the first's name and, with `Nats-Msg-Id` stamped from it, is dropped by the duplicate window.
+That is what a continuation admitted mid-request did: `attachContinuation` refused a terminal loop, a loop with
+pending tools and a loop awaiting approval, but not a loop that was waiting on a model.
+
+The answer is NOT a third identity segment. A third segment would mean the loop can have two requests in flight,
+and then a response's RequestID no longer tells the loop which turn it answers. The invariant is enforced instead:
+
+- **Knowing.** `LoopManager.outstandingRequests` (loopID → requestID) is written by `TrackRequest`, which every
+  model-request publish site already calls, and cleared by `SettleRequest` when the response arrives. It matches on
+  the request ID, so a late response for a superseded request cannot clear a newer request's mark.
+  `requestToLoop` could not answer this: its only delete is `releaseLoop`, so it is append-only for the loop's
+  life and records "published", never "outstanding".
+- **Deferring.** `attachContinuation` returns a `deferred` flag instead of refusing. `HandleTask` does everything
+  it normally does — the turn into the context, the caches the next request reads — and skips only the publish.
+  The result carries `Deferred`, so the task delivery can tell it from a dedup; it Acks after the loop-entity Put,
+  which is the effect it owns.
+- **Carrying.** `LoopEntity.PendingContinuation` says a turn is waiting. A completion response that meets it
+  advances the loop instead of settling: `carryDeferredContinuation` increments the iteration and calls
+  `publishIterationRequest`, the one home both this path and the tool-results path now use to build the next
+  request. The marker clears there, which is the moment the turn stops being deferred.
+
+Settlement is untouched. A deferred task Acks exactly where a deduplicated one did; the carried request travels in
+an ordinary non-terminal `HandlerResult` through `persistHandlerResult`, so a stamp or publish failure quarantines
+under L1's existing rule rather than under a new one.
+
 ## L1's residuals that name this layer
 
 L1 (#1327, squash-merged as `94cd8e4c`) left two residuals naming commits of this branch, and its promoted spec
@@ -86,14 +116,20 @@ deferred one identity decision to #1328. All three are answered here.
   which costs one extra provider call and nothing else. Deriving it durably is L4's, from
   `LoopEntity.PublishedRequestID` (#1330, ruling Q4: "the durable input for the retry ordinal is
   `PublishedRequestID` itself").
-- **A continuation admitted while a request is in flight reuses that request's name.** `attachContinuation`
-  refuses a terminal loop, a loop with pending tools, and a loop awaiting approval, but not a loop whose model
-  request is outstanding — and both requests sit at the same `Iterations`. Inside the duplicate window the
-  continuation's publish is rejected. Outside it there is nothing retained to answer from — the first request has
-  not returned — so the provider is called twice, which is what happens today and is not made worse. Either way
-  the continuation's added turn is not lost: it is in the loop's context manager and rides the next iteration's
-  request, so the consequence is a deferred turn and not a dropped one. Making the outstanding request's identity
-  durable is L4's.
+- **The deferred continuation's turn is ordered before the response it was admitted behind.** The turn enters the
+  context at admission, so a request that carries it reads `[… user(deferred turn), assistant(the answer that was
+  outstanding)]` — the two in the order they were written down, not the order they were spoken. This is not new:
+  the tool-call path has put an admitted turn ahead of its tool results since intake started attaching (#1227).
+  Reordering it means holding the turn outside the context until the response lands, which is a context-manager
+  change and not this layer's. Recorded rather than fixed here.
+- **A deferred turn at an exhausted iteration budget is dropped, loudly.** When the outstanding response completes
+  and the loop has no iteration left, the turn cannot be carried: the loop completes and a WARN names the dropped
+  turn. Failing the loop instead would turn a successful completion into a failure because a later message
+  arrived, which is worse for the user than the WARN.
+- **The outstanding-request registry is process-local.** `LoopManager.outstandingRequests` answers "is this loop
+  waiting on a model right now"; `requestToLoop` cannot, because it is append-only for the loop's whole life. A
+  process replacement loses it along with the rest of the loop, and the pending-continuation marker on
+  `LoopEntity` then persists with nothing to clear it. Restoring both is L4's (#1330), with the rest of the loop.
 
 ## Declared deviations from the brief
 

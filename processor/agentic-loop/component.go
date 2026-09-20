@@ -1317,6 +1317,22 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 		return nil
 	}
 
+	// A deferred continuation is not a dedup and not a spawn: the loop already
+	// exists, the turn is already in its context, and the durable effect this
+	// delivery owns is the pending-continuation marker on the loop entity. There
+	// is nothing to publish and no graph birth to do — the loop was born on its
+	// first task. Persisting the entity is best-effort here exactly as it is on
+	// the spawn path below; what the marker survives in-process is this
+	// process, and restoring it across a replacement is L4's (#1330).
+	if result.Deferred {
+		c.logger.Debug("Task deferred behind the loop's outstanding model request",
+			slog.String("loop_id", result.LoopID),
+			slog.String("task_id", task.TaskID))
+		c.recordTrajectoryObservations(ctx, result)
+		c.persistLoopState(ctx, result.LoopID)
+		return nil
+	}
+
 	if !result.Created {
 		pending, ok := c.pendingTaskResult(task.TaskID, result.LoopID)
 		if !ok {

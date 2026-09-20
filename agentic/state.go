@@ -79,6 +79,24 @@ type LoopEntity struct {
 	PendingApproval     *PendingApprovalState `json:"pending_approval,omitempty"`
 	StateBeforeApproval LoopState             `json:"state_before_approval,omitempty"`
 
+	// PendingContinuation is set when a continuation task was admitted to this
+	// loop while its model request was still outstanding. The continuation's
+	// turn is already in the loop's context; what this marker carries is that
+	// the turn has NOT been sent yet, so the outstanding response must not
+	// complete the loop — it advances to the next iteration and publishes a
+	// request that includes it. Cleared when that request is built.
+	//
+	// One outstanding model request per loop is what makes the request name
+	// (`<loopID>:req:<iteration>:<retry>`) unique: two requests minted at the
+	// same iteration carry the same name and the same Nats-Msg-Id, and the
+	// duplicate window drops the second. This marker is how the loop keeps that
+	// invariant without a third identity segment (owner ruling Q4).
+	//
+	// Residual, declared: restoring this across a process replacement is L4's
+	// (#1330). In-process it is authoritative; after a replacement the whole
+	// loop needs recovery, not just this bit.
+	PendingContinuation bool `json:"pending_continuation,omitempty"`
+
 	// User context (for routing responses)
 	UserID      string `json:"user_id,omitempty"`      // User who initiated the loop
 	ChannelType string `json:"channel_type,omitempty"` // cli, slack, discord, web

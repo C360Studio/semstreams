@@ -59,23 +59,30 @@ var (
 
 // LoopManager manages loop entity lifecycle and state
 type LoopManager struct {
-	loops                  map[string]*agentic.LoopEntity
-	contextManagers        map[string]*ContextManager          // loopID -> ContextManager
-	pendingTools           map[string]map[string]bool          // loopID -> map[callID]bool
-	queuedToolCalls        map[string][]agentic.ToolCall       // loopID -> remaining calls to dispatch serially
-	cachedTools            map[string][]agentic.ToolDefinition // loopID -> tools (runtime cache, not persisted)
-	cachedToolChoice       map[string]*agentic.ToolChoice      // loopID -> tool choice (runtime cache, not persisted)
-	cachedMetadata         map[string]map[string]any           // loopID -> metadata (domain context, not persisted)
-	cachedRequestTimeout   map[string]string                   // loopID -> request timeout (from TaskMessage.Timeout, not persisted)
-	cachedResponseFormat   map[string]*agentic.ResponseFormat  // loopID -> response_format (from TaskMessage.ResponseFormat, not persisted)
-	taskPrompts            map[string]string                   // loopID -> original task prompt (for context recovery)
-	requestToLoop          map[string]string                   // requestID -> loopID
-	toolCallToLoop         map[string]string                   // executionID -> loopID
-	executionIDToName      map[string]string                   // executionID -> function name (for Gemini tool result name field)
-	executionIDToArguments map[string]map[string]any           // executionID -> tool arguments (for trajectory audit)
-	executionIDToOrdinal   map[string]uint32                   // executionID -> model response order (for trajectory audit)
-	requestStartTimes      map[string]time.Time                // requestID -> start time (for duration measurement)
-	executionStartTimes    map[string]time.Time                // executionID -> start time (for duration measurement)
+	loops                map[string]*agentic.LoopEntity
+	contextManagers      map[string]*ContextManager          // loopID -> ContextManager
+	pendingTools         map[string]map[string]bool          // loopID -> map[callID]bool
+	queuedToolCalls      map[string][]agentic.ToolCall       // loopID -> remaining calls to dispatch serially
+	cachedTools          map[string][]agentic.ToolDefinition // loopID -> tools (runtime cache, not persisted)
+	cachedToolChoice     map[string]*agentic.ToolChoice      // loopID -> tool choice (runtime cache, not persisted)
+	cachedMetadata       map[string]map[string]any           // loopID -> metadata (domain context, not persisted)
+	cachedRequestTimeout map[string]string                   // loopID -> request timeout (from TaskMessage.Timeout, not persisted)
+	cachedResponseFormat map[string]*agentic.ResponseFormat  // loopID -> response_format (from TaskMessage.ResponseFormat, not persisted)
+	taskPrompts          map[string]string                   // loopID -> original task prompt (for context recovery)
+	requestToLoop        map[string]string                   // requestID -> loopID
+	// outstandingRequests names the ONE model request a loop has published and
+	// not yet had answered. requestToLoop cannot answer that question: it is
+	// append-only for the loop's whole life (its only delete is releaseLoop),
+	// so it records "this loop published X", never "X is still in flight".
+	// Process-local on purpose — a replacement has lost the whole loop, not
+	// just this entry, and durable recovery is L4's (#1330).
+	outstandingRequests    map[string]string         // loopID -> requestID
+	toolCallToLoop         map[string]string         // executionID -> loopID
+	executionIDToName      map[string]string         // executionID -> function name (for Gemini tool result name field)
+	executionIDToArguments map[string]map[string]any // executionID -> tool arguments (for trajectory audit)
+	executionIDToOrdinal   map[string]uint32         // executionID -> model response order (for trajectory audit)
+	requestStartTimes      map[string]time.Time      // requestID -> start time (for duration measurement)
+	executionStartTimes    map[string]time.Time      // executionID -> start time (for duration measurement)
 	// truncationRetryAttempts counts consecutive within-iteration retries
 	// driven by length-truncation responses. Reset to 0 whenever the loop
 	// makes forward progress (StatusComplete or StatusToolCall response).
@@ -122,6 +129,7 @@ func NewLoopManager(opts ...LoopManagerOption) *LoopManager {
 		cachedResponseFormat:    make(map[string]*agentic.ResponseFormat),
 		taskPrompts:             make(map[string]string),
 		requestToLoop:           make(map[string]string),
+		outstandingRequests:     make(map[string]string),
 		toolCallToLoop:          make(map[string]string),
 		executionIDToName:       make(map[string]string),
 		executionIDToArguments:  make(map[string]map[string]any),
@@ -152,6 +160,7 @@ func NewLoopManagerWithConfig(contextConfig ContextConfig, opts ...LoopManagerOp
 		cachedResponseFormat:    make(map[string]*agentic.ResponseFormat),
 		taskPrompts:             make(map[string]string),
 		requestToLoop:           make(map[string]string),
+		outstandingRequests:     make(map[string]string),
 		toolCallToLoop:          make(map[string]string),
 		executionIDToName:       make(map[string]string),
 		executionIDToArguments:  make(map[string]map[string]any),
@@ -270,34 +279,67 @@ func (m *LoopManager) CreateLoopWithID(loopID, taskID, role, model string, maxIt
 //
 // No other per-loop state is touched: the context manager, the pending-tool
 // set, and every cache stay exactly as the live loop left them.
-func (m *LoopManager) attachContinuation(loopID, taskID string) (agentic.LoopEntity, error) {
+func (m *LoopManager) attachContinuation(loopID, taskID string) (agentic.LoopEntity, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	entity, exists := m.loops[loopID]
 	if !exists {
-		return agentic.LoopEntity{}, errs.Wrap(
+		return agentic.LoopEntity{}, false, errs.Wrap(
 			fmt.Errorf("loop %s: %w", loopID, ErrLoopNotFound),
 			"agentic-loop", "attachContinuation", "find loop")
 	}
 	if entity.State.IsTerminal() {
-		return agentic.LoopEntity{}, errs.WrapInvalid(
+		return agentic.LoopEntity{}, false, errs.WrapInvalid(
 			fmt.Errorf("loop %s is %s: %w", loopID, entity.State, ErrLoopTerminal),
 			"agentic-loop", "attachContinuation", "refuse continuation of a settled loop")
 	}
 	if pending := len(m.pendingTools[loopID]); pending > 0 {
-		return agentic.LoopEntity{}, errs.WrapTransient(
+		return agentic.LoopEntity{}, false, errs.WrapTransient(
 			fmt.Errorf("loop %s has %d tool call(s) still outstanding: %w", loopID, pending, ErrLoopBusy),
 			"agentic-loop", "attachContinuation", "refuse continuation of a loop with work in flight")
 	}
 	if entity.State == agentic.LoopStateAwaitingApproval {
-		return agentic.LoopEntity{}, errs.WrapTransient(
+		return agentic.LoopEntity{}, false, errs.WrapTransient(
 			fmt.Errorf("loop %s is awaiting a human approval decision: %w", loopID, ErrLoopBusy),
 			"agentic-loop", "attachContinuation", "refuse continuation of a loop with work in flight")
 	}
 
 	entity.TaskID = taskID
-	return *entity, nil
+
+	// A loop waiting on a model response is NOT refused — refusing would throw
+	// the user's turn away, and this is the ordinary "someone typed while the
+	// agent was thinking" case. It is DEFERRED: the caller puts the turn in the
+	// loop's context and publishes nothing, because a second request minted now
+	// would carry this iteration's name a second time and the duplicate window
+	// would drop it. The outstanding response then advances the loop instead of
+	// completing it.
+	if _, outstanding := m.outstandingRequests[loopID]; outstanding {
+		entity.PendingContinuation = true
+		return *entity, true, nil
+	}
+
+	return *entity, false, nil
+}
+
+// ClearPendingContinuation drops the deferred-continuation marker. Called when
+// the request that carries the deferred turn is built, which is the moment the
+// turn stops being deferred.
+func (m *LoopManager) ClearPendingContinuation(loopID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if entity, exists := m.loops[loopID]; exists {
+		entity.PendingContinuation = false
+	}
+}
+
+// HasPendingContinuation reports whether a continuation turn is waiting for a
+// request to carry it.
+func (m *LoopManager) HasPendingContinuation(loopID string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	entity, exists := m.loops[loopID]
+	return exists && entity.PendingContinuation
 }
 
 // HasActiveLoopForTask returns true if a non-terminal loop already exists for the
@@ -504,6 +546,7 @@ func (m *LoopManager) DeleteLoop(loopID string) error {
 	delete(m.cachedResponseFormat, loopID)
 	delete(m.taskPrompts, loopID)
 	delete(m.truncationRetryAttempts, loopID)
+	delete(m.outstandingRequests, loopID)
 
 	prefix := loopID + ":"
 	for k, owner := range m.requestToLoop {
@@ -768,11 +811,36 @@ func (m *LoopManager) ClearQueuedTools(loopID string) {
 	delete(m.queuedToolCalls, loopID)
 }
 
-// TrackRequest associates a request ID with a loop ID
+// TrackRequest associates a request ID with a loop ID and marks it as the
+// loop's one outstanding model request. Every model-request publish site calls
+// this already, which is why the invariant is recorded here rather than in a
+// fourth call each site could forget.
 func (m *LoopManager) TrackRequest(requestID, loopID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.requestToLoop[requestID] = loopID
+	m.outstandingRequests[loopID] = requestID
+}
+
+// SettleRequest clears the loop's outstanding-request marker when the named
+// request is the one outstanding. Matching on the request ID matters: a late
+// response for a superseded request must not clear a newer request's mark and
+// let a continuation publish a second request at the same iteration.
+func (m *LoopManager) SettleRequest(loopID, requestID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if outstanding, ok := m.outstandingRequests[loopID]; ok && outstanding == requestID {
+		delete(m.outstandingRequests, loopID)
+	}
+}
+
+// HasOutstandingRequest reports whether this loop is waiting on a model
+// response right now.
+func (m *LoopManager) HasOutstandingRequest(loopID string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, outstanding := m.outstandingRequests[loopID]
+	return outstanding
 }
 
 // GetLoopForRequest retrieves the loop ID for a request ID

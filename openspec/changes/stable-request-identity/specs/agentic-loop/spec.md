@@ -13,6 +13,11 @@ Every `agent.request` publication SHALL stamp its RequestID as `Nats-Msg-Id`. Se
 inside the stream's configured window is a bounded convenience and SHALL NOT be treated as the mechanism that
 prevents repeated provider work; that mechanism is the retained-response rule in `agentic-model`.
 
+Because the ordinals move only when the loop advances, agentic-loop SHALL hold at most ONE outstanding
+`agent.request` per loop. A continuation admitted while a request is outstanding SHALL be neither refused nor
+published: its turn is added to the loop's context and recorded on the loop entity as pending, and the outstanding
+response SHALL carry it into the next iteration's request rather than settling the loop.
+
 #### Scenario: The same logical request is minted twice
 
 - **WHEN** a task redelivers and agentic-loop mints the request for a loop whose iteration and retry ordinals have
@@ -31,6 +36,22 @@ prevents repeated provider work; that mechanism is the retained-response rule in
 - **WHEN** any consumer recovers the loop token from a RequestID, by the `:req:` separator or by the first colon
 - **THEN** it reads the same loop token the framework minted
 - **AND** the resolved `agent.response.<requestID>` subject is a single valid NATS token
+
+#### Scenario: A continuation is admitted while a request is outstanding
+
+- **WHEN** a task naming a live loop is admitted before that loop's outstanding `agent.request` has been answered
+- **THEN** no `agent.request` is published for it, because a request minted now would carry the outstanding
+  request's RequestID and `Nats-Msg-Id` with different bytes
+- **AND** the continuation is not refused: its turn is added to the loop's context and the loop entity records a
+  pending continuation
+- **AND** the task delivery is acknowledged, because the loop entity write is the effect it owns
+
+#### Scenario: A completion response meets a deferred continuation
+
+- **WHEN** the outstanding response would complete the loop and a continuation is pending
+- **THEN** the loop does NOT complete: no completion record is built and no `agent.complete` is published
+- **AND** the loop advances one iteration and publishes `<loopID>:req:N+1:0` carrying the deferred turn
+- **AND** the pending marker is cleared when that request is built, on this path and on the tool-results path alike
 
 #### Scenario: A duplicate request publish meets a configured window
 

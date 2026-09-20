@@ -65,6 +65,13 @@ type HandlerResult struct {
 	ContextEvents        []agentic.ContextEvent
 	RetryScheduled       bool
 	MaxIterationsReached bool
+	// Deferred is true when HandleTask admitted a continuation to a loop whose
+	// model request was still outstanding. Nothing was published: the turn is in
+	// the loop's context and the outstanding response will carry it into the
+	// next iteration's request. The delivery is done — the durable effect is the
+	// loop entity's pending-continuation marker, not a publication.
+	Deferred bool
+
 	// Created is true only when HandleTask actually created a new loop.
 	// False on the dedup short-circuit path (TaskMessage redelivered for
 	// an already-active task). Component uses this to gate
@@ -849,7 +856,7 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 	// function, which otherwise seeds a brand-new loop.
 	var loopID string
 	var err error
-	continuation := false
+	var continuation, deferred bool
 	entity := agentic.LoopEntity{}
 
 	effectiveMaxIterations := effectiveLoopMaxIterations(task, h.config.MaxIterations)
@@ -859,7 +866,7 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 		switch {
 		case err == nil:
 		case errors.Is(err, ErrLoopAlreadyExists):
-			entity, err = h.loopManager.attachContinuation(task.LoopID, task.TaskID)
+			entity, deferred, err = h.loopManager.attachContinuation(task.LoopID, task.TaskID)
 			if err != nil {
 				// A settled loop (ErrLoopTerminal) and a loop with work in
 				// flight (ErrLoopBusy) both refuse the continuation outright;
@@ -872,7 +879,8 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 			h.logger.Info("Continuation attached to live loop",
 				slog.String("loop_id", loopID),
 				slog.String("task_id", task.TaskID),
-				slog.String("loop_state", string(entity.State)))
+				slog.String("loop_state", string(entity.State)),
+				slog.Bool("deferred", deferred))
 		default:
 			return HandlerResult{}, err
 		}
@@ -1028,12 +1036,42 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 		h.loopManager.CacheResponseFormat(loopID, task.ResponseFormat)
 	}
 
+	// The deferral itself. Everything above has run — the turn is in the loop's
+	// context, the caches the next request reads carry this task's tools, tool
+	// choice, metadata, timeout and response format — and the one thing that
+	// does NOT happen is the publish. Minting a request now would reuse the
+	// outstanding request's `<loopID>:req:<iteration>:<retry>` name, and the
+	// duplicate window would drop it: same name, different bytes. The
+	// outstanding response carries this turn into iteration N+1 instead.
+	if deferred {
+		keepTrajectory = true
+		return h.deferredContinuationResult(loopID, task.TaskID, entity), nil
+	}
+
 	result, err := h.buildTaskRequest(loopID, task, entity, messages, tools)
 	if err != nil {
 		return HandlerResult{}, err
 	}
 	keepTrajectory = true
 	return result, nil
+}
+
+// deferredContinuationResult is the empty-handed result a deferred continuation
+// returns: the loop is unchanged except for its context and its pending marker,
+// and nothing is published.
+func (h *MessageHandler) deferredContinuationResult(loopID, taskID string, entity agentic.LoopEntity) HandlerResult {
+	h.logger.Info("Continuation deferred behind an outstanding model request",
+		slog.String("loop_id", loopID),
+		slog.String("task_id", taskID),
+		slog.Int("iterations", entity.Iterations))
+	return HandlerResult{
+		LoopID:            loopID,
+		State:             entity.State,
+		Deferred:          true,
+		PublishedMessages: []PublishedMessage{},
+		TrajectorySteps:   []agentic.TrajectoryStep{},
+		ContextEvents:     []agentic.ContextEvent{},
+	}
 }
 
 // buildTaskRequest creates the initial agent request, trajectory step, and loop-created
@@ -1139,6 +1177,11 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 	if err != nil {
 		return HandlerResult{}, err
 	}
+	// This request is answered, whatever the outcome below. Clearing the
+	// outstanding mark here rather than in the success arms means an early
+	// return (timeout, terminal loop, budget exhausted) does not leave the loop
+	// looking like it is still waiting on a model.
+	h.loopManager.SettleRequest(loopID, response.RequestID)
 	result := HandlerResult{
 		LoopID:            loopID,
 		State:             entity.State,
@@ -1279,6 +1322,23 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 		// read_loop_result, even when the provider adapter routed it to
 		// the non-canonical field.
 		completionText := resolveCompletionText(response.Message)
+
+		// A continuation was admitted while this request was outstanding and
+		// published nothing, because minting a request then would have reused
+		// this request's name. Completing now would settle the loop with that
+		// turn unanswered and no later request to carry it — the case the
+		// "deferred, not dropped" claim was false for. The loop advances
+		// instead, and only a loop with nothing deferred completes here.
+		if h.loopManager.HasPendingContinuation(loopID) {
+			carried, err := h.carryDeferredContinuation(ctx, loopID, entity, cm, &result)
+			if err != nil {
+				return result, err
+			}
+			if carried {
+				return result, nil
+			}
+		}
+
 		// Model-text completion: no terminal tool, so no typed decision.
 		if err := h.handleCompleteResponse(&result, loopID, entity, completionText, nil); err != nil {
 			return result, err
@@ -2555,6 +2615,29 @@ func (h *MessageHandler) handleToolsComplete(
 		_ = cm.AddMessage(RegionRecentHistory, tm)
 	}
 
+	if err := h.publishIterationRequest(ctx, loopID, entity, cm, result, newIteration); err != nil {
+		return *result, err
+	}
+
+	return *result, nil
+}
+
+// publishIterationRequest builds and appends the loop's next model request from
+// its accumulated context. It is the ONE home for "what the next iteration asks
+// the model", reached from the tool-results path and from a completion response
+// that must carry a deferred continuation instead of settling.
+//
+// It also clears the pending-continuation marker: the turn stops being deferred
+// exactly when a request that includes it is built, and putting that in one
+// place is what keeps the marker from outliving the turn on either path.
+func (h *MessageHandler) publishIterationRequest(
+	ctx context.Context,
+	loopID string,
+	entity agentic.LoopEntity,
+	cm *ContextManager,
+	result *HandlerResult,
+	newIteration int,
+) error {
 	// Pre-request integrity audit. Belt-and-suspenders for any orphan
 	// tool_calls C1's synth-result wiring missed (KV-restored loops
 	// with corrupt context, future failure paths added without the
@@ -2580,14 +2663,13 @@ func (h *MessageHandler) handleToolsComplete(
 
 	// Check for cancellation before building request
 	if err := ctx.Err(); err != nil {
-		return *result, err
+		return err
 	}
 
 	// Get cached tools and tool choice for this loop (set once at loop start)
 	tools := h.loopManager.GetCachedTools(loopID)
 	toolChoice := h.loopManager.GetCachedToolChoice(loopID)
 
-	// All tools complete - send next agent request with full conversation
 	request := agentic.AgentRequest{
 		RequestID:      h.loopManager.GenerateRequestID(loopID),
 		LoopID:         loopID,
@@ -2603,15 +2685,16 @@ func (h *MessageHandler) handleToolsComplete(
 	// Track request ID to loop ID mapping (cache for fast lookup)
 	h.loopManager.TrackRequest(request.RequestID, loopID)
 	h.loopManager.TrackRequestStart(request.RequestID)
+	h.loopManager.ClearPendingContinuation(loopID)
 
 	requestMsg := message.NewBaseMessage(request.Schema(), &request, "agentic-loop")
 	requestData, err := json.Marshal(requestMsg)
 	if err != nil {
-		return *result, err
+		return err
 	}
 	requestSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.request", loopID)
 	if err != nil {
-		return *result, err
+		return err
 	}
 
 	result.PublishedMessages = append(result.PublishedMessages, PublishedMessage{
@@ -2634,7 +2717,46 @@ func (h *MessageHandler) handleToolsComplete(
 		Evidence:          request,
 	})
 
-	return *result, nil
+	return nil
+}
+
+// carryDeferredContinuation advances a loop that was ABOUT to complete into one
+// more iteration, because a continuation turn was admitted while this response
+// was outstanding and nothing has carried it yet. Returns false when the turn
+// cannot be carried, in which case the caller completes the loop as it would
+// have.
+func (h *MessageHandler) carryDeferredContinuation(
+	ctx context.Context,
+	loopID string,
+	entity agentic.LoopEntity,
+	cm *ContextManager,
+	result *HandlerResult,
+) (bool, error) {
+	if err := h.loopManager.IncrementIteration(loopID); err != nil {
+		// Budget exhaustion is the one refusal that is not an error here: the
+		// model said it was done and the loop has no iteration left to spend,
+		// so completing is the right outcome and the deferred turn cannot be
+		// carried. It is WARNed rather than swallowed, because a lost user turn
+		// is a fact an operator should be able to find.
+		if errors.Is(err, agentic.ErrMaxIterationsReached) {
+			h.logger.Warn("deferred continuation dropped — iteration budget exhausted at completion",
+				slog.String("loop_id", loopID),
+				slog.Int("iterations", entity.Iterations),
+				slog.Int("max_iterations", entity.MaxIterations))
+			h.loopManager.ClearPendingContinuation(loopID)
+			return false, nil
+		}
+		return false, errs.Wrap(err, "agentic-loop", "carryDeferredContinuation", "increment iteration")
+	}
+
+	newIteration := h.loopManager.GetCurrentIteration(loopID)
+	h.logger.Info("Completion deferred — carrying a continuation into the next iteration",
+		slog.String("loop_id", loopID),
+		slog.Int("iteration", newIteration))
+	if err := h.publishIterationRequest(ctx, loopID, entity, cm, result, newIteration); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // hasUserOrAssistantMessage returns true if the messages contain at least one
