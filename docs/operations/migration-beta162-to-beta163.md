@@ -1269,10 +1269,10 @@ an execution id is still one dotless subject token.
 **What to check.**
 
 - **A consumer that reads one call's result by exact subject** — `GetLastMsgForSubject("tool.result." + callID)`
-  finds nothing now. Read the `execution_id` off the `ToolCall` (or, for an approval-gated call, off the loop's
-  persisted `pending_approval.execution_id`; `ApprovalPendingEvent` still publishes only the provider `call_id`)
-  and address the result under that. Every `ToolResult` carries `request_id`, `execution_id` and `call_ordinal`,
-  so a consumer that scans the family can correlate without predicting a subject.
+  finds nothing now. Read the `execution_id` off the `ToolCall`, off the `agent.approval_pending` event for an
+  approval-gated call, or off the loop's persisted `pending_approval.execution_id`, and address the result under
+  that. Every `ToolResult` carries `request_id`, `execution_id` and `call_ordinal`, so a consumer that scans the
+  family can correlate without predicting a subject.
 - **Anything that publishes a `ToolCall` directly onto `tool.execute.*`** — a harness, a replay tool, a fixture.
   agentic-tools now validates the correlation before executing and **terminates** a delivery whose `request_id`
   or `execution_id` is empty or whose `call_ordinal` is zero: the call is not retried and no result is ever
@@ -1303,6 +1303,53 @@ valid PromQL and reads zero forever.** An alert written as
 panel filtered to it draws a flat line that reads as "no drops are happening". Nothing errors, and nothing in the
 upgrade tells you. Edit the selector to `reason="stale_execution"`, or drop the matcher and aggregate
 `by (reason)`; `stale_execution` is the only value this build emits, so that aggregation returns one series.
+
+## An approval response must echo the execution identity it answers (#1328)
+
+`agent.approval_pending` and `agent.approval_response` each gained two fields. Both are additive — the payloads'
+existing fields are unchanged and nothing new is required at decode.
+
+| Field | On | Means |
+|---|---|---|
+| `execution_id` | both | The framework execution identity of the gated call, the same `tool-exec-v1-<digest>` it was dispatched under |
+| `request_id` | both | The model request the gated call came from |
+
+`call_id` stays on both and still carries the provider's id, because the conversation transcript is written in
+provider terms. What moved is which field **authorises**: agentic-loop matches an arriving `agent.approval_response`
+against the loop's pending approval on `execution_id` whenever the pending state carries one, and **there is no
+fallback to `call_id`**. A response whose `execution_id` is empty or does not match is dropped as stale; the loop
+stays `awaiting_approval`, so the real decision can still arrive.
+
+**Why there is no fallback.** A provider may reuse a `call_id` on a later turn of the same conversation — the
+framework's execution identity does not, because it derives from the RequestID. Matching on `call_id` alone let a
+replayed or duplicated approval message authorise a *different* invocation than the one the human read and
+approved: same loop, same provider id, different tool and different arguments. There is no error in that path and
+no metric for it; the tool simply runs with a human's name on it. A fallback that accepts a response carrying no
+execution identity keeps that hole open for anything that can replay one message, so the fallback is gone rather
+than deprecated.
+
+**What to check.**
+
+- **Anything that publishes `agent.approval_response`** — a product approval UI, a chat-ops responder, a test
+  harness. Echo the `execution_id` from the `agent.approval_pending` event being answered (echo `request_id` too;
+  it is audit correlation, not matching). A response built from `loop_id` + `call_id` alone is refused and the call
+  stays gated — until `approval_timeout` auto-rejects it, or forever where that key is unset, which is the default
+  ("empty means wait indefinitely"). The symptom in agentic-loop's log is
+  `approval response ignored: not awaiting, or its identity does not match the pending call`, carrying
+  `response_call_id`, `response_execution_id` and `loop_state`.
+- **The approval timeout sweeper needs no action.** Its synthetic auto-reject is built from the loop's own pending
+  state, so it echoes the same two fields and still resolves the approval it expired. A deployment that configures
+  `approval_timeout` keeps exactly the behaviour it had.
+- **No pre-upgrade approval survives to be answered.** Like the rest of this wave, the upgrade starts on newly
+  provisioned NATS storage — the pre-v1 posture this note states throughout: no migration, no alias, no legacy
+  reader — so no `pending_approval` crosses it and no approval UI has to answer one. The matcher does still
+  compare `call_id` when the pending state carries no `execution_id`, which is what keeps the new field additive
+  rather than a required-field break, but in a correctly cut-over deployment nothing reaches that branch.
+- **A Go embedder calling `(*LoopManager).ResolveApprovalIfPending`** passes a third argument:
+  `ResolveApprovalIfPending(loopID, callID, executionID string)`. Pass the response's `execution_id`; `""` selects
+  the `call_id` comparison described above. `(*LoopTracker).GetPendingApproval(loopID) (PendingApprovalInfo, bool)`
+  is new and returns the whole pending record — `CallID`, `ExecutionID`, `RequestID` — for a caller that must
+  echo the identity; `GetPendingApprovalCallID` is unchanged.
 
 ## Governance verdicts route on execution identity, and an enforce-mode rule set must be edited first (#1328)
 

@@ -2489,8 +2489,13 @@ func (h *MessageHandler) gateForApproval(loopID string, entity *agentic.LoopEnti
 	}
 
 	pending := &agentic.ApprovalPendingEvent{
-		LoopID:      loopID,
-		CallID:      toolResult.CallID,
+		LoopID: loopID,
+		CallID: toolResult.CallID,
+		// The identity the approval authorises, carried to whoever answers so
+		// the answer can be matched on it rather than on a provider CallID the
+		// provider may reuse next turn.
+		ExecutionID: toolResult.ExecutionID,
+		RequestID:   toolResult.RequestID,
 		ToolName:    toolName,
 		Arguments:   args,
 		Reason:      toolResult.Error,

@@ -75,9 +75,15 @@ func (c *Component) sweepExpiredApprovals(ctx context.Context) {
 
 	for _, cand := range candidates {
 		response := agentic.ApprovalResponse{
-			LoopID:   cand.LoopID,
-			CallID:   cand.CallID,
-			Decision: agentic.ApprovalDecisionReject,
+			LoopID: cand.LoopID,
+			CallID: cand.CallID,
+			// The sweeper echoes the gated call's execution identity for the
+			// same reason a UI must: the matcher refuses a response that omits
+			// it against a pending approval that has one, and an auto-reject
+			// that could not be matched would leave the loop gated forever.
+			ExecutionID: cand.ExecutionID,
+			RequestID:   cand.RequestID,
+			Decision:    agentic.ApprovalDecisionReject,
 			Reason: fmt.Sprintf("approval timed out after %s",
 				cand.Timeout.Round(time.Second)),
 			ApprovedBy: approvalTimeoutSystemApprover,

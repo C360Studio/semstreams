@@ -43,8 +43,18 @@ func IsApprovalRejected(reason string) bool {
 // review. The corresponding response is published as
 // agent.approval_response.<loop_id> with an ApprovalResponse payload.
 type ApprovalPendingEvent struct {
-	LoopID      string         `json:"loop_id"`
-	CallID      string         `json:"call_id"`
+	LoopID string `json:"loop_id"`
+	CallID string `json:"call_id"`
+	// ExecutionID is the framework's execution identity for the gated call —
+	// the identity an approval actually authorises. Provider CallID is
+	// request-scoped conversation data a provider may reuse on a later turn, so
+	// a response matched on CallID alone can authorise a DIFFERENT execution
+	// than the human saw. Carried here so a response can echo it.
+	ExecutionID string `json:"execution_id,omitempty"`
+	// RequestID names the model request the gated call came from, so an
+	// approval UI and an auditor can place the decision in the conversation
+	// without re-deriving it from the execution identity.
+	RequestID   string         `json:"request_id,omitempty"`
 	ToolName    string         `json:"tool_name"`
 	Arguments   map[string]any `json:"arguments,omitempty"`
 	Reason      string         `json:"reason"` // Original "approval_required: ..." rejection reason
@@ -102,9 +112,19 @@ func (e *ApprovalPendingEvent) UnmarshalJSON(data []byte) error {
 // (Decision == approve | modify) or synthesizes a rejection result
 // for the LLM (Decision == reject).
 type ApprovalResponse struct {
-	LoopID   string `json:"loop_id"`
-	CallID   string `json:"call_id"`
-	Decision string `json:"decision"` // ApprovalDecisionApprove | ApprovalDecisionReject | ApprovalDecisionModify
+	LoopID string `json:"loop_id"`
+	CallID string `json:"call_id"`
+	// ExecutionID echoes the ApprovalPendingEvent's execution identity. A
+	// response carrying it is matched on it; a response omitting it against a
+	// pending approval that HAS one is refused as stale, with no fallback to
+	// CallID. That refusal is the point: a replayed approval from an earlier
+	// turn carries an earlier execution, and a provider that reuses a CallID
+	// would otherwise let it authorise the later call.
+	ExecutionID string `json:"execution_id,omitempty"`
+	// RequestID echoes the pending event's request identity. Audit correlation
+	// only — matching is on ExecutionID.
+	RequestID string `json:"request_id,omitempty"`
+	Decision  string `json:"decision"` // ApprovalDecisionApprove | ApprovalDecisionReject | ApprovalDecisionModify
 	// ModifiedArguments replaces the original tool-call arguments when
 	// Decision == ApprovalDecisionModify. Ignored for approve/reject.
 	ModifiedArguments map[string]any `json:"modified_arguments,omitempty"`

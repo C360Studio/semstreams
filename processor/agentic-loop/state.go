@@ -392,8 +392,14 @@ func (m *LoopManager) UpdateLoop(entity agentic.LoopEntity) error {
 // it through HandleApprovalResponse — same code path a real human
 // rejection would take.
 type ApprovalTimeoutCandidate struct {
-	LoopID      string
-	CallID      string
+	LoopID string
+	CallID string
+	// ExecutionID and RequestID carry the gated call's framework identity so
+	// the sweeper's synthetic rejection is matched the same way a human
+	// response is. Without them the sweeper would be the one caller allowed in
+	// on CallID alone, which is the hole the human path just closed.
+	ExecutionID string
+	RequestID   string
 	ToolName    string
 	RequestedAt time.Time
 	Timeout     time.Duration
@@ -428,6 +434,8 @@ func (m *LoopManager) SnapshotExpiredApprovals(now time.Time) []ApprovalTimeoutC
 		out = append(out, ApprovalTimeoutCandidate{
 			LoopID:      id,
 			CallID:      loop.PendingApproval.CallID,
+			ExecutionID: loop.PendingApproval.ExecutionID,
+			RequestID:   loop.PendingApproval.RequestID,
 			ToolName:    loop.PendingApproval.ToolName,
 			RequestedAt: loop.PendingApproval.RequestedAt,
 			Timeout:     loop.PendingApproval.Timeout,
@@ -474,7 +482,7 @@ func (m *LoopManager) ResetTruncationRetry(loopID string) {
 // HandleApprovalResponse let two concurrent responses both pass
 // the awaiting-state check and both dispatch — for a safety
 // feature, that double-execution risk is unacceptable.
-func (m *LoopManager) ResolveApprovalIfPending(loopID, callID string) (agentic.PendingApprovalState, bool, error) {
+func (m *LoopManager) ResolveApprovalIfPending(loopID, callID, executionID string) (agentic.PendingApprovalState, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -493,7 +501,25 @@ func (m *LoopManager) ResolveApprovalIfPending(loopID, callID string) (agentic.P
 	if entity.State != agentic.LoopStateAwaitingApproval {
 		return agentic.PendingApprovalState{}, false, nil
 	}
-	if entity.PendingApproval == nil || entity.PendingApproval.CallID != callID {
+	if entity.PendingApproval == nil {
+		return agentic.PendingApprovalState{}, false, nil
+	}
+	// Execution identity decides, whenever the pending state carries one.
+	// Provider CallID is request-scoped conversation data: a provider may reuse
+	// it on a later turn of the SAME loop, and an approval replayed from the
+	// earlier turn would then authorise the later call — a different tool
+	// invocation than the human saw. A response that omits ExecutionID against
+	// a pending approval that has one is refused as stale rather than falling
+	// back to CallID, because the fallback IS the hole.
+	//
+	// CallID still decides for a pending approval minted before execution
+	// identity existed (a loop gated across the upgrade), which carries no
+	// ExecutionID to match on.
+	if entity.PendingApproval.ExecutionID != "" {
+		if entity.PendingApproval.ExecutionID != executionID {
+			return agentic.PendingApprovalState{}, false, nil
+		}
+	} else if entity.PendingApproval.CallID != callID {
 		return agentic.PendingApprovalState{}, false, nil
 	}
 

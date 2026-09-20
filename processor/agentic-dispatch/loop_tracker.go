@@ -62,7 +62,14 @@ type LoopInfo struct {
 // framework's loop enforces it, and exposing it here would invite
 // dispatch consumers to second-guess that authority.
 type PendingApprovalInfo struct {
-	CallID      string         `json:"call_id"`
+	CallID string `json:"call_id"`
+	// ExecutionID and RequestID are the gated call's framework identity,
+	// projected from the ApprovalPendingEvent. The approval endpoint echoes
+	// ExecutionID onto the ApprovalResponse it publishes; without it the loop
+	// refuses the response as stale, because a provider CallID alone cannot
+	// say which execution the human saw.
+	ExecutionID string         `json:"execution_id,omitempty"`
+	RequestID   string         `json:"request_id,omitempty"`
 	ToolName    string         `json:"tool_name"`
 	Arguments   map[string]any `json:"arguments,omitempty"`
 	Reason      string         `json:"reason,omitempty"`
@@ -391,14 +398,27 @@ func (t *LoopTracker) gcPendingApprovalBufferLocked() {
 // mutable fields outside the tracker's RLock and is unsound under
 // concurrent HTTP requests.
 func (t *LoopTracker) GetPendingApprovalCallID(loopID string) (string, bool) {
+	pending, ok := t.GetPendingApproval(loopID)
+	if !ok {
+		return "", false
+	}
+	return pending.CallID, true
+}
+
+// GetPendingApproval atomically snapshots the whole pinned PendingApproval
+// record, by value. GetPendingApprovalCallID answers only half the question
+// now: an approval response must echo the gated call's ExecutionID or the loop
+// refuses it as stale, and reading the two fields through two separate RLocks
+// would let the pending approval change between them.
+func (t *LoopTracker) GetPendingApproval(loopID string) (PendingApprovalInfo, bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
 	info, ok := t.loops[loopID]
 	if !ok || info.PendingApproval == nil {
-		return "", false
+		return PendingApprovalInfo{}, false
 	}
-	return info.PendingApproval.CallID, true
+	return *info.PendingApproval, true
 }
 
 // ClearPendingApproval drops the pending-approval record for a loop.

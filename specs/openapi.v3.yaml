@@ -895,7 +895,11 @@ components:
                                             type: object
                                         call_id:
                                             type: string
+                                        execution_id:
+                                            type: string
                                         reason:
+                                            type: string
+                                        request_id:
                                             type: string
                                         requested_at:
                                             format: date-time
@@ -1233,7 +1237,11 @@ components:
                                 type: object
                             call_id:
                                 type: string
+                            execution_id:
+                                type: string
                             reason:
+                                type: string
+                            request_id:
                                 type: string
                             requested_at:
                                 format: date-time
@@ -1306,7 +1314,11 @@ components:
                                 type: object
                             call_id:
                                 type: string
+                            execution_id:
+                                type: string
                             reason:
+                                type: string
+                            request_id:
                                 type: string
                             requested_at:
                                 format: date-time

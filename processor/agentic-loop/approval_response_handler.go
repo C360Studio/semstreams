@@ -51,7 +51,7 @@ func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response ag
 
 	loopID := response.LoopID
 
-	pending, ok, resolveErr := h.loopManager.ResolveApprovalIfPending(loopID, response.CallID)
+	pending, ok, resolveErr := h.loopManager.ResolveApprovalIfPending(loopID, response.CallID, response.ExecutionID)
 	if resolveErr != nil && !errors.Is(resolveErr, ErrLoopNotFound) {
 		return HandlerResult{}, resolveErr
 	}
@@ -70,9 +70,10 @@ func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response ag
 		if getErr == nil {
 			state = entity.State
 		}
-		h.logger.Warn("approval response ignored: not awaiting or call_id mismatch",
+		h.logger.Warn("approval response ignored: not awaiting, or its identity does not match the pending call",
 			slog.String("loop_id", loopID),
 			slog.String("response_call_id", response.CallID),
+			slog.String("response_execution_id", response.ExecutionID),
 			slog.String("loop_state", string(state)))
 		return HandlerResult{LoopID: loopID, State: state, staleDrop: true}, nil
 	}

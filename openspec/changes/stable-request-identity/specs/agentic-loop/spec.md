@@ -65,10 +65,31 @@ The framework SHALL preserve provider ToolCall ID for conversation semantics and
 derived from RequestID, provider CallID, and positive call ordinal. Tool, approval, governance, and completed-outcome
 correlation SHALL use the framework identity.
 
+A human approval authorises one EXECUTION, not one provider CallID. The approval-pending event SHALL carry the gated
+call's execution identity, and an approval response SHALL echo it. A loop SHALL resolve a pending approval only on a
+response whose execution identity matches the pending one, and SHALL refuse a response that carries none against a
+pending approval that has one — there SHALL be no fallback to provider CallID. Every responder SHALL echo it,
+including the approval-timeout sweeper's synthetic rejection.
+
 #### Scenario: Provider repeats a CallID in another request
 
 - **WHEN** two provider responses use the same CallID under different RequestIDs
 - **THEN** their execution identities differ and their completed outcomes cannot collide
+
+#### Scenario: An earlier approval is replayed against a later call with the same provider CallID
+
+- **WHEN** a loop gates a second call whose provider CallID repeats an earlier, already-approved call's, and the
+  earlier approval response is delivered again
+- **THEN** the loop refuses it as stale and dispatches nothing
+- **AND** the loop stays awaiting approval with the later call still pending, so a real decision on it can arrive
+
+#### Scenario: An approval response carries no execution identity
+
+- **WHEN** a response naming the pending call's provider CallID arrives with no execution identity, against a
+  pending approval that has one
+- **THEN** the loop refuses it rather than matching on provider CallID
+- **AND** a pending approval minted before execution identity existed still resolves on provider CallID, because it
+  carries none to match
 
 ### Requirement: Loop task, request, and tool work use only required correlation
 

@@ -777,7 +777,7 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 	// case (process restart, race lost, already resolved). 409
 	// Conflict is the right REST signal for "resource exists but is
 	// in the wrong state for this operation."
-	callID, awaiting := c.loopTracker.GetPendingApprovalCallID(loopID)
+	pendingApproval, awaiting := c.loopTracker.GetPendingApproval(loopID)
 	if !awaiting {
 		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "409")
 		c.writeJSONError(w, http.StatusConflict, "loop not awaiting approval")
@@ -787,12 +787,13 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 	c.logger.DebugContext(ctx, "submitting approval response for loop",
 		slog.String("request_id", requestID),
 		slog.String("loop_id", loopID),
-		slog.String("call_id", callID),
+		slog.String("call_id", pendingApproval.CallID),
+		slog.String("execution_id", pendingApproval.ExecutionID),
 		slog.String("decision", req.Decision),
 		slog.String("approved_by", approver))
 
 	// Build + publish the framework's ApprovalResponse payload.
-	subject, err := c.publishApprovalResponse(ctx, loopID, callID, &req, approver)
+	subject, err := c.publishApprovalResponse(ctx, loopID, pendingApproval, &req, approver)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "failed to publish approval response",
 			slog.String("request_id", requestID),
@@ -847,13 +848,19 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 // a client, but unit tests construct
 // Components with natsClient nil and we surface a clean error rather
 // than letting the underlying client.PublishToStream NPE.
-func (c *Component) publishApprovalResponse(ctx context.Context, loopID, callID string, req *ApprovalRequest, approver string) (string, error) {
+func (c *Component) publishApprovalResponse(ctx context.Context, loopID string, pending PendingApprovalInfo, req *ApprovalRequest, approver string) (string, error) {
 	if c.natsClient == nil {
 		return "", ErrNATSClientNil
 	}
 	response := &agentic.ApprovalResponse{
-		LoopID:            loopID,
-		CallID:            callID,
+		LoopID: loopID,
+		CallID: pending.CallID,
+		// Echo the execution identity the framework gated on. A response that
+		// omits it against a pending approval that has one is refused as stale
+		// by the loop — deliberately, because provider CallID alone cannot say
+		// which execution the human was shown.
+		ExecutionID:       pending.ExecutionID,
+		RequestID:         pending.RequestID,
 		Decision:          req.Decision,
 		ModifiedArguments: req.ModifiedArguments,
 		Reason:            req.Reason,

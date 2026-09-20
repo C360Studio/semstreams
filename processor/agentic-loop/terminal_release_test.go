@@ -359,7 +359,7 @@ func TestLateApprovalResponseForSettledLoopIsExpectedDrop(t *testing.T) {
 		t.Fatalf("a late approval response was reported as a failure:\n present: %s\n absent: %s",
 			presentLogs, absentLogs)
 	}
-	const dropLine = "approval response ignored: not awaiting or call_id mismatch"
+	const dropLine = "approval response ignored: not awaiting, or its identity does not match the pending call"
 	if !strings.Contains(presentLogs, dropLine) || !strings.Contains(absentLogs, dropLine) {
 		t.Fatalf("the two cases do not produce the same declared drop:\n present: %s\n absent: %s",
 			presentLogs, absentLogs)

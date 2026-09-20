@@ -1326,6 +1326,8 @@ func (c *Component) handleAgentApprovalPending(_ context.Context, data []byte) (
 	// state is canonical and the HTTP handler degrades gracefully.
 	if accepted := c.loopTracker.SetPendingApproval(pending.LoopID, &PendingApprovalInfo{
 		CallID:      pending.CallID,
+		ExecutionID: pending.ExecutionID,
+		RequestID:   pending.RequestID,
 		ToolName:    pending.ToolName,
 		Arguments:   pending.Arguments,
 		Reason:      pending.Reason,
