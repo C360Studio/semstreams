@@ -461,3 +461,14 @@ re-home commit. Backup ref `refs/backup/gh1329-pre-l2round1-rebase-20260920` = `
       `go test -count=1 ./processor/agentic-loop/ ./processor/agentic-dispatch/ ./agentic/` 0;
       `openspec validate durable-loop-authority --strict` 0; `task openspec:validate` 57/57;
       `task spec:properties` **268/268**
+- [x] 11.15 Re-based again onto L2's round-8 head `4e7ddaec` (backup ref
+      `refs/backup/gh1329-pre-l2round8-rebase-20260920` = `e5eb13e2`). 31 commits, **no conflict**. That round
+      answers the owner's Codex round 4: L2's own defensive constant truncated the skipped-sibling drain at 256,
+      so a 258-call batch left one call unanswered and `RepairToolPairs` dropped the group again. The bound is
+      now the queue's own length, read through a new `LoopManager.QueuedToolCount`. All of it is inside
+      `agentic-loop` — `handlers.go`, `state.go`, its test and L2's records — and nothing under
+      `processor/agentic-dispatch/` references either symbol (grep, exit 1, stderr visible).
+      Gates on `50cc38b2`: `go build ./...` 0; `task lint` 0;
+      `go test -count=1 ./processor/agentic-loop/ ./processor/agentic-dispatch/ ./agentic/` 0;
+      `openspec validate durable-loop-authority --strict` 0; `task openspec:validate` 57/57;
+      `task spec:properties` **269/269**
