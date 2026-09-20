@@ -841,6 +841,13 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 	// This prevents duplicate LLM work when JetStream redelivers a message
 	// (e.g. after a transient heartbeat failure).
 	if existingID, exists := h.loopManager.HasActiveLoopForTask(task.TaskID); exists {
+		// A conflicting loop token under this TaskID never reaches here: the
+		// delivery refuses it in handleTaskMessage, where the token the
+		// PRODUCER sent is still distinguishable from one intake minted
+		// (preflightDecodedTask reserves a fresh prospective UUID per delivery
+		// for a lineage task that named no loop). By this point the two are
+		// the same field, so the comparison would read a redelivery as a
+		// conflict.
 		h.logger.Warn("Duplicate task message — loop already active",
 			slog.String("task_id", task.TaskID),
 			slog.String("existing_loop_id", existingID))

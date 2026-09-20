@@ -1273,6 +1273,40 @@ func (c *Component) taskInputHandler(workTimeout time.Duration) inputHandler {
 	}
 }
 
+// refuseConflictingTaskIdentity stops a delivery whose TaskID is already
+// running under a DIFFERENT loop than the one its message names.
+//
+// TaskID alone is a redelivery — the same work arriving twice — and the loop
+// already running it is the answer; that is what the dedup branch in
+// HandleTask serves, and it is unchanged. One TaskID naming TWO loops is not
+// a redelivery: the message and durable state disagree about which loop this
+// work is, and neither answer is available. Adopting the running loop runs
+// this message's work in a conversation it does not name; answering with the
+// running loop tells the producer its loop is live when no loop by that name
+// exists anywhere. A second delivery resolves nothing, because the
+// disagreement is IN the message. Fatal, so the lane quarantines with both
+// tokens on the record (the heartbeat policy reads Fatal as Quarantine,
+// :1196).
+//
+// It takes the producer's token rather than reading task.LoopID, because by
+// now those differ: preflightDecodedTask reserves a fresh prospective UUID on
+// every delivery of a lineage task that named no loop, so reading the field
+// would classify an ordinary redelivery of such a task as a conflict. A task
+// that named no loop keeps the intake exemption and is deduplicated.
+func (c *Component) refuseConflictingTaskIdentity(task agentic.TaskMessage, suppliedLoopID string) error {
+	if suppliedLoopID == "" {
+		return nil
+	}
+	existingID, running := c.handler.loopManager.HasActiveLoopForTask(task.TaskID)
+	if !running || existingID == suppliedLoopID {
+		return nil
+	}
+	return errs.WrapFatal(
+		fmt.Errorf("task %s is already running as loop %s but this message names loop %s",
+			task.TaskID, existingID, suppliedLoopID),
+		"agentic-loop", "handleTaskMessage", "reject conflicting task identity")
+}
+
 // handleTaskMessage processes incoming task messages
 func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 	baseMsg, err := c.decoder.Decode(data)
@@ -1286,12 +1320,22 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 		c.logger.Error("Unexpected payload type", "type", fmt.Sprintf("%T", baseMsg.Payload()))
 		return nil
 	}
+	// The loop token the PRODUCER sent, read before preflight can reserve one.
+	// Everything below distinguishes "this message named a loop" from "intake
+	// minted a prospective UUID for this delivery", and after
+	// preflightDecodedTask they are the same field.
+	suppliedLoopID := task.LoopID
 	related, hasLineage, err := c.preflightDecodedTask(task)
 	if err != nil {
 		if c.metrics != nil {
 			c.metrics.recordTaskIntakeRejection(taskIntakeRejectionLane, taskIntakeRejectionReason)
 		}
 		return natsclient.TerminateDelivery(err)
+	}
+	if err := c.refuseConflictingTaskIdentity(*task, suppliedLoopID); err != nil {
+		c.logger.Error("Task refused — its identity conflicts with a running loop",
+			"error", err, "task_id", task.TaskID, "loop_id", suppliedLoopID)
+		return err
 	}
 
 	c.logger.Debug("Processing task message",

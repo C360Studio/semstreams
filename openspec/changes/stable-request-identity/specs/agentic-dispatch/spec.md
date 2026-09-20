@@ -150,4 +150,3 @@ family, public state, durable state, or communication path.
 - **WHEN** a delivery-owned dispatch operation reaches a timeout required by that operation
 - **THEN** its context is cancelled
 - **AND** all operation work joins before the callback settles or returns
-

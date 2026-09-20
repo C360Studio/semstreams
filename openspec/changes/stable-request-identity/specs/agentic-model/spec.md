@@ -101,4 +101,3 @@ ambiguity policy, or replay-admission prerequisite is admitted.
 - **WHEN** exact lookup finds a response whose subject RequestID, payload RequestID, and source request RequestID do
   not agree
 - **THEN** agentic-model quarantines before provider invocation
-

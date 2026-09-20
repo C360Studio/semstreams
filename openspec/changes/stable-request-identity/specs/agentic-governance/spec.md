@@ -13,10 +13,20 @@ proposals require no exact committed-output lookup. Absence outside admitted ret
 general stream scan or new verdict authority is introduced.
 
 Verdict dispositions SHALL follow what the arriving message can be, not what the operator would prefer. A verdict
-missing its decision or its execution identity SHALL terminate — redelivery cannot supply either. A verdict naming
-no active waiter SHALL remain retryable, since a waiter may be registered by another process or a later attempt. A
-SECOND verdict under one execution identity SHALL quarantine, because only one of the two can have been acted on
-and which one is not knowable from the message.
+missing its decision or its execution identity SHALL terminate — redelivery cannot supply either. A SECOND verdict
+under one execution identity SHALL quarantine, because only one of the two can have been acted on and which one is
+not knowable from the message.
+
+A verdict naming no active waiter SHALL be settled against the LOOP it names rather than retried by default, and
+the execution identity cannot supply that loop — it is an opaque digest — so the loop comes from the verdict's own
+`loop_id`, or from the RequestID grammar when a rule echoes only that. Three dispositions follow, and each is
+required for a different reason. A verdict whose loop is finished, or belongs to another process's tree on a shared
+stream, SHALL be acknowledged: that is the documented-normal case the missing-waiter counter exists for, and
+retrying it is a hot redelivery loop no record can ever end. A verdict whose loop is LIVE but held by no waiter in
+this process SHALL remain retryable, because the loop is still owed its answer and a replacement process may
+register the waiter. A verdict carrying no recoverable loop identity at all SHALL terminate as malformed and be
+counted, because acknowledging it is indistinguishable from "that loop finished" — which is how a rule echoing a
+non-canonical identity would lose every verdict it publishes with no signal naming why.
 
 `ProposalFingerprint` SHALL be carried, not verified: agentic-loop mints it onto the proposal, the rule engine
 echoes it onto the verdict, and agentic-loop decodes it as audit context — audit mode SHALL record it on the
@@ -52,11 +62,25 @@ is lost with them. Normalization SHALL happen in one place, not once per dispatc
 - **THEN** it is terminated rather than retried
 - **AND** no waiter is consulted
 
-#### Scenario: A verdict names no active waiter
+#### Scenario: A verdict names no waiter and its loop is finished or foreign
 
-- **WHEN** a verdict's execution identity has no registered waiter
-- **THEN** the delivery remains retryable
+- **WHEN** a verdict's execution identity has no registered waiter and the loop it names is terminal, absent, or
+  another process's
+- **THEN** the delivery is acknowledged
+- **AND** the missing-waiter observation is recorded rather than the delivery being retried
+
+#### Scenario: A verdict names no waiter and its loop is still live
+
+- **WHEN** a verdict's execution identity has no registered waiter and the loop it names is non-terminal
+- **THEN** the delivery remains retryable, because that loop is still owed its answer
 - **AND** the missing-waiter observation is recorded
+
+#### Scenario: A verdict names no waiter and no recoverable loop
+
+- **WHEN** a verdict carries neither a canonical `loop_id` nor a `request_id` in the `<loopID>:req:<iteration>:<retry>`
+  grammar
+- **THEN** the delivery terminates as malformed rather than being acknowledged as if its loop had settled
+- **AND** the unrecoverable-identity observation is recorded, so a rule echoing a non-canonical identity is visible
 
 #### Scenario: Two verdicts name one execution identity
 
@@ -77,4 +101,3 @@ is lost with them. Normalization SHALL happen in one place, not once per dispatc
 - **WHEN** an echoed `proposal_fingerprint` does not match the proposal that minted it
 - **THEN** the verdict still reaches the waiter named by its execution identity
 - **AND** the disagreement is carried as audit context rather than refused
-

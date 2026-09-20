@@ -108,6 +108,15 @@ where they prevent repeating non-repeatable work or prove a lane-specific durabl
 - **THEN** agentic-loop validates the same TaskID-to-LoopID mapping
 - **AND** any required ordinary publication may repeat and receives PubAck before source ACK
 
+#### Scenario: One task identity names two loops
+
+- **WHEN** a task whose TaskID already names a running loop arrives carrying a DIFFERENT LoopID
+- **THEN** agentic-loop quarantines the source delivery rather than answering with the loop already running, whose
+  conversation the message does not name
+- **AND** the comparison reads the token the PRODUCER sent, so the same task carrying no loop token is still
+  deduplicated to the running loop — including a lineage task for which intake reserved a fresh prospective
+  identity on this delivery, which is a redelivery and not a second loop
+
 #### Scenario: Request or execution correlation conflicts
 
 - **WHEN** one RequestID or framework execution identity names conflicting required correlation
