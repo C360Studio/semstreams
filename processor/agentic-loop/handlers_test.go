@@ -1290,7 +1290,10 @@ func TestHandleModelResponse_TerminalLoop(t *testing.T) {
 		t.Fatalf("HandleToolResult(StopLoop) error = %v", err)
 	}
 
-	// Now send a model response to the terminal loop (simulates stale agent.request)
+	// Now send a model response to the terminal loop (simulates stale agent.request).
+	// The loop is terminal, so it is waiting on nothing and this reads "" — the
+	// superseded guard's empty carve-out lets it through to the terminal guard,
+	// which is the guard under test here.
 	staleResponse := agentic.AgentResponse{
 		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",

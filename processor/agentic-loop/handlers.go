@@ -1225,9 +1225,10 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 	//
 	// The terminal guard below cannot stand in for this. A completion response
 	// that carried a deferred continuation leaves the loop NON-terminal at the
-	// next iteration, so its JetStream redelivery — the lane has AckWait,
-	// MaxDeliver and BackOff (config.go:405) and no dedup of its own — meets no
-	// terminal state, finds no turn left to carry, and would complete the loop
+	// next iteration, so its JetStream redelivery — AckWait and MaxDeliver are
+	// declared at config.go:169-171 and the agent.response lane resolves them
+	// with its BackOff at component.go:956-992, and it has no dedup of its own —
+	// meets no terminal state, finds no turn left to carry, and would complete the loop
 	// while the request carrying the user's turn is still in flight. That
 	// request's own answer would then be dropped by the terminal guard, which is
 	// exactly the lost turn the deferral exists to prevent.

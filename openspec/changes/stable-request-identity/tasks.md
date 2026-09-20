@@ -414,7 +414,9 @@
       `false &&` on the identity conjunct → "the redelivery completed a loop whose carried request is still in
       flight". 28 in-package fixtures invented RequestIDs like `"req-001"`; production routes a response to its
       loop BY its RequestID, so those were states production cannot produce — they now ask the handler what the
-      loop published (`OutstandingRequestForTest`)
+      loop published (`OutstandingRequestForTest`). Corrected at § 12.4: in two of the 28 the answer is `""`,
+      because at that point the loop is waiting on nothing, so "they now answer the request the loop is actually
+      waiting on" holds for 26 and the other two take the guard's deliberate empty carve-out
 - [x] 11.2 **H1 — `emitRetryRequest` was a third request-building site** (`e2260b2b`). The truncation retry builds
       from `cm.GetContext()`, which already holds the deferred turn, and never ended the deferral: the completion
       that answered the retry deferred again and spent an iteration re-asking with a context that had gained
@@ -499,3 +501,51 @@
       `./processor/agentic-model/`, `./processor/rule/` 0. This round touched no integration-tagged file, so the
       integration suite ran once, through the canonical runner and its host lock inside `task check:push` — exit
       0. CI run and job count recorded in the PR body with the head sha
+
+## 12. Internal review of round 2 (docs only — 1 HIGH, 3 MEDIUM, 4 NIT, no code defect)
+
+The review verified every round-2 fix and reproduced every mutation verbatim on `b292f605`, and ran two of its
+own: moving `SettleRequest` ahead of the guard is GREEN (and is PROVABLY equivalent — `carrier != "" ⟹ carrier ==
+outstanding`, because `TrackRequest` writes both under one lock), while dropping the `outstanding != ""` conjunct
+is RED in two pre-existing tests, so the empty carve-out is load-bearing and covered.
+
+- [x] 12.1 **HIGH-1 — "at most ONE outstanding `agent.request` per loop" holds only for serialized deliveries.**
+      `attachContinuation` reads the mark under the manager lock and releases it (`state.go:317`);
+      `HandleModelResponse` clears it at `handlers.go:1258` and the carrying request does not re-take it until
+      `TrackRequest` at `handlers.go:2771`. `agent.task` and `agent.response` are separate JetStream consumers
+      (`component.go:1103-1108`) with no per-loop serialization between them, so a continuation delivered inside
+      that window is admitted against an empty mark and both paths mint `…:req:N:0`. Reproduced deterministically
+      by the reviewer with an overlay probe against the real state machine; the scheduling of two live consumers
+      is inferred, the state transition is not. NOT a regression — before `8734713d` every mid-request
+      continuation collided and F1 closed the serialized case — but the delta published the narrowed behaviour as
+      an unqualified SHALL in target truth that archives. **Ruled: qualify, do not add a concurrency primitive.**
+      The SHALL now reads "ACROSS DELIVERIES IT PROCESSES IN ORDER" with the reason stated beneath it, `design.md`
+      scopes "the invariant is enforced instead" the same way, and the window is a declared residual naming its
+      two lines and its owner: L4's `LoopEntity.PublishedRequestID` under `Update(revision)` is the durable
+      check-and-set that closes it (#1330, inventory placed by the coordinator at
+      https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5749352045)
+- [x] 12.2 **MEDIUM-1 — a FIFTH publication of the withdrawn F4 claim survived, in code.**
+      `governance_dispatcher.go:637-640`, the comment `bbb4eae6` put above the enforce-mode channel send, still
+      read "reading it off the wrong level of a publish-action verdict … is a rejection with no reason on it".
+      Rewritten to what § 11.6 established. The round-1 review enumerated four sites and the withdrawal inherited
+      the miss; the tree is now swept for a sixth — `grep -riE 'no reason on it|reason the model is told|rejection
+      reached a model|wrong level|refused with'` over `*.go` and `*.md` returns only unrelated hits and § 11.6's
+      own record of the claim as FALSE
+- [x] 12.3 **MEDIUM-3 — the BLOCKING finding's own premise pin was wrong when written.**
+      `superseded_response_test.go:65` cited `component.go:1902-1906`, which is the `publishResults` rationale;
+      the sentence it means is `:1889-1892`. Not line drift: `git show 3e662a28:…` has the same miss. Re-derived
+- [x] 12.4 **NITs.** NIT-1: the guard comment pinned AckWait/MaxDeliver/BackOff at `config.go:405`, the port
+      declaration — they are declared at `config.go:169-171` and resolved for this lane at `component.go:956-992`.
+      NIT-2: two of the 28 re-homed fixtures (`truncation_branch_test.go`'s post-progress truncation and
+      `handlers_test.go`'s stale response to a terminal loop) read `""`, because at those points the loop is
+      waiting on nothing; both now say so at the site. Asking the handler is still the right question — the answer
+      is the empty carve-out, and inventing a name would put them back in a state production cannot produce — but
+      `3e662a28`'s "all 28 now answer the request the loop is actually waiting on" is inaccurate for those two and
+      is corrected here
+- [ ] 12.5 **NIT-3 and NIT-4 are OWED, not done: both want a test, and this round is docs and comments only.**
+      NIT-3: the guard's placement ahead of the timeout and terminal checks is a real behavioural difference —
+      a superseded response would otherwise fail a timed-out loop — and nothing observes it; one subtest feeding a
+      superseded response to a timed-out loop closes it. NIT-4: the fourth ordering of the carrier shape (a second
+      continuation admitted while a carrier is outstanding resets the carrier, so the next completion carries
+      again) is the composition of two tested transitions and is killed by no mutation, and it is the ordering
+      HIGH-1 attacks. Both belong in the next code-carrying round on this branch

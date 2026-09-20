@@ -49,7 +49,10 @@ That is what a continuation admitted mid-request did: `attachContinuation` refus
 pending tools and a loop awaiting approval, but not a loop that was waiting on a model.
 
 The answer is NOT a third identity segment. A third segment would mean the loop can have two requests in flight,
-and then a response's RequestID no longer tells the loop which turn it answers. The invariant is enforced instead:
+and then a response's RequestID no longer tells the loop which turn it answers. The invariant is enforced instead
+— for deliveries this component processes in order, which is the scope of every sentence below and the scope the
+spec delta's SHALL now carries. The window that escapes it is a declared residual (§ Declared residuals, "The
+admission check and the mint are not one critical section"):
 
 - **Knowing.** `LoopManager.outstandingRequests` (loopID → requestID) is written by `TrackRequest`, which every
   model-request publish site already calls, and cleared by `SettleRequest` when the response arrives. It matches on
@@ -155,6 +158,23 @@ deferred one identity decision to #1328. All three are answered here.
   its only caller today, and it is kept deliberately: it is the correct behaviour if a future caller carries from
   somewhere past that check, and failing the loop instead would turn a successful completion into a failure
   because a later message arrived. Corrected at round 2 — the earlier text declared it as a reachable residual.
+- **The admission check and the mint are not one critical section.** `attachContinuation` (`state.go:317`) reads
+  `outstandingRequests` under the manager lock and releases it; `HandleModelResponse` clears the mark at
+  `handlers.go:1258` and the carrying request does not re-take it until `TrackRequest` at `handlers.go:2771`,
+  after the context write, `maybeCompact`, `IncrementIteration` and the whole request build. `agent.task` and
+  `agent.response` are separate JetStream consumers (`component.go:1103-1108`) and nothing in this package
+  serializes per loop across them, so a continuation delivered inside that window is admitted against an empty
+  mark and both paths mint `…:req:N:0` from the same iteration counter — the identity collision this change
+  closes for the serialized case. The reviewer reproduced it deterministically against the real state machine
+  with an overlay probe; what is inferred is only the scheduling of two live consumers. The long windows are
+  already shut: `attachContinuation` refuses with `ErrLoopBusy` while tools are pending (`state.go:297-301`) and
+  while a human approval is outstanding (`:303-307`).
+
+  It is NOT closed here, and deliberately: closing it needs either per-loop serialization across the two
+  consumers or a durable check-and-set on the mark, and the second comes for free from L4's
+  `LoopEntity.PublishedRequestID` under `Update(revision)` (#1330) — a new concurrency primitive invented in a
+  review-fix commit would be the wrong shape and the wrong layer. The inventory is on #1330 for L4's design,
+  placed by the coordinator: https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5749352045
 - **The outstanding-request registry is process-local.** `LoopManager.outstandingRequests` answers "is this loop
   waiting on a model right now"; `requestToLoop` cannot, because it is append-only for the loop's whole life. A
   process replacement loses it along with the rest of the loop, and the pending-continuation marker on

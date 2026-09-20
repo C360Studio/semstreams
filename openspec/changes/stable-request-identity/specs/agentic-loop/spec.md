@@ -14,9 +14,17 @@ inside the stream's configured window is a bounded convenience and SHALL NOT be 
 prevents repeated provider work; that mechanism is the retained-response rule in `agentic-model`.
 
 Because the ordinals move only when the loop advances, agentic-loop SHALL hold at most ONE outstanding
-`agent.request` per loop. A continuation admitted while a request is outstanding SHALL be neither refused nor
-published: its turn is added to the loop's context and recorded on the loop entity as pending, and the outstanding
-response SHALL carry it into the next iteration's request rather than settling the loop.
+`agent.request` per loop ACROSS DELIVERIES IT PROCESSES IN ORDER. A continuation admitted while a request is
+outstanding SHALL be neither refused nor published: its turn is added to the loop's context and recorded on the
+loop entity as pending, and the outstanding response SHALL carry it into the next iteration's request rather than
+settling the loop.
+
+The qualifier is the truth about this layer, not a softening. The admission check and the mint are separate
+critical sections, and `agent.task` and `agent.response` are separate JetStream consumers, so a continuation
+delivered between a response clearing the mark and the carrying request re-taking it is admitted against an empty
+mark and both paths mint the same identity. Closing that window needs either per-loop serialization across the
+two consumers or a durable check-and-set on the mark; neither is this layer's, and until one exists the guarantee
+SHALL NOT be stated unqualified.
 
 A response naming a request the loop is NOT waiting on SHALL change nothing and settle as handled, counted under a
 reason label. One outstanding request is what makes that decidable, and it is required because carrying a turn

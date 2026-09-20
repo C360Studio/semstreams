@@ -634,10 +634,14 @@ func (d *enforceDispatcher) HandleVerdict(decision, executionID string, verdict 
 	// rule into a duplicate publish), the second is dropped — the
 	// first wins. Same as the natsclient request/response convention.
 	select {
-	// The reason travels to the waiting Propose and ends up in the message
-	// the model is told its call was refused with, so reading it off the
-	// wrong level of a publish-action verdict is not an audit defect — it
-	// is a rejection with no reason on it.
+	// Both fields are read through the accessors, because a publish-action
+	// verdict carries them under `properties` and an approve action carries
+	// them at the top level. The reason survived the old top-level read
+	// anyway — EffectiveReason already fell through — so the claim that a
+	// rejection reached a model with no reason on it was FALSE and is
+	// withdrawn. What the top-level read really dropped on the publish-action
+	// shape is the RULE ID, which is what tells a waiter, and everything
+	// downstream of it, which rule refused the call.
 	case ch <- verdictArrival{decision: decision, reason: verdict.EffectiveReason(), ruleID: verdict.effectiveRuleID()}:
 		return natsclient.DeliveryDecisionAck, nil
 	default:

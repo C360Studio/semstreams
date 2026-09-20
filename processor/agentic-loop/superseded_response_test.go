@@ -62,7 +62,7 @@ func persistedLoop(t *testing.T, bucket *recordingLoopBucket, loopID string) age
 // takes its redelivery out of reach of the terminal guard. The guard that used
 // to absorb a redelivered completion — "ignoring model response for terminal
 // loop" — is the premise persistHandlerResult's own classification rationale is
-// written on (component.go:1902-1906), and carrying a deferred turn falsifies
+// written on (component.go:1889-1892), and carrying a deferred turn falsifies
 // it: the loop advanced to the next iteration instead of completing, so the
 // redelivery meets a live loop with nothing left to carry and would settle it
 // while the request holding the user's turn is still in flight. That request's
