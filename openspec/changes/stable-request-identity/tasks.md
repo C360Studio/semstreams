@@ -125,7 +125,7 @@
       | mutation | test that dies |
       |---|---|
       | drop the `proposal_fingerprint` attribute from the audit verdict line | `TestProposalFingerprintIsCarriedAndNotVerified/audit_mode_reads_the_decoded_fingerprint_onto_its_verdict_line` at `proposal_fingerprint_test.go:137` — expected `sha256:audited-digest`, actual `<nil>` |
-      | delete the `StatusToolCall` forward-progress `ResetTruncationRetry` at `handlers.go:1255` | `TestMintedRequestIDsAreInjectiveAcrossTheHandlerPath` at `request_identity_mint_test.go:170` — post-retry continuation `:req:3:1`, want `:req:3:0` |
+      | delete the `StatusToolCall` forward-progress `ResetTruncationRetry` at `handlers.go:1372` | `TestMintedRequestIDsAreInjectiveAcrossTheHandlerPath` at `request_identity_mint_test.go:170` — post-retry continuation `:req:3:1`, want `:req:3:0` |
 
 ## 8. Rebase onto L1 (`20fe8d09` → `fdd645b5`) and review round 3
 
@@ -237,7 +237,7 @@
       lane on framework execution identity (`component.go:2064`), so every result settled as an expected drop
       without ever reaching the handler — the assertions were not failing on their subject, they were passing over
       a lane that never ran. Repaired in the fixtures, not in the classification: the results now carry both ids
-      (the loop's pending-tool set is still keyed by `CallID`, `handlers.go:2303`), and the dispatch-driven
+      (the loop's pending-tool set is still keyed by `CallID`, `handlers.go:2437`), and the dispatch-driven
       fixture reads the minted identity back out of the routing map production writes (`dispatchedExecutionID`)
       rather than re-deriving it from `deriveToolExecutionID`'s inputs. All six subtests verified **by name** with
       `-v`, since a package-level `ok` cannot distinguish passed from not-compiled-in
@@ -466,6 +466,12 @@
 - [x] 11.7 **Records, pins and NITs** (this commit). Five stale pins re-derived with `sed -n`: § 9.3's three
       `component.go` pins (`:919`→`:926`, `:950`/`:955`→`:957`/`:962`, `:1025`→`:1040`) and the two in the comment
       block F3 rewrote (`component.go:1010` `:945-955`→`:953-963`, `:1016` `loop_tracker.go:204-226`→`:212-233`).
+      Round 2's own line moves were swept the same way: five in-code pins in `processor/agentic-loop/component.go`
+      into `handlers.go` — the terminal guard (`:1179-1185`→`:1305-1310`), the model-response timeout
+      (`:1173`→`:1299`), the tool-result timeout branch (`:2245-2259`→`:2402-2417`) and the three context checks
+      (`:2209`→`:2367`, `:2472`/`:2555`→`:2638`/`:2747`) — plus § 9.4's `handlers.go:2303`→`:2437` and § 9.1's
+      mutation-table `handlers.go:1255`→`:1372`. The tools-complete wording now also says which of the two
+      context checks is in `handleToolsComplete` and which is in the `publishIterationRequest` it calls.
       NIT 1: the `ErrMaxIterationsReached` arm in `carryDeferredContinuation` is unreachable from its only caller
       (`handlers.go:1313` fails the delivery on the same predicate first) — kept as a guard and the declared
       residual now says so instead of describing it as reachable. NIT 2: § 10.1's "settles exactly where a
@@ -484,8 +490,9 @@
       `superseded_request` is new operator-visible behaviour and a redelivery is its commonest cause
 - [x] 11.8 **Gates, measured on the head that ships** (§ 8.9's rule: a count carried across a round is not a
       measurement). `task lint` 0; `openspec validate stable-request-identity --strict` 0;
-      `openspec validate --all --strict` 0 (56 passed, 0 failed); `task spec:properties` 0 (223/223 — round 1
-      measured 217/217, round 2 added six citations); `task schema:generate` 0 with
+      `openspec validate --all --strict` 0 (56 passed, 0 failed); `task spec:properties` 0 (224/224 — round 1
+      measured 217/217, round 2 added seven citations; the checker reads TRACKED test files only, so the count
+      moves when a new test file is committed, not when it is written); `task schema:generate` 0 with
       `git diff --exit-code schemas/ specs/` 0; `go run ./cmd/entity-id-audit .` 0 (1332 structured candidates);
       `git diff --check origin/main...HEAD` 0; `go test -race -count=1` over `./agentic/`,
       `./processor/agentic-loop/`, `./processor/agentic-dispatch/`, `./processor/agentic-tools/`,

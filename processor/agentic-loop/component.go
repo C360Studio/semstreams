@@ -1887,7 +1887,7 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 	// for the delivery. The handler has already moved this loop in memory
 	// before we are called, so the redelivery does not arrive at the same loop
 	// it left: a redelivered model response meets the terminal guard
-	// (handlers.go:1179-1185) and returns an empty result — no completion
+	// (handlers.go:1305-1310) and returns an empty result — no completion
 	// record, no publication — which persists nothing, publishes nothing and
 	// ACKs. The completion the first attempt built is then gone, and
 	// COMPLETE_<loopID> and agent.complete were never emitted. So a stamp
@@ -1946,7 +1946,7 @@ func (c *Component) persistResultState(ctx context.Context, result HandlerResult
 		// publishFailureEvents (:1700), which this route never enters: the
 		// three results that carry a FailureState here return no error to
 		// handleLoopFailure, and the one that does (HandleModelResponse's
-		// timeout, handlers.go:1173) never reaches this function. So the write
+		// timeout, handlers.go:1299) never reaches this function. So the write
 		// happens exactly once on every path, and the failure event is
 		// published exactly once — by publishResults here, or by
 		// publishFailureEvents there, never both.
@@ -2177,7 +2177,7 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 // This branch used to record the trajectory, log, and return nil, which is ACK:
 // an executor's completed work was discarded behind a log line, and the worst
 // case was the terminal one. HandleToolResult's timeout branch
-// (handlers.go:2245-2259) transitions the loop to failed, builds its failure
+// (handlers.go:2402-2417) transitions the loop to failed, builds its failure
 // record and its failure publications, and returns them WITH the error — so the
 // old branch acknowledged a terminal failure that was never written and never
 // published. The loop record stayed non-terminal forever while the input that
@@ -2196,8 +2196,9 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 //
 // Cancellation is the one exception, and only the kind that is provably
 // pre-mutation. HandleToolResult checks its context three times: once before it
-// touches anything (handlers.go:2209) and twice inside handleToolsComplete
-// (handlers.go:2472, :2555), after StoreToolResult, RemovePendingTool,
+// touches anything (handlers.go:2367) and twice on the tools-complete path
+// (handlers.go:2638 in handleToolsComplete, :2747 in the publishIterationRequest
+// it calls), after StoreToolResult, RemovePendingTool,
 // IncrementIteration and GetAndClearToolResults have moved in-process state.
 // Only the first carries errCancelledBeforeMutation, and only it retries: a
 // shutting-down process that mutated nothing must not latch a false
