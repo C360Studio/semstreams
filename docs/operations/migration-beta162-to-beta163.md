@@ -1375,9 +1375,11 @@ settled, and answers without publishing again. So is any command that published 
 bare `/status`, and the arms of a bare `/cancel` that refuse, find no loop, or find one already settled.
 
 A client-side refusal also keeps retrying, because it proves the signal was never sent: the circuit breaker open,
-the client not connected, and the sentinels the NATS client returns before it writes (`ErrConnectionClosed`,
-`ErrMaxPayload` and their siblings). A broker outage of that shape recovers on the redelivery instead of stopping
-the lane. If you see the latch, the fix is the same as for any owner-fatal: restart the component once the broker
+the client not connected, and the sentinels the NATS client returns before it writes (`ErrMaxPayload`,
+`ErrBadSubject` and their siblings). `ErrConnectionClosed` is NOT one of them, despite reading like one: the same
+sentinel also comes back after the bytes went out, when the connection drops while the publish is waiting for its
+acknowledgement, so a connection lost mid-publish stops the lane rather than retrying. A broker outage that
+refuses up front recovers on the redelivery instead of stopping the lane. If you see the latch, the fix is the same as for any owner-fatal: restart the component once the broker
 is healthy, and check whether the loop named in the cause is cancelled — the delivery could not tell you.
 
 ## Governance verdicts route on execution identity, and an enforce-mode rule set must be edited first (#1328)

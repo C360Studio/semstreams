@@ -13,6 +13,7 @@ import (
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -154,9 +155,48 @@ func TestBareCancelWithUnconfirmedSignalQuarantines(t *testing.T) {
 		require.Equal(t, []string{ambiguousLoopA}, signalledLoopIDs(*stored))
 	})
 
+	t.Run("a connection closed mid-publish is ambiguous, not a refusal", func(t *testing.T) {
+		// nats.ErrConnectionClosed reads like a refusal and is one at
+		// nats.go:4450 — but the sync publish path reaches
+		// RequestMsgWithContext, which returns the SAME sentinel at
+		// context.go:70 when clearPendingRequestCalls (nats.go:5925-5932)
+		// closes the reply channel on a close or ForceReconnect, AFTER
+		// createNewRequestAndSend already wrote. errors.Is cannot tell the two
+		// sites apart, so the fixture stores: this is the connection that
+		// dropped with the signal already gone.
+		c, stored := cancelAmbiguityComponent(t, true, nats.ErrConnectionClosed)
+
+		decision, err := c.handleUserMessage(t.Context(), cancelCommandMessage(t, "/cancel"))
+
+		assert.Equal(t, natsclient.DeliveryDecisionQuarantine, decision,
+			"a sentinel a post-write site also returns cannot prove the broker stored nothing")
+		require.Error(t, err)
+		require.Equal(t, []string{ambiguousLoopA}, signalledLoopIDs(*stored),
+			"the fixture must have stored, or the test proves nothing about the ambiguous case")
+
+		// The cost of Retry here, driven the same way as the first subtest.
+		if decision == natsclient.DeliveryDecisionRetry {
+			c.loopTracker.UpdateState(ambiguousLoopA, "cancelled")
+			withPersistedLoops(c, map[string]*agentic.LoopEntity{
+				ambiguousLoopA: {
+					ID: ambiguousLoopA, UserID: "operator-1", ChannelType: "http", ChannelID: "session-a",
+					State: agentic.LoopStateCancelled, MaxIterations: 5,
+				},
+				ambiguousLoopB: {
+					ID: ambiguousLoopB, UserID: "operator-1", ChannelType: "http", ChannelID: "session-b",
+					State: agentic.LoopStateExecuting, MaxIterations: 5,
+				},
+			})
+			_, err = c.handleUserMessage(t.Context(), cancelCommandMessage(t, "/cancel"))
+			require.Error(t, err)
+		}
+		require.NotContains(t, signalledLoopIDs(*stored), ambiguousLoopB,
+			"a redelivery re-resolved the target and cancelled a loop the user never named")
+	})
+
 	t.Run("a proven refusal on a resolved target retries", func(t *testing.T) {
 		// ErrNotConnected is returned by the client before js.PublishMsg is
-		// reached (natsclient/client.go:975-978), so nothing was stored and the
+		// reached (natsclient/client.go:976-978), so nothing was stored and the
 		// redelivery is the thing that gets the user their answer.
 		c, stored := cancelAmbiguityComponent(t, false, natsclient.ErrNotConnected)
 

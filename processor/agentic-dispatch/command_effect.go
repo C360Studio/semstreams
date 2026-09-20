@@ -97,17 +97,28 @@ func (e *commandEffect) attemptedUnconfirmed() bool {
 // ambiguous, whatever it reads like. Every entry is a refusal the client makes
 // before the bytes leave the process, at the versions this module pins:
 //
-//   - natsclient.ErrCircuitOpen and natsclient.ErrNotConnected — the two gates
-//     at natsclient/client.go:971-978, which return before js.PublishMsg is
-//     reached at all.
+//   - natsclient.ErrCircuitOpen (natsclient/client.go:972-974) and
+//     natsclient.ErrNotConnected (:976-978) — the two gates that return before
+//     js.PublishMsg is reached at all.
 //   - the sentinels nats.Conn.publish returns before its first write
 //     (nats.go v1.52.0, nats.go:4424): ErrInvalidConnection (:4426),
 //     ErrBadSubject (:4434, :4438), ErrHeadersNotSupported (:4445),
-//     ErrConnectionClosed (:4450), ErrConnectionDraining (:4455),
-//     ErrMaxPayload (:4463) and ErrReconnectBufExceeded (:4470). Each is the
-//     client refusing its own caller.
+//     ErrConnectionDraining (:4455), ErrMaxPayload (:4463) and
+//     ErrReconnectBufExceeded (:4470). Each is the client refusing its own
+//     caller with no bytes written.
 //
-// Two errors that read like refusals are deliberately NOT here.
+// Membership is a property of the SENTINEL, not of one site that returns it,
+// because errors.Is sees only the sentinel. nats.ErrConnectionClosed fails
+// that test and is deliberately absent: nats.Conn.publish does return it
+// pre-write (nats.go:4450), but RequestMsgWithContext ALSO returns it
+// post-write (context.go:70) when the reply channel is closed —
+// clearPendingRequestCalls (nats.go:5925-5932) closes every pending reply on
+// close and on ForceReconnect (:2485) — and the sync publish this component
+// uses goes js.PublishMsg → RequestMsgWithContext (UseOldRequestStyle is never
+// set here). A connection that dropped after the bytes went out is the exact
+// case that must stay ambiguous.
+//
+// Three errors that read like refusals are deliberately NOT here.
 // jetstream.ErrNoStreamResponse (jetstream/publish.go:244-246) means no
 // responder answered, which cannot tell a stream that never received the
 // message from one whose reply was lost; a *jetstream.APIError
@@ -115,7 +126,12 @@ func (e *commandEffect) attemptedUnconfirmed() bool {
 // nothing about whether the store ran. Either could be proven definite by
 // reading the server, and until that proof exists they settle as ambiguous —
 // the cost of being wrong the other way is a live loop cancelled in a user's
-// name without ever having been named.
+// name without ever having been named. The third is genuinely pre-write and
+// still omitted: m.JetStream()'s refusal (natsclient/client.go:980-983)
+// returns before js.PublishMsg, but it is a fmt.Errorf built at client.go:885
+// with no sentinel behind it, so errors.Is cannot recognise it and the only
+// alternative is matching its text. Omitting it over-quarantines, which is the
+// direction this whitelist fails on purpose.
 func publishDefinitelyRejected(err error) bool {
 	for _, refusal := range []error{
 		natsclient.ErrCircuitOpen,
@@ -123,7 +139,6 @@ func publishDefinitelyRejected(err error) bool {
 		nats.ErrInvalidConnection,
 		nats.ErrBadSubject,
 		nats.ErrHeadersNotSupported,
-		nats.ErrConnectionClosed,
 		nats.ErrConnectionDraining,
 		nats.ErrMaxPayload,
 		nats.ErrReconnectBufExceeded,
