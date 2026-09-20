@@ -265,13 +265,25 @@ func TestIntegration_ApprovalFlow_Approve(t *testing.T) {
 	assert.Contains(t, pe.Reason, "approval_required:")
 	assert.Equal(t, int32(0), toolExecutor.calls.Load(), "initial gate must not execute")
 
-	// Step 6: publish ApprovalResponse with decision=approve.
+	dispatchMu.Lock()
+	gatedExecutionID := dispatchedCalls[0].ExecutionID
+	dispatchMu.Unlock()
+	require.NotEmpty(t, gatedExecutionID, "the dispatched call must carry a framework execution identity")
+	assert.Equal(t, gatedExecutionID, pe.ExecutionID,
+		"the pending event must carry over the wire the execution identity an approval authorises")
+
+	// Step 6: publish ApprovalResponse with decision=approve, echoing the
+	// execution identity the pending event named. A response that omits it
+	// against a pending approval that has one is refused as stale — provider
+	// CallID is conversation data a provider may reuse on a later turn, so
+	// there is no CallID-only fallback to match on.
 	approval := &agentic.ApprovalResponse{
-		LoopID:     loopID,
-		CallID:     callID,
-		Decision:   agentic.ApprovalDecisionApprove,
-		ApprovedBy: "alice@example.com",
-		DecidedAt:  time.Now().UTC(),
+		LoopID:      loopID,
+		CallID:      callID,
+		ExecutionID: pe.ExecutionID,
+		Decision:    agentic.ApprovalDecisionApprove,
+		ApprovedBy:  "alice@example.com",
+		DecidedAt:   time.Now().UTC(),
 	}
 	envelope := message.NewBaseMessage(approval.Schema(), approval, "integration-test")
 	envelopeData, err := json.Marshal(envelope)
