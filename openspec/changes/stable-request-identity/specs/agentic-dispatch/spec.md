@@ -33,6 +33,35 @@ NOT add exact committed-output lookup for ordinary publications.
 - **AND** duplicate-window suppression is not treated as durable reconciliation
 
 
+### Requirement: An approval decision names the execution it answers
+
+The HTTP approval endpoint SHALL require the execution identity the caller reviewed — the `execution_id` carried on
+the `ApprovalPendingEvent` — in the request body, and SHALL refuse a body that omits it. A decision naming an
+execution other than the one currently gated SHALL be refused as a conflict. Both refusals SHALL land before
+anything is published, and SHALL leave the pending gate exactly as they found it. A successful submission SHALL
+echo the execution identity it answered.
+
+Without the field the endpoint approved whichever gate was pending when the request landed: a decision made about
+one execution, retried after that call finished and the next one gated, was republished as an approval of a call
+nobody had reviewed, and the loop's matcher accepted it because dispatch had stamped the current identity onto it.
+A human approves one call, not "the next one".
+
+An execution identity SHALL be compared only when the pending gate carries one, matching the loop's own matcher: a
+gate with no identity has nothing to compare and SHALL remain answerable.
+
+#### Scenario: A decision is retried after the gate it answered has moved on
+
+- **WHEN** an approval body naming one execution arrives while a DIFFERENT execution is the pending gate
+- **THEN** the request is refused as a conflict, naming the execution the caller asked about
+- **AND** nothing is published and the pending gate is neither cleared nor re-pointed
+
+#### Scenario: An approval body names no execution
+
+- **WHEN** an approval body omits the execution identity, whatever the loop's state is
+- **THEN** the request is refused as malformed, naming the missing field
+- **AND** the pending gate is unchanged, because a required field is never defaulted from current state
+
+
 ## MODIFIED Requirements
 
 ### Requirement: Every dispatch durable input settles through its owner

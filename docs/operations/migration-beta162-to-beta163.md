@@ -1364,6 +1364,40 @@ than deprecated.
   is new and returns the whole pending record — `CallID`, `ExecutionID`, `RequestID` — for a caller that must
   echo the identity; `GetPendingApprovalCallID` is unchanged.
 
+### `POST /loops/{id}/approval` now requires `execution_id` in the body — BREAKING
+
+The dispatch HTTP approval endpoint no longer infers which call a decision is about. The body gains a required
+field:
+
+```json
+{"decision": "approve", "execution_id": "tool-exec-v1-<digest>", "user_id": "reviewer"}
+```
+
+| Case | Was | Now |
+|---|---|---|
+| Body omits `execution_id` | Approved whichever gate was pending | `400`, naming the field |
+| Body names the pending gate | `200` | `200`, and the acceptance echoes `execution_id` |
+| Body names another execution | Approved the pending gate under ITS identity | `409`, naming the execution the caller asked about |
+
+**Why it is required rather than optional.** Without the field the handler read the currently pending approval and
+stamped that execution onto the `agent.approval_response` it published. A decision made about execution A —
+retried after A finished and B gated, which is ordinary at-least-once client behaviour and needs no concurrency to
+reproduce — was republished as an approval of B, and the loop's matcher accepted it because dispatch had already
+relabelled it with B's identity. The human had approved one call and authorised another. An optional field would
+have left that path intact for every caller that did not adopt it.
+
+**What to change.** An approval UI already has the value: `execution_id` is on the `ApprovalPendingEvent` it
+rendered (and on the durable `pending_approval` record). Send it back. Both refusals land before anything is
+published and leave the pending gate exactly as they found it, so a refused POST is safe to correct and retry.
+
+A gate that carries no execution identity is still answerable — the comparison runs only when the pending record
+has one, matching agentic-loop's own matcher — but the body's field is required in every case.
+
+`agenticdispatch.ApprovalRequest` (Go) gains `ExecutionID string` and `ApprovalAcceptResponse` gains
+`ExecutionID string`. Both are published in `specs/openapi.v3.yaml`, where `execution_id` is listed under
+`ApprovalRequest.required`; the wire payload schemas in `schemas/agentic-dispatch.v1.json` are unchanged, because
+the HTTP body is not a registered payload type.
+
 ## A bare `/cancel` this process may have sent stops the `user.message` lane (#1328)
 
 Nothing to change; something to recognize in a log. A `/cancel` **with no loop id** has its target chosen by

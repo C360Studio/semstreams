@@ -32,6 +32,10 @@ server nor agentic-model could recognise the second as the first.
   `DeliveryDecision` instead of logging and acking.
 - **Cancel requires PubAck before its source settles**, and the ordinary at-least-once publications of loop,
   tools, dispatch and governance state that they may repeat.
+- **An approval decision names the execution it answers.** `POST /loops/{id}/approval` requires `execution_id` in
+  the body, refuses a body that omits it (400) or names an execution other than the pending gate (409), both
+  before publishing, and echoes the identity on the acceptance. Added at owner review round 2: without it the
+  endpoint approved whichever gate was pending when the request landed.
 
 ## Impact
 
@@ -42,6 +46,11 @@ server nor agentic-model could recognise the second as the first.
   `agentic/user_types.go`, `schemas/agentic-loop.v1.json`.
 - Consumer-visible: a RequestID's suffix is no longer a UUID. The `<loopID>:` prefix is unchanged, so a consumer
   that splits on the first colon is unaffected; one that parses the suffix as a UUID is not. Recorded in
+  `docs/operations/migration-beta162-to-beta163.md`.
+- Consumer-visible and BREAKING: `POST /loops/{id}/approval` requires `execution_id`. Every approval UI, chat-ops
+  responder and test harness that posts a decision must send the `execution_id` it was shown on the
+  `ApprovalPendingEvent`; a body without it is refused with 400. `specs/openapi.v3.yaml` lists it under
+  `ApprovalRequest.required` and `ApprovalAcceptResponse` echoes it. Recorded in
   `docs/operations/migration-beta162-to-beta163.md`.
 
 ## Non-goals

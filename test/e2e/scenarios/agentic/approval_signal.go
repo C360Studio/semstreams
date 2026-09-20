@@ -219,7 +219,7 @@ func (s *Scenario) walkApprovalPath(ctx context.Context, result *scenarios.Resul
 			parked.PendingApproval.CallID, pending.CallID)
 	}
 
-	if err := s.submitApproval(ctx, task.LoopID, agentic.ApprovalDecisionApprove); err != nil {
+	if err := s.submitApproval(ctx, task.LoopID, gatedExecutionID, agentic.ApprovalDecisionApprove); err != nil {
 		return err
 	}
 	if err := s.verifyApprovalResponsePublished(ctx, task.LoopID, pending.CallID); err != nil {
@@ -409,7 +409,13 @@ func (s *Scenario) refuseNonCanonicalApproval(ctx context.Context, result *scena
 			fmt.Sprintf("%s/loops/%s/approval", dispatchRoutePrefix, refusal.loopID),
 			agenticdispatch.ApprovalRequest{
 				Decision: agentic.ApprovalDecisionApprove,
-				UserID:   approvalRequester,
+				// Well-formed on purpose. The endpoint also refuses a body that
+				// names no execution, and this walk is about the ADMISSION
+				// gate's classification — the refusal-reason metric below is
+				// what tells the two apart, and a body missing a required field
+				// would leave the status ambiguous.
+				ExecutionID: uuid.NewString(),
+				UserID:      approvalRequester,
 			})
 		if err != nil {
 			return fmt.Errorf("post %s approval: %w", refusal.name, err)
@@ -723,7 +729,9 @@ func terminalOutcome(payload message.Payload) (string, error) {
 	return outcome, nil
 }
 
-// submitApproval answers a pending approval over the production HTTP seam.
+// submitApproval answers a pending approval over the production HTTP seam,
+// naming the execution it is answering — the endpoint refuses a body that does
+// not, and refuses one that names an execution other than the pending gate.
 //
 // A 409 is retried inside a bounded window instead of being failed on. The
 // endpoint answers 409 for "this loop is not awaiting approval", and the
@@ -732,12 +740,16 @@ func terminalOutcome(payload message.Payload) (string, error) {
 // the tracker the endpoint reads. That is a race between two observers of one
 // fact, not a refusal. Every other status is the answer and is reported as
 // one, and a 409 that outlasts the window still fails.
-func (s *Scenario) submitApproval(ctx context.Context, loopID, decision string) error {
+func (s *Scenario) submitApproval(ctx context.Context, loopID, executionID, decision string) error {
 	deadline := time.Now().Add(approvalTrackerWindow)
 	for {
 		status, body, err := s.postJSON(ctx,
 			fmt.Sprintf("%s/loops/%s/approval", dispatchRoutePrefix, loopID),
-			agenticdispatch.ApprovalRequest{Decision: decision, UserID: approvalRequester})
+			agenticdispatch.ApprovalRequest{
+				Decision:    decision,
+				ExecutionID: executionID,
+				UserID:      approvalRequester,
+			})
 		if err != nil {
 			return fmt.Errorf("post approval for loop %s: %w", loopID, err)
 		}
@@ -748,6 +760,14 @@ func (s *Scenario) submitApproval(ctx context.Context, loopID, decision string) 
 			}
 			if !accepted.Accepted || accepted.LoopID != loopID || accepted.Decision != decision {
 				return fmt.Errorf("approval acceptance = %+v, want accepted %s for loop %s", accepted, decision, loopID)
+			}
+			// The acceptance names the execution it answered. This is the one
+			// walk that reaches a 200, so it is where the echo is observed:
+			// a caller that cannot see WHICH gate it just answered is back to
+			// inferring it from the request it sent.
+			if accepted.ExecutionID != executionID {
+				return fmt.Errorf("approval acceptance execution_id = %q, want the execution the decision named (%q)",
+					accepted.ExecutionID, executionID)
 			}
 			return nil
 		}

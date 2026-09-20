@@ -956,6 +956,8 @@ components:
                     type: boolean
                 decision:
                     type: string
+                execution_id:
+                    type: string
                 loop_id:
                     type: string
                 message:
@@ -972,6 +974,8 @@ components:
             properties:
                 decision:
                     type: string
+                execution_id:
+                    type: string
                 modified_arguments:
                     additionalProperties: {}
                     type: object
@@ -981,6 +985,7 @@ components:
                     type: string
             required:
                 - decision
+                - execution_id
             type: object
         ComponentType:
             properties:

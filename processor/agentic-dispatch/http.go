@@ -502,7 +502,15 @@ func truncate(s string, maxLen int) string {
 // "http-user" default) so middleware can authenticate it without
 // handler edits.
 type ApprovalRequest struct {
-	Decision          string         `json:"decision"`                     // approve | reject | modify
+	Decision string `json:"decision"` // approve | reject | modify
+	// ExecutionID names the execution this decision is FOR: the execution_id
+	// the caller was shown on the ApprovalPendingEvent. REQUIRED. Without it
+	// the endpoint approved whichever gate happened to be pending when the
+	// POST landed, so a decision made about execution A, retried after A
+	// finished and B gated, was republished as an approval of B — and the
+	// loop's own matcher accepted it, because dispatch had relabelled it with
+	// B's identity. A human approves one call, not "the next one".
+	ExecutionID       string         `json:"execution_id"`
 	ModifiedArguments map[string]any `json:"modified_arguments,omitempty"` // only meaningful for modify
 	Reason            string         `json:"reason,omitempty"`             // optional, free text
 	UserID            string         `json:"user_id,omitempty"`            // optional; resolves via IdentityFromRequest
@@ -514,11 +522,15 @@ type ApprovalRequest struct {
 // this struct is the dispatch's HTTP-success envelope, not the
 // NATS wire format the framework's loop consumes.
 type ApprovalAcceptResponse struct {
-	LoopID    string `json:"loop_id"`
-	Decision  string `json:"decision"`
-	Accepted  bool   `json:"accepted"`
-	Message   string `json:"message,omitempty"`
-	Timestamp string `json:"timestamp"`
+	LoopID string `json:"loop_id"`
+	// ExecutionID is the execution the accepted decision applies to, echoed
+	// back so the caller can see WHICH gate it just answered rather than
+	// inferring it from the request it sent.
+	ExecutionID string `json:"execution_id,omitempty"`
+	Decision    string `json:"decision"`
+	Accepted    bool   `json:"accepted"`
+	Message     string `json:"message,omitempty"`
+	Timestamp   string `json:"timestamp"`
 }
 
 // ActivityEvent represents a real-time activity event sent via SSE.
@@ -700,6 +712,24 @@ func (c *Component) loopWireByID(ctx context.Context, loopID string) (Loop, erro
 	return loopFromEntity(persisted, c.deps.Platform.Org, c.deps.Platform.Platform), nil
 }
 
+// approvalIdentityMismatch reports whether the execution the caller reviewed is
+// not the one currently pending on this loop. It is the check that stops a
+// decision made about one gate being republished against a later one: without
+// it the handler read whichever approval was pending and stamped THAT identity
+// onto the response, so a retried POST approved a call nobody had reviewed.
+//
+// Empty pending identity is not a mismatch, mirroring the loop's own matcher
+// (`processor/agentic-loop/state.go:545`): a gate that carries no execution
+// identity has none to compare, and inventing a refusal here would make it
+// unapprovable through an endpoint whose field is already required.
+//
+// Deliberately one small function: L3 (#1329) re-homes the pending read onto
+// the durable loop record, and this comparison moves with the read instead of
+// being re-derived at the call site.
+func approvalIdentityMismatch(requested string, pending PendingApprovalInfo) bool {
+	return pending.ExecutionID != "" && pending.ExecutionID != requested
+}
+
 // handleLoopApproval drives the beta.19 approval flow over HTTP.
 // Path-param extraction, gate admission, JSON body decode,
 // validation, NATS publish, JSON success response. Identity resolves
@@ -769,6 +799,17 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The execution identity is part of the FORM — a body that names no
+	// execution is malformed, whatever the loop's state is — so it is refused
+	// with the decision above and before the state read below, and always
+	// before anything is published.
+	if req.ExecutionID == "" {
+		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "400")
+		c.writeJSONError(w, http.StatusBadRequest,
+			"execution_id is required: name the execution_id from the approval_pending event you are answering")
+		return
+	}
+
 	// Atomic CallID snapshot. The previous Get→deref pattern read
 	// loop.PendingApproval outside the tracker's lock and races
 	// against concurrent SetPendingApproval / UpdateCompletion /
@@ -781,6 +822,13 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 	if !awaiting {
 		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "409")
 		c.writeJSONError(w, http.StatusConflict, "loop not awaiting approval")
+		return
+	}
+
+	if approvalIdentityMismatch(req.ExecutionID, pendingApproval) {
+		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "409")
+		c.writeJSONError(w, http.StatusConflict, fmt.Sprintf(
+			"execution %q is not the approval pending on this loop", req.ExecutionID))
 		return
 	}
 
@@ -823,11 +871,12 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 		slog.String("subject", subject))
 
 	resp := ApprovalAcceptResponse{
-		LoopID:    loopID,
-		Decision:  req.Decision,
-		Accepted:  true,
-		Message:   fmt.Sprintf("Approval '%s' submitted for loop %s", req.Decision, loopID),
-		Timestamp: time.Now().Format(time.RFC3339),
+		LoopID:      loopID,
+		ExecutionID: req.ExecutionID,
+		Decision:    req.Decision,
+		Accepted:    true,
+		Message:     fmt.Sprintf("Approval '%s' submitted for loop %s", req.Decision, loopID),
+		Timestamp:   time.Now().Format(time.RFC3339),
 	}
 
 	w.Header().Set("Content-Type", "application/json")

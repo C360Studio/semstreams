@@ -607,6 +607,41 @@ that head, which is the point: these are behaviours no gate was watching.
       `CurrentRequestForTest` seam. `handlers_test.go`'s terminal-loop stale response is the one that mattered:
       under the new guard a response naming `""` is dropped as superseded one guard EARLIER than the terminal
       guard it exists to test, so it would have stayed green for the wrong reason
+- [x] 13.2 **P1-2 — the HTTP approval endpoint approved whichever gate was pending, not the one the caller
+      reviewed.** `ApprovalRequest` carried no execution identity, so the handler read the current pending record
+      and stamped THAT execution onto the `agent.approval_response` it published. A decision about execution A,
+      retried after A finished and B gated — ordinary at-least-once client behaviour, no concurrency — was
+      republished as an approval of B, and the loop's matcher accepted it because dispatch had relabelled it. The
+      review drove the production mux and watched one identical body emit `exec-a` and then `exec-b`, both 200.
+      **Fix as ruled, greenfield and BREAKING:** `execution_id` is REQUIRED on the body; missing → 400 naming the
+      field; present but not the pending gate → 409; both before any publication and both leaving the pending
+      record untouched; the acceptance echoes it. The comparison is one small function,
+      `approvalIdentityMismatch` (`http.go:729-731`), because L3 (#1329) re-homes the pending read onto the
+      durable loop record and the comparison moves with the read. It mirrors the loop's own matcher
+      (`processor/agentic-loop/state.go:545`): an empty PENDING identity is not a mismatch, so a gate carrying
+      none stays answerable instead of becoming unapprovable by a comparison it cannot satisfy — the body's field
+      is required in every case.
+      Tests (`approval_execution_identity_test.go`), all three through the PRODUCTION route table via
+      `RegisterHTTPHandlers`: `TestStaleApprovalPOSTIsRefusedAgainstTheGateThatIsPending` (the review's repro —
+      the decision reaches publish while its own gate is pending, then the gate moves and the identical body is
+      refused 409, naming the execution the caller asked about, with the pending record unmoved),
+      `TestApprovalWithoutAnExecutionIdentityIsRefused` (400, naming the field, gate untouched), and
+      `TestApprovalAgainstAGateWithNoExecutionIdentityIsAccepted` (the symmetry with the loop's matcher). The
+      component has no NATS client, so the status IS the publication assertion: anything that reached the publish
+      step answers 500.
+      **Mutation 1: `http.go:730`, `approvalIdentityMismatch`'s body replaced with `return false`.** RED at
+      `approval_execution_identity_test.go:77`: `expected: 409 actual: 500` — the stale decision reached the
+      publish step, which is the finding. **Mutation 2: `http.go:806-811`, the required-field refusal deleted.**
+      RED at `:81`-adjacent: `"execution \"\" is not the approval pending on this loop" does not contain
+      "execution_id"` — the 400 degrades into a 409 that misclassifies an incomplete body as a state conflict.
+      Each mutation fails exactly ONE test package-wide.
+      Recorded everywhere the break has to be visible: the dispatch spec delta gains the requirement
+      "An approval decision names the execution it answers" with two scenarios, `proposal.md` gains the
+      consumer-visible BREAKING line, `docs/operations/migration-beta162-to-beta163.md` gains the before/after
+      table under the existing approval-echo section, and `specs/openapi.v3.yaml` now lists `execution_id` under
+      `ApprovalRequest.required` and on `ApprovalAcceptResponse`. The agentic e2e approval walk sends the gated
+      execution and asserts the echo on its 200 — the one walk that reaches one — and the refusal walk's body was
+      made well-formed so its 400 stays the admission gate's, as its refusal-reason metric proves
 - [x] 13.3 **P1-3 — a terminal tool with a deferred turn settled the loop silently.** The carry check protected
       `StatusComplete` only; `toolResult.StopLoop` ran the completion path with no pending check at all, and the
       framework's own `decide` executor returns `StopLoop: true`, so this is a production shape rather than a
