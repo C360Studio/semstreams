@@ -486,3 +486,14 @@ re-home commit. Backup ref `refs/backup/gh1329-pre-l2round1-rebase-20260920` = `
       `openspec validate durable-loop-authority --strict` 0; `task openspec:validate` 57/57;
       `task spec:properties` **270/270** (L2's 235 plus this change's own 35 — the round's new citation arrives
       tracked here, so it is counted)
+- [x] 11.17 Re-based again onto L2's round-10 head `1bfac84d` (backup ref
+      `refs/backup/gh1329-pre-l2round10-rebase-20260921` = `31306dc5`). 33 commits, **no conflict**. That round
+      is L2's answer to its internal review round 6 (APPROVE, 1 MEDIUM, 2 NIT) and changes **no code**: both
+      queue-drain bounds justified themselves with a false premise — `DequeueToolCall` is not the only shrinker
+      and the lanes are not serialized per loop — so the comments now say the entry length bounds that drain
+      only and the post-drain re-read is a reachable guard, not an assertion. Two `§ 16` pins re-derived and one
+      sweep claim narrowed. Nothing under `processor/agentic-dispatch/` is touched by it (`git diff --stat` on
+      the commit is `handlers.go` comments and L2's own records). Gates on `4e0770e5`, the rebased head this
+      record commits on top of (docs only): `go build ./...` 0; `task lint` 0; `go test -count=1
+      ./processor/agentic-loop/ ./processor/agentic-dispatch/ ./agentic/` 0; `openspec validate
+      durable-loop-authority --strict` 0; `task openspec:validate` 57/57; `task spec:properties` 270/270
