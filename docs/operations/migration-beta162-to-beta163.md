@@ -1386,9 +1386,29 @@ reproduce — was republished as an approval of B, and the loop's matcher accept
 relabelled it with B's identity. The human had approved one call and authorised another. An optional field would
 have left that path intact for every caller that did not adopt it.
 
-**What to change.** An approval UI already has the value: `execution_id` is on the `ApprovalPendingEvent` it
-rendered (and on the durable `pending_approval` record). Send it back. Both refusals land before anything is
-published and leave the pending gate exactly as they found it, so a refused POST is safe to correct and retry.
+**What to change.** The value is on the wire already — `execution_id` rides the `ApprovalPendingEvent` and the
+durable `pending_approval` record — so the change is to carry it through to the POST. Both refusals land before
+anything is published and leave the pending gate exactly as they found it, so a refused POST is safe to correct
+and retry.
+
+**How much work that is depends on which shape the approval client is in**, and "you already have it" is not true
+of every one:
+
+1. *The client that decodes the typed event in the same process that POSTs.* Read `ExecutionID` off the
+   `ApprovalPendingEvent` (or off the loop record's `pending_approval`) and put it in the body. One field.
+2. *The client that renders a gate from something the identity does not travel on* — a graph condition, a status
+   projection, an event decoded in a DIFFERENT process from the one that posts. Here `execution_id` has to be
+   given a path to the caller before the POST can be built. Two steps: regenerate the HTTP client from
+   `specs/openapi.v3.yaml` so the request type carries the field at all, and thread the identity from the pending
+   event or the durable record to whatever holds the decision.
+
+Shape 2 is the live one in this family today, measured read-only at the time of writing: semteams' generated
+`ApprovalRequest` (`ui/src/lib/types/api.generated.ts`) has no `execution_id` and the string appears nowhere in
+`ui/src`, so every approval POST answers `400` the moment this lands; its typed-event consumer is a separate
+process (`cmd/semteams/approvalpause/`) whose pauser reads `LoopID` and `ToolName` only and never sees
+`ExecutionID`; and the browser learns a gate is open from an `approval_pending` graph triple, which carries no
+execution identity. That is the sister owner's work on the sister's schedule — recorded here so the step is
+sized, not hidden behind "send it back".
 
 A gate that carries no execution identity is still answerable — the comparison runs only when the pending record
 has one, matching agentic-loop's own matcher — but the body's field is required in every case.

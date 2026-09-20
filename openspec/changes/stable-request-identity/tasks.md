@@ -562,7 +562,7 @@ is RED in two pre-existing tests, so the empty carve-out is load-bearing and cov
       Turn one is carried by `…:req:2:0`; turn two is admitted while that request is still in flight; the record
       must then name NO carrier and read as pending-and-uncarried again, and `…:req:2:0`'s completion must carry
       turn two into `…:req:3:0` rather than settle, with turn one still in the conversation that request sends.
-      **Mutation: `state.go:323`, `entity.PendingContinuationRequestID = ""` in `attachContinuation`, deleted.**
+      **Mutation: `state.go:339`, `entity.PendingContinuationRequestID = ""` in `attachContinuation`, deleted.**
       RED at `continuation_deferral_test.go:389`: `the record still names "<loopID>:req:2:0" as the carrier of a
       turn minted after it; that request's response would end the deferral and turn two would never be sent`.
       NIT-4's premise is confirmed rather than assumed: package-wide under that mutation exactly ONE test fails,
@@ -618,7 +618,7 @@ that head, which is the point: these are behaviours no gate was watching.
       record untouched; the acceptance echoes it. The comparison is one small function,
       `approvalIdentityMismatch` (`http.go:729-731`), because L3 (#1329) re-homes the pending read onto the
       durable loop record and the comparison moves with the read. It mirrors the loop's own matcher
-      (`processor/agentic-loop/state.go:545`): an empty PENDING identity is not a mismatch, so a gate carrying
+      (`processor/agentic-loop/state.go:532`): an empty PENDING identity is not a mismatch, so a gate carrying
       none stays answerable instead of becoming unapprovable by a comparison it cannot satisfy — the body's field
       is required in every case.
       Tests (`approval_execution_identity_test.go`), all three through the PRODUCTION route table via
@@ -632,8 +632,9 @@ that head, which is the point: these are behaviours no gate was watching.
       **Mutation 1: `http.go:730`, `approvalIdentityMismatch`'s body replaced with `return false`.** RED at
       `approval_execution_identity_test.go:77`: `expected: 409 actual: 500` — the stale decision reached the
       publish step, which is the finding. **Mutation 2: `http.go:806-811`, the required-field refusal deleted.**
-      RED at `:81`-adjacent: `"execution \"\" is not the approval pending on this loop" does not contain
-      "execution_id"` — the 400 degrades into a 409 that misclassifies an incomplete body as a state conflict.
+      RED at `approval_execution_identity_test.go:101` and `:104`: `expected: 400 actual: 409` and
+      `"execution \"\" is not the approval pending on this loop" does not contain "execution_id"` — the 400
+      degrades into a 409 that misclassifies an incomplete body as a state conflict.
       Each mutation fails exactly ONE test package-wide.
       Recorded everywhere the break has to be visible: the dispatch spec delta gains the requirement
       "An approval decision names the execution it answers" with two scenarios, `proposal.md` gains the
@@ -684,3 +685,101 @@ that head, which is the point: these are behaviours no gate was watching.
       `terminal_failure_record_integration_test.go:21` cited `:2234-2243` for the tool-result timeout — neither
       matched the code at the head that shipped them, and the second disagreed with `component.go`'s pin for the
       same branch
+
+## 14. Internal review of round 3 (`4f91f32d`), plus the owner's ceiling ruling
+
+The review found no defect in the three P1 fixes and reproduced all five mutations. What it found was one gate
+never run and four records that had gone stale — including a reachability claim round 3 itself falsified. The
+owner then ruled on the behaviour that claim was about.
+
+- [x] 14.1 **Owner ruling, 2026-09-20 (on #1328): a turn admitted at the iteration ceiling is KEPT on the
+      completed record, not cleared.** `carryDeferredContinuation`'s `ErrMaxIterationsReached` arm no longer calls
+      `ClearPendingContinuation`: the loop still completes — the budget is spent and the model said it was done —
+      the Warn stays as the operator signal, and the durable record keeps `PendingContinuation` with an empty
+      `PendingContinuationRequestID`, the fact that this loop ended owing a turn no request ever contained. Same
+      shape as the quarantined carry, same reason: the one record that could recover a user's turn must not be a
+      log line. `LoopManager.ClearPendingContinuation` was the drop and had no other caller, so it is deleted with
+      the behaviour — added by this change's own `8734713d` and never released, so no Tier 1 surface is withdrawn
+      (`apidiff` compares against the tag).
+      **Kept, but inert — checked rather than asserted.** Nothing resurrects a completed loop off the flag:
+      `attachContinuation` refuses a terminal loop at `state.go:308-312` (`ErrLoopTerminal`) before any deferral
+      bookkeeping; `CancelLoop` refuses one at `state.go:1450-1457`; a repo-wide grep for `PendingContinuation`
+      outside `_test.go` finds NO reader outside `processor/agentic-loop`, where both readers are
+      `HasPendingContinuation` on a live response (`handlers.go:1423`, `:2501`); this layer has no
+      restore-from-KV path at all, so nothing rehydrates a terminal record into a live loop (restoration is L4's,
+      #1330); and L3's durable reader skips terminal entities when it resolves a route
+      (`processor/agentic-dispatch/http_activity.go:329`).
+      Test: `TestATerminalToolAtTheIterationCeilingKeepsTheDeferredTurnOnTheRecord`
+      (`continuation_deferral_test.go`), which asserts both halves — the turn survives on the record with no
+      carrier, and a task naming the settled loop is refused.
+      Spec: the deferral requirement gains a SHALL for the uncarriable turn and the scenario
+      "A turn is deferred behind a completion the loop has no iteration left to answer".
+- [x] 14.2 **The branch the ruling is about was declared unreachable, and round 3 made it reachable.**
+      `handlers.go:2881`'s comment said "unreachable from the only caller today". `carryDeferredContinuation` has
+      had TWO callers since `90226c38`. From `HandleModelResponse` (`:1424`) it is still unreachable — `:1330`
+      fails the delivery on the same predicate over the same value — but from the terminal-tool carry (`:2504`)
+      it is not: nothing gates iterations between `HandleToolResult`'s entry and that call, the tool lane is
+      at-least-once with no request-identity guard, and `RemovePendingTool` tolerates a call that is already gone.
+      What reaches it is a REDELIVERED terminal tool result landing on a loop whose earlier carry already spent
+      the last iteration, with a newer turn deferred behind it — which is what the test drives, and what makes
+      the fixture's `Iterations >= MaxIterations` precondition load-bearing rather than decorative. The comment
+      and `design.md` § Declared residuals both now say that, and the residual is the RULING, not an open question
+- [x] 14.3 **The migration note under-sized the one live adopter.** It said an approval UI "already has the
+      value … send it back". True of the wire, false of the client that has to send it. Measured read-only
+      (`git status --porcelain` on the sister: 0 lines): semteams' generated `ApprovalRequest`
+      (`ui/src/lib/types/api.generated.ts`) has no `execution_id` and the string appears NOWHERE under `ui/src`
+      (`grep -rl`, exit 1, stderr visible), so every approval POST answers 400 the moment this lands; its typed
+      `ApprovalPendingEvent` consumer is a DIFFERENT process (`cmd/semteams/approvalpause/`) whose pauser reads
+      `LoopID` and `ToolName` only; and the browser learns a gate is open from an `approval_pending` graph
+      triple, which carries no execution identity. The note now names the two adopter shapes — decode-and-post in
+      one process (one field) versus a client that must be regenerated AND given a path for the identity — and
+      says which one is live here. The sister's own work, on the sister's schedule; SemStreams agents make no
+      sister edits
+- [x] 14.4 Records corrected: § 13.2's mutation-2 red line — recorded as ":81-adjacent", and the mutation was
+      RE-RUN here rather than transcribed from the review, so the corrected lines and both messages are observed:
+      `approval_execution_identity_test.go:101` (`expected: 400 actual: 409`) and `:104`
+      (`"execution \"\" is not the approval pending on this loop" does not contain "execution_id"`). A wrong red
+      line costs exactly what the record was meant to save; the breaking entry's home is `proposal.md:50`,
+      beside the change's other consumer-visible
+      entries, NOT `design.md`, which has no breaking list — the round-3 brief named a location that does not
+      exist and the deviation is recorded rather than silently taken; and two pins staled by the ruling's own
+      edits, `state.go:545`→`:532` (the loop-side approval matcher, moved by deleting
+      `ClearPendingContinuation`) and § 12's mutation pin `state.go:323`→`:339` (the `attachContinuation` carrier
+      reset, stale since round 3's insertions and outside the § 13.4 sweep). Both re-derived by content and read
+      back with `sed -n '<n>p'`
+- [x] 14.5 **`task e2e:agentic` run — the gate HIGH-1 found missing, and the first time this change has run
+      it.** No workflow runs the agentic tier (`.github/workflows/*.yml` run `e2e:statistical` and `e2e:core`
+      only), and `docs/contributing/02-e2e-tests.md:297-302` requires a relevant tier green BEFORE a BREAKING
+      commit lands, so it is the author's. Run on the head that ships, measured before §§ 14.5-14.7 were
+      amended into it: the difference is this record's own markdown and nothing else — no Go file, no spec, no
+      schema (a sha is deliberately not quoted here, because every wording of this line would move it):
+      `task e2e:check-ports` **exit 0** (41 published ports probed, 0 held), `task e2e:agentic`
+      **exit 0** — `Scenario completed successfully`, `assertions_run=15`, `duration=2m4.641395542s`. Exit codes
+      read from `$?` on the line after each command into a log, never through a pipe. The stages this round
+      touches are in it: `walk-approval-path` (`approval_listing_matched:2` — the walk that now sends
+      `execution_id` and asserts the echo), `refuse-non-canonical-approval`, `verify-terminal-response`,
+      `verify-stage-a-process-replacement` (78.7s), `verify-durable-tool-replay` (44.5s),
+      `verify-tool-call-governance` and `governance_verdicts_approved_audit:1`.
+      Started only after six consecutive 10-second `ps -A -o pid=,ppid=,comm=` samples showed no `go`, `task`,
+      `*.test` or `e2e.test` process — another agent's `e2e.test` was live on this host and the run waited for it
+      (#1340)
+- [x] 14.6 **PR #1335 retitled `feat(agentic)!: …`** (same subject, `!` added). The repo squashes with
+      `COMMIT_MESSAGES` and the squash SUBJECT comes from the PR title, so a `!`-sweep over
+      `git log <last-tag>..<candidate>` reads this merge as additive without it — the exact failure that made
+      beta.162 read "purely additive" over eight `!` commits. Two commits in this range declare a break in body
+      prose only (`ec469610`, `bbb4eae6`); the title is what a sweep sees
+- [x] 14.7 Gates on the same tree, with § 14.5's markdown-only caveat: `go build ./...` 0; `task lint` 0;
+      `task test` 154 `ok` / 0 `FAIL` (136 cached —
+      packages untouched by this round); `go test -race -count=1 ./agentic/... ./processor/agentic-loop/...
+      ./processor/agentic-dispatch/...` 0; `go vet -tags=integration ./processor/agentic-loop/
+      ./processor/agentic-dispatch/` 0; `go vet -tags=e2e ./test/e2e/...` 0;
+      `openspec validate stable-request-identity --strict` 0; `task openspec:validate` 56/56;
+      `task spec:properties` **232/232**; `task schema:generate` + `git status --porcelain schemas/ specs/` 0,
+      empty; `git diff --check` 0.
+      **Mutation, `14.1`: the pre-ruling drop restored** — `ClearPendingContinuation` re-added to `state.go` and
+      its call put back in the arm at `handlers.go:2901`. RED at `continuation_deferral_test.go:691`: `the
+      completed record dropped the turn it never answered; nothing but the log line records that a user turn was
+      lost`. Exactly ONE test fails package-wide. `cp` backups with `md5 -q` baselines
+      (`handlers.go` `459a683c32e9535c2b31b1225cd0e7bf`, `state.go` `43345bfb7a7092457ca10fbfe54d2f1a`,
+      `http.go` `ee7d23bac103cec4afe6d8a7303df511`), all three matching after restore and
+      `git status --porcelain` empty

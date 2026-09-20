@@ -1,8 +1,10 @@
 package agenticloop_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -534,5 +536,176 @@ func TestDeferredContinuationIsCarriedByATerminalTool(t *testing.T) {
 	}
 	if !completion.State.IsTerminal() {
 		t.Fatalf("the loop did not complete once its deferred turn was answered; state=%s", completion.State)
+	}
+}
+
+// A terminal tool answering a loop that is already on its last iteration takes
+// the one branch in carryDeferredContinuation that cannot carry: there is no
+// iteration left to spend, so the loop completes with the terminal tool's
+// result — and the turn it owes STAYS on the durable record.
+//
+// Owner ruling, 2026-09-20 (on #1328): a turn admitted at the ceiling is kept,
+// not cleared. The completed record carries PendingContinuation with an empty
+// carrier, which is the same shape the quarantined carry already relies on — a
+// turn that no request ever contained remains a fact something can recover,
+// rather than a Warn in a log. The Warn stays as the operator signal.
+//
+// Until 90226c38 this branch had one caller that could not reach it
+// (HandleModelResponse fails the delivery on the same predicate first); the
+// terminal-tool carry is the caller that reaches it, so it is a production
+// shape and this is what watches it.
+//
+// spec: agentic-loop / A logical model request has one deterministic identity
+func TestATerminalToolAtTheIterationCeilingKeepsTheDeferredTurnOnTheRecord(t *testing.T) {
+	handler := agenticloop.NewMessageHandler(createTestConfig())
+	handler.SetToolRegistry(newTestToolRegistry(t))
+	var logs bytes.Buffer
+	handler.SetLogger(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	ctx := context.Background()
+
+	// Reaching the ceiling branch takes the loop THROUGH a successful carry
+	// first: the iteration counter only moves where a request is minted for the
+	// next iteration (handleToolsComplete and the carry itself), and
+	// HandleModelResponse fails any response that arrives at the ceiling, so no
+	// tool can be dispatched from a ceiling iteration. What reaches it is a
+	// REDELIVERED terminal tool result — at-least-once is the tool lane's
+	// contract, HandleToolResult has no request-identity guard, and
+	// RemovePendingTool tolerates a call that is already gone — landing on a
+	// loop that has since been given another turn. A per-spawn budget narrows
+	// the component ceiling (gh#528) so one carry is enough to exhaust it.
+	lastIteration := 1
+	birthResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		TaskID:        "task-ceiling-1",
+		Role:          "general",
+		Model:         "test-model",
+		Prompt:        "summarise the first thing",
+		MaxIterations: &lastIteration,
+	})
+	if err != nil {
+		t.Fatalf("HandleTask (birth): %v", err)
+	}
+	loopID := birthResult.LoopID
+	birth := oneMintedRequestID(t, "birth", birthResult)
+
+	if _, err = handler.HandleTask(ctx, agenticloop.TaskMessage{
+		TaskID: "task-ceiling-2",
+		LoopID: loopID,
+		Role:   "general",
+		Model:  "test-model",
+		Prompt: continuationPrompt,
+	}); err != nil {
+		t.Fatalf("HandleTask (first continuation): %v", err)
+	}
+
+	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+		RequestID: birth,
+		Status:    agentic.StatusToolCall,
+		Message: agentic.ChatMessage{
+			Role:      "assistant",
+			ToolCalls: []agentic.ToolCall{{ID: "call-ceiling-1", Name: "test_tool"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("HandleModelResponse(tool_call): %v", err)
+	}
+	dispatched := dispatchedToolCallFromResult(t, dispatchResult)
+
+	const terminalContent = "the first thing is decided"
+	terminalResult := agentic.ToolResult{
+		CallID:      dispatched.ID,
+		Name:        dispatched.Name,
+		Content:     terminalContent,
+		RequestID:   dispatched.RequestID,
+		ExecutionID: dispatched.ExecutionID,
+		CallOrdinal: dispatched.CallOrdinal,
+		StopLoop:    true,
+	}
+
+	// First delivery: the turn IS carried, and that carry spends the loop's
+	// last iteration.
+	carried, err := handler.HandleToolResult(ctx, loopID, terminalResult)
+	if err != nil {
+		t.Fatalf("HandleToolResult(StopLoop, first delivery): %v", err)
+	}
+	if carried.State.IsTerminal() {
+		t.Fatalf("the first delivery settled a loop with an admitted turn; state=%s", carried.State)
+	}
+	oneMintedRequestID(t, "first carry", carried)
+
+	// A second turn lands while the carried request is outstanding.
+	if _, err = handler.HandleTask(ctx, agenticloop.TaskMessage{
+		TaskID: "task-ceiling-3",
+		LoopID: loopID,
+		Role:   "general",
+		Model:  "test-model",
+		Prompt: secondContinuationPrompt,
+	}); err != nil {
+		t.Fatalf("HandleTask (second continuation): %v", err)
+	}
+
+	// The precondition IS the subject: if the fixture stops putting the loop on
+	// its ceiling with a turn owed, every assertion below passes for the wrong
+	// reason.
+	atCeiling, err := handler.GetLoop(loopID)
+	if err != nil {
+		t.Fatalf("GetLoop (before the redelivery): %v", err)
+	}
+	if atCeiling.Iterations < atCeiling.MaxIterations {
+		t.Fatalf("the loop is not at its ceiling: iterations=%d max=%d; the drop branch is unreachable",
+			atCeiling.Iterations, atCeiling.MaxIterations)
+	}
+	if !handler.HasPendingContinuationForTest(loopID) {
+		t.Fatal("no turn is deferred, so nothing can be dropped")
+	}
+
+	// The redelivery: same bytes, a loop that has moved on and has no iteration
+	// left to spend on the turn it now owes.
+	terminal, err := handler.HandleToolResult(ctx, loopID, terminalResult)
+	if err != nil {
+		t.Fatalf("HandleToolResult(StopLoop, redelivered at the ceiling): %v", err)
+	}
+
+	if !terminal.State.IsTerminal() {
+		t.Fatalf("the loop did not complete when its deferred turn could not be carried; state=%s", terminal.State)
+	}
+	if ids := mintedRequestIDs(t, terminal); len(ids) != 0 {
+		t.Fatalf("a request was minted past the iteration ceiling: %v", ids)
+	}
+
+	// The Warn is the operator signal, and it has to say the turn was not
+	// carried — an operator reading "completed" alone would not look.
+	if !strings.Contains(logs.String(), "deferred continuation not carried") {
+		t.Fatalf("the uncarried turn was not WARNed; logs=%q", logs.String())
+	}
+	if !strings.Contains(logs.String(), loopID) {
+		t.Fatalf("the Warn does not name the loop it happened on; logs=%q", logs.String())
+	}
+
+	// The ruling: kept, not cleared. The completed record is the only place the
+	// turn still exists, with an empty carrier because no request ever held it.
+	settled, err := handler.GetLoop(loopID)
+	if err != nil {
+		t.Fatalf("GetLoop (after completion): %v", err)
+	}
+	if !settled.PendingContinuation {
+		t.Fatal("the completed record dropped the turn it never answered; " +
+			"nothing but the log line records that a user turn was lost")
+	}
+	if settled.PendingContinuationRequestID != "" {
+		t.Fatalf("carrier = %q, want empty: no request ever carried this turn",
+			settled.PendingContinuationRequestID)
+	}
+
+	// Kept, but inert: a new turn cannot restart the settled loop off that
+	// flag. attachContinuation refuses a terminal loop before any deferral
+	// bookkeeping runs.
+	if _, err = handler.HandleTask(ctx, agenticloop.TaskMessage{
+		TaskID: "task-ceiling-4",
+		LoopID: loopID,
+		Role:   "general",
+		Model:  "test-model",
+		Prompt: "a third thing, after the loop settled",
+	}); err == nil {
+		t.Fatal("a turn was admitted to a completed loop; the retained marker must not resurrect it")
 	}
 }

@@ -2874,21 +2874,35 @@ func (h *MessageHandler) carryDeferredContinuation(
 	if err := h.loopManager.IncrementIteration(loopID); err != nil {
 		// Budget exhaustion is the one refusal that is not an error here: the
 		// model said it was done and the loop has no iteration left to spend,
-		// so completing is the right outcome and the deferred turn cannot be
-		// carried. It is WARNed rather than swallowed, because a lost user turn
-		// is a fact an operator should be able to find.
+		// so completing is the right outcome and the turn cannot be carried.
 		//
-		// Unreachable from the only caller today: HandleModelResponse fails the
-		// delivery at :1330 on the same predicate over the same value, and
-		// nothing between there and here moves Iterations. Kept as a guard, so
-		// a future caller that carries from past that check gets the right
-		// behaviour rather than a lost turn.
+		// Reachable from ONE of the two callers. From HandleModelResponse
+		// (:1424) it is not: that handler fails the delivery at :1330 on the
+		// same predicate over the same value, and nothing between there and
+		// here moves Iterations. From the terminal-tool carry (:2504) it is:
+		// nothing gates iterations between HandleToolResult's entry and that
+		// call, and a redelivered terminal tool result — at-least-once, with no
+		// request-identity guard on the tool lane and a tolerant
+		// RemovePendingTool — lands on a loop whose earlier carry already spent
+		// the last iteration, with a newer turn deferred behind it. Observed by
+		// TestATerminalToolAtTheIterationCeilingKeepsTheDeferredTurnOnTheRecord.
+		//
+		// The marker is deliberately NOT cleared (owner ruling, 2026-09-20, on
+		// #1328): the loop completes, and its durable record keeps
+		// PendingContinuation with an empty carrier — the fact that this loop
+		// ended owing a turn no request ever contained. Same shape as the
+		// quarantined carry, where the marker outlives a publish whose
+		// durability is unknown, and the reason is the same: the only record
+		// that could recover the user's turn must not be the log line.
+		// Nothing resurrects the loop off that flag — attachContinuation
+		// refuses a terminal loop at state.go:308-312 before any deferral
+		// bookkeeping, and the flag has no reader outside this package.
 		if errors.Is(err, agentic.ErrMaxIterationsReached) {
-			h.logger.Warn("deferred continuation dropped — iteration budget exhausted at completion",
+			h.logger.Warn("deferred continuation not carried — iteration budget exhausted at completion; "+
+				"the turn stays on the completed record",
 				slog.String("loop_id", loopID),
 				slog.Int("iterations", entity.Iterations),
 				slog.Int("max_iterations", entity.MaxIterations))
-			h.loopManager.ClearPendingContinuation(loopID)
 			return false, nil
 		}
 		return false, errs.Wrap(err, "agentic-loop", "carryDeferredContinuation", "increment iteration")

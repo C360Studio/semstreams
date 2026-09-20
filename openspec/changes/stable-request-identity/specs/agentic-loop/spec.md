@@ -50,6 +50,11 @@ request's response arrives. The loop entity is persisted before its publications
 when the carrying request is BUILT is durably clear about a publication whose durability is unknown; naming the
 carrier keeps the turn recoverable while still preventing a second carry.
 
+A turn that cannot be carried at all — the loop is at its iteration ceiling when the completion arrives — SHALL
+leave the loop completing and SHALL be retained on the record with no carrier named, rather than cleared. A turn
+no request ever contained is otherwise recoverable only from a log line. The retained record SHALL NOT make the
+settled loop continuable: a task naming a terminal loop is refused as it always was.
+
 #### Scenario: The same logical request is minted twice
 
 - **WHEN** a task redelivers and agentic-loop mints the request for a loop whose iteration and retry ordinals have
@@ -99,6 +104,13 @@ carrier keeps the turn recoverable while still preventing a second carry.
 - **WHEN** the publication carrying a deferred turn fails with unknown durability and the delivery is quarantined
 - **THEN** the persisted loop entity still records the turn as pending and names the request that was to carry it
 - **AND** no second request is minted for the same turn while that record names a carrier
+
+#### Scenario: A turn is deferred behind a completion the loop has no iteration left to answer
+
+- **WHEN** a completion arrives for a loop at its iteration ceiling with a continuation turn pending
+- **THEN** the loop completes and warns that the turn was not carried
+- **AND** the persisted loop entity still records the turn as pending, with no carrier named
+- **AND** a task naming that settled loop is refused rather than continuing it
 
 #### Scenario: A response arrives for a request the loop has moved on from
 

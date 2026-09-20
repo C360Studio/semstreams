@@ -343,19 +343,6 @@ func (m *LoopManager) attachContinuation(loopID, taskID string) (agentic.LoopEnt
 	return *entity, false, nil
 }
 
-// ClearPendingContinuation drops the deferred-continuation marker outright,
-// carrier and all. This is the DROP, not the send: the one caller is the
-// iteration-budget refusal, where the turn cannot be carried at all and the
-// loop completes without it.
-func (m *LoopManager) ClearPendingContinuation(loopID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if entity, exists := m.loops[loopID]; exists {
-		entity.PendingContinuation = false
-		entity.PendingContinuationRequestID = ""
-	}
-}
-
 // HasPendingContinuation reports whether a continuation turn is waiting for a
 // request to carry it — pending AND uncarried. Once a request names the turn,
 // the answer is false: carrying it a second time would spend an iteration

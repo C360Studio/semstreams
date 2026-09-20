@@ -165,13 +165,29 @@ deferred one identity decision to #1328. All three are answered here.
   the tool-call path has put an admitted turn ahead of its tool results since intake started attaching (#1227).
   Reordering it means holding the turn outside the context until the response lands, which is a context-manager
   change and not this layer's. Recorded rather than fixed here.
-- **The budget-exhausted drop is a guard, not a reachable state.** `carryDeferredContinuation`'s
-  `ErrMaxIterationsReached` arm completes the loop and WARNs the dropped turn — but `HandleModelResponse` already
-  returns `WrapFatal` at `handlers.go:1330-1337` when `entity.Iterations >= entity.MaxIterations`, over the same
-  value, and nothing between that check and the carry moves `Iterations`. The arm is therefore unreachable from
-  its only caller today, and it is kept deliberately: it is the correct behaviour if a future caller carries from
-  somewhere past that check, and failing the loop instead would turn a successful completion into a failure
-  because a later message arrived. Corrected at round 2 — the earlier text declared it as a reachable residual.
+- **A turn admitted at the iteration ceiling is KEPT on the completed record — owner ruling, 2026-09-20 (#1328).**
+  `carryDeferredContinuation`'s `ErrMaxIterationsReached` arm completes the loop and WARNs. Through round 2 the
+  arm was declared unreachable, and from `HandleModelResponse` (`handlers.go:1424`) it still is: that handler
+  returns `WrapFatal` at `:1330-1337` on the same predicate over the same value, and nothing between that check
+  and the carry moves `Iterations`. Round 3's terminal-tool carry (`:2504`) is a SECOND caller and it reaches the
+  arm: nothing gates iterations between `HandleToolResult`'s entry and that call, the tool lane is at-least-once
+  with no request-identity guard, and `RemovePendingTool` tolerates a call that is already gone — so a
+  redelivered terminal tool result lands on a loop whose earlier carry already spent the last iteration, with a
+  newer turn deferred behind it.
+  The arm used to clear the marker. It no longer does: the loop completes, and its durable record keeps
+  `PendingContinuation` with an empty `PendingContinuationRequestID` — the fact that this loop ended owing a turn
+  no request ever contained. Same shape as the quarantined carry, for the same reason: the one record that could
+  recover a user's turn must not be a log line. `LoopManager.ClearPendingContinuation` was the drop and had no
+  other caller, so it is deleted with the behaviour (added by this change's own `8734713d`, never released, so no
+  Tier 1 surface is withdrawn).
+  Kept, but inert. Nothing resurrects a completed loop off the flag: `attachContinuation` refuses a terminal loop
+  at `state.go:308-312` before any deferral bookkeeping; `CancelLoop` refuses one at `:1450-1457`; the flag has no
+  reader outside `processor/agentic-loop`, where both readers are `HasPendingContinuation` on a live response
+  (`handlers.go:1423`, `:2501`); this layer has no restore-from-KV path at all (loop restoration is L4's, #1330);
+  and L3's durable reader skips terminal entities outright when it resolves a route
+  (`processor/agentic-dispatch/http_activity.go:329`). Observed by
+  `TestATerminalToolAtTheIterationCeilingKeepsTheDeferredTurnOnTheRecord`, which asserts both halves — the turn
+  survives on the record, and a new task naming the settled loop is refused.
 - **The admission check and the mint are not one critical section.** `attachContinuation` (`state.go:333`) reads
   `outstandingRequests` under the manager lock and releases it; `HandleModelResponse` clears the mark at
   `handlers.go:1275` and the carrying request does not re-take it until `TrackRequest` at `handlers.go:2826`,
