@@ -333,7 +333,10 @@
       `TestApprovalWithoutExecutionIdentityIsRefusedAgainstAGatedCall`,
       `TestApprovalPendingEventCarriesTheGatedExecutionIdentity`,
       `TestExpiredApprovalCandidateCarriesTheGatedExecutionIdentity`. Mutation: matching on CallID only → both
-      refusal tests fail
+      refusal tests fail. `TestIntegration_ApprovalFlow_Approve` went red on exactly this rule — its fixture
+      answered with CallID alone — and now echoes the pending event's execution identity over the wire, the way a
+      real approval UI must (`3fbdd21c`). Mutation: `+ "-mutated"` on the pending event's `ExecutionID` → the
+      wire-identity assertion and the re-dispatch both fail
 - [x] 10.3 **F3 [P1] — an ambiguous cancel publish failure retried an inferred target** (`2e00d00c`). The recorder
       gains the ATTEMPT (`commands.go:184`, before the publish) beside the publication (`:191`). A command whose
       target was resolved rather than named and whose attempt is unaccounted for returns Fatal → Quarantine. The
