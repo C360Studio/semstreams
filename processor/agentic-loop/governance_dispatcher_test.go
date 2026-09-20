@@ -37,12 +37,12 @@ func TestGovernanceDispatcherHandleVerdictDeclaresDeliveryOutcome(t *testing.T) 
 	t.Parallel()
 
 	disabled := NewGovernanceDispatcher(ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeDisabled}, nil, slog.Default(), nil)
-	decision, err := disabled.HandleVerdict("approved", "call-disabled", nil)
+	decision, err := disabled.HandleVerdict("approved", "call-disabled", VerdictPayload{})
 	require.NoError(t, err)
 	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
 
 	audit := NewGovernanceDispatcher(ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeAudit}, nil, slog.Default(), nil)
-	decision, err = audit.HandleVerdict("approved", "call-audit", nil)
+	decision, err = audit.HandleVerdict("approved", "call-audit", VerdictPayload{})
 	require.NoError(t, err)
 	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
 
@@ -54,13 +54,13 @@ func TestGovernanceDispatcherHandleVerdictDeclaresDeliveryOutcome(t *testing.T) 
 	// A missing waiter is not a settlement the dispatcher can make: the
 	// Component classifies it against the loops bucket. The dispatcher's job
 	// is to say WHICH condition it hit, in a form errors.Is can read.
-	decision, err = enforce.HandleVerdict("approved", "missing", nil)
+	decision, err = enforce.HandleVerdict("approved", "missing", VerdictPayload{})
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrNoGovernanceWaiter)
 	require.Contains(t, err.Error(), "missing", "the cause must name the call_id it could not route")
 
 	delivered := enforce.registerWaiter("delivered")
-	decision, err = enforce.HandleVerdict("approved", "delivered", nil)
+	decision, err = enforce.HandleVerdict("approved", "delivered", VerdictPayload{})
 	require.NoError(t, err)
 	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
 	require.Equal(t, "approved", (<-delivered).decision)
@@ -68,7 +68,7 @@ func TestGovernanceDispatcherHandleVerdictDeclaresDeliveryOutcome(t *testing.T) 
 
 	full := enforce.registerWaiter("full")
 	full <- verdictArrival{decision: "approved"}
-	decision, err = enforce.HandleVerdict("rejected", "full", nil)
+	decision, err = enforce.HandleVerdict("rejected", "full", VerdictPayload{})
 	require.Error(t, err)
 	require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
 	enforce.releaseWaiter("full")
@@ -217,10 +217,9 @@ func TestDispatcher_EnforceModeWaitsForApproveVerdict(t *testing.T) {
 	// send even if Propose hasn't entered its select yet.
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		payload, _ := json.Marshal(VerdictPayload{
+		d.HandleVerdict("approved", "execution-call-001", VerdictPayload{
 			Decision: "approved", RuleID: "rule-allow", Reason: "policy permits",
 		})
-		d.HandleVerdict("approved", "execution-call-001", payload)
 	}()
 
 	result, err := d.Propose(context.Background(), "loop-1", "", calls)
@@ -244,10 +243,9 @@ func TestDispatcher_EnforceModeRejectsOnDenyVerdict(t *testing.T) {
 
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		payload, _ := json.Marshal(VerdictPayload{
+		d.HandleVerdict("rejected", "execution-call-001", VerdictPayload{
 			Decision: "rejected", RuleID: "block-bash", Reason: "bash disallowed",
 		})
-		d.HandleVerdict("rejected", "execution-call-001", payload)
 	}()
 
 	result, err := d.Propose(context.Background(), "loop-1", "", calls)
@@ -313,8 +311,8 @@ func TestDispatcher_EnforceModeMixedVerdictsPreserveOrder(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		// Reverse order on purpose to confirm the dispatcher
 		// re-orders by request, not by arrival.
-		approvedPayload, _ := json.Marshal(VerdictPayload{Decision: "approved"})
-		rejectedPayload, _ := json.Marshal(VerdictPayload{Decision: "rejected", Reason: "blocked"})
+		approvedPayload := VerdictPayload{Decision: "approved"}
+		rejectedPayload := VerdictPayload{Decision: "rejected", Reason: "blocked"}
 		d.HandleVerdict("approved", "execution-c3", approvedPayload)
 		d.HandleVerdict("rejected", "execution-c2", rejectedPayload)
 		d.HandleVerdict("approved", "execution-c1", approvedPayload)
@@ -353,9 +351,8 @@ func TestDispatcher_EnforceModePartialPublishFailure(t *testing.T) {
 
 	go func() {
 		time.Sleep(30 * time.Millisecond)
-		payload, _ := json.Marshal(VerdictPayload{Decision: "approved"})
 		// Only c1 will have a verdict subscribe path — c2's publish failed.
-		d.HandleVerdict("approved", "execution-c1", payload)
+		d.HandleVerdict("approved", "execution-c1", VerdictPayload{Decision: "approved"})
 	}()
 
 	result, err := d.Propose(context.Background(), "loop-1", "", calls)
@@ -386,8 +383,7 @@ func TestDispatcher_EnforceModeVerdictBeforeSelectArrival(t *testing.T) {
 	// before Propose returns from publish and enters the select. The
 	// buffered waiter channel must absorb this.
 	pub.onPublish = func() {
-		payload, _ := json.Marshal(VerdictPayload{Decision: "approved", RuleID: "fast-rule"})
-		d.HandleVerdict("approved", "execution-fast-call", payload)
+		d.HandleVerdict("approved", "execution-fast-call", VerdictPayload{Decision: "approved", RuleID: "fast-rule"})
 	}
 
 	result, err := d.Propose(context.Background(), "loop-1", "", calls)
@@ -415,8 +411,7 @@ func TestDispatcher_EnforceModeLateVerdictIsNoOp(t *testing.T) {
 	require.Len(t, result.Rejected, 1)
 
 	// Now fire a late verdict — must not panic.
-	payload, _ := json.Marshal(VerdictPayload{Decision: "approved"})
-	d.HandleVerdict("approved", "execution-late-call", payload)
+	d.HandleVerdict("approved", "execution-late-call", VerdictPayload{Decision: "approved"})
 }
 
 // --- metrics integration --------------------------------------------
@@ -468,8 +463,7 @@ func TestDispatcher_EnforceModeRecordsApprovedVerdictMetric(t *testing.T) {
 	calls := []agentic.ToolCall{governanceTestCall("c1", "bash")}
 	go func() {
 		time.Sleep(30 * time.Millisecond)
-		payload, _ := json.Marshal(VerdictPayload{Decision: "approved"})
-		d.HandleVerdict("approved", "execution-c1", payload)
+		d.HandleVerdict("approved", "execution-c1", VerdictPayload{Decision: "approved"})
 	}()
 
 	_, err := d.Propose(context.Background(), "loop-1", "", calls)
@@ -522,8 +516,7 @@ func TestDispatcher_LateVerdictIncrementsMissingWaiterMetric(t *testing.T) {
 
 	// Late verdict — waiter already released by defer. Must increment
 	// the missing-waiter counter, not panic.
-	payload, _ := json.Marshal(VerdictPayload{Decision: "approved"})
-	d.HandleVerdict("approved", "execution-late-call", payload)
+	d.HandleVerdict("approved", "execution-late-call", VerdictPayload{Decision: "approved"})
 
 	assert.Equal(t, 1, mx.missingWaiterCalls,
 		"late verdict for released waiter must increment subscribe-before-publish counter")

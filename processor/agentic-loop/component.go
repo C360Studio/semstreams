@@ -2637,7 +2637,7 @@ func (c *Component) handleToolCallVerdictMessage(ctx context.Context, data []byt
 			fmt.Errorf("tool-call verdict payload missing decision or execution_id (decision=%q execution_id=%q)", decision, executionID)
 	}
 
-	settled, err := dispatcher.HandleVerdict(decision, executionID, data)
+	settled, err := dispatcher.HandleVerdict(decision, executionID, payload)
 	if errors.Is(err, ErrNoGovernanceWaiter) {
 		return c.settleVerdictWithoutWaiter(ctx, payload, executionID, err)
 	}
@@ -2721,9 +2721,9 @@ func decodeVerdictPayload(decoder *message.Decoder, data []byte) (VerdictPayload
 }
 
 // verdictPayloadFromMap translates a GenericJSONPayload.Data map into
-// the typed VerdictPayload. Only the routing-relevant fields are
-// extracted; the original bytes are still passed to the dispatcher's
-// HandleVerdict for context logging.
+// the typed VerdictPayload. This IS what the dispatcher receives — the
+// original bytes go no further, because the two production shapes do not
+// agree on where a field lives and only this decode knows both.
 func verdictPayloadFromMap(data map[string]any) VerdictPayload {
 	p := VerdictPayload{}
 	if v, ok := data["decision"].(string); ok {

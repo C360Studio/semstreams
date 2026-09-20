@@ -1418,6 +1418,21 @@ mean different things: `missing_waiter` points at the loop process or delivery t
 points at a *rule* — it is the observable symptom of a verdict rule that echoes neither identity, which is the same
 edit this section already asks for.
 
+### `GovernanceDispatcher.HandleVerdict` takes the decoded verdict
+
+The third parameter was the raw wire `[]byte` and is now the decoded `VerdictPayload`:
+
+```go
+HandleVerdict(decision, executionID string, verdict VerdictPayload) (natsclient.DeliveryDecision, error)
+```
+
+Only an adopter that implements `GovernanceDispatcher` itself is affected — a grep across all nine sister
+repositories found zero references — and the fix is to take the struct and delete the unmarshal. That unmarshal is
+the reason the parameter moved: the two shapes a rule publishes do not agree on where a field lives, so a
+dispatcher decoding the bytes itself read `""` for the fingerprint, the rule and the **reason**, which in enforce
+mode is the text the model is told its call was refused with. The framework normalizes both shapes once, before
+dispatch, and hands the result over.
+
 Every line pin in this section was re-derived with `sed -n '<n>p'` against the head it ships on, not carried
 forward: one of them (`governance_dispatcher.go:401`) had already drifted onto a comment line before anyone read
 it. Re-derive rather than trust when you cite this section from anywhere else.

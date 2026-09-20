@@ -216,9 +216,8 @@ func TestGovernanceWaitersSeparateRepeatedProviderCallID(t *testing.T) {
 	publisher.onPublish = func() {
 		executionID := calls[next].ExecutionID
 		next++
-		payload, err := json.Marshal(VerdictPayload{Decision: "approved", ExecutionID: executionID})
-		require.NoError(t, err)
-		decision, err := dispatcher.HandleVerdict("approved", executionID, payload)
+		decision, err := dispatcher.HandleVerdict("approved", executionID,
+			VerdictPayload{Decision: "approved", ExecutionID: executionID})
 		require.NoError(t, err)
 		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
 	}

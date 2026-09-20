@@ -396,7 +396,7 @@ type settlementVerdictDispatcher struct{ received chan string }
 func (*settlementVerdictDispatcher) Propose(context.Context, string, string, []agentic.ToolCall) (DispatcherResult, error) {
 	return DispatcherResult{}, nil
 }
-func (d *settlementVerdictDispatcher) HandleVerdict(decision, callID string, _ []byte) (natsclient.DeliveryDecision, error) {
+func (d *settlementVerdictDispatcher) HandleVerdict(decision, callID string, _ VerdictPayload) (natsclient.DeliveryDecision, error) {
 	d.received <- decision + ":" + callID
 	return natsclient.DeliveryDecisionAck, nil
 }

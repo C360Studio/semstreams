@@ -27,6 +27,13 @@ per-call governance state that NO layer of this stack owns: L4 (#1330) carries d
 per-call proposal state. Absent a new issue claiming it, the fingerprint is an audit token only, and no layer
 verifies it.
 
+The verdict handed to the dispatcher SHALL be the DECODED one, and every field read off it SHALL tolerate both
+published shapes — top level, and nested under `properties`. The rule engine's approve action publishes a
+`core.json.v1` envelope and the canonical reject pattern publishes a raw map whose fields all sit under
+`properties`, so a dispatcher that unmarshals the wire bytes itself reads the empty string for BOTH: the audit
+fingerprint, rule and reason are lost, and in enforce mode the reason the model is told its call was refused with
+is lost with them. Normalization SHALL happen in one place, not once per dispatcher.
+
 #### Scenario: Validated output may repeat
 
 - **WHEN** validation input redelivers after its validated output was published
@@ -56,6 +63,14 @@ verifies it.
 - **WHEN** a second verdict arrives for an execution identity whose waiter already holds one
 - **THEN** the delivery quarantines
 - **AND** neither verdict silently replaces the other
+
+#### Scenario: A verdict arrives in either published shape
+
+- **WHEN** a verdict arrives as an approve-action envelope, or as a publish-action map whose fields are nested
+  under `properties`
+- **THEN** the audit line records the decision, execution identity, rule, reason and fingerprint the rule actually
+  echoed, for either shape
+- **AND** an enforce-mode waiter receives that same reason, so the refusal the model reads is never reasonless
 
 #### Scenario: A verdict's fingerprint disagrees with its proposal
 
