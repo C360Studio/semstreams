@@ -184,10 +184,32 @@ deferred one identity decision to #1328. All three are answered here.
   at `state.go:308-312` before any deferral bookkeeping; `CancelLoop` refuses one at `:1450-1457`; the flag has no
   reader outside `processor/agentic-loop`, where both readers are `HasPendingContinuation` on a live response
   (`handlers.go:1423`, `:2501`); this layer has no restore-from-KV path at all (loop restoration is L4's, #1330);
-  and L3's durable reader skips terminal entities outright when it resolves a route
-  (`processor/agentic-dispatch/http_activity.go:329`). Observed by
+  and L3's durable reader skips terminal entities outright when it resolves a route (`activeLoop`'s
+  `entity.State.IsTerminal()` conjunct — `processor/agentic-dispatch/http_activity.go:329` in **#1329's tree at
+  `81a5cabb`**, NOT in this one, where that line is an SSE attach error branch). Observed by
   `TestATerminalToolAtTheIterationCeilingKeepsTheDeferredTurnOnTheRecord`, which asserts both halves — the turn
   survives on the record, and a new task naming the settled loop is refused.
+- **A redelivered terminal tool result re-settles an already-complete loop. Pre-existing, examined here, NOT
+  fixed here.** This change's own premise — the tool lane is at-least-once, `HandleToolResult` has no
+  request-identity guard, and `RemovePendingTool` tolerates a call that is already gone — has a second
+  consequence beyond the ceiling arm: when the redelivery lands on a loop the FIRST delivery already completed,
+  it completes it again. Reproduced sequentially through the public handler (no concurrency, no restart): a
+  second `agent.complete.<loopID>` on the wire, a second completion record, and `completed_at` rewritten on the
+  durable record. The outcome is not corrupted — the second completion carries the same values — so the harm is
+  a duplicate terminal event and a drifting timestamp.
+  Two lines cause it. `LoopEntity.TransitionTo` answers the same-state case `nil` BEFORE its terminal check
+  (`agentic/state.go:180-186`), so `complete → complete` is a silent success; and the `StopLoop` branch
+  (`handlers.go:2482`) runs ahead of the tool lane's only terminal guard, which is inside the `AllToolsComplete`
+  branch at `:2536`. Nothing suppresses it downstream either: `MsgID` is set at exactly three sites
+  (`handlers.go:1174`, `:2096`, `:2842`), all model-request mints, so the completion publishes with an empty
+  `Nats-Msg-Id` and the stream's Duplicates window never sees it (`PublishedMessage.MsgID`, `handlers.go:47-55`;
+  `component.go:2275-2279`). Only `complete → complete` leaks: a loop cancelled while the tool ran refuses the
+  late result with `cannot transition from terminal state cancelled` and publishes nothing.
+  It is L4's, by the owner's Q6 ruling on tool-lane redelivery classification, and the inventory is placed there
+  rather than filed as its own issue:
+  https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5751092034. Recorded here so the archived
+  change says the tool lane was examined and this is what was found — the model lane's superseded-response guard
+  has no counterpart on this lane until durable request identity exists to give it one.
 - **The admission check and the mint are not one critical section.** `attachContinuation` (`state.go:333`) reads
   `outstandingRequests` under the manager lock and releases it; `HandleModelResponse` clears the mark at
   `handlers.go:1275` and the carrying request does not re-take it until `TrackRequest` at `handlers.go:2826`,

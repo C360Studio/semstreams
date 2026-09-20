@@ -708,7 +708,8 @@ owner then ruled on the behaviour that claim was about.
       `HasPendingContinuation` on a live response (`handlers.go:1423`, `:2501`); this layer has no
       restore-from-KV path at all, so nothing rehydrates a terminal record into a live loop (restoration is L4's,
       #1330); and L3's durable reader skips terminal entities when it resolves a route
-      (`processor/agentic-dispatch/http_activity.go:329`).
+      (`activeLoop`'s `entity.State.IsTerminal()` conjunct — `processor/agentic-dispatch/http_activity.go:329`
+      in #1329's tree at `81a5cabb`, NOT in this one, where that line is an SSE attach error branch).
       Test: `TestATerminalToolAtTheIterationCeilingKeepsTheDeferredTurnOnTheRecord`
       (`continuation_deferral_test.go`), which asserts both halves — the turn survives on the record with no
       carrier, and a task naming the settled loop is refused.
