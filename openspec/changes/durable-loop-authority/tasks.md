@@ -452,3 +452,12 @@ re-home commit. Backup ref `refs/backup/gh1329-pre-l2round1-rebase-20260920` = `
       `go test -count=1 ./processor/agentic-loop/ ./processor/agentic-dispatch/ ./agentic/` 0;
       `go test -race -count=1` over the same three 0; `openspec validate durable-loop-authority --strict` 0;
       `task openspec:validate` 57/57; `task spec:properties` **268/268**
+- [x] 11.14 Re-based again onto L2's round-7 docs head `7e93ea22` (backup ref
+      `refs/backup/gh1329-pre-l2round7-rebase-20260920` = `f445e4b5`). 30 commits, **no conflict**: that round
+      closes three review NITs in L2's own `design.md` and `tasks.md` — two drifted `agentic-loop` pins, an
+      honesty qualification on the tier precheck, and a new residual about `GetAndClearToolResults` returning
+      tool results in map order. None of it is code and none of it names a file this change touches.
+      Gates on `4507fa8d`: `go build ./...` 0; `task lint` 0;
+      `go test -count=1 ./processor/agentic-loop/ ./processor/agentic-dispatch/ ./agentic/` 0;
+      `openspec validate durable-loop-authority --strict` 0; `task openspec:validate` 57/57;
+      `task spec:properties` **268/268**
