@@ -139,12 +139,21 @@ func TestDeferredContinuationIsCarriedByTheCompletionResponse(t *testing.T) {
 		t.Fatalf("the carried request does not contain the continuation's turn %q", continuationPrompt)
 	}
 
+	// The marker stays set and names its carrier. It is persisted before the
+	// publish that sends this request, so clearing it here would durably say
+	// "nothing deferred" about a send whose durability is still unknown; what
+	// stops a second carry is the carrier being recorded, not the marker being
+	// gone.
 	entity, err := handler.GetLoop(loopID)
 	if err != nil {
 		t.Fatalf("GetLoop: %v", err)
 	}
-	if entity.PendingContinuation {
-		t.Fatal("the pending-continuation marker survived the request that carries the turn")
+	if entity.PendingContinuationRequestID != next {
+		t.Fatalf("carrier = %q, want the request that carries the turn %q",
+			entity.PendingContinuationRequestID, next)
+	}
+	if handler.HasPendingContinuationForTest(loopID) {
+		t.Fatal("the loop still reads as uncarried; the next completion would carry the same turn again")
 	}
 }
 
@@ -201,8 +210,12 @@ func TestDeferredContinuationRidesTheToolCallPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLoop: %v", err)
 	}
-	if entity.PendingContinuation {
-		t.Fatal("the pending-continuation marker survived the request that carries the turn")
+	if entity.PendingContinuationRequestID != next {
+		t.Fatalf("carrier = %q, want the tools-complete request %q",
+			entity.PendingContinuationRequestID, next)
+	}
+	if handler.HasPendingContinuationForTest(loopID) {
+		t.Fatal("the loop still reads as uncarried; the next completion would carry the same turn again")
 	}
 }
 

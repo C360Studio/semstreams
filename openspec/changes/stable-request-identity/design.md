@@ -67,7 +67,20 @@ and then a response's RequestID no longer tells the loop which turn it answers. 
   (`emitRetryRequest`) re-asks at the same iteration from the same context, and the birth request mints too — so
   the deferral bookkeeping does not live at any build site. It lives in `TrackRequest`, the call all three already
   make: every request that goes out is built from the context the turn was written into, so every request carries
-  it, and putting the clear where the mark is taken is what makes that true of three paths instead of two.
+  the turn, and putting the bookkeeping where the mark is taken is what makes that true of three paths instead of
+  two.
+- **Knowing it was sent.** `TrackRequest` RECORDS the carrier — `LoopEntity.PendingContinuationRequestID` — it
+  does not clear the marker, and `HasPendingContinuation` means pending AND uncarried. The ordering is why.
+  `persistHandlerResult` stamps the entity (`persistResultState`) and only then emits the results
+  (`publishResults`), and a publish-phase failure is commit-unknown: the delivery quarantines with the request's
+  durability unknown. A marker cleared at BUILD is therefore durably clear about a send that may never have
+  happened, and the one fact that could re-carry the user's turn is gone from the only record recovery reads.
+  Recording the carrier satisfies both obligations at once — nothing carries the turn twice, because a request
+  already names it; and a quarantined publish leaves "pending, carried by `<loopID>:req:N+1:0`" durable for L4's
+  replay. The clear moves to `SettleRequest`, where a response for that request is the first proof the send
+  happened, and it runs before the completion logic, so a completion for the carrying request settles the loop
+  normally. A turn admitted while a carrier is outstanding resets the carrier to empty in `attachContinuation`:
+  that turn is in no request's body, so the next completion must carry it.
 
 Settlement is untouched. A deferred task Acks exactly where a deduplicated one did; the carried request travels in
 an ordinary non-terminal `HandlerResult` through `persistHandlerResult`, so a stamp or publish failure quarantines

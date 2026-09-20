@@ -82,9 +82,9 @@ type LoopEntity struct {
 	// PendingContinuation is set when a continuation task was admitted to this
 	// loop while its model request was still outstanding. The continuation's
 	// turn is already in the loop's context; what this marker carries is that
-	// the turn has NOT been sent yet, so the outstanding response must not
-	// complete the loop — it advances to the next iteration and publishes a
-	// request that includes it. Cleared when that request is built.
+	// the turn must not be lost, so the outstanding response must not complete
+	// the loop — it advances to the next iteration and publishes a request that
+	// includes it.
 	//
 	// One outstanding model request per loop is what makes the request name
 	// (`<loopID>:req:<iteration>:<retry>`) unique: two requests minted at the
@@ -96,6 +96,21 @@ type LoopEntity struct {
 	// (#1330). In-process it is authoritative; after a replacement the whole
 	// loop needs recovery, not just this bit.
 	PendingContinuation bool `json:"pending_continuation,omitempty"`
+
+	// PendingContinuationRequestID names the request that carries the deferred
+	// turn, empty while no request does. It exists because the marker is
+	// persisted BEFORE the publish it describes: persistHandlerResult stamps
+	// the entity and only then emits the request, so a marker cleared when the
+	// request was BUILT would be durably clear while the publish that justified
+	// the clear had unknown durability — the delivery quarantines and the only
+	// state that could re-carry the turn is already gone.
+	//
+	// Recording the carrier instead keeps both obligations: the turn is not
+	// carried twice (a request already names it), and a quarantined publish
+	// leaves "pending, carried by <requestID>" durable for recovery to act on.
+	// It clears when that request's response settles, which is the first moment
+	// the send is known to have happened.
+	PendingContinuationRequestID string `json:"pending_continuation_request_id,omitempty"`
 
 	// User context (for routing responses)
 	UserID      string `json:"user_id,omitempty"`      // User who initiated the loop

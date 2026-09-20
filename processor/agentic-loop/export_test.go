@@ -101,3 +101,11 @@ func (g *GraphWriterForTest) WriteSpawnIdentity(ctx context.Context, loopID stri
 func (h *MessageHandler) OutstandingRequestForTest(loopID string) string {
 	return h.loopManager.OutstandingRequest(loopID)
 }
+
+// HasPendingContinuationForTest reports whether the loop still has a turn no
+// request carries. External-package fixtures use it to tell "the marker is
+// set" (which survives the carrying publish on purpose) from "the next
+// completion will carry this turn again".
+func (h *MessageHandler) HasPendingContinuationForTest(loopID string) bool {
+	return h.loopManager.HasPendingContinuation(loopID)
+}

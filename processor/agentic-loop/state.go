@@ -316,30 +316,41 @@ func (m *LoopManager) attachContinuation(loopID, taskID string) (agentic.LoopEnt
 	// completing it.
 	if _, outstanding := m.outstandingRequests[loopID]; outstanding {
 		entity.PendingContinuation = true
+		// A turn admitted NOW is not in the outstanding request's body, and it
+		// is not in a carrying request minted earlier either. Whatever was
+		// carrying, this turn is uncarried, so the next completion must carry
+		// it rather than settle.
+		entity.PendingContinuationRequestID = ""
 		return *entity, true, nil
 	}
 
 	return *entity, false, nil
 }
 
-// ClearPendingContinuation drops the deferred-continuation marker. Called when
-// the request that carries the deferred turn is built, which is the moment the
-// turn stops being deferred.
+// ClearPendingContinuation drops the deferred-continuation marker outright,
+// carrier and all. This is the DROP, not the send: the one caller is the
+// iteration-budget refusal, where the turn cannot be carried at all and the
+// loop completes without it.
 func (m *LoopManager) ClearPendingContinuation(loopID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if entity, exists := m.loops[loopID]; exists {
 		entity.PendingContinuation = false
+		entity.PendingContinuationRequestID = ""
 	}
 }
 
 // HasPendingContinuation reports whether a continuation turn is waiting for a
-// request to carry it.
+// request to carry it — pending AND uncarried. Once a request names the turn,
+// the answer is false: carrying it a second time would spend an iteration
+// re-asking with a context that has gained nothing. The marker itself stays
+// set until that request's response settles, so a publish whose durability is
+// unknown leaves the fact recoverable.
 func (m *LoopManager) HasPendingContinuation(loopID string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	entity, exists := m.loops[loopID]
-	return exists && entity.PendingContinuation
+	return exists && entity.PendingContinuation && entity.PendingContinuationRequestID == ""
 }
 
 // HasActiveLoopForTask returns true if a non-terminal loop already exists for the
@@ -842,21 +853,26 @@ func (m *LoopManager) ClearQueuedTools(loopID string) {
 // this already, which is why the invariant is recorded here rather than in a
 // fourth call each site could forget.
 //
-// It also ends the deferral, for the same reason and in the same place. A
-// request minted while a turn is deferred CARRIES that turn — it is built from
-// the context the turn was written into — and there are three sites that mint
-// one: the iteration request, the truncation retry, and the birth request. The
-// clear used to live in publishIterationRequest, which is only two of the
-// three: a truncation retry sent the turn and left the marker standing, so the
-// next completion deferred again and spent an iteration re-asking the model
-// with a context that had gained nothing.
+// It also records the carrier of a deferred turn, for the same reason and in
+// the same place. A request minted while a turn is deferred CARRIES that turn —
+// it is built from the context the turn was written into — and there are three
+// sites that mint one: the iteration request, the truncation retry, and the
+// birth request. The bookkeeping used to live in publishIterationRequest, which
+// is only two of the three: a truncation retry sent the turn and left the loop
+// still deferring, so the next completion spent an iteration re-asking the
+// model with a context that had gained nothing.
+//
+// It RECORDS rather than clears. The marker is persisted before the publish it
+// describes, so clearing here would durably say "nothing deferred" about a
+// request whose durability is still unknown; SettleRequest clears it when that
+// request's response arrives, which is the first moment the send is a fact.
 func (m *LoopManager) TrackRequest(requestID, loopID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.requestToLoop[requestID] = loopID
 	m.outstandingRequests[loopID] = requestID
-	if entity, exists := m.loops[loopID]; exists {
-		entity.PendingContinuation = false
+	if entity, exists := m.loops[loopID]; exists && entity.PendingContinuation {
+		entity.PendingContinuationRequestID = requestID
 	}
 }
 
@@ -864,11 +880,21 @@ func (m *LoopManager) TrackRequest(requestID, loopID string) {
 // request is the one outstanding. Matching on the request ID matters: a late
 // response for a superseded request must not clear a newer request's mark and
 // let a continuation publish a second request at the same iteration.
+//
+// It is also where a carried continuation stops being deferred: a response for
+// the request that carries the turn proves the request was sent, which the
+// build did not. Matching on the carrier rather than on the outstanding mark
+// keeps the two independent — a superseded response settles nothing, and a
+// carrier answered after the loop moved on still ends its deferral.
 func (m *LoopManager) SettleRequest(loopID, requestID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if outstanding, ok := m.outstandingRequests[loopID]; ok && outstanding == requestID {
 		delete(m.outstandingRequests, loopID)
+	}
+	if entity, exists := m.loops[loopID]; exists && requestID != "" && entity.PendingContinuationRequestID == requestID {
+		entity.PendingContinuation = false
+		entity.PendingContinuationRequestID = ""
 	}
 }
 
