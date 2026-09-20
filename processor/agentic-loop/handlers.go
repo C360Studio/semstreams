@@ -1793,29 +1793,42 @@ func (h *MessageHandler) tryDispatchOrSynthesize(result *HandlerResult, loopID s
 // when the queue drained without a success (caller should fall
 // through to AllToolsComplete).
 func (h *MessageHandler) dispatchedFromQueue(result *HandlerResult, loopID string) (dispatched bool, storeErr error) {
-	// Defensive cap: queue length at entry. DequeueToolCall is the only
-	// queue-shrinking op the loop runs, so under any sane LoopManager
-	// state the queue is bounded by entry-time length. The cap stops
-	// a future bug in DequeueToolCall (e.g., one that returned ok=true
-	// without consuming) from infinite-looping the dispatch path.
-	maxIter := len(h.loopManager.GetPendingTools(loopID)) + 64
-	for i := 0; i < maxIter; i++ {
+	// Bounded by the QUEUE's own length at entry, never by a heuristic. This
+	// bound used to be len(pendingTools)+64, which is derived from a different
+	// set than the one being drained: a batch whose first 65-plus calls all
+	// failed to dispatch stopped with calls still queued, they never got the
+	// synthetic result this loop exists to emit, and handleToolsComplete then
+	// minted a request whose assistant message advertised calls nothing
+	// answered — which RepairToolPairs removes as a broken group, terminal
+	// content and all. Same defect class as the skipped-queue drain's retired
+	// constant (owner's Codex round 4), at longer odds. DequeueToolCall is the
+	// only queue-shrinking operation and nothing else runs on this goroutine,
+	// so the entry length is exact; the post-loop check is the guard against a
+	// manager that ever breaks that.
+	queued := h.loopManager.QueuedToolCount(loopID)
+	for i := 0; i < queued; i++ {
 		next, ok := h.loopManager.DequeueToolCall(loopID)
 		if !ok {
-			return false, nil
+			break
 		}
-		ok, sErr := h.tryDispatchOrSynthesize(result, loopID, next)
+		sent, sErr := h.tryDispatchOrSynthesize(result, loopID, next)
 		if sErr != nil {
 			return false, sErr
 		}
-		if ok {
+		if sent {
 			return true, nil
 		}
 		// Synth-result emitted for this call; loop to try the next.
 	}
-	h.logger.Warn("dispatchedFromQueue iteration cap hit; queue may have leaked",
-		slog.String("loop_id", loopID),
-		slog.Int("max_iter", maxIter))
+	if remaining := h.loopManager.QueuedToolCount(loopID); remaining > 0 {
+		// Nothing dispatched and calls are still queued: they will reach no
+		// executor and carry no result, so the next request's tool batch is
+		// incomplete.
+		h.logger.Warn("queued tool calls remain after the dispatch drain; they will go unanswered",
+			slog.String("loop_id", loopID),
+			slog.Int("drained", queued),
+			slog.Int("remaining", remaining))
+	}
 	return false, nil
 }
 

@@ -880,11 +880,11 @@ public handlers, no restart, no redelivery, no concurrency — and it is a conse
 - [x] 16.2 The same mistake, checked for elsewhere on this path and found once. `dispatchedFromQueue`
       (`handlers.go:1801`) bounds its own drain at `len(GetPendingTools(loopID)) + 64` — derived, but from the
       PENDING set rather than from the queue it drains — so a batch whose first 65-plus calls all fail to
-      dispatch stops with calls still queued and unanswered. Pre-existing, far narrower (it needs a string of
-      consecutive dispatch failures, not merely a large batch), and NOT fixed here because it is a Go change on
-      a path this round does not otherwise touch. Recorded in `design.md` § Declared residuals with the line and
-      the reason. No other constant cap exists in `processor/agentic-loop` outside the compaction token budgets
-      (`context_compaction.go:111`, `:196`)
+      dispatch stops with calls still queued and unanswered. Pre-existing and far narrower (it needs a string of
+      consecutive dispatch failures, not merely a large batch), so this line first recorded it as a residual —
+      the owner then ruled it in scope, one call away from the accessor § 16.1 had just added: **fixed in
+      § 16.4**, and it is no longer a residual in `design.md`. No other constant cap exists in
+      `processor/agentic-loop` outside the compaction token budgets (`context_compaction.go:111`, `:196`)
 - [x] 16.3 Gates on the head that ships, measured before this line was amended into it — the difference is this
       record's own markdown and nothing else: `go build ./...` 0; `task lint` 0; `task test` 154 `ok` / 0 `FAIL`
       (136 cached — packages untouched this round);
@@ -902,3 +902,56 @@ public handlers, no restart, no redelivery, no concurrency — and it is a conse
       head under test, then `--- precheck: pgrep -fl e2e.test (before e2e:clean) ---` and `PGREP_EXIT=1` — no
       match, recorded before `e2e:clean` tore down the host's compose stacks — followed by `CHECKPORTS_EXIT=0`
       and `E2E_EXIT=0`. Every exit code read from `$?` on the line after its command, never through a pipe
+- [x] 16.4 **The residual § 16.2 recorded is fixed, as ruled — same defect class, one path over.**
+      `dispatchedFromQueue` (`handlers.go:1795`) drained the queue under `len(GetPendingTools(loopID)) + 64`.
+      By the time it runs, the result that woke it has already left the pending set, so the real bound was the
+      bare constant 64: a batch whose queued calls all fail to dispatch stopped there, the rest stayed queued —
+      undispatched, so no executor ever answers them, and unanswered, so `handleToolsComplete` minted a request
+      whose assistant message advertised calls nothing answered and `RepairToolPairs` removed the whole group.
+      **Fix, exactly as in § 16.1:** the drain is bounded by the queue's own length read at entry through
+      `QueuedToolCount` (`state.go:852`), the `+64` heuristic is deleted, and a post-drain re-read WARNs if
+      anything remains (`handlers.go:1808` and the block that follows). No oversized-batch policy, no new
+      accessor: § 16.1 already added the only one this needed.
+      Test: `TestEveryQueuedCallIsAnsweredWhenAllOfThemFailToDispatch`
+      (`processor/agentic-loop/dispatch_drain_test.go`), a subtest per batch size **20, 65, 66, 70** —
+      bracketing the retired bound, since at 65 calls the queue is 64 long and fits inside it and at 66 it does
+      not. Each drives the real handlers (`HandleTask` → `HandleModelResponse` with the batch →
+      `HandleToolResult` on the one call that dispatched) and asserts the queue is empty afterwards and that the
+      next request advertises and answers all `batch` calls.
+      **The test is in-package deliberately.** The dispatch failure is forced the way
+      `TestTryDispatchOrSynthesize_ForcedMarshalFailure` forces it — an argument `json.Marshal` rejects, one of
+      the two modes `dispatchToolCall` documents — but it has to be stamped on the QUEUED copies only: the
+      assistant message the loop's context holds shares the argument maps the model sent, so poisoning those
+      fails the request MINT instead of the dispatch, which is a different defect and was how the first attempt
+      at this test went red. `failEveryQueuedDispatch` dequeues, re-stamps, and re-queues in order, so the queue
+      the drain walks is the one `HandleModelResponse` built, identity and order intact
+      **Mutation: `handlers.go:1808`, the bound restored to `len(h.loopManager.GetPendingTools(loopID)) + 64`.**
+      RED at `dispatch_drain_test.go:167` in the `66_calls` and `70_calls` subtests only — `1 of 65 calls are
+      still queued — undispatched and unanswered` and `5 of 69 calls are still queued — undispatched and
+      unanswered`. 20 and 65 stay green under the mutation, which is what makes the boundary the test's subject:
+      the pending set is empty by the time the drain runs, so the restored expression is the bare 64 and a queue
+      of 64 still fits. Applied and reverted by `cp` backup with the md5 verified identical after restore
+      (`5958ae722e575c53a2001993de1b4a0c`), on the committed state
+- [x] 16.5 Gates on the head that ships. The code, the test and the two spec-change files were measured as they
+      ship; the only thing added afterwards is this record's own markdown, so the artifacts name the pre-amend
+      sha `7b33b038` and this commit is that content plus these lines.
+      `go build ./...` 0; `go vet ./processor/agentic-loop/` 0; `task lint` 0; `task test` **154 `ok` / 0 `FAIL`**;
+      `go test -race -count=1 ./agentic/... ./processor/agentic-loop/... ./processor/agentic-dispatch/...` 0
+      (8 packages, no race);
+      `go vet -tags=integration ./processor/agentic-loop/ ./processor/agentic-dispatch/` 0;
+      `openspec validate stable-request-identity --strict` 0; `task openspec:validate` 56/56;
+      `task spec:properties` **235/235** — the pre-commit run of it reported 234 and that number was a
+      skipped denominator, not a pass: the script scans TRACKED `*_test.go`, and `dispatch_drain_test.go`
+      was still untracked, so the one citation this round adds was not in the run that blessed it. Re-run
+      after the commit, with the file tracked, it is 235/235 and the new citation resolves;
+      `task schema:generate` + `git status --porcelain schemas/ specs/` 0, empty; `git diff --check` 0.
+      **Agentic tier re-run, Go having moved again**: `task e2e:check-ports` **exit 0**, `task e2e:agentic`
+      **exit 0** — `Scenario completed successfully`, `assertions_run=15`, `duration=2m4.749147708s`, with
+      `walk-approval-path`, `refuse-non-canonical-approval`, `verify-terminal-response`,
+      `verify-stage-a-process-replacement` (78.7s), `verify-durable-tool-replay` (44.7s) and
+      `verify-tool-call-governance` present. `e2e_agentic_r7.log` opens with the head under test, then
+      `--- precheck: pgrep -fl e2e.test (before e2e:clean) ---` and `PGREP_EXIT=1` — no match, recorded before
+      `e2e:clean` tore down the host's compose stacks — followed by `CHECKPORTS_EXIT=0` and `E2E_EXIT=0`, each
+      read from `$?` on the line after its command, never through a pipe. Host checked first the way § 15.3
+      requires: six `ps` samples 10s apart, all six with zero `e2e.test` processes and nothing but
+      `MTLCompilerService`, `gopls` and `ANECompilerService` matching the build-process filter
