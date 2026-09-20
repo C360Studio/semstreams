@@ -849,3 +849,56 @@ public handlers, no restart, no redelivery, no concurrency — and it is a conse
       live. **That precheck is the author's word, not an artifact**: its output went to the terminal and not into
       the log, so nothing in `e2e_agentic_r5.log` records it. Re-running it now would prove nothing about then.
       The next tier run redirects the precheck into the same log as the run it guards
+
+## 16. Owner's Codex review round 4 (PR #1335 on `7e93ea22`, one BLOCKING P2, accepted)
+
+- [x] 16.1 **§ 15.1's own defensive cap re-opened the defect it fixed.** `synthesizeSkippedQueuedTools` bounded
+      its drain at a constant 256 and the caller then cleared whatever was left, so a response carrying 258 tool
+      calls with a turn deferred behind it left ONE sibling unanswered — and one is all it takes:
+      `RepairToolPairs` drops the whole group, terminal result included. Codex's table is the shape exactly:
+      2 calls preserved, 257 preserved, 258 → 0 calls and 0 results on the carried request. Nothing caps a
+      batch — `AgentResponse.Validate` checks only the status (`agentic/types.go:180-187`) and
+      `ChatMessage.Validate` only the role and the presence of content or calls (`:242-250`) — so the constant
+      was never a safety net, it was a silent truncation waiting for a big enough batch.
+      **Fix as ruled:** the drain is bounded by the queue's OWN length, read at entry through a new
+      `LoopManager.QueuedToolCount` (`state.go:852`) — the smallest accessor that answers the question, since
+      `HasQueuedTools` answers only whether any exist. `DequeueToolCall` is the only queue-shrinking operation
+      and nothing else runs on this goroutine, so the entry length is exact; a post-drain re-read WARNs if
+      anything remains, which is the guard a constant pretended to be. The constant is deleted.
+      **No oversized-batch rejection was added**, per the ruling: that would be a new admission policy nobody
+      has ruled on. Nothing in this round makes one necessary — the drain is now O(batch) map writes with no
+      allocation per call beyond the result itself.
+      Test: `TestTheWholeQueuedBatchIsAnsweredWhateverItsSize` (`continuation_deferral_test.go`), a subtest per
+      batch size **2, 256, 257, 258** — bracketing the retired constant — asserting the carried request
+      advertises exactly `batch` tool calls, answers exactly `batch` of them, and still carries the terminal
+      tool's own result.
+      **Mutation: `handlers.go:1716`, the bound restored to a constant 256
+      (`for i := 0; i < 256; i++` over `queued`).** RED at `continuation_deferral_test.go:906` in the
+      `258_calls` subtest only: `the carried request advertises 0 tool calls, want 258; one unanswered sibling
+      repairs the whole group away`. 2, 256 and 257 stay green under the mutation, which is what makes the
+      boundary the test's subject rather than a coincidence
+- [x] 16.2 The same mistake, checked for elsewhere on this path and found once. `dispatchedFromQueue`
+      (`handlers.go:1801`) bounds its own drain at `len(GetPendingTools(loopID)) + 64` — derived, but from the
+      PENDING set rather than from the queue it drains — so a batch whose first 65-plus calls all fail to
+      dispatch stops with calls still queued and unanswered. Pre-existing, far narrower (it needs a string of
+      consecutive dispatch failures, not merely a large batch), and NOT fixed here because it is a Go change on
+      a path this round does not otherwise touch. Recorded in `design.md` § Declared residuals with the line and
+      the reason. No other constant cap exists in `processor/agentic-loop` outside the compaction token budgets
+      (`context_compaction.go:111`, `:196`)
+- [x] 16.3 Gates on the head that ships, measured before this line was amended into it — the difference is this
+      record's own markdown and nothing else: `go build ./...` 0; `task lint` 0; `task test` 154 `ok` / 0 `FAIL`
+      (136 cached — packages untouched this round);
+      `go test -race -count=1 ./agentic/... ./processor/agentic-loop/... ./processor/agentic-dispatch/...` 0;
+      `go vet -tags=integration ./processor/agentic-loop/ ./processor/agentic-dispatch/` 0;
+      `openspec validate stable-request-identity --strict` 0; `task openspec:validate` 56/56;
+      `task spec:properties` **234/234**; `task schema:generate` + `git status --porcelain schemas/ specs/` 0,
+      empty; `git diff --check` 0.
+      **Agentic tier re-run, Go having moved again**: `task e2e:check-ports` **exit 0**, `task e2e:agentic`
+      **exit 0** — `Scenario completed successfully`, `assertions_run=15`, `duration=2m5.041190166s`, with
+      `walk-approval-path`, `refuse-non-canonical-approval`, `verify-terminal-response`,
+      `verify-stage-a-process-replacement` (78.9s), `verify-durable-tool-replay` (44.8s) and
+      `verify-tool-call-governance` present.
+      **§ 15.3's commitment is kept: the precheck is now IN the artifact.** `e2e_agentic_r6.log` opens with the
+      head under test, then `--- precheck: pgrep -fl e2e.test (before e2e:clean) ---` and `PGREP_EXIT=1` — no
+      match, recorded before `e2e:clean` tore down the host's compose stacks — followed by `CHECKPORTS_EXIT=0`
+      and `E2E_EXIT=0`. Every exit code read from `$?` on the line after its command, never through a pipe

@@ -1688,11 +1688,6 @@ func (h *MessageHandler) drainPendingToolFailures(loopID, reason string) {
 	}
 }
 
-// maxQueuedSkipSynthesis bounds the skipped-queue drain. A provider batch is
-// a handful of calls; the cap exists only so a DequeueToolCall that ever
-// returned ok without consuming cannot spin the loop forever.
-const maxQueuedSkipSynthesis = 256
-
 // synthesizeSkippedQueuedTools gives every still-queued tool call a correlated
 // synthetic result saying the terminal tool ended the iteration, and empties
 // the queue doing it.
@@ -1707,11 +1702,20 @@ const maxQueuedSkipSynthesis = 256
 //
 // DequeueToolCall carries the whole call, so the synthetic correlates by
 // ExecutionID when one was minted and by CallID otherwise, exactly as the
-// dispatch-failure recovery does. Defensive cap for the same reason as
-// dispatchedFromQueue: DequeueToolCall is the only queue-shrinking operation,
-// so a future bug that returned ok without consuming would otherwise spin.
+// dispatch-failure recovery does.
+//
+// The loop is bounded by the queue's own length read at entry, never by a
+// constant. A constant is not a safety net here, it is a silent truncation:
+// the batch size is the provider's choice, agentic.AgentResponse validation
+// imposes no limit on it, and any call left queued when the caller clears the
+// queue is an unanswered call — which is the whole defect this function
+// exists to prevent (owner's Codex round 4). DequeueToolCall is the only
+// queue-shrinking operation and nothing else runs on this goroutine, so the
+// entry length is exact; the post-check below is the guard against a manager
+// that ever breaks that.
 func (h *MessageHandler) synthesizeSkippedQueuedTools(loopID, terminalTool string) {
-	if !h.loopManager.HasQueuedTools(loopID) {
+	queued := h.loopManager.QueuedToolCount(loopID)
+	if queued == 0 {
 		return
 	}
 	name := terminalTool
@@ -1719,10 +1723,10 @@ func (h *MessageHandler) synthesizeSkippedQueuedTools(loopID, terminalTool strin
 		name = "a terminal tool"
 	}
 	reason := fmt.Sprintf("skipped because %s ended the iteration", name)
-	for i := 0; i < maxQueuedSkipSynthesis; i++ {
+	for i := 0; i < queued; i++ {
 		next, ok := h.loopManager.DequeueToolCall(loopID)
 		if !ok {
-			return
+			break
 		}
 		h.logger.Info("queued tool call skipped by a terminal tool; emitting a synthetic result",
 			slog.String("loop_id", loopID),
@@ -1736,9 +1740,15 @@ func (h *MessageHandler) synthesizeSkippedQueuedTools(loopID, terminalTool strin
 				slog.String("error", err.Error()))
 		}
 	}
-	h.logger.Warn("skipped-queue synthesis cap hit; the queue may have leaked",
-		slog.String("loop_id", loopID),
-		slog.Int("cap", maxQueuedSkipSynthesis))
+	if remaining := h.loopManager.QueuedToolCount(loopID); remaining > 0 {
+		// Unreachable while the queue only shrinks on this goroutine. If it
+		// ever fires, those calls are about to be cleared with no results and
+		// the next request's tool batch will be repaired away.
+		h.logger.Warn("queued tool calls remain after the skipped-queue drain; they will go unanswered",
+			slog.String("loop_id", loopID),
+			slog.Int("drained", queued),
+			slog.Int("remaining", remaining))
+	}
 }
 
 // tryDispatchOrSynthesize attempts to dispatch a tool call. On

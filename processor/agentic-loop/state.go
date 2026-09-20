@@ -845,6 +845,16 @@ func (m *LoopManager) HasQueuedTools(loopID string) bool {
 	return len(m.queuedToolCalls[loopID]) > 0
 }
 
+// QueuedToolCount returns how many tool calls are waiting to be dispatched.
+// A caller that must account for every queued call needs the number, not just
+// whether any exist: it is the only honest bound on a drain loop, because the
+// batch size is the provider's choice and this package imposes no limit on it.
+func (m *LoopManager) QueuedToolCount(loopID string) int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.queuedToolCalls[loopID])
+}
+
 // ClearQueuedTools discards all queued tool calls (e.g., when StopLoop fires).
 func (m *LoopManager) ClearQueuedTools(loopID string) {
 	m.mu.Lock()

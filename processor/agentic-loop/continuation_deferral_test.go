@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -836,5 +837,81 @@ func TestATerminalToolCarriesItsOwnResultWhenTheBatchHasQueuedSiblings(t *testin
 	}
 	if !sawTurn {
 		t.Fatalf("the carried request does not contain the admitted turn %q", continuationPrompt)
+	}
+}
+
+// The skipped-sibling synthesis must answer the WHOLE admitted batch, whatever
+// its size. Its first version bounded the drain with a constant 256 and the
+// caller then cleared whatever was left, so a 258-call response with a pending
+// turn left one sibling unanswered — and one unanswered call is all it takes:
+// RepairToolPairs drops the entire group, terminal result included, exactly the
+// defect the synthesis exists to prevent (owner's Codex round 4).
+//
+// Nothing caps a batch: agentic.AgentResponse validation imposes no limit and
+// the model converter keeps the whole slice, so the only honest bound is the
+// queue's own length. The sizes bracket the retired constant.
+//
+// spec: agentic-loop / A logical model request has one deterministic identity
+func TestTheWholeQueuedBatchIsAnsweredWhateverItsSize(t *testing.T) {
+	for _, batch := range []int{2, 256, 257, 258} {
+		t.Run(fmt.Sprintf("%d_calls", batch), func(t *testing.T) {
+			handler := agenticloop.NewMessageHandler(createTestConfig())
+			handler.SetToolRegistry(newTestToolRegistry(t))
+			ctx := context.Background()
+
+			loopID, birth, _ := startLoopAndAdmitContinuation(t, handler)
+
+			calls := make([]agentic.ToolCall, batch)
+			for i := range calls {
+				calls[i] = agentic.ToolCall{ID: fmt.Sprintf("call-%03d", i), Name: "test_tool"}
+			}
+			dispatchResult, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+				RequestID: birth,
+				Status:    agentic.StatusToolCall,
+				Message:   agentic.ChatMessage{Role: "assistant", ToolCalls: calls},
+			})
+			if err != nil {
+				t.Fatalf("HandleModelResponse(%d tool_calls): %v", batch, err)
+			}
+			dispatched := dispatchedToolCallFromResult(t, dispatchResult)
+
+			const terminalContent = "the first thing is decided"
+			terminal, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
+				CallID:      dispatched.ID,
+				Name:        dispatched.Name,
+				Content:     terminalContent,
+				RequestID:   dispatched.RequestID,
+				ExecutionID: dispatched.ExecutionID,
+				CallOrdinal: dispatched.CallOrdinal,
+				StopLoop:    true,
+			})
+			if err != nil {
+				t.Fatalf("HandleToolResult(StopLoop): %v", err)
+			}
+
+			var advertised, answered int
+			terminalPreserved := false
+			for _, m := range carriedMessages(t, terminal) {
+				if len(m.ToolCalls) > 0 {
+					advertised += len(m.ToolCalls)
+				}
+				if m.Role == "tool" {
+					answered++
+					if m.ToolCallID == dispatched.ID && strings.Contains(m.Content, terminalContent) {
+						terminalPreserved = true
+					}
+				}
+			}
+			if advertised != batch {
+				t.Fatalf("the carried request advertises %d tool calls, want %d; "+
+					"one unanswered sibling repairs the whole group away", advertised, batch)
+			}
+			if answered != batch {
+				t.Fatalf("the carried request answers %d of %d calls", answered, batch)
+			}
+			if !terminalPreserved {
+				t.Fatalf("the terminal tool's own result did not survive a batch of %d", batch)
+			}
+		})
 	}
 }

@@ -203,6 +203,16 @@ deferred one identity decision to #1328. All three are answered here.
   (`handlers.go:1640`), so sorting the drained results by `CallOrdinal` would make the conversation deterministic
   in one line. `TestATerminalToolCarriesItsOwnResultWhenTheBatchHasQueuedSiblings` asserts the PRESENCE of each
   result by `ToolCallID`, deliberately not their order, so it does not encode today's accident as a guarantee.
+- **`dispatchedFromQueue`'s bound has the same shape as the one round 4 removed, and is NOT fixed here.**
+  `handlers.go:1801` bounds its dispatch drain at `len(GetPendingTools(loopID)) + 64`, which is derived from the
+  PENDING set rather than from the queue it drains. A batch whose first 65-plus calls all fail to dispatch would
+  therefore stop with calls still queued, and `handleToolsComplete` would mint the next request from an assistant
+  message with unanswered calls — the same repair-away that the skipped-sibling synthesis exists to prevent, one
+  path over. It is pre-existing, it needs a string of consecutive dispatch failures rather than an ordinary large
+  batch, and the fix is now one call away (`QueuedToolCount`), but changing it is a Go change on a path this
+  round did not otherwise touch. Recorded so the next reader does not have to re-derive that the two bounds are
+  the same mistake at different odds; checked and found nowhere else on this path (no other constant cap exists
+  in `processor/agentic-loop` outside the compaction token budgets).
 - **On the COMPLETING terminal-tool path a queued sibling still gets no result.** The carry path now synthesizes
   one per queued call (`synthesizeSkippedQueuedTools`), because the carried request replays the batch and
   `RepairToolPairs` would drop the whole group. The completing path mints no further request, so nothing re-reads
