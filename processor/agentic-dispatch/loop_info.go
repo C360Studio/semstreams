@@ -44,8 +44,12 @@ type LoopInfo struct {
 
 // PendingApprovalInfo projects the reviewed call; the loop alone enforces its deadline.
 type PendingApprovalInfo struct {
-	CallID      string         `json:"call_id"`
-	ExecutionID string         `json:"execution_id"`
+	CallID      string `json:"call_id"`
+	ExecutionID string `json:"execution_id"`
+	// RequestID names the model request the gated call came from. Published on
+	// this projection since #1328, which added it to the pending record for the
+	// approval lane; dropping it here would narrow a DTO an adopter already has.
+	RequestID   string         `json:"request_id,omitempty"`
 	ToolName    string         `json:"tool_name"`
 	Arguments   map[string]any `json:"arguments,omitempty"`
 	Reason      string         `json:"reason,omitempty"`
@@ -83,8 +87,8 @@ func pendingApprovalInfo(pending *agentic.PendingApprovalState) *PendingApproval
 		return nil
 	}
 	return &PendingApprovalInfo{
-		CallID: pending.CallID, ExecutionID: pending.ExecutionID, ToolName: pending.ToolName,
-		Arguments: pending.Arguments, Reason: pending.Reason, RequestedAt: pending.RequestedAt,
-		TraceID: pending.TraceID,
+		CallID: pending.CallID, ExecutionID: pending.ExecutionID, RequestID: pending.RequestID,
+		ToolName: pending.ToolName, Arguments: pending.Arguments, Reason: pending.Reason,
+		RequestedAt: pending.RequestedAt, TraceID: pending.TraceID,
 	}
 }

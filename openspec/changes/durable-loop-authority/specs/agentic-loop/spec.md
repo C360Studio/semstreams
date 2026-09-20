@@ -141,4 +141,3 @@ Trajectory-audit degradation SHALL remain a separate nonblocking policy.
 - **WHEN** trajectory audit storage is incompatible or unavailable
 - **THEN** the existing observable audit degradation policy remains nonblocking
 - **AND** it does not weaken loop-authority admission
-

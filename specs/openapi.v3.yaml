@@ -1138,6 +1138,8 @@ components:
                                                 type: string
                                             reason:
                                                 type: string
+                                            request_id:
+                                                type: string
                                             requested_at:
                                                 format: date-time
                                                 type: string
