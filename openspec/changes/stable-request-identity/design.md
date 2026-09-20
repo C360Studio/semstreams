@@ -69,8 +69,16 @@ admission check and the mint are not one critical section"):
   it normally does — the turn into the context, the caches the next request reads — and skips only the publish.
   The result carries `Deferred`, so the task delivery can tell it from a dedup; it Acks after the loop-entity Put,
   which is the effect it owns.
-- **Carrying.** `LoopEntity.PendingContinuation` says a turn is waiting. A completion response that meets it
-  advances the loop instead of settling: `carryDeferredContinuation` increments the iteration and calls
+- **Carrying.** `LoopEntity.PendingContinuation` says a turn is waiting. A completion that meets it advances the
+  loop instead of settling, on BOTH shapes a completion takes — terminal model text and a terminal tool result
+  (`StopLoop`, which the framework's own `decide` executor returns). The terminal-tool arm drains the accumulated
+  tool results into the conversation before carrying, which the completing path never had to do: the carried
+  request must send the terminal tool's own message, or its assistant tool call is an unpaired orphan and
+  `RepairToolPairs` drops the call rather than send a broken pair. `LoopCompletedEvent.Decision` does not travel
+  on that iteration, and should not: the field is the typed decision of the terminal that ENDED the loop, and
+  this one did not end it — the call and its result stay in the trajectory and in the conversation, and the
+  completion that does end the loop carries its own terminal. A completion response that meets a pending turn
+  advances the same way: `carryDeferredContinuation` increments the iteration and calls
   `publishIterationRequest`, the one home both this path and the tool-results path use to build the next
   ITERATION's request. It is not the only site that mints a request, though — the truncation retry
   (`emitRetryRequest`) re-asks at the same iteration from the same context, and the birth request mints too — so

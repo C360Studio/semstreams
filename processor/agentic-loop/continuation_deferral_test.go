@@ -434,3 +434,105 @@ func TestASecondContinuationUncarriesTheDeferralAndSendsBothTurns(t *testing.T) 
 		t.Fatal("the loop still reads as uncarried; the next completion would carry turn two again")
 	}
 }
+
+// The fourth path a completion can arrive on, and the one that was still
+// silently settling. A terminal tool ends a loop exactly as terminal model text
+// does — the framework's own `decide` executor returns StopLoop: true — so a
+// turn admitted while this iteration's request was outstanding has to be
+// carried here too. Before this, the StopLoop arm ran the completion path with
+// no pending check at all: the review observed `state=complete
+// pendingContinuation=true carrier=""`, a loop settled with the user's turn
+// still marked as waiting and no request that had ever contained it.
+//
+// The carried request has to send the terminal tool's own message as well.
+// Only the all-tools-complete path drained accumulated results into the
+// conversation, because the completing path never needed to; carrying without
+// that drain would put an assistant tool_call into the request with no tool
+// message answering it, and RepairToolPairs would drop the call the model just
+// made rather than send a broken pair.
+//
+// spec: agentic-loop / A logical model request has one deterministic identity
+func TestDeferredContinuationIsCarriedByATerminalTool(t *testing.T) {
+	handler := agenticloop.NewMessageHandler(createTestConfig())
+	handler.SetToolRegistry(newTestToolRegistry(t))
+	ctx := context.Background()
+
+	loopID, birth, _ := startLoopAndAdmitContinuation(t, handler)
+
+	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+		RequestID: birth,
+		Status:    agentic.StatusToolCall,
+		Message: agentic.ChatMessage{
+			Role:      "assistant",
+			ToolCalls: []agentic.ToolCall{{ID: "call-terminal-1", Name: "test_tool"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("HandleModelResponse(tool_call): %v", err)
+	}
+	dispatched := dispatchedToolCallFromResult(t, dispatchResult)
+
+	const terminalContent = "the first thing is decided"
+	terminal, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
+		CallID:      dispatched.ID,
+		Name:        dispatched.Name,
+		Content:     terminalContent,
+		RequestID:   dispatched.RequestID,
+		ExecutionID: dispatched.ExecutionID,
+		CallOrdinal: dispatched.CallOrdinal,
+		StopLoop:    true,
+	})
+	if err != nil {
+		t.Fatalf("HandleToolResult(StopLoop): %v", err)
+	}
+
+	if terminal.State.IsTerminal() {
+		t.Fatalf("the terminal tool settled a loop with an admitted turn; state=%s", terminal.State)
+	}
+	if terminal.CompletionState != nil {
+		t.Fatal("a completion record was built for a loop that still owes a turn")
+	}
+	for _, msg := range terminal.PublishedMessages {
+		if strings.Contains(strings.ToLower(msg.Subject), "agent.complete") {
+			t.Fatalf("the terminal tool published %s with the admitted turn unanswered", msg.Subject)
+		}
+	}
+
+	next := oneMintedRequestID(t, "terminal carry", terminal)
+	if want := loopID + ":req:2:0"; next != want {
+		t.Fatalf("carried RequestID = %q, want %q", next, want)
+	}
+	if !requestBodyContains(t, terminal, continuationPrompt) {
+		t.Fatalf("the carried request does not contain the admitted turn %q", continuationPrompt)
+	}
+	if !requestBodyContains(t, terminal, terminalContent) {
+		t.Fatalf("the carried request does not carry the terminal tool's own result %q; "+
+			"its assistant tool_call travels unpaired", terminalContent)
+	}
+
+	entity, err := handler.GetLoop(loopID)
+	if err != nil {
+		t.Fatalf("GetLoop: %v", err)
+	}
+	if entity.PendingContinuationRequestID != next {
+		t.Fatalf("carrier = %q, want the request carrying the turn %q",
+			entity.PendingContinuationRequestID, next)
+	}
+	if handler.HasPendingContinuationForTest(loopID) {
+		t.Fatal("the loop still reads as uncarried; the next completion would carry the same turn again")
+	}
+
+	// Nothing is deferred now, so the answer to the carried request settles the
+	// loop — the terminal tool delayed the completion, it did not cancel it.
+	completion, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+		RequestID: next,
+		Status:    agentic.StatusComplete,
+		Message:   agentic.ChatMessage{Role: "assistant", Content: "both things are done"},
+	})
+	if err != nil {
+		t.Fatalf("HandleModelResponse(complete carry): %v", err)
+	}
+	if !completion.State.IsTerminal() {
+		t.Fatalf("the loop did not complete once its deferred turn was answered; state=%s", completion.State)
+	}
+}

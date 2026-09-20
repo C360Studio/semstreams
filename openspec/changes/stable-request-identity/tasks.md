@@ -607,3 +607,31 @@ that head, which is the point: these are behaviours no gate was watching.
       `CurrentRequestForTest` seam. `handlers_test.go`'s terminal-loop stale response is the one that mattered:
       under the new guard a response naming `""` is dropped as superseded one guard EARLIER than the terminal
       guard it exists to test, so it would have stayed green for the wrong reason
+- [x] 13.3 **P1-3 — a terminal tool with a deferred turn settled the loop silently.** The carry check protected
+      `StatusComplete` only; `toolResult.StopLoop` ran the completion path with no pending check at all, and the
+      framework's own `decide` executor returns `StopLoop: true`, so this is a production shape rather than a
+      hypothetical. The review observed `state=complete pendingContinuation=true carrier=""` with no request that
+      had ever contained the accepted turn. **Fix as ruled:** carry, for consistency with the text path and with
+      the spec's SHALL — a completion is a completion whichever way the model says it — and only a loop with
+      nothing deferred completes there.
+      One thing the text path never needed: accumulated tool results reach the conversation in
+      `handleToolsComplete`, which the completing path never ran. Carrying without that drain puts an assistant
+      tool call into the carried request with no tool message answering it, and `RepairToolPairs` drops the call
+      the model just made. The drain is now one home, `absorbToolResultsIntoContext`, called from both paths.
+      `LoopCompletedEvent.Decision` deliberately does not travel on the carried iteration: the field is the typed
+      decision of the terminal that ENDED the loop (`agentic/events.go:88-91`), and this one did not end it — the
+      call and its result stay in the trajectory and in the conversation. Checked against the ruling's stop-and-ask
+      condition: nothing requires the typed payload to be preserved AS a completion event, so no refusal event and
+      no new surface was added.
+      Test: `TestDeferredContinuationIsCarriedByATerminalTool` (`continuation_deferral_test.go`) — deferred turn,
+      terminal tool, then: not terminal, no completion record, no `agent.complete`, `:req:2:0` carrying BOTH the
+      turn and the terminal tool's own result, the carrier recorded, and the loop settling normally once that
+      request is answered.
+      **Mutation 1: `handlers.go:2501-2511`, the terminal-path carry block, deleted.** RED at
+      `continuation_deferral_test.go:490`: `the terminal tool settled a loop with an admitted turn; state=complete`
+      — the finding verbatim. **Mutation 2: `handlers.go:2503`, the `absorbToolResultsIntoContext(loopID, cm)`
+      call alone, deleted.** RED at `continuation_deferral_test.go:509`: `the carried request does not carry the
+      terminal tool's own result "the first thing is decided"; its assistant tool_call travels unpaired`. Each
+      mutation fails exactly ONE test package-wide, this one.
+      Spec: the SHALL now names both completion shapes and the tool-message pairing, with a new scenario
+      "A terminal tool answers a loop that has a deferred continuation"

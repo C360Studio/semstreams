@@ -19,6 +19,11 @@ outstanding SHALL be neither refused nor published: its turn is added to the loo
 loop entity as pending, and the outstanding response SHALL carry it into the next iteration's request rather than
 settling the loop.
 
+A loop completes on terminal model text OR on a tool result that terminates it, and BOTH are completions for this
+rule: a terminal tool answered while a turn is pending SHALL carry the turn rather than settle, and the carried
+request SHALL contain that tool's own result, because a request holding an assistant tool call with no answering
+tool message is a broken pair. Only a loop with nothing deferred completes on either path.
+
 The qualifier is the truth about this layer, not a softening. The admission check and the mint are separate
 critical sections, and `agent.task` and `agent.response` are separate JetStream consumers, so a continuation
 delivered between a response clearing the mark and the carrying request re-taking it is admitted against an empty
@@ -80,6 +85,14 @@ carrier keeps the turn recoverable while still preventing a second carry.
 - **AND** the loop advances one iteration and publishes `<loopID>:req:N+1:0` carrying the deferred turn
 - **AND** the loop entity records that request as the carrier, on this path and on the tool-results path alike, and
   the pending record is cleared when that request's response arrives
+
+#### Scenario: A terminal tool answers a loop that has a deferred continuation
+
+- **WHEN** a tool result that terminates the loop arrives while a continuation is pending
+- **THEN** the loop does NOT complete: no completion record is built and no `agent.complete` is published
+- **AND** the loop advances one iteration and publishes `<loopID>:req:N+1:0` carrying both the deferred turn and
+  the terminal tool's own result
+- **AND** a terminal tool answering a loop with nothing deferred completes it exactly as before
 
 #### Scenario: A turn is deferred and its carrying request cannot be confirmed
 

@@ -2481,6 +2481,35 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 	// Content becomes the LoopCompletedEvent.Result.
 	if toolResult.StopLoop {
 		h.loopManager.ClearQueuedTools(loopID)
+
+		// The same disposition as the model-text completion path (:1423). A
+		// completion is a completion whether the model said it in text or
+		// through a terminal tool — the framework `decide` executor returns
+		// StopLoop: true — so a turn admitted while this iteration's request
+		// was outstanding is carried here too, and only a loop with nothing
+		// deferred completes. Without this the loop settled with the turn
+		// still marked pending and no request that had ever contained it.
+		//
+		// The tool results are drained into the conversation first, which the
+		// completing path never had to do: the carried request must send this
+		// terminal tool's own message, or its assistant tool_call is an
+		// unpaired orphan and RepairToolPairs drops the call the model just
+		// made. The typed `decide` decision does not ride a completion event
+		// here because this decide did not end the loop — LoopCompletedEvent
+		// .Decision is the terminal that did — and the call and its result
+		// stay in the trajectory and the conversation either way.
+		if h.loopManager.HasPendingContinuation(loopID) {
+			cm := h.loopManager.GetContextManager(loopID)
+			h.absorbToolResultsIntoContext(loopID, cm)
+			carried, err := h.carryDeferredContinuation(ctx, loopID, entity, cm, &result)
+			if err != nil {
+				return result, err
+			}
+			if carried {
+				return result, nil
+			}
+		}
+
 		if err := h.handleCompleteResponse(&result, loopID, entity, toolResult.Content, &toolResult); err != nil {
 			return result, err
 		}
@@ -2702,20 +2731,29 @@ func (h *MessageHandler) handleToolsComplete(
 	// Get the new iteration count for GC
 	newIteration := h.loopManager.GetCurrentIteration(loopID)
 
-	// Get ALL accumulated tool results
-	allResults := h.loopManager.GetAndClearToolResults(loopID)
-
-	toolMessages := h.buildToolMessages(allResults)
-
-	for _, tm := range toolMessages {
-		_ = cm.AddMessage(RegionRecentHistory, tm)
-	}
+	h.absorbToolResultsIntoContext(loopID, cm)
 
 	if err := h.publishIterationRequest(ctx, loopID, entity, cm, result, newIteration); err != nil {
 		return *result, err
 	}
 
 	return *result, nil
+}
+
+// absorbToolResultsIntoContext drains every tool result accumulated for this
+// loop into its conversation, as the tool messages the next request sends.
+//
+// One home, because two paths need it and the invariant is the same for both:
+// a request that carries an assistant tool_call without its tool message is a
+// broken pair, and RepairToolPairs would drop the call rather than send it.
+// The ordinary path is all-tools-complete; the other is a terminal tool
+// answered while a continuation turn is waiting, where the loop carries the
+// turn instead of settling and the terminal tool's own content has to travel
+// with it.
+func (h *MessageHandler) absorbToolResultsIntoContext(loopID string, cm *ContextManager) {
+	for _, tm := range h.buildToolMessages(h.loopManager.GetAndClearToolResults(loopID)) {
+		_ = cm.AddMessage(RegionRecentHistory, tm)
+	}
 }
 
 // publishIterationRequest builds and appends the loop's next model request from
