@@ -1709,10 +1709,23 @@ func (h *MessageHandler) drainPendingToolFailures(loopID, reason string) {
 // the batch size is the provider's choice, agentic.AgentResponse validation
 // imposes no limit on it, and any call left queued when the caller clears the
 // queue is an unanswered call — which is the whole defect this function
-// exists to prevent (owner's Codex round 4). DequeueToolCall is the only
-// queue-shrinking operation and nothing else runs on this goroutine, so the
-// entry length is exact; the post-check below is the guard against a manager
-// that ever breaks that.
+// exists to prevent (owner's Codex round 4).
+//
+// The entry length bounds THIS drain. It is not an invariant about the queue,
+// which can change underneath the loop: ClearQueuedTools empties it (:1668,
+// :2599 — the line right after this function's own call site — and :2721),
+// and QueueToolCalls (:1599) can append to it again. That append needs no
+// concurrency to reach: a redelivered tool-call response names the loop's
+// CURRENT request, so the request-identity guard passes it by design, and
+// handleToolCallResponse queues the batch a second time. Nor are the lanes
+// serialized — agent.task, agent.response and tool.result are separate
+// consumers and nothing in this package serializes them per loop (design.md
+// § Declared residuals, "the admission check and the mint are not one
+// critical section"); there is no per-loop mutex.
+//
+// The loop tolerates both directions: it breaks on !ok, so a shrink ends it
+// early, and the post-drain re-read reports a growth. That re-read is a
+// REACHABLE guard, not an assertion — do not delete it.
 func (h *MessageHandler) synthesizeSkippedQueuedTools(loopID, terminalTool string) {
 	queued := h.loopManager.QueuedToolCount(loopID)
 	if queued == 0 {
@@ -1741,9 +1754,10 @@ func (h *MessageHandler) synthesizeSkippedQueuedTools(loopID, terminalTool strin
 		}
 	}
 	if remaining := h.loopManager.QueuedToolCount(loopID); remaining > 0 {
-		// Unreachable while the queue only shrinks on this goroutine. If it
-		// ever fires, those calls are about to be cleared with no results and
-		// the next request's tool batch will be repaired away.
+		// Reachable: the queue can gain calls while this drains (see the
+		// bound's note above). When it fires, those calls are about to be
+		// cleared with no results and the next request's tool batch will be
+		// repaired away — so this WARN is the only trace of it.
 		h.logger.Warn("queued tool calls remain after the skipped-queue drain; they will go unanswered",
 			slog.String("loop_id", loopID),
 			slog.Int("drained", queued),
@@ -1801,10 +1815,17 @@ func (h *MessageHandler) dispatchedFromQueue(result *HandlerResult, loopID strin
 	// minted a request whose assistant message advertised calls nothing
 	// answered — which RepairToolPairs removes as a broken group, terminal
 	// content and all. Same defect class as the skipped-queue drain's retired
-	// constant (owner's Codex round 4), at longer odds. DequeueToolCall is the
-	// only queue-shrinking operation and nothing else runs on this goroutine,
-	// so the entry length is exact; the post-loop check is the guard against a
-	// manager that ever breaks that.
+	// constant (owner's Codex round 4), at longer odds.
+	//
+	// As there, the entry length bounds THIS drain and claims nothing about
+	// the queue: ClearQueuedTools empties it at three sites (:1668, :2599,
+	// :2721) and QueueToolCalls (:1599) can append to it again — reachable
+	// with no concurrency at all, since a redelivered tool-call response names
+	// the loop's CURRENT request and re-queues the batch — and the lanes are
+	// not serialized per loop (design.md § Declared residuals). The loop
+	// tolerates both: it breaks on !ok when the queue shrank, and the
+	// post-loop re-read reports what arrived. That re-read is a REACHABLE
+	// guard, not an assertion — do not delete it.
 	queued := h.loopManager.QueuedToolCount(loopID)
 	for i := 0; i < queued; i++ {
 		next, ok := h.loopManager.DequeueToolCall(loopID)
@@ -1821,9 +1842,10 @@ func (h *MessageHandler) dispatchedFromQueue(result *HandlerResult, loopID strin
 		// Synth-result emitted for this call; loop to try the next.
 	}
 	if remaining := h.loopManager.QueuedToolCount(loopID); remaining > 0 {
-		// Nothing dispatched and calls are still queued: they will reach no
-		// executor and carry no result, so the next request's tool batch is
-		// incomplete.
+		// Reachable, not an assertion: nothing dispatched and calls are still
+		// queued — either they arrived while this drained, or the manager
+		// stopped handing them over. Either way they reach no executor and
+		// carry no result, so the next request's tool batch is incomplete.
 		h.logger.Warn("queued tool calls remain after the dispatch drain; they will go unanswered",
 			slog.String("loop_id", loopID),
 			slog.Int("drained", queued),

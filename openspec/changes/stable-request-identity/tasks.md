@@ -872,19 +872,27 @@ public handlers, no restart, no redelivery, no concurrency — and it is a conse
       batch size **2, 256, 257, 258** — bracketing the retired constant — asserting the carried request
       advertises exactly `batch` tool calls, answers exactly `batch` of them, and still carries the terminal
       tool's own result.
-      **Mutation: `handlers.go:1716`, the bound restored to a constant 256
-      (`for i := 0; i < 256; i++` over `queued`).** RED at `continuation_deferral_test.go:906` in the
-      `258_calls` subtest only: `the carried request advertises 0 tool calls, want 258; one unanswered sibling
-      repairs the whole group away`. 2, 256 and 257 stay green under the mutation, which is what makes the
-      boundary the test's subject rather than a coincidence
+      **Mutation: the drain's loop head, `for i := 0; i < queued; i++` restored to `i < 256`.** That statement
+      is `handlers.go:1739` in this tree and was `:1726` when the mutation ran (§ 16.6's comment rewrite moved
+      it); the pin first written here, `:1716`, was the function signature rather than the bound.
+      RED at `continuation_deferral_test.go:906` in the `258_calls` subtest only: `the carried request
+      advertises 0 tool calls, want 258; one unanswered sibling repairs the whole group away`. 2, 256 and 257
+      stay green under the mutation, which is what makes the boundary the test's subject rather than a
+      coincidence
 - [x] 16.2 The same mistake, checked for elsewhere on this path and found once. `dispatchedFromQueue`
-      (`handlers.go:1801`) bounds its own drain at `len(GetPendingTools(loopID)) + 64` — derived, but from the
+      (`handlers.go:1809`, `:1801` when this line was first written and a comment line even then) bounds its
+      own drain at `len(GetPendingTools(loopID)) + 64` — derived, but from the
       PENDING set rather than from the queue it drains — so a batch whose first 65-plus calls all fail to
       dispatch stops with calls still queued and unanswered. Pre-existing and far narrower (it needs a string of
       consecutive dispatch failures, not merely a large batch), so this line first recorded it as a residual —
       the owner then ruled it in scope, one call away from the accessor § 16.1 had just added: **fixed in
-      § 16.4**, and it is no longer a residual in `design.md`. No other constant cap exists in
-      `processor/agentic-loop` outside the compaction token budgets (`context_compaction.go:111`, `:196`)
+      § 16.4**, and it is no longer a residual in `design.md`. No other constant-BOUNDED DRAIN exists in
+      `processor/agentic-loop`: the sweep's other hits are a retry counter (`component.go:1228`), two loops
+      bounded by their own collection (`context_manager.go:443`, `:508`) and read-side pagination
+      (`trajectory_reader.go:157`). Constant caps of other classes do exist — `maxLessonPages`
+      (`lessons.go:31`), `trajectoryHealthDiagnosticMaxBytes`, the compaction token budgets
+      (`context_compaction.go:111`, `:196`) — and none of them truncates a queue of work silently:
+      `maxLessonPages` caps a paginated read and reports partial coverage explicitly (`lessons.go:104`)
 - [x] 16.3 Gates on the head that ships, measured before this line was amended into it — the difference is this
       record's own markdown and nothing else: `go build ./...` 0; `task lint` 0; `task test` 154 `ok` / 0 `FAIL`
       (136 cached — packages untouched this round);
@@ -903,15 +911,16 @@ public handlers, no restart, no redelivery, no concurrency — and it is a conse
       match, recorded before `e2e:clean` tore down the host's compose stacks — followed by `CHECKPORTS_EXIT=0`
       and `E2E_EXIT=0`. Every exit code read from `$?` on the line after its command, never through a pipe
 - [x] 16.4 **The residual § 16.2 recorded is fixed, as ruled — same defect class, one path over.**
-      `dispatchedFromQueue` (`handlers.go:1795`) drained the queue under `len(GetPendingTools(loopID)) + 64`.
+      `dispatchedFromQueue` (`handlers.go:1809`; `:1795` before § 16.6 grew the comment above it) drained the
+      queue under `len(GetPendingTools(loopID)) + 64`.
       By the time it runs, the result that woke it has already left the pending set, so the real bound was the
       bare constant 64: a batch whose queued calls all fail to dispatch stopped there, the rest stayed queued —
       undispatched, so no executor ever answers them, and unanswered, so `handleToolsComplete` minted a request
       whose assistant message advertised calls nothing answered and `RepairToolPairs` removed the whole group.
       **Fix, exactly as in § 16.1:** the drain is bounded by the queue's own length read at entry through
       `QueuedToolCount` (`state.go:852`), the `+64` heuristic is deleted, and a post-drain re-read WARNs if
-      anything remains (`handlers.go:1808` and the block that follows). No oversized-batch policy, no new
-      accessor: § 16.1 already added the only one this needed.
+      anything remains (`handlers.go:1829` and the block that follows; `:1808` before § 16.6). No
+      oversized-batch policy, no new accessor: § 16.1 already added the only one this needed.
       Test: `TestEveryQueuedCallIsAnsweredWhenAllOfThemFailToDispatch`
       (`processor/agentic-loop/dispatch_drain_test.go`), a subtest per batch size **20, 65, 66, 70** —
       bracketing the retired bound, since at 65 calls the queue is 64 long and fits inside it and at 66 it does
@@ -925,7 +934,8 @@ public handlers, no restart, no redelivery, no concurrency — and it is a conse
       fails the request MINT instead of the dispatch, which is a different defect and was how the first attempt
       at this test went red. `failEveryQueuedDispatch` dequeues, re-stamps, and re-queues in order, so the queue
       the drain walks is the one `HandleModelResponse` built, identity and order intact
-      **Mutation: `handlers.go:1808`, the bound restored to `len(h.loopManager.GetPendingTools(loopID)) + 64`.**
+      **Mutation: the bound, `handlers.go:1829` in this tree and `:1808` when it ran, restored to
+      `len(h.loopManager.GetPendingTools(loopID)) + 64`.**
       RED at `dispatch_drain_test.go:167` in the `66_calls` and `70_calls` subtests only — `1 of 65 calls are
       still queued — undispatched and unanswered` and `5 of 69 calls are still queued — undispatched and
       unanswered`. 20 and 65 stay green under the mutation, which is what makes the boundary the test's subject:
@@ -955,3 +965,38 @@ public handlers, no restart, no redelivery, no concurrency — and it is a conse
       read from `$?` on the line after its command, never through a pipe. Host checked first the way § 15.3
       requires: six `ps` samples 10s apart, all six with zero `e2e.test` processes and nothing but
       `MTLCompilerService`, `gopls` and `ANECompilerService` matching the build-process filter
+- [x] 16.6 **Internal review round 6 on `cf59499b`: APPROVE — 0 blocking, 0 HIGH, 1 MEDIUM, 2 NIT.** Both mutations
+      reproduced at exactly the recorded boundaries, on a scratch copy with the baseline md5 unchanged; the
+      drain test's lever was read as honest and the argument-map aliasing as real but inert (nothing outside
+      tests writes `ToolCall.Arguments`, and approval-with-modifications builds a new call rather than mutating
+      the old one). **MEDIUM-1 — the comment, not the code.** Both new bounds justified themselves with
+      "DequeueToolCall is the only queue-shrinking operation and nothing else runs on this goroutine", and the
+      skipped-queue drain's post-check was annotated "Unreachable while the queue only shrinks on this
+      goroutine". Both premises are false and re-verified here rather than taken on the reviewer's word:
+      `ClearQueuedTools` shrinks the queue at three sites (`handlers.go:1668`, `:2599` — the line right after
+      `synthesizeSkippedQueuedTools`' own call — and `:2721`); the package has no per-loop mutex (a `grep -rnE`
+      for `loopLock`, `lockLoop`, `perLoopMu`, `loopMutex` and `keyedMutex` exits 1, stderr visible);
+      `design.md` § Declared residuals already records that nothing serializes the lanes per loop; and the
+      enqueue needs no concurrency at all — the superseded-response guard (`handlers.go:1253`) deliberately
+      admits a redelivery of the CURRENT request, as its own comment says (`:1247`), so `handleToolCallResponse`
+      re-queues the batch. The blast radius stops at duplicate queue entries: `deriveToolExecutionID`
+      (`execution_identity.go:31`) is pure, so the redelivery derives identical execution identities, and
+      agentic-tools keys its completed-outcome ledger on that identity
+      (`processor/agentic-tools/outcomes.go:99-101`, collisions classified at `:88-92`), so the tool does not
+      execute twice. That is why this is a comment finding and not a defect. **Fix, as ruled: no code change.**
+      Both bound comments and both post-drain annotations now say what is true — the entry length bounds THIS
+      drain, the queue can change underneath it in either direction, the loop tolerates both (`break` on `!ok`,
+      re-read at the end), and the post-drain check is a REACHABLE guard rather than an assertion, with "do not
+      delete it" said out loud so the next editor does not cite the old sentence while removing the thing that
+      makes the bound safe. **NIT-1 — pin drift, third round running.** § 16.1's mutation pin named the function
+      signature and § 16.2's named a comment line. Both re-derived with `grep -n` + `sed -n` and rewritten to
+      name the statement, carrying both the current line and the line the measurement was taken at, since this
+      round's own comment rewrite moved them (`:1726`→`:1739`, `:1795`→`:1809`, `:1808`→`:1829`). **NIT-2 — an
+      overstated sweep.** "No other constant cap exists in `processor/agentic-loop`" was false as written
+      (`maxLessonPages`, `trajectoryHealthDiagnosticMaxBytes`); the true claim is about constant-bounded DRAINS,
+      and § 16.2 now says that, names the sweep's four other hits, and notes that `maxLessonPages` reports
+      partial coverage explicitly instead of truncating silently. Gates on this docs-and-comments commit: `go
+      build ./...` 0; `task lint` 0; `go test -count=1 ./processor/agentic-loop/` 0; `openspec validate
+      stable-request-identity --strict` 0; `task openspec:validate` 56/56; `task spec:properties` 235/235; `git
+      diff --check` 0. No code changed, so no re-run of the race suite or the agentic tier is owed — `git diff
+      --stat` on the commit is comments and markdown only
