@@ -347,3 +347,24 @@ re-home commit. Backup ref `refs/backup/gh1329-pre-l2round1-rebase-20260920` = `
       at `:324,:326,:328`) and `:170,:228-229` for the conflict vocabulary (`:179,:237-238`) — and two this
       rebase moved, the OpenAPI `"500"` responses at `http.go:1143`/`:1123`/`:1182`, now `:1166`/`:1146`/`:1205`.
       All six re-derived. The four stale ones were never in the § 9.2 sweep, which covered the comment block only
+
+## 11. Rebase onto L2's round-2 head (`b292f605`)
+
+- [x] 11.1 Backup ref `refs/backup/gh1329-pre-l2round2-rebase-20260920` = `bdf956d2`, then
+      `git rebase --onto` L2's round-2 head. 23 commits replayed; ONE conflict, in
+      `processor/agentic-dispatch/component.go`'s two-conjunct comment block — L2 round 2 re-derived its pins
+      (`:945-955`→`:953-963`, `loop_tracker.go:204-226`→`:212-233`) in the very block this change rewrites to
+      cite durable authority instead. Resolved to THIS layer's text: the tracker pins it re-derived name a file
+      this change deletes, so carrying them would re-introduce the claim § 9's HIGH removed. The self-pin
+      `:882-897` and `http_activity.go:321-339` both still resolve on the rebased head
+- [x] 11.2 L2's whitelist change carried by the rebase: `nats.ErrConnectionClosed` is off
+      `publishDefinitelyRejected`, because the same sentinel also comes back post-write from
+      `RequestMsgWithContext`. The SUBTEST that proves it did not carry cleanly — L2 wrote it against the tracker
+      fixture this change replaced — and is re-homed onto `cancelAmbiguityWorld`, seeding the session-a route and
+      driving the counterfactual redelivery against a second world where A has settled and B was born on the same
+      route. `TestBareCancelWithUnconfirmedSignalQuarantines` is four subtests again, all green
+- [x] 11.3 Pins verified rather than assumed: `processor/agentic-dispatch/component.go`, `commands.go`,
+      `http.go` and `loop_admission.go` are byte-identical across the rebase (`git diff <backup> HEAD -- <file>`),
+      so every pin § 9.2 and § 10 re-derived still lands. `command_effect.go` grew 17 comment lines ABOVE none of
+      its pinned sites (`:22`, `:36`, both before the whitelist). The five `processor/agentic-loop/component.go`
+      pins into `handlers.go` that L2 re-derived arrive with L2's own commit and resolve here too
