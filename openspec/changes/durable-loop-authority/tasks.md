@@ -297,3 +297,53 @@ does the right thing and said the wrong thing about why.
       ./processor/agentic-dispatch/` 0; the three named dispatch tests by name under
       `-tags=integration -race -count=1 -p 2 -v`, all PASS; `openspec validate durable-loop-authority --strict` 0;
       `task spec:properties` 244/244; `task schema:generate` then `git diff --exit-code schemas/ specs/` 0
+
+## 10. Rebase onto L2's round-1 head (`7b6a47fd`)
+
+L2 (#1328) took a six-finding Codex round and one of those findings — F3, the cancel-signal ambiguity arm — lands in
+`processor/agentic-dispatch`, the package this change rewrites. Nineteen own commits in, nineteen out, plus one
+re-home commit. Backup ref `refs/backup/gh1329-pre-l2round1-rebase-20260920` = `072c5b4c`.
+
+- [x] 10.1 `git rebase --onto 7b6a47fd e0f0bdf2` — four of the nineteen conflicted, nine file conflicts in total.
+      `d6992612` (the durable-authority commit) took three: `component.go` resolved to the deletion, because L2's
+      F2 edit added fields to a `handleAgentApprovalPending` this change retires; `loop_tracker.go` resolved to the
+      delete; `http.go` kept this change's durable read AND L2's echo, which is the only resolution that is not a
+      loss either way (10.2). `2d6983d9` and `db563f9d` were one hunk each. `a124852a` was four stale line pins
+- [x] 10.2 **The approval echo had to be re-homed, not merged.** L2's F2 makes the HTTP approval endpoint echo the
+      gated `ExecutionID` and `RequestID` onto the `ApprovalResponse`, because the loop now authorises on execution
+      identity and refuses a response that omits it. F2 read them from `LoopTracker.GetPendingApproval`; this
+      change deletes the tracker. The endpoint now takes them from `persisted.PendingApproval` — the record it
+      already reads on every decision — and `publishApprovalResponse` takes an `agentic.PendingApprovalState`
+      rather than the wire projection, so the durable record is the single source for all three fields and the
+      `/loops` DTO is untouched. The dispatch delta said only "obtains CallID"; it now states the echo, since the
+      loop's refusal makes it a correctness property and not a detail
+- [x] 10.3 **F3's arm was re-homed too** (`9dd48384`). The conjunct is `targetResolved`, this layer's name for it
+      (§ 9.6); `targetFromTracker` no longer compiles. The helper's justification cited `GetActiveLoop` falling
+      through to another channel's loop — the exact stale account § 9.1 removed from the sibling arm — and is
+      rewritten to same-route rebirth. `TestBareCancelWithUnconfirmedSignalQuarantines` put its two loops on two
+      channels, a case `activeLoop` cannot produce; both now sit on session-a and the counterfactual drives the
+      redelivery through a second lane against the world the first attempt left (A settled, B born on that route),
+      sharing the recorded signals. Its header names the teeth and the inert assertion, as § 9.5 required of its
+      sibling. Mutations, on this head: deleting `noteSignalAttempt` flips `0x4` → `0x2` AND the counterfactual
+      then signals B (`should not contain "d9428888-…"`); dropping the `publishDefinitelyRejected` conjunct flips
+      the proven-refusal subtest `0x2` → `0x4`
+- [x] 10.4 Pins re-derived with `sed -n "${n}p"` on this head. F3 inserted the attempt record and the
+      `publishSignal` seam into `commands.go`, so every § 9.2 row that pointed into that file moved again, and one
+      no longer resolves to the line it names:
+
+      | site | § 9.2 said | now | resolves to |
+      |---|---|---|---|
+      | `command_effect.go:22` | `commands.go:187` | `commands.go:193` | `noteSignalPublished(ctx)` |
+      | `component.go:941` conjunct 1 | `commands.go:187` | `commands.go:193` | `noteSignalPublished(ctx)` |
+      | `delivery_owner_test.go:324` | `commands.go:187` | `commands.go:193` | `noteSignalPublished(ctx)` |
+      | `delivery_owner_test.go:432` | `commands.go:181` | `commands.go:187` | `c.publishSignal(ctx, subject, signalData)` |
+      | `task_submission_settlement_integration_test.go:141` | `commands.go:181` | `commands.go:187` | same |
+      | `component.go:964` | `commands.go:136-148` | `commands.go:142-152` | `if facts.Terminal {` … its closing `}` |
+      | `component.go:942` conjunct 2 | `:875-890` | `:882-897` | `loopID := ""` … the closing `}` of the resolution block |
+      | `command_effect.go:36` | `component.go:1398-1402` | `component.go:1413-1417` | `handler := func(exec CommandExecutor) CommandHandler {` … `}(executor)` |
+
+      `http_activity.go:321-339` still lands. `design.md` § "Declared cost" carried four pins that were ALREADY
+      stale before this rebase — `loop_admission.go:315,:317,:319` for the three `lookupLoop` producers (they are
+      at `:324,:326,:328`) and `:170,:228-229` for the conflict vocabulary (`:179,:237-238`) — and two this
+      rebase moved, the OpenAPI `"500"` responses at `http.go:1143`/`:1123`/`:1182`, now `:1166`/`:1146`/`:1205`.
+      All six re-derived. The four stale ones were never in the § 9.2 sweep, which covered the comment block only

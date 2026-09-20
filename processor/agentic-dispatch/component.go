@@ -941,7 +941,7 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 	//     itself (commands.go:193), never inferred from the command name or
 	//     the response text; and
 	//  2. its target was resolved here rather than named by the message
-	//     (:875-890).
+	//     (:882-897).
 	//
 	// With both, the replay is unsound: the message does not carry the identity
 	// the first delivery acted on, so a redelivery cannot repeat what this
@@ -961,7 +961,7 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 	//
 	//   - `/cancel <loop_id>`: the gate re-reads THAT loop, finds it terminal
 	//     once the cancel took effect, and answers "already settled" without
-	//     publishing anything (commands.go:136-148); a signal that races the
+	//     publishing anything (commands.go:142-152); a signal that races the
 	//     loop's own settlement is dropped effect-free by the loop's cancel
 	//     owner.
 	//   - `/help`, `/loops`, a bare `/status`, and the three arms of bare

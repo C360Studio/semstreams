@@ -48,7 +48,9 @@ exact-read and validate `AGENT_LOOPS/<LoopID>`. A partial, stale, watcher-lost, 
 never be treated as empty.
 
 An approval SHALL read the current durable record on every decision rather than a process-local pending cache, and
-SHALL obtain its CallID from validated `PendingApproval` state. The RECORDED STATE SHALL decide before any property
+SHALL obtain from validated `PendingApproval` state both its CallID and the framework execution identity it echoes
+onto the published `ApprovalResponse` — the loop authorises on that identity and refuses a response that omits it,
+so the record is what makes the decision answerable. The RECORDED STATE SHALL decide before any property
 of `PendingApproval` does: a record that is readable but not `awaiting_approval` SHALL refuse as conflict regardless
 of whether it still carries a pending block. An unreadable or invalid record, and an `awaiting_approval` record
 whose pending CallID or ExecutionID is empty, SHALL refuse as unavailable. Admission and publication SHALL NOT
@@ -62,6 +64,7 @@ method names; the wrapped detail belongs in the log line correlated by request i
 - **GIVEN** exact current state is awaiting approval
 - **WHEN** an authorized approval names its canonical LoopID
 - **THEN** dispatch obtains CallID from validated `PendingApproval` state read at decision time
+- **AND** echoes that record's execution identity onto the response it publishes
 - **AND** requires no earlier approval-pending event
 
 #### Scenario: Pending output carries observed identity after replacement

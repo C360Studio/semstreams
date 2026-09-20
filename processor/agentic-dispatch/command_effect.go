@@ -33,7 +33,7 @@ import (
 // taskfiles/apicompat.yml:9-12), so the count is a governed number, not a gate.
 // The break would be real but narrower than "every adopter": a handler literal
 // passed to CommandRegistry().Register would stop compiling, while the
-// CommandExecutor path adapts inside this package (component.go:1398-1402). None
+// CommandExecutor path adapts inside this package (component.go:1413-1417). None
 // of it buys anything, because the framework's own publish site already knows the
 // fact. The value is per delivery, never shared.
 type commandEffect struct {

@@ -83,10 +83,10 @@ because this change makes the old one false. No outcome moves in any of the four
 ## Declared residuals
 
 - **`loopLookupConflict` and `codeLoopOwnerConflict` are unreachable.** `lookupLoop` has exactly three producers
-  (`loop_admission.go:315,:317,:319`) and none of them is the conflict outcome, because there is no second source
-  left to conflict with. The vocabulary (`loop_admission.go:31,:170,:228-229`), the `/loops/{id}` `"500"` OpenAPI
-  response at `http.go:1143` — the one under `"/loops/{id}"` at `:1123`, NOT the `/loops/{id}/approval` `"500"` at
-  `:1182` — and `loop_seams_test.go:630` are retained rather than deleted in this round: removing them edits the
+  (`loop_admission.go:324,:326,:328`) and none of them is the conflict outcome, because there is no second source
+  left to conflict with. The vocabulary (`loop_admission.go:31,:179,:237-238`), the `/loops/{id}` `"500"` OpenAPI
+  response at `http.go:1166` — the one under `"/loops/{id}"` at `:1146`, NOT the `/loops/{id}/approval` `"500"` at
+  `:1205` — and `loop_seams_test.go:630` are retained rather than deleted in this round: removing them edits the
   generated OpenAPI surface, which is a separate reviewable change from the one this PR is. Whoever removes them
   should do all three together.
 
