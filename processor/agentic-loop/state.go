@@ -876,6 +876,17 @@ func (m *LoopManager) TrackRequest(requestID, loopID string) {
 	}
 }
 
+// registerRequestRoute records only that this request belongs to this loop, so
+// a response can be routed to it. It is the half of TrackRequest that says
+// "published", separated from the half that says "outstanding": a lookup that
+// rebuilds lost routing must not also announce that the loop is waiting on a
+// model, which is a claim about the future and not about the map it repaired.
+func (m *LoopManager) registerRequestRoute(requestID, loopID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.requestToLoop[requestID] = loopID
+}
+
 // SettleRequest clears the loop's outstanding-request marker when the named
 // request is the one outstanding. Matching on the request ID matters: a late
 // response for a superseded request must not clear a newer request's mark and
@@ -1342,8 +1353,11 @@ func (m *LoopManager) GetLoopForRequestWithRecovery(requestID string) (string, b
 		_, exists := m.loops[loopID]
 		m.mu.RUnlock()
 		if exists {
-			// Re-establish the mapping
-			m.TrackRequest(requestID, loopID)
+			// Routing only. This is a READ that found the cache empty — for a
+			// response that has already come back, among others — so the loop
+			// is not learning that it is waiting on this request, it is
+			// learning where the request's answer belongs.
+			m.registerRequestRoute(requestID, loopID)
 			return loopID, true
 		}
 	}
