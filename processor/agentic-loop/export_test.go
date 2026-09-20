@@ -92,3 +92,12 @@ func (g *GraphWriterForTest) WriteLineageTriples(ctx context.Context, loopID str
 func (g *GraphWriterForTest) WriteSpawnIdentity(ctx context.Context, loopID string, task *agentic.TaskMessage) error {
 	return g.w.WriteSpawnIdentity(ctx, loopID, task)
 }
+
+// OutstandingRequestForTest returns the one model request the loop is waiting
+// on. External-package fixtures use it to answer the request the loop actually
+// published: production routes a response to its loop BY its RequestID, so a
+// response naming a request the loop never minted is a state production cannot
+// produce, and one naming a superseded request is refused as stale.
+func (h *MessageHandler) OutstandingRequestForTest(loopID string) string {
+	return h.loopManager.OutstandingRequest(loopID)
+}

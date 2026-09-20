@@ -33,7 +33,7 @@ func TestArchitectCompletion_ProducesEnrichedCompletionState(t *testing.T) {
 	// Architect completes
 	architectOutput := "Architecture design: Use Redis cluster with consistent hashing..."
 	response := agentic.AgentResponse{
-		RequestID: "req-001",
+		RequestID: handler.OutstandingRequestForTest(architectLoopID),
 		Status:    "complete",
 		Message: agentic.ChatMessage{
 			Role:    "assistant",
@@ -98,7 +98,7 @@ func TestArchitectCompletion_PublishesAgentComplete(t *testing.T) {
 	architectOutput := "Architecture: Microservices with event sourcing..."
 
 	response := agentic.AgentResponse{
-		RequestID: "req-001",
+		RequestID: handler.OutstandingRequestForTest(architectLoopID),
 		Status:    "complete",
 		Message: agentic.ChatMessage{
 			Role:    "assistant",
@@ -166,7 +166,7 @@ func TestEditorCompletion_DoesNotChain(t *testing.T) {
 	editorLoopID := taskResult.LoopID
 
 	response := agentic.AgentResponse{
-		RequestID: "req-001",
+		RequestID: handler.OutstandingRequestForTest(editorLoopID),
 		Status:    "complete",
 		Message: agentic.ChatMessage{
 			Role:    "assistant",
@@ -222,7 +222,7 @@ func TestGeneralRoleCompletion_ProducesCompletionState(t *testing.T) {
 	generalLoopID := taskResult.LoopID
 
 	response := agentic.AgentResponse{
-		RequestID: "req-001",
+		RequestID: handler.OutstandingRequestForTest(generalLoopID),
 		Status:    "complete",
 		Message: agentic.ChatMessage{
 			Role:    "assistant",
@@ -267,7 +267,7 @@ func TestArchitectWithToolCalls_CompletionAfterTools(t *testing.T) {
 
 	// Architect makes tool calls (should work normally)
 	toolResponse := agentic.AgentResponse{
-		RequestID: "req-001",
+		RequestID: handler.OutstandingRequestForTest(architectLoopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",
@@ -304,7 +304,7 @@ func TestArchitectWithToolCalls_CompletionAfterTools(t *testing.T) {
 
 	// Now architect completes
 	completeResponse := agentic.AgentResponse{
-		RequestID: "req-002",
+		RequestID: handler.OutstandingRequestForTest(architectLoopID),
 		Status:    "complete",
 		Message: agentic.ChatMessage{
 			Role:    "assistant",
@@ -345,7 +345,7 @@ func TestArchitectFailure_NoCompletionState(t *testing.T) {
 
 	// Architect fails
 	response := agentic.AgentResponse{
-		RequestID: "req-001",
+		RequestID: handler.OutstandingRequestForTest(architectTask.LoopID),
 		Status:    "error",
 		Error:     "Model timeout",
 	}
@@ -385,7 +385,7 @@ func TestCompletionState_IncludesIterations(t *testing.T) {
 
 	// Do one iteration with tool call
 	_, err = handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
-		RequestID: "req-001",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role:      "assistant",
@@ -406,7 +406,7 @@ func TestCompletionState_IncludesIterations(t *testing.T) {
 
 	// Complete
 	result, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
-		RequestID: "req-002",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "complete",
 		Message: agentic.ChatMessage{
 			Role:    "assistant",

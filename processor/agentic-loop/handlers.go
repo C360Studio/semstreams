@@ -1184,6 +1184,39 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 	if err != nil {
 		return HandlerResult{}, err
 	}
+	// Identity decides whether this response may advance the loop, BEFORE any
+	// completion logic reads it. Only the request the loop is waiting on can:
+	// a response naming a different one is superseded, and acting on it acts on
+	// a world two moves old.
+	//
+	// The terminal guard below cannot stand in for this. A completion response
+	// that carried a deferred continuation leaves the loop NON-terminal at the
+	// next iteration, so its JetStream redelivery — the lane has AckWait,
+	// MaxDeliver and BackOff (config.go:405) and no dedup of its own — meets no
+	// terminal state, finds no turn left to carry, and would complete the loop
+	// while the request carrying the user's turn is still in flight. That
+	// request's own answer would then be dropped by the terminal guard, which is
+	// exactly the lost turn the deferral exists to prevent.
+	//
+	// The empty case is deliberately let through: a NAK/retry of the FIRST
+	// delivery arrives after the mark was cleared, and that one is not stale.
+	if outstanding := h.loopManager.OutstandingRequest(loopID); outstanding != "" && outstanding != response.RequestID {
+		h.logger.Warn("ignoring superseded model response — the loop is waiting on a different request",
+			slog.String("loop_id", loopID),
+			slog.String("response_request_id", response.RequestID),
+			slog.String("outstanding_request_id", outstanding),
+			slog.String("state", entity.State.String()))
+		if h.metrics != nil {
+			h.metrics.recordModelResponseDropped("superseded_request")
+		}
+		return HandlerResult{
+			LoopID:            loopID,
+			State:             entity.State,
+			PublishedMessages: []PublishedMessage{},
+			TrajectorySteps:   []agentic.TrajectoryStep{},
+			ContextEvents:     []agentic.ContextEvent{},
+		}, nil
+	}
 	// This request is answered, whatever the outcome below. Clearing the
 	// outstanding mark here rather than in the success arms means an early
 	// return (timeout, terminal loop, budget exhausted) does not leave the loop

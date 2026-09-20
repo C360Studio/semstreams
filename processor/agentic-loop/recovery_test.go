@@ -37,6 +37,12 @@ func TestHandleModelResponsePropagatesContextToGovernance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateLoop: %v", err)
 	}
+	// The loop has to be waiting on the request this response answers: routing
+	// finds a loop BY its RequestID, so an untracked one is a state production
+	// cannot produce, and the execution identity every tool call carries is
+	// derived from it.
+	requestID := handler.loopManager.GenerateRequestID(loopID)
+	handler.loopManager.TrackRequest(requestID, loopID)
 	dispatcher := &contextCapturingGovernanceDispatcher{
 		received: make(chan context.Context, 1),
 		release:  make(chan struct{}),
@@ -47,7 +53,7 @@ func TestHandleModelResponsePropagatesContextToGovernance(t *testing.T) {
 	returned := make(chan error, 1)
 	go func() {
 		_, handleErr := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
-			RequestID: "request-context",
+			RequestID: requestID,
 			Status:    agentic.StatusToolCall,
 			Message: agentic.ChatMessage{ToolCalls: []agentic.ToolCall{
 				{ID: "call-context", Name: "test_tool"},

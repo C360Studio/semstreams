@@ -32,7 +32,7 @@ func gateLoopAtCall(t *testing.T, handler *agenticloop.MessageHandler, callID, t
 	loopID := taskResult.LoopID
 
 	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
-		RequestID: "req-" + callID,
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",

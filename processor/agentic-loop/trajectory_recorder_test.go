@@ -677,7 +677,7 @@ func TestApprovalRejectionAtIterationCapRecordsTerminalBeforeAdjacentSurfaces(t 
 	loopID := taskResult.LoopID
 	const callID = "call-approval-terminal"
 	if _, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
-		RequestID: "request-approval-terminal", Status: agentic.StatusToolCall,
+		RequestID: handler.OutstandingRequestForTest(loopID), Status: agentic.StatusToolCall,
 		Message: agentic.ChatMessage{Role: "assistant", ToolCalls: []agentic.ToolCall{{
 			ID: callID, Name: "delete_rule", Arguments: map[string]any{"id": "rule-1"},
 		}}},

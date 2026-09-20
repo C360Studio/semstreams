@@ -71,7 +71,7 @@ func TestHandleLengthTruncation_FailFast_LowUtilization(t *testing.T) {
 	// task prompt). No additional context fill.
 
 	resp := agentic.AgentResponse{
-		RequestID:    "req-failfast",
+		RequestID:    handler.OutstandingRequestForTest(loopID),
 		Status:       agentic.StatusLengthTruncated,
 		FinishReason: agentic.FinishReasonLength,
 		Message: agentic.ChatMessage{
@@ -151,7 +151,7 @@ func TestHandleLengthTruncation_ResetAfterForwardProgress(t *testing.T) {
 	// First truncation at high utilization → retry (counter=1).
 	fillContextToHighUtilization(t, handler, loopID, 80000)
 	first := agentic.AgentResponse{
-		RequestID:    "req-reset-1",
+		RequestID:    handler.OutstandingRequestForTest(loopID),
 		Status:       agentic.StatusLengthTruncated,
 		FinishReason: agentic.FinishReasonLength,
 		Message:      agentic.ChatMessage{Role: "assistant", Content: "p1"},
@@ -166,7 +166,7 @@ func TestHandleLengthTruncation_ResetAfterForwardProgress(t *testing.T) {
 	// Forward progress: a normal tool_call response. This must reset
 	// the truncation retry counter.
 	progress := agentic.AgentResponse{
-		RequestID:    "req-reset-progress",
+		RequestID:    handler.OutstandingRequestForTest(loopID),
 		Status:       agentic.StatusToolCall,
 		FinishReason: "tool_calls",
 		Message: agentic.ChatMessage{
@@ -187,7 +187,7 @@ func TestHandleLengthTruncation_ResetAfterForwardProgress(t *testing.T) {
 	// second-strike-fail.
 	fillContextToHighUtilization(t, handler, loopID, 80000)
 	second := agentic.AgentResponse{
-		RequestID:    "req-reset-2",
+		RequestID:    handler.OutstandingRequestForTest(loopID),
 		Status:       agentic.StatusLengthTruncated,
 		FinishReason: agentic.FinishReasonLength,
 		Message:      agentic.ChatMessage{Role: "assistant", Content: "p2"},
@@ -239,7 +239,7 @@ func TestHandleLengthTruncation_Retry_HighUtilization(t *testing.T) {
 	fillContextToHighUtilization(t, handler, loopID, 80000)
 
 	resp := agentic.AgentResponse{
-		RequestID:    "req-retry",
+		RequestID:    handler.OutstandingRequestForTest(loopID),
 		Status:       agentic.StatusLengthTruncated,
 		FinishReason: agentic.FinishReasonLength,
 		Message: agentic.ChatMessage{
@@ -327,7 +327,7 @@ func TestHandleLengthTruncation_SecondTruncation_FailWithCompactionAttempted(t *
 	// First truncation at high utilization → retry.
 	fillContextToHighUtilization(t, handler, loopID, 80000)
 	first := agentic.AgentResponse{
-		RequestID:    "req-twice-1",
+		RequestID:    handler.OutstandingRequestForTest(loopID),
 		Status:       agentic.StatusLengthTruncated,
 		FinishReason: agentic.FinishReasonLength,
 		Message:      agentic.ChatMessage{Role: "assistant", Content: "partial 1"},
@@ -343,7 +343,7 @@ func TestHandleLengthTruncation_SecondTruncation_FailWithCompactionAttempted(t *
 
 	// Second truncation arrives — same iteration, retry counter is now 1.
 	second := agentic.AgentResponse{
-		RequestID:    "req-twice-2",
+		RequestID:    handler.OutstandingRequestForTest(loopID),
 		Status:       agentic.StatusLengthTruncated,
 		FinishReason: agentic.FinishReasonLength,
 		Message:      agentic.ChatMessage{Role: "assistant", Content: "partial 2"},

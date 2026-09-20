@@ -860,13 +860,16 @@ func (m *LoopManager) SettleRequest(loopID, requestID string) {
 	}
 }
 
-// HasOutstandingRequest reports whether this loop is waiting on a model
-// response right now.
-func (m *LoopManager) HasOutstandingRequest(loopID string) bool {
+// OutstandingRequest returns the one model request this loop is waiting on, or
+// "" when it is waiting on none. The identity, not just the fact, is what
+// callers need: a response that names a DIFFERENT request than the loop is
+// waiting on is superseded, and the empty answer has to be distinguishable from
+// a mismatch, because a redelivery of the first delivery arrives after the mark
+// was cleared and must still be handled.
+func (m *LoopManager) OutstandingRequest(loopID string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	_, outstanding := m.outstandingRequests[loopID]
-	return outstanding
+	return m.outstandingRequests[loopID]
 }
 
 // GetLoopForRequest retrieves the loop ID for a request ID

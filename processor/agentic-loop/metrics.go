@@ -174,7 +174,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "model_responses_dropped_total",
-				Help:      "Total model responses dropped at the wire because no loop maps to the RequestID and the loop record is absent or terminal. Expected after a loop settles and releases its per-loop state; a sustained rate points at NATS redelivery. A response for a loop that is live but held by another process is NOT counted here: it is retried, not dropped.",
+				Help:      "Total model responses acknowledged without advancing a loop. reason=\"stale_request_id\" is a response whose RequestID maps to no loop and whose loop record is absent or terminal — expected after a loop settles and releases its per-loop state. reason=\"superseded_request\" is a response for a live loop that is waiting on a DIFFERENT request, which is what a redelivery of a response the loop already advanced past looks like. A sustained rate on either points at NATS redelivery. A response for a loop that is live but held by another process is NOT counted here: it is retried, not dropped.",
 			}, []string{"reason"}),
 
 			signalsDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -528,16 +528,19 @@ func (m *loopMetrics) recordToolResultDropped(reason string) {
 	m.toolResultsDropped.WithLabelValues(reason).Inc()
 }
 
-// recordModelResponseDropped records a model response that arrived with no loop
-// mapping for its RequestID. Reason "stale_request_id" is the settled-loop case:
-// terminal release takes the request routing with it, so a response that arrives
-// after the loop settled resolves nothing. The drop is deliberate and safe — the
-// loop's outcome is already recorded — and it is counted so that "safe" stays a
-// claim an operator can check rather than one only the code makes.
+// recordSignalDropped records a control signal acknowledged without effect.
 func (m *loopMetrics) recordSignalDropped(reason string) {
 	m.signalsDropped.WithLabelValues(reason).Inc()
 }
 
+// recordModelResponseDropped records a model response acknowledged without
+// advancing a loop. Reason "stale_request_id" is the settled-loop case: terminal
+// release takes the request routing with it, so a response that arrives after
+// the loop settled resolves nothing. Reason "superseded_request" is the live-loop
+// case: the loop is waiting on a different request, so this one cannot advance it
+// — a redelivery of a response the loop already moved past. Both drops are
+// deliberate and safe, and both are counted so that "safe" stays a claim an
+// operator can check rather than one only the code makes.
 func (m *loopMetrics) recordModelResponseDropped(reason string) {
 	m.modelResponsesDropped.WithLabelValues(reason).Inc()
 }

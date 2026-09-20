@@ -32,7 +32,7 @@ func TestHandleToolResult_ApprovalGated(t *testing.T) {
 
 	// Drive the loop to dispatch a tool that the filter will reject.
 	toolResponse := agentic.AgentResponse{
-		RequestID: "req-001",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",
@@ -155,7 +155,7 @@ func TestHandleToolResult_AwaitingApprovalAbsorbsSiblings(t *testing.T) {
 
 	// Two tool calls in one batch.
 	toolResponse := agentic.AgentResponse{
-		RequestID: "req-002",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",
