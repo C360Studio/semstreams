@@ -162,10 +162,18 @@ func TestProposalFingerprintIsCarriedAndNotVerified(t *testing.T) {
 		}
 	})
 
-	// Enforce mode reads the same fields, and there the loss is not audit:
-	// the reason travels to the waiting Propose and becomes the text the
-	// model is told its call was refused with.
-	t.Run("a publish-action rejection reaches its waiter with the reason on it", func(t *testing.T) {
+	// Enforce mode reads the same fields, and there the read is not audit:
+	// what the waiter gets becomes what the model is told. The field that was
+	// actually lost on this shape is the rule id — the old path read
+	// `payload.RuleID`, top level only, so a rule echoing `rule_id` under
+	// `properties` handed its waiter the empty string.
+	//
+	// The canonical reject rules echo no rule_id, which is why the audit
+	// subtest above asserts "" for that shape; a rule that DOES echo one is
+	// what discriminates here, and it is a rule set an operator can write
+	// today.
+	t.Run("a publish-action rejection carries its echoed rule id to the waiter", func(t *testing.T) {
+		const echoedRuleID = "rule-enforce-reject"
 		c := verdictTestComponent(t)
 		dispatcher := NewGovernanceDispatcher(
 			ToolCallGovernanceConfig{Mode: ToolCallGovernanceModeEnforce, Timeout: "1s"},
@@ -176,14 +184,19 @@ func TestProposalFingerprintIsCarriedAndNotVerified(t *testing.T) {
 		waiter := dispatcher.registerWaiter(auditedExecutionID)
 		defer dispatcher.releaseWaiter(auditedExecutionID)
 
-		decision, err := c.handleToolCallVerdictMessage(t.Context(), publishActionVerdictWire(t))
+		decision, err := c.handleToolCallVerdictMessage(t.Context(),
+			publishActionVerdictWireWithRuleID(t, echoedRuleID))
 		require.NoError(t, err)
 		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
 
 		arrival := <-waiter
 		require.Equal(t, "rejected", arrival.decision)
-		require.Equal(t, auditedReason, arrival.reason,
-			"a rejection with no reason on it is what the model would have been told")
+		require.Equal(t, echoedRuleID, arrival.ruleID,
+			"the waiter was handed no rule id, so nothing downstream can say which rule refused the call")
+		// Not the defect — EffectiveReason already fell through to
+		// `properties`, so this held before the change too — but it is the
+		// obligation the enforce path exists for, so it stays pinned.
+		require.Equal(t, auditedReason, arrival.reason)
 	})
 }
 
@@ -236,19 +249,31 @@ func approveActionVerdictWire(t *testing.T) []byte {
 // docs/operations/17-tool-call-governance.md:117-128).
 func publishActionVerdictWire(t *testing.T) []byte {
 	t.Helper()
+	return publishActionVerdictWireWithRuleID(t, "")
+}
+
+// publishActionVerdictWireWithRuleID is the same shape with a rule_id echoed
+// under `properties`, which the canonical rule set omits but a rule set may
+// carry. It is the field the old top-level read dropped on this shape.
+func publishActionVerdictWireWithRuleID(t *testing.T, ruleID string) []byte {
+	t.Helper()
+	properties := map[string]any{
+		"decision":             "rejected",
+		"request_id":           "7c9e6679-7425-40de-944b-e07fc1f90ae7:req:2:0",
+		"execution_id":         auditedExecutionID,
+		"call_id":              "call-001",
+		"proposal_fingerprint": auditedFingerprint,
+		"reason":               auditedReason,
+	}
+	if ruleID != "" {
+		properties["rule_id"] = ruleID
+	}
 	data, err := json.Marshal(map[string]any{
-		"entity_id": "acme.ops.semstreams.agentic.toolcall.fp-audit",
-		"subject":   "agent.toolcall.rejected." + auditedExecutionID,
-		"timestamp": time.Now().Format(time.RFC3339Nano),
-		"source":    "rule_engine",
-		"properties": map[string]any{
-			"decision":             "rejected",
-			"request_id":           "7c9e6679-7425-40de-944b-e07fc1f90ae7:req:2:0",
-			"execution_id":         auditedExecutionID,
-			"call_id":              "call-001",
-			"proposal_fingerprint": auditedFingerprint,
-			"reason":               auditedReason,
-		},
+		"entity_id":  "acme.ops.semstreams.agentic.toolcall.fp-audit",
+		"subject":    "agent.toolcall.rejected." + auditedExecutionID,
+		"timestamp":  time.Now().Format(time.RFC3339Nano),
+		"source":     "rule_engine",
+		"properties": properties,
 	})
 	require.NoError(t, err)
 	return data

@@ -1455,9 +1455,16 @@ HandleVerdict(decision, executionID string, verdict VerdictPayload) (natsclient.
 Only an adopter that implements `GovernanceDispatcher` itself is affected — a grep across all nine sister
 repositories found zero references — and the fix is to take the struct and delete the unmarshal. That unmarshal is
 the reason the parameter moved: the two shapes a rule publishes do not agree on where a field lives, so a
-dispatcher decoding the bytes itself read `""` for the fingerprint, the rule and the **reason**, which in enforce
-mode is the text the model is told its call was refused with. The framework normalizes both shapes once, before
-dispatch, and hands the result over.
+dispatcher decoding the bytes itself read `""` for every field it took from the top level — the audit fingerprint
+and the rule id on a publish-action verdict, and every field of an approve action's BaseMessage envelope. The
+framework normalizes both shapes once, before dispatch, and hands the result over.
+
+Corrected after review, and the correction is worth carrying: an earlier draft of this section said the enforce-mode
+**reason** was lost too. It was not, for any verdict the rule engine publishes. `EffectiveReason()` already fell
+through to `properties`, so a publish-action rejection reached its waiter with its reason on it; and the envelope
+shape, which does lose everything, is the approve action, which hardcodes `"decision": "approved"`
+(`processor/rule/actions.go:2198`) and therefore never carries a rejection. The enforce-mode reason loss is
+reachable only for a non-rule-engine publisher that emits a rejection in the envelope shape.
 
 Every line pin in this section was re-derived with `sed -n '<n>p'` against the head it ships on, not carried
 forward: one of them (`governance_dispatcher.go:401`) had already drifted onto a comment line before anyone read

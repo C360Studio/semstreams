@@ -40,9 +40,9 @@ verifies it.
 The verdict handed to the dispatcher SHALL be the DECODED one, and every field read off it SHALL tolerate both
 published shapes — top level, and nested under `properties`. The rule engine's approve action publishes a
 `core.json.v1` envelope and the canonical reject pattern publishes a raw map whose fields all sit under
-`properties`, so a dispatcher that unmarshals the wire bytes itself reads the empty string for BOTH: the audit
-fingerprint, rule and reason are lost, and in enforce mode the reason the model is told its call was refused with
-is lost with them. Normalization SHALL happen in one place, not once per dispatcher.
+`properties`, so a dispatcher that unmarshals the wire bytes itself reads the empty string for every field it takes
+from the top level: all of them for the envelope shape, and the audit fingerprint and rule id for the raw-map shape.
+Normalization SHALL happen in one place, not once per dispatcher.
 
 #### Scenario: Validated output may repeat
 

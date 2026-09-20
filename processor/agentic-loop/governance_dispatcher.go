@@ -305,11 +305,13 @@ type GovernanceDispatcher interface {
 	// It takes the DECODED verdict rather than the wire bytes because the
 	// two production shapes are not the same bytes: the approve action
 	// publishes a `core.json.v1` BaseMessage and the canonical reject
-	// pattern publishes a raw map with every field under `properties`.
-	// A dispatcher that unmarshalled the bytes itself read empty strings
-	// off both, which is how a rejection reached a model with no reason on
-	// it. The Component already owns that normalization
-	// (decodeVerdictPayload), so it happens in one place.
+	// pattern publishes a raw map with every field under `properties`. A
+	// dispatcher that unmarshalled the bytes itself read empty strings off
+	// every field it took from the top level — all of them for the envelope
+	// shape, and the audit fingerprint and rule id for the raw map. (Not the
+	// reason: EffectiveReason already fell through to `properties`.) The
+	// Component already owns that normalization (decodeVerdictPayload), so it
+	// happens in one place.
 	//
 	// When no waiter is registered for the execution identity the
 	// dispatcher cannot decide the settlement, because the two reasons a
