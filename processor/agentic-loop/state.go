@@ -841,11 +841,23 @@ func (m *LoopManager) ClearQueuedTools(loopID string) {
 // loop's one outstanding model request. Every model-request publish site calls
 // this already, which is why the invariant is recorded here rather than in a
 // fourth call each site could forget.
+//
+// It also ends the deferral, for the same reason and in the same place. A
+// request minted while a turn is deferred CARRIES that turn — it is built from
+// the context the turn was written into — and there are three sites that mint
+// one: the iteration request, the truncation retry, and the birth request. The
+// clear used to live in publishIterationRequest, which is only two of the
+// three: a truncation retry sent the turn and left the marker standing, so the
+// next completion deferred again and spent an iteration re-asking the model
+// with a context that had gained nothing.
 func (m *LoopManager) TrackRequest(requestID, loopID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.requestToLoop[requestID] = loopID
 	m.outstandingRequests[loopID] = requestID
+	if entity, exists := m.loops[loopID]; exists {
+		entity.PendingContinuation = false
+	}
 }
 
 // SettleRequest clears the loop's outstanding-request marker when the named

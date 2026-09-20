@@ -62,8 +62,12 @@ and then a response's RequestID no longer tells the loop which turn it answers. 
   which is the effect it owns.
 - **Carrying.** `LoopEntity.PendingContinuation` says a turn is waiting. A completion response that meets it
   advances the loop instead of settling: `carryDeferredContinuation` increments the iteration and calls
-  `publishIterationRequest`, the one home both this path and the tool-results path now use to build the next
-  request. The marker clears there, which is the moment the turn stops being deferred.
+  `publishIterationRequest`, the one home both this path and the tool-results path use to build the next
+  ITERATION's request. It is not the only site that mints a request, though — the truncation retry
+  (`emitRetryRequest`) re-asks at the same iteration from the same context, and the birth request mints too — so
+  the deferral bookkeeping does not live at any build site. It lives in `TrackRequest`, the call all three already
+  make: every request that goes out is built from the context the turn was written into, so every request carries
+  it, and putting the clear where the mark is taken is what makes that true of three paths instead of two.
 
 Settlement is untouched. A deferred task Acks exactly where a deduplicated one did; the carried request travels in
 an ordinary non-terminal `HandlerResult` through `persistHandlerResult`, so a stamp or publish failure quarantines

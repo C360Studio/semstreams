@@ -205,3 +205,94 @@ func TestDeferredContinuationRidesTheToolCallPath(t *testing.T) {
 		t.Fatal("the pending-continuation marker survived the request that carries the turn")
 	}
 }
+
+// The third request-building site. A length-truncated response compacts and
+// re-asks the model at the SAME iteration, and it builds from the same context
+// the deferred turn was written into — so the retry carries the turn exactly as
+// the iteration request does. When the retry did not end the deferral, the
+// completion that answered it deferred a turn that had already been sent and
+// spent an iteration re-asking with a context that had gained nothing.
+//
+// spec: agentic-loop / A logical model request has one deterministic identity
+func TestTruncationRetryCarriesTheDeferredTurn(t *testing.T) {
+	handler := agenticloop.NewMessageHandler(createTestConfig())
+	handler.SetToolRegistry(newTestToolRegistry(t))
+	ctx := context.Background()
+
+	birthResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		TaskID: "task-truncation-carry",
+		Role:   "general",
+		Model:  "qwen-32b",
+		Prompt: "summarise the first thing",
+	})
+	if err != nil {
+		t.Fatalf("HandleTask (birth): %v", err)
+	}
+	loopID := birthResult.LoopID
+	birth := oneMintedRequestID(t, "birth", birthResult)
+
+	// Above the compaction threshold, so the truncation self-heals and retries
+	// rather than failing fast.
+	fillContextToHighUtilization(t, handler, loopID, 80000)
+
+	continuation, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		TaskID: "task-truncation-carry-2",
+		LoopID: loopID,
+		Role:   "general",
+		Model:  "qwen-32b",
+		Prompt: continuationPrompt,
+	})
+	if err != nil {
+		t.Fatalf("HandleTask (continuation): %v", err)
+	}
+	if !continuation.Deferred {
+		t.Fatalf("the continuation was not deferred; state=%s", continuation.State)
+	}
+
+	retry, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+		RequestID:    birth,
+		Status:       agentic.StatusLengthTruncated,
+		FinishReason: agentic.FinishReasonLength,
+		Message:      agentic.ChatMessage{Role: "assistant", Content: "half an answer"},
+		TokenUsage:   agentic.TokenUsage{PromptTokens: 50, CompletionTokens: 4096},
+	})
+	if err != nil {
+		t.Fatalf("HandleModelResponse(length_truncated): %v", err)
+	}
+	if retry.State == agentic.LoopStateFailed {
+		t.Fatalf("the truncation failed the loop instead of retrying; state=%s", retry.State)
+	}
+	retryID := oneMintedRequestID(t, "truncation retry", retry)
+	if retryID == birth {
+		t.Fatalf("the retry reused the truncated request's name %q", birth)
+	}
+	// The turn is in the request either as the message the deferral wrote or,
+	// when compaction at this utilization empties the context, as the prompt
+	// recoverEmptyContext re-seeds from — CacheTaskPrompt (handlers.go:974) runs
+	// on the continuation too, so the recovered prompt is this turn and not the
+	// birth task's. Both are "the model has been asked", which is what makes
+	// ending the deferral correct here rather than a dropped turn.
+	if !requestBodyContains(t, retry, continuationPrompt) {
+		t.Fatalf("the retry request does not contain the continuation's turn %q", continuationPrompt)
+	}
+
+	// The turn has gone out. The completion that answers the retry must settle
+	// the loop, not defer a turn the model has already been asked.
+	completion, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+		RequestID: retryID,
+		Status:    agentic.StatusComplete,
+		Message:   agentic.ChatMessage{Role: "assistant", Content: "both things are done"},
+	})
+	if err != nil {
+		t.Fatalf("HandleModelResponse(complete): %v", err)
+	}
+	if ids := mintedRequestIDs(t, completion); len(ids) != 0 {
+		t.Fatalf("the completion spent another iteration re-asking with the already-sent turn: minted %v", ids)
+	}
+	if !completion.State.IsTerminal() {
+		t.Fatalf("the loop did not complete after its deferred turn was answered; state=%s", completion.State)
+	}
+	if completion.CompletionState == nil {
+		t.Fatal("no completion record was built for a loop with nothing left deferred")
+	}
+}

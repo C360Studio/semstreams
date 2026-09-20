@@ -2668,13 +2668,16 @@ func (h *MessageHandler) handleToolsComplete(
 }
 
 // publishIterationRequest builds and appends the loop's next model request from
-// its accumulated context. It is the ONE home for "what the next iteration asks
+// its accumulated context. It is the ONE home for "what the next ITERATION asks
 // the model", reached from the tool-results path and from a completion response
 // that must carry a deferred continuation instead of settling.
 //
-// It also clears the pending-continuation marker: the turn stops being deferred
-// exactly when a request that includes it is built, and putting that in one
-// place is what keeps the marker from outliving the turn on either path.
+// It is NOT the only site that mints a request — emitRetryRequest mints the
+// truncation retry at the same iteration, and HandleTask mints the birth
+// request — so the deferral bookkeeping does not live here. It lives in
+// TrackRequest (state.go:844), the call all three already make, which is the
+// only placement under which "every request that carries the turn ends the
+// deferral" is true rather than true of two paths out of three.
 func (h *MessageHandler) publishIterationRequest(
 	ctx context.Context,
 	loopID string,
@@ -2727,10 +2730,11 @@ func (h *MessageHandler) publishIterationRequest(
 		ResponseFormat: h.loopManager.GetCachedResponseFormat(loopID),
 	}
 
-	// Track request ID to loop ID mapping (cache for fast lookup)
+	// Track request ID to loop ID mapping (cache for fast lookup). TrackRequest
+	// also ends the deferral, because every request that goes out carries the
+	// turn and this is the call every publish site already makes.
 	h.loopManager.TrackRequest(request.RequestID, loopID)
 	h.loopManager.TrackRequestStart(request.RequestID)
-	h.loopManager.ClearPendingContinuation(loopID)
 
 	requestMsg := message.NewBaseMessage(request.Schema(), &request, "agentic-loop")
 	requestData, err := json.Marshal(requestMsg)
