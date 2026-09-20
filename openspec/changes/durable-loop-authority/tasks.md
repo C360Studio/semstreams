@@ -472,3 +472,17 @@ re-home commit. Backup ref `refs/backup/gh1329-pre-l2round1-rebase-20260920` = `
       `go test -count=1 ./processor/agentic-loop/ ./processor/agentic-dispatch/ ./agentic/` 0;
       `openspec validate durable-loop-authority --strict` 0; `task openspec:validate` 57/57;
       `task spec:properties` **269/269**
+- [x] 11.16 Re-based again onto L2's round-9 head `cf59499b` (backup ref
+      `refs/backup/gh1329-pre-l2round9-rebase-20260921` = `7cbcf3e4`). 32 commits, **no conflict**. That round
+      fixes the residual L2's own round 8 recorded rather than shipped: `dispatchedFromQueue` bounded its
+      dispatch drain at `len(GetPendingTools)+64`, a number from a different set than the one it drains, so a
+      batch whose queued calls all fail to dispatch stopped at 64 and left the rest queued and unanswered. It is
+      now bounded by `QueuedToolCount`, the accessor round 8 added. All of it is inside `agentic-loop` —
+      `handlers.go`, a new `dispatch_drain_test.go`, and L2's records — and nothing under
+      `processor/agentic-dispatch/` references `dispatchedFromQueue` or `QueuedToolCount` (grep, exit 1, stderr
+      visible).
+      Gates on `32f9b513`: `go build ./...` 0; `task lint` 0;
+      `go test -count=1 ./processor/agentic-loop/ ./processor/agentic-dispatch/ ./agentic/` 0;
+      `openspec validate durable-loop-authority --strict` 0; `task openspec:validate` 57/57;
+      `task spec:properties` **270/270** (L2's 235 plus this change's own 35 — the round's new citation arrives
+      tracked here, so it is counted)
