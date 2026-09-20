@@ -5,9 +5,11 @@ import (
 	"log/slog"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/types"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // TrajectoryManager is a test-only view of active-loop execution mechanics.
@@ -100,6 +102,34 @@ func (g *GraphWriterForTest) WriteSpawnIdentity(ctx context.Context, loopID stri
 // produce, and one naming a superseded request is refused as stale.
 func (h *MessageHandler) OutstandingRequestForTest(loopID string) string {
 	return h.loopManager.OutstandingRequest(loopID)
+}
+
+// CurrentRequestForTest returns the newest request the loop has minted in this
+// process, answered or not. It is the identity the superseded-response guard
+// compares against, so a fixture that must reach the handler PAST that guard —
+// a redelivery, or a response arriving while the loop waits on tools, where
+// the outstanding mark is empty and reads "" — names this one. Asking for the
+// outstanding request there would build a response naming no request at all,
+// which production cannot route.
+func (h *MessageHandler) CurrentRequestForTest(loopID string) string {
+	return h.loopManager.CurrentRequest(loopID)
+}
+
+// EnableDropCountingForTest gives the handler a metrics set, so an
+// external-package fixture can observe that a refusal was COUNTED and under
+// which reason — a drop nobody can see is a drop an operator cannot act on.
+func (h *MessageHandler) EnableDropCountingForTest() {
+	h.SetMetrics(getMetrics(metric.NewMetricsRegistry()))
+}
+
+// ModelResponseDropsForTest reads the drop counter for one reason label.
+// getMetrics is a package singleton, so this value accumulates across the test
+// binary: read it before and after and assert the DELTA.
+func (h *MessageHandler) ModelResponseDropsForTest(reason string) float64 {
+	if h.metrics == nil {
+		return 0
+	}
+	return testutil.ToFloat64(h.metrics.modelResponsesDropped.WithLabelValues(reason))
 }
 
 // HasPendingContinuationForTest reports whether the loop still has a turn no

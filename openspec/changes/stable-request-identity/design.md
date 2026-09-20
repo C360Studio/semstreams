@@ -54,11 +54,17 @@ and then a response's RequestID no longer tells the loop which turn it answers. 
 spec delta's SHALL now carries. The window that escapes it is a declared residual (§ Declared residuals, "The
 admission check and the mint are not one critical section"):
 
-- **Knowing.** `LoopManager.outstandingRequests` (loopID → requestID) is written by `TrackRequest`, which every
-  model-request publish site already calls, and cleared by `SettleRequest` when the response arrives. It matches on
-  the request ID, so a late response for a superseded request cannot clear a newer request's mark.
-  `requestToLoop` could not answer this: its only delete is `releaseLoop`, so it is append-only for the loop's
-  life and records "published", never "outstanding".
+- **Knowing.** Two maps, because "is a model answer owed" and "which request is live" are different questions and
+  the difference is a real window. `LoopManager.outstandingRequests` (loopID → requestID) is written by
+  `TrackRequest`, which every model-request publish site already calls, and cleared by `SettleRequest` when the
+  response arrives; it decides whether a continuation defers. `LoopManager.currentRequests` is written by the same
+  call and NOT cleared by `SettleRequest`; it is what the superseded-response guard compares against. A tool-call
+  response settles its request while the loop stays on that iteration waiting for executors, so the outstanding
+  mark is empty for the whole tool phase — an identity check keyed on that emptiness admits an earlier request's
+  redelivered completion and settles the loop with the previous task's answer while the carried turn is still
+  being worked (owner review round 2, reproduced sequentially). `requestToLoop` could answer neither: its only
+  delete is `releaseLoop`, so it is append-only for the loop's life and records "published", never "outstanding"
+  or "newest".
 - **Deferring.** `attachContinuation` returns a `deferred` flag instead of refusing. `HandleTask` does everything
   it normally does — the turn into the context, the caches the next request reads — and skips only the publish.
   The result carries `Deferred`, so the task delivery can tell it from a dedup; it Acks after the loop-entity Put,
@@ -181,6 +187,15 @@ deferred one identity decision to #1328. All three are answered here.
   `LoopEntity` — with the request that carries it — then persists with nothing to settle it. Restoring both is
   L4's (#1330), with the rest of the loop. The marker surviving a quarantine is what makes that restoration
   possible at all: the durable record says which request was supposed to carry the turn.
+- **A loop this process has minted nothing for cannot be identity-checked at all.** The superseded-response guard
+  compares a response against `currentRequests[loopID]`, and after a process replacement that map is empty while
+  the loop itself is live: the response routed here through `GetLoopForRequestWithRecovery`, which rebuilds
+  routing FROM the RequestID and deliberately does not claim the request was minted
+  (`registerRequestRoute`). The empty case is therefore let through, and a superseded response delivered to a
+  replacement is handled as though it were current. Refusing it instead would strand every live loop across a
+  restart, which is the worse failure. Closing it needs durable request identity — L4's
+  `LoopEntity.PublishedRequestID` (#1330), the same field that closes the admission/mint window above — and the
+  guard is written so that one field replaces the process-local read without moving the check.
 
 ## Declared deviations from the brief
 

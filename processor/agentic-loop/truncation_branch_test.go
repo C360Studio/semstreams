@@ -186,14 +186,15 @@ func TestHandleLengthTruncation_ResetAfterForwardProgress(t *testing.T) {
 	// is "first truncation since progress" — retry must fire, not
 	// second-strike-fail.
 	fillContextToHighUtilization(t, handler, loopID, 80000)
-	// Reads "" here on purpose: the tool-call response above dispatched a tool
-	// and settled its request, so the loop is waiting on no model request at
-	// this point. The empty answer takes the superseded-response guard's
-	// deliberate empty carve-out, which is the arm this fixture needs — asking
-	// the handler is still the right question, and inventing a name would put
-	// the fixture back in a state production cannot produce.
+	// The CURRENT request, not the outstanding one. The tool-call response
+	// above dispatched a tool and settled its request, so the loop is waiting
+	// on no model response here and the outstanding mark reads "" — a response
+	// naming no request is a state production cannot route, and since the
+	// guard compares against the loop's current request it is now also one the
+	// guard drops as superseded. The live request is what a redelivered answer
+	// at this point would name.
 	second := agentic.AgentResponse{
-		RequestID:    handler.OutstandingRequestForTest(loopID),
+		RequestID:    handler.CurrentRequestForTest(loopID),
 		Status:       agentic.StatusLengthTruncated,
 		FinishReason: agentic.FinishReasonLength,
 		Message:      agentic.ChatMessage{Role: "assistant", Content: "p2"},

@@ -1291,11 +1291,13 @@ func TestHandleModelResponse_TerminalLoop(t *testing.T) {
 	}
 
 	// Now send a model response to the terminal loop (simulates stale agent.request).
-	// The loop is terminal, so it is waiting on nothing and this reads "" — the
-	// superseded guard's empty carve-out lets it through to the terminal guard,
-	// which is the guard under test here.
+	// It names the loop's CURRENT request: the terminal guard is what is under
+	// test, and a response naming anything else — including the "" the
+	// outstanding mark reads once the loop settled — is dropped one guard
+	// earlier as superseded, which would leave this test green for the wrong
+	// reason.
 	staleResponse := agentic.AgentResponse{
-		RequestID: handler.OutstandingRequestForTest(loopID),
+		RequestID: handler.CurrentRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role:      "assistant",

@@ -138,6 +138,9 @@ func perLoopMapCount(m *LoopManager, loopID string) map[string]bool {
 	if _, ok := m.truncationRetryAttempts[loopID]; ok {
 		held["truncationRetryAttempts"] = true
 	}
+	if _, ok := m.currentRequests[loopID]; ok {
+		held["currentRequests"] = true
+	}
 	for k, owner := range m.requestToLoop {
 		if owner == loopID {
 			held["requestToLoop:"+k] = true

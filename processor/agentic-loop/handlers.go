@@ -1219,9 +1219,20 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 		return HandlerResult{}, err
 	}
 	// Identity decides whether this response may advance the loop, BEFORE any
-	// completion logic reads it. Only the request the loop is waiting on can:
-	// a response naming a different one is superseded, and acting on it acts on
-	// a world two moves old.
+	// completion logic reads it. Only the loop's CURRENT request can: a
+	// response naming an earlier one is superseded, and acting on it acts on a
+	// world two moves old.
+	//
+	// Current, not outstanding. The outstanding mark is cleared the moment a
+	// response settles, and a tool-call response settles its request while the
+	// loop stays on that iteration waiting for executors or an approval — so
+	// "the loop is waiting on nothing" is the loop's ordinary mid-iteration
+	// state, not evidence that a response belongs to it. An earlier request's
+	// redelivered completion arriving in that window would pass an emptiness
+	// test and settle the loop with the PREVIOUS task's answer while the
+	// current request — the one carrying the user's newer turn — is still
+	// being worked. Reproduced sequentially by the owner's round-2 review; no
+	// concurrency and no restart needed.
 	//
 	// The terminal guard below cannot stand in for this. A completion response
 	// that carried a deferred continuation leaves the loop NON-terminal at the
@@ -1233,13 +1244,18 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 	// request's own answer would then be dropped by the terminal guard, which is
 	// exactly the lost turn the deferral exists to prevent.
 	//
-	// The empty case is deliberately let through: a NAK/retry of the FIRST
-	// delivery arrives after the mark was cleared, and that one is not stale.
-	if outstanding := h.loopManager.OutstandingRequest(loopID); outstanding != "" && outstanding != response.RequestID {
-		h.logger.Warn("ignoring superseded model response — the loop is waiting on a different request",
+	// A redelivery of the CURRENT request is still handled: same identity,
+	// same request, and refusing it would drop the answer the loop is owed.
+	// The empty case is let through too, but it now means only "this process
+	// minted nothing for this loop" — a restart, where the routing was rebuilt
+	// from the RequestID. Deciding that one needs durable request identity and
+	// is L4's (#1330, declared in design.md § Declared residuals).
+	if current := h.loopManager.CurrentRequest(loopID); current != "" && current != response.RequestID {
+		h.logger.Warn("ignoring superseded model response — the loop has moved on to a different request",
 			slog.String("loop_id", loopID),
 			slog.String("response_request_id", response.RequestID),
-			slog.String("outstanding_request_id", outstanding),
+			slog.String("current_request_id", current),
+			slog.String("outstanding_request_id", h.loopManager.OutstandingRequest(loopID)),
 			slog.String("state", entity.State.String()))
 		if h.metrics != nil {
 			h.metrics.recordModelResponseDropped("superseded_request")

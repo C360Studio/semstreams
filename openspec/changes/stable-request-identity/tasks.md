@@ -574,3 +574,36 @@ is RED in two pre-existing tests, so the empty carve-out is load-bearing and cov
       `TestRedeliveredCarriedCompletionDoesNotCompleteTheLoop` asserted the absolute `1.0` and was green only
       because it incremented first; both tests now assert a DELTA of one through `supersededDrops`, which is the
       observation each of them actually owns
+
+## 13. Owner's Codex review round 2 (PR #1335 on `d127adeb`, three P1, all accepted)
+
+Every finding is a sequential reproduction against production handlers — no concurrency, no restart, none of them
+the declared cross-consumer residual. Round-1 fixes confirmed by the same review; 8/8 hosted checks were green at
+that head, which is the point: these are behaviours no gate was watching.
+
+- [x] 13.1 **P1-1 — the identity guard let an empty OUTSTANDING mark through, and the mark is empty for a whole
+      phase of every tool-using loop.** A tool-call response settles its request, so the loop sits on that
+      iteration waiting for executors or an approval with no model answer owed. The guard's empty carve-out was
+      written for one case — a first delivery's NAK arriving after its own mark was cleared — and admitted this
+      one for free: task one starts request one, task two defers behind it, request one's completion carries task
+      two into request two, request two answers with a tool call and settles, request one's completion redelivers,
+      meets an empty mark and completes the loop. Task TWO, with task ONE's answer, while the tool carrying the
+      user's turn is still running. **Fix as ruled:** `LoopManager.currentRequests` beside `outstandingRequests` —
+      same writer (`TrackRequest`, the call every publish site already makes), NOT cleared by `SettleRequest`,
+      dropped with the loop in `DeleteLoop` — and the guard compares against `CurrentRequest`. No durable field:
+      durable request identity is L4's `PublishedRequestID` (#1330). No iteration-ordinal comparison either, which
+      would re-admit a redelivered `:req:N:0` against a truncation retry's `:req:N:1`. A redelivery of the current
+      request still passes, and so does an empty CURRENT — now meaning only "this process minted nothing", the
+      process-replacement case, declared in `design.md` § Declared residuals against #1330.
+      Test: `TestRedeliveredCompletionIsRefusedWhileTheCarrierWaitsOnTools`
+      (`superseded_while_tools_pending_test.go`), the review's repro through the public handler, asserting the
+      refusal is counted as `superseded_request`, the durable record's state, iteration, task identity, outcome
+      and completion are untouched, and the live iteration's tool result still advances the loop to `:req:3:0`.
+      **Mutation: `handlers.go:1253`, `CurrentRequest` → `OutstandingRequest` — the emptiness condition restored.**
+      RED at `superseded_while_tools_pending_test.go:85`: `the redelivery completed the loop while its tool was
+      still running; state=complete`, which is the finding verbatim. Package-wide under that mutation exactly ONE
+      test fails, the new one.
+      Two fixtures that read `""` on purpose (§ 12.4 NIT-2) now name the loop's current request through a new
+      `CurrentRequestForTest` seam. `handlers_test.go`'s terminal-loop stale response is the one that mattered:
+      under the new guard a response naming `""` is dropped as superseded one guard EARLIER than the terminal
+      guard it exists to test, so it would have stayed green for the wrong reason

@@ -26,10 +26,19 @@ mark and both paths mint the same identity. Closing that window needs either per
 two consumers or a durable check-and-set on the mark; neither is this layer's, and until one exists the guarantee
 SHALL NOT be stated unqualified.
 
-A response naming a request the loop is NOT waiting on SHALL change nothing and settle as handled, counted under a
-reason label. One outstanding request is what makes that decidable, and it is required because carrying a turn
+A response naming a request other than the loop's CURRENT one — the newest request minted for it — SHALL change
+nothing and settle as handled, counted under a reason label. The identity check is required because carrying a turn
 leaves the loop non-terminal: the terminal guard that absorbs a redelivered completion does not apply, so without
-the identity check a redelivery would settle a loop whose carrying request is still in flight.
+it a redelivery would settle a loop whose carrying request is still in flight.
+
+Current, not merely outstanding. A tool-call response settles its request while the loop stays on that iteration
+waiting for executors or a human approval, so for that whole window the loop is waiting on no model response at
+all; a check keyed on that emptiness admits an EARLIER request's redelivered completion, which then settles the
+loop with the previous task's answer while the request carrying the user's newer turn is still being worked. A
+redelivery of the current request SHALL still be handled, because it is the answer the loop is owed. A response
+arriving for a loop this process has minted no request for SHALL also be handled: that is the process-replacement
+case, where the routing was rebuilt from the RequestID rather than from a mint, and deciding it needs durable
+request identity.
 
 The record of a pending continuation SHALL name the request that carries it, and SHALL NOT be cleared before that
 request's response arrives. The loop entity is persisted before its publications are emitted, so a marker cleared
@@ -78,13 +87,15 @@ carrier keeps the turn recoverable while still preventing a second carry.
 - **THEN** the persisted loop entity still records the turn as pending and names the request that was to carry it
 - **AND** no second request is minted for the same turn while that record names a carrier
 
-#### Scenario: A response arrives for a request the loop is not waiting on
+#### Scenario: A response arrives for a request the loop has moved on from
 
-- **WHEN** a model response names a request other than the loop's one outstanding request
+- **WHEN** a model response names a request other than the loop's current one, including while the loop waits on
+  tools or an approval and is therefore waiting on no model response at all
 - **THEN** the loop is not advanced, not completed, and publishes nothing
 - **AND** the delivery is acknowledged and counted under a drop reason, because redelivering it cannot help
-- **AND** a response arriving when the loop has NO outstanding request is still handled, because the first
-  delivery's retry arrives after the mark was cleared
+- **AND** a redelivery of the CURRENT request is still handled, because it is the answer the loop is owed
+- **AND** a response for a loop this process has minted no request for is still handled, because refusing it would
+  strand a live loop whose process was replaced
 
 #### Scenario: A duplicate request publish meets a configured window
 
