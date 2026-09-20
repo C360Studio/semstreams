@@ -415,3 +415,18 @@ re-home commit. Backup ref `refs/backup/gh1329-pre-l2round1-rebase-20260920` = `
       `go test -race -count=1 ./agentic/... ./processor/agentic-loop/... ./processor/agentic-dispatch/...` 0,
       `go vet -tags=e2e ./test/e2e/...` and `go vet -tags=integration ./processor/agentic-dispatch/` 0,
       `task spec:properties` 266/266, `task openspec:validate` 57/57, `task schema:generate` no drift
+- [x] 11.10 Re-based again onto L2's round-4 head `86462b52` (backup ref
+      `refs/backup/gh1329-pre-l2round4-rebase-20260920` = `077ea84f`). 27 commits, **no conflict**. That round is
+      the owner's ceiling ruling plus records: it edits `processor/agentic-loop/{handlers.go,state.go,
+      continuation_deferral_test.go}`, L2's own change directory, and the `execution_id` subsection of the
+      migration note — none of which this change touches, and the migration sections this change adds sit
+      elsewhere in that file. One coupling checked rather than assumed: L2 deletes
+      `LoopManager.ClearPendingContinuation` with the behaviour it implemented, and nothing under
+      `processor/agentic-dispatch/` references it or `PendingContinuation` at all (grep, stderr visible), so the
+      retirement crosses the layer boundary without touching this one. `git diff 077ea84f b34a24d0` is exactly
+      L2's seven files, +358/-37
+- [x] 11.11 Gates on `b34a24d0`: `go build ./...` 0; `task lint` 0; `task test` 155 `ok` / 0 `FAIL`;
+      `go test -race -count=1 ./agentic/... ./processor/agentic-loop/... ./processor/agentic-dispatch/...` 0;
+      `go vet -tags=integration ./processor/agentic-dispatch/` and `go vet -tags=e2e ./test/e2e/...` 0;
+      `openspec validate durable-loop-authority --strict` 0; `task openspec:validate` 57/57;
+      `task spec:properties` **267/267**; `task schema:generate` no drift
