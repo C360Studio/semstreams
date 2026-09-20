@@ -307,3 +307,74 @@
       through beta.162, so a selector naming it is valid PromQL that reads zero forever with no error — the same
       `class:advertised-absent` shape this change's own § 9.6 names, applied to the one label with an operator
       behind it. No note is owed for `loop_held_elsewhere`: it never reached main (§ 9.6)
+
+## 10. Codex review round 4 (PR #1335 round 1, six findings)
+
+- [x] 10.1 **F1 [P1] — a continuation admitted mid-request reused the outstanding request's identity** (`8734713d`).
+      The Q4 grammar is unique only if the loop mints one request per `(iteration, retry)`, and both ordinals move
+      when the LOOP advances, so a continuation admitted while a request was outstanding minted the outstanding
+      request's name and its `Nats-Msg-Id` — dropped by the duplicate window. `LoopManager.outstandingRequests`
+      (written by `TrackRequest`, cleared by `SettleRequest` on a matching request id) answers "waiting on a model
+      right now", which `requestToLoop` cannot: its only delete is `releaseLoop`, so it records "published", never
+      "outstanding". `attachContinuation` returns `deferred` instead of refusing; `HandleTask` does everything but
+      the publish and marks `LoopEntity.PendingContinuation`; the completion path carries the turn through
+      `carryDeferredContinuation` → `publishIterationRequest`, the one home both it and the tool-results path now
+      use. Tests: `TestContinuationBehindAnOutstandingRequestPublishesNothing`,
+      `TestDeferredContinuationIsCarriedByTheCompletionResponse`, `TestDeferredContinuationRidesTheToolCallPath`.
+      No STOP was owed: `handleTaskMessage` already discards `persistLoopState`'s error and ACKs, so a deferred
+      task settles exactly where a deduplicated one did
+- [x] 10.2 **F2 [P1] — human approval matched by provider CallID, not execution identity** (`c300c9bc`).
+      `ApprovalPendingEvent` and `ApprovalResponse` gain `ExecutionID`/`RequestID` (additive — `task
+      api:compat:report` lists both payloads under *Compatible changes*); the gate stamps them, the HTTP path
+      echoes them through `LoopTracker.GetPendingApproval`, and the timeout sweeper's synthetic auto-reject carries
+      them off the loop's own pending state. `ResolveApprovalIfPending` matches on ExecutionID whenever the pending
+      state carries one, with NO fallback to CallID. Tests:
+      `TestReplayedApprovalDoesNotAuthoriseALaterCallWithTheSameProviderCallID`,
+      `TestApprovalWithoutExecutionIdentityIsRefusedAgainstAGatedCall`,
+      `TestApprovalPendingEventCarriesTheGatedExecutionIdentity`,
+      `TestExpiredApprovalCandidateCarriesTheGatedExecutionIdentity`. Mutation: matching on CallID only → both
+      refusal tests fail
+- [x] 10.3 **F3 [P1] — an ambiguous cancel publish failure retried an inferred target** (`2e00d00c`). The recorder
+      gains the ATTEMPT (`commands.go:184`, before the publish) beside the publication (`:191`). A command whose
+      target was resolved rather than named and whose attempt is unaccounted for returns Fatal → Quarantine. The
+      exception is a PROVEN refusal, a fail-closed whitelist of errors the client returns before the bytes leave
+      the process: `natsclient.ErrCircuitOpen`, `natsclient.ErrNotConnected` (`natsclient/client.go:971-978`) and
+      the sentinels `nats.Conn.publish` returns before its first write (nats.go v1.52.0 `:4426`, `:4434`, `:4438`,
+      `:4445`, `:4450`, `:4455`, `:4463`, `:4470`). `jetstream.ErrNoStreamResponse` (`jetstream/publish.go:244-246`)
+      and a server `*jetstream.APIError` (`:255-257`) are deliberately NOT on it — neither contract says the store
+      did not run. Test: `TestBareCancelWithUnconfirmedSignalQuarantines`, three subtests. Mutations: delete
+      `noteSignalAttempt` → the quarantine subtest flips AND its counterfactual cancels loop B; drop the
+      proven-refusal conjunct → the refusal subtest flips
+- [x] 10.4 **F4 [P2] — the audit fingerprint was decoded from raw bytes; both production shapes logged empty**
+      (`bbb4eae6`). `HandleVerdict` takes the decoded `VerdictPayload`, so the Component's existing
+      `decodeVerdictPayload` normalization is the only decode, and the audit line reads every field through the
+      top-level-then-`properties` fall-through. In enforce mode the same defect emptied the REASON that travels to
+      the waiting `Propose` and becomes the refusal text the model reads. The naked-JSON observer test is
+      REPLACED: `TestProposalFingerprintIsCarriedAndNotVerified` now drives the approve-action envelope and the
+      publish-action map, built as `processor/rule/actions.go` builds them, through
+      `handleToolCallVerdictMessage`, and asserts the waiter's reason. Mutations: top-level reads instead of the
+      accessors → the publish-action shape and the waiter reason fail; re-unmarshalling the wire bytes → the
+      envelope shape fails. BREAKING on a Tier 1 exported interface; zero sister implementers (grep across all
+      nine); migration note carries the signature
+- [x] 10.5 **F5 [P2] — three spec contradictions, one of them a missing behaviour** (`554581f6`). (c) One TaskID
+      naming two LoopIDs now quarantines. The comparison lives at the delivery seam and reads the token the
+      PRODUCER sent, not `task.LoopID`: `preflightDecodedTask` reserves a fresh prospective UUID on every delivery
+      of a lineage task that named no loop, so reading the field classified an ordinary redelivery as a conflict —
+      which `TestPreflightGeneratedIdentityPreservesHandleTaskDedup` and
+      `TestTransientLineageWriteNAKsThenResumesPendingSpawnOnRedelivery` caught, and which
+      `TestTaskNamingADifferentLoopThanItsTaskIDQuarantines` now pins in all four arms. (b) The governance delta's
+      "Retry for every absent waiter" is replaced by the three dispositions `settleVerdictWithoutWaiter` actually
+      takes, one scenario each. (a) Three MODIFIED blocks restate the agentic-tools baseline requirements the
+      ADDED-only delta contradicted, every scenario carried over. That third one was not only spec drift:
+      `component.ToolRegistryReader` — the framework-wide executor contract — still named `ToolCall.ID` as the
+      downstream idempotency key while `agentictools.ToolExecutor` had moved to `ExecutionID`. Mutations: delete
+      the refusal call → the quarantine subtest flips; compare `task.LoopID` → the lineage-exemption subtest flips
+- [x] 10.6 **F6 [P2] — two migration instructions that do not work as written** (`4b27d3cc`). Routing reads
+      `execution_id` from the payload, never the subject, so "replace the suffix" left a publish-action rule
+      losing every verdict; and a pre-upgrade `ToolCall` is terminated before the ledger read
+      (`processor/agentic-tools/component.go:731`, ahead of `:744`), so it does not re-execute and deleting the
+      outcome bucket cannot repair it. Both now cite the cutover contract where it is written
+      (`docs/adr/104-unique-platform-authority.md:104-105`). The verdict handler's own stale `component.go:805`
+      pin is re-derived to `:1094`
+- [x] 10.7 Hygiene: the four EOF blank lines `git diff --check origin/main...HEAD` flagged in the spec deltas are
+      stripped (folded into 10.5)
