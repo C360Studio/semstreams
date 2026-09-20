@@ -430,3 +430,14 @@ re-home commit. Backup ref `refs/backup/gh1329-pre-l2round1-rebase-20260920` = `
       `go vet -tags=integration ./processor/agentic-dispatch/` and `go vet -tags=e2e ./test/e2e/...` 0;
       `openspec validate durable-loop-authority --strict` 0; `task openspec:validate` 57/57;
       `task spec:properties` **267/267**; `task schema:generate` no drift
+- [x] 11.12 Re-based again onto L2's round-5 docs head `7069ea0a` (backup ref
+      `refs/backup/gh1329-pre-l2round5-rebase-20260920` = `81a5cabb`). 28 commits, **no conflict**: that round
+      edits only L2's own `design.md` and `tasks.md` — the duplicate terminal-delivery residual it declares is
+      `agentic-loop`'s tool lane, and this change touches neither that lane nor those files. One line of it
+      points HERE: L2's pin for "the durable reader skips terminal entities" is now qualified as living in this
+      branch's tree, `activeLoop`'s `entity.State.IsTerminal()` conjunct at
+      `processor/agentic-dispatch/http_activity.go:329`, which still reads back exactly on the rebased head.
+      Gates: `go build ./...` 0; `task lint` 0;
+      `go test -count=1 ./processor/agentic-loop/ ./processor/agentic-dispatch/ ./agentic/` 0;
+      `openspec validate durable-loop-authority --strict` 0; `task openspec:validate` 57/57;
+      `task spec:properties` **267/267**
