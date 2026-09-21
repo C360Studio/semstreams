@@ -5,6 +5,12 @@ re-derived at that commit and dispatch's lane count re-measured (`design.md` § 
 `scripts/inventory-verify.sh` `pins=272 ok=272 … EXIT=0`; pre-owner design review and owner acceptance recorded on
 #1341; Q2 ruling on #1341 — RULED "amend" 2026-09-19 (`design-docket.md`), so #1249 consumes the package.
 
+**`scripts/inventory-verify.sh` is RED at the implemented head and that is correct — do not re-pin it.** The pins are
+pre-change evidence taken at `3faca84f`, so the change landing is exactly what makes them move: at `13a76b63` the
+verifier reports `pins=272 ok=98 moved=16 ambiguous=2 drift=156`, and the drifted paths are the five
+`delivery_owner.go` files this change deletes plus the five `component.go` it rewrites. Re-pinning would destroy the
+evidence the design was built on. It is not a CI gate; `task check:push` does not run it.
+
 Implementation order (coordinator, 2026-09-21): **dispatch is converted FIRST**, not tools, because it is the widest
 copy — the only one with both the refuse arm and a settlement lane, and the only one whose constructor is wider than
 `(onFatal)`. A defect in the package shape surfaces there once instead of five times. The reviewer runs on
