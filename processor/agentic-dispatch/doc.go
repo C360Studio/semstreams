@@ -53,6 +53,10 @@
 //	    Config() CommandConfig
 //	}
 //
+// A command that acts on one loop declares CommandConfig.ResolvesActiveLoop, and
+// only then is it handed a loopID the message did not name. A command that reads
+// no loop leaves it false and is never blocked by loop state it does not use.
+//
 // The CommandContext provides access to dispatch services:
 //
 //	type CommandContext struct {

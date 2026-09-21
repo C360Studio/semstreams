@@ -19,18 +19,20 @@ import (
 func (c *Component) registerBuiltinCommands() {
 	// /cancel [loop_id] - Cancel a loop
 	c.registry.Register("cancel", CommandConfig{
-		Pattern:     `^/cancel\s*(\S*)$`,
-		Permission:  "cancel_own",
-		RequireLoop: false,
-		Help:        "/cancel [loop_id] - Cancel current or specified loop",
+		Pattern:            `^/cancel\s*(\S*)$`,
+		Permission:         "cancel_own",
+		RequireLoop:        false,
+		ResolvesActiveLoop: true,
+		Help:               "/cancel [loop_id] - Cancel current or specified loop",
 	}, c.handleCancelCommand)
 
 	// /status [loop_id] - Show loop status
 	c.registry.Register("status", CommandConfig{
-		Pattern:     `^/status\s*(\S*)$`,
-		Permission:  "view",
-		RequireLoop: false,
-		Help:        "/status [loop_id] - Show loop status",
+		Pattern:            `^/status\s*(\S*)$`,
+		Permission:         "view",
+		RequireLoop:        false,
+		ResolvesActiveLoop: true,
+		Help:               "/status [loop_id] - Show loop status",
 	}, c.handleStatusCommand)
 
 	// /loops - List active loops

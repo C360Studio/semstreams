@@ -875,15 +875,20 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 		})
 	}
 
-	// Resolve loop ID. Whether the target was named by the message or resolved
-	// here from durable loop authority decides how a failed response settles
-	// below, so the answer is recorded now rather than re-derived from args at
-	// the call site.
+	// Resolve loop ID, for the commands that consume one. Whether the target
+	// was named by the message or resolved here from durable loop authority
+	// decides how a failed response settles below, so the answer is recorded
+	// now rather than re-derived from args at the call site.
+	//
+	// A command that declares no target (command_registry.go:22-35) never
+	// reaches the resolver: `/loops` and `/help` read no loop, and resolving
+	// one for them made them fail on exactly the route whose ambiguity `/loops`
+	// is how a user resolves.
 	loopID := ""
 	targetResolved := false
 	if len(args) > 0 && args[0] != "" {
 		loopID = args[0]
-	} else if c.config.AutoContinue {
+	} else if cmd.Config.ResolvesActiveLoop && c.config.AutoContinue {
 		var err error
 		loopID, err = c.activeLoop(ctx, msg)
 		if err != nil {

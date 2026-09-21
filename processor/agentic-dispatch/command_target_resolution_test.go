@@ -1,7 +1,11 @@
 package agenticdispatch
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -169,5 +173,119 @@ func TestAmbiguousCommandTargetIsAnsweredBeforeSettling(t *testing.T) {
 		assert.Equal(t, int32(1), msg.naks.Load())
 		assert.Zero(t, msg.acks.Load()+msg.terms.Load())
 		requireLaneIntact(t, c, handles)
+	})
+}
+
+// httpCommand drives the production HTTP message handler with one command on
+// the cli/channel-1 route and returns the recorder.
+func httpCommand(t *testing.T, c *Component, content string) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(map[string]string{
+		"content": content, "user_id": "user-1", "channel_type": "cli", "channel_id": "channel-1",
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/message", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.handleHTTPMessage(rec, req)
+	return rec
+}
+
+// newAmbiguousHTTPRoute builds the HTTP seam over a route carrying two
+// nonterminal loops, which is the exact condition `activeLoop` refuses.
+func newAmbiguousHTTPRoute(t *testing.T) *Component {
+	t.Helper()
+	c, _, _ := newSeamTestComponent(t)
+	c.config.AutoContinue = true
+	seedCurrentLoops(t, c, routeLoop(routeLoopA), routeLoop(routeLoopB))
+	return c
+}
+
+// A command that takes no target must not acquire one.
+//
+// Both command lanes resolved an active loop before EVERY argument-less
+// command, so `/loops` and `/help` — neither of which reads the loopID
+// argument at all — failed on a route with two current loops: 409 on HTTP, and
+// on the bus the delivery that finding 1's arm now answers. `/loops` is what a
+// user runs to find the competing loop IDs, so the one command that resolves
+// the ambiguity was the one the ambiguity disabled, and `/help` took a
+// dependency on view readiness it has no use for.
+//
+// The declaration is explicit rather than inferred: `RequireLoop` cannot carry
+// it, because all four built-ins declare it false, and inferring from "the
+// handler ignores its loopID parameter" is not observable from the registry an
+// adopter registers into.
+//
+// spec: agentic-dispatch / Dispatch uses one authority-backed current-state projection
+func TestCommandsThatConsumeNoTargetRunUnderRouteAmbiguity(t *testing.T) {
+	t.Run("bus /loops lists the competing loops", func(t *testing.T) {
+		published := make([]agentic.UserResponse, 0, 1)
+		c, deliver, handles, ctx := newInstalledCommandLane(t, &published)
+		seedCurrentLoops(t, c, routeLoop(routeLoopA), routeLoop(routeLoopB))
+		withPersistedLoops(c, nil)
+
+		msg := commandDelivery(t, "message-ambiguous-loops", "/loops")
+		deliver(ctx, msg)
+
+		require.Len(t, published, 1)
+		assert.Contains(t, published[0].Content, truncateID(routeLoopA))
+		assert.Contains(t, published[0].Content, truncateID(routeLoopB),
+			"the listing the user needs to name a loop must show both of them")
+		assert.Equal(t, int32(1), msg.acks.Load())
+		assert.Zero(t, msg.naks.Load()+msg.terms.Load())
+		requireLaneIntact(t, c, handles)
+	})
+
+	t.Run("bus /help answers", func(t *testing.T) {
+		published := make([]agentic.UserResponse, 0, 1)
+		c, deliver, handles, ctx := newInstalledCommandLane(t, &published)
+		seedCurrentLoops(t, c, routeLoop(routeLoopA), routeLoop(routeLoopB))
+		withPersistedLoops(c, nil)
+
+		msg := commandDelivery(t, "message-ambiguous-help", "/help")
+		deliver(ctx, msg)
+
+		require.Len(t, published, 1)
+		assert.Contains(t, published[0].Content, "Available commands:")
+		assert.Equal(t, int32(1), msg.acks.Load())
+		assert.Zero(t, msg.naks.Load()+msg.terms.Load())
+		requireLaneIntact(t, c, handles)
+	})
+
+	t.Run("HTTP /loops lists the competing loops", func(t *testing.T) {
+		rec := httpCommand(t, newAmbiguousHTTPRoute(t), "/loops")
+
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.Contains(t, rec.Body.String(), truncateID(routeLoopA))
+		assert.Contains(t, rec.Body.String(), truncateID(routeLoopB))
+	})
+
+	t.Run("HTTP /help answers", func(t *testing.T) {
+		rec := httpCommand(t, newAmbiguousHTTPRoute(t), "/help")
+
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.Contains(t, rec.Body.String(), "Available commands:")
+	})
+
+	t.Run("HTTP /help needs no loop view at all", func(t *testing.T) {
+		// No view is seeded, which is the warm-up state auto_continue's
+		// default reaches on every boot. /help reads no loop state, so it must
+		// not inherit the refusal that state's absence produces.
+		c, _, _ := newSeamTestComponent(t)
+		c.config.AutoContinue = true
+
+		rec := httpCommand(t, c, "/help")
+
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		assert.Contains(t, rec.Body.String(), "Available commands:")
+	})
+
+	t.Run("a command that does take a target still resolves one", func(t *testing.T) {
+		// The negative half: /status consumes the target it is given, so it
+		// keeps resolving — and keeps refusing when the route is ambiguous.
+		// Without this a fix that simply stopped resolving would pass.
+		rec := httpCommand(t, newAmbiguousHTTPRoute(t), "/status")
+
+		require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+		assert.Contains(t, rec.Body.String(), "multiple current loops match the user/channel route")
 	})
 }

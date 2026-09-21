@@ -19,7 +19,21 @@ type CommandConfig struct {
 	Pattern     string `json:"pattern"`      // Regex pattern to match
 	Permission  string `json:"permission"`   // Required permission
 	RequireLoop bool   `json:"require_loop"` // Requires an active loop
-	Help        string `json:"help"`         // Help text
+	// ResolvesActiveLoop declares that this command acts on ONE loop, so the
+	// dispatcher may resolve a target from durable loop authority when the
+	// message names none. A command that leaves it false is never given a
+	// resolved target, and therefore never fails for a loop it does not read:
+	// `/loops` and `/help` take no loop_id and used to refuse on a route whose
+	// current loops are ambiguous — disabling the listing a user needs to name
+	// one — or while the shared view was still warming.
+	//
+	// This is not RequireLoop, which refuses a command that ends up with no
+	// target at all. All four built-ins declare that false because a bare
+	// `/cancel` and `/status` answer for themselves, which is why it cannot
+	// carry this fact. The two are independent: a command may require a NAMED
+	// loop and still accept no resolved one.
+	ResolvesActiveLoop bool   `json:"resolves_active_loop"`
+	Help               string `json:"help"` // Help text
 }
 
 // CommandHandler is a function that handles a command

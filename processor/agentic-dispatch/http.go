@@ -274,11 +274,16 @@ func (c *Component) processCommandSync(ctx context.Context, msg agentic.UserMess
 		}, nil
 	}
 
-	// Resolve loop ID
+	// Resolve loop ID, for the commands that consume one. A command that
+	// declares no target (command_registry.go:22-35) never reaches the
+	// resolver: on this lane resolving one for `/loops` answered 409 for a
+	// route with two current loops, so the listing that names them was the one
+	// command the ambiguity disabled, and `/help` answered 503 while the
+	// shared view warmed.
 	loopID := ""
 	if len(args) > 0 && args[0] != "" {
 		loopID = args[0]
-	} else if c.config.AutoContinue {
+	} else if cmd.Config.ResolvesActiveLoop && c.config.AutoContinue {
 		var err error
 		loopID, err = c.activeLoop(ctx, msg)
 		if err != nil {
