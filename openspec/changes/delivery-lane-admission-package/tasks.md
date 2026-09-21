@@ -67,8 +67,12 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
       callback it bound and drives ONE unprovable delivery through it, asserting health degraded, status
       `delivery ownership lost`, `LastError`, and `drains == 1`. Both mutants then KILLED. `nil onRefused` still
       SURVIVES — recorded in 4.3, not fixed (coordinator ruling).
-- [ ] 2.2 agentic-model: as 2.1; move `recordDeliveryOwnerFatal` (`delivery_owner.go:50-58`) into `component.go`;
-      add `reactDeliveryFatal` (the existing "Model delivery ownership lost" log line).
+- [x] 2.2 agentic-model: as 2.1; move `recordDeliveryOwnerFatal` (`delivery_owner.go:50-58`) into `component.go`;
+      add `reactDeliveryFatal` (the existing "Model delivery ownership lost" log line). DONE, 1:1 with the design;
+      nothing the design did not say. Wiring mutants on the one lane: the `Observe` CALL and `nil onFatal` are BOTH
+      KILLED by `TestModelSetupWiresMetadataFailureToAcquiredOwner` — the detector `design.md` § 8 M6 named, and the
+      only one of the five components where the design's prediction held without new assertions. The lane declares
+      no refusals (nil `onRefused`), so there is nothing to mutate there (#1342).
 - [ ] 2.3 agentic-loop: heartbeat lanes → `Consume`; the settlement shape → `Settle(..., settleRetry, admission,
       "loop", settleHandlerFn)`; move `recordDeliveryOwnerFatal` (`:65-72`) into `component.go`; delete
       `runLoopDeliveryWork`. **Settlement guard form (MEDIUM-2, ruled): EARLY RETURN** —

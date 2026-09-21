@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -58,11 +59,11 @@ func TestModelUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner(t *testin
 		},
 	)
 	require.NoError(t, err)
-	admission := newDeliveryLaneAdmission(nil)
+	admission := deliverylane.NewAdmission(nil, nil)
 	metadataCause := errors.New("metadata unavailable")
 	msg := &modelDeliveryOwnerMsg{data: []byte("must-not-run"), metadataErr: metadataCause}
 
-	result, admitted := consumeAdmittedDelivery(t.Context(), msg, policy, admission)
+	result, admitted := deliverylane.Consume(t.Context(), msg, policy, admission)
 
 	require.True(t, admitted)
 	require.Equal(t, natsclient.DeliveryDecisionQuarantine, result.Decision())
@@ -76,19 +77,19 @@ func TestModelUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner(t *testin
 	require.Zero(t, msg.settlement.Load())
 
 	handle := &modelPolicyHandle{closed: make(chan struct{})}
-	binding := newStreamConsumerBinding(handle)
+	binding := deliverylane.NewBinding(handle)
 	ctx, cancel := context.WithCancel(t.Context())
 	c := &Component{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	c.observeDeliveryLane(ctx, &binding, admission)
+	deliverylane.Observe(ctx, binding, admission, c.reactDeliveryFatal)
 	require.Eventually(t, func() bool { return handle.drains.Load() == 1 }, time.Second, time.Millisecond)
 
-	_, admitted = consumeAdmittedDelivery(t.Context(), msg, policy, admission)
+	_, admitted = deliverylane.Consume(t.Context(), msg, policy, admission)
 	require.False(t, admitted)
 	require.Equal(t, int32(1), msg.metadata.Load(), "closed admission must not inspect another delivery")
-	binding.drain()
+	binding.Drain()
 	require.Equal(t, int32(1), handle.drains.Load(), "fatal and ordinary stop share exact drain-once authority")
 	cancel()
-	<-binding.observerDone
+	<-binding.Done()
 }
 
 // spec: agentic-model / The model delivery owner latches its first fatal result into health
@@ -158,6 +159,6 @@ func TestModelSetupWiresMetadataFailureToAcquiredOwner(t *testing.T) {
 
 	cancel()
 	for _, binding := range c.consumers {
-		<-binding.observerDone
+		<-binding.Done()
 	}
 }
