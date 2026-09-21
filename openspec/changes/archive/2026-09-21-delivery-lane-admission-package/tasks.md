@@ -284,8 +284,16 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
 - [x] 4.4b PR body carries `implemented-by: opus` and `Closes #1341` — the coordinator's half, published by the
       coordinator; this branch is not pushed by the implementer. Split from 4.4a because one checkbox over two
       owners cannot be read: a tick would have claimed something this branch cannot show.
-- [ ] 4.5 Archive/spec sync is the last content commit. NOT DONE HERE: it is a merge-time commit and this branch
-      is unpushed.
+- [x] 4.5 Archive/spec sync is the last content commit.
+      DONE. Pre-flight first, because the archiver only refuses at archive time: every `### Requirement` heading in
+      the delta was matched against `openspec/specs/jetstream-consumer-policy/spec.md` and every existing
+      `#### Scenario` under it checked for presence by exact title. Result: 2/2, 2/2 and 3/3 existing scenarios
+      restated verbatim, nothing omitted and nothing renamed, plus one genuinely NEW scenario
+      ("the owner-side reaction has one home"). `openspec archive delivery-lane-admission-package --yes`, never
+      `--skip-specs`: `~ 3 modified`, `Totals: + 0, ~ 3, - 0, -> 0`, archived as
+      `2026-09-21-delivery-lane-admission-package`. The updated spec keeps its Purpose (`:3`) and grew 694 -> 715
+      lines; the new scenario landed at `:631`. `openspec validate --all --strict` and `task openspec:queue` are
+      the gates recorded on the final head.
 - [x] 4.6 **E2E: none run, and that is a checked fact, not an assumption.** The rule is that a tier runs when a
       consumer's admission behaviour changed. Four mechanical checks say none did.
       (a) The production diff touches exactly eleven Go files: one added package, five `component.go`, five

@@ -607,6 +607,15 @@ Refusal by closed admission is a declared event, not a silent drop. Each refused
 line and increment a lane-labelled counter naming the refusal and why continuing is safe (ADR-098). The buffered
 deliveries a drained handle flushes reach this path, so the first fatal result alone SHALL NOT be the only signal.
 
+Within this module the owner-side reaction has exactly one home: one shared package that provides the per-lane
+admission latch, the drain-once binding around the exact committed handle, and the observer that runs the owner's
+reaction and drains that handle on the first buffered fatal. That package SHALL own no lifecycle authority — no
+Stop, no restart, no reconstruction, no registry of lanes: the owner constructs the admission before acquisition,
+constructs and retains the binding after it, decides Stop, awaits the exact handle's Closed, and joins the observer
+through the binding. The owner's health writer SHALL run synchronously inside the latch before the result is
+buffered. A closed lane SHALL read nothing from a refused delivery except its subject, and that only to declare the
+refusal. No migrated binding SHALL declare its own admission latch.
+
 #### Scenario: control loss precedes handle return
 
 - **WHEN** a callback reports OwnerStopRequired before acquisition returns
@@ -618,6 +627,16 @@ deliveries a drained handle flushes reach this path, so the first fatal result a
 - **WHEN** a delivery reaches a binding whose admission is already closed
 - **THEN** the binding performs no work, heartbeat, or terminal method
 - **AND** it emits a log line and increments its lane-labelled refusal counter
+
+#### Scenario: the owner-side reaction has one home
+
+- **WHEN** a durable-consumer owner in this module reacts to OwnerStopRequired
+- **THEN** it consumes each delivery through the shared lane package under an admission it constructed before
+  acquisition, and retains the shared binding it constructed after acquisition
+- **AND** the observer runs on the owner's Start-derived context, runs the owner's reaction, drains the exact handle
+  once, and is joined by the owner's Stop through the binding, which is joinable whether or not an observer ran
+- **AND** the shared package holds no registry of bindings, stops nothing on its own authority, and exposes no
+  status, metric, or durable state
 
 ### Requirement: current crash redelivery declarations are preserved
 
@@ -652,7 +671,8 @@ heartbeat, or own consumer lifecycle, and neither SHALL modify OTEL production s
 
 - **WHEN** typed heartbeat settlement attempts a terminal JetStream method
 - **THEN** it calls the private terminal-method executor
-- **AND** no shared helper owns admission, a native handle, health, shutdown, or restart
+- **AND** no shared settlement helper owns admission, a native handle, health, shutdown, or restart; the owner-side
+  reaction lives in the one shared lane package, which owns no lifecycle authority
 
 #### Scenario: the exported settlement operation carries no work half
 
@@ -678,7 +698,8 @@ react to `OwnerStopRequired` through the existing exact owner.
 
 - **WHEN** typed heartbeat or settlement-only handling attempts a terminal JetStream method
 - **THEN** it calls the private terminal-method executor
-- **AND** no shared helper owns admission, a native handle, health, shutdown, or restart
+- **AND** no shared settlement helper owns admission, a native handle, health, shutdown, or restart; the owner-side
+  reaction lives in the one shared lane package, which owns no lifecycle authority
 
 #### Scenario: an invalid tuple or absent message settles nothing
 
