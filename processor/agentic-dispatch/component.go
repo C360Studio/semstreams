@@ -881,7 +881,7 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 	// decides how a failed response settles below, so the answer is recorded
 	// now rather than re-derived from args at the call site.
 	//
-	// A command that declares no target (command_registry.go:22-35) never
+	// A command that declares no target (command_registry.go:22-38) never
 	// reaches the resolver: `/loops` and `/help` read no loop, and resolving
 	// one for them made them fail on exactly the route whose ambiguity `/loops`
 	// is how a user resolves.
@@ -902,8 +902,12 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 			// name. Only a transient failure, the shared view not caught up,
 			// is worth replaying; everything else is published as the refusal
 			// and settles on ITS PubAck, which is the split handleTaskSubmission
-			// already makes for this same call (:1110-1115).
-			if errs.IsTransient(err) {
+			// already makes for this same call (:1117-1124). Fatal joins
+			// transient here and at the handler arm (:945) rather than being
+			// published as a refusal: activeLoop produces no fatal today, and
+			// if one became reachable, quarantining is the answer a refusal
+			// response would silently swallow.
+			if errs.IsFatal(err) || errs.IsTransient(err) {
 				return err
 			}
 			return c.sendResponse(ctx, commandRefusalResponse(msg, err))
@@ -957,10 +961,10 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 	// delivery may be replayed takes TWO conjuncts, and it needs both:
 	//
 	//  1. this delivery published a signal — recorded at the publish site
-	//     itself (commands.go:195), never inferred from the command name or
+	//     itself (commands.go:204), never inferred from the command name or
 	//     the response text; and
 	//  2. its target was resolved here rather than named by the message
-	//     (:888-916).
+	//     (:888-920).
 	//
 	// With both, the replay is unsound: the message does not carry the identity
 	// the first delivery acted on, so a redelivery cannot repeat what this
@@ -980,7 +984,7 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 	//
 	//   - `/cancel <loop_id>`: the gate re-reads THAT loop, finds it terminal
 	//     once the cancel took effect, and answers "already settled" without
-	//     publishing anything (commands.go:144-154); a signal that races the
+	//     publishing anything (commands.go:153-163); a signal that races the
 	//     loop's own settlement is dropped effect-free by the loop's cancel
 	//     owner.
 	//   - `/help`, `/loops`, a bare `/status`, and the three arms of bare
@@ -1061,8 +1065,11 @@ func (c *Component) buildTaskMessage(ctx context.Context, msg agentic.UserMessag
 // field the caller can act on — reply_to on a refused continuation, the task
 // field TaskMessage.Validate rejected on a refused payload.
 //
-// It never counts anything: the refusal it is handed was already metered and
-// logged exactly once, where it was built.
+// It never counts anything. A refusal from the admission gate was metered and
+// logged exactly once where it was built; the route ambiguity this lane can
+// also be handed (:1117-1124, from http_activity.go:334) is the one refusal in
+// this component that is neither, for the reason and with the safety argument
+// recorded at commandRefusalResponse (commands.go:61-71).
 func (c *Component) answerRefusedSubmission(ctx context.Context, msg agentic.UserMessage, refusal error) error {
 	return c.sendResponse(ctx, agentic.UserResponse{
 		ResponseID:  uuid.New().String(),
@@ -1109,7 +1116,9 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		} else if c.config.AutoContinue {
 			loopID, err = c.activeLoop(ctx, msg)
 			if err != nil {
-				if errs.IsTransient(err) {
+				// Fatal joins transient for the reason recorded at the command
+				// lane's copy of this arm (:895-914).
+				if errs.IsFatal(err) || errs.IsTransient(err) {
 					return err
 				}
 				return c.answerRefusedSubmission(ctx, msg, err)
@@ -1166,7 +1175,7 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		Content:     fmt.Sprintf("Task submitted. Loop: %s", loopID),
 		Timestamp:   time.Now(),
 	}); err != nil {
-		// The task already has its PubAck (:1150), so the delivery that carried
+		// The task already has its PubAck (:1159), so the delivery that carried
 		// this submission can no longer be replayed free of effect. Two of the
 		// three effects #1328 named here are gone: identity, because a
 		// redelivery reads its own committed task back through

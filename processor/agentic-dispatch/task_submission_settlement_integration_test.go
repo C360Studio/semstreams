@@ -138,7 +138,7 @@ func TestIntegrationPublishedTaskWithFailedResponseQuarantines(t *testing.T) {
 
 // The command lane's post-effect response failure is the counterpart decision
 // to the task lane's, and it goes the other way. `/cancel` publishes its signal
-// at commands.go:189 and then builds its success response, so a failed response
+// at commands.go:198 and then builds its success response, so a failed response
 // publication is also a failure after an effect — but its redelivery is
 // effect-free, and the user has been told nothing, so Retry is what actually
 // delivers their answer.
@@ -332,7 +332,10 @@ func TestIntegrationHTTPSubmissionResponseFailureNamesItsOwnLane(t *testing.T) {
 // B stays in the fixture and is load-bearing, but not for the reason an earlier
 // version of this header gave. With two loops on two channels, a resolver
 // widened back to a user-scoped fallback matches BOTH, so activeLoop refuses
-// with loop_route_ambiguous and the command errors before publishing anything.
+// with loop_route_ambiguous; since fec49dd3 the command PUBLISHES that refusal
+// rather than returning it, and this fixture has no USER stream for it to
+// reach (:360-364), so the mutant still reaches no signal and its unclassified
+// publish failure still leaves Retry.
 // What a widening turns red is the Quarantine assertion at :436 and "the
 // first delivery cancelled this channel's loop" at :439. That is mutation
 // evidence rather than a reading: dropping the ChannelID conjunct from

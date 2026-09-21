@@ -24,7 +24,7 @@ import (
 // The two HTTP lanes' callers already have the same response synchronously, so
 // a failed publication is counted and logged rather than changing an accepted
 // operation; the loop user-channel copy is void by signature and not on a
-// delivery path today (component.go:1278-1282), so it takes the same
+// delivery path today (component.go:1287-1290), so it takes the same
 // observation rather than a silent discard.
 const (
 	responseLaneHTTPCommand     = "http_command"
@@ -275,11 +275,12 @@ func (c *Component) processCommandSync(ctx context.Context, msg agentic.UserMess
 	}
 
 	// Resolve loop ID, for the commands that consume one. A command that
-	// declares no target (command_registry.go:22-35) never reaches the
+	// declares no target (command_registry.go:22-38) never reaches the
 	// resolver: on this lane resolving one for `/loops` answered 409 for a
 	// route with two current loops, so the listing that names them was the one
-	// command the ambiguity disabled, and `/help` answered 503 while the
-	// shared view warmed.
+	// command the ambiguity disabled, and `/help` answered 503 for a view it
+	// never reads. `/loops` reads the view in its own handler and still
+	// answers 503 while that view warms; only the resolver's 409 is gone.
 	loopID := ""
 	if len(args) > 0 && args[0] != "" {
 		loopID = args[0]

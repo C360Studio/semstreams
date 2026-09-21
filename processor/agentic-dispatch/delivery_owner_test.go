@@ -73,9 +73,9 @@ func TestDispatchProductionCallbacksDoNotAckFalseDone(t *testing.T) {
 		}
 	})
 
-	// The response-PubAck gate (component.go:1227 -> Ack :844) had no observer:
+	// The response-PubAck gate (component.go:1236 -> Ack :844) had no observer:
 	// the sendResponseFn seam short-circuits sendResponse before PublishToStream
-	// (:1213-1215), so a test using it cannot see the publish at all. The
+	// (:1222-1224), so a test using it cannot see the publish at all. The
 	// unknown-command path reaches the production sendResponse with the user
 	// response as its ONLY required publication, which isolates that gate: if
 	// the publish fails and the callback still Acks, the user was told nothing
@@ -324,7 +324,7 @@ var _ component.Discoverable = (*Component)(nil)
 //
 // The predicate is now two conjuncts, and this test holds the half that must
 // NOT quarantine. The published fact comes from the publish site itself
-// (commands.go:195), so these cases are distinguished by what they did rather
+// (commands.go:204), so these cases are distinguished by what they did rather
 // than by what they were called.
 //
 // spec: agentic-dispatch / Every dispatch durable input settles through its owner
@@ -432,7 +432,7 @@ func TestEffectFreeCommandWithFailedResponseRetries(t *testing.T) {
 		defer cancel()
 		// Current in the shared projection, settled in the exact record: the
 		// gate reads the record and answers "already settled", so
-		// handleCancelCommand returns BEFORE the publish at commands.go:189.
+		// handleCancelCommand returns BEFORE the publish at commands.go:198.
 		// The two reads are the view and the exact Get — under #1329 that skew
 		// is the projection lagging its own bucket, not a second source of
 		// truth, and it is what lets this case resolve a target and still

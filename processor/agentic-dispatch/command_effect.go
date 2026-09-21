@@ -19,7 +19,7 @@ import (
 // publish nothing (no active loop, gate refusal, already settled) can — they
 // resolved a target and then did nothing with it.
 //
-// The fact is recorded AT the publish site (commands.go:195) so it cannot drift
+// The fact is recorded AT the publish site (commands.go:204) so it cannot drift
 // from what happened. Inferring it from the command name would be a second
 // spelling of "which commands publish", and inferring it from response text
 // would be a parser over prose.
@@ -33,7 +33,7 @@ import (
 // taskfiles/apicompat.yml:9-12), so the count is a governed number, not a gate.
 // The break would be real but narrower than "every adopter": a handler literal
 // passed to CommandRegistry().Register would stop compiling, while the
-// CommandExecutor path adapts inside this package (component.go:1432-1436). None
+// CommandExecutor path adapts inside this package (component.go:1441-1445). None
 // of it buys anything, because the framework's own publish site already knows the
 // fact. The value is per delivery, never shared.
 type commandEffect struct {

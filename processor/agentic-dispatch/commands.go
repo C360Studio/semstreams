@@ -58,8 +58,17 @@ func (c *Component) registerBuiltinCommands() {
 // "permission" for a loop that did not exist and for a token that was never a
 // loop id.
 //
-// It never counts anything: the refusal was metered and logged exactly once
-// where it was built.
+// It never counts anything, and for every refusal the admission gate builds
+// that is because the gate already metered and logged it exactly once, where it
+// was built (loop_admission.go:485). ONE refusal reaches here unmetered and
+// unlogged: the route ambiguity activeLoop builds inline
+// (http_activity.go:334). It is not a gate refusal — nothing was named, no
+// record was read, and the resolver has no seam at its site to label
+// loop_admission_refusals_total with — so rather than widen that counter's
+// meaning it is left uncounted, which is safe because the refusal is never
+// silent: it is answered to the user on both lanes, and HTTP additionally
+// counts it as a 409 (http.go:212). The residual is design.md § Declared
+// residuals; TestRouteAmbiguityRefusalIsAnsweredWithoutMeteringTheGate pins it.
 func commandRefusalResponse(msg agentic.UserMessage, refusal error) agentic.UserResponse {
 	return agentic.UserResponse{
 		ResponseID:  uuid.New().String(),

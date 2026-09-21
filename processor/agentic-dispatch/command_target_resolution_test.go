@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -52,6 +54,12 @@ func newInstalledCommandLane(t *testing.T, capture *[]agentic.UserResponse) (
 	t.Helper()
 	deps := componentDependenciesForCausalTest()
 	deps.PayloadRegistry = payloadbuiltins.NewTestRegistry(t)
+	// A per-component metrics registry, supplied at construction rather than
+	// assigned after: the shared view's hooks read c.metrics from their own
+	// goroutine, so a later write is a data race (caught by -race). The shared
+	// process-global instance every other nil-registry test uses could not
+	// prove a counter did not move.
+	deps.MetricsRegistry = metric.NewMetricsRegistry()
 	discoverable, err := NewComponent([]byte(`{}`), deps)
 	require.NoError(t, err)
 	c := discoverable.(*Component)
@@ -287,5 +295,51 @@ func TestCommandsThatConsumeNoTargetRunUnderRouteAmbiguity(t *testing.T) {
 
 		require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
 		assert.Contains(t, rec.Body.String(), "multiple current loops match the user/channel route")
+	})
+}
+
+// The route-ambiguity refusal is the one refusal in this component that is
+// neither metered nor logged where it is built, and the two doc comments that
+// used to claim otherwise now say so (commands.go:61-71, component.go:1068-1072).
+//
+// This pins the corrected claim rather than the absence: the refusal reaches
+// the user on the delivery lane and moves no series on the admission gate's
+// counter, because the gate never made it — nothing was named, no record was
+// read, and `activeLoop` has no seam at its site to label. Wiring it into
+// `loop_admission_refusals_total` would turn this test red, which is the point:
+// the comment and the metric cannot drift apart silently. The HTTP lane's own
+// count of the same condition is the second subtest, so the asymmetry the
+// comment describes is observed rather than asserted.
+//
+// spec: agentic-dispatch / Every dispatch durable input settles through its owner
+func TestRouteAmbiguityRefusalIsAnsweredWithoutMeteringTheGate(t *testing.T) {
+	t.Run("the delivery lane answers and the gate counter stays empty", func(t *testing.T) {
+		published := make([]agentic.UserResponse, 0, 1)
+		c, deliver, _, ctx := newInstalledCommandLane(t, &published)
+		seedCurrentLoops(t, c, routeLoop(routeLoopA), routeLoop(routeLoopB))
+		withPersistedLoops(c, nil)
+		require.Zero(t, testutil.CollectAndCount(c.metrics.loopAdmissionRefusals),
+			"the isolated registry must start empty, or the assertion below proves nothing")
+
+		msg := commandDelivery(t, "message-ambiguous-metering", "/cancel")
+		deliver(ctx, msg)
+
+		require.Len(t, published, 1, "the refusal must have happened for the absence below to mean anything")
+		require.Equal(t, int32(1), msg.acks.Load())
+		require.Zero(t, testutil.CollectAndCount(c.metrics.loopAdmissionRefusals),
+			"the admission gate's counter must not grow a series for a refusal the gate never made")
+	})
+
+	t.Run("the HTTP lane counts the same condition as a 409", func(t *testing.T) {
+		// newSeamTestComponent already builds on a per-component registry.
+		c := newAmbiguousHTTPRoute(t)
+
+		rec := httpCommand(t, c, "/status")
+
+		require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+		require.Equal(t, float64(1),
+			testutil.ToFloat64(c.metrics.httpRequestsTotal.WithLabelValues("/message", "POST", "409")),
+			"the HTTP lane meters this refusal through its request counter, which the delivery lane has no analogue of")
+		require.Zero(t, testutil.CollectAndCount(c.metrics.loopAdmissionRefusals))
 	})
 }

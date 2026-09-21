@@ -106,6 +106,17 @@ because this change makes the old one false. No outcome moves in any of the four
 
 ## Declared residuals
 
+- **The route-ambiguity refusal is neither metered nor logged where it is built.** `activeLoop` returns
+  `loop_route_ambiguous` as a bare `&errs.ClassifiedError{…}` (`http_activity.go:334`), and it is the one refusal
+  in this component that misses the "metered and logged exactly once where it was built" rule its two rendering
+  helpers state. It is not an admission-gate refusal: nothing was named, no record was read, no ownership was
+  considered, and the resolver has no seam token at its site — so `loop_admission_refusals_total{seam,reason}`
+  would have to widen its meaning (and its enumerated Help text) to carry it, and a new counter beside it is
+  exactly the addition `proposal.md` § Non-goals refuses. Left uncounted, which is safe because the refusal is
+  never silent: both lanes answer the user, and HTTP additionally counts it through
+  `recordHTTPRequest("/message","POST","409")` (`http.go:212`). What is missing is an operator-visible count on the
+  delivery lane. `TestRouteAmbiguityRefusalIsAnsweredWithoutMeteringTheGate` pins both halves, so the comments and
+  the metric cannot drift apart silently. Whoever gives the resolver a seam should meter it then.
 - **`loopLookupConflict` and `codeLoopOwnerConflict` are unreachable.** `lookupLoop` has exactly three producers
   (`loop_admission.go:324,:326,:328`) and none of them is the conflict outcome, because there is no second source
   left to conflict with. The vocabulary (`loop_admission.go:31,:179,:237-238`), the `/loops/{id}` `"500"` OpenAPI
