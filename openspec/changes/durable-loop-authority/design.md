@@ -57,14 +57,31 @@ so returning `err.Error()` from `POST /message` and `GET /loops` shipped
 `auto_continue` defaults to true here, a dispatch whose view is still warming reaches it on the *default*
 configuration. Internal type and method names are not a client contract; they moved to the log line.
 
-## Why the MODIFIED block reads ahead of `openspec/specs/`
+## What the MODIFIED block restates, and what the L2 merge changed in it
 
-The `## MODIFIED Requirements` block for "Every dispatch durable input settles through its owner" restates **L2's
-delta text** (`openspec/changes/stable-request-identity/specs/agentic-dispatch/spec.md`), not the text currently in
-`openspec/specs/agentic-dispatch/spec.md`. This change archives after #1328, so L2's block is the spec that will be
-current when this one applies; restating main's would silently revert L2's four edits. An archiver reading this
-ahead of L2's merge should expect the two clauses that differ from main — the cancel signal in the PubAck list and
-the response-identity disposition on the invalid-input lane — to already be there.
+The `## MODIFIED Requirements` block for "Every dispatch durable input settles through its owner" restates the
+text now current in `openspec/specs/agentic-dispatch/spec.md`. It used to read ahead of that file — L2 (#1328) had
+not merged, so the block restated L2's then-unmerged delta rather than main's text, because restating main's would
+have silently reverted L2's edits.
+
+L2 merged as `fbd3c173` and archived to `openspec/changes/archive/2026-09-21-stable-request-identity/`, and the
+rebase onto main reconciled the two. L2's later review rounds had moved its own delta after this block was written,
+so two things were folded forward here, both verbatim from the now-current spec:
+
+- the retry rule's **unaccounted-attempt** extension — a failed publish counts as an unaccounted attempt unless the
+  error proves nothing was stored, and that set fails closed;
+- the scenario **"A resolved cancel's signal publish fails without proving refusal"**, which this block did not
+  carry at all. Omitting a scenario is how a MODIFIED block silently deletes one, so it is restated in full.
+
+Its hazard clause is the one place the fold-forward is not verbatim, and deliberately: the archived text explains
+the hazard as the redelivery falling through the now terminal loop onto the user's next live loop, which is exactly
+the reasoning this change replaces one scenario earlier — route-scoped resolution means a terminal loop resolves to
+nothing rather than falling through. Restating it unchanged would have put two contradictory accounts of the same
+mechanism in one requirement, so it reads, like its sibling, that the redelivery resolves afresh against a world
+this delivery had already changed. The outcome — quarantine — is identical in both spellings.
+
+After the reconciliation, `diff` against the baseline requirement shows the preamble prose byte-identical and every
+remaining difference one of the four scenario edits this change owns.
 
 Four of its eight scenarios change. Two of them only replace vocabulary this change deletes — "resolved from the
 tracker" becomes "resolved from durable loop authority", and "tracker and gauge state remain unchanged" becomes the
@@ -126,4 +143,6 @@ deleted by this change — so the change shipped two accounts of its own Quarant
 an implementer reads. § 9.1 of `tasks.md` records the fix. A premise correction that stops at the spec is not a
 correction; the code is where the next reader looks first.
 
-PR #1338 stays based on `claude/gh1328-stable-identity` until L2 merges to main.
+PR #1338 was based on `claude/gh1328-stable-identity` until L2 merged. L2 squash-merged as `fbd3c173`, the
+branch is deleted, and this PR is retargeted to `main` and rebased onto it — everything below L2's old head
+`1bfac84d` is now that squash.

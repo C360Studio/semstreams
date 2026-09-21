@@ -357,13 +357,16 @@ and user-response publication has synchronous JetStream PubAck. The cancel signa
 PubAck rather than as a core publication, so the published fact a classification reads names a durable effect
 rather than a hope. Whether an unacknowledged publication retries or quarantines SHALL be decided by whether its
 redelivery is effect-free, and that decision SHALL be recorded at the call site rather than taken by default. A
-command SHALL NOT be retried when both of two facts hold: this component published a signal during the delivery,
-and its target was resolved rather than named by the message. That
-published fact SHALL be recorded where this component's own publication happens, never inferred from the command
-name or the response text, because a command that published nothing is replayable no matter how its target was
-chosen. The recorder is internal to this component, so a command handler an adopter registers cannot record a
-publication of its own: its failed response after a durable publication retries exactly as it did before this
-change, and exporting the recorder is an addition a later change owns. Terminal events SHALL retain their typed
+command SHALL NOT be retried when its target was resolved rather than named by the message and this component
+either published a signal during that delivery or attempted one whose outcome it cannot account for. A failed
+publish SHALL count as an unaccounted attempt unless the error PROVES nothing was stored — a refusal the client
+returns before the bytes leave the process — and that set SHALL fail closed, so an error it does not recognize is
+unaccounted rather than refused. Both the attempt and the published fact SHALL be recorded where this component's
+own publication happens, never inferred from the command name or the response text, because a command that
+published nothing is replayable no matter how its target was chosen. The recorder is internal to this component,
+so a command handler an adopter registers cannot record a publication of its own: its failed response after a
+durable publication retries exactly as it did before this change, and exporting the recorder is an addition a
+later change owns. Terminal events SHALL retain their typed
 ancestry and deterministic response contract. No void, log-only, or core-NATS publication failure SHALL become ACK.
 
 The `user.message`, `agent.created`, and `agent.approval_pending` subscriptions SHALL invoke their typed business
@@ -410,6 +413,18 @@ family, public state, durable state, or communication path.
   repeating what this delivery did
 - **AND** resolution SHALL be scoped to the exact user and channel route, never widened to the user's other
   channels, so the terminal loop resolves to nothing rather than falling through to a loop the user never named
+
+#### Scenario: A resolved cancel's signal publish fails without proving refusal
+
+- **WHEN** a bare `/cancel` resolves its target from durable loop authority and its signal publish fails with an
+  error that does not prove the broker stored nothing
+- **THEN** the delivery quarantines rather than retrying, because the failure describes what the client
+  experienced and not whether the signal was stored
+- **AND** the hazard is the published one reached through an error: were it retried and the first attempt had
+  stored, the redelivery would resolve afresh against a world this delivery had already changed rather than
+  repeating what this delivery did
+- **AND** the same failure on a target the message named retries, as does a failure the client proves is a refusal
+  it made before publishing, because neither can have changed the world
 
 #### Scenario: A command that resolved a target and published nothing
 

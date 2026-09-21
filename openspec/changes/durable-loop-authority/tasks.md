@@ -497,3 +497,29 @@ re-home commit. Backup ref `refs/backup/gh1329-pre-l2round1-rebase-20260920` = `
       record commits on top of (docs only): `go build ./...` 0; `task lint` 0; `go test -count=1
       ./processor/agentic-loop/ ./processor/agentic-dispatch/ ./agentic/` 0; `openspec validate
       durable-loop-authority --strict` 0; `task openspec:validate` 57/57; `task spec:properties` 270/270
+- [x] 11.18 **Re-based onto `main` — L2 has landed.** PR #1335 squash-merged as `fbd3c173` (`feat(agentic)!:`), #1328
+      closed, `openspec/changes/archive/2026-09-21-stable-request-identity/` on main, and the
+      `claude/gh1328-stable-identity` branch deleted; #1338 was retargeted to `main` before the merge. Backup
+      ref `refs/backup/gh1329-pre-main-rebase-20260921` = `99417cc1`, then `git rebase --onto origin/main
+      1bfac84d` — 34 commits (this change's 33 plus the round-10 rebase record), **no conflict**, no code hunk
+      touched. Every § 8-11 line above that names `origin/claude/gh1328-stable-identity` is kept as written: it
+      records a command that was run against a branch that existed then. **The MODIFIED block needed
+      reconciling, and did not announce itself.** `openspec validate durable-loop-authority --strict` passes
+      both before and after, so the check that caught it was a `diff` of this change's restated requirement
+      against the now-current `openspec/specs/agentic-dispatch/spec.md`. L2's later review rounds had moved its
+      own delta after this block was written, so the block was restating an older L2 text: it was missing the
+      retry rule's unaccounted-attempt extension AND the whole scenario "A resolved cancel's signal publish
+      fails without proving refusal". A MODIFIED block that omits a scenario deletes it. Both are folded
+      forward, the preamble now diffs byte-identical against the baseline, and every remaining difference is one
+      of the four scenario edits this change owns. The one non-verbatim fold is the re-added scenario's hazard
+      clause, which would otherwise have contradicted the route-scoping this change states one scenario earlier;
+      `design.md` § "What the MODIFIED block restates, and what the L2 merge changed in it" is rewritten to
+      record all of it, and its "PR #1338 stays based on …" line is replaced. Gates on the content that ships —
+      the rebased head `60333285` plus this commit's reconciliation, measured in the working tree before it was
+      committed, so the only later change is this record's own markdown: `go build ./...` 0; `task lint` 0;
+      `task test` **155 `ok` / 0 `FAIL`**; `go test -race -count=1 ./agentic/... ./processor/agentic-loop/...
+      ./processor/agentic-dispatch/...` 0; `go vet -tags=integration ./processor/agentic-loop/
+      ./processor/agentic-dispatch/` 0; `openspec validate durable-loop-authority --strict` 0; `task
+      openspec:validate` 56/56 (55 specs plus this change — L2's is archived now and archives are not
+      validated); `task spec:properties` 270/270; `task schema:generate` + `git status --porcelain schemas/
+      specs/` 0, empty; `git diff --check` 0
