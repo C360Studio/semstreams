@@ -73,7 +73,7 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
       KILLED by `TestModelSetupWiresMetadataFailureToAcquiredOwner` — the detector `design.md` § 8 M6 named, and the
       only one of the five components where the design's prediction held without new assertions. The lane declares
       no refusals (nil `onRefused`), so there is nothing to mutate there (#1342).
-- [ ] 2.3 agentic-loop: heartbeat lanes → `Consume`; the settlement shape → `Settle(..., settleRetry, admission,
+- [x] 2.3 agentic-loop: heartbeat lanes → `Consume`; the settlement shape → `Settle(..., settleRetry, admission,
       "loop", settleHandlerFn)`; move `recordDeliveryOwnerFatal` (`:65-72`) into `component.go`; delete
       `runLoopDeliveryWork`. **Settlement guard form (MEDIUM-2, ruled): EARLY RETURN** —
       `result, admitted := deliverylane.Settle(...)` then `if !admitted { return }`, leaving the existing branches
@@ -107,9 +107,21 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
       review (MEDIUM-1): this line previously cited the package doc as already documenting the bool contract; that
       sentence was in `Consume`'s doc only, and is now in `Settle`'s with the consequence named and gated by
       `TestSettleRefusalReturnsAZeroResultWhoseErrIsNonNil`.
-- [ ] 2.5 agentic-governance: `Settle(..., ImmediateDeliveryRetry(), admission, "governance", handler)`; delete
+- [x] 2.5 agentic-governance: `Settle(..., ImmediateDeliveryRetry(), admission, "governance", handler)`; delete
       `delivery_owner.go`, `runGovernanceDeliveryWork` (`component.go:349-361`), the out-of-file `drain` (`:728-733`).
       **Settlement guard form: EARLY RETURN**, as 2.3 (MEDIUM-2).
+      DONE, 1:1 with the design; nothing the design did not say beyond the `admitted` guard 2.4 recorded, which the
+      ruled early-return form supplies. Governance is the only consumer with no `run*DeliveryWork` wrapper to
+      delete — its panic recovery was inline at `component.go:349-361` and is now the package's — and the only one
+      whose observer needed a closure to carry `port.Name` into the reaction. Wiring mutants on the three lanes
+      (one construction serves all three): the `Observe` CALL and `nil onFatal` are BOTH KILLED by
+      `TestGovernanceAllowedPublicationFailureQuarantinesExactOwner` and
+      `TestGovernanceProductionCallbackPanicLatchesFirstFatalAndDrainsExactOwner`. The NEW early-return guard
+      SURVIVED at first, closed the same way loop's was: that panic test now replays a second delivery into the
+      same latched lane and asserts no terminal method and no "Governance delivery did not settle cleanly"; then
+      KILLED. The lanes declare no refusals (nil `onRefused`), so there is nothing to mutate there (#1342).
+      Package-level re-runs against this suite: `m7g` (drop `runWork`'s recover) KILLED; `m8g` (drop `Settle`'s
+      `Admit()` guard) SURVIVED — the same reason it survives loop, recorded in 4.3.
 - [ ] 2.6 Tests — the **45 functions in 23 files** pinned in `inventory.md` § 4, regenerated at `3faca84f` (36/16 at
       the design base; L2/L3 added seven files, six of them under `agentic-loop`): `admission.fatal` length checks
       → `require.False(admission.Admit())` (buffering moves to 1.2);
@@ -117,8 +129,8 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
       `lifecycle_causal_test.go` literals `[]streamConsumerBinding{{handle: h}}` →
       `[]*deliverylane.Binding{deliverylane.NewBinding(h)}`; every string assertion in `design.md` § 8 stays
       byte-identical.
-- [ ] 2.7 `git grep -n 'deliveryLaneAdmission\|newStreamConsumerBinding\|observeDeliveryLane\|consumeAdmittedDelivery\|run[A-Za-z]*DeliveryWork\|streamConsumerBinding\|observerDone' -- processor/agentic-*` returns nothing.
-      PARTIAL: already returns nothing for `processor/agentic-dispatch/` (exit 1); the other four are 2.1-2.3, 2.5.
+- [x] 2.7 `git grep -n 'deliveryLaneAdmission\|newStreamConsumerBinding\|observeDeliveryLane\|consumeAdmittedDelivery\|run[A-Za-z]*DeliveryWork\|streamConsumerBinding\|observerDone' -- processor/agentic-*` returns nothing.
+      DONE: exit 1 (no match) across all five packages with stderr visible.
 - [x] 2.8 M8's production-seam detector, on dispatch:
       `TestLatchedSettlementLaneRefusesTheNextDeliveryWithoutWorkOrSettlement` latches the `user.message` lane
       through the production quarantine path, replays a second delivery into the **same** lane, and asserts

@@ -1,8 +1,10 @@
 package agenticgovernance
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -52,7 +54,7 @@ func TestGovernanceAllowedPublicationFailureQuarantinesExactOwner(t *testing.T) 
 	require.Contains(t, c.Health().LastError, "unknown durable publication state")
 	cancel()
 	for _, binding := range c.consumers {
-		<-binding.observerDone
+		<-binding.Done()
 	}
 }
 
@@ -137,6 +139,20 @@ func TestGovernanceProductionCallbackPanicLatchesFirstFatalAndDrainsExactOwner(t
 	require.Equal(t, 5, health.ErrorCount)
 	require.Contains(t, health.LastError, "governance delivery work panicked")
 
+	// The SAME lane, a second delivery — what a drained handle flushes. Its
+	// latch must refuse it: no work, no terminal method, and no report of a
+	// settlement failure, because nothing was settled. Every other replay in
+	// this file goes into a DIFFERENT port, which has its own latch and so
+	// cannot see this lane's refusal branch at all.
+	logs := &bytes.Buffer{}
+	c.logger = slog.New(slog.NewTextHandler(logs, nil))
+	replay := &governanceSettlementMsg{data: []byte(`{"id":"after-the-latch"}`)}
+	callbacks["task_validation"](ctx, replay)
+	require.Zero(t, replay.acks.Load()+replay.naks.Load()+replay.terms.Load(),
+		"a latched lane attempted a terminal method")
+	require.NotContains(t, logs.String(), "Governance delivery did not settle cleanly",
+		"a refused delivery settled nothing, so it must not be reported as a settlement failure")
+
 	callbacks["request_validation"](ctx, &governanceSettlementMsg{data: []byte(`{"id":"later"}`)})
 	require.Eventually(t, func() bool { return handles["request_validation"].drains.Load() == 1 }, time.Second, time.Millisecond)
 	later := c.Health()
@@ -145,6 +161,6 @@ func TestGovernanceProductionCallbackPanicLatchesFirstFatalAndDrainsExactOwner(t
 
 	cancel()
 	for _, binding := range c.consumers {
-		<-binding.observerDone
+		<-binding.Done()
 	}
 }

@@ -79,6 +79,6 @@ func TestIntegrationGovernanceProductionCallbacksPublishBeforeAck(t *testing.T) 
 	require.NoError(t, sub.Drain(t.Context()))
 	cancel()
 	for _, binding := range c.consumers {
-		<-binding.observerDone
+		<-binding.Done()
 	}
 }
