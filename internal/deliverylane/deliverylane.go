@@ -33,9 +33,13 @@ type Admission struct {
 }
 
 // NewAdmission returns an open latch. onFatal runs synchronously on the first
-// owner-stop result, before that result is buffered for Observe, so health
-// latches before the exact handle drains; nil is allowed and means the owner
-// records nothing. onRefused, when non-nil, declares each delivery the closed
+// owner-stop result — after the lane has closed, before that result is
+// buffered for Observe — so the owner's record is complete by the time the
+// FATAL observer drains that lane's handle. That is the only drain it orders.
+// The owner's own Stop calls Binding.Drain independently of this Admission, so
+// a Stop concurrent with a latching lane may drain while onFatal is still
+// running, and an ordinary Stop drains a lane that never latched at all; nil
+// is allowed and means the owner records nothing. onRefused, when non-nil, declares each delivery the closed
 // latch refuses; nil leaves the refusal undeclared, which is what every lane
 // without a refusal counter does today (#1342 tracks the gap).
 func NewAdmission(
@@ -191,9 +195,12 @@ func NewBinding(handle jetstream.ConsumeContext) *Binding {
 	return &Binding{handle: handle, done: noObserver}
 }
 
-// Drain stops this lane through jetstream.ConsumeContext.Drain, not Stop.
-// Admission latches BEFORE the handle is drained, so every buffered delivery
-// Drain flushes hits closed admission, runs no work, attempts no terminal
+// Drain stops this lane through jetstream.ConsumeContext.Drain, not Stop. It is
+// deliberately unsynchronized with Admission: the owner calls it from Stop,
+// where the lane usually never latched, and nothing here waits on onFatal.
+// On the FATAL path the ordering does hold, because Observe drains only after
+// onFatal has returned and the result has been buffered — so every delivery
+// that drain flushes hits closed admission, runs no work, attempts no terminal
 // method, and stays pending for the reconstructed owner; an already-admitted
 // in-flight delivery can finish and settle instead of being abandoned
 // mid-effect. Repeated calls rejoin the one drain.

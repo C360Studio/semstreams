@@ -531,7 +531,9 @@ func (c *Component) Stop(ctx context.Context) error {
 // recordDeliveryOwnerFatal latches the FIRST loss of delivery ownership into
 // health. It runs synchronously inside the delivery callback as the lane
 // admission's onFatal, before the result is buffered for the observer, so
-// health can never read healthy after the exact handle has drained. Relocated
+// health can never read healthy after the FATAL observer has drained the exact
+// handle. It is not ordered against cleanup's own Drain, which runs
+// independently of this admission. Relocated
 // here from delivery_owner.go when the latch moved to internal/deliverylane;
 // the health semantics, including the error counter, are untouched.
 func (c *Component) recordDeliveryOwnerFatal(result natsclient.DeliveryResult) {

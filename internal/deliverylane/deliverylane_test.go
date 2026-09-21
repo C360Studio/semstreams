@@ -176,8 +176,13 @@ func TestLatchClosesOnFirstOwnerStopAndIgnoresEveryLaterResult(t *testing.T) {
 }
 
 // I3: the owner's health writer completes inside the callback, before the
-// result is buffered, so health cannot read "healthy" after the exact handle
-// has drained.
+// result is buffered — so on the FATAL path health cannot read "healthy" after
+// the handle has drained, because the observer is what drains it and the
+// observer runs after the buffer. This orders nothing against the owner's own
+// Stop, which calls Binding.Drain independently of the Admission; a Stop
+// concurrent with a latching lane may drain while this writer is still running.
+// Nothing here is a synchronization contract for that case, and the assertions
+// below only hold because no Stop competes with them.
 //
 // spec: jetstream-consumer-policy / control loss shuts down through the existing exact owner
 func TestHealthWriterCompletesBeforeTheResultIsBuffered(t *testing.T) {
@@ -201,7 +206,8 @@ func TestHealthWriterCompletesBeforeTheResultIsBuffered(t *testing.T) {
 
 	<-entered
 	require.False(t, admission.Admit(), "the lane closes before the health writer runs")
-	require.Zero(t, handle.drains.Load(), "the handle drained while the health writer was still running")
+	require.Zero(t, handle.drains.Load(),
+		"the OBSERVER drained while the health writer was still running; no owner Stop competes in this test")
 	select {
 	case <-reacted:
 		t.Fatal("the observer reacted before the health writer returned")

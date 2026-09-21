@@ -119,9 +119,13 @@ type Admission struct {
 }
 
 // NewAdmission returns an open latch. onFatal runs synchronously on the first
-// owner-stop result, before that result is buffered for Observe, so health
-// latches before the exact handle drains; nil is allowed and means the owner
-// records nothing. onRefused, when non-nil, declares each delivery the closed
+// owner-stop result — after the lane has closed, before that result is
+// buffered for Observe — so the owner's record is complete by the time the
+// FATAL observer drains that lane's handle. That is the only drain it orders.
+// The owner's own Stop calls Binding.Drain independently of this Admission, so
+// a Stop concurrent with a latching lane may drain while onFatal is still
+// running, and an ordinary Stop drains a lane that never latched at all; nil
+// is allowed and means the owner records nothing. onRefused, when non-nil, declares each delivery the closed
 // latch refuses; nil leaves the refusal undeclared, which is what every lane
 // without a refusal counter does today (#1342 tracks the gap).
 func NewAdmission(
@@ -267,9 +271,12 @@ func NewBinding(handle jetstream.ConsumeContext) *Binding {
 	return &Binding{handle: handle, done: noObserver}
 }
 
-// Drain stops this lane through jetstream.ConsumeContext.Drain, not Stop.
-// Admission latches BEFORE the handle is drained, so every buffered delivery
-// Drain flushes hits closed admission, runs no work, attempts no terminal
+// Drain stops this lane through jetstream.ConsumeContext.Drain, not Stop. It is
+// deliberately unsynchronized with Admission: the owner calls it from Stop,
+// where the lane usually never latched, and nothing here waits on onFatal.
+// On the FATAL path the ordering does hold, because Observe drains only after
+// onFatal has returned and the result has been buffered — so every delivery
+// that drain flushes hits closed admission, runs no work, attempts no terminal
 // method, and stays pending for the reconstructed owner; an already-admitted
 // in-flight delivery can finish and settle instead of being abandoned
 // mid-effect. Repeated calls rejoin the one drain.
@@ -380,7 +387,7 @@ introduce a latch spelling; task 2.7's grep is the check.
 |---|---|---|
 | I1 | After the first result with `OwnerStopRequired()` on a lane, `Admit()` is false forever on that lane. | `jetstream-consumer-policy:602-603` |
 | I2 | Exactly one result reaches the observer per lane: the first fatal; later fatals change neither the buffer nor health. | `:602` ("buffer its first"); L1 `agentic-loop` delta `:77` ("neither overwrites nor recounts") |
-| I3 | `onFatal` completes in the callback before the result is buffered, so health reads the fatal before the handle can drain. | L1 `agentic-loop` delta `:72-76`; `agentic-model` delta `:10-12`; `agentic-dispatch` delta `:22-23`; `agentic-governance` delta `:21-22` |
+| I3 | `onFatal` completes in the callback before the result is buffered, so the owner's record is complete before the FATAL observer drains the handle. It orders nothing against the owner's own Stop, which drains the binding independently. | L1 `agentic-loop` delta `:72-76`; `agentic-model` delta `:10-12`; `agentic-dispatch` delta `:22-23`; `agentic-governance` delta `:21-22` |
 | I4 | `handle.Drain()` is called at most once per binding across `Observe` and Stop, in any order and concurrency. | `:604-605`; L1 `agentic-loop` delta `:69` |
 | I5 | A closed lane performs no work, heartbeat, or terminal method, and reads no payload; the only metadata it reads is the subject, and only when a declarer exists. | `:603`, strengthened by the `**AND**` clause this change adds to the requirement prose |
 | I6 | The observer exits on the owner's context cancellation or after the fatal drain; `Done()` is never nil and closes either way, and is already closed when no observer ran, so Stop can always join it without blocking. | `:605`; `component-lifecycle:11-12` |

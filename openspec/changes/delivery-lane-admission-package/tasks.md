@@ -138,9 +138,13 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
       DONE, and checked two ways rather than by eye. (a) Exactly **23 of 23** pinned files are touched on this
       branch: `git diff --name-only 3faca84f..HEAD -- 'processor/agentic-*/*_test.go' | wc -l` = 23, and the list
       equals the census file set. (b) Every spelling the census pinned is gone, with stderr visible:
-      `git grep -nE 'admission\.(fatal|admit|latch|refuse)\b|\.handle\.Closed' -- 'processor/agentic-*'` exits 1,
-      and so does the seven-symbol sweep in 2.7 — so all 45 pinned references were converted by construction, not
-      by a count that could miscount. Four tests gained assertions beyond the mechanical conversion; each is
+      `git grep -nE 'admission\.(fatal|admit|latch|refuse)|\.handle\.Closed' -- 'processor/agentic-*'` exits 1,
+      **with no `\b`** — this line first recorded the same expression with a trailing `\b`, which `git grep -E`
+      silently matches nothing for, so the `admission.` half of that sweep was vacuous AS RECORDED. Re-run
+      without it on the same tree: still exit 1, and the identical expression on `main` returns 36 hits, so the
+      sweep is demonstrably non-vacuous. The seven-symbol sweep in 2.7 carries no `\b` and was always sound; it
+      also exits 1 — so all 45 pinned references were converted by construction, not by a count that could
+      miscount. Four tests gained assertions beyond the mechanical conversion; each is
       recorded against the mutant that demanded it in 2.1, 2.3, 2.4/2.8 and 2.5, never as a silent addition.
 - [x] 2.7 `git grep -n 'deliveryLaneAdmission\|newStreamConsumerBinding\|observeDeliveryLane\|consumeAdmittedDelivery\|run[A-Za-z]*DeliveryWork\|streamConsumerBinding\|observerDone' -- processor/agentic-*` returns nothing.
       DONE: exit 1 (no match) across all five packages with stderr visible.
@@ -195,8 +199,9 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
       provides, the lifecycle authority it does NOT hold, and the contract test that keeps it the only home. The
       migration doc gains a paragraph that says plainly it is **not exported**, promises no export, and — the part
       an adopter actually needs — names the four properties to hold while building the reaction themselves: the
-      latch closes once and keeps the FIRST owner-stop result; the health/log write completes before the latch is
-      observable; the drain targets the exact acquired handle and no sibling; the handle drains once however many
+      latch closes once and keeps the FIRST owner-stop result; the health/log write completes before that result
+      is buffered for the observer, so it is complete before the FATAL observer drains the handle — and it orders
+      nothing against the owner's own Stop; the drain targets the exact acquired handle and no sibling; the handle drains once however many
       results demand it. Plus the refusal behaviour a closed lane owes. Both kept under the 120-column convention.
 - [x] 4.3 Mutation evidence per `design.md` § 8 (M1-M8), each by `cp` backup + checksum, `[applied]` printed
       between mutating and testing, recorded in the PR body with commands and output. COMPLETE. Every restore was
@@ -309,6 +314,42 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
       This is a `refactor`, not a BREAKING change, so the `docs/contributing/02-e2e-tests.md` § Breaking Changes
       rule is not triggered either. Integration tiers DID run in full, twice (once directly, once inside
       `check:push`), and they are the layer that exercises the real NATS delivery paths this change touches.
+
+- [x] 4.7 **Ordering-claim sweep (owner's Codex round on `dd36b199`, MEDIUM, nonblocking).** The package orders
+      exactly one sequence — close admission -> run `onFatal` -> buffer the result -> observer reaction ->
+      FATAL-OBSERVER drain. It does NOT order health against the owner's own Stop: `Binding.Drain` is called by
+      component cleanup independently of the admission and of `onFatal`, so a Stop concurrent with a latching lane
+      can drain while the health writer is still running, and an ordinary Stop drains a lane that never latched.
+      Five sites claimed the stronger thing. All were written by this change; the runtime is unchanged.
+      Sweep commands (run in the worktree, stderr visible) — the reviewer's, plus a second pass for the class the
+      first could miss:
+      `git grep -n -iE 'before (the|its|that) (exact )?handle|before .*drain|before the latch|latch is observable|health (is|gets) written before|written before' -- internal/deliverylane docs/operations openspec/changes/delivery-lane-admission-package 'processor/agentic-*/component.go' 'processor/agentic-*/*_test.go'`
+      and
+      `git grep -n -iE 'health.{0,90}(drain|observable)|(drain|observable).{0,90}health' -- internal/deliverylane docs openspec/changes/delivery-lane-admission-package 'processor/agentic-*'`.
+      Every hit, with its disposition:
+
+      | Hit | Disposition |
+      |---|---|
+      | `docs/operations/migration-restart-safe-nats-client.md:95` "health is written before the exact handle can drain" | **FIXED** — the write completes before the result is buffered, so before the OBSERVER drains; and the LIMIT is now explicit: it says nothing about the adopter's own Stop |
+      | `internal/deliverylane/deliverylane.go:37` `NewAdmission` "so health latches before the exact handle drains" | **FIXED** — names the fatal observer as the only drain it orders, and names both Stop cases |
+      | `internal/deliverylane/deliverylane.go:195` `Binding.Drain` "Admission latches BEFORE the handle is drained" | **FIXED** — false for an ordinary Stop, where the lane never latched; now says Drain is deliberately unsynchronized with Admission and the ordering holds on the fatal path only |
+      | `design.md:123`, `:271` — verbatim copies of those two comments in § 5 | **FIXED** — kept byte-identical to the package |
+      | `design.md:383` invariant I3 | **FIXED** — same qualification |
+      | `deliverylane_test.go:178-180` the I3 comment | **FIXED** — says why its assertions hold (no Stop competes in this test) instead of implying a general contract |
+      | `deliverylane_test.go:204` assertion message | **FIXED** — names the OBSERVER as what must not have drained |
+      | `tasks.md:198` (4.2) "the health write completes before the latch is observable" | **FIXED** — doubly wrong: `Admit()` is already false while `onFatal` runs, which the test at `:203` asserts |
+      | `processor/agentic-loop/component.go:1021` and `agentic-model/component.go:534` "health can never read healthy after the exact handle has drained" | **FIXED** — qualified to the fatal observer, and says it is not ordered against cleanup's own Drain |
+      | `deliverylane.go:180`, `design.md:256` "a fatal reported before the handle returned stays buffered" | KEPT — true, and about acquisition ordering, not drain ordering |
+      | `design.md:13` "record the fatal into health synchronously, buffer the result, and let an observer drain" | KEPT — the correct sequence, stated correctly |
+      | `design.md:324-325` "must run in the callback before the result is buffered" | KEPT — correct wording |
+      | spec delta `:28` "SHALL run synchronously inside the latch before the result is buffered" | KEPT — the reviewer named this as the correct wording; every other site was made to match it |
+      | `agentic-dispatch/component.go:675`, `agentic-model/component.go:548` `reactDeliveryFatal` "run by the observer before it drains that lane's exact handle" | KEPT — true: this IS the fatal observer |
+      | `agentic-dispatch/terminal_settlement_integration_test.go:506` "by the time the exact handle has drained, health already names THIS lane" | KEPT — true of that test, which observes the fatal path with no competing Stop |
+      | `agentic-tools/delivery_owner_test.go:93`, `:148` "the lane closes before the handle exists" | KEPT — about latching before acquisition |
+      | `inventory.md:475`, `:488`, `:495`; `proposal.md:36`; `tasks.md:41`; `design.md:408`; `agentic-loop/partial_publish_settlement_integration_test.go:59` | KEPT — lists of outcomes or test names, no ordering guarantee |
+      | `docs/operations/migration-beta162-to-beta163.md:769`, `:1283`; `docs/adr/055`, `084`, `094`; two `docs/proposals/*`; `agentic-dispatch/component.go:849`; `agentic-dispatch/terminal_settlement_integration_test.go:154`, `:585`; `agentic-loop/response_handler_failure_test.go:59`, `terminal_failure_record_integration_test.go:17`, `tool_result_handler_failure_test.go:67`, `:227` | KEPT — unrelated subject matter (KV records "written before acknowledged", forwarder drain, handler ordering) |
+
+      No runtime change: `internal/deliverylane/deliverylane.go` differs only in comment lines.
 
 ## Out of scope (recorded, not tasks)
 
