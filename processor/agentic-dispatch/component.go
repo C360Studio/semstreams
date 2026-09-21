@@ -887,7 +887,20 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 		var err error
 		loopID, err = c.activeLoop(ctx, msg)
 		if err != nil {
-			return err
+			// A resolver refusal the user can act on is an ANSWER, not a
+			// retry. `loop_route_ambiguous` (http_activity.go:334) is
+			// errs.ErrorInvalid, so returning it raw put the delivery on
+			// handleUserMessage's Retry arm (:838-842) and the user.message
+			// consumer's MaxDeliver: 3 (:572) exhausted it on a world no
+			// redelivery can change — the user was never told which loop to
+			// name. Only a transient failure, the shared view not caught up,
+			// is worth replaying; everything else is published as the refusal
+			// and settles on ITS PubAck, which is the split handleTaskSubmission
+			// already makes for this same call (:1102-1107).
+			if errs.IsTransient(err) {
+				return err
+			}
+			return c.sendResponse(ctx, commandRefusalResponse(msg, err))
 		}
 		// Resolved by us, not named by the message. L1 recorded this same fact
 		// when the source was the in-process tracker; #1329 moves the source to
