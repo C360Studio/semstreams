@@ -451,7 +451,7 @@ func TestIntegrationProductionCallbackFirstDispositionAfterOwnRecordLoss(t *test
 			require.Empty(t, health.LastError)
 			require.Len(t, c.consumers, 3)
 			select {
-			case <-c.consumers[1].handle.Closed():
+			case <-c.consumers[1].Closed():
 				t.Fatal("missing authority must not quarantine the complete lane")
 			default:
 			}
@@ -495,12 +495,21 @@ func TestIntegrationProductionCallbackUnknownPublishQuarantinesExactLane(t *test
 		t.Fatal("unknown publication result was not observed")
 	}
 	require.Len(t, c.consumers, 3)
-	completeClosed := c.consumers[1].handle.Closed()
+	completeClosed := c.consumers[1].Closed()
 	select {
 	case <-completeClosed:
 	case <-time.After(5 * time.Second):
 		t.Fatal("agent.complete exact handle was not drained")
 	}
+	// The lane's own health writer, wired as this admission's onFatal, ran
+	// synchronously inside the callback before the result was buffered — so by
+	// the time the exact handle has drained, health already names THIS lane.
+	// Asserted here because every other check of that writer calls it directly:
+	// this is the only place the LANE's wiring of it is observable.
+	health := c.Health()
+	require.False(t, health.Healthy)
+	require.Equal(t, "terminal delivery ownership lost", health.Status)
+	require.Contains(t, health.LastError, "agent.complete")
 	stream, err := tc.Client.GetStream(ctx, "QUARANTINE_AGENT")
 	require.NoError(t, err)
 	consumer, err := stream.Consumer(ctx, "agentic-dispatch-agent-complete-quarantine")

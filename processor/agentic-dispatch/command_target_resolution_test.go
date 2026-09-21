@@ -86,9 +86,7 @@ func newInstalledCommandLane(t *testing.T, capture *[]agentic.UserResponse) (
 	t.Cleanup(func() {
 		cancel()
 		for _, binding := range c.consumers {
-			if binding.observerDone != nil {
-				<-binding.observerDone
-			}
+			<-binding.Done()
 		}
 	})
 	deliver, ok := callbacks["user.message"]

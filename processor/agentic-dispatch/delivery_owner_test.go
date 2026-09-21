@@ -13,6 +13,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -70,7 +71,7 @@ func TestDispatchProductionCallbacksDoNotAckFalseDone(t *testing.T) {
 		require.Contains(t, c.Health().LastError, "unknown durable state")
 		cancel()
 		for _, binding := range c.consumers {
-			<-binding.observerDone
+			<-binding.Done()
 		}
 	})
 
@@ -123,7 +124,7 @@ func TestDispatchProductionCallbacksDoNotAckFalseDone(t *testing.T) {
 		}
 		cancel()
 		for _, binding := range c.consumers {
-			<-binding.observerDone
+			<-binding.Done()
 		}
 	})
 }
@@ -150,17 +151,17 @@ func TestTerminalDeliveryFatalBuffersBeforeHandleAndDrainsExactHandleOnce(t *tes
 		logger:                 slog.New(slog.NewTextHandler(io.Discard, nil)),
 		terminalDeliveryDoneFn: func(err error) { observed <- err },
 	}
-	admission := newDeliveryLaneAdmission(c.recordAgentCompleteFatal, nil)
-	admission.latch(result)
-	require.Len(t, admission.fatal, 1)
+	admission := deliverylane.NewAdmission(c.recordAgentCompleteFatal, nil)
+	admission.Latch(result)
+	require.False(t, admission.Admit())
 	health := c.Health()
 	require.False(t, health.Healthy)
 	require.Contains(t, health.LastError, "agent.complete")
 
 	handle := &causalConsumeHandle{closed: make(chan struct{}), closedCalls: make(chan struct{}, 1)}
-	binding := newStreamConsumerBinding(handle)
+	binding := deliverylane.NewBinding(handle)
 	ctx, cancel := context.WithCancel(t.Context())
-	c.observeDeliveryLane(ctx, &binding, admission)
+	deliverylane.Observe(ctx, binding, admission, c.reactDeliveryFatal)
 	select {
 	case err := <-observed:
 		require.Error(t, err)
@@ -168,11 +169,11 @@ func TestTerminalDeliveryFatalBuffersBeforeHandleAndDrainsExactHandleOnce(t *tes
 		t.Fatal("fatal result was not observed")
 	}
 	require.Eventually(t, func() bool { return handle.drains.Load() == 1 }, time.Second, time.Millisecond)
-	binding.drain()
+	binding.Drain()
 	require.Equal(t, int32(1), handle.drains.Load())
-	require.False(t, admission.admit())
+	require.False(t, admission.Admit())
 	cancel()
-	<-binding.observerDone
+	<-binding.Done()
 }
 
 // The two terminal lanes keep their own fatal fields, so a fatal on one does
@@ -190,8 +191,8 @@ func TestTerminalLaneFatalHealthFailsClosedIndependently(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &Component{started: true}
-			admission := newDeliveryLaneAdmission(func(result natsclient.DeliveryResult) { tt.record(c, result) }, nil)
-			admission.latch(result)
+			admission := deliverylane.NewAdmission(func(result natsclient.DeliveryResult) { tt.record(c, result) }, nil)
+			admission.Latch(result)
 			health := c.Health()
 			require.False(t, health.Healthy)
 			require.Equal(t, "terminal delivery ownership lost", health.Status)
@@ -209,9 +210,9 @@ func TestTerminalLaneFatalHealthFailsClosedIndependently(t *testing.T) {
 func TestDeliveryFatalHealthKeepsFirstCauseAcrossLanes(t *testing.T) {
 	result := natsclient.ConsumeDeliveryWithHeartbeat(t.Context(), nil, natsclient.HeartbeatDeliveryPolicy{})
 	c := &Component{started: true}
-	newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal, nil).latch(result)
+	deliverylane.NewAdmission(c.recordDeliveryOwnerFatal, nil).Latch(result)
 	first := c.Health()
-	newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal, nil).latch(result)
+	deliverylane.NewAdmission(c.recordDeliveryOwnerFatal, nil).Latch(result)
 	second := c.Health()
 	require.False(t, first.Healthy)
 	require.Equal(t, "delivery ownership lost", first.Status)
@@ -232,13 +233,13 @@ func TestRefusedTerminalDeliveryIsLoggedAndCounted(t *testing.T) {
 		metrics: getMetrics(metric.NewMetricsRegistry()),
 	}
 	before := testutil.ToFloat64(c.metrics.deliveryRefusals.WithLabelValues("agent.complete"))
-	admission := newDeliveryLaneAdmission(c.recordAgentCompleteFatal, func(subject string) {
+	admission := deliverylane.NewAdmission(c.recordAgentCompleteFatal, func(subject string) {
 		c.recordDeliveryRefused("agent.complete", subject)
 	})
 	fatal := natsclient.ConsumeDeliveryWithHeartbeat(t.Context(), nil, natsclient.HeartbeatDeliveryPolicy{})
-	admission.latch(fatal)
+	admission.Latch(fatal)
 
-	result, admitted := consumeAdmittedDelivery(t.Context(), &refusedDeliveryMsg{}, natsclient.HeartbeatDeliveryPolicy{}, admission)
+	result, admitted := deliverylane.Consume(t.Context(), &refusedDeliveryMsg{}, natsclient.HeartbeatDeliveryPolicy{}, admission)
 
 	require.False(t, admitted)
 	require.Equal(t, natsclient.DeliveryResult{}, result)
@@ -299,9 +300,7 @@ func TestDispatchProductionCallbacksTerminateMalformedNonHeartbeatInputs(t *test
 
 	cancel()
 	for _, binding := range c.consumers {
-		if binding.observerDone != nil {
-			<-binding.observerDone
-		}
+		<-binding.Done()
 	}
 }
 
@@ -527,4 +526,69 @@ func seedCurrentLoops(t *testing.T, c *Component, records ...*agentic.LoopEntity
 	}
 	watcher.updates <- nil
 	require.NoError(t, view.WaitCaughtUp(ctx))
+}
+
+// M8's production-seam detector: the admission guard inside the settlement lane
+// is invisible to every test that replays into a DIFFERENT lane, because each
+// lane has its own latch. This replays a second delivery into the SAME latched
+// lane through the production callback and asserts the two consequences a
+// deleted guard would produce — a terminal method on a lane that lost delivery
+// ownership, and work run for a second time after the owner stopped.
+//
+// spec: agentic-dispatch / Every dispatch durable input settles through its owner
+func TestLatchedSettlementLaneRefusesTheNextDeliveryWithoutWorkOrSettlement(t *testing.T) {
+	deps := componentDependenciesForCausalTest()
+	deps.PayloadRegistry = payloadbuiltins.NewTestRegistry(t)
+	discoverable, err := NewComponent([]byte(`{}`), deps)
+	require.NoError(t, err)
+	c := discoverable.(*Component)
+	c.modelRegistry = newTestRegistry()
+	c.taskEvidence = emptyRetainedTaskEvidenceReader{}
+	withPersistedLoops(c, nil)
+	c.waitForStreamInput = func(context.Context, string) error { return nil }
+	logs := &bytes.Buffer{}
+	c.logger = slog.New(slog.NewTextHandler(logs, nil))
+	responses := 0
+	c.sendResponseFn = func(agentic.UserResponse) { responses++ }
+	callbacks := make(map[string]func(context.Context, jetstream.Msg))
+	handles := make(map[string]*causalConsumeHandle)
+	c.consumeStream = func(_ context.Context, owner natsclient.PortConsumerContext, _ natsclient.StreamConsumerConfig, callback func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
+		handle := &causalConsumeHandle{closed: make(chan struct{}), closedCalls: make(chan struct{}, 1)}
+		callbacks[owner.Port] = callback
+		handles[owner.Port] = handle
+		return handle, nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	require.NoError(t, c.setupSubscriptions(ctx))
+
+	// Unknown durable state quarantines: the lane loses delivery ownership and
+	// latches, settling nothing.
+	fatal := &dispatchSettlementMsg{data: mustMarshalDispatchSettlementPayload(t, &agentic.UserMessage{
+		MessageID: "message-latches-the-lane", ChannelType: "cli", ChannelID: "channel-1", UserID: "user-1",
+		Content: "do the work", Timestamp: time.Now().UTC(),
+	})}
+	callbacks["user.message"](ctx, fatal)
+	require.Zero(t, fatal.acks.Load()+fatal.naks.Load()+fatal.terms.Load())
+	require.Contains(t, c.Health().LastError, "unknown durable state")
+	require.Eventually(t, func() bool { return handles["user.message"].drains.Load() == 1 }, time.Second, time.Millisecond)
+	settledBefore := responses
+
+	// The same lane, a second delivery — exactly what a drained handle flushes.
+	// Admitted, this input answers /help with one response and Acks.
+	replay := &dispatchSettlementMsg{data: mustMarshalDispatchSettlementPayload(t, &agentic.UserMessage{
+		MessageID: "message-after-the-latch", ChannelType: "cli", ChannelID: "channel-1", UserID: "user-1",
+		Content: "/help", Timestamp: time.Now().UTC(),
+	})}
+	callbacks["user.message"](ctx, replay)
+
+	require.Zero(t, replay.acks.Load()+replay.naks.Load()+replay.terms.Load(),
+		"a latched lane attempted a terminal method: the delivery must stay pending for the reconstructed owner")
+	require.Equal(t, settledBefore, responses, "a latched lane ran its work again")
+	require.NotContains(t, logs.String(), "User message delivery did not settle cleanly",
+		"a refused delivery settled nothing, so it must not be reported as a settlement failure")
+
+	cancel()
+	for _, binding := range c.consumers {
+		<-binding.Done()
+	}
 }

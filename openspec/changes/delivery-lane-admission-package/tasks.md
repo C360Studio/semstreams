@@ -62,9 +62,21 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
 - [ ] 2.3 agentic-loop: heartbeat lanes → `Consume`; the settlement shape → `Settle(..., settleRetry, admission,
       "loop", settleHandlerFn)`; move `recordDeliveryOwnerFatal` (`:65-72`) into `component.go`; delete
       `runLoopDeliveryWork`.
-- [ ] 2.4 agentic-dispatch (three lanes at `L3:`): two terminal lanes → `Consume` with the refuse arm; the one
-      settlement lane (`user.message`) → `Settle(..., natsclient.ImmediateDeliveryRetry(), admission, "dispatch",
-      c.handleUserMessage)`; one `reactDeliveryFatal` for all three lanes; delete `runDispatchDeliveryWork`.
+- [x] 2.4 agentic-dispatch (three lanes at `3faca84f`) — FIRST, per the order above: two terminal lanes →
+      `Consume` with the refuse arm; the one settlement lane (`user.message`) →
+      `Settle(..., natsclient.ImmediateDeliveryRetry(), admission, "dispatch", c.handleUserMessage)`; one
+      `reactDeliveryFatal` for all three lanes; `delivery_owner.go` deleted with `runDispatchDeliveryWork`,
+      `streamConsumerBinding` (`component.go`) deleted, `consumers []*deliverylane.Binding`, Stop uses
+      `Drain`/`Closed`/`Done` and drops the `done != nil` guard. Net: −178 lines in `component.go` +
+      `delivery_owner.go`, +11 for `reactDeliveryFatal` and the two-line `Settle` call.
+      **One thing the design did not say** (recorded, and the check every other consumer needs): today's
+      settlement-lane body returns early when admission refuses, so its "did not settle cleanly" log is implicitly
+      guarded. `Settle` returns the ZERO `DeliveryResult` on refusal, and `DeliveryResult.Err()` is NON-NIL for a
+      zero value ("delivery result is incomplete for decision 0"), so the same branch must now read
+      `if admitted && result.Err() != nil && !result.OwnerStopRequired()`. Without the `admitted &&` a refused
+      delivery would be logged as a settlement failure. This is a call-site guard the package already documents
+      ("The bool reports admission, so a caller can guard every branch on it"), not a package change — but loop
+      and governance have the same inline shape and must be checked for it.
 - [ ] 2.5 agentic-governance: `Settle(..., ImmediateDeliveryRetry(), admission, "governance", handler)`; delete
       `delivery_owner.go`, `runGovernanceDeliveryWork` (`component.go:349-361`), the out-of-file `drain` (`:728-733`).
 - [ ] 2.6 Tests — the **45 functions in 23 files** pinned in `inventory.md` § 4, regenerated at `3faca84f` (36/16 at
@@ -75,9 +87,12 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
       `[]*deliverylane.Binding{deliverylane.NewBinding(h)}`; every string assertion in `design.md` § 8 stays
       byte-identical.
 - [ ] 2.7 `git grep -n 'deliveryLaneAdmission\|newStreamConsumerBinding\|observeDeliveryLane\|consumeAdmittedDelivery\|run[A-Za-z]*DeliveryWork\|streamConsumerBinding\|observerDone' -- processor/agentic-*` returns nothing.
-- [ ] 2.8 M8's production-seam detector (~10 lines, governance or dispatch): after a fatal latches a settlement
-      lane, replay a second delivery into the **same** lane and assert `acks+naks+terms == 0` and the work counter
-      unchanged.
+      PARTIAL: already returns nothing for `processor/agentic-dispatch/` (exit 1); the other four are 2.1-2.3, 2.5.
+- [x] 2.8 M8's production-seam detector, on dispatch:
+      `TestLatchedSettlementLaneRefusesTheNextDeliveryWithoutWorkOrSettlement` latches the `user.message` lane
+      through the production quarantine path, replays a second delivery into the **same** lane, and asserts
+      `acks+naks+terms == 0`, the work counter unchanged, and that the refusal is not reported as a settlement
+      failure. Kills M8 (`m8d`) and the `admitted` guard mutant (`md6b`).
 
 ## 3. Guard (severable; drop on reviewer or owner call)
 
@@ -96,7 +111,23 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
       that exact handle"; `docs/operations/migration-restart-safe-nats-client.md:87-88` gains one sentence saying the
       reaction is internal for now and what an adopter builds meanwhile.
 - [ ] 4.3 Mutation evidence per `design.md` § 8 (M1–M8), each by `cp` backup + checksum, `[applied]` printed
-      between mutating and testing, recorded in the PR body with commands and output.
+      between mutating and testing, recorded in the PR body with commands and output. PARTIAL — package and
+      dispatch done; every restore verified by md5 equal to the pre-mutation sum, and `git diff` empty after each.
+      Package (`go test -race -count=1 ./internal/deliverylane/...`): M1 delete `admission.Latch(result)` in
+      `Consume` → KILLED; M2 delete `a.onFatal(result)` in `Latch` → KILLED; M3 delete `binding.Drain()` in
+      `Observe` → KILLED; M4 delete `admission.refuse(msg)` in `Consume` → KILLED; M5 `drainOnce.Do` → bare
+      `handle.Drain()` → KILLED; M7 delete the `recover` block → INVALID MUTANT (build failure: `fmt` becomes
+      unused), re-run as `m7b`, a compiling mutant that also drops the import → KILLED; M8 delete the
+      `admission.Admit()` guard in `Settle` → KILLED.
+      Dispatch, CALL-level (`go test -race -count=1 ./processor/agentic-dispatch/...` unless noted): M6 delete the
+      `deliverylane.Observe(...)` call on the `agent.complete` lane → SURVIVES the untagged suite, KILLED under
+      `-tags=integration` by `TestIntegrationProductionCallbackUnknownPublishQuarantinesExactLane`; delete the
+      `admitted` guard at the `user.message` lane → KILLED by 2.8's test; M8 and M3 re-run against the dispatch
+      suite → both KILLED by dispatch tests.
+      Dispatch, WIRING-level: passing `nil` as the `agent.complete` lane's `onFatal` SURVIVED both suites until
+      this change added three assertions to the existing integration test (health is degraded, status is
+      `terminal delivery ownership lost`, `LastError` names `agent.complete`) — then KILLED. Passing `nil` as that
+      lane's `onRefused` SURVIVES both suites and is NOT fixed here: see the residual in `design.md` § 9c.
 - [ ] 4.4 `task check:push` green; PR body carries `implemented-by: <persona>`; `Closes #1341`.
 - [ ] 4.5 Archive/spec sync is the last content commit.
 

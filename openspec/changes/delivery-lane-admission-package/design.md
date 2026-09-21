@@ -472,6 +472,30 @@ consumers are the five agentic components, and `agentic/agentrun` once #1249 ado
 agentrun as a present consumer. Q2 is RULED amend, so agentrun becomes a consumer, but not until #1249 lands; the
 doc comment states the tense correctly. Nothing else in § 5 changes.
 
+### 9c. What the dispatch conversion needed that the design did not say, and one residual it exposed
+
+1. **The `admitted` guard at a settlement lane.** `design.md` § 5's rewrite table gives dispatch's `user.message`
+   lane as `deliverylane.Settle(...)` and stops there. Today's inline body returns early when admission refuses, so
+   its "User message delivery did not settle cleanly" log is implicitly guarded by that return; `Settle` instead
+   returns the ZERO `DeliveryResult`, whose `Err()` is NON-NIL by construction
+   (`natsclient/delivery_settlement.go`: "delivery result is incomplete for decision 0"). The branch therefore has
+   to become `if admitted && result.Err() != nil && !result.OwnerStopRequired()`. This is the call-site guard the
+   package doc already anticipates ("The bool reports admission, so a caller can guard every branch on it"), not a
+   package change — **but loop and governance carry the same inline settlement shape and must be checked for the
+   same branch before they convert.** A mutation that drops the guard is killed by task 2.8's test.
+
+2. **Residual (recorded, not filed): the refusal-declarer wiring on a terminal lane is not test-sensitive.**
+   Replacing the `agent.complete` lane's `onRefused` closure with `nil` survives BOTH the untagged and the
+   `-tags=integration` dispatch suites. The reason is structural and PRE-DATES this change:
+   `TestRefusedTerminalDeliveryIsLoggedAndCounted` builds its own admission and wires `recordDeliveryRefused` by
+   hand, so it proves the PRIMITIVE; no test asserts that the LANE passes that declarer. The same argument applied
+   to the lane's `onFatal` wiring, and that half is closed here by three assertions added to
+   `TestIntegrationProductionCallbackUnknownPublishQuarantinesExactLane`, which already walks the real lane to a
+   fatal. The `onRefused` half is not closed: killing it needs a second delivery to reach a DRAINED handle over
+   real NATS, which is a timing-shaped test this change will not add. It is #1342's territory — that issue adds a
+   declarer to the five silent lanes, so the class deserves one wiring-level test there rather than five ad-hoc
+   ones here.
+
 ## 10. Residuals recorded, not filed
 
 - R1 → **filed as #1342** (2026-09-19, blocked by #1341): five lanes at `c58c65bd` refuse silently against spec

@@ -12,6 +12,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
@@ -120,7 +121,7 @@ type Component struct {
 	outputPorts []component.Port
 
 	// Track consumers for cleanup
-	consumers []streamConsumerBinding
+	consumers []*deliverylane.Binding
 
 	// Shared AGENT_LOOPS read view (ADR-081): ONE graphview.View serves every
 	// /activity SSE client. Lazily created on the first request — bucket
@@ -157,13 +158,6 @@ type Component struct {
 	waitForStreamInput     func(context.Context, string) error
 	consumeStream          func(context.Context, natsclient.PortConsumerContext, natsclient.StreamConsumerConfig, func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error)
 	waitConsumerClosed     func(context.Context, <-chan struct{}) error
-}
-
-// consumerInfo tracks JetStream consumer details for cleanup
-type streamConsumerBinding struct {
-	handle       jetstream.ConsumeContext
-	drainOnce    *sync.Once
-	observerDone <-chan struct{}
 }
 
 type subscriptionInputBinding struct {
@@ -500,19 +494,16 @@ func (c *Component) Stop(ctx context.Context) error {
 
 func (c *Component) cleanup(ctx context.Context) error {
 	var stopErr error
-	for i := range c.consumers {
-		binding := &c.consumers[i]
-		binding.drain()
-		stopErr = errors.Join(stopErr, c.awaitConsumerClosed(ctx, binding.handle.Closed()))
+	for _, binding := range c.consumers {
+		binding.Drain()
+		stopErr = errors.Join(stopErr, c.awaitConsumerClosed(ctx, binding.Closed()))
 	}
 	c.stopActivityView()
 	if c.cancel != nil {
 		c.cancel()
 	}
-	for i := range c.consumers {
-		if done := c.consumers[i].observerDone; done != nil {
-			<-done
-		}
+	for _, binding := range c.consumers {
+		<-binding.Done()
 	}
 	if err := ctx.Err(); err != nil {
 		stopErr = errors.Join(stopErr, err)
@@ -574,23 +565,22 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		MaxAckPending: bindings.userMessage.consumerConfig.MaxAckPending,
 		AutoCreate:    false,
 	}
-	userMessageAdmission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal, nil)
+	userMessageAdmission := deliverylane.NewAdmission(c.recordDeliveryOwnerFatal, nil)
 	handle, err := c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.userMessage.portName}, userMsgCfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		if !userMessageAdmission.admit() {
-			return
-		}
-		decision, cause := runDispatchDeliveryWork(msgCtx, msg.Data(), c.handleUserMessage)
-		result := natsclient.SettleDelivery(msg, decision, cause)
-		userMessageAdmission.latch(result)
-		if result.Err() != nil && !result.OwnerStopRequired() {
+		result, admitted := deliverylane.Settle(msgCtx, msg, natsclient.ImmediateDeliveryRetry(),
+			userMessageAdmission, "dispatch", c.handleUserMessage)
+		// Guarded on admitted: a refused delivery returns the zero result,
+		// whose Err() is non-nil by construction, and it settled nothing to
+		// report. Today's early return made the same guard implicit.
+		if admitted && result.Err() != nil && !result.OwnerStopRequired() {
 			c.logger.Error("User message delivery did not settle cleanly", slog.Any("error", result.Err()))
 		}
 	})
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupSubscriptions", "subscribe to user.message")
 	}
-	userMessageBinding := newStreamConsumerBinding(handle)
-	c.observeDeliveryLane(ctx, &userMessageBinding, userMessageAdmission)
+	userMessageBinding := deliverylane.NewBinding(handle)
+	deliverylane.Observe(ctx, userMessageBinding, userMessageAdmission, c.reactDeliveryFatal)
 	c.lifecycleMu.Lock()
 	c.consumers = append(c.consumers, userMessageBinding)
 	c.lifecycleMu.Unlock()
@@ -615,11 +605,11 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	if err != nil {
 		return errs.WrapInvalid(err, "Component", "setupSubscriptions", "validate agent.complete delivery policy")
 	}
-	agentCompleteAdmission := newDeliveryLaneAdmission(c.recordAgentCompleteFatal, func(subject string) {
+	agentCompleteAdmission := deliverylane.NewAdmission(c.recordAgentCompleteFatal, func(subject string) {
 		c.recordDeliveryRefused(bindings.agentComplete.portName, subject)
 	})
 	handle, err = c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.agentComplete.portName}, agentCompleteCfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		result, admitted := consumeAdmittedDelivery(msgCtx, msg, agentCompletePolicy, agentCompleteAdmission)
+		result, admitted := deliverylane.Consume(msgCtx, msg, agentCompletePolicy, agentCompleteAdmission)
 		if admitted && !result.OwnerStopRequired() {
 			c.observeTerminalDelivery(result.Err())
 		}
@@ -630,8 +620,8 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupSubscriptions", "subscribe to agent.complete")
 	}
-	agentCompleteBinding := newStreamConsumerBinding(handle)
-	c.observeDeliveryLane(ctx, &agentCompleteBinding, agentCompleteAdmission)
+	agentCompleteBinding := deliverylane.NewBinding(handle)
+	deliverylane.Observe(ctx, agentCompleteBinding, agentCompleteAdmission, c.reactDeliveryFatal)
 	c.lifecycleMu.Lock()
 	c.consumers = append(c.consumers, agentCompleteBinding)
 	c.lifecycleMu.Unlock()
@@ -656,11 +646,11 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	if err != nil {
 		return errs.WrapInvalid(err, "Component", "setupSubscriptions", "validate agent.failed delivery policy")
 	}
-	agentFailedAdmission := newDeliveryLaneAdmission(c.recordAgentFailedFatal, func(subject string) {
+	agentFailedAdmission := deliverylane.NewAdmission(c.recordAgentFailedFatal, func(subject string) {
 		c.recordDeliveryRefused(bindings.agentFailed.portName, subject)
 	})
 	handle, err = c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.agentFailed.portName}, agentFailedCfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		result, admitted := consumeAdmittedDelivery(msgCtx, msg, agentFailedPolicy, agentFailedAdmission)
+		result, admitted := deliverylane.Consume(msgCtx, msg, agentFailedPolicy, agentFailedAdmission)
 		if admitted && !result.OwnerStopRequired() {
 			c.observeTerminalDelivery(result.Err())
 		}
@@ -671,13 +661,22 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupSubscriptions", "subscribe to agent.failed")
 	}
-	agentFailedBinding := newStreamConsumerBinding(handle)
-	c.observeDeliveryLane(ctx, &agentFailedBinding, agentFailedAdmission)
+	agentFailedBinding := deliverylane.NewBinding(handle)
+	deliverylane.Observe(ctx, agentFailedBinding, agentFailedAdmission, c.reactDeliveryFatal)
 	c.lifecycleMu.Lock()
 	c.consumers = append(c.consumers, agentFailedBinding)
 	c.lifecycleMu.Unlock()
 
 	return nil
+}
+
+// reactDeliveryFatal is this component's asynchronous reaction to the first
+// owner-stop result on any of its three lanes, run by the lane observer before
+// it drains that lane's exact handle. The synchronous half — the health latch —
+// already ran inside the callback as the admission's onFatal.
+func (c *Component) reactDeliveryFatal(result natsclient.DeliveryResult) {
+	c.observeTerminalDelivery(result.Err())
+	c.logger.Error("Terminal delivery ownership lost", slog.Any("error", result.Err()))
 }
 
 func (c *Component) observeTerminalDelivery(err error) {
