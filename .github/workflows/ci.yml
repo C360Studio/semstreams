@@ -183,7 +183,7 @@ jobs:
 
       - name: Install task
         run: |
-          sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+          GOBIN=/usr/local/bin go install github.com/go-task/task/v3/cmd/task@v3.53.1
 
       - name: Generate schemas and OpenAPI spec
         run: task schema:generate
@@ -224,7 +224,7 @@ jobs:
 
       - name: Install task
         run: |
-          sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+          GOBIN=/usr/local/bin go install github.com/go-task/task/v3/cmd/task@v3.53.1
 
       # Hermetic and fast: proves the guard's failure modes still fail. This step BLOCKS — a release gate that
       # cannot detect its own broken input is worse than no gate.
