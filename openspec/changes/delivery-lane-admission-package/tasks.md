@@ -1,14 +1,22 @@
 # Tasks — delivery-lane-admission-package (#1341)
 
-Preconditions (not tasks): PR #1338 (L3) squash-merged to `main`; every pin in `inventory.md` re-derived at that
-commit and dispatch's lane count re-measured (`design.md` § 9); pre-owner design review and owner acceptance recorded
-on #1341; Q2 ruling on #1341 (affects only #1249's consumption, not these tasks).
+Preconditions (not tasks): PR #1338 (L3) squash-merged to `main` — it is `3faca84f`; every pin in `inventory.md`
+re-derived at that commit and dispatch's lane count re-measured (`design.md` § 9) — DONE, `inventory.md` re-pin note,
+`scripts/inventory-verify.sh` `pins=272 ok=272 … EXIT=0`; pre-owner design review and owner acceptance recorded on
+#1341; Q2 ruling on #1341 — RULED "amend" 2026-09-19 (`design-docket.md`), so #1249 consumes the package.
+
+Implementation order (coordinator, 2026-09-21): **dispatch is converted FIRST**, not tools, because it is the widest
+copy — the only one with both the refuse arm and a settlement lane, and the only one whose constructor is wider than
+`(onFatal)`. A defect in the package shape surfaces there once instead of five times. The reviewer runs on
+package + dispatch before tools/loop/model/governance are touched. Task numbering below is unchanged; 2.4 runs first.
 
 Per-component gate, used by every 2.x commit: `task lint && go test -race ./processor/agentic-<c>/... && go vet
--tags=integration ./processor/agentic-<c>/...` — the tagged vet is what compiles the four `//go:build integration`
+-tags=integration ./processor/agentic-<c>/...` — the tagged vet is what compiles the **five** `//go:build integration`
 files that reference deleted symbols (dispatch `terminal_settlement_integration_test.go`, governance
-`delivery_settlement_integration_test.go`, loop `delivery_settlement_integration_test.go` and
-`partial_publish_settlement_integration_test.go`); untagged `go test` never builds them.
+`delivery_settlement_integration_test.go`, loop `delivery_settlement_integration_test.go`,
+`partial_publish_settlement_integration_test.go` and `terminal_failure_record_integration_test.go`); untagged
+`go test` never builds them. The fifth was added by L2/L3 after the design round and is re-measured in
+`inventory.md` § 4.
 
 ## 1. Package
 
@@ -34,8 +42,9 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
       c.handleUserMessage)`; one `reactDeliveryFatal` for all three lanes; delete `runDispatchDeliveryWork`.
 - [ ] 2.5 agentic-governance: `Settle(..., ImmediateDeliveryRetry(), admission, "governance", handler)`; delete
       `delivery_owner.go`, `runGovernanceDeliveryWork` (`component.go:349-361`), the out-of-file `drain` (`:728-733`).
-- [ ] 2.6 Tests — the 36 functions in 16 files pinned in `inventory.md` § 4 (regenerate the list at the re-derived
-      base): `admission.fatal` length checks → `require.False(admission.Admit())` (buffering moves to 1.2);
+- [ ] 2.6 Tests — the **45 functions in 23 files** pinned in `inventory.md` § 4, regenerated at `3faca84f` (36/16 at
+      the design base; L2/L3 added seven files, six of them under `agentic-loop`): `admission.fatal` length checks
+      → `require.False(admission.Admit())` (buffering moves to 1.2);
       `binding.observerDone` → `binding.Done()`; `c.consumers[i].handle.Closed()` → `.Closed()`; the five
       `lifecycle_causal_test.go` literals `[]streamConsumerBinding{{handle: h}}` →
       `[]*deliverylane.Binding{deliverylane.NewBinding(h)}`; every string assertion in `design.md` § 8 stays

@@ -430,6 +430,38 @@ is 3, then regenerate every pin in `inventory.md` at that commit (`gen_inventory
 `scripts/inventory-verify.sh` EXIT 0) before the first code commit. Branch `claude/gh1341-delivery-lane-package` in
 its own worktree; draft PR with `Closes #1341` before work.
 
+### 9a. Re-pin executed (round 3, implementation) — base `3faca84f`
+
+The base is `3faca84f`, the squash-merge of PR #1338. Neither `20fe8d09` nor `c58c65bd` is an ancestor of it, so
+every pin in `inventory.md` was re-derived POSITIONALLY (old blob vs new blob, difflib opcodes, then `sed -n
+"${n}p"`), never by text search: 15 pins were textually AMBIGUOUS at the new base, one of them a bare `}` with 245
+hits. `scripts/inventory-verify.sh` → `pins=272 ok=272 moved=0 ambiguous=0 drift=0 malformed=0 unparsed=0`, EXIT=0.
+
+Every premise this design rests on holds, re-measured not assumed: five `delivery_owner.go` files, byte-identical to
+`20fe8d09` and untouched by L3 (`git diff --stat fbd3c173 3faca84f -- 'processor/*/delivery_owner.go'` empty), still
+550 lines; 8 lane constructions (dispatch 3, governance 1, loop 2, model 1, tools 1); 3 refusal declarers. Two
+measurements moved:
+
+- **Dispatch's two deleted lanes** (`agent.created`, `agent.approval_pending`) are gone, exactly as § 9 predicted —
+  eight inventory pins dropped rather than re-pinned. The § 5 rewrite table's `L3:` dispatch lines shift by +8
+  (`:569`→`:577`, `:610`→`:618`, `:651`→`:659`, `:584-585`→`:592-593`, `:625-626`→`:633-634`, `:666-667`→`:674-675`,
+  `:497-498`→`:505-506`, `:505`→`:513`); the shapes are unchanged, so the table is not re-transcribed.
+- **The test census grew** from 36 tests / 16 files / 4 integration-tagged to **45 / 23 / 5**. L2 and L3 added seven
+  files that touch these symbols, six under `agentic-loop`; the fifth integration-tagged file,
+  `processor/agentic-loop/terminal_failure_record_integration_test.go`, was not named in `tasks.md`'s gate line and
+  now is. Task 2.6 grows with it; tasks 1.x and the dispatch conversion do not.
+
+### 9b. Implementation order and the round-2 findings applied in code
+
+Order (coordinator, 2026-09-21): package, then **dispatch first** — the widest copy (refuse arm + settlement lane +
+the only constructor wider than `(onFatal)`) — then a review pass on package + dispatch before tools, loop, model and
+governance follow. `tasks.md` keeps its numbering; 2.4 runs before 2.1.
+
+MEDIUM-A (`design-review-2.md` § 5) is applied to the § 5 text as it lands: the package doc comment says "its
+consumers are the five agentic components, and `agentic/agentrun` once #1249 adopts it" rather than asserting
+agentrun as a present consumer. Q2 is RULED amend, so agentrun becomes a consumer, but not until #1249 lands; the
+doc comment states the tense correctly. Nothing else in § 5 changes.
+
 ## 10. Residuals recorded, not filed
 
 - R1 → **filed as #1342** (2026-09-19, blocked by #1341): five lanes at `c58c65bd` refuse silently against spec
