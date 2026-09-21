@@ -106,10 +106,11 @@ type Component struct {
 
 	// Three fatal fields, not one. The two terminal lanes are latched
 	// per-lane because their health projection names which lane lost
-	// ownership; the three lanes this change brings under settlement share
-	// deliveryFatalErr, which keeps the FIRST cause across them. Collapsing
-	// them would either lose the terminal lane's identity or recount a single
-	// loss as three.
+	// ownership; deliveryFatalErr is the component-wide latch, written for the
+	// three lanes L1 brought under settlement and held now by the one that
+	// survives this change (:724). It keeps the FIRST cause across whatever
+	// shares it. Collapsing them would either lose the terminal lane's
+	// identity or recount a single loss as three.
 	agentCompleteFatal error
 	agentFailedFatal   error
 	deliveryFatalErr   error
@@ -721,7 +722,7 @@ func (c *Component) recordAgentFailedFatal(result natsclient.DeliveryResult) {
 }
 
 // recordDeliveryOwnerFatal is the component-wide latch for the user.message
-// lane, its only caller (:569). It was written for three — the agent.created
+// lane, its only caller (:577). It was written for three — the agent.created
 // and agent.approval_pending lanes were deleted with the in-process loop
 // tracker they fed, and naming them here would send a reader looking for
 // subscriptions that no longer exist. The two terminal lanes keep their own
@@ -896,12 +897,12 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 			// retry. `loop_route_ambiguous` (http_activity.go:334) is
 			// errs.ErrorInvalid, so returning it raw put the delivery on
 			// handleUserMessage's Retry arm (:838-842) and the user.message
-			// consumer's MaxDeliver: 3 (:572) exhausted it on a world no
+			// consumer's MaxDeliver: 3 (:573) exhausted it on a world no
 			// redelivery can change — the user was never told which loop to
 			// name. Only a transient failure, the shared view not caught up,
 			// is worth replaying; everything else is published as the refusal
 			// and settles on ITS PubAck, which is the split handleTaskSubmission
-			// already makes for this same call (:1102-1107).
+			// already makes for this same call (:1110-1115).
 			if errs.IsTransient(err) {
 				return err
 			}
@@ -956,10 +957,10 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 	// delivery may be replayed takes TWO conjuncts, and it needs both:
 	//
 	//  1. this delivery published a signal — recorded at the publish site
-	//     itself (commands.go:193), never inferred from the command name or
+	//     itself (commands.go:195), never inferred from the command name or
 	//     the response text; and
 	//  2. its target was resolved here rather than named by the message
-	//     (:882-897).
+	//     (:888-916).
 	//
 	// With both, the replay is unsound: the message does not carry the identity
 	// the first delivery acted on, so a redelivery cannot repeat what this
@@ -979,7 +980,7 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 	//
 	//   - `/cancel <loop_id>`: the gate re-reads THAT loop, finds it terminal
 	//     once the cancel took effect, and answers "already settled" without
-	//     publishing anything (commands.go:142-152); a signal that races the
+	//     publishing anything (commands.go:144-154); a signal that races the
 	//     loop's own settlement is dropped effect-free by the loop's cancel
 	//     owner.
 	//   - `/help`, `/loops`, a bare `/status`, and the three arms of bare
@@ -1165,7 +1166,7 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		Content:     fmt.Sprintf("Task submitted. Loop: %s", loopID),
 		Timestamp:   time.Now(),
 	}); err != nil {
-		// The task already has its PubAck (:1112), so the delivery that carried
+		// The task already has its PubAck (:1150), so the delivery that carried
 		// this submission can no longer be replayed free of effect. Two of the
 		// three effects #1328 named here are gone: identity, because a
 		// redelivery reads its own committed task back through

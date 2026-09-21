@@ -510,7 +510,8 @@ re-home commit. Backup ref `refs/backup/gh1329-pre-l2round1-rebase-20260920` = `
       own delta after this block was written, so the block was restating an older L2 text: it was missing the
       retry rule's unaccounted-attempt extension AND the whole scenario "A resolved cancel's signal publish
       fails without proving refusal". A MODIFIED block that omits a scenario deletes it. Both are folded
-      forward, the preamble now diffs byte-identical against the baseline, and every remaining difference is one
+      forward, the preamble diffed byte-identical against the baseline at this commit — § 12.4 narrows it
+      deliberately, because it names two inputs this change deletes — and every remaining difference is one
       of the four scenario edits this change owns. The one non-verbatim fold is the re-added scenario's hazard
       clause, which would otherwise have contradicted the route-scoping this change states one scenario earlier;
       `design.md` § "What the MODIFIED block restates, and what the L2 merge changed in it" is rewritten to

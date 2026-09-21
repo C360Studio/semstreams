@@ -28,7 +28,6 @@ func mustDefaultLoopsBucket() string {
 }
 
 // spec: agentic-dispatch / The shared view separates current authority from activity
-// spec: agentic-dispatch / The shared loop view classifies the mixed bucket
 func TestLoopProjectionClassifiesCurrentAuthority(t *testing.T) {
 	c := terminalTestComponent(t)
 	valid := agentic.LoopEntity{ID: admissionLoopA, State: agentic.LoopStateExecuting, MaxIterations: 20}

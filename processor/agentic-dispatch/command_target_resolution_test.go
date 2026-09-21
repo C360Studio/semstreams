@@ -111,7 +111,7 @@ func requireLaneIntact(t *testing.T, c *Component, handles map[string]*causalCon
 //
 // `loop_route_ambiguous` is `errs.ErrorInvalid` — nontransient — and returning
 // it raw put the delivery on handleUserMessage's Retry arm. The user.message
-// consumer runs `MaxDeliver: 3` (component.go:572), so a bare `/cancel` on an
+// consumer runs `MaxDeliver: 3` (component.go:573), so a bare `/cancel` on an
 // ambiguous route was redelivered three times and dropped, and the user was
 // told nothing at all. The redeliveries cannot help: the world they re-read is
 // the same ambiguous one.

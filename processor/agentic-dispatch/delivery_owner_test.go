@@ -73,9 +73,9 @@ func TestDispatchProductionCallbacksDoNotAckFalseDone(t *testing.T) {
 		}
 	})
 
-	// The response-PubAck gate (component.go:1284 -> Ack :910) had no observer:
+	// The response-PubAck gate (component.go:1227 -> Ack :844) had no observer:
 	// the sendResponseFn seam short-circuits sendResponse before PublishToStream
-	// (:1270-1273), so a test using it cannot see the publish at all. The
+	// (:1213-1215), so a test using it cannot see the publish at all. The
 	// unknown-command path reaches the production sendResponse with the user
 	// response as its ONLY required publication, which isolates that gate: if
 	// the publish fails and the callback still Acks, the user was told nothing
@@ -102,7 +102,7 @@ func TestDispatchProductionCallbacksDoNotAckFalseDone(t *testing.T) {
 		require.NoError(t, c.setupSubscriptions(ctx))
 
 		// An unrecognised command: handleCommand answers it with a typed error
-		// response (component.go:916-926) and publishes nothing else, so the
+		// response (component.go:855-863) and publishes nothing else, so the
 		// failing publish below is the user response and only the user response.
 		msg := &dispatchSettlementMsg{data: mustMarshalDispatchSettlementPayload(t, &agentic.UserMessage{
 			MessageID: "message-response-publish-fails", ChannelType: "cli", ChannelID: "channel-1", UserID: "user-1",
@@ -200,8 +200,11 @@ func TestTerminalLaneFatalHealthFailsClosedIndependently(t *testing.T) {
 	}
 }
 
-// The three lanes this change brings under settlement share one latch, and it
-// keeps the FIRST cause: a later fatal neither overwrites nor recounts it.
+// The component-wide latch keeps the FIRST cause: a later fatal neither
+// overwrites nor recounts it. It was written for the three lanes L1 brought
+// under settlement and #1329 deletes two of them, so the rule pinned here is
+// the one that outlives how many lanes share it — which is why this drives the
+// latch directly rather than through a lane.
 func TestDeliveryFatalHealthKeepsFirstCauseAcrossLanes(t *testing.T) {
 	result := natsclient.ConsumeDeliveryWithHeartbeat(t.Context(), nil, natsclient.HeartbeatDeliveryPolicy{})
 	c := &Component{started: true}
@@ -321,7 +324,7 @@ var _ component.Discoverable = (*Component)(nil)
 //
 // The predicate is now two conjuncts, and this test holds the half that must
 // NOT quarantine. The published fact comes from the publish site itself
-// (commands.go:193), so these cases are distinguished by what they did rather
+// (commands.go:195), so these cases are distinguished by what they did rather
 // than by what they were called.
 //
 // spec: agentic-dispatch / Every dispatch durable input settles through its owner
@@ -429,7 +432,7 @@ func TestEffectFreeCommandWithFailedResponseRetries(t *testing.T) {
 		defer cancel()
 		// Current in the shared projection, settled in the exact record: the
 		// gate reads the record and answers "already settled", so
-		// handleCancelCommand returns BEFORE the publish at commands.go:187.
+		// handleCancelCommand returns BEFORE the publish at commands.go:189.
 		// The two reads are the view and the exact Get — under #1329 that skew
 		// is the projection lagging its own bucket, not a second source of
 		// truth, and it is what lets this case resolve a target and still

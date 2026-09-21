@@ -169,7 +169,7 @@ func (c *Component) handleCancelCommand(ctx context.Context, msg agentic.UserMes
 
 	// The BaseMessage envelope is REQUIRED, not decorative: the loop's signal
 	// handler decodes wire bytes through the payload registry
-	// (processor/agentic-loop/component.go:2083) and a bare payload fails at the
+	// (processor/agentic-loop/component.go:2533) and a bare payload fails at the
 	// wire-format unmarshal, so this lane published cancels the loop never saw.
 	signalData, err := json.Marshal(message.NewBaseMessage(signal.Schema(), signal, "agentic-dispatch"))
 	if err != nil {

@@ -34,14 +34,15 @@ temporarily unreadable route evidence SHALL not be treated as routeless.
 ### Requirement: Dispatch uses one authority-backed current-state projection
 
 Dispatch SHALL use one caught-up graph view over `AGENT_LOOPS` for `/activity`, `/loops`, `/debug/state`, and
-AutoContinue. `LoopTracker` and pending-approval process caches SHALL NOT exist. `/loops` and `/debug/state` SHALL
-preserve the existing immutable `LoopInfo` JSON schema, including `execution_id` on the existing nested
-`PendingApprovalInfo`, which SHALL come from observed pending authority. The existing optional
-`context_request_id` field SHALL remain empty in the authority-backed projection, as accepted by the edge-gateway
-design; no historical notification lookup SHALL reconstruct it. All other unrelated DTO fields and projection
-contracts SHALL remain unchanged.
-`/debug/state` SHALL expose the view's caught-up readiness
-and current poison diagnostics rather than reporting a false empty state.
+AutoContinue. AutoContinue SHALL resolve a target only for a command that declares it consumes one, so a command
+that reads no loop — `/loops`, `/help` — inherits neither the view's readiness nor its route ambiguity.
+`LoopTracker` and pending-approval process caches SHALL NOT exist. `/loops` and `/debug/state` SHALL preserve the
+existing immutable `LoopInfo` JSON schema, including `execution_id` on the existing nested `PendingApprovalInfo`,
+which SHALL come from observed pending authority. The existing optional `context_request_id` field SHALL remain
+empty in the authority-backed projection, as accepted by the edge-gateway design; no historical notification lookup
+SHALL reconstruct it. All other unrelated DTO fields and projection contracts SHALL remain unchanged.
+`/debug/state` SHALL expose the view's caught-up readiness and current poison diagnostics rather than reporting a
+false empty state.
 
 Explicit LoopID approval, read, continuation, cancellation, terminal-route, and command-owner operations SHALL
 exact-read and validate `AGENT_LOOPS/<LoopID>`. A partial, stale, watcher-lost, or relevant-poisoned projection SHALL
@@ -142,6 +143,13 @@ method names; the wrapped detail belongs in the log line correlated by request i
 - **WHEN** AutoContinue resolves the message
 - **THEN** dispatch refuses with typed ambiguity
 - **AND** does not guess
+
+#### Scenario: A command that consumes no target runs while resolution would refuse
+
+- **GIVEN** a route whose current loops are ambiguous, or a view that is not caught up
+- **WHEN** a command that declares no target arrives on either command lane
+- **THEN** it runs and answers, so `/loops` still lists the loops whose ambiguity refuses the others
+- **AND** a command that does declare a target still refuses
 
 ### Requirement: Loop existence and ownership come from durable authority alone
 
@@ -280,38 +288,6 @@ terminal records and registered ordinary-terminal envelopes SHALL retain their c
 - **AND** no result or current-loop state is fabricated
 - **AND** current-loop authority remains available if its own records and watcher are healthy
 
-### Requirement: The shared loop view classifies the mixed bucket
-
-Bare canonical LoopID keys SHALL validate as `LoopEntity` with key/ID equality. `COMPLETE_<canonical LoopID>` SHALL
-validate by completion family and remain activity-only. Known research namespaces SHALL be ignored as non-loop
-records. Every other key SHALL poison as malformed would-be loop state.
-
-A typed terminal payload's LoopID SHALL equal the suffix. A registered `SearchResult` has no payload LoopID; the
-suffix supplies its activity identity. Its aggregate `TokensUsed` SHALL NOT populate directional Loop token fields.
-
-Current-loop and unknown-key poison SHALL disable AutoContinue and authoritative listing until a greater-revision
-clean write or tombstone heals it.
-
-#### Scenario: SearchResult completion is projected
-
-- **GIVEN** a valid registered `SearchResult` at `COMPLETE_<canonical LoopID>`
-- **WHEN** the view decodes it
-- **THEN** the suffix supplies LoopID
-- **AND** synthesis, success, complete state, and iterations project through the existing Loop activity shape
-- **AND** TokensIn and TokensOut remain zero
-
-#### Scenario: Research intermediate record is present
-
-- **WHEN** a known research namespace is observed
-- **THEN** it is excluded without becoming loop poison
-
-#### Scenario: Malformed would-be loop heals
-
-- **GIVEN** an unknown or malformed current-loop key has poisoned the view
-- **WHEN** a greater-revision clean value or tombstone lands
-- **THEN** the poison clears
-- **AND** readiness may return after that revision is applied
-
 ## REMOVED Requirements
 
 ### Requirement: Loop existence and ownership are merged facts, never process memory alone
@@ -347,10 +323,11 @@ write the record before the loop is continuable. Adopter-facing consequences are
 
 ### Requirement: Every dispatch durable input settles through its owner
 
-Dispatch SHALL classify `user.message`, `agent.created`, `agent.approval_pending`, `agent.complete`, and
-`agent.failed` through their binding owner, and SHALL NOT settle any of them before its durable effect has
-committed. Business handlers SHALL receive only an immutable owner-supplied work view and SHALL return a typed
-semantic outcome. Native message and settlement methods SHALL NOT escape the owner.
+Dispatch SHALL classify `user.message`, `agent.complete`, and `agent.failed` through their binding owner, and SHALL
+NOT settle any of them before its durable effect has committed. `agent.created` and `agent.approval_pending` leave
+this list because this change deletes their subscriptions and handlers, and there is no owner to settle an input
+this component no longer consumes. Business handlers SHALL receive only an immutable owner-supplied work view and
+SHALL return a typed semantic outcome. Native message and settlement methods SHALL NOT escape the owner.
 
 A `UserMessage` SHALL not be positively acknowledged until every required task, cancel signal, approval response,
 and user-response publication has synchronous JetStream PubAck. The cancel signal SHALL travel its stream with
@@ -358,7 +335,10 @@ PubAck rather than as a core publication, so the published fact a classification
 rather than a hope. Whether an unacknowledged publication retries or quarantines SHALL be decided by whether its
 redelivery is effect-free, and that decision SHALL be recorded at the call site rather than taken by default. A
 command SHALL NOT be retried when its target was resolved rather than named by the message and this component
-either published a signal during that delivery or attempted one whose outcome it cannot account for. A failed
+either published a signal during that delivery or attempted one whose outcome it cannot account for. A refusal
+raised while RESOLVING that target SHALL be published to the user and settled on that publication unless it is
+transient: a redelivery re-reads the same authority and cannot change a nontransient answer, so retrying one spends
+the source's redelivery budget and tells the user nothing. A failed
 publish SHALL count as an unaccounted attempt unless the error PROVES nothing was stored — a refusal the client
 returns before the bytes leave the process — and that set SHALL fail closed, so an error it does not recognize is
 unaccounted rather than refused. Both the attempt and the published fact SHALL be recorded where this component's
@@ -369,20 +349,20 @@ durable publication retries exactly as it did before this change, and exporting 
 later change owns. Terminal events SHALL retain their typed
 ancestry and deterministic response contract. No void, log-only, or core-NATS publication failure SHALL become ACK.
 
-The `user.message`, `agent.created`, and `agent.approval_pending` subscriptions SHALL invoke their typed business
-handlers using the callback installed by each production setup branch. All delivery-derived work SHALL join before
-the private callback passes its decision and cause to `natsclient.SettleDelivery`. JetStream consumer configuration
-owns AckWait and redelivery; dispatch SHALL NOT derive a universal work deadline from AckWait. An operation MAY use
-an ordinary business timeout.
+The `user.message` subscription SHALL invoke its typed business handler using the callback installed by its
+production setup branch. All delivery-derived work SHALL join before the private callback passes its decision and
+cause to `natsclient.SettleDelivery`. JetStream consumer configuration owns AckWait and redelivery; dispatch SHALL
+NOT derive a universal work deadline from AckWait. An operation MAY use an ordinary business timeout.
 
 The first owner-fatal result in an owner family SHALL synchronously latch before the exact handle is drained, and
 later fatal results in that family SHALL neither overwrite nor recount it. Existing Health SHALL report
-`Healthy=false`. The three lanes this change brings under settlement share one latch whose status is
-`delivery ownership lost`; the two terminal lanes keep the separate latches they already had, so their loss alone
-keeps the narrower `terminal delivery ownership lost` status — it is the whole truth only while no other lane has
-lost ownership. `LastError` SHALL carry every latched cause and the error count SHALL be the number of owner
-families that lost ownership, so per-family aggregation is preserved rather than replaced. This adds no metric
-family, public state, durable state, or communication path.
+`Healthy=false`. The `user.message` lane latches under the component-wide status `delivery ownership lost` — the
+one latch the three lanes brought under settlement shared before this change retired two of them, and it stays
+shared for whatever lane joins it next; the two terminal lanes keep the separate latches they already had, so their
+loss alone keeps the narrower `terminal delivery ownership lost` status — it is the whole truth only while no other
+lane has lost ownership. `LastError` SHALL carry every latched cause and the error count SHALL be the number of
+owner families that lost ownership, so per-family aggregation is preserved rather than replaced. This adds no
+metric family, public state, durable state, or communication path.
 
 #### Scenario: Task publication succeeds but user response fails
 
@@ -433,6 +413,13 @@ family, public state, durable state, or communication path.
   receive PubAck
 - **THEN** the delivery retries, because a command that did nothing can be replayed whatever its target was
 - **AND** the lane is not latched, so later user messages are still admitted
+
+#### Scenario: A command's target cannot be resolved
+
+- **WHEN** a command that consumes a target names none and durable loop authority refuses nontransiently, as it
+  does for a route matching more than one current loop
+- **THEN** that refusal is published to the user and the delivery settles only on its PubAck
+- **AND** a transient resolution failure retries instead, publishing nothing, because a redelivery is what answers it
 
 #### Scenario: Invalid user input receives its negative consequence
 

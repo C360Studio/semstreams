@@ -80,8 +80,15 @@ nothing rather than falling through. Restating it unchanged would have put two c
 mechanism in one requirement, so it reads, like its sibling, that the redelivery resolves afresh against a world
 this delivery had already changed. The outcome — quarantine — is identical in both spellings.
 
-After the reconciliation, `diff` against the baseline requirement shows the preamble prose byte-identical and every
-remaining difference one of the four scenario edits this change owns.
+After the reconciliation, `diff` against the baseline requirement showed the preamble prose byte-identical and
+every remaining difference one of the four scenario edits this change owns. **Review round 1 withdrew the
+byte-identical rule for the preamble** (tasks § 12.4). The rule is right for text this change does not own, but
+the preamble NAMES this component's durable inputs, and two of them — `agent.created` and `agent.approval_pending`
+— are subscriptions and handlers this change deletes. Restating an obligation to classify and subscribe to an
+input dispatch no longer consumes would promote it as current truth at archive, contradicting the edge-gateway
+requirement one block above. So the preamble is owned here as well, narrowed to the surviving lanes with every
+surviving guarantee restated word for word, and the scenario list grows by the one scenario round 1's resolver fix
+earns.
 
 Four of its eight scenarios change. Two of them only replace vocabulary this change deletes — "resolved from the
 tracker" becomes "resolved from durable loop authority", and "tracker and gauge state remain unchanged" becomes the

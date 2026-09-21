@@ -138,7 +138,7 @@ func TestIntegrationPublishedTaskWithFailedResponseQuarantines(t *testing.T) {
 
 // The command lane's post-effect response failure is the counterpart decision
 // to the task lane's, and it goes the other way. `/cancel` publishes its signal
-// at commands.go:187 and then builds its success response, so a failed response
+// at commands.go:189 and then builds its success response, so a failed response
 // publication is also a failure after an effect — but its redelivery is
 // effect-free, and the user has been told nothing, so Retry is what actually
 // delivers their answer.
