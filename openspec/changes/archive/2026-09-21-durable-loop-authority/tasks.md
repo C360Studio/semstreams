@@ -108,7 +108,7 @@
       `verify-durable-tool-replay` (44.652s) and `walk-approval-path` (`approval_listing_matched:2`). The tier is
       required for a BREAKING commit, so a run on the head that ships is owed and is recorded in § 13's gates
       line, not here: a tick that says "final head" cannot stay true across a rebase
-- [ ] 5.4 Implementation review resolved; stack rebased onto the reviewed L1 head; archive as the final content commit
+- [x] 5.4 Implementation review resolved; stack rebased onto the reviewed L1 head; archive as the final content commit
 
 ## 7. Rebase onto the reviewed L2 head (`7eaff212`)
 
