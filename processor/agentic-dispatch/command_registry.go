@@ -24,8 +24,11 @@ type CommandConfig struct {
 	// message names none. A command that leaves it false is never given a
 	// resolved target, and therefore never fails for a loop it does not read:
 	// `/loops` and `/help` take no loop_id and used to refuse on a route whose
-	// current loops are ambiguous — disabling the listing a user needs to name
-	// one — or while the shared view was still warming.
+	// current loops are ambiguous, which disabled the listing a user needs to
+	// name one. Route ambiguity is the whole of what this removes. A command
+	// whose OWN handler reads the view still depends on it: `/loops` refuses a
+	// view that is not caught up exactly as before, and only `/help`, which
+	// reads no loop state, answers through that condition.
 	//
 	// This is not RequireLoop, which refuses a command that ends up with no
 	// target at all. All four built-ins declare that false because a bare

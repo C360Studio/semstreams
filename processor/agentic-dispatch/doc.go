@@ -54,8 +54,9 @@
 //	}
 //
 // A command that acts on one loop declares CommandConfig.ResolvesActiveLoop, and
-// only then is it handed a loopID the message did not name. A command that reads
-// no loop leaves it false and is never blocked by loop state it does not use.
+// only then is it handed a loopID the message did not name. A command that leaves
+// it false is never refused by the resolver — it is still subject to whatever its
+// own handler reads.
 //
 // The CommandContext provides access to dispatch services:
 //

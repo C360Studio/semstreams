@@ -34,8 +34,10 @@ temporarily unreadable route evidence SHALL not be treated as routeless.
 ### Requirement: Dispatch uses one authority-backed current-state projection
 
 Dispatch SHALL use one caught-up graph view over `AGENT_LOOPS` for `/activity`, `/loops`, `/debug/state`, and
-AutoContinue. AutoContinue SHALL resolve a target only for a command that declares it consumes one, so a command
-that reads no loop — `/loops`, `/help` — inherits neither the view's readiness nor its route ambiguity.
+AutoContinue. For a command, AutoContinue SHALL resolve a target only when the command declares it consumes one,
+so a command that declares none — `/loops`, `/help` — does not inherit the route ambiguity that refuses
+resolution. It inherits the view's readiness only where its own handler reads the view: `/loops` does and keeps
+refusing one that is not caught up, `/help` reads no loop state and answers regardless.
 `LoopTracker` and pending-approval process caches SHALL NOT exist. `/loops` and `/debug/state` SHALL preserve the
 existing immutable `LoopInfo` JSON schema, including `execution_id` on the existing nested `PendingApprovalInfo`,
 which SHALL come from observed pending authority. The existing optional `context_request_id` field SHALL remain
@@ -146,10 +148,12 @@ method names; the wrapped detail belongs in the log line correlated by request i
 
 #### Scenario: A command that consumes no target runs while resolution would refuse
 
-- **GIVEN** a route whose current loops are ambiguous, or a view that is not caught up
+- **GIVEN** a route whose current loops are ambiguous
 - **WHEN** a command that declares no target arrives on either command lane
 - **THEN** it runs and answers, so `/loops` still lists the loops whose ambiguity refuses the others
 - **AND** a command that does declare a target still refuses
+- **AND** readiness is not in scope of the declaration: `/help`, whose handler reads no loop state, answers while
+  the view is not caught up, and `/loops`, whose handler reads the view, still refuses one that is not
 
 ### Requirement: Loop existence and ownership come from durable authority alone
 
@@ -336,9 +340,9 @@ rather than a hope. Whether an unacknowledged publication retries or quarantines
 redelivery is effect-free, and that decision SHALL be recorded at the call site rather than taken by default. A
 command SHALL NOT be retried when its target was resolved rather than named by the message and this component
 either published a signal during that delivery or attempted one whose outcome it cannot account for. A refusal
-raised while RESOLVING that target SHALL be published to the user and settled on that publication unless it is
-transient: a redelivery re-reads the same authority and cannot change a nontransient answer, so retrying one spends
-the source's redelivery budget and tells the user nothing. A failed
+raised while RESOLVING a command's target SHALL be published to the user and settled on that publication unless it
+is transient: a redelivery re-reads the same authority and cannot change a nontransient answer, so retrying one
+spends the source's redelivery budget and tells the user nothing. A failed
 publish SHALL count as an unaccounted attempt unless the error PROVES nothing was stored — a refusal the client
 returns before the bytes leave the process — and that set SHALL fail closed, so an error it does not recognize is
 unaccounted rather than refused. Both the attempt and the published fact SHALL be recorded where this component's
@@ -416,8 +420,8 @@ metric family, public state, durable state, or communication path.
 
 #### Scenario: A command's target cannot be resolved
 
-- **WHEN** a command that consumes a target names none and durable loop authority refuses nontransiently, as it
-  does for a route matching more than one current loop
+- **WHEN** a command that consumes a target arrives on the user-message stream naming none, and durable loop
+  authority refuses nontransiently, as it does for a route matching more than one current loop
 - **THEN** that refusal is published to the user and the delivery settles only on its PubAck
 - **AND** a transient resolution failure retries instead, publishing nothing, because a redelivery is what answers it
 

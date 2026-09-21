@@ -1625,11 +1625,14 @@ service.
   Custom commands replace `CommandContext.LoopTracker` with `LookupLoopOwner(ctx, loopID)`, returning only LoopID
   and UserID. Invalid IDs, confirmed absence, missing owner, invalid records, and unavailable storage remain
   distinct classified errors. Do not turn an unavailable lookup into permission or absence.
-- `CommandConfig` gains `resolves_active_loop`, and it defaults to false. A custom command that acts on one loop
-  and expects auto-continue to supply it when the message names none must set it; without it the handler is called
-  with an empty `loopID`, exactly as it already is when `auto_continue` is off. The built-in `/cancel` and `/status`
-  set it; `/loops` and `/help` do not, and consequently keep answering on a route whose current loops are ambiguous
-  and while the shared view is still warming.
+- `CommandConfig` gains the field `ResolvesActiveLoop`, and it defaults to false. A custom command that acts on
+  one loop and expects auto-continue to supply it when the message names none must set it — in Go, on the struct it
+  registers; the `resolves_active_loop` JSON tag matches its four siblings but nothing unmarshals this struct
+  today. Without it the handler is called with an empty `loopID`, exactly as it already is when `auto_continue` is
+  off. The built-in `/cancel` and `/status` set it; `/loops` and `/help` do not, and consequently keep answering on
+  a route whose current loops are ambiguous. That is the only dependency the flag removes: `/help` also answers
+  while the shared view is still warming, because its handler reads no loop state, while `/loops` reads the view
+  itself and keeps the 503 described below.
 - Remove `agent.created` and `agent.approval_pending` from dispatch input-port overrides. Retain its declared
   `agent_loops` KV read port and the admitted user-message and terminal inputs. Do not remove the loop outputs or
   unrelated external subscribers.
