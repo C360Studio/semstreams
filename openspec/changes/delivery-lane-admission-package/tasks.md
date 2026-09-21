@@ -57,9 +57,16 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
 
 ## 2. Call sites (one commit per component; each green under the per-component gate above)
 
-- [ ] 2.1 agentic-tools: replace the four calls; `recordDeliveryOwnerFatal` stays; reaction closure captures the
+- [x] 2.1 agentic-tools: replace the four calls; `recordDeliveryOwnerFatal` stays; reaction closure captures the
       observer `ctx` for `recordHandlerError`; delete `delivery_owner.go`; `consumers []*deliverylane.Binding`; Stop
-      uses `Drain`/`Closed`/`Done` and drops the `done != nil` guard.
+      uses `Drain`/`Closed`/`Done` and drops the `done != nil` guard. DONE, 1:1 with the design; nothing the design
+      did not say. Wiring mutants on the one lane (`tool.execute`): the `Observe` CALL and `nil onFatal` both
+      SURVIVED the untagged AND `-tags=integration` suites, because every test in `delivery_owner_test.go` builds
+      its own admission and observer. Closed the way dispatch's was: the test that already drives production
+      `setupConsumer`, `TestToolsDeliveryPolicyUsesExactTargetConfigurationBeforeAcquisition`, now captures the
+      callback it bound and drives ONE unprovable delivery through it, asserting health degraded, status
+      `delivery ownership lost`, `LastError`, and `drains == 1`. Both mutants then KILLED. `nil onRefused` still
+      SURVIVES — recorded in 4.3, not fixed (coordinator ruling).
 - [ ] 2.2 agentic-model: as 2.1; move `recordDeliveryOwnerFatal` (`delivery_owner.go:50-58`) into `component.go`;
       add `reactDeliveryFatal` (the existing "Model delivery ownership lost" log line).
 - [ ] 2.3 agentic-loop: heartbeat lanes → `Consume`; the settlement shape → `Settle(..., settleRetry, admission,

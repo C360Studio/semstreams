@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -82,30 +83,32 @@ func TestDeliveryLaneBuffersFatalBeforeHandleAndRefusesLaterDelivery(t *testing.
 		logger:  slog.New(slog.NewTextHandler(logs, nil)),
 		metrics: newToolsMetrics(),
 	}
-	admission := newDeliveryLaneAdmission(component.recordDeliveryOwnerFatal, func(subject string) {
+	admission := deliverylane.NewAdmission(component.recordDeliveryOwnerFatal, func(subject string) {
 		component.recordDeliveryRefused("tool.execute", subject)
 	})
 	msg := &deliveryOwnerMsg{data: []byte("first")}
-	result, admitted := consumeAdmittedDelivery(t.Context(), msg, policy, admission)
+	result, admitted := deliverylane.Consume(t.Context(), msg, policy, admission)
 	require.True(t, admitted)
 	require.True(t, result.OwnerStopRequired())
-	require.Len(t, admission.fatal, 1, "fatal must be buffered before the handle exists")
+	require.False(t, admission.Admit(), "the lane closes before the handle exists")
 	health := component.Health()
 	require.False(t, health.Healthy)
 	require.Equal(t, "delivery ownership lost", health.Status)
 	require.Contains(t, health.LastError, cause.Error())
 	require.Equal(t, 1, health.ErrorCount)
-	admission.latch(result)
-	require.Len(t, admission.fatal, 1, "the first fatal result is sticky")
+	admission.Latch(result)
+	require.False(t, admission.Admit(), "the first fatal result is sticky")
 	require.Equal(t, 1, component.Health().ErrorCount)
 
 	handle := &deliveryOwnerHandle{closed: make(chan struct{})}
-	binding := newStreamConsumerBinding(handle)
+	binding := deliverylane.NewBinding(handle)
 	ctx, cancel := context.WithCancel(t.Context())
-	component.observeDeliveryLane(ctx, &binding, admission)
+	deliverylane.Observe(ctx, binding, admission, func(result natsclient.DeliveryResult) {
+		component.recordHandlerError(ctx, result.Err())
+	})
 	require.Eventually(t, func() bool { return handle.drains.Load() == 1 }, time.Second, time.Millisecond)
 
-	_, admitted = consumeAdmittedDelivery(t.Context(), msg, policy, admission)
+	_, admitted = deliverylane.Consume(t.Context(), msg, policy, admission)
 	require.False(t, admitted)
 	require.Equal(t, int32(1), msg.dataCalls.Load())
 	require.Zero(t, msg.heartbeats.Load())
@@ -119,10 +122,10 @@ func TestDeliveryLaneBuffersFatalBeforeHandleAndRefusesLaterDelivery(t *testing.
 		"a refused delivery must increment the refusal counter")
 	require.Contains(t, logs.String(), "Tool delivery refused by latched lane")
 	require.Contains(t, logs.String(), "subject=tool.delivery")
-	binding.drain()
+	binding.Drain()
 	require.Equal(t, int32(1), handle.drains.Load(), "fatal and ordinary stop share drain-once")
 	cancel()
-	<-binding.observerDone
+	<-binding.Done()
 }
 
 func TestDeliveryMetadataFailureBuffersBeforeHandleAndDrainsExactOwner(t *testing.T) {
@@ -134,15 +137,15 @@ func TestDeliveryMetadataFailureBuffersBeforeHandleAndDrainsExactOwner(t *testin
 			return natsclient.DeliveryDecisionAck, nil
 		})
 	require.NoError(t, err)
-	admission := newDeliveryLaneAdmission(nil, nil)
+	admission := deliverylane.NewAdmission(nil, nil)
 	msg := &deliveryOwnerMsg{data: []byte("must-not-run"), metadataErr: metadataCause}
 
-	result, admitted := consumeAdmittedDelivery(t.Context(), msg, policy, admission)
+	result, admitted := deliverylane.Consume(t.Context(), msg, policy, admission)
 
 	require.True(t, admitted)
 	require.True(t, result.OwnerStopRequired())
 	require.ErrorIs(t, result.Cause(), metadataCause)
-	require.Len(t, admission.fatal, 1, "fatal must be retained before the exact handle exists")
+	require.False(t, admission.Admit(), "the lane closes before the exact handle exists")
 	require.Equal(t, int32(1), msg.metadata.Load())
 	require.Zero(t, msg.dataCalls.Load())
 	require.Zero(t, workCalls.Load())
@@ -150,19 +153,21 @@ func TestDeliveryMetadataFailureBuffersBeforeHandleAndDrainsExactOwner(t *testin
 	require.Zero(t, msg.settlement.Load())
 
 	handle := &deliveryOwnerHandle{closed: make(chan struct{})}
-	binding := newStreamConsumerBinding(handle)
+	binding := deliverylane.NewBinding(handle)
 	ctx, cancel := context.WithCancel(t.Context())
 	component := &Component{running: true, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	component.observeDeliveryLane(ctx, &binding, admission)
+	deliverylane.Observe(ctx, binding, admission, func(result natsclient.DeliveryResult) {
+		component.recordHandlerError(ctx, result.Err())
+	})
 	require.Eventually(t, func() bool { return handle.drains.Load() == 1 }, time.Second, time.Millisecond)
 
-	_, admitted = consumeAdmittedDelivery(t.Context(), msg, policy, admission)
+	_, admitted = deliverylane.Consume(t.Context(), msg, policy, admission)
 	require.False(t, admitted)
 	require.Equal(t, int32(1), msg.metadata.Load(), "closed admission must not inspect a later delivery")
-	binding.drain()
+	binding.Drain()
 	require.Equal(t, int32(1), handle.drains.Load(), "only the exact owner is drained once")
 	cancel()
-	<-binding.observerDone
+	<-binding.Done()
 }
 
 func TestDeliveryLaneAllowsAlreadyAdmittedWorkToComplete(t *testing.T) {
@@ -179,25 +184,25 @@ func TestDeliveryLaneAllowsAlreadyAdmittedWorkToComplete(t *testing.T) {
 			return natsclient.DeliveryDecisionQuarantine, errors.New("fatal")
 		})
 	require.NoError(t, err)
-	admission := newDeliveryLaneAdmission(nil, nil)
+	admission := deliverylane.NewAdmission(nil, nil)
 	type slowOutcome struct {
 		result   natsclient.DeliveryResult
 		admitted bool
 	}
 	slowDone := make(chan slowOutcome, 1)
 	go func() {
-		result, admitted := consumeAdmittedDelivery(t.Context(), &deliveryOwnerMsg{data: []byte("slow")}, policy, admission)
+		result, admitted := deliverylane.Consume(t.Context(), &deliveryOwnerMsg{data: []byte("slow")}, policy, admission)
 		slowDone <- slowOutcome{result: result, admitted: admitted}
 	}()
 	<-slowEntered
-	fatal, admitted := consumeAdmittedDelivery(t.Context(), &deliveryOwnerMsg{data: []byte("fatal")}, policy, admission)
+	fatal, admitted := deliverylane.Consume(t.Context(), &deliveryOwnerMsg{data: []byte("fatal")}, policy, admission)
 	require.True(t, admitted)
 	require.True(t, fatal.OwnerStopRequired())
 	close(releaseSlow)
 	slow := <-slowDone
 	require.True(t, slow.admitted)
 	require.NoError(t, slow.result.Err())
-	require.False(t, admission.admit(), "new work closes after the first fatal result")
+	require.False(t, admission.Admit(), "new work closes after the first fatal result")
 }
 
 func TestDeliveryMethodErrorDoesNotCloseAdmission(t *testing.T) {
@@ -206,13 +211,13 @@ func TestDeliveryMethodErrorDoesNotCloseAdmission(t *testing.T) {
 			return natsclient.DeliveryDecisionAck, nil
 		})
 	require.NoError(t, err)
-	admission := newDeliveryLaneAdmission(nil, nil)
+	admission := deliverylane.NewAdmission(nil, nil)
 	msg := &deliveryOwnerMsg{ackErr: errors.New("ack unknown")}
-	result, admitted := consumeAdmittedDelivery(t.Context(), msg, policy, admission)
+	result, admitted := deliverylane.Consume(t.Context(), msg, policy, admission)
 	require.True(t, admitted)
 	require.True(t, result.SettlementMethodFailed())
 	require.False(t, result.OwnerStopRequired())
-	require.True(t, admission.admit())
+	require.True(t, admission.Admit())
 }
 
 func TestToolsDeliveryPolicyUsesExactTargetConfigurationBeforeAcquisition(t *testing.T) {
@@ -223,12 +228,15 @@ func TestToolsDeliveryPolicyUsesExactTargetConfigurationBeforeAcquisition(t *tes
 	handle := &deliveryOwnerHandle{closed: make(chan struct{})}
 	var acquired atomic.Int32
 	var observed natsclient.StreamConsumerConfig
+	var callback func(context.Context, jetstream.Msg)
 	c := &Component{
-		config: DefaultConfig(), logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		running: true,
+		config:  DefaultConfig(), logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		waitForStreamInput: func(context.Context, string) error { return nil },
-		consumeStream: func(_ context.Context, _ natsclient.PortConsumerContext, cfg natsclient.StreamConsumerConfig, _ func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
+		consumeStream: func(_ context.Context, _ natsclient.PortConsumerContext, cfg natsclient.StreamConsumerConfig, cb func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
 			acquired.Add(1)
 			observed = cfg
+			callback = cb
 			return handle, nil
 		},
 	}
@@ -240,10 +248,26 @@ func TestToolsDeliveryPolicyUsesExactTargetConfigurationBeforeAcquisition(t *tes
 	require.Equal(t, int32(1), acquired.Load())
 	require.Equal(t, 5*time.Minute, observed.AckWait)
 	require.Equal(t, []time.Duration{15 * time.Second, 60 * time.Second}, observed.BackOff)
+
+	// Everything above proves the CONFIGURATION setupConsumer acquires with.
+	// This drives one delivery through the callback it bound, which is the only
+	// place the lane's own wiring is observable: every other test in this file
+	// builds its admission and its observer by hand, so a setupConsumer that
+	// passed nil as the health writer, or never started the observer, would
+	// look identical to them.
+	require.NotNil(t, callback, "production setup did not bind a delivery callback")
+	callback(ctx, &deliveryOwnerMsg{data: []byte("unprovable"), metadataErr: errors.New("metadata unavailable")})
+
+	health := c.Health()
+	require.False(t, health.Healthy)
+	require.Equal(t, "delivery ownership lost", health.Status,
+		"the lane's fatal must reach THIS component's health writer, wired as the admission's onFatal")
+	require.Contains(t, health.LastError, "metadata unavailable")
+	require.Eventually(t, func() bool { return handle.drains.Load() == 1 }, time.Second, time.Millisecond,
+		"the observer setupConsumer started must drain the exact handle it bound")
+
 	cancel()
 	for _, binding := range c.consumers {
-		if binding.observerDone != nil {
-			<-binding.observerDone
-		}
+		<-binding.Done()
 	}
 }

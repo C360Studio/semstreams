@@ -18,6 +18,7 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
@@ -81,7 +82,7 @@ type Component struct {
 	toolListSub requestSubscription
 
 	// Track consumers for cleanup
-	consumers           []streamConsumerBinding
+	consumers           []*deliverylane.Binding
 	waitForStreamInput  func(context.Context, string) error
 	acquireOutcomeStore func(context.Context) (completedOutcomeStore, error)
 	subscribeRequests   func(context.Context, string, func(context.Context, []byte) ([]byte, error)) (requestSubscription, error)
@@ -92,12 +93,6 @@ type Component struct {
 type requestSubscription interface{ Drain(context.Context) error }
 
 // consumerInfo tracks JetStream consumer details for cleanup
-type streamConsumerBinding struct {
-	handle       jetstream.ConsumeContext
-	drainOnce    *sync.Once
-	observerDone <-chan struct{}
-}
-
 type consumerSetup struct {
 	port           component.Port
 	streamName     string
@@ -431,7 +426,7 @@ func (c *Component) setupConsumer(ctx context.Context, setup consumerSetup) erro
 		return errs.WrapInvalid(err, "Component", "setupConsumer", "validate heartbeat delivery policy")
 	}
 	lane := setup.port.Name
-	admission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal, func(subject string) {
+	admission := deliverylane.NewAdmission(c.recordDeliveryOwnerFatal, func(subject string) {
 		c.recordDeliveryRefused(lane, subject)
 	})
 
@@ -446,7 +441,7 @@ func (c *Component) setupConsumer(ctx context.Context, setup consumerSetup) erro
 		consume = c.consumeStream
 	}
 	handle, err := consume(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: setup.port.Name, ComponentOwned: true}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		result, admitted := consumeAdmittedDelivery(msgCtx, msg, deliveryPolicy, admission)
+		result, admitted := deliverylane.Consume(msgCtx, msg, deliveryPolicy, admission)
 		if admitted && !result.OwnerStopRequired() && result.Err() != nil {
 			c.recordHandlerError(msgCtx, result.Err())
 		}
@@ -456,8 +451,13 @@ func (c *Component) setupConsumer(ctx context.Context, setup consumerSetup) erro
 	}
 
 	// Track consumer for cleanup in Stop()
-	binding := newStreamConsumerBinding(handle)
-	c.observeDeliveryLane(ctx, &binding, admission)
+	binding := deliverylane.NewBinding(handle)
+	// ctx, not the per-delivery context: recordHandlerError branches on
+	// ctx.Err() to classify an ambiguous effect as shutdown, and the observer
+	// outlives every delivery.
+	deliverylane.Observe(ctx, binding, admission, func(result natsclient.DeliveryResult) {
+		c.recordHandlerError(ctx, result.Err())
+	})
 	c.lifecycleMu.Lock()
 	c.consumers = append(c.consumers, binding)
 	c.lifecycleMu.Unlock()
@@ -667,10 +667,9 @@ func (c *Component) cleanup(ctx context.Context) error {
 		}
 	}
 
-	for i := range c.consumers {
-		binding := &c.consumers[i]
-		binding.drain()
-		closed := binding.handle.Closed()
+	for _, binding := range c.consumers {
+		binding.Drain()
+		closed := binding.Closed()
 		if c.waitConsumerClosed != nil {
 			cleanupErr = errors.Join(cleanupErr, c.waitConsumerClosed(ctx, closed))
 		} else {
@@ -684,10 +683,8 @@ func (c *Component) cleanup(ctx context.Context) error {
 	if c.cancel != nil {
 		c.cancel()
 	}
-	for i := range c.consumers {
-		if done := c.consumers[i].observerDone; done != nil {
-			<-done
-		}
+	for _, binding := range c.consumers {
+		<-binding.Done()
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		cleanupErr = errors.Join(cleanupErr, ctxErr)
