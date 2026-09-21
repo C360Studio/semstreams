@@ -725,5 +725,21 @@ production seam, the named-target paths are untouched, and no subtest is vacuous
       `verify-stage-a-process-replacement_duration_ms:78790`, `verify-durable-tool-replay_duration_ms:44634`,
       `approval_listing_matched:2`, `tools_quarantine_executor_attempts:2`, zero `level=ERROR` or `level=WARN`
       lines in the tier log. Guard before it, per the standing rule that `e2e:check-ports` calls `e2e:clean` and
-      tears down every compose stack on the host: `pgrep -fl e2e.test` exit 1 with no match, `docker ps` and
-      `docker compose ls` both empty, both captured into the tier log before the run
+      tears down every compose stack on the host: `pgrep -fl e2e.test`, exit 1 with no match, **captured into the
+      tier log** above the run. `docker ps` and `docker compose ls` were also run immediately before and were
+      both empty, but that output went to the session and NOT into the log, so only the pgrep guard has an
+      artifact behind it
+- [x] 13.10 **MEDIUM (verification integrity) — § 13.9 claimed an artifact it did not have.** It said the
+      `docker ps` and `docker compose ls` guard output was "captured into the tier log"; the log holds the pgrep
+      block only (`grep -ic 'docker ps'` and `grep -ic 'compose ls'` both 0). The tier was NOT re-run: the
+      sentence now says which guard has an artifact and which does not. A record that claims an artifact it
+      cannot produce is worse than one that admits the gap, because the next reader trusts it without checking
+- [x] 13.11 **NIT — the metering absence needed a live-registry witness.**
+      `TestRouteAmbiguityRefusalIsAnsweredWithoutMeteringTheGate`'s first subtest asserted only that
+      `loop_admission_refusals_total` grew no series, which is equally true of a component whose counters never
+      move at all; the live-registry evidence sat in the second subtest, on a different builder. The subtest now
+      asserts `messages_received_total{channel_type="cli"}` is exactly 1 on the SAME registry first —
+      `handleUserMessage` meters every message it receives (`component.go:824`) and that is the last counter this
+      path moves, because the refusal returns before `recordCommandExecuted`. Mutation: deleting the
+      `recordMessageReceived` call flips the new assertion (`0` vs `1`) while the absence assertion stays green,
+      which is exactly the hole it closes. Restored by `cp`, md5 recorded in the round report

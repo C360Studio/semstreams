@@ -326,6 +326,14 @@ func TestRouteAmbiguityRefusalIsAnsweredWithoutMeteringTheGate(t *testing.T) {
 
 		require.Len(t, published, 1, "the refusal must have happened for the absence below to mean anything")
 		require.Equal(t, int32(1), msg.acks.Load())
+		// The absence below would also hold on a component whose metrics were
+		// never wired, so this delivery's own positive count comes first:
+		// handleUserMessage meters every message it receives (component.go:824)
+		// on the same registry, and it is the last counter this path moves —
+		// the refusal returns before recordCommandExecuted.
+		require.Equal(t, float64(1),
+			testutil.ToFloat64(c.metrics.messagesReceived.WithLabelValues("cli")),
+			"this lane's registry must be live, or the absence below proves nothing")
 		require.Zero(t, testutil.CollectAndCount(c.metrics.loopAdmissionRefusals),
 			"the admission gate's counter must not grow a series for a refusal the gate never made")
 	})
