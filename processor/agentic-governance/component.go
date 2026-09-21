@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -54,7 +55,7 @@ type Component struct {
 	cleanupPending     bool
 	startDone          chan struct{}
 	cancel             context.CancelFunc
-	consumers          []streamConsumerBinding
+	consumers          []*deliverylane.Binding
 	waitForStreamInput func(context.Context, string) error
 	consumeStream      func(context.Context, natsclient.PortConsumerContext, natsclient.StreamConsumerConfig, func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error)
 	waitConsumerClosed func(context.Context, <-chan struct{}) error
@@ -65,12 +66,6 @@ type Component struct {
 	errors            int64
 	deliveryFatalErr  error
 	lastActivity      time.Time
-}
-
-type streamConsumerBinding struct {
-	handle       jetstream.ConsumeContext
-	drainOnce    *sync.Once
-	observerDone <-chan struct{}
 }
 
 // DeclarePorts is the component.PortDeclarer for agentic-governance: the
@@ -346,20 +341,6 @@ func (c *Component) createHandler(msgType MessageType, outputPortName string) fu
 	}
 }
 
-func runGovernanceDeliveryWork(
-	ctx context.Context,
-	data []byte,
-	work func(context.Context, []byte) (natsclient.DeliveryDecision, error),
-) (decision natsclient.DeliveryDecision, cause error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			decision = natsclient.DeliveryDecisionQuarantine
-			cause = fmt.Errorf("governance delivery work panicked: %v", recovered)
-		}
-	}()
-	return work(ctx, data)
-}
-
 // handleMessage processes a message through the filter chain.
 // outputPortName identifies the output port in config whose subject pattern is used to publish validated messages.
 func (c *Component) handleMessage(ctx context.Context, data []byte, msgType MessageType, outputPortName string) (natsclient.DeliveryDecision, error) {
@@ -506,14 +487,16 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port, hand
 	if c.consumeStream != nil {
 		consume = c.consumeStream
 	}
-	admission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
+	admission := deliverylane.NewAdmission(c.recordDeliveryOwnerFatal, nil)
 	handle, err := consume(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		if !admission.admit() {
+		result, admitted := deliverylane.Settle(msgCtx, msg, natsclient.ImmediateDeliveryRetry(),
+			admission, "governance", handler)
+		// Early return, not a conjunct: a refused delivery returns the zero
+		// result, whose Err() is non-nil by construction, so every branch below
+		// must be unreachable on refusal — including ones added later.
+		if !admitted {
 			return
 		}
-		decision, cause := runGovernanceDeliveryWork(msgCtx, msg.Data(), handler)
-		result := natsclient.SettleDelivery(msg, decision, cause)
-		admission.latch(result)
 		if result.Err() != nil && !result.OwnerStopRequired() {
 			c.logger.Error("Governance delivery did not settle cleanly", "port", port.Name, "error", result.Err())
 		}
@@ -521,8 +504,10 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port, hand
 	if err != nil {
 		return errs.WrapTransient(err, "Component", "setupConsumer", fmt.Sprintf("setup consumer for stream %s", streamName))
 	}
-	binding := newStreamConsumerBinding(handle)
-	c.observeDeliveryLane(ctx, &binding, admission, port.Name)
+	binding := deliverylane.NewBinding(handle)
+	deliverylane.Observe(ctx, binding, admission, func(result natsclient.DeliveryResult) {
+		c.logger.Error("Governance delivery ownership lost", "port", port.Name, "error", result.Err())
+	})
 	c.lifecycleMu.Lock()
 	c.consumers = append(c.consumers, binding)
 	c.lifecycleMu.Unlock()
@@ -629,10 +614,9 @@ func (c *Component) Stop(ctx context.Context) error {
 
 func (c *Component) cleanup(ctx context.Context) error {
 	var stopErr error
-	for i := range c.consumers {
-		binding := &c.consumers[i]
-		binding.drain()
-		closed := binding.handle.Closed()
+	for _, binding := range c.consumers {
+		binding.Drain()
+		closed := binding.Closed()
 		if c.waitConsumerClosed != nil {
 			stopErr = errors.Join(stopErr, c.waitConsumerClosed(ctx, closed))
 		} else {
@@ -646,13 +630,11 @@ func (c *Component) cleanup(ctx context.Context) error {
 	if c.cancel != nil {
 		c.cancel()
 	}
-	for i := range c.consumers {
-		if done := c.consumers[i].observerDone; done != nil {
-			select {
-			case <-done:
-			case <-ctx.Done():
-				stopErr = errors.Join(stopErr, ctx.Err())
-			}
+	for _, binding := range c.consumers {
+		select {
+		case <-binding.Done():
+		case <-ctx.Done():
+			stopErr = errors.Join(stopErr, ctx.Err())
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -723,13 +705,6 @@ func (c *Component) recordDeliveryOwnerFatal(result natsclient.DeliveryResult) {
 	}
 	c.deliveryFatalErr = result.Err()
 	atomic.AddInt64(&c.errors, 1)
-}
-
-func (b *streamConsumerBinding) drain() {
-	if b.drainOnce == nil {
-		b.drainOnce = &sync.Once{}
-	}
-	b.drainOnce.Do(b.handle.Drain)
 }
 
 // getStatus returns a status string

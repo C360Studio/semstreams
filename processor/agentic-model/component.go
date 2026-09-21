@@ -15,6 +15,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
@@ -61,7 +62,7 @@ type Component struct {
 	cleanupPending     bool
 	startDone          chan struct{}
 	cancel             context.CancelFunc
-	consumers          []streamConsumerBinding
+	consumers          []*deliverylane.Binding
 	waitForStreamInput func(context.Context, string) error
 	consumeStream      func(context.Context, natsclient.PortConsumerContext, natsclient.StreamConsumerConfig, func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error)
 	waitConsumerClosed func(context.Context, <-chan struct{}) error
@@ -98,13 +99,6 @@ func WithHealthPolicy(p model.HealthPolicy) Option {
 // (e.g., a sibling dispatcher consulting circuit-breaker state before
 // routing) without going through the registry interface.
 func (c *Component) HealthPolicy() model.HealthPolicy { return c.healthPolicy }
-
-// consumerInfo tracks JetStream consumer details for cleanup
-type streamConsumerBinding struct {
-	handle       jetstream.ConsumeContext
-	drainOnce    *sync.Once
-	observerDone <-chan struct{}
-}
 
 // NewComponent creates a new agentic-model processor component
 func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
@@ -405,14 +399,14 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port) erro
 			fmt.Sprintf("validate heartbeat delivery policy for port %s", port.Name),
 		)
 	}
-	admission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
+	admission := deliverylane.NewAdmission(c.recordDeliveryOwnerFatal, nil)
 
 	consume := c.natsClient.ConsumeStreamWithConfig
 	if c.consumeStream != nil {
 		consume = c.consumeStream
 	}
 	handle, err := consume(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name, ComponentOwned: true}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		result, admitted := consumeAdmittedDelivery(msgCtx, msg, policy, admission)
+		result, admitted := deliverylane.Consume(msgCtx, msg, policy, admission)
 		if admitted && result.Err() != nil && !result.OwnerStopRequired() {
 			c.logger.Error("Model handler error", "error", result.Err())
 		}
@@ -421,8 +415,8 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port) erro
 		return errs.WrapTransient(err, "Component", "setupConsumer", fmt.Sprintf("setup consumer for stream %s", streamName))
 	}
 
-	binding := newStreamConsumerBinding(handle)
-	c.observeDeliveryLane(ctx, &binding, admission)
+	binding := deliverylane.NewBinding(handle)
+	deliverylane.Observe(ctx, binding, admission, c.reactDeliveryFatal)
 	c.lifecycleMu.Lock()
 	c.consumers = append(c.consumers, binding)
 	c.lifecycleMu.Unlock()
@@ -534,12 +528,37 @@ func (c *Component) Stop(ctx context.Context) error {
 	}
 }
 
+// recordDeliveryOwnerFatal latches the FIRST loss of delivery ownership into
+// health. It runs synchronously inside the delivery callback as the lane
+// admission's onFatal, before the result is buffered for the observer, so
+// health can never read healthy after the FATAL observer has drained the exact
+// handle. It is not ordered against cleanup's own Drain, which runs
+// independently of this admission. Relocated
+// here from delivery_owner.go when the latch moved to internal/deliverylane;
+// the health semantics, including the error counter, are untouched.
+func (c *Component) recordDeliveryOwnerFatal(result natsclient.DeliveryResult) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.deliveryFatalErr != nil {
+		return
+	}
+	c.deliveryFatalErr = result.Err()
+	c.errors++
+}
+
+// reactDeliveryFatal is this component's asynchronous reaction to the first
+// owner-stop result on its lane, run by the observer before it drains that
+// lane's exact handle. The synchronous half — the health latch — already ran
+// inside the callback as the admission's onFatal.
+func (c *Component) reactDeliveryFatal(result natsclient.DeliveryResult) {
+	c.logger.Error("Model delivery ownership lost", "error", result.Err())
+}
+
 func (c *Component) cleanup(ctx context.Context) error {
 	var cleanupErr error
-	for i := range c.consumers {
-		binding := &c.consumers[i]
-		binding.drain()
-		closed := binding.handle.Closed()
+	for _, binding := range c.consumers {
+		binding.Drain()
+		closed := binding.Closed()
 		if c.waitConsumerClosed != nil {
 			cleanupErr = errors.Join(cleanupErr, c.waitConsumerClosed(ctx, closed))
 		} else {
@@ -553,13 +572,11 @@ func (c *Component) cleanup(ctx context.Context) error {
 	if c.cancel != nil {
 		c.cancel()
 	}
-	for i := range c.consumers {
-		if done := c.consumers[i].observerDone; done != nil {
-			select {
-			case <-done:
-			case <-ctx.Done():
-				cleanupErr = errors.Join(cleanupErr, ctx.Err())
-			}
+	for _, binding := range c.consumers {
+		select {
+		case <-binding.Done():
+		case <-ctx.Done():
+			cleanupErr = errors.Join(cleanupErr, ctx.Err())
 		}
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {

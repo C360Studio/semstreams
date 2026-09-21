@@ -1,6 +1,7 @@
 package agenticloop
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
@@ -155,9 +157,9 @@ func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 		data, err := json.Marshal(message.NewBaseMessage(response.Schema(), response, "test"))
 		require.NoError(t, err)
 		msg := &loopDeliveryOwnerMsg{data: data}
-		admission := newDeliveryLaneAdmission(nil)
+		admission := deliverylane.NewAdmission(nil, nil)
 		policy := newPolicy(t, "agent.response", c.handleResponseMessage)
-		result, admitted := consumeAdmittedDelivery(t.Context(), msg, policy, admission)
+		result, admitted := deliverylane.Consume(t.Context(), msg, policy, admission)
 		require.True(t, admitted)
 		require.Equal(t, natsclient.DeliveryDecisionQuarantine, result.Decision())
 		require.True(t, result.OwnerStopRequired())
@@ -168,7 +170,7 @@ func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 
 		// The lane is latched, so this owner runs no further work on it.
 		redelivery := &loopDeliveryOwnerMsg{data: data}
-		_, readmitted := consumeAdmittedDelivery(t.Context(), redelivery, policy, admission)
+		_, readmitted := deliverylane.Consume(t.Context(), redelivery, policy, admission)
 		require.False(t, readmitted, "a latched lane admitted more work after a quarantined delivery")
 		require.Zero(t, redelivery.dataCalls.Load())
 
@@ -176,8 +178,8 @@ func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 		// loop, same bytes, healthy KV, a lane that had not latched.
 		bucket.heal()
 		retried := &loopDeliveryOwnerMsg{data: data}
-		retriedResult, admitted := consumeAdmittedDelivery(
-			t.Context(), retried, policy, newDeliveryLaneAdmission(nil))
+		retriedResult, admitted := deliverylane.Consume(
+			t.Context(), retried, policy, deliverylane.NewAdmission(nil, nil))
 		require.True(t, admitted)
 		require.Equal(t, natsclient.DeliveryDecisionAck, retriedResult.Decision())
 		require.Equal(t, []string{loopID}, bucket.written(),
@@ -203,7 +205,7 @@ func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 		data, err := json.Marshal(message.NewBaseMessage(toolResult.Schema(), toolResult, "test"))
 		require.NoError(t, err)
 		msg := &loopDeliveryOwnerMsg{data: data}
-		result, admitted := consumeAdmittedDelivery(t.Context(), msg, newPolicy(t, "tool.result", c.handleToolResultMessage), newDeliveryLaneAdmission(nil))
+		result, admitted := deliverylane.Consume(t.Context(), msg, newPolicy(t, "tool.result", c.handleToolResultMessage), deliverylane.NewAdmission(nil, nil))
 		require.True(t, admitted)
 		require.Equal(t, natsclient.DeliveryDecisionQuarantine, result.Decision())
 		require.True(t, result.OwnerStopRequired())
@@ -228,11 +230,11 @@ func TestLoopUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner(t *testing
 		},
 	)
 	require.NoError(t, err)
-	admission := newDeliveryLaneAdmission(nil)
+	admission := deliverylane.NewAdmission(nil, nil)
 	metadataCause := errors.New("metadata unavailable")
 	msg := &loopDeliveryOwnerMsg{data: []byte("must-not-run"), metadataErr: metadataCause}
 
-	result, admitted := consumeAdmittedDelivery(t.Context(), msg, policy, admission)
+	result, admitted := deliverylane.Consume(t.Context(), msg, policy, admission)
 
 	require.True(t, admitted)
 	require.Equal(t, natsclient.DeliveryDecisionQuarantine, result.Decision())
@@ -246,19 +248,21 @@ func TestLoopUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner(t *testing
 	require.Zero(t, msg.settlement.Load())
 
 	handle := &loopPolicyHandle{closed: make(chan struct{})}
-	binding := newStreamConsumerBinding(handle)
+	binding := deliverylane.NewBinding(handle)
 	ctx, cancel := context.WithCancel(t.Context())
 	c := &Component{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	c.observeDeliveryLane(ctx, &binding, admission, "agent.task")
+	deliverylane.Observe(ctx, binding, admission, func(result natsclient.DeliveryResult) {
+		c.logger.Error("Loop delivery ownership lost", "port", "agent.task", "error", result.Err())
+	})
 	require.Eventually(t, func() bool { return handle.drains.Load() == 1 }, time.Second, time.Millisecond)
 
-	_, admitted = consumeAdmittedDelivery(t.Context(), msg, policy, admission)
+	_, admitted = deliverylane.Consume(t.Context(), msg, policy, admission)
 	require.False(t, admitted)
 	require.Equal(t, int32(1), msg.metadata.Load(), "closed admission must not inspect another delivery")
-	binding.drain()
+	binding.Drain()
 	require.Equal(t, int32(1), handle.drains.Load(), "fatal and ordinary stop share exact drain-once authority")
 	cancel()
-	<-binding.observerDone
+	<-binding.Done()
 }
 
 // spec: agentic-loop / Loop input classes settle after owner-specific durable done
@@ -336,7 +340,7 @@ func TestLoopSetupWiresMetadataFailureToAcquiredOwner(t *testing.T) {
 
 	cancel()
 	for _, binding := range c.consumers {
-		<-binding.observerDone
+		<-binding.Done()
 	}
 }
 
@@ -385,9 +389,7 @@ func TestLoopProductionCallbacksTerminateMalformedNonHeartbeatInputs(t *testing.
 
 	cancel()
 	for _, binding := range c.consumers {
-		if binding.observerDone != nil {
-			<-binding.observerDone
-		}
+		<-binding.Done()
 	}
 }
 
@@ -447,9 +449,23 @@ func TestLoopApprovalPanicProductionCallbackQuarantinesExactOwner(t *testing.T) 
 	require.Equal(t, "delivery ownership lost", health.Status)
 	require.Contains(t, health.LastError, "approval response handler panicked")
 
+	// The same lane, a second delivery — what a drained handle flushes. The
+	// latch must refuse it: no work, no terminal method, and no report of a
+	// settlement failure, because nothing was settled. The refusal branch is
+	// the settlement lane's early return, which is invisible to every test
+	// that replays into a DIFFERENT lane.
+	logs := &bytes.Buffer{}
+	c.logger = slog.New(slog.NewTextHandler(logs, nil))
+	replay := &loopSettlementMsg{data: data}
+	callbacks["agent.approval_response"](ctx, replay)
+	require.Zero(t, replay.acks.Load()+replay.naks.Load()+replay.terms.Load(),
+		"a latched lane attempted a terminal method")
+	require.NotContains(t, logs.String(), "Message delivery did not settle cleanly",
+		"a refused delivery settled nothing, so it must not be reported as a settlement failure")
+
 	cancel()
 	for _, binding := range c.consumers {
-		<-binding.observerDone
+		<-binding.Done()
 	}
 }
 
@@ -499,7 +515,7 @@ func TestLoopCancellationUnknownPublicationQuarantinesWithoutReleasingTransientS
 
 	cancel()
 	for _, binding := range c.consumers {
-		<-binding.observerDone
+		<-binding.Done()
 	}
 }
 

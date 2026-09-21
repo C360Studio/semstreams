@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -135,7 +136,7 @@ func TestLifecycleCausalStartStopRollbackRetention(t *testing.T) {
 func TestLifecycleRunningDeadlineIsTerminalNoReplay(t *testing.T) {
 	runCtx, cancelRun := context.WithCancel(t.Context())
 	h := &causalHandle{closed: make(chan struct{}), closedCalls: make(chan struct{}, 2)}
-	c := &Component{lifecycleUsed: true, running: true, cancel: cancelRun, consumers: []streamConsumerBinding{{handle: h}}, clientCache: map[string]*Client{}}
+	c := &Component{lifecycleUsed: true, running: true, cancel: cancelRun, consumers: []*deliverylane.Binding{deliverylane.NewBinding(h)}, clientCache: map[string]*Client{}}
 	stopCtx, expire := context.WithCancel(t.Context())
 	result := make(chan error, 1)
 	go func() { result <- c.Stop(stopCtx) }()

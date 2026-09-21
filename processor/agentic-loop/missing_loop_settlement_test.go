@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go/jetstream"
@@ -89,8 +90,8 @@ func TestUndecodableHeartbeatLaneInputTerminatesRatherThanAcking(t *testing.T) {
 			t.Parallel()
 			c := releaseTestComponent(t, NewMessageHandler(DefaultConfig()))
 			msg := &loopDeliveryOwnerMsg{data: []byte("{not json")}
-			result, admitted := consumeAdmittedDelivery(
-				t.Context(), msg, heartbeatPolicyForTest(t, port.port, port.handler(c)), newDeliveryLaneAdmission(nil))
+			result, admitted := deliverylane.Consume(
+				t.Context(), msg, heartbeatPolicyForTest(t, port.port, port.handler(c)), deliverylane.NewAdmission(nil, nil))
 			require.True(t, admitted)
 			require.Equal(t, natsclient.DeliveryDecisionTerminate, result.Decision())
 			require.Equal(t, int32(1), msg.terms.Load())
@@ -109,8 +110,8 @@ func TestWrongPayloadTypeOnHeartbeatLaneTerminatesRatherThanAcking(t *testing.T)
 	// A ToolResult arriving on the response lane: decodes, wrong type.
 	data := baseMessageBytes(t, &agentic.ToolResult{CallID: "call-x", Name: "search", Content: "r"})
 	msg := &loopDeliveryOwnerMsg{data: data}
-	result, admitted := consumeAdmittedDelivery(
-		t.Context(), msg, heartbeatPolicyForTest(t, "agent.response", c.handleResponseMessage), newDeliveryLaneAdmission(nil))
+	result, admitted := deliverylane.Consume(
+		t.Context(), msg, heartbeatPolicyForTest(t, "agent.response", c.handleResponseMessage), deliverylane.NewAdmission(nil, nil))
 	require.True(t, admitted)
 	require.Equal(t, natsclient.DeliveryDecisionTerminate, result.Decision())
 	require.Equal(t, int32(1), msg.terms.Load())
@@ -145,8 +146,8 @@ func TestUncorrelatedResponseSettlesByRecordNotByMemory(t *testing.T) {
 			Message: agentic.ChatMessage{Role: "assistant", Content: "done"},
 		}
 		msg := &loopDeliveryOwnerMsg{data: baseMessageBytes(t, response)}
-		result, admitted := consumeAdmittedDelivery(
-			t.Context(), msg, heartbeatPolicyForTest(t, "agent.response", c.handleResponseMessage), newDeliveryLaneAdmission(nil))
+		result, admitted := deliverylane.Consume(
+			t.Context(), msg, heartbeatPolicyForTest(t, "agent.response", c.handleResponseMessage), deliverylane.NewAdmission(nil, nil))
 		require.True(t, admitted)
 		return msg, result
 	}
@@ -208,8 +209,8 @@ func TestUncorrelatedToolResultSettlesByRecordNotByMemory(t *testing.T) {
 			CallID: loopID + ":tool:1", Name: "search", Content: "result", LoopID: loopID,
 		}
 		msg := &loopDeliveryOwnerMsg{data: baseMessageBytes(t, toolResult)}
-		result, admitted := consumeAdmittedDelivery(
-			t.Context(), msg, heartbeatPolicyForTest(t, "tool.result", c.handleToolResultMessage), newDeliveryLaneAdmission(nil))
+		result, admitted := deliverylane.Consume(
+			t.Context(), msg, heartbeatPolicyForTest(t, "tool.result", c.handleToolResultMessage), deliverylane.NewAdmission(nil, nil))
 		require.True(t, admitted)
 		return msg, result
 	}

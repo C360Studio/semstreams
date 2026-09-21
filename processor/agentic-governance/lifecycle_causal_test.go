@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
@@ -133,7 +134,7 @@ func TestLifecycleCausalStartStopRollbackRetention(t *testing.T) {
 func TestLifecycleRunningDeadlineIsTerminalNoReplay(t *testing.T) {
 	runCtx, cancelRun := context.WithCancel(t.Context())
 	h := &causalHandle{closed: make(chan struct{}), closedCalls: make(chan struct{}, 2)}
-	c := &Component{lifecycleUsed: true, running: true, cancel: cancelRun, consumers: []streamConsumerBinding{{handle: h}}}
+	c := &Component{lifecycleUsed: true, running: true, cancel: cancelRun, consumers: []*deliverylane.Binding{deliverylane.NewBinding(h)}}
 	stopCtx, expire := context.WithCancel(t.Context())
 	result := make(chan error, 1)
 	go func() { result <- c.Stop(stopCtx) }()

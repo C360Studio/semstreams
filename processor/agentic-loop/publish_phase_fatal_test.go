@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/stretchr/testify/require"
@@ -95,8 +96,8 @@ func TestHeartbeatWorkMapsFatalToQuarantineAheadOfPermanentAndRetry(t *testing.T
 			msg := &loopDeliveryOwnerMsg{data: []byte("{}")}
 			policy := heartbeatPolicyForTest(t, "agent.response",
 				func(context.Context, []byte) error { return lane.handlerErr })
-			result, admitted := consumeAdmittedDelivery(
-				t.Context(), msg, policy, newDeliveryLaneAdmission(nil))
+			result, admitted := deliverylane.Consume(
+				t.Context(), msg, policy, deliverylane.NewAdmission(nil, nil))
 			require.True(t, admitted)
 			require.Equal(t, lane.decision, result.Decision())
 			require.Equal(t, lane.ownerStop, result.OwnerStopRequired())

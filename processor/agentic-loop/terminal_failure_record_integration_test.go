@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/stretchr/testify/require"
@@ -72,8 +73,8 @@ func TestIntegrationTerminalFailureRecordPrecedesItsPublication(t *testing.T) {
 	t.Run("the record is present and the event is published", func(t *testing.T) {
 		c, tc, bucket, loopID, executionID, callID := timedOutLoop(t)
 		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, executionID, callID)}
-		result, admitted := consumeAdmittedDelivery(t.Context(), msg,
-			heartbeatPolicyForTest(t, "tool.result", c.handleToolResultMessage), newDeliveryLaneAdmission(nil))
+		result, admitted := deliverylane.Consume(t.Context(), msg,
+			heartbeatPolicyForTest(t, "tool.result", c.handleToolResultMessage), deliverylane.NewAdmission(nil, nil))
 		require.True(t, admitted)
 		require.Equal(t, natsclient.DeliveryDecisionAck, result.Decision())
 
@@ -93,8 +94,8 @@ func TestIntegrationTerminalFailureRecordPrecedesItsPublication(t *testing.T) {
 		bucket.failPrefix = "COMPLETE_"
 
 		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, executionID, callID)}
-		result, admitted := consumeAdmittedDelivery(t.Context(), msg,
-			heartbeatPolicyForTest(t, "tool.result", c.handleToolResultMessage), newDeliveryLaneAdmission(nil))
+		result, admitted := deliverylane.Consume(t.Context(), msg,
+			heartbeatPolicyForTest(t, "tool.result", c.handleToolResultMessage), deliverylane.NewAdmission(nil, nil))
 		require.True(t, admitted)
 		require.Equal(t, natsclient.DeliveryDecisionQuarantine, result.Decision(),
 			"a terminal failure whose record did not land cannot be acknowledged")

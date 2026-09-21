@@ -3,6 +3,7 @@ package agenticloop
 import (
 	"testing"
 
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/stretchr/testify/require"
 )
@@ -35,10 +36,10 @@ func TestQuarantinedCarryLeavesTheDeferredTurnInTheDurableRecord(t *testing.T) {
 	c.natsClient = client
 
 	msg := &loopDeliveryOwnerMsg{data: completionResponseBytes(t, first, "the first thing is done")}
-	result, admitted := consumeAdmittedDelivery(
+	result, admitted := deliverylane.Consume(
 		t.Context(), msg,
 		heartbeatPolicyForTest(t, "agent.response", c.handleResponseMessage),
-		newDeliveryLaneAdmission(nil))
+		deliverylane.NewAdmission(nil, nil))
 	require.True(t, admitted)
 	require.Equal(t, natsclient.DeliveryDecisionQuarantine, result.Decision(),
 		"a publish of unknown durability must quarantine, not retry or terminate")

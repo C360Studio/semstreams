@@ -87,6 +87,20 @@ work join, and the one terminal settlement attempt. Inspect every `DeliveryResul
 and settlement evidence in existing health/log surfaces. If `OwnerStopRequired` is true, close admission and stop the
 exact retained consume handle outside the callback. A terminal-method error alone does not authorize owner shutdown.
 
+That owner-side reaction — latch on the first owner-stop result, drain the exact handle once, join the observer — is
+factored in-tree as `internal/deliverylane` and is **not exported**: an adopter outside this module cannot import it
+today, and no export is promised here. Until one is, build the reaction yourself, and hold these four properties,
+which are what the in-tree package exists to keep: the latch closes exactly once and the FIRST owner-stop result is
+the one kept; the health or log write reacting to it completes before that result is buffered for the observer, so
+it is complete before the OBSERVER drains that lane's handle and a later reader never sees a stopped lane with no
+recorded reason — note the ORDER, which is the lane closing first and the write running after, never the write
+running under the admission lock, and note its LIMIT, which is that it says nothing about your own Stop: Stop drains
+the handle on its own authority, so a Stop racing a lane that is latching may drain while the write is still running,
+and an ordinary Stop drains a lane that never latched at all; the drain targets the exact handle that lane acquired
+and no sibling; and the handle is drained once no matter how many results demand it. A lane whose admission has
+closed refuses further deliveries without running work and without attempting a terminal method, leaving them to
+JetStream's own redelivery.
+
 `ConsumeWithHeartbeat` is still exported while its last callers migrate — #1327 takes model and loop, #1249 takes
 AgentRun — and it is deleted by that last PR, with no deprecation period, alias, or shim. Its zero-growth AST ratchet
 (`natsclient/consumer_policy_callsite_test.go`) is not an API allowlist, compatibility promise, current capability,
