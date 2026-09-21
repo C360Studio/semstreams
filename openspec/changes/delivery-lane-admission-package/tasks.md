@@ -240,8 +240,35 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
       is M8's production-seam detector and kills it; the package test kills it directly. Not a governance or loop
       gap.
       **The guard's own mutants** are in 3.1, including one more INVALID MUTANT and the alias hole they found.
-- [ ] 4.4 `task check:push` green; PR body carries `implemented-by: <persona>`; `Closes #1341`.
-- [ ] 4.5 Archive/spec sync is the last content commit.
+- [x] 4.4 `task check:push` green; PR body carries `implemented-by: <persona>`; `Closes #1341`.
+      `task check:push` EXIT=0 at `40cb5a9b`, run to completion (the first attempt was killed by a 10-minute
+      harness budget mid-`test:integration`, which is a harness timeout and not a result; re-run unbounded).
+      Denominator, because an exit code alone does not prove the suites ran: 0 `FAIL` lines; race unit
+      156 `ok` + 20 no-test-files; integration 156 `ok`; `internal/deliverylane` and all five agentic processors
+      appear by name in BOTH. The PR-body half (`implemented-by`, `Closes #1341`) is the coordinator's — this
+      branch was not pushed.
+- [ ] 4.5 Archive/spec sync is the last content commit. NOT DONE HERE: it is a merge-time commit and this branch
+      is unpushed.
+- [x] 4.6 **E2E: none run, and that is a checked fact, not an assumption.** The rule is that a tier runs when a
+      consumer's admission behaviour changed. Four mechanical checks say none did.
+      (a) The production diff touches exactly eleven Go files: one added package, five `component.go`, five
+      deleted `delivery_owner.go`. No other production file changed.
+      (b) No exported declaration was added or removed in any of the five components:
+      `git diff 3faca84f..HEAD -- 'processor/agentic-*/component.go' 'processor/agentic-*/delivery_owner.go' |
+      grep -E '^[+-](func|type|var|const) '` filtered to exported names exits 1. `natsclient/` is untouched
+      (`git diff --name-only 3faca84f..HEAD -- natsclient/` is empty), so the Tier 1 frozen surface is unchanged
+      and `internal/` is outside both tiers (ADR-106).
+      (c) The STRING-LITERAL multiset over the five components' production files is unchanged except for imports,
+      comment text, and three panic-cause format strings that moved into the package. `"dispatch delivery work
+      panicked: %v"`, `"governance ..."` and `"loop ..."` are now composed by the package's one
+      `fmt.Errorf("%s delivery work panicked: %v", owner, recovered)` with `owner` = `"dispatch"` /
+      `"governance"` / `"loop"` — byte-identical output, and governance's existing test asserts the literal
+      string (`delivery_settlement_test.go:140`, green). Every port name, subject, health status, log message
+      and metric label is therefore identical. Nothing an E2E tier observes changed.
+      (d) `task schema:generate && git diff --stat schemas/ specs/` is empty: no config or wire surface moved.
+      This is a `refactor`, not a BREAKING change, so the `docs/contributing/02-e2e-tests.md` § Breaking Changes
+      rule is not triggered either. Integration tiers DID run in full, twice (once directly, once inside
+      `check:push`), and they are the layer that exercises the real NATS delivery paths this change touches.
 
 ## Out of scope (recorded, not tasks)
 
