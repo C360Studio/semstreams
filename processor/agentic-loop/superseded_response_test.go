@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -90,10 +91,10 @@ func TestRedeliveredCarriedCompletionDoesNotCompleteTheLoop(t *testing.T) {
 	deliver := func(t *testing.T) *loopDeliveryOwnerMsg {
 		t.Helper()
 		msg := &loopDeliveryOwnerMsg{data: wire}
-		result, admitted := consumeAdmittedDelivery(
+		result, admitted := deliverylane.Consume(
 			t.Context(), msg,
 			heartbeatPolicyForTest(t, "agent.response", c.handleResponseMessage),
-			newDeliveryLaneAdmission(nil))
+			deliverylane.NewAdmission(nil, nil))
 		require.True(t, admitted)
 		require.Equal(t, natsclient.DeliveryDecisionAck, result.Decision())
 		return msg
@@ -182,10 +183,10 @@ func TestSupersededResponseDoesNotSettleATimedOutLoop(t *testing.T) {
 	droppedBefore := supersededDrops(c)
 
 	msg := &loopDeliveryOwnerMsg{data: completionResponseBytes(t, superseded, "an answer two moves out of date")}
-	result, admitted := consumeAdmittedDelivery(
+	result, admitted := deliverylane.Consume(
 		t.Context(), msg,
 		heartbeatPolicyForTest(t, "agent.response", c.handleResponseMessage),
-		newDeliveryLaneAdmission(nil))
+		deliverylane.NewAdmission(nil, nil))
 	require.True(t, admitted)
 	require.Equal(t, natsclient.DeliveryDecisionAck, result.Decision(),
 		"the stale response published something or failed the delivery instead of being dropped")

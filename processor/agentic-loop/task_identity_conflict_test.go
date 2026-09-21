@@ -6,6 +6,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/stretchr/testify/require"
 )
@@ -51,8 +52,8 @@ func TestTaskNamingADifferentLoopThanItsTaskIDQuarantines(t *testing.T) {
 	deliver := func(t *testing.T, c *Component, task agentic.TaskMessage) (natsclient.DeliveryResult, *loopDeliveryOwnerMsg) {
 		t.Helper()
 		msg := &loopDeliveryOwnerMsg{data: baseMessageBytes(t, &task)}
-		result, admitted := consumeAdmittedDelivery(t.Context(), msg,
-			heartbeatPolicyForTest(t, lane, c.taskInputHandler(timeout)), newDeliveryLaneAdmission(nil))
+		result, admitted := deliverylane.Consume(t.Context(), msg,
+			heartbeatPolicyForTest(t, lane, c.taskInputHandler(timeout)), deliverylane.NewAdmission(nil, nil))
 		require.True(t, admitted)
 		return result, msg
 	}

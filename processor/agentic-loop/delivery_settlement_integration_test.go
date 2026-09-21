@@ -110,7 +110,7 @@ func TestIntegrationApprovalRejectionJoinsCancelledGraphRequestBeforeQuarantine(
 
 	stop()
 	for _, binding := range c.consumers {
-		<-binding.observerDone
+		<-binding.Done()
 	}
 }
 
@@ -191,6 +191,6 @@ func TestIntegrationLoopSignalAndApprovalCallbacksCommitBeforeAck(t *testing.T) 
 	require.NoError(t, toolSub.Drain(t.Context()))
 	cancel()
 	for _, binding := range c.consumers {
-		<-binding.observerDone
+		<-binding.Done()
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/stretchr/testify/require"
@@ -22,7 +23,7 @@ import (
 // `_ = c.handleLoopFailure(...); return nil` leaves that test green, because it
 // is the task lane. The assertion here is the return value on the response
 // lane, so both subtests drive the production callback through
-// consumeAdmittedDelivery rather than calling handleLoopFailure directly.
+// deliverylane.Consume rather than calling handleLoopFailure directly.
 //
 // spec: agentic-loop / Loop input classes settle after owner-specific durable done
 func TestResponseHandlerFailureSettlesOnTheDurableRecord(t *testing.T) {
@@ -58,10 +59,10 @@ func TestResponseHandlerFailureSettlesOnTheDurableRecord(t *testing.T) {
 	t.Run("a terminal business failure is written before it is acknowledged", func(t *testing.T) {
 		c, bucket, loopID, requestID := timedOutLoop(t)
 		msg := &loopDeliveryOwnerMsg{data: responseBytes(t, requestID)}
-		result, admitted := consumeAdmittedDelivery(
+		result, admitted := deliverylane.Consume(
 			t.Context(), msg,
 			heartbeatPolicyForTest(t, "agent.response", c.handleResponseMessage),
-			newDeliveryLaneAdmission(nil))
+			deliverylane.NewAdmission(nil, nil))
 		require.True(t, admitted)
 		require.Equal(t, natsclient.DeliveryDecisionAck, result.Decision())
 		require.Equal(t, int32(1), msg.acks.Load())
@@ -77,10 +78,10 @@ func TestResponseHandlerFailureSettlesOnTheDurableRecord(t *testing.T) {
 		c, bucket, _, requestID := timedOutLoop(t)
 		bucket.fail = errKVUnavailable
 		msg := &loopDeliveryOwnerMsg{data: responseBytes(t, requestID)}
-		result, admitted := consumeAdmittedDelivery(
+		result, admitted := deliverylane.Consume(
 			t.Context(), msg,
 			heartbeatPolicyForTest(t, "agent.response", c.handleResponseMessage),
-			newDeliveryLaneAdmission(nil))
+			deliverylane.NewAdmission(nil, nil))
 		require.True(t, admitted)
 		require.Equal(t, natsclient.DeliveryDecisionQuarantine, result.Decision(),
 			"the response lane acknowledged a terminal failure that never reached KV")

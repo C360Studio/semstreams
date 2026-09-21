@@ -75,6 +75,17 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
       `result, admitted := deliverylane.Settle(...)` then `if !admitted { return }`, leaving the existing branches
       byte-identical. Not the conjunct dispatch used: the early return is today's `if !admission.admit() { return }`
       shape and stays correct when L4 adds a branch below it.
+      DONE. Also relocated `recordDeliveryOwnerFatal` into `component.go` with a doc comment naming why it runs
+      synchronously; kept the `if admission != nil` guard around `Observe` byte-for-byte (both branches assign it,
+      so the guard is dead today — removing it would be a behaviour change this change does not owe). Wiring
+      mutants, both lanes: the `Observe` CALL, `nil onFatal` on the heartbeat lane and `nil onFatal` on the
+      settlement lane are ALL KILLED by existing tests (`TestLoopSetupWiresMetadataFailureToAcquiredOwner`,
+      `TestLoopApprovalPanicProductionCallbackQuarantinesExactOwner`,
+      `TestLoopCancellationUnknownPublicationQuarantinesWithoutReleasingTransientState`) — loop is the
+      best-covered of the five. The NEW early-return guard SURVIVED at first, so
+      `TestLoopApprovalPanicProductionCallbackQuarantinesExactOwner` now replays a second delivery into the same
+      latched lane and asserts no terminal method and no "did not settle cleanly" report; then KILLED. Neither
+      lane declares refusals, so there is no `onRefused` to mutate (#1342).
 - [x] 2.4 agentic-dispatch (three lanes at `3faca84f`) — FIRST, per the order above: two terminal lanes →
       `Consume` with the refuse arm; the one settlement lane (`user.message`) →
       `Settle(..., natsclient.ImmediateDeliveryRetry(), admission, "dispatch", c.handleUserMessage)`; one

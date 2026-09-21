@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/types"
@@ -66,8 +67,8 @@ func TestToolResultHandlerFailureSettlesOnTheDurableRecord(t *testing.T) {
 	t.Run("a terminal handler failure is written before it is acknowledged", func(t *testing.T) {
 		c, bucket, loopID, executionID, callID := timedOutLoop(t)
 		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, executionID, callID)}
-		result, admitted := consumeAdmittedDelivery(
-			t.Context(), msg, newPolicy(t, c.handleToolResultMessage), newDeliveryLaneAdmission(nil))
+		result, admitted := deliverylane.Consume(
+			t.Context(), msg, newPolicy(t, c.handleToolResultMessage), deliverylane.NewAdmission(nil, nil))
 		require.True(t, admitted)
 		require.Equal(t, natsclient.DeliveryDecisionAck, result.Decision())
 		require.Equal(t, int32(1), msg.acks.Load())
@@ -98,8 +99,8 @@ func TestToolResultHandlerFailureSettlesOnTheDurableRecord(t *testing.T) {
 		c, bucket, _, executionID, callID := timedOutLoop(t)
 		bucket.fail = errKVUnavailable
 		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, executionID, callID)}
-		result, admitted := consumeAdmittedDelivery(
-			t.Context(), msg, newPolicy(t, c.handleToolResultMessage), newDeliveryLaneAdmission(nil))
+		result, admitted := deliverylane.Consume(
+			t.Context(), msg, newPolicy(t, c.handleToolResultMessage), deliverylane.NewAdmission(nil, nil))
 		require.True(t, admitted)
 		require.Equal(t, natsclient.DeliveryDecisionQuarantine, result.Decision())
 		require.True(t, result.OwnerStopRequired())
@@ -116,8 +117,8 @@ func TestToolResultHandlerFailureSettlesOnTheDurableRecord(t *testing.T) {
 		handler.loopManager.TrackToolCall(executionID, "2f1a6c9e-9f2d-4b27-8f4a-3c9f0e6d51aa")
 		c := releaseTestComponent(t, handler)
 		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, executionID, callID)}
-		result, admitted := consumeAdmittedDelivery(
-			t.Context(), msg, newPolicy(t, c.handleToolResultMessage), newDeliveryLaneAdmission(nil))
+		result, admitted := deliverylane.Consume(
+			t.Context(), msg, newPolicy(t, c.handleToolResultMessage), deliverylane.NewAdmission(nil, nil))
 		require.True(t, admitted)
 		require.Equal(t, natsclient.DeliveryDecisionQuarantine, result.Decision())
 		require.Zero(t, msg.acks.Load()+msg.naks.Load()+msg.terms.Load())
@@ -128,8 +129,8 @@ func TestToolResultHandlerFailureSettlesOnTheDurableRecord(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, executionID, callID)}
-		result, admitted := consumeAdmittedDelivery(
-			ctx, msg, newPolicy(t, c.handleToolResultMessage), newDeliveryLaneAdmission(nil))
+		result, admitted := deliverylane.Consume(
+			ctx, msg, newPolicy(t, c.handleToolResultMessage), deliverylane.NewAdmission(nil, nil))
 		require.True(t, admitted)
 		require.Equal(t, natsclient.DeliveryDecisionRetry, result.Decision(),
 			"a clean shutdown must not latch delivery ownership lost")
@@ -206,9 +207,9 @@ func TestToolResultCancellationRetriesOnlyBeforeMutation(t *testing.T) {
 
 		before := handler.loopManager.GetCurrentIteration(loopID)
 		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, executionID, callID)}
-		result, admitted := consumeAdmittedDelivery(
+		result, admitted := deliverylane.Consume(
 			ctx, msg, heartbeatPolicyForTest(t, "tool.result", c.handleToolResultMessage),
-			newDeliveryLaneAdmission(nil))
+			deliverylane.NewAdmission(nil, nil))
 		require.True(t, admitted)
 		require.Positive(t, reader.calls.Load(), "the fixture must cancel from inside the handler")
 
@@ -230,9 +231,9 @@ func TestToolResultCancellationRetriesOnlyBeforeMutation(t *testing.T) {
 
 		before := handler.loopManager.GetCurrentIteration(loopID)
 		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, executionID, callID)}
-		result, admitted := consumeAdmittedDelivery(
+		result, admitted := deliverylane.Consume(
 			ctx, msg, heartbeatPolicyForTest(t, "tool.result", c.handleToolResultMessage),
-			newDeliveryLaneAdmission(nil))
+			deliverylane.NewAdmission(nil, nil))
 		require.True(t, admitted)
 		require.Equal(t, natsclient.DeliveryDecisionRetry, result.Decision(),
 			"a clean stop that mutated nothing must not latch delivery ownership lost")

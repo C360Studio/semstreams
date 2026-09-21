@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/stretchr/testify/require"
 )
@@ -58,10 +59,10 @@ func TestIntegrationPartialPublishQuarantinesRatherThanRetrying(t *testing.T) {
 	// owner-fatal latched, negative health, exact handle drained, and the
 	// message neither ACKed nor NAKed.
 	var latched natsclient.DeliveryResult
-	admission := newDeliveryLaneAdmission(func(r natsclient.DeliveryResult) {
+	admission := deliverylane.NewAdmission(func(r natsclient.DeliveryResult) {
 		latched = r
 		c.recordDeliveryOwnerFatal(r)
-	})
+	}, nil)
 	policy, err := newLoopHeartbeatDeliveryPolicy(ctx, natsclient.StreamConsumerConfig{
 		AckWait: 2 * time.Minute, BackOff: []time.Duration{30 * time.Second, 2 * time.Minute}, MaxDeliver: 2,
 	}, 15*time.Second, "agent.response", func(workCtx context.Context, _ []byte) error {
@@ -70,7 +71,7 @@ func TestIntegrationPartialPublishQuarantinesRatherThanRetrying(t *testing.T) {
 	require.NoError(t, err)
 
 	msg := &loopDeliveryOwnerMsg{data: []byte("{}")}
-	settled, admitted := consumeAdmittedDelivery(ctx, msg, policy, admission)
+	settled, admitted := deliverylane.Consume(ctx, msg, policy, admission)
 	require.True(t, admitted)
 	require.Equal(t, natsclient.DeliveryDecisionQuarantine, settled.Decision())
 	require.True(t, settled.OwnerStopRequired(), "commit-unknown must stop the exact owner")
@@ -90,7 +91,7 @@ func TestIntegrationPartialPublishQuarantinesRatherThanRetrying(t *testing.T) {
 	// same quarantine, different reason; only the cause text separates them.
 	c.loopsBucket = failingLoopBucket{err: errors.New("kv unavailable")}
 	preMsg := &loopDeliveryOwnerMsg{data: []byte("{}")}
-	prePublish, admitted := consumeAdmittedDelivery(ctx, preMsg, policy, newDeliveryLaneAdmission(nil))
+	prePublish, admitted := deliverylane.Consume(ctx, preMsg, policy, deliverylane.NewAdmission(nil, nil))
 	require.True(t, admitted)
 	require.Equal(t, natsclient.DeliveryDecisionQuarantine, prePublish.Decision())
 	require.Zero(t, preMsg.acks.Load()+preMsg.naks.Load()+preMsg.terms.Load())

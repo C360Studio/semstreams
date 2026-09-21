@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/llm"
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
@@ -73,7 +74,7 @@ type Component struct {
 
 	// Track consumers for cleanup
 	consumerInfos []consumerInfo
-	consumers     []streamConsumerBinding
+	consumers     []*deliverylane.Binding
 
 	// Query subscription for trajectory requests
 	trajectorySub            requestSubscription
@@ -114,11 +115,6 @@ type Component struct {
 	testLineageWriteHook func(context.Context, string, map[string]any) error
 }
 
-type streamConsumerBinding struct {
-	handle       jetstream.ConsumeContext
-	drainOnce    *sync.Once
-	observerDone <-chan struct{}
-}
 type requestSubscription interface{ Drain(context.Context) error }
 
 type inputHandler func(context.Context, []byte) error
@@ -761,10 +757,9 @@ func (c *Component) cleanup(ctx context.Context) error {
 			c.lifecycleMu.Unlock()
 		}
 	}
-	for i := range c.consumers {
-		binding := &c.consumers[i]
-		binding.drain()
-		closed := binding.handle.Closed()
+	for _, binding := range c.consumers {
+		binding.Drain()
+		closed := binding.Closed()
 		if c.waitConsumerClosed != nil {
 			cleanupErr = errors.Join(cleanupErr, c.waitConsumerClosed(ctx, closed))
 		} else {
@@ -781,13 +776,11 @@ func (c *Component) cleanup(ctx context.Context) error {
 	if c.cancel != nil {
 		c.cancel()
 	}
-	for i := range c.consumers {
-		if observerDone := c.consumers[i].observerDone; observerDone != nil {
-			select {
-			case <-observerDone:
-			case <-ctx.Done():
-				cleanupErr = errors.Join(cleanupErr, ctx.Err())
-			}
+	for _, binding := range c.consumers {
+		select {
+		case <-binding.Done():
+		case <-ctx.Done():
+			cleanupErr = errors.Join(cleanupErr, ctx.Err())
 		}
 	}
 	if done != nil {
@@ -1023,6 +1016,21 @@ func (c *Component) resolveLoopLaneDelivery(
 }
 
 // setupConsumer sets up a JetStream consumer for an input port.
+// recordDeliveryOwnerFatal latches the FIRST loss of delivery ownership into
+// health. It runs synchronously inside the delivery callback as the lane
+// admission's onFatal, before the result is buffered for the observer, so
+// health can never read healthy after the exact handle has drained. Relocated
+// here from delivery_owner.go when the latch moved to internal/deliverylane;
+// the health semantics are untouched.
+func (c *Component) recordDeliveryOwnerFatal(result natsclient.DeliveryResult) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.deliveryFatalErr != nil {
+		return
+	}
+	c.deliveryFatalErr = result.Err()
+}
+
 func (c *Component) setupConsumer(
 	setupCtx context.Context,
 	consumerCtx context.Context,
@@ -1089,15 +1097,15 @@ func (c *Component) setupConsumer(
 		DisableMessageTimeout: port.Name == "agent.task",
 	}
 	var handlerFn func(context.Context, jetstream.Msg)
-	var admission *deliveryLaneAdmission
+	var admission *deliverylane.Admission
 	if lane.useHeartbeat {
 		policy, policyErr := newLoopHeartbeatDeliveryPolicy(setupCtx, cfg, lane.heartbeatInterval, port.Name, handler)
 		if policyErr != nil {
 			return policyErr
 		}
-		admission = newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
+		admission = deliverylane.NewAdmission(c.recordDeliveryOwnerFatal, nil)
 		handlerFn = func(msgCtx context.Context, msg jetstream.Msg) {
-			result, admitted := consumeAdmittedDelivery(msgCtx, msg, policy, admission)
+			result, admitted := deliverylane.Consume(msgCtx, msg, policy, admission)
 			if admitted && result.Err() != nil && !result.OwnerStopRequired() {
 				c.logger.Error("Message handler error", "port", port.Name, "error", result.Err())
 			}
@@ -1117,14 +1125,15 @@ func (c *Component) setupConsumer(
 			return errs.WrapInvalid(retryErr, "agentic-loop", "setupConsumer",
 				"construct settlement retry policy")
 		}
-		admission = newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal)
+		admission = deliverylane.NewAdmission(c.recordDeliveryOwnerFatal, nil)
 		handlerFn = func(msgCtx context.Context, msg jetstream.Msg) {
-			if !admission.admit() {
+			result, admitted := deliverylane.Settle(msgCtx, msg, settleRetry, admission, "loop", settleHandlerFn)
+			// Early return, not a conjunct: a refused delivery returns the zero
+			// result, whose Err() is non-nil by construction, so every branch
+			// below must be unreachable on refusal — including ones added later.
+			if !admitted {
 				return
 			}
-			decision, cause := runLoopDeliveryWork(msgCtx, msg.Data(), settleHandlerFn)
-			result := natsclient.SettleDeliveryWithRetry(msg, settleRetry, decision, cause)
-			admission.latch(result)
 			if result.Err() != nil && !result.OwnerStopRequired() {
 				c.logger.Error("Message delivery did not settle cleanly", "port", port.Name, "error", result.Err())
 			}
@@ -1140,9 +1149,11 @@ func (c *Component) setupConsumer(
 		return errs.Wrap(err, "agentic-loop", "setupConsumer", fmt.Sprintf("setup consumer for stream %s", streamName))
 	}
 
-	binding := newStreamConsumerBinding(handle)
+	binding := deliverylane.NewBinding(handle)
 	if admission != nil {
-		c.observeDeliveryLane(consumerCtx, &binding, admission, port.Name)
+		deliverylane.Observe(consumerCtx, binding, admission, func(result natsclient.DeliveryResult) {
+			c.logger.Error("Loop delivery ownership lost", "port", port.Name, "error", result.Err())
+		})
 	}
 	// Track consumer for cleanup in Stop()
 	c.lifecycleMu.Lock()
