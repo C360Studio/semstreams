@@ -55,7 +55,7 @@ jobs:
           cache: true
 
       - name: Install task
-        run: sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+        run: GOBIN=/usr/local/bin go install github.com/go-task/task/v3/cmd/task@v3.53.1
 
       # gh#1279: the port preflight answers "is this free now", which is a
       # snapshot, not a reservation. In run 34392378822 it printed
@@ -85,7 +85,7 @@ jobs:
           cache: true
 
       - name: Install task
-        run: sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+        run: GOBIN=/usr/local/bin go install github.com/go-task/task/v3/cmd/task@v3.53.1
 
       # gh#1279: the port preflight answers "is this free now", which is a
       # snapshot, not a reservation. In run 34392378822 it printed

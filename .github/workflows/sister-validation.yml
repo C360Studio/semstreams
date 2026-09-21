@@ -69,7 +69,7 @@ jobs:
             semsource/go.sum
 
       - name: Install task
-        run: sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+        run: GOBIN=/usr/local/bin go install github.com/go-task/task/v3/cmd/task@v3.53.1
 
       - name: Point semsource at this semstreams
         working-directory: semsource
@@ -120,7 +120,7 @@ jobs:
             semboids/go.sum
 
       - name: Install task
-        run: sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+        run: GOBIN=/usr/local/bin go install github.com/go-task/task/v3/cmd/task@v3.53.1
 
       - name: Point semboids at this semstreams
         working-directory: semboids
@@ -156,7 +156,7 @@ jobs:
           cache: true
 
       - name: Install task
-        run: sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+        run: GOBIN=/usr/local/bin go install github.com/go-task/task/v3/cmd/task@v3.53.1
 
       - name: Run e2e core tier
         run: task e2e:core
