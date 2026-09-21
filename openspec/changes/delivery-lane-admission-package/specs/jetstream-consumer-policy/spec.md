@@ -1,10 +1,11 @@
 # jetstream-consumer-policy Delta
 
 > Written against the spec as it stands AFTER `settle-after-durable-effect` (L1) archives: the second and third
-> MODIFIED blocks restate L1's modified and added text and change exactly one `**AND**` clause each. `openspec
-> validate --strict` for this change is expected to fail until L1 syncs (`.agents/protocol.md`, design-phase claim);
-> the first block validates against the current spec. No import path appears in any SHALL; the package path lives
-> in `design.md` § 5 and the package doc comment.
+> MODIFIED blocks restate L1's modified and added text and change exactly one `**AND**` clause each. L1 has since
+> archived, so the caveat this note carried during the design phase is discharged: `openspec validate
+> delivery-lane-admission-package --strict` is green at the implementation base `3faca84f` and on every commit of
+> this change. No import path appears in any SHALL; the package path lives in `design.md` § 5 and the package doc
+> comment.
 
 ## MODIFIED Requirements
 

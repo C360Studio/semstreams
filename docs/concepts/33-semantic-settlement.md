@@ -89,6 +89,14 @@ A durable consumer owner composes the pattern in four steps:
 4. Inspect every `DeliveryResult`; when `OwnerStopRequired` is true, close admission and stop that exact handle outside
    the callback.
 
+Step 4 is one shape, not a per-component invention. In-tree it lives in `internal/deliverylane`: an admission latch
+that closes on the first result requiring owner stop, a drain-once binding around the exact handle that lane
+committed, and an observer that drains the handle when the latch closes. The five agentic processors compose it; the
+package holds no lifecycle authority of its own, so the owner still decides stop, awaits `Closed`, and joins the
+observer. It is internal while every consumer is a lane inside this module — the contract test
+`test/contract/delivery_lane_one_home_contract_test.go` keeps it the only home — and exporting it is a separate,
+measured decision.
+
 The framework SHOULD make transport mechanics uniform. It SHOULD NOT guess a domain's definition of done, invent a
 receipt ledger before one is proven necessary, or expose raw settlement authority to make a fast handler convenient.
 

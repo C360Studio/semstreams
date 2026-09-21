@@ -122,13 +122,20 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
       KILLED. The lanes declare no refusals (nil `onRefused`), so there is nothing to mutate there (#1342).
       Package-level re-runs against this suite: `m7g` (drop `runWork`'s recover) KILLED; `m8g` (drop `Settle`'s
       `Admit()` guard) SURVIVED — the same reason it survives loop, recorded in 4.3.
-- [ ] 2.6 Tests — the **45 functions in 23 files** pinned in `inventory.md` § 4, regenerated at `3faca84f` (36/16 at
+- [x] 2.6 Tests — the **45 functions in 23 files** pinned in `inventory.md` § 4, regenerated at `3faca84f` (36/16 at
       the design base; L2/L3 added seven files, six of them under `agentic-loop`): `admission.fatal` length checks
-      → `require.False(admission.Admit())` (buffering moves to 1.2);
-      `binding.observerDone` → `binding.Done()`; `c.consumers[i].handle.Closed()` → `.Closed()`; the five
-      `lifecycle_causal_test.go` literals `[]streamConsumerBinding{{handle: h}}` →
+      -> `require.False(admission.Admit())` (buffering moves to 1.2);
+      `binding.observerDone` -> `binding.Done()`; `c.consumers[i].handle.Closed()` -> `.Closed()`; the five
+      `lifecycle_causal_test.go` literals `[]streamConsumerBinding{{handle: h}}` ->
       `[]*deliverylane.Binding{deliverylane.NewBinding(h)}`; every string assertion in `design.md` § 8 stays
       byte-identical.
+      DONE, and checked two ways rather than by eye. (a) Exactly **23 of 23** pinned files are touched on this
+      branch: `git diff --name-only 3faca84f..HEAD -- 'processor/agentic-*/*_test.go' | wc -l` = 23, and the list
+      equals the census file set. (b) Every spelling the census pinned is gone, with stderr visible:
+      `git grep -nE 'admission\.(fatal|admit|latch|refuse)\b|\.handle\.Closed' -- 'processor/agentic-*'` exits 1,
+      and so does the seven-symbol sweep in 2.7 — so all 45 pinned references were converted by construction, not
+      by a count that could miscount. Four tests gained assertions beyond the mechanical conversion; each is
+      recorded against the mutant that demanded it in 2.1, 2.3, 2.4/2.8 and 2.5, never as a silent addition.
 - [x] 2.7 `git grep -n 'deliveryLaneAdmission\|newStreamConsumerBinding\|observeDeliveryLane\|consumeAdmittedDelivery\|run[A-Za-z]*DeliveryWork\|streamConsumerBinding\|observerDone' -- processor/agentic-*` returns nothing.
       DONE: exit 1 (no match) across all five packages with stderr visible.
 - [x] 2.8 M8's production-seam detector, on dispatch:
@@ -168,30 +175,71 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
 
 ## 4. Spec, docs, evidence
 
-- [ ] 4.1 Spec delta `specs/jetstream-consumer-policy/spec.md` (three MODIFIED requirements, every scenario
+- [x] 4.1 Spec delta `specs/jetstream-consumer-policy/spec.md` (three MODIFIED requirements, every scenario
       restated, no import path in a SHALL); `openspec validate delivery-lane-admission-package --strict` green AFTER
       L1's change archives (two of the three blocks restate L1's text and cannot validate before it).
-- [ ] 4.2 `docs/concepts/33-semantic-settlement.md:89` step 4 names the in-tree home of "close admission and stop
+      DONE; the delta needed no content change — it was written for exactly this landing. L1 archived before the
+      implementation base, so the design-phase caveat is discharged; the delta's own header note now records that
+      `--strict` is green at `3faca84f` rather than predicting a failure that no longer happens. `grep` for
+      `deliverylane` in the delta returns nothing: no import path in any SHALL, as designed.
+- [x] 4.2 `docs/concepts/33-semantic-settlement.md:89` step 4 names the in-tree home of "close admission and stop
       that exact handle"; `docs/operations/migration-restart-safe-nats-client.md:87-88` gains one sentence saying the
       reaction is internal for now and what an adopter builds meanwhile.
-- [ ] 4.3 Mutation evidence per `design.md` § 8 (M1–M8), each by `cp` backup + checksum, `[applied]` printed
-      between mutating and testing, recorded in the PR body with commands and output. PARTIAL — package and
-      dispatch done; every restore verified by md5 equal to the pre-mutation sum, and `git diff` empty after each.
-      Package (`go test -race -count=1 ./internal/deliverylane/...`): M1 delete `admission.Latch(result)` in
-      `Consume` → KILLED; M2 delete `a.onFatal(result)` in `Latch` → KILLED; M3 delete `binding.Drain()` in
-      `Observe` → KILLED; M4 delete `admission.refuse(msg)` in `Consume` → KILLED; M5 `drainOnce.Do` → bare
-      `handle.Drain()` → KILLED; M7 delete the `recover` block → INVALID MUTANT (build failure: `fmt` becomes
-      unused), re-run as `m7b`, a compiling mutant that also drops the import → KILLED; M8 delete the
-      `admission.Admit()` guard in `Settle` → KILLED.
-      Dispatch, CALL-level (`go test -race -count=1 ./processor/agentic-dispatch/...` unless noted): M6 delete the
-      `deliverylane.Observe(...)` call on the `agent.complete` lane → SURVIVES the untagged suite, KILLED under
+      DONE. The concepts doc gains a paragraph under step 4 naming `internal/deliverylane`, the three things it
+      provides, the lifecycle authority it does NOT hold, and the contract test that keeps it the only home. The
+      migration doc gains a paragraph that says plainly it is **not exported**, promises no export, and — the part
+      an adopter actually needs — names the four properties to hold while building the reaction themselves: the
+      latch closes once and keeps the FIRST owner-stop result; the health/log write completes before the latch is
+      observable; the drain targets the exact acquired handle and no sibling; the handle drains once however many
+      results demand it. Plus the refusal behaviour a closed lane owes. Both kept under the 120-column convention.
+- [x] 4.3 Mutation evidence per `design.md` § 8 (M1-M8), each by `cp` backup + checksum, `[applied]` printed
+      between mutating and testing, recorded in the PR body with commands and output. COMPLETE. Every restore was
+      verified by md5 equal to the pre-mutation sum, with `git diff` empty after each; `git stash`, `git checkout`
+      and `git restore` were used at no point.
+      **Package** (`go test -race -count=1 ./internal/deliverylane/...`): M1 delete `admission.Latch(result)` in
+      `Consume` -> KILLED; M2 delete `a.onFatal(result)` in `Latch` -> KILLED; M3 delete `binding.Drain()` in
+      `Observe` -> KILLED; M4 delete `admission.refuse(msg)` in `Consume` -> KILLED; M5 `drainOnce.Do` -> bare
+      `handle.Drain()` -> KILLED; M7 delete the `recover` block -> INVALID MUTANT (build failure: `fmt` becomes
+      unused), re-run as `m7b`, a compiling mutant that also drops the import -> KILLED; M8 delete the
+      `admission.Admit()` guard in `Settle` -> KILLED.
+      **Dispatch, CALL level** (`./processor/agentic-dispatch/...` unless noted): M6 delete the
+      `deliverylane.Observe(...)` call on the `agent.complete` lane -> SURVIVES the untagged suite, KILLED under
       `-tags=integration` by `TestIntegrationProductionCallbackUnknownPublishQuarantinesExactLane`; delete the
-      `admitted` guard at the `user.message` lane → KILLED by 2.8's test; M8 and M3 re-run against the dispatch
-      suite → both KILLED by dispatch tests.
-      Dispatch, WIRING-level: passing `nil` as the `agent.complete` lane's `onFatal` SURVIVED both suites until
-      this change added three assertions to the existing integration test (health is degraded, status is
-      `terminal delivery ownership lost`, `LastError` names `agent.complete`) — then KILLED. Passing `nil` as that
-      lane's `onRefused` SURVIVES both suites and is NOT fixed here: see the residual in `design.md` § 9c.
+      `admitted` guard at the `user.message` lane -> KILLED by 2.8's test; M8 and M3 re-run against the dispatch
+      suite -> both KILLED by dispatch tests.
+      **Wiring level, every lane of every component** — the mutant the design did not call for, and the one that
+      found real gaps. `nil onFatal` per lane, and deleting the `Observe` CALL per component:
+
+      | component | lane | `Observe` call | `nil onFatal` | settlement guard |
+      |---|---|---|---|---|
+      | dispatch | `agent.complete` | KILLED (integration only) | SURVIVED -> KILLED (3 new assertions) | n/a |
+      | dispatch | `agent.failed` | (same call site) | (same reaction) | n/a |
+      | dispatch | `user.message` | n/a | (same reaction) | KILLED by 2.8 |
+      | tools | `tool.execute` | SURVIVED -> KILLED | SURVIVED -> KILLED | n/a |
+      | loop | heartbeat | KILLED | KILLED | n/a |
+      | loop | settlement | KILLED | KILLED | SURVIVED -> KILLED (same-lane replay) |
+      | model | metadata | KILLED | KILLED | n/a |
+      | governance | 3 ports | KILLED | KILLED | SURVIVED -> KILLED (same-lane replay) |
+
+      The two SURVIVED -> KILLED wiring pairs (dispatch, tools) were closed inside the existing test that already
+      walks that lane to a fatal, by asserting health degraded, status, and `LastError`; the two SURVIVED -> KILLED
+      settlement guards (loop, governance) were closed by replaying a second delivery into the SAME latched lane
+      and asserting no terminal method and no "did not settle cleanly" report. Loop and model needed no new
+      assertions at the wiring level: loop is the best-covered of the five, and model's detector is the one
+      `design.md` § 8 M6 named by hand.
+      **`nil onRefused`, per lane — SURVIVORS, recorded not fixed** (coordinator ruling; obligation posted on
+      #1342). Only three lanes pass a non-nil `onRefused` today, so only three are mutable:
+      `dispatch/agent.complete` -> SURVIVED both suites; `dispatch/agent.failed` -> SURVIVED both suites
+      (`-race -count=1`, then `-tags=integration -p 2`, 80.4s); `tools/tool.execute` -> SURVIVED both suites.
+      The other five constructions (`dispatch/user.message`, both loop lanes, model, governance) pass nil already,
+      so there is nothing to mutate: the refusal is undeclared in production, which IS #1342.
+      **Re-runs of the package mutants against a consumer suite**: `m7g` (drop `runWork`'s recover) -> KILLED by
+      governance; `m8g` (drop `Settle`'s `Admit()` guard) -> SURVIVED governance, and survives loop for the same
+      reason: their settlement work panics, so a re-run quarantines and settles nothing, which is
+      indistinguishable from a refusal at the assertions those suites make. Dispatch's `/help` replay (task 2.8)
+      is M8's production-seam detector and kills it; the package test kills it directly. Not a governance or loop
+      gap.
+      **The guard's own mutants** are in 3.1, including one more INVALID MUTANT and the alias hole they found.
 - [ ] 4.4 `task check:push` green; PR body carries `implemented-by: <persona>`; `Closes #1341`.
 - [ ] 4.5 Archive/spec sync is the last content commit.
 
