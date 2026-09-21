@@ -313,8 +313,14 @@ func refusedSubmissionResponse(msg agentic.UserMessage, refusal error) agentic.U
 // processTaskSubmissionSync processes a task submission and returns acknowledgment.
 // The actual task execution happens asynchronously via NATS.
 func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.UserMessage) agentic.UserResponse {
+	prepared, vacant, found, err := c.findRetainedDispatchTask(ctx, msg)
+	if err != nil {
+		return refusedSubmissionResponse(msg,
+			c.refuseSubmission(seamHTTPSubmission, msg.ReplyTo, codeSubmissionInvalid, err))
+	}
+
 	// Check submit permission
-	if !c.hasPermission(msg.UserID, "submit_task") {
+	if !found && !c.hasPermission(msg.UserID, "submit_task") {
 		return agentic.UserResponse{
 			ResponseID:  uuid.New().String(),
 			ChannelType: msg.ChannelType,
@@ -326,58 +332,43 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 		}
 	}
 
-	// Determine loop ID (continue existing or create new). The mint decision is
-	// made HERE, before the gate: an unresolved continuation is the signal to
-	// start a conversation, not a malformed token, and the gate refuses an empty
-	// token as malformed.
-	loopID := ""
-	if msg.ReplyTo != "" {
-		loopID = msg.ReplyTo
-	} else if c.config.AutoContinue {
-		loopID = c.loopTracker.GetActiveLoop(msg.UserID, msg.ChannelID)
+	// Resolve a continuation only after exact retained absence. An empty result
+	// means new work; prepareNewDispatchTask mints its LoopID only after any
+	// named continuation passes admission.
+	loopID := prepared.task.LoopID
+	if !found {
+		if msg.ReplyTo != "" {
+			loopID = msg.ReplyTo
+		} else if c.config.AutoContinue {
+			loopID = c.loopTracker.GetActiveLoop(msg.UserID, msg.ChannelID)
+		}
+
+		if loopID != "" {
+			_, err = c.admitLoopRequest(ctx, loopAdmissionRequest{
+				Seam:      seamHTTPSubmission,
+				Field:     "reply_to",
+				Operation: loopOpContinue,
+				LoopID:    loopID,
+				Requester: msg.UserID,
+			})
+			if err != nil {
+				// The client hears about it here, synchronously, in the response it is
+				// already waiting on, naming the field — rather than "Task submitted"
+				// followed by an async TERM it never sees (ADR-105, #1192).
+				return refusedSubmissionResponse(msg, err)
+			}
+		}
+
+		prepared, err = c.prepareNewDispatchTask(ctx, msg, loopID, vacant)
+		if err != nil {
+			return refusedSubmissionResponse(msg,
+				c.refuseSubmission(seamHTTPSubmission, loopID, codeSubmissionInvalid, err))
+		}
+		loopID = prepared.task.LoopID
 	}
-
-	if loopID == "" {
-		// Create new loop. The token is framework-minted and full: a truncated
-		// one carried 32 bits, and a collision merged two conversations silently
-		// (ADR-105, #1192).
-		loopID = uuid.New().String()
-	} else if _, err := c.admitLoopRequest(ctx, loopAdmissionRequest{
-		Seam:      seamHTTPSubmission,
-		Field:     "reply_to",
-		Operation: loopOpContinue,
-		LoopID:    loopID,
-		Requester: msg.UserID,
-	}); err != nil {
-		// The client hears about it here, synchronously, in the response it is
-		// already waiting on, naming the field — rather than "Task submitted"
-		// followed by an async TERM it never sees (ADR-105, #1192).
-		return refusedSubmissionResponse(msg, err)
-	}
-
-	taskID := uuid.New().String()
-
-	// Create task message (shared builder — see buildTaskMessage; gh#256).
-	task := c.buildTaskMessage(ctx, msg, loopID, taskID)
-
-	// Wrap task in BaseMessage envelope (required by agentic-loop). The marshal
-	// is where TaskMessage.Validate runs, so it is the last thing that can
-	// refuse this submission on its own content — including the client-authored
-	// run_id / in_reply_to resume anchors, which never pass through the
-	// continuation branch above. Nothing is tracked or counted until it returns
-	// (#1225).
-	baseMsg := message.NewBaseMessage(task.Schema(), &task, "agentic-dispatch-http")
-	taskData, err := json.Marshal(baseMsg)
-	if err != nil {
-		return refusedSubmissionResponse(msg,
-			c.refuseSubmission(seamHTTPSubmission, loopID, codeSubmissionInvalid, err))
-	}
-
-	subject, err := component.ResolveSubject(c.outputPortDefs(), "agent.task", taskID)
-	if err != nil {
-		return refusedSubmissionResponse(msg,
-			c.refuseSubmission(seamHTTPSubmission, loopID, codeSubmissionUndeliverable, err))
-	}
+	task := prepared.task
+	taskID := task.TaskID
+	loopID = task.LoopID
 
 	// Track the loop and count it started — after the task is assembled and
 	// addressable, before the publish. See the channel path for why this window
@@ -395,7 +386,7 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 	})
 	c.metrics.recordLoopStarted()
 
-	if err := c.natsClient.PublishToStream(ctx, subject, taskData); err != nil {
+	if err := c.natsClient.PublishToStream(ctx, prepared.subject, prepared.data); err != nil {
 		return refusedSubmissionResponse(msg,
 			c.refuseSubmission(seamHTTPSubmission, loopID, codeSubmissionUndeliverable, err))
 	}
@@ -511,7 +502,15 @@ func truncate(s string, maxLen int) string {
 // "http-user" default) so middleware can authenticate it without
 // handler edits.
 type ApprovalRequest struct {
-	Decision          string         `json:"decision"`                     // approve | reject | modify
+	Decision string `json:"decision"` // approve | reject | modify
+	// ExecutionID names the execution this decision is FOR: the execution_id
+	// the caller was shown on the ApprovalPendingEvent. REQUIRED. Without it
+	// the endpoint approved whichever gate happened to be pending when the
+	// POST landed, so a decision made about execution A, retried after A
+	// finished and B gated, was republished as an approval of B — and the
+	// loop's own matcher accepted it, because dispatch had relabelled it with
+	// B's identity. A human approves one call, not "the next one".
+	ExecutionID       string         `json:"execution_id"`
 	ModifiedArguments map[string]any `json:"modified_arguments,omitempty"` // only meaningful for modify
 	Reason            string         `json:"reason,omitempty"`             // optional, free text
 	UserID            string         `json:"user_id,omitempty"`            // optional; resolves via IdentityFromRequest
@@ -523,11 +522,15 @@ type ApprovalRequest struct {
 // this struct is the dispatch's HTTP-success envelope, not the
 // NATS wire format the framework's loop consumes.
 type ApprovalAcceptResponse struct {
-	LoopID    string `json:"loop_id"`
-	Decision  string `json:"decision"`
-	Accepted  bool   `json:"accepted"`
-	Message   string `json:"message,omitempty"`
-	Timestamp string `json:"timestamp"`
+	LoopID string `json:"loop_id"`
+	// ExecutionID is the execution the accepted decision applies to, echoed
+	// back so the caller can see WHICH gate it just answered rather than
+	// inferring it from the request it sent.
+	ExecutionID string `json:"execution_id,omitempty"`
+	Decision    string `json:"decision"`
+	Accepted    bool   `json:"accepted"`
+	Message     string `json:"message,omitempty"`
+	Timestamp   string `json:"timestamp"`
 }
 
 // ActivityEvent represents a real-time activity event sent via SSE.
@@ -709,6 +712,24 @@ func (c *Component) loopWireByID(ctx context.Context, loopID string) (Loop, erro
 	return loopFromEntity(persisted, c.deps.Platform.Org, c.deps.Platform.Platform), nil
 }
 
+// approvalIdentityMismatch reports whether the execution the caller reviewed is
+// not the one currently pending on this loop. It is the check that stops a
+// decision made about one gate being republished against a later one: without
+// it the handler read whichever approval was pending and stamped THAT identity
+// onto the response, so a retried POST approved a call nobody had reviewed.
+//
+// Empty pending identity is not a mismatch, mirroring the loop's own matcher
+// (`processor/agentic-loop/state.go:545`): a gate that carries no execution
+// identity has none to compare, and inventing a refusal here would make it
+// unapprovable through an endpoint whose field is already required.
+//
+// Deliberately one small function: L3 (#1329) re-homes the pending read onto
+// the durable loop record, and this comparison moves with the read instead of
+// being re-derived at the call site.
+func approvalIdentityMismatch(requested string, pending PendingApprovalInfo) bool {
+	return pending.ExecutionID != "" && pending.ExecutionID != requested
+}
+
 // handleLoopApproval drives the beta.19 approval flow over HTTP.
 // Path-param extraction, gate admission, JSON body decode,
 // validation, NATS publish, JSON success response. Identity resolves
@@ -778,6 +799,17 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The execution identity is part of the FORM — a body that names no
+	// execution is malformed, whatever the loop's state is — so it is refused
+	// with the decision above and before the state read below, and always
+	// before anything is published.
+	if req.ExecutionID == "" {
+		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "400")
+		c.writeJSONError(w, http.StatusBadRequest,
+			"execution_id is required: name the execution_id from the approval_pending event you are answering")
+		return
+	}
+
 	// Atomic CallID snapshot. The previous Get→deref pattern read
 	// loop.PendingApproval outside the tracker's lock and races
 	// against concurrent SetPendingApproval / UpdateCompletion /
@@ -786,22 +818,30 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 	// case (process restart, race lost, already resolved). 409
 	// Conflict is the right REST signal for "resource exists but is
 	// in the wrong state for this operation."
-	callID, awaiting := c.loopTracker.GetPendingApprovalCallID(loopID)
+	pendingApproval, awaiting := c.loopTracker.GetPendingApproval(loopID)
 	if !awaiting {
 		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "409")
 		c.writeJSONError(w, http.StatusConflict, "loop not awaiting approval")
 		return
 	}
 
+	if approvalIdentityMismatch(req.ExecutionID, pendingApproval) {
+		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "409")
+		c.writeJSONError(w, http.StatusConflict, fmt.Sprintf(
+			"execution %q is not the approval pending on this loop", req.ExecutionID))
+		return
+	}
+
 	c.logger.DebugContext(ctx, "submitting approval response for loop",
 		slog.String("request_id", requestID),
 		slog.String("loop_id", loopID),
-		slog.String("call_id", callID),
+		slog.String("call_id", pendingApproval.CallID),
+		slog.String("execution_id", pendingApproval.ExecutionID),
 		slog.String("decision", req.Decision),
 		slog.String("approved_by", approver))
 
 	// Build + publish the framework's ApprovalResponse payload.
-	subject, err := c.publishApprovalResponse(ctx, loopID, callID, &req, approver)
+	subject, err := c.publishApprovalResponse(ctx, loopID, pendingApproval, &req, approver)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "failed to publish approval response",
 			slog.String("request_id", requestID),
@@ -831,11 +871,12 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 		slog.String("subject", subject))
 
 	resp := ApprovalAcceptResponse{
-		LoopID:    loopID,
-		Decision:  req.Decision,
-		Accepted:  true,
-		Message:   fmt.Sprintf("Approval '%s' submitted for loop %s", req.Decision, loopID),
-		Timestamp: time.Now().Format(time.RFC3339),
+		LoopID:      loopID,
+		ExecutionID: req.ExecutionID,
+		Decision:    req.Decision,
+		Accepted:    true,
+		Message:     fmt.Sprintf("Approval '%s' submitted for loop %s", req.Decision, loopID),
+		Timestamp:   time.Now().Format(time.RFC3339),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -856,13 +897,19 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 // a client, but unit tests construct
 // Components with natsClient nil and we surface a clean error rather
 // than letting the underlying client.PublishToStream NPE.
-func (c *Component) publishApprovalResponse(ctx context.Context, loopID, callID string, req *ApprovalRequest, approver string) (string, error) {
+func (c *Component) publishApprovalResponse(ctx context.Context, loopID string, pending PendingApprovalInfo, req *ApprovalRequest, approver string) (string, error) {
 	if c.natsClient == nil {
 		return "", ErrNATSClientNil
 	}
 	response := &agentic.ApprovalResponse{
-		LoopID:            loopID,
-		CallID:            callID,
+		LoopID: loopID,
+		CallID: pending.CallID,
+		// Echo the execution identity the framework gated on. A response that
+		// omits it against a pending approval that has one is refused as stale
+		// by the loop — deliberately, because provider CallID alone cannot say
+		// which execution the human was shown.
+		ExecutionID:       pending.ExecutionID,
+		RequestID:         pending.RequestID,
 		Decision:          req.Decision,
 		ModifiedArguments: req.ModifiedArguments,
 		Reason:            req.Reason,

@@ -138,6 +138,9 @@ func perLoopMapCount(m *LoopManager, loopID string) map[string]bool {
 	if _, ok := m.truncationRetryAttempts[loopID]; ok {
 		held["truncationRetryAttempts"] = true
 	}
+	if _, ok := m.currentRequests[loopID]; ok {
+		held["currentRequests"] = true
+	}
 	for k, owner := range m.requestToLoop {
 		if owner == loopID {
 			held["requestToLoop:"+k] = true
@@ -178,9 +181,9 @@ func populatedLoop(t *testing.T, h *MessageHandler) string {
 	h.loopManager.CacheTaskPrompt(loopID, "the original task prompt")
 	h.loopManager.IncrementTruncationRetry(loopID)
 	h.loopManager.TrackRequest(h.loopManager.GenerateRequestID(loopID), loopID)
-	// A MODEL-authored call ID: no loop prefix, so only a value sweep reaches
-	// it. Missing it leaks, and worse, lets recovery resolve a released loop.
-	h.loopManager.TrackToolCall("toolu_model_authored", loopID)
+	// A framework execution ID has no loop prefix, so only the routing owner
+	// value sweep reaches it. Missing it would retain a route to a released loop.
+	h.loopManager.TrackToolCall("execution-model-authored", loopID)
 	h.loopManager.TrackToolName("toolu_model_authored", "search")
 	return loopID
 }
@@ -217,12 +220,12 @@ func TestTerminalReleaseClearsEveryPerLoopMap(t *testing.T) {
 	if held := perLoopMapCount(h.loopManager, loopID); len(held) != 0 {
 		t.Fatalf("per-loop entries surviving release: %v", held)
 	}
-	if _, exists := h.loopManager.GetLoopForToolCall("toolu_model_authored"); exists {
-		t.Fatal("a model-authored call ID still routes to the released loop; " +
-			"recovery would resolve a loop that is gone and HandleToolResult would fail on it")
+	if _, exists := h.loopManager.GetLoopForToolCall("execution-model-authored"); exists {
+		t.Fatal("an execution ID still routes to the released loop; " +
+			"lookup would resolve a loop that is gone and HandleToolResult would fail on it")
 	}
-	if _, exists := h.loopManager.GetLoopForToolCallWithRecovery("toolu_model_authored"); exists {
-		t.Fatal("recovery resolved a released loop")
+	if _, exists := h.loopManager.GetLoopForToolCallWithRecovery("execution-model-authored"); exists {
+		t.Fatal("lookup resolved a released loop")
 	}
 }
 
@@ -359,7 +362,7 @@ func TestLateApprovalResponseForSettledLoopIsExpectedDrop(t *testing.T) {
 		t.Fatalf("a late approval response was reported as a failure:\n present: %s\n absent: %s",
 			presentLogs, absentLogs)
 	}
-	const dropLine = "approval response ignored: not awaiting or call_id mismatch"
+	const dropLine = "approval response ignored: not awaiting, or its identity does not match the pending call"
 	if !strings.Contains(presentLogs, dropLine) || !strings.Contains(absentLogs, dropLine) {
 		t.Fatalf("the two cases do not produce the same declared drop:\n present: %s\n absent: %s",
 			presentLogs, absentLogs)
@@ -374,6 +377,11 @@ func TestLateApprovalResponseForSettledLoopIsExpectedDrop(t *testing.T) {
 // TestLateToolResultForSettledLoopIsExpectedDrop is I8 for the tool-result and
 // model-response readers. Both resolve a loop from a routing map the release
 // clears; the drop is counted and warned, never an error.
+//
+// It is also the only observer of tool_results_dropped_total's label set. The
+// reader routes on framework execution identity now, so the settled-drop reason
+// reads "stale_execution"; the assertion is here so renaming that constant in
+// metrics.go cannot pass silently — an operator's alert is keyed on the string.
 func TestLateToolResultForSettledLoopIsExpectedDrop(t *testing.T) {
 	ctx := context.Background()
 	h := NewMessageHandler(DefaultConfig())
@@ -383,7 +391,13 @@ func TestLateToolResultForSettledLoopIsExpectedDrop(t *testing.T) {
 	// AFTER releaseTestComponent, which installs its own discarding logger.
 	h.logger = logger
 	c.logger = logger
-	c.metrics = nil
+	c.metrics = getMetrics(nil)
+	// Deltas, not absolutes: getMetrics is a package singleton shared by the
+	// whole test binary.
+	dropped := func(reason string) float64 {
+		return testutil.ToFloat64(c.metrics.toolResultsDropped.WithLabelValues(reason))
+	}
+	beforeStale := dropped("stale_execution")
 	loopID := populatedLoop(t, h)
 	requestID := h.loopManager.GenerateRequestID(loopID)
 	h.loopManager.TrackRequest(requestID, loopID)
@@ -400,7 +414,9 @@ func TestLateToolResultForSettledLoopIsExpectedDrop(t *testing.T) {
 	}}
 	c.releaseLoopTransientState(loopID)
 
-	toolResult := agentic.ToolResult{CallID: "toolu_model_authored", Name: "search", Content: "late"}
+	toolResult := agentic.ToolResult{
+		ExecutionID: "execution-model-authored", CallID: "toolu_model_authored", Name: "search", Content: "late",
+	}
 	toolEnvelope := message.NewBaseMessage(toolResult.Schema(), &toolResult, "test")
 	toolData, err := json.Marshal(toolEnvelope)
 	if err != nil {
@@ -423,12 +439,20 @@ func TestLateToolResultForSettledLoopIsExpectedDrop(t *testing.T) {
 	if strings.Contains(out, "ERROR") {
 		t.Fatalf("a late arrival for a settled loop was reported as a failure:\n%s", out)
 	}
-	if !strings.Contains(out, "No loop found for tool call") {
+	if !strings.Contains(out, "No loop found for tool execution") {
 		t.Fatalf("late tool result was not declared as a drop:\n%s", out)
 	}
 	if !strings.Contains(out, "No loop found for request") {
 		t.Fatalf("late model response was not declared as a drop:\n%s", out)
 	}
+	if d := dropped("stale_execution") - beforeStale; d != 1 {
+		t.Fatalf("tool_results_dropped_total{reason=stale_execution} delta = %v, want 1 — "+
+			"the settled drop is logged but not countable under the label operators alert on", d)
+	}
+	// A second reason is deliberately not asserted here: a result naming a loop
+	// another process holds is warned and retried rather than counted (#1327),
+	// so a zero-delta assertion on a label nothing emits could never fail.
+
 	// The loop must stay gone: a late arrival never resurrects per-loop state.
 	if held := perLoopMapCount(h.loopManager, loopID); len(held) != 0 {
 		t.Fatalf("a late arrival re-registered per-loop state: %v", held)

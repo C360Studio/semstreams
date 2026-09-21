@@ -1177,10 +1177,14 @@ Exactly one payload type now travels that subject.
   left in place it could only ever read zero. Remove it from dashboards and alerts.
 - **New metric:** `semstreams_router_loop_admission_refusals_total{seam,reason}` — one series for every refusal the
   gate issues, labelled by which seam the request arrived on and why it was refused. The reason set is closed.
-- **New metric:** `semstreams_agentic_loop_model_responses_dropped_total{reason}` — a model response that arrived
-  with no loop mapping for its `RequestID`. Expected after a loop settles and releases its per-loop state, or after
-  a process replacement; a sustained rate against live loops points at NATS redelivery. It is the sibling of the
-  existing `semstreams_agentic_loop_tool_results_dropped_total{reason}`, which the same drop class already had.
+- **New metric:** `semstreams_agentic_loop_model_responses_dropped_total{reason}` — a model response the loop did
+  not act on. `reason="stale_request_id"` is a response with no loop mapping for its `RequestID`, expected after a
+  loop settles and releases its per-loop state or after a process replacement. `reason="superseded_request"` is a
+  response naming a request the loop is no longer waiting on: the loop minted a newer one, most often because a
+  redelivery of an already-handled response arrived after the loop had moved on. Both are Acked, because
+  redelivering them cannot help. A sustained rate against live loops points at NATS redelivery. It is the sibling
+  of the existing `semstreams_agentic_loop_tool_results_dropped_total{reason}`, which the same drop class already
+  had.
 - **`/status` reports the state it read.** For a loop this process is not running — after dispatch was replaced,
   say — `/status` used to print `State: running` for anything not settled, so a loop actually sitting in
   `awaiting_approval` told the user to wait for an agent that was waiting for them. It now prints the recorded
@@ -1227,3 +1231,299 @@ by the same PR that migrates its last in-tree caller (`agentic/agentrun/agentrun
 should move to the typed API now. `natsclient/consumer_policy_callsite_test.go` pins the exact remaining caller set
 and fails on any addition, so the set only shrinks. SemStreams owns no non-heartbeat exported settlement operation:
 a lane that does not want a heartbeat keeps owning its own `msg` settlement, as it does today.
+
+## A RequestID's suffix is no longer a UUID (#1328, owner ruling Q4 on #1330)
+
+`agent.request` RequestIDs are minted as `<loopID>:req:<iteration>:<retry>` instead of `<loopID>:req:<uuid>`. The
+two ordinals name the logical work — iteration ordinal within the loop, truncation-retry ordinal within the
+iteration — so a redelivered task republishes the *same* RequestID and agentic-model answers it from the retained
+response instead of calling the provider a second time.
+
+**What did not change.** The `<loopID>:req:` prefix, and therefore everything built on it: the framework's own
+`ExtractLoopIDFromRequest`, the `agent.response.<requestID>` subject grammar, and any consumer that splits a
+RequestID on its first colon to recover the loop token — which is what semspec does. A RequestID is still one NATS
+subject token with no dot in it.
+
+**What to check.** Only a consumer that parsed the *suffix* and expected a canonical UUID. If you validate,
+log-parse, or index on that suffix, treat it as an opaque string, or parse it as `<iteration>:<retry>` with both
+parts non-negative integers.
+
+Each `agent.request` publication now also carries its RequestID as the `Nats-Msg-Id` header. If your AGENT stream
+declares a `Duplicates` window (the NATS server default is 2m when unset), the server rejects a second publish of
+the same logical request inside it. That is a convenience, not a contract: the guarantee that bounds provider work
+is agentic-model's retained-response read, which holds regardless of the window. No stream configuration changes
+here and none is required.
+
+## Tool results are addressed by execution identity, and an uncorrelated tool call is refused (#1328)
+
+Every `ToolCall` the framework dispatches now carries three correlation fields — `request_id`, `execution_id`
+(`tool-exec-v1-<digest>`, derived by agentic-loop from RequestID + provider CallID + call ordinal) and a 1-based
+`call_ordinal`. Three addresses moved off the provider `call_id` and onto `execution_id`:
+
+| Address | Was | Now |
+|---|---|---|
+| Result subject | `tool.result.<call_id>` | `tool.result.<execution_id>` |
+| Result `Nats-Msg-Id` | `tool-result/v1/<digest of call_id>` | `tool-result/v1/<digest of execution_id>` |
+| `TOOL_CALL_OUTCOMES` key | `v1.<digest of call_id>` | `v1.<digest of execution_id>` |
+
+The digest is unchanged (sha256, lowercase unpadded base32); only its input moved. The `tool.result.*` and
+`tool.result.>` subject families are unchanged, so a stream or consumer that binds the family needs no edit —
+an execution id is still one dotless subject token.
+
+**What to check.**
+
+- **A consumer that reads one call's result by exact subject** — `GetLastMsgForSubject("tool.result." + callID)`
+  finds nothing now. Read the `execution_id` off the `ToolCall`, off the `agent.approval_pending` event for an
+  approval-gated call, or off the loop's persisted `pending_approval.execution_id`, and address the result under
+  that. Every `ToolResult` carries `request_id`, `execution_id` and `call_ordinal`, so a consumer that scans the
+  family can correlate without predicting a subject.
+- **Anything that publishes a `ToolCall` directly onto `tool.execute.*`** — a harness, a replay tool, a fixture.
+  agentic-tools now validates the correlation before executing and **terminates** a delivery whose `request_id`
+  or `execution_id` is empty or whose `call_ordinal` is zero: the call is not retried and no result is ever
+  published. Stamp all three. Executors are unaffected — agentic-tools copies the correlation from the call onto
+  whatever result the executor returns, so no executor signature changes.
+- **`TOOL_CALL_OUTCOMES` written before this change** is keyed under the old digest — and under the pre-v1
+  cutover there is no such bucket to reason about, because the upgrade starts on newly provisioned NATS storage
+  ("Provision fresh NATS storage", above; `docs/adr/104-unique-platform-authority.md:104-105`, "Fresh storage, no
+  migration"). If you upgrade in place anyway, two things are worth knowing. Nothing recomputes an old key, so no
+  rekey or backfill is possible and none is required; the bucket carries no TTL and no binding MaxBytes
+  (`RetentionNoLifecycle`), so those keys persist until an operator removes them, inert. **And a tool call that
+  was in flight across the upgrade does not re-execute under its new identity — it is terminated.** A `ToolCall`
+  published before this change carries no `request_id`, `execution_id` or `call_ordinal`, and agentic-tools
+  validates that correlation BEFORE it reads the outcome ledger
+  (`processor/agentic-tools/component.go:731`, ahead of the ledger read at `:744`): the delivery terminates, no
+  result is ever published, and the loop waiting on that call waits until its own timeout. Deleting the outcome
+  bucket does not repair it — the ledger was never consulted. Drain in-flight tool calls before the upgrade, or
+  accept that the loops holding them fail on timeout.
+
+### `tool_results_dropped_total`'s only `reason` value is renamed
+
+The routing key moved, and the drop reason that names it moved with it. The one value
+`semstreams_agentic_loop_tool_results_dropped_total{reason}` emits is now `stale_execution`; it was `stale_callid`
+from beta.46 (`913cf209`, 2026-05-06) through beta.162, so this is a rename of a value that has shipped in 116
+tags, not a new series.
+
+| | Was | Now |
+|---|---|---|
+| `reason` value | `stale_callid` | `stale_execution` |
+
+The meaning is unchanged — a tool result arrived with no loop mapping for its routing key, the expected case once
+`GetAndClearToolResults` has evicted a drained execution — and the metric name, the label name and the cardinality
+are unchanged. Only the value moved, which is why it needs saying: **a selector naming the old value is still
+valid PromQL and reads zero forever.** An alert written as
+`rate(semstreams_agentic_loop_tool_results_dropped_total{reason="stale_callid"}[5m]) > 0` never fires again and a
+panel filtered to it draws a flat line that reads as "no drops are happening". Nothing errors, and nothing in the
+upgrade tells you. Edit the selector to `reason="stale_execution"`, or drop the matcher and aggregate
+`by (reason)`; `stale_execution` is the only value this build emits, so that aggregation returns one series.
+
+## An approval response must echo the execution identity it answers (#1328)
+
+`agent.approval_pending` and `agent.approval_response` each gained two fields. Both are additive — the payloads'
+existing fields are unchanged and nothing new is required at decode.
+
+| Field | On | Means |
+|---|---|---|
+| `execution_id` | both | The framework execution identity of the gated call, the same `tool-exec-v1-<digest>` it was dispatched under |
+| `request_id` | both | The model request the gated call came from |
+
+`call_id` stays on both and still carries the provider's id, because the conversation transcript is written in
+provider terms. What moved is which field **authorises**: agentic-loop matches an arriving `agent.approval_response`
+against the loop's pending approval on `execution_id` whenever the pending state carries one, and **there is no
+fallback to `call_id`**. A response whose `execution_id` is empty or does not match is dropped as stale; the loop
+stays `awaiting_approval`, so the real decision can still arrive.
+
+**Why there is no fallback.** A provider may reuse a `call_id` on a later turn of the same conversation — the
+framework's execution identity does not, because it derives from the RequestID. Matching on `call_id` alone let a
+replayed or duplicated approval message authorise a *different* invocation than the one the human read and
+approved: same loop, same provider id, different tool and different arguments. There is no error in that path and
+no metric for it; the tool simply runs with a human's name on it. A fallback that accepts a response carrying no
+execution identity keeps that hole open for anything that can replay one message, so the fallback is gone rather
+than deprecated.
+
+**What to check.**
+
+- **Anything that publishes `agent.approval_response`** — a product approval UI, a chat-ops responder, a test
+  harness. Echo the `execution_id` from the `agent.approval_pending` event being answered (echo `request_id` too;
+  it is audit correlation, not matching). A response built from `loop_id` + `call_id` alone is refused and the call
+  stays gated — until `approval_timeout` auto-rejects it, or forever where that key is unset, which is the default
+  ("empty means wait indefinitely"). The symptom in agentic-loop's log is
+  `approval response ignored: not awaiting, or its identity does not match the pending call`, carrying
+  `response_call_id`, `response_execution_id` and `loop_state`.
+- **The approval timeout sweeper needs no action.** Its synthetic auto-reject is built from the loop's own pending
+  state, so it echoes the same two fields and still resolves the approval it expired. A deployment that configures
+  `approval_timeout` keeps exactly the behaviour it had.
+- **No pre-upgrade approval survives to be answered.** Like the rest of this wave, the upgrade starts on newly
+  provisioned NATS storage — the pre-v1 posture, "Fresh storage, no migration"
+  (`docs/adr/104-unique-platform-authority.md:104-105`) — so no `pending_approval` crosses it and no approval UI
+  has to answer one. The matcher does still
+  compare `call_id` when the pending state carries no `execution_id`, which is what keeps the new field additive
+  rather than a required-field break, but in a correctly cut-over deployment nothing reaches that branch.
+- **A Go embedder calling `(*LoopManager).ResolveApprovalIfPending`** passes a third argument:
+  `ResolveApprovalIfPending(loopID, callID, executionID string)`. Pass the response's `execution_id`; `""` selects
+  the `call_id` comparison described above. `(*LoopTracker).GetPendingApproval(loopID) (PendingApprovalInfo, bool)`
+  is new and returns the whole pending record — `CallID`, `ExecutionID`, `RequestID` — for a caller that must
+  echo the identity; `GetPendingApprovalCallID` is unchanged.
+
+### `POST /loops/{id}/approval` now requires `execution_id` in the body — BREAKING
+
+The dispatch HTTP approval endpoint no longer infers which call a decision is about. The body gains a required
+field:
+
+```json
+{"decision": "approve", "execution_id": "tool-exec-v1-<digest>", "user_id": "reviewer"}
+```
+
+| Case | Was | Now |
+|---|---|---|
+| Body omits `execution_id` | Approved whichever gate was pending | `400`, naming the field |
+| Body names the pending gate | `200` | `200`, and the acceptance echoes `execution_id` |
+| Body names another execution | Approved the pending gate under ITS identity | `409`, naming the execution the caller asked about |
+
+**Why it is required rather than optional.** Without the field the handler read the currently pending approval and
+stamped that execution onto the `agent.approval_response` it published. A decision made about execution A —
+retried after A finished and B gated, which is ordinary at-least-once client behaviour and needs no concurrency to
+reproduce — was republished as an approval of B, and the loop's matcher accepted it because dispatch had already
+relabelled it with B's identity. The human had approved one call and authorised another. An optional field would
+have left that path intact for every caller that did not adopt it.
+
+**What to change.** The value is on the wire already — `execution_id` rides the `ApprovalPendingEvent` and the
+durable `pending_approval` record — so the change is to carry it through to the POST. Both refusals land before
+anything is published and leave the pending gate exactly as they found it, so a refused POST is safe to correct
+and retry.
+
+**How much work that is depends on which shape the approval client is in**, and "you already have it" is not true
+of every one:
+
+1. *The client that decodes the typed event in the same process that POSTs.* Read `ExecutionID` off the
+   `ApprovalPendingEvent` (or off the loop record's `pending_approval`) and put it in the body. One field.
+2. *The client that renders a gate from something the identity does not travel on* — a graph condition, a status
+   projection, an event decoded in a DIFFERENT process from the one that posts. Here `execution_id` has to be
+   given a path to the caller before the POST can be built. Two steps: regenerate the HTTP client from
+   `specs/openapi.v3.yaml` so the request type carries the field at all, and thread the identity from the pending
+   event or the durable record to whatever holds the decision.
+
+Shape 2 is the live one in this family today, measured read-only at the time of writing: semteams' generated
+`ApprovalRequest` (`ui/src/lib/types/api.generated.ts`) has no `execution_id` and the string appears nowhere in
+`ui/src`, so every approval POST answers `400` the moment this lands; its typed-event consumer is a separate
+process (`cmd/semteams/approvalpause/`) whose pauser reads `LoopID` and `ToolName` only and never sees
+`ExecutionID`; and the browser learns a gate is open from an `approval_pending` graph triple, which carries no
+execution identity. That is the sister owner's work on the sister's schedule — recorded here so the step is
+sized, not hidden behind "send it back".
+
+A gate that carries no execution identity is still answerable — the comparison runs only when the pending record
+has one, matching agentic-loop's own matcher — but the body's field is required in every case.
+
+`agenticdispatch.ApprovalRequest` (Go) gains `ExecutionID string` and `ApprovalAcceptResponse` gains
+`ExecutionID string`. Both are published in `specs/openapi.v3.yaml`, where `execution_id` is listed under
+`ApprovalRequest.required`; the wire payload schemas in `schemas/agentic-dispatch.v1.json` are unchanged, because
+the HTTP body is not a registered payload type.
+
+## A bare `/cancel` this process may have sent stops the `user.message` lane (#1328)
+
+Nothing to change; something to recognize in a log. A `/cancel` **with no loop id** has its target chosen by
+agentic-dispatch from the tracker, so the message does not carry the identity the delivery acted on and a
+redelivery picks the target again — against a world the first delivery already changed. Two failures on that lane
+therefore stop it rather than retrying: the signal published and its user response unacknowledged, and the signal
+publish that fails with an error which does not prove the broker stored nothing — a lost PubAck reads exactly like
+a signal that never arrived. Both are new in this wave. The consumer is drained and
+`Health()` reports `delivery ownership lost` with the cause naming the command and the loop.
+
+`/cancel <loop_id>` is unaffected in both cases: a redelivery re-reads the loop the message names, finds it
+settled, and answers without publishing again. So is any command that published nothing — `/help`, `/loops`, a
+bare `/status`, and the arms of a bare `/cancel` that refuse, find no loop, or find one already settled.
+
+A client-side refusal also keeps retrying, because it proves the signal was never sent: the circuit breaker open,
+the client not connected, and the sentinels the NATS client returns before it writes (`ErrMaxPayload`,
+`ErrBadSubject` and their siblings). `ErrConnectionClosed` is NOT one of them, despite reading like one: the same
+sentinel also comes back after the bytes went out, when the connection drops while the publish is waiting for its
+acknowledgement, so a connection lost mid-publish stops the lane rather than retrying. A broker outage that
+refuses up front recovers on the redelivery instead of stopping the lane. If you see the latch, the fix is the same as for any owner-fatal: restart the component once the broker
+is healthy, and check whether the loop named in the cause is cancelled — the delivery could not tell you.
+
+## Governance verdicts route on execution identity, and an enforce-mode rule set must be edited first (#1328)
+
+The tool-call governance verdict subjects moved off the two-token `<loop_id>.<call_id>` pair and onto the single
+framework execution id. This is the break most likely to take a deployment down, because the wait is fail-closed.
+
+| | Was | Now |
+|---|---|---|
+| Approve subject | `agent.toolcall.approved.<loop_id>.<call_id>` | `agent.toolcall.approved.<execution_id>` |
+| Reject subject | `agent.toolcall.rejected.<loop_id>.<call_id>` | `agent.toolcall.rejected.<execution_id>` |
+| Rule template | `agent.toolcall.rejected.$message.loop_id.$message.call_id` | `agent.toolcall.rejected.$message.execution_id` |
+| Demux key | `call_id` | `execution_id` (`processor/agentic-loop/component.go:2618`, `effectiveExecutionID`) |
+| Waiter key | proposal `call_id` | `call.ExecutionID` (`processor/agentic-loop/governance_dispatcher.go:465`) |
+
+The proposal payload on `agent.toolcall.proposed` carries `execution_id`, `request_id` and `call_ordinal` alongside
+the existing `loop_id` and `call_id`, so a rule has the token it needs without computing anything. The port
+subscriptions are unchanged — both ports still bind `agent.toolcall.{approved,rejected}.>` — so no stream or
+consumer configuration moves; only the rules that *publish* a verdict do.
+
+**Edit the rules before the upgrade, not after.** `agentic-loop` demuxes an arriving verdict by `execution_id` and
+**terminates** one that carries none, so a rule still templating `$message.loop_id.$message.call_id` publishes to a
+subject no waiter is registered under. In `audit` mode the loop publishes the proposal and does not wait, so tool
+calls continue. In **`enforce` mode the wait is fail-closed** (`governance_dispatcher.go:544-549`): a verdict that never arrives at the
+waiter's key times out and the call is rejected — so an enforce-mode deployment upgraded without editing its rules
+rejects **every governed tool call** until they are, with `governance verdict timeout after <d> (fail-closed)` as
+the only symptom.
+
+**Rewriting the subject suffix is not the fix — the payload is.** The loop's consumer never sees the subject: the
+input-port wrapper discards it, so routing reads `execution_id` out of the verdict PAYLOAD and terminates a verdict
+that carries none, whatever the subject says. A `publish`-action rule must therefore carry
+`"execution_id": "$message.execution_id"` in its `properties` as well as in its subject; a rule that changed only
+its suffix still loses every verdict it publishes, and `$message.loop_id.$message.call_id` in the payload is not a
+substitute. The `approve` action echoes `execution_id` for you.
+
+**Carry the loop identity in the payload too.** When a verdict reaches a process that holds no waiter for it — a
+restart, a shared stream, a late arrival — the loop's own record decides whether the delivery retries or
+acknowledges, and the execution identity cannot supply it: it is an opaque digest with no loop in it. A verdict
+carrying neither a canonical `loop_id` nor a `request_id` in the `<loopID>:req:<iteration>:<retry>` grammar is
+**terminated as malformed** and counted under `unrecoverable_loop_identity` (below). Every canonical rule in
+`docs/operations/17-tool-call-governance.md` echoes `"request_id": "$message.request_id"` for exactly this reason;
+keep it when you edit.
+
+`docs/operations/17-tool-call-governance.md` carries the worked rule set at the new subjects and payloads, and
+`$message.execution_id` is in its token table. An operator who cannot edit the rules in the same window should set
+`tool_call_governance.mode` to `audit` for the upgrade and switch back to `enforce` once they are edited; that
+trades enforcement for availability rather than losing both.
+
+### `tool_call_governance_subscribe_before_publish_failures_total` gains a `reason` label
+
+The counter was unlabelled at beta.162 and is now a `CounterVec` over `reason`, with two values:
+
+| `reason` | Means |
+|---|---|
+| `missing_waiter` | The verdict reached no waiter: the subscribe-before-publish race (ADR-039 race-fix option 3) or a late arrival. The loop record then decides ack-vs-retry. |
+| `unrecoverable_loop_identity` | The verdict carries neither a canonical `loop_id` nor a `request_id` in the `<loopID>:req:<iteration>:<retry>` grammar, so no loop record can be read for it. The delivery **terminates as malformed** rather than acknowledging as if the loop had settled. |
+
+A PromQL selector that names the metric keeps matching, but it now returns one series per reason instead of one
+series total. An alert written as a bare `rate(...) > 0` still fires; a recording rule or dashboard panel that
+assumed a single series should wrap it in `sum(...)` or add `by (reason)`. Both reasons mean investigate, and they
+mean different things: `missing_waiter` points at the loop process or delivery timing, `unrecoverable_loop_identity`
+points at a *rule* — it is the observable symptom of a verdict rule that echoes neither identity, which is the same
+edit this section already asks for.
+
+### `GovernanceDispatcher.HandleVerdict` takes the decoded verdict
+
+The third parameter was the raw wire `[]byte` and is now the decoded `VerdictPayload`:
+
+```go
+HandleVerdict(decision, executionID string, verdict VerdictPayload) (natsclient.DeliveryDecision, error)
+```
+
+Only an adopter that implements `GovernanceDispatcher` itself is affected — a grep across all nine sister
+repositories found zero references — and the fix is to take the struct and delete the unmarshal. That unmarshal is
+the reason the parameter moved: the two shapes a rule publishes do not agree on where a field lives, so a
+dispatcher decoding the bytes itself read `""` for every field it took from the top level — the audit fingerprint
+and the rule id on a publish-action verdict, and every field of an approve action's BaseMessage envelope. The
+framework normalizes both shapes once, before dispatch, and hands the result over.
+
+Corrected after review, and the correction is worth carrying: an earlier draft of this section said the enforce-mode
+**reason** was lost too. It was not, for any verdict the rule engine publishes. `EffectiveReason()` already fell
+through to `properties`, so a publish-action rejection reached its waiter with its reason on it; and the envelope
+shape, which does lose everything, is the approve action, which hardcodes `"decision": "approved"`
+(`processor/rule/actions.go:2198`) and therefore never carries a rejection. The enforce-mode reason loss is
+reachable only for a non-rule-engine publisher that emits a rejection in the envelope shape.
+
+Every line pin in this section was re-derived with `sed -n '<n>p'` against the head it ships on, not carried
+forward: one of them (`governance_dispatcher.go:401`) had already drifted onto a comment line before anyone read
+it. Re-derive rather than trust when you cite this section from anywhere else.

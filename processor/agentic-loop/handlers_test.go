@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -219,7 +220,7 @@ func TestHandleModelResponse_MaxIterationsGuard_ReturnsTypedSentinel(t *testing.
 	// Iteration 1: tool call + result brings entity.Iterations to the
 	// configured cap (1) via handleToolsComplete's IncrementIteration.
 	if _, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
-		RequestID: "req-001",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role:      "assistant",
@@ -247,7 +248,7 @@ func TestHandleModelResponse_MaxIterationsGuard_ReturnsTypedSentinel(t *testing.
 	// sentinel — not a plain/generic error a caller would have to
 	// string-match.
 	_, err = handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
-		RequestID: "req-002",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "complete",
 		Message:   agentic.ChatMessage{Role: "assistant", Content: "done"},
 	})
@@ -330,7 +331,7 @@ func TestHandleModelResponse_ToolCall(t *testing.T) {
 
 	// Model response with tool calls
 	response := agentic.AgentResponse{
-		RequestID: "req-001",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",
@@ -404,7 +405,7 @@ func TestHandleModelResponse_Complete_General(t *testing.T) {
 
 	// Model response with completion
 	response := agentic.AgentResponse{
-		RequestID: "req-001",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "complete",
 		Message: agentic.ChatMessage{
 			Role:    "assistant",
@@ -472,7 +473,7 @@ func TestHandleModelResponse_Complete_Architect(t *testing.T) {
 
 	// Architect completion response
 	response := agentic.AgentResponse{
-		RequestID: "req-001",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "complete",
 		Message: agentic.ChatMessage{
 			Role:    "assistant",
@@ -546,7 +547,7 @@ func TestHandleModelResponse_Error(t *testing.T) {
 
 	// Model error response
 	response := agentic.AgentResponse{
-		RequestID: "req-001",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "error",
 		Error:     "Model timeout",
 		TokenUsage: agentic.TokenUsage{
@@ -589,7 +590,7 @@ func TestHandleModelResponse_LengthTruncated(t *testing.T) {
 
 	// Model response with finish_reason=length (truncated output)
 	response := agentic.AgentResponse{
-		RequestID:    "req-truncated",
+		RequestID:    handler.OutstandingRequestForTest(loopID),
 		Status:       agentic.StatusLengthTruncated,
 		FinishReason: agentic.FinishReasonLength,
 		Message: agentic.ChatMessage{
@@ -667,7 +668,7 @@ func TestHandleToolResult_SingleTool(t *testing.T) {
 
 	// Model response with single tool call
 	toolResponse := agentic.AgentResponse{
-		RequestID: "req-001",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",
@@ -680,15 +681,20 @@ func TestHandleToolResult_SingleTool(t *testing.T) {
 		},
 	}
 
-	_, err = handler.HandleModelResponse(ctx, loopID, toolResponse)
+	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, toolResponse)
 	if err != nil {
 		t.Fatalf("HandleModelResponse() error = %v", err)
 	}
+	dispatched := dispatchedToolCallFromResult(t, dispatchResult)
 
 	// Tool result
 	toolResult := agentic.ToolResult{
-		CallID:  "call-001",
-		Content: "Query result data",
+		CallID:      dispatched.ID,
+		Name:        dispatched.Name,
+		Content:     "Query result data",
+		RequestID:   dispatched.RequestID,
+		ExecutionID: dispatched.ExecutionID,
+		CallOrdinal: dispatched.CallOrdinal,
 	}
 
 	result, err := handler.HandleToolResult(ctx, loopID, toolResult)
@@ -768,7 +774,7 @@ func TestHandleToolResult_MultipleTool_SerialDispatch(t *testing.T) {
 
 	// Model response with 3 tool calls — only the first should be dispatched
 	toolResponse := agentic.AgentResponse{
-		RequestID: "req-001",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",
@@ -890,7 +896,7 @@ func TestHandleToolResult_WithError(t *testing.T) {
 
 	// Trigger tool call
 	toolResponse := agentic.AgentResponse{
-		RequestID: "req-001",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",
@@ -956,7 +962,7 @@ func TestHandleToolResult_ErrorCategoryFallsBackToUnknown(t *testing.T) {
 
 	// Register a tool call so HandleToolResult has a known call to resolve.
 	toolResponse := agentic.AgentResponse{
-		RequestID: "req-fallback",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",
@@ -1013,7 +1019,7 @@ func TestHandleToolResult_ErrorCategoryPreservesExecutorKind(t *testing.T) {
 	loopID := taskResult.LoopID
 
 	toolResponse := agentic.AgentResponse{
-		RequestID: "req-preserve",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",
@@ -1059,7 +1065,7 @@ func TestHandleToolResult_StopLoop(t *testing.T) {
 
 	// Trigger tool call
 	toolResponse := agentic.AgentResponse{
-		RequestID: "req-001",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",
@@ -1069,16 +1075,21 @@ func TestHandleToolResult_StopLoop(t *testing.T) {
 		},
 	}
 
-	_, err = handler.HandleModelResponse(ctx, loopID, toolResponse)
+	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, toolResponse)
 	if err != nil {
 		t.Fatalf("HandleModelResponse() error = %v", err)
 	}
+	dispatched := dispatchedToolCallFromResult(t, dispatchResult)
 
 	// Tool result with StopLoop
 	toolResult := agentic.ToolResult{
-		CallID:   "call-001",
-		Content:  `{"dag": "quest-decomposition-result"}`,
-		StopLoop: true,
+		CallID:      dispatched.ID,
+		Name:        dispatched.Name,
+		Content:     `{"dag": "quest-decomposition-result"}`,
+		RequestID:   dispatched.RequestID,
+		ExecutionID: dispatched.ExecutionID,
+		CallOrdinal: dispatched.CallOrdinal,
+		StopLoop:    true,
 	}
 
 	result, err := handler.HandleToolResult(ctx, loopID, toolResult)
@@ -1171,7 +1182,7 @@ func TestHandleToolResult_StopLoopClearsQueue(t *testing.T) {
 
 	// Model emits two tool calls: submit_work (first, will StopLoop) and bash (queued)
 	toolResponse := agentic.AgentResponse{
-		RequestID: "req-001",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",
@@ -1253,30 +1264,40 @@ func TestHandleModelResponse_TerminalLoop(t *testing.T) {
 
 	// Complete the loop via StopLoop
 	toolResponse := agentic.AgentResponse{
-		RequestID: "req-001",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role:      "assistant",
 			ToolCalls: []agentic.ToolCall{{ID: "call-001", Name: "submit_work"}},
 		},
 	}
-	_, err = handler.HandleModelResponse(ctx, loopID, toolResponse)
+	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, toolResponse)
 	if err != nil {
 		t.Fatalf("HandleModelResponse() error = %v", err)
 	}
+	dispatched := dispatchedToolCallFromResult(t, dispatchResult)
 
 	_, err = handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
-		CallID:   "call-001",
-		Content:  "done",
-		StopLoop: true,
+		CallID:      dispatched.ID,
+		Name:        dispatched.Name,
+		Content:     "done",
+		RequestID:   dispatched.RequestID,
+		ExecutionID: dispatched.ExecutionID,
+		CallOrdinal: dispatched.CallOrdinal,
+		StopLoop:    true,
 	})
 	if err != nil {
 		t.Fatalf("HandleToolResult(StopLoop) error = %v", err)
 	}
 
-	// Now send a model response to the terminal loop (simulates stale agent.request)
+	// Now send a model response to the terminal loop (simulates stale agent.request).
+	// It names the loop's CURRENT request: the terminal guard is what is under
+	// test, and a response naming anything else — including the "" the
+	// outstanding mark reads once the loop settled — is dropped one guard
+	// earlier as superseded, which would leave this test green for the wrong
+	// reason.
 	staleResponse := agentic.AgentResponse{
-		RequestID: "req-stale",
+		RequestID: handler.CurrentRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role:      "assistant",
@@ -1410,7 +1431,7 @@ func TestMessageHandler_MaxIterationsGuard(t *testing.T) {
 
 	// Iteration 1: tool call and result
 	_, err = handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
-		RequestID: "req-001",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role:      "assistant",
@@ -1431,7 +1452,7 @@ func TestMessageHandler_MaxIterationsGuard(t *testing.T) {
 
 	// Iteration 2: tool call and result
 	_, err = handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
-		RequestID: "req-002",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role:      "assistant",
@@ -1457,7 +1478,7 @@ func TestMessageHandler_MaxIterationsGuard(t *testing.T) {
 	if !(result.State == agentic.LoopStateFailed || result.MaxIterationsReached) {
 		// Attempt iteration 3 should fail
 		_, err = handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
-			RequestID: "req-003",
+			RequestID: handler.OutstandingRequestForTest(loopID),
 			Status:    "tool_call",
 			Message: agentic.ChatMessage{
 				Role:      "assistant",
@@ -1578,7 +1599,7 @@ func TestHandleToolResult_NextRequestHasTools(t *testing.T) {
 
 	// Trigger a tool call
 	toolResponse := agentic.AgentResponse{
-		RequestID: "req-001",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",
@@ -1588,15 +1609,20 @@ func TestHandleToolResult_NextRequestHasTools(t *testing.T) {
 		},
 	}
 
-	_, err = handler.HandleModelResponse(ctx, loopID, toolResponse)
+	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, toolResponse)
 	if err != nil {
 		t.Fatalf("HandleModelResponse() error = %v", err)
 	}
+	dispatched := dispatchedToolCallFromResult(t, dispatchResult)
 
 	// Complete the tool
 	toolResult := agentic.ToolResult{
-		CallID:  "call-001",
-		Content: "Tool result",
+		CallID:      dispatched.ID,
+		Name:        dispatched.Name,
+		Content:     "Tool result",
+		RequestID:   dispatched.RequestID,
+		ExecutionID: dispatched.ExecutionID,
+		CallOrdinal: dispatched.CallOrdinal,
 	}
 
 	result, err := handler.HandleToolResult(ctx, loopID, toolResult)
@@ -1664,7 +1690,7 @@ func TestHandleModelResponse_Complete_PopulatesTokenFields(t *testing.T) {
 
 	// Model response with token usage
 	response := agentic.AgentResponse{
-		RequestID: "req-tokens",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "complete",
 		Message: agentic.ChatMessage{
 			Role:    "assistant",
@@ -1728,7 +1754,7 @@ func TestHandleCompleteResponse_SyntheticDecide_OptInTextOnly(t *testing.T) {
 	// `decide`, the loop transitions to complete cleanly, and no
 	// coordinator.next_action triple ever fires.
 	response := agentic.AgentResponse{
-		RequestID: "req-textonly",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "complete",
 		Message: agentic.ChatMessage{
 			Role:    "assistant",
@@ -1776,7 +1802,7 @@ func TestHandleCompleteResponse_SyntheticDecide_DefaultOff(t *testing.T) {
 	loopID := taskResult.LoopID
 
 	response := agentic.AgentResponse{
-		RequestID: "req-default-off",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "complete",
 		Message: agentic.ChatMessage{
 			Role:    "assistant",
@@ -1826,7 +1852,7 @@ func TestHandleCompleteResponse_SyntheticDecide_DecideInToolsetTriggers(t *testi
 
 	// Model completes with text-only — no tool_calls, no decide.
 	response := agentic.AgentResponse{
-		RequestID: "req-decide-toolset",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "complete",
 		Message: agentic.ChatMessage{
 			Role:    "assistant",
@@ -1871,7 +1897,7 @@ func TestHandleCompleteResponse_SyntheticDecide_DecideNotInToolset_NoSynthesis(t
 	loopID := taskResult.LoopID
 
 	response := agentic.AgentResponse{
-		RequestID: "req-no-decide",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "complete",
 		Message: agentic.ChatMessage{
 			Role:    "assistant",
@@ -1916,7 +1942,7 @@ func TestHandleCompleteResponse_SyntheticDecide_ReasoningContentFallback(t *test
 	const reasoningText = "Caching strategies fall into three buckets: write-through, write-back, write-around..."
 
 	response := agentic.AgentResponse{
-		RequestID: "req-reasoning-only",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "complete",
 		Message: agentic.ChatMessage{
 			Role:             "assistant",
@@ -2026,7 +2052,7 @@ func TestHandleTask_MetadataCachedAndPropagated(t *testing.T) {
 
 	// Trigger a tool call — metadata should flow to published tool calls
 	toolResponse := agentic.AgentResponse{
-		RequestID: "req-meta",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",
@@ -2273,6 +2299,17 @@ func extractDispatchedToolCall(t *testing.T, data []byte) agentic.ToolCall {
 	return envelope.Payload
 }
 
+func dispatchedToolCallFromResult(t *testing.T, result agenticloop.HandlerResult) agentic.ToolCall {
+	t.Helper()
+	for _, published := range result.PublishedMessages {
+		if strings.HasPrefix(published.Subject, "tool.execute.") {
+			return extractDispatchedToolCall(t, published.Data)
+		}
+	}
+	t.Fatal("handler result did not publish tool.execute")
+	return agentic.ToolCall{}
+}
+
 // wirePrePopulatedTestKey stands in for any per-call key the
 // translation layer may write onto ToolCall.Metadata before the
 // loop's metadata-merge step runs. Pre-ADR-051 the canonical example
@@ -2324,7 +2361,7 @@ func TestPropagateMetadata_MergesWithWirePopulation(t *testing.T) {
 	// lives here post-ADR-051, but any future per-call write would
 	// exercise the same merge code path.
 	response := agentic.AgentResponse{
-		RequestID: "req-merge-1",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",
@@ -2404,7 +2441,7 @@ func TestPropagateMetadata_NoOverwriteOnConflict(t *testing.T) {
 	loopID := taskResult.LoopID
 
 	response := agentic.AgentResponse{
-		RequestID: "req-conflict-1",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",
@@ -2461,7 +2498,7 @@ func TestEmptyNameToolCalls_Rejected(t *testing.T) {
 
 	// Model response with one valid and one empty-name tool call
 	response := agentic.AgentResponse{
-		RequestID: "req-empty-name",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",
@@ -2513,7 +2550,7 @@ func TestEmptyNameToolCalls_AllEmpty(t *testing.T) {
 	loopID := taskResult.LoopID
 
 	response := agentic.AgentResponse{
-		RequestID: "req-all-empty",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",
@@ -2575,7 +2612,7 @@ func TestHandleToolsComplete_FullConversationHistory(t *testing.T) {
 
 	// Model response with tool calls (empty content — typical for tool_call responses)
 	toolResponse := agentic.AgentResponse{
-		RequestID: "req-ctx-001",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role:    "assistant",
@@ -2586,15 +2623,20 @@ func TestHandleToolsComplete_FullConversationHistory(t *testing.T) {
 		},
 	}
 
-	_, err = handler.HandleModelResponse(ctx, loopID, toolResponse)
+	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, toolResponse)
 	if err != nil {
 		t.Fatalf("HandleModelResponse() error = %v", err)
 	}
+	dispatched := dispatchedToolCallFromResult(t, dispatchResult)
 
 	// Tool result
 	result, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
-		CallID:  "call-ctx-1",
-		Content: `{"temp": 20}`,
+		CallID:      dispatched.ID,
+		Name:        dispatched.Name,
+		Content:     `{"temp": 20}`,
+		RequestID:   dispatched.RequestID,
+		ExecutionID: dispatched.ExecutionID,
+		CallOrdinal: dispatched.CallOrdinal,
 	})
 	if err != nil {
 		t.Fatalf("HandleToolResult() error = %v", err)
@@ -2691,7 +2733,7 @@ func TestHandleToolResult_PopulatesToolNameAndArguments(t *testing.T) {
 
 	// Model response with a tool call that has arguments
 	toolResponse := agentic.AgentResponse{
-		RequestID: "req-args-001",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",
@@ -2705,15 +2747,19 @@ func TestHandleToolResult_PopulatesToolNameAndArguments(t *testing.T) {
 		},
 	}
 
-	_, err = handler.HandleModelResponse(ctx, loopID, toolResponse)
+	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, toolResponse)
 	if err != nil {
 		t.Fatalf("HandleModelResponse() error = %v", err)
 	}
+	dispatched := dispatchedToolCallFromResult(t, dispatchResult)
 
 	// Tool result
 	result, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
-		CallID:  "call-args-001",
-		Content: "42 results",
+		CallID:      dispatched.ID,
+		Content:     "42 results",
+		RequestID:   dispatched.RequestID,
+		ExecutionID: dispatched.ExecutionID,
+		CallOrdinal: dispatched.CallOrdinal,
 	})
 	if err != nil {
 		t.Fatalf("HandleToolResult() error = %v", err)

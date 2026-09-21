@@ -83,6 +83,7 @@ type Component struct {
 	deps          component.Dependencies
 	decoder       *message.Decoder
 	natsClient    *natsclient.Client
+	taskEvidence  retainedTaskEvidenceReader
 	logger        *slog.Logger
 	loopTracker   *LoopTracker
 	registry      *CommandRegistry
@@ -138,6 +139,13 @@ type Component struct {
 	// sendResponseFn is a test hook; production leaves this nil. When non-nil
 	// it replaces the NATS-publishing behavior of sendResponse.
 	sendResponseFn func(agentic.UserResponse)
+	// publishSignalFn is a test hook; production leaves this nil. When non-nil
+	// it replaces the JetStream publish in handleCancelCommand. It exists for
+	// the one outcome a real broker cannot be asked to produce: a publish that
+	// STORED the signal and then failed to say so. That is the ambiguity the
+	// settlement rule in handleCommand turns on, and without a seam the only
+	// reachable failures are the ones that prove nothing was stored.
+	publishSignalFn func(ctx context.Context, subject string, data []byte) error
 	// Terminal-only seams preserve production settlement semantics in focused
 	// tests without weakening the normal response API.
 	sendTerminalResponseFn func(context.Context, agentic.UserResponse, string) error
@@ -970,6 +978,16 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 	// Execute handler
 	resp, err := cmd.Handler(ctx, msg, args, loopID)
 	if err != nil {
+		// The handler's own failure is the FIRST of two settlement doors into
+		// the same hazard. A signal this delivery attempted and cannot account
+		// for is not a delivery that did nothing, however the error reads; the
+		// rule, and why a proven refusal still retries, is on the helper.
+		if fatal := unconfirmedSignalIsFatal(err, effect, targetFromTracker, name, loopID); fatal != nil {
+			return fatal
+		}
+		if errs.IsFatal(err) || errs.IsTransient(err) {
+			return err
+		}
 		return c.sendResponse(ctx, agentic.UserResponse{
 			ResponseID:  uuid.New().String(),
 			ChannelType: msg.ChannelType,
@@ -981,20 +999,21 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 		})
 	}
 
-	// The command's answer did not reach the user. Whether that delivery may be
-	// replayed takes TWO conjuncts, and it needs both:
+	// The command's answer did not reach the user — the SECOND door, where the
+	// signal is known published rather than merely attempted. Whether that
+	// delivery may be replayed takes TWO conjuncts, and it needs both:
 	//
 	//  1. this delivery published a signal — recorded at the publish site
-	//     itself (commands.go:185), never inferred from the command name or
+	//     itself (commands.go:191), never inferred from the command name or
 	//     the response text; and
 	//  2. its target was resolved from the tracker rather than named by the
-	//     message (:945-955).
+	//     message (:953-963).
 	//
 	// With both, the replay is unsound: the message does not carry the identity
 	// the first delivery acted on, and resolution is not stable across it.
 	// GetActiveLoop prefers the channel's loop only while that loop is
 	// non-terminal and otherwise falls back to the user's most recent one
-	// (loop_tracker.go:204-226), so the very effect this delivery had — loop A
+	// (loop_tracker.go:212-233), so the very effect this delivery had — loop A
 	// now terminal — is what makes the redelivery resolve to a DIFFERENT live
 	// loop B and cancel it. A's terminal guard cannot protect B. The burden of
 	// proof is on the Retry and the message cannot meet it, so the lane stops.
@@ -1050,9 +1069,13 @@ func (c *Component) buildTaskMessage(ctx context.Context, msg agentic.UserMessag
 	task := agentic.TaskMessage{
 		LoopID:           loopID,
 		TaskID:           taskID,
+		SourceMessageID:  msg.MessageID,
 		Role:             c.config.DefaultRole,
 		Model:            c.resolveModel(),
 		Prompt:           msg.Content,
+		ChannelType:      msg.ChannelType,
+		ChannelID:        msg.ChannelID,
+		UserID:           msg.UserID,
 		ContextRequestID: msg.ContextRequestID,
 		// Resumable-reply anchors (gh#256). Both omitempty and client-set, so an
 		// ordinary submission carries neither: RunID re-attaches the resumed loop
@@ -1098,8 +1121,17 @@ func (c *Component) answerRefusedSubmission(ctx context.Context, msg agentic.Use
 
 // handleTaskSubmission creates a new agent task
 func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMessage) error {
+	prepared, vacant, found, err := c.findRetainedDispatchTask(ctx, msg)
+	if err != nil {
+		if errs.IsFatal(err) || errs.IsTransient(err) {
+			return err
+		}
+		return c.answerRefusedSubmission(ctx, msg,
+			c.refuseSubmission(seamChannelSubmission, msg.ReplyTo, codeSubmissionInvalid, err))
+	}
+
 	// Check submit permission
-	if !c.hasPermission(msg.UserID, "submit_task") {
+	if !found && !c.hasPermission(msg.UserID, "submit_task") {
 		return c.sendResponse(ctx, agentic.UserResponse{
 			ResponseID:  uuid.New().String(),
 			ChannelType: msg.ChannelType,
@@ -1111,57 +1143,47 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		})
 	}
 
-	// Determine loop ID (continue existing or create new). The mint decision is
-	// made HERE, before the gate: an unresolved continuation is the signal to
-	// start a conversation, not a malformed token, and the gate refuses an empty
-	// token as malformed.
-	loopID := ""
-	if msg.ReplyTo != "" {
-		loopID = msg.ReplyTo
-	} else if c.config.AutoContinue {
-		loopID = c.loopTracker.GetActiveLoop(msg.UserID, msg.ChannelID)
+	// Resolve a continuation only after exact retained absence. An empty result
+	// means new work; prepareNewDispatchTask mints its LoopID only after any
+	// named continuation passes admission.
+	loopID := prepared.task.LoopID
+	if !found {
+		if msg.ReplyTo != "" {
+			loopID = msg.ReplyTo
+		} else if c.config.AutoContinue {
+			loopID = c.loopTracker.GetActiveLoop(msg.UserID, msg.ChannelID)
+		}
+
+		if loopID != "" {
+			_, err = c.admitLoopRequest(ctx, loopAdmissionRequest{
+				Seam:      seamChannelSubmission,
+				Field:     "reply_to",
+				Operation: loopOpContinue,
+				LoopID:    loopID,
+				Requester: msg.UserID,
+			})
+			if err != nil {
+				// This path has no synchronous return, so its answer goes out on the
+				// response subject — same refusal, same named field, different delivery.
+				return c.answerRefusedSubmission(ctx, msg, err)
+			}
+		}
+
+		prepared, err = c.prepareNewDispatchTask(ctx, msg, loopID, vacant)
+		if err != nil {
+			return c.answerRefusedSubmission(ctx, msg,
+				c.refuseSubmission(seamChannelSubmission, loopID, codeSubmissionInvalid, err))
+		}
+		loopID = prepared.task.LoopID
 	}
 
-	if loopID == "" {
-		// Create new loop. The token is framework-minted and full: a truncated
-		// one carried 32 bits, and a collision merged two conversations silently
-		// (ADR-105, #1192).
-		loopID = uuid.New().String()
-	} else if _, err := c.admitLoopRequest(ctx, loopAdmissionRequest{
-		Seam:      seamChannelSubmission,
-		Field:     "reply_to",
-		Operation: loopOpContinue,
-		LoopID:    loopID,
-		Requester: msg.UserID,
-	}); err != nil {
-		// This path has no synchronous return, so its answer goes out on the
-		// response subject — same refusal, same named field, different delivery.
-		return c.answerRefusedSubmission(ctx, msg, err)
-	}
-
-	taskID := uuid.New().String()
-
-	// Create task message (shared builder — see buildTaskMessage; gh#256).
-	task := c.buildTaskMessage(ctx, msg, loopID, taskID)
-
-	// Wrap task in BaseMessage envelope (required by agentic-loop). The marshal
-	// is where TaskMessage.Validate runs, so it is the last thing that can
-	// refuse this submission on its own content — including the client-authored
-	// run_id / in_reply_to resume anchors, which never pass through the
-	// continuation branch above. Nothing is tracked or counted until it returns
-	// (#1225).
-	baseMsg := message.NewBaseMessage(task.Schema(), &task, "agentic-dispatch")
-	taskData, err := json.Marshal(baseMsg)
-	if err != nil {
-		return c.answerRefusedSubmission(ctx, msg,
-			c.refuseSubmission(seamChannelSubmission, loopID, codeSubmissionInvalid, err))
-	}
-
-	subject, err := component.ResolveSubject(c.outputPortDefs(), "agent.task", taskID)
-	if err != nil {
-		return c.answerRefusedSubmission(ctx, msg,
-			c.refuseSubmission(seamChannelSubmission, loopID, codeSubmissionUndeliverable, err))
-	}
+	// Retained evidence bypasses mutable continuation inference and admission:
+	// the original submission already crossed those gates before its task
+	// committed, and replacement must finish that durable input rather than
+	// reinterpret it against a later active loop.
+	task := prepared.task
+	taskID := task.TaskID
+	loopID = task.LoopID
 
 	// Track the loop and count it started. This is after the task is assembled
 	// and addressable and before the publish: the approval-pending arrival
@@ -1182,7 +1204,7 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 	})
 	c.metrics.recordLoopStarted()
 
-	if err := c.natsClient.PublishToStream(ctx, subject, taskData); err != nil {
+	if err := c.natsClient.PublishToStream(ctx, prepared.subject, prepared.data); err != nil {
 		return errs.WrapFatal(err, "Component", "handleTaskSubmission",
 			fmt.Sprintf("task publication for loop %s has unknown durable state", loopID))
 	}
@@ -1201,17 +1223,22 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		Content:     fmt.Sprintf("Task submitted. Loop: %s", loopID),
 		Timestamp:   time.Now(),
 	}); err != nil {
-		// The task already has its PubAck (:1136) and the loop is tracked, so
-		// the delivery that carried this submission can no longer be replayed:
-		// a redelivery mints a fresh task UUID at :1093 and publishes it with
-		// no deduplication id, and with auto_continue=false it creates a second
-		// loop as well. AutoContinue does not save it either — it can reuse the
-		// loop, but downstream deduplication keys on TaskID, so a new TaskID
-		// becomes a continuation of work already accepted. Partial effect,
-		// unknown commit: the lane quarantines and an operator sees a stopped
-		// lane naming the cause. L2 `15825335` (fix(agentic-dispatch): recover
-		// task identity on redelivery) is where identity-preserving replay
-		// lands and may relax this to Retry.
+		// The task already has its PubAck (:1192) and the loop is tracked, so
+		// the delivery that carried this submission can no longer be replayed
+		// free of effect. Identity is no longer the reason it cannot: stable
+		// task identity (#1328) means a redelivery reads its own committed task
+		// back through findRetainedDispatchTask and republishes the same TaskID
+		// and LoopID, which is what downstream deduplication keys on. What a
+		// redelivery does repeat is the tracking at :1178 — Track replaces the
+		// whole LoopInfo, so a loop that has since advanced is reset to
+		// "pending" under a new CreatedAt — and the two started records at :1190
+		// and :1198: tasks_submitted_total counts one submission twice, and
+		// active_loops is a GAUGE, so a second Inc against one later Dec leaks
+		// it upward for the process's life. Partial effect, unknown commit: the
+		// lane quarantines and an operator sees a stopped lane naming the cause.
+		// Relaxing this to Retry needs that re-entry made idempotent, not more
+		// identity; openspec/changes/stable-request-identity/design.md records
+		// why this layer does not take it.
 		return errs.WrapFatal(err, "Component", "handleTaskSubmission",
 			fmt.Sprintf("task %s for loop %s is published but its acknowledgement is not", taskID, loopID))
 	}
@@ -1314,6 +1341,8 @@ func (c *Component) handleAgentApprovalPending(_ context.Context, data []byte) (
 	// state is canonical and the HTTP handler degrades gracefully.
 	if accepted := c.loopTracker.SetPendingApproval(pending.LoopID, &PendingApprovalInfo{
 		CallID:      pending.CallID,
+		ExecutionID: pending.ExecutionID,
+		RequestID:   pending.RequestID,
 		ToolName:    pending.ToolName,
 		Arguments:   pending.Arguments,
 		Reason:      pending.Reason,

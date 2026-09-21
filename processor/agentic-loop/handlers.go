@@ -47,6 +47,12 @@ type TaskMessage = agentic.TaskMessage
 type PublishedMessage struct {
 	Subject string
 	Data    []byte
+	// MsgID, when non-empty, is stamped as the Nats-Msg-Id header so the
+	// server rejects a duplicate of this logical message inside the stream's
+	// Duplicates window (owner ruling Q5 on #1330). Every agent.request
+	// carries its deterministic RequestID here; an empty MsgID publishes
+	// exactly as before.
+	MsgID string
 }
 
 // HandlerResult contains the results of a handler operation
@@ -59,6 +65,13 @@ type HandlerResult struct {
 	ContextEvents        []agentic.ContextEvent
 	RetryScheduled       bool
 	MaxIterationsReached bool
+	// Deferred is true when HandleTask admitted a continuation to a loop whose
+	// model request was still outstanding. Nothing was published: the turn is in
+	// the loop's context and the outstanding response will carry it into the
+	// next iteration's request. The delivery is done — the durable effect is the
+	// loop entity's pending-continuation marker, not a publication.
+	Deferred bool
+
 	// Created is true only when HandleTask actually created a new loop.
 	// False on the dedup short-circuit path (TaskMessage redelivered for
 	// an already-active task). Component uses this to gate
@@ -542,12 +555,12 @@ func (h *MessageHandler) computeRequestDuration(requestID string) int64 {
 }
 
 // computeToolDuration returns the elapsed milliseconds since TrackToolStart was called.
-func (h *MessageHandler) computeToolDuration(callID string) int64 {
-	if start := h.loopManager.GetToolStart(callID); !start.IsZero() {
+func (h *MessageHandler) computeToolDuration(executionID string) int64 {
+	if start := h.loopManager.GetToolStart(executionID); !start.IsZero() {
 		return time.Since(start).Milliseconds()
 	}
 	h.logger.Warn("missing tool start time for duration computation",
-		slog.String("call_id", callID))
+		slog.String("execution_id", executionID))
 	return 0
 }
 
@@ -828,6 +841,13 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 	// This prevents duplicate LLM work when JetStream redelivers a message
 	// (e.g. after a transient heartbeat failure).
 	if existingID, exists := h.loopManager.HasActiveLoopForTask(task.TaskID); exists {
+		// A conflicting loop token under this TaskID never reaches here: the
+		// delivery refuses it in handleTaskMessage, where the token the
+		// PRODUCER sent is still distinguishable from one intake minted
+		// (preflightDecodedTask reserves a fresh prospective UUID per delivery
+		// for a lineage task that named no loop). By this point the two are
+		// the same field, so the comparison would read a redelivery as a
+		// conflict.
 		h.logger.Warn("Duplicate task message — loop already active",
 			slog.String("task_id", task.TaskID),
 			slog.String("existing_loop_id", existingID))
@@ -843,7 +863,7 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 	// function, which otherwise seeds a brand-new loop.
 	var loopID string
 	var err error
-	continuation := false
+	var continuation, deferred bool
 	entity := agentic.LoopEntity{}
 
 	effectiveMaxIterations := effectiveLoopMaxIterations(task, h.config.MaxIterations)
@@ -853,7 +873,7 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 		switch {
 		case err == nil:
 		case errors.Is(err, ErrLoopAlreadyExists):
-			entity, err = h.loopManager.attachContinuation(task.LoopID, task.TaskID)
+			entity, deferred, err = h.loopManager.attachContinuation(task.LoopID, task.TaskID)
 			if err != nil {
 				// A settled loop (ErrLoopTerminal) and a loop with work in
 				// flight (ErrLoopBusy) both refuse the continuation outright;
@@ -866,7 +886,8 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 			h.logger.Info("Continuation attached to live loop",
 				slog.String("loop_id", loopID),
 				slog.String("task_id", task.TaskID),
-				slog.String("loop_state", string(entity.State)))
+				slog.String("loop_state", string(entity.State)),
+				slog.Bool("deferred", deferred))
 		default:
 			return HandlerResult{}, err
 		}
@@ -1022,12 +1043,76 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 		h.loopManager.CacheResponseFormat(loopID, task.ResponseFormat)
 	}
 
+	// The deferral itself. Everything above has run — the turn is in the loop's
+	// context, the caches the next request reads carry this task's tools, tool
+	// choice, metadata, timeout and response format — and the one thing that
+	// does NOT happen is the publish. Minting a request now would reuse the
+	// outstanding request's `<loopID>:req:<iteration>:<retry>` name, and the
+	// duplicate window would drop it: same name, different bytes. The
+	// outstanding response carries this turn into iteration N+1 instead.
+	if deferred {
+		keepTrajectory = true
+		return h.deferredContinuationResult(loopID, task.TaskID, entity), nil
+	}
+
 	result, err := h.buildTaskRequest(loopID, task, entity, messages, tools)
 	if err != nil {
 		return HandlerResult{}, err
 	}
 	keepTrajectory = true
 	return result, nil
+}
+
+// deferredContinuationResult is the empty-handed result a deferred continuation
+// returns: the loop is unchanged except for its context and its pending marker,
+// and nothing is published.
+//
+// Empty-handed on the wire, not in the record. The admitted task contributed a
+// turn to this loop, and the only correlation the carried request later carries
+// is its own RequestID — so without an observation here, "which task
+// contributed this turn" would be answerable from a log line and nowhere else.
+// Agent execution evidence is a first-class capability (openspec/project.md
+// § Purpose) and ADR-098 routes an agent-execution signal to graph conditions
+// rather than to logs.
+func (h *MessageHandler) deferredContinuationResult(loopID, taskID string, entity agentic.LoopEntity) HandlerResult {
+	h.logger.Info("Continuation deferred behind an outstanding model request",
+		slog.String("loop_id", loopID),
+		slog.String("task_id", taskID),
+		slog.Int("iterations", entity.Iterations))
+	result := HandlerResult{
+		LoopID:            loopID,
+		State:             entity.State,
+		Deferred:          true,
+		PublishedMessages: []PublishedMessage{},
+		TrajectorySteps:   []agentic.TrajectoryStep{},
+		ContextEvents:     []agentic.ContextEvent{},
+	}
+	appendTrajectoryObservation(&result, trajectoryObservation{
+		LoopID:            loopID,
+		Kind:              agentic.TrajectoryKindLoopStarted,
+		SourceKind:        agentic.TrajectorySourceTask,
+		SourceCorrelation: taskID,
+		CausalIteration:   positiveUint32(entity.Iterations),
+		CausalPhase:       agentic.TrajectoryPhaseLoopStart,
+		// Requested, not completed: the turn is admitted and waiting for a
+		// request to carry it, which is precisely what did NOT happen here.
+		Status: agentic.TrajectoryStatusRequested,
+		Evidence: trajectoryDeferredContinuationEvidence{
+			TaskID:              taskID,
+			OutstandingRequest:  h.loopManager.OutstandingRequest(loopID),
+			LoopStateAtDeferral: string(entity.State),
+		},
+	})
+	return result
+}
+
+// trajectoryDeferredContinuationEvidence names the turn that was admitted and
+// the request it is waiting behind, so the audit answers "why did nothing go
+// out for this task" without a log.
+type trajectoryDeferredContinuationEvidence struct {
+	TaskID              string `json:"task_id"`
+	OutstandingRequest  string `json:"outstanding_request_id"`
+	LoopStateAtDeferral string `json:"loop_state"`
 }
 
 // buildTaskRequest creates the initial agent request, trajectory step, and loop-created
@@ -1086,6 +1171,7 @@ func (h *MessageHandler) buildTaskRequest(loopID string, task TaskMessage, entit
 			{
 				Subject: requestSubject,
 				Data:    requestData,
+				MsgID:   request.RequestID,
 			},
 			{
 				Subject: createdSubject,
@@ -1132,6 +1218,61 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 	if err != nil {
 		return HandlerResult{}, err
 	}
+	// Identity decides whether this response may advance the loop, BEFORE any
+	// completion logic reads it. Only the loop's CURRENT request can: a
+	// response naming an earlier one is superseded, and acting on it acts on a
+	// world two moves old.
+	//
+	// Current, not outstanding. The outstanding mark is cleared the moment a
+	// response settles, and a tool-call response settles its request while the
+	// loop stays on that iteration waiting for executors or an approval — so
+	// "the loop is waiting on nothing" is the loop's ordinary mid-iteration
+	// state, not evidence that a response belongs to it. An earlier request's
+	// redelivered completion arriving in that window would pass an emptiness
+	// test and settle the loop with the PREVIOUS task's answer while the
+	// current request — the one carrying the user's newer turn — is still
+	// being worked. Reproduced sequentially by the owner's round-2 review; no
+	// concurrency and no restart needed.
+	//
+	// The terminal guard below cannot stand in for this. A completion response
+	// that carried a deferred continuation leaves the loop NON-terminal at the
+	// next iteration, so its JetStream redelivery — AckWait and MaxDeliver are
+	// declared at config.go:169-171 and the agent.response lane resolves them
+	// with its BackOff at component.go:956-992, and it has no dedup of its own —
+	// meets no terminal state, finds no turn left to carry, and would complete the loop
+	// while the request carrying the user's turn is still in flight. That
+	// request's own answer would then be dropped by the terminal guard, which is
+	// exactly the lost turn the deferral exists to prevent.
+	//
+	// A redelivery of the CURRENT request is still handled: same identity,
+	// same request, and refusing it would drop the answer the loop is owed.
+	// The empty case is let through too, but it now means only "this process
+	// minted nothing for this loop" — a restart, where the routing was rebuilt
+	// from the RequestID. Deciding that one needs durable request identity and
+	// is L4's (#1330, declared in design.md § Declared residuals).
+	if current := h.loopManager.CurrentRequest(loopID); current != "" && current != response.RequestID {
+		h.logger.Warn("ignoring superseded model response — the loop has moved on to a different request",
+			slog.String("loop_id", loopID),
+			slog.String("response_request_id", response.RequestID),
+			slog.String("current_request_id", current),
+			slog.String("outstanding_request_id", h.loopManager.OutstandingRequest(loopID)),
+			slog.String("state", entity.State.String()))
+		if h.metrics != nil {
+			h.metrics.recordModelResponseDropped("superseded_request")
+		}
+		return HandlerResult{
+			LoopID:            loopID,
+			State:             entity.State,
+			PublishedMessages: []PublishedMessage{},
+			TrajectorySteps:   []agentic.TrajectoryStep{},
+			ContextEvents:     []agentic.ContextEvent{},
+		}, nil
+	}
+	// This request is answered, whatever the outcome below. Clearing the
+	// outstanding mark here rather than in the success arms means an early
+	// return (timeout, terminal loop, budget exhausted) does not leave the loop
+	// looking like it is still waiting on a model.
+	h.loopManager.SettleRequest(loopID, response.RequestID)
 	result := HandlerResult{
 		LoopID:            loopID,
 		State:             entity.State,
@@ -1247,7 +1388,7 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 		// future truncation can self-heal once.
 		h.loopManager.ResetTruncationRetry(loopID)
 
-		if err := h.handleToolCallResponse(ctx, &result, loopID, response.Message.ToolCalls); err != nil {
+		if err := h.handleToolCallResponse(ctx, &result, loopID, response.RequestID, response.Message.ToolCalls); err != nil {
 			return result, err
 		}
 
@@ -1272,6 +1413,23 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 		// read_loop_result, even when the provider adapter routed it to
 		// the non-canonical field.
 		completionText := resolveCompletionText(response.Message)
+
+		// A continuation was admitted while this request was outstanding and
+		// published nothing, because minting a request then would have reused
+		// this request's name. Completing now would settle the loop with that
+		// turn unanswered and no later request to carry it — the case the
+		// "deferred, not dropped" claim was false for. The loop advances
+		// instead, and only a loop with nothing deferred completes here.
+		if h.loopManager.HasPendingContinuation(loopID) {
+			carried, err := h.carryDeferredContinuation(ctx, loopID, entity, cm, &result)
+			if err != nil {
+				return result, err
+			}
+			if carried {
+				return result, nil
+			}
+		}
+
 		// Model-text completion: no terminal tool, so no typed decision.
 		if err := h.handleCompleteResponse(&result, loopID, entity, completionText, nil); err != nil {
 			return result, err
@@ -1300,10 +1458,14 @@ func (h *MessageHandler) handleToolCallResponse(
 	ctx context.Context,
 	result *HandlerResult,
 	loopID string,
+	requestID string,
 	toolCalls []agentic.ToolCall,
 ) error {
+	if err := stampToolExecutionCorrelation(requestID, toolCalls); err != nil {
+		return err
+	}
 	for index, toolCall := range toolCalls {
-		h.loopManager.TrackToolOrdinal(toolCall.ID, uint32(index+1))
+		h.loopManager.TrackToolOrdinal(toolCall.ExecutionID, uint32(index+1))
 	}
 	// Reject tool calls with empty names — Gemini sometimes emits these as
 	// acknowledgment non-responses. Store error results so the model gets a
@@ -1315,10 +1477,13 @@ func (h *MessageHandler) handleToolCallResponse(
 				slog.String("loop_id", loopID),
 				slog.String("call_id", tc.ID))
 			errResult := agentic.ToolResult{
-				CallID: tc.ID,
-				Name:   "invalid_tool_call",
-				Error:  "tool call had empty function name — call a specific tool by name or respond with text",
-				LoopID: loopID,
+				CallID:      tc.ID,
+				RequestID:   tc.RequestID,
+				ExecutionID: tc.ExecutionID,
+				CallOrdinal: tc.CallOrdinal,
+				Name:        "invalid_tool_call",
+				Error:       "tool call had empty function name — call a specific tool by name or respond with text",
+				LoopID:      loopID,
 			}
 			if err := h.loopManager.StoreToolResult(loopID, errResult); err != nil {
 				return err
@@ -1351,12 +1516,15 @@ func (h *MessageHandler) handleToolCallResponse(
 			return gErr
 		}
 		for _, rejection := range govResult.Rejected {
-			h.loopManager.TrackToolName(rejection.Call.ID, rejection.Call.Name)
+			h.loopManager.TrackToolName(rejection.Call.ExecutionID, rejection.Call.Name)
 			errResult := agentic.ToolResult{
-				CallID: rejection.Call.ID,
-				Name:   rejection.Call.Name,
-				Error:  fmt.Sprintf("tool call rejected by governance: %s", rejection.Reason),
-				LoopID: loopID,
+				CallID:      rejection.Call.ID,
+				Name:        rejection.Call.Name,
+				Error:       fmt.Sprintf("tool call rejected by governance: %s", rejection.Reason),
+				LoopID:      loopID,
+				RequestID:   rejection.Call.RequestID,
+				ExecutionID: rejection.Call.ExecutionID,
+				CallOrdinal: rejection.Call.CallOrdinal,
 			}
 			if err := h.loopManager.StoreToolResult(loopID, errResult); err != nil {
 				return err
@@ -1447,24 +1615,29 @@ func (h *MessageHandler) handleToolCallResponse(
 // approval_response_handler.go:122). Reason is the diagnostic surfaced
 // to the model so it can decide how to recover.
 //
-// Idempotent at the loopManager.StoreToolResult layer — duplicate
-// call_ids dedupe naturally.
-func (h *MessageHandler) synthesizeToolFailure(loopID, callID, name, reason string) error {
+// Correlated dispatch failures use ExecutionID like ordinary results. The
+// terminal drain is the sole CallID-only fallback because it owns only the
+// provider IDs in one terminating loop and never crosses result routing.
+func (h *MessageHandler) synthesizeToolFailure(loopID string, call agentic.ToolCall, reason string) error {
+	name := call.Name
 	if name == "" {
 		// Best-effort recovery — the call may have been registered via
 		// TrackToolName at dispatch time even if the dispatch later
 		// failed. Falls back to a sentinel only if no name was tracked.
-		if tracked := h.loopManager.GetToolName(callID); tracked != "" {
+		if tracked := h.loopManager.GetToolName(call.ExecutionID); tracked != "" {
 			name = tracked
 		} else {
 			name = "unknown_tool"
 		}
 	}
 	synth := agentic.ToolResult{
-		CallID: callID,
-		Name:   name,
-		Error:  reason,
-		LoopID: loopID,
+		CallID:      call.ID,
+		Name:        name,
+		Error:       reason,
+		LoopID:      loopID,
+		RequestID:   call.RequestID,
+		ExecutionID: call.ExecutionID,
+		CallOrdinal: call.CallOrdinal,
 	}
 	return h.loopManager.StoreToolResult(loopID, synth)
 }
@@ -1480,14 +1653,13 @@ func (h *MessageHandler) synthesizeToolFailure(loopID, callID, name, reason stri
 // individual StoreToolResult calls are logged but don't stop the drain
 // — partial cleanup beats no cleanup.
 //
-// Concurrency note: callers run on the loop's owning goroutine. A
-// concurrent real result on a different goroutine could overwrite a
-// just-written synth via StoreToolResult's CallID-keyed map (state.go
-// PendingToolResults), or be overwritten by it depending on
-// interleaving. The race is benign because the loop is transitioning
-// to terminal — HandleToolResult's AllToolsComplete branch is gated
-// on !entity.State.IsTerminal() at handlers.go:1411, so neither write
-// triggers a new agent.request regardless of which won.
+// Concurrency note: callers run on the loop's owning goroutine. Terminal
+// drainage stores its loop-local synthetic by provider CallID because the
+// pending set has no execution correlation. A concurrent real result stores by
+// ExecutionID, so the entries cannot overwrite one another. The loop is already
+// transitioning to terminal; HandleToolResult's AllToolsComplete branch is
+// gated on !entity.State.IsTerminal(), so neither entry triggers another
+// agent.request.
 func (h *MessageHandler) drainPendingToolFailures(loopID, reason string) {
 	// Drop any queued-but-not-yet-dispatched calls unconditionally —
 	// they'd never get a real result on a terminating loop, and
@@ -1504,7 +1676,7 @@ func (h *MessageHandler) drainPendingToolFailures(loopID, reason string) {
 		slog.Int("count", len(pending)),
 		slog.String("reason", reason))
 	for _, callID := range pending {
-		if err := h.synthesizeToolFailure(loopID, callID, "", reason); err != nil {
+		if err := h.synthesizeToolFailure(loopID, agentic.ToolCall{ID: callID}, reason); err != nil {
 			h.logger.Warn("failed to store synthetic failure during drain",
 				slog.String("loop_id", loopID),
 				slog.String("call_id", callID),
@@ -1513,6 +1685,83 @@ func (h *MessageHandler) drainPendingToolFailures(loopID, reason string) {
 		// Remove from pending so a late-arriving real result is dropped
 		// silently (the synth-result already filled the slot).
 		_ = h.loopManager.RemovePendingTool(loopID, callID)
+	}
+}
+
+// synthesizeSkippedQueuedTools gives every still-queued tool call a correlated
+// synthetic result saying the terminal tool ended the iteration, and empties
+// the queue doing it.
+//
+// The caller is the terminal-tool CARRY path and only that path. A queued call
+// was never dispatched, so it is not in the pending set and
+// drainPendingToolFailures cannot see it — but it IS in the assistant message
+// the carried request replays, and a tool_call with no tool result makes
+// RepairToolPairs drop the entire group. The result is a failure rather than a
+// new kind because that is what the model must account for: the call it asked
+// for did not run, and here is why.
+//
+// DequeueToolCall carries the whole call, so the synthetic correlates by
+// ExecutionID when one was minted and by CallID otherwise, exactly as the
+// dispatch-failure recovery does.
+//
+// The loop is bounded by the queue's own length read at entry, never by a
+// constant. A constant is not a safety net here, it is a silent truncation:
+// the batch size is the provider's choice, agentic.AgentResponse validation
+// imposes no limit on it, and any call left queued when the caller clears the
+// queue is an unanswered call — which is the whole defect this function
+// exists to prevent (owner's Codex round 4).
+//
+// The entry length bounds THIS drain. It is not an invariant about the queue,
+// which can change underneath the loop: ClearQueuedTools empties it (:1668,
+// :2599 — the line right after this function's own call site — and :2721),
+// and QueueToolCalls (:1599) can append to it again. That append needs no
+// concurrency to reach: a redelivered tool-call response names the loop's
+// CURRENT request, so the request-identity guard passes it by design, and
+// handleToolCallResponse queues the batch a second time. Nor are the lanes
+// serialized — agent.task, agent.response and tool.result are separate
+// consumers and nothing in this package serializes them per loop (design.md
+// § Declared residuals, "the admission check and the mint are not one
+// critical section"); there is no per-loop mutex.
+//
+// The loop tolerates both directions: it breaks on !ok, so a shrink ends it
+// early, and the post-drain re-read reports a growth. That re-read is a
+// REACHABLE guard, not an assertion — do not delete it.
+func (h *MessageHandler) synthesizeSkippedQueuedTools(loopID, terminalTool string) {
+	queued := h.loopManager.QueuedToolCount(loopID)
+	if queued == 0 {
+		return
+	}
+	name := terminalTool
+	if name == "" {
+		name = "a terminal tool"
+	}
+	reason := fmt.Sprintf("skipped because %s ended the iteration", name)
+	for i := 0; i < queued; i++ {
+		next, ok := h.loopManager.DequeueToolCall(loopID)
+		if !ok {
+			break
+		}
+		h.logger.Info("queued tool call skipped by a terminal tool; emitting a synthetic result",
+			slog.String("loop_id", loopID),
+			slog.String("call_id", next.ID),
+			slog.String("tool_name", next.Name),
+			slog.String("terminal_tool", terminalTool))
+		if err := h.synthesizeToolFailure(loopID, next, reason); err != nil {
+			h.logger.Warn("failed to store the synthetic result for a skipped queued call",
+				slog.String("loop_id", loopID),
+				slog.String("call_id", next.ID),
+				slog.String("error", err.Error()))
+		}
+	}
+	if remaining := h.loopManager.QueuedToolCount(loopID); remaining > 0 {
+		// Reachable: the queue can gain calls while this drains (see the
+		// bound's note above). When it fires, those calls are about to be
+		// cleared with no results and the next request's tool batch will be
+		// repaired away — so this WARN is the only trace of it.
+		h.logger.Warn("queued tool calls remain after the skipped-queue drain; they will go unanswered",
+			slog.String("loop_id", loopID),
+			slog.Int("drained", queued),
+			slog.Int("remaining", remaining))
 	}
 }
 
@@ -1546,7 +1795,7 @@ func (h *MessageHandler) tryDispatchOrSynthesize(result *HandlerResult, loopID s
 	// drain helper would later see.
 	_ = h.loopManager.RemovePendingTool(loopID, tc.ID)
 	reason := fmt.Sprintf("tool dispatch failed: %s", err.Error())
-	return false, h.synthesizeToolFailure(loopID, tc.ID, tc.Name, reason)
+	return false, h.synthesizeToolFailure(loopID, tc, reason)
 }
 
 // dispatchedFromQueue drains the loop's queued tool calls until one
@@ -1558,29 +1807,50 @@ func (h *MessageHandler) tryDispatchOrSynthesize(result *HandlerResult, loopID s
 // when the queue drained without a success (caller should fall
 // through to AllToolsComplete).
 func (h *MessageHandler) dispatchedFromQueue(result *HandlerResult, loopID string) (dispatched bool, storeErr error) {
-	// Defensive cap: queue length at entry. DequeueToolCall is the only
-	// queue-shrinking op the loop runs, so under any sane LoopManager
-	// state the queue is bounded by entry-time length. The cap stops
-	// a future bug in DequeueToolCall (e.g., one that returned ok=true
-	// without consuming) from infinite-looping the dispatch path.
-	maxIter := len(h.loopManager.GetPendingTools(loopID)) + 64
-	for i := 0; i < maxIter; i++ {
+	// Bounded by the QUEUE's own length at entry, never by a heuristic. This
+	// bound used to be len(pendingTools)+64, which is derived from a different
+	// set than the one being drained: a batch whose first 65-plus calls all
+	// failed to dispatch stopped with calls still queued, they never got the
+	// synthetic result this loop exists to emit, and handleToolsComplete then
+	// minted a request whose assistant message advertised calls nothing
+	// answered — which RepairToolPairs removes as a broken group, terminal
+	// content and all. Same defect class as the skipped-queue drain's retired
+	// constant (owner's Codex round 4), at longer odds.
+	//
+	// As there, the entry length bounds THIS drain and claims nothing about
+	// the queue: ClearQueuedTools empties it at three sites (:1668, :2599,
+	// :2721) and QueueToolCalls (:1599) can append to it again — reachable
+	// with no concurrency at all, since a redelivered tool-call response names
+	// the loop's CURRENT request and re-queues the batch — and the lanes are
+	// not serialized per loop (design.md § Declared residuals). The loop
+	// tolerates both: it breaks on !ok when the queue shrank, and the
+	// post-loop re-read reports what arrived. That re-read is a REACHABLE
+	// guard, not an assertion — do not delete it.
+	queued := h.loopManager.QueuedToolCount(loopID)
+	for i := 0; i < queued; i++ {
 		next, ok := h.loopManager.DequeueToolCall(loopID)
 		if !ok {
-			return false, nil
+			break
 		}
-		ok, sErr := h.tryDispatchOrSynthesize(result, loopID, next)
+		sent, sErr := h.tryDispatchOrSynthesize(result, loopID, next)
 		if sErr != nil {
 			return false, sErr
 		}
-		if ok {
+		if sent {
 			return true, nil
 		}
 		// Synth-result emitted for this call; loop to try the next.
 	}
-	h.logger.Warn("dispatchedFromQueue iteration cap hit; queue may have leaked",
-		slog.String("loop_id", loopID),
-		slog.Int("max_iter", maxIter))
+	if remaining := h.loopManager.QueuedToolCount(loopID); remaining > 0 {
+		// Reachable, not an assertion: nothing dispatched and calls are still
+		// queued — either they arrived while this drained, or the manager
+		// stopped handing them over. Either way they reach no executor and
+		// carry no result, so the next request's tool batch is incomplete.
+		h.logger.Warn("queued tool calls remain after the dispatch drain; they will go unanswered",
+			slog.String("loop_id", loopID),
+			slog.Int("drained", queued),
+			slog.Int("remaining", remaining))
+	}
 	return false, nil
 }
 
@@ -1625,10 +1895,12 @@ func (h *MessageHandler) dispatchToolCall(result *HandlerResult, loopID string, 
 	if err := h.loopManager.AddPendingTool(loopID, tc.ID); err != nil {
 		return err
 	}
-	h.loopManager.TrackToolCall(tc.ID, loopID)
-	h.loopManager.TrackToolName(tc.ID, tc.Name)
-	h.loopManager.TrackToolArguments(tc.ID, tc.Arguments)
-	h.loopManager.TrackToolStart(tc.ID)
+	if tc.ExecutionID != "" {
+		h.loopManager.TrackToolCall(tc.ExecutionID, loopID)
+	}
+	h.loopManager.TrackToolName(tc.ExecutionID, tc.Name)
+	h.loopManager.TrackToolArguments(tc.ExecutionID, tc.Arguments)
+	h.loopManager.TrackToolStart(tc.ExecutionID)
 
 	if tc.LoopID == "" {
 		tc.LoopID = loopID
@@ -1725,7 +1997,7 @@ func (h *MessageHandler) dispatchToolCall(result *HandlerResult, loopID string, 
 		SourceCorrelation: tc.ID,
 		CausalIteration:   positiveUint32(h.loopManager.GetCurrentIteration(loopID)),
 		CausalPhase:       agentic.TrajectoryPhaseToolRequest,
-		CausalOrdinal:     h.loopManager.GetToolOrdinal(tc.ID),
+		CausalOrdinal:     tc.CallOrdinal,
 		Status:            agentic.TrajectoryStatusRequested,
 		ToolPreview:       tc.Name,
 		Evidence:          tc,
@@ -1919,6 +2191,7 @@ func (h *MessageHandler) emitRetryRequest(ctx context.Context, loopID string, en
 	result.PublishedMessages = append(result.PublishedMessages, PublishedMessage{
 		Subject: requestSubject,
 		Data:    requestData,
+		MsgID:   request.RequestID,
 	})
 	appendTrajectoryObservation(result, trajectoryObservation{
 		LoopID:            loopID,
@@ -2038,13 +2311,13 @@ func resolveCompletionText(msg agentic.ChatMessage) string {
 }
 
 // resolveToolName resolves the function name of a tool result through the
-// loop's name-fallback chain: the name tracked at dispatch for this call ID
+// loop's name-fallback chain: the name tracked for this execution ID
 // first, then the name carried on the result envelope itself. The fallback
 // is what survives a LoopManager cache loss (process restart) — agentic-tools
 // stamps Name on every result before publishing, so the envelope always
 // carries it. Returns "" only when neither source knows the name.
 func (h *MessageHandler) resolveToolName(toolResult agentic.ToolResult) string {
-	if tracked := h.loopManager.GetToolName(toolResult.CallID); tracked != "" {
+	if tracked := h.loopManager.GetToolName(toolResult.ExecutionID); tracked != "" {
 		return tracked
 	}
 	return toolResult.Name
@@ -2229,15 +2502,15 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 		SourceCorrelation: originalToolResult.CallID,
 		CausalIteration:   positiveUint32(entity.Iterations),
 		CausalPhase:       agentic.TrajectoryPhaseToolResult,
-		CausalOrdinal:     h.loopManager.GetToolOrdinal(originalToolResult.CallID),
-		ElapsedMS:         h.computeToolDuration(originalToolResult.CallID),
+		CausalOrdinal:     h.loopManager.GetToolOrdinal(originalToolResult.ExecutionID),
+		ElapsedMS:         h.computeToolDuration(originalToolResult.ExecutionID),
 		Status:            toolResultStatus(originalToolResult),
 		ToolPreview:       originalToolResult.Name,
 		CapabilityPreview: entity.Role,
 		ErrorCategory:     toolErrorCategory(originalToolResult),
 		Evidence: trajectoryToolCompletionEvidence{
 			Result:            originalToolResult,
-			DispatchArguments: h.loopManager.GetToolArguments(originalToolResult.CallID),
+			DispatchArguments: h.loopManager.GetToolArguments(originalToolResult.ExecutionID),
 		},
 	})
 
@@ -2305,7 +2578,54 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 	// are needed (e.g., a terminal action like decompose, submit, approve).
 	// Content becomes the LoopCompletedEvent.Result.
 	if toolResult.StopLoop {
+		// Serial dispatch sends one call of an assistant batch and queues the
+		// rest, so a terminal result arrives with siblings that will never run.
+		// On the CARRY path they must still be accounted for: the carried
+		// request replays this assistant message, and RepairToolPairs
+		// (RepairToolPairs, context_manager.go:292-335) marks the WHOLE group
+		// broken when one
+		// advertised call has no result — removing the assistant message and
+		// the terminal tool's own result with it, so the turn that asked the
+		// agent to explain its decision reached the model without the decision.
+		// Synthesizing a correlated skip result per queued call keeps the batch
+		// complete and says what actually happened. Same recovery shape as the
+		// dispatch failure at :1758, and it runs only when a turn is carried:
+		// the completing path mints no further request, so nothing there
+		// re-reads the batch.
+		carrying := h.loopManager.HasPendingContinuation(loopID)
+		if carrying {
+			h.synthesizeSkippedQueuedTools(loopID, toolResult.Name)
+		}
 		h.loopManager.ClearQueuedTools(loopID)
+
+		// The same disposition as the model-text completion path (:1423). A
+		// completion is a completion whether the model said it in text or
+		// through a terminal tool — the framework `decide` executor returns
+		// StopLoop: true — so a turn admitted while this iteration's request
+		// was outstanding is carried here too, and only a loop with nothing
+		// deferred completes. Without this the loop settled with the turn
+		// still marked pending and no request that had ever contained it.
+		//
+		// The tool results are drained into the conversation first, which the
+		// completing path never had to do: the carried request must send this
+		// terminal tool's own message, or its assistant tool_call is an
+		// unpaired orphan and RepairToolPairs drops the call the model just
+		// made. The typed `decide` decision does not ride a completion event
+		// here because this decide did not end the loop — LoopCompletedEvent
+		// .Decision is the terminal that did — and the call and its result
+		// stay in the trajectory and the conversation either way.
+		if carrying {
+			cm := h.loopManager.GetContextManager(loopID)
+			h.absorbToolResultsIntoContext(loopID, cm)
+			carried, err := h.carryDeferredContinuation(ctx, loopID, entity, cm, &result)
+			if err != nil {
+				return result, err
+			}
+			if carried {
+				return result, nil
+			}
+		}
+
 		if err := h.handleCompleteResponse(&result, loopID, entity, toolResult.Content, &toolResult); err != nil {
 			return result, err
 		}
@@ -2385,11 +2705,14 @@ func (h *MessageHandler) gateForApproval(loopID string, entity *agentic.LoopEnti
 	// Falls back to the tool name on the result envelope when the
 	// LoopManager cache has been cleared (e.g., process restart).
 	toolName := h.resolveToolName(toolResult)
-	args := h.loopManager.GetToolArguments(toolResult.CallID)
+	args := h.loopManager.GetToolArguments(toolResult.ExecutionID)
 
 	if err := entity.BeginAwaitingApproval(toolResult.CallID, toolName, args, toolResult.Error, h.config.ApprovalTimeout(), toolResult.TraceID); err != nil {
 		return nil, fmt.Errorf("begin awaiting approval: %w", err)
 	}
+	entity.PendingApproval.RequestID = toolResult.RequestID
+	entity.PendingApproval.ExecutionID = toolResult.ExecutionID
+	entity.PendingApproval.CallOrdinal = toolResult.CallOrdinal
 
 	// Clear sibling tool calls queued behind this one. Once the human
 	// responds, the LLM will get a fresh round-trip with the
@@ -2402,8 +2725,13 @@ func (h *MessageHandler) gateForApproval(loopID string, entity *agentic.LoopEnti
 	}
 
 	pending := &agentic.ApprovalPendingEvent{
-		LoopID:      loopID,
-		CallID:      toolResult.CallID,
+		LoopID: loopID,
+		CallID: toolResult.CallID,
+		// The identity the approval authorises, carried to whoever answers so
+		// the answer can be matched on it rather than on a provider CallID the
+		// provider may reuse next turn.
+		ExecutionID: toolResult.ExecutionID,
+		RequestID:   toolResult.RequestID,
 		ToolName:    toolName,
 		Arguments:   args,
 		Reason:      toolResult.Error,
@@ -2440,15 +2768,15 @@ func (h *MessageHandler) buildToolTrajectoryStep(toolResult agentic.ToolResult, 
 			errCategory = string(agentic.ToolErrorUnknown)
 		}
 	}
-	toolName := h.loopManager.GetToolName(toolResult.CallID)
-	toolArgs := h.loopManager.GetToolArguments(toolResult.CallID)
+	toolName := h.loopManager.GetToolName(toolResult.ExecutionID)
+	toolArgs := h.loopManager.GetToolArguments(toolResult.ExecutionID)
 	return agentic.TrajectoryStep{
 		Timestamp:     time.Now(),
 		StepType:      "tool_call",
 		ToolName:      toolName,
 		ToolArguments: toolArgs,
 		ToolResult:    toolResult.Content,
-		Duration:      h.computeToolDuration(toolResult.CallID),
+		Duration:      h.computeToolDuration(toolResult.ExecutionID),
 		Provider:      h.resolveProvider(entity.Model),
 		Capability:    entity.Role,
 		ToolStatus:    toolStatus,
@@ -2519,15 +2847,50 @@ func (h *MessageHandler) handleToolsComplete(
 	// Get the new iteration count for GC
 	newIteration := h.loopManager.GetCurrentIteration(loopID)
 
-	// Get ALL accumulated tool results
-	allResults := h.loopManager.GetAndClearToolResults(loopID)
+	h.absorbToolResultsIntoContext(loopID, cm)
 
-	toolMessages := h.buildToolMessages(allResults)
-
-	for _, tm := range toolMessages {
-		_ = cm.AddMessage(RegionRecentHistory, tm)
+	if err := h.publishIterationRequest(ctx, loopID, entity, cm, result, newIteration); err != nil {
+		return *result, err
 	}
 
+	return *result, nil
+}
+
+// absorbToolResultsIntoContext drains every tool result accumulated for this
+// loop into its conversation, as the tool messages the next request sends.
+//
+// One home, because two paths need it and the invariant is the same for both:
+// a request that carries an assistant tool_call without its tool message is a
+// broken pair, and RepairToolPairs would drop the call rather than send it.
+// The ordinary path is all-tools-complete; the other is a terminal tool
+// answered while a continuation turn is waiting, where the loop carries the
+// turn instead of settling and the terminal tool's own content has to travel
+// with it.
+func (h *MessageHandler) absorbToolResultsIntoContext(loopID string, cm *ContextManager) {
+	for _, tm := range h.buildToolMessages(h.loopManager.GetAndClearToolResults(loopID)) {
+		_ = cm.AddMessage(RegionRecentHistory, tm)
+	}
+}
+
+// publishIterationRequest builds and appends the loop's next model request from
+// its accumulated context. It is the ONE home for "what the next ITERATION asks
+// the model", reached from the tool-results path and from a completion response
+// that must carry a deferred continuation instead of settling.
+//
+// It is NOT the only site that mints a request — emitRetryRequest mints the
+// truncation retry at the same iteration, and HandleTask mints the birth
+// request — so the deferral bookkeeping does not live here. It lives in
+// TrackRequest, the call all three already make, which is the only placement
+// under which "every request that carries the turn is recorded as carrying it"
+// is true rather than true of two paths out of three.
+func (h *MessageHandler) publishIterationRequest(
+	ctx context.Context,
+	loopID string,
+	entity agentic.LoopEntity,
+	cm *ContextManager,
+	result *HandlerResult,
+	newIteration int,
+) error {
 	// Pre-request integrity audit. Belt-and-suspenders for any orphan
 	// tool_calls C1's synth-result wiring missed (KV-restored loops
 	// with corrupt context, future failure paths added without the
@@ -2553,14 +2916,13 @@ func (h *MessageHandler) handleToolsComplete(
 
 	// Check for cancellation before building request
 	if err := ctx.Err(); err != nil {
-		return *result, err
+		return err
 	}
 
 	// Get cached tools and tool choice for this loop (set once at loop start)
 	tools := h.loopManager.GetCachedTools(loopID)
 	toolChoice := h.loopManager.GetCachedToolChoice(loopID)
 
-	// All tools complete - send next agent request with full conversation
 	request := agentic.AgentRequest{
 		RequestID:      h.loopManager.GenerateRequestID(loopID),
 		LoopID:         loopID,
@@ -2573,23 +2935,27 @@ func (h *MessageHandler) handleToolsComplete(
 		ResponseFormat: h.loopManager.GetCachedResponseFormat(loopID),
 	}
 
-	// Track request ID to loop ID mapping (cache for fast lookup)
+	// Track request ID to loop ID mapping (cache for fast lookup). TrackRequest
+	// also records this request as the carrier of any deferred turn, because
+	// every request that goes out carries the turn and this is the call every
+	// publish site already makes.
 	h.loopManager.TrackRequest(request.RequestID, loopID)
 	h.loopManager.TrackRequestStart(request.RequestID)
 
 	requestMsg := message.NewBaseMessage(request.Schema(), &request, "agentic-loop")
 	requestData, err := json.Marshal(requestMsg)
 	if err != nil {
-		return *result, err
+		return err
 	}
 	requestSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.request", loopID)
 	if err != nil {
-		return *result, err
+		return err
 	}
 
 	result.PublishedMessages = append(result.PublishedMessages, PublishedMessage{
 		Subject: requestSubject,
 		Data:    requestData,
+		MsgID:   request.RequestID,
 	})
 	appendTrajectoryObservation(result, trajectoryObservation{
 		LoopID:            loopID,
@@ -2606,7 +2972,66 @@ func (h *MessageHandler) handleToolsComplete(
 		Evidence:          request,
 	})
 
-	return *result, nil
+	return nil
+}
+
+// carryDeferredContinuation advances a loop that was ABOUT to complete into one
+// more iteration, because a continuation turn was admitted while this response
+// was outstanding and nothing has carried it yet. Returns false when the turn
+// cannot be carried, in which case the caller completes the loop as it would
+// have.
+func (h *MessageHandler) carryDeferredContinuation(
+	ctx context.Context,
+	loopID string,
+	entity agentic.LoopEntity,
+	cm *ContextManager,
+	result *HandlerResult,
+) (bool, error) {
+	if err := h.loopManager.IncrementIteration(loopID); err != nil {
+		// Budget exhaustion is the one refusal that is not an error here: the
+		// model said it was done and the loop has no iteration left to spend,
+		// so completing is the right outcome and the turn cannot be carried.
+		//
+		// Reachable from ONE of the two callers. From HandleModelResponse
+		// (:1424) it is not: that handler fails the delivery at :1330 on the
+		// same predicate over the same value, and nothing between there and
+		// here moves Iterations. From the terminal-tool carry (:2504) it is:
+		// nothing gates iterations between HandleToolResult's entry and that
+		// call, and a redelivered terminal tool result — at-least-once, with no
+		// request-identity guard on the tool lane and a tolerant
+		// RemovePendingTool — lands on a loop whose earlier carry already spent
+		// the last iteration, with a newer turn deferred behind it. Observed by
+		// TestATerminalToolAtTheIterationCeilingKeepsTheDeferredTurnOnTheRecord.
+		//
+		// The marker is deliberately NOT cleared (owner ruling, 2026-09-20, on
+		// #1328): the loop completes, and its durable record keeps
+		// PendingContinuation with an empty carrier — the fact that this loop
+		// ended owing a turn no request ever contained. Same shape as the
+		// quarantined carry, where the marker outlives a publish whose
+		// durability is unknown, and the reason is the same: the only record
+		// that could recover the user's turn must not be the log line.
+		// Nothing resurrects the loop off that flag — attachContinuation
+		// refuses a terminal loop at state.go:308-312 before any deferral
+		// bookkeeping, and the flag has no reader outside this package.
+		if errors.Is(err, agentic.ErrMaxIterationsReached) {
+			h.logger.Warn("deferred continuation not carried — iteration budget exhausted at completion; "+
+				"the turn stays on the completed record",
+				slog.String("loop_id", loopID),
+				slog.Int("iterations", entity.Iterations),
+				slog.Int("max_iterations", entity.MaxIterations))
+			return false, nil
+		}
+		return false, errs.Wrap(err, "agentic-loop", "carryDeferredContinuation", "increment iteration")
+	}
+
+	newIteration := h.loopManager.GetCurrentIteration(loopID)
+	h.logger.Info("Completion deferred — carrying a continuation into the next iteration",
+		slog.String("loop_id", loopID),
+		slog.Int("iteration", newIteration))
+	if err := h.publishIterationRequest(ctx, loopID, entity, cm, result, newIteration); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // hasUserOrAssistantMessage returns true if the messages contain at least one
@@ -2653,7 +3078,7 @@ func (h *MessageHandler) buildToolMessages(results []agentic.ToolResult) []agent
 		content = decorateContentWithPagination(content, r.Metadata)
 		name := r.Name
 		if name == "" {
-			name = h.loopManager.GetToolName(r.CallID)
+			name = h.loopManager.GetToolName(r.ExecutionID)
 		}
 		messages[i] = agentic.ChatMessage{
 			Role:       "tool",

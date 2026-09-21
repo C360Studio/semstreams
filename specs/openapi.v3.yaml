@@ -895,7 +895,11 @@ components:
                                             type: object
                                         call_id:
                                             type: string
+                                        execution_id:
+                                            type: string
                                         reason:
+                                            type: string
+                                        request_id:
                                             type: string
                                         requested_at:
                                             format: date-time
@@ -952,6 +956,8 @@ components:
                     type: boolean
                 decision:
                     type: string
+                execution_id:
+                    type: string
                 loop_id:
                     type: string
                 message:
@@ -968,6 +974,8 @@ components:
             properties:
                 decision:
                     type: string
+                execution_id:
+                    type: string
                 modified_arguments:
                     additionalProperties: {}
                     type: object
@@ -977,6 +985,7 @@ components:
                     type: string
             required:
                 - decision
+                - execution_id
             type: object
         ComponentType:
             properties:
@@ -1233,7 +1242,11 @@ components:
                                 type: object
                             call_id:
                                 type: string
+                            execution_id:
+                                type: string
                             reason:
+                                type: string
+                            request_id:
                                 type: string
                             requested_at:
                                 format: date-time
@@ -1306,7 +1319,11 @@ components:
                                 type: object
                             call_id:
                                 type: string
+                            execution_id:
+                                type: string
                             reason:
+                                type: string
+                            request_id:
                                 type: string
                             requested_at:
                                 format: date-time

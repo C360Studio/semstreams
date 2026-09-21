@@ -449,21 +449,21 @@ func TestIntegration_LoopWithToolCalls(t *testing.T) {
 
 	// Verify tool call was published
 	toolMu.Lock()
-	assert.Greater(t, len(receivedToolCalls), 0, "Should publish tool call")
-	if len(receivedToolCalls) > 0 {
-		call := receivedToolCalls[0]
-		assert.Equal(t, "call_001", call.ID)
-		assert.Equal(t, "read_file", call.Name)
-	}
-	callID := receivedToolCalls[0].ID
+	require.NotEmpty(t, receivedToolCalls, "Should publish tool call")
+	call := receivedToolCalls[0]
 	toolMu.Unlock()
+	assert.Equal(t, "call_001", call.ID)
+	assert.Equal(t, "read_file", call.Name)
 
 	// Simulate tool result
 	toolResult := &agentic.ToolResult{
-		CallID:  callID,
-		Content: "file contents",
+		CallID:      call.ID,
+		RequestID:   call.RequestID,
+		ExecutionID: call.ExecutionID,
+		CallOrdinal: call.CallOrdinal,
+		Content:     "file contents",
 	}
-	publishToolResultMessage(t, natsClient, "tool.result."+callID, toolResult)
+	publishToolResultMessage(t, natsClient, "tool.result."+call.ExecutionID, toolResult)
 
 	time.Sleep(500 * time.Millisecond)
 

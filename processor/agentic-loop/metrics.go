@@ -59,7 +59,7 @@ type loopMetrics struct {
 	// Tool-call governance (ADR-039)
 	governanceVerdictDuration                *prometheus.HistogramVec
 	governanceVerdictTotal                   *prometheus.CounterVec
-	governanceSubscribeBeforePublishFailures prometheus.Counter
+	governanceSubscribeBeforePublishFailures *prometheus.CounterVec
 
 	// Lesson brief-assembly injection (ADR-080). kind=matched counts every
 	// active lesson whose scope matched at dispatch; kind=included counts those
@@ -167,14 +167,14 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "tool_results_dropped_total",
-				Help:      "Total tool results dropped at the wire because no loop mapping exists for the CallID and the loop record is absent or terminal. Sustained non-zero rate points at NATS redelivery or executor double-publish. A result for a loop that is live but held by another process is NOT counted here: it is retried, not dropped.",
+				Help:      "Total tool results dropped at the wire because no loop mapping exists for the execution ID and the loop record is absent or terminal. Sustained non-zero rate points at NATS redelivery or executor double-publish. A result for a loop that is live but held by another process is NOT counted here: it is retried, not dropped.",
 			}, []string{"reason"}),
 
 			modelResponsesDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "model_responses_dropped_total",
-				Help:      "Total model responses dropped at the wire because no loop maps to the RequestID and the loop record is absent or terminal. Expected after a loop settles and releases its per-loop state; a sustained rate points at NATS redelivery. A response for a loop that is live but held by another process is NOT counted here: it is retried, not dropped.",
+				Help:      "Total model responses acknowledged without advancing a loop. reason=\"stale_request_id\" is a response whose RequestID maps to no loop and whose loop record is absent or terminal — expected after a loop settles and releases its per-loop state. reason=\"superseded_request\" is a response for a live loop that is waiting on a DIFFERENT request, which is what a redelivery of a response the loop already advanced past looks like. A sustained rate on either points at NATS redelivery. A response for a loop that is live but held by another process is NOT counted here: it is retried, not dropped.",
 			}, []string{"reason"}),
 
 			signalsDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -269,12 +269,12 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Help:      "Total tool-call governance verdicts by decision and mode. Sum of decision=approved + decision=rejected + decision=timeout equals total proposed-call publishes (modulo in-flight). Sustained decision=timeout signals undersized timeout config or stuck rule-engine path.",
 			}, []string{"decision", "mode"}),
 
-			governanceSubscribeBeforePublishFailures: prometheus.NewCounter(prometheus.CounterOpts{
+			governanceSubscribeBeforePublishFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "tool_call_governance_subscribe_before_publish_failures_total",
-				Help:      "Times a verdict arrived for a call_id that no longer had a waiter registered, signalling the subscribe-before-publish race regressing (ADR-039 race-fix option 3). Non-zero rate means investigate immediately — verdicts are being dropped silently.",
-			}),
+				Help:      "Verdicts that reached no waiter, by reason. reason=\"missing_waiter\" is the subscribe-before-publish race regressing (ADR-039 race-fix option 3) or a late arrival — the loop record then decides ack-vs-retry. reason=\"unrecoverable_loop_identity\" is a verdict whose payload carries neither a canonical loop_id nor a request_id in the <loopID>:req: grammar, so no record can be read for it; those terminate as malformed rather than acknowledging like a settled loop. Non-zero on either reason means investigate.",
+			}, []string{"reason"}),
 
 			lessonInjection: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Namespace: "semstreams",
@@ -312,7 +312,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = registry.RegisterCounterVec("agentic-loop", "task_intake_rejections_total", metrics.taskIntakeRejections)
 			_ = registry.RegisterHistogramVec("agentic-loop", "tool_call_governance_verdict_duration_seconds", metrics.governanceVerdictDuration)
 			_ = registry.RegisterCounterVec("agentic-loop", "tool_call_governance_verdict_total", metrics.governanceVerdictTotal)
-			_ = registry.RegisterCounter("agentic-loop", "tool_call_governance_subscribe_before_publish_failures_total", metrics.governanceSubscribeBeforePublishFailures)
+			_ = registry.RegisterCounterVec("agentic-loop", "tool_call_governance_subscribe_before_publish_failures_total", metrics.governanceSubscribeBeforePublishFailures)
 			_ = registry.RegisterCounterVec("agentic-loop", "lesson_injection_total", metrics.lessonInjection)
 		} else {
 			// Fallback to default prometheus registry for testing
@@ -374,15 +374,35 @@ func (m *loopMetrics) RecordGovernanceVerdict(decision, mode string, duration fl
 	m.governanceVerdictTotal.WithLabelValues(decision, mode).Inc()
 }
 
+// The two reasons emitted on
+// semstreams_agentic_loop_tool_call_governance_subscribe_before_publish_failures_total.
+// Both are enumerated in the metric's Help; a value that is not one of these
+// is a bug.
+const (
+	verdictDropMissingWaiter         = "missing_waiter"
+	verdictDropUnrecoverableIdentity = "unrecoverable_loop_identity"
+)
+
 // RecordGovernanceVerdictMissingWaiter increments the
 // subscribe-before-publish-failures counter. Implements
 // DispatcherMetrics. Each non-zero increment signals a verdict
-// arrived for a call_id that no longer had a registered waiter —
+// arrived for an execution_id that no longer had a registered waiter —
 // either the race-fix regressed (verdict beat the pre-register) or a
 // verdict arrived after Propose's timeout already fired (benign in
 // audit mode, signal in enforce mode).
 func (m *loopMetrics) RecordGovernanceVerdictMissingWaiter() {
-	m.governanceSubscribeBeforePublishFailures.Inc()
+	m.governanceSubscribeBeforePublishFailures.WithLabelValues(verdictDropMissingWaiter).Inc()
+}
+
+// recordVerdictIdentityUnrecoverable counts a verdict whose loop identity
+// cannot be recovered from its payload. It shares the waiter-miss counter
+// because it is the same question — "this verdict reached no waiter, now
+// what?" — answered differently: a waiter miss is decided by the loop record,
+// while an unrecoverable identity has no record to read and is malformed input.
+// Separating the two reasons is what keeps an adopter's non-canonical loop_id
+// from reading as a settled loop on the same series.
+func (m *loopMetrics) recordVerdictIdentityUnrecoverable() {
+	m.governanceSubscribeBeforePublishFailures.WithLabelValues(verdictDropUnrecoverableIdentity).Inc()
 }
 
 // recordGraphWritePublishTimeout increments the counter when the
@@ -491,25 +511,36 @@ func (m *loopMetrics) recordToolResultReceived(hasError bool) {
 	m.toolResultsReceived.WithLabelValues(status).Inc()
 }
 
-// recordToolResultDropped records a tool result that arrived with no loop
-// mapping for its CallID. Reason "stale_callid" is the dominant case after
-// GetAndClearToolResults eviction — a re-delivered result for an already-
-// drained call. A sustained non-zero rate points at NATS redelivery or an
-// executor double-publishing.
+// recordToolResultDropped records a tool result this process did not route to
+// a loop. One reason is emitted:
+//
+//   - "stale_execution" — no loop mapping exists for the execution ID. The
+//     dominant case after GetAndClearToolResults eviction: a re-delivered
+//     result for an already-drained execution. A sustained non-zero rate
+//     points at NATS redelivery or an executor double-publishing.
+//
+// A result naming a live loop another process holds is deliberately not
+// counted here: that delivery returns an error and is retried, and a retried
+// result is not a dropped one. The arm is in settleToolResultWithoutLoop's
+// default branch, which warns with the execution id and leaves the work owed
+// to whichever process holds the loop.
 func (m *loopMetrics) recordToolResultDropped(reason string) {
 	m.toolResultsDropped.WithLabelValues(reason).Inc()
 }
 
-// recordModelResponseDropped records a model response that arrived with no loop
-// mapping for its RequestID. Reason "stale_request_id" is the settled-loop case:
-// terminal release takes the request routing with it, so a response that arrives
-// after the loop settled resolves nothing. The drop is deliberate and safe — the
-// loop's outcome is already recorded — and it is counted so that "safe" stays a
-// claim an operator can check rather than one only the code makes.
+// recordSignalDropped records a control signal acknowledged without effect.
 func (m *loopMetrics) recordSignalDropped(reason string) {
 	m.signalsDropped.WithLabelValues(reason).Inc()
 }
 
+// recordModelResponseDropped records a model response acknowledged without
+// advancing a loop. Reason "stale_request_id" is the settled-loop case: terminal
+// release takes the request routing with it, so a response that arrives after
+// the loop settled resolves nothing. Reason "superseded_request" is the live-loop
+// case: the loop is waiting on a different request, so this one cannot advance it
+// — a redelivery of a response the loop already moved past. Both drops are
+// deliberate and safe, and both are counted so that "safe" stays a claim an
+// operator can check rather than one only the code makes.
 func (m *loopMetrics) recordModelResponseDropped(reason string) {
 	m.modelResponsesDropped.WithLabelValues(reason).Inc()
 }

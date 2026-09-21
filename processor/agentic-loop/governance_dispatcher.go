@@ -31,20 +31,19 @@
 // publishing the proposed call. The wildcard subscription is bound
 // before any task arrives, and the in-process waiter registration is
 // synchronous with the publish call. Verdicts that arrive demux by
-// call_id (trailing path segment) into the registered waiter channel.
+// framework execution identity into the registered waiter channel.
 //
 // # Approved subject shape (ADR-039 open question 1)
 //
 // Implementations consume verdict subjects of the shape
-// `agent.toolcall.{approved,rejected}.<loop_id>.<call_id>`. The call_id
-// is the trailing path segment. Operators templating verdict subjects
-// in their rule actions are expected to use
-// `$message.loop_id.$message.call_id`; ADR-039 §"Implementation" lists
-// this contract.
+// `agent.toolcall.{approved,rejected}.<execution_id>`. Operators templating
+// verdict subjects in rule actions use `$message.execution_id`.
 package agenticloop
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,6 +54,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/internal/looptoken"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 )
@@ -81,7 +81,7 @@ type DispatcherMetrics interface {
 	RecordGovernanceVerdict(decision, mode string, duration float64)
 
 	// RecordGovernanceVerdictMissingWaiter signals that a verdict
-	// arrived for a call_id without a registered waiter — points at
+	// arrived for an execution_id without a registered waiter — points at
 	// the subscribe-before-publish race regressing or a late arrival.
 	RecordGovernanceVerdictMissingWaiter()
 }
@@ -111,17 +111,21 @@ type DispatcherResult struct {
 // can match across loop hierarchies for sub-agent governance
 // inheritance. Empty string means no parent.
 type ProposedToolCallPayload struct {
-	LoopID       string         `json:"loop_id"`
-	ParentLoopID string         `json:"parent_loop_id,omitempty"`
-	CallID       string         `json:"call_id"`
-	ToolName     string         `json:"tool_name"`
-	Command      string         `json:"command,omitempty"`
-	URL          string         `json:"url,omitempty"`
-	Arguments    map[string]any `json:"arguments,omitempty"`
+	LoopID              string         `json:"loop_id"`
+	ParentLoopID        string         `json:"parent_loop_id,omitempty"`
+	RequestID           string         `json:"request_id"`
+	ExecutionID         string         `json:"execution_id"`
+	CallID              string         `json:"call_id"`
+	CallOrdinal         uint32         `json:"call_ordinal"`
+	ProposalFingerprint string         `json:"proposal_fingerprint"`
+	ToolName            string         `json:"tool_name"`
+	Command             string         `json:"command,omitempty"`
+	URL                 string         `json:"url,omitempty"`
+	Arguments           map[string]any `json:"arguments,omitempty"`
 }
 
 // VerdictPayload is the wire shape inbound on
-// agent.toolcall.{approved,rejected}.<loop_id>.<call_id>. Produced by
+// agent.toolcall.{approved,rejected}.<execution_id>. Produced by
 // the rule engine's executeApprove action (top-level fields) OR by a
 // rule `publish` action emitting a rejection (fields nested under
 // Properties — the canonical ADR-039 reject pattern).
@@ -131,19 +135,40 @@ type ProposedToolCallPayload struct {
 // action). EffectiveCallID and EffectiveDecision fall through the two
 // shapes so callers don't write the same parsing code twice.
 type VerdictPayload struct {
-	Decision   string         `json:"decision,omitempty"`
-	CallID     string         `json:"call_id,omitempty"`
-	LoopID     string         `json:"loop_id,omitempty"`
-	RuleID     string         `json:"rule_id,omitempty"`
-	Reason     string         `json:"reason,omitempty"`
-	EntityID   string         `json:"entity_id,omitempty"`
-	Timestamp  string         `json:"timestamp,omitempty"`
-	Properties map[string]any `json:"properties,omitempty"`
+	Decision            string         `json:"decision,omitempty"`
+	CallID              string         `json:"call_id,omitempty"`
+	LoopID              string         `json:"loop_id,omitempty"`
+	RequestID           string         `json:"request_id,omitempty"`
+	ExecutionID         string         `json:"execution_id,omitempty"`
+	ProposalFingerprint string         `json:"proposal_fingerprint,omitempty"`
+	RuleID              string         `json:"rule_id,omitempty"`
+	Reason              string         `json:"reason,omitempty"`
+	EntityID            string         `json:"entity_id,omitempty"`
+	Timestamp           string         `json:"timestamp,omitempty"`
+	Properties          map[string]any `json:"properties,omitempty"`
 }
 
-// EffectiveCallID returns the routing call_id from the payload,
+func (v VerdictPayload) effectiveExecutionID() string {
+	if v.ExecutionID != "" {
+		return v.ExecutionID
+	}
+	if v.Properties != nil {
+		if executionID, ok := v.Properties["execution_id"].(string); ok {
+			return executionID
+		}
+	}
+	return ""
+}
+
+// EffectiveCallID returns the provider call_id from the payload,
 // preferring the top-level CallID (approve-action shape) and falling
 // back to Properties["call_id"] (publish-action shape).
+//
+// It is no longer the routing key: verdicts demux on the framework
+// execution identity (effectiveExecutionID), and the call_id is
+// conversation context an audit consumer may want. Retained because the
+// payload still carries the field in both shapes and reading it should
+// not mean writing the fall-through twice.
 func (v VerdictPayload) EffectiveCallID() string {
 	if v.CallID != "" {
 		return v.CallID
@@ -154,6 +179,42 @@ func (v VerdictPayload) EffectiveCallID() string {
 		}
 	}
 	return ""
+}
+
+// effectiveLoopID returns the loop this verdict belongs to. Routing never uses
+// it — that is execution identity alone — but a verdict whose waiter is gone
+// has to be classified against the loop record, and the execution identity is
+// an opaque digest that carries no loop.
+//
+// Exactly two sources, because exactly two are produced:
+//
+//   - `loop_id`, echoed by the approve action out of the proposed payload
+//     (processor/rule/actions.go:2215-2217; the in-tree rule is
+//     configs/agentic.json:293-296).
+//   - the RequestID grammar <loopID>:req:<iteration>:<retry>, top-level or
+//     under `properties` — the publish-action shape every canonical reject
+//     rule in docs/operations/17-tool-call-governance.md uses, none of which
+//     carries loop_id.
+//
+// A `properties.loop_id` tier and a <loopID>:tool: call-id tier were carried
+// here briefly and removed: no rule template in this tree or its docs produces
+// the first, and GenerateToolCallID has no caller anywhere, so provider call
+// ids are the only call ids that exist and looptoken.Valid refuses them. A
+// fallback nothing produces is dead code wearing resilience as a costume.
+//
+// Returns "" when no framework-minted loop token can be recovered; the caller
+// treats that as malformed input rather than as a settled loop.
+func (v VerdictPayload) effectiveLoopID() string {
+	if looptoken.Valid(v.LoopID) {
+		return v.LoopID
+	}
+	requestID := v.RequestID
+	if requestID == "" && v.Properties != nil {
+		if id, ok := v.Properties["request_id"].(string); ok {
+			requestID = id
+		}
+	}
+	return loopIDFromStructuredID(requestID, ":req:")
 }
 
 // EffectiveDecision returns the routing decision from the payload,
@@ -185,6 +246,37 @@ func (v VerdictPayload) EffectiveReason() string {
 	return ""
 }
 
+// effectiveRuleID returns the rule that authored the verdict, with the same
+// fall-through semantics as EffectiveCallID. Unexported: the audit line and
+// the waiter arrival are its only readers, both in this package.
+func (v VerdictPayload) effectiveRuleID() string {
+	if v.RuleID != "" {
+		return v.RuleID
+	}
+	if v.Properties != nil {
+		if id, ok := v.Properties["rule_id"].(string); ok {
+			return id
+		}
+	}
+	return ""
+}
+
+// effectiveProposalFingerprint returns the echoed proposal digest, with the
+// same fall-through semantics as EffectiveCallID. The canonical reject rules
+// in docs/operations/17-tool-call-governance.md echo it under `properties`,
+// which is where a top-level read found nothing.
+func (v VerdictPayload) effectiveProposalFingerprint() string {
+	if v.ProposalFingerprint != "" {
+		return v.ProposalFingerprint
+	}
+	if v.Properties != nil {
+		if fp, ok := v.Properties["proposal_fingerprint"].(string); ok {
+			return fp
+		}
+	}
+	return ""
+}
+
 // GovernanceDispatcher abstracts the subject-mode tool-call governance
 // flow. The Component holds one instance per loop component and
 // delegates from handleToolCallResponse before the existing serial-
@@ -205,22 +297,32 @@ type GovernanceDispatcher interface {
 
 	// HandleVerdict feeds an inbound verdict to the dispatcher. The
 	// Component's wildcard subscription handlers call this for every
-	// verdict, after extracting the decision and call_id from the
-	// payload via VerdictPayload.EffectiveCallID/EffectiveDecision.
-	// The dispatcher demuxes by call_id to the appropriate waiter
-	// channel. Data is retained for audit logging only — routing
-	// decisions are made from decision + callID.
+	// verdict, after decoding it. The dispatcher demuxes by execution
+	// identity to the appropriate waiter channel; the decoded verdict is
+	// the audit and reason context, and routing decisions are made from
+	// decision + executionID.
 	//
-	// When no waiter is registered for the call_id the dispatcher
-	// cannot decide the settlement, because the two reasons a waiter
-	// is missing settle in opposite directions: the verdict is late
-	// or belongs to another component's loop on the shared stream
-	// (nothing to deliver it to, ever), or this process was replaced
-	// and the loop is still waiting somewhere. The dispatcher owns no
-	// durable state and cannot tell those apart, so it returns an
-	// error wrapping ErrNoGovernanceWaiter and the Component — which
-	// owns the loops bucket — classifies it.
-	HandleVerdict(decision, callID string, data []byte) (natsclient.DeliveryDecision, error)
+	// It takes the DECODED verdict rather than the wire bytes because the
+	// two production shapes are not the same bytes: the approve action
+	// publishes a `core.json.v1` BaseMessage and the canonical reject
+	// pattern publishes a raw map with every field under `properties`. A
+	// dispatcher that unmarshalled the bytes itself read empty strings off
+	// every field it took from the top level — all of them for the envelope
+	// shape, and the audit fingerprint and rule id for the raw map. (Not the
+	// reason: EffectiveReason already fell through to `properties`.) The
+	// Component already owns that normalization (decodeVerdictPayload), so it
+	// happens in one place.
+	//
+	// When no waiter is registered for the execution identity the
+	// dispatcher cannot decide the settlement, because the two reasons a
+	// waiter is missing settle in opposite directions: the verdict is
+	// late or belongs to another component's loop on the shared stream
+	// (nothing to deliver it to, ever), or this process was replaced and
+	// the loop is still waiting somewhere. The dispatcher owns no durable
+	// state and cannot tell those apart, so it returns an error wrapping
+	// ErrNoGovernanceWaiter and the Component — which owns the loops
+	// bucket — classifies it.
+	HandleVerdict(decision, executionID string, verdict VerdictPayload) (natsclient.DeliveryDecision, error)
 
 	// Mode returns the configured mode for inspection. Useful for
 	// observability gauges and conditional logging in the handler.
@@ -279,13 +381,13 @@ func (d *disabledDispatcher) Propose(_ context.Context, _, _ string, calls []age
 	return DispatcherResult{Approved: calls}, nil
 }
 
-func (d *disabledDispatcher) HandleVerdict(decision, callID string, _ []byte) (natsclient.DeliveryDecision, error) {
+func (d *disabledDispatcher) HandleVerdict(decision, executionID string, _ VerdictPayload) (natsclient.DeliveryDecision, error) {
 	// No-op: in disabled mode the loop didn't publish a proposed call,
 	// so any verdict arriving is from another flow (or a misconfigured
 	// rule). Log at Debug only — not actionable.
 	d.logger.Debug("Verdict received in disabled-mode governance dispatcher; ignoring",
 		slog.String("decision", decision),
-		slog.String("call_id", callID))
+		slog.String("execution_id", executionID))
 	return natsclient.DeliveryDecisionAck, nil
 }
 
@@ -316,17 +418,26 @@ func (d *auditDispatcher) Propose(ctx context.Context, loopID, parentLoopID stri
 	return DispatcherResult{Approved: calls}, nil
 }
 
-func (d *auditDispatcher) HandleVerdict(decision, callID string, data []byte) (natsclient.DeliveryDecision, error) {
+func (d *auditDispatcher) HandleVerdict(decision, executionID string, verdict VerdictPayload) (natsclient.DeliveryDecision, error) {
 	// Audit mode logs verdicts for visibility but takes no action.
 	// Operators developing rules see their verdicts firing without
 	// gating real traffic.
-	var payload VerdictPayload
-	_ = json.Unmarshal(data, &payload)
+	//
+	// Every field is read through its effective accessor, because the
+	// canonical reject rules put all of them under `properties` and a
+	// top-level read logs an empty string for the whole shape.
+	//
+	// The fingerprint is audit context and nothing else: it is not
+	// compared, and routing is by execution identity alone. Logging it here
+	// is the whole of "agentic-loop decodes it as audit context" — without
+	// this attribute the decoded field has no reader and the claim is a
+	// sentence the code does not back.
 	d.logger.Info("Audit-mode verdict observed",
 		slog.String("decision", decision),
-		slog.String("call_id", callID),
-		slog.String("rule_id", payload.RuleID),
-		slog.String("reason", payload.EffectiveReason()))
+		slog.String("execution_id", executionID),
+		slog.String("rule_id", verdict.effectiveRuleID()),
+		slog.String("proposal_fingerprint", verdict.effectiveProposalFingerprint()),
+		slog.String("reason", verdict.EffectiveReason()))
 	if d.metrics != nil {
 		// Audit mode can't measure latency (no per-call start time
 		// kept) — count the verdict with zero duration. Duration
@@ -393,11 +504,14 @@ func (d *enforceDispatcher) Propose(ctx context.Context, loopID, parentLoopID st
 	// buffered channel.
 	channels := make(map[string]chan verdictArrival, len(calls))
 	for _, call := range calls {
-		channels[call.ID] = d.registerWaiter(call.ID)
+		if call.ExecutionID == "" {
+			return DispatcherResult{}, fmt.Errorf("governance proposal execution_id required for call %q", call.ID)
+		}
+		channels[call.ExecutionID] = d.registerWaiter(call.ExecutionID)
 	}
 	defer func() {
 		for _, call := range calls {
-			d.releaseWaiter(call.ID)
+			d.releaseWaiter(call.ExecutionID)
 		}
 	}()
 
@@ -408,7 +522,7 @@ func (d *enforceDispatcher) Propose(ctx context.Context, loopID, parentLoopID st
 	publishFailures := map[string]error{}
 	for _, call := range calls {
 		if err := publishProposed(ctx, d.publisher, loopID, parentLoopID, call, d.logger); err != nil {
-			publishFailures[call.ID] = err
+			publishFailures[call.ExecutionID] = err
 		}
 	}
 
@@ -420,7 +534,7 @@ func (d *enforceDispatcher) Propose(ctx context.Context, loopID, parentLoopID st
 		rejected []ToolCallRejection
 	)
 	for _, call := range calls {
-		if pubErr, failed := publishFailures[call.ID]; failed {
+		if pubErr, failed := publishFailures[call.ExecutionID]; failed {
 			rejected = append(rejected, ToolCallRejection{
 				Call:   call,
 				Reason: fmt.Sprintf("governance publish failed: %v", pubErr),
@@ -429,7 +543,7 @@ func (d *enforceDispatcher) Propose(ctx context.Context, loopID, parentLoopID st
 		}
 
 		waitStart := time.Now()
-		decision, reason := d.awaitVerdict(ctx, channels[call.ID], call, loopID)
+		decision, reason := d.awaitVerdict(ctx, channels[call.ExecutionID], call, loopID)
 		waitDuration := time.Since(waitStart).Seconds()
 		if d.metrics != nil {
 			// Record under the verdict's canonical decision label —
@@ -483,28 +597,21 @@ func (d *enforceDispatcher) awaitVerdict(ctx context.Context, ch chan verdictArr
 	}
 }
 
-func (d *enforceDispatcher) HandleVerdict(decision, callID string, data []byte) (natsclient.DeliveryDecision, error) {
-	if decision == "" || callID == "" {
-		d.logger.Warn("Verdict missing decision or call_id; ignoring",
+func (d *enforceDispatcher) HandleVerdict(decision, executionID string, verdict VerdictPayload) (natsclient.DeliveryDecision, error) {
+	if decision == "" || executionID == "" {
+		d.logger.Warn("Verdict missing decision or execution_id; ignoring",
 			slog.String("decision", decision),
-			slog.String("call_id", callID))
-		return natsclient.DeliveryDecisionTerminate, errors.New("verdict missing decision or call_id")
+			slog.String("execution_id", executionID))
+		return natsclient.DeliveryDecisionTerminate, errors.New("verdict missing decision or execution_id")
 	}
 
-	// Payload is optional audit context — routing relies on the
-	// (decision, callID) pair supplied by the caller. An unmarshal
-	// failure here downgrades the verdict reason but doesn't block
-	// dispatch.
-	var payload VerdictPayload
-	_ = json.Unmarshal(data, &payload)
-
-	ch, ok := d.lookupWaiter(callID)
+	ch, ok := d.lookupWaiter(executionID)
 	if !ok {
 		// Either late arrival (Propose already returned via timeout)
 		// or a verdict for a different loop's call. Common in healthy
 		// operation when retries happen; log at Debug.
 		d.logger.Debug("Verdict arrived after waiter released; ignoring",
-			slog.String("call_id", callID),
+			slog.String("execution_id", executionID),
 			slog.String("decision", decision))
 		if d.metrics != nil {
 			d.metrics.RecordGovernanceVerdictMissingWaiter()
@@ -519,20 +626,28 @@ func (d *enforceDispatcher) HandleVerdict(decision, callID string, data []byte) 
 		// Retry was worse: it made the same normal input a hot redelivery
 		// loop that no record could ever end.
 		return natsclient.DeliveryDecisionQuarantine,
-			fmt.Errorf("%w for call_id %q", ErrNoGovernanceWaiter, callID)
+			fmt.Errorf("%w for execution_id %q", ErrNoGovernanceWaiter, executionID)
 	}
 
 	// Non-blocking send via the buffered channel. If somehow a second
-	// verdict arrives for the same call_id (operator misconfigured a
+	// verdict arrives for the same execution_id (operator misconfigured a
 	// rule into a duplicate publish), the second is dropped — the
 	// first wins. Same as the natsclient request/response convention.
 	select {
-	case ch <- verdictArrival{decision: decision, reason: payload.EffectiveReason(), ruleID: payload.RuleID}:
+	// Both fields are read through the accessors, because a publish-action
+	// verdict carries them under `properties` and an approve action carries
+	// them at the top level. The reason survived the old top-level read
+	// anyway — EffectiveReason already fell through — so the claim that a
+	// rejection reached a model with no reason on it was FALSE and is
+	// withdrawn. What the top-level read really dropped on the publish-action
+	// shape is the RULE ID, which is what tells a waiter, and everything
+	// downstream of it, which rule refused the call.
+	case ch <- verdictArrival{decision: decision, reason: verdict.EffectiveReason(), ruleID: verdict.effectiveRuleID()}:
 		return natsclient.DeliveryDecisionAck, nil
 	default:
 		d.logger.Debug("Verdict channel already full (duplicate verdict?); dropping",
-			slog.String("call_id", callID))
-		return natsclient.DeliveryDecisionQuarantine, fmt.Errorf("governance waiter for call_id %q is full", callID)
+			slog.String("execution_id", executionID))
+		return natsclient.DeliveryDecisionQuarantine, fmt.Errorf("governance waiter for execution_id %q is full", executionID)
 	}
 }
 
@@ -550,6 +665,9 @@ func (d *enforceDispatcher) Mode() string { return ToolCallGovernanceModeEnforce
 // the error is fatal (enforce mode treats it as a fail-closed reject)
 // or best-effort (audit mode logs and proceeds).
 func publishProposed(ctx context.Context, publisher VerdictPublisher, loopID, parentLoopID string, call agentic.ToolCall, logger *slog.Logger) error {
+	if call.RequestID == "" || call.ExecutionID == "" || call.CallOrdinal == 0 {
+		return fmt.Errorf("proposed tool call missing request/execution correlation for call %q", call.ID)
+	}
 	if publisher == nil {
 		// No publisher: dev/test scaffold without a NATS connection.
 		// Log at Debug and treat as a no-op — disabled mode never
@@ -566,7 +684,10 @@ func publishProposed(ctx context.Context, publisher VerdictPublisher, loopID, pa
 	payload := ProposedToolCallPayload{
 		LoopID:       loopID,
 		ParentLoopID: parentLoopID,
+		RequestID:    call.RequestID,
+		ExecutionID:  call.ExecutionID,
 		CallID:       call.ID,
+		CallOrdinal:  call.CallOrdinal,
 		ToolName:     call.Name,
 		Arguments:    coerceArguments(call.Arguments),
 	}
@@ -582,6 +703,11 @@ func publishProposed(ctx context.Context, publisher VerdictPublisher, loopID, pa
 	if url, ok := payload.Arguments["url"].(string); ok {
 		payload.URL = url
 	}
+	fingerprint, err := fingerprintProposedToolCall(payload)
+	if err != nil {
+		return fmt.Errorf("fingerprint proposed-call payload: %w", err)
+	}
+	payload.ProposalFingerprint = fingerprint
 
 	// Wrap in a `core.json.v1` BaseMessage envelope so the rule
 	// processor's decoder can parse this off the wire. The rule
@@ -602,6 +728,16 @@ func publishProposed(ctx context.Context, publisher VerdictPublisher, loopID, pa
 		return fmt.Errorf("publish proposed to %s: %w", subject, err)
 	}
 	return nil
+}
+
+func fingerprintProposedToolCall(payload ProposedToolCallPayload) (string, error) {
+	payload.ProposalFingerprint = ""
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
 // payloadToBaseMessageBytes converts a ProposedToolCallPayload into a

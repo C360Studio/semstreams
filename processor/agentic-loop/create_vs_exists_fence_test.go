@@ -54,6 +54,35 @@ func requestMessages(t *testing.T, result HandlerResult) []agentic.ChatMessage {
 	return envelope.Payload.Messages
 }
 
+// requestIDOf returns the RequestID of the agent request a handler result
+// published.
+func requestIDOf(t *testing.T, result HandlerResult) string {
+	t.Helper()
+	if len(result.PublishedMessages) == 0 {
+		t.Fatal("handler result published no messages; expected the agent request")
+	}
+	var envelope struct {
+		Payload struct {
+			RequestID string `json:"request_id"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(result.PublishedMessages[0].Data, &envelope); err != nil {
+		t.Fatalf("decode agent request envelope: %v", err)
+	}
+	return envelope.Payload.RequestID
+}
+
+// answerOutstandingRequest completes the fiction a continuation fixture needs:
+// the loop's model request came back. Without it the loop is still waiting, and
+// a continuation admitted then is DEFERRED rather than published (#1328 F1) —
+// which is a different behaviour from the one these tests are about. It calls
+// the same LoopManager seam HandleModelResponse calls, keyed off the request
+// that was really published.
+func answerOutstandingRequest(t *testing.T, h *MessageHandler, result HandlerResult) {
+	t.Helper()
+	h.loopManager.SettleRequest(result.LoopID, requestIDOf(t, result))
+}
+
 func countRole(msgs []agentic.ChatMessage, role string) int {
 	n := 0
 	for _, m := range msgs {
@@ -185,6 +214,13 @@ func TestContinuationReusesContextManager(t *testing.T) {
 		t.Fatalf("HandleTask (first): %v", err)
 	}
 	loopID := first.LoopID
+
+	// The seeded assistant turn and tool result below stand for a round the
+	// loop already finished; answering its request is the other half of that
+	// same fiction, and without it the continuation would be deferred instead
+	// of sent. TestContinuationBehindAnOutstandingRequestIsDeferred owns that
+	// case.
+	answerOutstandingRequest(t, h, first)
 
 	cmBefore := h.loopManager.GetContextManager(loopID)
 	if err := cmBefore.AddMessage(RegionRecentHistory, agentic.ChatMessage{

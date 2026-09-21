@@ -62,7 +62,7 @@ func TestHandleCompleteResponseStampsTypedDecisionFromDecideTerminal(t *testing.
 
 	// Model calls decide; the loop tracks the call ID under the tool name.
 	_, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
-		RequestID: "req-decide",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role:      "assistant",
@@ -126,7 +126,7 @@ func TestHandleCompleteResponseLeavesDecisionNilForNonDecideTerminal(t *testing.
 	loopID := startDecisionTestLoop(t, handler)
 
 	_, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
-		RequestID: "req-submit",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role:      "assistant",
@@ -218,7 +218,7 @@ func TestHandleCompleteResponseLeavesDecisionNilForSynthesizedDecide(t *testing.
 
 	// Text-only completion: no terminal tool call at all.
 	result, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
-		RequestID: "req-text",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "complete",
 		Message: agentic.ChatMessage{
 			Role:    "assistant",

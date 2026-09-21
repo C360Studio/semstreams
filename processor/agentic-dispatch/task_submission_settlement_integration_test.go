@@ -27,12 +27,18 @@ import (
 // stream at all, so `agent.task.<id>` receives a PubAck and
 // `user.response.http.<channel>` has no stream to answer it.
 //
-// The classification is the point. Retry was the old answer, and a redelivered
-// UserMessage mints a NEW task UUID (component.go:1093) and publishes it with no
-// deduplication id — accepted work executed twice. The subtests are the pair:
+// The classification is the point, and its reason moved under #1328. Retry was
+// the old answer, and L1 refused it because a redelivered UserMessage minted a
+// NEW task UUID and published it with no deduplication id — accepted work
+// executed twice. Stable task identity removes exactly that effect: the
+// redelivery reads its own committed task back and republishes it under the
+// same TaskID and LoopID, which is what downstream deduplication keys on.
+// Quarantine still stands, on the effects identity does not cover — the
+// redelivery replaces the tracked LoopInfo, resetting a loop that has since
+// advanced, and counts the submission a second time. The subtests are the pair:
 // the first delivery quarantines with exactly one task on the stream, and the
 // counterfactual drives the redelivery Retry would have asked for and observes
-// the second task it publishes under a different identity.
+// both halves, the identity that is recovered and the tracking that is not.
 //
 // spec: agentic-dispatch / Every dispatch durable input settles through its owner
 func TestIntegrationPublishedTaskWithFailedResponseQuarantines(t *testing.T) {
@@ -101,30 +107,44 @@ func TestIntegrationPublishedTaskWithFailedResponseQuarantines(t *testing.T) {
 		require.Len(t, tasks, 1, "no second task is published for one user message")
 	})
 
-	t.Run("the counterfactual: a redelivery publishes a second task under a new identity", func(t *testing.T) {
+	t.Run("the counterfactual: a redelivery recovers the identity but re-enters the tracking", func(t *testing.T) {
 		c, tc := newComponent(t)
 		data := userMessageBytes(t, "msg-1")
 
 		first, err := c.handleUserMessage(t.Context(), data)
 		require.Equal(t, natsclient.DeliveryDecisionQuarantine, first)
 		require.Error(t, err)
+
+		// The loop advances, as it would while an unacknowledged delivery
+		// waited to be redelivered. Without this the reset below is invisible.
+		tracked := c.loopTracker.GetAllLoops()
+		require.Len(t, tracked, 1)
+		loopID := tracked[0].LoopID
+		c.loopTracker.UpdateState(loopID, "exploring")
+
 		// Exactly what Retry would have caused: the same bytes again.
 		second, err := c.handleUserMessage(t.Context(), data)
 		require.Equal(t, natsclient.DeliveryDecisionQuarantine, second)
 		require.Error(t, err)
 
 		tasks := tasksOnStream(t, tc)
-		require.Len(t, tasks, 2, "the redelivery published a second task")
-		require.NotEqual(t, tasks[0].TaskID, tasks[1].TaskID,
-			"the second task carries a new TaskID, so nothing downstream can deduplicate it")
-		require.NotEqual(t, tasks[0].LoopID, tasks[1].LoopID,
-			"with auto_continue=false the redelivery also creates a second loop")
+		require.Len(t, tasks, 2, "the redelivery published a second copy")
+		require.Equal(t, tasks[0].TaskID, tasks[1].TaskID,
+			"#1328: the redelivery republishes the committed task identity, which downstream deduplicates")
+		require.Equal(t, tasks[0].LoopID, tasks[1].LoopID,
+			"the committed LoopID is recovered, so no second loop is created")
+
+		// The effects identity does not cover, and the reason Quarantine stands.
+		require.Equal(t, "pending", c.loopTracker.Get(loopID).State,
+			"the redelivery replaced the tracked LoopInfo, resetting a loop that had advanced")
+		assert.Equal(t, float64(2), testutil.ToFloat64(c.metrics.tasksSubmitted),
+			"the redelivery counted one submission twice")
 	})
 }
 
 // The command lane's post-effect response failure is the counterpart decision
 // to the task lane's, and it goes the other way. `/cancel` publishes its signal
-// at commands.go:179 and then builds its success response, so a failed response
+// at commands.go:185 and then builds its success response, so a failed response
 // publication is also a failure after an effect — but its redelivery is
 // effect-free, and the user has been told nothing, so Retry is what actually
 // delivers their answer.

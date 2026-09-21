@@ -18,7 +18,7 @@ import (
 // about what reached the stream: with a nil client "nothing was published" is
 // true by construction and proves nothing.
 //
-// The route is the tool-result timeout (handlers.go:2234-2243): HandleToolResult
+// The route is the tool-result timeout (handlers.go:2420-2433): HandleToolResult
 // fails the loop, builds its failure record AND its failure publications, and
 // returns them with a fatal error, so settleFailedToolResult persists the
 // terminal result and settles on it. Before round 3 that branch stamped graph
@@ -26,7 +26,9 @@ import (
 //
 // spec: agentic-loop / Loop input classes settle after owner-specific durable done
 func TestIntegrationTerminalFailureRecordPrecedesItsPublication(t *testing.T) {
-	timedOutLoop := func(t *testing.T) (*Component, *natsclient.TestClient, *recordingLoopBucket, string, string) {
+	timedOutLoop := func(
+		t *testing.T,
+	) (*Component, *natsclient.TestClient, *recordingLoopBucket, string, string, string) {
 		t.Helper()
 		testClient := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV(),
 			natsclient.WithStreams(natsclient.TestStreamConfig{Name: "AGENT", Subjects: []string{"agent.>"}}))
@@ -34,7 +36,8 @@ func TestIntegrationTerminalFailureRecordPrecedesItsPublication(t *testing.T) {
 		loopID, err := handler.loopManager.CreateLoop("task-terminal-record", "general", "model", 3)
 		require.NoError(t, err)
 		callID := "call-terminal-record"
-		handler.loopManager.TrackToolCall(callID, loopID)
+		executionID := "execution-terminal-record"
+		handler.loopManager.TrackToolCall(executionID, loopID)
 		require.NoError(t, handler.loopManager.AddPendingTool(loopID, callID))
 		require.NoError(t, handler.loopManager.SetTimeout(loopID, -time.Second))
 		c := releaseTestComponent(t, handler)
@@ -43,11 +46,16 @@ func TestIntegrationTerminalFailureRecordPrecedesItsPublication(t *testing.T) {
 		// After initializeKVBuckets, which installs the real bucket.
 		bucket := &recordingLoopBucket{}
 		c.loopsBucket = bucket
-		return c, testClient, bucket, loopID, callID
+		return c, testClient, bucket, loopID, executionID, callID
 	}
-	toolResultBytes := func(t *testing.T, callID string) []byte {
+	// Both identities: the lane routes on the framework execution id and the
+	// loop's pending-tool set is keyed by the provider call id, so a result
+	// carrying one of them settles as an expected drop — which also ACKs, and
+	// would leave the ACK assertion below passing over a lane that never ran.
+	toolResultBytes := func(t *testing.T, executionID, callID string) []byte {
 		t.Helper()
-		toolResult := &agentic.ToolResult{CallID: callID, Name: "search", Content: "executor ran this"}
+		toolResult := &agentic.ToolResult{
+			ExecutionID: executionID, CallID: callID, Name: "search", Content: "executor ran this"}
 		data, err := json.Marshal(message.NewBaseMessage(toolResult.Schema(), toolResult, "test"))
 		require.NoError(t, err)
 		return data
@@ -62,8 +70,8 @@ func TestIntegrationTerminalFailureRecordPrecedesItsPublication(t *testing.T) {
 	}
 
 	t.Run("the record is present and the event is published", func(t *testing.T) {
-		c, tc, bucket, loopID, callID := timedOutLoop(t)
-		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, callID)}
+		c, tc, bucket, loopID, executionID, callID := timedOutLoop(t)
+		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, executionID, callID)}
 		result, admitted := consumeAdmittedDelivery(t.Context(), msg,
 			heartbeatPolicyForTest(t, "tool.result", c.handleToolResultMessage), newDeliveryLaneAdmission(nil))
 		require.True(t, admitted)
@@ -78,13 +86,13 @@ func TestIntegrationTerminalFailureRecordPrecedesItsPublication(t *testing.T) {
 	})
 
 	t.Run("a terminal record that cannot be written publishes nothing", func(t *testing.T) {
-		c, tc, bucket, loopID, callID := timedOutLoop(t)
+		c, tc, bucket, loopID, executionID, callID := timedOutLoop(t)
 		// Only the record write fails: the loop key still lands, which is what
 		// makes this discriminating — the old branch wrote that one and ACKed.
 		bucket.fail = errKVUnavailable
 		bucket.failPrefix = "COMPLETE_"
 
-		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, callID)}
+		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, executionID, callID)}
 		result, admitted := consumeAdmittedDelivery(t.Context(), msg,
 			heartbeatPolicyForTest(t, "tool.result", c.handleToolResultMessage), newDeliveryLaneAdmission(nil))
 		require.True(t, admitted)

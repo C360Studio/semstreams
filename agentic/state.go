@@ -54,7 +54,7 @@ type LoopEntity struct {
 	Model              string                `json:"model"`
 	Iterations         int                   `json:"iterations"`
 	MaxIterations      int                   `json:"max_iterations"`
-	PendingToolResults map[string]ToolResult `json:"pending_tool_results,omitempty"` // Accumulated tool results by call ID
+	PendingToolResults map[string]ToolResult `json:"pending_tool_results,omitempty"` // ExecutionID; synthetic failures use CallID
 	StartedAt          time.Time             `json:"started_at,omitempty"`           // When the loop was created
 	TimeoutAt          time.Time             `json:"timeout_at,omitempty"`           // When the loop should timeout
 	ParentLoopID       string                `json:"parent_loop_id,omitempty"`       // Parent loop ID for architect->editor relationship
@@ -78,6 +78,39 @@ type LoopEntity struct {
 	// arrives.
 	PendingApproval     *PendingApprovalState `json:"pending_approval,omitempty"`
 	StateBeforeApproval LoopState             `json:"state_before_approval,omitempty"`
+
+	// PendingContinuation is set when a continuation task was admitted to this
+	// loop while its model request was still outstanding. The continuation's
+	// turn is already in the loop's context; what this marker carries is that
+	// the turn must not be lost, so the outstanding response must not complete
+	// the loop — it advances to the next iteration and publishes a request that
+	// includes it.
+	//
+	// One outstanding model request per loop is what makes the request name
+	// (`<loopID>:req:<iteration>:<retry>`) unique: two requests minted at the
+	// same iteration carry the same name and the same Nats-Msg-Id, and the
+	// duplicate window drops the second. This marker is how the loop keeps that
+	// invariant without a third identity segment (owner ruling Q4).
+	//
+	// Residual, declared: restoring this across a process replacement is L4's
+	// (#1330). In-process it is authoritative; after a replacement the whole
+	// loop needs recovery, not just this bit.
+	PendingContinuation bool `json:"pending_continuation,omitempty"`
+
+	// PendingContinuationRequestID names the request that carries the deferred
+	// turn, empty while no request does. It exists because the marker is
+	// persisted BEFORE the publish it describes: persistHandlerResult stamps
+	// the entity and only then emits the request, so a marker cleared when the
+	// request was BUILT would be durably clear while the publish that justified
+	// the clear had unknown durability — the delivery quarantines and the only
+	// state that could re-carry the turn is already gone.
+	//
+	// Recording the carrier instead keeps both obligations: the turn is not
+	// carried twice (a request already names it), and a quarantined publish
+	// leaves "pending, carried by <requestID>" durable for recovery to act on.
+	// It clears when that request's response settles, which is the first moment
+	// the send is known to have happened.
+	PendingContinuationRequestID string `json:"pending_continuation_request_id,omitempty"`
 
 	// User context (for routing responses)
 	UserID      string `json:"user_id,omitempty"`      // User who initiated the loop
@@ -161,7 +194,10 @@ func (e *LoopEntity) TransitionTo(newState LoopState) error {
 // Persisted on LoopEntity so a process restart mid-approval still
 // remembers what the human is reviewing.
 type PendingApprovalState struct {
+	RequestID   string         `json:"request_id,omitempty"`
+	ExecutionID string         `json:"execution_id,omitempty"`
 	CallID      string         `json:"call_id"`
+	CallOrdinal uint32         `json:"call_ordinal,omitempty"`
 	ToolName    string         `json:"tool_name"`
 	Arguments   map[string]any `json:"arguments,omitempty"`
 	Reason      string         `json:"reason,omitempty"`   // Original "approval_required: ..." rejection reason

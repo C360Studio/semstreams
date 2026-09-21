@@ -121,7 +121,7 @@ func (b *recordingLoopBucket) written() []string {
 // load-bearing rather than stylistic. A complete model response drives the loop
 // to complete in memory and builds its completion record; the KV write then
 // fails. Under the retired Retry classification the redelivery meets
-// HandleModelResponse's terminal guard (handlers.go:1179-1185), which returns an
+// HandleModelResponse's terminal guard (handlers.go:1322-1327), which returns an
 // empty result — so the second attempt writes the loop key, writes no
 // COMPLETE_<loopID>, publishes nothing, and ACKs. The completion is gone with
 // the delivery that carried it. The second half of this test drives exactly that
@@ -196,7 +196,10 @@ func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 		require.NoError(t, err)
 		c := releaseTestComponent(t, handler)
 		c.loopsBucket = failingLoopBucket{err: errors.New("kv unavailable")}
-		toolResult := &agentic.ToolResult{CallID: "call-tool", Name: "search", Content: "result"}
+		toolResult := &agentic.ToolResult{
+			RequestID: "request-tool", ExecutionID: deriveToolExecutionID("request-tool", "call-tool", 1),
+			CallID: "call-tool", CallOrdinal: 1, Name: "search", Content: "result",
+		}
 		data, err := json.Marshal(message.NewBaseMessage(toolResult.Schema(), toolResult, "test"))
 		require.NoError(t, err)
 		msg := &loopDeliveryOwnerMsg{data: data}
@@ -372,7 +375,7 @@ func TestLoopProductionCallbacksTerminateMalformedNonHeartbeatInputs(t *testing.
 		{port: "agent.toolcall.approved", decision: "approved", callID: "call-approved"},
 		{port: "agent.toolcall.rejected", decision: "rejected", callID: "call-rejected"},
 	} {
-		data := []byte(`{"decision":"` + row.decision + `","call_id":"` + row.callID + `"}`)
+		data := []byte(`{"decision":"` + row.decision + `","execution_id":"` + row.callID + `"}`)
 		msg := &loopSettlementMsg{data: data}
 		callbacks[row.port](ctx, msg)
 		require.Equal(t, int32(1), msg.acks.Load())
@@ -393,7 +396,7 @@ type settlementVerdictDispatcher struct{ received chan string }
 func (*settlementVerdictDispatcher) Propose(context.Context, string, string, []agentic.ToolCall) (DispatcherResult, error) {
 	return DispatcherResult{}, nil
 }
-func (d *settlementVerdictDispatcher) HandleVerdict(decision, callID string, _ []byte) (natsclient.DeliveryDecision, error) {
+func (d *settlementVerdictDispatcher) HandleVerdict(decision, callID string, _ VerdictPayload) (natsclient.DeliveryDecision, error) {
 	d.received <- decision + ":" + callID
 	return natsclient.DeliveryDecisionAck, nil
 }

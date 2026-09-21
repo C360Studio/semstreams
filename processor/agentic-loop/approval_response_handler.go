@@ -51,7 +51,7 @@ func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response ag
 
 	loopID := response.LoopID
 
-	pending, ok, resolveErr := h.loopManager.ResolveApprovalIfPending(loopID, response.CallID)
+	pending, ok, resolveErr := h.loopManager.ResolveApprovalIfPending(loopID, response.CallID, response.ExecutionID)
 	if resolveErr != nil && !errors.Is(resolveErr, ErrLoopNotFound) {
 		return HandlerResult{}, resolveErr
 	}
@@ -70,9 +70,10 @@ func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response ag
 		if getErr == nil {
 			state = entity.State
 		}
-		h.logger.Warn("approval response ignored: not awaiting or call_id mismatch",
+		h.logger.Warn("approval response ignored: not awaiting, or its identity does not match the pending call",
 			slog.String("loop_id", loopID),
 			slog.String("response_call_id", response.CallID),
+			slog.String("response_execution_id", response.ExecutionID),
 			slog.String("loop_state", string(state)))
 		return HandlerResult{LoopID: loopID, State: state, staleDrop: true}, nil
 	}
@@ -115,10 +116,13 @@ func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response ag
 // tool.result path takes over from here.
 func (h *MessageHandler) dispatchApprovedCall(loopID string, pending agentic.PendingApprovalState, args map[string]any, approvedBy string, result *HandlerResult) error {
 	tc := agentic.ToolCall{
-		ID:         pending.CallID,
-		Name:       pending.ToolName,
-		Arguments:  args,
-		ApprovedBy: approvedBy,
+		ID:          pending.CallID,
+		Name:        pending.ToolName,
+		Arguments:   args,
+		RequestID:   pending.RequestID,
+		ExecutionID: pending.ExecutionID,
+		CallOrdinal: pending.CallOrdinal,
+		ApprovedBy:  approvedBy,
 	}
 	if err := h.dispatchToolCall(result, loopID, tc); err != nil {
 		return errs.Wrap(err, "agentic-loop", "dispatchApprovedCall", "dispatch approved tool call")
@@ -142,11 +146,14 @@ func (h *MessageHandler) handleRejectedApproval(ctx context.Context, loopID stri
 		reasonSuffix = "no reason provided"
 	}
 	synthetic := agentic.ToolResult{
-		CallID:    pending.CallID,
-		Name:      pending.ToolName,
-		ErrorKind: agentic.ToolErrorPermission,
-		Error:     fmt.Sprintf("%srejected by %s: %s", agentic.ApprovalRejectedPrefix, approver, reasonSuffix),
-		TraceID:   pending.TraceID,
+		RequestID:   pending.RequestID,
+		ExecutionID: pending.ExecutionID,
+		CallID:      pending.CallID,
+		CallOrdinal: pending.CallOrdinal,
+		Name:        pending.ToolName,
+		ErrorKind:   agentic.ToolErrorPermission,
+		Error:       fmt.Sprintf("%srejected by %s: %s", agentic.ApprovalRejectedPrefix, approver, reasonSuffix),
+		TraceID:     pending.TraceID,
 	}
 	return h.HandleToolResult(ctx, loopID, synthetic)
 }

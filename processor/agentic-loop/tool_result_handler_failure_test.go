@@ -32,20 +32,27 @@ func TestToolResultHandlerFailureSettlesOnTheDurableRecord(t *testing.T) {
 		t.Helper()
 		return heartbeatPolicyForTest(t, "tool.result", handler)
 	}
-	toolResultBytes := func(t *testing.T, callID string) []byte {
+	// The result carries both identities because the lane routes on the
+	// framework execution id (#1328) while the loop's pending-tool set is still
+	// keyed by the provider call id. A fixture that supplied only one of them
+	// would never reach the handler, and every assertion below would pass
+	// vacuously against a settled-drop ACK.
+	toolResultBytes := func(t *testing.T, executionID, callID string) []byte {
 		t.Helper()
-		toolResult := &agentic.ToolResult{CallID: callID, Name: "search", Content: "executor ran this"}
+		toolResult := &agentic.ToolResult{
+			ExecutionID: executionID, CallID: callID, Name: "search", Content: "executor ran this"}
 		data, err := json.Marshal(message.NewBaseMessage(toolResult.Schema(), toolResult, "test"))
 		require.NoError(t, err)
 		return data
 	}
-	timedOutLoop := func(t *testing.T) (*Component, *recordingLoopBucket, string, string) {
+	timedOutLoop := func(t *testing.T) (*Component, *recordingLoopBucket, string, string, string) {
 		t.Helper()
 		handler := NewMessageHandler(DefaultConfig())
 		loopID, err := handler.loopManager.CreateLoop("task-timeout", "general", "model", 3)
 		require.NoError(t, err)
 		callID := "call-timeout"
-		handler.loopManager.TrackToolCall(callID, loopID)
+		executionID := "execution-timeout"
+		handler.loopManager.TrackToolCall(executionID, loopID)
 		require.NoError(t, handler.loopManager.AddPendingTool(loopID, callID))
 		// Already past its deadline when the result lands: the handler fails the
 		// loop, builds the failure record, and returns it with a fatal error.
@@ -53,12 +60,12 @@ func TestToolResultHandlerFailureSettlesOnTheDurableRecord(t *testing.T) {
 		c := releaseTestComponent(t, handler)
 		bucket := &recordingLoopBucket{}
 		c.loopsBucket = bucket
-		return c, bucket, loopID, callID
+		return c, bucket, loopID, executionID, callID
 	}
 
 	t.Run("a terminal handler failure is written before it is acknowledged", func(t *testing.T) {
-		c, bucket, loopID, callID := timedOutLoop(t)
-		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, callID)}
+		c, bucket, loopID, executionID, callID := timedOutLoop(t)
+		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, executionID, callID)}
 		result, admitted := consumeAdmittedDelivery(
 			t.Context(), msg, newPolicy(t, c.handleToolResultMessage), newDeliveryLaneAdmission(nil))
 		require.True(t, admitted)
@@ -88,9 +95,9 @@ func TestToolResultHandlerFailureSettlesOnTheDurableRecord(t *testing.T) {
 	})
 
 	t.Run("a terminal handler failure whose write fails quarantines", func(t *testing.T) {
-		c, bucket, _, callID := timedOutLoop(t)
+		c, bucket, _, executionID, callID := timedOutLoop(t)
 		bucket.fail = errKVUnavailable
-		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, callID)}
+		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, executionID, callID)}
 		result, admitted := consumeAdmittedDelivery(
 			t.Context(), msg, newPolicy(t, c.handleToolResultMessage), newDeliveryLaneAdmission(nil))
 		require.True(t, admitted)
@@ -105,9 +112,10 @@ func TestToolResultHandlerFailureSettlesOnTheDurableRecord(t *testing.T) {
 		// GetLoop with an empty, non-terminal result. Nothing to persist, an
 		// executor's work in hand, so the lane stops instead of ACKing it away.
 		callID := "call-unrouted"
-		handler.loopManager.TrackToolCall(callID, "2f1a6c9e-9f2d-4b27-8f4a-3c9f0e6d51aa")
+		executionID := "execution-unrouted"
+		handler.loopManager.TrackToolCall(executionID, "2f1a6c9e-9f2d-4b27-8f4a-3c9f0e6d51aa")
 		c := releaseTestComponent(t, handler)
-		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, callID)}
+		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, executionID, callID)}
 		result, admitted := consumeAdmittedDelivery(
 			t.Context(), msg, newPolicy(t, c.handleToolResultMessage), newDeliveryLaneAdmission(nil))
 		require.True(t, admitted)
@@ -116,10 +124,10 @@ func TestToolResultHandlerFailureSettlesOnTheDurableRecord(t *testing.T) {
 	})
 
 	t.Run("a cancelled process retries instead of latching a false fatal", func(t *testing.T) {
-		c, _, _, callID := timedOutLoop(t)
+		c, _, _, executionID, callID := timedOutLoop(t)
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, callID)}
+		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, executionID, callID)}
 		result, admitted := consumeAdmittedDelivery(
 			ctx, msg, newPolicy(t, c.handleToolResultMessage), newDeliveryLaneAdmission(nil))
 		require.True(t, admitted)
@@ -132,7 +140,7 @@ func TestToolResultHandlerFailureSettlesOnTheDurableRecord(t *testing.T) {
 
 // cancellingTodoReader fires a cancellation from inside HandleToolResult, at
 // the one point production reads it: prependIterationContext
-// (handlers.go:2551) runs after IncrementIteration and GetAndClearToolResults
+// (handlers.go:2799) runs after IncrementIteration and GetAndClearToolResults
 // have already moved this loop, and the ctx check that observes the
 // cancellation is the one two lines later. It is the smallest production seam
 // that produces a post-mutation cancel without a fake handler.
@@ -162,16 +170,17 @@ func (r *cancellingTodoReader) ReadTodos(_ context.Context, _ string) ([]TodoSta
 //
 // spec: agentic-loop / Loop input classes settle after owner-specific durable done
 func TestToolResultCancellationRetriesOnlyBeforeMutation(t *testing.T) {
-	toolResultBytes := func(t *testing.T, callID string) []byte {
+	toolResultBytes := func(t *testing.T, executionID, callID string) []byte {
 		t.Helper()
-		toolResult := &agentic.ToolResult{CallID: callID, Name: "search", Content: "executor ran this"}
+		toolResult := &agentic.ToolResult{
+			ExecutionID: executionID, CallID: callID, Name: "search", Content: "executor ran this"}
 		data, err := json.Marshal(message.NewBaseMessage(toolResult.Schema(), toolResult, "test"))
 		require.NoError(t, err)
 		return data
 	}
 	// A loop with one dispatched tool call, so the arriving result completes
 	// the batch and drives handleToolsComplete.
-	loopAwaitingItsOnlyTool := func(t *testing.T) (*Component, *MessageHandler, string, string) {
+	loopAwaitingItsOnlyTool := func(t *testing.T) (*Component, *MessageHandler, string, string, string) {
 		t.Helper()
 		handler := NewMessageHandler(DefaultConfig())
 		handler.SetPlatform(types.PlatformMeta{Org: "acme", Platform: "ops"})
@@ -185,18 +194,18 @@ func TestToolResultCancellationRetriesOnlyBeforeMutation(t *testing.T) {
 		require.NoError(t, err)
 		c := releaseTestComponent(t, handler)
 		c.loopsBucket = &recordingLoopBucket{}
-		return c, handler, loopID, callID
+		return c, handler, loopID, dispatchedExecutionID(t, handler.loopManager, loopID), callID
 	}
 
 	t.Run("cancelled after the loop advanced, so the delivery quarantines", func(t *testing.T) {
-		c, handler, loopID, callID := loopAwaitingItsOnlyTool(t)
+		c, handler, loopID, executionID, callID := loopAwaitingItsOnlyTool(t)
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		reader := &cancellingTodoReader{cancel: cancel}
 		handler.SetTodoReader(reader)
 
 		before := handler.loopManager.GetCurrentIteration(loopID)
-		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, callID)}
+		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, executionID, callID)}
 		result, admitted := consumeAdmittedDelivery(
 			ctx, msg, heartbeatPolicyForTest(t, "tool.result", c.handleToolResultMessage),
 			newDeliveryLaneAdmission(nil))
@@ -215,12 +224,12 @@ func TestToolResultCancellationRetriesOnlyBeforeMutation(t *testing.T) {
 	})
 
 	t.Run("cancelled before the handler touched anything, so the delivery retries", func(t *testing.T) {
-		c, handler, loopID, callID := loopAwaitingItsOnlyTool(t)
+		c, handler, loopID, executionID, callID := loopAwaitingItsOnlyTool(t)
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 
 		before := handler.loopManager.GetCurrentIteration(loopID)
-		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, callID)}
+		msg := &loopDeliveryOwnerMsg{data: toolResultBytes(t, executionID, callID)}
 		result, admitted := consumeAdmittedDelivery(
 			ctx, msg, heartbeatPolicyForTest(t, "tool.result", c.handleToolResultMessage),
 			newDeliveryLaneAdmission(nil))
@@ -231,4 +240,23 @@ func TestToolResultCancellationRetriesOnlyBeforeMutation(t *testing.T) {
 		require.Equal(t, before, handler.loopManager.GetCurrentIteration(loopID),
 			"the pre-mutation case is only retryable because nothing moved")
 	})
+}
+
+// dispatchedExecutionID reads back the framework execution identity the loop
+// minted for its one dispatched call (#1328). It reads the routing map
+// production writes rather than re-deriving the id from its inputs: a fixture
+// that re-derived it would still route after a change to the derivation, and
+// route to nothing after a change to what is tracked.
+func dispatchedExecutionID(t *testing.T, m *LoopManager, loopID string) string {
+	t.Helper()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var found []string
+	for executionID, owner := range m.toolCallToLoop {
+		if owner == loopID {
+			found = append(found, executionID)
+		}
+	}
+	require.Len(t, found, 1, "fixture expects exactly one dispatched tool call for loop %s", loopID)
+	return found[0]
 }

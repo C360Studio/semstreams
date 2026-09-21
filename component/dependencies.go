@@ -46,10 +46,13 @@ type StoreProvider interface {
 // extension friction and is gone with this contract.
 type ToolRegistryReader interface {
 	// Execute implementations that may cause external effects MUST use
-	// ToolCall.ID as the downstream idempotency key. agentic-tools persists only
-	// COMPLETED outcomes, so a crash or transient Create failure after the
-	// external effect but before durable completion is inherently ambiguous and
-	// may redeliver the same call to Execute.
+	// ToolCall.ExecutionID as the downstream idempotency key — never
+	// ToolCall.ID, which is the provider's token and may repeat across turns of
+	// one conversation, so an implementation keyed on it would treat a later,
+	// different invocation as an effect it had already performed. agentic-tools
+	// persists only COMPLETED outcomes, so a crash or transient Create failure
+	// after the external effect but before durable completion is inherently
+	// ambiguous and may redeliver the same execution to Execute.
 	Execute(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error)
 	ListTools() []agentic.ToolDefinition
 }

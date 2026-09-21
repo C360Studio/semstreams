@@ -43,7 +43,7 @@ func startLoopWithTools(t *testing.T, handler *agenticloop.MessageHandler, taskI
 func dispatchedToolExecute(t *testing.T, handler *agenticloop.MessageHandler, loopID string, tc agentic.ToolCall) string {
 	t.Helper()
 	result, err := handler.HandleModelResponse(context.Background(), loopID, agentic.AgentResponse{
-		RequestID: "req-" + tc.ID,
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role:      "assistant",
@@ -130,7 +130,7 @@ func TestApprovedCall_CarriesAdvertisedTools(t *testing.T) {
 
 	// Drive to awaiting_approval on the call (mirrors gateCallWithMetadata).
 	if _, err := handler.HandleModelResponse(context.Background(), loopID, agentic.AgentResponse{
-		RequestID: "req-call-adv-4",
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",

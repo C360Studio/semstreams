@@ -728,6 +728,11 @@ func (c *Component) handleToolCall(ctx context.Context, data []byte) error {
 		c.incrementErrors()
 		return natsclient.TerminateDelivery(fmt.Errorf("validate tool call: %w", err))
 	}
+	if err := validateToolExecutionCorrelation(call); err != nil {
+		c.logger.Error("Invalid tool execution correlation", "error", err)
+		c.incrementErrors()
+		return natsclient.TerminateDelivery(fmt.Errorf("validate tool execution correlation: %w", err))
+	}
 
 	c.logger.Debug("Processing tool call",
 		slog.String("tool", call.Name),
@@ -752,13 +757,7 @@ func (c *Component) handleToolCall(ctx context.Context, data []byte) error {
 			c.metrics.recordToolFiltered(call.Name, rejection.filterReason)
 		}
 
-		result := agentic.ToolResult{
-			CallID:    call.ID,
-			Error:     rejection.message,
-			ErrorKind: rejection.kind,
-			LoopID:    call.LoopID,
-			TraceID:   call.TraceID,
-		}
+		result := correlateToolResult(call, agentic.ToolResult{Error: rejection.message, ErrorKind: rejection.kind})
 		err := c.persistAndPublishOutcome(ctx, call, result, outcomePathRejection, false)
 		c.incrementErrors()
 		return err
@@ -774,20 +773,15 @@ func (c *Component) handleToolCall(ctx context.Context, data []byte) error {
 				c.metrics.recordToolFiltered(call.Name, "approval_required")
 			}
 
-			result := agentic.ToolResult{
-				CallID:    call.ID,
-				Name:      call.Name,
-				Error:     filterResult.Rejected[0].Reason,
-				ErrorKind: agentic.ToolErrorPermission,
-				LoopID:    call.LoopID,
-				TraceID:   call.TraceID,
-			}
-			// Approval-required is a pause signal, not a terminal outcome. The
-			// loop deliberately re-dispatches the SAME CallID with ApprovedBy set;
+			result := correlateToolResult(call, agentic.ToolResult{
+				Name: call.Name, Error: filterResult.Rejected[0].Reason, ErrorKind: agentic.ToolErrorPermission,
+			})
+			// Approval-required is nonterminal coordination. The loop deliberately
+			// re-dispatches the same execution identity with ApprovedBy set;
 			// persisting this gate as COMPLETED would collide with that request.
 			// It also gets a distinct message ID so stream dedup cannot suppress
 			// the later terminal result.
-			err := c.publishResultWithMsgID(ctx, result, toolApprovalRequiredMessageID(call.ID))
+			err := c.publishResultWithMsgID(ctx, result, toolApprovalRequiredMessageID(call.ExecutionID))
 			if err != nil {
 				// The approval gate runs before execution, so no effect has
 				// begun and redelivery is proven safe.
@@ -808,9 +802,7 @@ func (c *Component) handleToolCall(ctx context.Context, data []byte) error {
 	c.classifyToolOutcome(ctx, call, &result, err, duration)
 
 	// Propagate trace correlation fields from call to result
-	result.LoopID = call.LoopID
-	result.TraceID = call.TraceID
-	result.CallID = call.ID
+	result = correlateToolResult(call, result)
 	if result.Name == "" {
 		result.Name = call.Name
 	}
@@ -849,7 +841,7 @@ func (c *Component) executeWithPanicRecovery(ctx context.Context, call agentic.T
 func (c *Component) loadCompletedOutcome(
 	ctx context.Context, call agentic.ToolCall, operation outcomeStoreOperation,
 ) (completedOutcome, bool, error) {
-	data, err := c.outcomes.Get(ctx, toolCallOutcomeKey(call.ID))
+	data, err := c.outcomes.Get(ctx, toolCallOutcomeKey(call.ExecutionID))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return completedOutcome{}, false, nil
 	}
@@ -899,7 +891,7 @@ func (c *Component) persistCompletedOutcome(
 	if err != nil {
 		return completedOutcome{}, path, natsclient.TerminateDelivery(fmt.Errorf("marshal tool outcome: %w", err))
 	}
-	err = c.outcomes.Create(ctx, toolCallOutcomeKey(call.ID), data)
+	err = c.outcomes.Create(ctx, toolCallOutcomeKey(call.ExecutionID), data)
 	if err == nil {
 		if compact {
 			path = outcomePathCompact
@@ -940,8 +932,8 @@ func (c *Component) persistCompletedOutcome(
 	}
 	// A failed Create after external execution is ambiguous: the lane must stop
 	// without settlement because replay safety is not proven. Pre-effect Create
-	// failures remain retryable. Executors still use ToolCall.ID as their
-	// downstream idempotency key across crash-redelivery windows.
+	// failures remain retryable. External-effect recovery remains governed by
+	// each executor's operation-specific idempotency contract.
 	createErr := fmt.Errorf("create tool-call outcome: %w", err)
 	if effectful {
 		return completedOutcome{}, path, &ambiguousOutcomeCreateError{err: createErr}
@@ -965,7 +957,7 @@ func (c *Component) publishCompletedResult(
 		return retryableDelivery("publish tool result: %w", err)
 	}
 	// The full immutable authority stays in KV. A publication-only bound gets
-	// exactly one compact transport surrogate using the same call-derived MsgID.
+	// exactly one compact transport surrogate using the same execution-derived MsgID.
 	compact := compactTooLargeResult(call)
 	if compactErr := c.publishResult(ctx, compact); compactErr != nil {
 		c.logger.Error("Compact tool result publication failed", "error", compactErr)
@@ -1233,7 +1225,7 @@ func backoffFor(attempt int, policy RetryPolicy) time.Duration {
 // The constructor merges and resolves the required tool.result declaration;
 // publication fails closed if that declaration is absent or malformed.
 func (c *Component) publishResult(ctx context.Context, result agentic.ToolResult) error {
-	return c.publishResultWithMsgID(ctx, result, toolResultMessageID(result.CallID))
+	return c.publishResultWithMsgID(ctx, result, toolResultMessageID(result.ExecutionID))
 }
 
 func (c *Component) publishResultWithMsgID(ctx context.Context, result agentic.ToolResult, msgID string) error {
@@ -1245,7 +1237,7 @@ func (c *Component) publishResultWithMsgID(ctx context.Context, result agentic.T
 		return errs.Wrap(err, "Component", "publishResult", "marshal result")
 	}
 
-	subject, err := component.ResolveSubject(c.outputPortDefs(), "tool.result", result.CallID)
+	subject, err := component.ResolveSubject(c.outputPortDefs(), "tool.result", result.ExecutionID)
 	if err != nil {
 		return errs.WrapInvalid(err, "Component", "publishResult", "resolve output subject")
 	}
@@ -1368,13 +1360,7 @@ func (c *Component) ListTools() []ToolDefinition {
 func (c *Component) Execute(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
 	// Check admission: global allowlist + per-loop advertised set (gh#551)
 	if rejection := c.admitToolCall(call); rejection != nil {
-		result := agentic.ToolResult{
-			CallID:    call.ID,
-			Error:     rejection.message,
-			ErrorKind: rejection.kind,
-			LoopID:    call.LoopID,
-			TraceID:   call.TraceID,
-		}
+		result := correlateToolResult(call, agentic.ToolResult{Error: rejection.message, ErrorKind: rejection.kind})
 		return result, errs.WrapInvalid(errors.New(rejection.message), "Component", "Execute", "check tool admission")
 	}
 
@@ -1390,8 +1376,7 @@ func (c *Component) Execute(ctx context.Context, call agentic.ToolCall) (agentic
 		}
 	}
 	// Propagate trace correlation fields
-	result.LoopID = call.LoopID
-	result.TraceID = call.TraceID
+	result = correlateToolResult(call, result)
 	return result, err
 }
 

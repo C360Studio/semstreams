@@ -917,7 +917,7 @@ func (c *Component) setupSubscriptions(setupCtx, consumerCtx context.Context) er
 		case "agent.toolcall.approved", "agent.toolcall.rejected":
 			// Verdicts from rule-driven tool-call governance (ADR-039).
 			// Both subjects route into the same demux — the dispatcher
-			// uses the subject path to extract decision + call_id.
+			// reads decision + execution_id from the verdict payload.
 			// Skip if no dispatcher is configured (disabled mode with
 			// no fallback construction); the wildcard subscription is
 			// still cheap to bind but never gets traffic in disabled
@@ -1273,6 +1273,40 @@ func (c *Component) taskInputHandler(workTimeout time.Duration) inputHandler {
 	}
 }
 
+// refuseConflictingTaskIdentity stops a delivery whose TaskID is already
+// running under a DIFFERENT loop than the one its message names.
+//
+// TaskID alone is a redelivery — the same work arriving twice — and the loop
+// already running it is the answer; that is what the dedup branch in
+// HandleTask serves, and it is unchanged. One TaskID naming TWO loops is not
+// a redelivery: the message and durable state disagree about which loop this
+// work is, and neither answer is available. Adopting the running loop runs
+// this message's work in a conversation it does not name; answering with the
+// running loop tells the producer its loop is live when no loop by that name
+// exists anywhere. A second delivery resolves nothing, because the
+// disagreement is IN the message. Fatal, so the lane quarantines with both
+// tokens on the record (the heartbeat policy reads Fatal as Quarantine,
+// :1196).
+//
+// It takes the producer's token rather than reading task.LoopID, because by
+// now those differ: preflightDecodedTask reserves a fresh prospective UUID on
+// every delivery of a lineage task that named no loop, so reading the field
+// would classify an ordinary redelivery of such a task as a conflict. A task
+// that named no loop keeps the intake exemption and is deduplicated.
+func (c *Component) refuseConflictingTaskIdentity(task agentic.TaskMessage, suppliedLoopID string) error {
+	if suppliedLoopID == "" {
+		return nil
+	}
+	existingID, running := c.handler.loopManager.HasActiveLoopForTask(task.TaskID)
+	if !running || existingID == suppliedLoopID {
+		return nil
+	}
+	return errs.WrapFatal(
+		fmt.Errorf("task %s is already running as loop %s but this message names loop %s",
+			task.TaskID, existingID, suppliedLoopID),
+		"agentic-loop", "handleTaskMessage", "reject conflicting task identity")
+}
+
 // handleTaskMessage processes incoming task messages
 func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 	baseMsg, err := c.decoder.Decode(data)
@@ -1286,12 +1320,22 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 		c.logger.Error("Unexpected payload type", "type", fmt.Sprintf("%T", baseMsg.Payload()))
 		return nil
 	}
+	// The loop token the PRODUCER sent, read before preflight can reserve one.
+	// Everything below distinguishes "this message named a loop" from "intake
+	// minted a prospective UUID for this delivery", and after
+	// preflightDecodedTask they are the same field.
+	suppliedLoopID := task.LoopID
 	related, hasLineage, err := c.preflightDecodedTask(task)
 	if err != nil {
 		if c.metrics != nil {
 			c.metrics.recordTaskIntakeRejection(taskIntakeRejectionLane, taskIntakeRejectionReason)
 		}
 		return natsclient.TerminateDelivery(err)
+	}
+	if err := c.refuseConflictingTaskIdentity(*task, suppliedLoopID); err != nil {
+		c.logger.Error("Task refused — its identity conflicts with a running loop",
+			"error", err, "task_id", task.TaskID, "loop_id", suppliedLoopID)
+		return err
 	}
 
 	c.logger.Debug("Processing task message",
@@ -1314,6 +1358,22 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 			return nil
 		}
 		c.logger.Error("Failed to handle task", "error", err, "task_id", task.TaskID)
+		return nil
+	}
+
+	// A deferred continuation is not a dedup and not a spawn: the loop already
+	// exists, the turn is already in its context, and the durable effect this
+	// delivery owns is the pending-continuation marker on the loop entity. There
+	// is nothing to publish and no graph birth to do — the loop was born on its
+	// first task. Persisting the entity is best-effort here exactly as it is on
+	// the spawn path below; what the marker survives in-process is this
+	// process, and restoring it across a replacement is L4's (#1330).
+	if result.Deferred {
+		c.logger.Debug("Task deferred behind the loop's outstanding model request",
+			slog.String("loop_id", result.LoopID),
+			slog.String("task_id", task.TaskID))
+		c.recordTrajectoryObservations(ctx, result)
+		c.persistLoopState(ctx, result.LoopID)
 		return nil
 	}
 
@@ -1827,7 +1887,7 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 	// for the delivery. The handler has already moved this loop in memory
 	// before we are called, so the redelivery does not arrive at the same loop
 	// it left: a redelivered model response meets the terminal guard
-	// (handlers.go:1179-1185) and returns an empty result — no completion
+	// (handlers.go:1322-1327) and returns an empty result — no completion
 	// record, no publication — which persists nothing, publishes nothing and
 	// ACKs. The completion the first attempt built is then gone, and
 	// COMPLETE_<loopID> and agent.complete were never emitted. So a stamp
@@ -1886,7 +1946,7 @@ func (c *Component) persistResultState(ctx context.Context, result HandlerResult
 		// publishFailureEvents (:1700), which this route never enters: the
 		// three results that carry a FailureState here return no error to
 		// handleLoopFailure, and the one that does (HandleModelResponse's
-		// timeout, handlers.go:1173) never reaches this function. So the write
+		// timeout, handlers.go:1316) never reaches this function. So the write
 		// happens exactly once on every path, and the failure event is
 		// published exactly once — by publishResults here, or by
 		// publishFailureEvents there, never both.
@@ -2044,7 +2104,7 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 	}
 	toolResult := *toolResultPtr
 
-	// Find loop ID for this tool call. Empty here means we drained the CallID at
+	// Find loop ID for this tool execution. Empty here means we drained the execution ID at
 	// the previous turn boundary (GetAndClearToolResults evicts the routing
 	// entry to drop late re-deliveries), the loop settled and released its
 	// per-loop state (#1233), or we never tracked it. All three are expected
@@ -2052,14 +2112,16 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 	// Returning here is load-bearing — proceeding would land the late result
 	// in PendingToolResults and surface as a duplicate tool message in the
 	// next turn's request. It is also what keeps a released loop
-	// indistinguishable from a present terminal one: DeleteLoop clears the
-	// routing entry for model-authored call IDs as well as structured ones, so
-	// recovery cannot resolve a loop that is gone and hand it to
+	// indistinguishable from a present terminal one: DeleteLoop clears opaque
+	// execution routing entries by their mapped owner, so the direct lookup
+	// cannot resolve a loop that is gone and hand it to
 	// HandleToolResult, which would fail instead of dropping.
 	// The fourth case the comment above did not name: the loop is live and
 	// this process is simply not the one holding it. Memory reads identically
-	// to the three expected drops, so the loops bucket decides.
-	loopID := c.findLoopIDForToolCall(toolResult.CallID)
+	// to the three expected drops, so the loops bucket decides. The lookup key
+	// is the framework execution identity, not the provider call id — the
+	// routing entry is minted under it.
+	loopID := c.findLoopIDForToolCall(toolResult.ExecutionID)
 	if loopID == "" {
 		return c.settleToolResultWithoutLoop(ctx, toolResult)
 	}
@@ -2115,7 +2177,7 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 // This branch used to record the trajectory, log, and return nil, which is ACK:
 // an executor's completed work was discarded behind a log line, and the worst
 // case was the terminal one. HandleToolResult's timeout branch
-// (handlers.go:2245-2259) transitions the loop to failed, builds its failure
+// (handlers.go:2420-2433) transitions the loop to failed, builds its failure
 // record and its failure publications, and returns them WITH the error — so the
 // old branch acknowledged a terminal failure that was never written and never
 // published. The loop record stayed non-terminal forever while the input that
@@ -2134,8 +2196,9 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 //
 // Cancellation is the one exception, and only the kind that is provably
 // pre-mutation. HandleToolResult checks its context three times: once before it
-// touches anything (handlers.go:2209) and twice inside handleToolsComplete
-// (handlers.go:2472, :2555), after StoreToolResult, RemovePendingTool,
+// touches anything (handlers.go:2384) and twice on the tools-complete path
+// (handlers.go:2684 in handleToolsComplete, :2802 in the publishIterationRequest
+// it calls), after StoreToolResult, RemovePendingTool,
 // IncrementIteration and GetAndClearToolResults have moved in-process state.
 // Only the first carries errCancelledBeforeMutation, and only it retries: a
 // shutting-down process that mutated nothing must not latch a false
@@ -2179,9 +2242,13 @@ func (c *Component) settleToolResultWithoutLoop(ctx context.Context, toolResult 
 	}
 	switch c.classifyMissingLoop(ctx, loopID) {
 	case loopPresenceStale:
-		c.logger.Warn("No loop found for tool call", "call_id", toolResult.CallID)
+		// Named for the identity the lookup actually failed on: the routing
+		// entry is keyed by execution identity, so a miss is a stale
+		// execution, not a stale call id. metrics.go documents the same word.
+		c.logger.Warn("No loop found for tool execution",
+			"execution_id", toolResult.ExecutionID, "call_id", toolResult.CallID)
 		if c.metrics != nil {
-			c.metrics.recordToolResultDropped("stale_callid")
+			c.metrics.recordToolResultDropped("stale_execution")
 		}
 		return nil
 	default:
@@ -2189,7 +2256,7 @@ func (c *Component) settleToolResultWithoutLoop(ctx context.Context, toolResult 
 		// a retried tool result is not a dropped one, and an executor's work is
 		// still owed to whichever process holds that loop.
 		c.logger.Warn("Tool result names a loop this process does not hold",
-			"call_id", toolResult.CallID, "loop_id", loopID)
+			"execution_id", toolResult.ExecutionID, "call_id", toolResult.CallID, "loop_id", loopID)
 		return fmt.Errorf("loop %q for tool call %q is not held by this process", loopID, toolResult.CallID)
 	}
 }
@@ -2204,8 +2271,12 @@ func (c *Component) publishResults(ctx context.Context, result HandlerResult) er
 		return nil
 	}
 	for _, msg := range result.PublishedMessages {
-		// Use JetStream for publishing to ensure delivery
-		if err := c.natsClient.PublishToStream(ctx, msg.Subject, msg.Data); err != nil {
+		// Use JetStream for publishing to ensure delivery. A message that
+		// carries a MsgID publishes through the Nats-Msg-Id path so the server
+		// rejects a duplicate of the same logical message inside the stream's
+		// Duplicates window (owner ruling Q5 on #1330). An empty MsgID is a
+		// drop-in for PublishToStream.
+		if err := c.natsClient.PublishToStreamWithMsgID(ctx, msg.Subject, msg.Data, msg.MsgID); err != nil {
 			return fmt.Errorf("publish result %s: %w", msg.Subject, err)
 		}
 	}
@@ -2414,10 +2485,11 @@ func (c *Component) findLoopIDForRequest(requestID string) string {
 	return loopID
 }
 
-// findLoopIDForToolCall finds the loop ID associated with a tool call ID,
-// attempting recovery from structured ID if not found in cache.
-func (c *Component) findLoopIDForToolCall(callID string) string {
-	loopID, exists := c.handler.loopManager.GetLoopForToolCallWithRecovery(callID)
+// findLoopIDForToolCall finds the loop ID associated with a framework tool
+// execution ID. Provider CallID is request-scoped conversation data and is
+// never used as a routing fallback.
+func (c *Component) findLoopIDForToolCall(executionID string) string {
+	loopID, exists := c.handler.loopManager.GetLoopForToolCallWithRecovery(executionID)
 	if !exists {
 		return ""
 	}
@@ -2571,15 +2643,15 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 
 // handleToolCallVerdictMessage routes inbound verdicts from
 // agent.toolcall.approved.> and agent.toolcall.rejected.> into the
-// governance dispatcher (ADR-039). The dispatcher demuxes by call_id
+// governance dispatcher (ADR-039). The dispatcher demuxes by execution_id
 // to per-call waiter channels.
 //
 // Both wildcard subjects share this single handler because the
 // existing input-port consumer wrapper discards the subject (see
-// setupConsumer's adapter at component.go:805). The verdict's decision
-// is read from the payload via VerdictPayload.EffectiveDecision — both
-// authorship paths (approve action's top-level fields, publish action's
-// nested Properties) are supported.
+// setupConsumer's adapter at component.go:1094, which passes msg.Data() and
+// nothing else). The verdict's decision is read from the payload via
+// VerdictPayload.EffectiveDecision — both authorship paths (approve action's
+// top-level fields, publish action's nested Properties) are supported.
 //
 // Wire format: the rule engine's `approve` action publishes a
 // `core.json.v1` BaseMessage; the canonical ADR-039 reject pattern
@@ -2604,38 +2676,58 @@ func (c *Component) handleToolCallVerdictMessage(ctx context.Context, data []byt
 	}
 
 	decision := payload.EffectiveDecision()
-	callID := payload.EffectiveCallID()
-	if decision == "" || callID == "" {
+	executionID := payload.effectiveExecutionID()
+	if decision == "" || executionID == "" {
 		return natsclient.DeliveryDecisionTerminate,
-			fmt.Errorf("tool-call verdict payload missing decision or call_id (decision=%q call_id=%q)", decision, callID)
+			fmt.Errorf("tool-call verdict payload missing decision or execution_id (decision=%q execution_id=%q)", decision, executionID)
 	}
 
-	settled, err := dispatcher.HandleVerdict(decision, callID, data)
+	settled, err := dispatcher.HandleVerdict(decision, executionID, payload)
 	if errors.Is(err, ErrNoGovernanceWaiter) {
-		return c.settleVerdictWithoutWaiter(ctx, callID, err)
+		return c.settleVerdictWithoutWaiter(ctx, payload, executionID, err)
 	}
 	return settled, err
 }
 
-// settleVerdictWithoutWaiter decides a verdict whose call_id has no waiter
-// here. The dispatcher's own doc comment says such verdicts are expected in
-// normal operation — audit mode, late arrivals, verdicts for other components'
-// loops on a shared stream — and the RecordGovernanceVerdictMissingWaiter
-// counter exists for exactly that, so Retrying them made a documented-normal
-// input a hot redelivery loop. But the fourth case is real: after process
-// replacement the loop is still waiting and the verdict is still owed. The
-// call_id grammar carries the loop ID, so the record decides which it is.
+// settleVerdictWithoutWaiter decides a verdict whose execution identity has no
+// waiter here. The dispatcher's own doc comment says such verdicts are expected
+// in normal operation — audit mode, late arrivals, verdicts for other
+// components' loops on a shared stream — and the
+// RecordGovernanceVerdictMissingWaiter counter exists for exactly that, so
+// Retrying them made a documented-normal input a hot redelivery loop. But the
+// fourth case is real: after process replacement the loop is still waiting and
+// the verdict is still owed, so the record decides which it is.
+//
+// The execution identity cannot answer that question — it is an opaque digest
+// with no loop in it — so the loop comes from the payload's own loop_id, or
+// from the RequestID grammar when a rule echoes only that.
+//
+// A payload carrying neither is malformed input, not a settled loop, and is
+// terminated the way an undecodable verdict already is. Acknowledging it would
+// be indistinguishable from "this loop finished", which is how an adopter rule
+// echoing a non-canonical loop_id — an uppercase UUID, a braced form, a legacy
+// token — would lose every verdict with no signal naming why.
 func (c *Component) settleVerdictWithoutWaiter(
-	ctx context.Context, callID string, cause error,
+	ctx context.Context, payload VerdictPayload, executionID string, cause error,
 ) (natsclient.DeliveryDecision, error) {
-	loopID := loopIDFromStructuredID(callID, ":tool:")
+	loopID := payload.effectiveLoopID()
+	if loopID == "" {
+		if c.metrics != nil {
+			c.metrics.recordVerdictIdentityUnrecoverable()
+		}
+		c.logger.WarnContext(ctx, "Verdict carries no recoverable loop identity; terminating as malformed",
+			slog.String("execution_id", executionID),
+			slog.String("hint", "the rule must echo loop_id as the framework minted it, or request_id in the <loopID>:req:<iteration>:<retry> grammar"))
+		return natsclient.DeliveryDecisionTerminate,
+			fmt.Errorf("tool-call verdict for execution_id %q carries no recoverable loop identity: %w", executionID, cause)
+	}
 	if c.classifyMissingLoop(ctx, loopID) == loopPresenceStale {
 		c.logger.Debug("Verdict has no waiter and its loop is finished or foreign; acknowledging",
-			slog.String("call_id", callID), slog.String("loop_id", loopID))
+			slog.String("execution_id", executionID), slog.String("loop_id", loopID))
 		return natsclient.DeliveryDecisionAck, nil
 	}
 	c.logger.Warn("Verdict names a live loop this process does not hold",
-		slog.String("call_id", callID), slog.String("loop_id", loopID))
+		slog.String("execution_id", executionID), slog.String("loop_id", loopID))
 	return natsclient.DeliveryDecisionRetry, cause
 }
 
@@ -2674,9 +2766,9 @@ func decodeVerdictPayload(decoder *message.Decoder, data []byte) (VerdictPayload
 }
 
 // verdictPayloadFromMap translates a GenericJSONPayload.Data map into
-// the typed VerdictPayload. Only the routing-relevant fields are
-// extracted; the original bytes are still passed to the dispatcher's
-// HandleVerdict for context logging.
+// the typed VerdictPayload. This IS what the dispatcher receives — the
+// original bytes go no further, because the two production shapes do not
+// agree on where a field lives and only this decode knows both.
 func verdictPayloadFromMap(data map[string]any) VerdictPayload {
 	p := VerdictPayload{}
 	if v, ok := data["decision"].(string); ok {
@@ -2687,6 +2779,15 @@ func verdictPayloadFromMap(data map[string]any) VerdictPayload {
 	}
 	if v, ok := data["loop_id"].(string); ok {
 		p.LoopID = v
+	}
+	if v, ok := data["request_id"].(string); ok {
+		p.RequestID = v
+	}
+	if v, ok := data["execution_id"].(string); ok {
+		p.ExecutionID = v
+	}
+	if v, ok := data["proposal_fingerprint"].(string); ok {
+		p.ProposalFingerprint = v
 	}
 	if v, ok := data["rule_id"].(string); ok {
 		p.RuleID = v

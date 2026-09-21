@@ -12,6 +12,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// approvalExecutionID is the framework execution identity a gated call carries
+// onto its ApprovalPendingEvent, and the one a caller must name back. Fixtures
+// derive it from the CallID so a test can say which execution it is answering
+// without threading a second constant through every body.
+func approvalExecutionID(callID string) string {
+	return "exec-" + callID
+}
+
 // trackedLoopWithApproval seeds a loop in the tracker AND attaches a
 // pending approval. Returns the test component for chained
 // assertions. Used by every test that exercises the success-path
@@ -30,6 +38,7 @@ func trackedLoopWithApproval(t *testing.T, loopID, callID string) *Component {
 	})
 	comp.loopTracker.SetPendingApproval(loopID, &PendingApprovalInfo{
 		CallID:      callID,
+		ExecutionID: approvalExecutionID(callID),
 		ToolName:    "delete_rule",
 		Arguments:   map[string]any{"rule_id": "rule-42"},
 		Reason:      "approval_required: Tool 'delete_rule' requires human approval",
@@ -110,7 +119,9 @@ func TestHandleLoopApproval_NotAwaitingApproval(t *testing.T) {
 	})
 	// No SetPendingApproval — loop is tracked but not awaiting approval.
 
-	body := `{"decision":"approve"}`
+	// Names an execution so the body is well-formed and the refusal under test
+	// is the loop's STATE, not the missing field.
+	body := `{"decision":"approve","execution_id":"exec-call-001"}`
 	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopB+"/approval", strings.NewReader(body))
 	req.SetPathValue("id", seamTestLoopB)
 	rec := httptest.NewRecorder()
@@ -146,7 +157,7 @@ func TestHandleLoopApproval_DecisionValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			comp := trackedLoopWithApproval(t, seamTestLoopA, "call-001")
 
-			body := `{"decision":"` + tt.decision + `"}`
+			body := `{"decision":"` + tt.decision + `","execution_id":"` + approvalExecutionID("call-001") + `"}`
 			req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", strings.NewReader(body))
 			req.SetPathValue("id", seamTestLoopA)
 			rec := httptest.NewRecorder()
@@ -167,7 +178,7 @@ func TestHandleLoopApproval_BodyIdentityFallback(t *testing.T) {
 	comp := trackedLoopWithApproval(t, seamTestLoopA, "call-001")
 
 	// No user_id in body.
-	body := `{"decision":"approve"}`
+	body := `{"decision":"approve","execution_id":"exec-call-001"}`
 	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", strings.NewReader(body))
 	req.SetPathValue("id", seamTestLoopA)
 	rec := httptest.NewRecorder()
@@ -189,7 +200,7 @@ func TestHandleLoopApproval_BodyIdentityFallback(t *testing.T) {
 func TestHandleLoopApproval_CtxIdentityWinsOverBody(t *testing.T) {
 	comp := trackedLoopWithApproval(t, seamTestLoopA, "call-001")
 
-	body := `{"decision":"approve","user_id":"body-user"}`
+	body := `{"decision":"approve","user_id":"body-user","execution_id":"exec-call-001"}`
 	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", strings.NewReader(body))
 	req = req.WithContext(WithIdentity(req.Context(), "ctx-authenticated-user"))
 	req.SetPathValue("id", seamTestLoopA)
@@ -209,7 +220,8 @@ func TestHandleLoopApproval_CtxIdentityWinsOverBody(t *testing.T) {
 func TestHandleLoopApproval_ModifiedArgumentsAccepted(t *testing.T) {
 	comp := trackedLoopWithApproval(t, seamTestLoopA, "call-001")
 
-	body := `{"decision":"modify","modified_arguments":{"path":"/tmp/safe"},"reason":"narrowed scope"}`
+	body := `{"decision":"modify","modified_arguments":{"path":"/tmp/safe"},"reason":"narrowed scope",` +
+		`"execution_id":"exec-call-001"}`
 	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", strings.NewReader(body))
 	req.SetPathValue("id", seamTestLoopA)
 	rec := httptest.NewRecorder()
@@ -230,7 +242,7 @@ func TestHandleLoopApproval_ModifiedArgumentsAccepted(t *testing.T) {
 func TestHandleLoopApproval_FailedPublishPreservesPendingApproval(t *testing.T) {
 	comp := trackedLoopWithApproval(t, seamTestLoopA, "call-001")
 
-	body := `{"decision":"approve"}`
+	body := `{"decision":"approve","execution_id":"exec-call-001"}`
 	req := httptest.NewRequest(http.MethodPost, "/loops/"+seamTestLoopA+"/approval", strings.NewReader(body))
 	req.SetPathValue("id", seamTestLoopA)
 	rec := httptest.NewRecorder()

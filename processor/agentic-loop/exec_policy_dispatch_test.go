@@ -31,7 +31,7 @@ func gateCallWithMetadata(t *testing.T, handler *agenticloop.MessageHandler, cal
 	loopID := taskResult.LoopID
 
 	if _, err = handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
-		RequestID: "req-" + callID,
+		RequestID: handler.OutstandingRequestForTest(loopID),
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role: "assistant",
