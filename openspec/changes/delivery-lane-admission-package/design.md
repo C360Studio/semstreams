@@ -479,10 +479,24 @@ doc comment states the tense correctly. Nothing else in § 5 changes.
    its "User message delivery did not settle cleanly" log is implicitly guarded by that return; `Settle` instead
    returns the ZERO `DeliveryResult`, whose `Err()` is NON-NIL by construction
    (`natsclient/delivery_settlement.go`: "delivery result is incomplete for decision 0"). The branch therefore has
-   to become `if admitted && result.Err() != nil && !result.OwnerStopRequired()`. This is the call-site guard the
-   package doc already anticipates ("The bool reports admission, so a caller can guard every branch on it"), not a
+   to become `if admitted && result.Err() != nil && !result.OwnerStopRequired()`. It is a call-site guard, not a
    package change — **but loop and governance carry the same inline settlement shape and must be checked for the
    same branch before they convert.** A mutation that drops the guard is killed by task 2.8's test.
+
+   Corrected on internal review (MEDIUM-1): the earlier wording here cited the package doc as already anticipating
+   this, quoting "The bool reports admission, so a caller can guard every branch on it" — that sentence lived only
+   in `Consume`'s doc, where the trap does not bite, and `Settle`'s doc said nothing about the bool at all. The
+   sentence is now in `Settle`'s doc with the consequence spelled out (the zero result, and
+   `natsclient.DeliveryResult.Err()` reporting "delivery result is incomplete" for anything that settled nothing),
+   and the fact is gated by `TestSettleRefusalReturnsAZeroResultWhoseErrIsNonNil` rather than left to prose. The
+   package file is 238 lines, not the 228 § 4 measured.
+
+   **The form to use, ruled on internal review (MEDIUM-2):** loop (`component.go:1121-1131`) and governance
+   (`:510-520`) take the EARLY-RETURN form — `result, admitted := deliverylane.Settle(...)`, then
+   `if !admitted { return }`, leaving every existing branch byte-identical. That is today's
+   `if !admission.admit() { return }` shape, and it stays correct when L4 or #1249 add a branch below it, which the
+   conjunct would not. Dispatch keeps its conjunct because its branch is the only one it has. The heartbeat lanes
+   (`loop:1101`, `model:416`, `tools:450`) already carry `(result, admitted)` and need no change.
 
 2. **Residual (recorded, not filed): the refusal-declarer wiring on a terminal lane is not test-sensitive.**
    Replacing the `agent.complete` lane's `onRefused` closure with `nil` survives BOTH the untagged and the

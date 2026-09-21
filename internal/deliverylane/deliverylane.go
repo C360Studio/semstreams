@@ -117,6 +117,16 @@ func Consume(
 // refuses; an open lane runs work under the panic guard, applies one terminal
 // method under retry, and latches on the result. Pass
 // natsclient.ImmediateDeliveryRetry() for a lane that settles immediately.
+//
+// The bool reports admission, and a caller MUST guard every branch on it,
+// because a refusal returns the zero natsclient.DeliveryResult and a zero
+// result's Err() is non-nil by construction: Err reports "delivery result is
+// incomplete for decision 0" for anything that settled nothing
+// (natsclient/delivery_settlement.go). An unguarded `result.Err() != nil`
+// branch therefore reports a refused delivery — which ran no work and
+// attempted no terminal method — as a settlement failure. The early-return
+// form, `if !admitted { return }`, keeps the branches below it unchanged.
+//
 // Unlike Consume, msg must be non-nil: work needs its payload, and the NATS
 // callback never delivers nil; a nil here is the caller's contract violation.
 func Settle(

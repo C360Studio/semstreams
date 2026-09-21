@@ -420,6 +420,29 @@ func TestSettleRefusesWithoutInvokingWork(t *testing.T) {
 	require.Equal(t, natsclient.DeliveryDecisionInvalid, result.Decision())
 }
 
+// The refusal trap, gated rather than documented: a refused Settle returns the
+// ZERO result, and a zero result's Err() is NON-NIL, so a caller that branches
+// on Err() without the admission bool reports a delivery that ran no work and
+// attempted no terminal method as a settlement failure.
+//
+// spec: jetstream-consumer-policy / settlement-only delivery decisions use one shared interpreter
+func TestSettleRefusalReturnsAZeroResultWhoseErrIsNonNil(t *testing.T) {
+	admission := latchedAdmission(t, nil)
+	msg := deliveredMsg("user.message")
+
+	result, admitted := Settle(t.Context(), msg, natsclient.ImmediateDeliveryRetry(), admission, "dispatch",
+		func(context.Context, []byte) (natsclient.DeliveryDecision, error) {
+			return natsclient.DeliveryDecisionAck, nil
+		})
+
+	require.False(t, admitted)
+	require.Equal(t, natsclient.DeliveryResult{}, result)
+	require.Error(t, result.Err(),
+		"the zero result's Err() is non-nil, which is exactly why a caller must guard on the bool")
+	require.False(t, result.OwnerStopRequired(), "a refusal is not itself a new owner-stop event")
+	require.Zero(t, msg.settlements())
+}
+
 // A lane whose fatal drains with no owner reaction is a silent degrade, so a
 // nil reaction fails at wiring rather than at the first fatal.
 //

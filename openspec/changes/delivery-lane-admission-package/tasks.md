@@ -38,6 +38,9 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
       I8 `TestTerminalMethodErrorAloneKeepsTheLaneOpen`; I9 `TestRefusalDeclarerSeesEverySubjectExactlyOnce`.
       `TestConsumeRunsTheTypedHeartbeatPathAndLatchesItsResult` covers the admitted half of `Consume` through
       `natsclient.ConsumeDeliveryWithHeartbeat`.
+- [x] 1.2b Internal-review MEDIUM-1: `Settle`'s doc carries the bool contract and its consequence (the zero
+      result's non-nil `Err()`), and `TestSettleRefusalReturnsAZeroResultWhoseErrIsNonNil` gates it. The package
+      file is 238 lines (§ 4 measured 228 on the draft).
 - [x] 1.2a PBT and fuzz decisions, recorded here because `design.md` § 8 did not take them (testing discipline
       § When to Use Property-Based Testing / § mandatory fuzz targets):
       **PBT applies** — shape 3, "stateful histories where outcomes depend on operation order"; I1 and I2 are
@@ -61,7 +64,10 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
       add `reactDeliveryFatal` (the existing "Model delivery ownership lost" log line).
 - [ ] 2.3 agentic-loop: heartbeat lanes → `Consume`; the settlement shape → `Settle(..., settleRetry, admission,
       "loop", settleHandlerFn)`; move `recordDeliveryOwnerFatal` (`:65-72`) into `component.go`; delete
-      `runLoopDeliveryWork`.
+      `runLoopDeliveryWork`. **Settlement guard form (MEDIUM-2, ruled): EARLY RETURN** —
+      `result, admitted := deliverylane.Settle(...)` then `if !admitted { return }`, leaving the existing branches
+      byte-identical. Not the conjunct dispatch used: the early return is today's `if !admission.admit() { return }`
+      shape and stays correct when L4 adds a branch below it.
 - [x] 2.4 agentic-dispatch (three lanes at `3faca84f`) — FIRST, per the order above: two terminal lanes →
       `Consume` with the refuse arm; the one settlement lane (`user.message`) →
       `Settle(..., natsclient.ImmediateDeliveryRetry(), admission, "dispatch", c.handleUserMessage)`; one
@@ -74,11 +80,14 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
       guarded. `Settle` returns the ZERO `DeliveryResult` on refusal, and `DeliveryResult.Err()` is NON-NIL for a
       zero value ("delivery result is incomplete for decision 0"), so the same branch must now read
       `if admitted && result.Err() != nil && !result.OwnerStopRequired()`. Without the `admitted &&` a refused
-      delivery would be logged as a settlement failure. This is a call-site guard the package already documents
-      ("The bool reports admission, so a caller can guard every branch on it"), not a package change — but loop
-      and governance have the same inline shape and must be checked for it.
+      delivery would be logged as a settlement failure. It is a call-site guard, not a package change — but loop
+      and governance have the same inline shape and must be checked for it (2.3, 2.5). Corrected on internal
+      review (MEDIUM-1): this line previously cited the package doc as already documenting the bool contract; that
+      sentence was in `Consume`'s doc only, and is now in `Settle`'s with the consequence named and gated by
+      `TestSettleRefusalReturnsAZeroResultWhoseErrIsNonNil`.
 - [ ] 2.5 agentic-governance: `Settle(..., ImmediateDeliveryRetry(), admission, "governance", handler)`; delete
       `delivery_owner.go`, `runGovernanceDeliveryWork` (`component.go:349-361`), the out-of-file `drain` (`:728-733`).
+      **Settlement guard form: EARLY RETURN**, as 2.3 (MEDIUM-2).
 - [ ] 2.6 Tests — the **45 functions in 23 files** pinned in `inventory.md` § 4, regenerated at `3faca84f` (36/16 at
       the design base; L2/L3 added seven files, six of them under `agentic-loop`): `admission.fatal` length checks
       → `require.False(admission.Admit())` (buffering moves to 1.2);
