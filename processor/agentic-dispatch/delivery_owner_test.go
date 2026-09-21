@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
+	"github.com/c360studio/semstreams/pkg/graphview"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -73,9 +74,9 @@ func TestDispatchProductionCallbacksDoNotAckFalseDone(t *testing.T) {
 		}
 	})
 
-	// The response-PubAck gate (component.go:1284 -> Ack :910) had no observer:
+	// The response-PubAck gate (component.go:1236 -> Ack :844) had no observer:
 	// the sendResponseFn seam short-circuits sendResponse before PublishToStream
-	// (:1270-1273), so a test using it cannot see the publish at all. The
+	// (:1222-1224), so a test using it cannot see the publish at all. The
 	// unknown-command path reaches the production sendResponse with the user
 	// response as its ONLY required publication, which isolates that gate: if
 	// the publish fails and the callback still Acks, the user was told nothing
@@ -102,7 +103,7 @@ func TestDispatchProductionCallbacksDoNotAckFalseDone(t *testing.T) {
 		require.NoError(t, c.setupSubscriptions(ctx))
 
 		// An unrecognised command: handleCommand answers it with a typed error
-		// response (component.go:916-926) and publishes nothing else, so the
+		// response (component.go:855-863) and publishes nothing else, so the
 		// failing publish below is the user response and only the user response.
 		msg := &dispatchSettlementMsg{data: mustMarshalDispatchSettlementPayload(t, &agentic.UserMessage{
 			MessageID: "message-response-publish-fails", ChannelType: "cli", ChannelID: "channel-1", UserID: "user-1",
@@ -120,36 +121,6 @@ func TestDispatchProductionCallbacksDoNotAckFalseDone(t *testing.T) {
 		for port, handle := range handles {
 			require.Zero(t, handle.drains.Load(), "a retryable publish failure must not drain owner %s", port)
 		}
-		cancel()
-		for _, binding := range c.consumers {
-			<-binding.observerDone
-		}
-	})
-
-	t.Run("unaccepted pending projection retries", func(t *testing.T) {
-		deps := componentDependenciesForCausalTest()
-		deps.PayloadRegistry = payloadbuiltins.NewTestRegistry(t)
-		discoverable, err := NewComponent([]byte(`{}`), deps)
-		require.NoError(t, err)
-		c := discoverable.(*Component)
-		c.waitForStreamInput = func(context.Context, string) error { return nil }
-		callbacks := make(map[string]func(context.Context, jetstream.Msg))
-		c.consumeStream = func(_ context.Context, owner natsclient.PortConsumerContext, _ natsclient.StreamConsumerConfig, callback func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
-			callbacks[owner.Port] = callback
-			return &causalConsumeHandle{closed: make(chan struct{}), closedCalls: make(chan struct{}, 1)}, nil
-		}
-		ctx, cancel := context.WithCancel(t.Context())
-		require.NoError(t, c.setupSubscriptions(ctx))
-		for i := range pendingApprovalBufferCap {
-			require.False(t, c.loopTracker.SetPendingApproval(fmt.Sprintf("buffered-%d", i), &PendingApprovalInfo{CallID: "call"}))
-		}
-
-		msg := &dispatchSettlementMsg{data: mustMarshalDispatchSettlementPayload(t, &agentic.ApprovalPendingEvent{
-			LoopID: "00000000-0000-4000-8000-000000000099", CallID: "call-overflow", ToolName: "search", RequestedAt: time.Now().UTC(),
-		})}
-		callbacks["agent.approval_pending"](ctx, msg)
-		require.Zero(t, msg.acks.Load()+msg.terms.Load())
-		require.Equal(t, int32(1), msg.naks.Load())
 		cancel()
 		for _, binding := range c.consumers {
 			<-binding.observerDone
@@ -230,8 +201,11 @@ func TestTerminalLaneFatalHealthFailsClosedIndependently(t *testing.T) {
 	}
 }
 
-// The three lanes this change brings under settlement share one latch, and it
-// keeps the FIRST cause: a later fatal neither overwrites nor recounts it.
+// The component-wide latch keeps the FIRST cause: a later fatal neither
+// overwrites nor recounts it. It was written for the three lanes L1 brought
+// under settlement and #1329 deletes two of them, so the rule pinned here is
+// the one that outlives how many lanes share it — which is why this drives the
+// latch directly rather than through a lane.
 func TestDeliveryFatalHealthKeepsFirstCauseAcrossLanes(t *testing.T) {
 	result := natsclient.ConsumeDeliveryWithHeartbeat(t.Context(), nil, natsclient.HeartbeatDeliveryPolicy{})
 	c := &Component{started: true}
@@ -297,7 +271,9 @@ func TestDispatchProductionCallbacksTerminateMalformedNonHeartbeatInputs(t *test
 	ctx, cancel := context.WithCancel(t.Context())
 	require.NoError(t, c.setupSubscriptions(ctx))
 
-	for _, port := range []string{"user.message", "agent.created", "agent.approval_pending"} {
+	require.NotContains(t, callbacks, "agent.created")
+	require.NotContains(t, callbacks, "agent.approval_pending")
+	for _, port := range []string{"user.message"} {
 		callback, ok := callbacks[port]
 		require.True(t, ok, "production setup did not bind %s", port)
 		msg := &dispatchSettlementMsg{data: []byte("{")}
@@ -307,20 +283,12 @@ func TestDispatchProductionCallbacksTerminateMalformedNonHeartbeatInputs(t *test
 		require.Equal(t, int32(1), msg.terms.Load(), "%s immutable malformed input must terminate", port)
 	}
 
-	loopID := "00000000-0000-4000-8000-000000000001"
 	valid := map[string][]byte{
 		"user.message": mustMarshalDispatchSettlementPayload(t, &agentic.UserMessage{
-			MessageID: "message-1", ChannelType: "cli", ChannelID: "channel-1", UserID: "user-1",
-			Content: "/help", Timestamp: time.Now().UTC(),
-		}),
-		"agent.created": mustMarshalDispatchSettlementPayload(t, &agentic.LoopCreatedEvent{
-			LoopID: loopID, TaskID: "task-1", Role: "research", MaxIterations: 3, CreatedAt: time.Now().UTC(),
-		}),
-		"agent.approval_pending": mustMarshalDispatchSettlementPayload(t, &agentic.ApprovalPendingEvent{
-			LoopID: loopID, CallID: "call-1", ToolName: "search", RequestedAt: time.Now().UTC(),
+			MessageID: "message-1", ChannelType: "cli", ChannelID: "channel-1", UserID: "user-1", Content: "/help", Timestamp: time.Now().UTC(),
 		}),
 	}
-	for _, port := range []string{"user.message", "agent.created", "agent.approval_pending"} {
+	for _, port := range []string{"user.message"} {
 		msg := &dispatchSettlementMsg{data: valid[port]}
 		callbacks[port](ctx, msg)
 		require.Equal(t, int32(1), msg.acks.Load(), "%s successful declared consequence must ACK", port)
@@ -328,10 +296,6 @@ func TestDispatchProductionCallbacksTerminateMalformedNonHeartbeatInputs(t *test
 	}
 	require.Len(t, responses, 1)
 	require.Contains(t, responses[0].Content, "/help")
-	tracked := c.loopTracker.Get(loopID)
-	require.NotNil(t, tracked)
-	require.NotNil(t, tracked.PendingApproval)
-	require.Equal(t, "call-1", tracked.PendingApproval.CallID)
 
 	cancel()
 	for _, binding := range c.consumers {
@@ -352,16 +316,18 @@ var _ component.Discoverable = (*Component)(nil)
 
 // R1 quarantined a post-effect response failure on the command lane, and round
 // 6 found the predicate too wide: it keyed on where the TARGET came from, which
-// is true of every argument-less command while auto-continue is on — `/help`,
-// `/loops`, a bare `/status` — and of the three arms of bare `/cancel` that
-// publish nothing. None of them can be un-done by a replay, because none of
-// them did anything; quarantining them latches the whole user.message lane on a
-// failed response to a read-only command, and the cause text names a loop they
-// never touched.
+// is true of a bare `/status` and of the three arms of bare `/cancel` that
+// publish nothing. It was true of `/help` and `/loops` too, until the commands
+// that declare they consume no target stopped being given one
+// (`ResolvesActiveLoop`, command_registry.go:22-38); those two now fail the
+// provenance conjunct instead. None of them can be un-done by a replay, because
+// none of them did anything; quarantining them latches the whole user.message
+// lane on a failed response to a read-only command, and the cause text names a
+// loop they never touched.
 //
 // The predicate is now two conjuncts, and this test holds the half that must
 // NOT quarantine. The published fact comes from the publish site itself
-// (commands.go:191), so these cases are distinguished by what they did rather
+// (commands.go:204), so these cases are distinguished by what they did rather
 // than by what they were called.
 //
 // spec: agentic-dispatch / Every dispatch durable input settles through its owner
@@ -404,11 +370,12 @@ func TestEffectFreeCommandWithFailedResponseRetries(t *testing.T) {
 		require.NoError(t, c.setupSubscriptions(ctx))
 		return c, callbacks["user.message"], handles, ctx, cancel
 	}
-	trackLoop := func(c *Component, loopID string) {
-		c.loopTracker.Track(&LoopInfo{
-			LoopID: loopID, TaskID: "task-" + loopID, UserID: "user-1",
-			ChannelType: "cli", ChannelID: "channel-1", State: "executing", CreatedAt: time.Now(),
-		})
+	currentLoop := func(loopID string) *agentic.LoopEntity {
+		return &agentic.LoopEntity{
+			ID: loopID, TaskID: "task-" + loopID, UserID: "user-1",
+			ChannelType: "cli", ChannelID: "channel-1",
+			State: agentic.LoopStateExecuting, MaxIterations: 5,
+		}
 	}
 	command := func(t *testing.T, id, content string) *dispatchSettlementMsg {
 		t.Helper()
@@ -437,23 +404,46 @@ func TestEffectFreeCommandWithFailedResponseRetries(t *testing.T) {
 		}
 	}
 
-	t.Run("a read-only command whose target came from the tracker", func(t *testing.T) {
+	t.Run("a read-only command whose target was resolved, not named", func(t *testing.T) {
 		c, deliver, handles, ctx, cancel := newLane(t)
 		defer cancel()
-		// A live loop in this channel, so handleCommand's tracker branch
-		// resolves a target for the argument-less /help — the exact condition
-		// that used to be sufficient to quarantine.
-		trackLoop(c, activeLoopID)
-		require.Equal(t, activeLoopID, c.loopTracker.GetActiveLoop("user-1", "channel-1"))
+		// A current loop on this route, so handleCommand's auto-continue branch
+		// resolves a target for the argument-less /status, which declares it
+		// consumes one (commands.go:29-35) — the exact condition that used to
+		// be sufficient to quarantine. The source moved from the process-local
+		// tracker to durable authority (#1329); the provenance fact the
+		// quarantine arm reads did not.
+		seedCurrentLoops(t, c, currentLoop(activeLoopID))
+		// The gate's read seam, recording. A bare /status reaches it ONLY with
+		// a resolved target: given none it answers "No active loop" and returns
+		// before the gate (commands.go:241-251), and that answer settles
+		// identically. Without this witness the case cannot tell the resolved
+		// path from the path that never resolved — which is exactly how it
+		// stopped covering what it claimed when /help stopped resolving.
+		var readMu sync.Mutex
+		var reads []string
+		c.loadPersistedLoopFn = func(_ context.Context, loopID string) (*agentic.LoopEntity, error) {
+			readMu.Lock()
+			reads = append(reads, loopID)
+			readMu.Unlock()
+			if loopID != activeLoopID {
+				return nil, absentRecord(loopID)
+			}
+			return currentLoop(activeLoopID), nil
+		}
 
-		msg := command(t, "message-help", "/help")
+		msg := command(t, "message-bare-status", "/status")
 		deliver(ctx, msg)
 
+		readMu.Lock()
+		require.Equal(t, []string{activeLoopID}, reads,
+			"the DELIVERED command must resolve this target and read its record, or this is not the resolved-target case")
+		readMu.Unlock()
 		requireRetriedWithLaneIntact(t, c, msg, handles)
 
 		// And the lane still takes work, which is the cost a Quarantine here
 		// would have imposed on every later user message.
-		second := command(t, "message-help-2", "/help")
+		second := command(t, "message-bare-status-2", "/status")
 		deliver(ctx, second)
 		require.Equal(t, int32(1), second.naks.Load(), "the lane refused a later delivery")
 	})
@@ -461,12 +451,19 @@ func TestEffectFreeCommandWithFailedResponseRetries(t *testing.T) {
 	t.Run("a bare cancel whose loop has already settled", func(t *testing.T) {
 		c, deliver, handles, ctx, cancel := newLane(t)
 		defer cancel()
-		// Tracked as live, settled in the record: the gate reports terminal
-		// from either source, so handleCancelCommand answers "already settled"
-		// and returns BEFORE the publish at commands.go:185.
-		trackLoop(c, settledLoopID)
-		require.Equal(t, settledLoopID, c.loopTracker.GetActiveLoop("user-1", "channel-1"),
-			"the target must be tracker-resolved, or this case cannot discriminate")
+		// Current in the shared projection, settled in the exact record: the
+		// gate reads the record and answers "already settled", so
+		// handleCancelCommand returns BEFORE the publish at commands.go:198.
+		// The two reads are the view and the exact Get — under #1329 that skew
+		// is the projection lagging its own bucket, not a second source of
+		// truth, and it is what lets this case resolve a target and still
+		// publish nothing.
+		seedCurrentLoops(t, c, currentLoop(settledLoopID))
+		resolved, err := c.activeLoop(ctx, agentic.UserMessage{
+			UserID: "user-1", ChannelType: "cli", ChannelID: "channel-1"})
+		require.NoError(t, err)
+		require.Equal(t, settledLoopID, resolved,
+			"the target must be resolved rather than named, or this case cannot discriminate")
 		withPersistedLoops(c, map[string]*agentic.LoopEntity{settledLoopID: {
 			ID: settledLoopID, UserID: "user-1", ChannelType: "cli", ChannelID: "channel-1",
 			State: agentic.LoopStateComplete, MaxIterations: 5,
@@ -479,12 +476,15 @@ func TestEffectFreeCommandWithFailedResponseRetries(t *testing.T) {
 	})
 
 	// This one discriminates neither predicate: with no loop to resolve,
-	// targetFromTracker is false, so the old provenance-only arm retried it too.
+	// targetResolved is false, so the old provenance-only arm retried it too.
 	// It pins the no-loop path against a future widening, and is not coverage of
-	// the two-conjunct rule — the two subtests above are.
+	// the two-conjunct rule — the bare /status and settled bare /cancel above
+	// are, and both prove the target was resolved by the DELIVERY rather than
+	// by a separate call the delivery need not have made.
 	t.Run("a bare cancel with no loop to resolve", func(t *testing.T) {
 		c, deliver, handles, ctx, cancel := newLane(t)
 		defer cancel()
+		seedCurrentLoops(t, c)
 		withPersistedLoops(c, nil)
 
 		msg := command(t, "message-bare-cancel-none", "/cancel")
@@ -492,4 +492,39 @@ func TestEffectFreeCommandWithFailedResponseRetries(t *testing.T) {
 
 		requireRetriedWithLaneIntact(t, c, msg, handles)
 	})
+}
+
+// seedCurrentLoops attaches the shared activity view to a component built for
+// the production callbacks and seeds it with current loop records. Under #1329
+// this is where an argument-less command's target comes from: handleCommand
+// resolves it through activeLoop, which reads this projection, so a lane test
+// that needs a resolvable target supplies one here rather than in a
+// process-local tracker. It seeds the view only — the exact-read seam is the
+// caller's, because the cases that matter here are the ones where the two
+// disagree.
+func seedCurrentLoops(t *testing.T, c *Component, records ...*agentic.LoopEntity) {
+	t.Helper()
+	source := newFakeActivitySource()
+	c.activityViewSource = source
+	c.activityViewOpts = []graphview.Option{graphview.WithTickInterval(2 * time.Millisecond)}
+	activityCtx, cancel := context.WithCancel(t.Context())
+	c.activityCommands = make(chan activityViewCommand)
+	c.activityDone = make(chan struct{})
+	c.activityCancel = cancel
+	go c.runActivityViewControl(activityCtx, c.activityCommands, c.activityDone)
+	t.Cleanup(c.stopActivityView)
+
+	ctx, cancelWait := context.WithTimeout(t.Context(), activityTestWait)
+	defer cancelWait()
+	view, err := c.ensureActivityView(ctx)
+	require.NoError(t, err)
+	watcher := source.waitWatcher(t, 1)
+	for i, record := range records {
+		require.NoError(t, record.Validate())
+		data, err := json.Marshal(record)
+		require.NoError(t, err)
+		watcher.updates <- putEntry(record.ID, data, uint64(i+1))
+	}
+	watcher.updates <- nil
+	require.NoError(t, view.WaitCaughtUp(ctx))
 }

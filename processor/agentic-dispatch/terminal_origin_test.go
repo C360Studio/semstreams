@@ -72,11 +72,10 @@ func terminalTestComponentWithLog(t *testing.T) (*Component, *bytes.Buffer) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads)
 	return &Component{
-		config:      DefaultConfig(),
-		logger:      logger,
-		loopTracker: NewLoopTrackerWithLogger(logger),
-		metrics:     getMetrics(metric.NewMetricsRegistry()),
-		decoder:     message.NewDecoder(reg),
+		config:  DefaultConfig(),
+		logger:  logger,
+		metrics: getMetrics(metric.NewMetricsRegistry()),
+		decoder: message.NewDecoder(reg),
 	}, &buf
 }
 
@@ -122,7 +121,7 @@ func captureResponse(t *testing.T, c *Component) func() (agentic.UserResponse, s
 func TestSettleAgentTerminalHandoffDecisionOnRoutedLoopPublishesNothing(t *testing.T) {
 	c := terminalTestComponent(t)
 	loader := newAncestryLoader(agentic.LoopEntity{
-		ID: "root-loop", TaskID: "task-root-loop", State: agentic.LoopStateComplete,
+		ID: "35f24ee8-8bb9-4dc4-bc8e-000000000015", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000015", State: agentic.LoopStateComplete, MaxIterations: 3,
 		ChannelType: "http", ChannelID: "origin-1", UserID: "user-1",
 	})
 	c.loadPersistedLoopFn = loader.load
@@ -130,7 +129,7 @@ func TestSettleAgentTerminalHandoffDecisionOnRoutedLoopPublishesNothing(t *testi
 
 	before := terminalReasonSnapshot(c)
 	require.NoError(t, c.settleAgentTerminal(context.Background(),
-		completionPayload(t, decideCompletion("root-loop", "autoresearch", "hand off to the chain"))))
+		completionPayload(t, decideCompletion("35f24ee8-8bb9-4dc4-bc8e-000000000015", "autoresearch", "hand off to the chain"))))
 
 	_, _, count := get()
 	require.Zero(t, count, "a routed handoff decision must publish nothing")
@@ -141,11 +140,11 @@ func TestSettleAgentTerminalHandoffDecisionOnRouteLessLoopPublishesNothing(t *te
 	c := terminalTestComponent(t)
 	loader := newAncestryLoader(
 		agentic.LoopEntity{
-			ID: "mid-loop", TaskID: "task-mid-loop", State: agentic.LoopStateComplete,
-			ParentLoopID: "root-loop", RunID: "root-loop",
+			ID: "35f24ee8-8bb9-4dc4-bc8e-000000000016", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000016", State: agentic.LoopStateComplete, MaxIterations: 3,
+			ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000015", RunID: "35f24ee8-8bb9-4dc4-bc8e-000000000015",
 		},
 		agentic.LoopEntity{
-			ID: "root-loop", State: agentic.LoopStateComplete,
+			ID: "35f24ee8-8bb9-4dc4-bc8e-000000000015", State: agentic.LoopStateComplete, MaxIterations: 3,
 			ChannelType: "http", ChannelID: "origin-1",
 		},
 	)
@@ -154,18 +153,18 @@ func TestSettleAgentTerminalHandoffDecisionOnRouteLessLoopPublishesNothing(t *te
 
 	before := terminalReasonSnapshot(c)
 	require.NoError(t, c.settleAgentTerminal(context.Background(),
-		completionPayload(t, decideCompletion("mid-loop", "synthesize", "enough evidence"))))
+		completionPayload(t, decideCompletion("35f24ee8-8bb9-4dc4-bc8e-000000000016", "synthesize", "enough evidence"))))
 
 	_, _, count := get()
 	require.Zero(t, count, "a handoff decision never borrows an origin")
-	require.Equal(t, []string{"mid-loop"}, loader.sequence, "a handoff must not walk ancestry")
+	require.Equal(t, []string{"35f24ee8-8bb9-4dc4-bc8e-000000000016"}, loader.sequence, "a handoff must not walk ancestry")
 	requireOneTerminalReason(t, c, "handoff_settled", before)
 }
 
 func TestSettleAgentTerminalRespondDirectOnRoutedLoopPublishesResultWithReason(t *testing.T) {
 	c := terminalTestComponent(t)
 	loader := newAncestryLoader(agentic.LoopEntity{
-		ID: "front-door", TaskID: "task-front-door", State: agentic.LoopStateComplete,
+		ID: "35f24ee8-8bb9-4dc4-bc8e-000000000017", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000017", State: agentic.LoopStateComplete, MaxIterations: 3,
 		ChannelType: "http", ChannelID: "origin-1", UserID: "user-1",
 	})
 	c.loadPersistedLoopFn = loader.load
@@ -173,7 +172,7 @@ func TestSettleAgentTerminalRespondDirectOnRoutedLoopPublishesResultWithReason(t
 
 	before := terminalReasonSnapshot(c)
 	require.NoError(t, c.settleAgentTerminal(context.Background(),
-		completionPayload(t, decideCompletion("front-door", agentic.DecideActionRespondDirect, "Optimized the flight plan."))))
+		completionPayload(t, decideCompletion("35f24ee8-8bb9-4dc4-bc8e-000000000017", agentic.DecideActionRespondDirect, "Optimized the flight plan."))))
 
 	response, _, count := get()
 	require.Equal(t, 1, count)
@@ -182,8 +181,8 @@ func TestSettleAgentTerminalRespondDirectOnRoutedLoopPublishesResultWithReason(t
 	require.Equal(t, "http", response.ChannelType)
 	require.Equal(t, "origin-1", response.ChannelID)
 	require.Equal(t, "user-1", response.UserID)
-	require.Equal(t, "front-door", response.InReplyTo)
-	require.Equal(t, []string{"front-door"}, loader.sequence, "an own-routed reply resolves no ancestry")
+	require.Equal(t, "35f24ee8-8bb9-4dc4-bc8e-000000000017", response.InReplyTo)
+	require.Equal(t, []string{"35f24ee8-8bb9-4dc4-bc8e-000000000017"}, loader.sequence, "an own-routed reply resolves no ancestry")
 	requireOneTerminalReason(t, c, "response_settled", before)
 }
 
@@ -191,11 +190,11 @@ func TestSettleAgentTerminalAskUserDecisionPublishesPromptToOrigin(t *testing.T)
 	c := terminalTestComponent(t)
 	loader := newAncestryLoader(
 		agentic.LoopEntity{
-			ID: "wakeup-loop", TaskID: "task-wakeup-loop", State: agentic.LoopStateComplete,
-			ParentLoopID: "root-loop",
+			ID: "35f24ee8-8bb9-4dc4-bc8e-000000000018", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000018", State: agentic.LoopStateComplete, MaxIterations: 3,
+			ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000015",
 		},
 		agentic.LoopEntity{
-			ID: "root-loop", State: agentic.LoopStateComplete,
+			ID: "35f24ee8-8bb9-4dc4-bc8e-000000000015", State: agentic.LoopStateComplete, MaxIterations: 3,
 			ChannelType: "slack", ChannelID: "C123", UserID: "user-7",
 		},
 	)
@@ -204,7 +203,7 @@ func TestSettleAgentTerminalAskUserDecisionPublishesPromptToOrigin(t *testing.T)
 
 	before := terminalReasonSnapshot(c)
 	require.NoError(t, c.settleAgentTerminal(context.Background(),
-		completionPayload(t, decideCompletion("wakeup-loop", agentic.DecideActionAskUser, "Which airframe?"))))
+		completionPayload(t, decideCompletion("35f24ee8-8bb9-4dc4-bc8e-000000000018", agentic.DecideActionAskUser, "Which airframe?"))))
 
 	response, _, count := get()
 	require.Equal(t, 1, count)
@@ -212,24 +211,24 @@ func TestSettleAgentTerminalAskUserDecisionPublishesPromptToOrigin(t *testing.T)
 	require.Equal(t, "Which airframe?", response.Content)
 	require.Equal(t, "slack", response.ChannelType)
 	require.Equal(t, "C123", response.ChannelID)
-	require.Equal(t, "wakeup-loop", response.InReplyTo, "the reply re-enters at the deciding loop")
+	require.Equal(t, "35f24ee8-8bb9-4dc4-bc8e-000000000018", response.InReplyTo, "the reply re-enters at the deciding loop")
 	requireOneTerminalReason(t, c, "response_settled", before)
 }
 
 func TestSettleAgentTerminalUserFacingDecisionResolvesOriginByAncestry(t *testing.T) {
 	c := terminalTestComponent(t)
-	// Unthreaded chain: no RunID anywhere, three deep, tracker empty.
+	// Unthreaded chain: no RunID anywhere, three deep, authority reads only.
 	loader := newAncestryLoader(
-		agentic.LoopEntity{ID: "terminal-loop", TaskID: "task-terminal-loop", State: agentic.LoopStateComplete, ParentLoopID: "mid-loop"},
-		agentic.LoopEntity{ID: "mid-loop", State: agentic.LoopStateComplete, ParentLoopID: "root-loop"},
-		agentic.LoopEntity{ID: "root-loop", State: agentic.LoopStateComplete, ChannelType: "http", ChannelID: "origin-1", UserID: "user-1"},
+		agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000019", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000019", State: agentic.LoopStateComplete, MaxIterations: 3, ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000016"},
+		agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000016", State: agentic.LoopStateComplete, MaxIterations: 3, ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000015"},
+		agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000015", State: agentic.LoopStateComplete, MaxIterations: 3, ChannelType: "http", ChannelID: "origin-1", UserID: "user-1"},
 	)
 	c.loadPersistedLoopFn = loader.load
 	get := captureResponse(t, c)
 
 	before := terminalReasonSnapshot(c)
 	require.NoError(t, c.settleAgentTerminal(context.Background(),
-		completionPayload(t, decideCompletion("terminal-loop", agentic.DecideActionRespondDirect, "Here is the answer."))))
+		completionPayload(t, decideCompletion("35f24ee8-8bb9-4dc4-bc8e-000000000019", agentic.DecideActionRespondDirect, "Here is the answer."))))
 
 	response, _, count := get()
 	require.Equal(t, 1, count)
@@ -238,9 +237,8 @@ func TestSettleAgentTerminalUserFacingDecisionResolvesOriginByAncestry(t *testin
 	require.Equal(t, "http", response.ChannelType)
 	require.Equal(t, "origin-1", response.ChannelID)
 	require.Equal(t, "user-1", response.UserID)
-	require.Equal(t, "terminal-loop", response.InReplyTo)
-	require.Equal(t, []string{"terminal-loop", "mid-loop", "root-loop"}, loader.sequence)
-	require.Nil(t, c.loopTracker.Get("terminal-loop"), "ancestry is never resolved from the process tracker")
+	require.Equal(t, "35f24ee8-8bb9-4dc4-bc8e-000000000019", response.InReplyTo)
+	require.Equal(t, []string{"35f24ee8-8bb9-4dc4-bc8e-000000000019", "35f24ee8-8bb9-4dc4-bc8e-000000000016", "35f24ee8-8bb9-4dc4-bc8e-000000000015"}, loader.sequence)
 	requireOneTerminalReason(t, c, "response_settled", before)
 }
 
@@ -249,17 +247,17 @@ func TestSettleAgentTerminalMissingParentFallsBackToRunID(t *testing.T) {
 		c := terminalTestComponent(t)
 		loader := newAncestryLoader(
 			agentic.LoopEntity{
-				ID: "terminal-loop", TaskID: "task-terminal-loop", State: agentic.LoopStateComplete,
-				ParentLoopID: "evicted-parent", RunID: "root-loop",
+				ID: "35f24ee8-8bb9-4dc4-bc8e-000000000019", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000019", State: agentic.LoopStateComplete, MaxIterations: 3,
+				ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000007", RunID: "35f24ee8-8bb9-4dc4-bc8e-000000000015",
 			},
-			agentic.LoopEntity{ID: "root-loop", State: agentic.LoopStateComplete, ChannelType: "http", ChannelID: "origin-1"},
+			agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000015", State: agentic.LoopStateComplete, MaxIterations: 3, ChannelType: "http", ChannelID: "origin-1"},
 		)
 		c.loadPersistedLoopFn = loader.load
 		get := captureResponse(t, c)
 
 		before := terminalReasonSnapshot(c)
 		require.NoError(t, c.settleAgentTerminal(context.Background(),
-			completionPayload(t, decideCompletion("terminal-loop", agentic.DecideActionRespondDirect, "answered"))))
+			completionPayload(t, decideCompletion("35f24ee8-8bb9-4dc4-bc8e-000000000019", agentic.DecideActionRespondDirect, "answered"))))
 
 		response, _, count := get()
 		require.Equal(t, 1, count, "an absent parent key must not settle while a durable RunID is in hand")
@@ -272,17 +270,17 @@ func TestSettleAgentTerminalMissingParentFallsBackToRunID(t *testing.T) {
 		c := terminalTestComponent(t)
 		loader := newAncestryLoader(
 			agentic.LoopEntity{
-				ID: "terminal-loop", TaskID: "task-terminal-loop", State: agentic.LoopStateComplete,
-				RunID: "root-loop",
+				ID: "35f24ee8-8bb9-4dc4-bc8e-000000000019", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000019", State: agentic.LoopStateComplete, MaxIterations: 3,
+				RunID: "35f24ee8-8bb9-4dc4-bc8e-000000000015",
 			},
-			agentic.LoopEntity{ID: "root-loop", State: agentic.LoopStateComplete, ChannelType: "http", ChannelID: "origin-1"},
+			agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000015", State: agentic.LoopStateComplete, MaxIterations: 3, ChannelType: "http", ChannelID: "origin-1"},
 		)
 		c.loadPersistedLoopFn = loader.load
 		get := captureResponse(t, c)
 
 		before := terminalReasonSnapshot(c)
 		require.NoError(t, c.settleAgentTerminal(context.Background(),
-			completionPayload(t, decideCompletion("terminal-loop", agentic.DecideActionRespondDirect, "answered"))))
+			completionPayload(t, decideCompletion("35f24ee8-8bb9-4dc4-bc8e-000000000019", agentic.DecideActionRespondDirect, "answered"))))
 
 		response, _, count := get()
 		require.Equal(t, 1, count, "a severed parent link must not settle while a durable RunID is in hand")
@@ -294,21 +292,21 @@ func TestSettleAgentTerminalMissingParentFallsBackToRunID(t *testing.T) {
 		c := terminalTestComponent(t)
 		loader := newAncestryLoader(
 			agentic.LoopEntity{
-				ID: "terminal-loop", TaskID: "task-terminal-loop", State: agentic.LoopStateComplete,
-				ParentLoopID: "mid-loop", RunID: "root-loop",
+				ID: "35f24ee8-8bb9-4dc4-bc8e-000000000019", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000019", State: agentic.LoopStateComplete, MaxIterations: 3,
+				ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000016", RunID: "35f24ee8-8bb9-4dc4-bc8e-000000000015",
 			},
-			agentic.LoopEntity{ID: "mid-loop", State: agentic.LoopStateComplete, ParentLoopID: "root-loop"},
-			agentic.LoopEntity{ID: "root-loop", State: agentic.LoopStateComplete, ChannelType: "http", ChannelID: "origin-1"},
+			agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000016", State: agentic.LoopStateComplete, MaxIterations: 3, ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000015"},
+			agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000015", State: agentic.LoopStateComplete, MaxIterations: 3, ChannelType: "http", ChannelID: "origin-1"},
 		)
 		c.loadPersistedLoopFn = loader.load
 		get := captureResponse(t, c)
 
 		require.NoError(t, c.settleAgentTerminal(context.Background(),
-			completionPayload(t, decideCompletion("terminal-loop", agentic.DecideActionRespondDirect, "answered"))))
+			completionPayload(t, decideCompletion("35f24ee8-8bb9-4dc4-bc8e-000000000019", agentic.DecideActionRespondDirect, "answered"))))
 
 		_, _, count := get()
 		require.Equal(t, 1, count)
-		require.Equal(t, []string{"terminal-loop", "root-loop"}, loader.sequence,
+		require.Equal(t, []string{"35f24ee8-8bb9-4dc4-bc8e-000000000019", "35f24ee8-8bb9-4dc4-bc8e-000000000015"}, loader.sequence,
 			"the run anchor is read first; the parent key is never read")
 	})
 
@@ -317,16 +315,16 @@ func TestSettleAgentTerminalMissingParentFallsBackToRunID(t *testing.T) {
 		// but an intermediate record does, and its parent key is gone.
 		c := terminalTestComponent(t)
 		loader := newAncestryLoader(
-			agentic.LoopEntity{ID: "terminal-loop", TaskID: "task-terminal-loop", State: agentic.LoopStateComplete, ParentLoopID: "mid-loop"},
-			agentic.LoopEntity{ID: "mid-loop", State: agentic.LoopStateComplete, ParentLoopID: "evicted-parent", RunID: "root-loop"},
-			agentic.LoopEntity{ID: "root-loop", State: agentic.LoopStateComplete, ChannelType: "http", ChannelID: "origin-1"},
+			agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000019", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000019", State: agentic.LoopStateComplete, MaxIterations: 3, ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000016"},
+			agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000016", State: agentic.LoopStateComplete, MaxIterations: 3, ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000007", RunID: "35f24ee8-8bb9-4dc4-bc8e-000000000015"},
+			agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000015", State: agentic.LoopStateComplete, MaxIterations: 3, ChannelType: "http", ChannelID: "origin-1"},
 		)
 		c.loadPersistedLoopFn = loader.load
 		get := captureResponse(t, c)
 
 		before := terminalReasonSnapshot(c)
 		require.NoError(t, c.settleAgentTerminal(context.Background(),
-			completionPayload(t, decideCompletion("terminal-loop", agentic.DecideActionRespondDirect, "answered"))))
+			completionPayload(t, decideCompletion("35f24ee8-8bb9-4dc4-bc8e-000000000019", agentic.DecideActionRespondDirect, "answered"))))
 
 		response, _, count := get()
 		require.Equal(t, 1, count)
@@ -339,23 +337,23 @@ func TestSettleAgentTerminalNoDecisionRouteLessLoopStaysRouteLess(t *testing.T) 
 	c := terminalTestComponent(t)
 	loader := newAncestryLoader(
 		agentic.LoopEntity{
-			ID: "phase-loop", TaskID: "task-phase-loop", State: agentic.LoopStateComplete,
-			ParentLoopID: "root-loop", RunID: "root-loop",
+			ID: "35f24ee8-8bb9-4dc4-bc8e-000000000020", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000020", State: agentic.LoopStateComplete, MaxIterations: 3,
+			ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000015", RunID: "35f24ee8-8bb9-4dc4-bc8e-000000000015",
 		},
-		agentic.LoopEntity{ID: "root-loop", State: agentic.LoopStateComplete, ChannelType: "http", ChannelID: "origin-1"},
+		agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000015", State: agentic.LoopStateComplete, MaxIterations: 3, ChannelType: "http", ChannelID: "origin-1"},
 	)
 	c.loadPersistedLoopFn = loader.load
 	get := captureResponse(t, c)
 
 	before := terminalReasonSnapshot(c)
 	require.NoError(t, c.settleAgentTerminal(context.Background(), completionPayload(t, &agentic.LoopCompletedEvent{
-		LoopID: "phase-loop", TaskID: "task-phase-loop", Outcome: agentic.OutcomeSuccess,
+		LoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000020", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000020", Outcome: agentic.OutcomeSuccess,
 		Result: "baseline gathered", CompletedAt: time.Unix(1_700_100_100, 0).UTC(),
 	})))
 
 	_, _, count := get()
 	require.Zero(t, count, "an internal phase completion never reaches the user channel")
-	require.Equal(t, []string{"phase-loop"}, loader.sequence, "a terminal without a decision resolves no origin")
+	require.Equal(t, []string{"35f24ee8-8bb9-4dc4-bc8e-000000000020"}, loader.sequence, "a terminal without a decision resolves no origin")
 	requireOneTerminalReason(t, c, "route_less_settled", before)
 }
 
@@ -364,14 +362,14 @@ func TestSettleAgentTerminalReplyDecisionWithRouteLessRootSettlesRouteLess(t *te
 	// A bus-submitted root: no parent, no run anchor, no route. There was no
 	// origin — nothing pointed at something unobservable.
 	loader := newAncestryLoader(agentic.LoopEntity{
-		ID: "bus-root", TaskID: "task-bus-root", State: agentic.LoopStateComplete,
+		ID: "35f24ee8-8bb9-4dc4-bc8e-000000000021", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000021", State: agentic.LoopStateComplete, MaxIterations: 3,
 	})
 	c.loadPersistedLoopFn = loader.load
 	get := captureResponse(t, c)
 
 	before := terminalReasonSnapshot(c)
 	require.NoError(t, c.settleAgentTerminal(context.Background(),
-		completionPayload(t, decideCompletion("bus-root", agentic.DecideActionRespondDirect, "answered nobody"))))
+		completionPayload(t, decideCompletion("35f24ee8-8bb9-4dc4-bc8e-000000000021", agentic.DecideActionRespondDirect, "answered nobody"))))
 
 	_, _, count := get()
 	require.Zero(t, count)
@@ -381,8 +379,8 @@ func TestSettleAgentTerminalReplyDecisionWithRouteLessRootSettlesRouteLess(t *te
 func TestSettleAgentTerminalUserFacingDecisionKeepsStableIdentityOnRedelivery(t *testing.T) {
 	c := terminalTestComponent(t)
 	loader := newAncestryLoader(
-		agentic.LoopEntity{ID: "terminal-loop", TaskID: "task-terminal-loop", State: agentic.LoopStateComplete, ParentLoopID: "root-loop"},
-		agentic.LoopEntity{ID: "root-loop", State: agentic.LoopStateComplete, ChannelType: "http", ChannelID: "origin-1"},
+		agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000019", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000019", State: agentic.LoopStateComplete, MaxIterations: 3, ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000015"},
+		agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000015", State: agentic.LoopStateComplete, MaxIterations: 3, ChannelType: "http", ChannelID: "origin-1"},
 	)
 	c.loadPersistedLoopFn = loader.load
 
@@ -395,7 +393,7 @@ func TestSettleAgentTerminalUserFacingDecisionKeepsStableIdentityOnRedelivery(t 
 		return nil
 	}
 
-	data := completionPayload(t, decideCompletion("terminal-loop", agentic.DecideActionRespondDirect, "answered"))
+	data := completionPayload(t, decideCompletion("35f24ee8-8bb9-4dc4-bc8e-000000000019", agentic.DecideActionRespondDirect, "answered"))
 	var source struct {
 		ID string `json:"id"`
 	}
@@ -412,15 +410,15 @@ func TestResolveOriginRouteBoundsHopsAndDetectsCycles(t *testing.T) {
 	t.Run("cycle", func(t *testing.T) {
 		c := terminalTestComponent(t)
 		loader := newAncestryLoader(
-			agentic.LoopEntity{ID: "a-loop", TaskID: "task-a-loop", State: agentic.LoopStateComplete, ParentLoopID: "b-loop"},
-			agentic.LoopEntity{ID: "b-loop", State: agentic.LoopStateComplete, ParentLoopID: "a-loop"},
+			agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000022", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000022", State: agentic.LoopStateComplete, MaxIterations: 3, ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000023"},
+			agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000023", State: agentic.LoopStateComplete, MaxIterations: 3, ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000022"},
 		)
 		c.loadPersistedLoopFn = loader.load
 		get := captureResponse(t, c)
 
 		before := terminalReasonSnapshot(c)
 		require.NoError(t, c.settleAgentTerminal(context.Background(),
-			completionPayload(t, decideCompletion("a-loop", agentic.DecideActionRespondDirect, "answered"))))
+			completionPayload(t, decideCompletion("35f24ee8-8bb9-4dc4-bc8e-000000000022", agentic.DecideActionRespondDirect, "answered"))))
 
 		_, _, count := get()
 		require.Zero(t, count)
@@ -433,10 +431,10 @@ func TestResolveOriginRouteBoundsHopsAndDetectsCycles(t *testing.T) {
 		records := make([]agentic.LoopEntity, 0, 64)
 		for i := range 64 {
 			records = append(records, agentic.LoopEntity{
-				ID:           fmt.Sprintf("loop-%02d", i),
-				TaskID:       fmt.Sprintf("task-loop-%02d", i),
-				State:        agentic.LoopStateComplete,
-				ParentLoopID: fmt.Sprintf("loop-%02d", i+1),
+				ID:     fmt.Sprintf("bf8ec69d-4520-4b29-8c21-%012d", i),
+				TaskID: fmt.Sprintf("task-bf8ec69d-4520-4b29-8c21-%012d", i),
+				State:  agentic.LoopStateComplete, MaxIterations: 3,
+				ParentLoopID: fmt.Sprintf("bf8ec69d-4520-4b29-8c21-%012d", i+1),
 			})
 		}
 		loader := newAncestryLoader(records...)
@@ -445,7 +443,7 @@ func TestResolveOriginRouteBoundsHopsAndDetectsCycles(t *testing.T) {
 
 		before := terminalReasonSnapshot(c)
 		require.NoError(t, c.settleAgentTerminal(context.Background(),
-			completionPayload(t, decideCompletion("loop-00", agentic.DecideActionRespondDirect, "answered"))))
+			completionPayload(t, decideCompletion("bf8ec69d-4520-4b29-8c21-000000000000", agentic.DecideActionRespondDirect, "answered"))))
 
 		_, _, count := get()
 		require.Zero(t, count)
@@ -458,23 +456,23 @@ func TestResolveOriginRouteSettlesOriginUnresolvableOnlyAfterParentAndRunIDExhau
 	t.Run("absent_parent_and_absent_run_anchor", func(t *testing.T) {
 		c, logs := terminalTestComponentWithLog(t)
 		loader := newAncestryLoader(agentic.LoopEntity{
-			ID: "terminal-loop", TaskID: "task-terminal-loop", State: agentic.LoopStateComplete,
-			ParentLoopID: "evicted-parent", RunID: "evicted-root",
+			ID: "35f24ee8-8bb9-4dc4-bc8e-000000000019", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000019", State: agentic.LoopStateComplete, MaxIterations: 3,
+			ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000007", RunID: "35f24ee8-8bb9-4dc4-bc8e-000000000024",
 		})
 		c.loadPersistedLoopFn = loader.load
 		get := captureResponse(t, c)
 
 		before := terminalReasonSnapshot(c)
 		require.NoError(t, c.settleAgentTerminal(context.Background(),
-			completionPayload(t, decideCompletion("terminal-loop", agentic.DecideActionRespondDirect, "answered"))))
+			completionPayload(t, decideCompletion("35f24ee8-8bb9-4dc4-bc8e-000000000019", agentic.DecideActionRespondDirect, "answered"))))
 
 		_, _, count := get()
 		require.Zero(t, count)
-		require.Contains(t, loader.sequence, "evicted-root", "the run anchor must be tried")
-		require.Contains(t, loader.sequence, "evicted-parent", "the parent chain must be tried")
+		require.Contains(t, loader.sequence, "35f24ee8-8bb9-4dc4-bc8e-000000000024", "the run anchor must be tried")
+		require.Contains(t, loader.sequence, "35f24ee8-8bb9-4dc4-bc8e-000000000007", "the parent chain must be tried")
 		requireOneTerminalReason(t, c, "origin_unresolvable", before)
-		require.Contains(t, logs.String(), "evicted-parent", "the warning names the absent loop")
-		require.Contains(t, logs.String(), "evicted-root", "the warning names the run anchor")
+		require.Contains(t, logs.String(), "35f24ee8-8bb9-4dc4-bc8e-000000000007", "the warning names the absent loop")
+		require.Contains(t, logs.String(), "35f24ee8-8bb9-4dc4-bc8e-000000000024", "the warning names the run anchor")
 	})
 
 	t.Run("absent_run_anchor_then_linkless_end", func(t *testing.T) {
@@ -486,41 +484,41 @@ func TestResolveOriginRouteSettlesOriginUnresolvableOnlyAfterParentAndRunIDExhau
 		// retention/persistence alert, never "there was no origin".
 		c, logs := terminalTestComponentWithLog(t)
 		loader := newAncestryLoader(agentic.LoopEntity{
-			ID: "terminal-loop", TaskID: "task-terminal-loop", State: agentic.LoopStateComplete,
-			RunID: "evicted-root",
+			ID: "35f24ee8-8bb9-4dc4-bc8e-000000000019", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000019", State: agentic.LoopStateComplete, MaxIterations: 3,
+			RunID: "35f24ee8-8bb9-4dc4-bc8e-000000000024",
 		})
 		c.loadPersistedLoopFn = loader.load
 		get := captureResponse(t, c)
 
 		before := terminalReasonSnapshot(c)
 		require.NoError(t, c.settleAgentTerminal(context.Background(),
-			completionPayload(t, decideCompletion("terminal-loop", agentic.DecideActionRespondDirect, "answered"))))
+			completionPayload(t, decideCompletion("35f24ee8-8bb9-4dc4-bc8e-000000000019", agentic.DecideActionRespondDirect, "answered"))))
 
 		_, _, count := get()
 		require.Zero(t, count)
-		require.Equal(t, []string{"terminal-loop", "evicted-root"}, loader.sequence)
+		require.Equal(t, []string{"35f24ee8-8bb9-4dc4-bc8e-000000000019", "35f24ee8-8bb9-4dc4-bc8e-000000000024"}, loader.sequence)
 		requireOneTerminalReason(t, c, "origin_unresolvable", before)
-		require.Contains(t, logs.String(), "evicted-root", "the warning names the absent run anchor")
+		require.Contains(t, logs.String(), "35f24ee8-8bb9-4dc4-bc8e-000000000024", "the warning names the absent run anchor")
 		require.Contains(t, logs.String(), "no further link", "the warning states the parent chain ran out")
 	})
 
 	t.Run("absent_parent_and_no_run_anchor", func(t *testing.T) {
 		c, logs := terminalTestComponentWithLog(t)
 		loader := newAncestryLoader(agentic.LoopEntity{
-			ID: "terminal-loop", TaskID: "task-terminal-loop", State: agentic.LoopStateComplete,
-			ParentLoopID: "evicted-parent",
+			ID: "35f24ee8-8bb9-4dc4-bc8e-000000000019", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000019", State: agentic.LoopStateComplete, MaxIterations: 3,
+			ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000007",
 		})
 		c.loadPersistedLoopFn = loader.load
 		get := captureResponse(t, c)
 
 		before := terminalReasonSnapshot(c)
 		require.NoError(t, c.settleAgentTerminal(context.Background(),
-			completionPayload(t, decideCompletion("terminal-loop", agentic.DecideActionRespondDirect, "answered"))))
+			completionPayload(t, decideCompletion("35f24ee8-8bb9-4dc4-bc8e-000000000019", agentic.DecideActionRespondDirect, "answered"))))
 
 		_, _, count := get()
 		require.Zero(t, count)
 		requireOneTerminalReason(t, c, "origin_unresolvable", before)
-		require.Contains(t, logs.String(), "evicted-parent", "the warning names the absent loop")
+		require.Contains(t, logs.String(), "35f24ee8-8bb9-4dc4-bc8e-000000000007", "the warning names the absent loop")
 		require.Contains(t, logs.String(), "none", "the warning states there was no run anchor")
 	})
 }
@@ -528,15 +526,15 @@ func TestResolveOriginRouteSettlesOriginUnresolvableOnlyAfterParentAndRunIDExhau
 func TestResolveOriginRouteTransientReadDelaysNak(t *testing.T) {
 	c := terminalTestComponent(t)
 	loader := newAncestryLoader(agentic.LoopEntity{
-		ID: "terminal-loop", TaskID: "task-terminal-loop", State: agentic.LoopStateComplete, ParentLoopID: "root-loop",
+		ID: "35f24ee8-8bb9-4dc4-bc8e-000000000019", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000019", State: agentic.LoopStateComplete, MaxIterations: 3, ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000015",
 	})
-	loader.errors["root-loop"] = errors.New("kv unavailable")
+	loader.errors["35f24ee8-8bb9-4dc4-bc8e-000000000015"] = errors.New("kv unavailable")
 	c.loadPersistedLoopFn = loader.load
 	get := captureResponse(t, c)
 
 	before := terminalReasonSnapshot(c)
 	err := c.settleAgentTerminal(context.Background(),
-		completionPayload(t, decideCompletion("terminal-loop", agentic.DecideActionRespondDirect, "answered")))
+		completionPayload(t, decideCompletion("35f24ee8-8bb9-4dc4-bc8e-000000000019", agentic.DecideActionRespondDirect, "answered")))
 	require.Error(t, err)
 	require.False(t, isPermanentTerminal(err), "a transient ancestor read is redelivered, never classified")
 
@@ -549,14 +547,14 @@ func TestResolveOriginRouteMalformedAncestorIsPermanent(t *testing.T) {
 	t.Run("malformed_record", func(t *testing.T) {
 		c := terminalTestComponent(t)
 		loader := newAncestryLoader(agentic.LoopEntity{
-			ID: "terminal-loop", TaskID: "task-terminal-loop", State: agentic.LoopStateComplete, ParentLoopID: "root-loop",
+			ID: "35f24ee8-8bb9-4dc4-bc8e-000000000019", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000019", State: agentic.LoopStateComplete, MaxIterations: 3, ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000015",
 		})
-		loader.errors["root-loop"] = permanentTerminal("malformed AGENT_LOOPS/root-loop")
+		loader.errors["35f24ee8-8bb9-4dc4-bc8e-000000000015"] = permanentTerminal("malformed AGENT_LOOPS/35f24ee8-8bb9-4dc4-bc8e-000000000015")
 		c.loadPersistedLoopFn = loader.load
 
 		before := terminalReasonSnapshot(c)
 		err := c.settleAgentTerminal(context.Background(),
-			completionPayload(t, decideCompletion("terminal-loop", agentic.DecideActionRespondDirect, "answered")))
+			completionPayload(t, decideCompletion("35f24ee8-8bb9-4dc4-bc8e-000000000019", agentic.DecideActionRespondDirect, "answered")))
 		require.Error(t, err)
 		require.True(t, isPermanentTerminal(err))
 		requireOneTerminalReason(t, c, "routing_malformed", before)
@@ -565,14 +563,14 @@ func TestResolveOriginRouteMalformedAncestorIsPermanent(t *testing.T) {
 	t.Run("partial_route_on_ancestor", func(t *testing.T) {
 		c := terminalTestComponent(t)
 		loader := newAncestryLoader(
-			agentic.LoopEntity{ID: "terminal-loop", TaskID: "task-terminal-loop", State: agentic.LoopStateComplete, ParentLoopID: "root-loop"},
-			agentic.LoopEntity{ID: "root-loop", State: agentic.LoopStateComplete, ChannelType: "http"},
+			agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000019", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000019", State: agentic.LoopStateComplete, MaxIterations: 3, ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000015"},
+			agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000015", State: agentic.LoopStateComplete, MaxIterations: 3, ChannelType: "http"},
 		)
 		c.loadPersistedLoopFn = loader.load
 
 		before := terminalReasonSnapshot(c)
 		err := c.settleAgentTerminal(context.Background(),
-			completionPayload(t, decideCompletion("terminal-loop", agentic.DecideActionRespondDirect, "answered")))
+			completionPayload(t, decideCompletion("35f24ee8-8bb9-4dc4-bc8e-000000000019", agentic.DecideActionRespondDirect, "answered")))
 		require.Error(t, err)
 		require.True(t, isPermanentTerminal(err))
 		requireOneTerminalReason(t, c, "routing_malformed", before)
@@ -588,12 +586,12 @@ func TestSettleAgentTerminalRouteLessRunRootContinuesToRoutedAncestor(t *testing
 		c := terminalTestComponent(t)
 		loader := newAncestryLoader(
 			agentic.LoopEntity{
-				ID: "terminal-loop", TaskID: "task-terminal-loop", State: agentic.LoopStateComplete,
-				RunID: "run-root",
+				ID: "35f24ee8-8bb9-4dc4-bc8e-000000000019", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000019", State: agentic.LoopStateComplete, MaxIterations: 3,
+				RunID: "35f24ee8-8bb9-4dc4-bc8e-000000000025",
 			},
-			agentic.LoopEntity{ID: "run-root", State: agentic.LoopStateComplete, ParentLoopID: "front-door"},
+			agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000025", State: agentic.LoopStateComplete, MaxIterations: 3, ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000017"},
 			agentic.LoopEntity{
-				ID: "front-door", State: agentic.LoopStateComplete,
+				ID: "35f24ee8-8bb9-4dc4-bc8e-000000000017", State: agentic.LoopStateComplete, MaxIterations: 3,
 				ChannelType: "http", ChannelID: "origin-1", UserID: "user-1",
 			},
 		)
@@ -602,13 +600,13 @@ func TestSettleAgentTerminalRouteLessRunRootContinuesToRoutedAncestor(t *testing
 
 		before := terminalReasonSnapshot(c)
 		require.NoError(t, c.settleAgentTerminal(context.Background(),
-			completionPayload(t, decideCompletion("terminal-loop", agentic.DecideActionRespondDirect, "answered"))))
+			completionPayload(t, decideCompletion("35f24ee8-8bb9-4dc4-bc8e-000000000019", agentic.DecideActionRespondDirect, "answered"))))
 
 		response, _, count := get()
 		require.Equal(t, 1, count)
 		require.Equal(t, "http", response.ChannelType)
 		require.Equal(t, "origin-1", response.ChannelID)
-		require.Equal(t, []string{"terminal-loop", "run-root", "front-door"}, loader.sequence,
+		require.Equal(t, []string{"35f24ee8-8bb9-4dc4-bc8e-000000000019", "35f24ee8-8bb9-4dc4-bc8e-000000000025", "35f24ee8-8bb9-4dc4-bc8e-000000000017"}, loader.sequence,
 			"the walk continues FROM the route-less run root, it does not settle on it")
 		requireOneTerminalReason(t, c, "response_settled", before)
 	})
@@ -621,32 +619,32 @@ func TestSettleAgentTerminalRouteLessRunRootContinuesToRoutedAncestor(t *testing
 		c := terminalTestComponent(t)
 		loader := newAncestryLoader(
 			agentic.LoopEntity{
-				ID: "terminal-loop", TaskID: "task-terminal-loop", State: agentic.LoopStateComplete,
-				RunID: "run-root",
+				ID: "35f24ee8-8bb9-4dc4-bc8e-000000000019", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000019", State: agentic.LoopStateComplete, MaxIterations: 3,
+				RunID: "35f24ee8-8bb9-4dc4-bc8e-000000000025",
 			},
-			agentic.LoopEntity{ID: "run-root", State: agentic.LoopStateComplete, ParentLoopID: "severed-hop"},
-			agentic.LoopEntity{ID: "severed-hop", State: agentic.LoopStateComplete},
+			agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000025", State: agentic.LoopStateComplete, MaxIterations: 3, ParentLoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000026"},
+			agentic.LoopEntity{ID: "35f24ee8-8bb9-4dc4-bc8e-000000000026", State: agentic.LoopStateComplete, MaxIterations: 3},
 		)
 		c.loadPersistedLoopFn = loader.load
 		get := captureResponse(t, c)
 
 		before := terminalReasonSnapshot(c)
 		require.NoError(t, c.settleAgentTerminal(context.Background(),
-			completionPayload(t, decideCompletion("terminal-loop", agentic.DecideActionRespondDirect, "answered"))))
+			completionPayload(t, decideCompletion("35f24ee8-8bb9-4dc4-bc8e-000000000019", agentic.DecideActionRespondDirect, "answered"))))
 
 		_, _, count := get()
 		require.Zero(t, count)
-		require.Equal(t, []string{"terminal-loop", "run-root", "severed-hop"}, loader.sequence)
+		require.Equal(t, []string{"35f24ee8-8bb9-4dc4-bc8e-000000000019", "35f24ee8-8bb9-4dc4-bc8e-000000000025", "35f24ee8-8bb9-4dc4-bc8e-000000000026"}, loader.sequence)
 		requireOneTerminalReason(t, c, "route_less_settled", before)
 	})
 }
 
 func TestSettleAgentTerminalAskUserOnRoutedLoopPublishesPromptToItsOwnRoute(t *testing.T) {
-	// The front-door shape of ask_user: the deciding loop owns the channel,
+	// The 35f24ee8-8bb9-4dc4-bc8e-000000000017 shape of ask_user: the deciding loop owns the channel,
 	// so no ancestry is walked, and the projection is still a prompt.
 	c := terminalTestComponent(t)
 	loader := newAncestryLoader(agentic.LoopEntity{
-		ID: "front-door", TaskID: "task-front-door", State: agentic.LoopStateComplete,
+		ID: "35f24ee8-8bb9-4dc4-bc8e-000000000017", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000017", State: agentic.LoopStateComplete, MaxIterations: 3,
 		ChannelType: "http", ChannelID: "origin-1", UserID: "user-1",
 	})
 	c.loadPersistedLoopFn = loader.load
@@ -654,15 +652,15 @@ func TestSettleAgentTerminalAskUserOnRoutedLoopPublishesPromptToItsOwnRoute(t *t
 
 	before := terminalReasonSnapshot(c)
 	require.NoError(t, c.settleAgentTerminal(context.Background(),
-		completionPayload(t, decideCompletion("front-door", agentic.DecideActionAskUser, "Which airframe?"))))
+		completionPayload(t, decideCompletion("35f24ee8-8bb9-4dc4-bc8e-000000000017", agentic.DecideActionAskUser, "Which airframe?"))))
 
 	response, _, count := get()
 	require.Equal(t, 1, count)
 	require.Equal(t, agentic.ResponseTypePrompt, response.Type)
 	require.Equal(t, "Which airframe?", response.Content)
 	require.Equal(t, "origin-1", response.ChannelID)
-	require.Equal(t, "front-door", response.InReplyTo)
-	require.Equal(t, []string{"front-door"}, loader.sequence, "an own-routed prompt resolves no ancestry")
+	require.Equal(t, "35f24ee8-8bb9-4dc4-bc8e-000000000017", response.InReplyTo)
+	require.Equal(t, []string{"35f24ee8-8bb9-4dc4-bc8e-000000000017"}, loader.sequence, "an own-routed prompt resolves no ancestry")
 	requireOneTerminalReason(t, c, "response_settled", before)
 }
 
@@ -702,14 +700,14 @@ func TestSettleAgentTerminalMalformedPresentDecisionIsRejectedNeverAHandoff(t *t
 		t.Run(tc.name, func(t *testing.T) {
 			c := terminalTestComponent(t)
 			loader := newAncestryLoader(agentic.LoopEntity{
-				ID: "loop-bad", TaskID: "task-loop-bad", State: agentic.LoopStateComplete,
+				ID: "35f24ee8-8bb9-4dc4-bc8e-000000000027", TaskID: "task-35f24ee8-8bb9-4dc4-bc8e-000000000027", State: agentic.LoopStateComplete, MaxIterations: 3,
 				ChannelType: "http", ChannelID: "origin-1",
 			})
 			c.loadPersistedLoopFn = loader.load
 			get := captureResponse(t, c)
 
 			data := completionEnvelopeWithRawDecision(t,
-				decideCompletion("loop-bad", agentic.DecideActionRespondDirect, "answered"), tc.decision)
+				decideCompletion("35f24ee8-8bb9-4dc4-bc8e-000000000027", agentic.DecideActionRespondDirect, "answered"), tc.decision)
 
 			before := terminalReasonSnapshot(c)
 			err := c.settleAgentTerminal(context.Background(), data)

@@ -99,7 +99,7 @@ func TestRegister_ConfigSchema(t *testing.T) {
 	}
 
 	// Verify expected properties exist
-	expectedProps := []string{"max_iterations", "timeout", "loops_bucket", "ports"}
+	expectedProps := []string{"max_iterations", "timeout", "approval_timeout", "ports"}
 	for _, propName := range expectedProps {
 		if _, ok := schema.Properties[propName]; !ok {
 			t.Errorf("Schema.Properties should have %q property", propName)
@@ -130,13 +130,12 @@ func TestRegister_ConfigSchema(t *testing.T) {
 		t.Error("timeout.Description should not be empty")
 	}
 
-	// Verify loops_bucket property
-	loopsBucketProp, ok := schema.Properties["loops_bucket"]
-	if !ok {
-		t.Fatal("Schema should have 'loops_bucket' property")
+	if _, ok := schema.Properties["loops_bucket"]; ok {
+		t.Fatal("Schema must not retain loops_bucket")
 	}
-	if loopsBucketProp.Type != "string" {
-		t.Errorf("loops_bucket.Type = %s, want string", loopsBucketProp.Type)
+	approvalProp := schema.Properties["approval_timeout"]
+	if approvalProp.Type != "string" || approvalProp.Default != "12h" {
+		t.Errorf("approval_timeout schema = %+v, want string default 12h", approvalProp)
 	}
 
 	// Verify ports property
@@ -233,9 +232,12 @@ func TestRegister_SchemaValidation(t *testing.T) {
 		t.Errorf("timeout type should be string, got %s", timeoutProp.Type)
 	}
 
-	loopsBucketProp := schema.Properties["loops_bucket"]
-	if loopsBucketProp.Type != "string" {
-		t.Errorf("loops_bucket type should be string, got %s", loopsBucketProp.Type)
+	if _, ok := schema.Properties["loops_bucket"]; ok {
+		t.Error("loops_bucket must be absent from the schema")
+	}
+	approvalProp := schema.Properties["approval_timeout"]
+	if approvalProp.Type != "string" {
+		t.Errorf("approval_timeout type should be string, got %s", approvalProp.Type)
 	}
 
 	// Verify schema can be used for validation

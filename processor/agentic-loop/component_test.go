@@ -3,6 +3,7 @@ package agenticloop_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -246,13 +247,14 @@ func TestComponent_ConfigSchema(t *testing.T) {
 	}
 
 	// Verify expected properties exist
-	expectedProps := []string{"max_iterations", "timeout", "loops_bucket", "ports"}
+	expectedProps := []string{"max_iterations", "timeout", "approval_timeout", "ports"}
 	for _, propName := range expectedProps {
 		if _, ok := schema.Properties[propName]; !ok {
 			t.Errorf("ConfigSchema() should have %q property", propName)
 		}
 	}
 	for _, retired := range []string{
+		"loops_bucket",
 		"content_bucket", "trajectory_detail", "trajectory_cache_ttl",
 		"trajectories_bucket", "trajectory_ttl", "trajectory_history",
 	} {
@@ -279,13 +281,13 @@ func TestComponent_ConfigSchema(t *testing.T) {
 		t.Errorf("timeout type = %s, want string", timeoutProp.Type)
 	}
 
-	// Verify loops_bucket property
-	loopsBucketProp, ok := schema.Properties["loops_bucket"]
+	// Verify the finite approval-wait schema.
+	approvalProp, ok := schema.Properties["approval_timeout"]
 	if !ok {
-		t.Fatal("ConfigSchema() should have 'loops_bucket' property")
+		t.Fatal("ConfigSchema() should have 'approval_timeout' property")
 	}
-	if loopsBucketProp.Type != "string" {
-		t.Errorf("loops_bucket type = %s, want string", loopsBucketProp.Type)
+	if approvalProp.Type != "string" || approvalProp.Default != "12h" {
+		t.Errorf("approval_timeout schema = %+v, want string default 12h", approvalProp)
 	}
 
 }
@@ -407,13 +409,9 @@ func TestNewComponent_InvalidTimeout(t *testing.T) {
 }
 
 func TestNewComponent_EmptyBucketNames(t *testing.T) {
-	config := agenticloop.DefaultConfig()
-	config.LoopsBucket = "" // Invalid
-
-	rawConfig, err := json.Marshal(config)
-	if err != nil {
-		t.Fatalf("Marshal config failed: %v", err)
-	}
+	// Invalid external bytes must reach the production decoder; the canonical
+	// Go encoder correctly refuses to construct this malformed declaration.
+	rawConfig := []byte(`{"ports":{"outputs":[{"name":"loops","config":{"kind":"kv-write","bucket":""}}]}}`)
 
 	deps := component.Dependencies{
 		NATSClient: nil,
@@ -421,7 +419,10 @@ func TestNewComponent_EmptyBucketNames(t *testing.T) {
 
 	comp, err := agenticloop.NewComponent(rawConfig, deps)
 	if err == nil {
-		t.Fatal("NewComponent() should fail with empty loops_bucket")
+		t.Fatal("NewComponent() should fail with empty loops port bucket")
+	}
+	if !strings.Contains(err.Error(), "bucket") {
+		t.Fatalf("unexpected refusal: %v", err)
 	}
 	if comp != nil {
 		t.Error("NewComponent() should return nil on error")
@@ -494,7 +495,7 @@ func TestNewComponent_CustomMaxIterations(t *testing.T) {
 
 func TestNewComponent_CustomBucketNames(t *testing.T) {
 	config := agenticloop.DefaultConfig()
-	config.LoopsBucket = "CUSTOM_LOOPS"
+	config.Ports = &component.PortConfig{Outputs: []component.PortDefinition{{Name: "loops", Config: component.KVWritePort{Bucket: "CUSTOM_LOOPS"}}}}
 
 	rawConfig, err := json.Marshal(config)
 	if err != nil {
@@ -513,8 +514,16 @@ func TestNewComponent_CustomBucketNames(t *testing.T) {
 		t.Fatal("NewComponent() returned nil component")
 	}
 
-	// Verify custom bucket names are used
-	// This may require exposing config or checking via component methods
+	for _, port := range comp.OutputPorts() {
+		if port.Name == "loops" {
+			facts, err := port.Facts()
+			if err != nil || facts.ResourceID() != "kv:CUSTOM_LOOPS" {
+				t.Fatalf("custom loops facts = %+v, %v", facts, err)
+			}
+			return
+		}
+	}
+	t.Fatal("custom loops output is absent")
 }
 
 func TestNewComponent_VariousTimeouts(t *testing.T) {

@@ -19,18 +19,20 @@ import (
 func (c *Component) registerBuiltinCommands() {
 	// /cancel [loop_id] - Cancel a loop
 	c.registry.Register("cancel", CommandConfig{
-		Pattern:     `^/cancel\s*(\S*)$`,
-		Permission:  "cancel_own",
-		RequireLoop: false,
-		Help:        "/cancel [loop_id] - Cancel current or specified loop",
+		Pattern:            `^/cancel\s*(\S*)$`,
+		Permission:         "cancel_own",
+		RequireLoop:        false,
+		ResolvesActiveLoop: true,
+		Help:               "/cancel [loop_id] - Cancel current or specified loop",
 	}, c.handleCancelCommand)
 
 	// /status [loop_id] - Show loop status
 	c.registry.Register("status", CommandConfig{
-		Pattern:     `^/status\s*(\S*)$`,
-		Permission:  "view",
-		RequireLoop: false,
-		Help:        "/status [loop_id] - Show loop status",
+		Pattern:            `^/status\s*(\S*)$`,
+		Permission:         "view",
+		RequireLoop:        false,
+		ResolvesActiveLoop: true,
+		Help:               "/status [loop_id] - Show loop status",
 	}, c.handleStatusCommand)
 
 	// /loops - List active loops
@@ -56,8 +58,17 @@ func (c *Component) registerBuiltinCommands() {
 // "permission" for a loop that did not exist and for a token that was never a
 // loop id.
 //
-// It never counts anything: the refusal was metered and logged exactly once
-// where it was built.
+// It never counts anything, and for every refusal the admission gate builds
+// that is because the gate already metered and logged it exactly once, where it
+// was built (loop_admission.go:485). ONE refusal reaches here unmetered and
+// unlogged: the route ambiguity activeLoop builds inline
+// (http_activity.go:334). It is not a gate refusal — nothing was named, no
+// record was read, and the resolver has no seam at its site to label
+// loop_admission_refusals_total with — so rather than widen that counter's
+// meaning it is left uncounted, which is safe because the refusal is never
+// silent: it is answered to the user on both lanes, and HTTP additionally
+// counts it as a 409 (http.go:212). The residual is design.md § Declared
+// residuals; TestRouteAmbiguityRefusalIsAnsweredWithoutMeteringTheGate pins it.
 func commandRefusalResponse(msg agentic.UserMessage, refusal error) agentic.UserResponse {
 	return agentic.UserResponse{
 		ResponseID:  uuid.New().String(),
@@ -70,19 +81,7 @@ func commandRefusalResponse(msg agentic.UserMessage, refusal error) agentic.User
 	}
 }
 
-// loopStatusFromTracker renders the live status line: this process is running
-// the loop, so iteration counts and age exist.
-func loopStatusFromTracker(info *LoopInfo) string {
-	age := time.Since(info.CreatedAt).Truncate(time.Second)
-	return fmt.Sprintf("Loop: %s\nState: %s\nIterations: %d/%d\nAge: %s\nUser: %s",
-		info.LoopID, info.State, info.Iterations, info.MaxIterations, age, info.UserID)
-}
-
-// loopStatusFromFacts renders what /status can say about a loop the gate
-// admitted from the durable record alone — this process never tracked it, so
-// iteration counts and age do not exist here. Naming the fields it does have
-// beats the "Loop %s not found" this seam answered before existence was merged,
-// which contradicted the admission that had just succeeded.
+// loopStatusFromFacts renders the exact persisted facts admitted by the gate.
 //
 // The state is the one the gate READ, never one derived from terminality. This
 // seam used to print a hardcoded "running" for anything not settled, so a user
@@ -94,8 +93,22 @@ func loopStatusFromFacts(facts loopFacts) string {
 	if state == "" {
 		state = "unknown"
 	}
-	return fmt.Sprintf("Loop: %s\nState: %s (from the durable record; this process is not running it)\nUser: %s",
-		facts.LoopID, state, facts.UserID)
+	return fmt.Sprintf("Loop: %s\nState: %s (from the durable record)\nIterations: %d/%d\nAge: %s\nUser: %s",
+		facts.LoopID, state, facts.Iterations, facts.MaxIterations, loopAgeLabel(facts.StartedAt), facts.UserID)
+}
+
+// loopAgeLabel renders a loop's age from its recorded start, or says the record
+// does not carry one.
+//
+// There is no substitute clock. The KV revision timestamp advances on every
+// iteration, so using it would report the age of the last write under the word
+// "Age"; a status line that answers the wrong question confidently is worse
+// than one that admits the field is absent.
+func loopAgeLabel(startedAt time.Time) string {
+	if startedAt.IsZero() {
+		return "unknown (the record carries no start time)"
+	}
+	return time.Since(startedAt).Truncate(time.Second).String()
 }
 
 // handleCancelCommand handles the /cancel command
@@ -135,8 +148,8 @@ func (c *Component) handleCancelCommand(ctx context.Context, msg agentic.UserMes
 
 	// A settled loop is not a refusal on this operation — cancelling something
 	// already finished is a no-op the caller should simply be told about. The
-	// gate reports terminality from BOTH sources, so this answers correctly for
-	// a loop this process never tracked.
+	// gate reads terminality from current KV authority, including a loop this
+	// process never handled.
 	if facts.Terminal {
 		return agentic.UserResponse{
 			ResponseID:  uuid.New().String(),
@@ -149,7 +162,7 @@ func (c *Component) handleCancelCommand(ctx context.Context, msg agentic.UserMes
 		}, nil
 	}
 
-	// Send cancel signal. The route comes from the gate's merged facts for the
+	// Send cancel signal. The route comes from the gate's persisted facts for the
 	// same reason the HTTP lane's does — the gate already read it — but the
 	// signal's user is the REQUESTER, so a cancel_any operator cancelling
 	// someone else's loop is attributed to the operator.
@@ -165,7 +178,7 @@ func (c *Component) handleCancelCommand(ctx context.Context, msg agentic.UserMes
 
 	// The BaseMessage envelope is REQUIRED, not decorative: the loop's signal
 	// handler decodes wire bytes through the payload registry
-	// (processor/agentic-loop/component.go:2083) and a bare payload fails at the
+	// (processor/agentic-loop/component.go:2533) and a bare payload fails at the
 	// wire-format unmarshal, so this lane published cancels the loop never saw.
 	signalData, err := json.Marshal(message.NewBaseMessage(signal.Schema(), signal, "agentic-dispatch"))
 	if err != nil {
@@ -239,8 +252,7 @@ func (c *Component) handleStatusCommand(ctx context.Context, msg agentic.UserMes
 
 	// Reading is gated for form and existence only — ownership is deliberately
 	// not consulted, exactly as GET /loops/{id} is not (the ownership model's
-	// read row). Existence is merged, so a loop this process never tracked is
-	// still found.
+	// read row). The exact persisted authority determines existence.
 	facts, err := c.admitLoopRequest(ctx, loopAdmissionRequest{
 		Seam:      seamStatusCommand,
 		Field:     "loop_id",
@@ -253,9 +265,6 @@ func (c *Component) handleStatusCommand(ctx context.Context, msg agentic.UserMes
 	}
 
 	content := loopStatusFromFacts(facts)
-	if loopInfo := c.loopTracker.Get(targetLoopID); loopInfo != nil {
-		content = loopStatusFromTracker(loopInfo)
-	}
 
 	return agentic.UserResponse{
 		ResponseID:  uuid.New().String(),
@@ -271,7 +280,11 @@ func (c *Component) handleStatusCommand(ctx context.Context, msg agentic.UserMes
 
 // handleLoopsCommand handles the /loops command
 func (c *Component) handleLoopsCommand(ctx context.Context, msg agentic.UserMessage, _ []string, _ string) (agentic.UserResponse, error) {
-	loops := c.loopTracker.GetUserLoops(msg.UserID)
+	snapshot, err := c.currentLoopSnapshot(ctx)
+	if err != nil {
+		return agentic.UserResponse{}, err
+	}
+	loops := currentLoopInfos(snapshot, msg.UserID)
 
 	c.logger.DebugContext(ctx, "Loops command executed",
 		slog.String("user_id", msg.UserID),

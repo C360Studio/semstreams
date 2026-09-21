@@ -22,6 +22,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/persona"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/processor/agentic-loop/internal/loopbucket"
 	"github.com/c360studio/semstreams/processor/agentic-loop/prompt"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -122,10 +123,22 @@ type requestSubscription interface{ Drain(context.Context) error }
 
 type inputHandler func(context.Context, []byte) error
 
-func rejectRetiredTrajectoryConfig(rawConfig json.RawMessage) error {
+func rejectRetiredConfig(rawConfig json.RawMessage) error {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(rawConfig, &fields); err != nil {
 		return err
+	}
+	// Match the case-folded field spellings consumed by encoding/json below.
+	for name, raw := range fields {
+		switch {
+		case strings.EqualFold(name, "loops_bucket"):
+			return fmt.Errorf("retired field loops_bucket is not supported; configure ports.outputs named loops with config.bucket")
+		case strings.EqualFold(name, "approval_timeout"):
+			var duration string
+			if string(raw) == "null" || json.Unmarshal(raw, &duration) != nil {
+				return fmt.Errorf("approval_timeout %s must be a JSON string duration in (0,12h]", raw)
+			}
+		}
 	}
 	for _, retired := range []string{
 		"content_bucket", "trajectory_detail", "trajectory_cache_ttl",
@@ -213,8 +226,8 @@ func resolveConfig(rawConfig json.RawMessage) (Config, []component.Port, []compo
 	// compact_threshold (0.0) and headroom_tokens (0) cause compaction
 	// to trigger on every iteration regardless of context utilization.
 	config := DefaultConfig()
-	if err := rejectRetiredTrajectoryConfig(rawConfig); err != nil {
-		return Config{}, nil, nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "reject retired trajectory config")
+	if err := rejectRetiredConfig(rawConfig); err != nil {
+		return Config{}, nil, nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "validate explicit config fields")
 	}
 	if err := json.Unmarshal(rawConfig, &config); err != nil {
 		return Config{}, nil, nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "parse config")
@@ -273,7 +286,27 @@ func resolveConfig(rawConfig json.RawMessage) (Config, []component.Port, []compo
 		}
 		outputPorts = append(outputPorts, port)
 	}
+	if _, err := loopBucketName(outputPorts); err != nil {
+		return Config{}, nil, nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "validate loops output")
+	}
 	return config, inputPorts, outputPorts, nil
+}
+
+func loopBucketName(outputs []component.Port) (string, error) {
+	for _, port := range outputs {
+		if port.Name != "loops" {
+			continue
+		}
+		facts, err := port.Facts()
+		if err != nil {
+			return "", fmt.Errorf("loops output: %w", err)
+		}
+		if port.Direction != component.DirectionOutput || facts.Kind() != component.PortKindKVWrite {
+			return "", fmt.Errorf("loops output must be kv-write")
+		}
+		return strings.TrimPrefix(facts.ResourceID(), "kv:"), nil
+	}
+	return "", fmt.Errorf("loops kv-write output is required")
 }
 
 // NewComponent creates a new agentic-loop component
@@ -789,18 +822,16 @@ func (c *Component) initializeKVBuckets(ctx context.Context) error {
 		return errs.WrapTransient(err, "agentic-loop", "initializeKVBuckets", "get JetStream")
 	}
 
-	// Initialize loops bucket
-	loopsBucket, err := js.KeyValue(ctx, c.config.LoopsBucket)
+	name, err := loopBucketName(c.outputPorts)
 	if err != nil {
-		// Bucket doesn't exist, try to create it
-		loopsBucket, err = js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
-			Bucket:  c.config.LoopsBucket,
-			History: 10,
-			TTL:     24 * time.Hour,
-		})
-		if err != nil {
-			return errs.Wrap(err, "agentic-loop", "initializeKVBuckets", "create loops bucket")
-		}
+		return errs.WrapInvalid(err, "agentic-loop", "initializeKVBuckets", "resolve loops output")
+	}
+	if err := c.config.Validate(); err != nil {
+		return err
+	}
+	loopsBucket, err := loopbucket.AcquireOwner(ctx, js, name)
+	if err != nil {
+		return errs.Wrap(err, "agentic-loop", "initializeKVBuckets", "admit loop authority")
 	}
 	c.loopsBucket = loopsBucket
 

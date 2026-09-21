@@ -14,12 +14,14 @@ import (
 // commandEffect is one delivery's record of what its command handler actually
 // did to the world. It exists because the settlement decision in handleCommand
 // is about THIS delivery's effect, not about the shape of the request that
-// produced it: a bare /cancel that published a signal cannot be replayed,
-// while /help, /loops, a bare /status and the three arms of bare /cancel that
-// publish nothing (no active loop, gate refusal, already settled) can — they
-// resolved a target and then did nothing with it.
+// produced it: a bare /cancel that published a signal cannot be replayed, while
+// a bare /status and the three arms of bare /cancel that publish nothing (no
+// active loop, gate refusal, already settled) can — they resolved a target and
+// then did nothing with it. /help and /loops resolve no target at all
+// (ResolvesActiveLoop, command_registry.go:22-38), so they are replayable for
+// the other reason.
 //
-// The fact is recorded AT the publish site (commands.go:191) so it cannot drift
+// The fact is recorded AT the publish site (commands.go:204) so it cannot drift
 // from what happened. Inferring it from the command name would be a second
 // spelling of "which commands publish", and inferring it from response text
 // would be a parser over prose.
@@ -33,7 +35,7 @@ import (
 // taskfiles/apicompat.yml:9-12), so the count is a governed number, not a gate.
 // The break would be real but narrower than "every adopter": a handler literal
 // passed to CommandRegistry().Register would stop compiling, while the
-// CommandExecutor path adapts inside this package (component.go:1565-1569). None
+// CommandExecutor path adapts inside this package (component.go:1441-1445). None
 // of it buys anything, because the framework's own publish site already knows the
 // fact. The value is per delivery, never shared.
 type commandEffect struct {
@@ -157,20 +159,23 @@ func publishDefinitelyRejected(err error) bool {
 // It is the second door into the hazard the two-conjunct rule at the response
 // site closes. There the signal is known published; here it is only known
 // ATTEMPTED — and a Retry on an attempt whose outcome is unknown replays a
-// bare /cancel whose target this component chooses afresh. If the first
-// attempt did store, loop A is already cancelling, so the redelivery's
-// GetActiveLoop falls through A to the user's next live loop and cancels B, a
-// loop the message never named. The same defect as a published-then-unanswered
-// response, reached through an error instead of through a response.
+// bare /cancel whose target this component chooses afresh, against a world the
+// first attempt may already have changed. activeLoop (http_activity.go:321-339)
+// matches the exact user, channel type and channel and refuses ambiguity, so
+// the redelivery cannot fall through to a live loop on another channel of the
+// same user. What survives is the same hazard the response-site arm names:
+// same-route rebirth. If the first attempt did store, loop A settles, and a
+// loop started on THIS route in between is the current one when the redelivery
+// resolves — so the replay cancels a loop the message never named.
 //
 // The three conjuncts are all necessary. Without the attempt, nothing was put
-// on the wire at all. Without a tracker-resolved target, the redelivery
-// re-reads the loop the message names and cannot drift onto another. And with
-// a PROVEN refusal the world is unchanged, so the ordinary Retry is not just
-// safe but correct — the user has been told nothing yet, and a broker that was
-// merely disconnected will answer the redelivery.
-func unconfirmedSignalIsFatal(err error, effect *commandEffect, targetFromTracker bool, name, loopID string) error {
-	if !effect.attemptedUnconfirmed() || !targetFromTracker || publishDefinitelyRejected(err) {
+// on the wire at all. Without a resolved target, the redelivery re-reads the
+// loop the message names and cannot drift onto another. And with a PROVEN
+// refusal the world is unchanged, so the ordinary Retry is not just safe but
+// correct — the user has been told nothing yet, and a broker that was merely
+// disconnected will answer the redelivery.
+func unconfirmedSignalIsFatal(err error, effect *commandEffect, targetResolved bool, name, loopID string) error {
+	if !effect.attemptedUnconfirmed() || !targetResolved || publishDefinitelyRejected(err) {
 		return nil
 	}
 	return errs.WrapFatal(err, "Component", "handleCommand", fmt.Sprintf(

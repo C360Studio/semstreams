@@ -12,6 +12,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/test/e2e/harness/processbarrier"
 	"github.com/c360studio/semstreams/test/e2e/scenarios"
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -448,9 +449,14 @@ func (s *Scenario) newDispatchTerminal(
 	ctx context.Context, label string,
 ) (dispatchTerminalFixture, string, error) {
 	now := time.Now().UTC()
-	loopID := fmt.Sprintf("e2e-dispatch-replacement-%s-%d", label, now.UnixNano())
-	taskID := "task-" + loopID
-	channelID := "channel-" + loopID
+	// A canonical framework loop token (ADR-105, #1192). agentic-dispatch reads
+	// loop authority out of AGENT_LOOPS and refuses a terminal whose loop id is
+	// not a canonical token BEFORE it reads the record (#1329), so a readable
+	// synthetic id would be classified routing_malformed and never reach the
+	// publish this stage faults.
+	loopID := uuid.NewString()
+	taskID := fmt.Sprintf("task-e2e-dispatch-replacement-%s-%d", label, now.UnixNano())
+	channelID := fmt.Sprintf("channel-e2e-dispatch-replacement-%s-%d", label, now.UnixNano())
 	loop := agentic.LoopEntity{
 		ID: loopID, TaskID: taskID, State: agentic.LoopStateComplete, MaxIterations: 3,
 		ChannelType: "e2e-replacement", ChannelID: channelID,

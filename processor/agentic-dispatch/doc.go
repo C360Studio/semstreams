@@ -1,8 +1,10 @@
 // Package agenticdispatch provides message routing between users and agentic loops.
 //
-// The agentic-dispatch component handles command parsing, permission checking, loop
-// tracking, and message dispatch. It bridges input components (CLI, Slack,
+// The agentic-dispatch component handles command parsing, permission checking,
+// current-loop reads, and message dispatch. It bridges input components (CLI, Slack,
 // Discord, Web) with the agentic processing system.
+// Explicit loop operations read validated durable state; listing and AutoContinue
+// use one caught-up read-only view. Dispatch does not own intermediate loop state.
 //
 // # Architecture
 //
@@ -51,14 +53,23 @@
 //	    Config() CommandConfig
 //	}
 //
+// A command that acts on one loop declares CommandConfig.ResolvesActiveLoop, and
+// only then is it handed a loopID the message did not name. A command that leaves
+// it false is never refused by the resolver — it is still subject to whatever its
+// own handler reads.
+//
 // The CommandContext provides access to dispatch services:
 //
 //	type CommandContext struct {
-//	    NATSClient    *natsclient.Client       // For publishing messages
-//	    LoopTracker   *LoopTracker             // For tracking loops
-//	    Logger        *slog.Logger             // For logging
-//	    HasPermission func(userID, permission string) bool  // For permission checks
+//	    NATSClient      *natsclient.Client     // For publishing messages
+//	    LookupLoopOwner LoopOwnerLookup       // For exact loop ownership reads
+//	    Logger          *slog.Logger           // For logging
+//	    HasPermission   func(userID, permission string) bool // For permission checks
 //	}
+//
+// LookupLoopOwner returns only LoopID and UserID. Invalid IDs, absent loops,
+// missing ownership, invalid records, and unavailable storage are distinct
+// classified failures, not interchangeable permission answers.
 //
 // # Built-in Commands
 //

@@ -69,88 +69,6 @@ execution evidence stays write-only from execution's side; nothing in the admiss
 - **AND** the tests that verify this are `TestEverySeamRefusesThroughTheGate` and
   `TestRefusalIsCountedExactlyOncePerSeam`
 
-### Requirement: Loop existence and ownership are merged facts, never process memory alone
-
-The gate MUST decide existence and ownership from the union of the process-local loop tracker and the durable
-`AGENT_LOOPS` record, because neither source alone is authority: the tracker is empty after a process
-replacement, and the durable record may be absent for a live loop because persisting it is best-effort. A loop
-observed in EITHER source exists. When both are observed, their owner and route fields MUST be reconciled by
-the same merge rule the terminal-settlement path already uses — a conflicting non-empty value is a refusal, not
-a silent preference for one source.
-
-The durable bucket name MUST be OBSERVED from the component's declared KV read port through the existing port
-projection. No reader may carry a bucket-name default of its own.
-
-Degradation is explicit. A tracker hit is sufficient to admit even when the durable read fails transiently. A
-tracker miss plus a durable read that fails for any reason other than key absence MUST refuse as transient —
-the request is answerable later and MUST NOT be admitted on an unread record. A tracker miss plus a durable
-read that reports key absence is the not-found refusal.
-
-The merged facts MUST carry the loop's recorded STATE, not only whether it has settled, and a seam that reports
-a loop's state to a caller MUST report the state that was read. "Not settled" covers executing and awaiting
-approval; a seam that renders one fixed word for both tells a user whose loop is waiting on their own approval
-to go on waiting for the agent — a fabricated fact, and worse than the not-found this seam answered before
-existence was merged. A merged observation that carries no state MUST say so rather than name one. When both
-sources report a state they reconcile on the same fail-closed rule terminality uses: a settled observation in
-either source wins.
-
-A durable record that decodes but does not validate as a loop entity MUST be refused by the reader under the
-same permanent classification a malformed record receives, and MUST NOT reach the merge or any seam. A state
-outside the loop state vocabulary is the case this change adds: it never becomes valid, so retrying it is not
-an answer, and reporting it would republish a state the framework no longer defines. The refusal is the whole
-entity's, not one field's — every production record on this key is a marshalled loop entity, so a record that
-fails validation is a record no seam should reason about.
-
-#### Scenario: a continuation after a process replacement is admitted from the durable record
-
-- **GIVEN** a loop created before dispatch was replaced, whose `AGENT_LOOPS` record names its owner
-- **AND** an empty loop tracker in the replacement process
-- **WHEN** that loop's owner continues it by `reply_to`
-- **THEN** the request is admitted, and the loop is continued rather than silently forked under the same token
-- **AND** the test that verifies this is `TestContinuationAfterReplacementIsAdmittedFromDurableRecord`
-
-#### Scenario: a live loop with no durable record is admitted from the tracker
-
-- **GIVEN** a loop tracked in process whose best-effort `AGENT_LOOPS` write has not landed
-- **WHEN** its owner continues it
-- **THEN** the request is admitted from the tracker without requiring the durable record
-- **AND** the test that verifies this is `TestLiveLoopWithoutDurableRecordIsAdmitted`
-
-#### Scenario: an unreadable durable record with no tracker entry refuses as transient
-
-- **GIVEN** an empty tracker and an `AGENT_LOOPS` read that fails with anything other than key absence
-- **WHEN** a request names a loop
-- **THEN** the refusal is classified transient, not not-found, and no loop is created for the token
-- **AND** the test that verifies this is `TestUnreadableDurableRecordRefusesTransient`
-
-#### Scenario: a status read after a process replacement reports the recorded state
-
-- **GIVEN** an empty loop tracker and an `AGENT_LOOPS` record whose loop is `awaiting_approval`
-- **WHEN** its owner asks for that loop's status
-- **THEN** the answer names `awaiting_approval` rather than a fixed "running", so the user learns the loop is
-  waiting on them
-- **AND** a record carrying no state is reported as unknown, never as a state nobody read
-- **AND** the tests that verify this are `TestStatusReportsTheRecordedStateNotAFabricatedRunning` and
-  `TestMergeLoopStatePrefersSettledThenTheTracker`
-
-#### Scenario: conflicting owners across the two sources are refused
-
-- **GIVEN** a tracker entry and an `AGENT_LOOPS` record for the same token whose recorded owners differ
-- **WHEN** the gate admits a request naming it
-- **THEN** the request is refused with the conflict reason rather than one source being silently preferred
-- **AND** the test that verifies this is `TestConflictingOwnersAcrossSourcesAreRefused`
-
-#### Scenario: a persisted record whose state is outside the vocabulary is refused permanently
-
-- **GIVEN** an `AGENT_LOOPS` record written before the paused state was removed, carrying `"state":"paused"`
-- **WHEN** the dispatch reader loads it
-- **THEN** it is refused under the reader's permanent classification — the same one a malformed record
-  receives — and no new class is invented for it
-- **AND** the record does not reach the merge, `/status`, or any other seam
-- **AND** a record whose state IS in the vocabulary is still returned by the same reader, so the refusal is the
-  state's and not the path's
-- **AND** the test that verifies this is `TestIntegrationPersistedInvalidStateIsPermanent`
-
 ### Requirement: The ownership model binds the user lane, and approval is deliberately not owner-scoped
 
 The gate MUST apply exactly this ownership model to requests arriving on the user lane, and MUST NOT extend it:
@@ -364,10 +282,11 @@ that an ungated seam is a recorded decision rather than an omission a later read
 
 ### Requirement: Every dispatch durable input settles through its owner
 
-Dispatch SHALL classify `user.message`, `agent.created`, `agent.approval_pending`, `agent.complete`, and
-`agent.failed` through their binding owner, and SHALL NOT settle any of them before its durable effect has
-committed. Business handlers SHALL receive only an immutable owner-supplied work view and SHALL return a typed
-semantic outcome. Native message and settlement methods SHALL NOT escape the owner.
+Dispatch SHALL classify `user.message`, `agent.complete`, and `agent.failed` through their binding owner, and SHALL
+NOT settle any of them before its durable effect has committed. `agent.created` and `agent.approval_pending` leave
+this list because this change deletes their subscriptions and handlers, and there is no owner to settle an input
+this component no longer consumes. Business handlers SHALL receive only an immutable owner-supplied work view and
+SHALL return a typed semantic outcome. Native message and settlement methods SHALL NOT escape the owner.
 
 A `UserMessage` SHALL not be positively acknowledged until every required task, cancel signal, approval response,
 and user-response publication has synchronous JetStream PubAck. The cancel signal SHALL travel its stream with
@@ -375,7 +294,10 @@ PubAck rather than as a core publication, so the published fact a classification
 rather than a hope. Whether an unacknowledged publication retries or quarantines SHALL be decided by whether its
 redelivery is effect-free, and that decision SHALL be recorded at the call site rather than taken by default. A
 command SHALL NOT be retried when its target was resolved rather than named by the message and this component
-either published a signal during that delivery or attempted one whose outcome it cannot account for. A failed
+either published a signal during that delivery or attempted one whose outcome it cannot account for. A refusal
+raised while RESOLVING a command's target SHALL be published to the user and settled on that publication unless it
+is transient: a redelivery re-reads the same authority and cannot change a nontransient answer, so retrying one
+spends the source's redelivery budget and tells the user nothing. A failed
 publish SHALL count as an unaccounted attempt unless the error PROVES nothing was stored — a refusal the client
 returns before the bytes leave the process — and that set SHALL fail closed, so an error it does not recognize is
 unaccounted rather than refused. Both the attempt and the published fact SHALL be recorded where this component's
@@ -386,20 +308,20 @@ durable publication retries exactly as it did before this change, and exporting 
 later change owns. Terminal events SHALL retain their typed
 ancestry and deterministic response contract. No void, log-only, or core-NATS publication failure SHALL become ACK.
 
-The `user.message`, `agent.created`, and `agent.approval_pending` subscriptions SHALL invoke their typed business
-handlers using the callback installed by each production setup branch. All delivery-derived work SHALL join before
-the private callback passes its decision and cause to `natsclient.SettleDelivery`. JetStream consumer configuration
-owns AckWait and redelivery; dispatch SHALL NOT derive a universal work deadline from AckWait. An operation MAY use
-an ordinary business timeout.
+The `user.message` subscription SHALL invoke its typed business handler using the callback installed by its
+production setup branch. All delivery-derived work SHALL join before the private callback passes its decision and
+cause to `natsclient.SettleDelivery`. JetStream consumer configuration owns AckWait and redelivery; dispatch SHALL
+NOT derive a universal work deadline from AckWait. An operation MAY use an ordinary business timeout.
 
 The first owner-fatal result in an owner family SHALL synchronously latch before the exact handle is drained, and
 later fatal results in that family SHALL neither overwrite nor recount it. Existing Health SHALL report
-`Healthy=false`. The three lanes this change brings under settlement share one latch whose status is
-`delivery ownership lost`; the two terminal lanes keep the separate latches they already had, so their loss alone
-keeps the narrower `terminal delivery ownership lost` status — it is the whole truth only while no other lane has
-lost ownership. `LastError` SHALL carry every latched cause and the error count SHALL be the number of owner
-families that lost ownership, so per-family aggregation is preserved rather than replaced. This adds no metric
-family, public state, durable state, or communication path.
+`Healthy=false`. The `user.message` lane latches under the component-wide status `delivery ownership lost` — the
+one latch the three lanes brought under settlement shared before this change retired two of them, and it stays
+shared for whatever lane joins it next; the two terminal lanes keep the separate latches they already had, so their
+loss alone keeps the narrower `terminal delivery ownership lost` status — it is the whole truth only while no other
+lane has lost ownership. `LastError` SHALL carry every latched cause and the error count SHALL be the number of
+owner families that lost ownership, so per-family aggregation is preserved rather than replaced. This adds no
+metric family, public state, durable state, or communication path.
 
 #### Scenario: Task publication succeeds but user response fails
 
@@ -407,8 +329,8 @@ family, public state, durable state, or communication path.
 - **AND** the required user response does not receive PubAck
 - **THEN** the delivery quarantines rather than retrying the UserMessage
 - **AND** no second task is published; a redelivery recovers the committed task identity rather than minting
-  another, so what keeps this arm from retrying is the loop tracking and started counting it would re-enter, not
-  the identity
+  another, and the in-process tracking that was the other half of the reason is gone with the tracker, so what
+  keeps this arm from retrying is the submission counter it would move a second time
 
 #### Scenario: A named cancel command's signal is published but its response is not
 
@@ -423,37 +345,49 @@ family, public state, durable state, or communication path.
 
 #### Scenario: A cancel command whose target was resolved rather than named
 
-- **WHEN** a bare `/cancel` resolves its target from the tracker, publishes that loop's signal, and the required
-  user response does not receive PubAck
+- **WHEN** a bare `/cancel` resolves its target from durable loop authority, publishes that loop's signal, and the
+  required user response does not receive PubAck
 - **THEN** the delivery quarantines, because the message does not carry the identity the delivery acted on
-- **AND** the redelivery is not effect-free: this delivery's own effect makes the resolution fall through the now
-  terminal loop to the user's next live loop, which would be cancelled without ever having been named
+- **AND** the redelivery is not effect-free: it resolves afresh against a world this delivery changed rather than
+  repeating what this delivery did
+- **AND** resolution SHALL be scoped to the exact user and channel route, never widened to the user's other
+  channels, so the terminal loop resolves to nothing rather than falling through to a loop the user never named
 
 #### Scenario: A resolved cancel's signal publish fails without proving refusal
 
-- **WHEN** a bare `/cancel` resolves its target from the tracker and its signal publish fails with an error that
-  does not prove the broker stored nothing
+- **WHEN** a bare `/cancel` resolves its target from durable loop authority and its signal publish fails with an
+  error that does not prove the broker stored nothing
 - **THEN** the delivery quarantines rather than retrying, because the failure describes what the client
   experienced and not whether the signal was stored
 - **AND** the hazard is the published one reached through an error: were it retried and the first attempt had
-  stored, this delivery's own effect would make the redelivery resolve past the now cancelling loop onto the
-  user's next live loop and cancel it unnamed
+  stored, the redelivery would resolve afresh against a world this delivery had already changed rather than
+  repeating what this delivery did
 - **AND** the same failure on a target the message named retries, as does a failure the client proves is a refusal
   it made before publishing, because neither can have changed the world
 
 #### Scenario: A command that resolved a target and published nothing
 
-- **WHEN** a command whose target was resolved from the tracker publishes no signal — a read-only command, or a
-  cancel that was refused, found no loop, or found one already settled — and its response does not receive PubAck
+- **WHEN** a command whose target was resolved from durable loop authority publishes no signal — a read-only
+  command, or a cancel that was refused, found no loop, or found one already settled — and its response does not
+  receive PubAck
 - **THEN** the delivery retries, because a command that did nothing can be replayed whatever its target was
 - **AND** the lane is not latched, so later user messages are still admitted
+
+#### Scenario: A command's target cannot be resolved
+
+- **WHEN** a command that consumes a target arrives on the user-message stream naming none, and durable loop
+  authority refuses nontransiently, as it does for a route matching more than one current loop
+- **THEN** that refusal is published to the user and the delivery settles only on its PubAck
+- **AND** a transient resolution failure retries instead, publishing nothing, because a redelivery is what answers it
 
 #### Scenario: Invalid user input receives its negative consequence
 
 - **WHEN** a user message is permanently invalid or unauthorized
 - **THEN** its typed user error receives PubAck before the delivery is acknowledged, and a publication that fails
   is classified rather than swallowed
-- **AND** tracker and gauge state remain unchanged
+- **AND** no loop bookkeeping moves: the in-process tracker and the `active_loops` gauge this clause used to name
+  are deleted by this change, and the obligation survives them as no durable loop record written and no
+  submission counted for a message that was refused
 - **AND** the response identity is minted per publication on this lane, and #1328 leaves it that way: which
   refusal a message earns is decided by which check failed, so two deliveries of one source message can carry
   different refusals, and a source-derived identity would give those one name and let a duplicate window suppress
@@ -535,4 +469,294 @@ gate with no identity has nothing to compare and SHALL remain answerable.
 - **WHEN** an approval body omits the execution identity, whatever the loop's state is
 - **THEN** the request is refused as malformed, naming the missing field
 - **AND** the pending gate is unchanged, because a required field is never defaulted from current state
+
+### Requirement: Dispatch is exclusively an edge gateway
+
+Dispatch SHALL only admit external requests and publish task, cancel, and approval work; expose exact LoopID reads
+and one caught-up current-state view; and bridge terminal complete/failed events to user responses when validated
+authority carries a user route. Agentic-loop SHALL exclusively own loop birth, pending approval, every intermediate
+transition, and terminal state.
+
+Dispatch SHALL NOT create, advance, repair, infer, persist, or cache intermediate loop state and SHALL NOT consume
+`agent.created` or `agent.approval_pending` as correctness inputs. Those publications remain available to external
+subscribers.
+
+A validated terminal for a system-lane loop with no user route SHALL settle without `user.response`. Conflicting or
+temporarily unreadable route evidence SHALL not be treated as routeless.
+
+#### Scenario: System-lane terminal has no user route
+
+- **GIVEN** validated loop authority identifies a terminal system-lane loop with no user route
+- **WHEN** dispatch receives its complete or failed event
+- **THEN** dispatch publishes no `user.response`
+- **AND** settles the terminal source after required validation
+
+#### Scenario: AutoContinue observes the loop-birth gap
+
+- **GIVEN** a new task has received PubAck but its first `LoopEntity` is not yet visible
+- **WHEN** another route-only message uses the same `(UserID, ChannelType, ChannelID)`
+- **THEN** dispatch observes zero current matches and may mint another task and random LoopID
+- **AND** it does not invent a route claim from process memory
+- **AND** a caller requiring continuity must supply the first minted LoopID
+
+### Requirement: Dispatch uses one authority-backed current-state projection
+
+Dispatch SHALL use one caught-up graph view over `AGENT_LOOPS` for `/activity`, `/loops`, `/debug/state`, and
+AutoContinue. For a command, AutoContinue SHALL resolve a target only when the command declares it consumes one,
+so a command that declares none — `/loops`, `/help` — does not inherit the route ambiguity that refuses
+resolution. It inherits the view's readiness only where its own handler reads the view: `/loops` does and keeps
+refusing one that is not caught up, `/help` reads no loop state and answers regardless.
+`LoopTracker` and pending-approval process caches SHALL NOT exist. `/loops` and `/debug/state` SHALL preserve the
+existing immutable `LoopInfo` JSON schema, including `execution_id` on the existing nested `PendingApprovalInfo`,
+which SHALL come from observed pending authority. The existing optional `context_request_id` field SHALL remain
+empty in the authority-backed projection, as accepted by the edge-gateway design; no historical notification lookup
+SHALL reconstruct it. All other unrelated DTO fields and projection contracts SHALL remain unchanged.
+`/debug/state` SHALL expose the view's caught-up readiness and current poison diagnostics rather than reporting a
+false empty state.
+
+Explicit LoopID approval, read, continuation, cancellation, terminal-route, and command-owner operations SHALL
+exact-read and validate `AGENT_LOOPS/<LoopID>`. A partial, stale, watcher-lost, or relevant-poisoned projection SHALL
+never be treated as empty.
+
+An approval SHALL read the current durable record on every decision rather than a process-local pending cache, and
+SHALL obtain from validated `PendingApproval` state both its CallID and the framework execution identity it echoes
+onto the published `ApprovalResponse` — the loop authorises on that identity and refuses a response that omits it,
+so the record is what makes the decision answerable. The RECORDED STATE SHALL decide before any property
+of `PendingApproval` does: a record that is readable but not `awaiting_approval` SHALL refuse as conflict regardless
+of whether it still carries a pending block. An unreadable or invalid record, and an `awaiting_approval` record
+whose pending CallID or ExecutionID is empty, SHALL refuse as unavailable. Admission and publication SHALL NOT
+mutate loop authority, so a failed publish leaves the decision retryable.
+
+An unavailable answer SHALL carry a fixed client-facing phrase. A refusal body SHALL NOT contain framework type or
+method names; the wrapped detail belongs in the log line correlated by request id.
+
+#### Scenario: Approval follows replacement
+
+- **GIVEN** exact current state is awaiting approval
+- **WHEN** an authorized approval names its canonical LoopID
+- **THEN** dispatch obtains CallID from validated `PendingApproval` state read at decision time
+- **AND** echoes that record's execution identity onto the response it publishes
+- **AND** requires no earlier approval-pending event
+
+#### Scenario: Pending output carries observed identity after replacement
+
+- **GIVEN** exact validated current authority contains a pending approval
+- **WHEN** the existing pending HTTP projection is read after dispatch replacement
+- **THEN** it carries the pending record's ExecutionID as `execution_id`
+- **AND** the caller need not compute identity or have received the original event
+
+#### Scenario: Current authority refuses a decision the memory cache would have accepted
+
+- **GIVEN** the durable record is executing, terminal, or incoherent
+- **WHEN** an approval decision arrives
+- **THEN** dispatch refuses from the record alone, as conflict or unavailable
+- **AND** no process-local cache can override or stand in for that record
+
+#### Scenario: A terminal names a loop id that cannot be one
+
+- **WHEN** a complete or failed event carries a LoopID that is not a canonical framework loop token
+- **THEN** dispatch refuses it as permanently malformed routing without reading `AGENT_LOOPS`
+- **AND** publishes no user response
+
+#### Scenario: A loop that left awaiting-approval still carries its pending block
+
+- **GIVEN** a record whose state is cancelled, failed or executing and whose `PendingApproval` was never cleared
+- **WHEN** an approval decision names it
+- **THEN** dispatch refuses as conflict, because the state is permanent and the caller must not retry it
+- **AND** the unavailable answer is reserved for a record that could not be read or did not validate
+
+#### Scenario: An unavailable answer names no framework internals
+
+- **GIVEN** the shared loop view is not yet available
+- **WHEN** a message submission or a loop listing is refused
+- **THEN** the response body is a fixed retryable phrase
+- **AND** it contains no framework type or method name, which remain in the correlated log line
+
+#### Scenario: A failed publish leaves the decision retryable
+
+- **GIVEN** a validated pending approval
+- **WHEN** publishing the decision fails
+- **THEN** the durable record is byte-identical to what it was before the request
+- **AND** the caller may submit the same decision again
+
+#### Scenario: Projection endpoint is unavailable
+
+- **WHEN** the shared view is not caught up or has current-loop poison
+- **THEN** listing and debug return service unavailable
+- **AND** debug diagnostics identify not-caught-up readiness or the current poison condition
+- **AND** AutoContinue remains retryable
+- **AND** no path assumes zero loops
+
+#### Scenario: Loop DTO shape is preserved
+
+- **WHEN** `/loops` or `/debug/state` reports a valid view-derived loop
+- **THEN** it uses the existing immutable `LoopInfo` JSON schema with only the declared nested pending
+  `execution_id` addition
+- **AND** `context_request_id` retains its optional schema but is empty, as accepted for the authority-backed view
+- **AND** JSON/OpenAPI verification preserves every other unrelated field and mapping
+- **AND** no mutable loop entity, tracker state, or projection internals enter the response
+
+#### Scenario: Exact AutoContinue tuple has one match
+
+- **GIVEN** exactly one nonterminal record matches `(UserID, ChannelType, ChannelID)`
+- **WHEN** AutoContinue resolves the message
+- **THEN** dispatch continues that LoopID
+
+#### Scenario: Partial route does not match
+
+- **WHEN** only UserID, ChannelType, or ChannelID agrees
+- **THEN** the record is not an AutoContinue candidate
+
+#### Scenario: AutoContinue is ambiguous
+
+- **GIVEN** more than one exact nonterminal match
+- **WHEN** AutoContinue resolves the message
+- **THEN** dispatch refuses with typed ambiguity
+- **AND** does not guess
+
+#### Scenario: A command that consumes no target runs while resolution would refuse
+
+- **GIVEN** a route whose current loops are ambiguous
+- **WHEN** a command that declares no target arrives on either command lane
+- **THEN** it runs and answers, so `/loops` still lists the loops whose ambiguity refuses the others
+- **AND** a command that does declare a target still refuses
+- **AND** readiness is not in scope of the declaration: `/help`, whose handler reads no loop state, answers while
+  the view is not caught up, and `/loops`, whose handler reads the view, still refuses one that is not
+
+### Requirement: Loop existence and ownership come from durable authority alone
+
+Dispatch SHALL decide a loop's existence, ownership and state ONLY from the exact `AGENT_LOOPS/<LoopID>` record read
+at decision time. No process-local observation, prior successful admission, or cached fact SHALL establish, extend or
+substitute for that record. This requirement replaces "Loop existence and ownership are merged facts, never process
+memory alone": there is no second source left to merge, because the tracker that was the other half is deleted.
+
+The durable bucket name SHALL be OBSERVED from the component's declared KV read port through the existing port
+projection. No reader SHALL carry a bucket-name default of its own.
+
+Degradation SHALL stay explicit and SHALL NOT collapse into one another. Key absence is the not-found refusal. Any
+other read failure, and any record that is decodable but not valid current authority — a wrong key/ID pairing, a
+non-canonical loop token, a missing or unknown state, a non-positive iteration budget — SHALL refuse as transient and
+unreadable: the request is answerable later and SHALL NOT be admitted on an unread or invalid record. Invalid
+authority SHALL be refused BEFORE ownership is considered, so a refusal never discloses whether the requester owns
+the loop.
+
+A seam that reports a loop's state SHALL report the state it read; it SHALL NOT render one fixed word over
+executing, paused and awaiting-approval. Terminal authority SHALL refuse continuation while remaining readable,
+cancellable and approvable at the gate. Reading authority SHALL NOT mutate it.
+
+#### Scenario: a continuation after a process replacement is admitted from the durable record
+
+- **GIVEN** a loop created before dispatch was replaced, whose `AGENT_LOOPS` record names its owner and route
+- **AND** a replacement process with no memory of that loop
+- **WHEN** that loop's owner continues it by `reply_to`
+- **THEN** the request is admitted with the record's owner, route and state
+- **AND** the test that verifies this is `TestContinuationAfterReplacementIsAdmittedFromDurableRecord`
+
+#### Scenario: a loop this process admitted before, whose record is now gone, is not found
+
+- **GIVEN** a loop this process successfully admitted while its `AGENT_LOOPS` record existed
+- **WHEN** the record is gone and the same request arrives again
+- **THEN** the refusal is not-found, and the earlier observation establishes nothing
+- **AND** the test that verifies this is `TestPreviouslyObservedLoopWithoutDurableRecordIsRefused`
+
+#### Scenario: an unreadable durable record refuses as transient
+
+- **GIVEN** an `AGENT_LOOPS` read that fails with anything other than key absence
+- **WHEN** a request names a loop
+- **THEN** the refusal is classified transient and unreadable, never not-found, and no loop is created for the token
+- **AND** the test that verifies this is `TestUnreadableDurableRecordRefusesTransient`
+
+#### Scenario: a prior admission is no fallback for a later read failure
+
+- **GIVEN** a request that was admitted while the record was readable
+- **WHEN** the same request arrives after the read starts failing
+- **THEN** it refuses as transient and unreadable, carrying no ownership from the earlier admission
+- **AND** the test that verifies this is `TestPriorAdmissionDoesNotBypassADurableReadFailure`
+
+#### Scenario: only the current record establishes ownership
+
+- **GIVEN** a loop whose record named one owner when a request was last admitted
+- **WHEN** the record now names a different owner
+- **THEN** the former owner is refused as not-owner and the current owner is admitted
+- **AND** the test that verifies this is `TestCurrentOwnerReplacesPreviouslyObservedOwner`
+
+#### Scenario: terminal authority refuses continuation and stays readable
+
+- **GIVEN** a record in complete, failed or cancelled state
+- **WHEN** its owner continues it
+- **THEN** the refusal is terminal
+- **AND** read, cancel and approve still resolve that record and report its terminal state
+- **AND** the test that verifies this is `TestGateTerminalAuthorityRefusesContinuation`
+
+#### Scenario: a read reports the exact state and mutates nothing
+
+- **WHEN** a status read resolves a record in any state
+- **THEN** the reported state equals the recorded state and the record is byte-identical afterwards
+- **AND** the tests that verify this are `TestGateReportsExactCurrentStateWithoutMutatingAuthority` and
+  `TestStatusReportsTheRecordedStateNotAFabricatedRunning`
+
+#### Scenario: invalid authority refuses before ownership is considered
+
+- **GIVEN** a record that is absent, keyed under another identity, non-canonically identified, stateless,
+  unknown-stated or without a positive iteration budget
+- **WHEN** a stranger names that loop
+- **THEN** the refusal is unreadable and its message does not say the requester does not own the loop
+- **AND** the tests that verify this are `TestGateRefusesInvalidCurrentAuthorityBeforeOwnership` and
+  `TestLoopAdmissionValidatesPersistedAuthority`
+
+#### Scenario: every read seam answers from the record after replacement
+
+- **GIVEN** a replacement process with no memory of any loop
+- **WHEN** the read seams are asked about a loop whose record exists
+- **THEN** each answers from that record rather than reporting absence
+- **AND** the test that verifies this is `TestReadSeamsAnswerFromTheDurableRecordAfterReplacement`
+
+#### Scenario: /status reports iteration progress and age from the record
+
+- **WHEN** `/status` resolves a loop whose record carries its iteration count, budget and timestamps
+- **THEN** the answer names the iteration progress and the loop's age, as it did before the tracker was removed
+- **AND** neither field is reconstructed from process memory
+
+### Requirement: The shared view separates current authority from activity
+
+Bare canonical LoopID keys SHALL validate as `LoopEntity` with key/ID equality. Invalid values under those keys
+SHALL poison authoritative listing and AutoContinue until a greater-revision valid write or tombstone heals them.
+Other non-completion keys SHALL be excluded from current-loop authority without optional-producer classification.
+
+Existing ordinary `COMPLETE_` activity SHALL retain its field mappings and canonical suffix/payload identity checks.
+Completion records SHALL remain activity-only. Unsupported or malformed completion records SHALL produce observable
+activity errors and SHALL NOT fabricate current state or block current-loop authority.
+
+This change SHALL NOT introduce research completion rendering, a payload behavior, or a shared namespace package.
+Registered stream terminal decoding and validation SHALL remain unchanged by this activity-scope reduction.
+Withdrawal of research rendering SHALL NOT withdraw registered ordinary-terminal support. Both private raw
+terminal records and registered ordinary-terminal envelopes SHALL retain their current validation and field mappings.
+
+#### Scenario: Canonical current-loop corruption heals
+
+- **GIVEN** an invalid value under a canonical LoopID has poisoned current-loop authority
+- **WHEN** a greater-revision valid value with matching ID or a tombstone lands
+- **THEN** the poison clears
+- **AND** authoritative listing and AutoContinue may resume after that revision is applied
+
+#### Scenario: Non-authority record is present
+
+- **WHEN** a key is neither a canonical LoopID nor a completion key
+- **THEN** it is excluded without interpreting its value or optional producer's namespace
+- **AND** it does not become a loop or poison current-loop authority
+
+#### Scenario: Ordinary completion remains activity-only
+
+- **GIVEN** an ordinary raw or registered completion with a canonical key and matching payload LoopID
+- **WHEN** the shared view decodes it
+- **THEN** it preserves the existing activity fields
+- **AND** it does not supply a current-loop record or an AutoContinue candidate
+
+#### Scenario: Unsupported completion does not block current authority
+
+- **GIVEN** an unsupported or malformed completion value
+- **WHEN** the shared view observes it
+- **THEN** activity reports the existing observable error
+- **AND** no result or current-loop state is fabricated
+- **AND** current-loop authority remains available if its own records and watcher are healthy
 

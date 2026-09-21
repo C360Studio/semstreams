@@ -3,9 +3,9 @@
 package agenticdispatch
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,11 +17,9 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/internal/looptoken"
 	"github.com/c360studio/semstreams/message"
-	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/nats-io/nats.go/jetstream"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,7 +35,7 @@ func TestIntegrationTerminalSettlementRestartRouteStableDedupAndUnlimitedAttempt
 	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads)
 	c := &Component{
 		config: DefaultConfig(), decoder: message.NewDecoder(reg), natsClient: tc.Client,
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)), loopTracker: NewLoopTracker(), metrics: getMetrics(nil),
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)), metrics: getMetrics(nil),
 	}
 	// The checked production response output is USER; this fixture binds that
 	// existing port to the independently named test stream without changing its
@@ -47,7 +45,7 @@ func TestIntegrationTerminalSettlementRestartRouteStableDedupAndUnlimitedAttempt
 	kv, err := tc.GetKVBucket(ctx, defaultAgentLoopsBucket(t))
 	require.NoError(t, err)
 	loop := agentic.LoopEntity{
-		ID: "restart-loop", TaskID: "restart-task", State: agentic.LoopStateComplete, MaxIterations: 3,
+		ID: "35f24ee8-8bb9-4dc4-bc8e-000000000008", TaskID: "restart-task", State: agentic.LoopStateComplete, MaxIterations: 3,
 		ChannelType: "http", ChannelID: "restart-channel",
 	}
 	loopData, err := json.Marshal(loop)
@@ -60,7 +58,7 @@ func TestIntegrationTerminalSettlementRestartRouteStableDedupAndUnlimitedAttempt
 		LoopID: loop.ID, TaskID: loop.TaskID, Outcome: agentic.OutcomeSuccess, Result: "restart result", CompletedAt: at,
 	}
 	terminalData := terminalEnvelopeForDispatch(t, terminal)
-	require.NoError(t, c.settleAgentTerminal(ctx, terminalData), "empty process tracker must recover route from AGENT_LOOPS")
+	require.NoError(t, c.settleAgentTerminal(ctx, terminalData), "fresh dispatch must recover route from AGENT_LOOPS")
 	require.NoError(t, c.settleAgentTerminal(ctx, terminalData), "redelivery must reuse stable response MsgID")
 
 	userStream, err := tc.Client.GetStream(ctx, "USER_TERMINAL")
@@ -132,21 +130,23 @@ func TestIntegrationPersistedLoopMalformedJSONAndIDMismatchArePermanent(t *testi
 	kv, err := tc.GetKVBucket(ctx, defaultAgentLoopsBucket(t))
 	require.NoError(t, err)
 
-	_, err = kv.Put(ctx, "malformed-loop", []byte(`{"not valid"`))
+	_, err = kv.Put(ctx, "35f24ee8-8bb9-4dc4-bc8e-000000000009", []byte(`{"not valid"`))
 	require.NoError(t, err)
-	_, err = c.loadPersistedLoop(ctx, "malformed-loop")
+	_, err = c.loadPersistedLoop(ctx, "35f24ee8-8bb9-4dc4-bc8e-000000000009")
 	require.Error(t, err)
 	require.True(t, isPermanentTerminal(err))
-	require.ErrorContains(t, err, "malformed AGENT_LOOPS/malformed-loop")
+	require.ErrorContains(t, err, "malformed AGENT_LOOPS/35f24ee8-8bb9-4dc4-bc8e-000000000009")
 
-	mismatch, err := json.Marshal(agentic.LoopEntity{ID: "other-loop", TaskID: "task"})
+	mismatch, err := json.Marshal(agentic.LoopEntity{
+		ID: "35f24ee8-8bb9-4dc4-bc8e-000000000010", TaskID: "task", State: agentic.LoopStateComplete, MaxIterations: 3,
+	})
 	require.NoError(t, err)
-	_, err = kv.Put(ctx, "expected-loop", mismatch)
+	_, err = kv.Put(ctx, "35f24ee8-8bb9-4dc4-bc8e-000000000011", mismatch)
 	require.NoError(t, err)
-	_, err = c.loadPersistedLoop(ctx, "expected-loop")
+	_, err = c.loadPersistedLoop(ctx, "35f24ee8-8bb9-4dc4-bc8e-000000000011")
 	require.Error(t, err)
 	require.True(t, isPermanentTerminal(err))
-	require.ErrorContains(t, err, `contains loop id "other-loop"`)
+	require.ErrorContains(t, err, `contains invalid loop identity "35f24ee8-8bb9-4dc4-bc8e-000000000010"`)
 }
 
 // A record that decodes and whose ID matches can still be one this component
@@ -157,7 +157,7 @@ func TestIntegrationPersistedLoopMalformedJSONAndIDMismatchArePermanent(t *testi
 // gate would reason about it. It takes the reader's existing permanent
 // classification — a state outside the vocabulary never becomes valid — and no
 // new one is invented for it.
-// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
+// spec: agentic-dispatch / Loop existence and ownership come from durable authority alone
 func TestIntegrationPersistedInvalidStateIsPermanent(t *testing.T) {
 	ctx := t.Context()
 	tc := natsclient.NewTestClient(t, natsclient.WithKVBuckets(defaultAgentLoopsBucket(t)))
@@ -242,7 +242,7 @@ func TestIntegrationInvalidTerminalIsTerminated(t *testing.T) {
 	}, 2*time.Second, 25*time.Millisecond)
 }
 
-func TestIntegrationProductionCallbackRetriesKVThenAcksAfterPubAck(t *testing.T) {
+func TestIntegrationProductionCallbackRetriesMissingRouteThenAcksAfterPubAck(t *testing.T) {
 	ctx := t.Context()
 	tc := natsclient.NewTestClient(t,
 		natsclient.WithKVBuckets(defaultAgentLoopsBucket(t)),
@@ -257,7 +257,7 @@ func TestIntegrationProductionCallbackRetriesKVThenAcksAfterPubAck(t *testing.T)
 		t, ctx, tc, "CALLBACK_AGENT", "CALLBACK_INPUT_USER", "CALLBACK_USER", "retry",
 		func(c *Component) { c.terminalDeliveryDoneFn = func(err error) { deliveryDone <- err } },
 	)
-	routingReadBefore := terminalReasonValue(c, "routing_read_transient")
+	routeUnavailableBefore := terminalReasonValue(c, "terminal_route_unavailable")
 	responseSettledBefore := terminalReasonValue(c, "response_settled")
 
 	kv, err := tc.GetKVBucket(ctx, defaultAgentLoopsBucket(t))
@@ -282,7 +282,7 @@ func TestIntegrationProductionCallbackRetriesKVThenAcksAfterPubAck(t *testing.T)
 		})
 		require.NoError(t, tc.Client.PublishToStream(ctx, "agent.complete."+loopID, data))
 	}
-	publishTerminal("kv-loop", "kv-task")
+	publishTerminal("35f24ee8-8bb9-4dc4-bc8e-000000000012", "kv-task")
 	select {
 	case callbackErr := <-deliveryDone:
 		require.Error(t, callbackErr, "proven pre-publish failure must retry")
@@ -294,9 +294,9 @@ func TestIntegrationProductionCallbackRetriesKVThenAcksAfterPubAck(t *testing.T)
 	require.Equal(t, uint64(1), info.Delivered.Consumer)
 	require.Zero(t, info.AckFloor.Consumer, "transient KV failure must not ACK")
 	require.Equal(t, 1, info.NumAckPending)
-	require.Equal(t, routingReadBefore+1, terminalReasonValue(c, "routing_read_transient"))
+	require.Equal(t, routeUnavailableBefore+1, terminalReasonValue(c, "terminal_route_unavailable"))
 
-	persist("kv-loop", "kv-task", "kv-channel")
+	persist("35f24ee8-8bb9-4dc4-bc8e-000000000012", "kv-task", "kv-channel")
 	select {
 	case callbackErr := <-deliveryDone:
 		require.NoError(t, callbackErr, "recovered production callback")
@@ -316,6 +316,149 @@ func TestIntegrationProductionCallbackRetriesKVThenAcksAfterPubAck(t *testing.T)
 	require.Equal(t, uint64(1), userInfo.State.Msgs)
 }
 
+func TestIntegrationProductionCallbackFirstDispositionAfterOwnRecordLoss(t *testing.T) {
+	for _, loss := range []string{"delete", "purge", "ttl_expiry"} {
+		t.Run(loss, func(t *testing.T) {
+			ctx := t.Context()
+			tc := natsclient.NewTestClient(t, natsclient.WithStreams(
+				natsclient.TestStreamConfig{Name: "LOSS_AGENT", Subjects: []string{"agent.>"}},
+				natsclient.TestStreamConfig{Name: "LOSS_INPUT_USER", Subjects: []string{"user.message.>"}},
+				natsclient.TestStreamConfig{Name: "LOSS_USER", Subjects: []string{"callback.response.>"}},
+			))
+			kvConfig := jetstream.KeyValueConfig{Bucket: defaultAgentLoopsBucket(t), History: 1}
+			kv, err := tc.Client.CreateKeyValueBucket(ctx, kvConfig)
+			require.NoError(t, err)
+			loop := agentic.LoopEntity{
+				ID: "35f24ee8-8bb9-4dc4-bc8e-000000000015", TaskID: "loss-task",
+				State: agentic.LoopStateComplete, MaxIterations: 3,
+				UserID: "loss-user", ChannelType: "http", ChannelID: "loss-channel",
+			}
+			loopData, err := json.Marshal(loop)
+			require.NoError(t, err)
+			revision, err := kv.Put(ctx, loop.ID, loopData)
+			require.NoError(t, err)
+			reader := terminalTestComponent(t)
+			reader.natsClient = tc.Client
+			persisted, err := reader.loadPersistedLoop(ctx, loop.ID)
+			require.NoError(t, err, "the record must be valid current authority before loss")
+			require.Equal(t, &loop, persisted)
+			entry, err := kv.Get(ctx, loop.ID)
+			require.NoError(t, err)
+			require.Equal(t, revision, entry.Revision())
+			require.Equal(t, loopData, entry.Value())
+
+			// Establish the production DeliverNew durable before the source exists,
+			// then join its owner. Replacement must resume that exact consumer.
+			original := startProductionTerminalDispatch(
+				t, ctx, tc, "LOSS_AGENT", "LOSS_INPUT_USER", "LOSS_USER", "loss", nil)
+			require.NoError(t, original.Stop(ctx))
+
+			// Retain the original terminal before inducing loss. Its asserted route
+			// must not replace the missing record's authority after dispatch starts.
+			terminalData := terminalEnvelopeForDispatch(t, &agentic.LoopCompletedEvent{
+				LoopID: loop.ID, TaskID: loop.TaskID, Outcome: agentic.OutcomeSuccess,
+				Result: "retained result", CompletedAt: time.Now().UTC(),
+				UserID: loop.UserID, ChannelType: loop.ChannelType, ChannelID: loop.ChannelID,
+			})
+			subject := "agent.complete." + loop.ID
+			require.NoError(t, tc.Client.PublishToStream(ctx, subject, terminalData))
+			stream, err := tc.Client.GetStream(ctx, "LOSS_AGENT")
+			require.NoError(t, err)
+			streamInfo, err := stream.Info(ctx)
+			require.NoError(t, err)
+			require.Equal(t, uint64(1), streamInfo.State.Msgs)
+			source, err := stream.GetMsg(ctx, streamInfo.State.LastSeq)
+			require.NoError(t, err)
+			require.Equal(t, subject, source.Subject)
+			require.Equal(t, terminalData, source.Data)
+			originalConsumer, err := stream.Consumer(ctx, "agentic-dispatch-agent-complete-loss")
+			require.NoError(t, err)
+			originalInfo, err := originalConsumer.Info(ctx)
+			require.NoError(t, err)
+			require.Equal(t, jetstream.DeliverNewPolicy, originalInfo.Config.DeliverPolicy)
+			require.Zero(t, originalInfo.Delivered.Consumer)
+			require.Zero(t, originalInfo.AckFloor.Consumer)
+			require.Equal(t, uint64(1), originalInfo.NumPending)
+
+			switch loss {
+			case "delete":
+				require.NoError(t, kv.Delete(ctx, loop.ID))
+			case "purge":
+				require.NoError(t, kv.Purge(ctx, loop.ID))
+			case "ttl_expiry":
+				// Arm expiry only after both authority and retained source were
+				// observed. The Get below, not elapsed wall time, establishes loss.
+				kvConfig.TTL = 100 * time.Millisecond
+				js, jsErr := tc.Client.JetStream()
+				require.NoError(t, jsErr)
+				kv, err = js.UpdateKeyValue(ctx, kvConfig)
+				require.NoError(t, err)
+				status, statusErr := kv.Status(ctx)
+				require.NoError(t, statusErr)
+				require.Equal(t, kvConfig.TTL, status.TTL())
+			}
+			require.Eventually(t, func() bool {
+				_, readErr := kv.Get(ctx, loop.ID)
+				return errors.Is(readErr, jetstream.ErrKeyNotFound) || errors.Is(readErr, jetstream.ErrKeyDeleted)
+			}, 5*time.Second, 25*time.Millisecond, "observe actual key loss; infrastructure errors are not absence")
+			retained, err := stream.GetMsg(ctx, source.Sequence)
+			require.NoError(t, err, "source must still exist when current authority is lost")
+			require.Equal(t, source.Data, retained.Data)
+
+			deliveryDone := make(chan error, 1)
+			var before map[string]float64
+			c := startProductionTerminalDispatch(
+				t, ctx, tc, "LOSS_AGENT", "LOSS_INPUT_USER", "LOSS_USER", "loss",
+				func(c *Component) {
+					before = terminalReasonSnapshot(c)
+					c.terminalDeliveryDoneFn = func(err error) { deliveryDone <- err }
+				},
+			)
+			consumer, err := stream.Consumer(ctx, "agentic-dispatch-agent-complete-loss")
+			require.NoError(t, err)
+			userStream, err := tc.Client.GetStream(ctx, "LOSS_USER")
+			require.NoError(t, err)
+			// This is a first-disposition/no-effect proof. The adjacent missing-key
+			// then Put test proves physical redelivery with the unchanged 30s policy.
+			select {
+			case callbackErr := <-deliveryDone:
+				require.Error(t, callbackErr)
+				require.True(t, isLoopRecordAbsent(callbackErr))
+				require.False(t, isPermanentTerminal(callbackErr))
+				require.False(t, isUnknownTerminalPublication(callbackErr))
+			case <-time.After(5 * time.Second):
+				t.Fatal("production first disposition after record loss did not finish")
+			}
+			requireOneTerminalReason(t, c, "terminal_route_unavailable", before)
+			info, err := consumer.Info(ctx)
+			require.NoError(t, err)
+			require.True(t, originalInfo.Created.Equal(info.Created), "replacement must resume the original durable")
+			require.Equal(t, originalInfo.Config, info.Config, "record loss does not change consumer policy")
+			require.Equal(t, uint64(1), info.Delivered.Consumer)
+			require.Equal(t, source.Sequence, info.Delivered.Stream)
+			require.Zero(t, info.AckFloor.Consumer, "loss cannot authorize source ACK")
+			require.Zero(t, info.AckFloor.Stream)
+			require.Equal(t, 1, info.NumAckPending)
+			userInfo, err := userStream.Info(ctx)
+			require.NoError(t, err)
+			require.Zero(t, userInfo.State.Msgs, "event route assertions do not replace current authority")
+			retained, err = stream.GetMsg(ctx, source.Sequence)
+			require.NoError(t, err)
+			require.Equal(t, source.Subject, retained.Subject)
+			require.Equal(t, source.Data, retained.Data, "unsettled original terminal bytes must remain retained")
+			health := c.Health()
+			require.True(t, health.Healthy, health.LastError)
+			require.Empty(t, health.LastError)
+			require.Len(t, c.consumers, 3)
+			select {
+			case <-c.consumers[1].handle.Closed():
+				t.Fatal("missing authority must not quarantine the complete lane")
+			default:
+			}
+		})
+	}
+}
+
 func TestIntegrationProductionCallbackUnknownPublishQuarantinesExactLane(t *testing.T) {
 	ctx := t.Context()
 	tc := natsclient.NewTestClient(t,
@@ -333,7 +476,7 @@ func TestIntegrationProductionCallbackUnknownPublishQuarantinesExactLane(t *test
 	kv, err := tc.GetKVBucket(ctx, defaultAgentLoopsBucket(t))
 	require.NoError(t, err)
 	loop := agentic.LoopEntity{
-		ID: "quarantine-loop", TaskID: "quarantine-task", State: agentic.LoopStateComplete, MaxIterations: 3,
+		ID: "35f24ee8-8bb9-4dc4-bc8e-000000000013", TaskID: "quarantine-task", State: agentic.LoopStateComplete, MaxIterations: 3,
 		ChannelType: "http", ChannelID: "channel",
 	}
 	data, err := json.Marshal(loop)
@@ -351,7 +494,7 @@ func TestIntegrationProductionCallbackUnknownPublishQuarantinesExactLane(t *test
 	case <-time.After(5 * time.Second):
 		t.Fatal("unknown publication result was not observed")
 	}
-	require.Len(t, c.consumers, 5)
+	require.Len(t, c.consumers, 3)
 	completeClosed := c.consumers[1].handle.Closed()
 	select {
 	case <-completeClosed:
@@ -398,9 +541,9 @@ func TestIntegrationProductionCallbackShutdownUsesSemanticRetry(t *testing.T) {
 	consumer, err := stream.Consumer(ctx, "agentic-dispatch-agent-complete-shutdown")
 	require.NoError(t, err)
 	payload := terminalEnvelopeForDispatch(t, &agentic.LoopCompletedEvent{
-		LoopID: "shutdown-loop", TaskID: "shutdown-task", Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now(),
+		LoopID: "35f24ee8-8bb9-4dc4-bc8e-000000000014", TaskID: "shutdown-task", Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now(),
 	})
-	require.NoError(t, tc.Client.PublishToStream(ctx, "agent.complete.shutdown-loop", payload))
+	require.NoError(t, tc.Client.PublishToStream(ctx, "agent.complete.35f24ee8-8bb9-4dc4-bc8e-000000000014", payload))
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
@@ -469,57 +612,4 @@ func startProductionTerminalDispatch(
 	require.NoError(t, c.Start(ctx))
 	t.Cleanup(func() { _ = c.Stop(context.Background()) })
 	return c
-}
-
-// A permanently defective durable record reaches the admission gate's ONE
-// tolerated-failure branch, which was built for transient failures. This pins
-// what that combination does today, because nothing did: the record is refused
-// by the reader, the tracker answers, the request is admitted, and the refused
-// record contributes NO facts to the merge — so no seam reports a state the
-// vocabulary no longer defines. The operator's only signal is the tolerated
-// WARN, which must at least carry the permanent cause; whether this class earns
-// its own metric or its own message is #1329's question, since that change
-// rewrites this path.
-//
-// Driven through the real reader against a real bucket on purpose: the unit
-// seam (withPersistedLoops) replaces loadPersistedLoop wholesale, so a unit
-// test here would assert an error it wrote itself.
-//
-// spec: agentic-dispatch / Loop existence and ownership are merged facts, never process memory alone
-func TestIntegrationInvalidPersistedRecordIsToleratedOnlyBecauseTheTrackerAnswers(t *testing.T) {
-	ctx := t.Context()
-	tc := natsclient.NewTestClient(t, natsclient.WithKVBuckets(defaultAgentLoopsBucket(t)))
-	var logs bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	reg := payloadregistry.NewWithSubset(t, agentic.RegisterPayloads)
-	c := &Component{
-		config: DefaultConfig(), decoder: message.NewDecoder(reg), natsClient: tc.Client,
-		logger: logger, loopTracker: NewLoopTrackerWithLogger(logger), metrics: getMetrics(metric.NewMetricsRegistry()),
-	}
-
-	kv, err := tc.GetKVBucket(ctx, defaultAgentLoopsBucket(t))
-	require.NoError(t, err)
-	_, err = kv.Put(ctx, admissionLoopA,
-		[]byte(`{"id":"`+admissionLoopA+`","state":"paused","max_iterations":20}`))
-	require.NoError(t, err)
-	c.loopTracker.Track(&LoopInfo{
-		LoopID: admissionLoopA, UserID: "user-a", ChannelType: "cli", ChannelID: "s1", State: "executing",
-	})
-
-	facts, err := c.admitLoopRequest(ctx, loopAdmissionRequest{
-		Seam: "channel_submission", Field: "reply_to", Operation: loopOpContinue,
-		LoopID: admissionLoopA, Requester: "user-a",
-	})
-
-	require.NoError(t, err, "a tracker hit admits; a defective durable record must not refuse a live loop")
-	require.True(t, facts.Tracked)
-	require.False(t, facts.Persisted, "the refused record must not enter the merge")
-	require.Equal(t, agentic.LoopStateExecuting, facts.State,
-		"the state a seam reports comes from the tracker, never from the record that was refused")
-	require.Equal(t, 0, testutil.CollectAndCount(c.metrics.loopAdmissionRefusals),
-		"tolerating the read is not a refusal and must not be counted as one")
-
-	require.Contains(t, logs.String(), loopDurableReadToleratedLogMessage)
-	require.Contains(t, logs.String(), "invalid state: paused",
-		"the tolerated WARN must carry the permanent cause, or the operator cannot tell a blip from a record that needs rewriting")
 }

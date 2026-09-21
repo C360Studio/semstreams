@@ -34,8 +34,7 @@ func TestHTTPResponsePublicationFailureIsObservedWithoutChangingTheResult(t *tes
 		registry: NewCommandRegistry(),
 		// Constructed, never connected: every publish refuses with
 		// ErrNotConnected before it touches a socket.
-		natsClient:  &natsclient.Client{},
-		loopTracker: NewLoopTracker(),
+		natsClient: &natsclient.Client{},
 	}
 	require.NoError(t, c.registry.Register("echo", CommandConfig{Pattern: `^/echo$`},
 		func(_ context.Context, msg agentic.UserMessage, _ []string, _ string) (agentic.UserResponse, error) {
@@ -50,13 +49,23 @@ func TestHTTPResponsePublicationFailureIsObservedWithoutChangingTheResult(t *tes
 			}, nil
 		}))
 
-	resp := c.processCommandSync(t.Context(), agentic.UserMessage{
+	// An argument-less command resolves a target through durable authority
+	// before it runs (#1329), so the lane needs a live projection even when it
+	// holds no loops: without one the command is refused for an unreadable
+	// authority and never reaches the response publication this test is about.
+	seedCurrentLoops(t, c)
+
+	// processCommandSync returns its refusal separately under #1329, so the
+	// command that answers here must be the one whose response publication
+	// fails, not one refused before it ran.
+	resp, err := c.processCommandSync(t.Context(), agentic.UserMessage{
 		MessageID:   "msg-echo",
 		ChannelType: "http",
 		ChannelID:   "session-echo",
 		UserID:      "operator-1",
 		Content:     "/echo",
 	})
+	require.NoError(t, err)
 
 	require.Equal(t, agentic.ResponseTypeText, resp.Type,
 		"the HTTP command was executed and its answer must stand")
@@ -87,8 +96,7 @@ func TestLoopUserChannelResponseFailureNamesItsOwnLane(t *testing.T) {
 		metrics: getMetrics(metric.NewMetricsRegistry()),
 		// Constructed, never connected: the response publish is the only
 		// publish on this path, so it is the one that fails.
-		natsClient:  &natsclient.Client{},
-		loopTracker: NewLoopTracker(),
+		natsClient: &natsclient.Client{},
 	}
 
 	c.sendUserResponseForLoop(t.Context(), &LoopInfo{

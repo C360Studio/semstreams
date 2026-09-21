@@ -1,5 +1,5 @@
 // Package agenticdispatch provides message routing between users and agentic loops.
-// It handles command parsing, permission checking, loop tracking, and message dispatch.
+// It handles command parsing, permission checking, current ownership lookup, and message dispatch.
 package agenticdispatch
 
 import (
@@ -19,7 +19,24 @@ type CommandConfig struct {
 	Pattern     string `json:"pattern"`      // Regex pattern to match
 	Permission  string `json:"permission"`   // Required permission
 	RequireLoop bool   `json:"require_loop"` // Requires an active loop
-	Help        string `json:"help"`         // Help text
+	// ResolvesActiveLoop declares that this command acts on ONE loop, so the
+	// dispatcher may resolve a target from durable loop authority when the
+	// message names none. A command that leaves it false is never given a
+	// resolved target, and therefore never fails for a loop it does not read:
+	// `/loops` and `/help` take no loop_id and used to refuse on a route whose
+	// current loops are ambiguous, which disabled the listing a user needs to
+	// name one. Route ambiguity is the whole of what this removes. A command
+	// whose OWN handler reads the view still depends on it: `/loops` refuses a
+	// view that is not caught up exactly as before, and only `/help`, which
+	// reads no loop state, answers through that condition.
+	//
+	// This is not RequireLoop, which refuses a command that ends up with no
+	// target at all. All four built-ins declare that false because a bare
+	// `/cancel` and `/status` answer for themselves, which is why it cannot
+	// carry this fact. The two are independent: a command may require a NAMED
+	// loop and still accept no resolved one.
+	ResolvesActiveLoop bool   `json:"resolves_active_loop"`
+	Help               string `json:"help"` // Help text
 }
 
 // CommandHandler is a function that handles a command
@@ -27,11 +44,22 @@ type CommandHandler func(ctx context.Context, msg agentic.UserMessage, args []st
 
 // CommandContext provides services to command executors
 type CommandContext struct {
-	NATSClient    *natsclient.Client
-	LoopTracker   *LoopTracker
-	Logger        *slog.Logger
-	HasPermission func(userID, permission string) bool
+	NATSClient      *natsclient.Client
+	LookupLoopOwner LoopOwnerLookup
+	Logger          *slog.Logger
+	HasPermission   func(userID, permission string) bool
 }
+
+// LoopOwner is the current ownership answer for one canonical loop ID.
+type LoopOwner struct {
+	LoopID string
+	UserID string
+}
+
+// LoopOwnerLookup reads current ownership. Refusals use classified codes
+// invalid_loop_id, loop_not_found, loop_owner_absent, loop_record_invalid,
+// or loop_state_unavailable. It never exposes a store or mutable projection.
+type LoopOwnerLookup func(context.Context, string) (LoopOwner, error)
 
 // CommandExecutor is the interface for command implementations
 type CommandExecutor interface {

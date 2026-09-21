@@ -78,7 +78,6 @@ func TestIntegration_ApprovalFlow_Approve(t *testing.T) {
 		Timeout:            "60s",
 		StreamName:         "AGENT",
 		ConsumerNameSuffix: "approval-approve-test",
-		LoopsBucket:        "AGENT_LOOPS",
 	}
 
 	rawConfig, err := json.Marshal(config)
@@ -371,7 +370,6 @@ func TestIntegration_ApprovalTimeoutSweeper_PublishesWireResponse(t *testing.T) 
 		ApprovalTimeoutStr: approvalTimeout,
 		StreamName:         "AGENT",
 		ConsumerNameSuffix: "approval-timeout-wire-test",
-		LoopsBucket:        "AGENT_LOOPS",
 	}
 
 	rawConfig, err := json.Marshal(config)

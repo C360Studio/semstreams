@@ -22,6 +22,9 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+// ErrNATSClientNil is returned when the NATS client is unavailable.
+var ErrNATSClientNil = errs.ErrNoConnection
+
 // scopeTaskTools applies c.config.DefaultTools to task.Tools when
 // configured. Mirrors the bus-dispatch and HTTP-dispatch paths so
 // both honor the same scoping contract: nil DefaultTools leaves
@@ -85,7 +88,6 @@ type Component struct {
 	natsClient    *natsclient.Client
 	taskEvidence  retainedTaskEvidenceReader
 	logger        *slog.Logger
-	loopTracker   *LoopTracker
 	registry      *CommandRegistry
 	metrics       *routerMetrics
 	modelRegistry model.RegistryReader // Unified model registry for model selection
@@ -104,10 +106,11 @@ type Component struct {
 
 	// Three fatal fields, not one. The two terminal lanes are latched
 	// per-lane because their health projection names which lane lost
-	// ownership; the three lanes this change brings under settlement share
-	// deliveryFatalErr, which keeps the FIRST cause across them. Collapsing
-	// them would either lose the terminal lane's identity or recount a single
-	// loss as three.
+	// ownership; deliveryFatalErr is the component-wide latch, written for the
+	// three lanes L1 brought under settlement and held now by the one that
+	// survives this change (:724). It keeps the FIRST cause across whatever
+	// shares it. Collapsing them would either lose the terminal lane's
+	// identity or recount a single loss as three.
 	agentCompleteFatal error
 	agentFailedFatal   error
 	deliveryFatalErr   error
@@ -171,11 +174,9 @@ type subscriptionInputBinding struct {
 }
 
 type subscriptionInputBindings struct {
-	userMessage     subscriptionInputBinding
-	agentComplete   subscriptionInputBinding
-	agentCreated    subscriptionInputBinding
-	agentFailed     subscriptionInputBinding
-	approvalPending subscriptionInputBinding
+	userMessage   subscriptionInputBinding
+	agentComplete subscriptionInputBinding
+	agentFailed   subscriptionInputBinding
 }
 
 // NewComponent creates a new router component
@@ -197,7 +198,6 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		decoder:       message.NewDecoder(deps.PayloadRegistry),
 		natsClient:    deps.NATSClient,
 		logger:        logger,
-		loopTracker:   NewLoopTrackerWithLogger(logger),
 		registry:      NewCommandRegistry(),
 		metrics:       getMetrics(deps.MetricsRegistry),
 		modelRegistry: deps.ModelRegistry,
@@ -636,38 +636,6 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	c.consumers = append(c.consumers, agentCompleteBinding)
 	c.lifecycleMu.Unlock()
 
-	// Subscribe to loop created events for workflow context sync
-	agentCreatedCfg := natsclient.StreamConsumerConfig{
-		StreamName:    bindings.agentCreated.streamName,
-		ConsumerName:  c.consumerName("agentic-dispatch-agent-created"),
-		FilterSubject: bindings.agentCreated.subject,
-		DeliverPolicy: "new",
-		AckPolicy:     "explicit",
-		MaxDeliver:    3,
-		MaxAckPending: bindings.agentCreated.consumerConfig.MaxAckPending,
-		AutoCreate:    false,
-	}
-	agentCreatedAdmission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal, nil)
-	handle, err = c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.agentCreated.portName}, agentCreatedCfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		if !agentCreatedAdmission.admit() {
-			return
-		}
-		decision, cause := runDispatchDeliveryWork(msgCtx, msg.Data(), c.handleAgentCreated)
-		result := natsclient.SettleDelivery(msg, decision, cause)
-		agentCreatedAdmission.latch(result)
-		if result.Err() != nil && !result.OwnerStopRequired() {
-			c.logger.Error("Agent-created delivery did not settle cleanly", slog.Any("error", result.Err()))
-		}
-	})
-	if err != nil {
-		return errs.WrapTransient(err, "Component", "setupSubscriptions", "subscribe to agent.created")
-	}
-	agentCreatedBinding := newStreamConsumerBinding(handle)
-	c.observeDeliveryLane(ctx, &agentCreatedBinding, agentCreatedAdmission)
-	c.lifecycleMu.Lock()
-	c.consumers = append(c.consumers, agentCreatedBinding)
-	c.lifecycleMu.Unlock()
-
 	// Subscribe to loop failed events
 	agentFailedCfg := natsclient.StreamConsumerConfig{
 		StreamName:    bindings.agentFailed.streamName,
@@ -707,51 +675,6 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	c.observeDeliveryLane(ctx, &agentFailedBinding, agentFailedAdmission)
 	c.lifecycleMu.Lock()
 	c.consumers = append(c.consumers, agentFailedBinding)
-	c.lifecycleMu.Unlock()
-
-	// Subscribe to approval-pending events so the HTTP approval
-	// handler has the loop's CallID + tool args available locally
-	// (no KV.Get round-trip per request). Optional port — the
-	// dispatch surface continues to function without it; only the
-	// approval HTTP endpoint requires the cache populated.
-	//
-	// MaxDeliver is intentionally finite while terminal sibling subscriptions
-	// use unlimited delivery: a missed approval-pending event has
-	// asymmetric blast radius — it leaves the HTTP approval handler
-	// returning 400 forever for that loop until the next approval
-	// cycle. Terminal siblings instead use unlimited, retention-bounded
-	// settlement. Combined with the LoopTracker's early-arrival
-	// buffer (drains on the matching agent.created), 10 retries gives
-	// generous slack for race resolution without unbounded redelivery.
-	agentApprovalPendingCfg := natsclient.StreamConsumerConfig{
-		StreamName:    bindings.approvalPending.streamName,
-		ConsumerName:  c.consumerName("agentic-dispatch-agent-approval-pending"),
-		FilterSubject: bindings.approvalPending.subject,
-		DeliverPolicy: "new",
-		AckPolicy:     "explicit",
-		MaxDeliver:    10,
-		MaxAckPending: bindings.approvalPending.consumerConfig.MaxAckPending,
-		AutoCreate:    false,
-	}
-	approvalPendingAdmission := newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal, nil)
-	handle, err = c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.approvalPending.portName}, agentApprovalPendingCfg, func(msgCtx context.Context, msg jetstream.Msg) {
-		if !approvalPendingAdmission.admit() {
-			return
-		}
-		decision, cause := runDispatchDeliveryWork(msgCtx, msg.Data(), c.handleAgentApprovalPending)
-		result := natsclient.SettleDelivery(msg, decision, cause)
-		approvalPendingAdmission.latch(result)
-		if result.Err() != nil && !result.OwnerStopRequired() {
-			c.logger.Error("Approval-pending delivery did not settle cleanly", slog.Any("error", result.Err()))
-		}
-	})
-	if err != nil {
-		return errs.WrapTransient(err, "Component", "setupSubscriptions", "subscribe to agent.approval_pending")
-	}
-	approvalPendingBinding := newStreamConsumerBinding(handle)
-	c.observeDeliveryLane(ctx, &approvalPendingBinding, approvalPendingAdmission)
-	c.lifecycleMu.Lock()
-	c.consumers = append(c.consumers, approvalPendingBinding)
 	c.lifecycleMu.Unlock()
 
 	return nil
@@ -798,11 +721,14 @@ func (c *Component) recordAgentFailedFatal(result natsclient.DeliveryResult) {
 	}
 }
 
-// recordDeliveryOwnerFatal is the component-wide latch for the three lanes
-// this change brings under settlement (user.message, agent.created,
-// agent.approval_pending). The two terminal lanes keep their own per-lane
-// fields above: those are read by the terminal-lane health projection, and
-// collapsing them into this one would lose which terminal lane failed.
+// recordDeliveryOwnerFatal is the component-wide latch for the user.message
+// lane, its only caller (:577). It was written for three — the agent.created
+// and agent.approval_pending lanes were deleted with the in-process loop
+// tracker they fed, and naming them here would send a reader looking for
+// subscriptions that no longer exist. The two terminal lanes keep their own
+// per-lane fields above: those are read by the terminal-lane health
+// projection, and collapsing them into this one would lose which terminal
+// lane failed.
 func (c *Component) recordDeliveryOwnerFatal(result natsclient.DeliveryResult) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -950,16 +876,47 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 		})
 	}
 
-	// Resolve loop ID. Whether the target came from the message or from the
-	// tracker decides how a failed response settles below, so the answer is
-	// recorded here rather than re-derived from args at the call site.
+	// Resolve loop ID, for the commands that consume one. Whether the target
+	// was named by the message or resolved here from durable loop authority
+	// decides how a failed response settles below, so the answer is recorded
+	// now rather than re-derived from args at the call site.
+	//
+	// A command that declares no target (command_registry.go:22-38) never
+	// reaches the resolver: `/loops` and `/help` read no loop, and resolving
+	// one for them made them fail on exactly the route whose ambiguity `/loops`
+	// is how a user resolves.
 	loopID := ""
-	targetFromTracker := false
+	targetResolved := false
 	if len(args) > 0 && args[0] != "" {
 		loopID = args[0]
-	} else if c.config.AutoContinue {
-		loopID = c.loopTracker.GetActiveLoop(msg.UserID, msg.ChannelID)
-		targetFromTracker = loopID != ""
+	} else if cmd.Config.ResolvesActiveLoop && c.config.AutoContinue {
+		var err error
+		loopID, err = c.activeLoop(ctx, msg)
+		if err != nil {
+			// A resolver refusal the user can act on is an ANSWER, not a
+			// retry. `loop_route_ambiguous` (http_activity.go:334) is
+			// errs.ErrorInvalid, so returning it raw put the delivery on
+			// handleUserMessage's Retry arm (:838-842) and the user.message
+			// consumer's MaxDeliver: 3 (:573) exhausted it on a world no
+			// redelivery can change — the user was never told which loop to
+			// name. Only a transient failure, the shared view not caught up,
+			// is worth replaying; everything else is published as the refusal
+			// and settles on ITS PubAck, which is the split handleTaskSubmission
+			// already makes for this same call (:1117-1124). Fatal joins
+			// transient here and at the handler arm (:945) rather than being
+			// published as a refusal: activeLoop produces no fatal today, and
+			// if one became reachable, quarantining is the answer a refusal
+			// response would silently swallow.
+			if errs.IsFatal(err) || errs.IsTransient(err) {
+				return err
+			}
+			return c.sendResponse(ctx, commandRefusalResponse(msg, err))
+		}
+		// Resolved by us, not named by the message. L1 recorded this same fact
+		// when the source was the in-process tracker; #1329 moves the source to
+		// durable loop authority and leaves the fact, and the arm that reads it,
+		// unchanged.
+		targetResolved = loopID != ""
 	}
 
 	// Check if loop is required
@@ -982,7 +939,7 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 		// the same hazard. A signal this delivery attempted and cannot account
 		// for is not a delivery that did nothing, however the error reads; the
 		// rule, and why a proven refusal still retries, is on the helper.
-		if fatal := unconfirmedSignalIsFatal(err, effect, targetFromTracker, name, loopID); fatal != nil {
+		if fatal := unconfirmedSignalIsFatal(err, effect, targetResolved, name, loopID); fatal != nil {
 			return fatal
 		}
 		if errs.IsFatal(err) || errs.IsTransient(err) {
@@ -1004,19 +961,22 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 	// delivery may be replayed takes TWO conjuncts, and it needs both:
 	//
 	//  1. this delivery published a signal — recorded at the publish site
-	//     itself (commands.go:191), never inferred from the command name or
+	//     itself (commands.go:204), never inferred from the command name or
 	//     the response text; and
-	//  2. its target was resolved from the tracker rather than named by the
-	//     message (:953-963).
+	//  2. its target was resolved here rather than named by the message
+	//     (:888-920).
 	//
 	// With both, the replay is unsound: the message does not carry the identity
-	// the first delivery acted on, and resolution is not stable across it.
-	// GetActiveLoop prefers the channel's loop only while that loop is
-	// non-terminal and otherwise falls back to the user's most recent one
-	// (loop_tracker.go:212-233), so the very effect this delivery had — loop A
-	// now terminal — is what makes the redelivery resolve to a DIFFERENT live
-	// loop B and cancel it. A's terminal guard cannot protect B. The burden of
-	// proof is on the Retry and the message cannot meet it, so the lane stops.
+	// the first delivery acted on, so a redelivery cannot repeat what this
+	// delivery did — it resolves afresh against a world this delivery changed.
+	// activeLoop (http_activity.go:321-339) matches the exact user, channel
+	// type and channel and refuses ambiguity, so the widest form of the hazard
+	// is gone: the redelivery cannot fall through to a live loop on some other
+	// channel of the same user. What survives is same-route rebirth — a loop
+	// started on THIS route between the two deliveries is the current one when
+	// the redelivery reads, and it would be cancelled having never been named.
+	// The burden of proof is on the Retry and the message cannot meet it, so
+	// the lane stops.
 	//
 	// Without both, the redelivery is provably effect-free and Retry is the
 	// right answer — the user has been told nothing, so the redelivery is what
@@ -1024,20 +984,24 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 	//
 	//   - `/cancel <loop_id>`: the gate re-reads THAT loop, finds it terminal
 	//     once the cancel took effect, and answers "already settled" without
-	//     publishing anything (commands.go:136-148); a signal that races the
+	//     publishing anything (commands.go:153-163); a signal that races the
 	//     loop's own settlement is dropped effect-free by the loop's cancel
 	//     owner.
-	//   - `/help`, `/loops`, a bare `/status`, and the three arms of bare
-	//     `/cancel` that publish nothing (no active loop, gate refusal, already
-	//     settled): they resolved a target and did nothing with it. Quarantining
-	//     these would latch the whole user.message lane on a failed response to
-	//     a read-only command.
+	//   - a bare `/status` and the three arms of bare `/cancel` that publish
+	//     nothing (no active loop, gate refusal, already settled): they resolved
+	//     a target and did nothing with it.
+	//   - `/help` and `/loops`, which declare they consume no target
+	//     (`ResolvesActiveLoop`, command_registry.go:22-38) and are therefore
+	//     never given one: they fail the second conjunct outright.
+	//
+	//     Quarantining any of them would latch the whole user.message lane on a
+	//     failed response to a read-only command.
 	//
 	// Recovering the target in case 1 would mean a durable per-command
 	// selection record written on every bare command for a rare path; L4
 	// (#1330) is where identity-preserving replay makes that unnecessary.
 	if err := c.sendResponse(ctx, resp); err != nil {
-		if effect.signalled() && targetFromTracker {
+		if effect.signalled() && targetResolved {
 			return errs.WrapFatal(err, "Component", "handleCommand", fmt.Sprintf(
 				"command %s signalled loop %s, which this message does not name, and its acknowledgement is not published",
 				name, loopID))
@@ -1105,8 +1069,11 @@ func (c *Component) buildTaskMessage(ctx context.Context, msg agentic.UserMessag
 // field the caller can act on — reply_to on a refused continuation, the task
 // field TaskMessage.Validate rejected on a refused payload.
 //
-// It never counts anything: the refusal it is handed was already metered and
-// logged exactly once, where it was built.
+// It never counts anything. A refusal from the admission gate was metered and
+// logged exactly once where it was built; the route ambiguity this lane can
+// also be handed (:1117-1124, from http_activity.go:334) is the one refusal in
+// this component that is neither, for the reason and with the safety argument
+// recorded at commandRefusalResponse (commands.go:61-71).
 func (c *Component) answerRefusedSubmission(ctx context.Context, msg agentic.UserMessage, refusal error) error {
 	return c.sendResponse(ctx, agentic.UserResponse{
 		ResponseID:  uuid.New().String(),
@@ -1151,7 +1118,15 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		if msg.ReplyTo != "" {
 			loopID = msg.ReplyTo
 		} else if c.config.AutoContinue {
-			loopID = c.loopTracker.GetActiveLoop(msg.UserID, msg.ChannelID)
+			loopID, err = c.activeLoop(ctx, msg)
+			if err != nil {
+				// Fatal joins transient for the reason recorded at the command
+				// lane's copy of this arm (:895-914).
+				if errs.IsFatal(err) || errs.IsTransient(err) {
+					return err
+				}
+				return c.answerRefusedSubmission(ctx, msg, err)
+			}
 		}
 
 		if loopID != "" {
@@ -1185,25 +1160,6 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 	taskID := task.TaskID
 	loopID = task.LoopID
 
-	// Track the loop and count it started. This is after the task is assembled
-	// and addressable and before the publish: the approval-pending arrival
-	// buffer that Track drains exists to absorb exactly this window, and the
-	// alternative — track first, untrack on failure — is a compensating action a
-	// later branch can skip.
-	c.loopTracker.Track(&LoopInfo{
-		LoopID:           loopID,
-		TaskID:           taskID,
-		Role:             task.Role,
-		UserID:           msg.UserID,
-		ChannelType:      msg.ChannelType,
-		ChannelID:        msg.ChannelID,
-		State:            "pending",
-		MaxIterations:    20,
-		ContextRequestID: msg.ContextRequestID,
-		CreatedAt:        time.Now(),
-	})
-	c.metrics.recordLoopStarted()
-
 	if err := c.natsClient.PublishToStream(ctx, prepared.subject, prepared.data); err != nil {
 		return errs.WrapFatal(err, "Component", "handleTaskSubmission",
 			fmt.Sprintf("task publication for loop %s has unknown durable state", loopID))
@@ -1223,22 +1179,22 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		Content:     fmt.Sprintf("Task submitted. Loop: %s", loopID),
 		Timestamp:   time.Now(),
 	}); err != nil {
-		// The task already has its PubAck (:1192) and the loop is tracked, so
-		// the delivery that carried this submission can no longer be replayed
-		// free of effect. Identity is no longer the reason it cannot: stable
-		// task identity (#1328) means a redelivery reads its own committed task
-		// back through findRetainedDispatchTask and republishes the same TaskID
-		// and LoopID, which is what downstream deduplication keys on. What a
-		// redelivery does repeat is the tracking at :1178 — Track replaces the
-		// whole LoopInfo, so a loop that has since advanced is reset to
-		// "pending" under a new CreatedAt — and the two started records at :1190
-		// and :1198: tasks_submitted_total counts one submission twice, and
-		// active_loops is a GAUGE, so a second Inc against one later Dec leaks
-		// it upward for the process's life. Partial effect, unknown commit: the
-		// lane quarantines and an operator sees a stopped lane naming the cause.
-		// Relaxing this to Retry needs that re-entry made idempotent, not more
-		// identity; openspec/changes/stable-request-identity/design.md records
-		// why this layer does not take it.
+		// The task already has its PubAck (:1159), so the delivery that carried
+		// this submission can no longer be replayed free of effect. Two of the
+		// three effects #1328 named here are gone: identity, because a
+		// redelivery reads its own committed task back through
+		// findRetainedDispatchTask and republishes the same TaskID and LoopID,
+		// which is what downstream deduplication keys on; and the tracked
+		// LoopInfo being replaced under a loop that had advanced, because
+		// #1329 retires the in-process tracker and loop state is durable. What
+		// survives is the counter at :1118 — tasks_submitted_total moves twice
+		// for one submission. Partial effect, unknown commit: the lane
+		// quarantines and an operator sees a stopped lane naming the cause.
+		// The classification is carried, not re-derived: whether one counter is
+		// still reason enough now that the durable state is idempotent is a
+		// question for a change that owns this arm, and
+		// openspec/changes/durable-loop-authority/design.md records it as a
+		// residual rather than deciding it in a rebase.
 		return errs.WrapFatal(err, "Component", "handleTaskSubmission",
 			fmt.Sprintf("task %s for loop %s is published but its acknowledgement is not", taskID, loopID))
 	}
@@ -1258,101 +1214,11 @@ func (c *Component) handleAgentComplete(ctx context.Context, data []byte) {
 	}
 }
 
-// handleAgentCreated processes loop creation events for workflow context sync
-func (c *Component) handleAgentCreated(_ context.Context, data []byte) (natsclient.DeliveryDecision, error) {
-	// Parse BaseMessage envelope
-	baseMsg, err := c.decoder.Decode(data)
-	if err != nil {
-		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("decode agent-created event: %w", err)
-	}
-
-	// Extract LoopCreatedEvent from payload
-	createdPtr, ok := baseMsg.Payload().(*agentic.LoopCreatedEvent)
-	if !ok {
-		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("unexpected agent-created payload type %T", baseMsg.Payload())
-	}
-	created := *createdPtr
-
-	// Check if we already track this loop (we originated it)
-	if existing := c.loopTracker.Get(created.LoopID); existing != nil {
-		// Atomically update workflow context if missing
-		c.loopTracker.UpdateWorkflowContext(created.LoopID, created.WorkflowSlug, created.WorkflowStep)
-		// Atomically update context request ID if missing
-		c.loopTracker.UpdateContextRequestID(created.LoopID, created.ContextRequestID)
-		return natsclient.DeliveryDecisionAck, nil
-	}
-
-	// New loop we didn't originate - track it
-	c.loopTracker.Track(&LoopInfo{
-		LoopID:           created.LoopID,
-		TaskID:           created.TaskID,
-		Role:             created.Role,
-		State:            "executing",
-		MaxIterations:    created.MaxIterations,
-		WorkflowSlug:     created.WorkflowSlug,
-		WorkflowStep:     created.WorkflowStep,
-		ContextRequestID: created.ContextRequestID,
-		Metadata:         created.Metadata,
-		CreatedAt:        created.CreatedAt,
-	})
-
-	// Record external loop for metrics (will be decremented by handleAgentComplete)
-	c.metrics.recordLoopStarted()
-
-	c.logger.Debug("Tracked external loop",
-		slog.String("loop_id", created.LoopID),
-		slog.String("workflow_slug", created.WorkflowSlug),
-		slog.String("workflow_step", created.WorkflowStep))
-	return natsclient.DeliveryDecisionAck, nil
-}
-
 // handleAgentFailed processes loop failure events
 func (c *Component) handleAgentFailed(ctx context.Context, data []byte) {
 	if err := c.settleAgentTerminal(ctx, data); err != nil {
 		c.logger.Warn("Agent terminal settlement failed", slog.Any("error", err))
 	}
-}
-
-// handleAgentApprovalPending records the gated tool-call info on the
-// loop tracker so the HTTP approval handler has the loop's CallID +
-// tool args available locally without a KV.Get round-trip per
-// request. The framework's agentic-loop emits this event when a tool
-// call hits config.approval_required and the loop transitions to
-// LoopStateAwaitingApproval; dispatch is one of several subscribers
-// (the others being product-layer approval UIs).
-func (c *Component) handleAgentApprovalPending(_ context.Context, data []byte) (natsclient.DeliveryDecision, error) {
-	baseMsg, err := c.decoder.Decode(data)
-	if err != nil {
-		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("decode approval-pending event: %w", err)
-	}
-
-	pending, ok := baseMsg.Payload().(*agentic.ApprovalPendingEvent)
-	if !ok {
-		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("unexpected approval-pending payload type %T", baseMsg.Payload())
-	}
-
-	if pending.LoopID == "" || pending.CallID == "" {
-		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("approval-pending event missing required loop_id or call_id")
-	}
-
-	// SetPendingApproval handles the unknown-loop race internally by
-	// buffering until the matching agent.created arrives. Returns
-	// false on miss-or-buffered; either way the framework's loop
-	// state is canonical and the HTTP handler degrades gracefully.
-	if accepted := c.loopTracker.SetPendingApproval(pending.LoopID, &PendingApprovalInfo{
-		CallID:      pending.CallID,
-		ExecutionID: pending.ExecutionID,
-		RequestID:   pending.RequestID,
-		ToolName:    pending.ToolName,
-		Arguments:   pending.Arguments,
-		Reason:      pending.Reason,
-		RequestedAt: pending.RequestedAt,
-		TraceID:     pending.TraceID,
-	}); !accepted {
-		return natsclient.DeliveryDecisionRetry,
-			fmt.Errorf("approval-pending projection for loop %q was not accepted", pending.LoopID)
-	}
-	return natsclient.DeliveryDecisionAck, nil
 }
 
 // sendResponse publishes a response to the user's channel
@@ -1462,11 +1328,6 @@ func (c *Component) CommandRegistry() *CommandRegistry {
 	return c.registry
 }
 
-// LoopTracker returns the loop tracker
-func (c *Component) LoopTracker() *LoopTracker {
-	return c.loopTracker
-}
-
 // inputPortBinding returns the configured stream and sole subject for a named JetStream input.
 func (c *Component) inputPortBinding(portName string) (string, string, error) {
 	for _, port := range c.inputPorts {
@@ -1521,15 +1382,7 @@ func (c *Component) resolveAndWaitForSubscriptionBindings(
 	if err != nil {
 		return subscriptionInputBindings{}, err
 	}
-	bindings.agentCreated, err = resolve("agent.created")
-	if err != nil {
-		return subscriptionInputBindings{}, err
-	}
 	bindings.agentFailed, err = resolve("agent.failed")
-	if err != nil {
-		return subscriptionInputBindings{}, err
-	}
-	bindings.approvalPending, err = resolve("agent.approval_pending")
 	if err != nil {
 		return subscriptionInputBindings{}, err
 	}
@@ -1537,9 +1390,7 @@ func (c *Component) resolveAndWaitForSubscriptionBindings(
 	streamNames := []string{
 		bindings.userMessage.streamName,
 		bindings.agentComplete.streamName,
-		bindings.agentCreated.streamName,
 		bindings.agentFailed.streamName,
-		bindings.approvalPending.streamName,
 	}
 	seen := make(map[string]struct{}, len(streamNames))
 	for _, streamName := range streamNames {
@@ -1581,10 +1432,10 @@ func (c *Component) outputPortDefs() []component.PortDefinition {
 // loadGlobalCommands loads globally registered commands into the component
 func (c *Component) loadGlobalCommands() {
 	cmdCtx := &CommandContext{
-		NATSClient:    c.natsClient,
-		LoopTracker:   c.loopTracker,
-		Logger:        c.logger,
-		HasPermission: c.hasPermission,
+		NATSClient:      c.natsClient,
+		LookupLoopOwner: c.lookupLoopOwner,
+		Logger:          c.logger,
+		HasPermission:   c.hasPermission,
 	}
 
 	for name, executor := range ListRegisteredCommands() {

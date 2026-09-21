@@ -51,7 +51,7 @@ state, and records append-only observed trajectory facts with separately stored 
     "max_iterations": 20,
     "timeout": "120s",
     "stream_name": "AGENT",
-    "loops_bucket": "AGENT_LOOPS",
+    "approval_timeout": "12h",
     "trajectory_evidence_storage_instance": "objectstore",
     "context": {
       "enabled": true,
@@ -109,10 +109,16 @@ state, and records append-only observed trajectory facts with separately stored 
 | `timeout` | string | "120s" | Loop execution timeout |
 | `stream_name` | string | "AGENT" | JetStream stream name |
 | `consumer_name_suffix` | string | "" | Suffix for consumer names (for testing) |
-| `loops_bucket` | string | "AGENT_LOOPS" | KV bucket for loop state |
+| `approval_timeout` | string | "12h" | Positive approval wait, at most 12h; invalid or longer values fail configuration admission |
 | `trajectory_evidence_storage_instance` | string | "objectstore" | Registered Store instance for full evidence |
 | `context` | object | (defaults) | Context management configuration |
 | `ports` | object | (defaults) | Port configuration |
+
+The existing `loops` KV-write output selects the loop bucket, defaulting to `AGENT_LOOPS`.
+To use another bucket, override that named output's `config.bucket`; the removed top-level `loops_bucket` key
+is rejected even if it matches the port. Startup observes History 10, TTL 24h and nonbinding MaxBytes before work.
+The 12-hour approval limit leaves nominal grace, not a recovery guarantee; replacement preserves existing deadlines.
+See the [migration notes](../../docs/operations/migration-beta162-to-beta163.md#loop-bucket-declaration-and-approval-wait-limit-1146).
 
 ### Context Configuration
 

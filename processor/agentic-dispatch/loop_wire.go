@@ -2,15 +2,19 @@ package agenticdispatch
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/internal/agentterminal"
+	"github.com/c360studio/semstreams/internal/looptoken"
+	"github.com/c360studio/semstreams/message"
 )
 
 // Loop is the canonical wire contract for both the /loops and /activity endpoints.
 // It is a flat superset: fields absent from a given source remain zero/empty.
-// LoopInfo (in-memory tracker) and agentic.LoopEntity (KV entity) each project
-// onto this type, so consumers see a single consistent shape regardless of
-// whether the data originated from a live tracker record or a KV watch event.
+// Current-state DTOs and validated KV records project onto this type, so
+// consumers see a single consistent shape across list and activity responses.
 type Loop struct {
 	LoopID        string `json:"loop_id"`
 	TaskID        string `json:"task_id,omitempty"`
@@ -37,8 +41,8 @@ type Loop struct {
 	PendingApproval *PendingApprovalInfo `json:"pending_approval,omitempty"`
 }
 
-// loopFromInfo projects the dispatch-owned in-memory tracker record onto Loop.
-// ParentLoopID stays empty — the tracker does not record spawn relationships today.
+// loopFromInfo projects the immutable list DTO onto Loop.
+// ParentLoopID stays empty because LoopInfo has no ancestry field.
 func loopFromInfo(in *LoopInfo) Loop {
 	return Loop{
 		LoopID:        in.LoopID,
@@ -52,7 +56,7 @@ func loopFromInfo(in *LoopInfo) Loop {
 		ParentLoopID:  "", // not tracked in LoopInfo today — scoped-out follow-up
 		RunID:         "", // not tracked in LoopInfo today — /activity (loopFromEntity) carries it
 		RunEntityID:   "", // ditto
-		// entity-id-audit:classify intentional-sentinel "" line=54 column=18 surface=go-field:Loop.RunEntityID entity_id_invalid:empty optional projection unavailable from LoopInfo
+		// entity-id-audit:classify intentional-sentinel "" line=58 column=18 surface=go-field:Loop.RunEntityID entity_id_invalid:empty optional projection unavailable from LoopInfo
 		Outcome:         in.Outcome,
 		Result:          in.Result,
 		Error:           in.Error,
@@ -77,24 +81,26 @@ func loopFromEntity(e *agentic.LoopEntity, org, platform string) Loop {
 			runEntityID = id
 		}
 	}
+	pending := pendingApprovalInfo(e.PendingApproval)
 	return Loop{
-		LoopID:        e.ID,
-		TaskID:        e.TaskID,
-		State:         e.State.String(),
-		Role:          e.Role,
-		Iterations:    e.Iterations,
-		MaxIterations: e.MaxIterations,
-		UserID:        e.UserID,
-		ChannelType:   e.ChannelType,
-		ParentLoopID:  e.ParentLoopID,
-		RunID:         e.RunID,
-		RunEntityID:   runEntityID,
-		Outcome:       e.Outcome,
-		Result:        e.Result,
-		Error:         e.Error,
-		Prompt:        "", // not present on live LoopEntity
-		TokensIn:      0,  // not present on live LoopEntity
-		TokensOut:     0,  // not present on live LoopEntity
+		LoopID:          e.ID,
+		TaskID:          e.TaskID,
+		State:           e.State.String(),
+		Role:            e.Role,
+		Iterations:      e.Iterations,
+		MaxIterations:   e.MaxIterations,
+		UserID:          e.UserID,
+		ChannelType:     e.ChannelType,
+		ParentLoopID:    e.ParentLoopID,
+		RunID:           e.RunID,
+		RunEntityID:     runEntityID,
+		Outcome:         e.Outcome,
+		Result:          e.Result,
+		Error:           e.Error,
+		Prompt:          "", // not present on live LoopEntity
+		TokensIn:        0,  // not present on live LoopEntity
+		TokensOut:       0,  // not present on live LoopEntity
+		PendingApproval: pending,
 	}
 }
 
@@ -120,13 +126,27 @@ type completionWire struct {
 }
 
 // loopFromCompletion projects a COMPLETE_<loopID> terminal event payload onto Loop.
-// Returns ok=false only when the bytes cannot be unmarshalled or yield no loop_id.
+// Returns ok=false unless the bytes validate as an ordinary terminal payload.
 func loopFromCompletion(raw []byte) (Loop, bool) {
 	var w completionWire
 	if err := json.Unmarshal(raw, &w); err != nil {
 		return Loop{}, false
 	}
 	if w.LoopID == "" {
+		return Loop{}, false
+	}
+	var payload message.Payload
+	switch w.Outcome {
+	case agentic.OutcomeSuccess:
+		payload = &agentic.LoopCompletedEvent{}
+	case agentic.OutcomeFailed:
+		payload = &agentic.LoopFailedEvent{}
+	case agentic.OutcomeCancelled:
+		payload = &agentic.LoopCancelledEvent{}
+	default:
+		return Loop{}, false
+	}
+	if err := json.Unmarshal(raw, payload); err != nil || payload.Validate() != nil {
 		return Loop{}, false
 	}
 	return Loop{
@@ -145,4 +165,45 @@ func loopFromCompletion(raw []byte) (Loop, bool) {
 		RunID:        w.RunID,
 		RunEntityID:  w.RunEntityID,
 	}, true
+}
+
+// loopFromCompletion validates the canonical key and ordinary stored completion,
+// accepting raw terminal records and registered terminal envelopes.
+func (c *Component) loopFromCompletion(key string, raw []byte) (Loop, error) {
+	loopID := strings.TrimPrefix(key, completeKeyPrefix)
+	if !strings.HasPrefix(key, completeKeyPrefix) || !looptoken.Valid(loopID) {
+		return Loop{}, fmt.Errorf("invalid completion key %q", key)
+	}
+	if loop, ok := loopFromCompletion(raw); ok {
+		if loop.LoopID != loopID {
+			return Loop{}, fmt.Errorf("completion key %q contains loop %q", key, loop.LoopID)
+		}
+		return loop, nil
+	}
+	if c.decoder == nil {
+		return Loop{}, fmt.Errorf("completion decoder unavailable")
+	}
+	base, err := c.decoder.Decode(raw)
+	if err != nil {
+		return Loop{}, fmt.Errorf("decode completion %q: %w", key, err)
+	}
+	if err := base.Validate(); err != nil {
+		return Loop{}, fmt.Errorf("validate completion %q: %w", key, err)
+	}
+	event, err := agentterminal.Decode(c.decoder, raw)
+	if err != nil {
+		return Loop{}, fmt.Errorf("invalid completion %q: %w", key, err)
+	}
+	if event.LoopID != loopID {
+		return Loop{}, fmt.Errorf("completion key %q contains loop %q", key, event.LoopID)
+	}
+	payload, err := json.Marshal(base.Payload())
+	if err != nil {
+		return Loop{}, err
+	}
+	loop, ok := loopFromCompletion(payload)
+	if !ok {
+		return Loop{}, fmt.Errorf("invalid terminal projection on %q", key)
+	}
+	return loop, nil
 }
