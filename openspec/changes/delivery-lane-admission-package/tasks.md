@@ -219,16 +219,33 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
       | component | lane | `Observe` call | `nil onFatal` | settlement guard |
       |---|---|---|---|---|
       | dispatch | `agent.complete` | KILLED (integration only) | SURVIVED -> KILLED (3 new assertions) | n/a |
-      | dispatch | `agent.failed` | (same call site) | (same reaction) | n/a |
-      | dispatch | `user.message` | n/a | (same reaction) | KILLED by 2.8 |
+      | dispatch | `agent.failed` | **SURVIVED both** | **SURVIVED both** | n/a |
+      | dispatch | `user.message` | KILLED | KILLED | KILLED by 2.8 |
       | tools | `tool.execute` | SURVIVED -> KILLED | SURVIVED -> KILLED | n/a |
       | loop | heartbeat | KILLED | KILLED | n/a |
       | loop | settlement | KILLED | KILLED | SURVIVED -> KILLED (same-lane replay) |
       | model | metadata | KILLED | KILLED | n/a |
       | governance | 3 ports | KILLED | KILLED | SURVIVED -> KILLED (same-lane replay) |
 
-      The two SURVIVED -> KILLED wiring pairs (dispatch, tools) were closed inside the existing test that already
-      walks that lane to a fatal, by asserting health degraded, status, and `LastError`; the two SURVIVED -> KILLED
+      Dispatch has three distinct `Observe` call sites and three distinct `onFatal` writers
+      (`recordDeliveryOwnerFatal`, `recordAgentCompleteFatal`, `recordAgentFailedFatal`), so all six were mutated
+      separately rather than assumed to share a fate — and they did not.
+      **`agent.failed` is an open wiring gap, pre-existing and carried over unchanged.** Deleting its `Observe`
+      call and nulling its `onFatal` both SURVIVE the untagged suite (2.3s) AND `-tags=integration -p 2`
+      (81.1s / 79.4s): no test in the package walks that lane to a fatal through production `setupSubscriptions`.
+      `TestTerminalLaneFatalHealthFailsClosedIndependently` covers `recordAgentFailedFatal` by calling it directly,
+      and `port_overrides_test.go` covers the lane's configuration — neither reaches the wiring. The remedy the
+      coordinator prescribed (add health/`LastError` assertions to the test that already walks that lane to a
+      fatal) has no target here: `agent.complete`'s equivalent is
+      `TestIntegrationProductionCallbackUnknownPublishQuarantinesExactLane`, and `agent.failed` has no analogue.
+      Closing it means WRITING that analogue, which is beyond this change's design — recorded as a question for the
+      coordinator, not fixed. Evidence that it is pre-existing rather than introduced: `inventory.md` § 4 pins the
+      same two wiring calls at `3faca84f` with the same arguments
+      (`component.go:659` `newDeliveryLaneAdmission(c.recordAgentFailedFatal, ...)`, `:675`
+      `c.observeDeliveryLane(ctx, &agentFailedBinding, agentFailedAdmission)`), and the 45-function census lists no
+      test reaching them.
+      The two SURVIVED -> KILLED wiring pairs (dispatch `agent.complete`, tools) were closed inside the existing
+      test that already walks that lane to a fatal, by asserting health degraded, status, and `LastError`; the two SURVIVED -> KILLED
       settlement guards (loop, governance) were closed by replaying a second delivery into the SAME latched lane
       and asserting no terminal method and no "did not settle cleanly" report. Loop and model needed no new
       assertions at the wiring level: loop is the best-covered of the five, and model's detector is the one
