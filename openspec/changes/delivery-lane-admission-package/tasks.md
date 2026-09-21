@@ -139,11 +139,32 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
 
 ## 3. Guard (severable; drop on reviewer or owner call)
 
-- [ ] 3.1 `test/contract/delivery_lane_one_home_contract_test.go`: fails if any production file outside
+- [x] 3.1 `test/contract/delivery_lane_one_home_contract_test.go`: fails if any production file outside
       `internal/deliverylane` declares a field of type `chan natsclient.DeliveryResult` — the latch's one
       unmistakable fingerprint (five hits today, all in the files this change deletes). Scoped to the latch only:
       the eleven legitimate `drainIssued` drain-once bindings (`inventory.md` § 2) are not in its reach, and the
       spec SHALL it enforces is narrowed to the latch to match.
+      DONE, kept (it did not fight). Implemented as designed: a `go/parser` AST scan of non-test `.go` files,
+      matching a STRUCT FIELD whose type is a channel of `natsclient.DeliveryResult` in any direction. Final
+      fingerprint count tree-wide: **one production declaration**, `internal/deliverylane/deliverylane.go:30`
+      (five before this change). The three remaining hits are all `make(chan ...)` in tests, which the scan
+      exempts by design.
+      Two things the task line did not say, both found by mutating the guard itself:
+      (a) the first draft read only the FIRST natsclient import spec, so a second, ALIASED import of the same
+      path slipped past (`gd2` SURVIVED). The scan now collects every local name for the path; `gd2b` KILLED.
+      (b) a detector that stops matching would pass over an empty tree forever, so the test asserts non-vacuity:
+      it must find the home's own latch, and `t.Fatal`s naming the detector — not the tree — when it does not.
+      Guard mutation evidence (`go test -count=1 ./test/contract/ -run TestDeliveryLaneLatchHasOneHome`; each
+      file restored from a `cp` backup with md5 verified equal and `git diff` empty):
+      `gd1` add `fatal chan natsclient.DeliveryResult` to `agentic-dispatch`'s `Component` → KILLED;
+      `gd2` the same field through a second, aliased import → SURVIVED → detector widened → `gd2b` KILLED;
+      `gd3` retype the home's own field to `chan *natsclient.DeliveryResult` → INVALID MUTANT (build failure, not
+      test sensitivity), re-run as `gd3b`, a compiling variant that spells it through `type latched =
+      natsclient.DeliveryResult` → KILLED by the non-vacuity assertion.
+      Recorded bound: the scan matches the fingerprint AS WRITTEN (AST, not types), so a local type alias outside
+      the home would evade it. Deliberate — this catches drift, not an adversary, and a whole-tree type-check
+      (the `packages.Load` shape `context_ownership_contract_test.go` uses) is more machinery than the design
+      asked for. The non-vacuity assertion is what keeps the bound honest.
 
 ## 4. Spec, docs, evidence
 
