@@ -101,10 +101,13 @@
       re-stated here, because a count carried across two rebases is not a measurement: § 7.9 carries the numbers
       measured on the head that ships (56/56 and 232/232)
 - [x] 5.2 `task check:push` 0 on the round-1 head: zero `FAIL` lines, 312 `ok`, `[INTEGRATION] tests complete`
-- [x] 5.3 `task e2e:agentic` on the final head — required, both commits are BREAKING. Exit 0,
+- [x] 5.3 `task e2e:agentic` **measured at `3242572f`** (2026-09-18), which was this change's head THEN and is
+      not the head it ships on — every later rebase and review round is behind this line. Exit 0,
       `assertions_run=15`, `duration=2m4.752573667s`, all 17 stages green including
       `verify-stage-a-process-replacement` (78.679s, `dispatch_replacement_user_responses:1`),
-      `verify-durable-tool-replay` (44.652s) and `walk-approval-path` (`approval_listing_matched:2`)
+      `verify-durable-tool-replay` (44.652s) and `walk-approval-path` (`approval_listing_matched:2`). The tier is
+      required for a BREAKING commit, so a run on the head that ships is owed and is recorded in § 13's gates
+      line, not here: a tick that says "final head" cannot stay true across a rebase
 - [ ] 5.4 Implementation review resolved; stack rebased onto the reviewed L1 head; archive as the final content commit
 
 ## 7. Rebase onto the reviewed L2 head (`7eaff212`)
@@ -284,7 +287,9 @@ does the right thing and said the wrong thing about why.
 - [x] 9.5 **MEDIUM.** `TestIntegrationBareCancelWithFailedResponseQuarantines`'s header credited the wrong
       assertion. The reviewer proved by mutation (drop the `ChannelID` conjunct from `activeLoop`) that a widening
       makes loop A and loop B BOTH match the route, so `activeLoop` refuses with `loop_route_ambiguous` and the
-      command errors before publishing: what dies is the Quarantine assertion at `:436` and "the first delivery
+      command errors before publishing (§ 13.4: since `fec49dd3` it publishes that refusal instead, and the
+      fixture has no USER stream for it to reach, so the same two assertions die): what dies is the Quarantine
+      assertion at `:436` and "the first delivery
       cancelled this channel's loop" at `:439`. The `require.NotContains` at `:449` — the assertion the header
       named as the guard — stays GREEN under that mutation, and under a classification mutation too, because its
       whole block is inside `if decision == Retry`. Header rewritten to credit `:436`/`:439` and to name `:449` as
@@ -630,3 +635,95 @@ are delta text that would have been promoted as current truth at archive.
 
       `http_activity.go:321-339` (`activeLoop`), `component.go:724` and `command_registry.go:22-35` were checked
       and still land
+- [x] 12.7 Gates on `3e52c7df` — the content head of this round; `722ccb0f` adds only this record's markdown,
+      and `openspec validate` and `spec:properties` were re-run after it. `task lint` 0; `go test -race -count=1
+      ./processor/agentic-dispatch/... ./processor/agentic-loop/... ./pkg/graphview/...
+      ./frameworkcapabilities/graphresearch/...` 0, seven packages `ok`; `go test -race -count=1
+      -tags=integration -p 2 ./processor/agentic-dispatch/...` 0 — **268 `--- PASS`, 1 `--- SKIP`
+      (`TestHandleActivityStream_NoClient`, pre-existing), 0 `--- FAIL`**, so the green is not a vacuous one;
+      `go vet -tags=integration ./processor/agentic-dispatch/` 0; `go test -count=1 ./test/contract/...` 0;
+      `openspec validate durable-loop-authority --strict` 0; `task spec:properties` **271/271** (270 plus this
+      round's two new citations, minus § 12.3's removed one); `git diff --check` 0; `task schema:generate` then
+      `git status --porcelain schemas/ specs/` empty. `task e2e:agentic` was NOT run for this round — § 13.7 owes
+      and records it
+
+## 13. Internal review round on § 12 (2 HIGH, 3 MEDIUM, 2 NIT — CHANGES REQUESTED)
+
+The reviewer found no behaviour hole in § 12's two code fixes — the Ack is genuinely PubAck-conditioned on the
+production seam, the named-target paths are untouched, and no subtest is vacuous. **Every defect was in text
+§ 12 added**, which is the same class § 9 found and the reason the standing sweep exists.
+
+- [x] 13.1 **HIGH — the delta promised `/loops` escapes view readiness, and it does not.** `handleLoopsCommand`
+      calls `currentLoopSnapshot` in its OWN handler (`commands.go:283`) and returns its error raw; every
+      failure there is `WrapTransient`, so the bus lane retries (`component.go:945`) and HTTP answers 503, pinned
+      by `loop_projection_integration_test.go:88,:143`. § 12.2's fix removed `/loops`'s dependency on ROUTE
+      AMBIGUITY and on nothing else. Four sites overclaimed and all four are scoped: the delta sentence
+      (`spec.md:36-39`), the scenario GIVEN (`spec.md:149-156`, which now states the split rather than dropping
+      the condition — `/help` answers through an uncaught-up view, `/loops` still refuses one), the migration
+      note (`migration-beta162-to-beta163.md:1628-1635`, which contradicted its own "`/loops` and `/debug/state`
+      return 503" paragraph at `:1652-1654`) and the field doc comment (`command_registry.go:22-38`). The HTTP
+      lane comment (`http.go:277-282`) and `doc.go:56-59` were caught by the same sweep and scoped too
+- [x] 13.2 **HIGH — the same sentence forbade the task-submission lane's auto-continue.** "AutoContinue SHALL
+      resolve a target only for a command that declares it consumes one" binds all of AutoContinue, but two of its
+      three resolution sites are not commands (`component.go:1117`, `http.go:389`), and the requirement's own
+      edge-gateway scenario turns on a "route-only message". Rewritten with the lane as its subject: "For a
+      command, AutoContinue SHALL resolve a target only when the command declares it consumes one"
+- [x] 13.3 **MEDIUM — `loop_route_ambiguous` is neither metered nor logged, and two doc comments said it was.**
+      `activeLoop` builds it inline (`http_activity.go:334`) as a bare `&errs.ClassifiedError{…}`, while
+      `commandRefusalResponse` and `answerRefusedSubmission` both claimed every refusal they render "was already
+      metered and logged exactly once, where it was built". **No existing recorder fits.**
+      `loop_admission_refusals_total{seam,reason}` (`metrics.go:177-182`) counts what the ADMISSION GATE refused,
+      its nine reasons are enumerated in its own Help text, and its single producer takes a
+      `loopAdmissionRequest`; this refusal names no loop, reads no record, considers no ownership and has no seam
+      token at its site, so carrying it there would widen the family's meaning rather than add a label to it. A
+      new counter is what `proposal.md` § Non-goals refuses. Neither clause blocks a label — `spec.md:369` and
+      `proposal.md:49` say metric FAMILY — but no label fits honestly, so the ruling's fallback is taken: both
+      comments now say the refusal is unmetered, why (no seam, not a gate refusal) and why that is safe (both
+      lanes answer the user; HTTP counts it as a 409 at `http.go:212`), the gap is a declared residual in
+      `design.md` § Declared residuals, and `TestRouteAmbiguityRefusalIsAnsweredWithoutMeteringTheGate` pins BOTH
+      halves — the delivery lane answers and grows no series on the gate's counter, the HTTP lane counts its 409.
+      Wiring the counter in later turns that test red rather than leaving a comment stale
+- [x] 13.4 **MEDIUM — an integration header still described the pre-fix mechanism.**
+      `task_submission_settlement_integration_test.go:335` said a widened resolver "errors before publishing
+      anything". Since `fec49dd3` it publishes the refusal; the fixture creates no USER stream (`:360-364`), so
+      the publish fails, the mutant still signals nothing and its unclassified failure still leaves Retry — the
+      two assertions § 9.5 credited still die. Header corrected, and § 9.5's sentence qualified in place rather
+      than rewritten, since it recorded what was true then. **Sweep**
+      (`grep -rn 'loop_route_ambiguous\|errors before publishing\|before publishing anything'` over `processor/`,
+      this change directory and `docs/`): six hits, two were these, the other four are the construction site and
+      three correct present-tense descriptions
+- [x] 13.5 **MEDIUM — § 5.3's e2e tick claimed a head it was not measured on.** It said "on the final head" for a
+      run taken at `3242572f` on 2026-09-18, 31 commits and two command-path behaviour commits ago. Rewritten to
+      name the SHA and the date, to say plainly that it is not the head this ships on, and to point at § 13.7 for
+      the run that is. Not un-ticked: the run happened and its result stands for that head
+- [x] 13.6 **NIT — both resolver arms fail closed on a fatal.** `component.go:910` and `:1121` gated on
+      `IsTransient` alone, so a fatal classified error would have been published as a refusal and ACKED, losing
+      the quarantine the handler arm at `:945` gives it. Both now read `errs.IsFatal(err) || errs.IsTransient(err)`
+      with the reachability recorded at the site: `activeLoop` produces no fatal today. No test — the case is
+      unreachable, and a test that could only be written by mutating the producer would assert the mutation
+- [x] 13.7 **NIT — the migration note names the Go identifier.** `CommandConfig` is never unmarshalled, so an
+      adopter sets `ResolvesActiveLoop`, not `resolves_active_loop`. The JSON tag stays: all four siblings carry
+      one, and dropping it would make this field the odd one out for no gain
+- [x] 13.8 **Sweeps.** (a) `git diff 81cdabc9..HEAD | grep -iE 'warming|readiness|caught up|not caught'` over
+      this round's own additions returned nine lines: four were 13.1's overclaims, two were correctly scoped to
+      `/help` already (`command_target_resolution_test.go`, § 12.2's own record), one is `component.go:902`
+      naming the resolver's transient failure (accurate), one is pre-existing spec text re-emitted by a reflow.
+      (b) Every normative sentence this round added, checked for whether its subject is the lane the code
+      changed: 13.2's was the miss; "A refusal raised while RESOLVING a command's target SHALL…" had a
+      demonstrative referent and now names the command explicitly; the scenario "A command's target cannot be
+      resolved" now says "arrives on the user-message stream", since its THEN is a settlement decision that only
+      that lane has; "A command that consumes no target runs while resolution would refuse" already said "either
+      command lane" and both lanes did change
+- [x] 13.9 Gates on `dcf0f930`, the content head of this round — this record's own markdown is the only later
+      change, and `openspec validate` plus `task spec:properties` were re-run after it. `task lint` 0;
+      `go test -race -count=1 ./processor/agentic-dispatch/...` 0; `go vet -tags=integration
+      ./processor/agentic-dispatch/` 0; `openspec validate durable-loop-authority --strict` 0;
+      `task spec:properties` **272/272** (271 plus § 13.3's new citation); `git diff --check` 0;
+      `task schema:generate` then `git status --porcelain schemas/ specs/` empty.
+      **`task e2e:agentic` exit 0 on `dcf0f930`** — `assertions_run=15`, `duration=2m4.857432334s`, all 17 stages
+      reporting a duration, `dispatch_replacement_user_responses:1`,
+      `verify-stage-a-process-replacement_duration_ms:78790`, `verify-durable-tool-replay_duration_ms:44634`,
+      `approval_listing_matched:2`, `tools_quarantine_executor_attempts:2`, zero `level=ERROR` or `level=WARN`
+      lines in the tier log. Guard before it, per the standing rule that `e2e:check-ports` calls `e2e:clean` and
+      tears down every compose stack on the host: `pgrep -fl e2e.test` exit 1 with no match, `docker ps` and
+      `docker compose ls` both empty, both captured into the tier log before the run
