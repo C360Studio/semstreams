@@ -417,6 +417,16 @@ Mutation checks are named by the CALL deleted, never the primitive; each is run 
 Mutation criterion (`docs/contributing/01-testing.md:96-97`): "enforcement of a consequential invariant whose
 violation could … leave owned work running after shutdown" applies to I1, I4, I6.
 
+**PBT decision (taken at implementation, round 3; § 8 did not record one).** Shape 3 of the PBT decision applies —
+I1 and I2 are stateful histories whose outcome depends on the ORDER of the results a lane observes, and the § 8
+examples fix one order each. `internal/deliverylane/deliverylane_prop_test.go` carries one bounded property,
+`TestPropFirstOwnerStopResultWins`, over arbitrary result histories; its expectation is computed from the drawn
+history, never read back from the `Admission`. I4's concurrency obligation is deliberately NOT given to the
+property: a sequential state model cannot reach the observer-vs-Stop race, so it stays an explicit eight-goroutine
+`-race` example. Fuzzing is inapplicable — the package parses no external bytes or strings; `owner` is a
+caller-supplied literal and payloads are passed to caller-supplied work unread — so no fuzz target and no gap issue
+is owed (`tasks.md` 1.2a).
+
 ## 9. Sequencing and the rebase base
 
 Order: L3 (#1329, PR #1338) lands → this change → #1249 and #1330 implementation. Measured at the rebased L3 head

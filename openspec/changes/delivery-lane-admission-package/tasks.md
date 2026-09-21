@@ -20,12 +20,37 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
 
 ## 1. Package
 
-- [ ] 1.1 Add `internal/deliverylane/deliverylane.go` from `design.md` § 5 verbatim (gofmt-clean at draft; revive
-      `exported` and `package-comments` satisfied by the doc comments).
-- [ ] 1.2 Add `internal/deliverylane/deliverylane_test.go` proving I1–I9 (`design.md` § 7) with a local fake
+- [x] 1.1 Add `internal/deliverylane/deliverylane.go` from `design.md` § 5 verbatim (gofmt-clean at draft; revive
+      `exported` and `package-comments` satisfied by the doc comments). DONE: 228 lines, `gofmt -l` clean,
+      `task lint` clean. One deviation from § 5, recorded in `design.md` § 9b: the package doc comment applies
+      `design-review-2.md` MEDIUM-A — it no longer asserts `agentic/agentrun` as a PRESENT consumer, it says
+      "the five agentic components today, and agentic/agentrun once #1249 adopts it". No code line differs.
+- [x] 1.2 Add `internal/deliverylane/deliverylane_test.go` proving I1–I9 (`design.md` § 7) with a local fake
       `jetstream.ConsumeContext` and a local fake `jetstream.Msg`, including `TestSettleRefusesWithoutInvokingWork`
       (M8's primitive detector), `TestDoneIsClosedWhenNoObserverRan` (I6), and `TestObserveRefusesNilReact`;
       `-race`; `// spec:` citations name the `jetstream-consumer-policy` requirements this change modifies.
+      DONE: 12 test functions, all RUN and PASS under `go test -race -count=1` (no skips); every fatal fixture is
+      built through the production settlement path (`natsclient.SettleDeliveryWithRetry`), never by constructing a
+      `DeliveryResult`. Invariant → test: I1/I2 `TestLatchClosesOnFirstOwnerStopAndIgnoresEveryLaterResult`;
+      I3 `TestHealthWriterCompletesBeforeTheResultIsBuffered`; I4 `TestDrainHappensAtMostOnceAcrossObserverAndStop`;
+      I5 `TestClosedLaneTouchesNothingOnARefusedDelivery`; I6 `TestDoneIsClosedWhenNoObserverRan` +
+      `TestObserverExitsOnCancellationWithoutDraining`; I7 `TestSettleQuarantinesPanickingWorkWithTheOwnerNamedCause`;
+      I8 `TestTerminalMethodErrorAloneKeepsTheLaneOpen`; I9 `TestRefusalDeclarerSeesEverySubjectExactlyOnce`.
+      `TestConsumeRunsTheTypedHeartbeatPathAndLatchesItsResult` covers the admitted half of `Consume` through
+      `natsclient.ConsumeDeliveryWithHeartbeat`.
+- [x] 1.2a PBT and fuzz decisions, recorded here because `design.md` § 8 did not take them (testing discipline
+      § When to Use Property-Based Testing / § mandatory fuzz targets):
+      **PBT applies** — shape 3, "stateful histories where outcomes depend on operation order"; I1 and I2 are
+      order-dependent and the examples fix one order each. Added `internal/deliverylane/deliverylane_prop_test.go`,
+      `TestPropFirstOwnerStopResultWins`: arbitrary histories of owner-stop / clean results, expectation derived
+      from the drawn history (`firstFatal` is computed from the draw, never read back), boundaries by construction
+      (length 0 and "first result is fatal" are ordinary draws). 100/100 pass.
+      **Concurrency is NOT given to the property**: I4's obligation is a race between the observer's drain and
+      Stop's, which a sequential rapid state model cannot reach; it stays an explicit eight-goroutine `-race` test.
+      **Fuzz is inapplicable**: the package parses and validates no external bytes or strings — `owner` is a
+      caller-supplied literal used only in an error string, and every byte slice is handed to caller-supplied work
+      unread. The grammar surfaces it composes (`jetstream.Msg`, `DeliveryResult`) are `natsclient`'s, which owns
+      their fuzz obligation. No gap issue is owed because no new parsing surface is added.
 
 ## 2. Call sites (one commit per component; each green under the per-component gate above)
 
