@@ -524,3 +524,109 @@ re-home commit. Backup ref `refs/backup/gh1329-pre-l2round1-rebase-20260920` = `
       openspec:validate` 56/56 (55 specs plus this change — L2's is archived now and archives are not
       validated); `task spec:properties` 270/270; `task schema:generate` + `git status --porcelain schemas/
       specs/` 0, empty; `git diff --check` 0
+
+## 12. Owner Codex round 1 on PR #1338 (2 HIGH, 2 MEDIUM — CHANGES REQUESTED)
+
+Reviewed `81cdabc9` against `fbd3c173`. Both HIGH findings are on the command path and both were reached by
+tracing, not by a failing test: the suite was green and did not exercise either combination. Both MEDIUM findings
+are delta text that would have been promoted as current truth at archive.
+
+- [x] 12.1 **HIGH — an ambiguous command target exhausted the delivery and told the user nothing.**
+      `handleCommand` returned `activeLoop`'s error raw (`component.go:889` at the reviewed head). With two
+      nonterminal loops on one route — the world this change's own edge-gateway requirement accepts as reachable
+      through the loop-birth gap — `activeLoop` refuses with `loop_route_ambiguous`, which is `errs.ErrorInvalid`
+      (`http_activity.go:334`). `handleUserMessage` maps a nontransient error to Retry, the installed callback
+      passes that to `SettleDelivery`, and the `user.message` consumer runs `MaxDeliver: 3` (`component.go:573`):
+      a bare `/cancel` or `/status` was redelivered three times against a world no redelivery could change, and
+      then dropped. **Changed**: `component.go:895-910` takes the split its sibling already took for the same call
+      at `:1110-1115` — transient returns and retries; everything else publishes the refusal through
+      `commandRefusalResponse` and settles only on that publication's PubAck. The refusal text is `activeLoop`'s
+      own, so the bus lane and the HTTP 409 cannot drift apart. **Proven** by
+      `TestAmbiguousCommandTargetIsAnsweredBeforeSettling` through the installed `user.message` callback, three
+      subtests: the refusal is published and the delivery Acks; with the production `sendResponse` over an
+      unconnected client the same delivery Naks, so the Ack is conditioned on the publication and not assumed; and
+      a transient failure (no view at all) still Naks and publishes nothing. **Mutation** on `fec49dd3`: replacing
+      the arm with `return err` flips subtest 1 (`published` empty, 0 acks / 1 nak); restored by `cp`, md5
+      `e683742e935632af980f69698ced4bea` both sides
+- [x] 12.2 **HIGH — a command that consumes no target was given one.** Both lanes resolved an active loop before
+      every argument-less command, so `/loops` and `/help` — neither reads the `loopID` it is handed — failed
+      whenever resolution did: 409 on HTTP, and on the bus the delivery 12.1 now answers. `/loops` is how a user
+      finds the competing loop IDs, so the ambiguity disabled its own remedy, and `/help` inherited a dependency
+      on view readiness for state it never reads. **Changed**: `CommandConfig.ResolvesActiveLoop`
+      (`command_registry.go:22-35`), declared by `/cancel` and `/status`; both lanes gate the resolver on it
+      (`component.go:892`, `http.go:286`). `RequireLoop` cannot carry this — all four built-ins declare it false
+      — and the two stay independent, because a command may require a NAMED loop and accept no resolved one.
+      Adopter-visible: the field defaults false, recorded in `migration-beta162-to-beta163.md` § "Go callers and
+      component configuration" and in `doc.go`'s CommandExecutor section. **Proven** by
+      `TestCommandsThatConsumeNoTargetRunUnderRouteAmbiguity`: `/loops` and `/help` on both lanes with two matching
+      loops (the bus cases assert the listing names BOTH loops and that the delivery Acks), `/help` over a
+      component with no view at all, and the negative half — `/status` still resolves and still refuses 409, so a
+      fix that merely stopped resolving would fail. **Mutation** on `f0aa020c`: dropping the
+      `cmd.Config.ResolvesActiveLoop` conjunct from both lanes kills all five positive subtests; flipping
+      `/status`'s declaration to false kills the negative one. Restored by `cp`, md5s
+      `7ee3ebbd598817f6966d06c6cbf9e17e` (`component.go`), `8870064857835f32ea56941e9230e08e` (`http.go`),
+      `8d41a69ccd5e13618b84a11c2ccb71ec` (`commands.go`)
+- [x] 12.3 **MEDIUM — the superseded mixed-bucket requirement is removed.** "The shared loop view classifies the
+      mixed bucket" mandated poison for every non-loop key and `SearchResult` rendering; "The shared view
+      separates current authority from activity", two blocks above it, excludes those keys WITHOUT poisoning and
+      forbids research rendering. The implementation follows the second. `git log -S` says why both were there:
+      the first arrived with the restart-safety closeout's design sync (`8599fc5b`), the second with the
+      implementation commit (`5e0e2259`) that withdrew research rendering, and `8f2f36ff` carried both into this
+      delta without retiring the first. Removed, and `loop_projection_test.go:30` now cites only the retained
+      requirement — it had cited both incompatible ones. Neither `--strict` nor `spec:properties` can see this
+      class: both requirements exist and both citations resolved
+- [x] 12.4 **MEDIUM — the restated settlement preamble is narrowed to the surviving lanes.** The MODIFIED block
+      still required dispatch to classify and subscribe to `agent.created` and `agent.approval_pending` and
+      described three nonterminal lanes sharing a latch; this change deletes those two subscriptions and their
+      handlers, and `TestDispatchProductionCallbacksTerminateMalformedNonHeartbeatInputs` asserts they are not
+      bound. Three sentences narrowed, every surviving guarantee restated word for word; the scenarios are
+      untouched by this edit. `design.md` § "What the MODIFIED block restates" now records that the preamble is
+      owned here after all — the byte-identical rule is right for text this change does not own, and wrong for a
+      preamble that NAMES inputs this change removes — and § 11.18's byte-identical claim is qualified where it
+      stands rather than rewritten. The parked owner question about the hazard clause is untouched
+- [x] 12.5 **Sweeps, one path over each, per the standing rule.** (a) All four `activeLoop` callers classified:
+      `http.go:288` and `http.go:388` return raw into `handleHTTPMessage`, which answers the synchronous caller
+      503 + fixed phrase for transient and 409 + the refusal text otherwise — an answer, not a settlement;
+      `component.go:894` is 12.1; `component.go:1110` already had the split 12.1 copied. (b) Every other error
+      arm reachable from the command path, classified at its return: unknown command (`:855`), permission denied
+      (`:868`) and `RequireLoop` miss (`:920`) publish a typed response; a handler's nontransient non-fatal error
+      publishes "Command failed" (`:944`); fatal quarantines, transient retries, and the two post-publication
+      arms (`:997`, `:1001`) keep their L1 classification. No nontransient classified error settles without an
+      answer. TWO deliberate non-findings recorded rather than changed: `/loops` under a poisoned or
+      not-caught-up view retries and can exhaust `MaxDeliver: 3` — that is the transient bound the whole lane
+      runs on, not this defect class; and `handleTaskSubmission`'s `admitLoopRequest` arm (`:1120-1131`) answers
+      a TRANSIENT gate refusal as a refusal rather than retrying, symmetric with the HTTP lane and inherited from
+      #1225. (c) `grep -n 'agent\.created\|approval_pending\|three.*lane'` over the change directory returns
+      `proposal.md:6,:19` and `spec.md:13`, which describe the deletion correctly, plus the three preamble
+      sentences 12.4 fixes. The same grep over the PACKAGE found two more live ones that § 7.5 missed:
+      `component.go:109`'s struct comment and `delivery_owner_test.go:203`'s test header both still said the
+      three lanes share the latch. Both corrected. (d) `diff` of the archived baseline requirement
+      (`openspec/specs/agentic-dispatch/spec.md:365-479`) against the MODIFIED block: before this round, the
+      preamble was byte-identical and the only differences were the four scenario edits this change owns — no
+      scenario omitted, which is the thing `--strict` cannot see. After it, the differences are those four plus
+      12.4's three preamble narrowings plus one added scenario each for 12.1 and 12.2
+- [x] 12.6 **Fifteen pins re-derived with `sed -n "${n}p"` on this head.** FIVE were already stale at the
+      reviewed head `81cdabc9` rather than moved by this round — `component.go:725`'s caller pin, the three in
+      `delivery_owner_test.go`, and `http.go:27` — and two more pointed into `agentic-loop` at lines that had
+      moved under L2. The § 9.2 and § 10.4 tables above are historical and were NOT rewritten:
+
+      | site | was | now | resolves to |
+      |---|---|---|---|
+      | `component.go:725` | `:569` (already stale) | `:577` | `newDeliveryLaneAdmission(c.recordDeliveryOwnerFatal, nil)` |
+      | `component.go:900`, `command_target_resolution_test.go:114` | `:572` | `:573` | `MaxDeliver:    3,` |
+      | `component.go:905` | `:1102-1107` | `:1110-1115` | `loopID, err = c.activeLoop(…)` … `answerRefusedSubmission` |
+      | `component.go:963` | `:882-897` | `:888-916` | `loopID := ""` … the closing `}` of the resolution block |
+      | `component.go:1169` | `:1112` (already stale) | `:1150` | `c.natsClient.PublishToStream(ctx, prepared.subject, …)` |
+      | `component.go:960`, `command_effect.go:22`, `delivery_owner_test.go:327` | `commands.go:193` | `commands.go:195` | `noteSignalPublished(ctx)` |
+      | `delivery_owner_test.go:435`, `task_submission_settlement_integration_test.go:141` | `commands.go:187` | `commands.go:189` | `c.publishSignal(ctx, subject, signalData)` |
+      | `component.go:983` | `commands.go:142-152` | `commands.go:144-154` | `if facts.Terminal {` … its closing `}` |
+      | `delivery_owner_test.go:76` | `component.go:1284 -> :910` (already stale) | `:1227 -> :844` | the `PublishToStream` gate → the callback's Ack |
+      | `delivery_owner_test.go:78` | `:1270-1273` (already stale) | `:1213-1215` | the `sendResponseFn` short-circuit |
+      | `delivery_owner_test.go:105` | `component.go:916-926` (already stale) | `:855-863` | the unknown-command typed response |
+      | `http.go:27` | `component.go:1347-1351` (already stale) | `:1278-1282` | `sendUserResponseForLoop`'s observed publish |
+      | `command_effect.go:36` | `component.go:1413-1417` | `:1432-1436` | the `CommandExecutor` handler adapter |
+      | `commands.go:172` | `agentic-loop/component.go:2083` (already stale) | `:2533` | `handleSignalMessage`'s `decoder.Decode` |
+      | `terminal_settlement.go:200` | `agentic-loop/component.go:2389` (already stale) | `:2450` | `func (c *Component) persistLoopState` |
+
+      `http_activity.go:321-339` (`activeLoop`), `component.go:724` and `command_registry.go:22-35` were checked
+      and still land
