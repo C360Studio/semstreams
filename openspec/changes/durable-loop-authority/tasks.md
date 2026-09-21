@@ -743,3 +743,54 @@ production seam, the named-target paths are untouched, and no subtest is vacuous
       path moves, because the refusal returns before `recordCommandExecuted`. Mutation: deleting the
       `recordMessageReceived` call flips the new assertion (`0` vs `1`) while the absence assertion stays green,
       which is exactly the hole it closes. Restored by `cp`, md5 recorded in the round report
+
+## 14. Owner Codex round 2 on PR #1338 (APPROVE, 1 nonblocking MEDIUM)
+
+- [x] 14.1 **MEDIUM — the resolved-target read-only case stopped being one.** The subtest named "a read-only
+      command whose target was resolved, not named" delivered `/help`. § 12.2 made `/help` declare it consumes no
+      target, so from that commit on the delivery resolved nothing: `targetResolved` was false, the case fell to
+      the same conjunct as the no-loop subtest below it, and the `c.activeLoop` call beside it proved only that
+      resolution COULD have succeeded — never that the delivered command took that path. It now delivers a bare
+      `/status`, which does declare it consumes a target (`commands.go:29-35`), over a route whose current loop
+      has an exact persisted record. Nonblocking and test-only: the settled-cancel sibling still exercises
+      `targetResolved=true` with no signal, so the rule was never uncovered
+- [x] 14.2 **The witness, not the premise.** A bare `/status` that resolves nothing answers "No active loop"
+      before the gate (`commands.go:241-251`) and settles identically, so a settlement assertion cannot tell the
+      two apart — which is precisely how the `/help` version rotted silently. The subtest therefore records what
+      the DELIVERY read at the gate's own read seam (`loadPersistedLoopFn`) and asserts the read happened, on
+      that loop, once (`delivery_owner_test.go:423-441`)
+- [x] 14.3 **`/help` is dropped here rather than kept as a no-target case.** With the declaration in place its
+      settlement shape is identical to "a bare cancel with no loop to resolve" two subtests down — same
+      conjunct, same decision — so it discriminates nothing this test is about. The behaviour that IS distinct,
+      answering where resolution would refuse, is covered positively by
+      `TestCommandsThatConsumeNoTargetRunUnderRouteAmbiguity`
+- [x] 14.4 **Three comments carried the same stale premise.** `component.go:990-995` and this test's own header
+      listed `/help` and `/loops` among the commands that "resolved a target and did nothing with it"; both now
+      separate the two ways a command fails the resolution conjunct. `command_effect.go:16-22` is the same
+      sentence one file over and was NOT in the finding — sweep (b) found it
+- [x] 14.5 **Mutation evidence** (`cp` backup, md5 recorded, `[applied]` printed between mutating and testing).
+      M1: `component.go`, `if effect.signalled() && targetResolved {` → `if targetResolved {`, the conjunct this
+      case exists to hold. New subtest RED at `delivery_owner_test.go:442`. M1′, the point of the finding: with
+      M1 still applied, the pre-fix `/help` subtest spliced back from `HEAD~1` — **PASS**, so the old case was
+      blind to exactly the mutation it claimed to cover. M2: `commands.go`, `/status`'s `ResolvesActiveLoop`
+      `true` → `false`. RED at `:439` (`expected []string{…a1}, actual nil`) while every settlement assertion in
+      the subtest stayed satisfied — the read witness is what carries the resolution claim. Restored from the
+      backups; `md5` re-matched `7de7cc8c8f90a2b15a41f506f58e09b7` (component.go),
+      `2b24d80b747b032944eea56d4aff2fa6` (commands.go), `283fff04835ff946c727889c6bf23f5b`
+      (delivery_owner_test.go), and `git status --porcelain` was empty after each
+- [x] 14.6 **Sweeps.** (a) Every test in the package that delivers `/help` or `/loops` beside a resolved-target
+      premise: the finding is the only one. `TestDispatchProductionCallbacksTerminateMalformedNonHeartbeatInputs`
+      delivers `/help` as its well-formed input (`delivery_owner_test.go:287`) and asserts ACK plus the help text
+      — it seeds no loop and claims no resolution; `command_target_resolution_test.go:234,252,263,271,284` assert
+      the opposite premise (these commands run BECAUSE they resolve nothing) and are § 12.2's own coverage;
+      `cancel_signal_ambiguity_test.go:121,204` say "resolved target" of `/cancel`, which still declares one;
+      `metrics_test.go:112-113` and `command_registry_test.go:193` use the names as label and pattern inputs; the
+      four `httptest` hits are the `GET /loops` HTTP route, not the chat command. (b) Production comments naming
+      `/help` or `/loops` as a resolved-target path: `component.go:990` (the finding's) and `command_effect.go:18`
+      (new) were stale and are fixed; `component.go:885-886`, `http.go:279-282` and `command_registry.go:22-38`
+      are § 12.2's additions and already say these commands read no loop; `commands.go:38-51`, `doc.go:80-81`,
+      `loop_admission.go:112` and the `http.go` metric labels and OpenAPI paths are declarations or HTTP routes
+      with no resolution claim. (c) `tasks.md`/`design.md` prose describing the `/help` subtest as the
+      resolved-target case: none. The only prose naming the test is § 8.9's line at `tasks.md:239`, which says it
+      must keep its meaning without saying which command it delivers, and the spec's settlement scenarios never
+      name `/help`

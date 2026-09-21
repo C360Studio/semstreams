@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -315,12 +316,14 @@ var _ component.Discoverable = (*Component)(nil)
 
 // R1 quarantined a post-effect response failure on the command lane, and round
 // 6 found the predicate too wide: it keyed on where the TARGET came from, which
-// is true of every argument-less command while auto-continue is on — `/help`,
-// `/loops`, a bare `/status` — and of the three arms of bare `/cancel` that
-// publish nothing. None of them can be un-done by a replay, because none of
-// them did anything; quarantining them latches the whole user.message lane on a
-// failed response to a read-only command, and the cause text names a loop they
-// never touched.
+// is true of a bare `/status` and of the three arms of bare `/cancel` that
+// publish nothing. It was true of `/help` and `/loops` too, until the commands
+// that declare they consume no target stopped being given one
+// (`ResolvesActiveLoop`, command_registry.go:22-38); those two now fail the
+// provenance conjunct instead. None of them can be un-done by a replay, because
+// none of them did anything; quarantining them latches the whole user.message
+// lane on a failed response to a read-only command, and the cause text names a
+// loop they never touched.
 //
 // The predicate is now two conjuncts, and this test holds the half that must
 // NOT quarantine. The published fact comes from the publish site itself
@@ -405,24 +408,42 @@ func TestEffectFreeCommandWithFailedResponseRetries(t *testing.T) {
 		c, deliver, handles, ctx, cancel := newLane(t)
 		defer cancel()
 		// A current loop on this route, so handleCommand's auto-continue branch
-		// resolves a target for the argument-less /help — the exact condition
-		// that used to be sufficient to quarantine. The source moved from the
-		// process-local tracker to durable authority (#1329); the provenance
-		// fact the quarantine arm reads did not.
+		// resolves a target for the argument-less /status, which declares it
+		// consumes one (commands.go:29-35) — the exact condition that used to
+		// be sufficient to quarantine. The source moved from the process-local
+		// tracker to durable authority (#1329); the provenance fact the
+		// quarantine arm reads did not.
 		seedCurrentLoops(t, c, currentLoop(activeLoopID))
-		resolved, err := c.activeLoop(ctx, agentic.UserMessage{
-			UserID: "user-1", ChannelType: "cli", ChannelID: "channel-1"})
-		require.NoError(t, err)
-		require.Equal(t, activeLoopID, resolved)
+		// The gate's read seam, recording. A bare /status reaches it ONLY with
+		// a resolved target: given none it answers "No active loop" and returns
+		// before the gate (commands.go:241-251), and that answer settles
+		// identically. Without this witness the case cannot tell the resolved
+		// path from the path that never resolved — which is exactly how it
+		// stopped covering what it claimed when /help stopped resolving.
+		var readMu sync.Mutex
+		var reads []string
+		c.loadPersistedLoopFn = func(_ context.Context, loopID string) (*agentic.LoopEntity, error) {
+			readMu.Lock()
+			reads = append(reads, loopID)
+			readMu.Unlock()
+			if loopID != activeLoopID {
+				return nil, absentRecord(loopID)
+			}
+			return currentLoop(activeLoopID), nil
+		}
 
-		msg := command(t, "message-help", "/help")
+		msg := command(t, "message-bare-status", "/status")
 		deliver(ctx, msg)
 
+		readMu.Lock()
+		require.Equal(t, []string{activeLoopID}, reads,
+			"the DELIVERED command must resolve this target and read its record, or this is not the resolved-target case")
+		readMu.Unlock()
 		requireRetriedWithLaneIntact(t, c, msg, handles)
 
 		// And the lane still takes work, which is the cost a Quarantine here
 		// would have imposed on every later user message.
-		second := command(t, "message-help-2", "/help")
+		second := command(t, "message-bare-status-2", "/status")
 		deliver(ctx, second)
 		require.Equal(t, int32(1), second.naks.Load(), "the lane refused a later delivery")
 	})
@@ -457,7 +478,9 @@ func TestEffectFreeCommandWithFailedResponseRetries(t *testing.T) {
 	// This one discriminates neither predicate: with no loop to resolve,
 	// targetResolved is false, so the old provenance-only arm retried it too.
 	// It pins the no-loop path against a future widening, and is not coverage of
-	// the two-conjunct rule — the two subtests above are.
+	// the two-conjunct rule — the bare /status and settled bare /cancel above
+	// are, and both prove the target was resolved by the DELIVERY rather than
+	// by a separate call the delivery need not have made.
 	t.Run("a bare cancel with no loop to resolve", func(t *testing.T) {
 		c, deliver, handles, ctx, cancel := newLane(t)
 		defer cancel()

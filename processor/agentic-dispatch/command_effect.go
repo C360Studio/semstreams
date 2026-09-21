@@ -14,10 +14,12 @@ import (
 // commandEffect is one delivery's record of what its command handler actually
 // did to the world. It exists because the settlement decision in handleCommand
 // is about THIS delivery's effect, not about the shape of the request that
-// produced it: a bare /cancel that published a signal cannot be replayed,
-// while /help, /loops, a bare /status and the three arms of bare /cancel that
-// publish nothing (no active loop, gate refusal, already settled) can — they
-// resolved a target and then did nothing with it.
+// produced it: a bare /cancel that published a signal cannot be replayed, while
+// a bare /status and the three arms of bare /cancel that publish nothing (no
+// active loop, gate refusal, already settled) can — they resolved a target and
+// then did nothing with it. /help and /loops resolve no target at all
+// (ResolvesActiveLoop, command_registry.go:22-38), so they are replayable for
+// the other reason.
 //
 // The fact is recorded AT the publish site (commands.go:204) so it cannot drift
 // from what happened. Inferring it from the command name would be a second

@@ -987,11 +987,15 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 	//     publishing anything (commands.go:153-163); a signal that races the
 	//     loop's own settlement is dropped effect-free by the loop's cancel
 	//     owner.
-	//   - `/help`, `/loops`, a bare `/status`, and the three arms of bare
-	//     `/cancel` that publish nothing (no active loop, gate refusal, already
-	//     settled): they resolved a target and did nothing with it. Quarantining
-	//     these would latch the whole user.message lane on a failed response to
-	//     a read-only command.
+	//   - a bare `/status` and the three arms of bare `/cancel` that publish
+	//     nothing (no active loop, gate refusal, already settled): they resolved
+	//     a target and did nothing with it.
+	//   - `/help` and `/loops`, which declare they consume no target
+	//     (`ResolvesActiveLoop`, command_registry.go:22-38) and are therefore
+	//     never given one: they fail the second conjunct outright.
+	//
+	//     Quarantining any of them would latch the whole user.message lane on a
+	//     failed response to a read-only command.
 	//
 	// Recovering the target in case 1 would mean a durable per-command
 	// selection record written on every bare command for a rare path; L4
