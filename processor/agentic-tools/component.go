@@ -92,7 +92,6 @@ type Component struct {
 
 type requestSubscription interface{ Drain(context.Context) error }
 
-// consumerInfo tracks JetStream consumer details for cleanup
 type consumerSetup struct {
 	port           component.Port
 	streamName     string

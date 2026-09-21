@@ -43,6 +43,11 @@ const natsclientImportPath = "github.com/c360studio/semstreams/natsclient"
 // non-vacuity assertion below is what keeps the bound honest: if the home's own
 // field stops matching for ANY reason, including an alias, the test fails loudly
 // instead of passing over an empty tree.
+//
+// parser.ParseFile is called with mode 0, so a .go file anywhere in the tree
+// that does not parse FAILS this test rather than being skipped. Deliberate: a
+// scan that quietly steps over the one file it cannot read is the shape of
+// every vacuous guard this repo has had to unpick.
 func TestDeliveryLaneLatchHasOneHome(t *testing.T) {
 	t.Parallel()
 

@@ -91,9 +91,11 @@ That owner-side reaction — latch on the first owner-stop result, drain the exa
 factored in-tree as `internal/deliverylane` and is **not exported**: an adopter outside this module cannot import it
 today, and no export is promised here. Until one is, build the reaction yourself, and hold these four properties,
 which are what the in-tree package exists to keep: the latch closes exactly once and the FIRST owner-stop result is
-the one kept; the health or log write reacting to it completes before the latch is observable, so a later reader never
-sees a stopped lane with no recorded reason; the drain targets the exact handle that lane acquired and no sibling; and
-the handle is drained once no matter how many results demand it. A lane whose admission has closed refuses further
+the one kept; the health or log write reacting to it completes before that result is buffered for the observer, so
+health is written before the exact handle can drain and a later reader never sees a stopped lane with no recorded
+reason — note the ORDER, which is the lane closing first and the write running after, never the write running under
+the admission lock; the drain targets the exact handle that lane acquired and no sibling; and the handle is drained
+once no matter how many results demand it. A lane whose admission has closed refuses further
 deliveries without running work and without attempting a terminal method, leaving them to JetStream's own redelivery.
 
 `ConsumeWithHeartbeat` is still exported while its last callers migrate — #1327 takes model and loop, #1249 takes

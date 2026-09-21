@@ -1015,7 +1015,6 @@ func (c *Component) resolveLoopLaneDelivery(
 	return lane
 }
 
-// setupConsumer sets up a JetStream consumer for an input port.
 // recordDeliveryOwnerFatal latches the FIRST loss of delivery ownership into
 // health. It runs synchronously inside the delivery callback as the lane
 // admission's onFatal, before the result is buffered for the observer, so
@@ -1031,6 +1030,7 @@ func (c *Component) recordDeliveryOwnerFatal(result natsclient.DeliveryResult) {
 	c.deliveryFatalErr = result.Err()
 }
 
+// setupConsumer sets up a JetStream consumer for an input port.
 func (c *Component) setupConsumer(
 	setupCtx context.Context,
 	consumerCtx context.Context,
@@ -1150,6 +1150,11 @@ func (c *Component) setupConsumer(
 	}
 
 	binding := deliverylane.NewBinding(handle)
+	// Unreachable today: both useHeartbeat branches above assign admission.
+	// Kept as a guard because the failure it prevents is silent — a nil
+	// admission would append a binding to c.consumers with no observer, whose
+	// Done() is pre-closed, so Stop would join nothing and a lost lane would
+	// never drain its handle.
 	if admission != nil {
 		deliverylane.Observe(consumerCtx, binding, admission, func(result natsclient.DeliveryResult) {
 			c.logger.Error("Loop delivery ownership lost", "port", port.Name, "error", result.Err())

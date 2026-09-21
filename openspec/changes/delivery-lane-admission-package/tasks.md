@@ -271,19 +271,28 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
       is M8's production-seam detector and kills it; the package test kills it directly. Not a governance or loop
       gap.
       **The guard's own mutants** are in 3.1, including one more INVALID MUTANT and the alias hole they found.
-- [x] 4.4 `task check:push` green; PR body carries `implemented-by: <persona>`; `Closes #1341`.
-      `task check:push` EXIT=0 at `40cb5a9b`, run to completion (the first attempt was killed by a 10-minute
-      harness budget mid-`test:integration`, which is a harness timeout and not a result; re-run unbounded).
-      Denominator, because an exit code alone does not prove the suites ran: 0 `FAIL` lines; race unit
-      156 `ok` + 20 no-test-files; integration 156 `ok`; `internal/deliverylane` and all five agentic processors
-      appear by name in BOTH. The PR-body half (`implemented-by`, `Closes #1341`) is the coordinator's — this
-      branch was not pushed.
+- [x] 4.4a `task check:push` green — the branch-checkable half. EXIT=0 at `40cb5a9b`, run to completion (the first
+      attempt was killed by a 10-minute harness budget mid-`test:integration`, which is a harness timeout and not a
+      result; re-run unbounded). Denominator, because an exit code alone does not prove the suites ran: 0 `FAIL`
+      lines; race unit 156 `ok` + 20 no-test-files; integration 156 `ok`; `internal/deliverylane` and all five
+      agentic processors appear by name in BOTH.
+- [x] 4.4b PR body carries `implemented-by: opus` and `Closes #1341` — the coordinator's half, published by the
+      coordinator; this branch is not pushed by the implementer. Split from 4.4a because one checkbox over two
+      owners cannot be read: a tick would have claimed something this branch cannot show.
 - [ ] 4.5 Archive/spec sync is the last content commit. NOT DONE HERE: it is a merge-time commit and this branch
       is unpushed.
 - [x] 4.6 **E2E: none run, and that is a checked fact, not an assumption.** The rule is that a tier runs when a
       consumer's admission behaviour changed. Four mechanical checks say none did.
       (a) The production diff touches exactly eleven Go files: one added package, five `component.go`, five
       deleted `delivery_owner.go`. No other production file changed.
+      (b0) **Four of the five components are themselves Tier 1**: `release/tier1-packages.txt:74-78` lists
+      `processor/agentic-dispatch`, `-loop`, `-model` and `-tools` (plus `-loop/lessonmatch`, `-tools/executors`,
+      `-tools/runner`); only `agentic-governance` is Tier 2. So the exported surface of these packages is
+      semver-binding at 1.0 and "no exported change" is the load-bearing claim, not a courtesy. Re-derived here
+      with an AST extractor over the only production files this change touches in those four (`component.go`
+      modified, `delivery_owner.go` deleted), at `3faca84f` and at head: **57 exported declarations on each side,
+      diff empty** (exported funcs, methods, types, exported struct fields, vars and consts). `agentic-governance`
+      is outside the list, and `internal/deliverylane` is outside both tiers by ADR-106's `internal/` rule.
       (b) No exported declaration was added or removed in any of the five components:
       `git diff 3faca84f..HEAD -- 'processor/agentic-*/component.go' 'processor/agentic-*/delivery_owner.go' |
       grep -E '^[+-](func|type|var|const) '` filtered to exported names exits 1. `natsclient/` is untouched
