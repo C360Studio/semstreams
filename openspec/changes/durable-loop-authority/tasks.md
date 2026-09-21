@@ -794,3 +794,16 @@ production seam, the named-target paths are untouched, and no subtest is vacuous
       resolved-target case: none. The only prose naming the test is § 8.9's line at `tasks.md:239`, which says it
       must keep its meaning without saying which command it delivers, and the spec's settlement scenarios never
       name `/help`
+- [x] 14.7 Gates on `b1259a71`, the content head of this round — this record's own markdown is the only later
+      change before the archive. Exit codes read, not inferred: `task lint` 0; `go test -race -count=1
+      ./processor/agentic-dispatch/...` 0; `task spec:properties` **272/272**, unchanged, because the corrected
+      subtest sits under the same `// spec:` citation its parent test already carried and no citation was added
+      or removed; `openspec validate durable-loop-authority --strict` 0; `git diff --check 81cdabc9..HEAD` 0.
+      **`task e2e:agentic` exit 0 on `b1259a71`** — `assertions_run=15`, `duration=2m4.798999792s`, 17 stages
+      reporting a duration, `dispatch_replacement_user_responses:1`, `approval_listing_matched:2`,
+      `tools_quarantine_executor_attempts:2`, `verify-stage-a-process-replacement_duration_ms:78762`,
+      `verify-durable-tool-replay_duration_ms:44577`, and `grep -c` over the tier log returns 0 `level=ERROR`
+      and 0 `level=WARN`. The guard ran first and IS in the log, per the standing rule that `e2e:check-ports`
+      calls `e2e:clean` and tears down every compose stack on the host: `pgrep -fl e2e.test` exit 1,
+      `pgrep -fl 'e2e --scenario'` exit 1, `docker ps` empty, `docker compose ls` empty — all four captured into
+      the tier log above the run, unlike § 13.9's, where only the pgrep block had an artifact
