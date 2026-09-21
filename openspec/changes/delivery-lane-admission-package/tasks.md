@@ -219,7 +219,7 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
       | component | lane | `Observe` call | `nil onFatal` | settlement guard |
       |---|---|---|---|---|
       | dispatch | `agent.complete` | KILLED (integration only) | SURVIVED -> KILLED (3 new assertions) | n/a |
-      | dispatch | `agent.failed` | **SURVIVED both** | **SURVIVED both** | n/a |
+      | dispatch | `agent.failed` | SURVIVED -> KILLED (new detector) | SURVIVED -> KILLED (new detector) | n/a |
       | dispatch | `user.message` | KILLED | KILLED | KILLED by 2.8 |
       | tools | `tool.execute` | SURVIVED -> KILLED | SURVIVED -> KILLED | n/a |
       | loop | heartbeat | KILLED | KILLED | n/a |
@@ -230,20 +230,26 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
       Dispatch has three distinct `Observe` call sites and three distinct `onFatal` writers
       (`recordDeliveryOwnerFatal`, `recordAgentCompleteFatal`, `recordAgentFailedFatal`), so all six were mutated
       separately rather than assumed to share a fate — and they did not.
-      **`agent.failed` is an open wiring gap, pre-existing and carried over unchanged.** Deleting its `Observe`
-      call and nulling its `onFatal` both SURVIVE the untagged suite (2.3s) AND `-tags=integration -p 2`
-      (81.1s / 79.4s): no test in the package walks that lane to a fatal through production `setupSubscriptions`.
+      **`agent.failed` had no wiring coverage at all, and now does.** Deleting its `Observe` call (`dm3`) and
+      nulling its `onFatal` (`dm4`) both SURVIVED the untagged suite AND `-tags=integration -p 2` (81.1s / 79.4s):
+      no test in the package walked that lane to a fatal through production `setupSubscriptions`.
       `TestTerminalLaneFatalHealthFailsClosedIndependently` covers `recordAgentFailedFatal` by calling it directly,
-      and `port_overrides_test.go` covers the lane's configuration — neither reaches the wiring. The remedy the
-      coordinator prescribed (add health/`LastError` assertions to the test that already walks that lane to a
-      fatal) has no target here: `agent.complete`'s equivalent is
-      `TestIntegrationProductionCallbackUnknownPublishQuarantinesExactLane`, and `agent.failed` has no analogue.
-      Closing it means WRITING that analogue, which is beyond this change's design — recorded as a question for the
-      coordinator, not fixed. Evidence that it is pre-existing rather than introduced: `inventory.md` § 4 pins the
-      same two wiring calls at `3faca84f` with the same arguments
-      (`component.go:659` `newDeliveryLaneAdmission(c.recordAgentFailedFatal, ...)`, `:675`
-      `c.observeDeliveryLane(ctx, &agentFailedBinding, agentFailedAdmission)`), and the 45-function census lists no
-      test reaching them.
+      and `port_overrides_test.go` covers the lane's configuration; neither reaches the wiring. The remedy the
+      coordinator prescribed had no target, because `agent.complete`'s detector
+      (`TestIntegrationProductionCallbackUnknownPublishQuarantinesExactLane`) had no `agent.failed` analogue —
+      **so the analogue was written** (coordinator ruling 2026-09-21: where no existing test reaches a lane this
+      change rewires, the proof must be supplied, or a rewired lane lands with zero sensitivity).
+      `TestIntegrationProductionCallbackUnknownPublishQuarantinesExactFailedLane` drives the real `agent.failed`
+      lane on the production seam to an unknown terminal publication and asserts what only THAT lane's wiring can
+      produce: arrival on `terminalDeliveryDoneFn` (which the callback does not call once the result requires owner
+      stop — only `reactDeliveryFatal` does, from the observer), the drain of `c.consumers[2]` with both siblings
+      still holding their handles, and `ErrorCount == 1` with `LastError` naming `agent.failed delivery ownership
+      lost` and NOT `agent.complete` — reachable only through `recordAgentFailedFatal`, which writes a field of its
+      own. Re-run: `dm3` KILLED (82.9s), `dm4` KILLED (78.5s), each failing ONLY the new test. The gap was
+      pre-existing, not introduced: `inventory.md` § 4 pins the same two wiring calls at `3faca84f` with the same
+      arguments (`component.go:659`, `:675`) and the 45-function census lists nothing reaching them.
+      `dr2` (`nil onRefused` on this lane) was re-run against the new detector and still SURVIVES (79.3s) — the
+      detector drives a fatal, not a refusal. Recorded, not fixed (#1342).
       The two SURVIVED -> KILLED wiring pairs (dispatch `agent.complete`, tools) were closed inside the existing
       test that already walks that lane to a fatal, by asserting health degraded, status, and `LastError`; the two SURVIVED -> KILLED
       settlement guards (loop, governance) were closed by replaying a second delivery into the SAME latched lane
@@ -252,7 +258,9 @@ files that reference deleted symbols (dispatch `terminal_settlement_integration_
       `design.md` § 8 M6 named by hand.
       **`nil onRefused`, per lane — SURVIVORS, recorded not fixed** (coordinator ruling; obligation posted on
       #1342). Only three lanes pass a non-nil `onRefused` today, so only three are mutable:
-      `dispatch/agent.complete` -> SURVIVED both suites; `dispatch/agent.failed` -> SURVIVED both suites
+      `dispatch/agent.complete` -> SURVIVED both suites; `dispatch/agent.failed` -> SURVIVED both suites, and
+      re-confirmed SURVIVING (79.3s) after the new fatal detector landed, because a detector that drives a fatal
+      does not drive a refusal;
       (`-race -count=1`, then `-tags=integration -p 2`, 80.4s); `tools/tool.execute` -> SURVIVED both suites.
       The other five constructions (`dispatch/user.message`, both loop lanes, model, governance) pass nil already,
       so there is nothing to mutate: the refusal is undeclared in production, which IS #1342.

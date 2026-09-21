@@ -522,6 +522,99 @@ func TestIntegrationProductionCallbackUnknownPublishQuarantinesExactLane(t *test
 	require.Zero(t, info.NumRedelivered)
 }
 
+// The agent.failed sibling of the test above. It exists because the two
+// terminal lanes are wired SEPARATELY — three Observe call sites, three
+// distinct onFatal writers — and nothing else in this package walks agent.failed
+// to a fatal through production setupSubscriptions. Without this, deleting that
+// lane's deliverylane.Observe call or nulling its onFatal leaves every test in
+// the package green, in both the untagged and the integration build.
+//
+// What only this lane's wiring can produce: recordAgentFailedFatal writes
+// c.agentFailedFatal, which is a different field from agent.complete's, so an
+// ErrorCount of exactly 1 whose LastError names agent.failed and not
+// agent.complete is reachable only if THIS lane's admission was constructed
+// with THIS reaction. The drain of c.consumers[2] and the arrival on
+// terminalDeliveryDoneFn (which the callback does NOT call once the result
+// requires owner stop — only reactDeliveryFatal does, from the observer) are
+// reachable only if this lane's Observe call ran.
+func TestIntegrationProductionCallbackUnknownPublishQuarantinesExactFailedLane(t *testing.T) {
+	ctx := t.Context()
+	tc := natsclient.NewTestClient(t,
+		natsclient.WithKVBuckets(defaultAgentLoopsBucket(t)),
+		natsclient.WithStreams(
+			natsclient.TestStreamConfig{Name: "FAILEDQ_AGENT", Subjects: []string{"agent.>"}},
+			natsclient.TestStreamConfig{Name: "FAILEDQ_INPUT_USER", Subjects: []string{"user.message.>"}},
+		),
+	)
+	deliveryDone := make(chan error, 1)
+	c := startProductionTerminalDispatch(
+		t, ctx, tc, "FAILEDQ_AGENT", "FAILEDQ_INPUT_USER", "MISSING", "failedquarantine",
+		func(c *Component) { c.terminalDeliveryDoneFn = func(err error) { deliveryDone <- err } },
+	)
+	kv, err := tc.GetKVBucket(ctx, defaultAgentLoopsBucket(t))
+	require.NoError(t, err)
+	loop := agentic.LoopEntity{
+		ID: "35f24ee8-8bb9-4dc4-bc8e-000000000014", TaskID: "quarantine-failed-task",
+		State: agentic.LoopStateFailed, MaxIterations: 3,
+		ChannelType: "http", ChannelID: "channel",
+	}
+	data, err := json.Marshal(loop)
+	require.NoError(t, err)
+	_, err = kv.Put(ctx, loop.ID, data)
+	require.NoError(t, err)
+	payload := terminalEnvelopeForDispatch(t, &agentic.LoopFailedEvent{
+		LoopID: loop.ID, TaskID: loop.TaskID, Outcome: agentic.OutcomeFailed,
+		Reason: "tool_error", Error: "provider refused", FailedAt: time.Now(),
+	})
+	require.NoError(t, tc.Client.PublishToStream(ctx, "agent.failed."+loop.ID, payload))
+	select {
+	case callbackErr := <-deliveryDone:
+		require.Error(t, callbackErr)
+		require.True(t, isUnknownTerminalPublication(callbackErr))
+	case <-time.After(5 * time.Second):
+		t.Fatal("unknown publication result was not observed on the agent.failed lane")
+	}
+
+	require.Len(t, c.consumers, 3)
+	select {
+	case <-c.consumers[2].Closed():
+	case <-time.After(5 * time.Second):
+		t.Fatal("agent.failed exact handle was not drained")
+	}
+	// The siblings keep their handles: the lane that lost ownership is the only
+	// one drained. Checked before Stop runs, which drains all three.
+	for i, name := range map[int]string{0: "user.message", 1: "agent.complete"} {
+		select {
+		case <-c.consumers[i].Closed():
+			t.Fatalf("agent.failed loss drained unrelated lane %s", name)
+		default:
+		}
+	}
+
+	// This lane's own health writer, wired as this admission's onFatal, ran
+	// synchronously inside the callback before the result was buffered. The
+	// ErrorCount of one and the absence of agent.complete are what make this
+	// assertion specific to recordAgentFailedFatal rather than to "some lane
+	// failed": every fatal field feeds the same LastError join.
+	health := c.Health()
+	require.False(t, health.Healthy)
+	require.Equal(t, "terminal delivery ownership lost", health.Status)
+	require.Equal(t, 1, health.ErrorCount)
+	require.Contains(t, health.LastError, "agent.failed delivery ownership lost")
+	require.NotContains(t, health.LastError, "agent.complete")
+
+	stream, err := tc.Client.GetStream(ctx, "FAILEDQ_AGENT")
+	require.NoError(t, err)
+	consumer, err := stream.Consumer(ctx, "agentic-dispatch-agent-failed-failedquarantine")
+	require.NoError(t, err)
+	info, err := consumer.Info(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), info.Delivered.Consumer)
+	require.Zero(t, info.AckFloor.Consumer)
+	require.Equal(t, 1, info.NumAckPending)
+	require.Zero(t, info.NumRedelivered)
+}
+
 func TestIntegrationProductionCallbackShutdownUsesSemanticRetry(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	tc := natsclient.NewTestClient(t,
