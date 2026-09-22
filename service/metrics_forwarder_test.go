@@ -213,12 +213,15 @@ func TestMetricsForwarder_ServiceLifecycle(t *testing.T) {
 	assert.Equal(t, StatusStopped, forwarder.Status())
 }
 
-// TestMetricsForwarder_TickerInterval tests that ticker fires at configured interval
+// TestMetricsForwarder_TickerInterval tests that the ticker fires repeatedly at
+// the configured cadence: within a 350ms window a 100ms ticker produces at least
+// three ticks and no more than a 100ms ticker can. The wall-clock spacing between
+// ticks is deliberately NOT asserted (#1363): under -race on a loaded host one
+// coalesced tick reads as a ~200ms gap, which is scheduling, not the forwarder.
 func TestMetricsForwarder_TickerInterval(t *testing.T) {
 	// Track tick cycles, not individual publishes (multiple metrics can be published per tick)
 	tickCount := 0
 	var tickMu sync.Mutex
-	tickTimes := []time.Time{}
 	lastTickTime := time.Time{}
 
 	mockNATS := &metricsForwarderMockNATS{
@@ -229,7 +232,6 @@ func TestMetricsForwarder_TickerInterval(t *testing.T) {
 			// Consider publishes within 10ms as part of the same tick
 			if lastTickTime.IsZero() || now.Sub(lastTickTime) > 10*time.Millisecond {
 				tickCount++
-				tickTimes = append(tickTimes, now)
 				lastTickTime = now
 			}
 			return nil
@@ -264,16 +266,9 @@ func TestMetricsForwarder_TickerInterval(t *testing.T) {
 	defer tickMu.Unlock()
 
 	assert.GreaterOrEqual(t, tickCount, 3, "should have at least 3 tick cycles")
-
-	// Verify intervals between ticks are approximately 100ms
-	if len(tickTimes) >= 2 {
-		for i := 1; i < len(tickTimes); i++ {
-			interval := tickTimes[i].Sub(tickTimes[i-1])
-			// Allow 50ms tolerance for timing variance
-			assert.InDelta(t, 100*time.Millisecond, interval, float64(50*time.Millisecond),
-				"intervals should be approximately 100ms")
-		}
-	}
+	// A shorter interval than configured would fire many more times in the same
+	// window (a 10ms ticker would produce ~35); load can only lower the count.
+	assert.LessOrEqual(t, tickCount, 5, "a 100ms ticker cannot fire more than 5 times in 350ms")
 }
 
 // TestMetricsForwarder_GatherMetrics tests metrics gathering from registry
