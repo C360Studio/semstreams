@@ -334,11 +334,14 @@ func (m *LoopManager) attachContinuation(loopID, taskID string) (agentic.LoopEnt
 // response format, per-request timeout). Both are durable facts of the loop,
 // not a reconstruction of them.
 //
-// The conversation is rebuilt as TWO regions: the system messages, and
-// everything else in the order the request carried it. The request is NOT
-// GetContext() — prependIterationContext wraps it — so the per-iteration
-// prefix is dropped first (isIterationPrefixMessage); what is left is
-// GetContext()'s order, because the request's Messages were built from it.
+// The conversation is replayed into ONE region: the system messages go to the
+// system prompt at the front, and everything else to RegionRecentHistory in the
+// order the request carried it. The predecessor's compacted and summarised
+// regions are not reconstructed — that is the whole simplification, and every
+// other layer describes it the same way. The request is NOT GetContext() —
+// prependIterationContext wraps it — so the per-iteration prefix is dropped
+// first (isIterationPrefixMessage); what is left is GetContext()'s order,
+// because the request's Messages were built from it.
 //
 // Two things do NOT survive, both recorded rather than repaired:
 //
@@ -346,9 +349,10 @@ func (m *LoopManager) attachContinuation(loopID, taskID string) (agentic.LoopEnt
 //     RegionCompactedHistory returns as ordinary recent history, so the next
 //     compaction fires slightly earlier than it would have. Visible on
 //     context_compactions_total and context_compacted_region_tokens.
-//   - The ordering WITHIN the system region, when the retained request carried
-//     more than one system message: they are re-added in retained order, which
-//     is the order GetContext() rendered them in.
+//   - The ordering of MORE THAN ONE system message relative to the rest: they
+//     are re-seated together at the front in retained order, which is the order
+//     GetContext() rendered them in, rather than wherever the request
+//     interleaved them.
 //
 // Re-attributing regions would mean guessing which retained message came from
 // which region, which is exactly the content-comparison this change removes.

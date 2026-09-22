@@ -686,10 +686,12 @@
       requirement, landed `0e327a51`).
       `openspec validate agentic-loop-durable-applied-facts --strict` → `Change 'agentic-loop-durable-applied-facts'
       is valid`, exit 0.
-      `task spec:properties` → `323/323 citations resolve.`, exit 0, and `324/324` once task 5.3's new test file is
-      tracked — the denominator moves by exactly the one citation that test adds, because the script counts TRACKED
-      test files only. Fifteen files carry `// spec: agentic-loop / The loop record names its outstanding request`,
-      including 4.1's `applied_facts_property_test.go:102`, and every one resolves against the ADDED requirement.
+      `task spec:properties` → `323/323 citations resolve.`, exit 0, when the deltas landed. The denominator moves
+      by exactly the citations the later tasks' test files add, because the script counts TRACKED test files only:
+      **324/324** with task 5.3's, **325/325** with task 5.4's (checkpoint 4's head `2999e9f6`), **326/326** with
+      task 5.5's arm (this round). Each re-measured, never extrapolated. Fifteen files carry
+      `// spec: agentic-loop / The loop record names its outstanding request`, including 4.1's
+      `applied_facts_property_test.go:102`, and every one resolves against the ADDED requirement.
 - [x] 5.3 No approval-deadline hydration (docket OQ2, owner ruling 2026-09-22): the delta scenario "a replaced process
       re-arms no approval deadline; the loop stays `awaiting_approval` until answered or cancelled" plus the same
       sentence as a line in `docs/operations/migration-beta162-to-beta163.md` under a `#1330` section. Test: the zero
@@ -698,7 +700,7 @@
       `SnapshotExpiredApprovals`) reports — then starts a REPLACEMENT component over the same KV and asserts the
       replacement's snapshot is empty, the record is still `awaiting_approval`, and its revision is unchanged.
       **Landed.** Test `TestAReplacementReArmsNoApprovalDeadline`
-      (`processor/agentic-loop/approval_deadline_hydration_integration_test.go:34`, `//go:build integration`, real
+      (`processor/agentic-loop/approval_deadline_hydration_integration_test.go:41`, `//go:build integration`, real
       NATS). It drives the REAL gate — born loop, model response dispatching one tool, a tool result whose error
       carries `agentic.ApprovalRequiredPrefix` — so `RequestedAt` and `Timeout` are a real pending approval's and
       the record is written by the real carrier. The zero is a measured delta: one instrument
@@ -713,7 +715,7 @@
       every non-terminal record into the LoopManager, which is exactly the startup pass OQ2 refused. `component.go`
       `77064b5e84396c23a6fdf20a389a712e` → `2333f89a51f9782b80eb857035968c8b` → restored
       `77064b5e84396c23a6fdf20a389a712e`, `git status --porcelain` empty after. RED at
-      `approval_deadline_hydration_integration_test.go:59` — "a replacement re-armed a deadline its predecessor
+      `approval_deadline_hydration_integration_test.go:66` — "a replacement re-armed a deadline its predecessor
       held", the snapshot returning the gated candidate `{… call-gated … 12h0m0s}`.
       **Finding, escalated not applied (contract § 0.2).** The requirement's free-text sentence
       (`specs/agentic-loop/spec.md:36-38`, verbatim OQ2 ruling text) says a replaced process SHALL re-arm no

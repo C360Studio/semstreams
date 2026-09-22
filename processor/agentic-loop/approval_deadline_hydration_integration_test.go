@@ -19,6 +19,13 @@ import (
 // `SnapshotExpiredApprovals` reports only the loops this process holds in
 // memory, which for a replacement is none of them.
 //
+// The instrument covers the site a hydration pass would occupy, not merely a
+// constructor. `startLoopProcess` boots each process through the real
+// `initializeKVBuckets` — the one place that acquires AGENT_LOOPS at startup,
+// and the site this test's mutant (task 5.3) plants a hydrating list into.
+// `Start()` is not the site: it wires subscriptions, and a deadline seated
+// there would already have been seated by the time any delivery arrived.
+//
 // The zero is a MEASURED DELTA, not a bare absence: the same instrument, at the
 // same instant, over the same durable record, reports the deadline on the
 // process that armed it and reports nothing on the process that replaced it.
