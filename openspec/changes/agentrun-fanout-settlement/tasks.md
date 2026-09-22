@@ -314,6 +314,12 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       The `DelayedDeliveryRetry(30s)` half was proven in checkpoint 1 and stands:
       `TestMilestoneFanoutRetriesOnTransientHandlerError` asserts the Nak carries `milestoneRetryDelay` and not a
       line-rate redelivery.
+      Mutation evidence (`cp` backup + md5, `[applied]` printed between mutating and testing, md5 re-checked after
+      restore; `agentic/agentrun/agentrun.go` md5 `88a3e888bfa6eaaf65f052b536888d08` before and after). K, the drift
+      I6 exists to catch: `MaxDeliver: 5` changed to `0` in BOTH `Start` literals — the new test went red on both
+      lanes, on both the positivity assertion and the exact-value one, reading `-1` because that is what JetStream
+      stores for unlimited. The whole unit suite (`go test -race ./agentic/agentrun/`) stayed GREEN under the same
+      mutant, which is the measurement that justifies the test: the pre-existing coverage could not see this.
 - [x] 6.2 No new exhaustion signal: the existing advisory counter (`internal/maxdelivery/observer.go:148`) is asserted
       by 9.2.
       Evidence: this layer adds no exhaustion signal of its own. `git grep -n 'max_delivery_exhaustions'` finds the
