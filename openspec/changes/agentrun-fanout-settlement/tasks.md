@@ -940,10 +940,10 @@ The reviewer verified every one of the twelve rows, the bijection in both direct
 re-ran the R1/R2 mutants red. Nothing in the rule or the table changed; what changed is the guard's shape and five
 text claims.
 
-- [x] 11.5 HIGH-1 — the spec resolver was first-match-wins and therefore fail-open.
-      `test/contract/e2e_tier_binary_contract_test.go:59-92` now gathers EVERY candidate (the changes glob plus the
-      live spec), and `t.Fatalf`s unless exactly one carries the table header, naming all of them when more than one
-      does. openspec's MODIFIED rule makes the ambiguous case ordinary rather than exotic: the next change touching
+- [x] 11.5 HIGH-1 — the spec resolver was first-match-wins and therefore fail-open. **Its remedy was itself wrong
+      and is superseded by § 11.10**; this entry records the finding and the mutant, not the shape that shipped.
+      The first remedy gathered EVERY candidate (the changes glob plus the live spec) and `t.Fatalf`d unless exactly
+      one carried the table header, naming all of them when more than one did. openspec's MODIFIED rule makes the ambiguous case ordinary rather than exotic: the next change touching
       this requirement must restate the whole block, table included, so two deltas would both carry it and the old
       resolver would have governed by alphabetical change id. The dead `"/changes/archive/"` skip is removed — a
       single `*` cannot reach `openspec/changes/archive/<date>-<id>/specs/`, one level deeper — and replaced by the
@@ -1018,3 +1018,29 @@ text claims.
       unchanged for the reasons § 11.4 gives. Still no tier run: the fix round touches one contract test, the spec
       delta's two scenarios, `tasks.md` and `docs/contributing/02-e2e-tests.md`; no tier compiles or reads any of
       them, and the tagged vet covers the tree the agentic image builds.
+- [x] 11.10 § 11.5's remedy was fail-closed in the wrong place, and is corrected here. Refusing on ANY two carriers
+      makes the guard unusable the moment this change archives: the live spec then holds the table, and openspec
+      1.7.0 requires the next change MODIFYING that requirement to restate the whole block, table included, so a
+      second copy exists by construction and neither may be deleted. Its author's only remedy would be to edit the
+      guard — which is how a guard gets deleted.
+      The rule is now precedence, stated in the resolver's doc comment
+      (`test/contract/e2e_tier_binary_contract_test.go:59-72`) in two sentences: the live capability spec governs
+      whenever it carries the table and the deltas are not consulted at all, because specs are current truth and a
+      later change's restated copy is checked at the moment it matters — its own archive, when it becomes the live
+      spec; only when the live spec does NOT carry the table is an in-flight delta the source, and then exactly one
+      of them may carry it, several meaning a pick by alphabetical change id.
+      Mutant N6, re-run unchanged against the new shape — a sibling
+      `openspec/changes/aaa-other-change/specs/payload-registry/spec.md` holding a correct table AND this change's
+      delta corrupted (agentic row → `production` / no gate). Delta md5 `045c27606bc7d31c597ae989da6e063d` →
+      `14d19c9cea002f395279ec41b3078fbd` → `045c27606bc7d31c597ae989da6e063d`; sibling removed; still **RED**,
+      `the live spec does not carry the tier table and 2 in-flight deltas do, so which one governs is ambiguous: …`.
+      The window this change is in is exactly the branch that refuses, so the sibling case stays caught.
+      Mutant N8, the post-archive shape with a delta still in flight: the twelve-row table spliced into
+      `openspec/specs/payload-registry/spec.md` in place of its eleven-row one, with this change's delta left where
+      it is. Live md5 `01d2cea4a69530d13da02810eecb98a6` → `35239d13d906b3a06e4068f5e713a916` →
+      `01d2cea4a69530d13da02810eecb98a6`; delta md5 `045c27606bc7d31c597ae989da6e063d` unchanged throughout and
+      equal after. **GREEN**, and the run names which file it read: `tier table read from
+      ../../openspec/specs/payload-registry/spec.md: 12 rows`. That log line is the assertion that matters — a green
+      that had read the delta would prove nothing.
+      `docs/contributing/02-e2e-tests.md:190-191` carried the superseded sentence ("reads whichever one carries it,
+      refusing if both do") and now states the precedence.

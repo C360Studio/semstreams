@@ -57,20 +57,27 @@ type tierRow struct {
 
 func (r tierRow) String() string { return fmt.Sprintf("%s (%s %s)", r.tier, r.composeFile, r.service) }
 
-// tierTable parses the table out of the payload-registry spec. Two homes are
-// possible: an in-flight change's delta carries the target state until
-// `openspec archive` syncs it into the live capability spec, after which the
-// delta is gone and the live spec answers.
+// tierTable parses the table out of the payload-registry spec, under one rule
+// in two sentences. The live capability spec governs whenever it carries the
+// table, and the change deltas are not consulted at all — specs are current
+// truth, and a later change's restated copy is checked at the moment it
+// matters, its own archive, when it becomes the live spec. Only when the live
+// spec does NOT carry the table is an in-flight delta the source, and then
+// exactly one of them may carry it: several would mean picking by alphabetical
+// change id, which is fail-open.
 //
-// Exactly one of them may carry the table. Picking the first match would be
-// fail-open, and openspec's MODIFIED rule makes the ambiguous case likely
-// rather than exotic: the next change touching this requirement must restate
-// the whole block, table included, so two deltas would both carry it and a
-// first-match resolver would silently govern by alphabetical change id — a
-// corrupted table in the change under test would go unread. When more than one
-// carries it, the author decides which governs; this refuses and names them.
+// The precedence is what keeps this usable after the archive. openspec 1.7.0
+// requires a MODIFIED block to restate its whole requirement, table included,
+// so the next change touching this requirement necessarily holds a second copy
+// beside the live one — and neither copy may be deleted. Refusing on that pair
+// would leave its author no remedy but to edit this guard.
 func tierTable(t *testing.T) (string, []tierRow) {
 	t.Helper()
+
+	live := filepath.Join(tierRepoRoot, "openspec/specs/payload-registry/spec.md")
+	if body, err := os.ReadFile(live); err == nil && strings.Contains(string(body), tierTableHeader) { //nolint:gosec // repository-relative spec path
+		return live, parseTierRows(t, live, string(body))
+	}
 
 	// A single `*` cannot reach archived changes: those live at
 	// openspec/changes/archive/<date>-<id>/specs/, one level deeper.
@@ -79,7 +86,6 @@ func tierTable(t *testing.T) (string, []tierRow) {
 		t.Fatalf("glob change deltas: %v", err)
 	}
 	sort.Strings(candidates)
-	candidates = append(candidates, filepath.Join(tierRepoRoot, "openspec/specs/payload-registry/spec.md"))
 
 	var carriers []string
 	bodies := map[string]string{}
@@ -94,10 +100,10 @@ func tierTable(t *testing.T) (string, []tierRow) {
 
 	switch len(carriers) {
 	case 0:
-		t.Fatalf("no payload-registry spec carries the tier table header %q", tierTableHeader)
+		t.Fatalf("neither %s nor any in-flight change delta carries the tier table header %q", live, tierTableHeader)
 	case 1:
 	default:
-		t.Fatalf("%d payload-registry specs carry the tier table, so which one governs is ambiguous: %s",
+		t.Fatalf("the live spec does not carry the tier table and %d in-flight deltas do, so which one governs is ambiguous: %s",
 			len(carriers), strings.Join(carriers, ", "))
 	}
 	return carriers[0], parseTierRows(t, carriers[0], bodies[carriers[0]])

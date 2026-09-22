@@ -187,7 +187,8 @@ must stay inert in the tier's other stages, an environment variable only that ti
 
 **The source of truth is the tier table in `openspec/specs/payload-registry/spec.md`** — until this change archives,
 the table lives in `openspec/changes/agentrun-fanout-settlement/specs/payload-registry/spec.md`, and
-`test/contract/e2e_tier_binary_contract_test.go` reads whichever one carries it, refusing if both do. That table
+`test/contract/e2e_tier_binary_contract_test.go` reads the live spec when it carries the table, otherwise exactly one
+in-flight delta. That table
 additionally carries each tier's gate, its E2E-only hooks, and the synthetic types it stamps, and the test re-reads it
 against these compose files and `docker/Dockerfile` on every run. The list below is the navigation copy — when the two
 disagree, the spec is right.
