@@ -170,7 +170,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "tool_results_dropped_total",
-				Help:      "Total tool results acknowledged without effect, by reason. reason=\"stale_execution\": no loop mapping exists for the execution ID and the loop record is absent or terminal. reason=\"older_request\": the result names an earlier request than the loop record does, so the loop already applied it — counted on the warm lane and on the cold lane after the record has been brought forward to the loop newest retained request, whichever process holds the loop. reason=\"terminal_unproven\": the loop is terminal, so no result can still be applied to it. Sustained non-zero rate points at NATS redelivery or executor double-publish. A result the loop record still names is NOT counted here: it is retried until a process can apply it, and a result naming a request of no loop is quarantined rather than dropped.",
+				Help:      "Total tool results acknowledged without effect, by reason. reason=\"stale_execution\": no loop mapping exists for the execution ID and the loop record is absent or terminal. reason=\"older_request\": the result names an earlier request than the loop record does, so the loop already applied it — counted on the warm lane and on the cold lane after the record has been brought forward to the loop newest retained request, whichever process holds the loop. reason=\"already_applied\": the result names the request the record names AND its execution is already in that record pending_tool_results, so this is a replay of work the loop kept — the unfinished siblings of its batch are untouched and go on running. reason=\"terminal_unproven\": the loop is terminal, so no result can still be applied to it. Sustained non-zero rate points at NATS redelivery or executor double-publish. A result the loop record still names is NOT counted here: it is retried until a process can apply it, and a result naming a request of no loop is quarantined rather than dropped.",
 			}, []string{"reason"}),
 
 			modelResponsesDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -524,7 +524,7 @@ func (m *loopMetrics) recordToolResultReceived(hasError bool) {
 }
 
 // recordToolResultDropped records a tool result acknowledged without effect.
-// Three reasons are emitted:
+// Four reasons are emitted:
 //
 //   - "stale_execution" — no loop mapping exists for the execution ID. The
 //     dominant case after GetAndClearToolResults eviction: a re-delivered
@@ -535,6 +535,14 @@ func (m *loopMetrics) recordToolResultReceived(hasError bool) {
 //     whole tool batch is in, so an earlier request is one this loop already
 //     applied; the redelivery is settled rather than re-applied, which would
 //     otherwise re-send the result to the model in the next turn.
+//   - "already_applied" — the result names the request the record still names,
+//     and its execution is already in that record's `pending_tool_results`
+//     (#1330, owner Codex round on PR #1361). A lost ACK is ordinary
+//     at-least-once delivery, and ordering cannot see this case because the
+//     batch is the current request's; membership is the only fact that
+//     decides. Settled rather than rebuilt: the rebuild leaves applied
+//     executions unrouted, so it would end in a quarantined tool lane. The
+//     batch's unfinished siblings are untouched and go on running.
 //   - "terminal_unproven" — the loop is terminal, so no result can be applied
 //     to it any more (owner ruling Q7 on #1330). Whether this particular
 //     result was applied before the loop settled is deliberately not

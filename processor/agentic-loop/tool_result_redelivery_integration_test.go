@@ -513,3 +513,116 @@ func failureReasonOn(t *testing.T, client *natsclient.Client, subject string) st
 	require.NoError(t, json.Unmarshal(stored.Data, &envelope))
 	return envelope.Payload.Error
 }
+
+// TestAReplayedAppliedToolResultDoesNotQuarantineItsLane is the lost-ACK arm
+// of the cold tool lane (owner Codex round on PR #1361, finding 5).
+//
+// A tool result is applied, the record learns it, its sibling is still
+// running, and then the delivery's acknowledgement is lost — ordinary
+// at-least-once behaviour. The redelivery cannot be ordered away: the batch
+// belongs to the request the record still names, so ordering says "current".
+// The cold arm therefore rebuilt the loop, and the rebuild deliberately leaves
+// applied executions unrouted — so the lane immediately found no route for the
+// arriving execution and Terminated it. A routine redelivery quarantined the
+// tool lane, and the batch's unfinished sibling was left behind a loop this
+// process now holds and cannot rebuild over.
+//
+// Membership in the record's applied set is the only fact that decides, and it
+// is read BEFORE anything is rebuilt: the replay settles, nothing is touched,
+// and the sibling's own arrival is what recovers the batch.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestAReplayedAppliedToolResultDoesNotQuarantineItsLane(t *testing.T) {
+	client := newLoopNATS(t)
+
+	const loopID = "5f1e3a82-7b64-4c09-8d25-1a3b4c5d6e70"
+	task := agentic.TaskMessage{
+		TaskID: "task-replayed-applied-result",
+		LoopID: loopID,
+		Role:   "general",
+		Model:  "test-model",
+		Prompt: "the task whose first tool result loses its acknowledgement",
+	}
+	firstRequest := looprequest.ID{LoopID: loopID, Iteration: 1, Retry: 0}.String()
+	secondRequest := looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String()
+	requestSubject := "agent.request." + loopID
+
+	predecessor, handler := startLoopProcess(t, client, DefaultConfig())
+	_, birth := deliverTask(t, predecessor, task)
+	require.Equal(t, natsclient.DeliveryDecisionAck, birth.Decision())
+
+	// Two calls, so applying the first leaves the sibling unfinished — the
+	// state that makes this a replay rather than a late result for a loop that
+	// has already moved on.
+	batch := agentic.AgentResponse{
+		RequestID:    firstRequest,
+		Status:       agentic.StatusToolCall,
+		FinishReason: "tool_calls",
+		Message: agentic.ChatMessage{
+			Role: "assistant",
+			ToolCalls: []agentic.ToolCall{
+				{ID: "call-replay-a", Name: "replay_tool"},
+				{ID: "call-replay-b", Name: "replay_tool"},
+			},
+		},
+	}
+	retainModelResponse(t, client, batch)
+	dispatch, err := handler.HandleModelResponse(t.Context(), loopID, batch)
+	require.NoError(t, err)
+	require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch, publishThenWrite))
+	callA, _ := dispatchedToolCall(t, dispatch)
+
+	resultA := agentic.ToolResult{
+		CallID: callA.ID, Name: callA.Name, Content: "the first tool answered", LoopID: loopID,
+		RequestID: callA.RequestID, ExecutionID: callA.ExecutionID, CallOrdinal: callA.CallOrdinal,
+	}
+	_, appliedA := deliverToolResult(t, predecessor, resultA)
+	require.Equal(t, natsclient.DeliveryDecisionAck, appliedA.Decision())
+
+	applied := loopRecordOf(t, predecessor, loopID)
+	require.Contains(t, applied.entity.PendingToolResults, resultA.ExecutionID,
+		"the replay under test is of a result the RECORD carries; without it this is a different arm")
+	require.Equal(t, firstRequest, applied.entity.PublishedRequestID,
+		"the batch still belongs to the request the record names, so ordering cannot settle this")
+
+	// A's acknowledgement was lost and the process was replaced. The same
+	// bytes arrive again at a process with no memory of the loop.
+	replacement, replacementHandler := startLoopProcess(t, client, DefaultConfig())
+	replays := toolDropDelta(replacement, "already_applied")
+	stale := toolDropDelta(replacement, "stale_execution")
+	superseded := toolDropDelta(replacement, "older_request")
+
+	msg, redelivered := deliverToolResult(t, replacement, resultA)
+
+	require.Equal(t, natsclient.DeliveryDecisionAck, redelivered.Decision(),
+		"a lost ACK is ordinary at-least-once delivery; terminating it quarantines the tool lane")
+	require.Zero(t, msg.terms.Load(), "the replay was quarantined")
+	require.Equal(t, float64(1), replays(),
+		"a drop nobody can see is a drop an operator cannot act on")
+	require.Zero(t, stale()+superseded(), "a replay is neither a stale execution nor an older request")
+
+	_, seated := replacementHandler.loopManager.GetLoop(loopID)
+	require.Error(t, seated,
+		"a replay settles without touching the loop; rebuilding here would seat a loop whose own "+
+			"arriving execution has no route, which is what Terminated the lane")
+	after := loopRecordOf(t, replacement, loopID)
+	require.Equal(t, applied.revision, after.revision, "an acknowledged-without-effect result writes nothing")
+	require.Equal(t, applied.entity.PendingToolResults, after.entity.PendingToolResults,
+		"the applied set the unfinished sibling will be rebuilt against must survive the replay")
+
+	// The sibling proves the siblings' progress was preserved: it arrives,
+	// rebuilds the batch against the untouched record, completes it, and mints
+	// the loop's next request.
+	_, deliveredSibling := deliverToolResult(t, replacement, agentic.ToolResult{
+		CallID: "call-replay-b", Name: "replay_tool", Content: "the sibling answered",
+		LoopID: loopID, RequestID: firstRequest,
+		ExecutionID: deriveToolExecutionID(firstRequest, "call-replay-b", 2), CallOrdinal: 2,
+	})
+	require.Equal(t, natsclient.DeliveryDecisionAck, deliveredSibling.Decision())
+
+	completed := loopRecordOf(t, replacement, loopID)
+	require.Equal(t, 1, completed.entity.Iterations, "the completed batch advances its loop")
+	require.Equal(t, secondRequest, completed.entity.PublishedRequestID)
+	require.Equal(t, uint64(2), messagesOn(t, client, requestSubject),
+		"a recovered batch's completion is what puts the loop's second request on the stream")
+}

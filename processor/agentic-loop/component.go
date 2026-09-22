@@ -2664,6 +2664,31 @@ func (c *Component) settleToolResultWithoutLoop(ctx context.Context, toolResult 
 				loopID, toolResult.RequestID),
 			"agentic-loop", "settleToolResultWithoutLoop", "classify the tool result against the loop record")
 	case requestOrderCurrent:
+		// An execution the record has ALREADY applied is a replay, not new
+		// work: a lost ACK is ordinary at-least-once delivery, and the
+		// ordinary apply drops the route, so a same-process redelivery lands
+		// here too. Ordering cannot see it — the batch still belongs to the
+		// current request — so membership is the only fact that decides.
+		//
+		// Checked BEFORE the rebuild, for two reasons. restoreToolBatch
+		// deliberately leaves applied executions unrouted, so the rebuild
+		// would succeed and the lane would then find no route and Terminate,
+		// quarantining a whole tool lane over a routine redelivery. And
+		// touching nothing is what preserves the unfinished siblings: each of
+		// them rebuilds the batch on its own arrival.
+		//
+		// The TERMINAL arm stays membership-free (owner ruling Q7): there,
+		// re-deriving which side of the settlement a result fell on changes
+		// nothing the delivery can do. Here it is the whole decision.
+		if _, applied := adopted.entity.PendingToolResults[toolResult.ExecutionID]; applied {
+			c.logger.WarnContext(ctx, "Tool result acknowledged without effect — the record already applied it",
+				"loop_id", loopID, "execution_id", toolResult.ExecutionID,
+				"request_id", toolResult.RequestID)
+			if c.metrics != nil {
+				c.metrics.recordToolResultDropped("already_applied")
+			}
+			return false, nil
+		}
 		// The executor's work belongs to the batch the record names, and no
 		// process holds that loop. Rebuild it here — record, retained request,
 		// retained response — rather than retrying a delivery nobody can take
