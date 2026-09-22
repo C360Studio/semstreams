@@ -225,7 +225,7 @@ func TestPropAppliedFactsHoldAcrossEveryCrashWindow(t *testing.T) {
 				}
 			},
 
-			"replace the process": func(rt *rapid.T) {
+			"replace the process": func(_ *rapid.T) {
 				replaceProcess()
 			},
 
