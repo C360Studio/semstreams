@@ -800,9 +800,9 @@
       `45f73fb14c6f945afbeafbdd41b4cc3f` → restored `6c1eaf6d5e0a616a1b0a0626017dad17`, porcelain empty. RED at
       `:452`, `Not equal` on the `agent.failed` count, 1.09s.
 
-- [ ] 6.1 `task check:push` (schema drift expected empty — `LoopEntity` is in no schema); `go run ./cmd/entity-id-audit .`
+- [x] 6.1 `task check:push` (schema drift expected empty — `LoopEntity` is in no schema); `go run ./cmd/entity-id-audit .`
       green.
-      **NOT ticked: `task check:push` is RED on this host, exit 201, 631s wall.** One package failed, and it failed
+      **Ticked 2026-09-22 — see the resolution at the end of this entry. History first: `task check:push` was RED on this host, exit 201, 631s wall.** One package failed, and it failed
       on disk:
       ```
       --- FAIL: TestReleaseArtifactsReportInjectedVersions/production (19.50s)
@@ -876,11 +876,16 @@
           - Config.LoopsBucket: removed
           - GovernanceDispatcher.HandleVerdict: changed from func(string, string, []byte) to func(string, string, VerdictPayload) (…DeliveryDecision, error)
       ```
-- [ ] 6.2 `task e2e:agentic` with the process-replacement stage (`stage_a_process_replacement.go`,
+      **Resolved 2026-09-22 (coordinator), after the owner-authorized host reclaim** (Docker images + build cache
+      100.6 GB and the Go build cache 72 GB pruned; 168 GiB free after): `task check:push` on this tree at `dafdd799`
+      plus the 6.2 record, `pgrep -fl e2e.test` empty before the run: **exit 0**, 316 `ok` lines, zero `--- FAIL`
+      lines. `go run ./cmd/entity-id-audit .` exit 0. Every earlier red in this entry was the host, as the moving
+      `[build failed]` set already said. Log: coordinator scratchpad `l4a/checkpush-dafdd799-plus-6.2.log`.
+- [x] 6.2 `task e2e:agentic` with the process-replacement stage (`stage_a_process_replacement.go`,
       `process_replacement_test.go`) named in the PR body with exit codes; BREAKING for the recovery contract, so this
       tier is the gate (`docs/contributing/02-e2e-tests.md` § Breaking Changes). The approval-after-restart stage is
       L4b's.
-      **Stage assertion written; the tier run is BLOCKED on host storage. NOT ticked.**
+      **Landed: tier GREEN at `dafdd799`, no-rebuild mutant RED (coordinator, 2026-09-22, after the host reclaim).**
       What the stage was missing: its three checks (completed-outcome replay, tool quarantine, dispatch quarantine)
       are all SETTLEMENT checks. None of them holds a LOOP across the replacement, which is the one claim task 4.2's
       in-process `Component` pair cannot make (recorded deviation, 4.2 above). Added
@@ -931,6 +936,22 @@
       Note for whoever runs it: `task e2e:agentic` depends on `e2e:clean`, which tears down every compose stack on
       the host (`Taskfile` → `e2e:clean` lines visible at the head of the run log). Nothing was running on this
       host, so nothing was lost; the "never run `e2e:clean`" rule cannot be honoured while running this tier.
+      **Tier run at `dafdd799`** (Docker images + build cache and the Go build cache pruned first, image built cold):
+      `pgrep -fl e2e.test` printed nothing, `docker compose ls` listed no stacks; `task e2e:agentic` exit 0,
+      `Scenario completed successfully duration=2m11.212145125s`, `assertions_run=15`, no `level=ERROR` line;
+      `verify-stage-a-process-replacement_duration_ms:85043`, `midflight_record_revision_delta:3`,
+      `midflight_requests_published:2`, `replacement_user_responses:1`. Log: coordinator scratchpad
+      `l4a/tier-dafdd799.log`.
+      **Mutant** (`cp` backup + `md5 -q`, `[applied]` printed between mutating and testing, `go vet` gate before
+      the tier, restore verified by checksum): `restoreLoopFromEvidence` returns Transient unconditionally, so the
+      replacement never rebuilds and the redelivered response retries as it did before L4a. `loop_evidence.go`
+      `d30e4845f7345c7e09981861d65cb8d9` → `2468a3feb0b2336a4d38da55beaf4171` → restored
+      `d30e4845f7345c7e09981861d65cb8d9`, porcelain empty. Tier exit 201, `level=ERROR msg="Scenario completed with
+      failure" error="verify-stage-a-process-replacement failed: mid-flight loop: replacement did not carry the
+      mid-flight loop to a terminal: subject agent.complete.<loopID> was not stored within 1m30s"` — the stage's own
+      assertion, not a build or boot failure. A first attempt at this mutant did NOT compile (`errs.WrapTransient`
+      takes four arguments) and its tier exit 201 was a build failure — vacuous, discarded, and the reason the
+      `go vet` gate now precedes the tier in the ritual. Log: `l4a/tier-dafdd799-mutant-no-rebuild.log`.
 
 ## Moved to L4b (#1362)
 
