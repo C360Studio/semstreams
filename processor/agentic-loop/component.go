@@ -76,6 +76,28 @@ type Component struct {
 	// with the rest of the loop's per-loop state. Protected by mu.
 	loopRevisions map[string]uint64
 
+	// loopRecordMu serializes the record-write sequence — render the entity,
+	// read its observed revision, compare-and-swap, remember the revision the
+	// write committed at — so the read and the write are ONE critical section.
+	//
+	// They have to be. The compare-and-swap exists to catch a SECOND PROCESS
+	// writing this loop, and a refused CAS cannot tell that apart from anything
+	// else; but this process has several lanes that write the same loop — the
+	// three L4a lanes through the carrier, the cancel lane, the approval lane,
+	// the approval-timeout sweeper — on separate consumers, so two of them can
+	// interleave. Without this lock one lane reads revision N, the other
+	// commits N+1, and the first lane's write is refused; the loop is then
+	// released as if a foreign process owned it and the delivery settles as
+	// unknown-durability. CI run 35719155514 is exactly that: a cancel signal
+	// lost its record write to the tool lane's advance, ownership was dropped,
+	// and the loop never reached cancelled.
+	//
+	// One mutex, not one per loop: the sequence is a single bounded KV write,
+	// a process has a handful of writers, and a per-loop lock is another map to
+	// create, find and release with the loop it belongs to — machinery this
+	// contention does not earn.
+	loopRecordMu sync.Mutex
+
 	// KV buckets
 	loopsBucket           jetstream.KeyValue
 	trajectoryBucket      jetstream.KeyValue
@@ -2679,6 +2701,17 @@ func (c *Component) createLoopState(ctx context.Context, loopID string) error {
 		return nil
 	}
 
+	// Render, observe and write as one critical section (loopRecordMu). Two
+	// lanes of THIS process write the same loop — the carrier, cancel,
+	// approval, the timeout sweeper — and a revision read outside the lock is
+	// stale the moment another lane commits: the CAS then refuses a write that
+	// has no conflict to report, and the loop is released as though a foreign
+	// process had taken it. The render is inside too, because a value
+	// marshalled before another lane's mutation would commit a record that
+	// silently loses it.
+	c.loopRecordMu.Lock()
+	defer c.loopRecordMu.Unlock()
+
 	data, err := c.marshalLoopRecord(loopID)
 	if err != nil {
 		return err
@@ -2713,6 +2746,12 @@ func (c *Component) persistLoopState(ctx context.Context, loopID string) error {
 	if c.loopsBucket == nil {
 		return nil
 	}
+
+	// Under the same lock as every other record write: birth is the write that
+	// seeds the revision, and a write that started before it must not commit
+	// after it with a revision it never saw.
+	c.loopRecordMu.Lock()
+	defer c.loopRecordMu.Unlock()
 
 	data, err := c.marshalLoopRecord(loopID)
 	if err != nil {
