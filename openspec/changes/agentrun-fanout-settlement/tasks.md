@@ -22,19 +22,26 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       `implemented-by: <persona>` in the body and keep the Tier 1 declaration (§ 7, wording per reconciliation B4: one
       added incompatible line under the already-counted `natsclient`, package count unchanged at 15). There is no L1
       branch to target: L1 is `94cd8e4c` on `main`.
-- [ ] 1.2 Before any deletion, run `git grep -n -E 'ConsumeWithHeartbeat\(' -- '*.go' ':!**/*_test.go'` at the base; on
+- [x] 1.2 Before any deletion, run `git grep -n -E 'ConsumeWithHeartbeat\(' -- '*.go' ':!**/*_test.go'` at the base; on
       `main` at `b7ce8727` that is two hits, the call site `agentic/agentrun/agentrun.go:812` and the declaration
       `natsclient/heartbeat.go:84` (the grep matches `func ConsumeWithHeartbeat(`). Anything else: stop and report; do
       not migrate it here.
+      Evidence 2026-09-22 on the claim branch at `580f531d`, stderr visible, exit 0: exactly the two expected hits,
+      `agentic/agentrun/agentrun.go:812` and `natsclient/heartbeat.go:84`. Nothing else matched.
 
 ## 2. Identity and the handler contract (O3; #759 ruling item 3)
 
-- [ ] 2.1 Add `LoopTerminalEvent.SourceMessageID string`, copied from `agentterminal.Event.SourceMessageID`
+- [x] 2.1 Add `LoopTerminalEvent.SourceMessageID string`, copied from `agentterminal.Event.SourceMessageID`
       (`internal/agentterminal/terminal.go:67`) at `agentic/agentrun/agentrun.go:586`;
       `test/compat/semteams/agentrun_terminal_compat_test.go:75` stays green.
-- [ ] 2.2 Document handler done on `OnLoopTerminal` (`agentrun.go:490`): return nil only after the durable consequence
+      Evidence: field is the first member of `LoopTerminalEvent`; copy at the `ev := LoopTerminalEvent{...}` literal in
+      `HandleEvent`. `go test -race ./test/compat/...` → `ok github.com/c360studio/semstreams/test/compat/semteams`.
+- [x] 2.2 Document handler done on `OnLoopTerminal` (`agentrun.go:490`): return nil only after the durable consequence
       for this identity is committed; every replay presents the same identity.
       Test: `TestMilestoneFanoutPresentsSameSourceMessageIDOnEveryAttempt`.
+      Evidence: the "Handler done" paragraph on the `MilestoneHandler` doc comment; test in
+      `agentic/agentrun/milestone_identity_test.go` replays the same stored bytes twice and pins both attempts to the
+      envelope's own `ID()`. Mutation evidence is recorded with 3.8.
 
 ## 3. Decision matrix and settlement (design § 2.3–2.4; R1, R2, O1)
 

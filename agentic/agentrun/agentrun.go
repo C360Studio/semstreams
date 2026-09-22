@@ -465,6 +465,11 @@ func ResolveRun(ctx context.Context, runs RunStateReader, reader LoopTripleReade
 // LoopTerminalEvent carries the terminal event data passed to MilestoneHandlers.
 // Product handlers receive this along with the pre-resolved *AgentRun.
 type LoopTerminalEvent struct {
+	// SourceMessageID is the terminal's wire message identity, copied from the
+	// BaseMessage envelope the loop published. It is the SAME value on every
+	// attempt of one stored delivery, so it is the key a handler makes its
+	// durable consequence idempotent on (ADR-053 D6; #1249).
+	SourceMessageID string
 	// LoopID is the bare loop UUID that terminated.
 	LoopID string
 	// RunID is the bare run loop-id from the event wire (ADR-053 D8).
@@ -486,6 +491,16 @@ type LoopTerminalEvent struct {
 // Implementations receive the pre-resolved *AgentRun. Handlers that need graph
 // mutations must emit work through a component's declared mutation port; the
 // milestone subscriber owns no hidden graph-write capability.
+//
+// Handler done, the obligation the framework cannot verify for you: return nil
+// ONLY after the durable consequence for ev.SourceMessageID is committed, or
+// when there is nothing to do for it. The subscriber settles the whole handler
+// set as one unit, so a delivery is acknowledged only on an attempt where every
+// handler returned nil; until then JetStream replays it, and every replay
+// presents the SAME ev.SourceMessageID to every handler — including handlers
+// that already returned nil on an earlier attempt. Key the durable effect on
+// ev.SourceMessageID and a repeat becomes a no-op; do not key it on wall-clock
+// time, a generated ID, or the delivery count.
 type MilestoneHandler interface {
 	OnLoopTerminal(ctx context.Context, ev LoopTerminalEvent, run *AgentRun) error
 }
@@ -578,12 +593,13 @@ func (s *MilestoneSubscriber) HandleEvent(ctx context.Context, data []byte) erro
 		return fmt.Errorf("agentrun: HandleEvent: normalize terminal: %w", err)
 	}
 	ev := LoopTerminalEvent{
-		LoopID:      normalized.LoopID,
-		RunID:       normalized.RunID,
-		RunEntityID: normalized.RunEntityID,
-		Category:    normalized.Category,
-		Outcome:     normalized.Outcome,
-		Role:        normalized.Role,
+		SourceMessageID: normalized.SourceMessageID,
+		LoopID:          normalized.LoopID,
+		RunID:           normalized.RunID,
+		RunEntityID:     normalized.RunEntityID,
+		Category:        normalized.Category,
+		Outcome:         normalized.Outcome,
+		Role:            normalized.Role,
 	}
 
 	// Resolve the run. Prefer the wire RunID (D8 typed path); fall back to walk.
