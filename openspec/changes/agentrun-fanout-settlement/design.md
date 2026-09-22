@@ -34,7 +34,13 @@ Owner rulings (2026-09-18, "as recommended on all five", recorded on #1249) — 
 - O3 All four exports: `LoopTerminalEvent.SourceMessageID`, `MilestoneSubscriber.DeliveryFatal() error`,
   `MilestoneSubscriber.RegisterMetrics(metric.MetricsRegistrar) error`, and the counter
   `semstreams_agentrun_milestone_decisions_total{lane,decision,reason}`; no histogram; `milestoneStarter` unchanged.
-- O4 The env-gated test-only handler in `cmd/e2e-semstreams` is admissible (both roots hand-copied, #1301).
+- O4 The env-gated test-only handler is admissible. **AMENDED 2026-09-22** (owner on #1249, after the placement was
+  reopened as a design question and an architect inventory + docket were taken): the ruled root was wrong for this
+  tier, because `task e2e:agentic` boots `cmd/semstreams` through Dockerfile target `e2e-process-barrier`, not
+  `cmd/e2e-semstreams`. The amended rule, ratified as docket option B: *an E2E-only hook lands in the binary its tier
+  boots, gated by that tier's build tag and, where it must stay inert in the tier's other stages, an env var.* The
+  probe stays in `cmd/semstreams/milestone_probe_e2e.go`; the rule lands with it (`tasks.md` § 11). The two
+  hand-copied roots themselves remain #1301's, sequenced after #1362 and gating the tag.
 - O5 #1155's "matching milestone transition" is amended to re-invocation + idempotent effect count (ADR-053 D5).
 
 ## 2. Target shape (both lanes; one `DeliveryWork`, two validated policies, two latches, two exact handles)
@@ -193,7 +199,8 @@ Terminate on first sight; not-managed and unclassifiable errors retry under the 
 ## 5. What the #1155 stage-D proof must show (both lanes) — ruled O4/O5, not open; unit tasks from R1/R2/O1
 
 Complete and failed each: publish a terminal; the proof handler commits its durable effect; the process is replaced
-BEFORE Ack (env-gated test-only handler, O4); the replacement redelivers; the handler sees the same `SourceMessageID`;
+BEFORE Ack (test-only handler in the binary the agentic tier boots, gated by tag and env — O4 as amended); the
+replacement redelivers; the handler sees the same `SourceMessageID`;
 effect count 1; ack-pending 0. Quarantine: panic on first attempt; no Ack/Nak/Term; `/health` (`:1736`) shows `milestone`
 unhealthy; that lane drains while the other consumes; replacement redelivers; Ack. Exhaustion: transient five times →
 `semstreams_nats_max_delivery_exhaustions_total{consumer="agentrun-milestone-complete"}` = 1 in `verify-streaming-metrics`.

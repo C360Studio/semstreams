@@ -44,12 +44,14 @@ conversion is forbidden. The five-question design docket was ruled "as recommend
 ## Impact
 
 - Affected capabilities: `agent-run-milestones` (new, seeded here), `jetstream-consumer-policy` (MODIFIED against L0's
-  head text), `nats-streaming` (REMOVED, the L0-added "shrinking remainder" requirement).
+  head text), `nats-streaming` (REMOVED, the L0-added "shrinking remainder" requirement), `payload-registry` (MODIFIED:
+  the tier->binary->gate rule and the twelve-tier table, owner ruling on #1249 amending Q5, 2026-09-22).
 - Affected code: `agentic/agentrun/agentrun.go`, (no new file: `agentrun` imports `internal/deliverylane`),
   `agentic/agentrun/nats_reader.go`, `service/milestone_service.go`, `cmd/semstreams/main.go`,
-  `cmd/e2e-semstreams/main.go` (one wiring line each, plus the env-gated proof handler), `natsclient/heartbeat.go` and
-  its two test files, `natsclient/consumer_policy_callsite_test.go`, two foreign test comments, the e2e agentic
-  scenario.
+  `cmd/e2e-semstreams/main.go` (one wiring line each), the env-gated proof handler in `cmd/semstreams` behind the
+  agentic tier's build tag (Q5 as amended), `natsclient/heartbeat.go` and its two test files,
+  `natsclient/consumer_policy_callsite_test.go`, two foreign test comments, the e2e agentic scenario,
+  `test/contract/e2e_tier_binary_contract_test.go` and `docs/contributing/02-e2e-tests.md`.
 - Exported surface (Tier 1, ADR-106): additions `LoopTerminalEvent.SourceMessageID`, `MilestoneSubscriber.DeliveryFatal()
   error`, `MilestoneSubscriber.RegisterMetrics(metric.MetricsRegistrar) error`; removal `natsclient.ConsumeWithHeartbeat`
   — an incompatible change in a frozen package, declared with a `!` commit; `scripts/api-compat.sh` has no waiver, so

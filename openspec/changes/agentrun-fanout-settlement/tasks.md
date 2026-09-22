@@ -581,11 +581,13 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
 
 ## 9. Proof (#1155 stage D; O4, O5)
 
-- [x] 9.1 Add the env-gated test-only `MilestoneHandler` in `cmd/e2e-semstreams` (registered only when the variable is
-      set) that commits a durable effect keyed on `SourceMessageID` and, on its first attempt, exits the process
-      before Ack.
-      **DEVIATION from O4's root, with the measurement.** The handler is in `test/e2e/harness/milestoneprobe` and its
-      registration hook is in `cmd/semstreams`, NOT `cmd/e2e-semstreams`. The agentic tier does not boot that root:
+- [x] 9.1 Add the env-gated test-only `MilestoneHandler` in the binary the agentic tier boots (registered only when
+      the variable is set) that commits a durable effect keyed on `SourceMessageID` and, on its first attempt, exits
+      the process before Ack.
+      **Was a DEVIATION from O4's ruled root; RATIFIED 2026-09-22 as the Q5 amendment** (owner on #1249, after an
+      architect inventory and docket; the rule it established lands in § 11). The handler is in
+      `test/e2e/harness/milestoneprobe` and its registration hook is in `cmd/semstreams`, NOT
+      `cmd/e2e-semstreams`. The agentic tier does not boot that root:
       `docker/compose/agentic.yml:66-68` builds Dockerfile target `e2e-process-barrier`, which is
       `./cmd/semstreams` with `-tags=e2e_process_barrier` (`docker/Dockerfile:182-193`). `cmd/e2e-semstreams` is the
       `e2e` target, used by `ops.yml`, `lifecycle.yml`, `research-graph.yml` and `tiered.yml`. A probe registered
@@ -597,16 +599,19 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       `cmd/semstreams/milestone_probe_disabled.go` (`//go:build !e2e_process_barrier`) is a no-op with no harness
       import, so the ordinary dependency graph never reaches it. (2) Environment: `milestoneprobe.Register` returns
       nil unless `SEMSTREAMS_E2E_MILESTONE_PROBE` is set, named in the handler's package doc comment, in
-      `Register`'s doc comment, and in the compose block that sets it. `docs/contributing/02-e2e-tests.md` was NOT
-      edited: it has no tier env-knob list to add to (no `AGENTIC_LLM_URL`, no `AGENTIC_COMPOSE_FILE`, and the
-      agentic tier is not among its Test Tiers sections), so the knob is documented where it is read and where it is
-      set instead of in a list that does not exist.
-      Guards: `TestDefaultMilestoneProbeFileDoesNotImportHarness` pins both build constraints and that only the
-      tagged file imports the harness; `TestMilestoneProbeIsInertWithoutTag` calls the no-op with nils;
-      `TestAgenticComposeArmsTheMilestoneProbe` requires `agentic.yml` to set the variable AND every other compose
-      file in `docker/compose/` not to — an arming leak into another tier would look like a flake, since the probe
-      crashes and quarantines on purpose. `TestRegisterIsInertWithoutTheEnvironmentVariable` and
-      `TestRegisterRefusesIncompleteWiringWhenArmed` pin the runtime gate's both directions.
+      `Register`'s doc comment, and in the compose block that sets it. `docs/contributing/02-e2e-tests.md` had no
+      tier env-knob list to add to (no `AGENTIC_LLM_URL`, no `AGENTIC_COMPOSE_FILE`, and the agentic tier was not
+      among its Test Tiers sections), so the knob is documented where it is read and where it is set; § 11 then gave
+      that page the list of all twelve tiers it was missing, pointing at the spec table for each tier's gate.
+      Guards, after § 11 consolidated the tier facts: `TestE2ETierTableMatchesComposeAndDockerfile` pins the tag,
+      the target, the binary and BOTH directions of the env gate — `agentic.yml` sets the variable and every other
+      compose file does not, since an arming leak into another tier would look like a flake (the probe crashes and
+      quarantines on purpose); `TestProductionRootReachesNoE2EHarnessWithoutABuildTag` pins that only a tagged file
+      in `cmd/semstreams` may import the harness at all; `TestMilestoneProbeIsInertWithoutTag` calls the no-op with
+      nils; `TestRegisterIsInertWithoutTheEnvironmentVariable` and `TestRegisterRefusesIncompleteWiringWhenArmed`
+      pin the runtime gate's both directions. The first two replaced the four per-hook pin tests, two of which —
+      `TestDefaultMilestoneProbeFileDoesNotImportHarness` and `TestAgenticComposeArmsTheMilestoneProbe` — this task
+      previously named.
       The registration is one call inside `registerMilestoneService` in `cmd/semstreams/main.go` — an eight-line
       block: five comment lines and one guarded call. That is the one deliberate divergence between the two
       hand-copied bodies (#1301) and BOTH roots' doc comments say so in those words, replacing the previous
@@ -751,7 +756,7 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       (`.github/workflows/ci.yml:44`) — no tagged vet has ever been a CI step — so this gate is pre-push, not CI.
       The tagged build drops a `semstreams` binary at the worktree root; it is gitignored and was deleted, and
       `git status --porcelain` is empty.
-- [x] 10.2 `task e2e:agentic` green on the pushed head (the BREAKING rule, `docs/contributing/02-e2e-tests.md:299`),
+- [x] 10.2 `task e2e:agentic` green on the pushed head (the BREAKING rule, `docs/contributing/02-e2e-tests.md:312`),
       every stage's result verbatim in the PR body.
       Ran 2026-09-22 at `6dde2eed`; later commits are evidence and the review fixes. Host state before the
       run, pasted: `pgrep -fl e2e.test` printed nothing (exit 1), `docker compose ls` listed no stacks.
@@ -806,3 +811,117 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       `..._durable_effects:1`; `milestone_exhaustion_attempts:5`. The three tightened assertions — the decisions
       counter at 5, `NumPending` growing across the blocked publish, and `/health` = 503 naming `delivery ownership
       lost` — all held on the deployed binary.
+
+## 11. E2E hook placement (Q5 amended, owner 2026-09-22)
+
+The owner reopened Q5 as a design question (verbatim: "1249 smells like we have a deign problem if it's non obvious
+where an e2e test lands? we need to figure that out first"), commissioned a read-only architect inventory and a
+docket, and then ruled: *an E2E-only hook lands in the binary its tier boots, gated by that tier's build tag and,
+where it must stay inert in the tier's other stages, an env var.* Docket option B is ratified — the rule and the
+table land WITH the hook they govern, in this PR. PR #1360's probe stays where § 9.1 put it. Options C/D and docket
+questions 3 (rename the shared `e2e_process_barrier` tag) and 5 (vet the slow-consumer tag in `check:push`) are
+**#1301's**, sequenced
+after #1362 and gating the tag; they are deliberately not done here.
+
+- [x] 11.1 The rule and the twelve-tier table, through the change's spec delta.
+      `openspec/changes/agentrun-fanout-settlement/specs/payload-registry/spec.md` is a new MODIFIED block against the
+      live requirement "A message type is a type of the deployment only if it is registered in the binary's payload
+      registry" (`openspec/specs/payload-registry/spec.md:10`). It restates all four live scenarios by exact title and
+      in live order, adds two, and keeps the MUST on the requirement's first line.
+      `openspec validate agentrun-fanout-settlement --strict` exit 0, `Change 'agentrun-fanout-settlement' is valid`.
+      The table was already broader than the docket recorded: the live table at `:23-35` carries **eleven** rows, not
+      the six the docket's "six-row table about synthetic types" describes, and it already named agentic, ops,
+      crud-tools, deep-research and slow-consumer (`git show 8f441f8e:openspec/specs/payload-registry/spec.md` and
+      HEAD are byte-identical here, so this is not rebase drift). What it did not carry is the tier's Dockerfile
+      target, its gate, its hooks, or a `throughput` row, and no sentence anywhere said where a hook that must run
+      INSIDE the production composition goes. The delta's table is twelve rows with target / binary / gate / hook
+      columns beside the synthetic-type column it already had, and each row names exactly one compose service, so the
+      rows and the twelve services built from `docker/Dockerfile` are in bijection.
+      One restated pin had drifted and is corrected rather than copied: the ops seed's direct `PutKV` calls are
+      `test/e2e/scenarios/ops/scenario.go:439` and `:484` (the registered type is at `:476`), not `:464,472`.
+      `docker/compose/tiered.yml:246` claimed the structural service boots the e2e root "with reactive workflow
+      engine" — that engine was deleted in `e1c66cbd` (2026-03-12); the comment now states the reason the spec row
+      gives. The three other survivals of the same deleted founding reason (`docker/Dockerfile:54`, `:115`,
+      `taskfiles/build.yml:17`) are left: `test/release/release_smoke_test.go:64,66` slices the Dockerfile on that
+      comment's text, and the second root's existence is #1301's question, not this checkpoint's.
+- [x] 11.2 One table-driven contract test replaces the four per-hook pin tests.
+      `test/contract/e2e_tier_binary_contract_test.go` parses the tier table out of the payload-registry spec — the
+      active change's delta first, the live spec after `openspec archive`, so there is no second copy of the table —
+      and drives every assertion from its rows: the compose service's `build.target`, the Go package and `-tags=` of
+      that target resolved through `docker/Dockerfile`'s stage graph, and the `SEMSTREAMS_E2E_*` variables the service
+      sets. It closes the table in both directions (no compose service built from `docker/Dockerfile` may be missing
+      from the table, no row may name a service that does not exist), and re-pins the beta.90 hazard that
+      `docker/compose/e2e.yml:45-52` records in prose: two targets sharing one `image:` tag. A gate token it cannot
+      classify fails the row rather than being ignored — an unread gate is the fail-open shape.
+      `TestProductionRootReachesNoE2EHarnessWithoutABuildTag` is the compile-time half. It sweeps every non-test file
+      of the package the `production` target builds (read from the Dockerfile, not listed) and fails any that imports
+      a `test/e2e/` or `internal/e2e*` package while still building with the overlay tags off — `go/build/constraint`
+      evaluation, not a string match — so it covers hook files nobody has written yet. Run: `9 non-test files scanned,
+      3 behind an overlay tag`; it refuses a zero denominator in either direction.
+      Deleted (subsumed): `TestProcessBarrierE2EBuildDoesNotReplaceProductionTarget`,
+      `TestDefaultProcessBarrierFileDoesNotImportHarness`, `TestSlowConsumerE2EBuildDoesNotReplaceProductionTarget`,
+      `TestDefaultMilestoneProbeFileDoesNotImportHarness`, `TestAgenticComposeArmsTheMilestoneProbe`, and the compose
+      half of `TestOpsComposeUsesE2EBinaryForLessonCurationControl`.
+      Kept, because none is a tier→binary→gate fact: `TestMilestoneProbeIsInertWithoutTag` (the untagged stub's
+      nil-safe no-op), `TestShippedAgenticConfigDoesNotAdmitProcessBarrier` (config admission),
+      `TestSlowConsumerHookRunsBetweenConnectionAndConfigArbitration` (boot-order window), and the ops test's persona
+      assertion, now `TestE2ECompositionRootLoadsCheckedInPersonaFragments`. Two files are renamed to what they hold
+      (`process_barrier_config_contract_test.go`, `slow_consumer_hook_contract_test.go`,
+      `test/e2e/scenarios/ops/composition_root_contract_test.go`). `test/e2e/harness/milestoneprobe/protocol_test.go`
+      is untouched — the brief listed it as carrying a compose check, and it does not; its env-gate tests in both
+      directions (`TestRegisterIsInertWithoutTheEnvironmentVariable`,
+      `TestRegisterRefusesIncompleteWiringWhenArmed`) are behaviour, not tier facts.
+      Mutation evidence, each by `cp` backup with md5 before / after-mutation / after-restore, `[applied]` printed
+      between mutating and testing, and every restore sum equal to its original:
+
+      | Mutant | md5 before → mutated → restored | Result |
+      |---|---|---|
+      | `docker/compose/agentic.yml` `target: e2e-process-barrier` → `target: e2e` | `decf934c3dea5a9b38c6aef37cab10b1` → `00f1348a574ea978f7273b0da31aaf47` → `decf934c3dea5a9b38c6aef37cab10b1` | RED: `agentic (agentic.yml semstreams): compose target = "e2e", spec table says "e2e-process-barrier"` |
+      | `docker/Dockerfile` `-tags=e2e_process_barrier` → `-trimpath` | `bda229324b35a27e311fda6012816447` → `c8bb58cc253142b66d9675158b7bdecf` → `bda229324b35a27e311fda6012816447` | RED in both tests: `builds with tags [], spec table says [e2e_process_barrier]`, and both hook files now `build without any of the overlay tags [e2e_slow_consumer]` |
+      | `docker/compose/agentic.yml` drops `SEMSTREAMS_E2E_MILESTONE_PROBE=1` | `decf934c3dea5a9b38c6aef37cab10b1` → `7bc9437bdd069a4a56e8d3b71cde692e` → `decf934c3dea5a9b38c6aef37cab10b1` | RED: `compose sets [], spec table says [SEMSTREAMS_E2E_MILESTONE_PROBE]` |
+      | `docker/compose/ops.yml` ADDS `SEMSTREAMS_E2E_MILESTONE_PROBE=1` (the leak direction) | `accbaecb66dd784922f95f4d442fa4a0` → `30bdf6d6b2860eacdceeaa82fcc64e04` → `accbaecb66dd784922f95f4d442fa4a0` | RED: `ops (ops.yml semstreams): compose sets [SEMSTREAMS_E2E_MILESTONE_PROBE], spec table says []` |
+      | the spec table loses its `slow-consumer` row | `79b54680914613a3c4f6ad14be6c3ee0` → `09c0557124219cbb9f082576da221edd` → `79b54680914613a3c4f6ad14be6c3ee0` | RED: `11 rows`, `compose service e2e-slow-consumer.yml/semstreams builds docker/Dockerfile but no tier table row names it` |
+
+      The fifth mutant is the one that proves the SPEC is load-bearing rather than the compose files alone: delete a
+      row and the guard fails, so the table cannot quietly shrink to whatever still passes.
+- [x] 11.3 `docs/contributing/02-e2e-tests.md` corrected. Its Quick Reference called itself "5 E2E tasks - one per
+      tier" and listed four; its "Docker Compose Files" table named `structural.yml` and `federation.yml`, neither of
+      which exists (`ls docker/compose/`). That section is now "Every tier and the binary it boots": the rule in two
+      sentences, a pointer naming `openspec/specs/payload-registry/spec.md` as the source of truth and
+      `test/contract/e2e_tier_binary_contract_test.go` as what re-reads it, and all twelve tiers with compose file,
+      service, Dockerfile target and binary — gate and hook columns are NOT duplicated here, per the ruling. The
+      thirteenth task, `e2e:openai-responses`, is named as the live paid-API test with no container. The
+      "Directory Structure" block carried the same class of defect (a `federation.yml` taskfile, four scenario files
+      that no longer exist) and is replaced with the layout that is there, including `test/e2e/harness/`. The
+      BREAKING rule is unchanged in text and **moves from `:299` to `:312`**: `task inventory:verify` and
+      `tasks-pins.md:84,188` pin `:299` as PRE-change evidence and are deliberately not re-pinned, and § 10.2's
+      forward-looking citation is re-derived with `sed -n "312p"`.
+      The page points at `openspec/specs/payload-registry/spec.md` rather than at the delta, because the archive is
+      this PR's last content commit and the live spec is where the table is read from afterwards; until then the
+      contract test resolves the delta first, so the two never disagree in a way a gate cannot see.
+- [x] 11.4 Gates for this checkpoint, run from the worktree root on the tree that became `6931c6f7` plus § 11's own
+      markdown. Every exit code is the command's own, captured as `EXIT=$?` or `${pipestatus[1]}` immediately after
+      it, never after an echo:
+
+      | Command | Exit | Final line |
+      |---|---|---|
+      | `task lint` | 0 | `ok  	github.com/c360studio/semstreams/test/natsclient	0.681s` |
+      | `go build ./...` | 0 | no output |
+      | `go vet -tags=e2e_process_barrier ./cmd/semstreams ./test/e2e/...` | 0 | no output |
+      | `go test -race -count=1 ./test/contract/... ./cmd/... ./test/e2e/...` | 0 | `ok  	github.com/c360studio/semstreams/test/e2e/scenarios/throughput	2.714s` |
+      | `task spec:properties` | 0 | `spec-properties: 288/288 citations resolve.` |
+      | `openspec validate --all --strict` | 0 | `Totals: 56 passed, 0 failed (56 items)` |
+      | `task check:push` | 0 | `[INTEGRATION] tests complete` |
+      | `git diff --stat schemas/ specs/` | 0 | no output — no drift |
+
+      Denominators, because a green run that skipped everything reads identically: the race run produced 33 package
+      result lines with 0 beginning `FAIL`; `check:push` produced 316 `ok` lines and 40 `[no test files]` with 0
+      beginning `FAIL`; `spec:properties` is unchanged at 288 because this checkpoint adds no `// spec:` citation —
+      the new contract test is not property-based, and the spec names it in a scenario instead, which is how the rest
+      of this capability's tests are cited. The `openspec validate` total is unchanged at 56 items because the
+      payload-registry delta joins an existing change rather than adding one.
+      `openspec validate --all --strict` and the markdown-walking contract test were re-run after the last
+      `tasks.md` re-wrap, since markdown is a gate input here.
+      No tier run: nothing this checkpoint touches is compiled or read by a tier. The only non-markdown edits are a
+      new `test/contract` file, four `_test.go` files, and one comment line in `docker/compose/tiered.yml`;
+      `go vet -tags=e2e_process_barrier` covers the tagged tree the agentic tier's image builds.
