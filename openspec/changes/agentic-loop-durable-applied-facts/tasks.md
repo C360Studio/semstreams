@@ -17,7 +17,12 @@
 
 > File:line pins are at `b7ce8727` through the substitutions in `tasks-pins.md`, using the `inventory.md`
 > abbreviations (ST = `processor/agentic-loop/state.go`, C = `…/component.go`, H = `…/handlers.go`, and so on); a
-> `68c14c8e` pin appears only where the text names the predecessor site it replaces. Dependency order; each task names
+> `68c14c8e` pin appears only where the text names the predecessor site it replaces.
+> **Two pin classes (checkpoint-4 review, MEDIUM-3).** That baseline holds for a pin in a task's DESCRIPTION: it is
+> pre-change evidence at `b7ce8727` and is never re-pinned. A pin inside a **Landed** or **Amended** block is a
+> different thing — it names what this branch built, so it is regenerated at the branch head, currently `2e245243`,
+> with every number produced by `sed -n "${n}p"` rather than transcribed. Which class a pin belongs to is decided by
+> the block it sits in, not by how it is spelled. Dependency order; each task names
 > its file and the proving test. No landing tasks (claim PR, CI, merge, archive) — PR checklist, owner ruling #1230
 > Option 1. Prerequisites #1327–#1329 merged; #1328 shipped the RequestID grammar (`ST:1339-1347`).
 
@@ -55,7 +60,7 @@
       `outstandingRequests`, `ST:887-888`) and the tool batch (`restoreToolBatch`, membership against the retained
       response only), so it has no `PublishedRequestID` mismatch to refuse. Test: `state_test.go` — set /
       restore-after-adoption / restore-equal.
-      **Landed.** `SetPublishedRequest` is at `state.go:914-924`, refusing a loop the manager does not hold rather
+      **Landed.** `SetPublishedRequest` is at `state.go:1082-1095`, refusing a loop the manager does not hold rather
       than ignoring it, and has three production callers (the mint sites of 2.4). The rebuild landed in two
       commits: `6c91a1cc` for the two manager primitives, `c09cc282` for the reader, the component seam and the
       call sites — sequenced that way because the shape of the ContextManager rebuild is decided by its call sites,
@@ -63,14 +68,14 @@
 
       Five parts, as built:
 
-      1. `LoopManager.restoreLoopFromRequest(record, request)` (`state.go:359`) — seats the loop, its
+      1. `LoopManager.restoreLoopFromRequest(record, request)` (`state.go:363`) — seats the loop, its
          ContextManager and its routing maps from the record plus the retained request. The conversation replays
          into ONE region: `system` → `RegionSystemPrompt`, everything else → `RegionRecentHistory` in the retained
          order, then `RepairToolPairs()`. It also restores `cachedTools` / `cachedToolChoice` /
          `cachedResponseFormat` / `cachedRequestTimeout` off the request — an addition to the task text, because
          without them a rebuilt loop's NEXT request advertises no tools at all. The loop is marked outstanding on
          its request (TrackRequest's shape), which `restoreToolBatch` settles when a response for it is in hand.
-      2. `LoopManager.restoreToolBatch(loopID, response, applied, inFlight)` (`state.go:462`) — re-derives every
+      2. `LoopManager.restoreToolBatch(loopID, response, applied, inFlight)` (`state.go:466`) — re-derives every
          execution identity from the retained response with `stampToolExecutionCorrelation`, adds the assistant
          turn the batch belongs to, seats names/arguments/ordinals for all of them, seats routes for the unapplied
          ones only, and queues the unapplied minus `inFlight`. **Divergence from the task text:** a fourth
@@ -83,8 +88,8 @@
          from the agent.response **INPUT** port — `requestAddress`'s mirror — so the recovery read and the live
          subscription resolve the same subject after a config change. Both reads share one `newestOn`.
       4. `Component.restoreLoopFromEvidence(ctx, loopID, record, inFlightExecutionID)` (`loop_evidence.go:577`),
-         called from both cold arms on `requestOrderCurrent` only (`component.go:1905`, `component.go:2653`), which
-         then fall through to the ordinary warm apply (`component.go:1749`, `component.go:2451`) — no second apply
+         called from both cold arms on `requestOrderCurrent` only (`component.go:1905`, `component.go:2659`), which
+         then fall through to the ordinary warm apply (`component.go:1749`, `component.go:2454`) — no second apply
          path for a recovered loop. It ends with `rememberLoopRevision`. **Divergence from the task text:** the
          retained-RESPONSE read fires on the tool lane only. On the response lane, applying the response is what
          creates the batch; pre-seating one would add the assistant turn to the conversation twice.
@@ -132,7 +137,7 @@
       `task_redelivery_integration_test.go`: `ok … 5.242s`.
 
       **Amended 2026-09-22 (checkpoint-3 review, BLOCKING-2): a retained request is not the conversation.**
-      All three mint sites wrap the conversation in `prependIterationContext` (`handlers.go:316`), so the retained
+      All three mint sites wrap the conversation in `prependIterationContext` (`handlers.go:326`), so the retained
       `AgentRequest` opens with an `[Iteration Budget]` line and, when the loop has a working list, a
       `[Working list …]` block — both Role `system`. The rebuild seated them into `RegionSystemPrompt`, pinning ONE
       iteration's framing at the top of the loop's system prompt for the rest of its life while every later request
@@ -259,7 +264,7 @@
       RequestID and nothing else), and the decision `adoptRetainedRequest` (`:218`) called from `publishResults`
       before every minted request (`C:2470`; `msg.MsgID != ""` is exactly the three mint sites, measured).
       The revision-returning entity read is `readLoopRecord` (`:159`) returning `loopRecord{entity, revision,
-      presence}` (`:147`); `classifyMissingLoop` keeps its signature and delegates (`loop_presence.go:69`).
+      presence}` (`:147`); `classifyMissingLoop` keeps its signature and delegates (`loop_presence.go:65`).
       **Recorded simplification (standing simplicity rule, owner 2026-09-22):** the interface carries ONE read, not
       two. The retained-RESPONSE read's only consumer is `restoreToolBatch`, which lands with the cold rebuild; an
       interface method nothing calls is the surface the contract refuses to add. **Recorded simplification #2:** the
@@ -704,12 +709,12 @@
       NATS). It drives the REAL gate — born loop, model response dispatching one tool, a tool result whose error
       carries `agentic.ApprovalRequiredPrefix` — so `RequestedAt` and `Timeout` are a real pending approval's and
       the record is written by the real carrier. The zero is a measured delta: one instrument
-      (`SnapshotExpiredApprovals`, `state.go:630`), one instant, two processes over the same bucket — 1 candidate on
+      (`SnapshotExpiredApprovals`, `state.go:634`), one instant, two processes over the same bucket — 1 candidate on
       the process that gated the loop, 0 on the replacement. The instant is passed in rather than waited for, so
       there is no sleep and no backdated fixture and the configured 12h wait stays production's.
-      Migration section: `docs/operations/migration-beta162-to-beta163.md:1758` § "A replaced process re-arms no
+      Migration section: `docs/operations/migration-beta162-to-beta163.md:1766` § "A replaced process re-arms no
       approval deadline", which also supersedes the beta.25 note's false "Restart safety" paragraph by name.
-      Delta scenario: `specs/agentic-loop/spec.md:58-63`. Conformance row OQ2 updated (`design.md` § 9).
+      Delta scenario: `specs/agentic-loop/spec.md:67-72`. Conformance row OQ2 updated (`design.md` § 9).
       Mutant (`cp` backup + `md5 -q`, `[applied]` printed between mutating and testing, restore verified by
       checksum): hydrate the replacement — `initializeKVBuckets` lists `AGENT_LOOPS` after acquiring it and seats
       every non-terminal record into the LoopManager, which is exactly the startup pass OQ2 refused. `component.go`
@@ -720,7 +725,7 @@
       **Finding, escalated not applied (contract § 0.2).** The requirement's free-text sentence
       (`specs/agentic-loop/spec.md:36-38`, verbatim OQ2 ruling text) says a replaced process SHALL re-arm no
       approval deadline, without qualification. Measured false in this tree: task 1.2's rebuild seats the record
-      wholesale (`state.go:383-384`), including `State = awaiting_approval` and `PendingApproval`, so a replacement
+      wholesale (`state.go:387-388`), including `State = awaiting_approval` and `PendingApproval`, so a replacement
       that takes a redelivered tool result or model response for a gated loop DOES hold that deadline again — at
       the record's own `RequestedAt + Timeout`. Probe, run and discarded: predecessor snapshot 1, replacement at
       start 0, replacement after redelivering the gated result 1, record still `awaiting_approval` at revision 4.
@@ -735,8 +740,8 @@
       while reusing the retained LoopID and publishing no second task
       (`processor/agentic-dispatch/metrics.go:112`, `recordTaskSubmitted` `:321`, increment `:322`).
       **Landed.** Test `TestTaskSubmissionCounterIsAtLeastOnceUnderRedelivery`
-      (`processor/agentic-dispatch/task_submission_counter_integration_test.go:42`). Migration section:
-      `docs/operations/migration-beta162-to-beta163.md:1782` § "`tasks_submitted_total` is at-least-once, and stays
+      (`processor/agentic-dispatch/task_submission_counter_integration_test.go:41`). Migration section:
+      `docs/operations/migration-beta162-to-beta163.md:1790` § "`tasks_submitted_total` is at-least-once, and stays
       that way", with the two reading rules an operator needs. No arm changed: `recordTaskSubmitted` is still called
       unconditionally after the publication on both lanes (`component.go:1168`, `http.go:428`). Conformance row OQ4
       updated (`design.md` § 9).
@@ -839,7 +844,7 @@
       What the stage was missing: its three checks (completed-outcome replay, tool quarantine, dispatch quarantine)
       are all SETTLEMENT checks. None of them holds a LOOP across the replacement, which is the one claim task 4.2's
       in-process `Component` pair cannot make (recorded deviation, 4.2 above). Added
-      `verifyMidFlightLoopAcrossReplacement` (`test/e2e/scenarios/agentic/stage_a_process_replacement.go:806`),
+      `verifyMidFlightLoopAcrossReplacement` (`test/e2e/scenarios/agentic/stage_a_process_replacement.go:824`),
       wired as the stage's fourth check (`:69`).
       Shape, built only from knobs the tier already has — the existing `composeProcessController`, `PauseConsumer`
       (the dispatch check's own knob), `waitForStreamSubject`/`streamSubjectCount`/`waitForConsumerSettled`, and the
