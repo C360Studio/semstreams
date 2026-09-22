@@ -392,9 +392,23 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       `ShutdownDelayedNAKRedelivers` → `TestIntegrationSemanticRetryProducesDurableRedelivery` (the legacy 5s
       shutdown NAK is deliberately gone, design § 2.9, so that claim is superseded rather than ported).
       One thing the task's "delete the file" does not describe: `mockMsg` — the package's in-memory `jetstream.Msg`,
-      113 lines of declaration and methods — was DECLARED in `heartbeat_test.go` and is used throughout `delivery_settlement_test.go`. Deleting
-      the file as written breaks the typed path's own tests. It moved verbatim to `natsclient/mockmsg_test.go` with a
-      doc comment recording why it outlived the file.
+      113 lines of declaration and methods — was DECLARED in `heartbeat_test.go` and is used throughout
+      `delivery_settlement_test.go`. Deleting the file as written breaks the typed path's own tests. It moved
+      verbatim to `natsclient/mockmsg_test.go` with a doc comment recording why it outlived the file.
+      Mutation evidence for section 7 (`cp` backup + md5, `[applied]` printed between mutating and testing, md5
+      re-checked after restore).
+      L, the retirement the ratchet exists for: `func ConsumeWithHeartbeat() error { return nil }` appended to
+      `natsclient/heartbeat.go` (md5 `ea356d643386ca39e23def1baac3d92c` before and after) —
+      `TestConsumeWithHeartbeatHasNoDeclarationOrProductionCalls` went red with `retired ConsumeWithHeartbeat surface
+      remains: [natsclient/heartbeat.go: function or receiver method]`. Under the PRE-inversion scanner this exact
+      mutant was legal, which is what 7.2 had to change.
+      M and N both on `natsclient/delivery_settlement.go` (md5 `f1cbfd26bf13eea3d03f8367d7b66709` before and after
+      each). M, `result.ownerStopNeeded = true` deleted from the renewal-failure branch — the ported test and
+      `TestConsumeDeliveryWithHeartbeatControlLossPreservesJoinedMeaning` both went red. N,
+      `errors.Join(ErrHeartbeatFailed, ...)` reduced to the bare `fmt.Errorf` so the sentinel is no longer joined —
+      `TestConsumeDeliveryWithHeartbeatInProgressFailureRequiresOwnerStop` was the ONLY test in the whole `natsclient`
+      package that went red. That is the measurement behind "port before deleting": without it, the sentinel could
+      have been dropped from the typed path with the suite green.
 - [x] 7.4 Commit as `refactor(natsclient)!: remove ConsumeWithHeartbeat`. Record in the PR body that
       `task api:compat:report` at `b7ce8727` lists 15 incompatible Tier 1 packages against `v1.0.0-beta.162`,
       `natsclient` (`NewDurableHandler: removed`) and `agentic/agentrun` (`EntityIDPattern`, `Mint`) among them; this
