@@ -23,6 +23,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// publishedRequestID is the identity the loop's birth published its first
+// request under, taken off the message the loop itself produced.
+//
+// A hand-written name here is a reconstruction of a value production never
+// produces, and #1330 made that visible: the response lane orders an answer
+// against the request the loop's record NAMES, and a name that is not one of
+// this loop's requests is quarantined rather than dropped. This test only
+// passed before because the old arm collapsed foreign and superseded into one
+// effect-free acknowledgement.
+func publishedRequestID(t *testing.T, birth agenticloop.HandlerResult) string {
+	t.Helper()
+	for _, published := range birth.PublishedMessages {
+		if strings.HasPrefix(published.Subject, "agent.request.") {
+			require.NotEmpty(t, published.MsgID,
+				"a minted request publishes under its own identity")
+			return published.MsgID
+		}
+	}
+	t.Fatal("the loop's birth published no agent.request")
+	return ""
+}
+
 // loopCompletionEnvelope drives a real loop to a decide terminal and returns
 // the agent.complete envelope it published.
 func loopCompletionEnvelope(t *testing.T, loopAction, loopReason string) []byte {
@@ -36,7 +58,7 @@ func loopCompletionEnvelope(t *testing.T, loopAction, loopReason string) []byte 
 	require.NoError(t, err)
 
 	_, err = handler.HandleModelResponse(ctx, task.LoopID, agentic.AgentResponse{
-		RequestID: "seam-req", Status: "tool_call",
+		RequestID: publishedRequestID(t, task), Status: "tool_call",
 		Message: agentic.ChatMessage{
 			Role:      "assistant",
 			ToolCalls: []agentic.ToolCall{{ID: "seam-call", Name: agentic.DecideToolName}},

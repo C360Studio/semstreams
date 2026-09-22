@@ -410,6 +410,19 @@
       Mutant: replace the guard's ordering with a constant `requestOrderCurrent` (`H:1274`) →
       `TestAReplacementClassifiesAResponseAgainstTheRecordNotItsOwnMints` (superseded, not-yet-named) and
       `TestSupersededResponseDoesNotSettleATimedOutLoop` red.
+      **The quarantine found a reconstruction one package over** (CI run
+      [35733719359](https://github.com/C360Studio/semstreams/actions/runs/35733719359), Test job).
+      `processor/agentic-dispatch/terminal_loop_seam_test.go` births a REAL loop through `HandleTask` and then fed
+      `HandleModelResponse` a response named `"seam-req"` — a value production never mints. It passed only because the
+      old collapsed arm dropped-and-acked a foreign name; with the disposition corrected it quarantines, exactly as
+      ruled. Fixed in the TEST: `publishedRequestID` reads the `Nats-Msg-Id` off the `agent.request.<loopID>` message
+      the loop's own birth published, so the answer names the question the loop actually asked. Class swept before the
+      fix: `git grep -nE 'RequestID:\s*"[a-z-]+"' -- 'processor/**/*_test.go' 'agentic/**/*_test.go' 'test/**/*_test.go'`
+      returns 56 hits, and `HandleModelResponse` has exactly ONE call site outside `processor/agentic-loop` — this
+      one. The in-package literals (`delivery_owner_test.go:285`, `tool_result_handler_failure_test.go:193`) sit on
+      loops built with `CreateLoop`, whose record names no request, so they meet `requestOrderUnnamed` and are fixtures
+      rather than reconstructions. The 14 in-package files that both birth a loop and answer it are green under
+      `-race`.
 - [x] 3.4 Task lane: a cold fork before `C:1396` (`HandleTask`) — read the record by `task.LoopID`; absent → birth;
       present at iteration 0 → rebuild R1 through `buildTaskRequest` (`H:1120`) and republish it unconditionally with
       the MsgId, no retained read (Q1); present and advanced → ACK. Test: `recovery_test.go` (exists, extend) — cold
