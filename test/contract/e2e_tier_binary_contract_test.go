@@ -53,13 +53,23 @@ type tierRow struct {
 
 func (r tierRow) String() string { return fmt.Sprintf("%s (%s %s)", r.tier, r.composeFile, r.service) }
 
-// tierTable parses the table out of the payload-registry spec. The active
-// change's delta is preferred over the live capability spec because a delta is
-// the target state until `openspec archive` syncs it; after the archive the
+// tierTable parses the table out of the payload-registry spec. Two homes are
+// possible: an in-flight change's delta carries the target state until
+// `openspec archive` syncs it into the live capability spec, after which the
 // delta is gone and the live spec answers.
+//
+// Exactly one of them may carry the table. Picking the first match would be
+// fail-open, and openspec's MODIFIED rule makes the ambiguous case likely
+// rather than exotic: the next change touching this requirement must restate
+// the whole block, table included, so two deltas would both carry it and a
+// first-match resolver would silently govern by alphabetical change id — a
+// corrupted table in the change under test would go unread. When more than one
+// carries it, the author decides which governs; this refuses and names them.
 func tierTable(t *testing.T) (string, []tierRow) {
 	t.Helper()
 
+	// A single `*` cannot reach archived changes: those live at
+	// openspec/changes/archive/<date>-<id>/specs/, one level deeper.
 	candidates, err := filepath.Glob(filepath.Join(tierRepoRoot, "openspec/changes/*/specs/payload-registry/spec.md"))
 	if err != nil {
 		t.Fatalf("glob change deltas: %v", err)
@@ -67,18 +77,26 @@ func tierTable(t *testing.T) (string, []tierRow) {
 	sort.Strings(candidates)
 	candidates = append(candidates, filepath.Join(tierRepoRoot, "openspec/specs/payload-registry/spec.md"))
 
+	var carriers []string
+	bodies := map[string]string{}
 	for _, path := range candidates {
-		if strings.Contains(filepath.ToSlash(path), "/changes/archive/") {
-			continue
-		}
 		body, readErr := os.ReadFile(path) //nolint:gosec // repository-relative spec path
 		if readErr != nil || !strings.Contains(string(body), tierTableHeader) {
 			continue
 		}
-		return path, parseTierRows(t, path, string(body))
+		carriers = append(carriers, path)
+		bodies[path] = string(body)
 	}
-	t.Fatalf("no payload-registry spec carries the tier table header %q", tierTableHeader)
-	return "", nil
+
+	switch len(carriers) {
+	case 0:
+		t.Fatalf("no payload-registry spec carries the tier table header %q", tierTableHeader)
+	case 1:
+	default:
+		t.Fatalf("%d payload-registry specs carry the tier table, so which one governs is ambiguous: %s",
+			len(carriers), strings.Join(carriers, ", "))
+	}
+	return carriers[0], parseTierRows(t, carriers[0], bodies[carriers[0]])
 }
 
 func parseTierRows(t *testing.T, path, body string) []tierRow {

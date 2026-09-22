@@ -925,3 +925,25 @@ after #1362 and gating the tag; they are deliberately not done here.
       No tier run: nothing this checkpoint touches is compiled or read by a tier. The only non-markdown edits are a
       new `test/contract` file, four `_test.go` files, and one comment line in `docker/compose/tiered.yml`;
       `go vet -tags=e2e_process_barrier` covers the tagged tree the agentic tier's image builds.
+
+### Checkpoint-B review fixes (2026-09-22)
+
+The reviewer verified every one of the twelve rows, the bijection in both directions and the MODIFIED block, and
+re-ran the R1/R2 mutants red. Nothing in the rule or the table changed; what changed is the guard's shape and five
+text claims.
+
+- [x] 11.5 HIGH-1 — the spec resolver was first-match-wins and therefore fail-open.
+      `test/contract/e2e_tier_binary_contract_test.go:59-92` now gathers EVERY candidate (the changes glob plus the
+      live spec), and `t.Fatalf`s unless exactly one carries the table header, naming all of them when more than one
+      does. openspec's MODIFIED rule makes the ambiguous case ordinary rather than exotic: the next change touching
+      this requirement must restate the whole block, table included, so two deltas would both carry it and the old
+      resolver would have governed by alphabetical change id. The dead `"/changes/archive/"` skip is removed — a
+      single `*` cannot reach `openspec/changes/archive/<date>-<id>/specs/`, one level deeper — and replaced by the
+      comment saying so.
+      Mutant N6, the reviewer's: a sibling `openspec/changes/aaa-other-change/specs/payload-registry/spec.md` holding
+      a correct copy of the table, AND this change's own delta corrupted (agentic row rewritten to
+      `production` / no gate). Delta md5 `79b54680914613a3c4f6ad14be6c3ee0` → `c19362b36eb7193ecf8f2942649f18bb` →
+      `79b54680914613a3c4f6ad14be6c3ee0`; `[applied]` printed with the sibling path before the run; sibling directory
+      removed and `git status --porcelain` showed only the intended test-file edit afterwards. GREEN before this fix
+      (the reviewer's finding), now RED: `2 payload-registry specs carry the tier table, so which one governs is
+      ambiguous: …/aaa-other-change/…, …/agentrun-fanout-settlement/…`.
