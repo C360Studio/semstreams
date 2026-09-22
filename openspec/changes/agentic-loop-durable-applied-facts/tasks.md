@@ -661,8 +661,17 @@
       `docs/operations/migration-beta24-to-beta25.md:155-162` ("An expired loop in KV at restart will auto-reject
       within `approvalSweepInterval` of the new process booting"). It is a SHIPPED release note for a past release
       and is left as written; the beta162→beta163 note's #1330 section names and supersedes it (task 5.3).
-- [ ] 5.2 Apply the `specs/agentic-loop/spec.md` and `specs/agentic-dispatch/spec.md` deltas;
+- [x] 5.2 Apply the `specs/agentic-loop/spec.md` and `specs/agentic-dispatch/spec.md` deltas;
       `openspec validate agentic-loop-durable-applied-facts --strict` green; `task spec:properties` resolves the `// spec:` citation from 4.1 against the ADDED requirement.
+      **Landed.** Both deltas are in the tree: `specs/agentic-loop/spec.md` (one ADDED requirement with seven
+      scenarios, one MODIFIED requirement restated in full) and `specs/agentic-dispatch/spec.md` (the OQ4
+      requirement, landed `0e327a51`).
+      `openspec validate agentic-loop-durable-applied-facts --strict` → `Change 'agentic-loop-durable-applied-facts'
+      is valid`, exit 0.
+      `task spec:properties` → `323/323 citations resolve.`, exit 0, and `324/324` once task 5.3's new test file is
+      tracked — the denominator moves by exactly the one citation that test adds, because the script counts TRACKED
+      test files only. Fifteen files carry `// spec: agentic-loop / The loop record names its outstanding request`,
+      including 4.1's `applied_facts_property_test.go:102`, and every one resolves against the ADDED requirement.
 - [ ] 5.3 No approval-deadline hydration (docket OQ2, owner ruling 2026-09-22): the delta scenario "a replaced process
       re-arms no approval deadline; the loop stays `awaiting_approval` until answered or cancelled" plus the same
       sentence as a line in `docs/operations/migration-beta162-to-beta163.md` under a `#1330` section. Test: the zero
