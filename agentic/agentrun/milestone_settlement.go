@@ -245,6 +245,16 @@ func (s *MilestoneSubscriber) consumeLane(
 	}
 }
 
+// newLaneAdmission builds one lane's admission latch. Both lanes and every test
+// that assembles a lane come through here, so the recorder health reads cannot
+// be wired on one path and missing on another.
+//
+// onRefused is nil: the milestone lanes declare no refusal today, and the
+// per-lane declarer sweep has one home in #1342 (owner ruling OQ1, 2026-09-22).
+func (s *MilestoneSubscriber) newLaneAdmission() *deliverylane.Admission {
+	return deliverylane.NewAdmission(s.recordDeliveryOwnerFatal, nil)
+}
+
 // observeLane wraps one acquired handle in its binding and starts that lane's
 // owner-stop observer. It is the one place a raw jetstream.ConsumeContext
 // becomes a Binding, so the owner never holds a second path to the handle.

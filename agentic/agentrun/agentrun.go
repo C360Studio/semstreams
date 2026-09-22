@@ -950,7 +950,7 @@ func (s *MilestoneSubscriber) Start(
 		return nil, fmt.Errorf(
 			"agentrun: MilestoneSubscriber: validate agent.complete.* delivery policy: %w", err)
 	}
-	completeAdmission := deliverylane.NewAdmission(s.recordDeliveryOwnerFatal, nil)
+	completeAdmission := s.newLaneAdmission()
 	completeHandle, err := client.ConsumeInternalStreamWithConfig(
 		runCtx, completeCfg, s.consumeLane(milestoneLaneComplete, completePolicy, completeAdmission),
 	)
@@ -1014,7 +1014,7 @@ func (s *MilestoneSubscriber) Start(
 		}
 		return stop, errors.Join(startErr, rollbackErr)
 	}
-	failedAdmission := deliverylane.NewAdmission(s.recordDeliveryOwnerFatal, nil)
+	failedAdmission := s.newLaneAdmission()
 	failedHandle, err := client.ConsumeInternalStreamWithConfig(
 		runCtx, failedCfg, s.consumeLane(milestoneLaneFailed, failedPolicy, failedAdmission),
 	)

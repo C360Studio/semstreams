@@ -45,7 +45,7 @@ func newMilestoneLaneFixture(t *testing.T, s *MilestoneSubscriber, lane string) 
 	t.Helper()
 	return milestoneLaneFixture{
 		policy:    milestonePolicyFor(t, s, lane),
-		admission: deliverylane.NewAdmission(s.recordDeliveryOwnerFatal, nil),
+		admission: s.newLaneAdmission(),
 	}
 }
 
@@ -524,6 +524,66 @@ func TestMilestoneNonAckDecisionsLogOnceAndCountOnce(t *testing.T) {
 	lane.deliver(t, data)
 	assert.Empty(t, decisionLogLines(t, logs.String()), "an Ack emits no decision line")
 	assert.InDelta(t, 1.0, testutil.ToFloat64(counter), 0.0, "an Ack does not move the counter")
+}
+
+// TestMilestoneRefusedDeliveryIsNotLoggedAsASettlementFailure pins the guard
+// reconciliation B1 names. deliverylane.Consume answers a refused delivery with
+// the ZERO DeliveryResult, and a zero result's Err() is non-nil by
+// construction, so an unguarded `result.Err() != nil` branch reports a delivery
+// that ran no work and attempted no terminal method as a settlement failure —
+// exactly the class of noise an operator uses to decide a lane is broken.
+//
+// It drives consumeLane, the closure the NATS callback actually is, not the
+// DeliveryWork underneath it.
+func TestMilestoneRefusedDeliveryIsNotLoggedAsASettlementFailure(t *testing.T) {
+	t.Parallel()
+	var logs strings.Builder
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	var handlerCalls atomic.Int32
+	sub := NewMilestoneSubscriberWithRunStateReader(
+		&stubRunReader{err: lifecycle.ErrEntityNotFound}, stubTripleReader{}, "acme", "ops", logger)
+	sub.AddHandler(handlerFunc(func(context.Context, LoopTerminalEvent, *AgentRun) error {
+		handlerCalls.Add(1)
+		panic("product handler exploded")
+	}))
+	admission := sub.newLaneAdmission()
+	callback := sub.consumeLane(milestoneLaneComplete, milestonePolicyFor(t, sub, milestoneLaneComplete), admission)
+
+	// First delivery latches the lane.
+	first := &settlementMsg{data: terminalBytes(t, "latching-loop", ""), subject: "agent.complete.x", delivered: 1}
+	callback(t.Context(), first)
+	require.False(t, admission.Admit(), "the panic must close the lane")
+	require.Equal(t, int32(1), handlerCalls.Load())
+
+	// Second delivery arrives at a closed lane: buffered deliveries still reach
+	// the callback after the latch, before the drain has flushed them.
+	logs.Reset()
+	second := &settlementMsg{data: terminalBytes(t, "refused-loop", ""), subject: "agent.complete.x", delivered: 1}
+	callback(t.Context(), second)
+
+	assert.Equal(t, int32(1), handlerCalls.Load(), "a refused delivery runs no work")
+	assert.Zero(t, second.settlements(), "a refused delivery attempts no terminal method")
+	assert.Zero(t, second.heartbeat.Load(), "a refused delivery is not heartbeaten")
+	assert.Empty(t, logLinesWithMessage(t, logs.String(), "agentrun: milestone delivery did not settle cleanly"),
+		"a refusal is not a settlement failure")
+	assert.Empty(t, decisionLogLines(t, logs.String()), "a refusal reached no decision to report")
+}
+
+// logLinesWithMessage returns the records whose slog message is exactly msg.
+func logLinesWithMessage(t *testing.T, raw, msg string) []map[string]any {
+	t.Helper()
+	var lines []map[string]any
+	for _, entry := range strings.Split(strings.TrimSpace(raw), "\n") {
+		if entry == "" {
+			continue
+		}
+		record := map[string]any{}
+		require.NoError(t, json.Unmarshal([]byte(entry), &record), "log entry: %s", entry)
+		if record["msg"] == msg {
+			lines = append(lines, record)
+		}
+	}
+	return lines
 }
 
 // decisionLogLines returns the records carrying a decision reason, which is the
