@@ -43,6 +43,17 @@ type milestoneLaneFixture struct {
 
 func newMilestoneLaneFixture(t *testing.T, s *MilestoneSubscriber, lane string) milestoneLaneFixture {
 	t.Helper()
+	return milestoneLaneFixture{
+		policy:    milestonePolicyFor(t, s, lane),
+		admission: deliverylane.NewAdmission(s.recordDeliveryOwnerFatal, nil),
+	}
+}
+
+// milestonePolicyFor validates one lane's policy against the production
+// consumer config: MaxDeliver 5 and AckWait 30s, which is also what makes the
+// 10s heartbeat admissible.
+func milestonePolicyFor(t *testing.T, s *MilestoneSubscriber, lane string) natsclient.HeartbeatDeliveryPolicy {
+	t.Helper()
 	retry, err := natsclient.DelayedDeliveryRetry(milestoneRetryDelay)
 	require.NoError(t, err)
 	cfg := natsclient.StreamConsumerConfig{
@@ -58,10 +69,7 @@ func newMilestoneLaneFixture(t *testing.T, s *MilestoneSubscriber, lane string) 
 		t.Context(), cfg, milestoneHeartbeatInterval, retry, s.deliveryWork(lane),
 	)
 	require.NoError(t, err)
-	return milestoneLaneFixture{
-		policy:    policy,
-		admission: deliverylane.NewAdmission(s.recordDeliveryOwnerFatal, nil),
-	}
+	return policy
 }
 
 // deliver runs one delivery of data through the lane and returns the message so

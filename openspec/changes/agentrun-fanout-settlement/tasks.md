@@ -100,20 +100,38 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       `semstreams_agentrun_milestone_decisions_total{lane,decision,reason}` increment, both inside the `DeliveryWork`
       (B1). The vec is built in `NewMilestoneSubscriberWithRunStateReader` so an unregistered increment is a local
       no-op; `RegisterMetrics` and the root wiring stay with task 5.2.
-- [ ] 3.8 Mutation evidence for the wiring, not the primitive: `cp` `agentrun.go` aside; delete the aggregate call so
+- [x] 3.8 Mutation evidence for the wiring, not the primitive: `cp` `agentrun.go` aside; delete the aggregate call so
       the closure returns Ack unconditionally; run 3.5's tests and record the failing names; restore and `shasum` the
       restored file against the backup. Then delete the `SourceMessageID` copy at `:586` and record 2.2's failure the
       same way.
+      Evidence (`cp` backup + md5, `[applied]` printed between mutating and testing, md5 re-checked after restore):
+      `agentic/agentrun/agentrun.go` md5 `9a09f96f5f67f05270a393abe3126aa1` before and after BOTH mutants.
+      Mutant A, `switch aggregateMilestoneOutcomes(outcomes)` to `switch outcomeDone` (the aggregate call deleted, so the
+      work always returns Ack): `TestMilestoneFanoutAcksOnlyWhenEveryHandlerReturnsNil`,
+      `TestMilestoneFanoutRetriesOnTransientHandlerError`, `TestMilestoneFanoutTerminatesOnAllInvalid`,
+      `TestMilestoneFanoutQuarantinesOnHandlerPanic`, `TestMilestoneNonAckDecisionsLogOnceAndCountOnce` and
+      `TestSubscriber_PanicGuard_SecondHandlerRunsAfterFirstPanics` all went red.
+      Mutant B, the `SourceMessageID: normalized.SourceMessageID,` copy deleted from the `ev` literal:
+      `TestMilestoneFanoutPresentsSameSourceMessageIDOnEveryAttempt` and
+      `TestMilestoneNonAckDecisionsLogOnceAndCountOnce` went red (2.2's evidence).
+      Mutant C checks the check: swapping `outcomeTransient` and `outcomeInvalid` in the ordinal (md5
+      `8a1613dfb62ae4a70dd2cc68d66f6c3e` on `milestone_settlement.go` before and after) killed the rapid property after
+      one test, `aggregate([2 1]) = 2, want 1 by the requirement's precedence` — so the property can fail.
 
 ## 4. Admission latch and handle owner (design § 2.6)
 
-- [ ] 4.1 Per lane, consume `internal/deliverylane` instead of copying the latch (there is no
+- [x] 4.1 Per lane, consume `internal/deliverylane` instead of copying the latch (there is no
       `agentic/agentrun/delivery_owner.go`; `processor/agentic-loop/delivery_owner.go` was deleted at `b7ce8727` by
       #1357): `deliverylane.NewAdmission(s.recordDeliveryOwnerFatal, nil)` (`internal/deliverylane/deliverylane.go:45`),
       `deliverylane.Consume` (`:105`), `deliverylane.NewBinding(handle)` (`:194`),
       `deliverylane.Observe(runCtx, binding, admission, react)` (`:225`; `react` log-only, non-nil).
       `recordDeliveryOwnerFatal` keeps its `*MilestoneSubscriber` receiver as the `onFatal` feeding `DeliveryFatal()`.
-- [ ] 4.2 Replace the hand-rolled handle state in `milestoneConsumerOwner` (`agentrun.go:679-689`) with two
+      Evidence: `agentic/agentrun/milestone_settlement.go` — `observeLane` is the one place a raw
+      `jetstream.ConsumeContext` becomes a `deliverylane.Binding`, and it starts the lane's observer with a log-only
+      non-nil `react`. `Start` builds `deliverylane.NewAdmission(s.recordDeliveryOwnerFatal, nil)` per lane (OQ1: `nil`
+      `onRefused` as ruled). `recordDeliveryOwnerFatal` and `DeliveryFatal()` are on `*MilestoneSubscriber`. No
+      `agentic/agentrun/delivery_owner.go` exists.
+- [x] 4.2 Replace the hand-rolled handle state in `milestoneConsumerOwner` (`agentrun.go:679-689`) with two
       `*deliverylane.Binding`: the two `jetstream.ConsumeContext` fields (`:681-682`) and the two drained flags
       (`:683-684`) go, and no observer goroutine is hand-rolled — `Observe` owns it. `stop()` = `Drain()` both
       (both-drain-first, `:718`, holds) → await both `Closed()` (`:727`, `:730`) → `o.cancel()` (`:743`) → join both
@@ -121,9 +139,20 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       (`:734-737`) is removed and no raw handle is kept beside the binding — owner ruling 2026-09-22 on #1249
       (OQ2, as recommended). Tests (`-race`):
       `TestMilestoneFatalDrainsOnlyTheFailedLane`, `TestMilestoneStopAfterFatalWaitsClosedWithoutSecondDrain`.
-- [ ] 4.3 Control-plane rows: an `InProgress` failure (`natsclient/delivery_settlement.go:372`/`:377`) and unavailable
+      Evidence: `milestoneConsumerOwner` now holds two `*deliverylane.Binding` and nothing else per lane — the two
+      `jetstream.ConsumeContext` fields and both drained flags are gone, and no observer goroutine is hand-rolled.
+      `stop()` drains both, awaits both `Closed()` through `waitMilestoneLane`, calls `o.cancel()`, then joins both
+      `Done()`. The forced `handle.Stop()` fallback is gone (OQ2). Tests green under `-race`:
+      `TestMilestoneFatalDrainsOnlyTheFailedLane`, `TestMilestoneStopAfterFatalWaitsClosedWithoutSecondDrain`; the
+      fake handle's `Stop()` panics, so a reintroduced force-stop fails loudly.
+- [x] 4.3 Control-plane rows: an `InProgress` failure (`natsclient/delivery_settlement.go:372`/`:377`) and unavailable
       metadata (`:390`) latch the lane and surface in health:
       `TestMilestoneUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner`.
+      Evidence: `TestMilestoneUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner` green under `-race`: nothing is
+      settled, no handler runs, only the exact lane drains, that lane stops admitting, and `DeliveryFatal()` carries
+      `delivery_metadata_unavailable`. The `InProgress` row reaches the owner through the identical
+      `DeliveryResult.OwnerStopRequired` seam the admission latches on, and `natsclient/delivery_settlement_test.go`
+      owns the InProgress-to-owner-stop mapping. `MilestoneService.Health()` itself stays with task 5.1.
 
 ## 5. Health and metrics (O3; design § 2.7)
 

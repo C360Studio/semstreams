@@ -245,6 +245,28 @@ func (s *MilestoneSubscriber) consumeLane(
 	}
 }
 
+// observeLane wraps one acquired handle in its binding and starts that lane's
+// owner-stop observer. It is the one place a raw jetstream.ConsumeContext
+// becomes a Binding, so the owner never holds a second path to the handle.
+//
+// react only logs: recording already happened, synchronously, in the
+// admission's onFatal before the result reached the observer, and the drain is
+// Observe's own act once react returns.
+func (s *MilestoneSubscriber) observeLane(
+	runCtx context.Context,
+	lane string,
+	handle jetstream.ConsumeContext,
+	admission *deliverylane.Admission,
+) *deliverylane.Binding {
+	binding := deliverylane.NewBinding(handle)
+	deliverylane.Observe(runCtx, binding, admission, func(result natsclient.DeliveryResult) {
+		s.logger.Error("agentrun: milestone delivery ownership lost",
+			slog.String("lane", lane),
+			slog.Any("error", result.Err()))
+	})
+	return binding
+}
+
 // recordDeliveryOwnerFatal latches the FIRST loss of delivery ownership on
 // either lane. It runs synchronously inside the delivery callback as the lane
 // admission's onFatal, before the result is buffered for the observer, so

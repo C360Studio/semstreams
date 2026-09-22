@@ -27,7 +27,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -788,16 +787,18 @@ type StartConfig struct {
 	ConsumerNameSuffix string
 }
 
+// milestoneConsumerOwner is the SOLE owner of both milestone lanes. It holds a
+// deliverylane.Binding per lane — never a raw jetstream.ConsumeContext — so
+// there is exactly one path to each handle and that path drains at most once,
+// whether the lane's own observer or this Stop reaches it first.
 type milestoneConsumerOwner struct {
-	mu              sync.Mutex
-	complete        jetstream.ConsumeContext
-	failed          jetstream.ConsumeContext
-	completeDrained bool
-	failedDrained   bool
-	running         bool
-	stopping        bool
-	completed       bool
-	cancel          context.CancelFunc
+	mu        sync.Mutex
+	complete  *deliverylane.Binding
+	failed    *deliverylane.Binding
+	running   bool
+	stopping  bool
+	completed bool
+	cancel    context.CancelFunc
 }
 
 func (o *milestoneConsumerOwner) stop(ctx context.Context) error {
@@ -821,38 +822,37 @@ func (o *milestoneConsumerOwner) stop(ctx context.Context) error {
 	complete := o.complete
 	failed := o.failed
 	running := o.running
-	drainComplete := complete != nil && !o.completeDrained
-	drainFailed := failed != nil && !o.failedDrained
-	o.completeDrained = o.completeDrained || drainComplete
-	o.failedDrained = o.failedDrained || drainFailed
 	o.mu.Unlock()
 
-	// Both running handles begin Drain before either exact Closed wait.
-	if drainComplete {
+	// Both bindings begin Drain before either exact Closed wait. Drain is
+	// once-only inside the binding, so a lane whose observer already drained it
+	// after a fatal rejoins that one drain rather than ordering a second.
+	if complete != nil {
 		complete.Drain()
 	}
-	if drainFailed {
+	if failed != nil {
 		failed.Drain()
 	}
 	var stopErrors []error
 	if complete != nil {
-		stopErrors = append(stopErrors, waitMilestoneConsumerClosed(ctx, complete.Closed(), "complete"))
+		stopErrors = append(stopErrors, waitMilestoneLane(ctx, complete.Closed(), "complete milestone consumer Closed"))
 	}
 	if failed != nil {
-		stopErrors = append(stopErrors, waitMilestoneConsumerClosed(ctx, failed.Closed(), "failed"))
+		stopErrors = append(stopErrors, waitMilestoneLane(ctx, failed.Closed(), "failed milestone consumer Closed"))
+	}
+
+	// Cancel AFTER both handles are closed, then join the observers. An
+	// observer that exits on cancellation does not drain, so cancelling first
+	// would race the drain this Stop is the authority for. Done() is never nil,
+	// so a lane that never started an observer returns at once.
+	o.cancel()
+	if complete != nil {
+		stopErrors = append(stopErrors, waitMilestoneLane(ctx, complete.Done(), "complete milestone lane observer"))
+	}
+	if failed != nil {
+		stopErrors = append(stopErrors, waitMilestoneLane(ctx, failed.Done(), "failed milestone lane observer"))
 	}
 	stopErr := errors.Join(stopErrors...)
-	if stopErr != nil && running {
-		// Running Stop is terminal. Force local closure best-effort and never
-		// manufacture later rejoin authority for this generation.
-		if complete != nil {
-			complete.Stop()
-		}
-		if failed != nil {
-			failed.Stop()
-		}
-	}
-	o.cancel()
 
 	o.mu.Lock()
 	if running || stopErr == nil {
@@ -865,12 +865,14 @@ func (o *milestoneConsumerOwner) stop(ctx context.Context) error {
 	return stopErr
 }
 
-func waitMilestoneConsumerClosed(ctx context.Context, closed <-chan struct{}, name string) error {
+// waitMilestoneLane blocks on one lane signal — a handle's Closed or an
+// observer's Done — and names which one the caller's context outlived.
+func waitMilestoneLane(ctx context.Context, signal <-chan struct{}, what string) error {
 	select {
-	case <-closed:
+	case <-signal:
 		return nil
 	case <-ctx.Done():
-		return fmt.Errorf("wait for %s milestone consumer Closed: %w", name, ctx.Err())
+		return fmt.Errorf("wait for %s: %w", what, ctx.Err())
 	}
 }
 
@@ -883,9 +885,10 @@ func waitMilestoneConsumerClosed(ctx context.Context, closed <-chan struct{}, na
 // subscriber restarts and resume from the last-acked message.
 //
 // cfg.StreamName must be non-empty (use AgentStreamName as the default).
-// The ctx controls callback authority. Stop Drains both native handles, awaits
-// both exact Closed signals while that authority remains live, and then cancels
-// it. Durable consumer offsets remain in NATS for restart recovery.
+// The ctx controls callback authority. Stop Drains both bindings, awaits both
+// exact Closed signals while that authority remains live, cancels it, and then
+// joins both lane observers. Durable consumer offsets remain in NATS for
+// restart recovery.
 //
 // If the second acquisition fails, Start synchronously rolls back the first.
 // Successful rollback returns no cleanup closure. Failed rollback returns one
@@ -987,7 +990,7 @@ func (s *MilestoneSubscriber) Start(
 		return nil, fmt.Errorf("agentrun: MilestoneSubscriber: start durable consumer agent.complete.*: %w", err)
 	}
 	owner.mu.Lock()
-	owner.complete = completeHandle
+	owner.complete = s.observeLane(runCtx, milestoneLaneComplete, completeHandle, completeAdmission)
 	owner.mu.Unlock()
 
 	failedCfg := natsclient.StreamConsumerConfig{
@@ -1028,7 +1031,7 @@ func (s *MilestoneSubscriber) Start(
 		return stop, errors.Join(startErr, rollbackErr)
 	}
 	owner.mu.Lock()
-	owner.failed = failedHandle
+	owner.failed = s.observeLane(runCtx, milestoneLaneFailed, failedHandle, failedAdmission)
 	owner.running = true
 	owner.mu.Unlock()
 
