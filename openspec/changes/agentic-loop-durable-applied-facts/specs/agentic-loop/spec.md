@@ -1,7 +1,8 @@
 # agentic-loop — delta
 
-> Delta for #1330 (restart-safety L4). File:line pins are at `68c14c8e`. The MODIFIED block restates the requirement
-> at `main:openspec/specs/agentic-loop/spec.md:201-226` in full, including both of its scenarios.
+> Delta for #1330 (restart-safety **L4a**; L4b is #1362, which adds no delta of its own beyond what is stated here).
+> The MODIFIED block restates the requirement at `openspec/specs/agentic-loop/spec.md:201-226` (`b7ce8727`) in full,
+> including both of its scenarios. Amended 2026-09-22 to the owner's rulings on #1330 (`design.md` § 1).
 
 ## ADDED Requirements
 
@@ -29,6 +30,10 @@ read the newest retained request for the loop and, when it is newer than `publis
 record by identity first. A redelivered terminal input SHALL adopt the loop's durable terminal by loop ID and terminal kind.
 Recovery SHALL never compare rendered messages, result content, or terminal content to decide whether an input was applied.
 
+An approval deadline is process-local and is not a durable fact: a replaced process SHALL re-arm no approval deadline,
+and a loop in `awaiting_approval` SHALL stay in `awaiting_approval` until the approval is answered or the loop is
+cancelled.
+
 #### Scenario: The next request was published but the record was not updated (W4, tool lane)
 
 - **GIVEN** a running loop whose record names request `R` at iteration `N` and whose last tool result of `R`'s batch
@@ -54,6 +59,13 @@ Recovery SHALL never compare rendered messages, result content, or terminal cont
 - **WHEN** the approval response is redelivered to a replacement process with no memory of the loop
 - **THEN** the replacement writes the record to `R(N+1)` with the gate cleared and `state = running` under
   compare-and-swap, classifies the approval response as inapplicable, acknowledges it, and publishes nothing
+
+#### Scenario: A replaced process re-arms no approval deadline
+
+- **GIVEN** a loop whose record is `awaiting_approval` and whose process was replaced
+- **WHEN** the replacement starts and holds no in-memory approval deadline for that loop
+- **THEN** no approval deadline is re-armed and no record is written, and the loop stays `awaiting_approval` until the
+  approval is answered or the loop is cancelled
 
 #### Scenario: A stale tool result is acknowledged without effect
 

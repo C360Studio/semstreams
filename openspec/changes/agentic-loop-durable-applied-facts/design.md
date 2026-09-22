@@ -1,23 +1,61 @@
 # Design — agentic-loop-durable-applied-facts (#1330, restart-safety L4)
 
-> Every `file:line` is at `68c14c8e` unless prefixed `main:`. Owner rulings: #1330 comment, 2026-09-18, "as recommended
-> on all eight" (Q1–Q8) and, in its own comment the same day, terminal outcome adoption (§ 1). Premise correction
-> (recorded): RequestIDs are UUID-minted at `68c14c8e` (`state.go:1364-1365`) and `af829616` (`state.go:1131-1132`);
-> deterministic IDs are L2's deliverable (#1328). Abbreviations as in `inventory.md`.
+> **Scope: PR #1361 implements L4a** — the field, the carrier order + CAS, the cold rebuild, and the task, response and
+> tool lanes. The approval lane, the verdict after waiter loss, the single terminal owner and route-ambiguity metering
+> are **L4b = #1362**; their design text stays below, and every section carrying it is marked "(L4b, #1362)" so no
+> reader mistakes it for this PR's scope.
+>
+> Pins: sentences amended on 2026-09-22 are at `b7ce8727` and use the `inventory.md` abbreviations; surviving original
+> text is at `68c14c8e` (PR #1159's never-merged branch), and every one of its sites maps through `reconciliation.md`
+> § A, which names the `main` equivalent or records that there is none. Owner rulings: #1330, 2026-09-18, "as
+> recommended on all eight" (Q1–Q8) and, in its own comment the same day, terminal outcome adoption (§ 1); #1330,
+> 2026-09-22, the reconciliation docket and its simplicity re-read (§ 1). Premise correction (recorded): RequestIDs were
+> UUID-minted at `68c14c8e` (`state.go:1364-1365`) and `af829616` (`state.go:1131-1132`); deterministic IDs shipped with
+> L2 (#1328) and are a fact on `main` (`ST:1339-1347`).
 
 ## 1. Rulings applied (2026-09-18, #1330)
 
 | Was | Decision |
 |---|---|
-| Q1 birth order | Birth keeps Put → publish (`C:1405` → `:1410`). A task redelivered while the record is at iteration 0 republishes R1 unconditionally (no evidence read). |
+| Q1 birth order | Birth keeps Put → publish. A task redelivered while the record is at iteration 0 republishes R1 unconditionally (no evidence read). On `main` birth publishes first (`C:1496`) and writes after (`C:1499`, error ignored), so task 2.1 reorders it — P1, § 3.1. |
 | Q2 carrier form | The non-terminal carrier becomes `Update(observedRevision)`; in L4 scope. |
 | Q3 applied set | `PendingToolResults` keys ARE the applied execution IDs; no separate field. |
-| Q4 ID grammar (lands in #1328) | `<loopID>:req:<iteration>:<retry>`; the truncation-retry ordinal is derived from `PublishedRequestID`; recovery ADOPTS an already-published next request by identity (`readExact` = `GetLastMsgForSubject` on `agent.request.<loopID>`, `SR:56-71`) instead of republishing. Applied to the cold read in § 3.6 (coordinator, 2026-09-18, on the design review's BLOCKING). |
-| Q5 duplicates | Request publishes stamp RequestID as `Nats-Msg-Id` via the existing `PublishToStreamWithMsgID` (`main:natsclient/client.go:963`); the window is a bonus, not the guarantee. `agent.created` duplicates accepted. |
+| Q4 ID grammar (lands in #1328) | `<loopID>:req:<iteration>:<retry>`; the truncation-retry ordinal is derived from `PublishedRequestID`; recovery ADOPTS an already-published next request by identity (`readExact` = `GetLastMsgForSubject` on `agent.request.<loopID>`; the reader is built here, task 2.3) instead of republishing. Applied to the cold read in § 3.6 (coordinator, 2026-09-18, on the design review's BLOCKING). |
+| Q5 duplicates | Request publishes stamp RequestID as `Nats-Msg-Id` via the existing `PublishToStreamWithMsgID` (`natsclient/client.go:963`); the window is a bonus, not the guarantee. `agent.created` duplicates accepted. **Shipped by L2 on `main`:** `C:2328` routes every publish through it and all three mints stamp `MsgID` (`H:1174`, `H:2194`, `H:2958`), so task 2.2 is done before L4a begins. |
 | Q6 verdict ACK | L4 owns a minimal ACK path for a verdict with no waiter, using the tool lane's classification. |
 | Q7 terminal + unproven | Effect-free ACK with a metric and an audit line. |
-| Q8 retention proof | `settleAbsentApprovalEvidence` (`SR:921-981`) stays unchanged. |
+| Q8 retention proof | No referent on `main` (`git grep -n continuation_unavailable -- .` returns only this change's own files), so "stays unchanged" has nothing to leave alone: the ruled outcome is one branch that fails the loop `continuation_unavailable`. Docket **OQ1**; it ships with the approval lane in **L4b (#1362)**. |
 | Terminal outcome adoption | #1330, owner ruling 2026-09-18 (terminal outcome adoption), same standing as Q1–Q8: a redelivered terminal adopts the loop's durable terminal by identity (loop ID + terminal kind); content differences are logged, never a disposition (§ 5.7). |
+
+### Rulings applied — 2026-09-22 (#1330, [ruling comment](https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5773604066))
+
+Verbatim: "as recommeded.  and i approve the simplificatino plan on L4 as long sa we are not just gaming a quicker
+finish." Applied to the reconciliation docket and its simplicity re-read
+([issuecomment-5773199445](https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5773199445)); the re-read
+table governs where the two differ.
+
+- **OQ1** build `continuation_unavailable` with the approval lane → L4b.
+- **OQ2** no hydration; the sentence "a replaced process re-arms no approval deadline; the loop stays
+  `awaiting_approval` until answered or cancelled" becomes a scenario in this change's `agentic-loop` delta and a
+  migration-note line.
+- **OQ3** absorb: a CAS loss releases the loop's process state and Retries; birth by `Create`.
+- **OQ4** document `tasks_submitted_total` as at-least-once under redelivery; no new issue, no arm change.
+- **OQ5** absorb: classify the redelivered tool result at component entry; `TransitionTo` untouched.
+- **OQ6** meter inside `activeLoop` with one reason value; retire the two absence asserts → L4b.
+- **OQ7 SPLIT.** #1330 is narrowed to **L4a**: the field, carrier order + CAS, cold rebuild, and the task/response/tool
+  lanes (tasks 1.x, 2.1, 2.3–2.5, 3.1, 3.2, 3.4, 3.5, 3.8, 4.1, 4.3a–c,e). **L4b is #1362** (beta.163), carrying the
+  approval lane, verdict, terminal owner, and 3.9 with their tests and the 6.2 approval stage.
+- **OQ8** uniform publish → `Update`, conditional on a test showing the response lane Retries an answer that beats its
+  gate; if that test cannot be written, the accepted write → publish branch stands.
+- **3.5** reason values on the existing `tool_results_dropped_total`.
+
+**Condition recorded from the ruling — not a quicker finish.** Guards applied: every "document instead of build" row
+lands as a spec scenario with a test that asserts the documented behaviour (OQ2's sentence, OQ4's counter note); L4b
+keeps the beta.163 milestone, the #1146 acceptance line, and its place on the epic; and this change's tasks name what
+moved and where ("Moved to L4b (#1362)" in `tasks.md`).
+
+Standing simplicity rule (owner, 2026-09-22): keep complexity as low as possible — an edge case that a doc sentence or
+a plain "not supported" can carry does not earn a code branch. Every section below is read against it.
 
 ## 2. The field
 
@@ -29,52 +67,79 @@
 PublishedRequestID string `json:"published_request_id,omitempty"`
 ```
 
-Applied execution IDs: `PendingToolResults` keys (`AG:54`, written at `ST:1107-1119`, kept through the advance at
-`H:2612` with `clearResults=false`, superseded by the next batch's first result at `ST:1100-1106`). Gate identity:
-`PendingApproval.RequestID` (`agentic/state.go:158`) already exists; I4 binds it to the new field.
+Applied execution IDs: `PendingToolResults` keys (`AG:57`, written at `ST:1075-1082`, read at `H:2546`, and drained by
+the advance itself — `GetAndClearToolResults` (`ST:1107`, `nil` at `ST:1121`) runs from `H:2870` BEFORE the mint at
+`H:2927`, so the normal path leaves an empty set at every advance). Gate identity: `PendingApprovalState.RequestID`
+(`AG:197`) already exists; I4 binds it to the new field.
 `LoopEntity` is in no generated schema or OpenAPI and is not a registered payload (measured, `inventory.md` § 0), so
 `task schema:generate` is untouched.
 
 ## 3. The carrier: order, form, identity adoption
 
-Carrier: `persistLoopState` (`C:2396-2415`) reached from `persistHandlerResult` (`C:1782-1799`) and birth (`C:1405`).
+Carrier on `main`: `persistLoopState` (`C:2468`, write at `C:2483`), reached from `persistHandlerResult` (`C:1923`;
+write `C:1947`, then publish `C:1959`) and from birth (`C:1496` publish, then `C:1499` `Put` with its error ignored).
+Two more callers ride the same write: the deferred-continuation marker (`C:1425`) and the approval sweeper (`AS:101`).
 
-1. **Order (non-terminal results):** `publishResults` (`C:1798`) moves before the write (`C:1795`), so
-   `PublishedRequestID` is written only after the request's PubAck. The terminal owner already publishes before its
-   Update (`C:1917` → `:1927`); the approval owner already does (`ARH:269` → `:275`); the gate keeps
-   Update → publish (`C:2319` → `:2323`) because a redelivered `approval_required` result re-echoes the event (§ 5.4).
-   Birth keeps Put → publish (Q1).
-2. **Form:** `Update(observedRevision)` replaces `Put` at `C:2411`. The tool lane reads the revision at `C:2163`, the
-   response lane at `C:1564`; both currently discard it. A lost race (cancel at `C:1927`, gate clear at `ARH:275`)
-   now fails the write → Retry → re-read → the classification below answers. `MaxAckPending=1` (`C:1162-1163`)
-   serializes one port only.
-3. **Identity adoption (Q4):** before publishing a minted next request R' the carrier calls
-   `readRetainedAgentRequest` (`SR:273-323`, identity checks only; the newest message on `agent.request.<loopID>`) and
-   orders the retained RequestID against R' (Q4): == R' → adopt (skip publish; the retained body is authoritative);
-   absent or == current R → publish with `Nats-Msg-Id = R'` (Q5); anything else (older than R, beyond R', unparseable)
-   → Quarantine as a conflict (`errs.WrapFatal` → `loopSettlementDecision`, `SR:1042-1051`). No content compare.
-4. **Setting the field:** `LoopManager.SetPublishedRequest(loopID, requestID)` at the three minting sites (`H:1083`
-   via `buildTaskResultFromRequest`, `H:1981`, `H:2654`); the marshal at `C:2406` carries it.
-5. **Retry ordinal:** `IncrementTruncationRetry` (`ST:601-606`, process-local) is replaced by parsing the `<retry>`
-   part of `PublishedRequestID` (`looprequest`, added in THIS change — L2 declined to export a parser with no reader, deviation accepted by the coordinator 2026-09-19 on #1328; task 1.0).
+1. **Order (uniform — docket OQ8, owner ruling 2026-09-22):** one order for every lane, `publishResults` before the
+   write, so `PublishedRequestID` is written only after the request's PubAck. The design's premise that three owners
+   already had that order is FALSE on `main`: the carrier writes and then publishes for every result, terminal included
+   (`C:1947` → `C:1959`). The approval lane's order is inverted on `main` (write, then publish); the carrier reorder in
+   task 2.1 gives it the accepted publish → `Update` order, which is what creates the reject-minted W4 that § 5.5 and
+   task 4.2 handle (P5). The timeout sweeper's own publish-then-`Put` pair (`AS:100-101`) is replaced by the carrier
+   (`persistHandlerResult`, `C:1923`) so the auto-reject takes the same publish → `Update` order and the same CAS as an
+   operator rejection (D39). The approval gate takes the uniform order too, **conditional on the test named in task
+   2.7**: an approval answer that arrives before its gate is durable must be Retried by the approval-response lane's
+   cold KV branch. If that test cannot be written, the accepted write → publish branch for the gate stands. Birth is
+   the one write-first lane: birth becomes `Put` → publish (Q1) — `persistLoopState` moves ahead of `publishResults` at
+   `C:1496-1499` and its error returns Retry, converting the first of #1345's five task-intake branches by necessity;
+   the other four stay #1345's (P1).
+2. **Form (Q2):** `Update(observedRevision)` replaces `Put` at `C:2483` (`KVStore.Update`, `KV:231`;
+   `ErrKVRevisionMismatch`, `KV:238`). The ruling's premise that both lanes already hold the revision is FALSE on
+   `main`: there are zero `Update`/`Create` calls under `processor/agentic-loop`, all four writers are `Put` (`C:2401`,
+   `:2432`, `:2456`, `:2483`) and discard the revision `Put` returns, and the one reader `LP:75` discards
+   `entry.Revision()`. The revision is therefore process-retained per loop — seeded at birth from `Create`'s return,
+   and on a cold read from `entry.Revision()`. A lost race now fails the write → Retry → re-read → the classification
+   below answers, **and the loser releases the loop's process state** (`ST:574` `DeleteLoop`, `C:1964`
+   `releaseLoopTransientState`) before that Retry, so the redelivery re-enters the cold path against the record that
+   won; without the release the loser keeps a stale in-memory loop forever (docket OQ3). Birth is by `Create`
+   (`KV:211`), so a second consumer's birth is refused with `ErrKVKeyExists` (`KV:218`) and takes the cold fork — the
+   only way the `…:req:N:0` window closes at iteration 0, where no revision exists yet (OQ3).
+   `MaxAckPending=1` (`C:1191-1192`) serializes one port only.
+3. **Identity adoption (Q4):** before publishing a minted next request R' the carrier calls the retained-request
+   reader built in task 2.3 (identity checks only; the newest message on `agent.request.<loopID>`) and orders the
+   retained RequestID against R' (Q4): == R' → adopt (skip publish; the retained body is authoritative); absent or ==
+   current R → publish with `Nats-Msg-Id = R'` (Q5); anything else (older than R, beyond R', unparseable) → Quarantine
+   as a conflict (`errs.WrapFatal`; on `main` each lane returns its own `natsclient.DeliveryDecision` in place, the
+   `C:2780` shape — there is no `loopSettlementDecision` helper and none is built). No content compare.
+4. **Setting the field:** `LoopManager.SetPublishedRequest(loopID, requestID)` at the three minting sites on `main`
+   (`H:1122` inside `buildTaskRequest`, `H:2168` inside `emitRetryRequest`, `H:2927` inside `publishIterationRequest`);
+   the marshal inside `persistLoopState` (`C:2468`) carries it.
+5. **Retry ordinal:** `IncrementTruncationRetry` (`ST:466`) and `ResetTruncationRetry` (`ST:477`), both process-local,
+   are replaced by parsing the `<retry>` part of `PublishedRequestID` (`looprequest`, added in THIS change — L2 declined
+   to export a parser with no reader, deviation accepted by the coordinator 2026-09-19 on #1328; task 1.0). Their
+   callers (`H:2037`, `H:1389`, `H:1409`) and the map cleared at `ST:588` go with them: this is the only deletion
+   target the accepted § 6 has on `main`.
 6. **Cold read, step 0 — one rule for every lane but task (Q4 applied to the cold path; coordinator, 2026-09-18):** a
-   process with no memory of the loop reads the entity + revision, then the newest retained request on
-   `agent.request.<loopID>` (`SR:63`, the only reader; no RequestID-addressed form exists), and orders its RequestID
-   against `PublishedRequestID`. Equal → current, continue. Newer (higher `(iteration, retry)`) → **adopt first**:
-   `Update(revision)` the record to that request — `PublishedRequestID = R(N+1)`, `Iterations` = its parsed iteration
-   (I3), `PendingToolResults = nil` — one eviction ahead of the normal path, which retains R(N)'s batch at the advance
-   (`toolResults(loopID, false)` at `H:2612`; doc `ST:1144-1146`) and evicts it at the next batch's first result
-   (`StoreToolResult`, `ST:1100-1105`). Harmless (review pass 3): every surviving reader classifies a redelivered input
-   older-by-request before consulting membership (§ 5.3 step 2, § 5.6), Q7's terminal-unproven check reads absence,
-   and `validatedToolBatchResults` no-ops on an empty map; no entry is synthesized, so nothing is derived from any message body and no surviving validator
-   (`validatedToolBatchResults`, `ST:441-443`) ever sees a synthetic entry — and, when `PendingApproval != nil`,
-   `PendingApproval = nil` with `State = running`: by I4 the gate's RequestID equals `PublishedRequestID`, so it is always
-   older than the adopted request, and R(N+1) can only have been minted after that gate's result completed the batch
-   (`H:2654` runs on the batch's last result). The adopt writes every field the advance implies, so I1–I4 hold on the
-   written record by construction — then classify the redelivered input against the UPDATED record. Older or unparseable → Quarantine (conflict). The rebuild source
-   (`restoreLoopFromRequest`, `ST:349-430`) is always that newest retained request, never "the request for R", so it has
-   no `PublishedRequestID` mismatch to refuse. Task lane: no step 0 — Q1 rules iteration 0 (no evidence read; a duplicate
-   R1 is answered by the MsgId window or L2 reuse) and an advanced record already answers "applied" (§ 5.1.4).
+   process with no memory of the loop reads the entity + revision (`LP:75`, made revision-returning by task 2.3), then
+   the newest retained request on `agent.request.<loopID>` (task 2.3's reader; no RequestID-addressed form exists), and
+   orders its RequestID against `PublishedRequestID`. Equal → current, continue. Newer (higher `(iteration, retry)`) →
+   **adopt first**: `Update(revision)` the record to that request — `PublishedRequestID = R(N+1)`,
+   `Iterations = parsed iteration − 1` (`ST:1345` mints `iteration = entity.Iterations + 1`, so birth writes
+   `Iterations = 0` beside `…:req:1:0`; I3), `PendingToolResults = nil` — which is exactly the shape the normal path
+   itself leaves at the advance: on `main` `GetAndClearToolResults` (`H:2870` → `ST:1107-1121`, nil at `ST:1121`) drains
+   the batch BEFORE the mint at `H:2927`, so the adopt evicts nothing the normal path would have kept. (Review pass 3
+   read this as an eviction one step ahead and asked for a rationale; on `main` the design's original sentence is true
+   and that MEDIUM reverses — `reconciliation.md` § C, Q3.) Every reader still classifies a redelivered input
+   older-by-request before consulting membership (§ 5.3 step 2, § 5.6), Q7's terminal-unproven check reads absence, and
+   no entry is synthesized, so nothing is derived from any message body. When `PendingApproval != nil`, the same update
+   sets `PendingApproval = nil` with `State = running`: by I4 the gate's RequestID equals `PublishedRequestID`, so it is
+   always older than the adopted request, and R(N+1) can only have been minted after that gate's result completed the
+   batch (`H:2927` runs on the batch's last result). The adopt writes every field the advance implies, so I1–I4 hold on
+   the written record by construction — then classify the redelivered input against the UPDATED record. Older or
+   unparseable → Quarantine (conflict). The rebuild source (`restoreLoopFromRequest`, built here — § 6) is always that
+   newest retained request, never "the request for R", so it has no `PublishedRequestID` mismatch to refuse. Task lane:
+   no step 0 — Q1 rules iteration 0 (no evidence read; a duplicate R1 is answered by the MsgId window or L2's retained
+   response reuse) and an advanced record already answers "applied" (§ 5.1.4).
 
 ## 4. Invariants (spec home: the ADDED requirement in `specs/agentic-loop/spec.md`)
 
@@ -82,7 +147,8 @@ For every AGENT_LOOPS record of a non-terminal loop L at revision r:
 - I1. `PublishedRequestID = R` ⇒ while the record exists, an `AgentRequest{RequestID: R, LoopID: L}` is durably
   retained on `agent.request.L`. I1 is scoped to records that exist: AGENT_LOOPS is `History: 10, TTL: 24h` and refuses
   any other policy at startup (`internal/loopbucket/acquire.go:20,42-43`, measured 2026-09-18); an expired record is a
-  gone loop (pre-existing property) and a redelivery after it reads "not observable" → Retry (`SR:488-490`, `:574-575`).
+  gone loop (pre-existing property) and a redelivery after it reads "not observable" → Retry (on `main` the cold arms
+  `C:1700` and `C:2292`, via `LP:66-94`).
 - I2. Every `PendingToolResults[e]` with `RequestID == R` names an ExecutionID derived from a tool call of the retained
   response for R (`deriveToolExecutionID`, `execution_identity.go:31-40`) — membership only. That its conversation
   effect is the tool message the successor request carries is a consequence the normal handler's tests already prove;
@@ -90,16 +156,22 @@ For every AGENT_LOOPS record of a non-terminal loop L at revision r:
 - I3. `Iterations` changes only in an update whose `PublishedRequestID` also changes.
 - I4. `PendingApproval != nil` ⇒ `PendingApproval.RequestID == PublishedRequestID`. Step 0 (§ 3.6) preserves I4 by clearing the gate in the same update that advances `PublishedRequestID`.
 
+**No hydration (docket OQ2, owner ruling 2026-09-22).** An approval deadline is a process-local convenience, not a
+durable fact: **a replaced process re-arms no approval deadline; the loop stays `awaiting_approval` until answered or
+cancelled.** That is the standard, written as a scenario in this change's `agentic-loop` delta and as a migration-note
+line — no startup hydration is built, and `approval_sweeper.go` keeps its memory-only snapshot (`AS:69`).
+
 PBT decision (`docs/contributing/01-testing.md`): I1–I4 hold over action sequences (deliver / crash at W1–W4 /
 redeliver), so one bounded Rapid state-machine property over an in-memory KV plus a fake retained-stream reader (the
-`loopSettlementEvidenceReader` seam, `SR:28-32`) covers the tool and response lanes and checks I2 as membership, never by
-rendering; the approval lane has three shapes and uses named examples.
+evidence-reader seam built in task 2.3) covers the tool and response lanes and checks I2 as membership, never by
+rendering; the approval lane has three shapes, uses named examples, and lands with L4b (#1362).
 
 ## 5. Per lane: algorithm and crash windows
 
 R = current `PublishedRequestID`; W1 = crash before effect; W2 = after effect, before update; W3 = after update, before
 ACK; W4 = next request PubAck'd, crash before the update. "Classify" = terminal → effect-free ACK (Q7); `RequestID == R`
-→ current; older ordinal → applied, ACK; unknown/future ordinal → quarantine (`loopSettlementDecision`, `SR:1042-1051`).
+→ current; older ordinal → applied, ACK; unknown/future ordinal → quarantine (each lane returns its own
+`natsclient.DeliveryDecision` in place, the `C:2780` shape).
 "Cold" = a process with no memory of the loop: § 3.6 step 0 runs first on every lane but task.
 
 ### 5.1 Task (`agent.task`)
@@ -111,10 +183,16 @@ ACK; W4 = next request PubAck'd, crash before the update. "Classify" = terminal 
 4. Present and advanced: applied → ACK.
 Windows: W1 redo. W2 (record written, R1 unpublished) → step 3 publishes. W3 → step 3 republishes; the window dedups
 or L2 reuse answers. No W4 at birth (Put precedes publish by ruling).
+Counter semantics (docket OQ4, owner ruling 2026-09-22): a redelivered task submission counts again on
+`tasks_submitted_total` (agentic-dispatch `metrics.go:112`, recorded at `:322`). The counter is **at-least-once under
+redelivery**; that is documented in the migration note and pinned by a test, not armed away — no Quarantine arm, no new
+issue.
 
 ### 5.2 Model response (`agent.response.<requestID>`)
 1. Loop from the RequestID grammar (`SR:369-375`); read entity + revision (`SR:484`).
-2. Cold → step 0 (§ 3.6). Classify on `response.RequestID` vs R. Current: cold → rebuild ContextManager from the newest
+2. Cold → step 0 (§ 3.6). Classify on `response.RequestID` vs R. The superseded-response guard at `H:1253` compares
+   `response.RequestID` with the record's `PublishedRequestID`; an empty process map after replacement is no longer a
+   let-through (D11; L2's declared residual `ST:955-961`). Current: cold → rebuild ContextManager from the newest
    retained request, which after step 0 is R (`ST:349-430`); `handleModelResponse` with `recoverGovernance` (`SR:131-195`).
    Older → ACK with metric. `RequestID` newer than R (its update not yet landed) → Retry "not yet observable"
    (the shape at `SR:522`).
@@ -127,7 +205,14 @@ lane only): R' retained, record says R → warm: re-runs, finds R' by identity, 
 R' first, then the response for R classifies older → ACK.
 
 ### 5.3 Tool result (`tool.result`)
-1. Validate identity (`C:2277-2304`); read entity + revision (`C:2163`). Warm route (inventory D45-D48, all four now
+1. A redelivered tool result is classified against `PublishedRequestID` at component entry (`C:2195`, before
+   `HandleToolResult`) and in the cold live arm (`C:2292`); `HandleToolResult` never sees an older or unknown result
+   (D22). Entry is the placement the owner ruled for the duplicate-`StopLoop` replay as well: classify the redelivered
+   tool result at component entry and leave `TransitionTo` untouched — its same-state `nil` at `AG:181` is a legitimate
+   no-op for other callers (docket OQ5, 2026-09-22). The cold terminal drop at `C:2296-2303` is already Q7's
+   effect-free ACK; the warm half is inserted before `HandleToolResult` at `C:2195`, because `StopLoop` (`H:2580`) and
+   `StoreToolResult` (`H:2546`) both precede the lane's only terminal guard (`H:2652`) (D26).
+   Validate identity (`C:2277-2304`); read entity + revision (`C:2163`). Warm route (inventory D45-D48, all four now
    consume the revision § 3 makes the CAS input): not-yet-observable → Retry (stays); process-vs-KV identity conflict →
    Quarantine (stays); `C:2178-2180` under the CAS re-read: terminal → Q7 effect-free ACK, gate mismatch → re-classify
    per § 5.4 (not Retry "authority changed"); the six-field gate-ownership compare (`C:2185-2189`) is identity, not
@@ -136,8 +221,8 @@ R' first, then the response for R classifies older → ACK.
 2. Older → applied (the iteration cannot advance before `AllToolsComplete`, `H:2410-2414`) → ACK.
 3. Current: cold → rebuild from the newest retained request (after step 0 it is R) and retained response R
    (`ST:473-521` without `:486-488`).
-   `HandleToolResult` stores the result (`H:2346`; idempotent key overwrite at `ST:1119`), dispatches the next queued
-   sibling, or on the last result mints R(N+1) (`H:2654`).
+   `HandleToolResult` stores the result (`H:2546`; idempotent key overwrite), dispatches the next queued
+   sibling, or on the last result mints R(N+1) (`H:2927`).
 4. Publish `tool.execute`, or identity-adopt / publish R(N+1) (§ 3.3); then Update(revision) with `Iterations`,
    `PendingToolResults`, `PublishedRequestID = R(N+1)`; ACK.
 Windows: W1 redo. W2 mid-batch → re-store, re-dispatch; duplicate `tool.execute` replays (`TC:710-713`). **W4**:
@@ -148,18 +233,26 @@ R(N+1)`, `Iterations = N+1`, applied set by identity) → the result for R now c
 no rebuild of R is attempted, so `restoreLoopFromRequest` has nothing to refuse (the design review's BLOCKING). A response
 for R(N+1) arriving before that update → Retry until observable. W3 → step 2: `R(N+1) ≠ result.RequestID`, older → ACK.
 
-### 5.4 Approval-required tool result (gate)
+### 5.4 Approval-required tool result (gate) — L4a, except the warm re-echo (L4b, #1362)
 Steps 1–2 as § 5.3. Current and `State == awaiting_approval && PendingApproval.ExecutionID == result.ExecutionID` →
 re-echo `ApprovalPendingEvent` (`SR:743-758` minus its retained-request validation) → ACK. Current, running,
 `PendingToolResults[e]` holds this gate status and `PendingApproval == nil` → gate consumed → ACK (`SR:793-795`).
-Else `gateForApproval` (`H:2459-2482`) → `persistApprovalGate` Update → publish → ACK. Windows: W1 redo; W2/W3 →
-re-echo; no W4 (the gate's Update precedes its publish). Cold → step 0 first, as § 5.3.
+Else `gateForApproval` (`H:2459-2482`) → the carrier's gate branch (on `main` there is no `persistApprovalGate`: the
+gate is a carrier result keyed on `result.State == awaiting_approval`, `H:2573` → `ARH:205` → `C:1947` → `C:1959`).
+Windows: W1 redo; W2/W3 → re-echo. W4 exists only if the gate takes the uniform publish → `Update` order (OQ8), and
+step 0 answers it exactly as it answers every other lane's W4; under the write → publish fallback there is no W4 here.
+The warm re-echo itself (`H:2674`, D28) rides the approval lane and lands with L4b (#1362). Cold → step 0 first, as
+§ 5.3.
 
-### 5.5 Approval response (`agent.approval_response.<loopID>`)
+### 5.5 Approval response (`agent.approval_response.<loopID>`) (L4b, #1362)
 1. Step 0 (§ 3.6): read entity + revision, adopt a newer retained request (which clears the gate); then require
-   `awaiting_approval` with matching `ExecutionID`/`CallID` (`ARH:182-215`); else ACK inapplicable / quarantine, unchanged.
-2. Require I4 and the gated result in `PendingToolResults` (`SR:1015-1032`). Cold → rebuild from retained R and its
-   response (`SR:904-916`). Retained R or its response absent → `settleAbsentApprovalEvidence` (`SR:921-981`, Q8).
+   `awaiting_approval` with matching `ExecutionID`/`CallID`; else ACK inapplicable / quarantine. On `main` this lane has
+   no cold branch at all: an in-memory loop that is not awaiting stays an Ack (W3); `ErrLoopNotFound` no longer
+   stale-drops — it enters the new cold branch at `ARH:58`, and only a record that is absent or terminal is
+   acknowledged (D35, today `ARH:78` → `ARH:194-199`).
+2. Require I4 and the gated result in `PendingToolResults`. Cold → rebuild from retained R and its response. Retained R
+   or its response absent → the loop fails `continuation_unavailable` (the 2026-09-13 ruling on #1146; docket OQ1 — one
+   branch, built here, nothing on `main` to leave unchanged).
 3. Approve/modify: publish `tool.execute`, then Update clearing the gate (`ARH:269-278`, unchanged). Reject:
    synthetic result through § 5.3.
 Windows: W1 (crash before the `tool.execute` publish) → redo, record unchanged. W2 (published, gate not cleared) →
@@ -173,51 +266,85 @@ and clears the gate in the same CAS write (§ 3.6) → step 1 finds the record n
 inapplicable, nothing republished: the W3 path. The approve/modify branch mints no request (it publishes `tool.execute`)
 and has no W4.
 
-### 5.6 Governance verdict (Q6), timer, startup, cancel
-- Verdict: `HandleVerdict` returns no-waiter (`GD:557-560`). The component (`C:2585-2596`) then reads the entity by
-  `verdict.LoopID` (`GD:133`) and classifies: terminal → ACK; `verdict.RequestID ≠ R` and older → ACK with metric;
-  `verdict.ExecutionID ∈ PendingToolResults` → consumed → ACK; else Retry (the response redelivery re-runs governance
-  and reads this verdict by identity, `SR:197-235`).
-- Timer/startup: `restoreApprovalDeadlines` (`AS:21-86`) and the sweeper unchanged; they feed § 5.5.
+### 5.6 Governance verdict (Q6 — L4b, #1362), timer, startup, cancel
+- Verdict: on a missing waiter the verdict lane reads the record: `verdict.RequestID` older than `PublishedRequestID`,
+  or `ExecutionID ∈ PendingToolResults`, or terminal → Ack with a reason on the missing-waiter counter (`M:393`);
+  current and unseen → Retry (`C:2780` unchanged) (D16). The skeleton it attaches to exists on `main`:
+  `ErrNoGovernanceWaiter` (`GD:337`, returned at `GD:608-629`) → `C:2734` → `settleVerdictWithoutWaiter` (`C:2759`,
+  stale → Ack `C:2773`, live → Retry `C:2780`). No retained-verdict reader is built (D14/D15): the re-proposal re-fires
+  the rule, and the duplicate proposed/verdict pair is the declared residual.
+- Timer/startup: the sweeper keeps its memory-only snapshot (`AS:69`) and **no startup hydration is built** — a replaced
+  process re-arms no approval deadline; the loop stays `awaiting_approval` until answered or cancelled (docket OQ2,
+  owner ruling 2026-09-22; § 4). Its write pair moves onto the carrier: the timeout sweeper's own publish-then-`Put`
+  pair (`AS:100-101`) is replaced by the carrier (`persistHandlerResult`, `C:1923`) so the auto-reject takes the same
+  publish → `Update` order and the same CAS as an operator rejection (D39).
 - Cancel: unchanged (`C:2506-2572`); its terminal Update is one of the writers § 3.2 protects.
 
-### 5.7 Terminal (all lanes; the single owner `persistTerminalOutcome`, `C:1802-1931`)
+### 5.7 Terminal (all lanes; one owner replacing the three `Put` paths) (L4b, #1362)
 **#1330, owner ruling 2026-09-18 (terminal outcome adoption)**, same standing as Q1–Q8 (applies Q7 + the Q4 identity
-principle; inventory D44, D49). On a redelivered terminal, after the TaskID check (`C:1841-1842`, Quarantine, unchanged):
-- (a) record terminal at the observed revision → effect-free ACK with metric and audit line (Q7); today `C:1838-1839`
-  retries. A revision conflict alone → Retry (CAS re-read, short-lived).
-- (b) record not terminal and the loop's durable terminal exists — `selectTerminalOutcome` (`C:1846`) does a
-  `COMPLETE_<loopID>` Create-once (`C:1959-1960`) and on `ErrKeyExists` reads the saved payload back; at 68c14c8e this
-  KV marker, not a stream read, is the "retained published terminal" the ruling names → adopt it by identity (loop ID +
-  terminal kind): the saved payload replaces the candidate (`C:1857-1858`, `:1867-1869`, unchanged), publish proceeds
-  with it (`C:1917`; a terminal republish is an accepted duplicate, `main:spec.md:430-446`), the entity is written to
-  match under `Update(revision)` (`C:1927`), ACK. Content differences between this delivery's candidate and the saved
-  payload are logged at the audit line, never a disposition; the compares at `C:1852-1856`/`:1861-1866` are deleted.
+principle; inventory D44, D49). On `main` there is no single owner and no marker identity: three paths each `Put` — the
+carrier (`C:1974` → marker `:2401`/`:2432` → stamps → publish `C:1959`), the birth failure (`C:1752` → `:1809` →
+`:1831`) and cancel (`C:2631` → `:2668` → `:2683`). The three terminal write paths become one owner: `COMPLETE_` marker
+by `Create` (`KV:211`; `ErrKVKeyExists` `KV:218` → read it back and adopt), graph stamps, publish, then the entity by
+`Update(revision)` (`KV:231`); the marker's Create-once is the identity the beta.57 ordering (`C:1798-1803`) keyed on
+(D41/P6). Q7(a) sits at `C:2195` (warm) and `C:2296` (cold), not inside this owner, and the TaskID-versus-marker
+Quarantine is dropped because no warm read exists to feed it (D44). It also lands L3's deferred item: `PendingApproval`
+is cleared on the terminal transition. On a redelivered terminal:
+- (a) record terminal at the observed revision → effect-free ACK with metric and audit line (Q7). A revision conflict
+  alone → Retry (CAS re-read, short-lived).
+- (b) record not terminal and the loop's durable terminal exists — the owner's marker `Create` is refused with
+  `ErrKVKeyExists` and the saved payload is read back; this KV marker, not a stream read, is the "retained published
+  terminal" the ruling names → adopt it by identity (loop ID + terminal kind): the saved payload replaces the
+  candidate, publish proceeds with it (a terminal republish is an accepted duplicate,
+  `openspec/specs/agentic-loop/spec.md:430-446`), the entity is written to match under `Update(revision)`, ACK. Content
+  differences between this delivery's candidate and the saved payload are logged at the audit line, never a
+  disposition. There are no content compares on `main` to delete and none is built.
 - (c) no durable terminal → normal path: Create, publish, `Update`, ACK.
 Windows: crash after the Create or the publish, before `Update` → (b) on redelivery; after `Update`, before ACK → (a).
 
-## 6. Deleted from the Codex layer / survives
+## 6. What exists on `main` at `b7ce8727` / what this change builds
 
-Deleted (`settlement_recovery.go` 1,051 → ≈ 430): `toolResultProvenInLaterRequest` (686-740),
-`approvalRequiredResultSuperseded` (763-817), `proveTerminalToolResultApplied` (821-852), the retained-request compares
-in `ensureResponseLoop` (517-535) and `recoverToolResult` (622-665), `validatePendingApprovalRequest` (1034-1040), the
-compare-only truncation (634-636); `state.go`: `Iterations--` (486-488), `requirePreceding` (435-444),
-`IncrementTruncationRetry`/`ResetTruncationRetry` (601-616); `component.go`: the terminal content compares (1852-1856,
-1861-1866) and the terminal-at-revision Retry (1838-1839), § 5.7. Tests deleted or rewritten: `settlement_recovery_test.go`
-(818), `tool_result_recovery_test.go` (179), `terminal_tool_recovery_test.go` (175), and the layout assertions in
-`tool_result_redelivery_integration_test.go` (255), `terminal_tool_redelivery_integration_test.go` (188),
-`settlement_recovery_integration_test.go` (161).
+The accepted design was written as a pruning of PR #1159's recovery layer (`settlement_recovery.go`, 1,051 lines). That
+layer never landed on `main`, so this section inverts: one deletion target, nine of the predecessor's "survives" items
+are builds, and the rest of its vocabulary has no home here at all (rows: `reconciliation.md` § B and § H).
 
-Survives: evidence reader and addresses (`SR:20-127`), `recoverGovernance` + `readRetainedGovernanceVerdict`
-(131-235), `readLoopEntity[Revision]` (237-271), `readRetainedAgentRequest/Response` (273-367; identity + rebuild),
-`loopIDFromRequestID`, `recoverTaskDelivery` (§ 5.1), `republishPendingApproval` (simplified),
-`settleAbsentApprovalEvidence` (Q8), `validatePendingApprovalResult`, `validatePendingApprovalEvidence` (`SR:984-1013`,
-reduced to I4 + `validatePendingApprovalResult`), `loopSettlementDecision`; `restoreLoopFromRequest` (`ST:349-430`, fed the
-adopted record, § 3.6); `restoreToolBatch` minus the decrement; `execution_identity.go`;
-`delivery_owner.go`; `approval_sweeper.go`; `agentic-dispatch/task_recovery.go`; `agentic-model/provider_settlement.go`
-(L2); the shared handlers; the single terminal owner (`C:1802-1931`) minus the compares § 5.7 deletes; the e2e harness
-(`test/e2e/harness/processbarrier`, `test/e2e/scenarios/agentic/stage_a_process_replacement.go`,
-`approval_restart.go`) with assertions re-pointed at KV facts.
+**Deleted — the one target:** `IncrementTruncationRetry` (`ST:466`) and `ResetTruncationRetry` (`ST:477`), their callers
+`H:2037`, `H:1389`, `H:1409`, and the map cleared at `ST:588` (task 2.4).
+
+**Built here (L4a):**
+
+| Item | `main` today | What lands |
+|---|---|---|
+| evidence reader + addresses | absent (pattern `PS:21-49`, `TR:51`) | one interface, two reads: newest retained request, retained response (task 2.3) |
+| revision-returning entity read | `LP:75` reads the entity and discards `entry.Revision()` | a read that returns the revision; `classifyMissingLoop` keeps its signature |
+| one reader for the ID grammar | two prefix-only readers, `ST:1360-1367` and `LP:50-60` | `looprequest.Parse/Next/Compare` (task 1.0) |
+| cold task fork | none — `C:1396` `HandleTask` creates the loop in memory | the fork before `C:1396` (§ 5.1, task 3.4) |
+| `restoreLoopFromRequest` | absent | rebuild from the adopted record + newest retained request (task 1.2) |
+| `restoreToolBatch` | absent | membership against the retained response; no `Iterations--`, no `requirePreceding` |
+| step 0 (adopt, then classify) | absent | the cold arms `C:1700` and `C:2292` (task 2.5) |
+| `PublishedRequestID` + CAS carrier | four `Put` writers discarding the revision (`C:2401`, `:2432`, `:2456`, `:2483`) | the field, `Update(revision)`, publish → write, birth by `Create` (tasks 1.1, 2.1, 2.6) |
+| Q7 warm half | cold half exists (`C:2296-2303`); the warm lane has none | the check before `HandleToolResult` at `C:2195` (task 3.5) |
+| the six predecessor test files | absent | written, not rewritten (tasks 3.x, 4.x) |
+
+**Built with L4b (#1362):** the approval lane's cold branch at `ARH:58` with `republishPendingApproval` and the I4
+evidence check, `continuation_unavailable` (OQ1), the verdict classification at `C:2759-2780` (D16), the single terminal
+owner (D41/P6), and the route-ambiguity metering inside `activeLoop` (OQ6).
+
+**Survives untouched:** `execution_identity.go` (`EI:24-36`), `approval_sweeper.go` (memory-only snapshot at `AS:69`; no
+hydration — OQ2), `agentic-dispatch/task_recovery.go`, `agentic-model/provider_settlement.go`, the shared handlers, and
+the e2e harness (`test/e2e/harness/processbarrier`, `test/e2e/scenarios/agentic/stage_a_process_replacement.go`) with
+its assertions re-pointed at KV facts. `delivery_owner.go` leaves the list entirely: `internal/deliverylane`
+(`DL:27-225`) owns the latch since #1341, and L4 adds no second spelling.
+
+**Codex-only, with no home here (nothing to delete):** `settlement_recovery.go` entire — `recoverTaskDelivery`,
+`ensureResponseLoop`, `recoverToolResult`, `recoverApprovalResponse`, `recoverGovernance`,
+`readRetainedGovernanceVerdict`, `loopSettlementDecision`, `validatePendingApproval*`, the three layout proofs
+(`toolResultProvenInLaterRequest`, `approvalRequiredResultSuperseded`, `proveTerminalToolResultApplied`) and the
+compare-only truncation; `state.go`'s `requirePreceding`, `validatedToolBatchResults` and `Iterations--`;
+`component.go`'s `persistTerminalOutcome`, `selectTerminalOutcome`, `persistApprovalGate`, the warm KV checks
+`C:2162-2190` and the birth `Create` at `C:1532`; `approval_sweeper.go`'s `restoreApprovalDeadlines`; `metrics.go`'s
+`approvalDecisionsInapplicable`. They are never written rather than deleted, and § H of `reconciliation.md` keeps the
+full list so nothing is silently lost.
 
 ## 7. Strongest case against, each marked
 
@@ -226,18 +353,23 @@ adopted record, § 3.6); `restoreToolBatch` minus the decrement; `execution_iden
 3. Approval-required results — **answered**: the gate is already CAS-committed; L4 adds I4 and the re-echo; the
    reject-minted W4 (`ARH:269` before `:275`) is adopted by step 0, which clears the gate with the advance (§ 5.5).
 4. Terminal loop + unproven result — **answered by ruling Q7**: effect-free ACK with metric and audit line (as the
-   cancel lane does at `C:2518-2526`); Codex's retry-to-`MaxDeliver` (`SR:851`) is removed.
+   cancel lane already does at `C:2593-2612`); the cold half exists (`C:2296-2303`) and the warm half is built at
+   `C:2195`. The predecessor's retry-to-`MaxDeliver` was never on `main`, so there is nothing to remove.
 5. Governance verdict retention — **answered by measurement** (re-proposal re-fires the rule) and **by ruling Q6** for
    the verdict lane's ACK; **residual**: duplicate proposed/verdict pairs (declared cost).
 6. Stale vs conflict — **answered by ruling Q4**: the ordinal grammar orders RequestIDs; unknown/future quarantines.
 7. Two lanes, one record — **answered by ruling Q2**: `Update(observedRevision)`.
-8. Retention-absence proof — **answered by ruling Q8**: unchanged.
+8. Retention-absence proof — **answered by ruling Q8, re-read 2026-09-22**: no referent exists on `main`, so the ruled
+   outcome is built as one `continuation_unavailable` branch (docket OQ1) and ships with the approval lane in L4b
+   (#1362).
 9. Deterministic retry IDs — **answered by ruling Q4**: retry ordinal derived from `PublishedRequestID`.
 10. Adopted-request drift — **residual**, declared in `proposal.md`.
-11. Terminal owner's content compare (`C:1852-1866`, the twin of D26) — **answered by owner ruling 2026-09-18 (terminal
-    outcome adoption)** (§ 5.7); **residual**: adopted-terminal drift is logged, never a disposition.
-12. Divergent duplicate for a stored ExecutionID in the current batch overwrites by key instead of the Codex quarantine
-    at `SR:799-802` — **residual**, declared; the framework producer cannot diverge (`TC:710-713`, one outcome per ID).
+11. Terminal owner's content compare (the twin of D26) — **answered by owner ruling 2026-09-18 (terminal outcome
+    adoption)** (§ 5.7). No compare exists on `main` to delete; the owner is built with marker identity in L4b (#1362).
+    **Residual**: adopted-terminal drift is logged, never a disposition.
+12. Divergent duplicate for a stored ExecutionID in the current batch overwrites by key; the predecessor's quarantine at
+    `SR:799-802` is not built — **residual**, declared; the framework producer cannot diverge (`TC:710-713`, one outcome
+    per ID).
 13. Cold W4 rebuild source (one reader, `GetLastMsgForSubject`, serving two purposes) — **answered** (§ 3.6): the newest
     retained request is adopted into the record before any classification; "the request for R" is never fetched.
 14. AGENT_LOOPS 24h TTL vs stream retention — **residual**, measured (`acquire.go:20,42-43`); I1 is scoped to records
