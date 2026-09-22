@@ -149,8 +149,8 @@ func TestModelResponseRedeliveredToAReplacementProcess(t *testing.T) {
 
 		// Nothing newer than the record is on the stream, so step 0 has nothing
 		// to adopt and the response is still the loop's current one. Before L4a
-		// that response was owed to a process that no longer exists: Retry, to
-		// MaxDeliver, then the dead-letter. The replacement now rebuilds the
+		// that response was owed to a process that no longer exists: Retry until
+		// MaxDeliver stopped redelivering it. The replacement now rebuilds the
 		// loop from the record and its retained request — the response IS the
 		// delivery, so there is no second read to do — and applies it.
 		replacement, replacementHandler := startLoopProcess(t, client, DefaultConfig())

@@ -311,7 +311,7 @@ func TestToolResultRedeliveredToAReplacementProcess(t *testing.T) {
 		// The replacement finds nothing newer than the record, so the result is
 		// still the current request's. No process holds the loop, and before
 		// L4a that meant the delivery was refused with "not held by this
-		// process" and retried to MaxDeliver and then to the dead-letter — an
+		// process" and retried until MaxDeliver stopped redelivering it — an
 		// executor's completed work, durably on the stream and structurally
 		// unreachable. It now rebuilds the loop from the record and the two
 		// retained messages, and applies.

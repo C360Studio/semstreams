@@ -296,7 +296,7 @@ func coldRebuildComponent(
 //
 // Before it, a model response naming the request its loop's record names, met
 // by a process that does not hold that loop, was refused with "not held by
-// this process" and retried — to MaxDeliver and then to the dead-letter,
+// this process" and retried until MaxDeliver stopped redelivering it,
 // because after a process replacement no process ever holds it again. The
 // model's answer was durably on the stream and structurally unreachable.
 //
