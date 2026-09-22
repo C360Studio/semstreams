@@ -213,7 +213,7 @@ func TestIntegrationAckFailureRestartReplaysWithoutSecondExecution(t *testing.T)
 			return publishErr
 		}
 		// PubAck has arrived; sever the request consumer's connection before
-		// ConsumeWithHeartbeat can ACK the request.
+		// the delivery's settlement contract can ACK the request.
 		testClient.GetNativeConnection().Close()
 		return nil
 	}

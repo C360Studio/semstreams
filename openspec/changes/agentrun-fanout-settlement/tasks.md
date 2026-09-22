@@ -330,14 +330,37 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
 
 ## 7. Removal of `ConsumeWithHeartbeat` (Tier 1; `Closes #759`)
 
-- [ ] 7.1 Delete the function (`natsclient/heartbeat.go:84`) and `nonCancellationWorkError` (`:37`); the doc comment at
+- [x] 7.1 Delete the function (`natsclient/heartbeat.go:84`) and `nonCancellationWorkError` (`:37`); the doc comment at
       `:75-83`, which names #1249 as the deleting PR, goes with the function (there is no `Deprecated:` marker on
       `main`). Keep `ErrHeartbeatFailed`, `PermanentDeliveryError`, `TerminateDelivery`; rewrite the
       `PermanentDeliveryError` doc (`:18`) to "a binding maps it to `DeliveryDecisionTerminate`".
-- [ ] 7.2 Invert the ratchet: exact-declaration (`natsclient/consumer_policy_callsite_test.go:428`) and exact-caller-set
+      Evidence: `natsclient/heartbeat.go` is now 28 lines — `ErrHeartbeatFailed`, `PermanentDeliveryError`,
+      `TerminateDelivery`, and nothing else. `ConsumeWithHeartbeat`, its doc comment and `nonCancellationWorkError`
+      are gone, and the import block collapsed to `import "errors"` (the file no longer touches `context`, `fmt`,
+      `log/slog`, `time`, or `jetstream`). The `PermanentDeliveryError` doc now reads "a binding maps it to
+      DeliveryDecisionTerminate rather than retrying a message no redelivery can fix"; it named the deleted helper
+      before. No `Deprecated:` marker existed to remove, matching #759's no-deprecation ruling.
+- [x] 7.2 Invert the ratchet: exact-declaration (`natsclient/consumer_policy_callsite_test.go:428`) and exact-caller-set
       (`:446`) assert absence in every package, in the `NewDurableHandler` retirement shape (`:395`); keep the surface
       guard (`:425`).
-- [ ] 7.3 Delete `natsclient/heartbeat_test.go` (407 lines) and `heartbeat_integration_test.go` (133) after porting any
+      Evidence: `TestLegacyHeartbeatProductionCallZeroGrowthStagingGuard` — which pinned the EXACT declaration
+      signature at `natsclient/heartbeat.go` and an exact caller set — is replaced by
+      `TestConsumeWithHeartbeatHasNoDeclarationOrProductionCalls`, which asserts zero violations and zero direct calls
+      across every production package, in the `NewDurableHandler` retirement shape. The exemption that made the
+      inversion necessary was inside the scanner, not the test: `scanLegacyHeartbeatReferences` recorded a violation
+      for a `ConsumeWithHeartbeat` `FuncDecl` only when `declaration.Recv != nil || parsed.rel !=
+      "natsclient/heartbeat.go"`. That clause is deleted, so any declaration anywhere is now a violation, and a
+      "function declaration" case was added to `TestLegacyHeartbeatGuardRejectsAlternateExportedSurface` to prove the
+      scanner catches the plain re-addition and not only the alias forms. The surface guard is kept intact:
+      `TestLegacyHeartbeatGuardRejectsTakingOrAliasingSymbol`, `...RejectsAlternateExportedSurface`,
+      `...CountsDotImportAsDirectCall`, `...IgnoresUnrelatedSelector` all still run and pass.
+      Repo-wide reference sweep, stderr visible: `git grep -n 'ConsumeWithHeartbeat' --include='*.go'` returns only
+      the ratchet's own string literals, the ported test's provenance note, and `mockmsg_test.go`'s provenance note —
+      every one of them a statement ABOUT the removal, not a use. Outside Go: `docs/operations/` and
+      `openspec/specs/` are 8.1/8.3's work; `docs/adr/070-gated-dag-durable-dispatch.md` (3),
+      `docs/proposals/` (4) and `openspec/changes/archive/` are historical records of decisions taken when the helper
+      existed and are deliberately left as written.
+- [x] 7.3 Delete `natsclient/heartbeat_test.go` (407 lines) and `heartbeat_integration_test.go` (133) after porting any
       claim without a twin in `delivery_settlement_test.go` / `delivery_settlement_integration_test.go`; list the
       ported claims in the PR body. One port is already known and is NOT optional: the InProgress-failure → owner-stop
       case has no twin. Before deleting `heartbeat_test.go`, port
@@ -347,15 +370,55 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       `TestConsumeDeliveryWithHeartbeatInProgressFailureRequiresOwnerStop` — asserting that a failed lease renewal
       cancels the work, joins `ErrHeartbeatFailed`, and returns a result with `OwnerStopRequired()` true
       (`delivery_settlement.go:372-378`). Task 4.3's matrix row depends on it.
-- [ ] 7.4 Commit as `refactor(natsclient)!: remove ConsumeWithHeartbeat`. Record in the PR body that
+      Evidence: the port landed FIRST, as `TestConsumeDeliveryWithHeartbeatInProgressFailureRequiresOwnerStop` in
+      `natsclient/delivery_settlement_test.go`, and carries all three deleted claims in one test because each alone
+      permits the defect the other two catch: the work is cancelled by the renewal failure (nothing cancels the
+      owner's context), `ControlError()` carries `ErrHeartbeatFailed`, "failed to send InProgress" and the renewal
+      cause, `Err()` retains the work's cleanup error, `OwnerStopRequired()` is true, and no terminal method is
+      attempted. Before it, `ErrHeartbeatFailed` was asserted ONLY by the three deleted tests and one deleted
+      integration test — `git grep -n ErrHeartbeatFailed -- '*_test.go'` on the pre-deletion tree returned four hits,
+      all of them in the two files this task removes, so deleting them without the port would have left the sentinel
+      with no assertion anywhere.
+      Twin analysis for the rest of the two files, so the deletion is not a silent coverage drop. `SurfacesSettlementErrors`,
+      `_AcksOnSuccess`, `_NaksWithDelayOnWorkError`, `TermsPermanentWorkError`, `_NaksOnContextCancel` → the typed
+      truth tables `TestConsumeDeliveryWithHeartbeatValidDecisionTruthTable` and `TestSettleDeliveryDecisionTruthTable`,
+      which cover every decision AND every settlement-method failure. `_SendsInProgressBeforeAckWait`,
+      `_FastWorkNoHeartbeat` → `TestIntegrationConsumeDeliveryWithHeartbeatHealthyRenewalPreventsOverlap`.
+      `_RetainsCleanupErrorJoinedWithCancellation` → `TestConsumeDeliveryWithHeartbeatControlLossPreservesJoinedMeaning`
+      and `...OwnerCancellationJoinsThenSettles`. Integration:
+      `AckFailureLeavesDeliveryForRedelivery` and `FailureLeavesDeliveryUnsettled` →
+      `TestIntegrationConsumeDeliveryWithHeartbeatStoppedRenewalUsesBackOff`, which closes the delivery owner's
+      connection and proves the server redelivered a delivery this process could not settle;
+      `ShutdownDelayedNAKRedelivers` → `TestIntegrationSemanticRetryProducesDurableRedelivery` (the legacy 5s
+      shutdown NAK is deliberately gone, design § 2.9, so that claim is superseded rather than ported).
+      One thing the task's "delete the file" does not describe: `mockMsg` — the package's in-memory `jetstream.Msg`,
+      113 lines of declaration and methods — was DECLARED in `heartbeat_test.go` and is used throughout `delivery_settlement_test.go`. Deleting
+      the file as written breaks the typed path's own tests. It moved verbatim to `natsclient/mockmsg_test.go` with a
+      doc comment recording why it outlived the file.
+- [x] 7.4 Commit as `refactor(natsclient)!: remove ConsumeWithHeartbeat`. Record in the PR body that
       `task api:compat:report` at `b7ce8727` lists 15 incompatible Tier 1 packages against `v1.0.0-beta.162`,
       `natsclient` (`NewDurableHandler: removed`) and `agentic/agentrun` (`EntityIDPattern`, `Mint`) among them; this
       layer adds one line, `ConsumeWithHeartbeat: removed`, under the already-counted `natsclient` and only compatible
       additions under `agentic/agentrun`, so the package count does not move. The commit is still `!`; the posture is
       still ADR-106's pre-RC descending count (`scripts/api-compat.sh:174`; no allowlist or waiver exists).
-- [ ] 7.5 Reword the two foreign test comments naming the helper
+      Evidence: the commit is `refactor(natsclient)!: remove ConsumeWithHeartbeat with its last caller`, with a
+      `BREAKING CHANGE:` footer naming `docs/operations/migration-beta162-to-beta163.md`.
+      `task api:compat:report` at that head, exit 0, base `v1.0.0-beta.162`: `compared: 62 / clean: 47 /
+      incompatible: 15`. The `natsclient` block reads exactly two incompatible lines — `ConsumeWithHeartbeat:
+      removed` and `NewDurableHandler: removed` — beside the twenty compatible additions the typed API brought; the
+      `agentic/agentrun` block still reads `EntityIDPattern` and `Mint` incompatible, with
+      `(*MilestoneSubscriber).DeliveryFatal`, `(*MilestoneSubscriber).RegisterMetrics`, `AgentRun.OriginEntityID` and
+      `LoopTerminalEvent.SourceMessageID` under Compatible changes. The package count did not move: 15 before this
+      layer and 15 after, exactly as reconciliation B4 declares. `MilestoneService.Health()` produces NO line under
+      `service` — it overrides a method `MilestoneService` already promoted from `BaseService`, so apidiff sees no
+      change; it is a behaviour change behind an unchanged signature, like the two § 7 contract changes.
+- [x] 7.5 Reword the two foreign test comments naming the helper
       (`storage/objectstore/component_ack_integration_test.go:41`,
       `processor/agentic-tools/outcomes_integration_test.go:216`).
+      Evidence: objectstore's delivery-timing note now sizes its 90s poll deadline on "the framework's 30s
+      semantic-retry constant (`natsclient.DelayedDeliveryRetry`)" — the live constant that supplies the same 30s —
+      instead of the deleted helper. agentic-tools' now severs the connection "before the delivery's settlement
+      contract can ACK the request". Neither test's behaviour changed; both packages are green under `-race`.
 
 ## 8. Specs and docs
 
