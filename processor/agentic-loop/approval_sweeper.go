@@ -99,12 +99,22 @@ func (c *Component) sweepExpiredApprovals(ctx context.Context) {
 		}
 		// The sweeper keeps its own publish-then-write order until #1362; only
 		// the writer itself changed, to the carrier's compare-and-swap.
-		c.publishResults(ctx, result)
+		//
+		// Neither failure below has a delivery to retry — this is a timer, not
+		// a consumer — so each is named rather than silently swallowed. Both
+		// are log-only: there is no loop-side counter whose subject is "a
+		// write this process meant to make did not commit", and #1362, which
+		// moves this lane onto the carrier, owns whether one is owed
+		// (design § 5.6).
+		if err := c.publishResults(ctx, result); err != nil {
+			c.logger.Warn("approval timeout auto-reject did not publish its results",
+				slog.String("loop_id", cand.LoopID),
+				slog.String("call_id", cand.CallID),
+				slog.String("error", err.Error()))
+		}
 		if err := c.persistLoopState(ctx, cand.LoopID); err != nil {
-			// No delivery to retry here — this is a timer, not a consumer —
-			// so the loss is named rather than silently swallowed. On a lost
-			// compare-and-swap the loop's in-process state is already
-			// released, and the record that won holds the gate.
+			// On a lost compare-and-swap the loop's in-process state is
+			// already released, and the record that won holds the gate.
 			c.logger.Warn("approval timeout auto-reject did not commit the loop record",
 				slog.String("loop_id", cand.LoopID),
 				slog.String("call_id", cand.CallID),

@@ -96,7 +96,14 @@ func requestAddress(ports []component.PortDefinition, loopID string) (subject, s
 // rendered conversation content is the shape this whole change removes.
 func (c *Component) readRetainedAgentRequest(ctx context.Context, loopID string) (agentic.AgentRequest, bool, error) {
 	if c.natsClient == nil && c.requestEvidence == nil {
-		return agentic.AgentRequest{}, false, nil
+		// Not "nothing is retained" — nothing can be ASKED. Both callers read
+		// a false `found` as "this request has not gone out, publish it", so
+		// answering absence here would let a component with no reader at all
+		// stand in for a stream that holds the request, which is the
+		// absence-for-unknown shape this change exists to remove.
+		return agentic.AgentRequest{}, false, errs.WrapTransient(
+			fmt.Errorf("loop %s: no retained-request reader is configured", loopID),
+			"agentic-loop", "readRetainedAgentRequest", "read retained request evidence")
 	}
 	subject, stream, err := requestAddress(c.outputPortDefs(), loopID)
 	if err != nil {
@@ -153,9 +160,15 @@ type loopRecord struct {
 // readLoopRecord reads one loop record and reports it with the revision it was
 // observed at. It performs no recovery and writes nothing.
 //
-// The revision is retained on the component as this process's compare-and-swap
-// input for the loop, because a cold read IS this process's observation of the
-// record — the same role the birth Create's return plays for a warm loop.
+// The revision travels in the returned record and is NOT retained on the
+// component. Every caller here is asking about a loop this process does not
+// hold — a settled one, a foreign one, one that never existed — and a
+// per-loop entry is released only with the loop's own transient state, which
+// such a loop never acquires. Retaining one per read is an unbounded map keyed
+// by every loop this process was ever asked about. A caller that goes on to
+// WRITE the record compare-and-swaps against the revision in this record; a
+// caller that goes on to HOLD the loop retains its revision at the write that
+// makes it the holder.
 func (c *Component) readLoopRecord(ctx context.Context, loopID string) loopRecord {
 	if loopID == "" || !looptoken.Valid(loopID) {
 		// Nothing to look up. An input that carries no framework-minted loop
@@ -181,7 +194,6 @@ func (c *Component) readLoopRecord(ctx context.Context, loopID string) loopRecor
 			"loop_id", loopID, "error", err)
 		return loopRecord{presence: loopPresenceUnknown}
 	}
-	c.rememberLoopRevision(loopID, entry.Revision())
 	if entity.State.IsTerminal() {
 		return loopRecord{entity: entity, revision: entry.Revision(), presence: loopPresenceStale}
 	}
@@ -332,13 +344,15 @@ func (c *Component) adoptNewerRetainedRequest(ctx context.Context, loopID string
 		return errs.WrapFatal(err, "agentic-loop", "adoptNewerRetainedRequest",
 			"marshal the adopted record")
 	}
-	committed, err := c.loopsBucket.Update(ctx, loopID, data, record.revision)
-	if err != nil {
+	// The committed revision is deliberately not retained: this process does
+	// not hold the loop — both callers refuse the delivery immediately after
+	// this returns — and an entry for a loop nobody holds is never released.
+	// Whoever takes the redelivery reads the record and its revision together.
+	if _, err := c.loopsBucket.Update(ctx, loopID, data, record.revision); err != nil {
 		if natsclient.IsKVConflictError(err) {
 			// Somebody else wrote the record between the read and this update.
 			// Whatever they wrote, the redelivery re-reads and re-decides; the
 			// retained request is durable and is not going anywhere.
-			c.forgetLoopRevision(loopID)
 			return errs.WrapTransient(
 				fmt.Errorf("loop %s record moved past revision %d while adopting %q: %w",
 					loopID, record.revision, retained.RequestID, natsclient.ErrKVRevisionMismatch),
@@ -347,7 +361,6 @@ func (c *Component) adoptNewerRetainedRequest(ctx context.Context, loopID string
 		return errs.WrapTransient(err, "agentic-loop", "adoptNewerRetainedRequest",
 			"adopt the retained request")
 	}
-	c.rememberLoopRevision(loopID, committed)
 	c.logger.InfoContext(ctx, "Adopted the loop's newest retained request before classifying a redelivered input",
 		slog.String("loop_id", loopID),
 		slog.String("was", record.entity.PublishedRequestID),

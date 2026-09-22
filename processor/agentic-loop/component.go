@@ -1546,12 +1546,26 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 			"create loop record at birth")
 	}
 
-	// Publish output messages. The error stays discarded here, exactly as it
-	// was before the reorder: converting the task lane's publish failure into
-	// a delivery decision is one of #1345's four remaining task-intake
-	// branches, and the record now written ahead of it is what task 3.4's cold
-	// fork reads to republish R1.
-	_ = c.publishResults(ctx, result)
+	// Publish output messages, and return what that publish answers.
+	//
+	// The record written above names R1, and I1 says that while the record
+	// exists the stream retains the request it names. Discarding this error
+	// ACKs a delivery that left exactly the state I1 declares impossible: a
+	// record naming a request nothing retains, which every later cold read
+	// answers with Quarantine (adoptNewerRetainedRequest's I1 arm). Returning
+	// it hands the delivery to the task lane's classification — an ordinary
+	// publish failure is Retry — so the request goes out on a redelivery
+	// instead of never. Writing the record first is still Q1: the redelivery
+	// needs a record to republish R1 from.
+	//
+	// Until task 3.4's cold fork lands, that redelivery meets birth's own
+	// Create, is refused with ErrKVKeyExists, and Retries again to the lane's
+	// MaxDeliver; 3.4 is what turns the refusal into a republish.
+	if err := c.publishResults(ctx, result); err != nil {
+		c.logger.Error("Birth did not publish the request its record names — the delivery is not acknowledged",
+			"loop_id", result.LoopID, "task_id", task.TaskID, "error", err)
+		return err
+	}
 	return nil
 }
 

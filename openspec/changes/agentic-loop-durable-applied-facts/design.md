@@ -97,9 +97,15 @@ Two more callers ride the same write: the deferred-continuation marker (`C:1425`
    onto the carrier (D39). Reordering either one opens the reject-minted W4 whose only handler is the approval lane's
    cold branch, and that branch is #1362's (§ 5.5). OQ8's gate-order decision and its conditional test move to #1362
    with the lane; until then the gate keeps write → publish and the spec delta scopes the uniform order to L4a's
-   three lanes. Birth is the write-first lane of the three: birth becomes `Put` → publish (Q1) — `persistLoopState`
-   moves ahead of `publishResults` at `C:1496-1499` and its error returns Retry, converting the first of #1345's five
-   task-intake branches by necessity; the other four stay #1345's (P1).
+   three lanes. Birth is the write-first lane of the three: birth becomes record → publish (Q1) — the record write
+   moves ahead of `publishResults` at `C:1496-1499`, and BOTH errors return rather than one. The write's, because no
+   request may go out for a loop with no record. The publish's, because a record naming a request the stream does not
+   retain is the state I1 declares impossible, and every later cold read of that loop answers it with Quarantine
+   (§ 3.6's I1 arm) instead of recovering it — so a discarded publish error here does not merely lose a request, it
+   strands the loop. Two of #1345's five task-intake branches convert by necessity; the other three stay #1345's (P1).
+   Until task 3.4's cold fork lands, the Retry a returned birth publish produces meets birth's own `Create`, is
+   refused with `ErrKVKeyExists`, and Retries again to the lane's `MaxDeliver`; 3.4 is what turns that refusal into
+   the unconditional R1 republish, so it is a merge precondition for this change and not a later slice.
 2. **Form (Q2):** `Update(observedRevision)` replaces `Put` at `C:2483` (`KVStore.Update`, `KV:231`;
    `ErrKVRevisionMismatch`, `KV:238`). The ruling's premise that both lanes already hold the revision is FALSE on
    `main`: no production loop-record writer calls `Update` or `Create` — all four are `Put` (`C:2401`,
@@ -297,6 +303,13 @@ and has no W4.
   sweeper's own publish-then-`Put` pair (`AS:100-101`) is replaced by the carrier (`persistHandlerResult`, `C:1923`)
   so the auto-reject takes the same publish → `Update` order and the same CAS as an operator rejection (D39). In L4a
   the pair is untouched; only its `persistLoopState` call (`AS:101`) rides the writer's change to `Update`.
+  **Residual for #1362, recorded in L4a:** both halves of that pair fail log-only. A timer has no delivery to
+  classify, so neither the publish nor the record write can settle anything — L4a names each in its own `Warn`
+  line ("did not publish its results", "did not commit the loop record") and adds no counter. No existing loop-side counter's subject is "a write this process meant to
+  make did not commit": `tool_results_dropped_total`, `model_responses_dropped_total` and `signals_dropped_total`
+  each count an INPUT acknowledged without effect, and reporting a sweeper write loss on one of them would put two
+  different events under one reason vocabulary. Whether the auto-reject owes a counted signal is decided where the
+  lane moves onto the carrier and acquires a delivery to classify, which is #1362's.
 - Cancel: unchanged (`settleUncancellableLoop`, `C:2593-2612`, classifying by `State` only; `handleCancelSignal`,
   `C:2614`); its terminal writes (`C:2631`, `C:2683`) are among the writers § 3.2 protects.
 

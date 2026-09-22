@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
 )
@@ -110,4 +111,40 @@ func storedMessageCount(ctx context.Context, t *testing.T, stream jetstream.Stre
 	}
 	require.NoError(t, batch.Error())
 	return count
+}
+
+// TestIntegrationBirthAcknowledgesOnlyWhatTheStreamRetains is the half of I1 at
+// birth that needs a broker: the publish lands, the stream retains the request
+// the record names, and the delivery acknowledges. Its partner,
+// TestBirthWhosePublishFailsIsNotAcknowledged, drives the other disjunct — the
+// stream retains nothing and the delivery is not acknowledged. Neither arm
+// alone distinguishes "acknowledges what was published" from "acknowledges
+// regardless"; the pair does.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestIntegrationBirthAcknowledgesOnlyWhatTheStreamRetains(t *testing.T) {
+	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV(), natsclient.WithStreams(
+		natsclient.TestStreamConfig{Name: "AGENT", Subjects: []string{"agent.>"}},
+	))
+	ctx := t.Context()
+
+	c := releaseTestComponent(t, NewMessageHandler(DefaultConfig()))
+	c.natsClient = testClient.Client
+	require.NoError(t, c.initializeKVBuckets(ctx))
+
+	const loopID = "5c1d9f2a-8b3e-4d6c-9a70-1e2f3a4b5c60"
+	msg, result := deliverBirth(t, c, loopID)
+
+	require.Equal(t, natsclient.DeliveryDecisionAck, result.Decision())
+	require.Equal(t, int32(1), msg.acks.Load())
+	requireBirthI1(t, c, loopID, msg)
+
+	// And explicitly, so the pair does not rest on the helper's early return:
+	// what the record names is what the stream holds.
+	retained, found, err := c.readRetainedAgentRequest(ctx, loopID)
+	require.NoError(t, err)
+	require.True(t, found, "birth acknowledged without leaving its request on the stream")
+	require.Equal(t,
+		looprequest.ID{LoopID: loopID, Iteration: 1, Retry: 0}.String(), retained.RequestID)
+	require.Equal(t, retained.RequestID, decodeRecord(t, c, loopID).PublishedRequestID)
 }

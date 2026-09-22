@@ -146,6 +146,11 @@ func TestUncorrelatedResponseSettlesByRecordNotByMemory(t *testing.T) {
 		t.Helper()
 		c := releaseTestComponent(t, NewMessageHandler(DefaultConfig()))
 		c.loopsBucket = loopsBucket
+		// A live record's cold arm reads the loop's retained request before it
+		// refuses the delivery, and a component with no reader at all cannot
+		// answer that read: the reader here says the stream retains nothing
+		// for this loop, which is the state these fixtures describe.
+		c.requestEvidence = stubEvidenceReader{}
 		// Nothing is tracked in memory: findLoopIDForRequest returns "".
 		response := &agentic.AgentResponse{
 			RequestID: loopID + ":req:1", Status: agentic.StatusComplete,
@@ -211,6 +216,9 @@ func TestUncorrelatedToolResultSettlesByRecordNotByMemory(t *testing.T) {
 		t.Helper()
 		c := releaseTestComponent(t, NewMessageHandler(DefaultConfig()))
 		c.loopsBucket = bucket
+		// As on the response lane above: the cold arm reads the retained
+		// request first, and this fixture's loops have none.
+		c.requestEvidence = stubEvidenceReader{}
 		toolResult := &agentic.ToolResult{
 			CallID: loopID + ":tool:1", Name: "search", Content: "result", LoopID: loopID,
 		}

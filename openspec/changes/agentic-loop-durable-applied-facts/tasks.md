@@ -146,6 +146,15 @@
       `adoptRetainedRequest` directly. `TestPublishingAMintedRequestConsultsTheRetainedIdentity` drives
       `publishResults` with a client that cannot publish — adoption is then the only thing that can make it return
       nil — and goes red on that mutant; its never-retained arm shows the nil is adoption's, not the path's.
+      Two corrections from the internal review (2026-09-22). `readRetainedAgentRequest` with neither a NATS client
+      nor an injected reader now returns a transient error rather than `found = false`: both callers read a false
+      `found` as "this request has not gone out, publish it", so absence was standing in for unknown. And
+      `readLoopRecord` no longer retains the revision it read on the component — every caller of it is asking about
+      a loop this process does not hold, the per-loop entry is released only with a loop's own transient state, and
+      so one entry accumulated per loop this process was ever asked about; the revision travels in the returned
+      `loopRecord` to the one caller that writes with it (`adoptNewerRetainedRequest`), which does not retain its
+      committed revision either. Test: `TestAColdReadRetainsNoRevisionForALoopItDoesNotHold`, three arms (a loop
+      another process holds, a settled loop, and the adoption that follows a cold read).
 - [x] 2.4 `handlers.go`: set the field at the three minting sites (`H:1122` in `buildTaskRequest`, `H:2168` in
       `emitRetryRequest`, `H:2927` in `publishIterationRequest`); mint via `looprequest.Next(PublishedRequestID)`
       (task 1.0); retry ordinal from the parsed field; delete `IncrementTruncationRetry` (`ST:466`) and
@@ -219,15 +228,28 @@
       moved). Recorded, because it is the one place the design's pins do not resolve to the call this makes.
       CAS-loss release: `persistLoopState` (`C:2721-2727`) calls `releaseLoopTransientState` before returning, which
       takes `DeleteLoop` (`ST:581`) and `forgetLoopRevision` with it.
-      **In-scope gap, recorded:** "takes the cold fork" is task 3.4's; until it lands a refused birth Retries
-      instead of forking, bounded by the lane's MaxDeliver.
+      Birth's publish error is returned too, not discarded (internal review, 2026-09-22): the record written a line
+      earlier names R1, and I1 says that while the record exists the stream retains that request, so acknowledging a
+      birth whose publish did not land leaves the record naming a request nothing retains — the state § 3.6's I1 arm
+      answers with Quarantine on every later cold read. It returns instead, and the task lane classifies it (an
+      ordinary publish error is Retry).
+      **In-scope gap, recorded:** "takes the cold fork" is task 3.4's; until it lands, a refused birth AND a birth
+      whose publish returned both Retry instead of forking, bounded by the lane's MaxDeliver — a redelivery meets
+      birth's own `Create`, is refused with `ErrKVKeyExists` and Retries again. Task 3.4 is what republishes R1 from
+      the record, so it is a merge precondition for this change, not a later slice.
       Tests: `loop_carrier_test.go` `TestBirthRefusesASecondCreateForTheSameLoop` and
       `TestCarrierCompareAndSwapLossRetriesAndReleasesTheLoop` (the loop is gone from memory and its revision with
-      it).
+      it); the I1 pair at birth — either the stream retains the request the record names, or the delivery was not
+      ACKed — is `TestBirthWhosePublishFailsIsNotAcknowledged` (unit: nothing retained, unconnected client, the
+      lane answers Retry and the message is never ACKed) plus
+      `TestIntegrationBirthAcknowledgesOnlyWhatTheStreamRetains` (real broker: the request is retained under the
+      name the record carries and the delivery ACKs). Neither arm alone separates "acknowledges what was published"
+      from "acknowledges regardless".
       Mutants: `Create` → `Put` in `createLoopState` (`C:2674`) → `TestBirthRefusesASecondCreateForTheSameLoop` red.
       Deleting the `createLoopState` CALL at birth (`C:1535-1547`) left the package green — the third pin the ritual
-      bought: `TestBirthRecordsTheLoopBeforeItPublishes` drives `handleTaskMessage` with an unpublishable client, so
-      a record in the bucket can only have been written before the publish that failed, and it goes red there.
+      bought: the birth test drives `handleTaskMessage` through the real task lane with an unpublishable client, so
+      a record in the bucket can only have been written before the publish that did not land, and it goes red there.
+      Re-discarding the birth publish error (`_ = c.publishResults(...)`) → `TestBirthWhosePublishFailsIsNotAcknowledged` red.
 ## 3. Lane classification (3.9 is L4b's — see "Moved to L4b")
 
 - [ ] 3.1 Tool-result classification: nothing to delete on `main`; build it at component entry `C:2195` (ahead of

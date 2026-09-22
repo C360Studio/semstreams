@@ -155,29 +155,83 @@ func TestBirthRefusesASecondCreateForTheSameLoop(t *testing.T) {
 	require.ErrorIs(t, err, natsclient.ErrKVKeyExists)
 }
 
-// And birth must CALL it, before it publishes.
+// And birth must CALL it, before it publishes — and must not ACK until the
+// stream holds what it recorded.
 //
-// Deleting the write from the task lane left every test above green, because
-// they drive createLoopState directly. This one drives the real intake seam
-// with a client that cannot publish: a record in the bucket afterwards can
-// only have been written before the publish that failed. The task lane
-// deliberately discards that publish error (#1345), which is exactly why the
-// record has to precede it — task 3.4 republishes R1 from this record.
+// This is I1 at birth, as the pair it actually is: after a birth delivery,
+// EITHER the stream retains the request the record names, OR that delivery was
+// not acknowledged. Birth records the loop first (Q1), so between the write and
+// the PubAck the record names a request nothing retains; acknowledging there
+// settles the delivery on exactly the state I1 declares impossible, and every
+// later cold read of that loop answers it with Quarantine
+// (adoptNewerRetainedRequest's I1 arm) rather than recovering it. The record
+// earns the redelivery a place to republish from; the publish earns the ACK.
+//
+// Deleting the record write from the task lane left every other test in this
+// file green, because they drive createLoopState directly — hence a test that
+// drives the real intake seam through the real lane. The client here was
+// constructed and never connected, so the publish genuinely fails on the
+// production path.
+//
+// The other half of the pair — the publish SUCCEEDS, the stream retains R1,
+// and the delivery acknowledges — needs a broker and is
+// TestIntegrationBirthAcknowledgesOnlyWhatTheStreamRetains.
 //
 // spec: agentic-loop / The loop record names its outstanding request
-func TestBirthRecordsTheLoopBeforeItPublishes(t *testing.T) {
-	c := evidenceComponent(t, "")
+func TestBirthWhosePublishFailsIsNotAcknowledged(t *testing.T) {
+	const loopID = "5c1d9f2a-8b3e-4d6c-9a70-1e2f3a4b5c60"
+	c := evidenceComponent(t, "") // the stream retains nothing for this loop
 	c.natsClient = unpublishableClient(t)
 	bucket, ok := c.loopsBucket.(*recordingLoopBucket)
 	require.True(t, ok)
 
-	task := agentic.TaskMessage{TaskID: "task-birth", Role: "general", Model: "model-a", Prompt: "first turn"}
-	require.NoError(t, c.handleTaskMessage(t.Context(), baseMessageBytes(t, &task)))
+	msg, result := deliverBirth(t, c, loopID)
 
-	written := bucket.written()
-	require.Len(t, written, 1, "birth published its first request without recording the loop first")
-	record := decodeRecord(t, c, written[0])
-	require.Equal(t, written[0], record.ID)
+	require.Equal(t, []string{loopID}, bucket.written(),
+		"birth published its first request without recording the loop first")
+	require.Equal(t,
+		looprequest.ID{LoopID: loopID, Iteration: 1, Retry: 0}.String(),
+		decodeRecord(t, c, loopID).PublishedRequestID)
+	requireBirthI1(t, c, loopID, msg)
+	require.Equal(t, natsclient.DeliveryDecisionRetry, result.Decision(),
+		"a birth whose publish failed is still owed to somebody")
+	require.Zero(t, msg.acks.Load()+msg.terms.Load())
+}
+
+// deliverBirth drives one task delivery through the production task lane, so
+// the settlement asserted is the lane's decision and not a return value the
+// test interpreted for itself.
+func deliverBirth(t *testing.T, c *Component, loopID string) (*loopDeliveryOwnerMsg, natsclient.DeliveryResult) {
+	t.Helper()
+	task := agentic.TaskMessage{
+		TaskID: "task-birth", LoopID: loopID,
+		Role: "general", Model: "model-a", Prompt: "first turn",
+	}
+	msg := &loopDeliveryOwnerMsg{data: baseMessageBytes(t, &task)}
+	result, admitted := deliverylane.Consume(t.Context(), msg,
+		heartbeatPolicyForTest(t, "agent.task", c.taskInputHandler(time.Minute)),
+		deliverylane.NewAdmission(nil, nil))
+	require.True(t, admitted)
+	return msg, result
+}
+
+// requireBirthI1 asserts the pair itself: the stream retains the request the
+// record names, or the delivery was not acknowledged. Both halves are read
+// through production seams — the record out of the bucket, the retention
+// through the component's own evidence reader — so an arm that changes one
+// half cannot quietly stop checking the other.
+func requireBirthI1(t *testing.T, c *Component, loopID string, msg *loopDeliveryOwnerMsg) {
+	t.Helper()
+	record := decodeRecord(t, c, loopID)
+	require.NotEmpty(t, record.PublishedRequestID, "birth recorded no request name at all")
+	retained, found, err := c.readRetainedAgentRequest(t.Context(), loopID)
+	require.NoError(t, err)
+	if found && retained.RequestID == record.PublishedRequestID {
+		return
+	}
+	require.Zero(t, msg.acks.Load(),
+		"the record names %q, the stream does not retain it, and the delivery was acknowledged anyway",
+		record.PublishedRequestID)
 }
 
 func mustNotExist(bucket *recordingLoopBucket, key string) []byte {
@@ -475,4 +529,54 @@ func decodeRecord(t *testing.T, c *Component, loopID string) agentic.LoopEntity 
 	var entity agentic.LoopEntity
 	require.NoError(t, json.Unmarshal(entry.Value(), &entity))
 	return entity
+}
+
+// TestAColdReadRetainsNoRevisionForALoopItDoesNotHold: a cold read is an
+// observation of somebody else's loop, never a claim on it.
+//
+// The revision map is released with the loop's own transient state
+// (releaseLoopTransientState), which a loop this process never held never
+// reaches — so remembering a revision per READ kept one entry for every loop
+// this process was ever asked about: every settled loop whose late response
+// arrives, every loop a sibling holds. The revision travels in the returned
+// record to the one caller that writes with it.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestAColdReadRetainsNoRevisionForALoopItDoesNotHold(t *testing.T) {
+	const loopID = "7e4c8a10-5b2d-4f3e-8c91-6a7b8c9d0e11"
+
+	for name, state := range map[string]agentic.LoopState{
+		"a loop another process holds": agentic.LoopStateExecuting,
+		"a settled loop":               agentic.LoopStateComplete,
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := evidenceComponent(t, "")
+			entity := agentic.NewLoopEntity(loopID, "task-cold", "general", "model", 10)
+			entity.State = state
+			data, err := json.Marshal(entity)
+			require.NoError(t, err)
+			_, err = c.loopsBucket.Put(t.Context(), loopID, data)
+			require.NoError(t, err)
+
+			record := c.readLoopRecord(t.Context(), loopID)
+			require.NotZero(t, record.revision, "the revision must travel in the record it was read with")
+			_, held := c.observedLoopRevision(loopID)
+			require.False(t, held, "a cold read left a revision behind for a loop nothing in this process releases")
+		})
+	}
+
+	t.Run("nor does the adoption that follows one", func(t *testing.T) {
+		retained := looprequest.ID{LoopID: loopID, Iteration: 3, Retry: 0}.String()
+		c := evidenceComponent(t, retained)
+		record := coldRecord(t, c, loopID, func(e *agentic.LoopEntity) {
+			e.PublishedRequestID = looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String()
+			e.Iterations = 1
+		})
+
+		require.NoError(t, c.adoptNewerRetainedRequest(t.Context(), loopID, record))
+
+		require.Equal(t, retained, decodeRecord(t, c, loopID).PublishedRequestID)
+		_, held := c.observedLoopRevision(loopID)
+		require.False(t, held, "adopting for a loop this process does not hold retained its revision")
+	})
 }
