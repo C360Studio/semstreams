@@ -145,6 +145,27 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       `Done()`. The forced `handle.Stop()` fallback is gone (OQ2). Tests green under `-race`:
       `TestMilestoneFatalDrainsOnlyTheFailedLane`, `TestMilestoneStopAfterFatalWaitsClosedWithoutSecondDrain`; the
       fake handle's `Stop()` panics, so a reintroduced force-stop fails loudly.
+      Per-lane wiring mutation evidence (`cp` backup + md5 before, `[applied]` printed, md5 re-checked after restore;
+      `milestone_settlement.go` md5 `9edc1ff9f4c1fc648f45e39af88ef99e` before and after E2 and F,
+      `87a11e48dd0b326b9c2d24b12e195c67` before and after D and E1):
+      D, the `deliverylane.Observe` call deleted from `observeLane` — `TestMilestoneFatalDrainsOnlyTheFailedLane`,
+      `TestMilestoneStopAfterFatalWaitsClosedWithoutSecondDrain` and
+      `TestMilestoneUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner` all hang on the drain that never comes
+      and the run panics on its 30s deadline naming exactly those three.
+      E1, `recordDeliveryOwnerFatal` records nothing — `TestMilestoneFanoutQuarantinesOnHandlerPanic`,
+      `TestMilestoneUnregisteredWorkflowQuarantinesAndLatches`, `TestMilestoneFatalDrainsOnlyTheFailedLane`,
+      `TestMilestoneUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner` went red.
+      E2, `newLaneAdmission` passes a nil `onFatal` — the same four went red. E2 only became detectable after both
+      lanes and the owner test were moved onto the one `newLaneAdmission` seam: before that the tests built their own
+      admission, so `Start` could have passed nil and nothing would have noticed.
+      F, the `if !admitted { return }` guard dropped from `consumeLane` —
+      `TestMilestoneRefusedDeliveryIsNotLoggedAsASettlementFailure` went red. That test is an addition beyond the
+      task's named list; without it the B1 guard had no coverage at all, because nothing drove `consumeLane`.
+      `task api:compat:report` at this head (base `v1.0.0-beta.162`, 62 compared, 15 incompatible, exit 0):
+      `agentic/agentrun` incompatible set is unchanged (`EntityIDPattern`, `Mint`) and this layer adds only
+      `(*MilestoneSubscriber).DeliveryFatal: added` and `LoopTerminalEvent.SourceMessageID: added` under Compatible
+      changes; `natsclient` still reads `NewDurableHandler: removed` alone, with `ConsumeWithHeartbeat: removed` owed
+      by section 7. The package count does not move, exactly as reconciliation B4 declares.
 - [x] 4.3 Control-plane rows: an `InProgress` failure (`natsclient/delivery_settlement.go:372`/`:377`) and unavailable
       metadata (`:390`) latch the lane and surface in health:
       `TestMilestoneUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner`.
