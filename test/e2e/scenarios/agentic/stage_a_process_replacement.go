@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -762,6 +763,39 @@ func waitForConsumerSettled(
 		lastFloor, wantAckFloor, lastPending, timeout)
 }
 
+// taskLaneConsumerName asks the server which durable consumer covers
+// agent.task, instead of assuming the framework's consumer-naming pattern. The
+// stage names four consumers as constants because it PAUSES or reads them by
+// identity; this one is only waited on, and a guessed name that resolved to
+// some other consumer would make that wait pass vacuously — which is the exact
+// failure the wait exists to close. Exactly one match is required, so a second
+// consumer over agent.task fails the check rather than being picked at random.
+func taskLaneConsumerName(ctx context.Context, stream jetstream.Stream) (string, error) {
+	const taskSubjectRoot = "agent.task"
+	lister := stream.ListConsumers(ctx)
+	var matched []string
+	for info := range lister.Info() {
+		filters := info.Config.FilterSubjects
+		if len(filters) == 0 && info.Config.FilterSubject != "" {
+			filters = []string{info.Config.FilterSubject}
+		}
+		for _, filter := range filters {
+			if filter == taskSubjectRoot || strings.HasPrefix(filter, taskSubjectRoot+".") {
+				matched = append(matched, info.Name)
+				break
+			}
+		}
+	}
+	if err := lister.Err(); err != nil {
+		return "", fmt.Errorf("list AGENT consumers: %w", err)
+	}
+	if len(matched) != 1 {
+		return "", fmt.Errorf("want exactly one AGENT consumer filtering %s, found %d: %v",
+			taskSubjectRoot, len(matched), matched)
+	}
+	return matched[0], nil
+}
+
 func joinHarnessFinalizationError(
 	parent context.Context,
 	runErr *error,
@@ -773,6 +807,67 @@ func joinHarnessFinalizationError(
 	if err := finalize(finalCtx); err != nil {
 		*runErr = errors.Join(*runErr, fmt.Errorf("%s: %w", operation, err))
 	}
+}
+
+// midFlightHandles are the server-side handles the mid-flight check reads and
+// waits on: the stream and bucket its assertions read, and the two consumers
+// whose settlement separates a recovery from a retry. Each consumer carries the
+// acknowledgement floor observed BEFORE the check publishes anything, because
+// wantAckFloor = 0 is vacuous — a consumer that has ever acked anything
+// satisfies it, including one whose recovery delivery is being retried to death.
+type midFlightHandles struct {
+	stream           jetstream.Stream
+	loops            jetstream.KeyValue
+	responseConsumer jetstream.Consumer
+	responseFloor    uint64
+	taskConsumer     jetstream.Consumer
+	taskFloor        uint64
+}
+
+func (s *Scenario) openMidFlightHandles(ctx context.Context) (midFlightHandles, error) {
+	var handles midFlightHandles
+	js, err := s.nats.Client().JetStream()
+	if err != nil {
+		return handles, err
+	}
+	handles.stream, err = js.Stream(ctx, "AGENT")
+	if err != nil {
+		return handles, fmt.Errorf("open AGENT stream: %w", err)
+	}
+	handles.loops, err = js.KeyValue(ctx, agentLoopsBucket)
+	if err != nil {
+		return handles, fmt.Errorf("open %s bucket: %w", agentLoopsBucket, err)
+	}
+	handles.responseConsumer, handles.responseFloor, err =
+		openConsumerWithFloor(ctx, handles.stream, loopResponseConsumerName)
+	if err != nil {
+		return handles, fmt.Errorf("open loop response consumer: %w", err)
+	}
+	taskName, err := taskLaneConsumerName(ctx, handles.stream)
+	if err != nil {
+		return handles, err
+	}
+	handles.taskConsumer, handles.taskFloor, err = openConsumerWithFloor(ctx, handles.stream, taskName)
+	if err != nil {
+		return handles, fmt.Errorf("open loop task consumer %q: %w", taskName, err)
+	}
+	return handles, nil
+}
+
+// openConsumerWithFloor opens a durable consumer and reads the acknowledgement
+// floor it is at right now.
+func openConsumerWithFloor(
+	ctx context.Context, stream jetstream.Stream, name string,
+) (jetstream.Consumer, uint64, error) {
+	consumer, err := stream.Consumer(ctx, name)
+	if err != nil {
+		return nil, 0, err
+	}
+	info, err := consumer.Info(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("read %s baseline: %w", name, err)
+	}
+	return consumer, info.AckFloor.Consumer, nil
 }
 
 // verifyMidFlightLoopAcrossReplacement is the one claim of #1330 that an
@@ -826,29 +921,11 @@ func (s *Scenario) verifyMidFlightLoopAcrossReplacement(
 	result *scenarios.Result,
 	controller composeProcessController,
 ) (runErr error) {
-	js, err := s.nats.Client().JetStream()
+	handles, err := s.openMidFlightHandles(ctx)
 	if err != nil {
 		return err
 	}
-	agentStream, err := js.Stream(ctx, "AGENT")
-	if err != nil {
-		return fmt.Errorf("open AGENT stream: %w", err)
-	}
-	loops, err := js.KeyValue(ctx, agentLoopsBucket)
-	if err != nil {
-		return fmt.Errorf("open %s bucket: %w", agentLoopsBucket, err)
-	}
-	responseConsumer, err := agentStream.Consumer(ctx, loopResponseConsumerName)
-	if err != nil {
-		return fmt.Errorf("open loop response consumer: %w", err)
-	}
-	// The floor this delivery must PASS. wantAckFloor = 0 is vacuous — a
-	// consumer that has ever acked anything satisfies it, including one whose
-	// recovery delivery is still being retried to death.
-	responseBaseline, err := responseConsumer.Info(ctx)
-	if err != nil {
-		return fmt.Errorf("read loop response consumer baseline: %w", err)
-	}
+	agentStream, loops := handles.stream, handles.loops
 
 	if _, err := agentStream.PauseConsumer(ctx, modelRequestConsumerName, time.Now().Add(2*time.Minute)); err != nil {
 		return fmt.Errorf("pause model request consumer: %w", err)
@@ -887,6 +964,22 @@ func (s *Scenario) verifyMidFlightLoopAcrossReplacement(
 	if midFlight.entity.State.IsTerminal() {
 		return fmt.Errorf("mid-flight loop %s is already terminal (%s); the model consumer pause did not hold",
 			loopID, midFlight.entity.State)
+	}
+
+	// Settle the TASK before killing, or this check can pass on the wrong path.
+	// Both observations above are made before the task's own acknowledgement —
+	// birth writes the record by Create and publishes the request, both ahead of
+	// the lane's return — so a kill here can leave the task delivery unsettled.
+	// Its redelivery then races the model response to the replacement, and if it
+	// wins, the replacement rebuilds the loop from the TASK; the response arrives
+	// WARM and the cold-response reconstruction this check exists for never runs.
+	// The recorded no-rebuild mutant would go green on that schedule.
+	//
+	// Waiting here cannot let the loop advance: the model consumer is still
+	// paused, so the arranged mid-flight window is unchanged by the wait.
+	if err := waitForConsumerSettled(ctx, handles.taskConsumer, handles.taskFloor+1, 30*time.Second); err != nil {
+		return fmt.Errorf("the mid-flight task never settled, so killing now would let its redelivery "+
+			"rebuild the loop warm and the response would never take the cold arm: %w", err)
 	}
 
 	// The process that minted the first request is gone. Nothing of this loop
@@ -960,7 +1053,7 @@ func (s *Scenario) verifyMidFlightLoopAcrossReplacement(
 	// Settlement before counting: a request appears on the stream before the
 	// delivery that produced it is acknowledged, so counting first can read one
 	// request while a duplicate is still inside its callback.
-	if err := waitForConsumerSettled(ctx, responseConsumer, responseBaseline.AckFloor.Consumer+1, 30*time.Second); err != nil {
+	if err := waitForConsumerSettled(ctx, handles.responseConsumer, handles.responseFloor+1, 30*time.Second); err != nil {
 		return fmt.Errorf("replacement response deliveries did not settle past the baseline floor: %w", err)
 	}
 	requests, err := streamSubjectCount(ctx, agentStream, requestSubject)
