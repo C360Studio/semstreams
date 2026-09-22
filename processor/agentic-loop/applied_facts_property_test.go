@@ -68,6 +68,14 @@ func (s *appliedFactsStream) ReadRetainedRequest(context.Context, string, string
 	return data, true, nil
 }
 
+// ReadRetainedResponse answers nothing: this model retains requests, and the
+// invariants below are stated over requests and the applied set. The tool
+// batch a response carries belongs to the cold rebuild, which no action here
+// drives.
+func (s *appliedFactsStream) ReadRetainedResponse(context.Context, string, string) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
 // TestPropAppliedFactsHoldAcrossEveryCrashWindow drives the loop record
 // through advances, lost record writes (W4), process replacements and
 // redeliveries in arbitrary order, and checks I1–I4 after every single step.

@@ -1746,7 +1746,20 @@ func (c *Component) handleResponseMessage(ctx context.Context, data []byte) erro
 		return err
 	}
 	if loopID == "" {
-		return c.settleResponseWithoutLoop(ctx, response.RequestID)
+		rebuilt, err := c.settleResponseWithoutLoop(ctx, response.RequestID)
+		if err != nil || !rebuilt {
+			return err
+		}
+		// The loop is this process's now, so the delivery takes the ordinary
+		// warm path from here — there is no second apply path for a recovered
+		// loop, which is what keeps recovery from drifting from execution.
+		loopID = c.findLoopIDForRequest(response.RequestID)
+		if loopID == "" {
+			return errs.WrapTransient(
+				fmt.Errorf("response %q: its loop was rebuilt and its request still routes nowhere",
+					response.RequestID),
+				"agentic-loop", "handleResponseMessage", "route the response to the rebuilt loop")
+		}
 	}
 
 	entity, _ := c.handler.GetLoop(loopID)
@@ -1845,7 +1858,9 @@ func (c *Component) extractAgentResponse(data []byte) (*agentic.AgentResponse, s
 // after settlement resolves nothing and is an expected drop. A response
 // arriving after process replacement looks identical from memory and is the
 // opposite case — the loop is live and still owed this response.
-func (c *Component) settleResponseWithoutLoop(ctx context.Context, requestID string) error {
+// It reports whether the loop was REBUILT here, in which case the caller goes
+// on to apply the delivery warm.
+func (c *Component) settleResponseWithoutLoop(ctx context.Context, requestID string) (bool, error) {
 	loopID := loopIDFromStructuredID(requestID, ":req:")
 	// Step 0 before anything else (#1330, design § 3.6): read the record and
 	// make it name the loop's newest retained request, so whichever process
@@ -1854,14 +1869,14 @@ func (c *Component) settleResponseWithoutLoop(ctx context.Context, requestID str
 	// are one critical section inside it.
 	adopted, err := c.adoptNewerRetainedRequest(ctx, loopID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if adopted.presence == loopPresenceStale {
 		c.logger.Warn("No loop found for request", "request_id", requestID)
 		if c.metrics != nil {
 			c.metrics.recordModelResponseDropped("stale_request_id")
 		}
-		return nil
+		return false, nil
 	}
 	// Warned, not counted below. The delivery is still outstanding — it
 	// retries — and model_responses_dropped_total means work this process
@@ -1881,16 +1896,29 @@ func (c *Component) settleResponseWithoutLoop(ctx context.Context, requestID str
 		if c.metrics != nil {
 			c.metrics.recordModelResponseDropped("superseded_request")
 		}
-		return nil
+		return false, nil
 	case requestOrderForeign:
-		return errs.WrapFatal(
+		return false, errs.WrapFatal(
 			fmt.Errorf("loop %s: response names request %q, which is not a request of this loop",
 				loopID, requestID),
 			"agentic-loop", "settleResponseWithoutLoop", "classify the response against the loop record")
+	case requestOrderCurrent:
+		// The loop is live, unfinished, and this is the answer to the question
+		// its record names. Rebuild it here rather than retrying a delivery no
+		// process can take (#1330, task 1.2).
+		if err := c.restoreLoopFromEvidence(ctx, loopID, adopted, ""); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
+	// Unnamed — a record written before this field existed names nothing, so
+	// the response cannot be ordered against it — and Ahead, where the record
+	// has not yet caught up with the request this response answers. Neither
+	// authorises a rebuild: there is no fact saying WHICH request to rebuild
+	// from. The delivery stays owed, and retries.
 	c.logger.Warn("Model response names a loop this process does not hold",
 		"request_id", requestID, "loop_id", loopID)
-	return fmt.Errorf("loop %q for request %q is not held by this process", loopID, requestID)
+	return false, fmt.Errorf("loop %q for request %q is not held by this process", loopID, requestID)
 }
 
 // handleLoopFailure records failure metrics and publishes failure events, and
@@ -2420,7 +2448,19 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 	// routing entry is minted under it.
 	loopID := c.findLoopIDForToolCall(toolResult.ExecutionID)
 	if loopID == "" {
-		return c.settleToolResultWithoutLoop(ctx, toolResult)
+		rebuilt, err := c.settleToolResultWithoutLoop(ctx, toolResult)
+		if err != nil || !rebuilt {
+			return err
+		}
+		// Rebuilt: the routing entry the batch restore seated is what the
+		// delivery now takes, through the ordinary warm path.
+		loopID = c.findLoopIDForToolCall(toolResult.ExecutionID)
+		if loopID == "" {
+			return errs.WrapFatal(
+				fmt.Errorf("tool result %q: the loop was rebuilt and its retained response dispatched no such execution",
+					toolResult.ExecutionID),
+				"agentic-loop", "handleToolResultMessage", "route the result to the rebuilt loop")
+		}
 	}
 
 	hasError := toolResult.Error != ""
@@ -2564,7 +2604,9 @@ func (c *Component) settleFailedToolResult(
 // structured CallID grammar carries one too; either identifies the record to
 // read. Stale is the expected settled-drop the surrounding comment describes;
 // live means an executor's completed work would be destroyed by an ACK.
-func (c *Component) settleToolResultWithoutLoop(ctx context.Context, toolResult agentic.ToolResult) error {
+// It reports whether the loop was REBUILT here, in which case the caller goes
+// on to apply the delivery warm.
+func (c *Component) settleToolResultWithoutLoop(ctx context.Context, toolResult agentic.ToolResult) (bool, error) {
 	loopID := toolResult.LoopID
 	if loopID == "" {
 		loopID = loopIDFromStructuredID(toolResult.CallID, ":tool:")
@@ -2572,7 +2614,7 @@ func (c *Component) settleToolResultWithoutLoop(ctx context.Context, toolResult 
 	// Step 0 before anything else, as on the response lane above.
 	adopted, err := c.adoptNewerRetainedRequest(ctx, loopID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if adopted.presence == loopPresenceStale {
 		// Named for the identity the lookup actually failed on: the routing
@@ -2583,7 +2625,7 @@ func (c *Component) settleToolResultWithoutLoop(ctx context.Context, toolResult 
 		if c.metrics != nil {
 			c.metrics.recordToolResultDropped("stale_execution")
 		}
-		return nil
+		return false, nil
 	}
 	// Warned, not counted below, for the same reason as the response lane
 	// above: a retried tool result is not a dropped one, and an executor's
@@ -2602,16 +2644,29 @@ func (c *Component) settleToolResultWithoutLoop(ctx context.Context, toolResult 
 		if c.metrics != nil {
 			c.metrics.recordToolResultDropped("older_request")
 		}
-		return nil
+		return false, nil
 	case requestOrderForeign:
-		return errs.WrapFatal(
+		return false, errs.WrapFatal(
 			fmt.Errorf("loop %s: tool result names request %q, which is not a request of this loop",
 				loopID, toolResult.RequestID),
 			"agentic-loop", "settleToolResultWithoutLoop", "classify the tool result against the loop record")
+	case requestOrderCurrent:
+		// The executor's work belongs to the batch the record names, and no
+		// process holds that loop. Rebuild it here — record, retained request,
+		// retained response — rather than retrying a delivery nobody can take
+		// (#1330, task 1.2).
+		if err := c.restoreLoopFromEvidence(ctx, loopID, adopted, toolResult.ExecutionID); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
+	// Unnamed — neither side carries a request name — and Ahead, where the
+	// record has not caught up with the request this result belongs to.
+	// Neither authorises a rebuild, for the same reason as the response lane:
+	// no fact names which request to rebuild from. The delivery retries.
 	c.logger.Warn("Tool result names a loop this process does not hold",
 		"execution_id", toolResult.ExecutionID, "call_id", toolResult.CallID, "loop_id", loopID)
-	return fmt.Errorf("loop %q for tool call %q is not held by this process", loopID, toolResult.CallID)
+	return false, fmt.Errorf("loop %q for tool call %q is not held by this process", loopID, toolResult.CallID)
 }
 
 // publishResults publishes all output messages from a handler result using JetStream.

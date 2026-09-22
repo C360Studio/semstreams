@@ -148,25 +148,44 @@ func TestModelResponseRedeliveredToAReplacementProcess(t *testing.T) {
 			"a tool_call response mints no request")
 
 		// Nothing newer than the record is on the stream, so step 0 has nothing
-		// to adopt and the response is still the loop's current one. A current
-		// response is owed to whichever process holds the loop.
-		replacement, _ := startLoopProcess(t, client, DefaultConfig())
+		// to adopt and the response is still the loop's current one. Before L4a
+		// that response was owed to a process that no longer exists: Retry, to
+		// MaxDeliver, then the dead-letter. The replacement now rebuilds the
+		// loop from the record and its retained request — the response IS the
+		// delivery, so there is no second read to do — and applies it.
+		replacement, replacementHandler := startLoopProcess(t, client, DefaultConfig())
 		superseded := modelDropDelta(replacement, "superseded_request")
 		stale := modelDropDelta(replacement, "stale_request_id")
 
-		_, delivered := deliverResponse(t, replacement, toolCall)
+		msg, delivered := deliverResponse(t, replacement, toolCall)
 
-		require.Equal(t, natsclient.DeliveryDecisionRetry, delivered.Decision(),
-			"a response no record accounts for is not a superseded one")
+		require.Equal(t, natsclient.DeliveryDecisionAck, delivered.Decision(),
+			"a response the rebuilt loop applied is settled, not owed to a process that will never exist")
+		require.Equal(t, int32(1), msg.acks.Load())
 		require.Zero(t, superseded())
 		require.Zero(t, stale())
 
+		rebuilt, err := replacementHandler.loopManager.GetLoop(loopID)
+		require.NoError(t, err, "the replacement must HOLD the loop it rebuilt")
+		require.False(t, rebuilt.State.IsTerminal())
+
 		after := loopRecordOf(t, replacement, loopID)
-		require.Equal(t, crashed.revision, after.revision,
-			"step 0 had nothing to adopt, so the retrying process must leave the record exactly as it found it")
-		require.Equal(t, firstRequest, after.entity.PublishedRequestID)
+		require.Greater(t, after.revision, crashed.revision,
+			"the dispatch the crash lost is durable only if the rebuilt holder can write the record")
+		require.Equal(t, firstRequest, after.entity.PublishedRequestID,
+			"a tool_call response mints no request, so the record still names the first one")
 		require.Equal(t, uint64(1), messagesOn(t, client, requestSubject))
-		require.Equal(t, uint64(1), messagesOn(t, client, executeSubject),
-			"a retried delivery re-dispatches nothing from the process that cannot apply it")
+
+		// The re-applied response dispatches the batch again, under the SAME
+		// execution identity: it is derived from the request and the call
+		// rather than minted (L2), so agentic-tools' TOOL_CALL_OUTCOMES sees a
+		// replay of one execution, not two executions of one call.
+		require.Equal(t, uint64(2), messagesOn(t, client, executeSubject),
+			"the rebuilt loop must dispatch the batch its response asked for")
+		execution := deriveToolExecutionID(firstRequest, "call-response-w2", 1)
+		routed, held := replacementHandler.loopManager.GetLoopForToolCall(execution)
+		require.True(t, held,
+			"the re-dispatched call must carry the identity its first dispatch derived")
+		require.Equal(t, loopID, routed)
 	})
 }

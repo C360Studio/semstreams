@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/metric"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest"
 	"github.com/stretchr/testify/require"
@@ -196,4 +198,137 @@ func TestARestoredToolBatchKnowsWhatIsLeftToRun(t *testing.T) {
 			"tool message the batch produces is an orphan")
 	require.Empty(t, manager.OutstandingRequest(rebuildLoopID),
 		"the response for this request is in hand, so the loop is not waiting on a model")
+}
+
+// coldRebuildComponent is a replacement process meeting a loop it never
+// started: a record in the bucket, the loop's request (and optionally its
+// response) retained, and nothing at all in memory.
+//
+// Its NATS client is unconnected, so every publish genuinely fails on the
+// production path. That is deliberate — a unit test can prove the rebuild
+// happened and the delivery reached the handler; only a real broker can prove
+// what the record and the stream look like afterwards, which is what the
+// integration arms of task 1.2 assert.
+func coldRebuildComponent(
+	t *testing.T,
+	requestID string,
+	response *agentic.AgentResponse,
+	shape func(*agentic.LoopEntity),
+) (*Component, *MessageHandler, loopRecord) {
+	t.Helper()
+	h := NewMessageHandler(DefaultConfig())
+	c := releaseTestComponent(t, h)
+	c.metrics = getMetrics(metric.NewMetricsRegistry())
+	h.SetMetrics(c.metrics)
+	c.loopsBucket = &recordingLoopBucket{}
+	c.natsClient = unpublishableClient(t)
+	c.requestEvidence = stubEvidenceReader{requestID: requestID, response: response}
+	record := coldRecord(t, c, rebuildLoopID, func(e *agentic.LoopEntity) {
+		e.PublishedRequestID = requestID
+		e.Iterations = 3
+		if shape != nil {
+			shape(e)
+		}
+	})
+	_, err := h.loopManager.GetLoop(rebuildLoopID)
+	require.Error(t, err, "the fixture must start with no memory of the loop")
+	return c, h, record
+}
+
+// TestAColdResponseRebuildsTheLoopItAnswers is the response lane's half of the
+// cold rebuild (#1330 task 1.2, design § 5.2 step 2).
+//
+// Before it, a model response naming the request its loop's record names, met
+// by a process that does not hold that loop, was refused with "not held by
+// this process" and retried — to MaxDeliver and then to the dead-letter,
+// because after a process replacement no process ever holds it again. The
+// model's answer was durably on the stream and structurally unreachable.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestAColdResponseRebuildsTheLoopItAnswers(t *testing.T) {
+	requestID := looprequest.ID{LoopID: rebuildLoopID, Iteration: 4, Retry: 0}.String()
+	c, h, record := coldRebuildComponent(t, requestID, nil, nil)
+
+	_, delivered := deliverResponse(t, c, agentic.AgentResponse{
+		RequestID: requestID,
+		Status:    agentic.StatusComplete,
+		Message:   agentic.ChatMessage{Role: "assistant", Content: "the answer the predecessor never saw"},
+	})
+
+	entity, err := h.loopManager.GetLoop(rebuildLoopID)
+	require.NoError(t, err,
+		"the response was refused instead of rebuilding the loop it answers")
+	require.True(t, entity.State.IsTerminal(),
+		"the rebuilt loop was seated but the response never reached the handler")
+	require.Equal(t, record.entity.Iterations, entity.Iterations,
+		"the rebuilt loop took its iteration count from the record, not from zero")
+	require.Equal(t, requestID, entity.PublishedRequestID)
+
+	require.Equal(t, []string{"user", "assistant"},
+		roles(h.loopManager.GetContextManager(rebuildLoopID).GetContext()),
+		"the conversation is the retained request plus the answer just applied")
+
+	// A completion compare-and-swaps the record against the revision the
+	// observer read it at, BEFORE it publishes. The rebuilt process wrote it,
+	// which it could only do by taking the record's revision with the loop —
+	// without that, its first write is refused and the loop is recovered and
+	// then immediately stranded.
+	require.Equal(t, agentic.LoopStateComplete, decodeRecord(t, c, rebuildLoopID).State,
+		"the rebuilt holder could not write the record it had just read")
+	require.Equal(t, natsclient.DeliveryDecisionQuarantine, delivered.Decision(),
+		"a completion this component cannot publish is commit-unknown, not retryable")
+}
+
+// TestAColdToolResultRebuildsTheBatchItBelongsTo is the tool lane's half, and
+// the one that needs the second read: the record says which executions are
+// APPLIED and the retained response says how many there were.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestAColdToolResultRebuildsTheBatchItBelongsTo(t *testing.T) {
+	requestID := looprequest.ID{LoopID: rebuildLoopID, Iteration: 4, Retry: 0}.String()
+	calls := []agentic.ToolCall{
+		{ID: "call-applied", Name: "search", Arguments: map[string]any{"q": "one"}},
+		{ID: "call-arriving", Name: "fetch", Arguments: map[string]any{"q": "two"}},
+		{ID: "call-never-ran", Name: "write", Arguments: map[string]any{"q": "three"}},
+	}
+	executionOf := func(index int) string {
+		return deriveToolExecutionID(requestID, calls[index].ID, uint32(index+1))
+	}
+	response := &agentic.AgentResponse{
+		RequestID: requestID,
+		Status:    agentic.StatusToolCall,
+		Message:   agentic.ChatMessage{Role: "assistant", Content: "three things", ToolCalls: calls},
+	}
+	c, h, _ := coldRebuildComponent(t, requestID, response, func(e *agentic.LoopEntity) {
+		e.PendingToolResults = map[string]agentic.ToolResult{
+			executionOf(0): {
+				ExecutionID: executionOf(0), CallID: calls[0].ID,
+				Name: "search", Content: "answered before the crash",
+			},
+		}
+	})
+
+	deliverToolResult(t, c, agentic.ToolResult{
+		CallID: calls[1].ID, Name: "fetch", Content: "answered after it",
+		LoopID: rebuildLoopID, RequestID: requestID,
+		ExecutionID: executionOf(1), CallOrdinal: 2,
+	})
+
+	entity, err := h.loopManager.GetLoop(rebuildLoopID)
+	require.NoError(t, err,
+		"the executor's completed work was refused instead of rebuilding the loop it belongs to")
+	require.Contains(t, entity.PendingToolResults, executionOf(1),
+		"the arriving result never reached the applied set")
+	require.Contains(t, entity.PendingToolResults, executionOf(0),
+		"the rebuild dropped the results the record already carried")
+
+	require.Equal(t, []string{"user", "assistant"},
+		roles(h.loopManager.GetContextManager(rebuildLoopID).GetContext()),
+		"without the assistant turn the retained response carries, every tool message "+
+			"in this batch is an orphan")
+
+	require.Equal(t, []string{calls[2].ID}, h.loopManager.GetPendingTools(rebuildLoopID),
+		"the sibling that never ran must be dispatched next; an applied one must not be re-run")
+	_, queued := h.loopManager.DequeueToolCall(rebuildLoopID)
+	require.False(t, queued, "the batch's last call is in flight, so nothing is left queued")
 }

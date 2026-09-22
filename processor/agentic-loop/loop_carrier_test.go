@@ -498,10 +498,14 @@ func TestColdSettlementArmsAdoptBeforeTheyRefuseTheDelivery(t *testing.T) {
 	}
 }
 
-// stubEvidenceReader answers the retained-request read from a fixed body, so
-// every arm of identity adoption is driven without a broker.
+// stubEvidenceReader answers the two evidence reads from fixed bodies, so
+// every arm of identity adoption and of the cold rebuild is driven without a
+// broker.
 type stubEvidenceReader struct {
 	requestID string
+	// response, when set, is the retained response for that request: the
+	// tool batch the record cannot carry and the rebuild's tool lane needs.
+	response *agentic.AgentResponse
 }
 
 func (r stubEvidenceReader) ReadRetainedRequest(context.Context, string, string) ([]byte, bool, error) {
@@ -514,6 +518,17 @@ func (r stubEvidenceReader) ReadRetainedRequest(context.Context, string, string)
 		Messages:  []agentic.ChatMessage{{Role: "user", Content: "retained"}},
 	}
 	data, err := json.Marshal(message.NewBaseMessage(request.Schema(), &request, "test"))
+	if err != nil {
+		return nil, false, err
+	}
+	return data, true, nil
+}
+
+func (r stubEvidenceReader) ReadRetainedResponse(context.Context, string, string) ([]byte, bool, error) {
+	if r.response == nil {
+		return nil, false, nil
+	}
+	data, err := json.Marshal(message.NewBaseMessage(r.response.Schema(), r.response, "test"))
 	if err != nil {
 		return nil, false, err
 	}

@@ -489,6 +489,14 @@ func (m *LoopManager) restoreToolBatch(
 	}
 	m.queuedToolCalls[loopID] = queued
 
+	// pendingTools stays empty on purpose. Dispatch is serial: at most one
+	// call is in flight, and the QUEUE is what says how much of the batch is
+	// left. HandleToolResult dispatches from that queue before it ever asks
+	// AllToolsComplete, so a rebuilt loop with a non-empty queue cannot
+	// advance early, and one with an empty queue has nothing left but the
+	// result it is applying — which is the same answer pendingTools would
+	// give. Seating it would be a second bookkeeping of one fact.
+
 	// The response for this request is in hand, so the loop is not waiting on
 	// a model. SettleRequest's half, applied to the mark restoreLoopFromRequest
 	// set from the only evidence it had.

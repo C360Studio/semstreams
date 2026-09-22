@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest"
@@ -144,6 +145,20 @@ func messagesOn(t *testing.T, client *natsclient.Client, subject string) uint64 
 	return info.State.Subjects[subject]
 }
 
+// retainModelResponse publishes a model response exactly as agentic-model
+// does, so the loop's answer is on the stream where a replacement's rebuild
+// reads it (#1330 task 1.2).
+//
+// A test that calls HandleModelResponse directly skips the delivery that would
+// have put it there; the durable fact is not optional, so the test supplies it
+// rather than pretending the rebuild can work without it.
+func retainModelResponse(t *testing.T, client *natsclient.Client, response agentic.AgentResponse) {
+	t.Helper()
+	data, err := json.Marshal(message.NewBaseMessage(response.Schema(), &response, "agentic-model"))
+	require.NoError(t, err)
+	require.NoError(t, client.PublishToStream(t.Context(), "agent.response."+response.RequestID, data))
+}
+
 // loopRecordOf reads the loop's record through the production reader, so the
 // revision the assertions compare is the one a writer would compare-and-swap
 // against.
@@ -242,7 +257,7 @@ func TestToolResultRedeliveredToAReplacementProcess(t *testing.T) {
 		// Two tool calls, so the first result leaves the batch incomplete: the
 		// loop mints no new request, and the only durable fact the predecessor
 		// owed was the applied set.
-		dispatch, err := handler.HandleModelResponse(t.Context(), loopID, agentic.AgentResponse{
+		batch := agentic.AgentResponse{
 			RequestID:    firstRequest,
 			Status:       agentic.StatusToolCall,
 			FinishReason: "tool_calls",
@@ -253,7 +268,9 @@ func TestToolResultRedeliveredToAReplacementProcess(t *testing.T) {
 					{ID: "call-w2-b", Name: "w2_tool"},
 				},
 			},
-		})
+		}
+		retainModelResponse(t, client, batch)
+		dispatch, err := handler.HandleModelResponse(t.Context(), loopID, batch)
 		require.NoError(t, err)
 		require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch, publishThenWrite))
 		call, executeSubject := dispatchedToolCall(t, dispatch)
@@ -280,30 +297,53 @@ func TestToolResultRedeliveredToAReplacementProcess(t *testing.T) {
 		require.Equal(t, uint64(1), messagesOn(t, client, requestSubject),
 			"an incomplete batch mints no request")
 
-		// The replacement finds nothing newer than the record on the stream, so
-		// there is nothing to adopt and the result is still current. A current
-		// result is owed to whichever process holds the loop, and no process
-		// does — so it stays outstanding rather than being acknowledged away.
-		replacement, _ := startLoopProcess(t, client, DefaultConfig())
+		// The replacement finds nothing newer than the record, so the result is
+		// still the current request's. No process holds the loop, and before
+		// L4a that meant the delivery was refused with "not held by this
+		// process" and retried to MaxDeliver and then to the dead-letter — an
+		// executor's completed work, durably on the stream and structurally
+		// unreachable. It now rebuilds the loop from the record and the two
+		// retained messages, and applies.
+		replacement, replacementHandler := startLoopProcess(t, client, DefaultConfig())
 		superseded := toolDropDelta(replacement, "older_request")
 		stale := toolDropDelta(replacement, "stale_execution")
 		unproven := toolDropDelta(replacement, "terminal_unproven")
 
-		_, delivered := deliverToolResult(t, replacement, result)
+		msg, delivered := deliverToolResult(t, replacement, result)
 
-		require.Equal(t, natsclient.DeliveryDecisionRetry, delivered.Decision(),
-			"a result no record accounts for is not a stale one")
-		require.Zero(t, superseded())
-		require.Zero(t, stale())
-		require.Zero(t, unproven())
+		require.Equal(t, natsclient.DeliveryDecisionAck, delivered.Decision(),
+			"a result the rebuilt loop applied is settled, not owed to a process that will never exist")
+		require.Equal(t, int32(1), msg.acks.Load())
+		require.Zero(t, superseded()+stale()+unproven(), "an applied result is not a dropped one")
+
+		rebuilt, err := replacementHandler.loopManager.GetLoop(loopID)
+		require.NoError(t, err, "the replacement must HOLD the loop it rebuilt")
+		require.Contains(t, rebuilt.PendingToolResults, result.ExecutionID)
 
 		after := loopRecordOf(t, replacement, loopID)
-		require.Equal(t, crashed.revision, after.revision,
-			"step 0 had nothing to adopt, so the retrying process must leave the record exactly as it found it")
-		require.Equal(t, firstRequest, after.entity.PublishedRequestID)
-		require.Empty(t, after.entity.PendingToolResults)
+		require.Greater(t, after.revision, crashed.revision,
+			"the applied fact the predecessor lost is durable only if the rebuilt holder can write the record")
+		require.Contains(t, after.entity.PendingToolResults, result.ExecutionID,
+			"the applied set the crash lost must now be on the record")
+		require.Equal(t, firstRequest, after.entity.PublishedRequestID,
+			"one result of a two-call batch completes nothing, so no new request is minted")
+		require.False(t, after.entity.State.IsTerminal())
 		require.Equal(t, uint64(1), messagesOn(t, client, requestSubject))
-		require.Equal(t, dispatched, messagesOn(t, client, executeSubject),
-			"a retried delivery re-dispatches nothing from the process that cannot apply it")
+
+		// The record says which executions are APPLIED, never which were
+		// DISPATCHED. So the rebuild queues the sibling the predecessor had
+		// already sent, and the apply dispatches it again — under the SAME
+		// execution identity, because that identity is derived from the
+		// request and the call, not minted (L2). agentic-tools keys
+		// TOOL_CALL_OUTCOMES by it and replays the recorded outcome rather
+		// than running the tool twice, which is what makes the re-dispatch a
+		// replay instead of a duplicate execution.
+		require.Equal(t, dispatched+1, messagesOn(t, client, executeSubject),
+			"the rebuilt loop must go on running the batch it recovered")
+		sibling := deriveToolExecutionID(firstRequest, "call-w2-b", 2)
+		routed, held := replacementHandler.loopManager.GetLoopForToolCall(sibling)
+		require.True(t, held,
+			"the re-dispatched sibling must carry the identity its first dispatch derived")
+		require.Equal(t, loopID, routed)
 	})
 }

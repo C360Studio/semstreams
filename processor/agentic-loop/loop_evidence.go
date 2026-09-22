@@ -20,17 +20,23 @@ import (
 // process with no memory of that loop can classify a redelivered input against
 // facts rather than against its own absent state.
 //
-// One read today: the newest AgentRequest retained for a loop. It answers the
-// only question identity adoption asks — "is the request I am about to publish
-// already on the stream?" — by RequestID equality, never by comparing bodies.
-// The retained-response read the cold rebuild needs (design § 5.3 step 3)
-// arrives with the rebuild itself; widening this interface before its consumer
-// exists would ship a surface nothing calls.
+// Two reads, one per question recovery asks.
+//
+// The newest AgentRequest retained for a loop answers identity adoption's
+// question — "is the request I am about to publish already on the stream?" —
+// by RequestID equality, never by comparing bodies, and it is what the cold
+// rebuild replays the conversation from.
+//
+// The retained response for a request answers the one thing the record cannot:
+// how many tool calls the assistant asked for. The record carries which
+// executions are APPLIED; only the response carries the batch, and
+// AllToolsComplete is undecidable without it (design § 5.3 step 3).
 //
 // It is an interface so a unit test can drive every arm — retained-equals-next,
 // retained-is-older, retained-absent, retained-is-newer — without a broker.
 type loopEvidenceReader interface {
 	ReadRetainedRequest(ctx context.Context, streamName, subject string) ([]byte, bool, error)
+	ReadRetainedResponse(ctx context.Context, streamName, subject string) ([]byte, bool, error)
 }
 
 // natsLoopEvidenceReader is the production reader: the newest message on a
@@ -44,16 +50,35 @@ func (r natsLoopEvidenceReader) ReadRetainedRequest(
 	streamName string,
 	subject string,
 ) ([]byte, bool, error) {
+	return r.newestOn(ctx, streamName, subject)
+}
+
+func (r natsLoopEvidenceReader) ReadRetainedResponse(
+	ctx context.Context,
+	streamName string,
+	subject string,
+) ([]byte, bool, error) {
+	return r.newestOn(ctx, streamName, subject)
+}
+
+// newestOn is both reads. They differ only in the subject they address — one
+// per-loop, one per-request — and giving each its own copy of a direct get
+// would be two spellings of one operation.
+func (r natsLoopEvidenceReader) newestOn(
+	ctx context.Context,
+	streamName string,
+	subject string,
+) ([]byte, bool, error) {
 	stream, err := r.client.GetStream(ctx, streamName)
 	if err != nil {
-		return nil, false, fmt.Errorf("read request stream %s: %w", streamName, err)
+		return nil, false, fmt.Errorf("read stream %s: %w", streamName, err)
 	}
 	raw, err := stream.GetLastMsgForSubject(ctx, subject)
 	if errors.Is(err, jetstream.ErrMsgNotFound) {
 		return nil, false, nil
 	}
 	if err != nil {
-		return nil, false, fmt.Errorf("read retained request %s: %w", subject, err)
+		return nil, false, fmt.Errorf("read retained message %s: %w", subject, err)
 	}
 	return append([]byte(nil), raw.Data...), true, nil
 }
@@ -86,6 +111,40 @@ func requestAddress(ports []component.PortDefinition, loopID string) (subject, s
 		return subject, declared.Name(), nil
 	}
 	return "", "", fmt.Errorf("agent.request output not found")
+}
+
+// responseAddress resolves the subject a request's response is retained on and
+// the stream that holds it, from the agent.response INPUT port — the same
+// declaration the delivery this component consumes arrives through, so the
+// recovery read and the live subscription address the same place after a
+// config change.
+//
+// The mirror of requestAddress on the other direction: requests are this
+// component's output, responses are its input.
+func responseAddress(ports []component.PortDefinition, requestID string) (subject, stream string, err error) {
+	subject, err = component.ResolveSubject(ports, "agent.response", requestID)
+	if err != nil {
+		return "", "", err
+	}
+	for _, definition := range ports {
+		if definition.Name != "agent.response" {
+			continue
+		}
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return "", "", err
+		}
+		facts, err := port.Facts()
+		if err != nil {
+			return "", "", err
+		}
+		declared, ok := facts.Stream()
+		if !ok || declared.Name() == "" {
+			return "", "", fmt.Errorf("agent.response input does not declare a JetStream stream")
+		}
+		return subject, declared.Name(), nil
+	}
+	return "", "", fmt.Errorf("agent.response input not found")
 }
 
 // readRetainedAgentRequest returns the newest AgentRequest retained for the
@@ -140,6 +199,57 @@ func (c *Component) readRetainedAgentRequest(ctx context.Context, loopID string)
 // outputPortDefs returns the component's declared output ports.
 func (c *Component) outputPortDefs() []component.PortDefinition {
 	return c.config.Ports.Outputs
+}
+
+// inputPortDefs returns the component's declared input ports.
+func (c *Component) inputPortDefs() []component.PortDefinition {
+	return c.config.Ports.Inputs
+}
+
+// readRetainedAgentResponse returns the retained response for one request, and
+// whether there is one.
+//
+// It is read for its TOOL CALLS, which is the batch size the loop record does
+// not carry. Nothing else in the body is consulted: the rebuild seats the
+// assistant turn the batch belongs to and re-derives each execution identity
+// from the request ID and the provider call ID, never from content.
+func (c *Component) readRetainedAgentResponse(
+	ctx context.Context, requestID string,
+) (agentic.AgentResponse, bool, error) {
+	if c.natsClient == nil && c.requestEvidence == nil {
+		return agentic.AgentResponse{}, false, errs.WrapTransient(
+			fmt.Errorf("request %s: no retained-response reader is configured", requestID),
+			"agentic-loop", "readRetainedAgentResponse", "read retained response evidence")
+	}
+	subject, stream, err := responseAddress(c.inputPortDefs(), requestID)
+	if err != nil {
+		return agentic.AgentResponse{}, false, errs.WrapFatal(
+			err, "agentic-loop", "readRetainedAgentResponse", "resolve response address")
+	}
+	reader := c.requestEvidence
+	if reader == nil {
+		reader = natsLoopEvidenceReader{client: c.natsClient}
+	}
+	data, found, err := reader.ReadRetainedResponse(ctx, stream, subject)
+	if err != nil {
+		return agentic.AgentResponse{}, false, errs.WrapTransient(
+			err, "agentic-loop", "readRetainedAgentResponse", "read retained response evidence")
+	}
+	if !found {
+		return agentic.AgentResponse{}, false, nil
+	}
+	decoded, err := c.decoder.Decode(data)
+	if err != nil {
+		return agentic.AgentResponse{}, false, errs.WrapFatal(
+			err, "agentic-loop", "readRetainedAgentResponse", "decode retained response envelope")
+	}
+	response, ok := decoded.Payload().(*agentic.AgentResponse)
+	if !ok {
+		return agentic.AgentResponse{}, false, errs.WrapFatal(
+			fmt.Errorf("retained response payload is %T, not *agentic.AgentResponse", decoded.Payload()),
+			"agentic-loop", "readRetainedAgentResponse", "decode retained response payload")
+	}
+	return *response, true, nil
 }
 
 // loopRecord is one observation of a loop's AGENT_LOOPS record: the decoded
@@ -416,4 +526,97 @@ func (c *Component) adoptNewerRetainedRequest(ctx context.Context, loopID string
 		slog.String("now", retained.RequestID),
 		slog.Int("iterations", adopted.Iterations))
 	return loopRecord{entity: adopted, revision: committed, presence: record.presence}, nil
+}
+
+// restoreLoopFromEvidence gives THIS process the loop a redelivered input names,
+// so the delivery can be applied instead of refused (#1330, design § 5.2 step 2
+// and § 5.3 step 3; task 1.2).
+//
+// It runs only on a CURRENT input — one naming the request the record names,
+// after step 0 has brought that record forward. An older input is answered
+// without a loop at all, and a newer one is not yet observable, so neither has
+// anything to rebuild for.
+//
+// The reads, in the order their answers are needed:
+//
+//  1. The newest retained request. It must be the one the record names — step 0
+//     just made that true, so a disagreement means the stream moved between the
+//     two reads, and the redelivery re-decides against whatever won.
+//  2. The retained response for that request, ONLY when a tool result is being
+//     applied. That is the one case where the batch must be re-seated before the
+//     result can be classified as complete or not. A redelivered model RESPONSE
+//     needs no such read: applying it IS what creates the batch, and seating one
+//     first would replay the assistant turn into the conversation twice.
+//
+// Last, the record's revision is taken as this process's own. Without it the
+// rebuilt holder's first compare-and-swap has nothing to compare against and
+// fails closed — a loop recovered and then immediately stranded.
+//
+// A failure after the loop is seated releases it. A half-built loop in memory
+// is worse than none: the redelivery would find it warm and skip the rebuild
+// that failed.
+func (c *Component) restoreLoopFromEvidence(
+	ctx context.Context, loopID string, record loopRecord, inFlightExecutionID string,
+) error {
+	request, found, err := c.readRetainedAgentRequest(ctx, loopID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		// I1 says this cannot happen while the record exists. It is transient
+		// rather than fatal because the loop is real and unfinished: refusing
+		// it forever on one unreadable stream state would settle a live loop.
+		return errs.WrapTransient(
+			fmt.Errorf("loop %s: its record names request %q and the stream retains none",
+				loopID, record.entity.PublishedRequestID),
+			"agentic-loop", "restoreLoopFromEvidence", "read the request to rebuild from")
+	}
+	if request.RequestID != record.entity.PublishedRequestID {
+		return errs.WrapTransient(
+			fmt.Errorf("loop %s: the record names request %q and the stream now retains %q",
+				loopID, record.entity.PublishedRequestID, request.RequestID),
+			"agentic-loop", "restoreLoopFromEvidence", "match the retained request to the record")
+	}
+
+	if err := c.handler.loopManager.restoreLoopFromRequest(record.entity, request); err != nil {
+		return err
+	}
+
+	if inFlightExecutionID != "" {
+		response, found, err := c.readRetainedAgentResponse(ctx, request.RequestID)
+		if err != nil {
+			c.releaseLoopTransientState(loopID)
+			return err
+		}
+		if !found {
+			c.releaseLoopTransientState(loopID)
+			return errs.WrapTransient(
+				fmt.Errorf("loop %s: a tool result for request %q arrived and the stream retains no response for it",
+					loopID, request.RequestID),
+				"agentic-loop", "restoreLoopFromEvidence", "read the batch to rebuild from")
+		}
+		if err := c.handler.loopManager.restoreToolBatch(
+			loopID, response, record.entity.PendingToolResults, inFlightExecutionID); err != nil {
+			c.releaseLoopTransientState(loopID)
+			return err
+		}
+	}
+
+	// The in-memory trajectory aggregate starts here, empty. It is an
+	// active-loop execution convenience, not the authority: the immutable KV
+	// fact log holds what this loop has done, and the predecessor's steps are
+	// already in it. Without the aggregate every step this process records
+	// warns instead of landing.
+	if _, err := c.handler.trajectoryManager.startTrajectory(loopID); err != nil {
+		c.logger.WarnContext(ctx, "Rebuilt loop has no trajectory aggregate — its steps will not be aggregated",
+			slog.String("loop_id", loopID), slog.String("error", err.Error()))
+	}
+
+	c.rememberLoopRevision(loopID, record.revision)
+	c.logger.InfoContext(ctx, "Rebuilt a loop this process never started, from its record and its retained request",
+		slog.String("loop_id", loopID),
+		slog.String("published_request_id", request.RequestID),
+		slog.Int("iterations", record.entity.Iterations),
+		slog.Int("applied_tool_results", len(record.entity.PendingToolResults)))
+	return nil
 }
