@@ -113,4 +113,3 @@ handle's `Closed`, and joins each lane's observer.
 - **WHEN** the subscriber builds its two consumer configurations
 - **THEN** each declares `MaxDeliver` 5 and `AckWait` 30s
 - **AND** a heartbeat above half of `AckWait` is refused before any consumer is acquired
-
