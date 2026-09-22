@@ -321,7 +321,8 @@ func TestHandleLengthTruncation_Retry_HighUtilization(t *testing.T) {
 
 // TestHandleLengthTruncation_SecondTruncation_FailWithCompactionAttempted
 // verifies the second-strike branch: when the loop already retried
-// once (truncationRetryAttempts == 1 going in) and another truncation
+// once (the record's published request names retry ordinal 1 going in)
+// and another truncation
 // arrives, fail with the post-compaction diagnostic message saying
 // compaction_attempted=true so the operator knows compaction did
 // its job and the response still doesn't fit.

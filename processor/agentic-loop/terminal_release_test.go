@@ -136,9 +136,6 @@ func perLoopMapCount(m *LoopManager, loopID string) map[string]bool {
 	if _, ok := m.taskPrompts[loopID]; ok {
 		held["taskPrompts"] = true
 	}
-	if _, ok := m.truncationRetryAttempts[loopID]; ok {
-		held["truncationRetryAttempts"] = true
-	}
 	if _, ok := m.currentRequests[loopID]; ok {
 		held["currentRequests"] = true
 	}
@@ -180,7 +177,6 @@ func populatedLoop(t *testing.T, h *MessageHandler) string {
 	h.loopManager.CacheRequestTimeout(loopID, "30s")
 	h.loopManager.CacheResponseFormat(loopID, &agentic.ResponseFormat{Type: "json_object"})
 	h.loopManager.CacheTaskPrompt(loopID, "the original task prompt")
-	h.loopManager.IncrementTruncationRetry(loopID)
 	h.loopManager.TrackRequest(h.loopManager.GenerateRequestID(loopID), loopID)
 	// A framework execution ID has no loop prefix, so only the routing owner
 	// value sweep reaches it. Missing it would retain a route to a released loop.
@@ -226,7 +222,7 @@ func TestTerminalReleaseClearsEveryPerLoopMap(t *testing.T) {
 	loopID := populatedLoop(t, h)
 
 	held := perLoopMapCount(h.loopManager, loopID)
-	if len(held) < 13 {
+	if len(held) < 12 {
 		t.Fatalf("fixture populated only %d per-loop entries (%v); it must exercise every map", len(held), held)
 	}
 

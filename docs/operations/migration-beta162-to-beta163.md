@@ -1692,3 +1692,41 @@ token as the key and a record that validates, or the terminal it names will neve
 Verify pending approval and explicit continuation after dispatch replacement, unavailable-view 503 responses,
 exact-route auto-continue and its birth gap, and terminal routing after replacement. No beta-state preservation,
 tracker hydration, or compatibility layer is required.
+
+## The loop record names its outstanding request, and the truncation-retry helpers are removed (#1330, restart safety L4a)
+
+### Two exported methods are removed from `processor/agentic-loop`
+
+`LoopManager.IncrementTruncationRetry` and `LoopManager.ResetTruncationRetry` are deleted, together with the
+process-local `truncationRetryAttempts` map they maintained. They counted consecutive within-iteration retries driven
+by length-truncation responses, in memory. A replacement process read zero and spent the self-heal a second time
+under a request name its predecessor had already published, which the stream's duplicate window then dropped — the
+retry was stranded, which is the class #1330 closes.
+
+The budget is durable now. It is read back out of the retry ordinal of `LoopEntity.PublishedRequestID`
+(`<loopID>:req:<iteration>:<retry>`, #1328), so it survives process replacement and is one spelling of one fact
+rather than two. `handleLengthTruncation` keeps its behaviour: one self-heal per iteration, renewed by forward
+progress because a new iteration mints retry ordinal `0` by construction.
+
+**No adopter impact, measured 2026-09-22.** A `grep -rn -E 'IncrementTruncationRetry|ResetTruncationRetry'` across
+every `sem*` repository in the workspace returned hits in exactly one place: frozen `.txt` copies of SemStreams'
+own `state.go` and `handlers.go` under `semdev/openspec/changes/spec-driven-test-sensitivity/evidence/`. No sister
+repository calls either method from Go. A control grep for `LoopManager` over the same tree set reached sister
+sources (`semdev/test/conformance/upstream_asks_test.go`), so the empty result is an absence and not an unreachable
+search.
+
+If you did call either method: delete the call. An `Increment` site that gated a budget reads
+`publishedRetryOrdinal` equivalents from the record's request name; a `Reset` site has no successor, because nothing
+has to clear a counter for the budget to renew.
+
+### One field is added to `agentic.LoopEntity`
+
+`PublishedRequestID string` (`published_request_id`, `omitempty`) names the request the loop currently has
+outstanding. It is additive and optional: a record written before this change decodes with the field empty, and a
+consumer that does not know the field is unaffected. `Validate()` does not require it.
+
+What it means is a contract, not a hint (invariant I1): while the record exists, an `AgentRequest` carrying that
+exact `RequestID` is durably retained on `agent.request.<loopID>`. A consumer may therefore read the record to learn
+which request a loop is waiting on, and recovery orders request identities rather than comparing message bodies.
+Anything that writes `AGENT_LOOPS` directly — a migration script, a replay harness, a fixture — must either leave
+the field empty or set it to a request it has actually published, or a replacement process will refuse the loop.

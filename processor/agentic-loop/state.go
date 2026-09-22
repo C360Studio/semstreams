@@ -98,22 +98,10 @@ type LoopManager struct {
 	executionIDToOrdinal   map[string]uint32         // executionID -> model response order (for trajectory audit)
 	requestStartTimes      map[string]time.Time      // requestID -> start time (for duration measurement)
 	executionStartTimes    map[string]time.Time      // executionID -> start time (for duration measurement)
-	// truncationRetryAttempts counted consecutive within-iteration retries
-	// driven by length-truncation responses. #1330 moved that budget onto the
-	// loop's durable record — publishedRetryOrdinal reads it back out of
-	// PublishedRequestID — because this map was process-local and a
-	// replacement read zero, spending the self-heal a second time under a
-	// request name the first attempt had already published.
-	//
-	// No production path reads or writes it. It survives only because
-	// IncrementTruncationRetry and ResetTruncationRetry are exported methods
-	// on a Tier 1 package (ADR-106) and removing them is an incompatible
-	// change this slice is not authorised to make (#1330 L4a).
-	truncationRetryAttempts map[string]int
-	contextConfig           ContextConfig        // shared context config
-	modelRegistry           model.RegistryReader // model registry for context managers
-	logger                  *slog.Logger         // logger for context managers
-	mu                      sync.RWMutex
+	contextConfig          ContextConfig             // shared context config
+	modelRegistry          model.RegistryReader      // model registry for context managers
+	logger                 *slog.Logger              // logger for context managers
+	mu                     sync.RWMutex
 }
 
 // LoopManagerOption is a functional option for configuring LoopManager
@@ -136,28 +124,27 @@ func WithLoopManagerModelRegistry(reg model.RegistryReader) LoopManagerOption {
 // NewLoopManager creates a new LoopManager
 func NewLoopManager(opts ...LoopManagerOption) *LoopManager {
 	lm := &LoopManager{
-		loops:                   make(map[string]*agentic.LoopEntity),
-		contextManagers:         make(map[string]*ContextManager),
-		pendingTools:            make(map[string]map[string]bool),
-		queuedToolCalls:         make(map[string][]agentic.ToolCall),
-		cachedTools:             make(map[string][]agentic.ToolDefinition),
-		cachedToolChoice:        make(map[string]*agentic.ToolChoice),
-		cachedMetadata:          make(map[string]map[string]any),
-		cachedRequestTimeout:    make(map[string]string),
-		cachedResponseFormat:    make(map[string]*agentic.ResponseFormat),
-		taskPrompts:             make(map[string]string),
-		requestToLoop:           make(map[string]string),
-		outstandingRequests:     make(map[string]string),
-		currentRequests:         make(map[string]string),
-		toolCallToLoop:          make(map[string]string),
-		executionIDToName:       make(map[string]string),
-		executionIDToArguments:  make(map[string]map[string]any),
-		executionIDToOrdinal:    make(map[string]uint32),
-		requestStartTimes:       make(map[string]time.Time),
-		executionStartTimes:     make(map[string]time.Time),
-		truncationRetryAttempts: make(map[string]int),
-		contextConfig:           DefaultContextConfig(),
-		logger:                  slog.Default(),
+		loops:                  make(map[string]*agentic.LoopEntity),
+		contextManagers:        make(map[string]*ContextManager),
+		pendingTools:           make(map[string]map[string]bool),
+		queuedToolCalls:        make(map[string][]agentic.ToolCall),
+		cachedTools:            make(map[string][]agentic.ToolDefinition),
+		cachedToolChoice:       make(map[string]*agentic.ToolChoice),
+		cachedMetadata:         make(map[string]map[string]any),
+		cachedRequestTimeout:   make(map[string]string),
+		cachedResponseFormat:   make(map[string]*agentic.ResponseFormat),
+		taskPrompts:            make(map[string]string),
+		requestToLoop:          make(map[string]string),
+		outstandingRequests:    make(map[string]string),
+		currentRequests:        make(map[string]string),
+		toolCallToLoop:         make(map[string]string),
+		executionIDToName:      make(map[string]string),
+		executionIDToArguments: make(map[string]map[string]any),
+		executionIDToOrdinal:   make(map[string]uint32),
+		requestStartTimes:      make(map[string]time.Time),
+		executionStartTimes:    make(map[string]time.Time),
+		contextConfig:          DefaultContextConfig(),
+		logger:                 slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(lm)
@@ -168,28 +155,27 @@ func NewLoopManager(opts ...LoopManagerOption) *LoopManager {
 // NewLoopManagerWithConfig creates a new LoopManager with custom context config
 func NewLoopManagerWithConfig(contextConfig ContextConfig, opts ...LoopManagerOption) *LoopManager {
 	lm := &LoopManager{
-		loops:                   make(map[string]*agentic.LoopEntity),
-		contextManagers:         make(map[string]*ContextManager),
-		pendingTools:            make(map[string]map[string]bool),
-		queuedToolCalls:         make(map[string][]agentic.ToolCall),
-		cachedTools:             make(map[string][]agentic.ToolDefinition),
-		cachedToolChoice:        make(map[string]*agentic.ToolChoice),
-		cachedMetadata:          make(map[string]map[string]any),
-		cachedRequestTimeout:    make(map[string]string),
-		cachedResponseFormat:    make(map[string]*agentic.ResponseFormat),
-		taskPrompts:             make(map[string]string),
-		requestToLoop:           make(map[string]string),
-		outstandingRequests:     make(map[string]string),
-		currentRequests:         make(map[string]string),
-		toolCallToLoop:          make(map[string]string),
-		executionIDToName:       make(map[string]string),
-		executionIDToArguments:  make(map[string]map[string]any),
-		executionIDToOrdinal:    make(map[string]uint32),
-		requestStartTimes:       make(map[string]time.Time),
-		executionStartTimes:     make(map[string]time.Time),
-		truncationRetryAttempts: make(map[string]int),
-		contextConfig:           contextConfig,
-		logger:                  slog.Default(),
+		loops:                  make(map[string]*agentic.LoopEntity),
+		contextManagers:        make(map[string]*ContextManager),
+		pendingTools:           make(map[string]map[string]bool),
+		queuedToolCalls:        make(map[string][]agentic.ToolCall),
+		cachedTools:            make(map[string][]agentic.ToolDefinition),
+		cachedToolChoice:       make(map[string]*agentic.ToolChoice),
+		cachedMetadata:         make(map[string]map[string]any),
+		cachedRequestTimeout:   make(map[string]string),
+		cachedResponseFormat:   make(map[string]*agentic.ResponseFormat),
+		taskPrompts:            make(map[string]string),
+		requestToLoop:          make(map[string]string),
+		outstandingRequests:    make(map[string]string),
+		currentRequests:        make(map[string]string),
+		toolCallToLoop:         make(map[string]string),
+		executionIDToName:      make(map[string]string),
+		executionIDToArguments: make(map[string]map[string]any),
+		executionIDToOrdinal:   make(map[string]uint32),
+		requestStartTimes:      make(map[string]time.Time),
+		executionStartTimes:    make(map[string]time.Time),
+		contextConfig:          contextConfig,
+		logger:                 slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(lm)
@@ -462,32 +448,6 @@ func (m *LoopManager) SnapshotExpiredApprovals(now time.Time) []ApprovalTimeoutC
 	return out
 }
 
-// IncrementTruncationRetry bumps the within-loop truncation retry counter and
-// returns the new value.
-//
-// Deprecated: the truncation budget is durable since #1330 and is read from
-// LoopEntity.PublishedRequestID by publishedRetryOrdinal. This method has no
-// production caller and its counter decides nothing; it remains only because
-// removing an exported method from a Tier 1 package (ADR-106) is an
-// incompatible change, which L4a is not authorised to make.
-func (m *LoopManager) IncrementTruncationRetry(loopID string) int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.truncationRetryAttempts[loopID]++
-	return m.truncationRetryAttempts[loopID]
-}
-
-// ResetTruncationRetry clears the within-loop truncation retry counter.
-//
-// Deprecated: see IncrementTruncationRetry. Forward progress renews the
-// self-heal budget by minting a new iteration, whose retry ordinal is zero by
-// construction; nothing has to clear a counter for that to hold.
-func (m *LoopManager) ResetTruncationRetry(loopID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.truncationRetryAttempts, loopID)
-}
-
 // ResolveApprovalIfPending atomically transitions the loop out of
 // LoopStateAwaitingApproval if and only if the supplied call_id
 // matches the currently pinned PendingApproval. Returns a snapshot
@@ -593,7 +553,6 @@ func (m *LoopManager) DeleteLoop(loopID string) error {
 	delete(m.cachedRequestTimeout, loopID)
 	delete(m.cachedResponseFormat, loopID)
 	delete(m.taskPrompts, loopID)
-	delete(m.truncationRetryAttempts, loopID)
 	delete(m.outstandingRequests, loopID)
 	delete(m.currentRequests, loopID)
 
