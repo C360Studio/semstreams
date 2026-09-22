@@ -1916,8 +1916,9 @@ func (c *Component) settleResponseWithoutLoop(ctx context.Context, requestID str
 	// has not yet caught up with the request this response answers. Neither
 	// authorises a rebuild: there is no fact saying WHICH request to rebuild
 	// from. The delivery stays owed, and retries — bounded by the consumer's
-	// MaxDeliver, after which the lane routes it to the dead letter rather
-	// than retrying forever.
+	// MaxDeliver, after which it stops being redelivered and is recorded in the
+	// framework's MaxDeliver ledger (`internal/maxdelivery`). There is no
+	// dead-letter subject; exhaustion is observed, not re-published.
 	c.logger.Warn("Model response names a loop this process does not hold",
 		"request_id", requestID, "loop_id", loopID)
 	return false, fmt.Errorf("loop %q for request %q is not held by this process", loopID, requestID)
@@ -2669,8 +2670,10 @@ func (c *Component) settleToolResultWithoutLoop(ctx context.Context, toolResult 
 	// record has not caught up with the request this result belongs to.
 	// Neither authorises a rebuild, for the same reason as the response lane:
 	// no fact names which request to rebuild from. The delivery retries,
-	// bounded by the consumer's MaxDeliver and then routed to the dead letter,
-	// so an input no process can ever place does not retry forever.
+	// bounded by the consumer's MaxDeliver, after which it stops being
+	// redelivered and is recorded in the framework's MaxDeliver ledger
+	// (`internal/maxdelivery`) — so an input no process can ever place does not
+	// retry forever, and its exhaustion is observable rather than silent.
 	c.logger.Warn("Tool result names a loop this process does not hold",
 		"execution_id", toolResult.ExecutionID, "call_id", toolResult.CallID, "loop_id", loopID)
 	return false, fmt.Errorf("loop %q for tool call %q is not held by this process", loopID, toolResult.CallID)

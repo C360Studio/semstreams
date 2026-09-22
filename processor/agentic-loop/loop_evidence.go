@@ -626,13 +626,13 @@ func (c *Component) restoreLoopFromEvidence(
 	// fact log holds what this loop has done, and the predecessor's steps are
 	// already in it. Without the aggregate every step this process records
 	// warns instead of landing.
-	if _, err := c.handler.trajectoryManager.startTrajectory(loopID); err != nil {
-		c.logger.WarnContext(ctx, "Rebuilt loop has no trajectory aggregate — its steps will not be aggregated",
-			slog.String("loop_id", loopID), slog.String("error", err.Error()))
-		if c.metrics != nil {
-			c.metrics.recordRecoveryDegradation("rebuilt_trajectory_aggregate")
-		}
-	}
+	//
+	// Its error is discarded because there is none to handle: startTrajectory
+	// stores into a map under its own lock and returns nil unconditionally
+	// (trajectory.go). A log-and-count degrade branch here would be dead code
+	// pretending to be a guard, which is worse than no branch — it advertises a
+	// failure mode the function cannot produce.
+	_, _ = c.handler.trajectoryManager.startTrajectory(loopID)
 
 	c.rememberLoopRevision(loopID, record.revision)
 	c.logger.InfoContext(ctx, "Rebuilt a loop this process never started, from its record and its retained request",

@@ -184,7 +184,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "recovery_degradations_total",
-				Help:      "Total times a recovery path continued past a failure it could not repair, by site. site=\"tool_result_classification\": the loop was released between the routing lookup and the component-entry classification, so the redelivered tool result was handed to the handler unclassified — safe, because the handler answers that race as it did before the check existed, but the guard did not run. site=\"rebuilt_trajectory_aggregate\": a rebuilt loop could not start its in-memory trajectory aggregate, so its steps are recorded but not aggregated; the immutable KV fact log is unaffected. Neither drops work or changes a delivery decision — each is a degraded continue that the matching log line names in full.",
+				Help:      "Total times a recovery path continued past a failure it could not repair, by site. site=\"tool_result_classification\": the loop was released between the routing lookup and the component-entry classification, so the redelivered tool result was handed to the handler unclassified — safe, because the handler answers that race as it did before the check existed, but the guard did not run. It drops no work and changes no delivery decision — it is a degraded continue that the matching log line names in full.",
 			}, []string{"site"}),
 
 			signalsDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -559,9 +559,8 @@ func (m *loopMetrics) recordToolResultDropped(reason string) {
 // It is the metric half of a declared degrade: each site logs the failure in
 // full AND counts it here, because a log line alone is not something an
 // operator can alert on. Nothing counted here drops work or changes a delivery
-// decision — the two sites are a tool result handed to the handler without its
-// component-entry classification, and a rebuilt loop whose in-memory
-// trajectory aggregate did not start.
+// decision. One site today: a tool result handed to the handler without its
+// component-entry classification, because the loop was released underneath it.
 func (m *loopMetrics) recordRecoveryDegradation(site string) {
 	m.recoveryDegradations.WithLabelValues(site).Inc()
 }

@@ -155,11 +155,16 @@
       `eaba19f1844225c316baeed4e7dff350`; RED on the unit arm (exit 1) AND on the real-NATS W2 arm (exit 1), green
       on restore, `git status --porcelain` empty after.
 
-      **Declared degrade, metered (checkpoint-3 NIT-3).** The rebuild's `startTrajectory` failure continues with a
-      warn; it now also counts `recovery_degradations_total{site="rebuilt_trajectory_aggregate"}`. No test asserts
-      that increment, deliberately: `trajectoryManager.startTrajectory` (`trajectory.go:24-32`) returns `nil`
-      unconditionally, so the branch is unreachable today. The instrumentation is there for the day it is not;
-      inventing a fake failure to assert it would test the fake.
+      **The rebuild's `startTrajectory` degrade branch is GONE (checkpoint-4 review NIT).** Checkpoint 3 added a
+      log-and-count degrade there and recorded that no test asserted it because
+      `trajectoryManager.startTrajectory` (`trajectory.go:24-32`) returns `nil` unconditionally. That reasoning
+      admits the branch was unreachable, and an unreachable degrade branch is dead code pretending to be a guard:
+      it advertises a failure mode the function cannot produce, and the contract's own rule is that a declared
+      degrade carries a test that a mutation kills. Deleted, along with its
+      `recovery_degradations_total{site="rebuilt_trajectory_aggregate"}` site and its clause in the metric's Help.
+      The call is now `_, _ = c.handler.trajectoryManager.startTrajectory(loopID)` with the reason written at the
+      site. `recovery_degradations_total{site="tool_result_classification"}` — the reachable one, with a test and a
+      mutant (task 3.1) — is untouched and is now the metric's only site.
 
       **Migration note.** `docs/operations/migration-beta162-to-beta163.md` § "A rebuilt loop's conversation is one
       region" records the one visible consequence of the one-region replay: compaction attribution does not survive
