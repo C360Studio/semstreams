@@ -404,6 +404,100 @@ func TestMilestoneFanoutQuarantinesOnHandlerPanic(t *testing.T) {
 	assert.False(t, lane.admission.Admit(), "the lane admits no further local work")
 }
 
+// TestMilestoneFanoutQuarantinesOnUnclassifiedHandlerError is the owner's
+// round-2 HIGH: a product handler that returns a plain errors.New has supplied
+// no errs class at all, so the delivery quarantines no matter what words the
+// message contains. "commit timeout after write" reads transient to
+// errs.IsTransient's substring pass, which would have Naked the delivery with
+// the 30s delay and burned the lane's finite MaxDeliver with the lane still
+// open and no fatal latch — a milestone whose disposition was decided by its
+// error WORDING.
+func TestMilestoneFanoutQuarantinesOnUnclassifiedHandlerError(t *testing.T) {
+	t.Parallel()
+	const unclassified = "commit timeout after write"
+	sub := quietSubscriber(&stubRunReader{err: lifecycle.ErrEntityNotFound}, stubTripleReader{}, "acme")
+	sub.AddHandler(handlerFunc(func(context.Context, LoopTerminalEvent, *AgentRun) error {
+		return errors.New(unclassified)
+	}))
+	lane := newMilestoneLaneFixture(t, sub, milestoneLaneComplete)
+
+	data := terminalBytes(t, "unclassified-loop", "")
+	decision, reason := reasonOf(t, sub, data)
+	assert.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
+	assert.Equal(t, reasonHandlerFatal, reason, "an unreadable handler error is fatal, not transient")
+
+	msg := lane.deliver(t, data)
+	assert.Zero(t, msg.settlements(), "a quarantined delivery is left to JetStream: no Ack, Nak or Term")
+	assert.Empty(t, msg.nakDelays, "the delivery must not be Naked with the retry delay")
+	require.Error(t, sub.DeliveryFatal(), "the lane must latch so an operator looks")
+	assert.ErrorContains(t, sub.DeliveryFatal(), unclassified, "the latched cause names the handler error")
+	assert.False(t, lane.admission.Admit(), "the lane admits no further local work")
+}
+
+// TestClassifyHandlerOutcomeReadsTheClassNotTheWording is the unit row behind
+// the test above: every word errs.IsTransient substring-matches is fatal here
+// when it arrives on an unclassified error, cancellation keeps its Retry by
+// sentinel identity, and an explicit class outranks everything.
+func TestClassifyHandlerOutcomeReadsTheClassNotTheWording(t *testing.T) {
+	t.Parallel()
+	// The exact substring set errs.IsTransient scans for (pkg/errs/errs.go).
+	// Each one is a plain, unclassified handler error here.
+	for _, word := range []string{"timeout", "connection", "network", "temporary", "unavailable", "busy", "retry"} {
+		t.Run("unclassified_"+word, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, outcomeFatal,
+				classifyHandlerOutcome(fmt.Errorf("commit %s after write", word)),
+				"an unclassified handler error is fatal however it is worded")
+		})
+	}
+
+	cases := []struct {
+		name string
+		err  error
+		want milestoneOutcome
+	}{
+		{"nil is done", nil, outcomeDone},
+		{"unclassified is fatal", errors.New("nothing can place this"), outcomeFatal},
+		{
+			"an uncoded errs sentinel carries no class",
+			semerrs.ErrRateLimited,
+			outcomeFatal,
+		},
+		{"cancellation retries", context.Canceled, outcomeTransient},
+		{
+			"a wrapped deadline retries",
+			fmt.Errorf("handler 0: %w", context.DeadlineExceeded),
+			outcomeTransient,
+		},
+		{
+			"an explicit class outranks the cancellation sentinel",
+			semerrs.WrapFatal(context.Canceled, "product", "OnLoopTerminal", "commit"),
+			outcomeFatal,
+		},
+		{
+			"errs Transient retries",
+			semerrs.WrapTransient(errors.New("downstream busy"), "product", "OnLoopTerminal", "commit"),
+			outcomeTransient,
+		},
+		{
+			"errs Invalid rejects",
+			semerrs.WrapInvalid(errors.New("payload rejected"), "product", "OnLoopTerminal", "validate"),
+			outcomeInvalid,
+		},
+		{
+			"errs Fatal quarantines",
+			semerrs.WrapFatal(errors.New("handler exploded"), "product", "OnLoopTerminal", "commit"),
+			outcomeFatal,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, classifyHandlerOutcome(tc.err))
+		})
+	}
+}
+
 // --- 3.6: resolution ---------------------------------------------------------
 
 // TestMilestoneNotManagedEntityRetriesThenAcksAfterCreate is R2 / invariant I7:

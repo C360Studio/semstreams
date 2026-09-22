@@ -14,12 +14,15 @@ typed heartbeat surface, not a workflow engine: what a handler does with a termi
 `MilestoneSubscriber` SHALL settle each `agent.complete.*` and `agent.failed.*` delivery through the typed heartbeat
 settlement surface with one `DeliveryWork` per delivery, and SHALL treat the registered handler set as one unit: every
 attempt invokes every registered handler in registration order under a per-handler recover, and the delivery is
-acknowledged only on an attempt where every handler returned nil. The aggregate decision SHALL be a pure function of
-the ordered outcome list: any fatal outcome (panic, `errs` Fatal, or an unclassified handler error) → Quarantine; else
-any transient outcome → Retry; else any invalid outcome → Terminate; else Ack. Every attempt of one stored delivery
-SHALL present the same `LoopTerminalEvent.SourceMessageID`, the terminal's wire message identity, to every handler. A
-handler SHALL return nil only after its durable consequence for that identity is committed, or it has nothing to do
-for it; the framework does not verify this obligation and documents it on the handler type.
+acknowledged only on an attempt where every handler returned nil. A handler return SHALL be ranked by explicit
+classification only, never by the error's wording: the `errs` class the handler set places it, and an error carrying no
+class is fatal unless it matches `context.Canceled` or `context.DeadlineExceeded` by sentinel identity — the fanout's
+own cancellation, which ranks transient so a clean shutdown does not latch the lane. The aggregate decision SHALL be a
+pure function of the ordered outcome list: any fatal outcome (panic, `errs` Fatal, or an unclassified handler error)
+→ Quarantine; else any transient outcome → Retry; else any invalid outcome → Terminate; else Ack. Every attempt of
+one stored delivery SHALL present the same `LoopTerminalEvent.SourceMessageID`, the terminal's wire message identity,
+to every handler. A handler SHALL return nil only after its durable consequence for that identity is committed, or it
+has nothing to do for it; the framework does not verify this obligation and documents it on the handler type.
 
 Resolution failures SHALL be classified on the AgentRun side, never by editing `pkg/lifecycle`: `ErrEntityNotFound` →
 continue with a nil run; `ErrEntityNotLifecycleManaged` → Retry (the ADR-049 forward-reference case, resolved by a
@@ -57,6 +60,12 @@ requirement, never an implementation detail.
 - **WHEN** a handler panics
 - **THEN** no Ack, Nak, or Term is attempted for that delivery
 - **AND** that lane admits no further local work and `DeliveryFatal()` is non-nil
+
+#### Scenario: an unclassified handler error quarantines however it is worded
+
+- **WHEN** a handler returns a plain error whose text contains a transient-looking word such as `timeout`
+- **THEN** the decision is Quarantine with reason `handler_fatal`, and no Ack, Nak, or Term is attempted
+- **AND** a handler error matching `context.Canceled` or `context.DeadlineExceeded` retries instead
 
 #### Scenario: a not-yet-managed entity retries and then succeeds
 

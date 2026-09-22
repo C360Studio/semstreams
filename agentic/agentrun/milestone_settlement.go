@@ -96,34 +96,52 @@ func aggregateMilestoneOutcomes(outcomes []milestoneOutcome) milestoneOutcome {
 
 // classifyHandlerOutcome ranks one handler return.
 //
-// An error the errs classes cannot place is FATAL here, not transient. The
-// framework default is the opposite (errs.Classify sends unknown errors to
-// Transient so they retry), and that is right for infrastructure the framework
-// owns. It is wrong for a product handler's durable effect: an error nothing
-// can read is not proven safe to repeat and not proven safe to drop, so the
-// lane latches and an operator looks, instead of the milestone disappearing.
+// Classification here is EXPLICIT: an errs class the handler itself set, or
+// one of the two admitted cancellation sentinels. Nothing else places an
+// error, and the error's WORDING never does. The framework defaults are the
+// opposite — errs.Classify sends unknown errors to Transient, and both
+// errs.IsTransient and errs.IsFatal reach a substring pass over the message
+// text ("timeout", "connection", "network", ...) before giving up — which is
+// right for infrastructure the framework owns and wrong for a product
+// handler's durable effect. An error nothing can read is not proven safe to
+// repeat and not proven safe to drop, so it is FATAL: the lane latches and an
+// operator looks, instead of the milestone retrying to MaxDeliver and
+// vanishing because its message happened to contain the word "timeout".
 //
-// The arms are not a class-only switch, and deliberately so: errs.IsTransient
-// places an UNCLASSIFIED error by substring first ("timeout", "connection",
-// "network", "unavailable", ...), so a handler error carrying one of those
-// words still retries. The default arm below is the fail-closed remainder —
-// what is left after the classes and that substring pass have both declined
-// to place the error — not the whole unclassified set.
+// context.Canceled and context.DeadlineExceeded are transient because they are
+// the FANOUT's own shutdown or deadline surfacing through the handler, not a
+// handler failure: the attempt never ran to completion, and quarantining on
+// them would latch both lanes on every clean Stop. They are admitted by
+// sentinel identity (errors.Is), never by text, and an explicit class outranks
+// them — a handler that wraps its cancellation errs Fatal means Fatal.
+//
+// The uncoded errs sentinels (ErrRateLimited, ErrCircuitOpen,
+// ErrConnectionTimeout, ...) are deliberately NOT admitted: they carry no
+// class, no handler in this tree or above it returns one, and
+// errs.WrapTransient is the one-line explicit spelling for a handler that
+// wants the replay.
 func classifyHandlerOutcome(err error) milestoneOutcome {
-	switch {
-	case err == nil:
+	if err == nil {
 		return outcomeDone
-	case semerrs.IsFatal(err):
-		return outcomeFatal
-	case semerrs.IsTransient(err):
-		// errs.IsTransient already counts context.Canceled and
-		// context.DeadlineExceeded, which is how a cancelled fanout retries.
-		return outcomeTransient
-	case semerrs.IsInvalid(err):
-		return outcomeInvalid
-	default:
-		return outcomeFatal
 	}
+	var classified *semerrs.ClassifiedError
+	if errors.As(err, &classified) {
+		switch classified.Class {
+		case semerrs.ErrorTransient:
+			return outcomeTransient
+		case semerrs.ErrorInvalid:
+			return outcomeInvalid
+		case semerrs.ErrorFatal:
+			return outcomeFatal
+		default:
+			// A class this build cannot name is as unplaceable as no class.
+			return outcomeFatal
+		}
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return outcomeTransient
+	}
+	return outcomeFatal
 }
 
 // errUnexpectedRunType marks a lifecycle participant that is not an *AgentRun.
