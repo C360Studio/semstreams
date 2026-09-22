@@ -707,13 +707,36 @@
       The delta SCENARIO is scoped to startup and is exactly true; only the free-text sentence over-reaches. It is
       ruling text, so it is not edited here — the migration note and the doc comments state the narrow truth, and
       the narrowing is owed to the owner.
-- [ ] 5.4 `tasks_submitted_total` is at-least-once under redelivery (docket OQ4, owner ruling 2026-09-22): the new
+- [x] 5.4 `tasks_submitted_total` is at-least-once under redelivery (docket OQ4, owner ruling 2026-09-22): the new
       `specs/agentic-dispatch/spec.md` delta states it, plus one line in
       `docs/operations/migration-beta162-to-beta163.md` under the same `#1330` section; no arm change. Test: a
       dispatch-side unit test carrying `// spec: agentic-dispatch / The task submission counter is at-least-once
       under redelivery` and asserting the delta's scenario — a replayed task submission increments the counter again
       while reusing the retained LoopID and publishing no second task
       (`processor/agentic-dispatch/metrics.go:112`, `recordTaskSubmitted` `:321`, increment `:322`).
+      **Landed.** Test `TestTaskSubmissionCounterIsAtLeastOnceUnderRedelivery`
+      (`processor/agentic-dispatch/task_submission_counter_integration_test.go:42`). Migration section:
+      `docs/operations/migration-beta162-to-beta163.md:1782` § "`tasks_submitted_total` is at-least-once, and stays
+      that way", with the two reading rules an operator needs. No arm changed: `recordTaskSubmitted` is still called
+      unconditionally after the publication on both lanes (`component.go:1168`, `http.go:428`). Conformance row OQ4
+      updated (`design.md` § 9).
+      **Overlap measured, not assumed.** The second increment is ALREADY observed on this head, inside
+      `TestIntegrationPublishedTaskWithFailedResponseQuarantines`
+      (`task_submission_settlement_integration_test.go:134`, "the redelivery counted one submission twice"). That
+      test's GIVEN is a quarantine with no USER stream, and it cites a different requirement — the counter's
+      semantics must not be contingent on that failure being present. The new test's GIVEN is the ordinary path:
+      both streams exist, both deliveries acknowledge, nothing fails. It adds what the existing one does not carry —
+      the OQ4 citation, the clean-ack precondition, and the derived-identity assertion against
+      `stableDispatchTaskID`.
+      **Integration, not unit, and why.** Both publications on this path go through the NATS client, so a component
+      built without a live one fails the task publication and never reaches the counter. The only way to make it a
+      unit test was a production publish seam whose sole consumer is a test, which the "before adding anything new"
+      check refuses.
+      Mutant (`cp` backup + `md5 -q`, `[applied]` printed between mutating and testing, restore verified by
+      checksum): arm the counter to exactly-once — gate `c.metrics.recordTaskSubmitted()` at `component.go:1168`
+      behind `if !found`, so a recovered submission does not count. `component.go`
+      `MUTANT_BEFORE` → `MUTANT_AFTER` → restored `MUTANT_RESTORED`.
+      RED: `TestTaskSubmissionCounterIsAtLeastOnceUnderRedelivery` — MUTANT_MSG.
 
 ## 6. Verification (before the push, every time)
 

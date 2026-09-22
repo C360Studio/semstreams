@@ -1778,3 +1778,19 @@ redelivered model response or tool result naming the request the record names â€
 along with the rest of the record, and from then on sweeps it against the record's own `RequestedAt` plus `Timeout`.
 That is the record's original deadline, not a fresh wait, and it depends on a redelivery arriving. It is not a
 recovery path to rely on.
+
+### `tasks_submitted_total` is at-least-once, and stays that way
+
+`semstreams_router_tasks_submitted_total` counts task submission ATTEMPTS, not distinct tasks. A redelivered
+`UserMessage` whose task already committed increments it a second time: dispatch recovers the committed task by its
+stable ID, republishes that same task under the same `task_id` and the same `loop_id`, and counts the submission
+again. Nothing suppresses the second increment, and **no arm was added to make it exactly-once** â€” the arm would
+have to distinguish a redelivery from a retry at a seam that cannot see the difference, and would buy a dashboard
+number at the cost of a guard on the path that carries real work.
+
+No action, but two reading rules:
+
+- Do not take this counter for a count of distinct tasks or loops. For that, count loops in `AGENT_LOOPS`, or count
+  distinct `task_id` values on `agent.task.>`.
+- A step in this counter with no matching new loop is a redelivery, not a duplicated task. The redelivery is
+  otherwise idempotent: same `task_id`, same `loop_id`, no second loop.
