@@ -735,8 +735,9 @@
       Mutant (`cp` backup + `md5 -q`, `[applied]` printed between mutating and testing, restore verified by
       checksum): arm the counter to exactly-once — gate `c.metrics.recordTaskSubmitted()` at `component.go:1168`
       behind `if !found`, so a recovered submission does not count. `component.go`
-      `MUTANT_BEFORE` → `MUTANT_AFTER` → restored `MUTANT_RESTORED`.
-      RED: `TestTaskSubmissionCounterIsAtLeastOnceUnderRedelivery` — MUTANT_MSG.
+      `bf2dc93c82632dc9e9ba8ded5f56dfe3` → `0949490c12ce7182b610091b55f91de4` → restored
+      `bf2dc93c82632dc9e9ba8ded5f56dfe3`, `git status --porcelain` empty after.
+      RED at `task_submission_counter_integration_test.go:78` — expected 2, actual 1.
 
 ## 6. Verification (before the push, every time)
 
