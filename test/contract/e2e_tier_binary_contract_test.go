@@ -238,23 +238,27 @@ func (e composeEnv) values(prefix string) map[string]string {
 	return out
 }
 
-// effectiveValue resolves the part of compose interpolation that decides
-// whether a gate is armed without the host's help: a literal is itself, and
-// `${VAR}` is empty unless it carries a default, since the host decides the
-// rest. Anything more (nested or partial interpolation) is not supported here
-// and reads as empty, which fails closed.
+// effectiveValue is the value a gate declaration arms the container with,
+// established WITHOUT the host's help. An arming value must therefore be a
+// LITERAL: any value containing `$` is compose interpolation whose result the
+// host decides, so this guard cannot establish it as nonempty and reads it as
+// empty, which fails closed.
+//
+// This does not reimplement compose's parser, and deliberately so — the
+// parser is where the earlier attempt went wrong. `$VAR` (unbraced) and
+// `${VAR:-${OTHER}}` (nested) both resolve to "" in compose when the
+// variables are unset, yet a substring reading of the expression returns
+// something nonempty for each, so a partial parser reports a gate as armed
+// that compose leaves empty. `docker/compose/*.yml` declares no interpolated
+// `SEMSTREAMS_E2E_*` value today; a tier gate whose arming depends on a
+// developer's shell is not armed, so if one is ever wanted it is this guard
+// that gets rewritten, not this rule that gets relaxed.
 func effectiveValue(value string) string {
 	trimmed := strings.Trim(strings.TrimSpace(value), `"'`)
-	if !strings.HasPrefix(trimmed, "${") || !strings.HasSuffix(trimmed, "}") {
-		return trimmed
+	if strings.Contains(trimmed, "$") {
+		return ""
 	}
-	inner := trimmed[2 : len(trimmed)-1]
-	for _, separator := range []string{":-", "-", ":?", "?"} {
-		if _, fallback, found := strings.Cut(inner, separator); found {
-			return strings.Trim(strings.TrimSpace(fallback), `"'`)
-		}
-	}
-	return ""
+	return trimmed
 }
 
 // composeServices reads every service in docker/compose/ that is built from
@@ -460,6 +464,66 @@ func assertNoComposeFileArmsAnUndeclaredHook(t *testing.T, rows []tierRow) {
 // builds its image, in both directions: no compose service built from
 // docker/Dockerfile may be missing from the table, and no row may name a
 // service that does not exist.
+// TestComposeArmingValueMustBeALiteral is the owner's round-2 MEDIUM, run
+// against the helper the tier guard uses. Both spellings below were executed
+// against `docker compose config --format json` with the variables unset:
+// compose emitted "" for each, while the previous parser returned the
+// expression itself for `$PR1360_UNSET` and the inner expression for the
+// nested default — either one passing the nonempty check while the gated hook
+// never installs.
+func TestComposeArmingValueMustBeALiteral(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{"a literal arms the gate", "1", "1"},
+		{"a quoted literal arms the gate", `"1"`, "1"},
+		{"surrounding space is not part of the value", "  1  ", "1"},
+		{"an empty declaration is unarmed", "", ""},
+		{"unbraced interpolation is unarmed", "$PR1360_UNSET", ""},
+		{"nested-default interpolation is unarmed", "${PR1360_UNSET:-${PR1360_ALSO_UNSET}}", ""},
+		{"bare interpolation is unarmed", "${SEMSTREAMS_E2E_MILESTONE_PROBE}", ""},
+		{"a host-defaulted value is unarmed", "${PR1360_UNSET:-1}", ""},
+		{"partial interpolation is unarmed", "x${PR1360_UNSET}y", ""},
+		{"a required-variable form is unarmed", "${PR1360_UNSET:?set it}", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := effectiveValue(tc.value); got != tc.want {
+				t.Errorf("effectiveValue(%q) = %q, want %q", tc.value, got, tc.want)
+			}
+		})
+	}
+
+	// Through the declaration reader the guard actually calls, including the
+	// `- NAME` passthrough form whose arming depends on the developer's shell.
+	env := composeEnv{
+		"SEMSTREAMS_E2E_LITERAL=1",
+		"SEMSTREAMS_E2E_UNBRACED=$PR1360_UNSET",
+		"SEMSTREAMS_E2E_NESTED=${PR1360_UNSET:-${PR1360_ALSO_UNSET}}",
+		"SEMSTREAMS_E2E_PASSTHROUGH",
+		"SEMSTREAMS_DEBUG=true",
+	}
+	got := env.values("SEMSTREAMS_E2E_")
+	want := map[string]string{
+		"SEMSTREAMS_E2E_LITERAL":     "1",
+		"SEMSTREAMS_E2E_UNBRACED":    "",
+		"SEMSTREAMS_E2E_NESTED":      "",
+		"SEMSTREAMS_E2E_PASSTHROUGH": "",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("values(SEMSTREAMS_E2E_) = %v, want %v", got, want)
+	}
+	for name, value := range want {
+		if got[name] != value {
+			t.Errorf("values(SEMSTREAMS_E2E_)[%s] = %q, want %q", name, got[name], value)
+		}
+	}
+}
+
 func TestE2ETierTableMatchesComposeAndDockerfile(t *testing.T) {
 	specPath, rows := tierTable(t)
 	t.Logf("tier table read from %s: %d rows", specPath, len(rows))

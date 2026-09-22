@@ -85,8 +85,9 @@ observation, and a contract test re-reads it against those artifacts:
 - **AND** every compose service built from `docker/Dockerfile` appears in the table and every row names a service that exists
 - **AND** no compose file mentions a `SEMSTREAMS_E2E_*` variable its rows do not declare — including in an overlay service
   with no `build:` block, since compose merges `environment:` across `-f` files, and including in a comment
-- **AND** each declared variable carries a nonempty effective value, an uninterpolated `${VAR}` counting as empty, because
-  a hook reading its gate with `os.Getenv` treats `NAME=` exactly as unset and leaves the tier's proof silently unarmed
+- **AND** each declared variable carries a nonempty LITERAL value, every value containing `$` counting as empty because the
+  guard cannot establish what the host interpolates it to, since a hook reading its gate with `os.Getenv` treats `NAME=`
+  exactly as unset and leaves the tier's proof silently unarmed
 - **AND** no two Dockerfile targets share an `image:` tag, so a build for one tier cannot leak into another
 - **AND** the test that verifies this is `TestE2ETierTableMatchesComposeAndDockerfile`
 
