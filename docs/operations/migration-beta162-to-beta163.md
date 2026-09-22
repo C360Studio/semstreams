@@ -1730,3 +1730,14 @@ exact `RequestID` is durably retained on `agent.request.<loopID>`. A consumer ma
 which request a loop is waiting on, and recovery orders request identities rather than comparing message bodies.
 Anything that writes `AGENT_LOOPS` directly — a migration script, a replay harness, a fixture — must either leave
 the field empty or set it to a request it has actually published, or a replacement process will refuse the loop.
+
+### A rebuilt loop's conversation is one region, so compaction attribution does not survive a replacement
+
+A process that meets a redelivered response or tool result for a loop it never started now rebuilds that loop from
+its record and its retained `AgentRequest` instead of refusing the delivery. The replay is deliberately flat: the
+system prompt goes back to the system-prompt region and every other retained message goes to recent history in the
+order the request carried them, so a conversation that its predecessor had compacted comes back as recent history
+rather than as compacted history. Nothing is lost and no message moves — the next request renders the same
+conversation in the same order — but a dashboard that reads per-region sizes or a compacted-history counter will see
+the attribution reset at the replacement, and the rebuilt loop may compact again sooner than its predecessor would
+have. No action is required.

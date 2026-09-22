@@ -49,27 +49,90 @@
       `TestPublishedRequestIDIsOmittedWhenUnset` (both directions of additivity — no key when unset, empty when a
       pre-field record decodes), `TestTransitionToKeepsTheOutstandingRequest`,
       `TestValidateIgnoresTheOutstandingRequest`.
-- [ ] 1.2 `processor/agentic-loop/state.go`: `SetPublishedRequest(loopID, requestID)`; new `restoreLoopFromRequest`
+- [x] 1.2 `processor/agentic-loop/state.go`: `SetPublishedRequest(loopID, requestID)`; new `restoreLoopFromRequest`
       beside `attachContinuation` (`ST:298`) — no rebuild path exists on `main` — fed the record step 0 (2.5) already
       adopted plus the newest retained request; it rebuilds the ContextManager, the routing maps (`ST:79`
       `outstandingRequests`, `ST:887-888`) and the tool batch (`restoreToolBatch`, membership against the retained
       response only), so it has no `PublishedRequestID` mismatch to refuse. Test: `state_test.go` — set /
       restore-after-adoption / restore-equal.
-      **Half landed.** `SetPublishedRequest` is at `ST:914-924`, refusing a loop the manager does not hold rather
-      than ignoring it, and has three production callers (the mint sites of 2.4). `restoreLoopFromRequest` /
-      `restoreToolBatch` are sequenced to the checkpoint that wires their call sites: their only consumers are the
-      cold rebuilds of tasks 3.1 and 3.2 (design § 5.2 step 2, § 5.3 step 3), and the shape of the ContextManager
-      rebuild — which `RegionType` each retained `ChatMessage` returns to — is decided by those call sites. Building
-      it ahead of them is the "zero present consumers" shape the developer contract refuses. Recorded as a
-      sequencing choice inside this PR, not a scope change.
-      **Carries the W2 halves of 4.2** (moved here 2026-09-22, checkpoint-2 review). Both W2 cases —
-      `tool_result_redelivery_integration_test.go` and `identity_adoption_integration_test.go` — pin what L4a does
-      with a redelivered input the record does not account for BEFORE the rebuild exists: the cold arm returns "this
-      process does not hold the loop", which is a Retry. Design § 5.2 step 2 and § 5.3 step 3 end elsewhere — a cold
-      process REBUILDS from the retained request and response and applies the input. When `restoreLoopFromRequest` /
-      `restoreToolBatch` land, the two cases are REWRITTEN, never deleted, from "retries, writes nothing" to
-      "rebuilds and applies". The invariant that survives either way: the input is never acknowledged away and the
-      record never moves on a delivery nobody applied.
+      **Landed.** `SetPublishedRequest` is at `state.go:914-924`, refusing a loop the manager does not hold rather
+      than ignoring it, and has three production callers (the mint sites of 2.4). The rebuild landed in two
+      commits: `6c91a1cc` for the two manager primitives, `c09cc282` for the reader, the component seam and the
+      call sites — sequenced that way because the shape of the ContextManager rebuild is decided by its call sites,
+      never ahead of them.
+
+      Five parts, as built:
+
+      1. `LoopManager.restoreLoopFromRequest(record, request)` (`state.go:351`) — seats the loop, its
+         ContextManager and its routing maps from the record plus the retained request. The conversation replays
+         into ONE region: `system` → `RegionSystemPrompt`, everything else → `RegionRecentHistory` in the retained
+         order, then `RepairToolPairs()`. It also restores `cachedTools` / `cachedToolChoice` /
+         `cachedResponseFormat` / `cachedRequestTimeout` off the request — an addition to the task text, because
+         without them a rebuilt loop's NEXT request advertises no tools at all. The loop is marked outstanding on
+         its request (TrackRequest's shape), which `restoreToolBatch` settles when a response for it is in hand.
+      2. `LoopManager.restoreToolBatch(loopID, response, applied, inFlight)` (`state.go:443`) — re-derives every
+         execution identity from the retained response with `stampToolExecutionCorrelation`, adds the assistant
+         turn the batch belongs to, seats names/arguments/ordinals for all of them, seats routes for the unapplied
+         ones only, and queues the unapplied minus `inFlight`. **Divergence from the task text:** a fourth
+         parameter, `inFlight`. Dispatch is serial, so the call whose result is arriving must not go back on the
+         queue; folding it into `applied` would have meant inventing a fake ToolResult value for it.
+         `pendingTools` is deliberately left empty — the queue is what says how much of the batch is left, and
+         `HandleToolResult` dispatches from it before it ever asks `AllToolsComplete`.
+      3. `loopEvidenceReader.ReadRetainedResponse` (`loop_evidence.go:56`) with `responseAddress`
+         (`loop_evidence.go:124`) and `readRetainedAgentResponse` (`loop_evidence.go:216`). The address resolves
+         from the agent.response **INPUT** port — `requestAddress`'s mirror — so the recovery read and the live
+         subscription resolve the same subject after a config change. Both reads share one `newestOn`.
+      4. `Component.restoreLoopFromEvidence(ctx, loopID, record, inFlightExecutionID)` (`loop_evidence.go:558`),
+         called from both cold arms on `requestOrderCurrent` only (`component.go:1905`, `component.go:2653`), which
+         then fall through to the ordinary warm apply (`component.go:1749`, `component.go:2451`) — no second apply
+         path for a recovered loop. It ends with `rememberLoopRevision`. **Divergence from the task text:** the
+         retained-RESPONSE read fires on the tool lane only. On the response lane, applying the response is what
+         creates the batch; pre-seating one would add the assistant turn to the conversation twice.
+         `requestOrderUnnamed` and `requestOrderAhead` still retry: neither names a request to rebuild from.
+      5. Tests. Unit: `loop_rebuild_test.go` drives the two manager primitives
+         (`TestARebuiltLoopIsTheRecordPlusItsRetainedRequest`, four arms — full rebuild, orphan assistant repaired
+         away, mismatched request refused, held loop not rebuilt over — and
+         `TestARestoredToolBatchKnowsWhatIsLeftToRun`) and both component seams
+         (`TestAColdResponseRebuildsTheLoopItAnswers`, `TestAColdToolResultRebuildsTheBatchItBelongsTo`).
+
+      **The W2 halves of 4.2** (moved here 2026-09-22, checkpoint-2 review) are REWRITTEN, not deleted, from
+      "retries, writes nothing" to "rebuilds and applies":
+      `tool_result_redelivery_integration_test.go` § "W2: the result was applied in memory and the record never
+      learned it" and `identity_adoption_integration_test.go` § "W2: the dispatch landed and the record never
+      learned it". Both now assert Ack, the replacement HOLDING the loop, and the record moving past the revision
+      the crash left — the invariant that survives either way is that the input is never acknowledged away and the
+      record never moves on a delivery nobody applied. The tool-lane case gained `retainModelResponse`, which
+      publishes the model response to `agent.response.<requestID>` exactly as agentic-model does: a test that calls
+      `HandleModelResponse` directly skips the delivery that would have put the durable fact there, and the rebuild
+      needs it.
+      Recorded residual, not a defect: the record says which executions are APPLIED, never which were DISPATCHED,
+      so the rebuild re-dispatches a sibling the predecessor had already sent. Both cases assert the re-dispatch and
+      name why it is a replay rather than a duplicate execution — the execution identity is derived, not minted
+      (L2), and agentic-tools keys `TOOL_CALL_OUTCOMES` by it.
+
+      **Mutation evidence** (`cp` backup + `md5 -q`, `[applied]` printed between mutating and testing, restore
+      verified by checksum, `git status --porcelain` clean after each):
+      - (i) `restoreLoopFromEvidence` stops remembering the record's revision. `loop_evidence.go`
+        `ec65ad839dff6d229aa583cdbf818ad8` → `b3024025358db0a5c4363037e9b32c3f` → restored
+        `ec65ad839dff6d229aa583cdbf818ad8`. RED: `TestAColdResponseRebuildsTheLoopItAnswers` ("the rebuilt holder
+        could not write the record it had just read"), and both real-NATS W2 cases ("a response/result the rebuilt
+        loop applied is settled, not owed to a process that will never exist").
+      - (ii) `restoreLoopFromRequest` stops calling `RepairToolPairs()`. `state.go`
+        `ceac885addaa74f5d8dcd8fbfc74b2cc` → `d3474b75b5ef734e1875020d92b8f501` → restored
+        `ceac885addaa74f5d8dcd8fbfc74b2cc`. RED:
+        `TestARebuiltLoopIsTheRecordPlusItsRetainedRequest/an assistant turn whose results never arrived is
+        repaired away`.
+      - (iii) `restoreToolBatch` restores the batch without skipping the applied executions. `state.go`
+        `ceac885addaa74f5d8dcd8fbfc74b2cc` → `e5cc0d199aa81fde8f60d803c686006a` → restored
+        `ceac885addaa74f5d8dcd8fbfc74b2cc`. RED: `TestARestoredToolBatchKnowsWhatIsLeftToRun` and
+        `TestAColdToolResultRebuildsTheBatchItBelongsTo` ("the sibling that never ran must be dispatched next; an
+        applied one must not be re-run").
+
+      **Migration note.** `docs/operations/migration-beta162-to-beta163.md` § "A rebuilt loop's conversation is one
+      region" records the one visible consequence of the one-region replay: compaction attribution does not survive
+      a process replacement. No message is lost and none moves, but per-region sizes reset at the replacement. The
+      owner ruled the one-region shape stands with no objection
+      ([issuecomment-5776942078](https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5776942078)).
 
 ## 2. Carrier: order, CAS, identity adoption
 
@@ -354,12 +417,15 @@
       error, never a birth, because birthing on a failed read is a second loop under a name that may already have one.
       The republish arm rebuilds R1 through the ordinary birth path and takes the record's own revision as its own
       (`rememberLoopRevision`, `C:1573`), so the replacement becomes the holder without writing the record again.
-      **Deviation, recorded:** the rebuilt R1 goes out through `publishResults`, which consults `adoptRetainedRequest`
-      first, so an R1 the stream ALREADY retains is adopted rather than published a second time. The task line says
-      "publish it unconditionally with the MsgId, no retained read (Q1)". Q1's point is that a birth must not be
-      blocked behind a retained read, and it is not — adoption is a no-op when nothing is retained, which is the state
-      the ruling describes. Where the two rules meet, publishing a second copy of a request the stream holds under the
-      same name is the thing 2.3 exists to prevent, so the cheaper reading wins; this is the record of it.
+      **Deviation from the task line, RATIFIED by the owner
+      ([issuecomment-5776942078](https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5776942078),
+      2026-09-22, verbatim "1330 agree with recommendation"):** the rebuilt R1 goes out through `publishResults`,
+      which consults `adoptRetainedRequest` first, so an R1 the stream ALREADY retains is adopted rather than
+      published a second time. The task line says "publish it unconditionally with the MsgId, no retained read (Q1)".
+      Q1's point is that a birth must not be blocked behind a retained read, and it is not — adoption is a no-op when
+      nothing is retained, which is the state the ruling describes. Where the two rules meet, publishing a second copy
+      of a request the stream holds under the same name is the thing 2.3 exists to prevent. Q1 is amended to the
+      adopt-not-republish reading; `design.md` § Conformance carries the row.
       Test: `recovery_test.go` `TestTaskRedeliveredToAProcessWithNoMemoryOfItsLoop` — six arms: iteration zero
       republishes R1; the replacement becomes the holder at the record's revision; an advanced loop Acks without
       effect; a settled loop Acks without re-birthing; no record at all is an ordinary birth; an unreadable record
