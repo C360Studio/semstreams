@@ -8,8 +8,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	dto "github.com/prometheus/client_model/go"
@@ -213,62 +215,53 @@ func TestMetricsForwarder_ServiceLifecycle(t *testing.T) {
 	assert.Equal(t, StatusStopped, forwarder.Status())
 }
 
-// TestMetricsForwarder_TickerInterval tests that the ticker fires repeatedly at
-// the configured cadence: within a 350ms window a 100ms ticker produces at least
-// three ticks and no more than a 100ms ticker can. The wall-clock spacing between
-// ticks is deliberately NOT asserted (#1363): under -race on a loaded host one
-// coalesced tick reads as a ~200ms gap, which is scheduling, not the forwarder.
+// TestMetricsForwarder_TickerInterval proves the ticker fires at the configured
+// cadence under controlled time: inside a synctest bubble time.Sleep advances the
+// fake clock, so a 350ms window admits exactly the ticks a 100ms ticker owes
+// (100, 200, 300) on top of the seed publish Start makes immediately. The count
+// is exact in both directions — a ticker that never fires leaves it at one, a
+// faster-than-configured one overshoots — and no goroutine's real scheduling
+// can move it (#1363: a wall-clock spacing assertion, and then a wall-clock
+// upper bound, each failed on a loaded host for scheduling reasons).
+//
+// Cycles are counted as publications of the dedicated test counter's subject,
+// one per gather, not inferred from wall-clock gaps between publishes.
 func TestMetricsForwarder_TickerInterval(t *testing.T) {
-	// Track tick cycles, not individual publishes (multiple metrics can be published per tick)
-	tickCount := 0
-	var tickMu sync.Mutex
-	lastTickTime := time.Time{}
+	synctest.Test(t, func(t *testing.T) {
+		var mu sync.Mutex
+		cycles := 0
+		mockNATS := &metricsForwarderMockNATS{
+			publishFunc: func(_ context.Context, subject string, _ []byte) error {
+				if strings.HasSuffix(subject, ".test_counter") {
+					mu.Lock()
+					cycles++
+					mu.Unlock()
+				}
+				return nil
+			},
+		}
 
-	mockNATS := &metricsForwarderMockNATS{
-		publishFunc: func(ctx context.Context, subject string, data []byte) error {
-			tickMu.Lock()
-			defer tickMu.Unlock()
-			now := time.Now()
-			// Consider publishes within 10ms as part of the same tick
-			if lastTickTime.IsZero() || now.Sub(lastTickTime) > 10*time.Millisecond {
-				tickCount++
-				lastTickTime = now
-			}
-			return nil
-		},
-	}
+		registry := metric.NewMetricsRegistry()
+		counter := prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "test_counter",
+			Help: "Test counter",
+		})
+		registry.PrometheusRegistry().MustRegister(counter)
+		counter.Inc()
 
-	registry := metric.NewMetricsRegistry()
+		forwarder := createTestMetricsForwarder(t, "100ms", mockNATS, registry)
+		require.NoError(t, forwarder.Start(context.Background()))
 
-	// Create counter for testing
-	counter := prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "test_counter",
-		Help: "Test counter",
+		// Fake time: the seed publish lands at 0, then ticks at 100, 200, 300.
+		time.Sleep(350 * time.Millisecond)
+		synctest.Wait()
+
+		require.NoError(t, forwarder.Stop(context.Background()))
+
+		mu.Lock()
+		defer mu.Unlock()
+		assert.Equal(t, 4, cycles, "one seed publish plus one publish per 100ms tick in 350ms")
 	})
-	registry.PrometheusRegistry().MustRegister(counter)
-	counter.Inc()
-
-	// Use 100ms interval for fast test
-	forwarder := createTestMetricsForwarder(t, "100ms", mockNATS, registry)
-
-	ctx := context.Background()
-	err := forwarder.Start(ctx)
-	require.NoError(t, err)
-
-	// Wait for at least 3 tick cycles (~300ms + buffer)
-	time.Sleep(350 * time.Millisecond)
-
-	err = forwarder.Stop(context.Background())
-	require.NoError(t, err)
-
-	// Verify multiple tick cycles occurred
-	tickMu.Lock()
-	defer tickMu.Unlock()
-
-	assert.GreaterOrEqual(t, tickCount, 3, "should have at least 3 tick cycles")
-	// A shorter interval than configured would fire many more times in the same
-	// window (a 10ms ticker would produce ~35); load can only lower the count.
-	assert.LessOrEqual(t, tickCount, 5, "a 100ms ticker cannot fire more than 5 times in 350ms")
 }
 
 // TestMetricsForwarder_GatherMetrics tests metrics gathering from registry
