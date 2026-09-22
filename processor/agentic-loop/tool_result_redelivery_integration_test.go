@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
@@ -375,4 +376,140 @@ func TestToolResultRedeliveredToAReplacementProcess(t *testing.T) {
 			"the re-dispatched sibling must carry the identity its first dispatch derived")
 		require.Equal(t, loopID, routed)
 	})
+
+	// The qualification the two arms above do not carry, and the one the
+	// published layers used to omit: a rebuild is not a reprieve.
+	//
+	// `TimeoutAt` is written at birth and lives on the record, so the rebuild
+	// seats it along with everything else (`state.go`, restoreLoopFromRequest).
+	// The warm apply then checks it (`handlers.go` HandleToolResult) and a
+	// replacement whose gap outran the loop's own deadline rebuilds the loop and
+	// immediately fails it. That is the DOCUMENTED behaviour, not a defect: the
+	// alternative — refreshing the deadline on rebuild, or excluding downtime
+	// from it — would let a loop outlive the budget its caller set, which is an
+	// owner ruling and not a recovery decision.
+	//
+	// The gap is expressed the way production expresses it — wall clock against
+	// the record's own `TimeoutAt` — rather than by rewriting the record, so
+	// what the test proves is what an operator would see. The deadline is short
+	// because a test cannot wait out a 120s one; the predecessor's whole run
+	// above it takes milliseconds.
+	//
+	// spec: agentic-loop / The loop record names its outstanding request
+	t.Run("the replacement gap outran the loop's deadline: rebuilt, then failed", func(t *testing.T) {
+		config := DefaultConfig()
+		config.Timeout = shortLoopDeadline.String()
+
+		predecessor, handler := startLoopProcess(t, client, config)
+		loopID, firstRequest := bornLoop(t, predecessor, handler, "task-tool-deadline")
+		requestSubject := "agent.request." + loopID
+
+		batch := agentic.AgentResponse{
+			RequestID:    firstRequest,
+			Status:       agentic.StatusToolCall,
+			FinishReason: "tool_calls",
+			Message: agentic.ChatMessage{
+				Role: "assistant",
+				ToolCalls: []agentic.ToolCall{
+					{ID: "call-deadline-a", Name: "deadline_tool"},
+					{ID: "call-deadline-b", Name: "deadline_tool"},
+				},
+			},
+		}
+		retainModelResponse(t, client, batch)
+		dispatch, err := handler.HandleModelResponse(t.Context(), loopID, batch)
+		require.NoError(t, err)
+		require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch, publishThenWrite))
+		call, _ := dispatchedToolCall(t, dispatch)
+
+		predecessor.loopsBucket = crashedBeforeRecordUpdate{KeyValue: predecessor.loopsBucket}
+		result := agentic.ToolResult{
+			CallID: call.ID, Name: call.Name, Content: "the tool answered", LoopID: loopID,
+			RequestID: call.RequestID, ExecutionID: call.ExecutionID, CallOrdinal: call.CallOrdinal,
+		}
+		_, died := deliverToolResult(t, predecessor, result)
+		require.Equal(t, natsclient.DeliveryDecisionQuarantine, died.Decision())
+
+		crashed := loopRecordOf(t, predecessor, loopID)
+		require.False(t, crashed.entity.TimeoutAt.IsZero(),
+			"the deadline this arm is about must be ON the record, or the rebuild inherits nothing")
+		require.False(t, crashed.entity.State.IsTerminal())
+		waitPastLoopDeadline(t, crashed.entity.TimeoutAt)
+
+		replacement, replacementHandler := startLoopProcess(t, client, config)
+		_, delivered := deliverToolResult(t, replacement, result)
+
+		// Rebuilt, then failed, and BOTH halves are read off durable state. The
+		// in-process loop is deliberately not the witness: the terminal
+		// transition releases it, so by the time the delivery returns, GetLoop
+		// reports "not found" for a loop this process really did hold.
+		//
+		// The failure event is the proof the rebuild ran. It is built by
+		// HandleToolResult, which only runs for a loop this process HOLDS —
+		// before L4a the delivery was refused for a loop nobody holds and no
+		// deadline was ever consulted.
+		failureSubject := "agent.failed." + loopID
+		require.Equal(t, uint64(1), messagesOn(t, client, failureSubject),
+			"a rebuilt-then-expired loop settles on agent.failed, where a reactive consumer can see it; "+
+				"no event here means the delivery was refused instead of rebuilt")
+		require.Equal(t, "loop timeout exceeded", failureReasonOn(t, client, failureSubject))
+		_, held := replacementHandler.loopManager.GetLoop(loopID)
+		require.Error(t, held, "a settled loop releases its process state")
+
+		expired := loopRecordOf(t, replacement, loopID)
+		require.Equal(t, crashed.entity.TimeoutAt.UTC(), expired.entity.TimeoutAt.UTC(),
+			"the rebuilt loop carries the record's ORIGINAL deadline; nothing refreshes it on rebuild")
+		require.Equal(t, agentic.LoopStateFailed, expired.entity.State)
+		require.Greater(t, expired.revision, crashed.revision,
+			"the failure is durable, not just published")
+
+		// The delivery is ACKNOWLEDGED, and that is the sharp edge: the loop
+		// settled terminally, its failure is published and durable, and nothing
+		// is owed to anyone — so this shape is INVISIBLE to a consumer-health
+		// or settlement check, which sees a clean ack. The only place it shows
+		// up is agent.failed, which is why that is what this arm asserts on.
+		require.Equal(t, natsclient.DeliveryDecisionAck, delivered.Decision(),
+			"a settled failure owes nobody a redelivery; this is why the shape hides from settlement checks")
+		require.Equal(t, uint64(1), messagesOn(t, client, requestSubject),
+			"an expired loop mints no further request")
+	})
+}
+
+// shortLoopDeadline is the loop timeout the deadline arm births under. It has
+// to be long enough that the predecessor's whole run — birth, model response,
+// dispatch, the crashed delivery — finishes inside it on a loaded machine, and
+// short enough that a test can wait it out. The predecessor's run is
+// sub-millisecond work against a local broker; a second is three orders of
+// magnitude of headroom.
+const shortLoopDeadline = time.Second
+
+// waitPastLoopDeadline blocks until the loop's own recorded deadline is in the
+// past, then adds a small margin so the comparison cannot land on the boundary.
+// It waits on the RECORD's timestamp rather than on a duration the test picked,
+// so the arm stays correct if the deadline above ever changes.
+func waitPastLoopDeadline(t *testing.T, deadline time.Time) {
+	t.Helper()
+	const boundaryMargin = 50 * time.Millisecond
+	remaining := time.Until(deadline) + boundaryMargin
+	require.Less(t, remaining, 5*time.Second,
+		"the recorded deadline is further out than this arm budgets for")
+	if remaining > 0 {
+		time.Sleep(remaining)
+	}
+	require.True(t, time.Now().After(deadline), "the loop's recorded deadline must be in the past")
+}
+
+// failureReasonOn reads the error the loop's failure event carries, through the
+// same envelope the component published it in.
+func failureReasonOn(t *testing.T, client *natsclient.Client, subject string) string {
+	t.Helper()
+	stream, err := client.GetStream(t.Context(), loopStreamName)
+	require.NoError(t, err)
+	stored, err := stream.GetLastMsgForSubject(t.Context(), subject)
+	require.NoError(t, err)
+	var envelope struct {
+		Payload agentic.LoopFailedEvent `json:"payload"`
+	}
+	require.NoError(t, json.Unmarshal(stored.Data, &envelope))
+	return envelope.Payload.Error
 }

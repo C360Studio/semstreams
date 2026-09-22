@@ -741,6 +741,29 @@
 
 ## 6. Verification (before the push, every time)
 
+- [x] 5.5 **A rebuilt loop keeps its record's deadline** (checkpoint-4 review HIGH-1; a residual recorded, not a
+      ruling). `TimeoutAt` is written at birth and lives on the record, so the cold rebuild seats it with everything
+      else and the warm apply's `IsTimedOut` fails the loop on the FIRST delivery whenever the replacement gap
+      outran `timeout`. Three published layers said a current-naming delivery "rebuilds rather than refuses"
+      without that qualification.
+      **Documented, behaviour unchanged.** Refreshing the deadline on rebuild, or excluding downtime from it, would
+      let a loop outlive the budget its caller set — an owner ruling, not a recovery decision.
+      Landed: one sentence each in `processor/agentic-loop/doc.go` § Recovery across a process replacement and
+      `docs/operations/migration-beta162-to-beta163.md` § "A rebuilt loop's conversation is one region" (with the
+      operator action: size `timeout` above the replacement window); delta scenario "A rebuilt loop keeps its
+      record's deadline"; conformance row in `design.md` § 9.
+      Test: a third arm of `TestToolResultRedeliveredToAReplacementProcess`,
+      "the replacement gap outran the loop's deadline: rebuilt, then failed". It builds the same W2 residue under a
+      short loop deadline, waits past the RECORD's own `TimeoutAt` (never a duration the test picked, and never by
+      rewriting the record), then delivers to the replacement.
+      **Measured correction to the review's expectation.** The delivery is `Ack`, not a refusal: the loop settles
+      terminally, its failure is durable, and nothing is owed. That is the sharp edge — the shape is INVISIBLE to a
+      consumer-settlement or health check and shows up only on `agent.failed.<loopID>`, which is what the arm
+      asserts on. `GetLoop` is likewise not the witness that the rebuild happened, because the terminal transition
+      releases the loop; the failure event is, since only a loop this process HOLDS can produce one.
+      Mutant (`cp` backup + `md5 -q`, `[applied]` printed between mutating and testing, restore verified by
+      checksum): MUTANT_RECORD
+
 - [ ] 6.1 `task check:push` (schema drift expected empty — `LoopEntity` is in no schema); `go run ./cmd/entity-id-audit .`
       green.
       **NOT ticked: `task check:push` is RED on this host, exit 201, 631s wall.** One package failed, and it failed

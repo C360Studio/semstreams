@@ -244,6 +244,14 @@
 // refusing it; the replayed conversation lands in one region, so compaction attribution
 // starts over (docs/concepts/13-agentic-systems.md).
 //
+// A rebuild is not a reprieve. TimeoutAt is written at birth and lives on the record, so a
+// rebuilt loop keeps its ORIGINAL deadline; nothing refreshes it and downtime is not
+// excluded from it. A replacement whose gap outran that deadline therefore rebuilds the
+// loop and then fails it on the first delivery, publishing a terminal on
+// agent.failed.<loopID> with the reason "loop timeout exceeded" - and the delivery is
+// ACKNOWLEDGED, because the loop settled and nothing is owed. Size a loop's timeout above
+// the replacement window you expect to operate under.
+//
 // An approval deadline is not recovered. PendingApproval is durable, but the timer is the
 // snapshot in approval_sweeper.go over the loops this process holds, and no startup pass
 // reads the bucket to restore one. A replacement holds a deadline again only for a loop

@@ -55,6 +55,15 @@ cancelled.
   `iterations = N+1`, `pending_tool_results` empty, any `pending_approval` cleared with `state = running`), then
   classifies the result as older, acknowledges it, and publishes nothing
 
+#### Scenario: A rebuilt loop keeps its record's deadline
+
+- **GIVEN** a loop whose record carries a `timeout_at` that has already passed, and a replacement process with no
+  memory of the loop
+- **WHEN** an input naming the request the record names is delivered to the replacement
+- **THEN** the replacement rebuilds the loop with the record's original `timeout_at` — the deadline is neither
+  refreshed nor extended by the time the process was down — and the rebuilt loop fails on that delivery, writing the
+  record terminal and publishing a loop-failed event carrying the timeout reason, and the delivery is acknowledged
+
 #### Scenario: A replaced process re-arms no approval deadline
 
 - **GIVEN** a loop whose record is `awaiting_approval` and whose process was replaced

@@ -1748,6 +1748,14 @@ Two things change at a replacement, neither of which needs an action:
   message has them re-seated together at the front, which is where `GetContext()` renders them anyway; a request
   that interleaved a system message with the conversation does not get that interleaving back.
 
+**A rebuild is not a reprieve.** `TimeoutAt` is written at loop birth and lives on the record, so a rebuilt loop
+keeps its ORIGINAL deadline: nothing refreshes it, and the time the process was down is not excluded from it. A
+replacement whose gap outran that deadline rebuilds the loop and then fails it on the very first delivery, with a
+terminal on `agent.failed.<loopID>` carrying `loop timeout exceeded`. The delivery itself is ACKNOWLEDGED — the loop
+settled and nothing is owed — so this shape is invisible to consumer-health and settlement checks and shows up only
+on `agent.failed`. **Action:** size `timeout` on the `agentic-loop` component above the replacement window you
+expect to operate under. A 30s loop timeout and a 60s rolling restart mean every in-flight loop dies on recovery.
+
 What is deliberately NOT replayed is the per-iteration framing. A retained request is not the loop's conversation —
 the loop prepends an `[Iteration Budget]` line, and when the loop has a working list a `[Working list …]` block,
 before publishing. Both are `system` messages that belong to that one request. The rebuild drops the leading run of
