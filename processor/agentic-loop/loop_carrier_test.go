@@ -328,7 +328,7 @@ func TestColdReadAdoptsTheNewestRetainedRequestFirst(t *testing.T) {
 			e.PendingToolResults = map[string]agentic.ToolResult{"exec-1": {ExecutionID: "exec-1"}}
 		})
 
-		adopted, adoptErr := c.adoptNewerRetainedRequest(t.Context(), loopID, record)
+		adopted, adoptErr := c.adoptNewerRetainedRequest(t.Context(), loopID)
 		require.NoError(t, adoptErr)
 		require.Equal(t, retained, adopted.entity.PublishedRequestID,
 			"the classification that runs next must be given the record this write left")
@@ -346,7 +346,7 @@ func TestColdReadAdoptsTheNewestRetainedRequestFirst(t *testing.T) {
 		retained := looprequest.ID{LoopID: loopID, Iteration: 3, Retry: 0}.String()
 		c := evidenceComponent(t, retained)
 		gate := looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String()
-		record := coldRecord(t, c, loopID, func(e *agentic.LoopEntity) {
+		coldRecord(t, c, loopID, func(e *agentic.LoopEntity) {
 			e.PublishedRequestID = gate
 			e.Iterations = 1
 			e.State = agentic.LoopStateAwaitingApproval
@@ -354,7 +354,7 @@ func TestColdReadAdoptsTheNewestRetainedRequestFirst(t *testing.T) {
 			e.PendingApproval = &agentic.PendingApprovalState{RequestID: gate, CallID: "call-1", ToolName: "t"}
 		})
 
-		_, adoptErr := c.adoptNewerRetainedRequest(t.Context(), loopID, record)
+		_, adoptErr := c.adoptNewerRetainedRequest(t.Context(), loopID)
 		require.NoError(t, adoptErr)
 
 		written := decodeRecord(t, c, loopID)
@@ -366,62 +366,62 @@ func TestColdReadAdoptsTheNewestRetainedRequestFirst(t *testing.T) {
 	t.Run("the current request writes nothing", func(t *testing.T) {
 		current := looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String()
 		c := evidenceComponent(t, current)
-		record := coldRecord(t, c, loopID, func(e *agentic.LoopEntity) {
+		coldRecord(t, c, loopID, func(e *agentic.LoopEntity) {
 			e.PublishedRequestID = current
 			e.Iterations = 1
 		})
 		bucket := c.loopsBucket.(*recordingLoopBucket)
 		bucket.resetWritten()
 
-		_, adoptErr := c.adoptNewerRetainedRequest(t.Context(), loopID, record)
+		_, adoptErr := c.adoptNewerRetainedRequest(t.Context(), loopID)
 		require.NoError(t, adoptErr)
 		require.Empty(t, bucket.written(), "an already-current record is not rewritten")
 	})
 
 	t.Run("no retained request writes nothing", func(t *testing.T) {
 		c := evidenceComponent(t, "")
-		record := coldRecord(t, c, loopID, func(e *agentic.LoopEntity) {
+		coldRecord(t, c, loopID, func(e *agentic.LoopEntity) {
 			e.PublishedRequestID = looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String()
 			e.Iterations = 1
 		})
 		bucket := c.loopsBucket.(*recordingLoopBucket)
 		bucket.resetWritten()
 
-		_, adoptErr := c.adoptNewerRetainedRequest(t.Context(), loopID, record)
+		_, adoptErr := c.adoptNewerRetainedRequest(t.Context(), loopID)
 		require.NoError(t, adoptErr)
 		require.Empty(t, bucket.written())
 	})
 
 	t.Run("a record naming a request the stream never retained quarantines", func(t *testing.T) {
 		c := evidenceComponent(t, looprequest.ID{LoopID: loopID, Iteration: 1, Retry: 0}.String())
-		record := coldRecord(t, c, loopID, func(e *agentic.LoopEntity) {
+		coldRecord(t, c, loopID, func(e *agentic.LoopEntity) {
 			e.PublishedRequestID = looprequest.ID{LoopID: loopID, Iteration: 4, Retry: 0}.String()
 			e.Iterations = 3
 		})
 
-		_, err := c.adoptNewerRetainedRequest(t.Context(), loopID, record)
+		_, err := c.adoptNewerRetainedRequest(t.Context(), loopID)
 		require.Error(t, err)
 		require.True(t, errs.IsFatal(err))
 	})
 
 	t.Run("an unparseable retained request quarantines", func(t *testing.T) {
 		c := evidenceComponent(t, "not-a-request-id")
-		record := coldRecord(t, c, loopID, func(e *agentic.LoopEntity) {
+		coldRecord(t, c, loopID, func(e *agentic.LoopEntity) {
 			e.PublishedRequestID = looprequest.ID{LoopID: loopID, Iteration: 1, Retry: 0}.String()
 		})
 
-		_, err := c.adoptNewerRetainedRequest(t.Context(), loopID, record)
+		_, err := c.adoptNewerRetainedRequest(t.Context(), loopID)
 		require.Error(t, err)
 		require.True(t, errs.IsFatal(err))
 	})
 
 	t.Run("an unparseable record request quarantines", func(t *testing.T) {
 		c := evidenceComponent(t, looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String())
-		record := coldRecord(t, c, loopID, func(e *agentic.LoopEntity) {
+		coldRecord(t, c, loopID, func(e *agentic.LoopEntity) {
 			e.PublishedRequestID = "not-a-request-id"
 		})
 
-		_, err := c.adoptNewerRetainedRequest(t.Context(), loopID, record)
+		_, err := c.adoptNewerRetainedRequest(t.Context(), loopID)
 		require.Error(t, err)
 		require.True(t, errs.IsFatal(err))
 	})
@@ -590,12 +590,12 @@ func TestAColdReadRetainsNoRevisionForALoopItDoesNotHold(t *testing.T) {
 	t.Run("nor does the adoption that follows one", func(t *testing.T) {
 		retained := looprequest.ID{LoopID: loopID, Iteration: 3, Retry: 0}.String()
 		c := evidenceComponent(t, retained)
-		record := coldRecord(t, c, loopID, func(e *agentic.LoopEntity) {
+		coldRecord(t, c, loopID, func(e *agentic.LoopEntity) {
 			e.PublishedRequestID = looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String()
 			e.Iterations = 1
 		})
 
-		_, adoptErr := c.adoptNewerRetainedRequest(t.Context(), loopID, record)
+		_, adoptErr := c.adoptNewerRetainedRequest(t.Context(), loopID)
 		require.NoError(t, adoptErr)
 
 		require.Equal(t, retained, decodeRecord(t, c, loopID).PublishedRequestID)

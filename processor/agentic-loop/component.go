@@ -1832,53 +1832,50 @@ func (c *Component) extractAgentResponse(data []byte) (*agentic.AgentResponse, s
 // opposite case — the loop is live and still owed this response.
 func (c *Component) settleResponseWithoutLoop(ctx context.Context, requestID string) error {
 	loopID := loopIDFromStructuredID(requestID, ":req:")
-	record := c.readLoopRecord(ctx, loopID)
-	switch record.presence {
-	case loopPresenceStale:
+	// Step 0 before anything else (#1330, design § 3.6): read the record and
+	// make it name the loop's newest retained request, so whichever process
+	// takes this delivery classifies against a current record rather than one
+	// its predecessor died before updating. The read and the adopting write
+	// are one critical section inside it.
+	adopted, err := c.adoptNewerRetainedRequest(ctx, loopID)
+	if err != nil {
+		return err
+	}
+	if adopted.presence == loopPresenceStale {
 		c.logger.Warn("No loop found for request", "request_id", requestID)
 		if c.metrics != nil {
 			c.metrics.recordModelResponseDropped("stale_request_id")
 		}
 		return nil
-	default:
-		// Warned, not counted. The delivery is still outstanding — it retries —
-		// and model_responses_dropped_total means work this process decided not
-		// to do. Counting a retry there would report one discarded response per
-		// redelivery for a response nothing has discarded, and the active
-		// delta says a live loop carries no expected-drop count at all. The
-		// cancel lane already drew this line (signals_dropped_total's help
-		// text); these two lanes had not.
-		// Step 0 before anything else (#1330, design § 3.6): make the record
-		// name the loop's newest retained request, so whichever process takes
-		// this delivery classifies against a current record rather than one
-		// its predecessor died before updating.
-		adopted, err := c.adoptNewerRetainedRequest(ctx, loopID, record)
-		if err != nil {
-			return err
-		}
-		// A response for a request the loop has moved past is owed to nobody:
-		// no process, warm or cold, can advance a loop with it. That is the
-		// one case this arm acknowledges rather than retrying (#1330,
-		// design § 5.2).
-		switch orderAgainstPublished(loopID, adopted.entity.PublishedRequestID, requestID) {
-		case requestOrderApplied:
-			c.logger.WarnContext(ctx, "Model response acknowledged without effect — its request is older than the loop's",
-				"loop_id", loopID, "request_id", requestID,
-				"published_request_id", adopted.entity.PublishedRequestID)
-			if c.metrics != nil {
-				c.metrics.recordModelResponseDropped("superseded_request")
-			}
-			return nil
-		case requestOrderForeign:
-			return errs.WrapFatal(
-				fmt.Errorf("loop %s: response names request %q, which is not a request of this loop",
-					loopID, requestID),
-				"agentic-loop", "settleResponseWithoutLoop", "classify the response against the loop record")
-		}
-		c.logger.Warn("Model response names a loop this process does not hold",
-			"request_id", requestID, "loop_id", loopID)
-		return fmt.Errorf("loop %q for request %q is not held by this process", loopID, requestID)
 	}
+	// Warned, not counted below. The delivery is still outstanding — it
+	// retries — and model_responses_dropped_total means work this process
+	// decided not to do. Counting a retry there would report one discarded
+	// response per redelivery for a response nothing has discarded. The cancel
+	// lane already drew this line (signals_dropped_total's help text); these
+	// two lanes had not.
+	//
+	// A response for a request the loop has moved past is owed to nobody: no
+	// process, warm or cold, can advance a loop with it. That is the one case
+	// this arm acknowledges rather than retrying (#1330, design § 5.2).
+	switch orderAgainstPublished(loopID, adopted.entity.PublishedRequestID, requestID) {
+	case requestOrderApplied:
+		c.logger.WarnContext(ctx, "Model response acknowledged without effect — its request is older than the loop's",
+			"loop_id", loopID, "request_id", requestID,
+			"published_request_id", adopted.entity.PublishedRequestID)
+		if c.metrics != nil {
+			c.metrics.recordModelResponseDropped("superseded_request")
+		}
+		return nil
+	case requestOrderForeign:
+		return errs.WrapFatal(
+			fmt.Errorf("loop %s: response names request %q, which is not a request of this loop",
+				loopID, requestID),
+			"agentic-loop", "settleResponseWithoutLoop", "classify the response against the loop record")
+	}
+	c.logger.Warn("Model response names a loop this process does not hold",
+		"request_id", requestID, "loop_id", loopID)
+	return fmt.Errorf("loop %q for request %q is not held by this process", loopID, requestID)
 }
 
 // handleLoopFailure records failure metrics and publishes failure events, and
@@ -2545,9 +2542,12 @@ func (c *Component) settleToolResultWithoutLoop(ctx context.Context, toolResult 
 	if loopID == "" {
 		loopID = loopIDFromStructuredID(toolResult.CallID, ":tool:")
 	}
-	record := c.readLoopRecord(ctx, loopID)
-	switch record.presence {
-	case loopPresenceStale:
+	// Step 0 before anything else, as on the response lane above.
+	adopted, err := c.adoptNewerRetainedRequest(ctx, loopID)
+	if err != nil {
+		return err
+	}
+	if adopted.presence == loopPresenceStale {
 		// Named for the identity the lookup actually failed on: the routing
 		// entry is keyed by execution identity, so a miss is a stale
 		// execution, not a stale call id. metrics.go documents the same word.
@@ -2557,39 +2557,34 @@ func (c *Component) settleToolResultWithoutLoop(ctx context.Context, toolResult 
 			c.metrics.recordToolResultDropped("stale_execution")
 		}
 		return nil
-	default:
-		// Warned, not counted, for the same reason as the response lane above:
-		// a retried tool result is not a dropped one, and an executor's work is
-		// still owed to whichever process holds that loop.
-		// Step 0 before anything else, as on the response lane above.
-		adopted, err := c.adoptNewerRetainedRequest(ctx, loopID, record)
-		if err != nil {
-			return err
-		}
-		// Then classify against the record step 0 brought forward. This is the
-		// cold half of the tool lane's classification (#1330, design § 5.3):
-		// the process that will take the redelivery is not this one, but a
-		// result the loop has already moved past is owed to nobody at all.
-		switch orderAgainstPublished(loopID, adopted.entity.PublishedRequestID, toolResult.RequestID) {
-		case requestOrderApplied:
-			c.logger.WarnContext(ctx, "Tool result acknowledged without effect — its request is older than the loop's",
-				"loop_id", loopID, "execution_id", toolResult.ExecutionID,
-				"result_request_id", toolResult.RequestID,
-				"published_request_id", adopted.entity.PublishedRequestID)
-			if c.metrics != nil {
-				c.metrics.recordToolResultDropped("older_request")
-			}
-			return nil
-		case requestOrderForeign:
-			return errs.WrapFatal(
-				fmt.Errorf("loop %s: tool result names request %q, which is not a request of this loop",
-					loopID, toolResult.RequestID),
-				"agentic-loop", "settleToolResultWithoutLoop", "classify the tool result against the loop record")
-		}
-		c.logger.Warn("Tool result names a loop this process does not hold",
-			"execution_id", toolResult.ExecutionID, "call_id", toolResult.CallID, "loop_id", loopID)
-		return fmt.Errorf("loop %q for tool call %q is not held by this process", loopID, toolResult.CallID)
 	}
+	// Warned, not counted below, for the same reason as the response lane
+	// above: a retried tool result is not a dropped one, and an executor's
+	// work is still owed to whichever process holds that loop.
+	//
+	// Classify against the record step 0 brought forward. This is the cold
+	// half of the tool lane's classification (#1330, design § 5.3): the
+	// process that will take the redelivery is not this one, but a result the
+	// loop has already moved past is owed to nobody at all.
+	switch orderAgainstPublished(loopID, adopted.entity.PublishedRequestID, toolResult.RequestID) {
+	case requestOrderApplied:
+		c.logger.WarnContext(ctx, "Tool result acknowledged without effect — its request is older than the loop's",
+			"loop_id", loopID, "execution_id", toolResult.ExecutionID,
+			"result_request_id", toolResult.RequestID,
+			"published_request_id", adopted.entity.PublishedRequestID)
+		if c.metrics != nil {
+			c.metrics.recordToolResultDropped("older_request")
+		}
+		return nil
+	case requestOrderForeign:
+		return errs.WrapFatal(
+			fmt.Errorf("loop %s: tool result names request %q, which is not a request of this loop",
+				loopID, toolResult.RequestID),
+			"agentic-loop", "settleToolResultWithoutLoop", "classify the tool result against the loop record")
+	}
+	c.logger.Warn("Tool result names a loop this process does not hold",
+		"execution_id", toolResult.ExecutionID, "call_id", toolResult.CallID, "loop_id", loopID)
+	return fmt.Errorf("loop %q for tool call %q is not held by this process", loopID, toolResult.CallID)
 }
 
 // publishResults publishes all output messages from a handler result using JetStream.

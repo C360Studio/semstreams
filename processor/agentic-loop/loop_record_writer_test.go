@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
 )
@@ -92,4 +93,69 @@ func TestTwoLanesWritingOneLoopDoNotRefuseEachOther(t *testing.T) {
 	_, err := c.handler.GetLoop(loopID)
 	require.NoError(t, err,
 		"a loop nobody else wrote must not be released — that is the ownership loss the CI run reported")
+}
+
+// TestAColdAdoptAndAWarmWriteOfOneLoopDoNotRefuseEachOther extends the rule
+// above to the writer it did not cover.
+//
+// Step 0's adopting compare-and-swap was the one loop-record write outside
+// loopRecordMu, and its read lived in the caller — two unlocked steps around a
+// CAS. It is reachable on a loop this very process holds warm: the tool lane
+// falls into the cold arm whenever the execution's routing entry has already
+// been drained (GetAndClearToolResults takes toolCallToLoop with it), so a
+// redelivered result can run step 0 while the carrier is mid-write. Reading
+// the record before the carrier commits and swapping after it did is a refusal
+// with no foreign writer behind it.
+//
+// One rule, stated once: every loop-record write happens under loopRecordMu
+// with the read it compare-and-swaps against in the same critical section.
+//
+// The one-second window is a NEGATIVE assertion with no sequencing role, as in
+// the test above; the started channel is what keeps it from passing vacuously
+// on a goroutine that never ran.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestAColdAdoptAndAWarmWriteOfOneLoopDoNotRefuseEachOther(t *testing.T) {
+	c, base, loopID := carrierLoop(t)
+	retained := looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String()
+	c.requestEvidence = stubEvidenceReader{requestID: retained}
+	bucket := &barrierLoopBucket{
+		recordingLoopBucket: base,
+		entered:             make(chan string, 4),
+		release:             make(chan struct{}),
+	}
+	c.loopsBucket = bucket
+	var once sync.Once
+	releaseWarm := func() { once.Do(func() { close(bucket.release) }) }
+	t.Cleanup(releaseWarm)
+
+	warm := make(chan error, 1)
+	go func() { warm <- c.persistLoopState(context.Background(), loopID) }()
+	require.Equal(t, loopID, <-bucket.entered,
+		"the warm writer must be inside its own compare-and-swap before the cold adopt starts")
+
+	started := make(chan struct{})
+	cold := make(chan error, 1)
+	go func() {
+		close(started)
+		_, err := c.adoptNewerRetainedRequest(context.Background(), loopID)
+		cold <- err
+	}()
+	<-started
+
+	select {
+	case <-bucket.entered:
+		t.Fatal("the cold adopt reached the bucket while the warm writer was still inside its " +
+			"compare-and-swap: step 0's read and write are not one critical section, so one of " +
+			"the two writes is refused with no foreign process behind it")
+	case <-time.After(time.Second):
+	}
+
+	releaseWarm()
+	require.NoError(t, <-warm, "the warm write was refused by a revision its own process had moved")
+	require.NoError(t, <-cold, "the cold adopt was refused by a revision its own process had moved")
+
+	require.Equal(t, []string{loopID, loopID}, bucket.written(), "both writers must have committed")
+	require.Equal(t, retained, decodeRecord(t, c, loopID).PublishedRequestID,
+		"the adopt ran last, so the record must name what the stream retains")
 }

@@ -281,15 +281,40 @@ func (c *Component) adoptRetainedRequest(ctx context.Context, loopID, requestID 
 //
 // Nothing is synthesised and no message body is read beyond its RequestID.
 //
+// The record is read and written inside ONE critical section (loopRecordMu),
+// which is the rule every loop-record write in this process follows — the
+// carrier's is at persistLoopState, birth's at createLoopState. A revision
+// observed outside the lock is stale the moment another lane of this process
+// commits, and this write's compare-and-swap exists to report a SECOND
+// PROCESS, not a sibling lane. The retained-request read is inside it too:
+// step 0's whole decision is "does the stream hold something newer than the
+// record", and reading the two either side of a concurrent advance would order
+// a record against a stream snapshot taken before it.
+//
 // It returns the record the classification that follows must use: the adopted
-// one at the revision the adopting write committed, or the one it was given
-// when there was nothing to adopt. Reporting the CAS's own resulting revision
+// one at the revision the adopting write committed, or the one it read when
+// there was nothing to adopt. Reporting the CAS's own resulting revision
 // rather than leaving the caller to re-read is what keeps the classification
 // and the write bound to the same observation (#1330, I1–I4).
-func (c *Component) adoptNewerRetainedRequest(
-	ctx context.Context, loopID string, record loopRecord,
-) (loopRecord, error) {
+//
+// Residual, stated rather than discovered: this write is deliberately not
+// remembered as a revision for the loop, because the process running step 0
+// does not hold the loop. When it happens to hold it anyway — the tool lane
+// reaches the cold arm whenever the execution's routing entry has been drained
+// — the warm lane's next compare-and-swap is refused and the loop is released,
+// exactly as a genuine foreign writer's commit would leave it. That is the
+// designed outcome of a lost CAS, and the delivery it releases is rebuilt by
+// the cold rebuild (task 1.2), not by a second in-memory path here.
+func (c *Component) adoptNewerRetainedRequest(ctx context.Context, loopID string) (loopRecord, error) {
+	c.loopRecordMu.Lock()
+	defer c.loopRecordMu.Unlock()
+
+	record := c.readLoopRecord(ctx, loopID)
 	switch record.presence {
+	case loopPresenceStale:
+		// No record, or a settled one. There is nothing to bring forward and
+		// nothing any process can still apply; the caller acknowledges.
+		return record, nil
 	case loopPresenceUnknown:
 		// Step 0 adopts INTO a record, so a record that could not be READ —
 		// no bucket, a transient KV error, bytes that did not decode — has
