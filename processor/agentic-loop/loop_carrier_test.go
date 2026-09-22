@@ -326,7 +326,12 @@ func TestColdReadAdoptsTheNewestRetainedRequestFirst(t *testing.T) {
 			e.PendingToolResults = map[string]agentic.ToolResult{"exec-1": {ExecutionID: "exec-1"}}
 		})
 
-		require.NoError(t, c.adoptNewerRetainedRequest(t.Context(), loopID, record))
+		adopted, adoptErr := c.adoptNewerRetainedRequest(t.Context(), loopID, record)
+		require.NoError(t, adoptErr)
+		require.Equal(t, retained, adopted.entity.PublishedRequestID,
+			"the classification that runs next must be given the record this write left")
+		require.Greater(t, adopted.revision, record.revision,
+			"the adopt reports the revision its own compare-and-swap committed")
 
 		written := decodeRecord(t, c, loopID)
 		require.Equal(t, retained, written.PublishedRequestID)
@@ -347,7 +352,8 @@ func TestColdReadAdoptsTheNewestRetainedRequestFirst(t *testing.T) {
 			e.PendingApproval = &agentic.PendingApprovalState{RequestID: gate, CallID: "call-1", ToolName: "t"}
 		})
 
-		require.NoError(t, c.adoptNewerRetainedRequest(t.Context(), loopID, record))
+		_, adoptErr := c.adoptNewerRetainedRequest(t.Context(), loopID, record)
+		require.NoError(t, adoptErr)
 
 		written := decodeRecord(t, c, loopID)
 		require.Equal(t, retained, written.PublishedRequestID)
@@ -365,7 +371,8 @@ func TestColdReadAdoptsTheNewestRetainedRequestFirst(t *testing.T) {
 		bucket := c.loopsBucket.(*recordingLoopBucket)
 		bucket.resetWritten()
 
-		require.NoError(t, c.adoptNewerRetainedRequest(t.Context(), loopID, record))
+		_, adoptErr := c.adoptNewerRetainedRequest(t.Context(), loopID, record)
+		require.NoError(t, adoptErr)
 		require.Empty(t, bucket.written(), "an already-current record is not rewritten")
 	})
 
@@ -378,7 +385,8 @@ func TestColdReadAdoptsTheNewestRetainedRequestFirst(t *testing.T) {
 		bucket := c.loopsBucket.(*recordingLoopBucket)
 		bucket.resetWritten()
 
-		require.NoError(t, c.adoptNewerRetainedRequest(t.Context(), loopID, record))
+		_, adoptErr := c.adoptNewerRetainedRequest(t.Context(), loopID, record)
+		require.NoError(t, adoptErr)
 		require.Empty(t, bucket.written())
 	})
 
@@ -389,7 +397,7 @@ func TestColdReadAdoptsTheNewestRetainedRequestFirst(t *testing.T) {
 			e.Iterations = 3
 		})
 
-		err := c.adoptNewerRetainedRequest(t.Context(), loopID, record)
+		_, err := c.adoptNewerRetainedRequest(t.Context(), loopID, record)
 		require.Error(t, err)
 		require.True(t, errs.IsFatal(err))
 	})
@@ -400,7 +408,7 @@ func TestColdReadAdoptsTheNewestRetainedRequestFirst(t *testing.T) {
 			e.PublishedRequestID = looprequest.ID{LoopID: loopID, Iteration: 1, Retry: 0}.String()
 		})
 
-		err := c.adoptNewerRetainedRequest(t.Context(), loopID, record)
+		_, err := c.adoptNewerRetainedRequest(t.Context(), loopID, record)
 		require.Error(t, err)
 		require.True(t, errs.IsFatal(err))
 	})
@@ -411,7 +419,7 @@ func TestColdReadAdoptsTheNewestRetainedRequestFirst(t *testing.T) {
 			e.PublishedRequestID = "not-a-request-id"
 		})
 
-		err := c.adoptNewerRetainedRequest(t.Context(), loopID, record)
+		_, err := c.adoptNewerRetainedRequest(t.Context(), loopID, record)
 		require.Error(t, err)
 		require.True(t, errs.IsFatal(err))
 	})
@@ -431,9 +439,11 @@ func TestColdSettlementArmsAdoptBeforeTheyRefuseTheDelivery(t *testing.T) {
 	retained := looprequest.ID{LoopID: loopID, Iteration: 3, Retry: 0}.String()
 
 	for name, lane := range map[string]struct {
-		port    string
-		handler func(*Component) inputHandler
-		payload message.Payload
+		port     string
+		handler  func(*Component) inputHandler
+		payload  message.Payload
+		decision natsclient.DeliveryDecision
+		why      string
 	}{
 		"model response": {
 			port:    "agent.response",
@@ -443,6 +453,11 @@ func TestColdSettlementArmsAdoptBeforeTheyRefuseTheDelivery(t *testing.T) {
 				Status:    agentic.StatusComplete,
 				Message:   agentic.ChatMessage{Role: "assistant", Content: "done"},
 			},
+			// Adoption moved the record to iteration 3, so this response
+			// answers a question the loop is two moves past: no process can
+			// apply it, and it is acknowledged rather than retried.
+			decision: natsclient.DeliveryDecisionAck,
+			why:      "an answer older than the adopted request is owed to nobody",
 		},
 		"tool result": {
 			port:    "tool.result",
@@ -450,6 +465,11 @@ func TestColdSettlementArmsAdoptBeforeTheyRefuseTheDelivery(t *testing.T) {
 			payload: &agentic.ToolResult{
 				CallID: loopID + ":tool:1", Name: "search", Content: "result", LoopID: loopID,
 			},
+			// This result correlates no request at all, so nothing orders it
+			// and the arm falls through to "a live loop this process does not
+			// hold" — still owed to whoever holds it.
+			decision: natsclient.DeliveryDecisionRetry,
+			why:      "an uncorrelated result for a live loop is still owed to its holder",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -464,9 +484,9 @@ func TestColdSettlementArmsAdoptBeforeTheyRefuseTheDelivery(t *testing.T) {
 				heartbeatPolicyForTest(t, lane.port, lane.handler(c)), deliverylane.NewAdmission(nil, nil))
 			require.True(t, admitted)
 
-			// The arm still refuses the delivery — classification is section 3
-			// — but it refuses against a record it has brought forward first.
-			require.Equal(t, natsclient.DeliveryDecisionRetry, result.Decision())
+			// Whatever the arm decides, it decides against a record it has
+			// brought forward first.
+			require.Equal(t, lane.decision, result.Decision(), lane.why)
 			require.Equal(t, retained, decodeRecord(t, c, loopID).PublishedRequestID,
 				"the cold arm settled without running step 0")
 		})
@@ -573,7 +593,8 @@ func TestAColdReadRetainsNoRevisionForALoopItDoesNotHold(t *testing.T) {
 			e.Iterations = 1
 		})
 
-		require.NoError(t, c.adoptNewerRetainedRequest(t.Context(), loopID, record))
+		_, adoptErr := c.adoptNewerRetainedRequest(t.Context(), loopID, record)
+		require.NoError(t, adoptErr)
 
 		require.Equal(t, retained, decodeRecord(t, c, loopID).PublishedRequestID)
 		_, held := c.observedLoopRevision(loopID)

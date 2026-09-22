@@ -167,7 +167,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "tool_results_dropped_total",
-				Help:      "Total tool results dropped at the wire because no loop mapping exists for the execution ID and the loop record is absent or terminal. Sustained non-zero rate points at NATS redelivery or executor double-publish. A result for a loop that is live but held by another process is NOT counted here: it is retried, not dropped.",
+				Help:      "Total tool results acknowledged without effect, by reason. reason=\"stale_execution\": no loop mapping exists for the execution ID and the loop record is absent or terminal. reason=\"older_request\": the result names an earlier request than the loop record does, so the loop already applied it. reason=\"terminal_unproven\": the loop is terminal, so no result can still be applied to it. Sustained non-zero rate points at NATS redelivery or executor double-publish. A result for a loop that is live but held by another process is NOT counted here: it is retried, not dropped.",
 			}, []string{"reason"}),
 
 			modelResponsesDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -511,13 +511,22 @@ func (m *loopMetrics) recordToolResultReceived(hasError bool) {
 	m.toolResultsReceived.WithLabelValues(status).Inc()
 }
 
-// recordToolResultDropped records a tool result this process did not route to
-// a loop. One reason is emitted:
+// recordToolResultDropped records a tool result acknowledged without effect.
+// Three reasons are emitted:
 //
 //   - "stale_execution" — no loop mapping exists for the execution ID. The
 //     dominant case after GetAndClearToolResults eviction: a re-delivered
 //     result for an already-drained execution. A sustained non-zero rate
 //     points at NATS redelivery or an executor double-publishing.
+//   - "older_request" — the result names an EARLIER request than the loop
+//     record does (#1330). A loop cannot advance past a request until its
+//     whole tool batch is in, so an earlier request is one this loop already
+//     applied; the redelivery is settled rather than re-applied, which would
+//     otherwise re-send the result to the model in the next turn.
+//   - "terminal_unproven" — the loop is terminal, so no result can be applied
+//     to it any more (owner ruling Q7 on #1330). Whether this particular
+//     result was applied before the loop settled is deliberately not
+//     re-derived: it would change nothing this delivery can do.
 //
 // A result naming a live loop another process holds is deliberately not
 // counted here: that delivery returns an error and is retried, and a retried

@@ -1214,6 +1214,18 @@ func (h *MessageHandler) buildTaskRequest(loopID string, task TaskMessage, entit
 	return result, nil
 }
 
+// errRequestNotYetObservable marks an input whose request the loop's record
+// does not name YET: the request was published and the update that records it
+// has not landed (#1330, crash window W4).
+//
+// It is a sentinel rather than a classified error because the delivery lane
+// and the loop-failure path read it differently. The lane must RETRY — the
+// record catches up and the next delivery classifies cleanly — while
+// handleResponseMessage must NOT treat it as this loop's business failure:
+// nothing about the loop has failed, and failing it here would settle a
+// running loop on a timing window.
+var errRequestNotYetObservable = errors.New("request is not yet named by the loop record")
+
 // HandleModelResponse processes a model response
 func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string, response agentic.AgentResponse) (HandlerResult, error) {
 	// Check for cancellation before starting work
@@ -1252,15 +1264,19 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 	//
 	// A redelivery of the CURRENT request is still handled: same identity,
 	// same request, and refusing it would drop the answer the loop is owed.
-	// The empty case is let through too, but it now means only "this process
-	// minted nothing for this loop" — a restart, where the routing was rebuilt
-	// from the RequestID. Deciding that one needs durable request identity and
-	// is L4's (#1330, declared in design.md § Declared residuals).
-	if current := h.loopManager.CurrentRequest(loopID); current != "" && current != response.RequestID {
+	//
+	// The identity compared against is the DURABLE one — the request the
+	// loop's record names (#1330, I1). It used to be LoopManager.CurrentRequest,
+	// a process-local map that is empty after a replacement, so every response
+	// reaching a rebuilt process passed this guard whatever it named (L2's
+	// declared residual). The record's name survives the process, so a
+	// replacement classifies with the same authority the original had.
+	switch orderAgainstPublished(loopID, entity.PublishedRequestID, response.RequestID) {
+	case requestOrderApplied, requestOrderForeign:
 		h.logger.Warn("ignoring superseded model response — the loop has moved on to a different request",
 			slog.String("loop_id", loopID),
 			slog.String("response_request_id", response.RequestID),
-			slog.String("current_request_id", current),
+			slog.String("published_request_id", entity.PublishedRequestID),
 			slog.String("outstanding_request_id", h.loopManager.OutstandingRequest(loopID)),
 			slog.String("state", entity.State.String()))
 		if h.metrics != nil {
@@ -1273,6 +1289,19 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 			TrajectorySteps:   []agentic.TrajectoryStep{},
 			ContextEvents:     []agentic.ContextEvent{},
 		}, nil
+	case requestOrderAhead:
+		// The answer arrived before the record that names its question. It is
+		// not superseded and must not be dropped: the delivery is retried
+		// until the record catches up, which is the only reading under which
+		// the record stays the authority (#1330, design § 5.2).
+		return HandlerResult{
+				LoopID:            loopID,
+				State:             entity.State,
+				PublishedMessages: []PublishedMessage{},
+				TrajectorySteps:   []agentic.TrajectoryStep{},
+				ContextEvents:     []agentic.ContextEvent{},
+			}, fmt.Errorf("%w: loop %s response names request %q, its record names %q",
+				errRequestNotYetObservable, loopID, response.RequestID, entity.PublishedRequestID)
 	}
 	// This request is answered, whatever the outcome below. Clearing the
 	// outstanding mark here rather than in the success arms means an early

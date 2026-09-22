@@ -146,6 +146,14 @@ func (b *recordingLoopBucket) writeLocked(key string, value []byte) (uint64, err
 	return b.revisions[key], nil
 }
 
+// revisionOf reports the revision a key currently holds, which is what a
+// reader of this record would compare-and-swap against.
+func (b *recordingLoopBucket) revisionOf(key string) uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.revisions[key]
+}
+
 func (b *recordingLoopBucket) value(key string) ([]byte, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

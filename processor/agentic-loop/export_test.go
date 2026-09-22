@@ -104,15 +104,24 @@ func (h *MessageHandler) OutstandingRequestForTest(loopID string) string {
 	return h.loopManager.OutstandingRequest(loopID)
 }
 
-// CurrentRequestForTest returns the newest request the loop has minted in this
-// process, answered or not. It is the identity the superseded-response guard
-// compares against, so a fixture that must reach the handler PAST that guard —
-// a redelivery, or a response arriving while the loop waits on tools, where
-// the outstanding mark is empty and reads "" — names this one. Asking for the
-// outstanding request there would build a response naming no request at all,
-// which production cannot route.
+// CurrentRequestForTest returns the request the loop's record names, which is
+// the identity the superseded-response guard compares against. A fixture that
+// must reach the handler PAST that guard — a redelivery, or a response
+// arriving while the loop waits on tools, where the outstanding mark is empty
+// and reads "" — names this one. Asking for the outstanding request there
+// would build a response naming no request at all, which production cannot
+// route.
+//
+// It reads LoopEntity.PublishedRequestID (#1330) rather than the process-local
+// mint map that used to answer this: the durable name is what the guard now
+// compares against, and a test helper that answered from a different source
+// could pass while production failed.
 func (h *MessageHandler) CurrentRequestForTest(loopID string) string {
-	return h.loopManager.CurrentRequest(loopID)
+	entity, err := h.loopManager.GetLoop(loopID)
+	if err != nil {
+		return ""
+	}
+	return entity.PublishedRequestID
 }
 
 // EnableDropCountingForTest gives the handler a metrics set, so an

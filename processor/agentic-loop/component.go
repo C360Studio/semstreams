@@ -1430,6 +1430,22 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 		slog.String("role", task.Role),
 		slog.String("model", task.Model))
 
+	// The cold fork (#1330, design § 5.1, owner ruling Q1): what this task
+	// means for a loop this process has no memory of is answered by the
+	// record, before anything is built in memory.
+	disposition, record, err := c.classifyRedeliveredTask(ctx, task.LoopID)
+	if err != nil {
+		return err
+	}
+	if disposition == taskApplied {
+		c.logger.Info("Task acknowledged without effect — its loop already moved past it",
+			slog.String("task_id", task.TaskID),
+			slog.String("loop_id", task.LoopID),
+			slog.Int("iterations", record.entity.Iterations),
+			slog.String("state", record.entity.State.String()))
+		return nil
+	}
+
 	// Handle the task using the message handler
 	result, err := c.handler.HandleTask(ctx, *task)
 	if err != nil {
@@ -1553,8 +1569,20 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 	// A refused birth releases the loop this process just built in memory and
 	// returns the delivery transient: the record belongs to whoever created
 	// it, and the redelivery is owed to the process holding that loop. The
-	// cold fork that resolves it in place is task 3.4's.
-	if err := c.createLoopState(ctx, result.LoopID); err != nil {
+	// cold fork above is what resolves the expected case in place.
+	if disposition == taskRepublishFirstRequest {
+		// The record exists at iteration zero and this process just rebuilt R1
+		// from the same task that produced it — the grammar is deterministic,
+		// so the name is the one the record already carries. There is nothing
+		// to write: the record is already the truth, and writing it again
+		// would move a revision no reader is waiting on. What IS taken is that
+		// revision: this process is now the loop's holder, and its next
+		// compare-and-swap has no other write to seed it from.
+		c.rememberLoopRevision(result.LoopID, record.revision)
+		c.logger.Info("Task redelivered at iteration zero — republishing the loop's first request",
+			"loop_id", result.LoopID, "task_id", task.TaskID,
+			"published_request_id", record.entity.PublishedRequestID)
+	} else if err := c.createLoopState(ctx, result.LoopID); err != nil {
 		if errors.Is(err, natsclient.ErrKVKeyExists) {
 			c.logger.Warn("Loop record already exists — this birth is not the one that created the loop",
 				"loop_id", result.LoopID, "task_id", task.TaskID)
@@ -1580,12 +1608,19 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 	// instead of never. Writing the record first is still Q1: the redelivery
 	// needs a record to republish R1 from.
 	//
-	// Until task 3.4's cold fork lands, that redelivery meets birth's own
-	// Create, is refused with ErrKVKeyExists, and Retries again to the lane's
-	// MaxDeliver; 3.4 is what turns the refusal into a republish.
+	// The loop this process just built in memory is released with it, for the
+	// same reason the refused birth above releases: the redelivery has to meet
+	// the cold fork, which republishes R1 from the record. Keeping the loop
+	// warm would send the redelivery into HandleTask's own dedup instead,
+	// which answers "already active" and acknowledges — leaving a record that
+	// names a request nothing ever published, which is the state I1 declares
+	// impossible. The active-loops gauge counted this birth and the release
+	// does not un-count it, exactly as the refused-birth branch above does not;
+	// the redelivery's own birth counts again.
 	if err := c.publishResults(ctx, result); err != nil {
 		c.logger.Error("Birth did not publish the request its record names — the delivery is not acknowledged",
 			"loop_id", result.LoopID, "task_id", task.TaskID, "error", err)
+		c.releaseLoopTransientState(result.LoopID)
 		return err
 	}
 	return nil
@@ -1718,6 +1753,15 @@ func (c *Component) handleResponseMessage(ctx context.Context, data []byte) erro
 
 	result, err := c.handler.HandleModelResponse(ctx, loopID, *response)
 	if err != nil {
+		if errors.Is(err, errRequestNotYetObservable) {
+			// Not a failure of this loop: the answer outran the record update
+			// that names its question (#1330, W4). Retry until the record
+			// catches up, and leave the loop exactly as it is — failing it
+			// here would settle a running loop on a timing window.
+			c.logger.Warn("Model response is not yet observable on the loop record — retrying",
+				"loop_id", loopID, "request_id", response.RequestID, "error", err)
+			return err
+		}
 		c.recordTrajectoryObservations(ctx, result)
 		// A handler error is this loop's business failure, and the delivery
 		// that carried it is done once that failure is durable — not once it
@@ -1808,8 +1852,28 @@ func (c *Component) settleResponseWithoutLoop(ctx context.Context, requestID str
 		// name the loop's newest retained request, so whichever process takes
 		// this delivery classifies against a current record rather than one
 		// its predecessor died before updating.
-		if err := c.adoptNewerRetainedRequest(ctx, loopID, record); err != nil {
+		adopted, err := c.adoptNewerRetainedRequest(ctx, loopID, record)
+		if err != nil {
 			return err
+		}
+		// A response for a request the loop has moved past is owed to nobody:
+		// no process, warm or cold, can advance a loop with it. That is the
+		// one case this arm acknowledges rather than retrying (#1330,
+		// design § 5.2).
+		switch orderAgainstPublished(loopID, adopted.entity.PublishedRequestID, requestID) {
+		case requestOrderApplied:
+			c.logger.WarnContext(ctx, "Model response acknowledged without effect — its request is older than the loop's",
+				"loop_id", loopID, "request_id", requestID,
+				"published_request_id", adopted.entity.PublishedRequestID)
+			if c.metrics != nil {
+				c.metrics.recordModelResponseDropped("superseded_request")
+			}
+			return nil
+		case requestOrderForeign:
+			return errs.WrapFatal(
+				fmt.Errorf("loop %s: response names request %q, which is not a request of this loop",
+					loopID, requestID),
+				"agentic-loop", "settleResponseWithoutLoop", "classify the response against the loop record")
 		}
 		c.logger.Warn("Model response names a loop this process does not hold",
 			"request_id", requestID, "loop_id", loopID)
@@ -2363,6 +2427,25 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 		}
 	}
 
+	// Classify the delivery against the loop's outstanding request BEFORE the
+	// handler touches anything (#1330, design § 5.3; owner ruling Q7 for the
+	// terminal arm, docket OQ5 for the placement). HandleToolResult stores the
+	// result and acts on StopLoop ahead of its own terminal guard, so a result
+	// the loop has moved past has to be settled here or not at all.
+	//
+	// A GetLoop error means the loop was released between the routing lookup
+	// above and this line. Nothing is classified then — HandleToolResult
+	// answers that race exactly as it did before this check existed.
+	if entity, entErr := c.handler.GetLoop(loopID); entErr == nil {
+		apply, classifyErr := c.classifyRedeliveredToolResult(ctx, loopID, entity, toolResult)
+		if classifyErr != nil {
+			return classifyErr
+		}
+		if !apply {
+			return nil
+		}
+	}
+
 	// Handle the tool result using the message handler
 	result, err := c.handler.HandleToolResult(ctx, loopID, toolResult)
 	if err != nil {
@@ -2479,8 +2562,29 @@ func (c *Component) settleToolResultWithoutLoop(ctx context.Context, toolResult 
 		// a retried tool result is not a dropped one, and an executor's work is
 		// still owed to whichever process holds that loop.
 		// Step 0 before anything else, as on the response lane above.
-		if err := c.adoptNewerRetainedRequest(ctx, loopID, record); err != nil {
+		adopted, err := c.adoptNewerRetainedRequest(ctx, loopID, record)
+		if err != nil {
 			return err
+		}
+		// Then classify against the record step 0 brought forward. This is the
+		// cold half of the tool lane's classification (#1330, design § 5.3):
+		// the process that will take the redelivery is not this one, but a
+		// result the loop has already moved past is owed to nobody at all.
+		switch orderAgainstPublished(loopID, adopted.entity.PublishedRequestID, toolResult.RequestID) {
+		case requestOrderApplied:
+			c.logger.WarnContext(ctx, "Tool result acknowledged without effect — its request is older than the loop's",
+				"loop_id", loopID, "execution_id", toolResult.ExecutionID,
+				"result_request_id", toolResult.RequestID,
+				"published_request_id", adopted.entity.PublishedRequestID)
+			if c.metrics != nil {
+				c.metrics.recordToolResultDropped("older_request")
+			}
+			return nil
+		case requestOrderForeign:
+			return errs.WrapFatal(
+				fmt.Errorf("loop %s: tool result names request %q, which is not a request of this loop",
+					loopID, toolResult.RequestID),
+				"agentic-loop", "settleToolResultWithoutLoop", "classify the tool result against the loop record")
 		}
 		c.logger.Warn("Tool result names a loop this process does not hold",
 			"execution_id", toolResult.ExecutionID, "call_id", toolResult.CallID, "loop_id", loopID)
@@ -2701,14 +2805,9 @@ func (c *Component) createLoopState(ctx context.Context, loopID string) error {
 		return nil
 	}
 
-	// Render, observe and write as one critical section (loopRecordMu). Two
-	// lanes of THIS process write the same loop — the carrier, cancel,
-	// approval, the timeout sweeper — and a revision read outside the lock is
-	// stale the moment another lane commits: the CAS then refuses a write that
-	// has no conflict to report, and the loop is released as though a foreign
-	// process had taken it. The render is inside too, because a value
-	// marshalled before another lane's mutation would commit a record that
-	// silently loses it.
+	// Under the same lock as every other record write: birth is the write that
+	// seeds the revision, and a write that started before it must not commit
+	// after it with a revision it never saw.
 	c.loopRecordMu.Lock()
 	defer c.loopRecordMu.Unlock()
 
@@ -2747,9 +2846,14 @@ func (c *Component) persistLoopState(ctx context.Context, loopID string) error {
 		return nil
 	}
 
-	// Under the same lock as every other record write: birth is the write that
-	// seeds the revision, and a write that started before it must not commit
-	// after it with a revision it never saw.
+	// Render, observe and write as one critical section (loopRecordMu). Two
+	// lanes of THIS process write the same loop — the carrier, cancel,
+	// approval, the timeout sweeper — and a revision read outside the lock is
+	// stale the moment another lane commits: the CAS then refuses a write that
+	// has no conflict to report, and the loop is released as though a foreign
+	// process had taken it. The render is inside too, because a value
+	// marshalled before another lane's mutation would commit a record that
+	// silently loses it.
 	c.loopRecordMu.Lock()
 	defer c.loopRecordMu.Unlock()
 

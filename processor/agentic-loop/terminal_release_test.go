@@ -136,9 +136,6 @@ func perLoopMapCount(m *LoopManager, loopID string) map[string]bool {
 	if _, ok := m.taskPrompts[loopID]; ok {
 		held["taskPrompts"] = true
 	}
-	if _, ok := m.currentRequests[loopID]; ok {
-		held["currentRequests"] = true
-	}
 	for k, owner := range m.requestToLoop {
 		if owner == loopID {
 			held["requestToLoop:"+k] = true
@@ -222,7 +219,7 @@ func TestTerminalReleaseClearsEveryPerLoopMap(t *testing.T) {
 	loopID := populatedLoop(t, h)
 
 	held := perLoopMapCount(h.loopManager, loopID)
-	if len(held) < 12 {
+	if len(held) < 11 {
 		t.Fatalf("fixture populated only %d per-loop entries (%v); it must exercise every map", len(held), held)
 	}
 

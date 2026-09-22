@@ -280,21 +280,29 @@ func (c *Component) adoptRetainedRequest(ctx context.Context, loopID, requestID 
 // after that gate's batch completed.
 //
 // Nothing is synthesised and no message body is read beyond its RequestID.
-func (c *Component) adoptNewerRetainedRequest(ctx context.Context, loopID string, record loopRecord) error {
+//
+// It returns the record the classification that follows must use: the adopted
+// one at the revision the adopting write committed, or the one it was given
+// when there was nothing to adopt. Reporting the CAS's own resulting revision
+// rather than leaving the caller to re-read is what keeps the classification
+// and the write bound to the same observation (#1330, I1–I4).
+func (c *Component) adoptNewerRetainedRequest(
+	ctx context.Context, loopID string, record loopRecord,
+) (loopRecord, error) {
 	retained, found, err := c.readRetainedAgentRequest(ctx, loopID)
 	if err != nil {
-		return err
+		return record, err
 	}
 	if !found {
 		// No retained request means nothing to adopt. It is not evidence that
 		// the record is wrong — a loop whose birth publish never landed is the
 		// task lane's case, and I1 is scoped to records that exist.
-		return nil
+		return record, nil
 	}
 
 	parsed, err := looprequest.Parse(retained.RequestID)
 	if err != nil || parsed.LoopID != loopID {
-		return errs.WrapFatal(
+		return record, errs.WrapFatal(
 			fmt.Errorf("loop %s retains request %q, which is not a request of this loop", loopID, retained.RequestID),
 			"agentic-loop", "adoptNewerRetainedRequest", "order the retained request")
 	}
@@ -302,20 +310,20 @@ func (c *Component) adoptNewerRetainedRequest(ctx context.Context, loopID string
 	if record.entity.PublishedRequestID != "" {
 		published, perr := looprequest.Parse(record.entity.PublishedRequestID)
 		if perr != nil || published.LoopID != loopID {
-			return errs.WrapFatal(
+			return record, errs.WrapFatal(
 				fmt.Errorf("loop %s record names request %q, which is not a request of this loop",
 					loopID, record.entity.PublishedRequestID),
 				"agentic-loop", "adoptNewerRetainedRequest", "order the retained request")
 		}
 		switch looprequest.Compare(parsed, published) {
 		case 0:
-			return nil
+			return record, nil
 		case -1:
 			// The record names a request NEWER than anything retained. I1 says
 			// that cannot happen while the record exists, so something outside
 			// this loop's own writers moved one of the two. Refuse rather than
 			// roll the record backwards onto an older name.
-			return errs.WrapFatal(
+			return record, errs.WrapFatal(
 				fmt.Errorf("loop %s record names request %q but the stream retains only %q",
 					loopID, record.entity.PublishedRequestID, retained.RequestID),
 				"agentic-loop", "adoptNewerRetainedRequest", "order the retained request")
@@ -330,35 +338,36 @@ func (c *Component) adoptNewerRetainedRequest(ctx context.Context, loopID string
 	adopted.PendingToolResults = nil
 	if adopted.PendingApproval != nil {
 		if err := adopted.ResolveApproval(); err != nil {
-			return errs.WrapFatal(err, "agentic-loop", "adoptNewerRetainedRequest",
+			return record, errs.WrapFatal(err, "agentic-loop", "adoptNewerRetainedRequest",
 				"clear the approval gate the adopted request advanced past")
 		}
 	}
 	if err := adopted.Validate(); err != nil {
-		return errs.WrapFatal(err, "agentic-loop", "adoptNewerRetainedRequest",
+		return record, errs.WrapFatal(err, "agentic-loop", "adoptNewerRetainedRequest",
 			"validate the adopted record")
 	}
 
 	data, err := json.Marshal(adopted)
 	if err != nil {
-		return errs.WrapFatal(err, "agentic-loop", "adoptNewerRetainedRequest",
+		return record, errs.WrapFatal(err, "agentic-loop", "adoptNewerRetainedRequest",
 			"marshal the adopted record")
 	}
-	// The committed revision is deliberately not retained: this process does
-	// not hold the loop — both callers refuse the delivery immediately after
-	// this returns — and an entry for a loop nobody holds is never released.
-	// Whoever takes the redelivery reads the record and its revision together.
-	if _, err := c.loopsBucket.Update(ctx, loopID, data, record.revision); err != nil {
+	// The committed revision is deliberately not retained ON THE COMPONENT:
+	// this process does not hold the loop, and an entry for a loop nobody
+	// holds is never released. It travels in the returned record instead, to
+	// the classification that runs next against the record this write left.
+	committed, err := c.loopsBucket.Update(ctx, loopID, data, record.revision)
+	if err != nil {
 		if natsclient.IsKVConflictError(err) {
 			// Somebody else wrote the record between the read and this update.
 			// Whatever they wrote, the redelivery re-reads and re-decides; the
 			// retained request is durable and is not going anywhere.
-			return errs.WrapTransient(
+			return record, errs.WrapTransient(
 				fmt.Errorf("loop %s record moved past revision %d while adopting %q: %w",
 					loopID, record.revision, retained.RequestID, natsclient.ErrKVRevisionMismatch),
 				"agentic-loop", "adoptNewerRetainedRequest", "adopt the retained request")
 		}
-		return errs.WrapTransient(err, "agentic-loop", "adoptNewerRetainedRequest",
+		return record, errs.WrapTransient(err, "agentic-loop", "adoptNewerRetainedRequest",
 			"adopt the retained request")
 	}
 	c.logger.InfoContext(ctx, "Adopted the loop's newest retained request before classifying a redelivered input",
@@ -366,5 +375,5 @@ func (c *Component) adoptNewerRetainedRequest(ctx context.Context, loopID string
 		slog.String("was", record.entity.PublishedRequestID),
 		slog.String("now", retained.RequestID),
 		slog.Int("iterations", adopted.Iterations))
-	return nil
+	return loopRecord{entity: adopted, revision: committed, presence: record.presence}, nil
 }

@@ -135,9 +135,15 @@ func timedOutLoopWithASupersededRequest(t *testing.T) (*Component, *recordingLoo
 
 	superseded := handler.loopManager.GenerateRequestID(loopID)
 	handler.loopManager.TrackRequest(superseded, loopID)
+	// SetPublishedRequest beside TrackRequest is what every production mint
+	// site does (#1330), and it is the identity the superseded guard compares
+	// against. A fixture that tracked without naming would leave the record
+	// naming nothing and let the stale response through.
+	require.NoError(t, handler.loopManager.SetPublishedRequest(loopID, superseded))
 	require.NoError(t, handler.loopManager.IncrementIteration(loopID))
 	current := handler.loopManager.GenerateRequestID(loopID)
 	handler.loopManager.TrackRequest(current, loopID)
+	require.NoError(t, handler.loopManager.SetPublishedRequest(loopID, current))
 	require.NotEqual(t, superseded, current, "the fixture must leave the first request superseded")
 	require.Equal(t, current, handler.loopManager.OutstandingRequest(loopID))
 

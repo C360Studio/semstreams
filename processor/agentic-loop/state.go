@@ -77,21 +77,7 @@ type LoopManager struct {
 	// so it records "this loop published X", never "X is still in flight".
 	// Process-local on purpose — a replacement has lost the whole loop, not
 	// just this entry, and durable recovery is L4's (#1330).
-	outstandingRequests map[string]string // loopID -> requestID
-	// currentRequests names the NEWEST request this process has minted for a
-	// loop, answered or not. outstandingRequests answers "is a model answer
-	// owed"; this answers "which request is the live one", and the two are not
-	// the same question for the whole tool or approval phase: a tool-call
-	// response settles its request, so the outstanding mark is empty while the
-	// loop sits mid-iteration waiting on executors. A redelivered completion
-	// for an EARLIER request meets that empty mark, and identity is the only
-	// thing left that can tell it from a legitimate retry of the live one.
-	//
-	// Set by TrackRequest, never cleared by SettleRequest, dropped with the
-	// loop in DeleteLoop. Process-local, so empty means "this process has
-	// minted nothing for this loop" — the restart case, which needs durable
-	// request identity to decide and is L4's (#1330).
-	currentRequests        map[string]string         // loopID -> requestID
+	outstandingRequests    map[string]string         // loopID -> requestID
 	toolCallToLoop         map[string]string         // executionID -> loopID
 	executionIDToName      map[string]string         // executionID -> function name (for Gemini tool result name field)
 	executionIDToArguments map[string]map[string]any // executionID -> tool arguments (for trajectory audit)
@@ -136,7 +122,6 @@ func NewLoopManager(opts ...LoopManagerOption) *LoopManager {
 		taskPrompts:            make(map[string]string),
 		requestToLoop:          make(map[string]string),
 		outstandingRequests:    make(map[string]string),
-		currentRequests:        make(map[string]string),
 		toolCallToLoop:         make(map[string]string),
 		executionIDToName:      make(map[string]string),
 		executionIDToArguments: make(map[string]map[string]any),
@@ -167,7 +152,6 @@ func NewLoopManagerWithConfig(contextConfig ContextConfig, opts ...LoopManagerOp
 		taskPrompts:            make(map[string]string),
 		requestToLoop:          make(map[string]string),
 		outstandingRequests:    make(map[string]string),
-		currentRequests:        make(map[string]string),
 		toolCallToLoop:         make(map[string]string),
 		executionIDToName:      make(map[string]string),
 		executionIDToArguments: make(map[string]map[string]any),
@@ -554,7 +538,6 @@ func (m *LoopManager) DeleteLoop(loopID string) error {
 	delete(m.cachedResponseFormat, loopID)
 	delete(m.taskPrompts, loopID)
 	delete(m.outstandingRequests, loopID)
-	delete(m.currentRequests, loopID)
 
 	prefix := loopID + ":"
 	for k, owner := range m.requestToLoop {
@@ -852,7 +835,6 @@ func (m *LoopManager) TrackRequest(requestID, loopID string) {
 	defer m.mu.Unlock()
 	m.requestToLoop[requestID] = loopID
 	m.outstandingRequests[loopID] = requestID
-	m.currentRequests[loopID] = requestID
 	if entity, exists := m.loops[loopID]; exists && entity.PendingContinuation {
 		entity.PendingContinuationRequestID = requestID
 	}
@@ -927,28 +909,6 @@ func (m *LoopManager) OutstandingRequest(loopID string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.outstandingRequests[loopID]
-}
-
-// CurrentRequest returns the newest request this process has minted for the
-// loop, answered or not, or "" when it has minted none.
-//
-// This is what decides whether a model response may advance the loop.
-// OutstandingRequest cannot: it is cleared the moment a response settles, and
-// a tool-call response settles its request while the loop is still on that
-// iteration waiting for executors. For that whole window the loop is waiting
-// on nothing, and a redelivered completion for an earlier request would pass
-// an emptiness test and settle a loop that has moved on — with the wrong
-// task's answer, because the carried turn is what the live request is asking.
-//
-// The empty answer still means "this process minted nothing", which is the
-// restart case: the routing that resolved the response was rebuilt from the
-// RequestID, not from a mint. Deciding THAT needs durable request identity
-// (L4, #1330); until it exists the response is handled rather than dropped,
-// because refusing it would strand a live loop whose process was replaced.
-func (m *LoopManager) CurrentRequest(loopID string) string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.currentRequests[loopID]
 }
 
 // GetLoopForRequest retrieves the loop ID for a request ID
