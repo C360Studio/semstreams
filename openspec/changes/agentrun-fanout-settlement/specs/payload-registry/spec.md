@@ -89,4 +89,6 @@ observation, and a contract test re-reads it against those artifacts:
 - **WHEN** its non-test source files are read
 - **THEN** every file importing an E2E harness package carries a build constraint naming one of the tags the Dockerfile
   builds that package with, so an ordinary build of the shipped binary links no harness at all
+- **AND** the converse holds per file: a file only an overlay tag can build imports a harness, so a hook cannot be left
+  stranded behind a constraint that reaches nothing
 - **AND** the test that verifies this is `TestProductionRootReachesNoE2EHarnessWithoutABuildTag`

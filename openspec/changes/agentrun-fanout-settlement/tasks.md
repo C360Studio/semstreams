@@ -964,3 +964,18 @@ text claims.
       `tiered.8b.yml mentions [SEMSTREAMS_E2E_MILESTONE_PROBE], the tier table declares [] for that file`.
       NIT-5 rides along: the `imagesByTarget` write is guarded so a shared image tag is reported once rather than
       once per later row.
+- [x] 11.7 MEDIUM-4 — "the tagged half imports its harness" had survived only as an aggregate `guarded != 0` floor.
+      `test/contract/e2e_tier_binary_contract_test.go:532-562` now decides per file on two independent readings —
+      does it import a harness, and does it build with every overlay tag off — and errors on either bad pair: a
+      harness in an ordinary build, or a file only an overlay tag can build that reaches no harness. The second is
+      the stranded-overlay shape the two deleted per-file tests covered. No count is involved, so nothing drifts
+      when a hook grows a second file; the `scanned == 0` denominator fatal stays and the aggregate floor is gone,
+      because a broken import predicate now trips the converse on all three gated files instead of reading as zero.
+      Mutant: the harness import deleted from `cmd/semstreams/process_barrier_e2e.go`. md5
+      `1da541ba2143cb8549630e0e4c5027bc` → `e88ee851a6ca8a1cc44a3ac2395ae3ec` → `1da541ba2143cb8549630e0e4c5027bc`.
+      RED: `cmd/semstreams/process_barrier_e2e.go builds only under an overlay tag but imports no E2E harness`. Two
+      independent gates catch this mutant — `go vet -tags=e2e_process_barrier` fails to compile it as well — which
+      is the point: the source-text guard states the rule, the compiler enforces one instance of it.
+      NIT-1 and NIT-4 are one-line "not supported" comments rather than code, per the owner's standing rule: a
+      constraint mixing an overlay tag with a negated platform tag (`:568-573`), and two `go build` lines sharing an
+      `-o` path (`:303-306`). Neither shape exists in this tree.

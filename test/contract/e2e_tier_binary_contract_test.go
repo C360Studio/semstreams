@@ -282,6 +282,10 @@ func readDockerfileTargets(t *testing.T) dockerfileTargets {
 		t.Fatalf("read Dockerfile: %v", err)
 	}
 
+	// Not supported: two `go build` lines writing the same `-o` path, which
+	// would silently overwrite each other in `artifacts` below. The Dockerfile
+	// gives every build its own output name; a collision is a Dockerfile
+	// defect worth fixing there rather than disambiguating here.
 	targets := dockerfileTargets{
 		artifacts: make(map[string]dockerBuild),
 		installs:  make(map[string]string),
@@ -521,7 +525,7 @@ func TestProductionRootReachesNoE2EHarnessWithoutABuildTag(t *testing.T) {
 		t.Fatalf("read production root: %v", err)
 	}
 
-	scanned, guarded := 0, 0
+	scanned, gated := 0, 0
 	for _, entry := range entries {
 		name := entry.Name()
 		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -534,25 +538,33 @@ func TestProductionRootReachesNoE2EHarnessWithoutABuildTag(t *testing.T) {
 		if parseErr != nil {
 			t.Fatalf("parse %s: %v", path, parseErr)
 		}
-		if !importsE2EHarness(file.Imports) {
-			continue
+		carriesHook := importsE2EHarness(file.Imports)
+		ordinaryBuild := reachableWithoutOverlayTags(t, path, overlay)
+		if !ordinaryBuild {
+			gated++
 		}
-		guarded++
 
-		if reachableWithoutOverlayTags(t, path, overlay) {
+		switch {
+		case carriesHook && ordinaryBuild:
 			t.Errorf("%s/%s imports an E2E harness and builds without any of the overlay tags %v",
 				production.pkg, name, sortedKeys(overlay))
+		case !carriesHook && !ordinaryBuild:
+			// The inverse, per file rather than as a count: a file that only
+			// an overlay tag can build and that reaches no harness is a
+			// stranded overlay — the shape left behind when a hook's import
+			// is dropped but its build constraint is not.
+			t.Errorf("%s/%s builds only under an overlay tag but imports no E2E harness", production.pkg, name)
 		}
 	}
 	if scanned == 0 {
 		t.Fatalf("no non-test Go files found in %s", production.pkg)
 	}
-	if guarded == 0 {
-		t.Fatalf("no file in %s imports an E2E harness; if the last hook was removed, this guard's expectation goes with it", production.pkg)
-	}
-	t.Logf("%s: %d non-test files scanned, %d behind an overlay tag", production.pkg, scanned, guarded)
+	t.Logf("%s: %d non-test files scanned, %d behind an overlay tag", production.pkg, scanned, gated)
 }
 
+// importsE2EHarness covers both homes an E2E-only hook body has today: the
+// shared harnesses under test/e2e/harness/ and the single-tier internal/e2e*
+// packages (the slow-consumer probe).
 func importsE2EHarness(imports []*ast.ImportSpec) bool {
 	for _, spec := range imports {
 		path := strings.Trim(spec.Path.Value, `"`)
@@ -565,6 +577,12 @@ func importsE2EHarness(imports []*ast.ImportSpec) bool {
 
 // reachableWithoutOverlayTags reports whether the file still builds when every
 // E2E overlay tag is off — which is exactly "the ordinary build links this".
+//
+// Not supported: a constraint mixing an overlay tag with a NEGATED platform or
+// release tag (`//go:build e2e_x && !linux`). Every non-overlay tag evaluates
+// true here, so the negation reads false and the file would look unreachable.
+// No hook file in this repository has that shape; if one needs it, this helper
+// gets a real build context rather than a second tag table.
 func reachableWithoutOverlayTags(t *testing.T, path string, overlay map[string]bool) bool {
 	t.Helper()
 
