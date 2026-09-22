@@ -3,12 +3,15 @@
 package agenticloop
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -214,4 +217,95 @@ func TestATaskRedeliveredOverAProgressedFirstBatchIsNotRepublished(t *testing.T)
 	require.Equal(t, secondRequest, completed.entity.PublishedRequestID)
 	require.Equal(t, uint64(2), messagesOn(t, client, requestSubject),
 		"the loop's second request is what a recovered batch produces")
+}
+
+// refusesFirstCreate is a record store that refuses the first birth write with
+// an ordinary failure — not the key-exists conflict, which the lane already
+// has its own arm for. Everything else reads and writes the real bucket, so
+// after the refusal is spent the redelivery meets a healthy store.
+type refusesFirstCreate struct {
+	jetstream.KeyValue
+	remaining int
+}
+
+func (b *refusesFirstCreate) Create(
+	ctx context.Context, key string, value []byte, opts ...jetstream.KVCreateOpt,
+) (uint64, error) {
+	if b.remaining > 0 {
+		b.remaining--
+		return 0, errors.New("the record store refused the birth write")
+	}
+	return b.KeyValue.Create(ctx, key, value, opts...)
+}
+
+// TestABirthWhoseRecordWriteFailedIsFinishedByItsRetry is the failed-birth arm
+// of I1 (owner Codex round on PR #1361, finding 2).
+//
+// Birth builds the loop in memory, writes its record, then publishes R1. When
+// the record write failed with anything other than a conflict the delivery
+// went back transient — correctly — but the loop it had just built stayed in
+// this process's memory. The redelivery then found a warm loop, so the cold
+// classification never ran, HandleTask answered with its task-ID dedup, and
+// the lane acknowledged a task that had never issued a request. Nothing was
+// retained, nothing was recorded, and nobody was owed it any more: silent task
+// loss.
+//
+// The key-exists arm and the publish-failure arm both release; this one did
+// not. The assertion is the pair I1 names, read off a real server: after the
+// store is healthy again the retry finishes the birth, or it is not
+// acknowledged.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestABirthWhoseRecordWriteFailedIsFinishedByItsRetry(t *testing.T) {
+	client := newLoopNATS(t)
+
+	const loopID = "0e5a9b14-3c72-4d68-9a05-7f8e1d2c3b40"
+	task := agentic.TaskMessage{
+		TaskID: "task-failed-birth-write",
+		LoopID: loopID,
+		Role:   "general",
+		Model:  "test-model",
+		Prompt: "the task whose first record write is refused",
+	}
+	firstRequest := looprequest.ID{LoopID: loopID, Iteration: 1, Retry: 0}.String()
+	requestSubject := "agent.request." + loopID
+
+	c, handler := startLoopProcess(t, client, DefaultConfig())
+	healthy := c.loopsBucket
+	c.loopsBucket = &refusesFirstCreate{KeyValue: healthy, remaining: 1}
+
+	_, refused := deliverTask(t, c, task)
+
+	require.Equal(t, natsclient.DeliveryDecisionRetry, refused.Decision(),
+		"a birth whose record never landed is still owed to somebody")
+	require.Equal(t, uint64(0), messagesOn(t, client, requestSubject),
+		"the record is written before the request is published; a refused write publishes nothing")
+	require.Equal(t, loopPresenceStale, c.readLoopRecord(t.Context(), loopID).presence,
+		"the refused write must leave no record behind")
+	// The mechanism, asserted without stopping the run: the harm below is what
+	// the finding is about, and seeing both reds at once is what tells a reader
+	// the released loop and the finished birth are the same fact.
+	_, warm := handler.loopManager.GetLoop(loopID)
+	assert.Error(t, warm,
+		"the loop built for a birth that did not happen is still held; the redelivery will meet "+
+			"HandleTask's task-id dedup instead of the record, and acknowledge without publishing")
+
+	// The store is healthy again and the SAME process takes the redelivery —
+	// which is the case that makes this a loss rather than a retry: a
+	// replacement would have met the cold fork regardless.
+	c.loopsBucket = healthy
+
+	msg, retried := deliverTask(t, c, task)
+
+	require.Equal(t, natsclient.DeliveryDecisionAck, retried.Decision(),
+		"the retry found a healthy store and finished the birth")
+	require.Equal(t, int32(1), msg.acks.Load())
+	require.Equal(t, uint64(1), messagesOn(t, client, requestSubject),
+		"the acknowledged birth must have put its first request on the stream")
+	require.Equal(t, firstRequest, retainedRequestIdentity(t, client, requestSubject))
+
+	record := loopRecordOf(t, c, loopID)
+	require.Equal(t, loopPresenceLive, record.presence)
+	require.Equal(t, firstRequest, record.entity.PublishedRequestID,
+		"the record and the stream must name the same request, or I1 does not hold for this loop")
 }

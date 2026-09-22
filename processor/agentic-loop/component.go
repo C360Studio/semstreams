@@ -1592,6 +1592,13 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 		}
 		c.logger.Error("Failed to write the loop record at birth — the first request is not published",
 			"loop_id", result.LoopID, "task_id", task.TaskID, "error", err)
+		// Released for the same reason the conflict arm above and the
+		// publish-failure arm below release: the redelivery has to reach the
+		// record, and a loop left warm sends it into HandleTask's task-id
+		// dedup instead, which answers "already active" and acknowledges. The
+		// birth wrote no record and published no request, so that ACK is
+		// silent task loss — a task nobody is owed and no loop is running.
+		c.releaseLoopTransientState(result.LoopID)
 		return errs.WrapTransient(err, "agentic-loop", "handleTaskMessage",
 			"create loop record at birth")
 	}
