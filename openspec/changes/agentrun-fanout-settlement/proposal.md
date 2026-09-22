@@ -53,7 +53,7 @@ conversion is forbidden. The five-question design docket was ruled "as recommend
 - Exported surface (Tier 1, ADR-106): additions `LoopTerminalEvent.SourceMessageID`, `MilestoneSubscriber.DeliveryFatal()
   error`, `MilestoneSubscriber.RegisterMetrics(metric.MetricsRegistrar) error`; removal `natsclient.ConsumeWithHeartbeat`
   — an incompatible change in a frozen package, declared with a `!` commit; `scripts/api-compat.sh` has no waiver, so
-  `task api:compat:report` prints it as one incompatible package, which is ADR-106's expected pre-RC descending count.
+  `task api:compat:report` already lists `natsclient` among 15 incompatible Tier 1 packages at `b7ce8727`, so this layer adds one line (`ConsumeWithHeartbeat: removed`) under it and no package; the posture is still ADR-106's pre-RC descending count.
   Behavior behind an unchanged signature: `agentrun.ResolveRun` errors gain the `errs` Invalid class (chains kept; one
   in-tree caller, no sister callers).
 - New metric: `semstreams_agentrun_milestone_decisions_total{lane,decision,reason}`. No histogram.

@@ -91,7 +91,7 @@ module, internal package, precedents `internal/lifecyclecleanup`, `internal/maxd
 cause). Recording is `onFatal` — `s.recordDeliveryOwnerFatal`, passed to `NewAdmission` and run synchronously inside
 `Latch` before the result is buffered (`deliverylane.go:78-81`), which is what `DeliveryFatal()` reads — and `Observe`
 itself drains the exact handle after `react` returns (`:240-241`); `react` is required non-nil (`:231-232`).
-`milestoneConsumerOwner` (`agentrun.go:679`, `:683`) stays the SOLE owner of both `ConsumeContext`s;
+`milestoneConsumerOwner` (`agentrun.go:679`, `:683`) stays the SOLE owner of both lanes' bindings (and, through them, both `ConsumeContext`s);
 `milestoneConsumerOwner` replaces `complete`/`failed` (`:681-682`) and the drained flags (`:683-684`) with two
 `*deliverylane.Binding`; `stop()` calls `Drain()` on both (both-drain-first, `:718`, holds; `Drain` is once-only, so a
 lane the observer already drained is a no-op), awaits both `Closed()` (`:727`, `:730`), calls `o.cancel()` (`:743`,
