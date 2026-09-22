@@ -29,10 +29,14 @@ Every fact recovery needs is already durable except one: which request is outsta
 
 1. `LoopEntity.PublishedRequestID` (`published_request_id`): the RequestID whose PubAck preceded the KV update that
    wrote the record. Set at birth and at every request-minting transition; never cleared.
-2. The non-terminal carrier (`component.go:1923`) publishes first, then writes with `Update(observedRevision)`
-   (`natsclient/kv.go:231`) instead of `Put` (`component.go:2483`). No lane holds a revision on `main` — all four
-   writers `Put` and discard it — so the process retains the revision its own last write returned, birth writes by
-   `Create`, and a CAS loss releases the loop's process state before it retries (owner ruling 2026-09-22, OQ3).
+2. The non-terminal carrier (`component.go:1923`) writes with `Update(observedRevision)` (`natsclient/kv.go:231`)
+   instead of `Put` (`component.go:2483`) for every caller, and publishes BEFORE that write on the lanes L4a owns —
+   model response and tool result. The approval lane's call site (`approval_response_handler.go:205`) and the
+   approval-timeout sweeper (`approval_sweeper.go:100-101`) keep today's order until #1362, because the
+   reject-minted window the flip opens is closed only by that lane's cold branch (coordinator scoping under OQ7/OQ8,
+   `design.md` § 1). No lane holds a revision on `main` — all four writers `Put` and discard it — so the process
+   retains the revision its own last write returned, birth writes by `Create`, and a CAS loss releases the loop's
+   process state before it retries (owner ruling 2026-09-22, OQ3).
 3. Identity adoption: before publishing the next request, recovery reads the newest retained message on
    `agent.request.<loopID>` (a new reader, built here) and adopts it when its RequestID is the next ordinal; a process
    with no memory of the loop adopts a newer retained request into the record before classifying any input
@@ -44,7 +48,7 @@ Every fact recovery needs is already durable except one: which request is outsta
    `handlers.go:1174`, `:2194`, `:2958`), so L4a verifies the window collapse rather than building it. The duplicates
    window is a bonus; L2's retained-response reuse (`processor/agentic-model/component.go:633-643`) is the guarantee.
 5. Two effect-free ACK paths with metric and audit line: any input for a loop already terminal in KV (L4a, at
-   `component.go:2195` warm and `:2296` cold, with two new reason values on the existing `tool_results_dropped_total`)
+   `component.go:2195` warm and `:2293` cold, with two new reason values on the existing `tool_results_dropped_total`)
    and a governance verdict redelivered after its waiter is gone (`governance_dispatcher.go:337`,
    `component.go:2759-2780` — L4b, #1362).
 6. One deletion, not a pruning: `IncrementTruncationRetry` / `ResetTruncationRetry` (`state.go:466`, `:477`) with
@@ -64,7 +68,10 @@ Every fact recovery needs is already durable except one: which request is outsta
 - **Scope, 2026-09-22:** this change is L4a. #1362 (L4b) carries the approval lane's cold branch,
   `continuation_unavailable`, the verdict-after-waiter-loss classification, the single terminal owner and
   route-ambiguity metering; `tasks.md` § "Moved to L4b (#1362)" lists every moved task.
-- `agentic-model` behaviour is unchanged; no delta for that capability (`design.md` § 8).
+- `agentic-model` behaviour is unchanged; no delta for that capability (`design.md` § 8). Two deltas ship:
+  `specs/agentic-loop/spec.md` (the field, the CAS carrier, the lanes L4a classifies) and
+  `specs/agentic-dispatch/spec.md` (OQ4's counter semantics). The `agentic-loop` delta states L4a only; the text
+  #1362 takes over is held verbatim in `tasks.md` § "Delta text carried to L4b (#1362)".
 
 ## Non-goals (the #1146 anti-goals, verbatim)
 
@@ -88,14 +95,16 @@ Every fact recovery needs is already durable except one: which request is outsta
   never a disposition.
 - **Divergent duplicate, residual:** the predecessor's quarantine (`settlement_recovery.go:799-802`) is not built, so a
   current-batch duplicate for a stored ExecutionID overwrites by key; the framework producer cannot diverge
-  (`processor/agentic-tools/component.go:710-713`, one outcome per execution ID).
+  (`processor/agentic-tools/component.go:740-743`, `loadCompletedOutcome` → `publishCompletedResult`: one outcome per
+  execution ID).
 - **Record lifetime vs stream retention, residual (measured):** AGENT_LOOPS is `History: 10, TTL: 24h`, refused otherwise
   (`processor/agentic-loop/internal/loopbucket/acquire.go:20,42-43`); an expired record is a gone loop; a post-expiry
   redelivery takes the existing not-observable Retry path (the cold arms `component.go:1700` and `:2292`, via
   `loop_presence.go:66-94`).
 - **At-least-once counter, documented (owner ruling 2026-09-22, OQ4):** `tasks_submitted_total`
   (`processor/agentic-dispatch/metrics.go:112`) counts a replayed task submission again. The counter is at-least-once
-  under redelivery; the migration note says so and a test pins it, rather than a new arm in the task lane.
+  under redelivery; `specs/agentic-dispatch/spec.md` states it, the migration note repeats it and a test pins its
+  scenario, rather than a new arm in the task lane.
 - **No approval-deadline hydration, documented (owner ruling 2026-09-22, OQ2):** a replaced process re-arms no approval
   deadline; the loop stays `awaiting_approval` until answered or cancelled. It is a spec scenario and a migration-note
   line, not a startup path.

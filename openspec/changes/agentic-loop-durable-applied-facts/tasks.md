@@ -7,7 +7,10 @@
 > ([issuecomment-5773199445](https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5773199445)), the
 > re-read governing where the two differ; `design.md` § 1 carries the bullets. **Scope is L4a.** The approval lane,
 > the verdict after waiter loss, the single terminal owner and route-ambiguity metering are **L4b = #1362** and are
-> listed under "Moved to L4b (#1362)" at the end of this file — moved, not dropped. Standing simplicity rule (owner,
+> listed under "Moved to L4b (#1362)" at the end of this file — moved, not dropped. The approval lane's and
+> sweeper's carrier reorder and OQ8's gate-order decision moved there too (coordinator scoping under OQ7/OQ8,
+> `design.md` § 1): L4a's writer becomes CAS `Update` for every caller, but the ORDER flip reaches only the task,
+> model-response and tool-result lanes. Delta text those tasks take over is held verbatim at the end of this file. Standing simplicity rule (owner,
 > 2026-09-22): keep complexity as low as possible; an edge case that a doc sentence or a plain "not supported" can
 > carry does not earn a code branch. From here `scripts/inventory-verify.sh` is expected to go RED as the
 > implementation lands — pins are pre-change evidence and a landed change is never re-pinned.
@@ -34,14 +37,18 @@
 ## 2. Carrier: order, CAS, identity adoption
 
 - [ ] 2.1 `processor/agentic-loop/component.go`: `persistLoopState` (`C:2468`, write `C:2483`) takes `revision` and uses
-      `loopsBucket.Update` (`KV:231`); `persistHandlerResult` (`C:1923`) publishes (`C:1959`) before it writes
-      (`C:1947`) for every non-terminal result; birth (`C:1496` publish → `C:1499` `Put` with the error ignored today)
-      becomes `Put` → publish, and a birth write that errors returns Retry — the first of #1345's five task-intake
-      branches, converted by necessity; the other four stay #1345's. On `ErrKVRevisionMismatch` (`KV:238`) return Retry
-      and release the loop's process state (`ST:574`, `C:1964`). `persistLoopState`'s other callers ride the same
-      `Update`: `C:1425` (deferred continuation marker) and `AS:101` (sweeper, whose own publish → `Put` pair at
-      `AS:100-101` moves onto the carrier). Test: `persist_handler_result_test.go` — publish observed before `Update`;
-      CAS conflict → `DeliveryDecisionRetry`; birth order write-then-publish.
+      `loopsBucket.Update` (`KV:231`) — the writer changes for EVERY caller. The ORDER flip is lane-scoped
+      (coordinator scoping under OQ7/OQ8, `design.md` § 1): `persistHandlerResult` (`C:1923`) publishes (`C:1959`)
+      before it writes (`C:1947`) for a non-terminal result on the model-response and tool-result lanes only; the
+      approval lane's call site (`ARH:205`) keeps today's write → publish, and the sweeper keeps its own
+      publish-then-`Put` pair (`AS:100-101`) — both move in #1362. Birth (`C:1496` publish → `C:1499` `Put` with the
+      error ignored today) becomes `Put` → publish, and a birth write that errors returns Retry — the first of
+      #1345's five task-intake branches, converted by necessity; the other four stay #1345's. On
+      `ErrKVRevisionMismatch` (`KV:238`) return Retry and release the loop's process state (`ST:574`, `C:1964`).
+      `persistLoopState`'s other callers ride the same `Update`: `C:1425` (deferred continuation marker) and `AS:101`
+      (sweeper). Test: `persist_handler_result_test.go` — publish observed before `Update` on the tool-result lane;
+      write observed before publish on the approval lane's call site; CAS conflict → `DeliveryDecisionRetry`; birth
+      order write-then-publish.
 - [x] 2.2 `C:2318-2333` `publishResults`: messages on the `agent.request` subject publish via `PublishToStreamWithMsgID`
       with `Nats-Msg-Id = RequestID`. **Shipped by L2 (#1328, PR #1335)** — recorded here because tasks record work when
       it happens. Verified at `b7ce8727`:
@@ -79,13 +86,6 @@
       `C:1964` `releaseLoopTransientState`) before it returns Retry. Test: `persist_handler_result_test.go` — a second
       birth for the same loop ID is refused and forks cold; after a CAS loss the loop holds no in-memory state and the
       redelivery reads the winning record.
-- [ ] 2.7 Gate order, conditional (docket OQ8, owner ruling 2026-09-22): write the test that an approval answer
-      arriving before its gate is durable is Retried by the approval-response lane's cold KV branch. If it can be
-      written, the approval gate takes the uniform publish → `Update` order with every other lane (task 2.1). If it
-      cannot be written in this change's scope, the accepted write → publish branch for the gate stands, and the PR
-      body records which branch shipped and why. Test: `persist_handler_result_test.go` (gate branch) plus the lane
-      case named above.
-
 ## 3. Lane classification (3.9 is L4b's — see "Moved to L4b")
 
 - [ ] 3.1 Tool-result classification: nothing to delete on `main`; build it at component entry `C:2195` (ahead of
@@ -100,8 +100,9 @@
       the MsgId, no retained read (Q1); present and advanced → ACK. Test: `recovery_test.go` (exists, extend) — cold
       redelivery at iteration 0 and after advance.
 - [ ] 3.5 Terminal + unproven result (Q7): effect-free ACK with a `WarnContext` audit line; two new reason values on
-      the existing `tool_results_dropped_total` (`older_request`, `terminal_unproven`; `M:382-383`, recorder `M:527`,
-      existing use `C:2299`) rather than a new counter; the warm check is inserted before `HandleToolResult` at
+      the existing `tool_results_dropped_total` (`older_request`, `terminal_unproven`; metric name `M:169`, recorder
+      `M:527`, the reason values enumerated in its doc comment `M:514-526`, existing use `C:2300`) rather than a new
+      counter; the warm check is inserted before `HandleToolResult` at
       `C:2195`, because `H:2546` and `H:2580` precede the lane's only terminal guard at `H:2652`. Test: write
       `terminal_tool_recovery_test.go`; both reason values asserted.
 - [ ] 3.8 In-flight answer (the MODIFIED requirement's new SHALL NOT): a test citing that requirement (`// spec:` line;
@@ -136,18 +137,22 @@
 
 - [ ] 5.1 Correct `docs/concepts/17-approval-flow.md:65` and `processor/agentic-loop/doc.go` restart claims to state the
       I1–I4 contract and its prerequisites (#1327–#1329).
-- [ ] 5.2 Apply the `specs/agentic-loop/spec.md` delta; `openspec validate agentic-loop-durable-applied-facts --strict`
-      green; `task spec:properties` resolves the `// spec:` citation from 4.1 against the ADDED requirement.
+- [ ] 5.2 Apply the `specs/agentic-loop/spec.md` and `specs/agentic-dispatch/spec.md` deltas;
+      `openspec validate agentic-loop-durable-applied-facts --strict` green; `task spec:properties` resolves the `// spec:` citation from 4.1 against the ADDED requirement.
 - [ ] 5.3 No approval-deadline hydration (docket OQ2, owner ruling 2026-09-22): the delta scenario "a replaced process
       re-arms no approval deadline; the loop stays `awaiting_approval` until answered or cancelled" plus the same
-      sentence as a line in `docs/operations/migration-beta162-to-beta163.md` under a `#1330` section. Test: a
-      replacement component started over a KV record in `awaiting_approval` arms no deadline (the sweeper's snapshot,
-      `AS:69`, is empty) and writes nothing — the record's state and revision are unchanged.
-- [ ] 5.4 `tasks_submitted_total` is at-least-once under redelivery (docket OQ4, owner ruling 2026-09-22): one line in
+      sentence as a line in `docs/operations/migration-beta162-to-beta163.md` under a `#1330` section. Test: the zero
+      is a measured delta, not a bare absence. The same test first arms a deadline in-process — a real
+      `awaiting_approval` record whose deadline the live component's snapshot (`AS:69`
+      `SnapshotExpiredApprovals`) reports — then starts a REPLACEMENT component over the same KV and asserts the
+      replacement's snapshot is empty, the record is still `awaiting_approval`, and its revision is unchanged.
+- [ ] 5.4 `tasks_submitted_total` is at-least-once under redelivery (docket OQ4, owner ruling 2026-09-22): the new
+      `specs/agentic-dispatch/spec.md` delta states it, plus one line in
       `docs/operations/migration-beta162-to-beta163.md` under the same `#1330` section; no arm change. Test: a
-      dispatch-side unit test asserting a replayed task submission increments the counter again
-      (`processor/agentic-dispatch/metrics.go:112`, `recordTaskSubmitted` `:322`), so the documented semantics are
-      pinned rather than assumed.
+      dispatch-side unit test carrying `// spec: agentic-dispatch / The task submission counter is at-least-once
+      under redelivery` and asserting the delta's scenario — a replayed task submission increments the counter again
+      while reusing the retained LoopID and publishing no second task
+      (`processor/agentic-dispatch/metrics.go:112`, `recordTaskSubmitted` `:321`, increment `:322`).
 
 ## 6. Verification (before the push, every time)
 
@@ -161,7 +166,8 @@
 ## Moved to L4b (#1362)
 
 Plain bullets, deliberately not checkboxes: these are #1362's tasks, listed so the reader sees exactly what left this
-change and where it went. Owner ruling 2026-09-22, OQ7; the split line is `reconciliation.md` § G.
+change and where it went. Owner ruling 2026-09-22, OQ7, plus the coordinator's scoping of the carrier reorder under
+OQ7/OQ8 (`design.md` § 1); the split line is `reconciliation.md` § G.
 
 - 3.3 Approval lane — the cold KV branch at `ARH:58` on `ErrLoopNotFound` (today `staleDrop` `ARH:78` → Ack
   `ARH:194-199`), I4 plus key presence against the record it just adopted, `republishPendingApproval` built inside it,
@@ -178,6 +184,15 @@ change and where it went. Owner ruling 2026-09-22, OQ7; the split line is `recon
   `loop_admission_refusals_total` inside `activeLoop` (`processor/agentic-dispatch/http_activity.go:334`,
   `metrics.go:180`) with one resolver-seam reason value; retire the two post-refusal absence assertions in
   `command_target_resolution_test.go` (`:335`, `:349`), keep the 409 assertion at `:346-348`. Never opened here.
+- 2.1 (approval lane and sweeper order) — flip the approval lane's call site (`ARH:205`) and the sweeper's own
+  publish-then-`Put` pair (`AS:100-101`, D39) to publish → CAS `Update`, so the auto-reject takes the same order and
+  the same CAS as an operator rejection. It moves with the lane because the reject-minted W4 the flip opens is closed
+  only by the approval lane's cold branch (3.3 above). L4a changes the writer for these callers, never the order.
+- 2.7 Gate order, conditional (docket OQ8) — write the test that an approval answer arriving before its gate is
+  durable is Retried by the approval-response lane's cold KV branch. If it can be written, the approval gate takes
+  the uniform publish → `Update` order; if it cannot, the accepted write → publish branch for the gate stands and
+  #1362's PR body records which shipped and why. Test: `persist_handler_result_test.go` (gate branch) plus the lane
+  case named above.
 - 4.2 (approval and terminal cases) — the approval-response lane's reject W4 (crash between the carrier's publish and
   its `Update` for the approval result, restart, redeliver → ACK inapplicable, R(N+1) counted once, record `running` at
   R(N+1) with no gate) and the terminal lane's crash-after-publish-before-`Update`, in a new
@@ -187,3 +202,47 @@ change and where it went. Owner ruling 2026-09-22, OQ7; the split line is `recon
 - 6.2 (approval stage) — the `task e2e:agentic` approval-after-restart stage (`approval_restart.go`,
   `approval_restart_test.go`, both absent on `main`), which asserts the answer is applied after replacement, not that a
   deadline fires.
+
+## Delta text carried to L4b (#1362)
+
+Not tasks. This is the delta text that was written for L4a's `agentic-loop` delta and moved out of it because it
+states #1362's behaviour (tasks 3.3, 3.6, 3.7 above). It is held here verbatim so #1362 seeds its own delta from it
+and nothing is lost. The header clause it replaces — "L4b is #1362, which adds no delta of its own beyond what is
+stated here" — is deliberately NOT carried: #1362 carries its own delta.
+
+```markdown
+<!-- from the ADDED requirement's opening sentence: the two lanes L4b classifies -->
+... and every redelivered model response, tool result, approval response, and governance verdict SHALL be classified
+against that field and against `pending_tool_results` rather than against retained conversation content.
+
+<!-- from the same requirement, after the compare-and-swap sentence -->
+A redelivered terminal input SHALL adopt the loop's durable terminal by loop ID and terminal kind.
+Recovery SHALL never compare rendered messages, result content, or terminal content to decide whether an input was applied.
+
+#### Scenario: A cold replacement adopts past a rejection-minted request and acknowledges the stale approval response
+
+- **GIVEN** a loop `awaiting_approval` at `R` whose gate was rejected, where the rejection minted and published `R(N+1)`
+  and the process crashed before the record was updated
+- **WHEN** the approval response is redelivered to a replacement process with no memory of the loop
+- **THEN** the replacement writes the record to `R(N+1)` with the gate cleared and `state = running` under
+  compare-and-swap, classifies the approval response as inapplicable, acknowledges it, and publishes nothing
+
+#### Scenario: A governance verdict redelivered after its waiter is gone
+
+- **GIVEN** a loop that restarted after proposing execution `e` under request `R` and later applied `e`'s result
+- **WHEN** the verdict for `e` is redelivered and no waiter exists
+- **THEN** the loop reads its record, finds `e` in `pending_tool_results` or `R` older than
+  `published_request_id`, and acknowledges the verdict without dispatching it
+
+#### Scenario: A redelivered terminal adopts the published terminal by identity
+
+- **GIVEN** a loop whose durable terminal (`COMPLETE_<loopID>`) exists and whose record is not yet terminal, because the
+  process crashed after publishing the terminal event and before the record update
+- **WHEN** the input that produced the terminal is redelivered and this delivery derives a terminal whose content differs
+- **THEN** the loop adopts the durable terminal by loop ID and terminal kind, publishes it, writes the record terminal under
+  compare-and-swap, acknowledges, and logs the content difference at the audit line without retrying or quarantining
+```
+
+L4a's own delta keeps the remainder, with the compare-and-swap sentence scoped to the model-response and tool-result
+lanes and loop birth, and the approval lane and approval-timeout sweeper named as keeping their present order
+until #1362.

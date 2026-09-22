@@ -1,6 +1,7 @@
 # agentic-loop — delta
 
-> Delta for #1330 (restart-safety **L4a**; L4b is #1362, which adds no delta of its own beyond what is stated here).
+> Delta for #1330 (restart-safety **L4a**). L4b (#1362) carries its own delta; this delta states L4a only — the text
+> it takes over is held verbatim in `tasks.md` § "Delta text carried to L4b (#1362)".
 > The MODIFIED block restates the requirement at `openspec/specs/agentic-loop/spec.md:201-226` (`b7ce8727`) in full,
 > including both of its scenarios. Amended 2026-09-22 to the owner's rulings on #1330 (`design.md` § 1).
 
@@ -8,9 +9,9 @@
 
 ### Requirement: The loop record names its outstanding request
 The `AGENT_LOOPS` record of a non-terminal loop SHALL carry `published_request_id`, the `RequestID` of the
-`AgentRequest` whose PubAck preceded the KV update that wrote the record, and every redelivered model response, tool
-result, approval response, and governance verdict SHALL be classified against that field and against
-`pending_tool_results` rather than against retained conversation content.
+`AgentRequest` whose PubAck preceded the KV update that wrote the record, and every redelivered model response and
+tool result SHALL be classified against that field and against `pending_tool_results` rather than against retained
+conversation content.
 
 The following SHALL hold for every record of a non-terminal loop `L`:
 
@@ -22,13 +23,15 @@ The following SHALL hold for every record of a non-terminal loop `L`:
 - `pending_approval`, when present, names `request_id = published_request_id`.
 
 The non-terminal record SHALL be written with a compare-and-swap update against the revision observed when the
-delivery was admitted, after the PubAck of every output the new record implies. A redelivered input whose
-`request_id` is older than `published_request_id` SHALL be acknowledged without effect; one whose `request_id` is
-newer SHALL be retried until the record names it; one whose `request_id` is not a request of the loop SHALL be
-quarantined. A process with no memory of the loop SHALL, before classifying any redelivered input other than a task,
-read the newest retained request for the loop and, when it is newer than `published_request_id`, adopt it into the
-record by identity first. A redelivered terminal input SHALL adopt the loop's durable terminal by loop ID and terminal kind.
-Recovery SHALL never compare rendered messages, result content, or terminal content to decide whether an input was applied.
+delivery was admitted. On the model-response and tool-result lanes that update SHALL follow the PubAck of every
+output the new record implies; at loop birth the record SHALL be written before the first request is published. The
+approval lane and the approval-timeout sweeper keep their present write-then-publish order until #1362. A redelivered
+input whose `request_id` is older than `published_request_id` SHALL be acknowledged without effect; one whose
+`request_id` is newer SHALL be retried until the record names it; one whose `request_id` is not a request of the loop
+SHALL be quarantined. A process with no memory of the loop SHALL, before classifying any redelivered input other than
+a task, read the newest retained request for the loop and, when it is newer than `published_request_id`, adopt it
+into the record by identity first. Recovery SHALL never compare rendered messages or result content to decide whether
+an input was applied.
 
 An approval deadline is process-local and is not a durable fact: a replaced process SHALL re-arm no approval deadline,
 and a loop in `awaiting_approval` SHALL stay in `awaiting_approval` until the approval is answered or the loop is
@@ -52,14 +55,6 @@ cancelled.
   `iterations = N+1`, `pending_tool_results` empty, any `pending_approval` cleared with `state = running`), then
   classifies the result as older, acknowledges it, and publishes nothing
 
-#### Scenario: A cold replacement adopts past a rejection-minted request and acknowledges the stale approval response
-
-- **GIVEN** a loop `awaiting_approval` at `R` whose gate was rejected, where the rejection minted and published `R(N+1)`
-  and the process crashed before the record was updated
-- **WHEN** the approval response is redelivered to a replacement process with no memory of the loop
-- **THEN** the replacement writes the record to `R(N+1)` with the gate cleared and `state = running` under
-  compare-and-swap, classifies the approval response as inapplicable, acknowledges it, and publishes nothing
-
 #### Scenario: A replaced process re-arms no approval deadline
 
 - **GIVEN** a loop whose record is `awaiting_approval` and whose process was replaced
@@ -80,27 +75,12 @@ cancelled.
 - **WHEN** the model response for `R(N+1)` is delivered
 - **THEN** the delivery is retried as not yet observable, and no effect is applied
 
-#### Scenario: A governance verdict redelivered after its waiter is gone
-
-- **GIVEN** a loop that restarted after proposing execution `e` under request `R` and later applied `e`'s result
-- **WHEN** the verdict for `e` is redelivered and no waiter exists
-- **THEN** the loop reads its record, finds `e` in `pending_tool_results` or `R` older than
-  `published_request_id`, and acknowledges the verdict without dispatching it
-
 #### Scenario: A terminal loop receives a result it cannot prove it applied
 
 - **GIVEN** a loop whose record is terminal
 - **WHEN** a tool result for that loop is redelivered and is not present in `pending_tool_results`
 - **THEN** it is acknowledged without effect, the inapplicable-result metric increments, and an audit log line names
   the loop, execution, and terminal state
-
-#### Scenario: A redelivered terminal adopts the published terminal by identity
-
-- **GIVEN** a loop whose durable terminal (`COMPLETE_<loopID>`) exists and whose record is not yet terminal, because the
-  process crashed after publishing the terminal event and before the record update
-- **WHEN** the input that produced the terminal is redelivered and this delivery derives a terminal whose content differs
-- **THEN** the loop adopts the durable terminal by loop ID and terminal kind, publishes it, writes the record terminal under
-  compare-and-swap, acknowledges, and logs the content difference at the audit line without retrying or quarantining
 
 #### Scenario: A task redelivered at iteration zero republishes the first request
 
