@@ -829,9 +829,22 @@
       The answer to the retained request then arrives at a process with no memory of the loop.
       Assertions, all on durable state: the record's revision MOVED, it names `<loopID>:req:2:0` (so the loop
       advanced an iteration rather than being rewritten), `iterations >= 1`, exactly TWO messages on
-      `agent.request.<loopID>` (the retained first and one next), the terminal exists, the response lane settled,
-      and `agentic-loop` is still healthy — the two shapes a refusal takes here are a failed health check
-      (quarantine) and an unsettled delivery (retry to MaxDeliver), and neither is present.
+      `agent.request.<loopID>` (the retained first and one next), the terminal is on `agent.complete.<loopID>`, the
+      response lane settled, and `agentic-loop` is still healthy.
+      **THREE refusal shapes, all distinguished** (checkpoint-4 review HIGH-2): (1) quarantine → the health
+      assertion; (2) retry to MaxDeliver → the settlement assertion, which now requires the ack floor to have
+      PASSED this delivery (`responseBaseline.AckFloor.Consumer + 1`) — `wantAckFloor = 0` was vacuous, satisfied by
+      any consumer that had ever acked anything, including one retrying this delivery to death; (3) **rebuilt, then
+      failed on the inherited deadline** (task 5.5) → the wait is on `agent.complete`, never on "a terminal", and
+      the failure path names `agent.failed` explicitly when it is the one that landed. Shape 3 is the subtle one:
+      it ACKNOWLEDGES the delivery and leaves the component healthy, so shapes 1 and 2 both read clean.
+      **The tier raced its own loop timeout** (HIGH-2). `configs/agentic.json` had `agentic-loop.timeout = "30s"`
+      against a replacement window of kill + `up --wait` + health settle, 10-25s on a warm host and more on a cold
+      one — so the stage was likely red on its own tier for a reason unrelated to disk, failing after 90s with a
+      message pointing at the recovery. Raised to `"180s"`; JSON carries no comments, so the reason is recorded in
+      `taskfiles/e2e/agentic.yml` beside the tier description. The stage also asserts the PREMISE now: it reads the
+      record's `TimeoutAt` after the replacement and fails loudly naming the budget and the file to change, rather
+      than timing out on a message that was never going to come.
       **Why the run is blocked, measured 2026-09-22.** `task e2e:agentic` → exit 201, 31s wall. The SemStreams
       container exits 1 during boot, before any stage runs:
       `Boot phase failed … boot_stage="stream-provisioning" error="ensure streams: create stream LOGS: create

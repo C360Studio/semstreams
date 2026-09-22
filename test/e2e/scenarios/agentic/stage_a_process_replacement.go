@@ -800,9 +800,27 @@ func joinHarnessFinalizationError(
 // revision moved, it names the SECOND request (so the loop advanced an
 // iteration, not merely got rewritten), exactly one next request went out on
 // agent.request.<loopID>, the loop reached its terminal, and the response lane
-// settled with agentic-loop still healthy — the two shapes a refusal would take
-// are a failed health check (quarantine) and an unsettled delivery (retry to
-// MaxDeliver), and neither is present.
+// settled with agentic-loop still healthy.
+//
+// There are THREE ways this can fail to be a recovery, and the assertions
+// distinguish all three:
+//
+//  1. QUARANTINE — the delivery is refused and the component latches. Caught by
+//     the agentic-loop health assertion.
+//  2. RETRY TO MaxDeliver — the delivery is never applied and never settles.
+//     Caught by the consumer-settlement assertion, which requires the ack floor
+//     to have PASSED this delivery rather than merely be nonzero.
+//  3. REBUILT, THEN FAILED ON THE INHERITED DEADLINE — the subtle one. TimeoutAt
+//     is written at loop birth and a rebuild does not refresh it (#1330, task
+//     5.5), so a replacement gap longer than the loop's timeout rebuilds the
+//     loop and immediately fails it. That ACKNOWLEDGES the delivery and leaves
+//     agentic-loop healthy, so shapes 1 and 2 both read clean; what betrays it
+//     is that the terminal lands on agent.failed rather than agent.complete.
+//     The wait at the end of this check is on agent.complete for exactly that
+//     reason, and the premise assertion below refuses to let the race go
+//     unnoticed: it reads the record's TimeoutAt after the replacement and says
+//     so, naming the budget, rather than timing out on a message that never
+//     comes.
 func (s *Scenario) verifyMidFlightLoopAcrossReplacement(
 	ctx context.Context,
 	result *scenarios.Result,
@@ -823,6 +841,13 @@ func (s *Scenario) verifyMidFlightLoopAcrossReplacement(
 	responseConsumer, err := agentStream.Consumer(ctx, loopResponseConsumerName)
 	if err != nil {
 		return fmt.Errorf("open loop response consumer: %w", err)
+	}
+	// The floor this delivery must PASS. wantAckFloor = 0 is vacuous — a
+	// consumer that has ever acked anything satisfies it, including one whose
+	// recovery delivery is still being retried to death.
+	responseBaseline, err := responseConsumer.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("read loop response consumer baseline: %w", err)
 	}
 
 	if _, err := agentStream.PauseConsumer(ctx, modelRequestConsumerName, time.Now().Add(2*time.Minute)); err != nil {
@@ -886,7 +911,37 @@ func (s *Scenario) verifyMidFlightLoopAcrossReplacement(
 		return fmt.Errorf("replacement components did not become healthy: %w", err)
 	}
 
+	// Assert the PREMISE before waiting on a message that depends on it. The
+	// loop inherits the TimeoutAt its birth wrote, and a rebuild does not
+	// refresh it, so if the replacement gap outran configs/agentic.json's
+	// agentic-loop.timeout the loop is already doomed: the recovery will
+	// rebuild it and then fail it, agent.complete will never arrive, and the
+	// wait below would spend 90s and blame the recovery. Say what actually
+	// happened instead.
+	gapCheck, err := waitForLoopRecord(ctx, loops, loopID, 10*time.Second, func(agentic.LoopEntity) bool {
+		return true
+	})
+	if err != nil {
+		return fmt.Errorf("read the loop record after the replacement: %w", err)
+	}
+	if !gapCheck.entity.TimeoutAt.IsZero() && time.Now().After(gapCheck.entity.TimeoutAt) {
+		return fmt.Errorf(
+			"the replacement gap outran the loop's own deadline (timeout_at %s, now %s): the loop will be rebuilt "+
+				"and then failed, not recovered. Raise agentic-loop.timeout in configs/agentic.json above the "+
+				"replacement window (see taskfiles/e2e/agentic.yml)",
+			gapCheck.entity.TimeoutAt.UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339))
+	}
+
+	// agent.complete, never merely "a terminal": a loop that was rebuilt and
+	// then failed on its inherited deadline settles on agent.failed, and that
+	// is the third refusal shape this check exists to catch.
 	if err := waitForStreamSubject(ctx, agentStream, "agent.complete."+loopID, 90*time.Second); err != nil {
+		failed, failedErr := streamSubjectCount(ctx, agentStream, "agent.failed."+loopID)
+		if failedErr == nil && failed > 0 {
+			return fmt.Errorf(
+				"the replacement settled the mid-flight loop on agent.failed, not agent.complete: it was rebuilt "+
+					"and then failed, most likely on the deadline it inherited from its record: %w", err)
+		}
 		return fmt.Errorf("replacement did not carry the mid-flight loop to a terminal: %w", err)
 	}
 	advanced, err := waitForLoopRecord(ctx, loops, loopID, 30*time.Second, func(entity agentic.LoopEntity) bool {
@@ -905,8 +960,8 @@ func (s *Scenario) verifyMidFlightLoopAcrossReplacement(
 	// Settlement before counting: a request appears on the stream before the
 	// delivery that produced it is acknowledged, so counting first can read one
 	// request while a duplicate is still inside its callback.
-	if err := waitForConsumerSettled(ctx, responseConsumer, 0, 30*time.Second); err != nil {
-		return fmt.Errorf("replacement response deliveries did not settle: %w", err)
+	if err := waitForConsumerSettled(ctx, responseConsumer, responseBaseline.AckFloor.Consumer+1, 30*time.Second); err != nil {
+		return fmt.Errorf("replacement response deliveries did not settle past the baseline floor: %w", err)
 	}
 	requests, err := streamSubjectCount(ctx, agentStream, requestSubject)
 	if err != nil {
