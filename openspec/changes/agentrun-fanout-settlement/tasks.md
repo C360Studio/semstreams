@@ -638,7 +638,58 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
 
 ## 10. Gates
 
-- [ ] 10.1 `task lint`, `task test`, `task test:race`, `task schema:generate` with empty `schemas/`/`specs/` drift,
+- [x] 10.1 `task lint`, `task test`, `task test:race`, `task schema:generate` with empty `schemas/`/`specs/` drift,
       `task openspec:validate`, `task spec:properties`, `task check:push`; commands and exit codes in the PR body.
-- [ ] 10.2 `task e2e:agentic` green on the pushed head (the BREAKING rule, `docs/contributing/02-e2e-tests.md:299`),
+      Run 2026-09-22 from the worktree root at `dc9a2f7b` (the last code commit; only this evidence follows it).
+      Every gate's exit code is the command's own, captured as `EXIT=$?` immediately after it, never after an echo:
+
+      | Command | Exit | Final line |
+      |---|---|---|
+      | `task lint` | 0 | `ok  	github.com/c360studio/semstreams/test/natsclient	0.662s` |
+      | `task test` | 0 | `?   github.com/c360studio/semstreams/vocabulary/rulepacks   [no test files]` |
+      | `task test:race` | 0 | same final line; `ok  github.com/c360studio/semstreams/service  7.861s` |
+      | `task schema:generate` | 0 | `Schemas and OpenAPI spec generated` |
+      | `git diff --stat schemas/ specs/` | 0 | no output — no drift |
+      | `task openspec:validate` | 0 | `Totals: 56 passed, 0 failed (56 items)` |
+      | `task spec:properties` | 0 | `spec-properties: 288/288 citations resolve.` |
+      | `go run ./cmd/entity-id-audit .` | 0 | `entity ID audit passed: 1333 structured candidates across 1 roots` |
+      | `git diff --check b7ce8727..HEAD` | 0 | no output |
+      | `task check:push` | 0 | `[INTEGRATION] tests complete`; 0 lines beginning `FAIL` |
+      | `git status --porcelain` | 0 | no output — clean |
+
+      The denominator is stated deliberately: `task test` and `task test:race` each produced 177 package result
+      lines with 0 lines beginning `FAIL`, so the green is over the whole tree and not over a truncated tail. New
+      test files were committed before `task spec:properties` ran, so they are inside its tracked-file denominator
+      rather than silently skipped.
+      `git log --oneline 647a16f3..HEAD` for this checkpoint:
+      `6b002817` probe handler and wiring; `867cb225` the BaseService health-race measurement;
+      `287fb8b3` the tier stages; `97703c65` per-proof result keys and the measured tier duration;
+      `dc9a2f7b` the milestone health test's wait; `6dde2eed` this evidence.
+- [x] 10.2 `task e2e:agentic` green on the pushed head (the BREAKING rule, `docs/contributing/02-e2e-tests.md:299`),
       every stage's result verbatim in the PR body.
+      Ran 2026-09-22 at `6dde2eed`, the final head (this evidence is the only later commit). Host state before the
+      run, pasted: `pgrep -fl e2e.test` printed nothing (exit 1), `docker compose ls` listed no stacks.
+      `task e2e:agentic` exit 0:
+      `level=INFO msg="Scenario completed successfully" duration=5m23.017389458s ... assertions_run=16`.
+      The runner emits no per-stage PASS line: `Execute` records `<stage>_duration_ms` for each stage that ran to
+      completion and returns at the FIRST failing stage with `<stage> failed: <err>`, so a recorded duration IS that
+      stage's pass and the absence of any `level=ERROR` line is the absence of a failure. All 19 stages in execution
+      order, with the durations the run printed (ms): `verify-components` 2; `capture-baseline` 6;
+      `arm-milestone-exhaustion` 8; `inject-task` 0; `wait-for-completion` 512; `verify-terminal-response` 5;
+      `validate-trajectory` 5; `verify-graph-triples` 3; `verify-tool-execution` 10; `verify-durable-tool-replay`
+      44581; `verify-streaming-metrics` 104959; `verify-tool-call-governance` 12;
+      `verify-stage-a-process-replacement` 78781; `verify-milestone-settlement` 93337; `walk-approval-path` 477;
+      `refuse-non-canonical-approval` 22; `walk-signal-path` 264; `refuse-non-canonical-signal` 22;
+      `validate-results` 0. `assertions_run=16` equals the count `assertingStageCount()` derives from the same list,
+      and `TestStagesAreExactlyThisOrderedList` holds the list itself, so the number cannot agree with a list it no
+      longer describes.
+      The stage-D measurements the run published, one per proof:
+      `milestone_exit-before-ack_agentrun-milestone-complete_handler_attempts:2` /
+      `..._durable_effects:1`; `milestone_exit-before-ack_agentrun-milestone-failed_handler_attempts:2` /
+      `..._durable_effects:1`; `milestone_panic-once_agentrun-milestone-failed_handler_attempts:2` /
+      `..._durable_effects:1`; `milestone_exhaustion_attempts:5`. Re-invocation plus an idempotent effect count on
+      both lanes, and the finite ceiling read from the handler's side.
+      The tier is now 5m23s, up from the ~2m its description carried; `taskfiles/e2e/agentic.yml` records the
+      measured figure rather than the stale one. An earlier green run of the same stages at `287fb8b3` took
+      5m23.074s, so the cost is the two AckWait expiries, three container replacements and the exhaustion wait, not
+      run-to-run noise.
