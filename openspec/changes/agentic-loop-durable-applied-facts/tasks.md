@@ -131,6 +131,36 @@
       `go test -race -count=3 -tags=integration -p 2` over the two rewritten W2 files plus
       `task_redelivery_integration_test.go`: `ok … 5.242s`.
 
+      **Amended 2026-09-22 (checkpoint-3 review, BLOCKING-2): a retained request is not the conversation.**
+      All three mint sites wrap the conversation in `prependIterationContext` (`handlers.go:316`), so the retained
+      `AgentRequest` opens with an `[Iteration Budget]` line and, when the loop has a working list, a
+      `[Working list …]` block — both Role `system`. The rebuild seated them into `RegionSystemPrompt`, pinning ONE
+      iteration's framing at the top of the loop's system prompt for the rest of its life while every later request
+      prepended a fresh one; the reviewer read `[Iteration Budget] Iteration 1 of 20 (5% used).` back off the
+      rebuilt context on the real-broker W2 path. `isIterationPrefixMessage` (`handlers.go`, beside the function it
+      inverts) is the filter, and `restoreLoopFromRequest` drops the LEADING run only — a user may type either
+      string, and a message further in is the conversation. The two opening literals are now constants both builders
+      and the predicate read, so the recogniser cannot drift from the writer.
+      Two claims corrected with it: the doc comment no longer asserts the retained body IS `GetContext()`'s order
+      without qualification, and it names the second residual this exposed — system messages are re-seated together
+      at the front, so a request that interleaved one does not get that interleaving back. The migration note says
+      both in adopter terms.
+      Tests, fixtures built by the PRODUCTION prefixer rather than by hand: `loop_rebuild_test.go` "the per-iteration
+      prefix belongs to the request, not to the conversation" (drives `handler.prependIterationContext` with a real
+      todo list, asserts the rebuilt `GetContext()` equals the un-prefixed conversation) and "a message that only
+      looks like the prefix is still the conversation" (the leading-only rule). On the real broker the W2 tool-lane
+      case asserts the rebuilt conversation opens on the loop's own task and that no message carries either prefix.
+      Mutant (iv): delete the leading-prefix skip in `restoreLoopFromRequest`. `state.go`
+      `eaba19f1844225c316baeed4e7dff350` → `c00431a5f7ccb0e9ed6d5570104a24b1` → restored
+      `eaba19f1844225c316baeed4e7dff350`; RED on the unit arm (exit 1) AND on the real-NATS W2 arm (exit 1), green
+      on restore, `git status --porcelain` empty after.
+
+      **Declared degrade, metered (checkpoint-3 NIT-3).** The rebuild's `startTrajectory` failure continues with a
+      warn; it now also counts `recovery_degradations_total{site="rebuilt_trajectory_aggregate"}`. No test asserts
+      that increment, deliberately: `trajectoryManager.startTrajectory` (`trajectory.go:24-32`) returns `nil`
+      unconditionally, so the branch is unreachable today. The instrumentation is there for the day it is not;
+      inventing a fake failure to assert it would test the fake.
+
       **Migration note.** `docs/operations/migration-beta162-to-beta163.md` § "A rebuilt loop's conversation is one
       region" records the one visible consequence of the one-region replay: compaction attribution does not survive
       a process replacement. No message is lost and none moves, but per-region sizes reset at the replacement. The
@@ -327,6 +357,24 @@
       (`C:1775`, `C:2446`) left all seven arms green. `TestColdSettlementArmsAdoptBeforeTheyRefuseTheDelivery`
       drives `handleResponseMessage` and `handleToolResultMessage` through `deliverylane.Consume` and reads the
       record afterwards; both its arms go red on that mutant.
+      **Amended 2026-09-22 (checkpoint-3 review, HIGH-1): step 0 adopts only into a record that NAMES a request.**
+      `orderAgainstPublished` gives an empty `PublishedRequestID` the pre-#1330 answer on purpose —
+      `requestOrderUnnamed`, retry to the loop's holder, settle nothing — and step 0 contradicted it: with the field
+      empty the ordering guard was skipped entirely and the newest retained request was written onto the record
+      together with `PendingToolResults = nil`, so the evidence the holder was about to apply was drained by the one
+      process that could not apply it, on a delivery it then retried anyway. `adoptNewerRetainedRequest` now returns
+      as soon as it reads an unnamed record: no stream read, no write. The seven arms above are unaffected — each
+      seeds a record that names a request.
+      Test: `loop_carrier_test.go` `TestStep0LeavesAnUnnamedRecordExactlyAsItFoundIt` — an unnamed record with a
+      non-empty applied set and a newer request retained, driven through the real cold tool lane, asserting Retry
+      with revision, applied set, request name and iteration count all unchanged.
+      Mutant (v): make the early-return condition constant false in `adoptNewerRetainedRequest`. `loop_evidence.go`
+      `9ac5734981c08360d67bb522e9a6f554` → `08695b3a2e35e77f08e61b859d278294` → restored
+      `9ac5734981c08360d67bb522e9a6f554`; RED at "step 0 adopted into a record the classification refuses to order
+      against" (exit 1), green on restore (exit 0), `git status --porcelain` empty after.
+      One fixture moved with the rule: `TestAColdAdoptAndAWarmWriteOfOneLoopDoNotRefuseEachOther` seeded an UNNAMED
+      record, so under the new arm the adopt it is about never reaches the bucket. Its loop now names a request,
+      which is the state every loop past its birth is in.
 - [x] 2.6 Birth by `Create` and CAS-loss release (docket OQ3, owner ruling 2026-09-22): birth writes the record with
       `loopsBucket.Create` (`KV:211`) so a second consumer's birth is refused with `ErrKVKeyExists` (`KV:218`) and
       takes the cold fork; a CAS loss anywhere on the carrier releases the loop's process state (`ST:574` `DeleteLoop`,
