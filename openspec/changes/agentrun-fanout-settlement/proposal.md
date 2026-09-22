@@ -54,8 +54,10 @@ conversion is forbidden. The five-question design docket was ruled "as recommend
   error`, `MilestoneSubscriber.RegisterMetrics(metric.MetricsRegistrar) error`; removal `natsclient.ConsumeWithHeartbeat`
   — an incompatible change in a frozen package, declared with a `!` commit; `scripts/api-compat.sh` has no waiver, so
   `task api:compat:report` already lists `natsclient` among 15 incompatible Tier 1 packages at `b7ce8727`, so this layer adds one line (`ConsumeWithHeartbeat: removed`) under it and no package; the posture is still ADR-106's pre-RC descending count.
-  Behavior behind an unchanged signature: `agentrun.ResolveRun` errors gain the `errs` Invalid class (chains kept; one
-  in-tree caller, no sister callers).
+  Two behavior changes behind unchanged signatures, invisible to `api-compat.sh`: `agentrun.ResolveRun` errors gain the
+  `errs` Invalid class (chains kept; one in-tree caller, no sister callers), and `MilestoneSubscriber.HandleEvent`
+  returns nil exactly when the attempt would be acknowledged where it previously returned an error only for decode and
+  NATS failures and swallowed every handler error (no present sister caller — semteams registers no handler).
 - New metric: `semstreams_agentrun_milestone_decisions_total{lane,decision,reason}`. No histogram.
 - Operator-visible: `/health`, the NATS-published service health and `/services/health` report `milestone` unhealthy
   with the cause after a lane stops; an `InProgress` failure now stops the lane where it was previously a WARN.
@@ -84,8 +86,11 @@ cannot observe about that, and the two milestone lanes' finite delivery policy a
 
 `ConsumeWithHeartbeat` is removed without alias (#1249/#759). Bindings compose `ValidateHeartbeatDeliveryPolicy` +
 `ConsumeDeliveryWithHeartbeat` (or `SettleDelivery`/`SettleDeliveryWithRetry`) and return a typed decision from their
-own definition of done; nil-means-Ack is gone. `agentrun.ResolveRun` errors now carry the `errs` Invalid class (chains
-kept). Known direct callers at beta.160: SemDev `internal/conversationchannel/component.go:476` and
+own definition of done; nil-means-Ack is gone. Two AgentRun behaviors changed behind unchanged signatures, so no
+compiler will point at them: `agentrun.ResolveRun` errors now carry the `errs` Invalid class (chains kept), and
+`MilestoneSubscriber.HandleEvent` now returns nil EXACTLY when the attempt would be acknowledged — it used to return an
+error only for decode and NATS failures and logged every handler error away, so a direct caller that reads nil as
+success now receives the same classified cause the durable lanes settle on. Known direct callers at beta.160: SemDev `internal/conversationchannel/component.go:476` and
 `internal/intake/component.go:378` (heartbeat 20s against AckWait 1m passes the ceiling); three SemDev comments
 (`conversationchannel/apply.go:113`, `:202`; `conversationchannel/component.go:435`; `intake/component.go:355`) size
 `max_deliver 10` on the removed helper's fixed 30s NAK — `DelayedDeliveryRetry(30*time.Second)` keeps that budget.

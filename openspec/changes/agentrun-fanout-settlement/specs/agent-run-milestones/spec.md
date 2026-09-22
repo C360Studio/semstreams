@@ -19,9 +19,18 @@ continue with a nil run; `ErrEntityNotLifecycleManaged` → Retry (the ADR-049 f
 later `Manager.Create`); `ErrWorkflowNotRegistered` → Quarantine (a process-wide composition defect); a decoded
 terminal naming no run and no loop, a non-`*AgentRun` result, and every `ResolveRun` entity-ID grammar, parent-type,
 hop-bound, or non-string-value failure → Terminate with a non-nil `errs` Invalid cause; every other error by its `errs`
-class, unknown defaulting to Retry. Retry is bounded by the lane's finite `MaxDeliver`. Every non-Ack decision SHALL
-emit exactly one log line carrying the source identity and exactly one increment of
+class — Fatal → Quarantine, unknown → Retry. Retry is bounded by the lane's finite `MaxDeliver`. Every non-Ack decision
+SHALL emit exactly one log line carrying the source identity and exactly one increment of
 `semstreams_agentrun_milestone_decisions_total{lane,decision,reason}`.
+
+The `reason` label set SHALL be closed and SHALL be exactly these ten, one per decision row: `decode` (bytes that are
+not a readable terminal); `not_managed` (`ErrEntityNotLifecycleManaged`); `composition` (`ErrWorkflowNotRegistered`);
+`resolution_type` (the lifecycle participant is not an `*AgentRun`); `resolution_invalid` (an entity-ID grammar,
+parent-type, hop-bound or non-string-value failure, and a terminal naming no run and no loop); `resolution_fatal` (a
+Fatal-classified resolution failure); `resolution_transient` (a resolution failure no `errs` class places);
+`handler_invalid` (every handler that spoke rejected the input); `handler_transient` (a handler is not ready yet);
+`handler_fatal` (a handler panicked or failed unplaceably). Adding, renaming or retiring a label is a change to this
+requirement, never an implementation detail.
 
 #### Scenario: a partial fanout is not acknowledged
 

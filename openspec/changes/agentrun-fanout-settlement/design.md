@@ -96,7 +96,9 @@ itself drains the exact handle after `react` returns (`:240-241`); `react` is re
 `*deliverylane.Binding`; `stop()` calls `Drain()` on both (both-drain-first, `:718`, holds; `Drain` is once-only, so a
 lane the observer already drained is a no-op), awaits both `Closed()` (`:727`, `:730`), calls `o.cancel()` (`:743`,
 ending the observers' `runCtx`), then joins both `Done()`, which is never nil (`deliverylane.go:216`) — the join #1357's
-design § 6 names as the one draft 4 never specified. The closure at `:810` becomes
+design § 6 names as the one draft 4 never specified. That join is bounded by the Stop context, not unconditional:
+`waitMilestoneLane` selects on the signal or `ctx.Done()` (`agentrun.go:873-879`), so a Stop whose context has already
+expired returns just after `o.cancel()` (`:851`) with a non-nil `stopErr` naming the lane signal it outlived. The closure at `:810` becomes
 `result, admitted := deliverylane.Consume(msgCtx, msg, policy, lane.admission)` followed by `if !admitted { return }` —
 a refusal returns the zero `DeliveryResult`, whose `Err()` is non-nil by construction
 (`internal/deliverylane/deliverylane.go:126-132`), so an unguarded `result.Err() != nil` branch would log a refused
@@ -118,6 +120,12 @@ dispatch `component.go:185`) — NOT `Service.RegisterMetrics`, which nothing ca
 vec built in the constructor (`agentrun.go:521`), so unregistered increments are local no-ops. Wiring: one line per root,
 `cmd/semstreams/main.go:347`, `cmd/e2e-semstreams/main.go:272` (`metricsRegistry` in scope `:170`, `:159`). Cost: two
 hand-copied roots (#1301); semteams' root (`main.go:939`) is silent until it adds the call. No histogram (L0 `design.md:309-310`).
+The `reason` label set is CLOSED at ten, one per § 2.3 row, and a later label is a spec change, never a rename:
+`decode` (undecodable bytes), `not_managed` (R2), `composition` (R1), `resolution_type` (non-`*AgentRun`),
+`resolution_invalid` (grammar, parent-type, hop bound, non-string value, and the no-run-no-loop guard),
+`resolution_fatal` (a Fatal-classified resolution failure — in production, graph's exact-response error
+`exact_entity.go:97`), `resolution_transient` (the unclassifiable remainder, bounded by `MaxDeliver`),
+`handler_invalid` (O1), `handler_transient`, `handler_fatal` (panic, `errs` Fatal, or unplaceable).
 
 2.8 Consumer policy (O2). Both lanes keep `MaxDeliver 5` (`agentrun.go:832`), `AckWait 30s` (`:833`),
 no BackOff, heartbeat 10s (ceiling 15s, `delivery_settlement.go:191`, unchanged at L1), semantic
@@ -207,8 +215,13 @@ with reason labels; `ErrWorkflowNotRegistered` → Quarantine + `DeliveryFatal()
 
 `agentrun.go` ≈ +170/−40; `delivery_owner.go` copy +75 → 0 after the 2026-09-19 amendment (consumes `internal/deliverylane`, ~+15 wiring); `milestone_service.go` +30; two mains +2; metric +40; unit +240;
 integration +150; natsclient production −116, tests −540, ratchet ±80; e2e handler + scenario + stage ≈ +260; docs ≈ 40;
-OpenSpec ≈ 300. ≈ +1,320 / −700 over ≈ 25-30 files, 3x inside the ~100-file breaker. `pkg/lifecycle` untouched. The one
-change `api-compat.sh` cannot see: `ResolveRun`'s errors gain the `errs` Invalid class (one caller `:651`, no sister callers; § 4).
+OpenSpec ≈ 300. ≈ +1,320 / −700 over ≈ 25-30 files, 3x inside the ~100-file breaker. `pkg/lifecycle` untouched. TWO changes `api-compat.sh` cannot see, both behind
+unchanged signatures, and both owed to 8.3's migration note: (1) `ResolveRun`'s errors gain the `errs` Invalid class
+(one caller `:651`, no sister callers; § 4); (2) `HandleEvent`'s return contract flips from "an error only for
+infrastructure failures (decode, NATS)", with handler errors logged and not propagated (`b7ce8727` `agentrun.go:572-574`),
+to "nil exactly when the attempt would be acknowledged" — it now returns the classified cause of every non-Ack decision
+(`agentrun.go:605-613`). Zero present sister callers: semteams composes the subscriber and registers no handler
+(`cmd/semteams/main.go:939`), so (2) is migration-note material, not a break.
 
 ## Round 4 changes
 

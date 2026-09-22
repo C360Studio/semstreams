@@ -53,8 +53,11 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       Evidence: `Start` now validates one `HeartbeatDeliveryPolicy` per lane before acquisition
       (`ValidateHeartbeatDeliveryPolicy(ctx, cfg, milestoneHeartbeatInterval, retry, s.deliveryWork(lane))`) and the NATS
       callback is `consumeLane` in `agentic/agentrun/milestone_settlement.go`: `deliverylane.Consume` then
-      `if !admitted { return }` (B1). Decode Terminates with reason `decode`. `git grep -n -E 'ConsumeWithHeartbeat\(' --
-      '*.go' ':!**/*_test.go'` now returns the declaration only.
+      `if !admitted { return }` (B1). Decode Terminates with reason `decode`, observed through the lane by
+      `TestMilestoneDecodeFailureTerminatesAndCounts` (undecodable bytes Term once, are neither Acked nor Naked, reach
+      no handler, and produce exactly one `terminate`/`decode` increment and one decision log line). The checkpoint-1
+      review found this row ticked with NO test behind it; the test is the correction. `git grep -n -E
+      'ConsumeWithHeartbeat\(' -- '*.go' ':!**/*_test.go'` now returns the declaration only.
 - [x] 3.2 Classify resolution on the AgentRun side: `errors.Is` against `ErrEntityNotFound`
       (`pkg/lifecycle/manager.go:205`) → nil run; `ErrEntityNotLifecycleManaged` (`:244`) → Retry (R2);
       `ErrWorkflowNotRegistered` (`:169`) → Quarantine (R1); otherwise `errs.Classify` (`pkg/errs/errs.go:280`):
@@ -66,10 +69,41 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       `pkg/lifecycle` is untouched (`git diff --stat pkg/lifecycle` empty).
 - [x] 3.3 Wrap `errs.WrapInvalid` (`errs.go:435`) at the AgentRun-side origins: `agentrun.go:393`, `:405`, `:436`,
       `:455`, `:462`, `nats_reader.go:68` (chains kept, no signature change).
-      Evidence: `semerrs.WrapInvalid` at the five `ResolveRun` origins (build loop entity ID, build run entity ID from
-      triple, build run entity ID from ancestry root, parent-not-a-loop-entity, hop bound) and at
-      `nats_reader.go` `getStringTriple`'s non-string value. Chains kept via `%w`; no signature changed. The
-      `Manager.Get` and triple-read sites are deliberately NOT wrapped: they forward the reader's own class.
+      Evidence: the five `ResolveRun` origins were wrapped in the first pass; `nats_reader.go`'s non-string value was
+      NOT, and the checkpoint-1 review caught it (fixed in `f6ca4ca5`). Unwrapped it reached `errs.Classify`'s unknown
+      default and settled Retry / `resolution_transient` — against `design.md:68`, the delta
+      (`specs/agent-run-milestones/spec.md:20-22`) and I7 — and because `errs.IsTransient` places an unclassified error
+      by SUBSTRING first, the disposition also turned on whether the interpolated entity ID happened to contain
+      "network" or "timeout".
+      The class sweep, every error origin that can reach `classifyResolutionFailure`, as `site → class it carries →
+      design row` (line numbers on this branch after the fix):
+      `nats_reader.go:50` nil exact reader → unclassified, `Classify` default Transient → the unmatchable row
+      (`design.md:63`): deterministic but carrying no sentinel and no class, and unreachable through
+      `NewNATSLoopTripleReader`, which always supplies a reader. Left unwrapped: I7 Terminates only failures that are
+      deterministic AND matchable, and this one is unmatchable.
+      `nats_reader.go:59` exact-read failure → `%w`, forwards the graph reader's own class → the forwarding row
+      (`design.md:64`): Invalid→Terminate, Fatal→Quarantine, else Retry.
+      `nats_reader.go:75` non-string value → `errs` Invalid (WRAPPED HERE) → `design.md:68` Terminate
+      `resolution_invalid`.
+      `agentrun.go:399`, `:410`, `:438` entity-ID grammar → Invalid (wrapped) → `design.md:68`.
+      `agentrun.go:452` parent is not a loop entity, `:461` hop bound → Invalid (wrapped) → `design.md:68`.
+      `agentrun.go:405`, `:432` triple reads → `%w` forward → `design.md:64`.
+      `agentrun.go:414`, `:443`, `:751` `Manager.Get` → `%w` forward or returned as-is, carrying the lifecycle
+      sentinels → the `ErrEntityNotFound` / `ErrEntityNotLifecycleManaged` / `ErrWorkflowNotRegistered` / projection
+      rows (`design.md:60`, `:61`, `:62`, `:65`).
+      `agentrun.go:760` terminal names no run and no loop → Invalid (wrapped) → `design.md:67`.
+      `milestone_settlement.go:139` `asAgentRun` → Invalid over the `errUnexpectedRunType` sentinel →
+      `design.md:66` Terminate `resolution_type`.
+      So after the fix every origin a design row classifies Invalid is wrapped, and the only unwrapped origins are the
+      `%w` forwards the design requires to forward plus the one unmatchable nil-reader guard. Chains kept via `%w`; no
+      signature changed.
+      Mutation evidence for the wrap (`cp` backup + md5, `[applied]` printed between mutating and testing, md5
+      re-checked after restore): `agentic/agentrun/nats_reader.go` md5 `9a1b3740172b4a7c9eadb8ccf4dd61ce` before and
+      after. Mutant G, the `semerrs.WrapInvalid` removed so the site returns the bare `fmt.Errorf` again:
+      `TestMilestoneResolutionInvalidTerminates/non-string_predicate_value` went red with
+      `expected: "resolution_invalid" / actual: "resolution_transient"` and `terms = 0`, while every other case in that
+      table and `TestMilestoneResolutionFatalQuarantines` stayed green — so the test kills exactly this defect and
+      reaches the production site.
 - [x] 3.4 The dead identity guard (`agentrun.go:646-647`) Terminates with cause
       `errs.WrapInvalid(errors.New("terminal names no run and no loop"), "agentrun", "HandleEvent", "resolve")`, never
       nil (`interpretDeliveryWork`, `natsclient/delivery_settlement.go:403`/`:407`).
@@ -94,6 +128,15 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       `TestMilestoneNilReaderAndProjectionFailuresRetry` drive the REAL `lifecycle.NewManager`, so their errors are
       production values, not strings a test invented. Each asserts the decision REASON as well as the settlement method,
       because four rows terminate and three retry.
+      Corrected by the checkpoint-1 review: `TestMilestoneResolutionInvalidTerminates`'s non-string case handed
+      `stubTripleReader` an error the TEST had pre-wrapped Invalid, under a comment claiming it was the class
+      `NATSLoopTripleReader` assigns — a reconstruction that could not fail. It now builds the REAL
+      `NATSLoopTripleReader` over the REAL `graph.ExactEntityReader`, faking only the NATS request, and reads a real
+      authority reply whose `agent.loop.run` object is a number.
+      Added: `TestMilestoneResolutionFatalQuarantines` for the `resolution_fatal` row, which no test reached. Its class
+      comes from the production seam — an exact authority reply with no entity is `errs` Fatal
+      (`graph/exact_entity.go:97`) and `getStringTriple` forwards the class — and the row Quarantines, settles nothing,
+      and latches the lane.
 - [x] 3.7 Log and counter on every non-Ack decision (I5): one line with `source_message_id`, `loop_id`, `category`,
       `lane`, `reason`; one increment. Test: `TestMilestoneNonAckDecisionsLogOnceAndCountOnce`.
       Evidence: `observeDecision` emits one `slog.Warn` with the five fields and one
@@ -105,7 +148,9 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       restored file against the backup. Then delete the `SourceMessageID` copy at `:586` and record 2.2's failure the
       same way.
       Evidence (`cp` backup + md5, `[applied]` printed between mutating and testing, md5 re-checked after restore):
-      `agentic/agentrun/agentrun.go` md5 `9a09f96f5f67f05270a393abe3126aa1` before and after BOTH mutants.
+      `agentic/agentrun/agentrun.go` md5 `9a09f96f5f67f05270a393abe3126aa1` before and after BOTH mutants. Every md5 in
+      3.8 and 4.2 is the file at the commit its mutant ran on — A/B/C at `47bf9c83`, D/E1 at `79c2c0bc`, E2/F at
+      `6bbbb7f7` — so `git show <rev>:<file> | md5` reproduces each one from the branch.
       Mutant A, `switch aggregateMilestoneOutcomes(outcomes)` to `switch outcomeDone` (the aggregate call deleted, so the
       work always returns Ack): `TestMilestoneFanoutAcksOnlyWhenEveryHandlerReturnsNil`,
       `TestMilestoneFanoutRetriesOnTransientHandlerError`, `TestMilestoneFanoutTerminatesOnAllInvalid`,
@@ -169,15 +214,26 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
 - [x] 4.3 Control-plane rows: an `InProgress` failure (`natsclient/delivery_settlement.go:372`/`:377`) and unavailable
       metadata (`:390`) latch the lane and surface in health:
       `TestMilestoneUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner`.
-      Evidence: `TestMilestoneUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner` green under `-race`: nothing is
-      settled, no handler runs, only the exact lane drains, that lane stops admitting, and `DeliveryFatal()` carries
-      `delivery_metadata_unavailable`. The `InProgress` row reaches the owner through the identical
-      `DeliveryResult.OwnerStopRequired` seam the admission latches on, and `natsclient/delivery_settlement_test.go`
-      owns the InProgress-to-owner-stop mapping. `MilestoneService.Health()` itself stays with task 5.1.
+      Evidence: the metadata row is proven —
+      `TestMilestoneUnavailableDeliveryMetadataQuarantinesAndStopsExactOwner` green under `-race`: nothing is settled,
+      no handler runs, only the exact lane drains, that lane stops admitting, and `DeliveryFatal()` carries
+      `delivery_metadata_unavailable`.
+      The `InProgress` row is NOT proven, and the checkpoint-1 review corrected this line: it claimed
+      `natsclient/delivery_settlement_test.go` owns the InProgress-to-owner-stop mapping, and
+      `grep -n InProgress natsclient/delivery_settlement_test.go` returns nothing (exit 1, stderr visible). The only
+      unit test that fails `InProgress` is `natsclient/heartbeat_test.go` (`inProgressErr` at `:40`/`:103`, used by
+      `TestConsumeWithHeartbeat_ReturnsErrorOnInProgressFailure`, `..._CancelsWorkOnInProgressFailure`,
+      `..._JoinsCleanupErrorOnInProgressFailure`) and it exercises the LEGACY `ConsumeWithHeartbeat`, which task 7.3
+      deletes — so `natsclient/delivery_settlement.go:372-378` (`ownerStopNeeded = true` on a failed lease renewal) has
+      no coverage on the typed path today. What holds by construction is only that the row reaches the owner through
+      the same `DeliveryResult.OwnerStopRequired` seam the admission latches on, which the metadata test does exercise.
+      7.3 now carries the port item that closes it. `MilestoneService.Health()` itself stays with task 5.1.
 
 ## 5. Health and metrics (O3; design § 2.7)
 
-- [ ] 5.1 Add `MilestoneSubscriber.DeliveryFatal() error`. `MilestoneService.Health()` override (the
+- [ ] 5.1 `MilestoneSubscriber.DeliveryFatal() error` LANDED in checkpoint 1 (task 4.1/4.2, on `*MilestoneSubscriber`
+      in `milestone_settlement.go`, and listed by `task api:compat:report` under Compatible changes); only the
+      `Health()` override below remains. `MilestoneService.Health()` override (the
       `service/base.go:209` pattern) type-asserts `interface{ DeliveryFatal() error }` on the `milestoneStarter`
       (`service/milestone_service.go:21-22`, unchanged) and returns `health.NewUnhealthy("milestone", …)`.
       Test: `TestMilestoneServiceHealthReportsDeliveryFatal`, observed through `/health`
@@ -211,7 +267,14 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       guard (`:425`).
 - [ ] 7.3 Delete `natsclient/heartbeat_test.go` (407 lines) and `heartbeat_integration_test.go` (133) after porting any
       claim without a twin in `delivery_settlement_test.go` / `delivery_settlement_integration_test.go`; list the
-      ported claims in the PR body.
+      ported claims in the PR body. One port is already known and is NOT optional: the InProgress-failure → owner-stop
+      case has no twin. Before deleting `heartbeat_test.go`, port
+      `TestConsumeWithHeartbeat_ReturnsErrorOnInProgressFailure`, `..._CancelsWorkOnInProgressFailure` and
+      `..._JoinsCleanupErrorOnInProgressFailure` (`heartbeat_test.go:283`, `:304`, `:354`; the `inProgressErr` mock at
+      `:40`/`:103`) to the typed path as a `ConsumeDeliveryWithHeartbeat` test — proposed name
+      `TestConsumeDeliveryWithHeartbeatInProgressFailureRequiresOwnerStop` — asserting that a failed lease renewal
+      cancels the work, joins `ErrHeartbeatFailed`, and returns a result with `OwnerStopRequired()` true
+      (`delivery_settlement.go:372-378`). Task 4.3's matrix row depends on it.
 - [ ] 7.4 Commit as `refactor(natsclient)!: remove ConsumeWithHeartbeat`. Record in the PR body that
       `task api:compat:report` at `b7ce8727` lists 15 incompatible Tier 1 packages against `v1.0.0-beta.162`,
       `natsclient` (`NewDurableHandler: removed`) and `agentic/agentrun` (`EntityIDPattern`, `Mint`) among them; this
