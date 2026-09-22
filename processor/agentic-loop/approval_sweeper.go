@@ -37,9 +37,13 @@ const approvalTimeoutSystemApprover = "system:approval-timeout"
 // synth-rejection through the existing HandleApprovalResponse path
 // rather than leaving the gated tool_call orphaned indefinitely.
 //
-// Restart-safe: PendingApproval is KV-persisted with RequestedAt and
-// Timeout, so a restored loop's deadline is computed correctly on the
-// first sweep after process restart.
+// Memory-only, deliberately (#1330, docket OQ2): the sweep reads the
+// loops THIS process holds, and no startup pass reads AGENT_LOOPS to
+// restore the ones it does not. PendingApproval is KV-persisted with
+// RequestedAt and Timeout, so a loop a redelivery rebuilds here comes
+// back with its original deadline already computed; a loop nothing
+// rebuilds is never swept by this process at all and stays parked
+// until the approval is answered or the loop is cancelled.
 func (c *Component) runApprovalTimeoutSweeper(ctx context.Context) {
 	ticker := time.NewTicker(approvalSweepInterval)
 	defer ticker.Stop()

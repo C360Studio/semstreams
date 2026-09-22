@@ -221,7 +221,36 @@
 // The loops KV-write output is the sole loop bucket declaration (default AGENT_LOOPS).
 // The removed top-level loops_bucket key fails configuration admission. Startup observes
 // History 10, TTL 24h and nonbinding MaxBytes before work. The 12h approval limit
-// provides nominal grace, not a recovery guarantee; replacement preserves retained deadlines.
+// provides nominal grace, not a recovery guarantee.
+//
+// # Recovery across a process replacement
+//
+// Nothing in this process survives a replacement. A loop's durable facts are its
+// AGENT_LOOPS record and the AgentRequest the stream retains for it, and four
+// invariants make the pair decidable (#1330):
+//
+//   - I1. LoopEntity.PublishedRequestID names the request the loop has outstanding, and
+//     while the record exists that exact AgentRequest is retained on agent.request.<loopID>.
+//   - I2. The keys of PendingToolResults are the executions already applied against that
+//     request - membership only, never rendered content.
+//   - I3. Iterations moves only in the update that moves PublishedRequestID.
+//   - I4. A PendingApproval names the request the record names.
+//
+// A replacement therefore classifies a redelivered model response or tool result by
+// ORDERING its RequestID against PublishedRequestID, never by comparing conversation
+// content: older is acknowledged without effect, newer is retried until the record names
+// it, and one naming a request of another loop is quarantined. A delivery naming the
+// current request rebuilds the loop from the record plus the retained request rather than
+// refusing it; the replayed conversation lands in one region, so compaction attribution
+// starts over (docs/concepts/13-agentic-systems.md).
+//
+// An approval deadline is not recovered. PendingApproval is durable, but the timer is the
+// snapshot in approval_sweeper.go over the loops this process holds, and no startup pass
+// reads the bucket to restore one. A replacement holds a deadline again only for a loop
+// some other redelivery rebuilt, and then it is the record's own RequestedAt plus Timeout,
+// not a fresh wait. A parked loop otherwise stays in awaiting_approval until the approval
+// is answered or the loop is cancelled. The cold approval-response branch - a replacement
+// answering an approval for a loop it never started - is #1362.
 //
 // # Ports
 //

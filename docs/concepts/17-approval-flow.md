@@ -62,10 +62,18 @@ Key design points:
   `ToolCall.ApprovedBy`, flows through `tool.execute`, lands in
   the trajectory step. Audit consumers can correlate every gated
   action to the human who said yes.
-- **Restart-safe.** `LoopEntity.PendingApproval` lives in the
-  AGENT_LOOPS KV bucket. A process restart mid-approval doesn't
-  lose the pending state; the new process picks up the same
-  `awaiting_approval` loop and waits on the same response subject.
+- **The pending state is durable; the timer is not.**
+  `LoopEntity.PendingApproval` lives in the AGENT_LOOPS KV bucket, so a
+  process replacement mid-approval loses nothing: the record still names
+  the gated call, its execution identity and the request that gated it,
+  and the loop stays `awaiting_approval` until the approval is answered
+  or the loop is cancelled. What a replacement does *not* do is re-arm
+  the deadline. The timeout sweeper reads the loops its own process
+  holds, and nothing at startup reads the bucket to restore one, so a
+  parked loop waits rather than being auto-rejected by whichever process
+  happens to come up. A replacement that answers an approval for a loop
+  it never started - the cold branch of the response lane - is
+  [#1362](https://github.com/C360Studio/semstreams/issues/1362).
 
 ## Timeouts
 

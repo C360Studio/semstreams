@@ -639,8 +639,28 @@
 
 ## 5. Docs and spec
 
-- [ ] 5.1 Correct `docs/concepts/17-approval-flow.md:65` and `processor/agentic-loop/doc.go` restart claims to state the
+- [x] 5.1 Correct `docs/concepts/17-approval-flow.md:65` and `processor/agentic-loop/doc.go` restart claims to state the
       I1–I4 contract and its prerequisites (#1327–#1329).
+      **Landed.** Four sites, three of them claims that were FALSE rather than merely incomplete:
+      - `doc.go:224` said "replacement preserves retained deadlines". Replaced by a `# Recovery across a process
+        replacement` section (`processor/agentic-loop/doc.go:226-253`) stating I1–I4, the ordering rule
+        (older → effect-free ACK, newer → retry, foreign → quarantine, current → rebuild from the record plus the
+        retained request), the one-region replay, and what a replacement does NOT recover.
+      - `docs/concepts/17-approval-flow.md:65-69` claimed "the new process picks up the same `awaiting_approval` loop
+        and waits on the same response subject" — that is #1362's cold approval branch, not L4a's. The bullet now
+        separates the durable pending state from the process-local timer and names #1362.
+      - `approval_sweeper.go:40-46` carried the same class one path over from the task's pins: "Restart-safe:
+        … a restored loop's deadline is computed correctly on the first sweep after process restart" reads as a
+        guarantee the sweeper cannot give, because it snapshots `m.loops` and nothing reads the bucket at startup.
+        Rewritten to say memory-only, and to say what a rebuilt loop does get.
+      - `docs/concepts/13-agentic-systems.md:216-223` gained the durable one-region fact beside the compaction
+        list, agreeing with the operator version in `docs/operations/migration-beta162-to-beta163.md`
+        § "A rebuilt loop's conversation is one region" (no "nothing moves" claim on either side).
+      Class sweep for the same defect elsewhere: `git grep -n -i 'restart|replacement|survives|persist'` over every
+      doc naming `PendingApproval`/`awaiting_approval`/`approval_timeout` found one further hit,
+      `docs/operations/migration-beta24-to-beta25.md:155-162` ("An expired loop in KV at restart will auto-reject
+      within `approvalSweepInterval` of the new process booting"). It is a SHIPPED release note for a past release
+      and is left as written; the beta162→beta163 note's #1330 section names and supersedes it (task 5.3).
 - [ ] 5.2 Apply the `specs/agentic-loop/spec.md` and `specs/agentic-dispatch/spec.md` deltas;
       `openspec validate agentic-loop-durable-applied-facts --strict` green; `task spec:properties` resolves the `// spec:` citation from 4.1 against the ADDED requirement.
 - [ ] 5.3 No approval-deadline hydration (docket OQ2, owner ruling 2026-09-22): the delta scenario "a replaced process
