@@ -436,18 +436,68 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
 
 ## 8. Specs and docs
 
-- [ ] 8.1 Copy `specs/` verbatim into the change: ADDED `agent-run-milestones`; MODIFIED `jetstream-consumer-policy`
+- [x] 8.1 Copy `specs/` verbatim into the change: ADDED `agent-run-milestones`; MODIFIED `jetstream-consumer-policy`
       "semantic heartbeat settlement has one permanent exported surface" against the live text
       (`openspec/specs/jetstream-consumer-policy/spec.md:380-413`), all three scenarios restated; REMOVED
       `nats-streaming` "the legacy helper is a shrinking remainder, never a compatibility surface" (live
       `openspec/specs/nats-streaming/spec.md:239-255`) and, per reconciliation B5, a second REMOVED "Heartbeat
       consumption SHALL expose settlement failure" (live `:158-181`, whose `:169` names this PR), each with a Reason.
       L0's blocks are in the tree, so `openspec validate agentrun-fanout-settlement --strict` passes at seed.
+      Evidence: the three delta files were seeded at design time; this checkpoint VERIFIED them against the live
+      specs at this head rather than rewriting them, and found nothing to change.
+      The MODIFIED block restates every scenario of the live requirement, by exact title and in the live order —
+      live `openspec/specs/jetstream-consumer-policy/spec.md` "public surface at this layer" (`:396`), "binding
+      migration requires semantic authority" (`:403`), "fast lane lacks an admitted settlement route" (`:409`)
+      against delta `specs/jetstream-consumer-policy/spec.md` "public surface at this layer" (`:17`), "binding
+      migration requires semantic authority" (`:24`), "fast lane lacks an admitted settlement route" (`:30`). Three
+      live, three restated, no omission and no rename — openspec 1.7.0 refuses either. Only the first scenario's
+      text moves, its fourth bullet going from "`ConsumeWithHeartbeat` carries only its ratcheted remaining callers
+      and no alias" to "`ConsumeWithHeartbeat` is absent: no declaration, alias, or production caller", which is
+      exactly what 7.2's inverted ratchet now asserts.
+      Both `nats-streaming` REMOVED blocks carry a Reason and match the live headings verbatim: "Heartbeat
+      consumption SHALL expose settlement failure" (live `:158`, whose `:169` assigns its own deletion to this PR)
+      and "the legacy helper is a shrinking remainder, never a compatibility surface" (live `:239`).
+      The ADDED `agent-run-milestones` reason set was verified against the implementation, not just read: the ten
+      labels in the delta are the ten `reason*` constants in `agentic/agentrun/milestone_settlement.go`, name for
+      name, and the requirement states that adding, renaming, or retiring one is a change to it.
+      `openspec validate agentrun-fanout-settlement --strict` → `Change 'agentrun-fanout-settlement' is valid`,
+      exit 0. `openspec validate --all --strict` → `Totals: 56 passed, 0 failed (56 items)`.
 - [ ] 8.2 Seed the `agent-run-milestones` Purpose from `proposal.md` at spec sync.
-- [ ] 8.3 Rewrite `docs/operations/migration-beta162-to-beta163.md:1216-1231` (from `:1226`, "still exported at this
+- [x] 8.3 Rewrite `docs/operations/migration-beta162-to-beta163.md:1216-1231` (from `:1226`, "still exported at this
       tag") with the migration text in `proposal.md`; replace
       `docs/operations/migration-restart-safe-nats-client.md:104-108`; update
       `docs/concepts/33-semantic-settlement.md:107-108`.
+      Evidence: `migration-beta162-to-beta163.md`'s "still exported at this tag" paragraph is replaced by "gone at
+      this tag" plus three named subsections — what a caller does instead (validate the policy from the same config,
+      `ConsumeDeliveryWithHeartbeat` or `SettleDelivery*`, nil-means-ACK is gone, inspect the `DeliveryResult`, stop
+      the exact handle on `OwnerStopRequired()`); the 30s NAK budget, now asked for explicitly as
+      `DelayedDeliveryRetry(30 * time.Second)`, with the `max_deliver 10` ≈ 4.5 minutes arithmetic adopters sized
+      against the old constant; and the measured direct-caller list.
+      The sister measurement, read-only with `git grep`/`git show` only and no `go` command, SemDev at `ca3956a`:
+      TWO direct call sites, `internal/conversationchannel/component.go:476` and `internal/intake/component.go:378`,
+      both `natsclient.ConsumeWithHeartbeat(msgCtx, msg, 20*time.Second, func(workCtx) error { return
+      c.handleEvent(...) })`. FOUR comment-only sites, not three: `internal/conversationchannel/apply.go:113`,
+      `internal/conversationchannel/component.go:435` and `internal/intake/component.go:355` size `max_deliver 10`
+      on the helper's fixed 30s NAK, as the design predicted, and a fourth,
+      `internal/conversationchannel/apply.go:202`, explains that the per-message context is cancelled when the
+      helper's `InProgress` fails. That fourth is a different claim and needed its own sentence: the typed path
+      cancels the work context the same way, and additionally reports `OwnerStopRequired()`. No other sister
+      references the helper. SemDev's working tree carries pre-existing modifications under `.agents/` and
+      `.claude/` that are NOT this session's; nothing was written there.
+      The two contract changes `api-compat.sh` cannot see (design § 7) are their own subsection of the note, since
+      the Tier 1 report shows nothing for either: (1) `ResolveRun`'s errors now carry the `errs` Invalid class with
+      chains preserved, so `errors.Is` still matches and `errs.Classify` places them deterministically instead of
+      by substring — which is what lets a poison identity Terminate on first sight; (2)
+      `MilestoneSubscriber.HandleEvent` returns nil exactly when the attempt would be acknowledged, where it
+      previously returned an error only for decode and NATS failures and logged handler errors without propagating
+      them. A caller reading nil as "processed" is unaffected; a caller reading non-nil as "the transport broke"
+      now also sees handler and resolution failures.
+      `migration-restart-safe-nats-client.md` now says the helper is removed and that its guard is INVERTED rather
+      than retired, and names `DelayedDeliveryRetry(30 * time.Second)` as where the old fixed delay went.
+      `docs/concepts/33-semantic-settlement.md`'s "AgentRun fanout needs its own design" open question is replaced
+      by the answer it got, including the trade it makes: whole-fanout settlement buys replay safety by moving from
+      at-most-once to at-least-once, and pays for it with the `SourceMessageID` identity rather than with the
+      per-handler receipt ledger this capability refuses to invent. Every added line is under 120 columns.
 - [ ] 8.4 O5 (#1155 amended to re-invocation + idempotent effect count) is recorded on #1155 by the coordinator; this
       PR's proof in § 9 implements the amended acceptance.
 

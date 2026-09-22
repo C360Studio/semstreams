@@ -104,8 +104,16 @@ receipt ledger before one is proven necessary, or expose raw settlement authorit
 
 This pattern is the foundation, not a claim that every existing consumer is already safe. A binding is restart-safe
 only when its happy and sad paths define durable done, classify replay, preserve ambiguous outcomes, and pass process-
-replacement proof. Model and loop work continues under #1146. AgentRun fanout needs its own design because one source
-delivery currently fans out to multiple outward-facing handlers without a durable per-handler completion contract.
+replacement proof. Model and loop work continues under #1146.
+
+AgentRun's milestone fanout resolved its version of the question (#1249) in a way worth naming, because one source
+delivery reaching several outward-facing handlers has no obvious answer. It settles the WHOLE fanout as one unit:
+every attempt runs every registered handler, and the delivery is acknowledged only on an attempt where all of them
+returned nil. That deliberately trades at-most-once for at-least-once — a handler already done can be re-invoked by
+a replay caused by a different handler — and pays for it with an identity. Every attempt of one delivery presents
+the same `SourceMessageID`, so a handler makes its own effect idempotent on that key. The framework does not verify
+that obligation and does not try to: a per-handler receipt ledger is exactly the durable primitive this capability
+refuses to invent before one is proven necessary.
 
 See [Migrate to direct one-shot lifecycle ownership](../operations/migration-restart-safe-nats-client.md) for the Go
 composition and [Gated-DAG semantic-settlement migration](../operations/migration-gated-dag-semantic-settlement.md)

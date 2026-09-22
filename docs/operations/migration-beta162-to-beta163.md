@@ -1223,12 +1223,53 @@ framework has to interpret. `NewDurableHandler` and its `consume_durable*.go` su
 range; `docs/operations/migration-restart-safe-nats-client.md` carries the complete composition, including the
 `DeliveryResult` inspection and the exact-handle stop that `OwnerStopRequired` demands.
 
-`ConsumeWithHeartbeat` is still exported at this tag but is **removed without a deprecation period**: it is deleted
-by the same PR that migrates its last in-tree caller (`agentic/agentrun/agentrun.go`, the #1249 layer). There is no
-`Deprecated:` window, no alias, and no compatibility shim to migrate against later — an adopter still calling it
-should move to the typed API now. `natsclient/consumer_policy_callsite_test.go` pins the exact remaining caller set
-and fails on any addition, so the set only shrinks. SemStreams owns no non-heartbeat exported settlement operation:
-a lane that does not want a heartbeat keeps owning its own `msg` settlement, as it does today.
+`ConsumeWithHeartbeat` is **gone at this tag**, without a deprecation period, alias, or compatibility shim. The
+#1249 layer migrated its last in-tree caller (`agentic/agentrun`) and deleted the helper in the same PR, as the
+ratchet in `natsclient/consumer_policy_callsite_test.go` had said it would; that ratchet now asserts the opposite —
+no declaration, alias, or reference anywhere — so the symbol cannot come back as a convenience wrapper either.
+`ErrHeartbeatFailed`, `PermanentDeliveryError`, and `TerminateDelivery` survive: they are the typed path's vocabulary
+too. SemStreams owns no non-heartbeat exported settlement operation: a lane that does not want a heartbeat keeps
+owning its own `msg` settlement, as it does today.
+
+**What a caller does instead.** Validate a `HeartbeatDeliveryPolicy` from the same `StreamConsumerConfig` you
+acquire the consumer with, then call `ConsumeDeliveryWithHeartbeat` — or, for a lane that settles without a
+heartbeat, `SettleDelivery` / `SettleDeliveryWithRetry`. The work returns `(natsclient.DeliveryDecision, error)`
+rather than a bare error: **nil-means-ACK is gone**, and so is the framework's guess about what your error meant. A
+returned `DeliveryResult` must be inspected, and the exact consumer handle stopped when `OwnerStopRequired()` is
+true. `docs/operations/migration-restart-safe-nats-client.md` carries the full composition.
+
+**The 30s NAK budget is preserved, but you now ask for it.** The deleted helper NAKed every transient work error
+with a fixed 30-second delay, and adopters sized `max_deliver` against that constant. `DelayedDeliveryRetry(30 *
+time.Second)` is the same budget, declared where the policy is built; `ImmediateDeliveryRetry()` is the plain Nak.
+A `max_deliver` of 10 still buys ≈4.5 minutes with the 30s policy.
+
+**Measured direct callers outside this repository** (SemDev `ca3956a`, read-only inventory): two call sites,
+`internal/conversationchannel/component.go:476` and `internal/intake/component.go:378`, both with a 20s heartbeat
+around `handleEvent`. Four SemDev comments also name the helper: three size `max_deliver 10` on its 30s NAK
+(`internal/conversationchannel/apply.go:113`, `internal/conversationchannel/component.go:435`,
+`internal/intake/component.go:355`) and one explains that the per-message context is cancelled when the helper's
+`InProgress` fails (`internal/conversationchannel/apply.go:202`) — on the typed path that cancellation is
+`ConsumeDeliveryWithHeartbeat`'s, with the same meaning, and the result additionally reports `OwnerStopRequired()`.
+No other sister repository calls it.
+
+### Two agent-run changes `api-compat` cannot see
+
+Both sit behind unchanged signatures, so the Tier 1 report shows nothing for them. Both are in `agentic/agentrun`,
+and a product that registers a `MilestoneHandler` or calls `ResolveRun` should read them.
+
+1. **`ResolveRun`'s errors now carry the `errs` Invalid class.** Entity-ID grammar failures, a parent that is not a
+   loop entity, the hop bound, and a non-string predicate value are wrapped with `errs.WrapInvalid` at their origin;
+   the underlying chains are preserved, so `errors.Is` against whatever you matched before still works. What changes
+   is that `errs.Classify` now places them deterministically instead of falling through to a substring guess — which
+   is what lets the milestone lanes Terminate a poison identity on first sight rather than retrying it five times.
+
+2. **`MilestoneSubscriber.HandleEvent` returns nil exactly when the attempt would be acknowledged.** It used to
+   return an error only for infrastructure failures — decode, NATS — and logged handler errors without propagating
+   them, so a fanout where every handler failed still returned nil. It now returns the classified cause of every
+   non-Ack decision. A caller that treated a nil return as "the message was processed" keeps working; a caller that
+   treated a non-nil return as "the transport broke" will now also see handler and resolution failures. Every
+   attempt of one delivery presents the same `LoopTerminalEvent.SourceMessageID`, which is the key a handler makes
+   its own effect idempotent on — the framework does not verify that obligation and never will.
 
 ## A RequestID's suffix is no longer a UUID (#1328, owner ruling Q4 on #1330)
 
