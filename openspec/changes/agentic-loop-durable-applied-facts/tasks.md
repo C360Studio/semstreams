@@ -435,6 +435,17 @@
       Mutant (`cp` backup + md5 + printed `[applied]`, restored and checksum-verified): delete the whole classification
       call at `C:2439-2447` → `TestRedeliveredToolResultIsClassifiedBeforeTheHandlerTouchesIt` (older, ahead) and
       `TestTerminalLoopAcknowledgesAToolResultWithoutEffect` (warm) red.
+      **Declared degrade, metered (checkpoint-3 NIT-2).** When `GetLoop` fails between the routing lookup and this
+      check — the loop was released mid-delivery — the classification is SKIPPED and the result goes to the handler
+      anyway. That is safe (the handler answers the race as it did before the check existed) but it is a degrade,
+      and a degrade is a declared event: the Warn line is now joined by
+      `recovery_degradations_total{site="tool_result_classification"}`, because a log line is not something an
+      operator can alert on. The counter drops no work and changes no delivery decision, and its Help says so.
+      Test: `TestASkippedClassificationSaysSoInTheLog` asserts the line AND a delta of exactly one on that site.
+      Mutant (vi): delete the counter call, keep the log. `component.go`
+      `77064b5e84396c23a6fdf20a389a712e` → `ffb00040435af2668767b11d3bbfb627` → restored
+      `77064b5e84396c23a6fdf20a389a712e`; RED at "a log line is not something an operator can alert on; a declared
+      degrade carries both" (exit 1), green on restore (exit 0), `git status --porcelain` empty after.
 - [x] 3.2 Response lane: cold → 2.5 first at `C:1698-1700`'s live arm; the warm superseded-response guard at `H:1253`
       (`CurrentRequest`, process-local and empty after replacement — L2's residual `ST:955-961`) compares against the
       record's `PublishedRequestID`; newer → Retry. Test: write `settlement_recovery_test.go` (response-lane cases).
