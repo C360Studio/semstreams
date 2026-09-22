@@ -63,14 +63,14 @@
 
       Five parts, as built:
 
-      1. `LoopManager.restoreLoopFromRequest(record, request)` (`state.go:351`) — seats the loop, its
+      1. `LoopManager.restoreLoopFromRequest(record, request)` (`state.go:359`) — seats the loop, its
          ContextManager and its routing maps from the record plus the retained request. The conversation replays
          into ONE region: `system` → `RegionSystemPrompt`, everything else → `RegionRecentHistory` in the retained
          order, then `RepairToolPairs()`. It also restores `cachedTools` / `cachedToolChoice` /
          `cachedResponseFormat` / `cachedRequestTimeout` off the request — an addition to the task text, because
          without them a rebuilt loop's NEXT request advertises no tools at all. The loop is marked outstanding on
          its request (TrackRequest's shape), which `restoreToolBatch` settles when a response for it is in hand.
-      2. `LoopManager.restoreToolBatch(loopID, response, applied, inFlight)` (`state.go:443`) — re-derives every
+      2. `LoopManager.restoreToolBatch(loopID, response, applied, inFlight)` (`state.go:462`) — re-derives every
          execution identity from the retained response with `stampToolExecutionCorrelation`, adds the assistant
          turn the batch belongs to, seats names/arguments/ordinals for all of them, seats routes for the unapplied
          ones only, and queues the unapplied minus `inFlight`. **Divergence from the task text:** a fourth
@@ -82,7 +82,7 @@
          (`loop_evidence.go:124`) and `readRetainedAgentResponse` (`loop_evidence.go:216`). The address resolves
          from the agent.response **INPUT** port — `requestAddress`'s mirror — so the recovery read and the live
          subscription resolve the same subject after a config change. Both reads share one `newestOn`.
-      4. `Component.restoreLoopFromEvidence(ctx, loopID, record, inFlightExecutionID)` (`loop_evidence.go:558`),
+      4. `Component.restoreLoopFromEvidence(ctx, loopID, record, inFlightExecutionID)` (`loop_evidence.go:577`),
          called from both cold arms on `requestOrderCurrent` only (`component.go:1905`, `component.go:2653`), which
          then fall through to the ordinary warm apply (`component.go:1749`, `component.go:2451`) — no second apply
          path for a recovered loop. It ends with `rememberLoopRevision`. **Divergence from the task text:** the
@@ -417,9 +417,11 @@
       old collapsed arm dropped-and-acked a foreign name; with the disposition corrected it quarantines, exactly as
       ruled. Fixed in the TEST: `publishedRequestID` reads the `Nats-Msg-Id` off the `agent.request.<loopID>` message
       the loop's own birth published, so the answer names the question the loop actually asked. Class swept before the
-      fix: `git grep -nE 'RequestID:\s*"[a-z-]+"' -- 'processor/**/*_test.go' 'agentic/**/*_test.go' 'test/**/*_test.go'`
-      returns 56 hits, and `HandleModelResponse` has exactly ONE call site outside `processor/agentic-loop` — this
-      one. The in-package literals (`delivery_owner_test.go:285`, `tool_result_handler_failure_test.go:193`) sit on
+      fix: `git grep -nE 'RequestID:[[:space:]]*"[a-z-]+"' -- 'processor/**/*_test.go' 'agentic/**/*_test.go' 'test/**/*_test.go'`
+      returns **55** hits, and `HandleModelResponse` has exactly ONE call site outside `processor/agentic-loop` — this
+      one. (`8dc81425`'s commit body records this sweep with `\s` and a count of 56; `git grep -E` is POSIX ERE, where
+      `\s` matches nothing and the command returns 0 — the POSIX class above is the one that was actually run, and 55
+      is its count. The squash body must carry the corrected form, since a commit body is what reaches `main`.) The in-package literals (`delivery_owner_test.go:285`, `tool_result_handler_failure_test.go:193`) sit on
       loops built with `CreateLoop`, whose record names no request, so they meet `requestOrderUnnamed` and are fixtures
       rather than reconstructions. The 14 in-package files that both birth a loop and answer it are green under
       `-race`.
