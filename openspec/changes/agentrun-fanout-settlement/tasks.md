@@ -1086,3 +1086,40 @@ text claims.
       RED on BOTH seeding mechanisms, which is the point of checking in the corpus as well as the `f.Add` calls:
       `FuzzEffectValidate/seed#2: Validate("msg-1") accepted evidence whose source id is "other"` and
       `FuzzEffectValidate/rejected_foreign_identity: … source id is "other-terminal"`.
+- [ ] 11.13 **UNRESOLVED — `task check:push` is RED on this host and was not re-run.** Owner-Codex-round gates at
+      `9cb5bb56`, every exit code the command's own:
+
+      | Command | Exit | Final line |
+      |---|---|---|
+      | `task lint` | 0 | `ok  	github.com/c360studio/semstreams/test/natsclient	0.701s` |
+      | `go vet -tags=e2e_process_barrier ./cmd/semstreams ./test/e2e/...` | 0 | no output |
+      | `go test -race -count=1 ./test/contract/... ./test/e2e/harness/... ./cmd/...` | 0 | `ok  	github.com/c360studio/semstreams/cmd/semstreams	4.926s` — 15 package lines, 0 beginning `FAIL` |
+      | `openspec validate --all --strict` | 0 | `Totals: 56 passed, 0 failed (56 items)` |
+      | `task spec:properties` | 0 | `spec-properties: 288/288 citations resolve.` |
+      | `task check:push` | **201** | `task: Failed to run task "check:push": task: Failed to run task "test:integration": exit status 1` |
+
+      `check:push` reached the integration phase (208 `ok`, 29 `[no test files]`) and failed in ONE package,
+      verbatim:
+
+      ```
+      --- FAIL: TestRestrictiveAuthorizationRuntimeContract/sufficient_provisioning_and_binding_permissions_succeed_without_advisory_subscription (0.06s)
+          runtime_integration_test.go:52:
+              Error: Received unexpected error:
+                     create stream LOGS: create stream: nats: API error: code=500 err_code=10047 description=insufficient storage resources available
+      FAIL	github.com/c360studio/semstreams/internal/maxdelivery	8.846s
+      ```
+
+      This is NOT the linker `No space left on device` the coordinator's brief anticipated — `grep -c 'No space
+      left on device'` over the whole log is 0 — but it is the same host-disk exhaustion arriving through
+      JetStream: err_code 10047 is JetStream refusing to provision file storage, and the volume is at 100%
+      capacity with 831MiB free. Not re-run, per the no-rerun-to-green rule: a second roll of the same dice does
+      not fix the substrate.
+      Why this round is not the cause, structurally rather than differentially: everything it changed is a
+      `_test.go` file or testdata in `test/contract` and `test/e2e/harness/milestoneprobe`, plus markdown. Go never
+      links one package's test files into another, and `git log b7ce8727..HEAD -- internal/maxdelivery` is empty —
+      this branch has never touched that package. `check:push` was exit 0 over the whole tree one commit earlier at
+      `931bd309`, when the host had ~1.3GiB free.
+      Honest accounting of the disk this round consumed: the two 20s fuzz runs took the volume from ~1.1GiB to
+      ~900MiB of build and corpus cache. `go clean -fuzzcache` afterwards returned ~6MiB, so the instrumented build
+      cache holds the rest. Clearing the Go build cache or Docker's is the coordinator's call, not a developer's
+      unilateral change to a shared host.
