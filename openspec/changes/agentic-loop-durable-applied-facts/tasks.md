@@ -816,6 +816,29 @@
       level (`1.3Gi` available before and after). So the build is sound and the link is sound; what the full
       parallel suite ran out of is peak temp headroom. This is NOT recorded as green — one isolated pass does not
       make `check:push` green, and the gate stays RED until it is run on a host with room.
+
+      **Re-run at the checkpoint-4 fix round's head (`0f964eef`): RED again, and further from green.** Exit 201.
+      Every phase before the race suite passed once more — `build`, `lint`, `go vet -tags=integration`,
+      `go vet -tags=live_llm`, `schema:generate` + `schema:check-changes` (clean), `go test ./test/contract/...`.
+      `go test -race ./...` then died in the toolchain, not in a test: **112 `[build failed]` packages, 50 `ok`,
+      and ZERO `--- FAIL` lines** — not one assertion failed.
+      ```
+      github.com/c360studio/semstreams/processor/agentic-detonator: mkdir /var/folders/.../T/go-build.../b862/: no space left on device
+      compile: writing output: write $WORK/b794/_pkg_.a: no space left on device
+      /usr/local/go/pkg/tool/darwin_arm64/link: running clang failed: exit status 1
+      ld: write() failed, errno=28 (No space left on device)
+      ```
+      Not rerun, per the round's standing instruction. The host went from `1.3Gi` free at checkpoint 4 to **`192Mi`**
+      (`df -h /System/Volumes/Data` → `460Gi size, 424Gi used, 100%`), because each package-scoped gate this round ran
+      consumed more of the little that was left. The package-scoped evidence that DOES exist at this head, each exit 0:
+      `task lint`; `go test -race -count=1 ./processor/agentic-loop/...` (5 packages `ok`);
+      `./processor/agentic-dispatch/... ./test/contract/...` (`ok`, `ok … 19.015s`); `task spec:properties`
+      → `326/326 citations resolve.`; `openspec validate --all --strict` → `56 passed, 0 failed`;
+      `task api:compat:report` → exit 0 with the `processor/agentic-loop` block unchanged from the one recorded above
+      (this round altered no exported surface).
+      `./test/e2e/...` is the one place the disk changes the READING of a run: it reported two `[build failed]`
+      packages on one pass and a different two on the next, and both pairs pass alone. A failing package set that
+      moves between runs is the host, not the tree.
       **The host.** `df -h /System/Volumes/Data` → `460Gi size, 423Gi used, 1.3Gi available, 100%`. Where it is:
       `/Users/coby/Library/Caches/go-build` 71G, `~/Library/Containers/com.docker.docker/Data` 97G (of which
       `docker system df` reports 86.48GB build cache, 9.93GB reclaimable without touching any image),
