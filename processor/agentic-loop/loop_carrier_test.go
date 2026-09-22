@@ -3,6 +3,7 @@ package agenticloop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
 )
 
@@ -600,4 +602,77 @@ func TestAColdReadRetainsNoRevisionForALoopItDoesNotHold(t *testing.T) {
 		_, held := c.observedLoopRevision(loopID)
 		require.False(t, held, "adopting for a loop this process does not hold retained its revision")
 	})
+}
+
+// unreadableLoopBucket answers every Get with a transient failure while still
+// recording anything written. Both halves are the assertion: the read failure
+// is what the cold arms must refuse on, and the key list is how "refused to
+// write" is told apart from "wrote into a record it could not read".
+type unreadableLoopBucket struct {
+	*recordingLoopBucket
+}
+
+func (unreadableLoopBucket) Get(context.Context, string) (jetstream.KeyValueEntry, error) {
+	return nil, errors.New("kv unavailable")
+}
+
+var _ jetstream.KeyValue = unreadableLoopBucket{}
+
+// TestColdArmsRefuseAnUnreadableRecordRatherThanAdoptIntoIt pins the one
+// presence the cold arms never named.
+//
+// readLoopRecord reports THREE presences — stale, live, and unknown, where
+// unknown is a nil bucket, a transient KV error, or bytes that did not decode.
+// Both cold arms switched on stale and let everything else fall into the
+// adopting default, so an unknown record — a ZERO entity — was adopted into:
+// the write's Validate refused an entity with no id, that refusal is fatal,
+// and a delivery was quarantined because a KV read failed. A failed read is
+// the one thing this change must never let decide anything.
+//
+// spec: agentic-loop / A loop absent from process memory is settled from its record
+func TestColdArmsRefuseAnUnreadableRecordRatherThanAdoptIntoIt(t *testing.T) {
+	const loopID = "d4c3b2a1-9e8f-4a7b-8c6d-5e4f3a2b1c09"
+	retained := looprequest.ID{LoopID: loopID, Iteration: 3, Retry: 0}.String()
+
+	for name, lane := range map[string]struct {
+		port    string
+		handler func(*Component) inputHandler
+		payload message.Payload
+	}{
+		"model response": {
+			port:    "agent.response",
+			handler: func(c *Component) inputHandler { return c.handleResponseMessage },
+			payload: &agentic.AgentResponse{
+				RequestID: looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String(),
+				Status:    agentic.StatusComplete,
+				Message:   agentic.ChatMessage{Role: "assistant", Content: "done"},
+			},
+		},
+		"tool result": {
+			port:    "tool.result",
+			handler: func(c *Component) inputHandler { return c.handleToolResultMessage },
+			payload: &agentic.ToolResult{
+				CallID: loopID + ":tool:1", Name: "search", Content: "result", LoopID: loopID,
+				RequestID: looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String(),
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := evidenceComponent(t, retained)
+			bucket := unreadableLoopBucket{recordingLoopBucket: c.loopsBucket.(*recordingLoopBucket)}
+			c.loopsBucket = bucket
+
+			msg := &loopDeliveryOwnerMsg{data: baseMessageBytes(t, lane.payload)}
+			delivered, admitted := deliverylane.Consume(t.Context(), msg,
+				heartbeatPolicyForTest(t, lane.port, lane.handler(c)), deliverylane.NewAdmission(nil, nil))
+			require.True(t, admitted)
+
+			require.Equal(t, natsclient.DeliveryDecisionRetry, delivered.Decision(),
+				"a record this process could not READ decided the delivery")
+			require.Equal(t, int32(1), msg.naks.Load())
+			require.Zero(t, msg.acks.Load()+msg.terms.Load())
+			require.Empty(t, bucket.written(),
+				"a record that could not be read was written anyway")
+		})
+	}
 }

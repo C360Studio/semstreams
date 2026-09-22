@@ -289,6 +289,21 @@ func (c *Component) adoptRetainedRequest(ctx context.Context, loopID, requestID 
 func (c *Component) adoptNewerRetainedRequest(
 	ctx context.Context, loopID string, record loopRecord,
 ) (loopRecord, error) {
+	switch record.presence {
+	case loopPresenceUnknown:
+		// Step 0 adopts INTO a record, so a record that could not be READ —
+		// no bucket, a transient KV error, bytes that did not decode — has
+		// nothing to adopt into. What it has instead is a ZERO entity, and
+		// writing the adopted request onto that produces a record with no id
+		// and no state: Validate refuses it, the refusal is fatal, and a
+		// delivery is quarantined because a KV read failed. Never assume
+		// anything from a failed read — retry it, which is the answer
+		// classifyRedeliveredTask already gives on the task lane.
+		return record, errs.WrapTransient(
+			fmt.Errorf("loop %s: the loop record could not be read, so its retained request cannot be adopted", loopID),
+			"agentic-loop", "adoptNewerRetainedRequest", "read the loop record before adopting")
+	}
+
 	retained, found, err := c.readRetainedAgentRequest(ctx, loopID)
 	if err != nil {
 		return record, err
