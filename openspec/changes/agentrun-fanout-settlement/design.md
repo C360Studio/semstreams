@@ -82,7 +82,30 @@ Ack for all N and re-runs the other N−1 each attempt; at exhaustion all N lose
 returns; 1..k no-op by 2.2; k+1..n proceed. W2 before `Ack()` and W3 `Ack()` returned locally (unconfirmed evidence; no
 `ServerConfirmed`): as W1. W4 quarantined then replaced: unacked; the replacement rebinds and re-runs all — loud, no hot loop.
 
-2.6 Latch and handle owner — AMENDED (owner ruling 2026-09-19 on #1341 Q2: "Amend"). No `agentic/agentrun/delivery_owner.go`; there is no sixth copy. `agentrun` imports `internal/deliverylane` (#1341; same module, internal package, precedents `internal/lifecyclecleanup`, `internal/maxdelivery`) and per lane constructs a `deliverylane.Admission` (`NewAdmission(onFatal, nil)` — the milestone lanes declare no refusal today; wiring `onRefused` is #1342's scope), a `deliverylane.Binding` around the exact `ConsumeContext`, and runs `deliverylane.Observe(ctx, binding, admission, react)` whose `react` records the fatal and drains that lane's exact handle. `milestoneConsumerOwner` (`agentrun.go:679`, `:683`) stays the SOLE owner of both `ConsumeContext`s; the hand-rolled drained flags (`:712`) go — `Binding` owns drain-once and `Done()` is never nil, so `stop()` awaits `Closed()` (`:727`) and both-drain-first (`:718`) holds through the package's contract. The closure at `:810` becomes `deliverylane.Consume(ctx, msg, policy, lane.admission)`. Sequencing: #1329 → #1341 → #1249; the implementation task list re-pins against the merged #1341 commit. The pre-amendment text (verbatim copy of `processor/agentic-loop/delivery_owner.go:29-63`, `:74-86`) is superseded, not deleted from history: see round-4 § 2.6 at the 2026-09-18 ruling.
+2.6 Latch and handle owner — AMENDED (owner ruling 2026-09-19 on #1341 Q2: "Amend"). No
+`agentic/agentrun/delivery_owner.go`; there is no sixth copy. `agentrun` imports `internal/deliverylane` (#1341; same
+module, internal package, precedents `internal/lifecyclecleanup`, `internal/maxdelivery`) and per lane constructs a
+`deliverylane.Admission` (`NewAdmission(onFatal, nil)` — the milestone lanes declare no refusal today; wiring
+`onRefused` is #1342's scope), a `deliverylane.Binding` around the exact `ConsumeContext`, and runs
+`deliverylane.Observe(runCtx, lane.binding, lane.admission, react)` where `react` only logs the lost lane (`lane`,
+cause). Recording is `onFatal` — `s.recordDeliveryOwnerFatal`, passed to `NewAdmission` and run synchronously inside
+`Latch` before the result is buffered (`deliverylane.go:78-81`), which is what `DeliveryFatal()` reads — and `Observe`
+itself drains the exact handle after `react` returns (`:240-241`); `react` is required non-nil (`:231-232`).
+`milestoneConsumerOwner` (`agentrun.go:679`, `:683`) stays the SOLE owner of both `ConsumeContext`s;
+`milestoneConsumerOwner` replaces `complete`/`failed` (`:681-682`) and the drained flags (`:683-684`) with two
+`*deliverylane.Binding`; `stop()` calls `Drain()` on both (both-drain-first, `:718`, holds; `Drain` is once-only, so a
+lane the observer already drained is a no-op), awaits both `Closed()` (`:727`, `:730`), calls `o.cancel()` (`:743`,
+ending the observers' `runCtx`), then joins both `Done()`, which is never nil (`deliverylane.go:216`) — the join #1357's
+design § 6 names as the one draft 4 never specified. The closure at `:810` becomes
+`result, admitted := deliverylane.Consume(msgCtx, msg, policy, lane.admission)` followed by `if !admitted { return }` —
+a refusal returns the zero `DeliveryResult`, whose `Err()` is non-nil by construction
+(`internal/deliverylane/deliverylane.go:126-132`), so an unguarded `result.Err() != nil` branch would log a refused
+delivery as a settlement failure. Every § 2.3 log line and § 2.7 increment is emitted inside the `DeliveryWork`, keyed
+on the decision it returns, never on `result`; the only branch after `Consume` logs a settlement-method error
+(`admitted && result.Err() != nil && !result.OwnerStopRequired()`, as loop `component.go:1111`). Sequencing: #1329 →
+#1341 → #1249; the implementation task list re-pins against the merged #1341 commit. The pre-amendment text (verbatim
+copy of `processor/agentic-loop/delivery_owner.go:29-63`, `:74-86`) is superseded, not deleted from history: see round-4
+§ 2.6 at the 2026-09-18 ruling.
 
 2.7 Health and metrics. `MilestoneSubscriber.DeliveryFatal() error` (new). `MilestoneService.Health()` override
 (`service/base.go:209`) type-asserts `interface{ DeliveryFatal() error }` on its `milestoneStarter`
@@ -129,19 +152,27 @@ Terminate on first sight; not-managed and unclassifiable errors retry under the 
   everywhere, zero references" in the `NewDurableHandler` retirement shape (`:395`); keep the surface guard (`:423`).
   Delete `heartbeat_test.go` (407) and `heartbeat_integration_test.go` (133) after porting any claim without a twin.
 - Tier 1. `natsclient` is frozen (`tier1-packages.txt:57`; `agentic/agentrun:40`). `scripts/api-compat.sh` has NO
-  allowlist, waiver, or exemption (`grep -i 'allow|waiver|exempt'` → 0); a removed export is one "Incompatible changes"
-  package (`:174`); CI runs report mode (`ci.yml:238`, `taskfiles/apicompat.yml:10`): exit 0 with the count (`:33`, `:190`);
-  strict exits 1 (`:193`). A counted Tier 1 break, not a red — ADR-106 expects the pre-RC count non-zero and descending
-  (`106…:78`; freeze `:50`). Declaration: `refactor(natsclient)!: remove ConsumeWithHeartbeat`, named in PR body and
-  `tasks.md` with #759's ruling; e2e agentic tier green before merge (`02-e2e-tests.md:299`).
+  allowlist, waiver, or exemption (`grep -i 'allow|waiver|exempt'` → 0); `task api:compat:report` at `b7ce8727` lists 15
+  incompatible Tier 1 packages against `v1.0.0-beta.162`, `natsclient` (`NewDurableHandler: removed`) and
+  `agentic/agentrun` (`EntityIDPattern`, `Mint`) among them; this layer adds one line, `ConsumeWithHeartbeat: removed`,
+  under the already-counted `natsclient` and only compatible additions under `agentic/agentrun`, so the package count
+  does not move. The commit is still `!`; the posture is still ADR-106's pre-RC descending count. CI runs report mode
+  (`ci.yml:238`, `taskfiles/apicompat.yml:10`): exit 0 with the count (`:33`, `:190`); strict exits 1 (`:193`). A
+  counted Tier 1 break, not a red — ADR-106 expects the pre-RC count non-zero and descending (`106…:78`; freeze `:50`).
+  Declaration: `refactor(natsclient)!: remove ConsumeWithHeartbeat`, named in PR body and `tasks.md` with #759's ruling;
+  e2e agentic tier green before merge (`02-e2e-tests.md:299`).
 - Spec deltas in `agentrun-fanout-settlement`, targeting L0's HEAD text as L1 does (`5ca936ac`, `design.md` D8). (1)
-  `jetstream-consumer-policy` MODIFIED "semantic heartbeat settlement has one permanent exported surface" (L0 `:73-103`):
-  `:78-79` → "`NewDurableHandler` and `ConsumeWithHeartbeat` SHALL NOT exist or have an alias"; `:82-84` → "The caller
-  ratchet SHALL assert zero declarations and zero references"; ALL THREE scenarios restated — "public surface at this
-  layer" (fourth bullet → "`ConsumeWithHeartbeat` is absent: no declaration, alias, or production caller"), "binding
-  migration requires semantic authority" and "fast lane lacks an admitted settlement route" verbatim. (2) `nats-streaming`
-  REMOVED "the legacy helper is a shrinking remainder, never a compatibility surface" (L0 `:61-77`), Reason: the remainder
-  reached zero here; the removal is recorded in the doc it names. (3) ADDED `agent-run-milestones`.
+  `jetstream-consumer-policy` MODIFIED "semantic heartbeat settlement has one permanent exported surface" (L0
+  `:73-103`): `:78-79` → "`NewDurableHandler` and `ConsumeWithHeartbeat` SHALL NOT exist or have an alias"; `:82-84` →
+  "The caller ratchet SHALL assert zero declarations and zero references"; ALL THREE scenarios restated — "public
+  surface at this layer" (fourth bullet → "`ConsumeWithHeartbeat` is absent: no declaration, alias, or production
+  caller"), "binding migration requires semantic authority" and "fast lane lacks an admitted settlement route" verbatim.
+  (2) `nats-streaming` REMOVED "the legacy helper is a shrinking remainder, never a compatibility surface" (L0
+  `:61-77`), Reason: the remainder reached zero here; the removal is recorded in the doc it names. (2b) `nats-streaming`
+  REMOVED "Heartbeat consumption SHALL expose settlement failure" (live `:158-181`, with its two scenarios "transient
+  work fails and delayed NAK fails" and "shutdown NAK fails"). Reason: the requirement's own last paragraph (`:169`)
+  assigns its deletion to this PR; L0 landed it MODIFIED, not REMOVED, so the removal is owed here. (3) ADDED
+  `agent-run-milestones`.
 - Docs: rewrite `migration-beta162-to-beta163.md:1050-1065` (L0 head) from "still exported at this tag"; replace
   `migration-restart-safe-nats-client.md:95`; update `33-semantic-settlement.md:99`; reword two test comments
   (`component_ack_integration_test.go:41`, `outcomes_integration_test.go:202`). Text: "`ConsumeWithHeartbeat` is removed

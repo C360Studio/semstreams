@@ -10,3 +10,12 @@ caller set now asserts absence (`jetstream-consumer-policy`, "semantic heartbeat
 surface"). Adopters get the removal from `docs/operations/migration-beta162-to-beta163.md`, as this requirement said
 they would (owner ruling 2026-09-18). JetStream remains the delivery and redelivery authority; no supervisor,
 checkpoint, outbox, receipt ledger, state-machine runtime, or new durable primitive is added by the removal.
+
+### Requirement: Heartbeat consumption SHALL expose settlement failure
+
+**Reason**: `ConsumeWithHeartbeat`, the only function this requirement binds, is deleted by this change with its last
+production caller; the requirement's own text ("This requirement is deleted together with the helper by the PR that
+migrates its last caller (#1249)") named this PR. Its scenarios ("transient work fails and delayed NAK fails",
+"shutdown NAK fails") describe the deleted helper's NAK paths and go with it. Migrated bindings are governed by
+`jetstream-consumer-policy` ("semantic heartbeat settlement has one permanent exported surface") and by
+"replay follows the binding's durable authority" in this capability.

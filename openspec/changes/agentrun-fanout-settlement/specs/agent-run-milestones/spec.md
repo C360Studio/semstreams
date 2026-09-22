@@ -72,12 +72,13 @@ emit exactly one log line carrying the source identity and exactly one increment
 Both milestone durables (`agentrun-milestone-complete`, `agentrun-milestone-failed`) SHALL declare a finite `MaxDeliver`
 (5) with `AckWait` 30s and a `HeartbeatDeliveryPolicy` validated before acquisition, and SHALL settle Retry through
 `DelayedDeliveryRetry(30s)`. Exhaustion is observed by `max-delivery-observability`'s
-`semstreams_nats_max_delivery_exhaustions_total{consumer}`; no other exhaustion signal is introduced. `MilestoneSubscriber`
-SHALL expose `DeliveryFatal() error` and `RegisterMetrics(metric.MetricsRegistrar) error`; the milestone service's
-`Health()` SHALL report unhealthy with the fatal cause once any lane's owner is stopped (a fatal work outcome, an
-`InProgress` failure, or unavailable delivery metadata), and each composition root SHALL call `RegisterMetrics` after
-construction. `milestoneConsumerOwner` SHALL remain the sole owner of both consume handles: a fatal on one lane drains
-only that lane's exact handle, and `stop()` waits for each still-running handle's `Closed` without a second drain.
+`semstreams_nats_max_delivery_exhaustions_total{consumer}`; no other exhaustion signal is introduced.
+`MilestoneSubscriber` SHALL expose `DeliveryFatal() error` and `RegisterMetrics(metric.MetricsRegistrar) error`; the
+milestone service's `Health()` SHALL report unhealthy with the fatal cause once any lane's owner is stopped (a fatal
+work outcome, an `InProgress` failure, or unavailable delivery metadata), and each composition root SHALL call
+`RegisterMetrics` after construction. `milestoneConsumerOwner` SHALL remain the sole owner of both consume handles: a
+fatal on one lane drains only that lane's exact handle, and `stop()` drains each binding at most once, waits for each
+handle's `Closed`, and joins each lane's observer.
 
 #### Scenario: exhaustion is counted, not silent
 
@@ -88,7 +89,7 @@ only that lane's exact handle, and `stop()` waits for each still-running handle'
 #### Scenario: a fatal on one lane leaves the other consuming
 
 - **WHEN** the complete lane quarantines
-- **THEN** its exact handle is drained and marked drained, and `Health()` reports the cause
+- **THEN** its exact handle is drained once through its `deliverylane.Binding`, and `Health()` reports the cause
 - **AND** the failed lane continues to consume, and `stop()` performs no second drain of the complete lane
 
 #### Scenario: both lanes are declared finite

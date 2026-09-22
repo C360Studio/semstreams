@@ -30,9 +30,10 @@ conversion is forbidden. The five-question design docket was ruled "as recommend
   Quarantine (a process-wide composition defect); `ResolveRun`'s grammar, parent-type, hop-bound and non-string-value
   failures are wrapped Invalid at their origin and Terminate; everything else settles by its `errs` class, unknown
   defaulting to bounded Retry. `pkg/lifecycle` is not edited.
-- **Fatal ownership loss latches health.** A sixth private copy of the admission latch stops a lane after a fatal
-  outcome, an `InProgress` failure or unavailable delivery metadata; `milestoneConsumerOwner` stays the sole owner of
-  both consume handles and drains only the failed lane; `MilestoneService.Health()` reports the cause.
+- **Fatal ownership loss latches health.** Each milestone lane is a `internal/deliverylane` consumer (#1341): its
+  `Admission` closes on a fatal outcome, an `InProgress` failure or unavailable delivery metadata, `Observe` drains only
+  that lane's exact handle, and `MilestoneService.Health()` reports the cause through `DeliveryFatal()`;
+  `milestoneConsumerOwner` retains both bindings and stays the sole owner.
 - **Lanes are finite and observed.** Both milestone durables keep `MaxDeliver 5` and `AckWait 30s`, validate their
   heartbeat policy before acquisition, and settle Retry through `DelayedDeliveryRetry(30s)`. Exhaustion is counted by
   the existing `semstreams_nats_max_delivery_exhaustions_total{consumer}`; decisions by a new
@@ -44,10 +45,11 @@ conversion is forbidden. The five-question design docket was ruled "as recommend
 
 - Affected capabilities: `agent-run-milestones` (new, seeded here), `jetstream-consumer-policy` (MODIFIED against L0's
   head text), `nats-streaming` (REMOVED, the L0-added "shrinking remainder" requirement).
-- Affected code: `agentic/agentrun/agentrun.go`, new `agentic/agentrun/delivery_owner.go`, `agentic/agentrun/nats_reader.go`,
-  `service/milestone_service.go`, `cmd/semstreams/main.go`, `cmd/e2e-semstreams/main.go` (one wiring line each, plus the
-  env-gated proof handler), `natsclient/heartbeat.go` and its two test files, `natsclient/consumer_policy_callsite_test.go`,
-  two foreign test comments, the e2e agentic scenario.
+- Affected code: `agentic/agentrun/agentrun.go`, (no new file: `agentrun` imports `internal/deliverylane`),
+  `agentic/agentrun/nats_reader.go`, `service/milestone_service.go`, `cmd/semstreams/main.go`,
+  `cmd/e2e-semstreams/main.go` (one wiring line each, plus the env-gated proof handler), `natsclient/heartbeat.go` and
+  its two test files, `natsclient/consumer_policy_callsite_test.go`, two foreign test comments, the e2e agentic
+  scenario.
 - Exported surface (Tier 1, ADR-106): additions `LoopTerminalEvent.SourceMessageID`, `MilestoneSubscriber.DeliveryFatal()
   error`, `MilestoneSubscriber.RegisterMetrics(metric.MetricsRegistrar) error`; removal `natsclient.ConsumeWithHeartbeat`
   — an incompatible change in a frozen package, declared with a `!` commit; `scripts/api-compat.sh` has no waiver, so
@@ -65,7 +67,8 @@ conversion is forbidden. The five-question design docket was ruled "as recommend
 
 - No supervisor, receipt bucket, checkpoint ledger, or state-machine runtime (#1249 anti-goals); no per-handler
   settlement or receipts — N handlers share one failure domain by design, and the design records that trade.
-- No consolidation of the six admission-latch copies (L1's declared residual).
+- No change to `internal/deliverylane` (#1341 owns it); no refusal declarer on the two milestone lanes (#1342's sweep,
+  see OQ1).
 - No edit to `pkg/lifecycle`; projection failures stay unclassified and retry under the finite ceiling.
 - No production handler; no new bucket, stream, subject, or duplicates window.
 - No change to any other component's settlement; the five typed owners introduced by #759 and #1327 are untouched.
