@@ -429,6 +429,22 @@ func (m *LoopManager) restoreLoopFromRequest(record agentic.LoopEntity, request 
 		m.cachedRequestTimeout[record.ID] = request.Timeout
 	}
 
+	// The task's ENFORCEMENT metadata (ADR-067), off the RECORD rather than
+	// off the request: it is written there once at birth, and the request
+	// never carried it. dispatchToolCall stamps
+	// DispatchEnforcedMetadataKeys onto every outgoing call from this cache,
+	// and both consumers read an ABSENT key as permissive — agentic-tools'
+	// bash executor treats no policy as the workspace-write default, and
+	// decide permits any action with no allowlist. A rebuild that skipped it
+	// turned a recovered read-only task writable, silently. Defensive copy for
+	// the same reason CacheMetadata makes one: the caller's map is the
+	// record's, and this cache outlives the read.
+	if len(record.Metadata) > 0 {
+		metadata := make(map[string]any, len(record.Metadata))
+		maps.Copy(metadata, record.Metadata)
+		m.cachedMetadata[record.ID] = metadata
+	}
+
 	// TrackRequest's shape: the request is routable AND outstanding. Outstanding
 	// is the right claim here because the only evidence in hand is that the
 	// request was published; restoreToolBatch settles it when the response that
