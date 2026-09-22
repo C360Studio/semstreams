@@ -16,7 +16,7 @@ E2E tests follow the **Observer Pattern**: they run against real services in Doc
 ## Quick Reference
 
 ```bash
-# The four tiers this page details; `task --list` shows all twelve
+# The four tiers this page details; `task --list` shows every tier task
 task e2e:core        # Platform boots, data flows (~10s)
 task e2e:structural  # Rules + PathRAG (~30s)
 task e2e:statistical # BM25 + community detection (~60s)
@@ -29,7 +29,7 @@ task e2e:clean
 ## Test Tiers
 
 The four sections below detail the four oldest tiers. [Every tier and the binary it boots](#every-tier-and-the-binary-it-boots)
-lists all twelve.
+lists all thirteen.
 
 ### Core (`task e2e:core`)
 
@@ -185,10 +185,15 @@ fixtures, the mission workflow, a control responder — boots `cmd/e2e-semstream
 *inside* the production composition lands in the binary its tier boots, behind that tier's build tag and, where it
 must stay inert in the tier's other stages, an environment variable only that tier sets.
 
-**The source of truth is the tier table in `openspec/specs/payload-registry/spec.md`**, which additionally carries
-each tier's gate, its E2E-only hooks, and the synthetic types it stamps;
-`test/contract/e2e_tier_binary_contract_test.go` re-reads that table against these compose files and
-`docker/Dockerfile` on every run. The list below is the navigation copy — when the two disagree, the spec is right.
+**The source of truth is the tier table in `openspec/specs/payload-registry/spec.md`** — until this change archives,
+the table lives in `openspec/changes/agentrun-fanout-settlement/specs/payload-registry/spec.md`, and
+`test/contract/e2e_tier_binary_contract_test.go` reads whichever one carries it, refusing if both do. That table
+additionally carries each tier's gate, its E2E-only hooks, and the synthetic types it stamps, and the test re-reads it
+against these compose files and `docker/Dockerfile` on every run. The list below is the navigation copy — when the two
+disagree, the spec is right.
+
+Twelve compose services, thirteen `e2e:<tier>` tasks. The units differ on purpose: `core` runs in two phases
+against two services (rows 1 and 2), and rows 2 and 4 each serve two tasks off one service.
 
 | Tier (`task e2e:<tier>`) | Compose file : service | Dockerfile target | Binary |
 |---|---|---|---|
@@ -205,9 +210,12 @@ each tier's gate, its E2E-only hooks, and the synthetic types it stamps;
 | `agentic` | `agentic.yml` : `semstreams` | `e2e-process-barrier` | `cmd/semstreams` (tagged) |
 | `slow-consumer` | `e2e-slow-consumer.yml` : `semstreams` | `e2e-slow-consumer` | `cmd/semstreams` (tagged) |
 
-`task e2e:openai-responses` is the thirteenth task and is not in this table: it is a live wire test against the paid
-API with no container of its own. `services.yml` carries the shared NATS, embedding and LLM services; `tiered.8b.yml`
-and `tiered.frontier.yml` are model overlays for the semantic tier and build no SemStreams image.
+`task e2e:openai-responses` is the fourteenth task and is not in this table: it is a live wire test against the paid
+API with no container of its own. Each tier file above defines its own `nats:`; `services.yml` carries the shared
+side services (semembed, seminstruct, step-ca, prometheus, grafana). `tiered.8b.yml` and `tiered.frontier.yml` are
+model overlays for the semantic tier: they build no SemStreams image, and because compose merges `environment:`
+across `-f` files, a variable set on their `semstreams-ml` block still reaches the running container — which is why
+the contract test sweeps every compose file's raw text for `SEMSTREAMS_E2E_*`, not just the services that build.
 
 ## Directory Structure
 
@@ -227,6 +235,7 @@ cmd/e2e/
 
 taskfiles/e2e/
 ├── common.yml              # Shared tasks (clean, check-ports, reserve-ports)
+├── openai-responses.yml    # The live paid-API test; no container, no table row
 └── <tier>.yml              # One file per tier in the table above
 ```
 

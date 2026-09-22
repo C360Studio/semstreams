@@ -844,8 +844,11 @@ after #1362 and gating the tag; they are deliberately not done here.
       `docker/compose/tiered.yml:246` claimed the structural service boots the e2e root "with reactive workflow
       engine" — that engine was deleted in `e1c66cbd` (2026-03-12); the comment now states the reason the spec row
       gives. The three other survivals of the same deleted founding reason (`docker/Dockerfile:54`, `:115`,
-      `taskfiles/build.yml:17`) are left: `test/release/release_smoke_test.go:64,66` slices the Dockerfile on that
-      comment's text, and the second root's existence is #1301's question, not this checkpoint's.
+      `taskfiles/build.yml:17`) are left because the second root's existence is #1301's question, not this
+      checkpoint's — not because a test pins their text. Only one of the three is pinned at all:
+      `test/release/release_smoke_test.go:64,66` slices the Dockerfile on the prefix `# Build e2e-semstreams
+      binary`, so `:54`'s trailing parenthetical and `:115` and `taskfiles/build.yml:17` are free to be corrected
+      whenever #1301 reaches them.
 - [x] 11.2 One table-driven contract test replaces the four per-hook pin tests.
       `test/contract/e2e_tier_binary_contract_test.go` parses the tier table out of the payload-registry spec — the
       active change's delta first, the live spec after `openspec archive`, so there is no second copy of the table —
@@ -898,9 +901,12 @@ after #1362 and gating the tag; they are deliberately not done here.
       BREAKING rule is unchanged in text and **moves from `:299` to `:312`**: `task inventory:verify` and
       `tasks-pins.md:84,188` pin `:299` as PRE-change evidence and are deliberately not re-pinned, and § 10.2's
       forward-looking citation is re-derived with `sed -n "312p"`.
-      The page points at `openspec/specs/payload-registry/spec.md` rather than at the delta, because the archive is
-      this PR's last content commit and the live spec is where the table is read from afterwards; until then the
-      contract test resolves the delta first, so the two never disagree in a way a gate cannot see.
+      The page names `openspec/specs/payload-registry/spec.md` as the source of truth, because the archive is this
+      PR's last content commit and the live spec is where the table is read from afterwards — and it names the
+      delta path for the window before that, because until the archive the live spec still carries the OLD
+      eleven-row table. The earlier claim here, that "the two never disagree in a way a gate cannot see", was
+      wrong: the contract test reads exactly ONE file, so an unread stale table is precisely what it cannot see.
+      What it does instead, after § 11.5, is refuse when more than one file carries the table.
 - [x] 11.4 Gates for this checkpoint, run from the worktree root on the tree that became `6931c6f7` plus § 11's own
       markdown. Every exit code is the command's own, captured as `EXIT=$?` or `${pipestatus[1]}` immediately after
       it, never after an echo:
@@ -979,3 +985,36 @@ text claims.
       NIT-1 and NIT-4 are one-line "not supported" comments rather than code, per the owner's standing rule: a
       constraint mixing an overlay tag with a negated platform tag (`:568-573`), and two `go build` lines sharing an
       `-o` path (`:303-306`). Neither shape exists in this tree.
+- [x] 11.8 The five text claims the reviewer refuted, corrected where each was made.
+      MEDIUM-1 `docs/contributing/02-e2e-tests.md:188-192` named a source of truth that carries the OLD eleven-row
+      table until this change archives; it now names both paths and says the test reads whichever one carries the
+      table and refuses if both do. § 11.3's reasoning above is corrected in the same terms — the gate reads one
+      file, so "the two never disagree in a way a gate cannot see" was false.
+      MEDIUM-2 `:212`: `services.yml` carries no `nats:` (every tier file defines its own); it carries semembed,
+      seminstruct, step-ca, prometheus and grafana.
+      MEDIUM-3 `:19`, `:31`, `:195`, `:212`: twelve compose services against thirteen `e2e:<tier>` tasks, stated
+      once with the reason (`core` runs two phases against two services; rows 2 and 4 each serve two tasks), and
+      `openai-responses` is the fourteenth task, not the thirteenth.
+      NIT-3 `:847`: the residue line claimed `release_smoke_test.go` pinned all three stale "reactive workflow"
+      comments. It slices on the prefix `# Build e2e-semstreams binary` only, so it pins one; the three are left
+      because the second root is #1301's, which is now what the line says.
+      NIT-6 `:228`: `taskfiles/e2e/openai-responses.yml` exists and is not a tier file; the layout block names it.
+- [x] 11.9 Fix-round gates, re-run over the whole tree at `a4890713` (this entry is the only content after it).
+      Every exit code is the command's own, captured immediately after it:
+
+      | Command | Exit | Final line |
+      |---|---|---|
+      | `task lint` | 0 | `ok  	github.com/c360studio/semstreams/test/natsclient	0.733s` |
+      | `go vet -tags=e2e_process_barrier ./cmd/semstreams ./test/e2e/...` | 0 | no output |
+      | `go test -race -count=1 ./test/contract/... ./cmd/... ./test/e2e/...` | 0 | `ok  	github.com/c360studio/semstreams/test/e2e/scenarios/throughput	2.717s` |
+      | `task spec:properties` | 0 | `spec-properties: 288/288 citations resolve.` |
+      | `openspec validate --all --strict` | 0 | `Totals: 56 passed, 0 failed (56 items)` |
+      | `task check:push` | 0 | `[INTEGRATION] tests complete` |
+      | `git status --porcelain` | 0 | no output |
+      | `git diff --stat schemas/ specs/` | 0 | no output — no drift |
+
+      Denominators: the race run produced 33 package result lines, 0 beginning `FAIL`; `check:push` produced 316
+      `ok` lines and 40 `[no test files]`, 0 beginning `FAIL`. `spec:properties` and the `openspec` item total are
+      unchanged for the reasons § 11.4 gives. Still no tier run: the fix round touches one contract test, the spec
+      delta's two scenarios, `tasks.md` and `docs/contributing/02-e2e-tests.md`; no tier compiles or reads any of
+      them, and the tagged vet covers the tree the agentic image builds.
