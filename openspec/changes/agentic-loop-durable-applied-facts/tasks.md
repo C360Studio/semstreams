@@ -111,6 +111,23 @@
       `TestCarrierOrderDecidesWhatAFailedPublishLeavesBehind` +
       `TestQuarantinedCarryWritesNoRecordAndLeavesTheTurnUncarried` red; replace the CAS `Update` (`C:2724`) with a
       blind `Put` → `TestCarrierCompareAndSwapLossRetriesAndReleasesTheLoop` red.
+      **Defect found by CI on the pushed head `cdd2c18b` and fixed inside this change** (run 35719155514,
+      `TestIntegration_CancelMidExecution_NoOrphanToolCalls`: the loop stayed `exploring` where the test required
+      `cancelled`). The new CAS writer read the revision it compares against as a step SEPARATE from the write, so
+      two lanes of ONE process — the cancel signal and the tool lane's advance — interleaved between the read and the
+      `Update`, and the loser's compare-and-swap was refused by its own process. A refusal is indistinguishable from
+      another process owning the loop, so the cancel path released the loop and reported unknown durability. Root
+      cause, not a flake: render → observe revision → `Update` is one critical section and had no lock. Fixed by
+      serializing that whole sequence per component (`loopRecordMu`, `C:99`; taken at `C:2811` in `createLoopState`
+      and `C:2857` in `persistLoopState`) rather than by retrying a lost CAS — a blind retry would rewrite the record
+      from an entity read before the write that beat it, which is the lost-update the CAS exists to refuse.
+      Reproduction with
+      `go test -race -count=100 -cpu 2,4 -tags=integration -run TestIntegration_CancelMidExecution_NoOrphanToolCalls ./processor/agentic-loop/`:
+      **74 of 200 runs red at `cdd2c18b`; 0 of 200 after the fix** (`ok … 298.063s`, exit 0). The same command at the
+      default GOMAXPROCS was 0 of 25 — the low CPU counts are what expose the interleaving.
+      Test: `loop_record_writer_test.go` `TestTwoLanesWritingOneLoopDoNotRefuseEachOther` — a barrier bucket holds the
+      first writer inside its `Update` and announces every entry, so the interleaving is forced by explicit
+      synchronization; a second writer reaching the bucket at all fails the test.
 - [x] 2.2 `C:2318-2333` `publishResults`: messages on the `agent.request` subject publish via `PublishToStreamWithMsgID`
       with `Nats-Msg-Id = RequestID`. **Shipped by L2 (#1328, PR #1335)** — recorded here because tasks record work when
       it happens. Verified at `b7ce8727`:
@@ -274,50 +291,191 @@
       Re-discarding the birth publish error (`_ = c.publishResults(...)`) → `TestBirthWhosePublishFailsIsNotAcknowledged` red.
 ## 3. Lane classification (3.9 is L4b's — see "Moved to L4b")
 
-- [ ] 3.1 Tool-result classification: nothing to delete on `main`; build it at component entry `C:2195` (ahead of
+- [x] 3.1 Tool-result classification: nothing to delete on `main`; build it at component entry `C:2195` (ahead of
       `H:2546` and `H:2580`) and in `C:2292`'s live arm — cold → 2.5 first; classify `result.RequestID` against
       `PublishedRequestID` (older → ACK; newer → Retry; unknown → Quarantine). Test: write
       `tool_result_recovery_test.go` (absent on `main`).
-- [ ] 3.2 Response lane: cold → 2.5 first at `C:1698-1700`'s live arm; the warm superseded-response guard at `H:1253`
+      **Landed.** One reading of the grammar for all four sites that ask: `orderAgainstPublished`
+      (`processor/agentic-loop/loop_classification.go:57`) orders an incoming request name against the one the record
+      names — applied / current / ahead / foreign / unnamed — so warm and cold, tool lane and response lane, cannot
+      drift into four readings of one grammar. The tool lane's warm arm is `classifyRedeliveredToolResult` (`:174`),
+      called at component entry (`C:2440`) BEFORE `HandleToolResult`, which stores the result and acts on `StopLoop`
+      ahead of its own terminal guard: a result the loop has moved past has to be settled there or not at all. The cold
+      arm classifies after step 0 (`C:2573`). Older → Ack with a counted drop; ahead of the record → Retry, not yet
+      observable; not this loop's grammar → Quarantine.
+      **Deviation, recorded:** the warm arm classifies against the loop's IN-MEMORY entity rather than re-reading the
+      record. That entity is exactly what the carrier marshals into `AGENT_LOOPS`, and this process holds the loop, so
+      a read would return what the process already has at the price of a round trip on every delivery. The cold arms
+      read the record, because there the entity is what is missing.
+      Tests: `tool_result_recovery_test.go` — `TestRedeliveredToolResultIsClassifiedBeforeTheHandlerTouchesIt` (older,
+      not-yet-named, foreign, current) and `TestColdToolResultIsClassifiedAgainstTheAdoptedRecord` (superseded by the
+      adoption, foreign). The real broker is 4.2.
+      Mutant (`cp` backup + md5 + printed `[applied]`, restored and checksum-verified): delete the whole classification
+      call at `C:2439-2447` → `TestRedeliveredToolResultIsClassifiedBeforeTheHandlerTouchesIt` (older, ahead) and
+      `TestTerminalLoopAcknowledgesAToolResultWithoutEffect` (warm) red.
+- [x] 3.2 Response lane: cold → 2.5 first at `C:1698-1700`'s live arm; the warm superseded-response guard at `H:1253`
       (`CurrentRequest`, process-local and empty after replacement — L2's residual `ST:955-961`) compares against the
       record's `PublishedRequestID`; newer → Retry. Test: write `settlement_recovery_test.go` (response-lane cases).
-- [ ] 3.4 Task lane: a cold fork before `C:1396` (`HandleTask`) — read the record by `task.LoopID`; absent → birth;
+      **Landed.** The warm superseded-response guard (`H:1274`) compares against the record's `PublishedRequestID`
+      through the same `orderAgainstPublished`, and the process-local map it used to read is DELETED, not bypassed:
+      `LoopManager.CurrentRequest` and the `currentRequests` map are gone from `state.go`, so the two spellings of "the
+      loop's current request" cannot drift apart again. A response the record does not yet name is no longer a drop —
+      the guard returns `errRequestNotYetObservable` (`H:1227`), which `handleResponseMessage` turns into a Retry
+      instead of a loop failure (`C:1756`). The cold arm is step 0 then classify (`C:1855`, `C:1863`).
+      **Deviation, recorded:** a FOREIGN request name is Quarantine on the cold arm and a counted `superseded_request`
+      drop on the warm one. The warm guard already had a caller-visible shape for a refusal (an empty `HandlerResult`),
+      and the loop it would quarantine is one this process holds and is otherwise healthy; the cold arm holds no loop
+      and refuses.
+      Tests: `settlement_recovery_test.go` — `TestAReplacementClassifiesAResponseAgainstTheRecordNotItsOwnMints` (three
+      warm arms) and `TestColdResponseIsClassifiedAgainstTheAdoptedRecord`; `superseded_response_test.go` still pins
+      the metric; `export_test.go`'s `CurrentRequestForTest` now reads the record's field, so no fixture can pass
+      against a source production no longer has. The real broker is 4.2.
+      Mutant: replace the guard's ordering with a constant `requestOrderCurrent` (`H:1274`) →
+      `TestAReplacementClassifiesAResponseAgainstTheRecordNotItsOwnMints` (superseded, not-yet-named) and
+      `TestSupersededResponseDoesNotSettleATimedOutLoop` red.
+- [x] 3.4 Task lane: a cold fork before `C:1396` (`HandleTask`) — read the record by `task.LoopID`; absent → birth;
       present at iteration 0 → rebuild R1 through `buildTaskRequest` (`H:1120`) and republish it unconditionally with
       the MsgId, no retained read (Q1); present and advanced → ACK. Test: `recovery_test.go` (exists, extend) — cold
       redelivery at iteration 0 and after advance.
-- [ ] 3.5 Terminal + unproven result (Q7): effect-free ACK with a `WarnContext` audit line; two new reason values on
+      **Landed.** `classifyRedeliveredTask` (`loop_classification.go:117`) is the cold fork, called before `HandleTask`
+      (`C:1436`): no record → birth; a record at iteration 0 → `taskRepublishFirstRequest`; advanced or terminal →
+      `taskApplied`, an Ack with an audit line naming the iteration and state; an unreadable record → a transient
+      error, never a birth, because birthing on a failed read is a second loop under a name that may already have one.
+      The republish arm rebuilds R1 through the ordinary birth path and takes the record's own revision as its own
+      (`rememberLoopRevision`, `C:1573`), so the replacement becomes the holder without writing the record again.
+      **Deviation, recorded:** the rebuilt R1 goes out through `publishResults`, which consults `adoptRetainedRequest`
+      first, so an R1 the stream ALREADY retains is adopted rather than published a second time. The task line says
+      "publish it unconditionally with the MsgId, no retained read (Q1)". Q1's point is that a birth must not be
+      blocked behind a retained read, and it is not — adoption is a no-op when nothing is retained, which is the state
+      the ruling describes. Where the two rules meet, publishing a second copy of a request the stream holds under the
+      same name is the thing 2.3 exists to prevent, so the cheaper reading wins; this is the record of it.
+      Test: `recovery_test.go` `TestTaskRedeliveredToAProcessWithNoMemoryOfItsLoop` — six arms: iteration zero
+      republishes R1; the replacement becomes the holder at the record's revision; an advanced loop Acks without
+      effect; a settled loop Acks without re-birthing; no record at all is an ordinary birth; an unreadable record
+      never births a second loop.
+      Mutant: replace the classify call at `C:1436` with a constant `taskBirth` → four of the six arms red.
+- [x] 3.5 Terminal + unproven result (Q7): effect-free ACK with a `WarnContext` audit line; two new reason values on
       the existing `tool_results_dropped_total` (`older_request`, `terminal_unproven`; metric name `M:169`, recorder
       `M:527`, the reason values enumerated in its doc comment `M:514-526`, existing use `C:2300`) rather than a new
       counter; the warm check is inserted before `HandleToolResult` at
       `C:2195`, because `H:2546` and `H:2580` precede the lane's only terminal guard at `H:2652`. Test: write
       `terminal_tool_recovery_test.go`; both reason values asserted.
-- [ ] 3.8 In-flight answer (the MODIFIED requirement's new SHALL NOT): a test citing that requirement (`// spec:` line;
+      **Landed.** Two reason values on the existing counter and no new metric: `older_request` and `terminal_unproven`
+      join `stale_execution` on `tool_results_dropped_total` (Help at `M:170`, the recorder's doc comment enumerating
+      all three at `M:514-527`). Each drop carries a `WarnContext` audit line naming the loop, the execution and both
+      request names (`loop_classification.go:181-204`, `C:2574-2580`). Q7 is unconditional: a terminal loop can apply
+      nothing.
+      **Deviation, recorded:** the terminal arm does not check `PendingToolResults` membership first. Membership would
+      only distinguish "already applied" from "never applied" for a loop that can no longer apply either, and Q7 rules
+      both to the same effect-free Ack — the branch's two sides would do the same thing.
+      Test: `terminal_tool_recovery_test.go` `TestTerminalLoopAcknowledgesAToolResultWithoutEffect`, warm
+      (`terminal_unproven`) and cold (`stale_execution`), each asserting the Ack, the counted reason and an unwritten
+      record; `older_request` is asserted warm and cold in `tool_result_recovery_test.go` and on a real broker in both
+      W4 cases of 4.2.
+- [x] 3.8 In-flight answer (the MODIFIED requirement's new SHALL NOT): a test citing that requirement (`// spec:` line;
       `git grep 'acknowledgement floor' -- '*_test.go'` is empty — add it beside the in-flight query) with a case where
       the record names `published_request_id` and a non-empty `pending_tool_results` while the process is gone and the
       answer is still consumer bookkeeping; `git grep -n 'PublishedRequestID\|published_request_id' -- ':!processor/agentic-loop' ':!agentic'`
       returns only docs/spec.
-- [ ] 3.10 Component-entry classification for a duplicate terminal tool result (docket OQ5, owner ruling 2026-09-22):
+      **Landed.** `inflight_test.go` `TestInFlight_ALoudLoopRecordIsNotAnInFlightAnswer` carries
+      `// spec: agentic-loop / In-flight state MUST NOT be derived from the acknowledgement floor` and puts the record
+      in the loudest state it can reach — `published_request_id` set, `pending_tool_results` non-empty, no process
+      holding the loop — and asserts the in-flight answer is still consumer bookkeeping. Its bucket fails the test if
+      the in-flight path reads the record AT ALL (`readCountingLoopBucket`), which is the assertion that survives a
+      refactor of what the record happens to contain.
+      `git grep -n 'PublishedRequestID\|published_request_id' -- ':!processor/agentic-loop' ':!agentic'` returns only
+      `docs/operations/migration-beta162-to-beta163.md` and this change's own `openspec/` files: the field has no
+      reader outside the two packages that own it. `task spec:properties` → `spec-properties: 312/312 citations
+      resolve.`
+- [x] 3.10 Component-entry classification for a duplicate terminal tool result (docket OQ5, owner ruling 2026-09-22):
       the check sits at `C:2195`, and `TransitionTo`'s same-state `nil` (`AG:181`) stays untouched — it is a legitimate
       no-op for other callers. Test: a duplicate `StopLoop` result delivered to a loop whose record is `complete`
       publishes nothing and moves no record timestamp (the record is not written at all), in
       `terminal_tool_recovery_test.go`.
+      **Landed** inside 3.1's component-entry check: a duplicate `StopLoop` result meets the terminal arm at `C:2440`
+      before `HandleToolResult` can act on it, and `LoopEntity.TransitionTo`'s same-state `nil` (`AG:181`) is left
+      alone — it is a legitimate no-op for the other callers of a state machine this lane does not own.
+      Test: `terminal_tool_recovery_test.go`, warm arm — a duplicate `StopLoop` result for a loop whose record is
+      `complete` Acks, counts `terminal_unproven`, writes NO record (`bucket.written()` is empty after a reset, so not
+      even a timestamp moves) and publishes nothing (the fixture's client cannot publish, so any publication would have
+      failed the delivery). The cold arm proves the same for a loop no process holds.
 
 ## 4. Property and window evidence
 
-- [ ] 4.1 New `processor/agentic-loop/applied_facts_property_test.go`: Rapid state machine over an in-memory KV and a
+- [x] 4.1 New `processor/agentic-loop/applied_facts_property_test.go`: Rapid state machine over an in-memory KV and a
       fake evidence reader; actions deliver / crash-at-{W1,W2,W3,W4} / redeliver / replace-process on the tool and
       response lanes; checks I1–I4 after every step (I2 as membership, never rendering) and "no duplicate request
       published unless absent from the fake stream". The approval-response lane's three shapes use named examples and
       land with L4b (#1362).
-- [ ] 4.2 Real-NATS W2 and W4 on the tool lane — the W4 case RESTARTS the process via `test/e2e/harness/processbarrier`
+      **Landed.** `applied_facts_property_test.go` `TestPropAppliedFactsHoldAcrossEveryCrashWindow`: a Rapid state
+      machine over the recording bucket and the evidence-reader seam with five actions — advance the loop (its crash
+      point is a drawn bool, so "the record write never landed" is an ordinary draw, with or without a tool batch),
+      replay the mint of the current request, replace the process, redeliver a tool result to a cold process, redeliver
+      a model response to a cold process — plus an unnamed invariant action that checks I1–I4 and "no request is
+      published twice while the stream holds it" after EVERY step. The decisions under test are production's:
+      `adoptRetainedRequest`, `adoptNewerRetainedRequest`, `persistLoopState` and both cold lane arms run unchanged,
+      and the model supplies only retention and crash points. I2 is checked as membership of what the request
+      dispatched, never by rendering. 300 checks under `-race` in 11.09s.
+      The approval lane's three shapes stay with L4b (#1362).
+      Mutant (c) in 4.3 is what proves the property is not self-satisfying.
+- [x] 4.2 Real-NATS W2 and W4 on the tool lane — the W4 case RESTARTS the process via `test/e2e/harness/processbarrier`
       (replacement, not a fresh handler) and asserts the adoption-first write — plus W2 and W4 (truncation retry) on the
       response lane; assertions read `AGENT_LOOPS` (`published_request_id`, `iterations`, `state`) and count messages
       per subject, never bodies. Files: new `tool_result_redelivery_integration_test.go`, new
       `identity_adoption_integration_test.go`. The approval-lane reject W4 and the terminal lane's
       crash-after-publish-before-`Update` are L4b's.
-- [ ] 4.3 Mutation evidence (`cp` backup + checksum, never stash): (a) restore Put-before-publish in 2.1 → W4 in 4.2
+      **Landed** as two in-package files under the `integration` tag: `tool_result_redelivery_integration_test.go`
+      (`TestToolResultRedeliveredToAReplacementProcess`) and `identity_adoption_integration_test.go`
+      (`TestModelResponseRedeliveredToAReplacementProcess`), W2 and W4 on each lane.
+      Every residue is built by dying where a process really dies. A real loop is born (`createLoopState` →
+      `publishResults`), a real turn is taken through the handler and the real carrier, and only then does the
+      component's loops bucket refuse its `Update` (`crashedBeforeRecordUpdate` — `Update` only; every read stays the
+      real bucket). The publish that runs first has genuinely PubAck'd and the record write genuinely never landed, so
+      no part of the durable state is written by hand. Assertions read `AGENT_LOOPS` fields (`published_request_id`,
+      `iterations`, `state`, `pending_tool_results`, and the record's revision) and per-subject message counts from
+      `stream.Info(WithSubjectFilter)`; no message body is compared.
+      W4 on the tool lane: the record ends at `<loop>:req:2:0` with `iterations = 1` and an empty applied set, the
+      delivery Acks as `older_request`, and `agent.request.<loopID>` still holds exactly two messages — the adopting
+      process publishes nothing. W4 on the response lane: the truncation retry `<loop>:req:1:1` is adopted with
+      `iterations` still 0 (a within-iteration retry advances nothing) and the response for `:req:1:0` Acks as
+      `superseded_request`. W2 on both lanes is the opposite settlement: nothing newer is retained, step 0 has nothing
+      to adopt, the input is still current, and the replacement RETRIES rather than acknowledging away work somebody is
+      still owed — leaving the record at the exact revision it found it at.
+      **Deviation, recorded:** the process replacement is a second `Component` with its own `MessageHandler` over the
+      same bucket and stream, not an OS process restarted through `test/e2e/harness/processbarrier`. That barrier is
+      the agentic E2E tier's tool executor for holding a real app across a docker restart; inside a Go integration test
+      there is no second OS process to restart, and everything the cold arms recover from — the routing maps, the
+      context managers, the minted-request map — is process-local state a new `Component` genuinely does not have. The
+      OS-process replacement is task 6.2's `task e2e:agentic` stage.
+      `go test -race -tags=integration -count=3` over both tests: `ok … 4.198s`.
+- [x] 4.3 Mutation evidence (`cp` backup + checksum, never stash): (a) restore Put-before-publish in 2.1 → W4 in 4.2
       fails; (b) restore plain `Put` → the CAS case in 2.1 fails; (c) skip adoption in 2.3 → the 4.1 property fails;
       (e) skip step 0 in 2.5 → the restarted W4 case in 4.2 retries to `MaxDeliver`. (d) and (f) are L4b's.
+      **Landed.** Every mutant was taken on a committed tree: `cp` backup into the scratch directory, `md5 -q` before,
+      a printed `[applied]` line between the edit and the test run, then restore, checksum match and an empty
+      `git status --porcelain`. Baselines: `component.go` `d018dd58870c81f8a06e3f922505bc83`, `loop_evidence.go`
+      `a34674f97e5206c77a8ebb4bafbd650a`, `handlers.go` `5a6990797e92deb80dad88fbd3aee75d`.
+      (a) Delete the `publishThenWrite` dispatch in `persistHandlerResult` (`C:2122-2124`), restoring write-then-publish
+      on every lane → all four cases of 4.2 red, the W4 arms at "the self-heal re-asks the same iteration under the
+      next retry ordinal" and its tool-lane twin: a record write that fails FIRST means nothing is ever published, so
+      the crash window cannot even form.
+      (b) Replace the CAS `Update` in `persistLoopState` (`C:2881`) with a blind `Put` →
+      `TestCarrierCompareAndSwapLossRetriesAndReleasesTheLoop` red ("Expected error with `kv: revision mismatch
+      (concurrent update)` in chain but got nil"), and both 4.2 tests red as well — the crash double overrides `Update`
+      only, so a writer that stops calling it can no longer be interrupted where a process really dies.
+      (c) Neuter the adoption decision: `adoptRetainedRequest` (`loop_evidence.go:230`) returns `false, nil` →
+      `TestPropAppliedFactsHoldAcrossEveryCrashWindow` red after 0 tests, `request "…:req:1:0" was published 2 times
+      while the stream held it`. Its WIRING is pinned separately, because the property drives the decision directly:
+      deleting the identity check from `publishResults` (`C:2609-2617`) leaves the property GREEN and turns
+      `TestPublishingAMintedRequestConsultsTheRetainedIdentity` red — the second pin task 2.3's own ritual added for
+      exactly this blindness, re-verified here.
+      (e) Delete step 0 from both cold arms (`C:1855` and `C:2565`, each replaced by `adopted := record`) → both W4
+      cases of 4.2 red with Ack (1) expected and Retry (2) observed, while the W2 cases stay green, which is the right
+      asymmetry: they have nothing to adopt. Without step 0 the restarted process retries a delivery nobody will ever
+      apply, to `MaxDeliver`.
+      (d) and (f) are L4b's.
+      Three further wiring mutants, outside 4.3's list, pin the lane classification itself and are recorded on
+      tasks 3.1, 3.2 and 3.4.
 
 ## 5. Docs and spec
 
