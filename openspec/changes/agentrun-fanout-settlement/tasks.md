@@ -1059,3 +1059,30 @@ text claims.
       `decf934c3dea5a9b38c6aef37cab10b1` → `831fce581ef20f5dc5661d330075047f` → `decf934c3dea5a9b38c6aef37cab10b1`.
       RED: `agentic (agentic.yml semstreams): SEMSTREAMS_E2E_MILESTONE_PROBE is declared with an empty effective
       value, which does not arm the hook`.
+- [x] 11.12 Owner Codex round, MEDIUM-2 — `Attempt.Validate` and `Effect.Validate` are exported surfaces that decide
+      whether externally-supplied evidence may be believed, and shipped without the fuzz target the developer
+      contract requires (§ Test and operational fidelity). `test/e2e/harness/milestoneprobe/fuzz_test.go` adds
+      `FuzzAttemptValidate` and `FuzzEffectValidate`, seeded with `f.Add` covering each accepting class and one
+      rejecting seed per clause the requirement names, plus four checked-in corpus files under
+      `test/e2e/harness/milestoneprobe/testdata/fuzz/`.
+      Two invariants of deliberately different kinds. The first is one-way, so it cannot pass vacuously: evidence
+      carrying a different source identity, or an empty expected identity, is NEVER accepted — the property the
+      probe's correlation rests on, since every replacement process re-reads the same subject and must not count
+      another terminal's record as its own. The second is the accept side, so the validator cannot drift closed and
+      silently reject the evidence the tier depends on. Neither reruns the implementation's switch: the completeness
+      predicate is the requirement's field list, written once in the test. `fuzzTime` keeps the zero-time branch
+      reachable from a fuzzed integer, since `time.Unix(0, 0)` is 1970 and not the zero `Time` Validate rejects.
+      Fuzz runs, 20s each, from the worktree root:
+      `go test -run '^$' -fuzz=FuzzAttemptValidate -fuzztime=20s ./test/e2e/harness/milestoneprobe/` exit 0,
+      `ok  	github.com/c360studio/semstreams/test/e2e/harness/milestoneprobe	21.426s`, last progress line
+      `fuzz: elapsed: 21s, execs: 1995867 (144203/sec), new interesting: 149 (total: 160)`.
+      `…-fuzz=FuzzEffectValidate…` exit 0, `ok  	…/milestoneprobe	21.345s`, last progress line
+      `fuzz: elapsed: 21s, execs: 2184690 (68311/sec), new interesting: 163 (total: 171)`. `go clean -fuzzcache`
+      afterwards: the host is at ~900MiB free and a fuzz corpus cache is not evidence anyone re-reads.
+      Mutant: the source-identity comparison deleted from `Effect.Validate`
+      (`test/e2e/harness/milestoneprobe/milestoneprobe.go:179-180`). md5 `704831f5c429d4ffdec1e9b3abfa2b9f` →
+      `7019aa4c456c21723374299b3ba2cdee` → `704831f5c429d4ffdec1e9b3abfa2b9f`, and `go test -run Fuzz` is exit 0
+      again on the restored file. Under the mutant, `go test -run Fuzz` (the seeds as a plain test, no fuzzing) is
+      RED on BOTH seeding mechanisms, which is the point of checking in the corpus as well as the `f.Add` calls:
+      `FuzzEffectValidate/seed#2: Validate("msg-1") accepted evidence whose source id is "other"` and
+      `FuzzEffectValidate/rejected_foreign_identity: … source id is "other-terminal"`.
