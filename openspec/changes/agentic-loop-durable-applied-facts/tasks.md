@@ -23,10 +23,13 @@
 
 ## 1. Field and invariant surface
 
-- [x] 1.0 New `processor/agentic-loop/internal/looprequest`: `Parse(id) (loopID string, iteration, retry int, err)` over `<loopID>:req:<i>:<r>` (loopID may itself contain colons; parse from the right, require all four parts, reject a missing retry part), `Next(prev, retry bool) string` (retry → same iteration, retry+1; else iteration+1, retry 0), `Compare(a, b)` on `(iteration, retry)`. `Next` must reproduce `ST:1345-1347` (`iteration = entity.Iterations + 1`; `%s:req:%d:%d`), so birth mints `…:req:1:0` from `Iterations = 0`. `Parse` becomes the one reader of the grammar, replacing the two prefix-only readers on `main`: `ST:1360-1361` (`ExtractLoopIDFromRequest`) and `LP:50` (`loopIDFromStructuredID`). L2 (PR #1335) shipped no parser because no reader existed yet; this change is the reader. Rapid property: `Parse(format(x)) == x`; `Compare` is a total order consistent with `Next`.
-      **Landed.** `looprequest.go` — `ID{LoopID,Iteration,Retry}` (the three parts travel together, so one named
-      value rather than three positional returns), `Parse` (right-hand read; canonical ordinals only — `007`, `+1`
-      and `iteration 0` are refused), `ID.String`, `Next(prev, retry)`, `Compare(a, b)`. `Parse` did NOT replace the
+- [x] 1.0 New `processor/agentic-loop/internal/looprequest`: `Parse(id) (ID, error)` over `<loopID>:req:<i>:<r>` (loopID may itself contain colons; parse from the right, require all four parts, reject a missing retry part), `Next(prev, retry bool) string` (retry → same iteration, retry+1; else iteration+1, retry 0), `Compare(a, b)` on `(iteration, retry)`. `Next` must reproduce `ST:1345-1347` (`iteration = entity.Iterations + 1`; `%s:req:%d:%d`), so birth mints `…:req:1:0` from `Iterations = 0`. `Parse` becomes the one reader of the grammar, replacing the two prefix-only readers on `main`: `ST:1360-1361` (`ExtractLoopIDFromRequest`) and `LP:50` (`loopIDFromStructuredID`). L2 (PR #1335) shipped no parser because no reader existed yet; this change is the reader. Rapid property: `Parse(format(x)) == x`; `Compare` is a total order consistent with `Next`.
+      **Landed.** `looprequest.go` — `ID{LoopID,Iteration,Retry}`, `Parse` (right-hand read; canonical ordinals
+      only — `007`, `+1` and `iteration 0` are refused), `ID.String`, `Next(prev, retry)`, `Compare(a, b)`. The task
+      line above says `Parse(id) (ID, error)` because that is what shipped and what the rest of the change calls;
+      the design wrote it as a three-value tuple, and the three parts travel together at every call site, so they
+      get a named value rather than three positional returns (developer contract, exported-surface rule). Corrected
+      here 2026-09-22 so the task text and the code agree. `Parse` did NOT replace the
       two prefix-only readers (`ST:1360`, `LP:50`): both are on the Tier 1 surface or its call graph and replacing
       them is section 3's lane work, not a grammar change — recorded so the substitution is not lost.
       Tests: `looprequest_test.go` (13 refusal cases + 6 accept cases — the half a round-trip property cannot see),
@@ -160,7 +163,7 @@
       (task 1.0); retry ordinal from the parsed field; delete `IncrementTruncationRetry` (`ST:466`) and
       `ResetTruncationRetry` (`ST:477`) with their callers `H:2037`, `H:1389`, `H:1409` and the map cleared at
       `ST:588`. Test: `handlers_test.go` — grammar holds; retry ordinal survives a rebuilt LoopManager.
-      **Landed, except the two deletions.** The field is set at `H:1138` (`buildTaskRequest`), `H:2190`
+      **Landed.** The field is set at `H:1138` (`buildTaskRequest`), `H:2190`
       (`emitRetryRequest`) and `H:2956` (`publishIterationRequest`), each beside the `TrackRequest` the site already
       made. `GenerateRequestID` (`ST:1375`) now mints through `looprequest`: iteration stays `Iterations + 1`, and
       the retry ordinal is read back out of `PublishedRequestID` — a mint at the iteration the field already names
@@ -169,10 +172,23 @@
       Five caller sites removed, not the three the design enumerated — `H:2037` (`Increment`), `H:1389`/`H:1409`
       (forward-progress resets) AND `H:2054`/`H:2072`, two further `ResetTruncationRetry` calls inside
       `handleLengthTruncation`'s own failure arms that the design's enumeration missed.
-      `IncrementTruncationRetry` (`ST:473`) and `ResetTruncationRetry` (`ST:485`) are NOT deleted: both are
-      **exported methods on a Tier 1 package** (ADR-106, `release/tier1-packages.txt:75`), which the checkpoint brief
-      reserves for the owner. They and `truncationRetryAttempts` (`ST:112`, cleared at `ST:596`) are marked
-      `Deprecated:` naming the durable replacement, and have no production caller.
+      `IncrementTruncationRetry` and `ResetTruncationRetry` shipped one commit marked `Deprecated:` with no
+      production caller, on the reading that removing an exported method from a **Tier 1 package** (ADR-106,
+      `release/tier1-packages.txt:75`) was the owner's call. **Both are DELETED as of 2026-09-22**, under the
+      coordinator's ruling on the checkpoint-1 review applying the standing no-deprecation rule: a helper whose last
+      caller is gone goes with it. `truncationRetryAttempts` (the map, its two constructor inits and its clear in
+      `DeleteLoop`) went with them — with both methods gone nothing read or wrote it. `task api:compat:report` adds
+      exactly `(*LoopManager).IncrementTruncationRetry: removed` and `(*LoopManager).ResetTruncationRetry: removed`
+      to the three incompatible entries `processor/agentic-loop` already carried, and the package total is
+      unchanged at 15. Migration note: `docs/operations/migration-beta162-to-beta163.md` § "The loop record names its
+      outstanding request, and the truncation-retry helpers are removed (#1330, restart safety L4a)", which records
+      the measured sister result — a `grep -rn` over every `sem*` repository finds the two names only in frozen
+      `.txt` copies of this repository's own source under `semdev/openspec/changes/.../evidence/`, and a control
+      grep over the same tree set reaches sister Go sources.
+      The one test caller, `populatedLoop`'s `IncrementTruncationRetry` line in `terminal_release_test.go`, is
+      dropped with the map it populated: the durable ordinal is not a per-loop manager map, so that assertion has no
+      subject to move to. `perLoopMapCount` loses the same entry and the fixture floor drops 13 → 12, keeping the
+      slack that refuses a fixture which skips a map.
       Tests: `execution_identity_test.go` `TestRequestIDCarriesTheTruncationRetryOrdinal` (rewritten onto
       `SetPublishedRequest`, the production seam) and the new `TestRetryOrdinalSurvivesARebuiltLoopManager` (a
       SECOND manager holding only the durable record mints `:3:2`, the name a process-local counter could not);
@@ -205,6 +221,12 @@
       L4a note: the classification that follows step 0 is tasks 3.1/3.2, so today the arm still returns its existing
       not-held error after adopting. The adopt is idempotent — the redelivery reads the record it just wrote and
       compares equal.
+      **Cost, corrected 2026-09-22** (the checkpoint's first reading said a cold redelivery pays a KV write per
+      redelivery; it does not): the FIRST cold read that finds a newer retained request pays one `Update`. Every
+      redelivery after it re-reads the record it just wrote, `looprequest.Compare` returns 0 and
+      `adoptNewerRetainedRequest` returns at `loop_evidence.go:312` before building anything — one KV write in
+      total, then one record read plus one `GetLastMsgForSubject` per redelivery. That read pair is the standing
+      cost of a lane whose classification is still tasks 3.1/3.2's, and it ends when they land.
       Test: `loop_carrier_test.go` `TestColdReadAdoptsTheNewestRetainedRequestFirst`, seven arms — newer-adopt
       (`published_request_id`, `iterations = parsed − 1`, applied set emptied, `Validate` green), newer-adopt over an
       `awaiting_approval` record (gate nil, state restored), current (nothing written), nothing retained (nothing

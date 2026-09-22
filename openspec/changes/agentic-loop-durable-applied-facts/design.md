@@ -106,16 +106,24 @@ Two more callers ride the same write: the deferred-continuation marker (`C:1425`
    Until task 3.4's cold fork lands, the Retry a returned birth publish produces meets birth's own `Create`, is
    refused with `ErrKVKeyExists`, and Retries again to the lane's `MaxDeliver`; 3.4 is what turns that refusal into
    the unconditional R1 republish, so it is a merge precondition for this change and not a later slice.
-2. **Form (Q2):** `Update(observedRevision)` replaces `Put` at `C:2483` (`KVStore.Update`, `KV:231`;
-   `ErrKVRevisionMismatch`, `KV:238`). The ruling's premise that both lanes already hold the revision is FALSE on
+2. **Form (Q2):** `Update(observedRevision)` replaces `Put` at `C:2483`. The `KV:` pins in this section are the
+   PATTERN, never the call: `natsclient.KVStore.Update` (`KV:231`, `ErrKVRevisionMismatch` at `KV:238`) and
+   `KVStore.Create` (`KV:211`, `ErrKVKeyExists` at `KV:218`) are what the component mirrors, but `c.loopsBucket` is a
+   raw `jetstream.KeyValue` and not a `KVStore`, so the component classifies each conflict itself with the shared
+   `natsclient.IsKVConflictError` and names it by call site — a refused `Create` is "the key exists", a refused
+   `Update` is "the revision moved". That is unambiguous because the two calls cannot return each other's case, and
+   it mirrors `natsclient/kv.go:217` and `:237` line for line. One consequence to state rather than discover: an
+   `Update` against a record the bucket's 24h TTL has already expired classifies as revision-mismatch, not as
+   absence, so it settles on the gone-loop path — release the loop, return Retry, and let the redelivery read a
+   bucket that now has no record for this loop at all (`loopPresenceStale`). The ruling's premise that both lanes already hold the revision is FALSE on
    `main`: no production loop-record writer calls `Update` or `Create` — all four are `Put` (`C:2401`,
    `:2432`, `:2456`, `:2483`) and discard the revision `Put` returns, and the one reader `LP:75` discards
    `entry.Revision()`. The revision is therefore process-retained per loop — seeded at birth from `Create`'s return,
    and on a cold read from `entry.Revision()`. A lost race now fails the write → Retry → re-read → the classification
    below answers, **and the loser releases the loop's process state** (`ST:574` `DeleteLoop`, `C:1964`
    `releaseLoopTransientState`) before that Retry, so the redelivery re-enters the cold path against the record that
-   won; without the release the loser keeps a stale in-memory loop forever (docket OQ3). Birth is by `Create`
-   (`KV:211`), so a second consumer's birth is refused with `ErrKVKeyExists` (`KV:218`) and takes the cold fork — the
+   won; without the release the loser keeps a stale in-memory loop forever (docket OQ3). Birth is by `Create`, so a
+   second consumer's birth is refused with `ErrKVKeyExists` and takes the cold fork — the
    only way the `…:req:N:0` window closes at iteration 0, where no revision exists yet (OQ3).
    `MaxAckPending=1` (`C:1191-1192`) is set per port, for the three ports named at `C:1191`; it serializes deliveries
    within a port and never across them.
