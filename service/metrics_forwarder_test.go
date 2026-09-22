@@ -221,8 +221,13 @@ func TestMetricsForwarder_ServiceLifecycle(t *testing.T) {
 // (100, 200, 300) on top of the seed publish Start makes immediately. The count
 // is exact in both directions — a ticker that never fires leaves it at one, a
 // faster-than-configured one overshoots — and no goroutine's real scheduling
-// can move it (#1363: a wall-clock spacing assertion, and then a wall-clock
-// upper bound, each failed on a loaded host for scheduling reasons).
+// can move it. Two wall-clock shapes preceded it (#1363). A spacing assertion
+// (InDelta 100ms ± 50ms between publishes) FAILED on a loaded host: one gap
+// measured 196ms, a coalesced tick under -race. Its replacement, a count bound
+// of 3 to 5 in a 350ms sleep, was shown in review to be scheduler-dependent
+// the other way — the sleep only pauses the observer, so a delayed observer
+// lets the ticker run past the window and overshoot the bound. That second
+// failure was established by reasoning about the schedule, not reproduced.
 //
 // Cycles are counted as publications of the dedicated test counter's subject,
 // one per gather, not inferred from wall-clock gaps between publishes.
