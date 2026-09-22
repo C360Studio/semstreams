@@ -128,6 +128,9 @@
         `TestAColdToolResultRebuildsTheBatchItBelongsTo` ("the sibling that never ran must be dispatched next; an
         applied one must not be re-run").
 
+      `go test -race -count=3 -tags=integration -p 2` over the two rewritten W2 files plus
+      `task_redelivery_integration_test.go`: `ok … 5.242s`.
+
       **Migration note.** `docs/operations/migration-beta162-to-beta163.md` § "A rebuilt loop's conversation is one
       region" records the one visible consequence of the one-region replay: compaction attribution does not survive
       a process replacement. No message is lost and none moves, but per-region sizes reset at the replacement. The
