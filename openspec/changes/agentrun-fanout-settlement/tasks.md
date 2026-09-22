@@ -247,6 +247,24 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       `TestMilestoneServiceHealthReadsTheProductionSubscriber` pins the assertion against a real
       `agentrun.NewMilestoneSubscriber`, because the `!ok` arm falls back to the base status: a renamed or resigned
       `DeliveryFatal` would otherwise turn the whole signal off silently and no other test would notice.
+      **Open defect, NOT fixed here (2026-09-22).** `TestMilestoneServiceHealthReportsDeliveryFatal` is flaky on
+      main-bound CI — run 35719826852, Test job, `a latched lane reports unhealthy with its cause` red at
+      `service/milestone_health_test.go:88` ("precondition: healthy before the latch"). Reproduced on this branch at
+      `6b002817`: green at `-count=1`, red inside `go test -count=60 -run 'TestMilestoneServiceHealthReportsDeliveryFatal$'
+      ./service/`, both subtests, message `Service is unhealthy (failed checks: 0)`. Cause is substrate, not this
+      test: `BaseService.healthy` is an `atomic.Bool` left at its zero value by `Start` (`service/base.go:266`), and
+      the first `true` is stored by `performHealthCheck` on the monitor GOROUTINE (`service/base.go:446`), so any
+      `Health()` read that races the goroutine reports unhealthy with zero failed checks.
+      The proposed one-line remedy — store `healthy = true` beside `s.status.Store(StatusRunning)` — was MEASURED and
+      is UNAVAILABLE: it breaks the readiness contract. `/readyz` reads `service.IsHealthy()`
+      (`service/service_manager.go:1838`), so "ready" would be published before any health check had run. Applied as a
+      mutant (`service/base.go` md5 `caba89a154827cfca534d9b924c4709d` before and after), `go test ./service/` went
+      from green to three failures: `TestReadinessWaitsForInitialServiceHealthObservation`
+      (`startup_observability_test.go:305`, `/readyz` answered 200 where the test requires 503 while the first check
+      is still blocked), `TestReadinessIncludesHealthyNonLifecycleDiscoverables` (`:223`, "component-manager did not
+      publish its initial healthy observation" — the fix removes the false→true edge the callback fires on), and
+      `TestStartAllBindsSharedAndMetricsBeforeBlockedService` (`:570`, same edge). The remedy is therefore a
+      readiness-semantics decision, not a one-liner, and is held for the coordinator/owner.
 - [x] 5.2 Add `MilestoneSubscriber.RegisterMetrics(r metric.MetricsRegistrar) error` registering
       `semstreams_agentrun_milestone_decisions_total{lane,decision,reason}` via `RegisterCounterVec`
       (`metric/registry.go:216`); the vec is built in `NewMilestoneSubscriber` (`agentrun.go:521`). Wire one call after
