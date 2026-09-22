@@ -762,7 +762,11 @@
       asserts on. `GetLoop` is likewise not the witness that the rebuild happened, because the terminal transition
       releases the loop; the failure event is, since only a loop this process HOLDS can produce one.
       Mutant (`cp` backup + `md5 -q`, `[applied]` printed between mutating and testing, restore verified by
-      checksum): MUTANT_RECORD
+      checksum): `HandleToolResult` stops consulting `IsTimedOut` on the way in,
+      so a rebuilt loop's inherited deadline is never read. `handlers.go` `6c1eaf6d5e0a616a1b0a0626017dad17` →
+      `6a4df6f4ef8326fe250eaba97a9f7179` → restored `6c1eaf6d5e0a616a1b0a0626017dad17`, `git status --porcelain`
+      empty after. RED at `tool_result_redelivery_integration_test.go:452` — zero messages on
+      `agent.failed.<loopID>` where one is required.
 
 - [ ] 6.1 `task check:push` (schema drift expected empty — `LoopEntity` is in no schema); `go run ./cmd/entity-id-audit .`
       green.
