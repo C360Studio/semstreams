@@ -119,7 +119,17 @@ func TestTwoLanesWritingOneLoopDoNotRefuseEachOther(t *testing.T) {
 // spec: agentic-loop / The loop record names its outstanding request
 func TestAColdAdoptAndAWarmWriteOfOneLoopDoNotRefuseEachOther(t *testing.T) {
 	c, base, loopID := carrierLoop(t)
+	first := looprequest.ID{LoopID: loopID, Iteration: 1, Retry: 0}.String()
 	retained := looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String()
+	// Step 0 adopts only into a record that already NAMES a request — an
+	// unnamed one is the classification's requestOrderUnnamed arm and is
+	// returned untouched. This test is about the lock around the adopting
+	// write, so the fixture has to be a record that has one. The set-and-
+	// persist below is fixture setup, like seedLoopRecord's birth write, and
+	// written() is reset after it for the same reason.
+	require.NoError(t, c.handler.loopManager.SetPublishedRequest(loopID, first))
+	require.NoError(t, c.persistLoopState(t.Context(), loopID))
+	base.resetWritten()
 	c.requestEvidence = stubEvidenceReader{requestID: retained}
 	bucket := &barrierLoopBucket{
 		recordingLoopBucket: base,

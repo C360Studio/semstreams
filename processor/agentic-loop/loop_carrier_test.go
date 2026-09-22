@@ -498,6 +498,53 @@ func TestColdSettlementArmsAdoptBeforeTheyRefuseTheDelivery(t *testing.T) {
 	}
 }
 
+// TestStep0LeavesAnUnnamedRecordExactlyAsItFoundIt is #1330's two arms
+// agreeing with each other.
+//
+// orderAgainstPublished gives a record that names no request the pre-#1330
+// answer — absence of evidence is not evidence of staleness — and retries the
+// delivery to whichever process holds the loop. Step 0 ran first and did the
+// opposite: with the field empty it fell past the ordering guard entirely and
+// wrote the stream's newest request onto the record WITH an empty applied set.
+// The evidence the holder was about to apply was drained by the one process
+// that could not apply it.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestStep0LeavesAnUnnamedRecordExactlyAsItFoundIt(t *testing.T) {
+	const loopID = "5a1c9e32-7b84-4d60-9f13-2c8e5b7a0d44"
+	retained := looprequest.ID{LoopID: loopID, Iteration: 4, Retry: 0}.String()
+	applied := map[string]agentic.ToolResult{
+		"tool-exec-v1-unnamed": {ExecutionID: "tool-exec-v1-unnamed", Name: "search", Content: "answered"},
+	}
+
+	c := evidenceComponent(t, retained)
+	before := coldRecord(t, c, loopID, func(e *agentic.LoopEntity) {
+		// A record written before this field existed, mid-batch.
+		e.PublishedRequestID = ""
+		e.Iterations = 2
+		e.PendingToolResults = applied
+	})
+
+	toolResult := agentic.ToolResult{
+		CallID: loopID + ":tool:1", Name: "search", Content: "result", LoopID: loopID,
+	}
+	msg, delivered := deliverToolResult(t, c, toolResult)
+
+	require.Equal(t, natsclient.DeliveryDecisionRetry, delivered.Decision(),
+		"an unnamed record orders nothing, so the delivery stays owed to the loop's holder")
+	require.Equal(t, int32(1), msg.naks.Load())
+	require.Zero(t, msg.acks.Load()+msg.terms.Load())
+
+	after := c.readLoopRecord(t.Context(), loopID)
+	require.Equal(t, before.revision, after.revision,
+		"step 0 adopted into a record the classification refuses to order against")
+	require.Equal(t, applied, after.entity.PendingToolResults,
+		"the applied set the holder is about to use was drained by a process that cannot apply it")
+	require.Empty(t, after.entity.PublishedRequestID,
+		"a record that never named a request must not be given one by a reader")
+	require.Equal(t, 2, after.entity.Iterations)
+}
+
 // stubEvidenceReader answers the two evidence reads from fixed bodies, so
 // every arm of identity adoption and of the cold rebuild is driven without a
 // broker.

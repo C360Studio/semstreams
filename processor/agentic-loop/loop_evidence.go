@@ -407,6 +407,13 @@ func (c *Component) adoptRetainedRequest(ctx context.Context, loopID, requestID 
 // rather than leaving the caller to re-read is what keeps the classification
 // and the write bound to the same observation (#1330, I1–I4).
 //
+// It adopts only into a record that already NAMES a request. A record with an
+// empty PublishedRequestID is the classification's requestOrderUnnamed arm,
+// which deliberately keeps the pre-#1330 answer, and step 0 must give the same
+// answer the arm it feeds does: it returns without reading the stream and
+// without writing. Adopting there would drain an applied set the lane is about
+// to hand, untouched, to whichever process holds the loop.
+//
 // Residual, stated rather than discovered: this write is deliberately not
 // remembered as a revision for the loop, because the process running step 0
 // does not hold the loop. When it happens to hold it anyway — the tool lane
@@ -437,6 +444,18 @@ func (c *Component) adoptNewerRetainedRequest(ctx context.Context, loopID string
 		return record, errs.WrapTransient(
 			fmt.Errorf("loop %s: the loop record could not be read, so its retained request cannot be adopted", loopID),
 			"agentic-loop", "adoptNewerRetainedRequest", "read the loop record before adopting")
+	}
+
+	if record.entity.PublishedRequestID == "" {
+		// A record that names no request is the UNNAMED arm, and the lane
+		// deliberately gives it the pre-#1330 answer: absence of evidence is
+		// not evidence of staleness (loop_classification.go). Step 0 must not
+		// contradict that. Adopting here would write the stream's newest
+		// request onto a record that never claimed one AND drain its applied
+		// set, so an input the lane is about to hand to the loop's holder
+		// would first have its evidence destroyed by the process that cannot
+		// apply it. Nothing is adopted and the record is returned as read.
+		return record, nil
 	}
 
 	retained, found, err := c.readRetainedAgentRequest(ctx, loopID)
