@@ -6,7 +6,10 @@
 > `pins=214 ok=214 moved=0 ambiguous=0 drift=0 malformed=0 unparsed=0`. The reconciliation of the accepted design
 > against that base — 28 rows, seven text corrections (B1–B7), two owner questions — is `reconciliation.md`; the
 > per-task old to new pin map is `tasks-pins.md`. From here `scripts/inventory-verify.sh` is EXPECTED to go RED as the
-> implementation lands: pins are pre-change evidence, and a landed change is never re-pinned.
+> implementation lands: pins are pre-change evidence, and a landed change is never re-pinned. **Owner rulings
+> 2026-09-22 on #1249 (issuecomment-5773598763, "as recommended"):** OQ1 the milestone lanes keep `nil` `onRefused`
+> and are added to #1342's table; OQ2 the forced `handle.Stop()` fallback is dropped. Standing rule from the same day:
+> keep complexity as low as possible — an edge case goes to a doc sentence or "not supported" before it gets code.
 
 Tasks record work when it happens. No task asserts a post-merge fact; CI and merge own that proof. Landing choreography
 (review, archive, merge) lives on the PR checklist (#1230), not here. Pins: every pin is a `main` line at `b7ce8727`;
@@ -81,7 +84,8 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       (`:683-684`) go, and no observer goroutine is hand-rolled — `Observe` owns it. `stop()` = `Drain()` both
       (both-drain-first, `:718`, holds) → await both `Closed()` (`:727`, `:730`) → `o.cancel()` (`:743`) → join both
       `Done()` (`internal/deliverylane/deliverylane.go:216`); reconciliation B3. The force `Stop()` fallback
-      (`:734-737`) is owner question OQ2 in `reconciliation.md`. Tests (`-race`):
+      (`:734-737`) is removed and no raw handle is kept beside the binding — owner ruling 2026-09-22 on #1249
+      (OQ2, as recommended). Tests (`-race`):
       `TestMilestoneFatalDrainsOnlyTheFailedLane`, `TestMilestoneStopAfterFatalWaitsClosedWithoutSecondDrain`.
 - [ ] 4.3 Control-plane rows: an `InProgress` failure (`natsclient/delivery_settlement.go:372`/`:377`) and unavailable
       metadata (`:390`) latch the lane and surface in health:
