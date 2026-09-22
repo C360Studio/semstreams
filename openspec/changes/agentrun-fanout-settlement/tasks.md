@@ -293,12 +293,34 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
 
 ## 6. Consumer policy (O2; design § 2.8)
 
-- [ ] 6.1 Keep `MaxDeliver 5` (`agentrun.go:832`) and `AckWait 30s` (`:833`) on both lanes; heartbeat 10s under the
+- [x] 6.1 Keep `MaxDeliver 5` (`agentrun.go:832`) and `AckWait 30s` (`:833`) on both lanes; heartbeat 10s under the
       `AckWait/2` ceiling (`natsclient/delivery_settlement.go:181`); semantic retry
       `DelayedDeliveryRetry(30*time.Second)`. Test: `TestMilestoneLanesDeclareFiniteMaxDeliver` (I6, reads both consumer
       configs; fails on 0).
-- [ ] 6.2 No new exhaustion signal: the existing advisory counter (`internal/maxdelivery/observer.go:148`) is asserted
+      Evidence: nothing in the policy changed — both `StreamConsumerConfig` literals in `Start` still declare
+      `MaxDeliver: 5` and `AckWait: 30 * time.Second`, `milestoneHeartbeatInterval` is still 10s, and
+      `milestoneRetryDelay` is still 30s. What was missing was the guard, and checkpoint 1's coverage did not supply
+      it: `milestonePolicyFor` asserts `MaxDeliver 5` / `AckWait 30s` on a config the TEST writes, so `Start` could
+      have declared 0 on both lanes with every unit test green.
+      The guard is `TestIntegration_MilestoneLanesDeclareFiniteMaxDeliver` in
+      `agentic/agentrun/milestone_policy_integration_test.go`. It starts the real subscriber against a testcontainer
+      NATS, then reads BOTH lanes' `ConsumerInfo.Config` back out of JetStream and asserts `MaxDeliver` is positive
+      (the "fails on 0" half, spelled as its own assertion because 0 means unlimited, not zero), that it is exactly 5,
+      that `AckWait` is 30s, and that `BackOff` is empty — the retry delay is semantic, not a consumer ladder. The
+      name carries the file's `TestIntegration_` prefix; the task names it `TestMilestoneLanesDeclareFiniteMaxDeliver`.
+      The heartbeat ceiling needs no separate assertion: `Start` runs `ValidateHeartbeatDeliveryPolicy` for each lane
+      BEFORE acquiring its consumer, so a heartbeat above `AckWait/2` fails Start, and the test's successful Start is
+      that check passing on both lanes.
+      The `DelayedDeliveryRetry(30s)` half was proven in checkpoint 1 and stands:
+      `TestMilestoneFanoutRetriesOnTransientHandlerError` asserts the Nak carries `milestoneRetryDelay` and not a
+      line-rate redelivery.
+- [x] 6.2 No new exhaustion signal: the existing advisory counter (`internal/maxdelivery/observer.go:148`) is asserted
       by 9.2.
+      Evidence: this layer adds no exhaustion signal of its own. `git grep -n 'max_delivery_exhaustions'` finds the
+      counter only under `internal/maxdelivery/` and its own tests plus the e2e stage, and both roots already start
+      the observer (`maxdelivery.Start` at `cmd/semstreams/main.go:232`, `cmd/e2e-semstreams/main.go:184`) before the
+      milestone service is registered, so the lanes' MAX_DELIVERIES advisories are observed by the existing seam. The
+      assertion on the series value belongs to 9.2 with the § 9 proof.
 
 ## 7. Removal of `ConsumeWithHeartbeat` (Tier 1; `Closes #759`)
 
