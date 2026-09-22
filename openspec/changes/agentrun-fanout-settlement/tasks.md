@@ -498,8 +498,8 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       by the answer it got, including the trade it makes: whole-fanout settlement buys replay safety by moving from
       at-most-once to at-least-once, and pays for it with the `SourceMessageID` identity rather than with the
       per-handler receipt ledger this capability refuses to invent. Every added line is under 120 columns.
-- [ ] 8.4 O5 (#1155 amended to re-invocation + idempotent effect count) is recorded on #1155 by the coordinator; this
-      PR's proof in § 9 implements the amended acceptance.
+- [x] 8.4 O5 (#1155 amended to re-invocation + idempotent effect count) is recorded on #1155 by the coordinator
+      (issuecomment-5775148106, 2026-09-22); this PR's proof in § 9 implements the amended acceptance.
 
 ## 9. Proof (#1155 stage D; O4, O5)
 
