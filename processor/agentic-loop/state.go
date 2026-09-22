@@ -317,6 +317,187 @@ func (m *LoopManager) attachContinuation(loopID, taskID string) (agentic.LoopEnt
 	return *entity, false, nil
 }
 
+// restoreLoopFromRequest rebuilds, in THIS process's memory, the loop that the
+// record and the newest retained request describe (#1330, design § 5.2 step 2
+// and § 5.3 step 3; task 1.2).
+//
+// It is the second half of the create-versus-exists fence's third case. A task
+// naming a live loop attaches (attachContinuation); a task naming a loop no
+// process holds rebuilds it — and so does a model response or a tool result
+// arriving at a process that was started after the loop was born. Without this,
+// a replacement can only refuse the delivery and retry it to MaxDeliver.
+//
+// Nothing here is derived, inferred or synthesised. The record supplies the
+// entity — identity, role, model, iteration, state, the applied set and the
+// request it named — and the retained request supplies the conversation and the
+// per-loop settings the loop was actually running with (tools, tool choice,
+// response format, per-request timeout). Both are durable facts of the loop,
+// not a reconstruction of them.
+//
+// The conversation is rebuilt as TWO regions: the system messages, and
+// everything else in the order the request carried it. That order IS
+// GetContext()'s order, because the request's Messages were built from it, so
+// the rebuilt context renders identically. What does NOT survive is compaction
+// ATTRIBUTION: a summary the predecessor had in RegionCompactedHistory returns
+// as ordinary recent history, so the next compaction fires slightly earlier
+// than it would have. That is visible on context_compactions_total and
+// context_compacted_region_tokens, and it is the whole of the loss —
+// re-attributing regions would mean guessing which retained message came from
+// which region, which is exactly the content-comparison this change removes.
+//
+// RepairToolPairs runs last: a request retained mid-batch can carry an
+// assistant tool_call whose results were never appended, and a provider refuses
+// that pair outright.
+func (m *LoopManager) restoreLoopFromRequest(record agentic.LoopEntity, request agentic.AgentRequest) error {
+	if record.ID == "" {
+		return errs.WrapInvalid(fmt.Errorf("loop record carries no id"),
+			"LoopManager", "restoreLoopFromRequest", "validate the record to rebuild from")
+	}
+	if request.RequestID == "" || request.RequestID != record.PublishedRequestID {
+		return errs.WrapInvalid(
+			fmt.Errorf("loop %s: the retained request is %q but the record names %q",
+				record.ID, request.RequestID, record.PublishedRequestID),
+			"LoopManager", "restoreLoopFromRequest", "match the retained request to the record")
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.loops[record.ID]; exists {
+		// This process already holds the loop, so there is nothing to rebuild
+		// and rebuilding would overwrite a live conversation with a retained
+		// one. Same refusal CreateLoopWithID gives, for the same reason.
+		return errs.WrapInvalid(
+			fmt.Errorf("loop %s: %w", record.ID, ErrLoopAlreadyExists),
+			"LoopManager", "restoreLoopFromRequest", "refuse a rebuild over a held loop")
+	}
+
+	entity := record
+	m.loops[record.ID] = &entity
+	m.pendingTools[record.ID] = make(map[string]bool)
+
+	opts := []ContextManagerOption{WithLogger(m.logger)}
+	if m.modelRegistry != nil {
+		opts = append(opts, WithModelRegistry(m.modelRegistry))
+	}
+	cm := NewContextManager(record.ID, record.Model, m.contextConfig, opts...)
+	for _, msg := range request.Messages {
+		region := RegionRecentHistory
+		if msg.Role == "system" {
+			region = RegionSystemPrompt
+		}
+		if err := cm.AddMessage(region, msg); err != nil {
+			delete(m.loops, record.ID)
+			delete(m.pendingTools, record.ID)
+			return errs.WrapTransient(err, "LoopManager", "restoreLoopFromRequest",
+				"replay the retained request into the rebuilt conversation")
+		}
+	}
+	cm.RepairToolPairs()
+	m.contextManagers[record.ID] = cm
+
+	// The settings the loop was running with, read off the request it last
+	// sent rather than off a TaskMessage this process never saw. Without them
+	// the rebuilt loop's next request would advertise no tools at all.
+	m.cachedTools[record.ID] = request.Tools
+	m.cachedToolChoice[record.ID] = request.ToolChoice
+	m.cachedResponseFormat[record.ID] = request.ResponseFormat
+	if request.Timeout != "" {
+		m.cachedRequestTimeout[record.ID] = request.Timeout
+	}
+
+	// TrackRequest's shape: the request is routable AND outstanding. Outstanding
+	// is the right claim here because the only evidence in hand is that the
+	// request was published; restoreToolBatch settles it when the response that
+	// answered it is read.
+	m.requestToLoop[request.RequestID] = record.ID
+	m.outstandingRequests[record.ID] = request.RequestID
+	return nil
+}
+
+// restoreToolBatch re-seats the tool batch the retained response dispatched, so
+// a rebuilt loop can decide AllToolsComplete (#1330, design § 5.3 step 3).
+//
+// The record alone cannot answer that question. It carries which executions are
+// APPLIED; only the response carries how many there were. A rebuild that skipped
+// this would advance the loop on the first redelivered result of a three-call
+// batch and send the model a turn missing two tool messages.
+//
+// Membership only, by identity. Execution IDs are re-derived from the retained
+// response with the same deterministic stamp the dispatch used
+// (stampToolExecutionCorrelation), never matched by comparing arguments or
+// content.
+//
+// inFlight names the execution whose result this delivery is about to apply. It
+// is excluded from the queue for the same reason serial dispatch never queues
+// the call it has in flight: the queue is what HandleToolResult dispatches NEXT,
+// and putting the arriving call back on it would re-execute work that has just
+// answered.
+//
+// Declared residual: a governance rejection that was stored and lost with the
+// crash is not in the applied set, so its call is queued and dispatched again.
+// The retained response is the only durable record of the batch and it predates
+// the rejection; re-taking that decision on dispatch is the same answer the
+// ordinary serial-dispatch path gives a queued call, which is never re-proposed
+// either.
+func (m *LoopManager) restoreToolBatch(
+	loopID string,
+	response agentic.AgentResponse,
+	applied map[string]agentic.ToolResult,
+	inFlight string,
+) error {
+	calls := make([]agentic.ToolCall, len(response.Message.ToolCalls))
+	copy(calls, response.Message.ToolCalls)
+	if err := stampToolExecutionCorrelation(response.RequestID, calls); err != nil {
+		return errs.WrapInvalid(err, "LoopManager", "restoreToolBatch",
+			"re-derive the retained batch's execution identities")
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	cm, held := m.contextManagers[loopID]
+	if !held {
+		return errs.Wrap(fmt.Errorf("loop %s: %w", loopID, ErrLoopNotFound),
+			"LoopManager", "restoreToolBatch", "find the rebuilt conversation")
+	}
+	// The assistant turn the batch belongs to. It is in the retained RESPONSE,
+	// never in the retained request, and without it every tool message the
+	// batch produces is an orphan that RepairToolPairs removes — taking the
+	// model's own tool calls out of the next request with it.
+	if err := cm.AddMessage(RegionRecentHistory, response.Message); err != nil {
+		return errs.WrapTransient(err, "LoopManager", "restoreToolBatch",
+			"replay the assistant turn the batch belongs to")
+	}
+
+	var queued []agentic.ToolCall
+	for _, call := range calls {
+		m.executionIDToName[call.ExecutionID] = call.Name
+		m.executionIDToArguments[call.ExecutionID] = call.Arguments
+		m.executionIDToOrdinal[call.ExecutionID] = call.CallOrdinal
+		if _, done := applied[call.ExecutionID]; done {
+			// Already answered. Its route stays unseated on purpose: a drained
+			// execution is unroutable on the ordinary path too, which is what
+			// keeps a late duplicate out of the next turn's applied set.
+			continue
+		}
+		m.toolCallToLoop[call.ExecutionID] = loopID
+		if call.ExecutionID == inFlight {
+			continue
+		}
+		queued = append(queued, call)
+	}
+	m.queuedToolCalls[loopID] = queued
+
+	// The response for this request is in hand, so the loop is not waiting on
+	// a model. SettleRequest's half, applied to the mark restoreLoopFromRequest
+	// set from the only evidence it had.
+	if outstanding, ok := m.outstandingRequests[loopID]; ok && outstanding == response.RequestID {
+		delete(m.outstandingRequests, loopID)
+	}
+	return nil
+}
+
 // HasPendingContinuation reports whether a continuation turn is waiting for a
 // request to carry it — pending AND uncarried. Once a request names the turn,
 // the answer is false: carrying it a second time would spend an iteration
