@@ -484,19 +484,19 @@ func TestToolResultRedeliveredToAReplacementProcess(t *testing.T) {
 const shortLoopDeadline = time.Second
 
 // waitPastLoopDeadline blocks until the loop's own recorded deadline is in the
-// past, then adds a small margin so the comparison cannot land on the boundary.
-// It waits on the RECORD's timestamp rather than on a duration the test picked,
-// so the arm stays correct if the deadline above ever changes.
+// past by a small margin, so the comparison cannot land on the boundary. It
+// waits on the RECORD's timestamp rather than on a duration the test picked, so
+// the arm stays correct if the deadline above ever changes. The wait is a
+// polled condition with a bound rather than a sleep: a bare time.Sleep in an
+// integration test is the shape test/testinfra's policy guard ratchets out, and
+// the bound doubles as the premise that the deadline sits inside this arm's
+// budget.
 func waitPastLoopDeadline(t *testing.T, deadline time.Time) {
 	t.Helper()
 	const boundaryMargin = 50 * time.Millisecond
-	remaining := time.Until(deadline) + boundaryMargin
-	require.Less(t, remaining, 5*time.Second,
-		"the recorded deadline is further out than this arm budgets for")
-	if remaining > 0 {
-		time.Sleep(remaining)
-	}
-	require.True(t, time.Now().After(deadline), "the loop's recorded deadline must be in the past")
+	require.Eventually(t, func() bool { return time.Now().After(deadline.Add(boundaryMargin)) },
+		5*time.Second, 10*time.Millisecond,
+		"the recorded deadline %s is further out than this arm budgets for", deadline.UTC().Format(time.RFC3339Nano))
 }
 
 // failureReasonOn reads the error the loop's failure event carries, through the

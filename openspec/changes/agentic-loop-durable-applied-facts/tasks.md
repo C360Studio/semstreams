@@ -839,6 +839,16 @@
       `./test/e2e/...` is the one place the disk changes the READING of a run: it reported two `[build failed]`
       packages on one pass and a different two on the next, and both pairs pass alone. A failing package set that
       moves between runs is the host, not the tree.
+      **CI at `34d70975` (run 35755159080): RED on one finding the package-scoped gates could not see.**
+      `test/testinfra` `TestInfrastructurePolicyGuard` reported
+      `integration-time-sleep|processor/agentic-loop/tool_result_redelivery_integration_test.go|waitPastLoopDeadline|time.Sleep(remaining)|1`:
+      the 5.5 arm's deadline wait was a bare `time.Sleep` in an integration file, the exact shape the guard ratchets
+      out, and `test/testinfra` sits in the race suite the linker killed locally. Fixed by the coordinator: the helper
+      is now `require.Eventually` on `time.Now().After(deadline + margin)` with a 5s bound — the package's established
+      wait form — and the bound carries the "deadline inside this arm's budget" premise the deleted `require.Less` held.
+      `go test -count=1 -run 'TestInfrastructurePolicyGuard$' ./test/testinfra/` → `ok`. `go vet -tags=integration
+      ./processor/agentic-loop/` could not compile on this host (`write $WORK/b001/_pkg_.a: no space left on device`),
+      so the arm's compile and run at the fixed head are CI's to prove.
       **The host.** `df -h /System/Volumes/Data` → `460Gi size, 423Gi used, 1.3Gi available, 100%`. Where it is:
       `/Users/coby/Library/Caches/go-build` 71G, `~/Library/Containers/com.docker.docker/Data` 97G (of which
       `docker system df` reports 86.48GB build cache, 9.93GB reclaimable without touching any image),
