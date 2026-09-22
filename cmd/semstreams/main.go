@@ -603,7 +603,10 @@ type runtimeManager interface {
 // no-op until it is published here, and service.Service's own RegisterMetrics
 // is called by nothing (service/storage_observability.go records why). The two
 // composition roots are hand-copied (#1301), so keeping the whole wiring in one
-// per-root function is what makes the copy checkable.
+// per-root function is what makes the copy checkable. The copies differ by
+// exactly one line, marked below: the E2E milestone probe hook, which is a
+// compile-time no-op here and absent from the other root because the agentic
+// tier boots this one.
 func registerMilestoneService(
 	manager *service.Manager,
 	svcDeps *service.Dependencies,
@@ -621,6 +624,14 @@ func registerMilestoneService(
 	)
 	if err := subscriber.RegisterMetrics(metricsRegistry); err != nil {
 		return fmt.Errorf("register milestone metrics: %w", err)
+	}
+	// The ONE deliberate divergence from cmd/e2e-semstreams' copy of this
+	// function, and it is a test-only one: the agentic tier boots THIS root
+	// (docker/compose/agentic.yml target e2e-process-barrier builds
+	// ./cmd/semstreams), so the #1155 stage-D proof's probe handler has to be
+	// registrable here. It is a compile-time no-op in every ordinary build.
+	if err := registerE2EMilestoneProbe(subscriber, natsClient, logger); err != nil {
+		return err
 	}
 	if err := manager.RegisterInstance("milestone", service.NewMilestoneService(
 		subscriber,
