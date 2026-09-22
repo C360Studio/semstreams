@@ -5,26 +5,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestSlowConsumerE2EBuildDoesNotReplaceProductionTarget(t *testing.T) {
-	dockerfile, err := os.ReadFile("../../docker/Dockerfile")
-	require.NoError(t, err)
-	source := string(dockerfile)
-	production := strings.Index(source, "FROM alpine:latest AS production")
-	taggedBuilder := strings.Index(source, "FROM builder AS slow-consumer-builder")
-	taggedTarget := strings.Index(source, "FROM production AS e2e-slow-consumer")
-	require.GreaterOrEqual(t, production, 0)
-	require.Greater(t, taggedBuilder, production,
-		"ordinary production target must not depend on the later tagged builder")
-	require.Greater(t, taggedTarget, taggedBuilder)
-	assert.Contains(t, source[taggedBuilder:taggedTarget], "-tags=e2e_slow_consumer")
-	assert.Contains(t, source[taggedBuilder:taggedTarget], "./cmd/semstreams")
-	assert.NotContains(t, source[taggedBuilder:taggedTarget], "./cmd/e2e-semstreams")
-}
-
+// TestSlowConsumerHookRunsBetweenConnectionAndConfigArbitration pins where the
+// probe runs in boot order: after the NATS connection exists and before config
+// arbitration, which is the only window in which it can observe the callback.
+// Which binary carries it, under which tag, is pinned by
+// test/contract/e2e_tier_binary_contract_test.go.
 func TestSlowConsumerHookRunsBetweenConnectionAndConfigArbitration(t *testing.T) {
 	mainSource, err := os.ReadFile("main.go")
 	require.NoError(t, err)
