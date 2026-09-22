@@ -1228,8 +1228,13 @@ range; `docs/operations/migration-restart-safe-nats-client.md` carries the compl
 ratchet in `natsclient/consumer_policy_callsite_test.go` had said it would; that ratchet now asserts the opposite —
 no declaration, alias, or reference anywhere — so the symbol cannot come back as a convenience wrapper either.
 `ErrHeartbeatFailed`, `PermanentDeliveryError`, and `TerminateDelivery` survive: they are the typed path's vocabulary
-too. SemStreams owns no non-heartbeat exported settlement operation: a lane that does not want a heartbeat keeps
-owning its own `msg` settlement, as it does today.
+too. A lane that does not want a heartbeat is not left settling its own `msg` either: `SettleDelivery` and
+`SettleDeliveryWithRetry` are exported settlement-only operations. Each takes the same closed
+`(DeliveryDecision, error)` tuple, validates it, and attempts at most one terminal method on the message —
+`SettleDelivery`'s Retry is a bare Nak, and `SettleDeliveryWithRetry` takes the retry policy as an argument so a
+Retry meaning "not yet" does not redeliver at line rate. They settle the message and nothing more: running the work,
+owning its context and any heartbeat, inspecting the returned `DeliveryResult`, and stopping the exact consumer
+handle when `OwnerStopRequired()` is true all stay the caller's.
 
 **What a caller does instead.** Validate a `HeartbeatDeliveryPolicy` from the same `StreamConsumerConfig` you
 acquire the consumer with, then call `ConsumeDeliveryWithHeartbeat` — or, for a lane that settles without a
