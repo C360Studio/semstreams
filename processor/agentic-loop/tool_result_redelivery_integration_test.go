@@ -158,9 +158,15 @@ func messagesOn(t *testing.T, client *natsclient.Client, subject string) uint64 
 // rather than pretending the rebuild can work without it.
 func retainModelResponse(t *testing.T, client *natsclient.Client, response agentic.AgentResponse) {
 	t.Helper()
+	// Resolved from the same port declaration the recovery reader resolves
+	// (responseAddress), never formatted here: a port change must move the
+	// fixture and the reader under test together, or the test would go on
+	// publishing where the reader no longer looks and prove nothing.
+	subject, _, err := responseAddress(DefaultConfig().Ports.Inputs, response.RequestID)
+	require.NoError(t, err)
 	data, err := json.Marshal(message.NewBaseMessage(response.Schema(), &response, "agentic-model"))
 	require.NoError(t, err)
-	require.NoError(t, client.PublishToStream(t.Context(), "agent.response."+response.RequestID, data))
+	require.NoError(t, client.PublishToStream(t.Context(), subject, data))
 }
 
 // loopRecordOf reads the loop's record through the production reader, so the

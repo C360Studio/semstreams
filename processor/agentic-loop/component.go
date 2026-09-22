@@ -1915,7 +1915,9 @@ func (c *Component) settleResponseWithoutLoop(ctx context.Context, requestID str
 	// the response cannot be ordered against it — and Ahead, where the record
 	// has not yet caught up with the request this response answers. Neither
 	// authorises a rebuild: there is no fact saying WHICH request to rebuild
-	// from. The delivery stays owed, and retries.
+	// from. The delivery stays owed, and retries — bounded by the consumer's
+	// MaxDeliver, after which the lane routes it to the dead letter rather
+	// than retrying forever.
 	c.logger.Warn("Model response names a loop this process does not hold",
 		"request_id", requestID, "loop_id", loopID)
 	return false, fmt.Errorf("loop %q for request %q is not held by this process", loopID, requestID)
@@ -2508,6 +2510,9 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 			slog.String("execution_id", toolResult.ExecutionID),
 			slog.String("call_id", toolResult.CallID),
 			slog.String("error", entErr.Error()))
+		if c.metrics != nil {
+			c.metrics.recordRecoveryDegradation("tool_result_classification")
+		}
 	}
 
 	// Handle the tool result using the message handler
@@ -2663,7 +2668,9 @@ func (c *Component) settleToolResultWithoutLoop(ctx context.Context, toolResult 
 	// Unnamed — neither side carries a request name — and Ahead, where the
 	// record has not caught up with the request this result belongs to.
 	// Neither authorises a rebuild, for the same reason as the response lane:
-	// no fact names which request to rebuild from. The delivery retries.
+	// no fact names which request to rebuild from. The delivery retries,
+	// bounded by the consumer's MaxDeliver and then routed to the dead letter,
+	// so an input no process can ever place does not retry forever.
 	c.logger.Warn("Tool result names a loop this process does not hold",
 		"execution_id", toolResult.ExecutionID, "call_id", toolResult.CallID, "loop_id", loopID)
 	return false, fmt.Errorf("loop %q for tool call %q is not held by this process", loopID, toolResult.CallID)

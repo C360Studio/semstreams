@@ -244,7 +244,10 @@ func TestASkippedClassificationSaysSoInTheLog(t *testing.T) {
 	var logged bytes.Buffer
 	handler := NewMessageHandler(DefaultConfig())
 	c := releaseTestComponent(t, handler)
+	c.metrics = getMetrics(metric.NewMetricsRegistry())
+	handler.SetMetrics(c.metrics)
 	c.logger = slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	degraded := degradationDelta(c, "tool_result_classification")
 	// A routing entry with no loop behind it: exactly what a release between
 	// the lookup and the read leaves.
 	handler.loopManager.TrackToolCall(executionID, loopID)
@@ -259,4 +262,15 @@ func TestASkippedClassificationSaysSoInTheLog(t *testing.T) {
 	require.Contains(t, logged.String(), "Tool result not classified against the loop",
 		"the delivery skipped its classification without saying so")
 	require.Contains(t, logged.String(), executionID)
+	require.Equal(t, float64(1), degraded(),
+		"a log line is not something an operator can alert on; a declared degrade carries both")
+}
+
+// degradationDelta reports how far recovery_degradations_total has moved for
+// one site since it was called.
+func degradationDelta(c *Component, site string) func() float64 {
+	before := testutil.ToFloat64(c.metrics.recoveryDegradations.WithLabelValues(site))
+	return func() float64 {
+		return testutil.ToFloat64(c.metrics.recoveryDegradations.WithLabelValues(site)) - before
+	}
 }

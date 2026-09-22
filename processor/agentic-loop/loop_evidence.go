@@ -629,6 +629,9 @@ func (c *Component) restoreLoopFromEvidence(
 	if _, err := c.handler.trajectoryManager.startTrajectory(loopID); err != nil {
 		c.logger.WarnContext(ctx, "Rebuilt loop has no trajectory aggregate — its steps will not be aggregated",
 			slog.String("loop_id", loopID), slog.String("error", err.Error()))
+		if c.metrics != nil {
+			c.metrics.recordRecoveryDegradation("rebuilt_trajectory_aggregate")
+		}
 	}
 
 	c.rememberLoopRevision(loopID, record.revision)
