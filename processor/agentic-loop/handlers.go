@@ -309,6 +309,16 @@ func (h *MessageHandler) maybeBuildTodoMessage(ctx context.Context, loopID strin
 	return BuildTodoStateMessage(todos)
 }
 
+// iterationBudgetPrefix and workingListPrefix open the two per-iteration
+// messages prependIterationContext attaches. They are constants because three
+// places depend on the exact text — the two builders that write it and
+// isIterationPrefixMessage, which is how a rebuild recognises it — and a
+// literal in any one of them could drift from the others silently.
+const (
+	iterationBudgetPrefix = "[Iteration Budget]"
+	workingListPrefix     = "[Working list"
+)
+
 // prependIterationContext is the canonical prefix the loop attaches
 // to every iteration's message slice: the iteration-budget warning
 // (mandatory) followed by the optional working-list block. Both go
@@ -319,6 +329,26 @@ func (h *MessageHandler) prependIterationContext(ctx context.Context, loopID str
 		prefix = append(prefix, todoMsg)
 	}
 	return append(prefix, messages...)
+}
+
+// isIterationPrefixMessage is the inverse of prependIterationContext: it
+// reports whether a message is one of the two per-iteration system messages
+// that function attaches, rather than a message of the loop's conversation.
+//
+// It exists for the cold rebuild. A retained AgentRequest is prependIterationContext's
+// OUTPUT, not GetContext(), so it opens with a budget line and possibly a
+// working list — both Role "system". A rebuild that trusted the role alone
+// would pin ONE iteration's budget at the top of RegionSystemPrompt for the
+// rest of the loop's life, while every later request prepends a fresh one.
+//
+// Only a LEADING run of these is ever dropped: a user is free to type either
+// string, and a message in the body of the conversation is the conversation.
+func isIterationPrefixMessage(msg agentic.ChatMessage) bool {
+	if msg.Role != "system" {
+		return false
+	}
+	return strings.HasPrefix(msg.Content, iterationBudgetPrefix) ||
+		strings.HasPrefix(msg.Content, workingListPrefix)
 }
 
 // lookupLoopUserID resolves the owning user for a loop, returning "" when the
@@ -794,11 +824,11 @@ func BuildIterationBudgetMessage(iteration, maxIterations int) agentic.ChatMessa
 	var content string
 	switch {
 	case pct > 75:
-		content = fmt.Sprintf("[Iteration Budget] Iteration %d of %d (%d%% used). Budget nearly exhausted — finalize and submit your work now.", iteration, maxIterations, pct)
+		content = fmt.Sprintf(iterationBudgetPrefix+" Iteration %d of %d (%d%% used). Budget nearly exhausted — finalize and submit your work now.", iteration, maxIterations, pct)
 	case pct > 50:
-		content = fmt.Sprintf("[Iteration Budget] Iteration %d of %d (%d%% used). Consider wrapping up — focus on completing the current objective.", iteration, maxIterations, pct)
+		content = fmt.Sprintf(iterationBudgetPrefix+" Iteration %d of %d (%d%% used). Consider wrapping up — focus on completing the current objective.", iteration, maxIterations, pct)
 	default:
-		content = fmt.Sprintf("[Iteration Budget] Iteration %d of %d (%d%% used).", iteration, maxIterations, pct)
+		content = fmt.Sprintf(iterationBudgetPrefix+" Iteration %d of %d (%d%% used).", iteration, maxIterations, pct)
 	}
 	return agentic.ChatMessage{Role: "system", Content: content}
 }

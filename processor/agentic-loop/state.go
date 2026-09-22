@@ -335,14 +335,22 @@ func (m *LoopManager) attachContinuation(loopID, taskID string) (agentic.LoopEnt
 // not a reconstruction of them.
 //
 // The conversation is rebuilt as TWO regions: the system messages, and
-// everything else in the order the request carried it. That order IS
-// GetContext()'s order, because the request's Messages were built from it, so
-// the rebuilt context renders identically. What does NOT survive is compaction
-// ATTRIBUTION: a summary the predecessor had in RegionCompactedHistory returns
-// as ordinary recent history, so the next compaction fires slightly earlier
-// than it would have. That is visible on context_compactions_total and
-// context_compacted_region_tokens, and it is the whole of the loss —
-// re-attributing regions would mean guessing which retained message came from
+// everything else in the order the request carried it. The request is NOT
+// GetContext() — prependIterationContext wraps it — so the per-iteration
+// prefix is dropped first (isIterationPrefixMessage); what is left is
+// GetContext()'s order, because the request's Messages were built from it.
+//
+// Two things do NOT survive, both recorded rather than repaired:
+//
+//   - Compaction ATTRIBUTION. A summary the predecessor had in
+//     RegionCompactedHistory returns as ordinary recent history, so the next
+//     compaction fires slightly earlier than it would have. Visible on
+//     context_compactions_total and context_compacted_region_tokens.
+//   - The ordering WITHIN the system region, when the retained request carried
+//     more than one system message: they are re-added in retained order, which
+//     is the order GetContext() rendered them in.
+//
+// Re-attributing regions would mean guessing which retained message came from
 // which region, which is exactly the content-comparison this change removes.
 //
 // RepairToolPairs runs last: a request retained mid-batch can carry an
@@ -381,7 +389,18 @@ func (m *LoopManager) restoreLoopFromRequest(record agentic.LoopEntity, request 
 		opts = append(opts, WithModelRegistry(m.modelRegistry))
 	}
 	cm := NewContextManager(record.ID, record.Model, m.contextConfig, opts...)
-	for _, msg := range request.Messages {
+	// A retained request is prependIterationContext's OUTPUT, not GetContext():
+	// it opens with that iteration's budget line and possibly its working list,
+	// both Role "system". They belong to the REQUEST, not to the conversation,
+	// and seating them would pin one iteration's budget at the top of
+	// RegionSystemPrompt for the rest of the loop's life while every later
+	// request prepends a fresh one. Only the leading run is dropped — a message
+	// further in is the conversation, whatever it says.
+	conversation := request.Messages
+	for len(conversation) > 0 && isIterationPrefixMessage(conversation[0]) {
+		conversation = conversation[1:]
+	}
+	for _, msg := range conversation {
 		region := RegionRecentHistory
 		if msg.Role == "system" {
 			region = RegionSystemPrompt

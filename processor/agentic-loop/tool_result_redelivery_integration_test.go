@@ -73,13 +73,17 @@ func startLoopProcess(t *testing.T, client *natsclient.Client, config Config) (*
 // request, the component writes the record and then publishes, which is the
 // order birth keeps (#1330 task 2.1). It returns the loop and the name of the
 // request now retained for it.
+// bornLoopPrompt is the task every bornLoop starts from, named so an assertion
+// about where the rebuilt conversation opens cannot drift from the fixture.
+const bornLoopPrompt = "recover from a crash between the publish and the record write"
+
 func bornLoop(t *testing.T, c *Component, h *MessageHandler, taskID string) (loopID, requestID string) {
 	t.Helper()
 	result, err := h.HandleTask(t.Context(), TaskMessage{
 		TaskID: taskID,
 		Role:   "general",
 		Model:  "test-model",
-		Prompt: "recover from a crash between the publish and the record write",
+		Prompt: bornLoopPrompt,
 	})
 	require.NoError(t, err)
 	require.NoError(t, c.createLoopState(t.Context(), result.LoopID))
@@ -319,6 +323,25 @@ func TestToolResultRedeliveredToAReplacementProcess(t *testing.T) {
 		rebuilt, err := replacementHandler.loopManager.GetLoop(loopID)
 		require.NoError(t, err, "the replacement must HOLD the loop it rebuilt")
 		require.Contains(t, rebuilt.PendingToolResults, result.ExecutionID)
+
+		// The retained request is prependIterationContext's OUTPUT, so on the
+		// wire it opens with that iteration's budget line and, when the loop
+		// has one, its working list. Both are Role "system". A rebuild that
+		// seated them would pin ONE iteration's framing at the top of
+		// RegionSystemPrompt for the rest of the loop's life while every later
+		// request prepends a fresh one. This loop was born through the real
+		// task lane, so the prefix is on the retained request for free.
+		rebuiltContext := replacementHandler.loopManager.GetContextManager(loopID).GetContext()
+		require.NotEmpty(t, rebuiltContext)
+		require.Equal(t, bornLoopPrompt, rebuiltContext[0].Content,
+			"the rebuilt conversation must open where the loop's own conversation opens; "+
+				"before the prefix filter it opened with an iteration-budget line")
+		for _, msg := range rebuiltContext {
+			require.NotContains(t, msg.Content, iterationBudgetPrefix,
+				"the request's per-iteration framing was replayed into the rebuilt conversation")
+			require.NotContains(t, msg.Content, workingListPrefix,
+				"the request's per-iteration framing was replayed into the rebuilt conversation")
+		}
 
 		after := loopRecordOf(t, replacement, loopID)
 		require.Greater(t, after.revision, crashed.revision,

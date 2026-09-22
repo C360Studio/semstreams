@@ -1735,9 +1735,22 @@ the field empty or set it to a request it has actually published, or a replaceme
 
 A process that meets a redelivered response or tool result for a loop it never started now rebuilds that loop from
 its record and its retained `AgentRequest` instead of refusing the delivery. The replay is deliberately flat: the
-system prompt goes back to the system-prompt region and every other retained message goes to recent history in the
+system messages go back to the system-prompt region and every other retained message goes to recent history in the
 order the request carried them, so a conversation that its predecessor had compacted comes back as recent history
-rather than as compacted history. Nothing is lost and no message moves — the next request renders the same
-conversation in the same order — but a dashboard that reads per-region sizes or a compacted-history counter will see
-the attribution reset at the replacement, and the rebuilt loop may compact again sooner than its predecessor would
-have. No action is required.
+rather than as compacted history.
+
+Two things change at a replacement, neither of which needs an action:
+
+- **Compaction attribution resets.** A dashboard that reads per-region sizes or a compacted-history counter sees the
+  attribution start over, and the rebuilt loop may compact again sooner than its predecessor would have. No
+  conversation content is lost.
+- **System messages are rendered before the recent history.** A retained request carrying more than one system
+  message has them re-seated together at the front, which is where `GetContext()` renders them anyway; a request
+  that interleaved a system message with the conversation does not get that interleaving back.
+
+What is deliberately NOT replayed is the per-iteration framing. A retained request is not the loop's conversation —
+the loop prepends an `[Iteration Budget]` line, and when the loop has a working list a `[Working list …]` block,
+before publishing. Both are `system` messages that belong to that one request. The rebuild drops the leading run of
+them, because seating them would pin one iteration's budget at the top of the rebuilt system prompt for the rest of
+the loop's life while every later request prepends a fresh one. Only a LEADING run is dropped, so a message of the
+conversation that happens to start with either string is kept.

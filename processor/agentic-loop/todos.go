@@ -202,7 +202,7 @@ func BuildTodoStateMessage(todos []TodoState) agentic.ChatMessage {
 	}
 
 	var b strings.Builder
-	b.WriteString("[Working list — your private working memory; you maintain this via write_todos]\n")
+	b.WriteString(workingListPrefix + " — your private working memory; you maintain this via write_todos]\n")
 	for _, t := range todos {
 		fmt.Fprintf(&b, "%s %s\n", todoStatusMarker(t.Status), t.Content)
 	}

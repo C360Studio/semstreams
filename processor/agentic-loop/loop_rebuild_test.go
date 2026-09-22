@@ -87,7 +87,8 @@ func TestARebuiltLoopIsTheRecordPlusItsRetainedRequest(t *testing.T) {
 		cm := manager.GetContextManager(rebuildLoopID)
 		require.NotNil(t, cm)
 		require.Equal(t, roles(request.Messages), roles(cm.GetContext()),
-			"the retained body IS GetContext()'s order; the rebuild must render it back the same way")
+			"this fixture carries no per-iteration prefix, so the retained body IS GetContext()'s "+
+				"order and the rebuild must render it back the same way")
 
 		require.Equal(t, request.Tools, manager.GetCachedTools(rebuildLoopID),
 			"a rebuilt loop with no tools cached would advertise none on its next request")
@@ -127,6 +128,61 @@ func TestARebuiltLoopIsTheRecordPlusItsRetainedRequest(t *testing.T) {
 		require.True(t, errs.IsInvalid(err))
 		_, getErr := manager.GetLoop(rebuildLoopID)
 		require.Error(t, getErr, "a refused rebuild must leave no loop behind")
+	})
+
+	t.Run("the per-iteration prefix belongs to the request, not to the conversation", func(t *testing.T) {
+		// The fixture is built by the PRODUCTION prefixer, not by hand: a hand-
+		// written approximation of what a mint attaches is the reconstruction
+		// this whole change removes, and it would go on passing after the
+		// prefix's wording changed.
+		handler := &MessageHandler{
+			config:   Config{},
+			platform: todoTestPlatform(),
+			todoReader: &fakeTodoReader{
+				todos: []TodoState{{ID: "1", Content: "the predecessor's working list", Status: "in_progress"}},
+			},
+		}
+		handler.logger = todoTestLogger()
+		conversation := []agentic.ChatMessage{
+			{Role: "system", Content: "you are a test agent"},
+			{Role: "user", Content: "the original task"},
+			{Role: "assistant", Content: "thinking"},
+		}
+		minted := handler.prependIterationContext(t.Context(), rebuildLoopID, 3, 20, conversation)
+		require.Len(t, minted, len(conversation)+2,
+			"the fixture must carry BOTH prefix messages, or this arm proves nothing")
+
+		manager := NewLoopManager()
+		require.NoError(t, manager.restoreLoopFromRequest(
+			rebuiltRecord(requestID, nil), retainedRequest(requestID, minted...)))
+
+		rebuilt := manager.GetContextManager(rebuildLoopID).GetContext()
+		require.Equal(t, conversation, rebuilt,
+			"the budget line and the working list are ONE iteration's framing; seating them pins "+
+				"a stale budget at the top of the system prompt for the rest of the loop's life, "+
+				"while every later request prepends a fresh one")
+	})
+
+	t.Run("a message that only looks like the prefix is still the conversation", func(t *testing.T) {
+		manager := NewLoopManager()
+		// A user is free to type either string, and a leading run is all a mint
+		// can produce — so only a leading run is dropped.
+		body := []agentic.ChatMessage{
+			{Role: "system", Content: "you are a test agent"},
+			{Role: "user", Content: "[Iteration Budget] explain what this line means"},
+			{Role: "system", Content: "[Working list — quoted back by a tool]"},
+		}
+		require.NoError(t, manager.restoreLoopFromRequest(
+			rebuiltRecord(requestID, nil), retainedRequest(requestID, body...)))
+
+		// Membership, not order: the two-region rebuild renders every system
+		// message before the recent history, which is the documented
+		// attribution residual, not what this arm is about.
+		rebuilt := manager.GetContextManager(rebuildLoopID).GetContext()
+		require.Len(t, rebuilt, len(body),
+			"the filter reached past the leading run and ate the conversation")
+		require.Contains(t, rebuilt, body[1], "a user may type the budget prefix; it is still their message")
+		require.Contains(t, rebuilt, body[2], "a prefix-shaped message in the body is the conversation")
 	})
 
 	t.Run("a loop this process already holds is not rebuilt over", func(t *testing.T) {
