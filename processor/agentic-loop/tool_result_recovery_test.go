@@ -1,6 +1,8 @@
 package agenticloop
 
 import (
+	"bytes"
+	"log/slog"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -225,4 +227,36 @@ func TestColdToolResultIsClassifiedAgainstTheAdoptedRecord(t *testing.T) {
 		require.Equal(t, natsclient.DeliveryDecisionQuarantine, delivered.Decision())
 		require.Zero(t, msg.acks.Load()+msg.naks.Load()+msg.terms.Load())
 	})
+}
+
+// TestASkippedClassificationSaysSoInTheLog: the classification at component
+// entry is skipped when the loop was released between the routing lookup and
+// the read, and continuing there is safe — HandleToolResult answers the race
+// exactly as it did before the check existed. Safe is not the same as silent.
+// An operator reading a result applied to a loop nothing guarded needs the
+// line saying the guard did not run.
+//
+// spec: agentic-loop / A loop absent from process memory is settled from its record
+func TestASkippedClassificationSaysSoInTheLog(t *testing.T) {
+	const loopID = "6d5e4f3a-2b1c-4098-8877-665544332211"
+	const executionID = "execution-orphan-route"
+
+	var logged bytes.Buffer
+	handler := NewMessageHandler(DefaultConfig())
+	c := releaseTestComponent(t, handler)
+	c.logger = slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	// A routing entry with no loop behind it: exactly what a release between
+	// the lookup and the read leaves.
+	handler.loopManager.TrackToolCall(executionID, loopID)
+
+	_, delivered := deliverToolResult(t, c, agentic.ToolResult{
+		CallID: "call-orphan", ExecutionID: executionID, Name: "search",
+		Content: "the executor really did this work", LoopID: loopID,
+	})
+	require.NotEqual(t, natsclient.DeliveryDecisionAck, delivered.Decision(),
+		"the fixture must reach the handler, which is what the skipped guard let through")
+
+	require.Contains(t, logged.String(), "Tool result not classified against the loop",
+		"the delivery skipped its classification without saying so")
+	require.Contains(t, logged.String(), executionID)
 }

@@ -78,9 +78,12 @@ cancelled.
 #### Scenario: A terminal loop receives a result it cannot prove it applied
 
 - **GIVEN** a loop whose record is terminal
-- **WHEN** a tool result for that loop is redelivered and is not present in `pending_tool_results`
+- **WHEN** a tool result for that loop is redelivered, whether or not its execution is still named in
+  `pending_tool_results`
 - **THEN** it is acknowledged without effect, the inapplicable-result metric increments, and an audit log line names
-  the loop, execution, and terminal state
+  the loop, execution, and terminal state — membership is deliberately not consulted, because a terminal loop can
+  apply nothing either way and re-deriving which side of the settlement this result fell on would change nothing
+  this delivery can do
 
 #### Scenario: A task redelivered at iteration zero republishes the first request
 

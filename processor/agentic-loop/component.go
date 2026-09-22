@@ -2456,6 +2456,18 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 		if !apply {
 			return nil
 		}
+	} else {
+		// A skipped classification is a declared event, not a private choice.
+		// Continuing is safe — HandleToolResult answers this race exactly as
+		// it did before the check existed, and a loop released between the
+		// routing lookup and this line has nothing left to classify against —
+		// but an operator reading "this result was applied to a settled loop"
+		// needs the line that says the guard did not run.
+		c.logger.WarnContext(ctx, "Tool result not classified against the loop — it was released mid-delivery",
+			slog.String("loop_id", loopID),
+			slog.String("execution_id", toolResult.ExecutionID),
+			slog.String("call_id", toolResult.CallID),
+			slog.String("error", entErr.Error()))
 	}
 
 	// Handle the tool result using the message handler
