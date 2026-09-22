@@ -1044,3 +1044,18 @@ text claims.
       that had read the delta would prove nothing.
       `docs/contributing/02-e2e-tests.md:190-191` carried the superseded sentence ("reads whichever one carries it,
       refusing if both do") and now states the precedence.
+- [x] 11.11 Owner Codex round, MEDIUM-1 — the env gate compared NAMES, so an empty value passed it.
+      `composeEnv.names` discarded everything after `=`, so `SEMSTREAMS_E2E_MILESTONE_PROBE=` satisfied both the
+      parsed comparison and the raw sweep while `milestoneprobe.Register` (`milestoneprobe.go:199`) returns without
+      installing the handler whenever `os.Getenv(EnvVar)` reads `""` — the tier would run, report nothing, and stay
+      green. The deleted `TestAgenticComposeArmsTheMilestoneProbe` had required `=1` literally.
+      `composeEnv.values` (`test/contract/e2e_tier_binary_contract_test.go:220-238`) now maps each prefixed variable
+      to the value the container would see, and the table test refuses any declared gate whose effective value is
+      empty (`:497-508`). `effectiveValue` (`:240-255`) resolves only what compose can decide without the host: a
+      literal is itself; `${VAR}` is empty unless it carries a `:-`/`-`/`:?`/`?` default; a bare `- NAME` with no
+      `=` is a host passthrough and therefore empty, because a tier gate must not depend on the developer's shell.
+      Anything more exotic reads as empty, which fails closed. The spec scenario gains the matching `AND` bullet.
+      Mutant N9: `agentic.yml`'s entry changed to `SEMSTREAMS_E2E_MILESTONE_PROBE=`. md5
+      `decf934c3dea5a9b38c6aef37cab10b1` → `831fce581ef20f5dc5661d330075047f` → `decf934c3dea5a9b38c6aef37cab10b1`.
+      RED: `agentic (agentic.yml semstreams): SEMSTREAMS_E2E_MILESTONE_PROBE is declared with an empty effective
+      value, which does not arm the hook`.

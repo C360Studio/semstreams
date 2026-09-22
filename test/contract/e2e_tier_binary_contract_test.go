@@ -217,16 +217,44 @@ func (e *composeEnv) UnmarshalYAML(value *yaml.Node) error {
 	}
 }
 
-func (e composeEnv) names(prefix string) []string {
-	var out []string
+// values returns the prefixed variables a service declares, mapped to the value
+// the container would actually see.
+func (e composeEnv) values(prefix string) map[string]string {
+	out := map[string]string{}
 	for _, entry := range e {
-		name, _, _ := strings.Cut(entry, "=")
-		if strings.HasPrefix(name, prefix) {
-			out = append(out, name)
+		name, value, assigned := strings.Cut(entry, "=")
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		if !assigned {
+			// `- NAME` with no `=` passes the host's value through, so whether
+			// the gate is armed depends on the developer's shell. For a tier
+			// gate that is the same as unset.
+			out[name] = ""
+			continue
+		}
+		out[name] = effectiveValue(value)
+	}
+	return out
+}
+
+// effectiveValue resolves the part of compose interpolation that decides
+// whether a gate is armed without the host's help: a literal is itself, and
+// `${VAR}` is empty unless it carries a default, since the host decides the
+// rest. Anything more (nested or partial interpolation) is not supported here
+// and reads as empty, which fails closed.
+func effectiveValue(value string) string {
+	trimmed := strings.Trim(strings.TrimSpace(value), `"'`)
+	if !strings.HasPrefix(trimmed, "${") || !strings.HasSuffix(trimmed, "}") {
+		return trimmed
+	}
+	inner := trimmed[2 : len(trimmed)-1]
+	for _, separator := range []string{":-", "-", ":?", "?"} {
+		if _, fallback, found := strings.Cut(inner, separator); found {
+			return strings.Trim(strings.TrimSpace(fallback), `"'`)
 		}
 	}
-	sort.Strings(out)
-	return out
+	return ""
 }
 
 // composeServices reads every service in docker/compose/ that is built from
@@ -467,8 +495,18 @@ func TestE2ETierTableMatchesComposeAndDockerfile(t *testing.T) {
 		// Both directions of the env gate. The milestone probe crashes and
 		// quarantines on purpose, so arming it in another tier would read as a
 		// flake, and disarming it in its own tier loses the proof silently.
-		if got, want := strings.Join(service.Environment.names("SEMSTREAMS_E2E_"), ","), strings.Join(sorted(row.envGates), ","); got != want {
+		armed := service.Environment.values("SEMSTREAMS_E2E_")
+		if got, want := strings.Join(sortedKeysOf(armed), ","), strings.Join(sorted(row.envGates), ","); got != want {
 			t.Errorf("%s: compose sets [%s], spec table says [%s]", row, got, want)
+		}
+		// The name alone is not the gate. `milestoneprobe.Register` returns
+		// without installing the handler when os.Getenv reads "", so
+		// `NAME=` declares the variable, satisfies a name comparison, and
+		// leaves the tier's proof unarmed and silent.
+		for _, gate := range row.envGates {
+			if value, declared := armed[gate]; declared && value == "" {
+				t.Errorf("%s: %s is declared with an empty effective value, which does not arm the hook", row, gate)
+			}
 		}
 
 		// Per-target image tags: Docker caches by image name, so two targets
@@ -614,6 +652,15 @@ func reachableWithoutOverlayTags(t *testing.T, path string, overlay map[string]b
 
 func sorted(values []string) []string {
 	out := append([]string(nil), values...)
+	sort.Strings(out)
+	return out
+}
+
+func sortedKeysOf(values map[string]string) []string {
+	out := make([]string, 0, len(values))
+	for key := range values {
+		out = append(out, key)
+	}
 	sort.Strings(out)
 	return out
 }
