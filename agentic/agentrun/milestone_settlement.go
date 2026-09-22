@@ -102,6 +102,13 @@ func aggregateMilestoneOutcomes(outcomes []milestoneOutcome) milestoneOutcome {
 // owns. It is wrong for a product handler's durable effect: an error nothing
 // can read is not proven safe to repeat and not proven safe to drop, so the
 // lane latches and an operator looks, instead of the milestone disappearing.
+//
+// The arms are not a class-only switch, and deliberately so: errs.IsTransient
+// places an UNCLASSIFIED error by substring first ("timeout", "connection",
+// "network", "unavailable", ...), so a handler error carrying one of those
+// words still retries. The default arm below is the fail-closed remainder —
+// what is left after the classes and that substring pass have both declined
+// to place the error — not the whole unclassified set.
 func classifyHandlerOutcome(err error) milestoneOutcome {
 	switch {
 	case err == nil:

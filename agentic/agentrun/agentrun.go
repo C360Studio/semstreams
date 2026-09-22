@@ -13,9 +13,12 @@
 //   - MilestoneSubscriber — subscribes to terminal loop events, pre-resolves the
 //     run, and fans out to product-registered MilestoneHandlers (D6)
 //
-// Import discipline: this package imports agentic + pkg/lifecycle only, plus the
-// module-internal internal/looptoken predicate its own token check calls.
-// pkg/lifecycle MUST NOT import agentic/agentrun — verify with go mod graph.
+// Import discipline: this package imports agentic, graph, message, natsclient,
+// payloadregistry, vocabulary (and vocabulary/agentic), pkg/errs, pkg/lifecycle
+// and pkg/types, plus four module-internal helpers — internal/agentterminal,
+// internal/deliverylane, internal/lifecyclecleanup and internal/looptoken. The
+// one edge that must never exist is the reverse: pkg/lifecycle MUST NOT import
+// agentic/agentrun — verify with go mod graph.
 package agentrun
 
 import (

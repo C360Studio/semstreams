@@ -18,11 +18,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	semerrs "github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
+	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
 // These tests drive the exact closure Start hands to the lane: the same
@@ -162,6 +164,58 @@ func (r stubTripleReader) GetLoopParentEntityID(context.Context, string) (string
 	return "", false, r.err
 }
 
+// --- the production triple reader, with only the NATS request faked ---------
+
+// exactAuthorityFunc answers one graph.ingest.query.entity request. It fakes
+// the NATS round trip and nothing else: the real graph exact reader decodes the
+// reply and the real NATSLoopTripleReader reads the triple out of it, so the
+// errs class the tests below assert is the class PRODUCTION assigns to a real
+// authority answer — never one the test handed to the classifier.
+type exactAuthorityFunc func(entityID string) ([]byte, error)
+
+func (fn exactAuthorityFunc) RequestClassified(
+	_ context.Context, _ string, request []byte, _ time.Duration,
+) ([]byte, error) {
+	var query struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(request, &query); err != nil {
+		return nil, err
+	}
+	return fn(query.ID)
+}
+
+// productionTripleReader is the real NATSLoopTripleReader over the real
+// graph.ExactEntityReader, reading whatever the authority answers.
+func productionTripleReader(answer exactAuthorityFunc) *NATSLoopTripleReader {
+	return &NATSLoopTripleReader{reader: graph.NewExactEntityReader(answer, time.Second)}
+}
+
+// exactAuthorityReply is one authority reply for a loop entity carrying a
+// single agent.loop.run triple. runObject is the stored object: a number is how
+// a real ENTITY_STATES entry poisons the typed resolution path.
+func exactAuthorityReply(t *testing.T, entityID string, runObject any) []byte {
+	t.Helper()
+	reply, err := json.Marshal(struct {
+		Entity     graph.EntityState `json:"entity"`
+		KVRevision uint64            `json:"kvRevision"`
+	}{
+		Entity: graph.EntityState{
+			ID: entityID,
+			Triples: []message.Triple{{
+				Subject:   entityID,
+				Predicate: agvocab.LoopRun,
+				Object:    runObject,
+				Source:    "agentic-loop",
+				Timestamp: time.Now().UTC(),
+			}},
+		},
+		KVRevision: 7,
+	})
+	require.NoError(t, err)
+	return reply
+}
+
 // handlerFunc adapts a function to MilestoneHandler.
 type handlerFunc func(context.Context, LoopTerminalEvent, *AgentRun) error
 
@@ -204,6 +258,44 @@ func reasonOf(t *testing.T, s *MilestoneSubscriber, data []byte) (natsclient.Del
 	t.Helper()
 	decided := s.decide(t.Context(), data)
 	return decided.decision, decided.reason
+}
+
+// --- 3.1: the decode row -----------------------------------------------------
+
+// TestMilestoneDecodeFailureTerminatesAndCounts is the matrix's first row,
+// driven through the lane rather than through decide alone. Bytes that are not
+// a terminal envelope decode the same way on every attempt, so the delivery is
+// terminated on first sight, counted, and never replayed — and no handler sees
+// an event that was never read.
+func TestMilestoneDecodeFailureTerminatesAndCounts(t *testing.T) {
+	t.Parallel()
+	var logs strings.Builder
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	sub := NewMilestoneSubscriberWithRunStateReader(
+		&stubRunReader{err: lifecycle.ErrEntityNotFound}, stubTripleReader{}, "acme", "ops", logger)
+	var handled atomic.Int32
+	sub.AddHandler(handlerFunc(func(context.Context, LoopTerminalEvent, *AgentRun) error {
+		handled.Add(1)
+		return nil
+	}))
+	lane := newMilestoneLaneFixture(t, sub, milestoneLaneComplete)
+
+	poison := []byte(`{"id":"not-a-terminal","payload":`)
+	decision, reason := reasonOf(t, sub, poison)
+	assert.Equal(t, natsclient.DeliveryDecisionTerminate, decision)
+	assert.Equal(t, reasonDecode, reason)
+
+	msg := lane.deliver(t, poison)
+	assert.Equal(t, int32(1), msg.terms.Load(), "undecodable bytes terminate")
+	assert.Zero(t, msg.acks.Load()+msg.naks.Load(), "they are neither acknowledged nor replayed")
+	assert.Zero(t, handled.Load(), "no handler sees a terminal that never decoded")
+	assert.NoError(t, sub.DeliveryFatal(), "poison for one delivery must not latch the lane")
+
+	counter := sub.decisions.WithLabelValues(milestoneLaneComplete, "terminate", reasonDecode)
+	assert.InDelta(t, 1.0, testutil.ToFloat64(counter), 0.0, "the decode row is counted once")
+	lines := decisionLogLines(t, logs.String())
+	require.Len(t, lines, 1, "and logged once")
+	assert.Equal(t, reasonDecode, lines[0]["reason"])
 }
 
 // --- 3.5: the fanout settles as one unit -----------------------------------
@@ -381,6 +473,11 @@ func TestMilestoneUnregisteredWorkflowQuarantinesAndLatches(t *testing.T) {
 // delivery no matter how often it is replayed.
 func TestMilestoneResolutionInvalidTerminates(t *testing.T) {
 	t.Parallel()
+	// The poisoned loop entity, as the authority would really answer it: its
+	// agent.loop.run object is a number, so production's own getStringTriple
+	// is what decides the class.
+	poisonedLoopEntityID := agentic.LoopExecutionEntityID("acme", "ops", "typed-loop")
+	poisonedReply := exactAuthorityReply(t, poisonedLoopEntityID, 42)
 	cases := []struct {
 		name       string
 		runs       RunStateReader
@@ -402,10 +499,12 @@ func TestMilestoneResolutionInvalidTerminates(t *testing.T) {
 			name:       "non-string predicate value",
 			wantReason: reasonResolutionInvalid,
 			runs:       &stubRunReader{err: lifecycle.ErrEntityNotFound},
-			// The class NATSLoopTripleReader assigns a non-string triple value.
-			reader: stubTripleReader{err: semerrs.WrapInvalid(
-				errors.New(`predicate "agent.loop.run" has non-string value int`),
-				"agentrun", "NATSLoopTripleReader", "read string triple")},
+			reader: productionTripleReader(func(entityID string) ([]byte, error) {
+				if entityID != poisonedLoopEntityID {
+					return nil, fmt.Errorf("unexpected entity %q", entityID)
+				}
+				return poisonedReply, nil
+			}),
 			org:    "acme",
 			loopID: "typed-loop",
 		},
@@ -434,6 +533,34 @@ func TestMilestoneResolutionInvalidTerminates(t *testing.T) {
 			assert.NoError(t, sub.DeliveryFatal(), "poison for one delivery must not latch the lane")
 		})
 	}
+}
+
+// TestMilestoneResolutionFatalQuarantines is the matrix's Fatal resolution row,
+// driven through the production seam that actually produces that class: an
+// exact authority reply carrying no entity is errs Fatal (graph's
+// exactResponseError), NATSLoopTripleReader forwards the class unchanged, and
+// ResolveRun's %w chain carries it to the classifier. Unlike an Invalid row it
+// is not proven to be poison, so the delivery is left to JetStream and the lane
+// latches for an operator instead of being dropped.
+func TestMilestoneResolutionFatalQuarantines(t *testing.T) {
+	t.Parallel()
+	sub := quietSubscriber(
+		&stubRunReader{err: lifecycle.ErrEntityNotFound},
+		productionTripleReader(func(string) ([]byte, error) {
+			return []byte(`{"entity":null,"kvRevision":1}`), nil
+		}), "acme")
+	lane := newMilestoneLaneFixture(t, sub, milestoneLaneComplete)
+
+	data := terminalBytes(t, "unreadable-authority-loop", "")
+	decision, reason := reasonOf(t, sub, data)
+	assert.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
+	assert.Equal(t, reasonResolutionFatal, reason,
+		"a Fatal-classified resolution failure is its own row, not the transient remainder")
+
+	msg := lane.deliver(t, data)
+	assert.Zero(t, msg.settlements(), "a quarantined delivery is left to JetStream")
+	require.Error(t, sub.DeliveryFatal(), "the lane latches so health can report the cause")
+	assert.False(t, lane.admission.Admit(), "and admits no further local work")
 }
 
 // TestMilestoneNilReaderAndProjectionFailuresRetry pins the unmatchable half of

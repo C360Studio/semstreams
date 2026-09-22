@@ -10,7 +10,7 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
-	"github.com/c360studio/semstreams/pkg/errs"
+	semerrs "github.com/c360studio/semstreams/pkg/errs"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
@@ -51,7 +51,7 @@ func (r *NATSLoopTripleReader) getStringTriple(ctx context.Context, entityID, pr
 	}
 	exact, err := r.reader.ReadExactEntity(ctx, entityID)
 	if err != nil {
-		var classified *errs.ClassifiedError
+		var classified *semerrs.ClassifiedError
 		if errors.As(err, &classified) && classified.Code == graph.ErrorCodeEntityNotFound {
 			// Entity not yet in graph — triple is absent.
 			return "", false, nil
@@ -65,7 +65,17 @@ func (r *NATSLoopTripleReader) getStringTriple(ctx context.Context, entityID, pr
 	}
 	s, ok := val.(string)
 	if !ok {
-		return "", false, fmt.Errorf("agentrun: NATSLoopTripleReader: predicate %q on entity %q has non-string value %T", predicate, entityID, val)
+		// Deterministic AND matchable (invariant I7): the same stored triple
+		// decodes to the same non-string value on every attempt, so the
+		// delivery that read it terminates instead of retrying to its
+		// MaxDeliver. Unwrapped it would reach errs.Classify's unknown
+		// default and settle as a bounded Retry, and IsTransient's substring
+		// pass would make even that depend on whether the interpolated entity
+		// ID happened to contain "network" or "timeout".
+		return "", false, semerrs.WrapInvalid(
+			fmt.Errorf("agentrun: NATSLoopTripleReader: predicate %q on entity %q has non-string value %T",
+				predicate, entityID, val),
+			"agentrun", "NATSLoopTripleReader", "read string triple")
 	}
 	return s, true, nil
 }
