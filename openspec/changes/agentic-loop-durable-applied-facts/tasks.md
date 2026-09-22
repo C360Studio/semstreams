@@ -743,6 +743,47 @@
 
 - [ ] 6.1 `task check:push` (schema drift expected empty — `LoopEntity` is in no schema); `go run ./cmd/entity-id-audit .`
       green.
+      **NOT ticked: `task check:push` is RED on this host, exit 201, 631s wall.** One package failed, and it failed
+      on disk:
+      ```
+      --- FAIL: TestReleaseArtifactsReportInjectedVersions/production (19.50s)
+          release_smoke_test.go:44: build release-smoke artifact: exit status 1
+              /usr/local/go/pkg/tool/darwin_arm64/link: running dsymutil failed: exit status 1
+              LLVM ERROR: IO failure on output stream: No space left on device
+      FAIL	github.com/c360studio/semstreams/test/release	21.594s
+      ```
+      Everything else in the run is green: 307 packages `ok`, exactly one `FAIL` line, and every phase BEFORE the
+      integration suite passed — `build`, `lint` (vet + fmt + revive + fixed-port guard + raw-Request guard),
+      `go vet -tags=integration`, `go vet -tags=live_llm`, `schema:generate` + `schema:check-changes`
+      (`git diff --exit-code schemas/ specs/openapi.v3.yaml` clean, as expected: `LoopEntity` is in no schema),
+      `go test ./test/contract/...`, and `go test -race ./...`.
+      **Not the substrate flake #1363.** `service` is `ok` in both phases of this run (`(cached)` in the race phase,
+      `24.706s` in integration); `TestMetricsForwarder_TickerInterval` did not fire.
+      **Cause localized, not guessed.** The same package passes ALONE: `go test -tags=integration -count=1 -run
+      TestReleaseArtifactsReportInjectedVersions ./test/release/` → `ok … 26.399s`, exit 0, taken at the same disk
+      level (`1.3Gi` available before and after). So the build is sound and the link is sound; what the full
+      parallel suite ran out of is peak temp headroom. This is NOT recorded as green — one isolated pass does not
+      make `check:push` green, and the gate stays RED until it is run on a host with room.
+      **The host.** `df -h /System/Volumes/Data` → `460Gi size, 423Gi used, 1.3Gi available, 100%`. Where it is:
+      `/Users/coby/Library/Caches/go-build` 71G, `~/Library/Containers/com.docker.docker/Data` 97G (of which
+      `docker system df` reports 86.48GB build cache, 9.93GB reclaimable without touching any image),
+      `/Users/coby/go/pkg/mod` 14G. Reclaiming the 9.93GB of dead Docker build cache is the smallest sufficient
+      action and unblocks task 6.2's tier run as well. Not done here: `.claude/skills/e2e-doctor/SKILL.md` makes
+      host-wide pruning the owner's call, and this is the owner's laptop.
+      `go run ./cmd/entity-id-audit .` → `entity ID audit passed: 1332 structured candidates across 1 roots`,
+      exit 0.
+      `task api:compat:report` → exit 0. The `processor/agentic-loop` block is exactly the shape the design's
+      no-deprecation row predicts — five incompatible lines, the two truncation removals this change makes plus the
+      three earlier layers left:
+      ```
+      --- github.com/c360studio/semstreams/processor/agentic-loop
+          Incompatible changes:
+          - (*LoopManager).IncrementTruncationRetry: removed
+          - (*LoopManager).ResetTruncationRetry: removed
+          - (*LoopManager).ResolveApprovalIfPending: changed from func(string, string) (…PendingApprovalState, bool, error) to func(string, string, string) (…PendingApprovalState, bool, error)
+          - Config.LoopsBucket: removed
+          - GovernanceDispatcher.HandleVerdict: changed from func(string, string, []byte) to func(string, string, VerdictPayload) (…DeliveryDecision, error)
+      ```
 - [ ] 6.2 `task e2e:agentic` with the process-replacement stage (`stage_a_process_replacement.go`,
       `process_replacement_test.go`) named in the PR body with exit codes; BREAKING for the recovery contract, so this
       tier is the gate (`docs/contributing/02-e2e-tests.md` § Breaking Changes). The approval-after-restart stage is
