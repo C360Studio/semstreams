@@ -1137,3 +1137,140 @@ text claims.
       **exit 0**, 316 `ok` lines, zero `--- FAIL` lines, `pgrep -fl e2e.test` empty before the run. The earlier red
       was the host (`err_code=10047 insufficient storage resources` in untouched `internal/maxdelivery`), as recorded
       above. Log: coordinator scratchpad `arch1249-e2e-placement/checkpush-archive-tree.log`.
+## 12. Owner merge review, round 2 (2026-09-22)
+
+Owner review of `6de85d66` against `b7ce8727` (issuecomment-5783549899, CHANGES REQUESTED): one HIGH, two MEDIUMs,
+one `git diff --check` blank line. The change is already archived; the live specs were reconciled directly and
+`openspec archive` was NOT re-run.
+
+- [x] 12.1 **HIGH — an unclassified handler error retried instead of quarantining.** `classifyHandlerOutcome` sent an
+      error the `errs` classes could not place through `semerrs.IsTransient`, whose substring pass over the message
+      text (`pkg/errs/errs.go:177-193`: "timeout", "connection", "network", "temporary", "unavailable", "busy",
+      "retry") admitted it. A product handler returning `errors.New("commit timeout after write")` therefore selected
+      Retry: Naked with the 30s delay, admission still open, able to exhaust all five deliveries with no fatal latch —
+      the live contract and design § 2.3 require Quarantine, so error WORDING decided the safety disposition.
+      Fixed in `75f761dc`, `agentic/agentrun/milestone_settlement.go:123`: `errors.As` to the `errs` class the handler
+      set, then `context.Canceled` / `context.DeadlineExceeded` by sentinel identity, then fatal. An explicit class
+      outranks the cancellation sentinels. `errs.IsFatal` was checked and carries the same substring pass
+      (`errs.go:222-238`); `errs.IsInvalid` does not. The uncoded `errs` sentinels (`ErrRateLimited`, `ErrCircuitOpen`,
+      `ErrConnectionTimeout`, `ErrConnectionLost`, `ErrStorageUnavailable`) are deliberately NOT admitted: they carry no
+      class, no handler in or above this tree returns one, and `errs.WrapTransient` is the explicit spelling for a
+      handler that wants the replay. Only the two cancellation sentinels are admitted, and only because the fanout's own
+      shutdown surfacing through a handler must not latch both lanes on every clean `Stop`.
+- [x] 12.2 **The live spec carries that admission.** `openspec/specs/agent-run-milestones/spec.md:17-20` now says a
+      handler return is ranked by explicit classification only, never by the error's wording, and names the two
+      cancellation sentinels as the one unclassified exception — without that clause the preserved cancellation Retry
+      would itself deviate from "an unclassified handler error → Quarantine". New scenario at `:64`.
+- [x] 12.3 **Regression through the production lane, plus the classifier's unit rows** (`75f761dc`).
+      `TestMilestoneFanoutQuarantinesOnUnclassifiedHandlerError`
+      (`agentic/agentrun/milestone_settlement_internal_test.go:415`) drives the same lane fixture as the panic and
+      unregistered-workflow rows: a handler returning `errors.New("commit timeout after write")` decides Quarantine with
+      reason `handler_fatal`, leaves NO Ack/Nak/Term on the delivery and no 30s Nak delay, latches `DeliveryFatal()` with
+      the handler's text, and closes the lane's admission. `TestClassifyHandlerOutcomeReadsTheClassNotTheWording`
+      (`:441`) pins each of the seven substring words on a plain error to fatal, an uncoded `errs` sentinel to fatal,
+      both cancellation sentinels (one wrapped) to transient, `WrapFatal(context.Canceled)` to fatal, and each `errs`
+      class to its rank. The Rapid aggregate property was left alone: it starts from already-classified outcomes.
+- [x] 12.4 **Mutant for 12.1** — `agentic/agentrun/milestone_settlement.go`, `cp` backup in the scratchpad,
+      `md5 -q` each side:
+
+      | Stage | md5 |
+      |---|---|
+      | baseline before | `b6173429d970fefb72233effe4fb611c` |
+      | mutant (`semerrs.IsTransient` arm put back) | `1592138124fdeb7b3c29a65807b05799` |
+      | restored after | `b6173429d970fefb72233effe4fb611c` |
+
+      Mutant RED, verbatim:
+
+      ```
+      --- FAIL: TestMilestoneFanoutQuarantinesOnUnclassifiedHandlerError (0.00s)
+              Messages:   	an unreadable handler error is fatal, not transient
+              Error:      	Should be zero, but was 1
+              Messages:   	a quarantined delivery is left to JetStream: no Ack, Nak or Term
+              Error:      	Should be empty, but was [30s]
+              Messages:   	the delivery must not be Naked with the retry delay
+              Error:      	An error is expected but got nil.
+              Messages:   	the lane must latch so an operator looks
+      --- FAIL: TestClassifyHandlerOutcomeReadsTheClassNotTheWording/unclassified_timeout (0.00s)
+              expected: 0x3
+              actual  : 0x2
+      ```
+
+      All seven word rows failed under the mutant (`connection`, `busy`, `network`, `retry`, `timeout`,
+      `unavailable`, `temporary`); restored tree exit 0.
+- [x] 12.5 **MEDIUM — the arming-value guard still accepted expressions Compose resolves to empty.** `effectiveValue`
+      parsed part of compose interpolation and got two spellings wrong: `$PR1360_UNSET` (unbraced) returned the
+      expression itself and `${PR1360_UNSET:-${PR1360_ALSO_UNSET}}` returned the nonempty inner expression, while
+      compose resolves both to `""`. Fixed in `5aed58e5`,
+      `test/contract/e2e_tier_binary_contract_test.go:256`: an arming value must be a LITERAL, and any value
+      containing `$` reads as empty. The `${VAR:-default}` parsing is deleted, not narrowed — measurement behind that:
+      `grep -n 'SEMSTREAMS_E2E' docker/compose/*.yml` returns exactly one line,
+      `docker/compose/agentic.yml:87: - SEMSTREAMS_E2E_MILESTONE_PROBE=1`, so no default form is in use for a tier gate
+      today and none was kept. (`${SEMSTREAMS_DEBUG:-false}`, `${AGENTIC_LLM_URL:-…}`, `${GEMINI_API_KEY:?…}` and
+      `${GRAFANA_PASSWORD:-admin}` are not `SEMSTREAMS_E2E_*`; `values("SEMSTREAMS_E2E_")` never passed them to this
+      helper.)
+- [x] 12.6 **Unit rows for 12.5** — `TestComposeArmingValueMustBeALiteral`
+      (`test/contract/e2e_tier_binary_contract_test.go:474`) carries the owner's two spellings verbatim plus the bare,
+      host-defaulted, partial and required-variable forms and the three literal forms, then runs the `values` reader the
+      guard actually calls over a fixture that includes the `- NAME` passthrough (arming depends on the developer's
+      shell → empty) and a non-`SEMSTREAMS_E2E_` variable.
+- [x] 12.7 **Spec sentence for 12.5, both homes.** `openspec/specs/payload-registry/spec.md:88` and the archived delta
+      `openspec/changes/archive/2026-09-22-agentrun-fanout-settlement/specs/payload-registry/spec.md:83` both said an
+      "uninterpolated `${VAR}`" counts as empty; both now say the value is a nonempty LITERAL and every value containing
+      `$` counts as empty. `git grep -n 'uninterpolated'` → 0 hits. `git grep -n 'MILESTONE_PROBE' -- docs/` → 0, so
+      `docs/contributing/02-e2e-tests.md` carried no copy of the sentence.
+- [x] 12.8 **Mutants for 12.5** — two directions, `cp` backup + `md5 -q` each side.
+
+      Compose fixture `docker/compose/agentic.yml` (baseline and both restores `decf934c3dea5a9b38c6aef37cab10b1`),
+      `TestE2ETierTableMatchesComposeAndDockerfile` RED for each:
+
+      | Arming line mutant | md5 | Red line |
+      |---|---|---|
+      | `SEMSTREAMS_E2E_MILESTONE_PROBE=$PR1360_UNSET` | `5f76315966062bf0fb8de3e1fab66a61` | `agentic (agentic.yml semstreams): SEMSTREAMS_E2E_MILESTONE_PROBE is declared with an empty effective value, which does not arm the hook` |
+      | `SEMSTREAMS_E2E_MILESTONE_PROBE=${PR1360_UNSET:-${PR1360_ALSO_UNSET}}` | `684a486d8591c59a832e0fd3c6e886fa` | same line |
+
+      Guard `test/contract/e2e_tier_binary_contract_test.go` (baseline and restore `c39494e12aef9a878b3b088cbfc1f410`,
+      mutant `085300caee1cc072d8d171c4da8877c3` = the partial parser put back) —
+      `TestComposeArmingValueMustBeALiteral` RED, reproducing the owner's measured values exactly:
+
+      ```
+      effectiveValue("$PR1360_UNSET") = "$PR1360_UNSET", want ""
+      effectiveValue("${PR1360_UNSET:-${PR1360_ALSO_UNSET}}") = "${PR1360_ALSO_UNSET}", want ""
+      effectiveValue("${PR1360_UNSET:-1}") = "1", want ""
+      effectiveValue("${PR1360_UNSET:?set it}") = "set it", want ""
+      effectiveValue("x${PR1360_UNSET}y") = "x${PR1360_UNSET}y", want ""
+      values(SEMSTREAMS_E2E_)[SEMSTREAMS_E2E_UNBRACED] = "$PR1360_UNSET", want ""
+      values(SEMSTREAMS_E2E_)[SEMSTREAMS_E2E_NESTED] = "${PR1360_ALSO_UNSET}", want ""
+      ```
+- [x] 12.9 **MEDIUM — the migration note denied the settlement-only helpers it then recommends.** Fixed in `f410467a`,
+      `docs/operations/migration-beta162-to-beta163.md:1231-1237`: the sentence now names `SettleDelivery` and
+      `SettleDeliveryWithRetry`, says what each settles (the closed `(DeliveryDecision, error)` tuple, at most one
+      terminal method; `SettleDelivery`'s Retry is a bare Nak, `SettleDeliveryWithRetry` takes the policy), and what
+      stays the caller's: running the work, owning its context and any heartbeat, inspecting the `DeliveryResult`, and
+      stopping the exact consumer handle on `OwnerStopRequired()`. Both doc comments
+      (`natsclient/delivery_settlement.go:284-303`) were read first. Docs-only; no test.
+- [x] 12.10 **Hygiene** — `b9bd4a2c` removes the trailing blank line at `openspec/specs/agent-run-milestones/spec.md:116`
+      that `git diff --check` reported.
+- [x] 12.11 **Two sweeps the round owed, neither blocking.** Other sites that classify a handler-supplied error through
+      the substring-reaching helpers: `processor/agentic-loop/component.go:1245` runs `errs.IsFatal(handlerErr)` on a
+      product handler's return inside a `DeliveryWork` closure, so an unclassified error saying "corrupted" or "fatal"
+      quarantines on its wording — the fail-CLOSED direction, and its documented default for an unclassified error is
+      Retry, the opposite intent from this lane's. `agentic/agentrun/milestone_settlement.go:170,188`
+      (`classifyResolutionFailure` → `semerrs.Classify`) reads resolution failures, not handler returns; its unknown
+      default is the spec'd bounded Retry, but the same substring pass can escalate an unclassified resolution error
+      carrying "fatal" to Quarantine. Both are framework-owned error paths outside this round's finding and were left
+      alone. `storage/objectstore/component.go:1029` uses `errs.IsInvalid`, which has no substring pass.
+      `processor/agentic-dispatch/component.go:909,1092`, `input/udp/udp.go:610` and `gateway/http/http.go:338-381`
+      classify in-tree framework errors, not product handler returns. Second sweep: no compose file relies on
+      `${VAR:-default}` for a `SEMSTREAMS_E2E_*` gate (12.5).
+- [x] 12.12 **Round-2 gates**, every exit code the command's own, on `f410467a`:
+
+      | Command | Exit | Final line |
+      |---|---|---|
+      | `task lint` | 0 | `ok  	github.com/c360studio/semstreams/test/natsclient	0.705s` |
+      | `go test -race -count=1 ./agentic/agentrun/... ./service/... ./test/contract/... ./natsclient/...` | 0 | 4 `ok` package lines, 0 lines containing `FAIL` |
+      | `openspec validate --all --strict` | 0 | `Totals: 56 passed, 0 failed (56 items)` |
+      | `task spec:properties` | 0 | `spec-properties: 288/288 citations resolve.` |
+      | `git diff --check b7ce8727` | 0 | no output |
+      | `task check:push` | 0 | `[INTEGRATION] tests complete` — 316 `ok` lines, 0 lines containing `FAIL` |
+
+      `pgrep -fl e2e.test` was empty before `check:push`; the volume had 159 GiB free.
