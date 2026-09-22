@@ -244,8 +244,12 @@ func (s *Scenario) assertIdempotentMilestoneSettlement(
 		return fmt.Errorf("handler invocations for %s = %d, want at least 2 across the replacement",
 			fixture.sourceMessageID, attempts)
 	}
-	result.Details["milestone_"+consumerName+"_source_message_id"] = fixture.sourceMessageID
-	result.Metrics["milestone_"+consumerName+"_handler_attempts"] = attempts
-	result.Metrics["milestone_"+consumerName+"_durable_effects"] = effects
+	// Keyed by behavior AND lane: the failed lane carries two separate proofs
+	// (a crash and a quarantine), and a lane-only key would report one of them
+	// twice and the other not at all.
+	proof := "milestone_" + fixture.behavior + "_" + consumerName
+	result.Details[proof+"_source_message_id"] = fixture.sourceMessageID
+	result.Metrics[proof+"_handler_attempts"] = attempts
+	result.Metrics[proof+"_durable_effects"] = effects
 	return nil
 }

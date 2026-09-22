@@ -6,7 +6,7 @@ version: "3"
 
 tasks:
   default:
-    desc: "Agentic tier: Agent loop + tools + process replacement (~2m)"
+    desc: "Agentic tier: Agent loop + tools + process replacement + milestone settlement (~5m30s measured 2026-09-22)"
     silent: false
     deps:
       - task: ":e2e:check-ports"
