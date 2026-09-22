@@ -1294,7 +1294,7 @@ an execution id is still one dotless subject token.
   bucket does not repair it — the ledger was never consulted. Drain in-flight tool calls before the upgrade, or
   accept that the loops holding them fail on timeout.
 
-### `tool_results_dropped_total`'s only `reason` value is renamed
+### `tool_results_dropped_total`'s `reason` values: one renamed, three added
 
 The routing key moved, and the drop reason that names it moved with it. The one value
 `semstreams_agentic_loop_tool_results_dropped_total{reason}` emits is now `stale_execution`; it was `stale_callid`
@@ -1312,7 +1312,18 @@ valid PromQL and reads zero forever.** An alert written as
 `rate(semstreams_agentic_loop_tool_results_dropped_total{reason="stale_callid"}[5m]) > 0` never fires again and a
 panel filtered to it draws a flat line that reads as "no drops are happening". Nothing errors, and nothing in the
 upgrade tells you. Edit the selector to `reason="stale_execution"`, or drop the matcher and aggregate
-`by (reason)`; `stale_execution` is the only value this build emits, so that aggregation returns one series.
+`by (reason)`. Aggregated that way the series now has four values, because this release also adds the three
+reasons the cold lanes need. The metric's Help text carries the same definitions.
+
+| `reason` | Counted when |
+|---|---|
+| `stale_execution` | no loop mapping exists for the execution ID and the loop record is absent or terminal (the rename above) |
+| `older_request` | the result names an earlier request than the record does, so the loop already applied it; counted on the warm lane and on the cold lane once the record has been brought forward |
+| `already_applied` | the result names the request the record names AND its execution is already in the record's `pending_tool_results`: a replay of work the loop kept, and the batch's unfinished siblings go on running |
+| `terminal_unproven` | the loop is terminal, so no result can still be applied to it |
+
+A result the record still names is NOT counted: it is retried until a process can apply it. A result naming a
+request of no loop is quarantined, not dropped.
 
 ## An approval response must echo the execution identity it answers (#1328)
 
