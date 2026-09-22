@@ -672,13 +672,40 @@
       tracked — the denominator moves by exactly the one citation that test adds, because the script counts TRACKED
       test files only. Fifteen files carry `// spec: agentic-loop / The loop record names its outstanding request`,
       including 4.1's `applied_facts_property_test.go:102`, and every one resolves against the ADDED requirement.
-- [ ] 5.3 No approval-deadline hydration (docket OQ2, owner ruling 2026-09-22): the delta scenario "a replaced process
+- [x] 5.3 No approval-deadline hydration (docket OQ2, owner ruling 2026-09-22): the delta scenario "a replaced process
       re-arms no approval deadline; the loop stays `awaiting_approval` until answered or cancelled" plus the same
       sentence as a line in `docs/operations/migration-beta162-to-beta163.md` under a `#1330` section. Test: the zero
       is a measured delta, not a bare absence. The same test first arms a deadline in-process — a real
       `awaiting_approval` record whose deadline the live component's snapshot (`AS:69`
       `SnapshotExpiredApprovals`) reports — then starts a REPLACEMENT component over the same KV and asserts the
       replacement's snapshot is empty, the record is still `awaiting_approval`, and its revision is unchanged.
+      **Landed.** Test `TestAReplacementReArmsNoApprovalDeadline`
+      (`processor/agentic-loop/approval_deadline_hydration_integration_test.go:34`, `//go:build integration`, real
+      NATS). It drives the REAL gate — born loop, model response dispatching one tool, a tool result whose error
+      carries `agentic.ApprovalRequiredPrefix` — so `RequestedAt` and `Timeout` are a real pending approval's and
+      the record is written by the real carrier. The zero is a measured delta: one instrument
+      (`SnapshotExpiredApprovals`, `state.go:630`), one instant, two processes over the same bucket — 1 candidate on
+      the process that gated the loop, 0 on the replacement. The instant is passed in rather than waited for, so
+      there is no sleep and no backdated fixture and the configured 12h wait stays production's.
+      Migration section: `docs/operations/migration-beta162-to-beta163.md:1758` § "A replaced process re-arms no
+      approval deadline", which also supersedes the beta.25 note's false "Restart safety" paragraph by name.
+      Delta scenario: `specs/agentic-loop/spec.md:58-63`. Conformance row OQ2 updated (`design.md` § 9).
+      Mutant (`cp` backup + `md5 -q`, `[applied]` printed between mutating and testing, restore verified by
+      checksum): hydrate the replacement — `initializeKVBuckets` lists `AGENT_LOOPS` after acquiring it and seats
+      every non-terminal record into the LoopManager, which is exactly the startup pass OQ2 refused. `component.go`
+      `5b8b3f27a45bbf05a86e6dfca2f83f68` → `a83ad6b3bdc25bcc5e5b0e3dd3b6c2ec` → restored
+      `5b8b3f27a45bbf05a86e6dfca2f83f68`. RED: `TestAReplacementReArmsNoApprovalDeadline` at the replacement
+      snapshot — "a replacement re-armed a deadline its predecessor held".
+      **Finding, escalated not applied (contract § 0.2).** The requirement's free-text sentence
+      (`specs/agentic-loop/spec.md:36-38`, verbatim OQ2 ruling text) says a replaced process SHALL re-arm no
+      approval deadline, without qualification. Measured false in this tree: task 1.2's rebuild seats the record
+      wholesale (`state.go:383-384`), including `State = awaiting_approval` and `PendingApproval`, so a replacement
+      that takes a redelivered tool result or model response for a gated loop DOES hold that deadline again — at
+      the record's own `RequestedAt + Timeout`. Probe, run and discarded: predecessor snapshot 1, replacement at
+      start 0, replacement after redelivering the gated result 1, record still `awaiting_approval` at revision 4.
+      The delta SCENARIO is scoped to startup and is exactly true; only the free-text sentence over-reaches. It is
+      ruling text, so it is not edited here — the migration note and the doc comments state the narrow truth, and
+      the narrowing is owed to the owner.
 - [ ] 5.4 `tasks_submitted_total` is at-least-once under redelivery (docket OQ4, owner ruling 2026-09-22): the new
       `specs/agentic-dispatch/spec.md` delta states it, plus one line in
       `docs/operations/migration-beta162-to-beta163.md` under the same `#1330` section; no arm change. Test: a

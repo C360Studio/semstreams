@@ -1754,3 +1754,27 @@ before publishing. Both are `system` messages that belong to that one request. T
 them, because seating them would pin one iteration's budget at the top of the rebuilt system prompt for the rest of
 the loop's life while every later request prepends a fresh one. Only a LEADING run is dropped, so a message of the
 conversation that happens to start with either string is kept.
+
+### A replaced process re-arms no approval deadline
+
+A loop parked in `awaiting_approval` keeps its pending state across a process replacement — the record names the
+gated call, its execution identity and the request that gated it — but **the deadline is not re-armed**. The
+approval-timeout sweeper snapshots the loops its own process holds, and nothing at startup reads `AGENT_LOOPS` to
+restore the ones it does not. A parked loop therefore stays `awaiting_approval` until the approval is answered or
+the loop is cancelled, rather than being auto-rejected by whichever process happens to come up.
+
+This **supersedes** the beta.25 note's "Restart safety" paragraph
+([migration-beta24-to-beta25.md](migration-beta24-to-beta25.md) § Restart safety), which said an expired loop in KV
+at restart would auto-reject within one sweep interval of the new process booting. It would not: that paragraph
+described fields the sweeper reads, not a process that reads the bucket.
+
+**Operational consequence, and what to do about it.** The wait a parked loop is nominally under (`approval_timeout`,
+at most 12h) is not a settlement guarantee across a replacement, and was never one. If your product needs a parked
+loop settled after a replacement, answer it — publish an `ApprovalResponse`, or cancel the loop with a `cancel`
+signal. Do not wait for a timeout that has no process behind it.
+
+One narrow exception, recorded rather than built on: a replacement that rebuilds a loop for some *other* reason — a
+redelivered model response or tool result naming the request the record names — seats that loop's pending approval
+along with the rest of the record, and from then on sweeps it against the record's own `RequestedAt` plus `Timeout`.
+That is the record's original deadline, not a fresh wait, and it depends on a redelivery arriving. It is not a
+recovery path to rely on.
