@@ -1753,7 +1753,8 @@ func (c *Component) handleResponseMessage(ctx context.Context, data []byte) erro
 
 	result, err := c.handler.HandleModelResponse(ctx, loopID, *response)
 	if err != nil {
-		if errors.Is(err, errRequestNotYetObservable) {
+		switch {
+		case errors.Is(err, errRequestNotYetObservable):
 			// Not a failure of this loop: the answer outran the record update
 			// that names its question (#1330, W4). Retry until the record
 			// catches up, and leave the loop exactly as it is — failing it
@@ -1761,6 +1762,20 @@ func (c *Component) handleResponseMessage(ctx context.Context, data []byte) erro
 			c.logger.Warn("Model response is not yet observable on the loop record — retrying",
 				"loop_id", loopID, "request_id", response.RequestID, "error", err)
 			return err
+		case errors.Is(err, errResponseSuperseded):
+			// The loop already applied this request's answer and moved on, so
+			// the delivery is finished. It returns HERE rather than flowing an
+			// empty result through the carrier: persistHandlerResult ends in a
+			// compare-and-swap write, and a response that changed nothing must
+			// not move the record's revision. The handler has already logged
+			// it and counted it on model_responses_dropped_total.
+			return nil
+		case errors.Is(err, errResponseForeign):
+			// Not this loop's request at all. Nothing orders it and no later
+			// delivery will, which is the disposition the tool lane and both
+			// cold arms already give the same input (#1330, design § 5.2).
+			return errs.WrapFatal(err, "agentic-loop", "handleResponseMessage",
+				"classify the response against the loop record")
 		}
 		c.recordTrajectoryObservations(ctx, result)
 		// A handler error is this loop's business failure, and the delivery

@@ -1226,6 +1226,24 @@ func (h *MessageHandler) buildTaskRequest(loopID string, task TaskMessage, entit
 // running loop on a timing window.
 var errRequestNotYetObservable = errors.New("request is not yet named by the loop record")
 
+// errResponseSuperseded marks a model response the loop has already moved past:
+// its request is OLDER than the one the record names, so the loop advanced,
+// which it can only do by applying it (#1330, design § 5.2).
+//
+// The delivery is finished — acknowledge it — and the handler returns it as an
+// error rather than as an empty HandlerResult so that nothing flows on to the
+// carrier. An empty result still reaches persistLoopState, which is a
+// compare-and-swap write: a response that changed nothing would move the
+// record's revision, which is the one thing a drop must not do.
+var errResponseSuperseded = errors.New("response names a request the loop has moved past")
+
+// errResponseForeign marks a model response naming something that is not a
+// request of this loop at all. Nothing orders it, no later delivery will make
+// it order, and applying it would act on another loop's identity — so it is
+// quarantined, which is the disposition the tool lane and both cold arms
+// already give the same input.
+var errResponseForeign = errors.New("response names a request that is not this loop's")
+
 // HandleModelResponse processes a model response
 func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string, response agentic.AgentResponse) (HandlerResult, error) {
 	// Check for cancellation before starting work
@@ -1272,7 +1290,7 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 	// declared residual). The record's name survives the process, so a
 	// replacement classifies with the same authority the original had.
 	switch orderAgainstPublished(loopID, entity.PublishedRequestID, response.RequestID) {
-	case requestOrderApplied, requestOrderForeign:
+	case requestOrderApplied:
 		h.logger.Warn("ignoring superseded model response — the loop has moved on to a different request",
 			slog.String("loop_id", loopID),
 			slog.String("response_request_id", response.RequestID),
@@ -1282,13 +1300,16 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 		if h.metrics != nil {
 			h.metrics.recordModelResponseDropped("superseded_request")
 		}
-		return HandlerResult{
-			LoopID:            loopID,
-			State:             entity.State,
-			PublishedMessages: []PublishedMessage{},
-			TrajectorySteps:   []agentic.TrajectoryStep{},
-			ContextEvents:     []agentic.ContextEvent{},
-		}, nil
+		return HandlerResult{}, fmt.Errorf("%w: loop %s response names request %q, its record names %q",
+			errResponseSuperseded, loopID, response.RequestID, entity.PublishedRequestID)
+	case requestOrderForeign:
+		h.logger.Warn("refusing a model response that names a request of no loop",
+			slog.String("loop_id", loopID),
+			slog.String("response_request_id", response.RequestID),
+			slog.String("published_request_id", entity.PublishedRequestID),
+			slog.String("state", entity.State.String()))
+		return HandlerResult{}, fmt.Errorf("%w: loop %s response names request %q, its record names %q",
+			errResponseForeign, loopID, response.RequestID, entity.PublishedRequestID)
 	case requestOrderAhead:
 		// The answer arrived before the record that names its question. It is
 		// not superseded and must not be dropped: the delivery is retried

@@ -322,13 +322,16 @@
       loop's current request" cannot drift apart again. A response the record does not yet name is no longer a drop —
       the guard returns `errRequestNotYetObservable` (`H:1227`), which `handleResponseMessage` turns into a Retry
       instead of a loop failure (`C:1756`). The cold arm is step 0 then classify (`C:1855`, `C:1863`).
-      **Deviation, recorded:** a FOREIGN request name is Quarantine on the cold arm and a counted `superseded_request`
-      drop on the warm one. The warm guard already had a caller-visible shape for a refusal (an empty `HandlerResult`),
-      and the loop it would quarantine is one this process holds and is otherwise healthy; the cold arm holds no loop
-      and refuses.
-      Tests: `settlement_recovery_test.go` — `TestAReplacementClassifiesAResponseAgainstTheRecordNotItsOwnMints` (three
-      warm arms) and `TestColdResponseIsClassifiedAgainstTheAdoptedRecord`; `superseded_response_test.go` still pins
-      the metric; `export_test.go`'s `CurrentRequestForTest` now reads the record's field, so no fixture can pass
+      **No deviation.** All four sites now give a FOREIGN request name the same disposition — Quarantine — as the
+      delta requires: the warm guard returns `errResponseForeign` (`handlers.go`) and `handleResponseMessage` wraps it
+      fatal, matching `classifyRedeliveredToolResult` and both cold arms. The warm APPLIED arm returns
+      `errResponseSuperseded` and the component acknowledges it in place: an empty `HandlerResult` was still a result,
+      and it flowed into `persistHandlerResult` → `persistLoopState`, whose compare-and-swap moved the record's
+      revision for a delivery that changed nothing. The early return matches the tool lane's `if !apply { return nil }`.
+      Tests: `settlement_recovery_test.go` — `TestAReplacementClassifiesAResponseAgainstTheRecordNotItsOwnMints` (four
+      warm arms: superseded, not-yet-named, current, and the foreign name that is refused rather than dropped — the
+      superseded arm also asserts the record's revision does not move) and `TestColdResponseIsClassifiedAgainstTheAdoptedRecord`;
+      `superseded_response_test.go` still pins the metric and now pins the empty write list; `export_test.go`'s `CurrentRequestForTest` now reads the record's field, so no fixture can pass
       against a source production no longer has. The real broker is 4.2.
       Mutant: replace the guard's ordering with a constant `requestOrderCurrent` (`H:1274`) →
       `TestAReplacementClassifiesAResponseAgainstTheRecordNotItsOwnMints` (superseded, not-yet-named) and

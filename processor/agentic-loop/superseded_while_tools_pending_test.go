@@ -2,6 +2,7 @@ package agenticloop_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -78,17 +79,14 @@ func TestRedeliveredCompletionIsRefusedWhileTheCarrierWaitsOnTools(t *testing.T)
 
 	// The exact bytes of request one's completion, redelivered by the lane.
 	replay, err := handler.HandleModelResponse(ctx, loopID, firstCompletion)
-	if err != nil {
-		t.Fatalf("HandleModelResponse(redelivered birth completion): %v", err)
+	if !errors.Is(err, agenticloop.ErrResponseSupersededForTest) {
+		t.Fatalf("HandleModelResponse(redelivered birth completion) = %v, want a superseded refusal", err)
 	}
-	if replay.State.IsTerminal() {
-		t.Fatalf("the redelivery completed the loop while its tool was still running; state=%s", replay.State)
-	}
-	if replay.CompletionState != nil {
-		t.Fatal("the redelivery built a completion record for the task it is not answering")
-	}
-	if len(replay.PublishedMessages) != 0 {
-		t.Fatalf("the redelivery published %d messages, want none", len(replay.PublishedMessages))
+	// The refusal hands the carrier NOTHING. An empty result is still a result:
+	// it flows on to persistLoopState, whose compare-and-swap moves the loop
+	// record's revision for a delivery that changed nothing (#1330).
+	if replay.LoopID != "" || replay.State != "" || replay.CompletionState != nil || len(replay.PublishedMessages) != 0 {
+		t.Fatalf("the refusal handed the carrier a result to persist: %+v", replay)
 	}
 	if got := handler.ModelResponseDropsForTest("superseded_request"); got != drops+1 {
 		t.Fatalf("superseded_request drops = %v, want %v: the refusal must be counted under the reason it happened",

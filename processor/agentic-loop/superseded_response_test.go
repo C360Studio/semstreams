@@ -209,8 +209,9 @@ func TestSupersededResponseDoesNotSettleATimedOutLoop(t *testing.T) {
 		"the stale response advanced the loop")
 	require.Empty(t, entity.Outcome, "the stale response settled the timed-out loop")
 	require.Empty(t, entity.CompletedAt)
-	require.Equal(t, []string{loopID}, bucket.written(),
-		"only the loop entity may be written; a COMPLETE_ record means the loop was terminated")
+	require.Empty(t, bucket.written(),
+		"a superseded response must write nothing at all: an empty HandlerResult still reaches the "+
+			"record's compare-and-swap, and a delivery that changed nothing must not move its revision")
 	require.Equal(t, loopID+":req:2:0", c.handler.loopManager.OutstandingRequest(loopID),
 		"the stale response settled the request the loop is actually waiting on")
 }

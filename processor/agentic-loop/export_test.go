@@ -148,3 +148,8 @@ func (h *MessageHandler) ModelResponseDropsForTest(reason string) float64 {
 func (h *MessageHandler) HasPendingContinuationForTest(loopID string) bool {
 	return h.loopManager.HasPendingContinuation(loopID)
 }
+
+// ErrResponseSupersededForTest is the sentinel HandleModelResponse returns for
+// a response the loop has already moved past (#1330). External-package tests
+// match on it so the refusal is asserted by identity rather than by a message.
+var ErrResponseSupersededForTest = errResponseSuperseded
