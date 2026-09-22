@@ -526,7 +526,10 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       name, and the requirement states that adding, renaming, or retiring one is a change to it.
       `openspec validate agentrun-fanout-settlement --strict` → `Change 'agentrun-fanout-settlement' is valid`,
       exit 0. `openspec validate --all --strict` → `Totals: 56 passed, 0 failed (56 items)`.
-- [ ] 8.2 Seed the `agent-run-milestones` Purpose from `proposal.md` at spec sync.
+- [x] 8.2 Seed the `agent-run-milestones` Purpose from `proposal.md` at spec sync.
+      **Landed at archive (2026-09-22):** `openspec/specs/agent-run-milestones/spec.md` § Purpose, one paragraph from
+      `proposal.md` § Why / § What changes (identity, handler done, aggregate settlement, resolution classes, the
+      health and metric surface; a settlement contract, not a workflow engine).
 - [x] 8.3 Rewrite `docs/operations/migration-beta162-to-beta163.md:1216-1231` (from `:1226`, "still exported at this
       tag") with the migration text in `proposal.md`; replace
       `docs/operations/migration-restart-safe-nats-client.md:104-108`; update
@@ -776,6 +779,11 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       `validate-results` 0. `assertions_run=16` equals the count `assertingStageCount()` derives from the same list,
       and `TestStagesAreExactlyThisOrderedList` holds the list itself, so the number cannot agree with a list it no
       longer describes.
+      **Re-run 2026-09-22 at the merge candidate `31ae27f6`** (after the owner-authorized host reclaim; Docker images +
+      build cache and the Go build cache were pruned first, so the image was built cold): `pgrep -fl e2e.test` printed
+      nothing, `docker compose ls` listed no stacks, `task e2e:agentic` exit 0, `Scenario completed successfully`
+      `duration=5m23.085466458s` `assertions_run=17`, no `level=ERROR` line. Log: coordinator scratchpad
+      `arch1249-e2e-placement/tier-31ae27f6.log`.
       The stage-D measurements the run published, one per proof:
       `milestone_exit-before-ack_agentrun-milestone-complete_handler_attempts:2` /
       `..._durable_effects:1`; `milestone_exit-before-ack_agentrun-milestone-failed_handler_attempts:2` /
@@ -1086,7 +1094,7 @@ text claims.
       RED on BOTH seeding mechanisms, which is the point of checking in the corpus as well as the `f.Add` calls:
       `FuzzEffectValidate/seed#2: Validate("msg-1") accepted evidence whose source id is "other"` and
       `FuzzEffectValidate/rejected_foreign_identity: … source id is "other-terminal"`.
-- [ ] 11.13 **UNRESOLVED — `task check:push` is RED on this host and was not re-run.** Owner-Codex-round gates at
+- [x] 11.13 **RESOLVED 2026-09-22 (below) — was: `task check:push` is RED on this host and was not re-run.** Owner-Codex-round gates at
       `9cb5bb56`, every exit code the command's own:
 
       | Command | Exit | Final line |
@@ -1123,3 +1131,9 @@ text claims.
       ~900MiB of build and corpus cache. `go clean -fuzzcache` afterwards returned ~6MiB, so the instrumented build
       cache holds the rest. Clearing the Go build cache or Docker's is the coordinator's call, not a developer's
       unilateral change to a shared host.
+      **Resolved 2026-09-22 (coordinator), after the owner-authorized host reclaim** (Docker images + build cache
+      100.6 GB and the Go build cache 72 GB pruned; 168 GiB free after). `task check:push` re-run on this tree with
+      the archive applied (`31ae27f6` + `openspec archive agentrun-fanout-settlement` + the seeded Purpose):
+      **exit 0**, 316 `ok` lines, zero `--- FAIL` lines, `pgrep -fl e2e.test` empty before the run. The earlier red
+      was the host (`err_code=10047 insufficient storage resources` in untouched `internal/maxdelivery`), as recorded
+      above. Log: coordinator scratchpad `arch1249-e2e-placement/checkpush-archive-tree.log`.
