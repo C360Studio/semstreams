@@ -239,7 +239,7 @@ func (s *Scenario) stages() []agenticStage {
 		{name: "capture-baseline", fn: s.captureBaseline},
 		// arm-milestone-exhaustion publishes the terminal whose five transient
 		// attempts exhaust the complete lane's MaxDeliver. It is armed here and
-		// asserted in verify-streaming-metrics because exhaustion costs four
+		// asserted in verify-milestone-exhaustion because exhaustion costs four
 		// redeliveries at the lane's 30s retry delay; arming it late would turn
 		// two minutes of the tier into waiting. It verifies nothing itself.
 		{name: "arm-milestone-exhaustion", fn: s.armMilestoneExhaustion},
@@ -253,6 +253,13 @@ func (s *Scenario) stages() []agenticStage {
 		{name: "verify-tool-execution", fn: s.verifyToolExecution, asserts: true},
 		{name: "verify-durable-tool-replay", fn: s.verifyDurableToolReplay, asserts: true},
 		{name: "verify-streaming-metrics", fn: s.verifyStreamingMetrics, asserts: true},
+		// verify-milestone-exhaustion is its own named stage rather than the
+		// tail of the one above it. A tail is deleted in one line and every
+		// in-tree guard stays green, because TestStagesAreExactlyThisOrderedList
+		// pins stage NAMES; a named stage makes that deletion fail in plain
+		// `go test`. It also cannot be skipped by the stage above returning
+		// early on a streaming warning, which the tail could be.
+		{name: "verify-milestone-exhaustion", fn: s.verifyMilestoneExhaustion, asserts: true},
 		{name: "verify-tool-call-governance", fn: s.verifyToolCallGovernance, asserts: true},
 		{name: "verify-stage-a-process-replacement", fn: s.verifyStageAProcessReplacement, asserts: true},
 		{name: "verify-milestone-settlement", fn: s.verifyMilestoneSettlement, asserts: true},
@@ -1087,13 +1094,7 @@ func (s *Scenario) verifyStreamingMetrics(ctx context.Context, result *scenarios
 	}
 
 	result.Details["streaming_verified"] = true
-
-	// The armed milestone exhaustion is asserted here, and here rather than in
-	// the milestone stage below, because this is the last stage before anything
-	// replaces the process: the exhaustion counter is process-local, and the
-	// advisory that feeds it is acknowledged durably, so a replacement between
-	// the advisory and the read would lose the only occurrence there will be.
-	return s.verifyMilestoneExhaustion(ctx, result)
+	return nil
 }
 
 // verifyToolCallGovernance checks that the ADR-039 subject-mode

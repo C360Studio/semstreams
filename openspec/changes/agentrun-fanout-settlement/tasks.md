@@ -600,14 +600,26 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       unhealthy; the failed lane is drained while the other consumes; the replacement succeeds. Five transient
       returns: `semstreams_nats_max_delivery_exhaustions_total{consumer="agentrun-milestone-complete"}` = 1. Record
       every stage's pass/fail verbatim in the PR body.
-      Two new stages in the agentic tier, both pinned in order by `TestStagesAreExactlyThisOrderedList`:
-      `arm-milestone-exhaustion` (action stage, `asserts:false`, third in the list) and
-      `verify-milestone-settlement` (`asserts:true`, straight after `verify-stage-a-process-replacement`).
-      `assertions_run` moves 15 -> 16 and the tier's derived denominator check moves with it.
+      Three new stages in the agentic tier, all pinned in order by `TestStagesAreExactlyThisOrderedList`:
+      `arm-milestone-exhaustion` (action stage, `asserts:false`, third in the list), `verify-milestone-exhaustion`
+      (`asserts:true`, straight after `verify-streaming-metrics`) and `verify-milestone-settlement` (`asserts:true`,
+      straight after `verify-stage-a-process-replacement`). `assertions_run` moves 15 -> 17 and the tier's derived
+      denominator check moves with it.
       Placement is forced by two facts, both recorded at the stages: exhaustion costs four redeliveries at the lane's
-      30s retry delay, so it is armed near the top and asserted ~2 minutes later in `verify-streaming-metrics`; and
-      it must be asserted BEFORE anything replaces the process, because the exhaustion counter is process-local
+      30s retry delay, so it is armed near the top and asserted ~2 minutes later in `verify-milestone-exhaustion`;
+      and it must be asserted BEFORE anything replaces the process, because the exhaustion counter is process-local
       while the advisory feeding it is acknowledged durably — a replacement in between loses the only occurrence.
+      The exhaustion assertion is its OWN stage, not the tail of `verify-streaming-metrics` it was first written as
+      (review M1). A tail is deleted in one line with every in-tree guard still green — the guard pins stage NAMES,
+      so it cannot see a call removed from inside a stage — and that particular tail was also skippable by its host
+      stage's early `return nil` on a streaming warning. A named stage fails `TestStagesAreExactlyThisOrderedList`
+      in plain `go test` when it goes away.
+      `verify-milestone-exhaustion` reads the exhaustion advisory counter AND
+      `semstreams_agentrun_milestone_decisions_total{lane="complete",decision="retry",reason="handler_transient"}`
+      = 5 — the first e2e observer of the operator signal section 5.2 added. `observeDecision` returns before the
+      increment on an Ack (`agentic/agentrun/milestone_settlement.go:218-219`), so an ordinary milestone contributes
+      nothing to that series and the armed probe's five transient returns are what it counts. The wait costs no
+      wall clock: the advisory it follows cannot fire before the fifth attempt has already been counted.
       The settlement stage sits after stage A so no later replacement resets what it measures, and before the
       approval and signal walks, whose loops publish terminals onto the same two lanes.
       Quarantine is proven on the FAILED lane: nothing else in this tier publishes `agent.failed.*`, so latching it
@@ -622,7 +634,15 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       lanes as the only place the terminal acts.
       The quarantine stage also asserts `/readyz` = 200 while `/health` is 503: the agentic compose overrides the
       container healthcheck to `/readyz` (`docker/compose/agentic.yml:91-103`), so the container stays up. That is
-      not incidental — a 503 there would replace the proof with a container restart loop.
+      not incidental — a 503 there would replace the proof with a container restart loop. Both halves of that
+      sentence are now assertions rather than one assertion and one description (review M3): the stage takes the
+      status code from `getHealthBody` and requires exactly 503, and requires the milestone sub-status message to
+      contain `delivery ownership lost`. `waitForMilestoneHealth` only requires `healthy=false`, which ANY unhealthy
+      cause satisfies, and `milestoneHealth` accepts 200 or 503 so it can be polled across the transition — so
+      without those two the stage could pass on an unrelated outage.
+      The admits-nothing check carries a positive control (review M2): `NumPending` must GROW across the blocked
+      publish while `Delivered` does not move. An unchanged `Delivered` alone also describes a message that never
+      arrived, so a broken publish would have read as a working latch.
       Mutation evidence (both at `97703c65`, both `cp` + md5 + `[applied]` + restore + re-checksum;
       `test/e2e/harness/milestoneprobe/milestoneprobe.go` md5 `f1deebec4965f64c51795becfacacc47` before and after
       BOTH):

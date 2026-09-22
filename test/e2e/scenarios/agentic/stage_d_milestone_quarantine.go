@@ -3,6 +3,8 @@ package agentic
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -11,6 +13,13 @@ import (
 	"github.com/c360studio/semstreams/test/e2e/harness/milestoneprobe"
 	"github.com/c360studio/semstreams/test/e2e/scenarios"
 )
+
+// milestoneQuarantineCause is the substring the latched /health verdict must
+// carry. MilestoneService.Health composes it as "milestone delivery ownership
+// lost; milestones are unacknowledged: <err>" (service/milestone_service.go:166),
+// and it is the phrase every other delivery owner in the tree latches with, so
+// an operator greps one string across all of them.
+const milestoneQuarantineCause = "delivery ownership lost"
 
 // verifyMilestoneQuarantineAcrossReplacement proves the fail-closed half: a
 // panicking handler quarantines its delivery — no Ack, Nak or Term — the
@@ -52,7 +61,7 @@ func (s *Scenario) verifyMilestoneQuarantineAcrossReplacement(
 	}
 	result.Details["milestone_quarantine_health_message"] = status.Message
 
-	quarantined, err := s.assertQuarantinedLaneKeptAuthority(ctx, failedConsumer, baseline)
+	quarantined, err := s.assertQuarantinedLaneKeptAuthority(ctx, failedConsumer, baseline, status)
 	if err != nil {
 		return err
 	}
@@ -66,9 +75,18 @@ func (s *Scenario) verifyMilestoneQuarantineAcrossReplacement(
 }
 
 // assertQuarantinedLaneKeptAuthority checks the #759 fail-closed shape: the
-// delivery is neither acknowledged nor terminated, so JetStream still owns it.
+// delivery is neither acknowledged nor terminated, so JetStream still owns it,
+// and the operator-visible verdict names why.
+//
+// The returned ConsumerInfo is the baseline the admits-nothing check reads its
+// NumPending against: it is taken here, before anything else publishes, so a
+// later message that the latched lane never hands over still shows up as a
+// pending message that arrived.
 func (s *Scenario) assertQuarantinedLaneKeptAuthority(
-	ctx context.Context, consumer jetstream.Consumer, baseline *jetstream.ConsumerInfo,
+	ctx context.Context,
+	consumer jetstream.Consumer,
+	baseline *jetstream.ConsumerInfo,
+	status milestoneHealthStatus,
 ) (*jetstream.ConsumerInfo, error) {
 	quarantined, err := consumer.Info(ctx)
 	if err != nil {
@@ -79,10 +97,28 @@ func (s *Scenario) assertQuarantinedLaneKeptAuthority(
 			"quarantined milestone settled or lost authority: ack floor=%d (baseline %d) pending=%d",
 			quarantined.AckFloor.Consumer, baseline.AckFloor.Consumer, quarantined.NumAckPending)
 	}
+	// waitForMilestoneHealth only requires healthy=false, which any unhealthy
+	// cause would satisfy. The cause is what an operator acts on, so it is
+	// asserted rather than merely recorded.
+	if !strings.Contains(status.Message, milestoneQuarantineCause) {
+		return nil, fmt.Errorf("latched milestone health message = %q, want it to name %q",
+			status.Message, milestoneQuarantineCause)
+	}
+	// The code a probe or an operator's curl sees. milestoneHealth deliberately
+	// accepts 200 OR 503 so it can be polled across the transition; the settled
+	// code is pinned here, once the verdict has been observed.
+	_, code, err := s.getHealthBody(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read /health under a latched milestone lane: %w", err)
+	}
+	if code != http.StatusServiceUnavailable {
+		return nil, fmt.Errorf("/health = %d under a latched milestone lane, want %d",
+			code, http.StatusServiceUnavailable)
+	}
 	// /readyz is deliberately untouched by a latched lane: the agentic compose
 	// overrides the container healthcheck to /readyz, so a 503 there would stop
 	// the container and replace the proof with a restart loop.
-	code, err := s.probeReadiness(ctx)
+	code, err = s.probeReadiness(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("read /readyz under a latched milestone lane: %w", err)
 	}
@@ -119,9 +155,12 @@ func (s *Scenario) assertOtherMilestoneLaneStillConsumes(ctx context.Context, re
 }
 
 // assertQuarantinedLaneAdmitsNothing publishes a second failed-lane terminal
-// and requires the latched lane not to deliver it. The consumer's own delivery
-// count is the evidence: the handler never runs, so no probe record would exist
-// either way, and only the server can say whether anything was handed over.
+// and requires the latched lane not to deliver it. The consumer's own counters
+// are the evidence: the handler never runs, so no probe record would exist
+// either way, and only the server can say whether anything was handed over. It
+// takes two of them — a pending count that GREW and a delivery count that did
+// NOT — so the assertion reads "a message arrived and was not handed over"
+// rather than "nothing happened", which a failed publish would also satisfy.
 func (s *Scenario) assertQuarantinedLaneAdmitsNothing(
 	ctx context.Context, consumer jetstream.Consumer, quarantined *jetstream.ConsumerInfo,
 ) error {
@@ -138,6 +177,15 @@ func (s *Scenario) assertQuarantinedLaneAdmitsNothing(
 	postLatch, err := consumer.Info(ctx)
 	if err != nil {
 		return fmt.Errorf("read post-latch milestone consumer: %w", err)
+	}
+	// The positive control on the wait: an unchanged Delivered count also
+	// describes a message that never arrived, which would make a broken publish
+	// read as a working latch. NumPending is the server saying the message IS
+	// there for this consumer and has not been handed over.
+	if postLatch.NumPending <= quarantined.NumPending {
+		return fmt.Errorf(
+			"the post-latch failed-lane terminal never reached the consumer: pending %d -> %d",
+			quarantined.NumPending, postLatch.NumPending)
 	}
 	if postLatch.Delivered.Consumer != quarantined.Delivered.Consumer {
 		return fmt.Errorf("the latched failed lane kept delivering: %d -> %d",

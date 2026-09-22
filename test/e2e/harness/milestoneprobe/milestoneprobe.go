@@ -134,7 +134,6 @@ func subjectToken(sourceMessageID string) string {
 type Attempt struct {
 	SourceMessageID string    `json:"source_message_id"`
 	LoopID          string    `json:"loop_id"`
-	Category        string    `json:"category"`
 	Behavior        string    `json:"behavior"`
 	ProcessInstance string    `json:"process_instance"`
 	ProcessID       int       `json:"process_id"`
@@ -302,7 +301,6 @@ func (h *handler) recordAttempt(
 	attempt := Attempt{
 		SourceMessageID: ev.SourceMessageID,
 		LoopID:          ev.LoopID,
-		Category:        ev.Category,
 		Behavior:        behavior,
 		ProcessInstance: h.processInstance,
 		ProcessID:       os.Getpid(),

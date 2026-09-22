@@ -92,7 +92,6 @@ func TestAttemptValidatesExactTerminalCorrelation(t *testing.T) {
 	attempt := Attempt{
 		SourceMessageID: "msg-1",
 		LoopID:          "loop-1",
-		Category:        "loop_completed",
 		Behavior:        BehaviorExitBeforeAck,
 		ProcessInstance: "process-a",
 		ProcessID:       42,

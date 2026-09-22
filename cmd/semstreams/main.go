@@ -603,10 +603,10 @@ type runtimeManager interface {
 // no-op until it is published here, and service.Service's own RegisterMetrics
 // is called by nothing (service/storage_observability.go records why). The two
 // composition roots are hand-copied (#1301), so keeping the whole wiring in one
-// per-root function is what makes the copy checkable. The copies differ by
-// exactly one line, marked below: the E2E milestone probe hook, which is a
-// compile-time no-op here and absent from the other root because the agentic
-// tier boots this one.
+// per-root function is what makes the copy checkable. The copies differ by one
+// call (an eight-line block: five comment lines and one guarded call), marked
+// below: the E2E milestone probe hook, which is a compile-time no-op here and
+// absent from the other root because the agentic tier boots this one.
 func registerMilestoneService(
 	manager *service.Manager,
 	svcDeps *service.Dependencies,

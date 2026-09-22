@@ -47,8 +47,8 @@ const (
 // stream every later milestone stage reads.
 //
 // It is armed HERE, near the top of the tier, and asserted in
-// verify-streaming-metrics, because exhaustion costs four redeliveries at the
-// lane's 30s retry delay — about two minutes that would otherwise be spent
+// verify-milestone-exhaustion, because exhaustion costs four redeliveries at
+// the lane's 30s retry delay — about two minutes that would otherwise be spent
 // waiting rather than testing. It is an action stage: it verifies nothing.
 //
 // It must also finish before any stage replaces the process. The exhaustion
@@ -76,9 +76,13 @@ func (s *Scenario) armMilestoneExhaustion(ctx context.Context, result *scenarios
 	return nil
 }
 
-// verifyMilestoneExhaustion is the assertion half of the armed exhaustion. It
-// runs inside verify-streaming-metrics, which is the last stage before anything
-// replaces the process.
+// verifyMilestoneExhaustion is the assertion half of the armed exhaustion, and
+// the verify-milestone-exhaustion stage.
+//
+// Its position is load-bearing in one direction: it must run before any stage
+// replaces the process. Both counters it reads are process-local Prometheus
+// counters fed by durable advisories and deliveries, so a replacement between
+// the event and this read would lose the only occurrence there will be.
 func (s *Scenario) verifyMilestoneExhaustion(ctx context.Context, result *scenarios.Result) error {
 	sourceMessageID, ok := result.Details[milestoneExhaustionIdentityKey].(string)
 	if !ok || sourceMessageID == "" {
@@ -89,6 +93,19 @@ func (s *Scenario) verifyMilestoneExhaustion(ctx context.Context, result *scenar
 		map[string]string{"consumer": milestoneCompleteConsumerName},
 		baseline+1, milestoneExhaustionBudget); err != nil {
 		return fmt.Errorf("milestone lane exhaustion was not counted: %w", err)
+	}
+	// The same five attempts read through the operator's own signal. The
+	// decisions counter increments only for a delivery that did NOT acknowledge
+	// (observeDecision returns early on an Ack —
+	// agentic/agentrun/milestone_settlement.go:218-219), so an ordinary
+	// milestone contributes nothing to this series and the armed probe's five
+	// transient returns are what it counts. The advisory above cannot fire
+	// before the fifth attempt, so this wait costs no wall clock; it is the
+	// first e2e observation of the lane/decision/reason signal at all.
+	if err := s.waitMetricWithLabels(ctx, "semstreams_agentrun_milestone_decisions_total",
+		map[string]string{"lane": "complete", "decision": "retry", "reason": "handler_transient"},
+		milestoneLaneMaxDeliver, milestoneExhaustionBudget); err != nil {
+		return fmt.Errorf("the milestone decisions counter did not record the lane's transient retries: %w", err)
 	}
 	stream, err := s.ensureMilestoneProbeStream(ctx)
 	if err != nil {

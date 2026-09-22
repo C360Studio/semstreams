@@ -797,10 +797,11 @@ type runtimeManager interface {
 // no-op until it is published here, and service.Service's own RegisterMetrics
 // is called by nothing (service/storage_observability.go records why). The two
 // composition roots are hand-copied (#1301), so keeping the whole wiring in one
-// per-root function is what makes the copy checkable. The copies differ by
-// exactly one line: cmd/semstreams additionally calls registerE2EMilestoneProbe,
-// because the agentic tier's image is built from THAT root, so the #1155
-// stage-D proof cannot be registered here.
+// per-root function is what makes the copy checkable. The copies differ by one
+// call (an eight-line block: five comment lines and one guarded call):
+// cmd/semstreams additionally calls registerE2EMilestoneProbe, because the
+// agentic tier's image is built from THAT root, so the #1155 stage-D proof
+// cannot be registered here.
 func registerMilestoneService(
 	manager *service.Manager,
 	svcDeps *service.Dependencies,
