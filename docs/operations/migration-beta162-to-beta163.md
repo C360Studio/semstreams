@@ -1252,10 +1252,12 @@ around `handleEvent`. Four SemDev comments also name the helper: three size `max
 `ConsumeDeliveryWithHeartbeat`'s, with the same meaning, and the result additionally reports `OwnerStopRequired()`.
 No other sister repository calls it.
 
-### Two agent-run changes `api-compat` cannot see
+### Three agent-run changes `api-compat` cannot see
 
-Both sit behind unchanged signatures, so the Tier 1 report shows nothing for them. Both are in `agentic/agentrun`,
-and a product that registers a `MilestoneHandler` or calls `ResolveRun` should read them.
+None of the three shows up in the Tier 1 report: the first two sit behind unchanged signatures, the third behind a
+method set `apidiff` already saw. The first two are in `agentic/agentrun` and a product that registers a
+`MilestoneHandler` or calls `ResolveRun` should read them; the third is in `service` and changes what `/health`
+returns to every probe you have pointed at it.
 
 1. **`ResolveRun`'s errors now carry the `errs` Invalid class.** Entity-ID grammar failures, a parent that is not a
    loop entity, the hop bound, and a non-string predicate value are wrapped with `errs.WrapInvalid` at their origin;
@@ -1270,6 +1272,33 @@ and a product that registers a `MilestoneHandler` or calls `ResolveRun` should r
    treated a non-nil return as "the transport broke" will now also see handler and resolution failures. Every
    attempt of one delivery presents the same `LoopTerminalEvent.SourceMessageID`, which is the key a handler makes
    its own effect idempotent on — the framework does not verify that obligation and never will.
+
+3. **`/health` now returns 503 once a milestone delivery lane latches.** `(*MilestoneService).Health()` is a new
+   override of a method the type previously inherited from `BaseService`. Overriding a promoted method does not
+   change the type's exported method set, so `task api:compat:report` prints nothing for it: on this branch the
+   `github.com/c360studio/semstreams/service` section lists only the `FlowService` removals and two signature
+   re-spellings, and never names `MilestoneService`.
+
+   What changes is process-wide. `handleSystemHealth` collects `Health()` from every registered service and
+   aggregates them, and `service/service_manager.go:1757` turns one unhealthy sub-status into a whole-process 503
+   on `/health`. The lane's fatal cause is latched, so a `/health` that goes 503 on a milestone latch stays 503
+   until the process restarts. `/readyz` is unaffected — `handleReadiness` (`service/service_manager.go:1778`)
+   reads the startup snapshot and never consults service health.
+
+   **Who gates on `/health` as a binary, measured.** The shipped image declares a `HEALTHCHECK` against it in both
+   stages — `docker/Dockerfile:104-105` (`AS production`) and `docker/Dockerfile:155-156` (`AS e2e`), both
+   `wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1` at
+   `--interval=30s --retries=3`, so a container flips to `unhealthy` about 3x30s after a milestone latch. The
+   published adopter examples gate the same way with their own intervals:
+   `semdocs/examples/production/docker-compose.yml:71` (`interval: 10s`, `retries: 5`) and
+   `semdocs/examples/quickstart/docker-compose.yml:55` (`interval: 10s`, `retries: 3`). Whatever reads that bit —
+   a `depends_on: service_healthy`, an orchestrator restart policy, a load-balancer pool — now acts on a latched
+   milestone lane rather than on process liveness.
+
+   This repository's own agentic stack already overrides the healthcheck to `/readyz`
+   (`docker/compose/agentic.yml:91-103`, the URL at `:99`) and is unaffected. If your probe means "is the process
+   up", point it at `/readyz` or `/healthz`. If it means "is this deployment doing its job", leave it on `/health`:
+   a lane whose milestones go unacknowledged is the case this change exists to make visible.
 
 ## A RequestID's suffix is no longer a UUID (#1328, owner ruling Q4 on #1330)
 

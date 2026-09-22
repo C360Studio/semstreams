@@ -484,14 +484,28 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       cancels the work context the same way, and additionally reports `OwnerStopRequired()`. No other sister
       references the helper. SemDev's working tree carries pre-existing modifications under `.agents/` and
       `.claude/` that are NOT this session's; nothing was written there.
-      The two contract changes `api-compat.sh` cannot see (design § 7) are their own subsection of the note, since
-      the Tier 1 report shows nothing for either: (1) `ResolveRun`'s errors now carry the `errs` Invalid class with
-      chains preserved, so `errors.Is` still matches and `errs.Classify` places them deterministically instead of
-      by substring — which is what lets a poison identity Terminate on first sight; (2)
-      `MilestoneSubscriber.HandleEvent` returns nil exactly when the attempt would be acknowledged, where it
+      THREE contract changes `api-compat.sh` cannot see, not the two design § 7 named, are their own subsection of
+      the note, since the Tier 1 report shows nothing for any of them: (1) `ResolveRun`'s errors now carry the
+      `errs` Invalid class with chains preserved, so `errors.Is` still matches and `errs.Classify` places them
+      deterministically instead of by substring — which is what lets a poison identity Terminate on first sight;
+      (2) `MilestoneSubscriber.HandleEvent` returns nil exactly when the attempt would be acknowledged, where it
       previously returned an error only for decode and NATS failures and logged handler errors without propagating
       them. A caller reading nil as "processed" is unaffected; a caller reading non-nil as "the transport broke"
-      now also sees handler and resolution failures.
+      now also sees handler and resolution failures. (3) `(*MilestoneService).Health()` is a NEW OVERRIDE of a
+      method promoted from `BaseService`, which does not change the type's exported method set, so
+      `API_COMPAT_MODE=report task api:compat:report` (run on this branch, base `v1.0.0-beta.162`, 62 compared /
+      15 incompatible, exit 0) prints nothing for it — its `service` section lists only the `FlowService` removals
+      and two signature re-spellings and never names `MilestoneService`. The behaviour is process-wide:
+      `service/service_manager.go:1757` turns one unhealthy sub-status into a whole-process 503 on `/health`, so a
+      latched milestone lane makes `/health` return 503 until restart, while `/readyz` is unaffected
+      (`handleReadiness`, `service/service_manager.go:1778`, reads the startup snapshot). Measured consumers that
+      gate on `/health` as a binary: the shipped image's `HEALTHCHECK` in both stages, `docker/Dockerfile:104-105`
+      (`AS production`, stage opens at `:65`) and `docker/Dockerfile:155-156` (`AS e2e`, stage opens at `:117`),
+      both `wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1` at
+      `--interval=30s --retries=3` so a container flips to `unhealthy` after 3x30s; and the published adopter
+      examples `semdocs/examples/production/docker-compose.yml:71` (`interval: 10s`, `retries: 5`) and
+      `semdocs/examples/quickstart/docker-compose.yml:55` (`interval: 10s`, `retries: 3`), both read-only.
+      `docker/compose/agentic.yml:91-103` already overrides to `/readyz` (URL at `:99`) and is unaffected.
       `migration-restart-safe-nats-client.md` now says the helper is removed and that its guard is INVERTED rather
       than retired, and names `DelayedDeliveryRetry(30 * time.Second)` as where the old fixed delay went.
       `docs/concepts/33-semantic-settlement.md`'s "AgentRun fanout needs its own design" open question is replaced
