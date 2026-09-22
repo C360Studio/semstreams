@@ -28,7 +28,10 @@ output the new record implies; at loop birth the record SHALL be written before 
 approval lane and the approval-timeout sweeper keep their present write-then-publish order until #1362. A redelivered
 input whose `request_id` is older than `published_request_id` SHALL be acknowledged without effect; one whose
 `request_id` is newer SHALL be retried until the record names it; one whose `request_id` is not a request of the loop
-SHALL be quarantined. A process with no memory of the loop SHALL, before classifying any redelivered input other than
+SHALL be quarantined. A redelivered tool result whose `request_id` equals `published_request_id` and whose execution
+is already named in `pending_tool_results` is a replay of applied work and SHALL be acknowledged without effect, with
+the batch's unfinished executions left untouched; ordering cannot decide that case, because the batch is the current
+request's. A process with no memory of the loop SHALL, before classifying any redelivered input other than
 a task, read the newest retained request for the loop and, when it is newer than `published_request_id`, adopt it
 into the record by identity first. Recovery SHALL never compare rendered messages or result content to decide whether
 an input was applied.
@@ -95,12 +98,31 @@ deadline from then on.
   apply nothing either way and re-deriving which side of the settlement this result fell on would change nothing
   this delivery can do
 
-#### Scenario: A task redelivered at iteration zero republishes the first request
+#### Scenario: A task redelivered at iteration zero adopts or publishes the first request
 
 - **GIVEN** a loop record at `iterations = 0` with `published_request_id = R1` and an empty `pending_tool_results`
 - **WHEN** the task message is redelivered to a process with no memory of the loop
-- **THEN** `R1` is rebuilt from the task, published with `Nats-Msg-Id = R1`, the in-process conversation is rebuilt,
-  and the task is acknowledged
+- **THEN** `R1` is rebuilt from the task and handed to the publish path, which adopts an `R1` the stream already
+  retains and otherwise publishes it with `Nats-Msg-Id = R1`, the in-process conversation is rebuilt, and the task
+  is acknowledged
+
+#### Scenario: A task redelivered over a first batch that already applied something is acknowledged without effect
+
+- **GIVEN** a loop record at `iterations = 0` with `published_request_id = R1` and a non-empty `pending_tool_results`
+- **WHEN** the task message is redelivered to a process with no memory of the loop
+- **THEN** it is acknowledged without effect: no request is published, no record is written, and no loop is seated in
+  memory — `iterations` alone is not evidence of an untouched birth, because a loop advances its iteration only when a
+  whole tool batch is in, and seating a fresh loop would leave the batch's remaining results with no execution to
+  route to
+
+#### Scenario: A tool result the record already applied is replayed
+
+- **GIVEN** a loop record naming `published_request_id = R` whose `pending_tool_results` already contains execution
+  `e`, and a process with no memory of the loop
+- **WHEN** a tool result carrying `request_id = R` and execution `e` is redelivered — its acknowledgement was lost
+- **THEN** it is acknowledged without effect before any rebuild is attempted, the inapplicable-result metric and an
+  audit log line name the loop and the execution, the record is not written, and the unfinished siblings of `e`'s
+  batch are untouched and still recoverable by their own arrival
 
 ## MODIFIED Requirements
 

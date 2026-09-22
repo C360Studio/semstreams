@@ -9,7 +9,8 @@
 ### Requirement: The task submission counter is at-least-once under redelivery
 `tasks_submitted_total` SHALL be treated as an at-least-once count of task submissions: a redelivered
 `UserMessage` whose task already committed SHALL increment the counter again, and SHALL remain otherwise
-idempotent — it reuses the retained LoopID and publishes no second task.
+idempotent — it reuses the retained LoopID and mints no second LOGICAL task: the retained task is republished
+under the same `TaskID`, so the stream can hold more than one physical copy of one task identity.
 
 The counter is a submission-attempt signal, not a distinct-task count. Nothing in dispatch or in the loop
 suppresses the second increment, and no arm is added to make it exactly-once.
@@ -19,4 +20,5 @@ suppresses the second increment, and no arm is added to make it exactly-once.
 - **GIVEN** a `UserMessage` whose task committed with a retained LoopID
 - **WHEN** the source redelivers that `UserMessage`
 - **THEN** `tasks_submitted_total` increments a second time
-- **AND** the retained LoopID is reused, no second task is published, and no loop is created
+- **AND** the retained LoopID is reused, the republished task carries the same `TaskID` rather than a second task
+  identity, and no loop is created

@@ -17,7 +17,7 @@
 
 | Was | Decision |
 |---|---|
-| Q1 birth order | Birth keeps Put → publish. A task redelivered while the record is at iteration 0 republishes R1 unconditionally (no evidence read). On `main` birth publishes first (`C:1496`) and writes after (`C:1499`, error ignored), so task 2.1 reorders it — P1, § 3.1. |
+| Q1 birth order | Birth keeps Put → publish. A task redelivered while the record is at iteration 0 with an empty applied set rebuilds R1 and hands it to the publish path, which adopts an R1 the stream already retains and otherwise publishes it ([amended 2026-09-22](https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5776942078)). On `main` birth publishes first (`C:1496`) and writes after (`C:1499`, error ignored), so task 2.1 reorders it — P1, § 3.1. |
 | Q2 carrier form | The non-terminal carrier becomes `Update(observedRevision)`; in L4 scope. |
 | Q3 applied set | `PendingToolResults` keys ARE the applied execution IDs; no separate field. |
 | Q4 ID grammar (lands in #1328) | `<loopID>:req:<iteration>:<retry>`; the truncation-retry ordinal is derived from `PublishedRequestID`; recovery ADOPTS an already-published next request by identity (`readExact` = `GetLastMsgForSubject` on `agent.request.<loopID>`; the reader is built here, task 2.3) instead of republishing. Applied to the cold read in § 3.6 (coordinator, 2026-09-18, on the design review's BLOCKING). |
@@ -162,8 +162,9 @@ Two more callers ride the same write: the deferred-continuation marker (`C:1425`
    the written record by construction — then classify the redelivered input against the UPDATED record. Older or
    unparseable → Quarantine (conflict). The rebuild source (`restoreLoopFromRequest`, built here — § 6) is always that
    newest retained request, never "the request for R", so it has no `PublishedRequestID` mismatch to refuse. Task lane:
-   no step 0 — Q1 rules iteration 0 (no evidence read; a duplicate R1 is answered by the MsgId window or L2's retained
-   response reuse) and an advanced record already answers "applied" (§ 5.1.4).
+   no step 0 — Q1 rules iteration 0 (no step-0 adopt; a duplicate R1 is answered by the publish path's own identity
+   check — Q1 as amended 2026-09-22, https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5776942078 — or by L2's retained
+   response reuse) and a record that has advanced or already applied something answers "applied" (§ 5.1.4).
 
 ## 4. Invariants (spec home: the ADDED requirement in `specs/agentic-loop/spec.md`)
 
@@ -213,11 +214,15 @@ ACK; W4 = next request PubAck'd, crash before the update. "Classify" = terminal 
 1. Warm map hit → `HandleTask` dedup (`H:843-855`, `HasActiveLoopForTask`), unchanged.
 2. Cold: read entity by `task.LoopID`. Absent → normal birth (Put → publish, R1 with MsgId). Present: verify
    task/role/model (`SR:391-397`); terminal → ACK (`SR:398-400`).
-3. Present, `Iterations == 0`, `PendingToolResults` empty: rebuild R1 from the TaskMessage (`SR:414-421`), publish it
-   unconditionally with `Nats-Msg-Id = R1` (Q1, Q5), rebuild ContextManager (`SR:424`), ACK.
-4. Present and advanced: applied → ACK.
-Windows: W1 redo. W2 (record written, R1 unpublished) → step 3 publishes. W3 → step 3 republishes; the window dedups
-or L2 reuse answers. No W4 at birth (Put precedes publish by ruling).
+3. Present, `Iterations == 0`, `PendingToolResults` empty: rebuild R1 from the TaskMessage (`SR:414-421`) and hand it
+   to the publish path, which adopts an R1 the stream already retains and otherwise publishes it with
+   `Nats-Msg-Id = R1` (Q1 as amended 2026-09-22 — https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5776942078 — Q5),
+   rebuild ContextManager (`SR:424`), ACK.
+4. Present and advanced, OR present at `Iterations == 0` with a non-empty `PendingToolResults`: applied → ACK. The
+   whole first batch runs at iteration 0, so the ordinal alone does not separate an untouched birth from a progressed
+   one; the batch is rebuilt by its next tool result, on the lane that owns it.
+Windows: W1 redo. W2 (record written, R1 unpublished) → step 3 publishes. W3 (R1 already retained) → step 3 adopts it
+and publishes nothing. No W4 at birth (Put precedes publish by ruling).
 Counter semantics (docket OQ4, owner ruling 2026-09-22): a redelivered task submission counts again on
 `tasks_submitted_total` (agentic-dispatch `metrics.go:112`; `recordTaskSubmitted` `:321`, increment `:322`). The counter is **at-least-once under
 redelivery**; that is documented in the migration note and pinned by a test, not armed away — no Quarantine arm, no new
