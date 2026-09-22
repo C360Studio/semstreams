@@ -146,7 +146,15 @@ func (c *Component) classifyRedeliveredTask(
 		}
 		return taskBirth, record, nil
 	}
-	if record.entity.Iterations == 0 {
+	// Both halves of the delta's GIVEN, because the ordinal alone is not the
+	// untouched birth it looks like: a loop advances its iteration only when a
+	// whole tool batch is in, so the entire FIRST batch runs at zero while its
+	// applied set fills. Republishing over that seats a fresh loop with no
+	// batch on top of a record that carries one, and the sibling result then
+	// has no execution to route to. A record that already applied something is
+	// a loop that moved past its task; its batch is rebuilt by the next tool
+	// result, on the lane that owns it.
+	if record.entity.Iterations == 0 && len(record.entity.PendingToolResults) == 0 {
 		return taskRepublishFirstRequest, record, nil
 	}
 	return taskApplied, record, nil

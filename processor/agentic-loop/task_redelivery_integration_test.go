@@ -97,3 +97,121 @@ func TestTaskRedeliveredToAReplacementLeavesOneFirstRequest(t *testing.T) {
 	require.True(t, held, "the holder took no revision, so its next compare-and-swap cannot run")
 	require.Equal(t, birthRecord.revision, revision)
 }
+
+// TestATaskRedeliveredOverAProgressedFirstBatchIsNotRepublished is the other
+// half of the task lane's cold fork, and the one `iterations` alone cannot
+// answer (owner Codex round on PR #1361, finding 6).
+//
+// A loop advances its iteration only when a whole tool batch is in, so the
+// entire FIRST batch sits at `iterations = 0` while its applied set fills. A
+// classification that reads the ordinal alone therefore cannot tell an
+// untouched birth from a first batch half applied, and answered both with
+// "republish R1" — seating a fresh loop with no batch over a record that
+// carries one. The sibling result then had no execution to route to, the
+// rebuild was refused over the loop the republish had just seated, and an
+// executor's completed work retried to MaxDeliver.
+//
+// The durable fact that separates them is the applied set, which the delta
+// scenario already names. The state below is built by running it: a real
+// birth, a real two-call batch, and a real apply of the first result, so the
+// record under test is the one production writes rather than a fixture's idea
+// of it.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestATaskRedeliveredOverAProgressedFirstBatchIsNotRepublished(t *testing.T) {
+	client := newLoopNATS(t)
+
+	const loopID = "9d3f7c21-4a58-4b6e-8f01-2c3d4e5f6a70"
+	task := agentic.TaskMessage{
+		TaskID: "task-progressed-first-batch",
+		LoopID: loopID,
+		Role:   "general",
+		Model:  "test-model",
+		Prompt: "the prompt whose first batch is already half applied",
+	}
+	firstRequest := looprequest.ID{LoopID: loopID, Iteration: 1, Retry: 0}.String()
+	secondRequest := looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String()
+	requestSubject := "agent.request." + loopID
+
+	predecessor, handler := startLoopProcess(t, client, DefaultConfig())
+	_, birth := deliverTask(t, predecessor, task)
+	require.Equal(t, natsclient.DeliveryDecisionAck, birth.Decision())
+	require.Equal(t, uint64(1), messagesOn(t, client, requestSubject))
+
+	// Two calls, so the first result completes nothing: the loop stays at
+	// iteration zero with one execution applied, which is exactly the state
+	// the ordinal cannot tell from a birth that has done nothing at all.
+	batch := agentic.AgentResponse{
+		RequestID:    firstRequest,
+		Status:       agentic.StatusToolCall,
+		FinishReason: "tool_calls",
+		Message: agentic.ChatMessage{
+			Role: "assistant",
+			ToolCalls: []agentic.ToolCall{
+				{ID: "call-progressed-a", Name: "progressed_tool"},
+				{ID: "call-progressed-b", Name: "progressed_tool"},
+			},
+		},
+	}
+	retainModelResponse(t, client, batch)
+	dispatch, err := handler.HandleModelResponse(t.Context(), loopID, batch)
+	require.NoError(t, err)
+	require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch, publishThenWrite))
+	callA, executeSubject := dispatchedToolCall(t, dispatch)
+
+	resultA := agentic.ToolResult{
+		CallID: callA.ID, Name: callA.Name, Content: "the first tool answered", LoopID: loopID,
+		RequestID: callA.RequestID, ExecutionID: callA.ExecutionID, CallOrdinal: callA.CallOrdinal,
+	}
+	_, appliedA := deliverToolResult(t, predecessor, resultA)
+	require.Equal(t, natsclient.DeliveryDecisionAck, appliedA.Decision())
+
+	progressed := loopRecordOf(t, predecessor, loopID)
+	require.Equal(t, 0, progressed.entity.Iterations,
+		"the whole first batch runs at iteration zero; if this ever changes the finding changes with it")
+	require.Contains(t, progressed.entity.PendingToolResults, resultA.ExecutionID,
+		"the residue under test is a record at iteration zero that already carries an applied result")
+	require.Equal(t, firstRequest, progressed.entity.PublishedRequestID)
+	require.Equal(t, uint64(2), messagesOn(t, client, executeSubject),
+		"the applied result released its sibling, so the batch is half run")
+
+	// The replacement has no memory of the loop, so the original task meets
+	// the cold fork rather than HandleTask's warm dedup.
+	replacement, replacementHandler := startLoopProcess(t, client, DefaultConfig())
+
+	_, redelivered := deliverTask(t, replacement, task)
+
+	require.Equal(t, natsclient.DeliveryDecisionAck, redelivered.Decision(),
+		"a task its loop has already moved past is settled, not re-run")
+	_, seated := replacementHandler.loopManager.GetLoop(loopID)
+	require.Error(t, seated,
+		"the redelivery seated a fresh loop over a record that carries a running batch; the "+
+			"sibling result now has no execution to route to and the rebuild is refused over the seat")
+	require.Equal(t, uint64(1), messagesOn(t, client, requestSubject),
+		"a loop whose batch is running must not have its first request published a second time")
+
+	after := loopRecordOf(t, replacement, loopID)
+	require.Equal(t, progressed.revision, after.revision,
+		"an acknowledged-without-effect task writes nothing")
+	require.Contains(t, after.entity.PendingToolResults, resultA.ExecutionID,
+		"the applied set the batch is still running against must survive the redelivery")
+
+	// The sibling is the proof the batch is still runnable: it arrives cold,
+	// rebuilds the loop from the record and the two retained messages,
+	// completes the batch and mints the loop's next request.
+	siblingResult := agentic.ToolResult{
+		CallID: "call-progressed-b", Name: "progressed_tool", Content: "the sibling answered",
+		LoopID: loopID, RequestID: firstRequest,
+		ExecutionID: deriveToolExecutionID(firstRequest, "call-progressed-b", 2), CallOrdinal: 2,
+	}
+	_, deliveredSibling := deliverToolResult(t, replacement, siblingResult)
+
+	require.Equal(t, natsclient.DeliveryDecisionAck, deliveredSibling.Decision(),
+		"the sibling belongs to the batch the record names; a replacement must be able to apply it")
+	completed := loopRecordOf(t, replacement, loopID)
+	require.Equal(t, 1, completed.entity.Iterations,
+		"the completed batch advances the loop it belongs to")
+	require.Equal(t, secondRequest, completed.entity.PublishedRequestID)
+	require.Equal(t, uint64(2), messagesOn(t, client, requestSubject),
+		"the loop's second request is what a recovered batch produces")
+}
