@@ -272,6 +272,24 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       `metricsRegistry.Unregister("agentrun", "milestone_decisions_total")` answers true.
 - [ ] 5.3 Mutation evidence: delete the `RegisterMetrics` call in one root; run the e2e `verify-streaming-metrics`
       stage; record the failure; restore and checksum.
+      The in-tree half is DONE; the `verify-streaming-metrics` stage runs with the § 9 proof, which owns the e2e tier.
+      All three mutants used a `cp` backup, printed `[applied]` between mutating and testing, and re-checked the md5
+      after restoring.
+      H, `MilestoneService.Health()` reduced to `return s.BaseService.Health()` so the override never consults the
+      latch (`service/milestone_service.go` md5 `d4e05bdffc4d975c22dd58d5b1be22bc` before and after) —
+      `TestMilestoneServiceHealthReportsDeliveryFatal/a_latched_lane_reports_unhealthy_with_its_cause` went red on
+      both assertions: `/health` answered 200 instead of 503, and the message read "Service operating normally"
+      instead of the cause. A first attempt at this mutant (nil the read, keep the branch) did not compile and was
+      DISCARDED, not recorded: a mutant that does not build tests nothing.
+      I, `RegisterMetrics` returning nil without calling `RegisterCounterVec`, the primitive
+      (`agentic/agentrun/agentrun.go` md5 `88a3e888bfa6eaaf65f052b536888d08` before and after) —
+      `TestMilestoneDecisionsCounterIsRegisteredOnce` went red with the gathered series map EMPTY where it expects
+      one `decision=retry lane=complete reason=handler_transient` series, and BOTH roots'
+      `TestRegisterMilestoneServicePublishesTheDecisionsCounter` went red too.
+      J, the wiring rather than the primitive: the `subscriber.RegisterMetrics(metricsRegistry)` call deleted from
+      `registerMilestoneService` in the e2e root ONLY (`cmd/e2e-semstreams/main.go` md5
+      `57e421afc9b34a7e2cdf83eaf4aed130` before and after) — `cmd/e2e-semstreams`'s wiring test went red and
+      `cmd/semstreams`'s stayed green, so the guard is per-root and a half-copied root cannot hide behind the other.
 
 ## 6. Consumer policy (O2; design § 2.8)
 
