@@ -6,7 +6,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -51,6 +53,39 @@ func milestoneSubStatus(t *testing.T, manager *Manager) (health.Status, int) {
 	return health.Status{}, recorder.Code
 }
 
+// awaitFirstHealthObservation blocks until the service's health monitor has
+// published its first observation, on the same seam readiness waits on.
+//
+// The contract this respects: a running BaseService is unhealthy until its
+// monitor's FIRST check completes (service/base.go leaves healthy at its zero
+// value and performHealthCheck stores the first true on the monitor goroutine),
+// and /readyz deliberately reports NOT READY until then
+// (TestReadinessWaitsForInitialServiceHealthObservation pins exactly that). A
+// /health read taken before that edge sees "unhealthy (failed checks: 0)" —
+// correct, and not what either subtest below is about. So the test waits for
+// the same edge instead of racing it, and it must be registered BEFORE Start
+// because the edge fires from inside it.
+func awaitFirstHealthObservation(t *testing.T, svc *MilestoneService) func() {
+	t.Helper()
+	observed := make(chan struct{})
+	var once sync.Once
+	svc.OnHealthChange(func(healthy bool) {
+		if healthy {
+			once.Do(func() { close(observed) })
+		}
+	})
+	return func() {
+		t.Helper()
+		select {
+		case <-observed:
+		case <-time.After(5 * time.Second):
+			// Loud, not a pass: a monitor that never observes health is the
+			// defect this wait exists to make visible.
+			t.Fatal("the milestone service published no initial health observation")
+		}
+	}
+}
+
 // TestMilestoneServiceHealthReportsDeliveryFatal is the § 2.7 health row: the
 // latched cause reaches an operator through the real /health aggregate, not
 // just through a method nobody calls.
@@ -64,8 +99,10 @@ func TestMilestoneServiceHealthReportsDeliveryFatal(t *testing.T) {
 	t.Run("owned lanes stay healthy", func(t *testing.T) {
 		starter := &latchedStarter{}
 		svc := NewMilestoneService(starter, nil, agentrun.StartConfig{StreamName: agentrun.AgentStreamName}, nil)
+		awaitHealthObserved := awaitFirstHealthObservation(t, svc)
 		require.NoError(t, svc.Start(context.Background()))
 		t.Cleanup(func() { _ = svc.Stop(context.Background()) })
+		awaitHealthObserved()
 
 		manager := NewServiceManager(NewServiceRegistry())
 		require.NoError(t, manager.RegisterInstance("milestone", svc))
@@ -79,8 +116,10 @@ func TestMilestoneServiceHealthReportsDeliveryFatal(t *testing.T) {
 		cause := errors.New("delivery metadata unavailable")
 		starter := &latchedStarter{}
 		svc := NewMilestoneService(starter, nil, agentrun.StartConfig{StreamName: agentrun.AgentStreamName}, nil)
+		awaitHealthObserved := awaitFirstHealthObservation(t, svc)
 		require.NoError(t, svc.Start(context.Background()))
 		t.Cleanup(func() { _ = svc.Stop(context.Background()) })
+		awaitHealthObserved()
 
 		manager := NewServiceManager(NewServiceRegistry())
 		require.NoError(t, manager.RegisterInstance("milestone", svc))

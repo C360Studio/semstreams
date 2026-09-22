@@ -247,24 +247,37 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       `TestMilestoneServiceHealthReadsTheProductionSubscriber` pins the assertion against a real
       `agentrun.NewMilestoneSubscriber`, because the `!ok` arm falls back to the base status: a renamed or resigned
       `DeliveryFatal` would otherwise turn the whole signal off silently and no other test would notice.
-      **Open defect, NOT fixed here (2026-09-22).** `TestMilestoneServiceHealthReportsDeliveryFatal` is flaky on
-      main-bound CI — run 35719826852, Test job, `a latched lane reports unhealthy with its cause` red at
-      `service/milestone_health_test.go:88` ("precondition: healthy before the latch"). Reproduced on this branch at
-      `6b002817`: green at `-count=1`, red inside `go test -count=60 -run 'TestMilestoneServiceHealthReportsDeliveryFatal$'
-      ./service/`, both subtests, message `Service is unhealthy (failed checks: 0)`. Cause is substrate, not this
-      test: `BaseService.healthy` is an `atomic.Bool` left at its zero value by `Start` (`service/base.go:266`), and
-      the first `true` is stored by `performHealthCheck` on the monitor GOROUTINE (`service/base.go:446`), so any
-      `Health()` read that races the goroutine reports unhealthy with zero failed checks.
-      The proposed one-line remedy — store `healthy = true` beside `s.status.Store(StatusRunning)` — was MEASURED and
-      is UNAVAILABLE: it breaks the readiness contract. `/readyz` reads `service.IsHealthy()`
-      (`service/service_manager.go:1838`), so "ready" would be published before any health check had run. Applied as a
-      mutant (`service/base.go` md5 `caba89a154827cfca534d9b924c4709d` before and after), `go test ./service/` went
-      from green to three failures: `TestReadinessWaitsForInitialServiceHealthObservation`
-      (`startup_observability_test.go:305`, `/readyz` answered 200 where the test requires 503 while the first check
-      is still blocked), `TestReadinessIncludesHealthyNonLifecycleDiscoverables` (`:223`, "component-manager did not
-      publish its initial healthy observation" — the fix removes the false→true edge the callback fires on), and
-      `TestStartAllBindsSharedAndMetricsBeforeBlockedService` (`:570`, same edge). The remedy is therefore a
-      readiness-semantics decision, not a one-liner, and is held for the coordinator/owner.
+      **Flake found and fixed (2026-09-22).** `TestMilestoneServiceHealthReportsDeliveryFatal` was red on CI run
+      35719826852 (Test job), `a latched lane reports unhealthy with its cause` at
+      `service/milestone_health_test.go:88` ("precondition: healthy before the latch"). Reproduced on this branch:
+      green at `-count=1`, red inside `go test -count=60 -run 'TestMilestoneServiceHealthReportsDeliveryFatal$'
+      ./service/`, both subtests, message `Service is unhealthy (failed checks: 0)`.
+      The cause is a deliberate substrate contract, not a substrate defect: a running `BaseService` is unhealthy
+      until its monitor's FIRST check completes — `Start` leaves `healthy` at its atomic zero value
+      (`service/base.go:266`) and `performHealthCheck` stores the first `true` on the monitor goroutine
+      (`service/base.go:446`) — and `/readyz` deliberately reports NOT READY until then
+      (`service/service_manager.go:1838` reads `IsHealthy()`). The test was reading `/health` before that edge.
+      The "store `healthy = true` in `Start`" remedy was MEASURED and REFUTED before the test fix was chosen, which
+      is the evidence for why the fix belongs in the test: applied as a mutant (`service/base.go` md5
+      `caba89a154827cfca534d9b924c4709d` before and after), `go test ./service/` went from green to three failures —
+      `TestReadinessWaitsForInitialServiceHealthObservation` (`startup_observability_test.go:305`, `/readyz` answered
+      200 where it requires 503 while the first check is blocked), `TestReadinessIncludesHealthyNonLifecycleDiscoverables`
+      (`:223`) and `TestStartAllBindsSharedAndMetricsBeforeBlockedService` (`:570`), the last two because the store
+      removes the false->true edge their callbacks fire on. Owner/coordinator ruling 2026-09-22: the substrate
+      contract stays; `service/base.go` is untouched.
+      The fix is `awaitFirstHealthObservation` in `service/milestone_health_test.go`: both subtests register
+      `svc.OnHealthChange` BEFORE `Start` — the same exported seam
+      `TestReadinessWaitsForInitialServiceHealthObservation` uses — and block on that edge, with a bounded failsafe
+      that calls `t.Fatal` so a monitor that never observes health is loud rather than a pass. No `Eventually`, no
+      `time.Sleep`, no poll.
+      Evidence: `go test -race -count=200 -run 'TestMilestoneServiceHealthReportsDeliveryFatal$' ./service/` ->
+      `ok github.com/c360studio/semstreams/service 1.844s`, exit 0.
+      Mutation evidence K: both `awaitHealthObserved()` calls deleted, the `OnHealthChange` registration left in
+      place (`service/milestone_health_test.go` md5 `42455974ad3bb1fac89228f142d581a0` before and after) — the same
+      `-race -count=200` command exited 1, with 10 of 200 iterations failing `a latched lane reports unhealthy with
+      its cause` ("precondition: healthy before the latch") and 7 failing `owned lanes stay healthy` ("an owned lane
+      must not report a delivery fatal: Service is unhealthy (failed checks: 0)"). The wait is what holds the test,
+      not the machine's mood.
 - [x] 5.2 Add `MilestoneSubscriber.RegisterMetrics(r metric.MetricsRegistrar) error` registering
       `semstreams_agentrun_milestone_decisions_total{lane,decision,reason}` via `RegisterCounterVec`
       (`metric/registry.go:216`); the vec is built in `NewMilestoneSubscriber` (`agentrun.go:521`). Wire one call after
