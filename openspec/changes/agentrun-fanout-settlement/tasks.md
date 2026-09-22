@@ -604,10 +604,12 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       among its Test Tiers sections), so the knob is documented where it is read and where it is set; § 11 then gave
       that page the list of all twelve tiers it was missing, pointing at the spec table for each tier's gate.
       Guards, after § 11 consolidated the tier facts: `TestE2ETierTableMatchesComposeAndDockerfile` pins the tag,
-      the target, the binary and BOTH directions of the env gate — `agentic.yml` sets the variable and every other
-      compose file does not, since an arming leak into another tier would look like a flake (the probe crashes and
-      quarantines on purpose); `TestProductionRootReachesNoE2EHarnessWithoutABuildTag` pins that only a tagged file
-      in `cmd/semstreams` may import the harness at all; `TestMilestoneProbeIsInertWithoutTag` calls the no-op with
+      the target, the binary and BOTH directions of the env gate — `agentic.yml`'s built service sets the variable
+      and no other compose FILE so much as mentions it, the second half swept over raw text rather than over parsed
+      services, because an overlay with no `build:` block is invisible to the YAML walk and compose still merges its
+      `environment:` into the container; an arming leak into another tier would look like a flake, since the probe
+      crashes and quarantines on purpose. `TestProductionRootReachesNoE2EHarnessWithoutABuildTag` pins that only a
+      tagged file in `cmd/semstreams` may import the harness at all, and that every tagged file imports one; `TestMilestoneProbeIsInertWithoutTag` calls the no-op with
       nils; `TestRegisterIsInertWithoutTheEnvironmentVariable` and `TestRegisterRefusesIncompleteWiringWhenArmed`
       pin the runtime gate's both directions. The first two replaced the four per-hook pin tests, two of which —
       `TestDefaultMilestoneProbeFileDoesNotImportHarness` and `TestAgenticComposeArmsTheMilestoneProbe` — this task
@@ -947,3 +949,18 @@ text claims.
       removed and `git status --porcelain` showed only the intended test-file edit afterwards. GREEN before this fix
       (the reviewer's finding), now RED: `2 payload-registry specs carry the tier table, so which one governs is
       ambiguous: …/aaa-other-change/…, …/agentrun-fanout-settlement/…`.
+- [x] 11.6 HIGH-2 — "every other compose file does not set the variable" was false, and the guard could not see it.
+      `composeServices` keeps only services carrying `build.dockerfile: docker/Dockerfile`, so the `semstreams-ml`
+      overlays in `docker/compose/tiered.8b.yml:88` and `tiered.frontier.yml:57` — `environment:` and no `build:` —
+      were invisible, while `docker compose -f tiered.yml -f tiered.8b.yml` MERGES `environment:` into the container
+      that actually runs. `assertNoComposeFileArmsAnUndeclaredHook`
+      (`test/contract/e2e_tier_binary_contract_test.go:456-492`) restores what the deleted
+      `TestAgenticComposeArmsTheMilestoneProbe` did: a raw-text sweep of every `docker/compose/*.yml` where the set of
+      `SEMSTREAMS_E2E_*` names a file mentions must equal the set its table rows declare — comments included, since a
+      mention is how a leak gets copied into the next tier. The spec scenario gains the matching `AND` bullet.
+      Mutant N2, the reviewer's: `- SEMSTREAMS_E2E_MILESTONE_PROBE=1` added under `tiered.8b.yml`'s `semstreams-ml`.
+      md5 `947a1edca55c1eb6f330f3ea4c27aece` → `15cbed9dfcda81169a534e722e326972` →
+      `947a1edca55c1eb6f330f3ea4c27aece`. GREEN before this fix, now RED:
+      `tiered.8b.yml mentions [SEMSTREAMS_E2E_MILESTONE_PROBE], the tier table declares [] for that file`.
+      NIT-5 rides along: the `imagesByTarget` write is guarded so a shared image tag is reported once rather than
+      once per later row.

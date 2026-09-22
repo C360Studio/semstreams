@@ -38,6 +38,10 @@ const tierTableHeader = "| Tier (`task e2e:<tier>`) | Compose service | Target â
 
 var codeSpan = regexp.MustCompile("`([^`]+)`")
 
+// e2eEnvName matches any E2E hook-arming variable wherever it appears in a
+// compose file â€” value, key or comment.
+var e2eEnvName = regexp.MustCompile(`SEMSTREAMS_E2E_[A-Z0-9_]+`)
+
 // tierRow is one row of the spec table: one tier, one compose service, one
 // Dockerfile target, one binary, and the gates that keep the tier's hooks out
 // of every other tier and out of every shipped artifact.
@@ -371,6 +375,47 @@ func (d dockerfileTargets) resolve(t *testing.T, target string) dockerBuild {
 	return dockerBuild{}
 }
 
+// assertNoComposeFileArmsAnUndeclaredHook sweeps the RAW text of every compose
+// file, not the services the YAML walk keeps. Two compose spellings escape that
+// walk and still reach the container: an overlay service with no `build:` block
+// (tiered.8b.yml / tiered.frontier.yml redefine `semstreams-ml`), because
+// compose MERGES `environment:` across every `-f` file, and a mention in a
+// comment, which is how an arming leak gets copied into the next tier. Every
+// file mentioning an arming variable must be a file whose table rows declare
+// exactly that set.
+func assertNoComposeFileArmsAnUndeclaredHook(t *testing.T, rows []tierRow) {
+	t.Helper()
+
+	declared := map[string]map[string]bool{}
+	for _, row := range rows {
+		if declared[row.composeFile] == nil {
+			declared[row.composeFile] = map[string]bool{}
+		}
+		for _, gate := range row.envGates {
+			declared[row.composeFile][gate] = true
+		}
+	}
+
+	paths, err := filepath.Glob(filepath.Join(tierRepoRoot, "docker/compose/*.yml"))
+	if err != nil {
+		t.Fatalf("glob compose files: %v", err)
+	}
+	for _, path := range paths {
+		body, readErr := os.ReadFile(path) //nolint:gosec // repository-relative compose path
+		if readErr != nil {
+			t.Fatalf("read %s: %v", path, readErr)
+		}
+		name := filepath.Base(path)
+		found := map[string]bool{}
+		for _, match := range e2eEnvName.FindAllString(string(body), -1) {
+			found[match] = true
+		}
+		if got, want := strings.Join(sortedKeys(found), ","), strings.Join(sortedKeys(declared[name]), ","); got != want {
+			t.Errorf("%s mentions [%s], the tier table declares [%s] for that file", name, got, want)
+		}
+	}
+}
+
 // TestE2ETierTableMatchesComposeAndDockerfile is the one pin for the whole
 // tier -> target -> binary -> gate fact. Every row of the spec table is checked
 // against the compose service that boots the tier and the Dockerfile stage that
@@ -423,8 +468,13 @@ func TestE2ETierTableMatchesComposeAndDockerfile(t *testing.T) {
 			t.Errorf("%s: compose service has no per-target image tag", row)
 			continue
 		}
-		if previous, seen := imagesByTarget[service.Image]; seen && previous != row.target {
-			t.Errorf("image tag %q is shared by targets %q and %q", service.Image, previous, row.target)
+		if previous, seen := imagesByTarget[service.Image]; seen {
+			// Keep the first target that claimed the tag, so a shared tag is
+			// reported once rather than once per later row.
+			if previous != row.target {
+				t.Errorf("image tag %q is shared by targets %q and %q", service.Image, previous, row.target)
+			}
+			continue
 		}
 		imagesByTarget[service.Image] = row.target
 	}
@@ -434,6 +484,8 @@ func TestE2ETierTableMatchesComposeAndDockerfile(t *testing.T) {
 			t.Errorf("compose service %s builds docker/Dockerfile but no tier table row names it", key)
 		}
 	}
+
+	assertNoComposeFileArmsAnUndeclaredHook(t, rows)
 }
 
 // TestProductionRootReachesNoE2EHarnessWithoutABuildTag is the compile-time

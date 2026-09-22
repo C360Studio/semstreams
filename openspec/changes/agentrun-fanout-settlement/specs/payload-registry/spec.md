@@ -78,6 +78,8 @@ observation, and a contract test re-reads it against those artifacts:
 - **THEN** the named service's `build.target` is the row's target, that target's image runs a binary built from the row's Go
   package with exactly the row's `-tags=`, and the service sets exactly the row's `SEMSTREAMS_E2E_*` variables
 - **AND** every compose service built from `docker/Dockerfile` appears in the table and every row names a service that exists
+- **AND** no compose file mentions a `SEMSTREAMS_E2E_*` variable its rows do not declare — including in an overlay service
+  with no `build:` block, since compose merges `environment:` across `-f` files, and including in a comment
 - **AND** no two Dockerfile targets share an `image:` tag, so a build for one tier cannot leak into another
 - **AND** the test that verifies this is `TestE2ETierTableMatchesComposeAndDockerfile`
 
