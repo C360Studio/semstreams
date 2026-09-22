@@ -1776,10 +1776,24 @@ This **supersedes** the beta.25 note's "Restart safety" paragraph
 at restart would auto-reject within one sweep interval of the new process booting. It would not: that paragraph
 described fields the sweeper reads, not a process that reads the bucket.
 
-**Operational consequence, and what to do about it.** The wait a parked loop is nominally under (`approval_timeout`,
-at most 12h) is not a settlement guarantee across a replacement, and was never one. If your product needs a parked
-loop settled after a replacement, answer it — publish an `ApprovalResponse`, or cancel the loop with a `cancel`
-signal. Do not wait for a timeout that has no process behind it.
+**Operational consequence, and what beta.163 can and cannot do about it.** The wait a parked loop is nominally
+under (`approval_timeout`, at most 12h) is not a settlement guarantee across a replacement, and was never one.
+Neither is answering it from outside: **an `ApprovalResponse` and a `cancel` signal both reach only a loop that is
+present in process memory.** For a parked loop no process holds:
+
+- an `ApprovalResponse` finds no pending approval to resolve, is dropped as stale, and is **acknowledged without
+  changing `AGENT_LOOPS`** — so it looks answered and is not;
+- a `cancel` signal against a live record finds no loop to cancel and is **retried until `MaxDeliver` stops
+  redelivering it**, after which it is recorded in the framework's MaxDeliver ledger.
+
+**A cold parked loop is not settleable in beta.163.** The cold approval branch — the one that rebuilds a parked loop
+from its record so an `ApprovalResponse` can land — is [#1362](https://github.com/C360Studio/semstreams/issues/1362),
+not this tag. Until it lands, the only thing that revives such a loop is the narrow exception below: a redelivered
+input naming the request the record names. That is not a recovery path to rely on.
+
+So the action for beta.163 is to keep the window small rather than to answer into it: size the `agentic-loop`
+component's `timeout` above the replacement window you operate under (see the loop-deadline note above), and expect
+loops parked at an approval across a replacement to sit until #1362.
 
 One narrow exception, recorded rather than built on: a replacement that rebuilds a loop for some *other* reason — a
 redelivered model response or tool result naming the request the record names — seats that loop's pending approval
