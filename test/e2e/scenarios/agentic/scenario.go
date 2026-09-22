@@ -237,6 +237,12 @@ func (s *Scenario) stages() []agenticStage {
 		// capture-baseline records metric baselines and downgrades its own
 		// failure to a warning, so it proves nothing and is not counted.
 		{name: "capture-baseline", fn: s.captureBaseline},
+		// arm-milestone-exhaustion publishes the terminal whose five transient
+		// attempts exhaust the complete lane's MaxDeliver. It is armed here and
+		// asserted in verify-streaming-metrics because exhaustion costs four
+		// redeliveries at the lane's 30s retry delay; arming it late would turn
+		// two minutes of the tier into waiting. It verifies nothing itself.
+		{name: "arm-milestone-exhaustion", fn: s.armMilestoneExhaustion},
 		// inject-task publishes the primary task; it performs no verification
 		// of its own, so it is an action stage rather than a counted one.
 		{name: "inject-task", fn: s.injectTask},
@@ -249,6 +255,7 @@ func (s *Scenario) stages() []agenticStage {
 		{name: "verify-streaming-metrics", fn: s.verifyStreamingMetrics, asserts: true},
 		{name: "verify-tool-call-governance", fn: s.verifyToolCallGovernance, asserts: true},
 		{name: "verify-stage-a-process-replacement", fn: s.verifyStageAProcessReplacement, asserts: true},
+		{name: "verify-milestone-settlement", fn: s.verifyMilestoneSettlement, asserts: true},
 		{name: "walk-approval-path", fn: s.walkApprovalPath, asserts: true},
 		{name: "refuse-non-canonical-approval", fn: s.refuseNonCanonicalApproval, asserts: true},
 		{name: "walk-signal-path", fn: s.walkSignalPath, asserts: true},
@@ -1080,7 +1087,13 @@ func (s *Scenario) verifyStreamingMetrics(ctx context.Context, result *scenarios
 	}
 
 	result.Details["streaming_verified"] = true
-	return nil
+
+	// The armed milestone exhaustion is asserted here, and here rather than in
+	// the milestone stage below, because this is the last stage before anything
+	// replaces the process: the exhaustion counter is process-local, and the
+	// advisory that feeds it is acknowledged durably, so a replacement between
+	// the advisory and the read would lose the only occurrence there will be.
+	return s.verifyMilestoneExhaustion(ctx, result)
 }
 
 // verifyToolCallGovernance checks that the ADR-039 subject-mode

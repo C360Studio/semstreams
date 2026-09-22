@@ -29,6 +29,7 @@ func TestStagesAreExactlyThisOrderedList(t *testing.T) {
 	}{
 		{"verify-components", true},
 		{"capture-baseline", false},
+		{"arm-milestone-exhaustion", false},
 		{"inject-task", false},
 		{"wait-for-completion", true},
 		{"verify-terminal-response", true},
@@ -39,6 +40,7 @@ func TestStagesAreExactlyThisOrderedList(t *testing.T) {
 		{"verify-streaming-metrics", true},
 		{"verify-tool-call-governance", true},
 		{"verify-stage-a-process-replacement", true},
+		{"verify-milestone-settlement", true},
 		{"walk-approval-path", true},
 		{"refuse-non-canonical-approval", true},
 		{"walk-signal-path", true},
