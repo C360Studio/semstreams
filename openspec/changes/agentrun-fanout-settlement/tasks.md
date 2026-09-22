@@ -560,14 +560,81 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
 
 ## 9. Proof (#1155 stage D; O4, O5)
 
-- [ ] 9.1 Add the env-gated test-only `MilestoneHandler` in `cmd/e2e-semstreams` (registered only when the variable is
+- [x] 9.1 Add the env-gated test-only `MilestoneHandler` in `cmd/e2e-semstreams` (registered only when the variable is
       set) that commits a durable effect keyed on `SourceMessageID` and, on its first attempt, exits the process
       before Ack.
-- [ ] 9.2 E2E scenario, both lanes: the replacement redelivers; the handler observes the same `SourceMessageID`;
+      **DEVIATION from O4's root, with the measurement.** The handler is in `test/e2e/harness/milestoneprobe` and its
+      registration hook is in `cmd/semstreams`, NOT `cmd/e2e-semstreams`. The agentic tier does not boot that root:
+      `docker/compose/agentic.yml:66-68` builds Dockerfile target `e2e-process-barrier`, which is
+      `./cmd/semstreams` with `-tags=e2e_process_barrier` (`docker/Dockerfile:182-193`). `cmd/e2e-semstreams` is the
+      `e2e` target, used by `ops.yml`, `lifecycle.yml`, `research-graph.yml` and `tiered.yml`. A probe registered
+      there could never run under `task e2e:agentic`, which is the tier task 10.2 requires, so O4's placement and
+      10.2's gate cannot both be satisfied as written. Everything O4 ruled ON is kept and strengthened: the handler
+      is test-only, env-gated, and no production binary contains it.
+      Gating is two independent mechanisms. (1) Build tag: `cmd/semstreams/milestone_probe_e2e.go`
+      (`//go:build e2e_process_barrier`) is the only file that imports the harness;
+      `cmd/semstreams/milestone_probe_disabled.go` (`//go:build !e2e_process_barrier`) is a no-op with no harness
+      import, so the ordinary dependency graph never reaches it. (2) Environment: `milestoneprobe.Register` returns
+      nil unless `SEMSTREAMS_E2E_MILESTONE_PROBE` is set, named in the handler's package doc comment, in
+      `Register`'s doc comment, and in the compose block that sets it. `docs/contributing/02-e2e-tests.md` was NOT
+      edited: it has no tier env-knob list to add to (no `AGENTIC_LLM_URL`, no `AGENTIC_COMPOSE_FILE`, and the
+      agentic tier is not among its Test Tiers sections), so the knob is documented where it is read and where it is
+      set instead of in a list that does not exist.
+      Guards: `TestDefaultMilestoneProbeFileDoesNotImportHarness` pins both build constraints and that only the
+      tagged file imports the harness; `TestMilestoneProbeIsInertWithoutTag` calls the no-op with nils;
+      `TestAgenticComposeArmsTheMilestoneProbe` requires `agentic.yml` to set the variable AND every other compose
+      file in `docker/compose/` not to — an arming leak into another tier would look like a flake, since the probe
+      crashes and quarantines on purpose. `TestRegisterIsInertWithoutTheEnvironmentVariable` and
+      `TestRegisterRefusesIncompleteWiringWhenArmed` pin the runtime gate's both directions.
+      The registration is one line inside `registerMilestoneService` in `cmd/semstreams/main.go`. That is now the one
+      deliberate divergence between the two hand-copied bodies (#1301) and BOTH roots' doc comments say so, replacing
+      the previous "identical registerMilestoneService body" claim, which would otherwise have become false silently.
+      Shape: the probe demuxes on `LoopTerminalEvent.Role` (already on both terminal payloads, so no framework change
+      makes it addressable) and returns nil before any IO for every role it does not own — pinned without NATS by
+      `TestOrdinaryTerminalIsANoOpBeforeAnyIO`, which holds a nil client so any read or publish would panic.
+      Its durable effect is published with `Nats-Msg-Id` = `SourceMessageID`, and its attempts are appended with a
+      per-invocation ID; the first-attempt decision reads the DURABLE attempt count, never process memory, because a
+      replacement process starts with empty memory and a memory-based decision would crash on every restart forever.
+- [x] 9.2 E2E scenario, both lanes: the replacement redelivers; the handler observes the same `SourceMessageID`;
       effect count 1; ack-pending 0. Panic on first attempt: no Ack/Nak/Term; `/health` reports `milestone`
       unhealthy; the failed lane is drained while the other consumes; the replacement succeeds. Five transient
       returns: `semstreams_nats_max_delivery_exhaustions_total{consumer="agentrun-milestone-complete"}` = 1. Record
       every stage's pass/fail verbatim in the PR body.
+      Two new stages in the agentic tier, both pinned in order by `TestStagesAreExactlyThisOrderedList`:
+      `arm-milestone-exhaustion` (action stage, `asserts:false`, third in the list) and
+      `verify-milestone-settlement` (`asserts:true`, straight after `verify-stage-a-process-replacement`).
+      `assertions_run` moves 15 -> 16 and the tier's derived denominator check moves with it.
+      Placement is forced by two facts, both recorded at the stages: exhaustion costs four redeliveries at the lane's
+      30s retry delay, so it is armed near the top and asserted ~2 minutes later in `verify-streaming-metrics`; and
+      it must be asserted BEFORE anything replaces the process, because the exhaustion counter is process-local
+      while the advisory feeding it is acknowledged durably — a replacement in between loses the only occurrence.
+      The settlement stage sits after stage A so no later replacement resets what it measures, and before the
+      approval and signal walks, whose loops publish terminals onto the same two lanes.
+      Quarantine is proven on the FAILED lane: nothing else in this tier publishes `agent.failed.*`, so latching it
+      cannot perturb the walks that follow, while `agent.complete.*` stays available as the live evidence that one
+      lane's fatal leaves the other consuming. The spec scenario "a fatal on one lane leaves the other consuming"
+      states its WHEN on the complete lane; the requirement itself is lane-symmetric ("a fatal on one lane drains
+      only that lane's exact handle") and the tier proves the failed-lane instance of it.
+      Each injected terminal persists a route-LESS `AGENT_LOOPS` record first. Without one, agentic-dispatch answers
+      an absent record with an unbounded transient retry (`processor/agentic-dispatch/terminal_settlement.go`), so
+      the terminal would stay pending on the dispatch lane forever and break the settled-consumer assertions stage A
+      already makes. With it, dispatch settles as `route_less_settled` and publishes nothing, leaving the milestone
+      lanes as the only place the terminal acts.
+      The quarantine stage also asserts `/readyz` = 200 while `/health` is 503: the agentic compose overrides the
+      container healthcheck to `/readyz` (`docker/compose/agentic.yml:91-103`), so the container stays up. That is
+      not incidental — a 503 there would replace the proof with a container restart loop.
+      Mutation evidence (both at `97703c65`, both `cp` + md5 + `[applied]` + restore + re-checksum;
+      `test/e2e/harness/milestoneprobe/milestoneprobe.go` md5 `f1deebec4965f64c51795becfacacc47` before and after
+      BOTH):
+      L, non-idempotent effect — `commitEffect` publishing via `PublishToStream` (no `Nats-Msg-Id`) instead of
+      `PublishToStreamWithMsgID(..., ev.SourceMessageID)`. `task e2e:agentic` exit 201:
+      `verify-milestone-settlement failed: complete lane replacement: durable effects for
+      eac98d82-7d95-4f6f-a0b8-a2a9e08ca618 = 2, want exactly 1 across every attempt`, `assertions_run=10`.
+      M, Ack before the effect commits — `return nil` inserted at the top of the `BehaviorExitBeforeAck` arm, so the
+      handler acknowledges without committing or ending the process. `task e2e:agentic` exit 201:
+      `verify-milestone-settlement failed: complete lane replacement: the SemStreams process still answered within
+      30s; the probe did not end it`, `assertions_run=10` — the handler is never re-invoked, which is the shape the
+      stage exists to refuse.
 
 ## 10. Gates
 
