@@ -13,6 +13,7 @@ import (
 	"github.com/c360studio/semstreams/internal/looptoken"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest"
 	"github.com/google/uuid"
 )
 
@@ -97,14 +98,17 @@ type LoopManager struct {
 	executionIDToOrdinal   map[string]uint32         // executionID -> model response order (for trajectory audit)
 	requestStartTimes      map[string]time.Time      // requestID -> start time (for duration measurement)
 	executionStartTimes    map[string]time.Time      // executionID -> start time (for duration measurement)
-	// truncationRetryAttempts counts consecutive within-iteration retries
-	// driven by length-truncation responses. Reset to 0 whenever the loop
-	// makes forward progress (StatusComplete or StatusToolCall response).
-	// Capped at 1 in the handler — second truncation in a row falls
-	// through to a hard fail with diagnostic so a structurally-too-small
-	// model doesn't burn iterations indefinitely. Runtime-only; a
-	// process restart mid-retry resets to 0, which is the desired
-	// behavior (the parent sees a generic loop failure and decides).
+	// truncationRetryAttempts counted consecutive within-iteration retries
+	// driven by length-truncation responses. #1330 moved that budget onto the
+	// loop's durable record — publishedRetryOrdinal reads it back out of
+	// PublishedRequestID — because this map was process-local and a
+	// replacement read zero, spending the self-heal a second time under a
+	// request name the first attempt had already published.
+	//
+	// No production path reads or writes it. It survives only because
+	// IncrementTruncationRetry and ResetTruncationRetry are exported methods
+	// on a Tier 1 package (ADR-106) and removing them is an incompatible
+	// change this slice is not authorised to make (#1330 L4a).
 	truncationRetryAttempts map[string]int
 	contextConfig           ContextConfig        // shared context config
 	modelRegistry           model.RegistryReader // model registry for context managers
@@ -458,11 +462,14 @@ func (m *LoopManager) SnapshotExpiredApprovals(now time.Time) []ApprovalTimeoutC
 	return out
 }
 
-// IncrementTruncationRetry bumps the within-loop truncation retry
-// counter and returns the new value. Caller branches on the return
-// to decide between "first retry — compact and try again" (==1) and
-// "already retried — fail loud" (>1). The counter is cleared by
-// ResetTruncationRetry whenever the loop makes forward progress.
+// IncrementTruncationRetry bumps the within-loop truncation retry counter and
+// returns the new value.
+//
+// Deprecated: the truncation budget is durable since #1330 and is read from
+// LoopEntity.PublishedRequestID by publishedRetryOrdinal. This method has no
+// production caller and its counter decides nothing; it remains only because
+// removing an exported method from a Tier 1 package (ADR-106) is an
+// incompatible change, which L4a is not authorised to make.
 func (m *LoopManager) IncrementTruncationRetry(loopID string) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -470,10 +477,11 @@ func (m *LoopManager) IncrementTruncationRetry(loopID string) int {
 	return m.truncationRetryAttempts[loopID]
 }
 
-// ResetTruncationRetry clears the within-loop truncation retry
-// counter. Called when the loop makes forward progress (a normal
-// StatusComplete or StatusToolCall response arrives) so a future
-// truncation can self-heal once.
+// ResetTruncationRetry clears the within-loop truncation retry counter.
+//
+// Deprecated: see IncrementTruncationRetry. Forward progress renews the
+// self-heal budget by minting a new iteration, whose retry ordinal is zero by
+// construction; nothing has to clear a counter for that to hold.
 func (m *LoopManager) ResetTruncationRetry(loopID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -889,6 +897,32 @@ func (m *LoopManager) TrackRequest(requestID, loopID string) {
 	if entity, exists := m.loops[loopID]; exists && entity.PendingContinuation {
 		entity.PendingContinuationRequestID = requestID
 	}
+}
+
+// SetPublishedRequest records the request this loop has minted as the one its
+// record will name (LoopEntity.PublishedRequestID, invariant I1 of #1330).
+//
+// It is called at each of the three mint sites, beside TrackRequest, and the
+// value only becomes durable when the carrier writes the record — which, on
+// the model-response and tool-result lanes, happens after the request's PubAck.
+// That ordering is what makes the durable field mean "an AgentRequest with this
+// identity is retained", rather than "a process intended to publish one".
+//
+// A loop this manager does not hold is refused rather than ignored: a request
+// this process cannot record is a request whose PubAck nothing will ever
+// classify, so the mint fails instead of publishing an unrecordable name.
+func (m *LoopManager) SetPublishedRequest(loopID, requestID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entity, exists := m.loops[loopID]
+	if !exists {
+		return errs.Wrap(
+			fmt.Errorf("loop %s: %w", loopID, ErrLoopNotFound),
+			"LoopManager", "SetPublishedRequest", "find loop")
+	}
+	entity.PublishedRequestID = requestID
+	return nil
 }
 
 // registerRequestRoute records only that this request belongs to this loop, so
@@ -1321,9 +1355,11 @@ func (m *LoopManager) SetMetadata(loopID string, metadata map[string]any) error 
 //     is :1:0; handleToolsComplete increments Iterations before it mints, so
 //     the request that follows a tool batch takes the next ordinal. A loop this
 //     manager does not know has not iterated, so its ordinal is 1.
-//   - retry is the within-iteration truncation-retry ordinal, read from the
-//     same process-local counter IncrementTruncationRetry advances and
-//     ResetTruncationRetry clears. A compaction retry of iteration N is :N:1.
+//   - retry is the within-iteration truncation-retry ordinal, read back out of
+//     the loop's own durable PublishedRequestID: a mint at the iteration that
+//     field already names is a retry of it and takes the next retry ordinal;
+//     any other mint is a new iteration at retry 0. A compaction retry of
+//     iteration N is :N:1.
 //
 // Both inputs are facts this manager already holds, so no caller computes them
 // and no caller can disagree with the state the loop is actually in. The
@@ -1332,19 +1368,51 @@ func (m *LoopManager) SetMetadata(loopID string, metadata map[string]any) error 
 // calling the provider a second time, and the Nats-Msg-Id stamped from this ID
 // lets the server reject the duplicate outright inside its window.
 //
-// Residual, declared: the retry ordinal is process-local. After a process
-// replacement mid-iteration the counter is zero, so a retry minted by the
-// replacement reads :N:0 rather than :N:1. Deriving it durably is L4's
-// (#1330, LoopEntity.PublishedRequestID).
+// The retry ordinal was process-local until #1330: after a process replacement
+// mid-iteration the counter read zero, so a retry minted by the replacement
+// took the name its predecessor had already published and the duplicate window
+// dropped it. Reading it from the durable record is what closes that.
 func (m *LoopManager) GenerateRequestID(loopID string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	iteration := 1
-	if entity, exists := m.loops[loopID]; exists {
-		iteration = entity.Iterations + 1
+	next := looprequest.ID{LoopID: loopID, Iteration: 1}
+	entity, exists := m.loops[loopID]
+	if !exists {
+		return next.String()
 	}
-	return fmt.Sprintf("%s:req:%d:%d", loopID, iteration, m.truncationRetryAttempts[loopID])
+	next.Iteration = entity.Iterations + 1
+	published, err := looprequest.Parse(entity.PublishedRequestID)
+	if err == nil && published.LoopID == loopID && published.Iteration == next.Iteration {
+		// Minting a second name for an iteration the record already names is
+		// the truncation retry, and only that.
+		next = looprequest.Next(published, true)
+	}
+	return next.String()
+}
+
+// publishedRetryOrdinal reports the within-iteration retry ordinal the loop's
+// durable record already names, and zero when it names none. It is the budget
+// the compaction self-heal spends: ordinal 0 means no retry of this iteration
+// has been published, so one is still available.
+//
+// An empty or unparseable field answers zero. That is the pre-#1330 answer for
+// a loop whose first request is still in flight, and it fails toward the
+// behaviour the loop had before the field existed — one self-heal attempt —
+// rather than toward refusing a recoverable truncation.
+func (m *LoopManager) publishedRetryOrdinal(loopID string) int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	entity, exists := m.loops[loopID]
+	if !exists {
+		return 0
+	}
+	published, err := looprequest.Parse(entity.PublishedRequestID)
+	if err != nil || published.LoopID != loopID || published.Iteration != entity.Iterations+1 {
+		return 0
+	}
+	return published.Retry
 }
 
 // GenerateToolCallID creates a structured tool call ID that embeds the loop ID.

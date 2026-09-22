@@ -37,8 +37,12 @@ func TestRequestIDIsDeterministicPerIteration(t *testing.T) {
 
 // spec: agentic-loop / A logical model request has one deterministic identity
 //
-// (b) of the #1328 scope amendment: a truncation retry of iteration N is :N:1,
-// and forward progress clears the ordinal back to 0.
+// (b) of the #1328 scope amendment: a truncation retry of iteration N is :N:1.
+// Since #1330 the ordinal is read back out of the loop's own durable
+// PublishedRequestID, so the mint is driven here through SetPublishedRequest —
+// the production seam — rather than through a process-local counter. Forward
+// progress needs no reset: the next iteration's first request is :N+1:0 by
+// construction.
 func TestRequestIDCarriesTheTruncationRetryOrdinal(t *testing.T) {
 	manager := NewLoopManager()
 	loopID, err := manager.CreateLoop("task-retry", "role", "model", 5)
@@ -46,15 +50,49 @@ func TestRequestIDCarriesTheTruncationRetryOrdinal(t *testing.T) {
 	require.NoError(t, manager.IncrementIteration(loopID))
 	require.NoError(t, manager.IncrementIteration(loopID))
 
-	require.Equal(t, loopID+":req:3:0", manager.GenerateRequestID(loopID))
+	first := manager.GenerateRequestID(loopID)
+	require.Equal(t, loopID+":req:3:0", first)
+	require.NoError(t, manager.SetPublishedRequest(loopID, first))
 
-	require.Equal(t, 1, manager.IncrementTruncationRetry(loopID))
-	require.Equal(t, loopID+":req:3:1", manager.GenerateRequestID(loopID),
+	retry := manager.GenerateRequestID(loopID)
+	require.Equal(t, loopID+":req:3:1", retry,
 		"the compaction retry is within-iteration recovery: same iteration, next retry ordinal")
+	require.NoError(t, manager.SetPublishedRequest(loopID, retry))
 
-	manager.ResetTruncationRetry(loopID)
-	require.Equal(t, loopID+":req:3:0", manager.GenerateRequestID(loopID),
-		"forward progress clears the retry ordinal")
+	require.NoError(t, manager.IncrementIteration(loopID))
+	require.Equal(t, loopID+":req:4:0", manager.GenerateRequestID(loopID),
+		"a new iteration starts the retry ordinal over without clearing anything")
+}
+
+// TestRetryOrdinalSurvivesARebuiltLoopManager is the restart half of the same
+// fact, and the one a process-local counter could never satisfy: a REPLACEMENT
+// manager that holds only the durable record mints the retry name its
+// predecessor would have minted. With the counter, the replacement read zero
+// and re-minted :3:1 -> :3:0, the name already published, which the duplicate
+// window then dropped.
+func TestRetryOrdinalSurvivesARebuiltLoopManager(t *testing.T) {
+	origin := NewLoopManager()
+	loopID, err := origin.CreateLoop("task-retry-restart", "role", "model", 5)
+	require.NoError(t, err)
+	require.NoError(t, origin.IncrementIteration(loopID))
+	require.NoError(t, origin.IncrementIteration(loopID))
+	require.NoError(t, origin.SetPublishedRequest(loopID, origin.GenerateRequestID(loopID)))
+	retry := origin.GenerateRequestID(loopID)
+	require.Equal(t, loopID+":req:3:1", retry)
+	require.NoError(t, origin.SetPublishedRequest(loopID, retry))
+
+	record, err := origin.GetLoop(loopID)
+	require.NoError(t, err)
+
+	replacement := NewLoopManager()
+	_, err = replacement.CreateLoopWithID(loopID, record.TaskID, record.Role, record.Model, record.MaxIterations)
+	require.NoError(t, err)
+	require.NoError(t, replacement.IncrementIteration(loopID))
+	require.NoError(t, replacement.IncrementIteration(loopID))
+	require.NoError(t, replacement.SetPublishedRequest(loopID, record.PublishedRequestID))
+
+	require.Equal(t, loopID+":req:3:2", replacement.GenerateRequestID(loopID),
+		"the replacement reads the published retry ordinal and mints the NEXT one")
 }
 
 // spec: agentic-loop / A logical model request has one deterministic identity

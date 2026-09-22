@@ -23,16 +23,39 @@
 
 ## 1. Field and invariant surface
 
-- [ ] 1.0 New `processor/agentic-loop/internal/looprequest`: `Parse(id) (loopID string, iteration, retry int, err)` over `<loopID>:req:<i>:<r>` (loopID may itself contain colons; parse from the right, require all four parts, reject a missing retry part), `Next(prev, retry bool) string` (retry → same iteration, retry+1; else iteration+1, retry 0), `Compare(a, b)` on `(iteration, retry)`. `Next` must reproduce `ST:1345-1347` (`iteration = entity.Iterations + 1`; `%s:req:%d:%d`), so birth mints `…:req:1:0` from `Iterations = 0`. `Parse` becomes the one reader of the grammar, replacing the two prefix-only readers on `main`: `ST:1360-1361` (`ExtractLoopIDFromRequest`) and `LP:50` (`loopIDFromStructuredID`). L2 (PR #1335) shipped no parser because no reader existed yet; this change is the reader. Rapid property: `Parse(format(x)) == x`; `Compare` is a total order consistent with `Next`.
-- [ ] 1.1 `agentic/state.go`: add `PublishedRequestID string \`json:"published_request_id,omitempty"\`` beside `AG:57`
+- [x] 1.0 New `processor/agentic-loop/internal/looprequest`: `Parse(id) (loopID string, iteration, retry int, err)` over `<loopID>:req:<i>:<r>` (loopID may itself contain colons; parse from the right, require all four parts, reject a missing retry part), `Next(prev, retry bool) string` (retry → same iteration, retry+1; else iteration+1, retry 0), `Compare(a, b)` on `(iteration, retry)`. `Next` must reproduce `ST:1345-1347` (`iteration = entity.Iterations + 1`; `%s:req:%d:%d`), so birth mints `…:req:1:0` from `Iterations = 0`. `Parse` becomes the one reader of the grammar, replacing the two prefix-only readers on `main`: `ST:1360-1361` (`ExtractLoopIDFromRequest`) and `LP:50` (`loopIDFromStructuredID`). L2 (PR #1335) shipped no parser because no reader existed yet; this change is the reader. Rapid property: `Parse(format(x)) == x`; `Compare` is a total order consistent with `Next`.
+      **Landed.** `looprequest.go` — `ID{LoopID,Iteration,Retry}` (the three parts travel together, so one named
+      value rather than three positional returns), `Parse` (right-hand read; canonical ordinals only — `007`, `+1`
+      and `iteration 0` are refused), `ID.String`, `Next(prev, retry)`, `Compare(a, b)`. `Parse` did NOT replace the
+      two prefix-only readers (`ST:1360`, `LP:50`): both are on the Tier 1 surface or its call graph and replacing
+      them is section 3's lane work, not a grammar change — recorded so the substitution is not lost.
+      Tests: `looprequest_test.go` (13 refusal cases + 6 accept cases — the half a round-trip property cannot see),
+      `looprequest_prop_test.go` `TestPropParseRoundTripsEveryMintedName` and
+      `TestPropCompareIsATotalOrderConsistentWithNext` (boundary-hugging generators: iteration at 1, retry at 0,
+      loop IDs that contain colons and that END in `:req`), `FuzzParseNeverPanicsAndRoundTrips` (15 seeds across
+      both grammar classes; 2,316,130 execs / 21s clean, `new interesting: 134`).
+- [x] 1.1 `agentic/state.go`: add `PublishedRequestID string \`json:"published_request_id,omitempty"\`` beside `AG:57`
       with the I1 doc comment; `Validate` (`AG:136`) unchanged. Test: `agentic/state_test.go` JSON round-trip;
       `TransitionTo` (`AG:171`) keeps it.
+      **Landed** at `agentic/state.go:58-71`; `Validate` untouched. Tests are in a NEW file,
+      `agentic/published_request_id_test.go`, not `state_test.go`: that file carries a "Builder must make these
+      tests pass without modification" banner. `TestPublishedRequestIDSurvivesTheDurableRoundTrip`,
+      `TestPublishedRequestIDIsOmittedWhenUnset` (both directions of additivity — no key when unset, empty when a
+      pre-field record decodes), `TestTransitionToKeepsTheOutstandingRequest`,
+      `TestValidateIgnoresTheOutstandingRequest`.
 - [ ] 1.2 `processor/agentic-loop/state.go`: `SetPublishedRequest(loopID, requestID)`; new `restoreLoopFromRequest`
       beside `attachContinuation` (`ST:298`) — no rebuild path exists on `main` — fed the record step 0 (2.5) already
       adopted plus the newest retained request; it rebuilds the ContextManager, the routing maps (`ST:79`
       `outstandingRequests`, `ST:887-888`) and the tool batch (`restoreToolBatch`, membership against the retained
       response only), so it has no `PublishedRequestID` mismatch to refuse. Test: `state_test.go` — set /
       restore-after-adoption / restore-equal.
+      **Half landed.** `SetPublishedRequest` is at `ST:914-924`, refusing a loop the manager does not hold rather
+      than ignoring it, and has three production callers (the mint sites of 2.4). `restoreLoopFromRequest` /
+      `restoreToolBatch` are sequenced to the checkpoint that wires their call sites: their only consumers are the
+      cold rebuilds of tasks 3.1 and 3.2 (design § 5.2 step 2, § 5.3 step 3), and the shape of the ContextManager
+      rebuild — which `RegionType` each retained `ChatMessage` returns to — is decided by those call sites. Building
+      it ahead of them is the "zero present consumers" shape the developer contract refuses. Recorded as a
+      sequencing choice inside this PR, not a scope change.
 
 ## 2. Carrier: order, CAS, identity adoption
 
@@ -65,11 +88,33 @@
       revision-returning entity read (`LP:75` discards `entry.Revision()` today). Adopt on exact `RequestID` match,
       publish on absent/current, quarantine anything else (design § 3.3). Test: unit through the evidence-reader seam —
       retained == next → no publish; == current → publish; absent → publish; other → Quarantine.
-- [ ] 2.4 `handlers.go`: set the field at the three minting sites (`H:1122` in `buildTaskRequest`, `H:2168` in
+- [x] 2.4 `handlers.go`: set the field at the three minting sites (`H:1122` in `buildTaskRequest`, `H:2168` in
       `emitRetryRequest`, `H:2927` in `publishIterationRequest`); mint via `looprequest.Next(PublishedRequestID)`
       (task 1.0); retry ordinal from the parsed field; delete `IncrementTruncationRetry` (`ST:466`) and
       `ResetTruncationRetry` (`ST:477`) with their callers `H:2037`, `H:1389`, `H:1409` and the map cleared at
       `ST:588`. Test: `handlers_test.go` — grammar holds; retry ordinal survives a rebuilt LoopManager.
+      **Landed, except the two deletions.** The field is set at `H:1138` (`buildTaskRequest`), `H:2190`
+      (`emitRetryRequest`) and `H:2956` (`publishIterationRequest`), each beside the `TrackRequest` the site already
+      made. `GenerateRequestID` (`ST:1375`) now mints through `looprequest`: iteration stays `Iterations + 1`, and
+      the retry ordinal is read back out of `PublishedRequestID` — a mint at the iteration the field already names
+      is the retry and takes `Next(published, true)`. The truncation budget moved with it:
+      `handleLengthTruncation`'s gate is `publishedRetryOrdinal(loopID) + 1` (`ST:1403`), one spelling of one fact.
+      Five caller sites removed, not the three the design enumerated — `H:2037` (`Increment`), `H:1389`/`H:1409`
+      (forward-progress resets) AND `H:2054`/`H:2072`, two further `ResetTruncationRetry` calls inside
+      `handleLengthTruncation`'s own failure arms that the design's enumeration missed.
+      `IncrementTruncationRetry` (`ST:473`) and `ResetTruncationRetry` (`ST:485`) are NOT deleted: both are
+      **exported methods on a Tier 1 package** (ADR-106, `release/tier1-packages.txt:75`), which the checkpoint brief
+      reserves for the owner. They and `truncationRetryAttempts` (`ST:112`, cleared at `ST:596`) are marked
+      `Deprecated:` naming the durable replacement, and have no production caller.
+      Tests: `execution_identity_test.go` `TestRequestIDCarriesTheTruncationRetryOrdinal` (rewritten onto
+      `SetPublishedRequest`, the production seam) and the new `TestRetryOrdinalSurvivesARebuiltLoopManager` (a
+      SECOND manager holding only the durable record mints `:3:2`, the name a process-local counter could not);
+      `published_request_identity_test.go` `TestEveryMintedRequestIsNamedOnTheLoopRecord` (all three mint sites, in
+      one run, through `HandleTask` → truncation retry → tool batch); `truncation_branch_test.go`
+      `TestHandleLengthTruncation_BudgetRenewsOnTheNextIteration` replaces
+      `TestHandleLengthTruncation_ResetAfterForwardProgress`, which encoded the counter's semantics (a tool-call
+      response mid-iteration renewed the budget); the durable rule is one self-heal per ITERATION, and the new test
+      drives a real tool batch to the advance.
 - [ ] 2.5 Step 0 for every cold read but the task lane (design § 3.6): read the newest retained request (task 2.3's
       reader), order it against `PublishedRequestID` with `looprequest.Parse`/`Compare` (task 1.0); newer →
       `Update(revision)` the record before classifying — field, `Iterations = parsed iteration − 1` (`ST:1345`: a

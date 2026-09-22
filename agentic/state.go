@@ -55,9 +55,23 @@ type LoopEntity struct {
 	Iterations         int                   `json:"iterations"`
 	MaxIterations      int                   `json:"max_iterations"`
 	PendingToolResults map[string]ToolResult `json:"pending_tool_results,omitempty"` // ExecutionID; synthetic failures use CallID
-	StartedAt          time.Time             `json:"started_at,omitempty"`           // When the loop was created
-	TimeoutAt          time.Time             `json:"timeout_at,omitempty"`           // When the loop should timeout
-	ParentLoopID       string                `json:"parent_loop_id,omitempty"`       // Parent loop ID for architect->editor relationship
+	// PublishedRequestID names the AgentRequest outstanding for this loop: the
+	// RequestID whose PubAck preceded the KV update that wrote this record.
+	//
+	// It is the loop's durable settlement fact (invariant I1, #1330): while
+	// this record exists, an AgentRequest{RequestID: PublishedRequestID,
+	// LoopID: ID} is durably retained on agent.request.<loop id>. That is what
+	// lets a process with no memory of the loop classify a redelivered model
+	// response or tool result by identity — older, current or newer — instead
+	// of comparing retained conversation content.
+	//
+	// Set at birth and by every request-minting transition; never cleared.
+	// It is a settlement fact, not an in-flight answer: a record naming a
+	// request says nothing about whether any process is still working on it.
+	PublishedRequestID string    `json:"published_request_id,omitempty"`
+	StartedAt          time.Time `json:"started_at,omitempty"`     // When the loop was created
+	TimeoutAt          time.Time `json:"timeout_at,omitempty"`     // When the loop should timeout
+	ParentLoopID       string    `json:"parent_loop_id,omitempty"` // Parent loop ID for architect->editor relationship
 	// RunID is the 6-part-derived run anchor; the run loop-id this loop belongs to.
 	// Empty for loops not in a run. Inherited at spawn (ADR-053 D7).
 	RunID string `json:"run_id,omitempty"`

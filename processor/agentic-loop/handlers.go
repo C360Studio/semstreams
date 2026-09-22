@@ -1132,6 +1132,12 @@ func (h *MessageHandler) buildTaskRequest(loopID string, task TaskMessage, entit
 
 	h.loopManager.TrackRequest(request.RequestID, loopID)
 	h.loopManager.TrackRequestStart(request.RequestID)
+	// The record must name the request it is about to publish (I1). The
+	// carrier writes the record before this first publish (owner ruling Q1),
+	// so birth is the one lane where the name is durable ahead of the PubAck.
+	if err := h.loopManager.SetPublishedRequest(loopID, request.RequestID); err != nil {
+		return HandlerResult{}, err
+	}
 
 	requestMsg := message.NewBaseMessage(request.Schema(), &request, "agentic-loop")
 	requestData, err := json.Marshal(requestMsg)
@@ -1384,9 +1390,10 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 
 	switch response.Status {
 	case agentic.StatusToolCall:
-		// Forward progress — clear the truncation retry counter so a
-		// future truncation can self-heal once.
-		h.loopManager.ResetTruncationRetry(loopID)
+		// Forward progress needs no explicit reset since #1330: the next
+		// request this loop mints names a NEW iteration, and a new iteration
+		// always starts at retry ordinal 0, so the self-heal budget renews
+		// itself in the name rather than in a counter somebody has to clear.
 
 		if err := h.handleToolCallResponse(ctx, &result, loopID, response.RequestID, response.Message.ToolCalls); err != nil {
 			return result, err
@@ -1405,9 +1412,6 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 		}
 
 	case agentic.StatusComplete:
-		// Forward progress — clear the truncation retry counter.
-		h.loopManager.ResetTruncationRetry(loopID)
-
 		// gh#158: fall back to ReasoningContent when Content is empty so
 		// the LLM's terminal text always lands on Result + downstream
 		// read_loop_result, even when the provider adapter routed it to
@@ -2034,7 +2038,14 @@ func (h *MessageHandler) handleLengthTruncation(ctx context.Context, loopID stri
 	// Branch 1: structurally can't recover. Either we already tried
 	// (the prior retry hit the same wall) or there's nothing for the
 	// compactor to compact away.
-	retryCount := h.loopManager.IncrementTruncationRetry(loopID)
+	//
+	// The budget is read out of the loop's durable record rather than a
+	// process-local counter (#1330): PublishedRequestID names this iteration's
+	// retry ordinal, so ordinal 0 means the self-heal has not been spent and
+	// ordinal 1 means it has. A replacement process reads the same answer its
+	// predecessor would have, where the counter read zero and spent the budget
+	// a second time under a name the first attempt had already published.
+	retryCount := h.loopManager.publishedRetryOrdinal(loopID) + 1
 	canRetry := preUtilization >= h.config.Context.CompactThreshold && retryCount == 1
 
 	if !canRetry {
@@ -2050,8 +2061,6 @@ func (h *MessageHandler) handleLengthTruncation(ctx context.Context, loopID stri
 			slog.Bool("compaction_attempted", compactionAttempted),
 			slog.Int("retry_count", retryCount))
 
-		// Reset so a parent retry (new loop) starts fresh.
-		h.loopManager.ResetTruncationRetry(loopID)
 		return h.failLoop(result, loopID, agentic.OutcomeTruncated, "length_truncated", message)
 	}
 
@@ -2067,9 +2076,9 @@ func (h *MessageHandler) handleLengthTruncation(ctx context.Context, loopID stri
 	compactResult, compactErr := h.compactor.Compact(ctx, cm)
 	if compactErr != nil {
 		// Compaction failed — fall through to the failure branch with a
-		// diagnostic that names the failure. Don't burn another retry
-		// attempt; the parent decides whether a fresh-loop retry helps.
-		h.loopManager.ResetTruncationRetry(loopID)
+		// diagnostic that names the failure. Nothing was published, so the
+		// record still names the same request and the budget is untouched;
+		// the parent decides whether a fresh-loop retry helps.
 		message := fmt.Sprintf("truncated and compaction failed (model_limit=%d, utilization=%.0f%%, completion_tokens=%d, compactor_error=%s) — try a larger model or tune CompactThreshold/HeadroomTokens",
 			modelLimit, preUtilization*100, completionTokens, compactErr.Error())
 		return h.failLoop(result, loopID, agentic.OutcomeTruncated, "length_truncated", message)
@@ -2128,9 +2137,9 @@ func (h *MessageHandler) handleLengthTruncation(ctx context.Context, loopID stri
 
 	// Build and emit the retry agent.request from the freshly-compacted
 	// context. We do NOT increment the iteration counter — this is a
-	// within-iteration self-heal. The truncationRetryAttempts counter
-	// (now ==1) prevents a second truncation from re-entering this
-	// branch.
+	// within-iteration self-heal. The retry request's own name carries the
+	// budget: it mints :N:1 at the same iteration, so a second truncation of
+	// iteration N reads retry ordinal 1 and falls through to the hard fail.
 	return h.emitRetryRequest(ctx, loopID, entity, cm, result, postUtilization)
 }
 
@@ -2178,6 +2187,9 @@ func (h *MessageHandler) emitRetryRequest(ctx context.Context, loopID string, en
 
 	h.loopManager.TrackRequest(request.RequestID, loopID)
 	h.loopManager.TrackRequestStart(request.RequestID)
+	if err := h.loopManager.SetPublishedRequest(loopID, request.RequestID); err != nil {
+		return err
+	}
 
 	requestMsg := message.NewBaseMessage(request.Schema(), &request, "agentic-loop")
 	requestData, err := json.Marshal(requestMsg)
@@ -2941,6 +2953,9 @@ func (h *MessageHandler) publishIterationRequest(
 	// publish site already makes.
 	h.loopManager.TrackRequest(request.RequestID, loopID)
 	h.loopManager.TrackRequestStart(request.RequestID)
+	if err := h.loopManager.SetPublishedRequest(loopID, request.RequestID); err != nil {
+		return err
+	}
 
 	requestMsg := message.NewBaseMessage(request.Schema(), &request, "agentic-loop")
 	requestData, err := json.Marshal(requestMsg)
