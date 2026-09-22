@@ -448,6 +448,14 @@
       context managers, the minted-request map — is process-local state a new `Component` genuinely does not have. The
       OS-process replacement is task 6.2's `task e2e:agentic` stage.
       `go test -race -tags=integration -count=3` over both tests: `ok … 4.198s`.
+      **Recorded for whoever lands the cold rebuild (task 1.2's unbuilt half).** Both W2 cases pin what L4a actually
+      does with a redelivered input the record does not account for: the cold arm returns "this process does not hold
+      the loop", which is a Retry. Design § 5.2 step 2 and § 5.3 step 3 end elsewhere — a cold process REBUILDS from
+      the retained request and response and applies the input — and `restoreLoopFromRequest` / `restoreToolBatch` are
+      the half of task 1.2 sequenced to that work. When they land, the two W2 cases change from "retries, writes
+      nothing" to "rebuilds and applies", and they are the tests that must be rewritten rather than deleted: the
+      invariant they hold either way is that the input is never acknowledged away and the record never moves on a
+      delivery nobody applied.
 - [x] 4.3 Mutation evidence (`cp` backup + checksum, never stash): (a) restore Put-before-publish in 2.1 → W4 in 4.2
       fails; (b) restore plain `Put` → the CAS case in 2.1 fails; (c) skip adoption in 2.3 → the 4.1 property fails;
       (e) skip step 0 in 2.5 → the restarted W4 case in 4.2 retries to `MaxDeliver`. (d) and (f) are L4b's.
