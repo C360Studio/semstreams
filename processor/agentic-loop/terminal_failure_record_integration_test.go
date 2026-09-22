@@ -47,6 +47,7 @@ func TestIntegrationTerminalFailureRecordPrecedesItsPublication(t *testing.T) {
 		// After initializeKVBuckets, which installs the real bucket.
 		bucket := &recordingLoopBucket{}
 		c.loopsBucket = bucket
+		seedLoopRecord(t, c, loopID)
 		return c, testClient, bucket, loopID, executionID, callID
 	}
 	// Both identities: the lane routes on the framework execution id and the

@@ -63,6 +63,10 @@ func appendTrajectoryObservation(result *HandlerResult, observation trajectoryOb
 func (c *Component) releaseLoopTransientState(loopID string) {
 	c.handler.trajectoryManager.discardTrajectory(loopID)
 	c.trajectoryAuditLoss.release(loopID)
+	// The record revision goes with the loop it belongs to (#1330). Keeping it
+	// would let a later loop under the same token compare-and-swap against a
+	// revision observed for a loop this process no longer holds.
+	c.forgetLoopRevision(loopID)
 	// Always nil; the signature predates this, its only production caller.
 	_ = c.handler.loopManager.DeleteLoop(loopID)
 }

@@ -8,29 +8,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The ordering that decides the marker's shape. persistHandlerResult stamps the
-// loop entity (persistResultState) and only THEN emits the results
-// (publishResults), and a publish-phase failure is commit-unknown: the delivery
-// quarantines with the request's durability unknown. A marker cleared when the
-// carrying request was BUILT is therefore durably clear about a send that may
-// never have happened, and the one fact that could re-carry the user's turn —
-// that a turn is waiting — is gone from the only record recovery will read.
+// The ordering that decides what a failed publish leaves behind.
 //
-// Recording the carrier instead of clearing the marker keeps both halves: the
-// persisted record still says "a turn is deferred, carried by <requestID>", and
-// the loop does not carry it a second time because a request already names it.
-// The clear moves to SettleRequest, where a response for that request proves
-// the send happened.
+// Before #1330 the carrier stamped the loop entity and only THEN emitted the
+// results, so a publish-phase failure left a record that had already recorded
+// the carrying request — and the marker had to name that request, because a
+// marker cleared when the request was BUILT would be durably clear about a send
+// that may never have happened.
+//
+// On the model-response and tool-result lanes the order is now publish, then
+// compare-and-swap. A publish of unknown durability therefore writes NOTHING:
+// the durable record still says "a turn is deferred and uncarried", which is
+// the state that can be recovered from, and no record claims a carrier for a
+// request whose PubAck never came back. The half that genuinely landed — a
+// request that DID PubAck before the process died — is recovered by identity
+// instead: the redelivery re-mints the same request name, finds it retained,
+// adopts it rather than publishing a second copy, and writes the record then.
 //
 // Asserted on the durable record rather than on the in-memory manager: what
 // survives a quarantine is what was written to KV.
 //
 // spec: agentic-loop / A logical model request has one deterministic identity
-func TestQuarantinedCarryLeavesTheDeferredTurnInTheDurableRecord(t *testing.T) {
+func TestQuarantinedCarryWritesNoRecordAndLeavesTheTurnUncarried(t *testing.T) {
 	c, bucket, loopID, first := loopWithADeferredTurn(t)
 
 	// Constructed, never connected: publishResults fails on the carrying
-	// agent.request, after persistResultState has already stamped the entity.
+	// agent.request, before the record write it now precedes.
 	client, err := natsclient.NewClient("nats://127.0.0.1:1")
 	require.NoError(t, err)
 	c.natsClient = client
@@ -44,11 +47,14 @@ func TestQuarantinedCarryLeavesTheDeferredTurnInTheDurableRecord(t *testing.T) {
 	require.Equal(t, natsclient.DeliveryDecisionQuarantine, result.Decision(),
 		"a publish of unknown durability must quarantine, not retry or terminate")
 
+	require.Empty(t, bucket.written(),
+		"the publish ran first, so a publish that did not commit must have written no record at all")
+
 	entity := persistedLoop(t, bucket, loopID)
 	require.True(t, entity.PendingContinuation,
-		"the quarantined record forgot that a turn is still waiting; nothing can re-carry it")
-	require.Equal(t, loopID+":req:2:0", entity.PendingContinuationRequestID,
-		"the record must name the request that was supposed to carry the turn")
+		"the durable record forgot that a turn is still waiting; nothing can re-carry it")
+	require.Empty(t, entity.PendingContinuationRequestID,
+		"no record may name a carrier for a request whose PubAck never came back")
 	require.False(t, entity.State.IsTerminal(),
 		"the loop must not be settled with an unanswered turn")
 }

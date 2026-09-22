@@ -61,6 +61,7 @@ func TestToolResultHandlerFailureSettlesOnTheDurableRecord(t *testing.T) {
 		c := releaseTestComponent(t, handler)
 		bucket := &recordingLoopBucket{}
 		c.loopsBucket = bucket
+		seedLoopRecord(t, c, loopID)
 		return c, bucket, loopID, executionID, callID
 	}
 
@@ -195,6 +196,7 @@ func TestToolResultCancellationRetriesOnlyBeforeMutation(t *testing.T) {
 		require.NoError(t, err)
 		c := releaseTestComponent(t, handler)
 		c.loopsBucket = &recordingLoopBucket{}
+		seedLoopRecord(t, c, loopID)
 		return c, handler, loopID, dispatchedExecutionID(t, handler.loopManager, loopID), callID
 	}
 

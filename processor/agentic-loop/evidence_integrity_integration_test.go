@@ -149,7 +149,7 @@ func TestTerminalStampCarriesObservedAuditLoss_Integration(t *testing.T) {
 			CompletionState: &agentic.LoopCompletedEvent{
 				LoopID: loopID, Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now(),
 			},
-		})
+		}, writeThenPublish)
 
 		outcome, withCondition, values := collector.outcomeRequests()
 		require.Equal(t, 1, outcome, "expected exactly one terminal append carrying agent.loop.outcome")
@@ -229,7 +229,7 @@ func TestTerminalStampOmitsConditionWithoutObservedLoss_Integration(t *testing.T
 		CompletionState: &agentic.LoopCompletedEvent{
 			LoopID: loopID, Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now(),
 		},
-	})
+	}, writeThenPublish)
 
 	outcome, withCondition, _ := collector.outcomeRequests()
 	require.Equal(t, 1, outcome, "expected exactly one terminal append carrying agent.loop.outcome")
@@ -284,6 +284,10 @@ func TestStartWithoutUsableTrajectoryBucketMarksEveryLoop_Integration(t *testing
 	// than stamping a terminal for a loop it cannot read.
 	loopID, err := c.handler.loopManager.CreateLoop("task-total-loss", "role", "model", 3)
 	require.NoError(t, err)
+	// The record too, by the production birth write: the carrier writes under
+	// compare-and-swap against the revision birth left behind (#1330), so a
+	// loop with no record has nothing to write against and fails closed.
+	require.NoError(t, c.createLoopState(ctx, loopID))
 	_, err = c.handler.trajectoryManager.startTrajectory(loopID)
 	require.NoError(t, err)
 
@@ -293,7 +297,7 @@ func TestStartWithoutUsableTrajectoryBucketMarksEveryLoop_Integration(t *testing
 		CompletionState: &agentic.LoopCompletedEvent{
 			LoopID: loopID, Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now(),
 		},
-	})
+	}, writeThenPublish)
 
 	outcome, withCondition, values := collector.outcomeRequests()
 	require.Equal(t, 1, outcome, "expected exactly one terminal append carrying agent.loop.outcome")

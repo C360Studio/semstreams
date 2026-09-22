@@ -65,14 +65,19 @@ func (m *loopDeliveryOwnerMsg) InProgress() error           { m.heartbeats.Add(1
 func (m *loopDeliveryOwnerMsg) Term() error                 { m.terms.Add(1); m.settlement.Add(1); return nil }
 func (m *loopDeliveryOwnerMsg) TermWithReason(string) error { return m.Term() }
 
-// recordingLoopBucket fails every Put until its error is cleared, and then
+// recordingLoopBucket fails every write until its error is cleared, and then
 // records the keys it is asked to write. Both halves matter: the failure drives
 // the classification, and the key list is how the counterfactual below observes
 // what a Retry would have lost.
 // failPrefix narrows the failure to one key family, which is how a test can
-// fail the terminal RECORD write while every other write on the same path
+// fail the terminal RECORD write while every other key on the same path
 // succeeds — the only way to tell "wrote the loop key and ACKed" apart from
 // "wrote both".
+//
+// It carries real revision semantics — Create refuses an existing key, Update
+// refuses a moved one — because since #1330 the loop record is written under
+// compare-and-swap and a fake that answered any revision would let a
+// last-writer-wins regression pass.
 type recordingLoopBucket struct {
 	jetstream.KeyValue
 	mu         sync.Mutex
@@ -80,11 +85,51 @@ type recordingLoopBucket struct {
 	failPrefix string
 	keys       []string
 	values     map[string][]byte
+	revisions  map[string]uint64
+	// seq is monotonic across the bucket's life, independent of the recorded
+	// key list. A revision derived from len(keys) would silently stand still
+	// whenever a fixture reset that list, which is exactly the case a
+	// compare-and-swap test needs to move.
+	seq uint64
 }
 
 func (b *recordingLoopBucket) Put(_ context.Context, key string, value []byte) (uint64, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.writeLocked(key, value)
+}
+
+func (b *recordingLoopBucket) Create(_ context.Context, key string, value []byte, _ ...jetstream.KVCreateOpt) (uint64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, exists := b.values[key]; exists {
+		return 0, jetstream.ErrKeyExists
+	}
+	return b.writeLocked(key, value)
+}
+
+func (b *recordingLoopBucket) Update(_ context.Context, key string, value []byte, revision uint64) (uint64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.revisions[key] != revision {
+		// The wrong-last-sequence API error, which is what NATS answers a
+		// compare-and-swap whose key has moved.
+		return 0, jetstream.ErrKeyExists
+	}
+	return b.writeLocked(key, value)
+}
+
+func (b *recordingLoopBucket) Get(_ context.Context, key string) (jetstream.KeyValueEntry, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	value, ok := b.values[key]
+	if !ok {
+		return nil, jetstream.ErrKeyNotFound
+	}
+	return recordLoopEntry{key: key, value: append([]byte(nil), value...), revision: b.revisions[key]}, nil
+}
+
+func (b *recordingLoopBucket) writeLocked(key string, value []byte) (uint64, error) {
 	if b.fail != nil && strings.HasPrefix(key, b.failPrefix) {
 		return 0, b.fail
 	}
@@ -92,8 +137,13 @@ func (b *recordingLoopBucket) Put(_ context.Context, key string, value []byte) (
 	if b.values == nil {
 		b.values = map[string][]byte{}
 	}
+	if b.revisions == nil {
+		b.revisions = map[string]uint64{}
+	}
 	b.values[key] = append([]byte(nil), value...)
-	return uint64(len(b.keys)), nil
+	b.seq++
+	b.revisions[key] = b.seq
+	return b.revisions[key], nil
 }
 
 func (b *recordingLoopBucket) value(key string) ([]byte, bool) {
@@ -107,6 +157,36 @@ func (b *recordingLoopBucket) heal() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.fail = nil
+}
+
+func (b *recordingLoopBucket) arm(err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.fail = err
+}
+
+// seedLoopRecord writes the loop's FIRST record through the production birth
+// path, which is what leaves the component holding the revision every later
+// compare-and-swap compares against (#1330). A fixture that skips it is
+// modelling a process that never created the loop, where refusing to write is
+// the correct answer — so every warm fixture has to do what a birth does.
+func seedLoopRecord(t *testing.T, c *Component, loopID string) {
+	t.Helper()
+	require.NoError(t, c.createLoopState(t.Context(), loopID))
+	// The birth write is fixture setup, not delivery behaviour, and written()
+	// exists to observe delivery behaviour.
+	if bucket, ok := c.loopsBucket.(*recordingLoopBucket); ok {
+		bucket.resetWritten()
+	}
+}
+
+// resetWritten forgets the key list without forgetting the records. Fixture
+// setup (the birth write seedLoopRecord performs) is not delivery behaviour,
+// and written() exists to observe delivery behaviour.
+func (b *recordingLoopBucket) resetWritten() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.keys = nil
 }
 
 func (b *recordingLoopBucket) written() []string {
@@ -148,8 +228,10 @@ func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 		requestID := handler.loopManager.GenerateRequestID(loopID)
 		handler.loopManager.TrackRequest(requestID, loopID)
 		c := releaseTestComponent(t, handler)
-		bucket := &recordingLoopBucket{fail: errors.New("kv unavailable")}
+		bucket := &recordingLoopBucket{}
 		c.loopsBucket = bucket
+		seedLoopRecord(t, c, loopID)
+		bucket.arm(errors.New("kv unavailable"))
 		response := &agentic.AgentResponse{
 			RequestID: requestID, Status: agentic.StatusComplete,
 			Message: agentic.ChatMessage{Role: "assistant", Content: "done"},
@@ -198,6 +280,9 @@ func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 		require.NoError(t, err)
 		c := releaseTestComponent(t, handler)
 		c.loopsBucket = failingLoopBucket{err: errors.New("kv unavailable")}
+		// The revision a birth would have left behind, so the write is what
+		// fails here rather than the missing observation that precedes it.
+		c.rememberLoopRevision(loopID, 1)
 		toolResult := &agentic.ToolResult{
 			RequestID: "request-tool", ExecutionID: deriveToolExecutionID("request-tool", "call-tool", 1),
 			CallID: "call-tool", CallOrdinal: 1, Name: "search", Content: "result",

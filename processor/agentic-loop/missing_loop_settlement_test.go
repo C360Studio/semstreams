@@ -47,13 +47,19 @@ func (recordLoopBucket) Put(context.Context, string, []byte) (uint64, error) { r
 
 type recordLoopEntry struct {
 	jetstream.KeyValueEntry
-	key   string
-	value []byte
+	key      string
+	value    []byte
+	revision uint64
 }
 
-func (e recordLoopEntry) Key() string    { return e.key }
-func (e recordLoopEntry) Value() []byte  { return e.value }
-func (recordLoopEntry) Revision() uint64 { return 1 }
+func (e recordLoopEntry) Key() string   { return e.key }
+func (e recordLoopEntry) Value() []byte { return e.value }
+func (e recordLoopEntry) Revision() uint64 {
+	if e.revision == 0 {
+		return 1
+	}
+	return e.revision
+}
 
 func heartbeatPolicyForTest(t *testing.T, port string, handler inputHandler) natsclient.HeartbeatDeliveryPolicy {
 	t.Helper()

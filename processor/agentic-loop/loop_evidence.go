@@ -1,0 +1,357 @@
+package agenticloop
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+
+	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/looptoken"
+	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest"
+	"github.com/nats-io/nats.go/jetstream"
+)
+
+// loopEvidenceReader reads the durable evidence a loop left behind, so a
+// process with no memory of that loop can classify a redelivered input against
+// facts rather than against its own absent state.
+//
+// One read today: the newest AgentRequest retained for a loop. It answers the
+// only question identity adoption asks — "is the request I am about to publish
+// already on the stream?" — by RequestID equality, never by comparing bodies.
+// The retained-response read the cold rebuild needs (design § 5.3 step 3)
+// arrives with the rebuild itself; widening this interface before its consumer
+// exists would ship a surface nothing calls.
+//
+// It is an interface so a unit test can drive every arm — retained-equals-next,
+// retained-is-older, retained-absent, retained-is-newer — without a broker.
+type loopEvidenceReader interface {
+	ReadRetainedRequest(ctx context.Context, streamName, subject string) ([]byte, bool, error)
+}
+
+// natsLoopEvidenceReader is the production reader: the newest message on a
+// subject, which for agent.request.<loopID> is the loop's newest request.
+type natsLoopEvidenceReader struct {
+	client *natsclient.Client
+}
+
+func (r natsLoopEvidenceReader) ReadRetainedRequest(
+	ctx context.Context,
+	streamName string,
+	subject string,
+) ([]byte, bool, error) {
+	stream, err := r.client.GetStream(ctx, streamName)
+	if err != nil {
+		return nil, false, fmt.Errorf("read request stream %s: %w", streamName, err)
+	}
+	raw, err := stream.GetLastMsgForSubject(ctx, subject)
+	if errors.Is(err, jetstream.ErrMsgNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("read retained request %s: %w", subject, err)
+	}
+	return append([]byte(nil), raw.Data...), true, nil
+}
+
+// requestAddress resolves the subject a loop's requests are published to and
+// the stream that retains them, from the same output-port declaration the
+// publish side uses. Asking the port rather than formatting a subject is what
+// keeps the read and the write addressing the same place after a config change.
+func requestAddress(ports []component.PortDefinition, loopID string) (subject, stream string, err error) {
+	subject, err = component.ResolveSubject(ports, "agent.request", loopID)
+	if err != nil {
+		return "", "", err
+	}
+	for _, definition := range ports {
+		if definition.Name != "agent.request" {
+			continue
+		}
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return "", "", err
+		}
+		facts, err := port.Facts()
+		if err != nil {
+			return "", "", err
+		}
+		declared, ok := facts.Stream()
+		if !ok || declared.Name() == "" {
+			return "", "", fmt.Errorf("agent.request output does not declare a JetStream stream")
+		}
+		return subject, declared.Name(), nil
+	}
+	return "", "", fmt.Errorf("agent.request output not found")
+}
+
+// readRetainedAgentRequest returns the newest AgentRequest retained for the
+// loop, and whether there is one.
+//
+// Identity only. The body is decoded to recover its RequestID and nothing
+// else: recovery orders request identities, and a decision made by comparing
+// rendered conversation content is the shape this whole change removes.
+func (c *Component) readRetainedAgentRequest(ctx context.Context, loopID string) (agentic.AgentRequest, bool, error) {
+	if c.natsClient == nil && c.requestEvidence == nil {
+		return agentic.AgentRequest{}, false, nil
+	}
+	subject, stream, err := requestAddress(c.outputPortDefs(), loopID)
+	if err != nil {
+		return agentic.AgentRequest{}, false, errs.WrapFatal(
+			err, "agentic-loop", "readRetainedAgentRequest", "resolve request address")
+	}
+	reader := c.requestEvidence
+	if reader == nil {
+		reader = natsLoopEvidenceReader{client: c.natsClient}
+	}
+	data, found, err := reader.ReadRetainedRequest(ctx, stream, subject)
+	if err != nil {
+		return agentic.AgentRequest{}, false, errs.WrapTransient(
+			err, "agentic-loop", "readRetainedAgentRequest", "read retained request evidence")
+	}
+	if !found {
+		return agentic.AgentRequest{}, false, nil
+	}
+
+	decoded, err := c.decoder.Decode(data)
+	if err != nil {
+		return agentic.AgentRequest{}, false, errs.WrapFatal(
+			err, "agentic-loop", "readRetainedAgentRequest", "decode retained request envelope")
+	}
+	request, ok := decoded.Payload().(*agentic.AgentRequest)
+	if !ok {
+		return agentic.AgentRequest{}, false, errs.WrapFatal(
+			fmt.Errorf("retained request payload is %T, not *agentic.AgentRequest", decoded.Payload()),
+			"agentic-loop", "readRetainedAgentRequest", "decode retained request payload")
+	}
+	return *request, true, nil
+}
+
+// outputPortDefs returns the component's declared output ports.
+func (c *Component) outputPortDefs() []component.PortDefinition {
+	return c.config.Ports.Outputs
+}
+
+// loopRecord is one observation of a loop's AGENT_LOOPS record: the decoded
+// entity, the revision it was observed at, and what that observation means for
+// an input naming the loop.
+//
+// The three travel together because every caller needs all three: the entity
+// to classify against, the revision to compare-and-swap against, and the
+// presence to decide whether there is anything to classify at all. Returning
+// them apart is how the revision came to be discarded at the one read that had
+// it (loop_presence.go's entry.Revision()).
+type loopRecord struct {
+	entity   agentic.LoopEntity
+	revision uint64
+	presence loopPresence
+}
+
+// readLoopRecord reads one loop record and reports it with the revision it was
+// observed at. It performs no recovery and writes nothing.
+//
+// The revision is retained on the component as this process's compare-and-swap
+// input for the loop, because a cold read IS this process's observation of the
+// record — the same role the birth Create's return plays for a warm loop.
+func (c *Component) readLoopRecord(ctx context.Context, loopID string) loopRecord {
+	if loopID == "" || !looptoken.Valid(loopID) {
+		// Nothing to look up. An input that carries no framework-minted loop
+		// token names no loop any process could be holding.
+		return loopRecord{presence: loopPresenceStale}
+	}
+	if c.loopsBucket == nil {
+		return loopRecord{presence: loopPresenceUnknown}
+	}
+	entry, err := c.loopsBucket.Get(ctx, loopID)
+	switch {
+	case errors.Is(err, jetstream.ErrKeyNotFound), errors.Is(err, jetstream.ErrKeyDeleted):
+		return loopRecord{presence: loopPresenceStale}
+	case err != nil:
+		return loopRecord{presence: loopPresenceUnknown}
+	}
+
+	var entity agentic.LoopEntity
+	if err := json.Unmarshal(entry.Value(), &entity); err != nil {
+		// A record that exists but will not decode is not evidence of
+		// staleness. Report unknown and let the bounded retry surface it.
+		c.logger.Error("Loop record did not decode while classifying a missing loop",
+			"loop_id", loopID, "error", err)
+		return loopRecord{presence: loopPresenceUnknown}
+	}
+	c.rememberLoopRevision(loopID, entry.Revision())
+	if entity.State.IsTerminal() {
+		return loopRecord{entity: entity, revision: entry.Revision(), presence: loopPresenceStale}
+	}
+	return loopRecord{entity: entity, revision: entry.Revision(), presence: loopPresenceLive}
+}
+
+// adoptRetainedRequest decides whether a minted request still has to be
+// published, by identity (owner ruling Q4 on #1330).
+//
+// It reports true when the request this process is about to publish is ALREADY
+// retained under that exact RequestID — the crash window where the publish
+// landed and the record update did not. Republishing there is not merely
+// wasteful: the retained message is the authoritative body, agentic-model
+// answers it from its retained response rather than calling the provider
+// again, and a second copy minted from a rebuilt context is a different
+// conversation under the same name.
+//
+// Absent, or older than the request being minted, means this request has not
+// gone out: publish.
+//
+// Newer than the request being minted, or unparseable, or naming a different
+// loop, is a conflict this delivery cannot resolve — a request beyond the one
+// this process believes it is minting means some other writer advanced the
+// loop — so it is quarantined rather than resolved by guessing.
+//
+// Simplification recorded (#1330, standing simplicity rule): the design
+// separates "retained equals the record's CURRENT request" (publish) from
+// "retained is older than the record's current request" (quarantine). Both are
+// "older than the request being minted" here, and both publish. Reaching the
+// second requires I1 to be broken already — the current request is retained by
+// definition while the record exists — and publishing the request the loop
+// actually needs is the better answer for a stream that lost it than refusing
+// the loop.
+func (c *Component) adoptRetainedRequest(ctx context.Context, loopID, requestID string) (bool, error) {
+	minted, err := looprequest.Parse(requestID)
+	if err != nil || minted.LoopID != loopID {
+		// Not this grammar. Nothing to compare against, so publish as before.
+		return false, nil
+	}
+	retained, found, err := c.readRetainedAgentRequest(ctx, loopID)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, nil
+	}
+	if retained.RequestID == requestID {
+		c.logger.InfoContext(ctx, "Request already retained under this identity — adopting instead of republishing",
+			slog.String("loop_id", loopID), slog.String("request_id", requestID))
+		return true, nil
+	}
+	parsed, err := looprequest.Parse(retained.RequestID)
+	if err != nil || parsed.LoopID != loopID {
+		return false, errs.WrapFatal(
+			fmt.Errorf("loop %s retains request %q, which is not a request of this loop", loopID, retained.RequestID),
+			"agentic-loop", "adoptRetainedRequest", "order retained request against the minted one")
+	}
+	if looprequest.Compare(parsed, minted) > 0 {
+		return false, errs.WrapFatal(
+			fmt.Errorf("loop %s retains request %q, beyond the %q this process is minting",
+				loopID, retained.RequestID, requestID),
+			"agentic-loop", "adoptRetainedRequest", "order retained request against the minted one")
+	}
+	return false, nil
+}
+
+// adoptNewerRetainedRequest is step 0 of every cold read but the task lane
+// (design § 3.6, owner ruling Q4 applied to the cold path).
+//
+// A process with no memory of the loop cannot classify a redelivered input
+// until the record tells the truth about which request is outstanding. The
+// crash window this closes is W4: the predecessor published the loop's NEXT
+// request and died before the record update, so the record names R while the
+// stream retains R(N+1). Classifying against R there would re-apply an input
+// the loop has already moved past.
+//
+// So the newest retained request is adopted into the record FIRST, under
+// compare-and-swap, and only then is the redelivered input classified — against
+// a record that is now current. The adopt writes exactly the shape the normal
+// advance writes: the new request name, its iteration, and an empty applied set
+// (the advance drains the set before it mints, so nothing is evicted that the
+// normal path would have kept). A pending approval gate is cleared in the same
+// update, because a request newer than the gate's own can only have been minted
+// after that gate's batch completed.
+//
+// Nothing is synthesised and no message body is read beyond its RequestID.
+func (c *Component) adoptNewerRetainedRequest(ctx context.Context, loopID string, record loopRecord) error {
+	retained, found, err := c.readRetainedAgentRequest(ctx, loopID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		// No retained request means nothing to adopt. It is not evidence that
+		// the record is wrong — a loop whose birth publish never landed is the
+		// task lane's case, and I1 is scoped to records that exist.
+		return nil
+	}
+
+	parsed, err := looprequest.Parse(retained.RequestID)
+	if err != nil || parsed.LoopID != loopID {
+		return errs.WrapFatal(
+			fmt.Errorf("loop %s retains request %q, which is not a request of this loop", loopID, retained.RequestID),
+			"agentic-loop", "adoptNewerRetainedRequest", "order the retained request")
+	}
+
+	if record.entity.PublishedRequestID != "" {
+		published, perr := looprequest.Parse(record.entity.PublishedRequestID)
+		if perr != nil || published.LoopID != loopID {
+			return errs.WrapFatal(
+				fmt.Errorf("loop %s record names request %q, which is not a request of this loop",
+					loopID, record.entity.PublishedRequestID),
+				"agentic-loop", "adoptNewerRetainedRequest", "order the retained request")
+		}
+		switch looprequest.Compare(parsed, published) {
+		case 0:
+			return nil
+		case -1:
+			// The record names a request NEWER than anything retained. I1 says
+			// that cannot happen while the record exists, so something outside
+			// this loop's own writers moved one of the two. Refuse rather than
+			// roll the record backwards onto an older name.
+			return errs.WrapFatal(
+				fmt.Errorf("loop %s record names request %q but the stream retains only %q",
+					loopID, record.entity.PublishedRequestID, retained.RequestID),
+				"agentic-loop", "adoptNewerRetainedRequest", "order the retained request")
+		}
+	}
+
+	adopted := record.entity
+	adopted.PublishedRequestID = retained.RequestID
+	// A request's iteration ordinal is the record's Iterations plus one at mint
+	// time, so the record that named it carried one less.
+	adopted.Iterations = parsed.Iteration - 1
+	adopted.PendingToolResults = nil
+	if adopted.PendingApproval != nil {
+		if err := adopted.ResolveApproval(); err != nil {
+			return errs.WrapFatal(err, "agentic-loop", "adoptNewerRetainedRequest",
+				"clear the approval gate the adopted request advanced past")
+		}
+	}
+	if err := adopted.Validate(); err != nil {
+		return errs.WrapFatal(err, "agentic-loop", "adoptNewerRetainedRequest",
+			"validate the adopted record")
+	}
+
+	data, err := json.Marshal(adopted)
+	if err != nil {
+		return errs.WrapFatal(err, "agentic-loop", "adoptNewerRetainedRequest",
+			"marshal the adopted record")
+	}
+	committed, err := c.loopsBucket.Update(ctx, loopID, data, record.revision)
+	if err != nil {
+		if natsclient.IsKVConflictError(err) {
+			// Somebody else wrote the record between the read and this update.
+			// Whatever they wrote, the redelivery re-reads and re-decides; the
+			// retained request is durable and is not going anywhere.
+			c.forgetLoopRevision(loopID)
+			return errs.WrapTransient(
+				fmt.Errorf("loop %s record moved past revision %d while adopting %q: %w",
+					loopID, record.revision, retained.RequestID, natsclient.ErrKVRevisionMismatch),
+				"agentic-loop", "adoptNewerRetainedRequest", "adopt the retained request")
+		}
+		return errs.WrapTransient(err, "agentic-loop", "adoptNewerRetainedRequest",
+			"adopt the retained request")
+	}
+	c.rememberLoopRevision(loopID, committed)
+	c.logger.InfoContext(ctx, "Adopted the loop's newest retained request before classifying a redelivered input",
+		slog.String("loop_id", loopID),
+		slog.String("was", record.entity.PublishedRequestID),
+		slog.String("now", retained.RequestID),
+		slog.Int("iterations", adopted.Iterations))
+	return nil
+}

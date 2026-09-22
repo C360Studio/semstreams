@@ -97,8 +97,19 @@ func (c *Component) sweepExpiredApprovals(ctx context.Context) {
 				slog.String("error", err.Error()))
 			continue
 		}
+		// The sweeper keeps its own publish-then-write order until #1362; only
+		// the writer itself changed, to the carrier's compare-and-swap.
 		c.publishResults(ctx, result)
-		c.persistLoopState(ctx, cand.LoopID)
+		if err := c.persistLoopState(ctx, cand.LoopID); err != nil {
+			// No delivery to retry here — this is a timer, not a consumer —
+			// so the loss is named rather than silently swallowed. On a lost
+			// compare-and-swap the loop's in-process state is already
+			// released, and the record that won holds the gate.
+			c.logger.Warn("approval timeout auto-reject did not commit the loop record",
+				slog.String("loop_id", cand.LoopID),
+				slog.String("call_id", cand.CallID),
+				slog.String("error", err.Error()))
+		}
 		// Publish the ApprovalResponse onto agent.approval_response.<loopID> so
 		// wire observers (sister-repo dashboards, audit consumers) see timeout
 		// auto-rejects the same way they see human responses. The component's

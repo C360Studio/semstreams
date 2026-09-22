@@ -112,18 +112,19 @@ type LoopEntity struct {
 	PendingContinuation bool `json:"pending_continuation,omitempty"`
 
 	// PendingContinuationRequestID names the request that carries the deferred
-	// turn, empty while no request does. It exists because the marker is
-	// persisted BEFORE the publish it describes: persistHandlerResult stamps
-	// the entity and only then emits the request, so a marker cleared when the
-	// request was BUILT would be durably clear while the publish that justified
-	// the clear had unknown durability — the delivery quarantines and the only
-	// state that could re-carry the turn is already gone.
+	// turn, empty while no request does. It is what keeps the turn from being
+	// carried twice: once a request names it, the next completion settles
+	// instead of spending an iteration re-asking with a context that gained
+	// nothing. It clears when that request's response settles, which is the
+	// first moment the send is known to have happened.
 	//
-	// Recording the carrier instead keeps both obligations: the turn is not
-	// carried twice (a request already names it), and a quarantined publish
-	// leaves "pending, carried by <requestID>" durable for recovery to act on.
-	// It clears when that request's response settles, which is the first moment
-	// the send is known to have happened.
+	// It was originally introduced to survive a publish whose durability was
+	// unknown, because the carrier stamped the entity BEFORE it emitted the
+	// request. Since #1330 the model-response and tool-result lanes publish
+	// first and write after, so a publish that did not commit writes no record
+	// at all and the durable state stays "deferred and uncarried" — and the
+	// opposite window, a request that PubAck'd before the record update, is
+	// closed by identity adoption rather than by this field.
 	PendingContinuationRequestID string `json:"pending_continuation_request_id,omitempty"`
 
 	// User context (for routing responses)

@@ -59,7 +59,7 @@
 
 ## 2. Carrier: order, CAS, identity adoption
 
-- [ ] 2.1 `processor/agentic-loop/component.go`: `persistLoopState` (`C:2468`, write `C:2483`) takes `revision` and uses
+- [x] 2.1 `processor/agentic-loop/component.go`: `persistLoopState` (`C:2468`, write `C:2483`) takes `revision` and uses
       `loopsBucket.Update` (`KV:231`) — the writer changes for EVERY caller. The ORDER flip is lane-scoped
       (coordinator scoping under OQ7/OQ8, `design.md` § 1): `persistHandlerResult` (`C:1923`) publishes (`C:1959`)
       before it writes (`C:1947`) for a non-terminal result on the model-response and tool-result lanes only; the
@@ -72,6 +72,35 @@
       (sweeper). Test: `persist_handler_result_test.go` — publish observed before `Update` on the tool-result lane;
       write observed before publish on the approval lane's call site; CAS conflict → `DeliveryDecisionRetry`; birth
       order write-then-publish.
+      **Landed.** The writer is `persistLoopState` (`C:2698`): CAS `Update` against a per-loop revision the process
+      retains (`loopRevisions`, `C:73`; `rememberLoopRevision` `C:2624`, `observedLoopRevision` `C:2636`,
+      `forgetLoopRevision` `C:2647`, released with the loop at `trajectory_handler_wiring.go:69`). **Deviation from
+      the task's wording, recorded:** `persistLoopState` keeps its `(ctx, loopID)` signature and reads the retained
+      revision itself instead of taking one. Four callers would otherwise have to carry a fact the component already
+      holds, which the developer contract's "am I asking a caller to predict something the framework could observe"
+      refuses; the invariant is unchanged, because the retained revision IS the revision this process observed. A
+      caller with no observation fails CLOSED (`C:2712`, Fatal) rather than writing blind or updating against
+      revision 0, which NATS reads as "must not exist".
+      The ORDER is a parameter, `carrierOrder` (`C:1980`), passed at every call site:
+      `publishThenWrite` on the model-response (`C:1650`) and tool-result (`C:2244`) lanes for a NON-terminal result
+      (`publishThenPersistResultState`, `C:2085`); `writeThenPublish` on the approval lane (`ARH:208`), on the
+      failed-terminal tool result (`C:2295`), and for every terminal result on every lane. The sweeper's own
+      publish-then-`Put` pair is untouched in order and only rides the new writer (`AS:103`, which now names its
+      write failure instead of discarding it — a timer has no delivery to retry).
+      Birth is `Put` → publish at `C:1535`, its error returns Retry; the birth publish error stays discarded, which
+      is #1345's remaining branch.
+      **A second recorded deviation:** the transient test in the carrier is `errors.Is(err,
+      natsclient.ErrKVRevisionMismatch)`, NOT `errs.IsTransient`. The latter substring-matches error TEXT for
+      "unavailable"/"timeout" (`pkg/errs/errs.go:177-187`), which handed a commit-unknown KV failure a Retry it had
+      not earned — caught by `TestResponseAndToolResultPersistenceFailureCannotAck` going from Quarantine to Retry.
+      Tests: `loop_carrier_test.go` — `TestCarrierOrderDecidesWhatAFailedPublishLeavesBehind` (both orders, through
+      a real but unconnected client so the publish genuinely fails: publish-first leaves NO record, write-first
+      commits it), `TestApprovalLaneKeepsWriteThenPublish` (the CALL SITE, through
+      `handleApprovalResponseMessage`), `TestCarrierCompareAndSwapLossRetriesAndReleasesTheLoop` (a foreign write
+      moves the record → `ErrKVRevisionMismatch`, the loop is gone from memory AND its revision is forgotten).
+      Birth order: `carried_continuation_durability_test.go`
+      `TestQuarantinedCarryWritesNoRecordAndLeavesTheTurnUncarried` asserts `bucket.written()` is EMPTY after a
+      failed publish, which is the order assertion on the response lane's real path.
 - [x] 2.2 `C:2318-2333` `publishResults`: messages on the `agent.request` subject publish via `PublishToStreamWithMsgID`
       with `Nats-Msg-Id = RequestID`. **Shipped by L2 (#1328, PR #1335)** — recorded here because tasks record work when
       it happens. Verified at `b7ce8727`:
@@ -82,12 +111,29 @@
       `processor/agentic-loop/handlers.go:2194:		MsgID:   request.RequestID,`,
       `processor/agentic-loop/handlers.go:2958:		MsgID:   request.RequestID,`.
       Test: `publication_semantics_integration_test.go` (exists). L4a verifies the window collapse only.
-- [ ] 2.3 `component.go`: new `readRetainedAgentRequest` (identity only; the newest message on `agent.request.<loopID>`,
+- [x] 2.3 `component.go`: new `readRetainedAgentRequest` (identity only; the newest message on `agent.request.<loopID>`,
       pattern `PS:21`/`PS:28`/`PS:37` `GetLastMsgForSubject`, `TR:51`) behind a new evidence-reader interface with two
       reads (request, response), called before `C:2318` for the messages minted at `H:1122`, `H:2168`, `H:2927`; plus a
       revision-returning entity read (`LP:75` discards `entry.Revision()` today). Adopt on exact `RequestID` match,
       publish on absent/current, quarantine anything else (design § 3.3). Test: unit through the evidence-reader seam —
       retained == next → no publish; == current → publish; absent → publish; other → Quarantine.
+      **Landed** in a new file, `processor/agentic-loop/loop_evidence.go`: `loopEvidenceReader` (`:32`),
+      `natsLoopEvidenceReader` over `GetLastMsgForSubject`, `requestAddress` (`:65`, resolved from the same output
+      port the publish side uses), `readRetainedAgentRequest` (`:97`, identity only — the body is decoded for its
+      RequestID and nothing else), and the decision `adoptRetainedRequest` (`:218`) called from `publishResults`
+      before every minted request (`C:2470`; `msg.MsgID != ""` is exactly the three mint sites, measured).
+      The revision-returning entity read is `readLoopRecord` (`:159`) returning `loopRecord{entity, revision,
+      presence}` (`:147`); `classifyMissingLoop` keeps its signature and delegates (`loop_presence.go:69`).
+      **Recorded simplification (standing simplicity rule, owner 2026-09-22):** the interface carries ONE read, not
+      two. The retained-RESPONSE read's only consumer is `restoreToolBatch`, which lands with the cold rebuild; an
+      interface method nothing calls is the surface the contract refuses to add. **Recorded simplification #2:** the
+      design separates "retained == the record's current request" (publish) from "retained older than it"
+      (quarantine); both are "older than the request being minted" here and both publish. Reaching the second
+      requires I1 to be broken already — the current request is retained by definition while the record exists — and
+      publishing the request the loop needs beats refusing the loop.
+      Test: `loop_carrier_test.go` `TestMintedRequestAdoptsAnAlreadyRetainedIdentity`, six arms through the
+      evidence-reader seam — already retained (adopt, publish nothing), previous request, retry of the previous,
+      nothing retained (publish), a LATER request (Quarantine), another loop's request (Quarantine).
 - [x] 2.4 `handlers.go`: set the field at the three minting sites (`H:1122` in `buildTaskRequest`, `H:2168` in
       `emitRetryRequest`, `H:2927` in `publishIterationRequest`); mint via `looprequest.Next(PublishedRequestID)`
       (task 1.0); retry ordinal from the parsed field; delete `IncrementTruncationRetry` (`ST:466`) and
@@ -115,7 +161,7 @@
       `TestHandleLengthTruncation_ResetAfterForwardProgress`, which encoded the counter's semantics (a tool-call
       response mid-iteration renewed the budget); the durable rule is one self-heal per ITERATION, and the new test
       drives a real tool batch to the advance.
-- [ ] 2.5 Step 0 for every cold read but the task lane (design § 3.6): read the newest retained request (task 2.3's
+- [x] 2.5 Step 0 for every cold read but the task lane (design § 3.6): read the newest retained request (task 2.3's
       reader), order it against `PublishedRequestID` with `looprequest.Parse`/`Compare` (task 1.0); newer →
       `Update(revision)` the record before classifying — field, `Iterations = parsed iteration − 1` (`ST:1345`: a
       record's request carries `Iterations + 1`), `PendingToolResults = nil` (the shape the advance itself leaves on
@@ -125,12 +171,40 @@
       (`C:2593-2612` classifies by `State` only). Test: unit via the evidence-reader seam — equal / newer-adopt (record
       passes `Validate`, `AG:136`; applied set empty; I4 holds) / newer-adopt over an `awaiting_approval` record (gate
       cleared, `State = running`) / older / unparseable.
-- [ ] 2.6 Birth by `Create` and CAS-loss release (docket OQ3, owner ruling 2026-09-22): birth writes the record with
+      **Landed** as `adoptNewerRetainedRequest` (`loop_evidence.go:271`), wired at both cold arms:
+      `settleResponseWithoutLoop` (`C:1775`) and `settleToolResultWithoutLoop` (`C:2446`), each BEFORE the arm
+      returns. The task lane and cancel are untouched. The gate clear is `LoopEntity.ResolveApproval` (`AG:246`) —
+      the existing owner of that transition — which restores `StateBeforeApproval`; there is no `running` state in
+      the vocabulary, and `StateBeforeApproval` is what "running" names. The adopted record is `Validate`d before it
+      is written, and the write is `Update(record.revision)`, so a record that moved under the read is a Retry, not
+      a silent overwrite.
+      L4a note: the classification that follows step 0 is tasks 3.1/3.2, so today the arm still returns its existing
+      not-held error after adopting. The adopt is idempotent — the redelivery reads the record it just wrote and
+      compares equal.
+      Test: `loop_carrier_test.go` `TestColdReadAdoptsTheNewestRetainedRequestFirst`, seven arms — newer-adopt
+      (`published_request_id`, `iterations = parsed − 1`, applied set emptied, `Validate` green), newer-adopt over an
+      `awaiting_approval` record (gate nil, state restored), current (nothing written), nothing retained (nothing
+      written), record naming a request the stream never retained (Quarantine), unparseable retained (Quarantine),
+      unparseable record field (Quarantine).
+- [x] 2.6 Birth by `Create` and CAS-loss release (docket OQ3, owner ruling 2026-09-22): birth writes the record with
       `loopsBucket.Create` (`KV:211`) so a second consumer's birth is refused with `ErrKVKeyExists` (`KV:218`) and
       takes the cold fork; a CAS loss anywhere on the carrier releases the loop's process state (`ST:574` `DeleteLoop`,
       `C:1964` `releaseLoopTransientState`) before it returns Retry. Test: `persist_handler_result_test.go` — a second
       birth for the same loop ID is refused and forks cold; after a CAS loss the loop holds no in-memory state and the
       redelivery reads the winning record.
+      **Landed.** `createLoopState` (`C:2663`) writes birth with `Create` and seeds the loop's revision; the refusal
+      is `natsclient.ErrKVKeyExists` and birth answers it by releasing the loop it just built in memory and
+      returning Retry (`C:1535-1547`). `natsclient.IsKVConflictError` is the shared classifier at both sites — the
+      component holds a raw `jetstream.KeyValue`, not a `natsclient.KVStore`, so `KV:211`/`KV:231` are the pattern
+      and not the call; the conflict class is unambiguous by call site (Create ⇒ key exists, Update ⇒ revision
+      moved). Recorded, because it is the one place the design's pins do not resolve to the call this makes.
+      CAS-loss release: `persistLoopState` (`C:2721-2727`) calls `releaseLoopTransientState` before returning, which
+      takes `DeleteLoop` (`ST:581`) and `forgetLoopRevision` with it.
+      **In-scope gap, recorded:** "takes the cold fork" is task 3.4's; until it lands a refused birth Retries
+      instead of forking, bounded by the lane's MaxDeliver.
+      Tests: `loop_carrier_test.go` `TestBirthRefusesASecondCreateForTheSameLoop` and
+      `TestCarrierCompareAndSwapLossRetriesAndReleasesTheLoop` (the loop is gone from memory and its revision with
+      it).
 ## 3. Lane classification (3.9 is L4b's — see "Moved to L4b")
 
 - [ ] 3.1 Tool-result classification: nothing to delete on `main`; build it at component entry `C:2195` (ahead of

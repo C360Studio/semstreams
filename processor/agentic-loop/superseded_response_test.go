@@ -47,6 +47,7 @@ func loopWithADeferredTurn(t *testing.T) (*Component, *recordingLoopBucket, stri
 	c := releaseTestComponent(t, handler)
 	bucket := &recordingLoopBucket{}
 	c.loopsBucket = bucket
+	seedLoopRecord(t, c, loopID)
 	return c, bucket, loopID, requestID
 }
 
@@ -148,6 +149,7 @@ func timedOutLoopWithASupersededRequest(t *testing.T) (*Component, *recordingLoo
 	c := releaseTestComponent(t, handler)
 	bucket := &recordingLoopBucket{}
 	c.loopsBucket = bucket
+	seedLoopRecord(t, c, loopID)
 	return c, bucket, loopID, superseded
 }
 

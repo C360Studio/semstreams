@@ -2,13 +2,9 @@ package agenticloop
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"strings"
 
-	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/internal/looptoken"
-	"github.com/nats-io/nats.go/jetstream"
 )
 
 // loopPresence answers one question, asked at six call sites in different
@@ -60,36 +56,12 @@ func loopIDFromStructuredID(structuredID, separator string) string {
 
 // classifyMissingLoop reads one loop record and classifies it. It performs no
 // recovery: it reconstructs no in-memory state, re-registers no routing entry,
-// and reads no retained request or tool-result message. Making the
-// loopPresenceLive case actually recoverable is L4's (#1330) subject; this
-// only stops the lost case from being acknowledged as if it were stale.
+// and reads no retained request or tool-result message.
+//
+// It keeps its signature and delegates to readLoopRecord, which is the same
+// read plus the revision this one used to discard (#1330). Callers that must
+// WRITE the record — identity adoption, the carrier — need the revision;
+// callers that only need to decide stale-versus-live keep asking this.
 func (c *Component) classifyMissingLoop(ctx context.Context, loopID string) loopPresence {
-	if loopID == "" || !looptoken.Valid(loopID) {
-		// Nothing to look up. An input that carries no framework-minted loop
-		// token names no loop any process could be holding.
-		return loopPresenceStale
-	}
-	if c.loopsBucket == nil {
-		return loopPresenceUnknown
-	}
-	entry, err := c.loopsBucket.Get(ctx, loopID)
-	switch {
-	case errors.Is(err, jetstream.ErrKeyNotFound), errors.Is(err, jetstream.ErrKeyDeleted):
-		return loopPresenceStale
-	case err != nil:
-		return loopPresenceUnknown
-	}
-
-	var entity agentic.LoopEntity
-	if err := json.Unmarshal(entry.Value(), &entity); err != nil {
-		// A record that exists but will not decode is not evidence of
-		// staleness. Report unknown and let the bounded retry surface it.
-		c.logger.Error("Loop record did not decode while classifying a missing loop",
-			"loop_id", loopID, "error", err)
-		return loopPresenceUnknown
-	}
-	if entity.State.IsTerminal() {
-		return loopPresenceStale
-	}
-	return loopPresenceLive
+	return c.readLoopRecord(ctx, loopID).presence
 }
