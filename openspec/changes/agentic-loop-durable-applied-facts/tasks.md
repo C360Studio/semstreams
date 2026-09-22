@@ -62,6 +62,14 @@
       rebuild — which `RegionType` each retained `ChatMessage` returns to — is decided by those call sites. Building
       it ahead of them is the "zero present consumers" shape the developer contract refuses. Recorded as a
       sequencing choice inside this PR, not a scope change.
+      **Carries the W2 halves of 4.2** (moved here 2026-09-22, checkpoint-2 review). Both W2 cases —
+      `tool_result_redelivery_integration_test.go` and `identity_adoption_integration_test.go` — pin what L4a does
+      with a redelivered input the record does not account for BEFORE the rebuild exists: the cold arm returns "this
+      process does not hold the loop", which is a Retry. Design § 5.2 step 2 and § 5.3 step 3 end elsewhere — a cold
+      process REBUILDS from the retained request and response and applies the input. When `restoreLoopFromRequest` /
+      `restoreToolBatch` land, the two cases are REWRITTEN, never deleted, from "retries, writes nothing" to
+      "rebuilds and applies". The invariant that survives either way: the input is never acknowledged away and the
+      record never moves on a delivery nobody applied.
 
 ## 2. Carrier: order, CAS, identity adoption
 
@@ -421,7 +429,7 @@
       dispatched, never by rendering. 300 checks under `-race` in 11.09s.
       The approval lane's three shapes stay with L4b (#1362).
       Mutant (c) in 4.3 is what proves the property is not self-satisfying.
-- [x] 4.2 Real-NATS W2 and W4 on the tool lane — the W4 case RESTARTS the process via `test/e2e/harness/processbarrier`
+- [x] 4.2 Real-NATS W4 on the tool lane — the W4 case RESTARTS the process via `test/e2e/harness/processbarrier`
       (replacement, not a fresh handler) and asserts the adoption-first write — plus W2 and W4 (truncation retry) on the
       response lane; assertions read `AGENT_LOOPS` (`published_request_id`, `iterations`, `state`) and count messages
       per subject, never bodies. Files: new `tool_result_redelivery_integration_test.go`, new
@@ -441,9 +449,15 @@
       delivery Acks as `older_request`, and `agent.request.<loopID>` still holds exactly two messages — the adopting
       process publishes nothing. W4 on the response lane: the truncation retry `<loop>:req:1:1` is adopted with
       `iterations` still 0 (a within-iteration retry advances nothing) and the response for `:req:1:0` Acks as
-      `superseded_request`. W2 on both lanes is the opposite settlement: nothing newer is retained, step 0 has nothing
-      to adopt, the input is still current, and the replacement RETRIES rather than acknowledging away work somebody is
-      still owed — leaving the record at the exact revision it found it at.
+      `superseded_request`. **The W2 halves of both files are NOT this task's** — they pin a provisional settlement
+      that the cold rebuild changes, so they moved under task 1.2 (split out 2026-09-22 at the checkpoint-2 review:
+      a ticked task must not carry a provisional assertion).
+      The task lane's own real-broker case lands here too: `task_redelivery_integration_test.go`
+      (`TestTaskRedeliveredToAReplacementLeavesOneFirstRequest`) births a loop through the real task lane, hands the
+      same bytes to a replacement, and asserts the delivery Acks while `agent.request.<loopID>` still holds exactly
+      one message under `Nats-Msg-Id = R1`, with the record's revision unmoved. It exists because the unit arm of 3.4
+      asserts only what the delivery does not do, and the `taskBirth` mutant satisfies that too; on a real stream it
+      does not (re-run recorded on 3.4).
       **Deviation, recorded:** the process replacement is a second `Component` with its own `MessageHandler` over the
       same bucket and stream, not an OS process restarted through `test/e2e/harness/processbarrier`. That barrier is
       the agentic E2E tier's tool executor for holding a real app across a docker restart; inside a Go integration test
@@ -451,14 +465,6 @@
       context managers, the minted-request map — is process-local state a new `Component` genuinely does not have. The
       OS-process replacement is task 6.2's `task e2e:agentic` stage.
       `go test -race -tags=integration -count=3` over both tests: `ok … 4.198s`.
-      **Recorded for whoever lands the cold rebuild (task 1.2's unbuilt half).** Both W2 cases pin what L4a actually
-      does with a redelivered input the record does not account for: the cold arm returns "this process does not hold
-      the loop", which is a Retry. Design § 5.2 step 2 and § 5.3 step 3 end elsewhere — a cold process REBUILDS from
-      the retained request and response and applies the input — and `restoreLoopFromRequest` / `restoreToolBatch` are
-      the half of task 1.2 sequenced to that work. When they land, the two W2 cases change from "retries, writes
-      nothing" to "rebuilds and applies", and they are the tests that must be rewritten rather than deleted: the
-      invariant they hold either way is that the input is never acknowledged away and the record never moves on a
-      delivery nobody applied.
 - [x] 4.3 Mutation evidence (`cp` backup + checksum, never stash): (a) restore Put-before-publish in 2.1 → W4 in 4.2
       fails; (b) restore plain `Put` → the CAS case in 2.1 fails; (c) skip adoption in 2.3 → the 4.1 property fails;
       (e) skip step 0 in 2.5 → the restarted W4 case in 4.2 retries to `MaxDeliver`. (d) and (f) are L4b's.
