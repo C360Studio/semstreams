@@ -28,9 +28,11 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/internal/agentterminal"
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/internal/looptoken"
 	"github.com/c360studio/semstreams/message"
@@ -392,7 +394,7 @@ func ResolveRun(ctx context.Context, runs RunStateReader, reader LoopTripleReade
 
 	loopEntityID, err := agentic.TryLoopExecutionEntityID(org, platform, loopID)
 	if err != nil {
-		return nil, fmt.Errorf("agentrun.ResolveRun: build loop entity ID: %w", err)
+		return nil, semerrs.WrapInvalid(err, "agentrun", "ResolveRun", "build loop entity ID")
 	}
 
 	// -- Path 1: typed agent.loop.run triple --
@@ -403,17 +405,13 @@ func ResolveRun(ctx context.Context, runs RunStateReader, reader LoopTripleReade
 	if ok && runID != "" {
 		runEntityID, err := agentic.TryChainExecutionEntityID(org, platform, runID)
 		if err != nil {
-			return nil, fmt.Errorf("agentrun.ResolveRun: build run entity ID from triple: %w", err)
+			return nil, semerrs.WrapInvalid(err, "agentrun", "ResolveRun", "build run entity ID from triple")
 		}
 		participant, err := runs.Get(ctx, WorkflowName, runEntityID)
 		if err != nil {
 			return nil, fmt.Errorf("agentrun.ResolveRun: Manager.Get: %w", err)
 		}
-		run, ok := participant.(*AgentRun)
-		if !ok {
-			return nil, fmt.Errorf("agentrun.ResolveRun: Manager.Get returned unexpected type %T", participant)
-		}
-		return run, nil
+		return asAgentRun(participant)
 	}
 
 	// -- Path 2: ancestry-walk fallback --
@@ -435,31 +433,32 @@ func ResolveRun(ctx context.Context, runs RunStateReader, reader LoopTripleReade
 			// currentLoopID is the root loop — treat as run ID.
 			runEntityID, err := agentic.TryChainExecutionEntityID(org, platform, currentLoopID)
 			if err != nil {
-				return nil, fmt.Errorf("agentrun.ResolveRun: build run entity ID from ancestry root: %w", err)
+				return nil, semerrs.WrapInvalid(err, "agentrun", "ResolveRun",
+					"build run entity ID from ancestry root")
 			}
 			participant, err := runs.Get(ctx, WorkflowName, runEntityID)
 			if err != nil {
 				return nil, fmt.Errorf("agentrun.ResolveRun: Manager.Get (ancestry root): %w", err)
 			}
-			run, ok := participant.(*AgentRun)
-			if !ok {
-				return nil, fmt.Errorf("agentrun.ResolveRun: Manager.Get returned unexpected type %T", participant)
-			}
-			return run, nil
+			return asAgentRun(participant)
 		}
 		// Step up to the parent. Extract the bare loopID from the parent's entity ID
 		// (the parent is a loop-execution entity, not a chain entity).
 		parentLoopID, ok := agentic.LoopIDFromExecutionEntityID(parentEntityID)
 		if !ok {
 			// parentEntityID is not a loop-execution entity — ancestry walk cannot proceed.
-			return nil, fmt.Errorf("agentrun.ResolveRun: ancestry walk hop %d: parent entity %q is not a loop-execution entity ID; cannot continue walk",
-				hop, parentEntityID)
+			return nil, semerrs.WrapInvalid(
+				fmt.Errorf("ancestry walk hop %d: parent entity %q is not a loop-execution entity ID; cannot continue walk",
+					hop, parentEntityID),
+				"agentrun", "ResolveRun", "walk loop ancestry")
 		}
 		currentEntityID = parentEntityID
 		currentLoopID = parentLoopID
 	}
 
-	return nil, fmt.Errorf("agentrun.ResolveRun: ancestry walk exceeded %d hops without reaching root for loop %q", maxAncestryHops, loopID)
+	return nil, semerrs.WrapInvalid(
+		fmt.Errorf("ancestry walk exceeded %d hops without reaching root for loop %q", maxAncestryHops, loopID),
+		"agentrun", "ResolveRun", "walk loop ancestry")
 }
 
 // LoopTerminalEvent carries the terminal event data passed to MilestoneHandlers.
@@ -525,6 +524,17 @@ type MilestoneSubscriber struct {
 	platform string
 	logger   *slog.Logger
 	decoder  *message.Decoder
+
+	// decisions counts every delivery that did NOT acknowledge, by lane,
+	// decision and reason. It is built here rather than at registration so an
+	// increment on an unregistered subscriber is a local no-op instead of a nil
+	// dereference on the delivery path.
+	decisions *prometheus.CounterVec
+
+	// mu guards deliveryFatalErr only. Handler registration stays the
+	// before-start contract AddHandler documents.
+	mu               sync.Mutex
+	deliveryFatalErr error
 }
 
 // NewMilestoneSubscriber constructs a subscriber wired to the given concrete
@@ -565,6 +575,12 @@ func NewMilestoneSubscriberWithRunStateReader(
 		platform: platform,
 		logger:   logger,
 		decoder:  message.NewDecoder(reg),
+		decisions: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "semstreams",
+			Subsystem: "agentrun",
+			Name:      "milestone_decisions_total",
+			Help:      "Milestone deliveries that did not acknowledge, by lane, decision and reason",
+		}, []string{"lane", "decision", "reason"}),
 	}
 }
 
@@ -584,13 +600,46 @@ func (s *MilestoneSubscriber) AddHandler(h MilestoneHandler) {
 // Panic guard: each handler invocation is wrapped in a recover so a panicking
 // product handler does not crash the subscriber goroutine.
 //
-// Returns an error only for infrastructure failures (decode, NATS). Handler
-// errors are logged but do not propagate — the subscriber continues processing
-// subsequent events.
+// Returns nil exactly when the attempt would be acknowledged: every registered
+// handler returned nil and the run resolved (or the loop belongs to no run).
+// Otherwise it returns the classified cause the durable lanes settle on — the
+// SAME answer, computed once in decide, so a direct call and a redelivered
+// message can never disagree about what an attempt meant. Before #1249 this
+// swallowed every resolution and handler failure and returned nil, which
+// acknowledged a milestone nobody had processed.
 func (s *MilestoneSubscriber) HandleEvent(ctx context.Context, data []byte) error {
+	return s.decide(ctx, data).cause
+}
+
+// milestoneDecision is one delivery attempt's settlement decision together with
+// the identity its log line and counter increment carry. cause is nil only for
+// an Ack: the typed settlement contract rejects any other decision without one.
+type milestoneDecision struct {
+	decision natsclient.DeliveryDecision
+	cause    error
+	reason   string
+	event    LoopTerminalEvent
+}
+
+// decide runs one delivery attempt and returns its settlement decision. It is
+// the package's only classifier: HandleEvent and both lanes' DeliveryWork read
+// what it returns.
+//
+// Every attempt runs EVERY registered handler in registration order, and the
+// delivery settles on the aggregate — never on a per-handler decision. That is
+// what makes a replay safe to repeat: a handler that already committed its
+// durable consequence for this identity re-runs as its own no-op (see
+// MilestoneHandler's handler-done contract).
+func (s *MilestoneSubscriber) decide(ctx context.Context, data []byte) milestoneDecision {
 	normalized, err := agentterminal.Decode(s.decoder, data)
 	if err != nil {
-		return fmt.Errorf("agentrun: HandleEvent: normalize terminal: %w", err)
+		// Poison for this delivery: the same stored bytes decode the same way
+		// on every attempt, so retrying buys nothing.
+		return milestoneDecision{
+			decision: natsclient.DeliveryDecisionTerminate,
+			cause:    semerrs.WrapInvalid(err, "agentrun", "HandleEvent", "normalize terminal"),
+			reason:   reasonDecode,
+		}
 	}
 	ev := LoopTerminalEvent{
 		SourceMessageID: normalized.SourceMessageID,
@@ -605,62 +654,109 @@ func (s *MilestoneSubscriber) HandleEvent(ctx context.Context, data []byte) erro
 	// Resolve the run. Prefer the wire RunID (D8 typed path); fall back to walk.
 	run, err := s.resolveRunForEvent(ctx, ev)
 	if err != nil {
-		// Resolution failure: log but do not crash the subscriber.
-		s.logger.Warn("agentrun: HandleEvent: run resolution failed — skipping handlers",
+		decision, reason := classifyResolutionFailure(err)
+		return milestoneDecision{decision: decision, cause: err, reason: reason, event: ev}
+	}
+
+	outcomes := make([]milestoneOutcome, 0, len(s.handlers))
+	causes := make([]error, 0, len(s.handlers))
+	for index, handler := range s.handlers {
+		handlerErr := s.invokeHandler(ctx, index, ev, run, handler)
+		outcomes = append(outcomes, classifyHandlerOutcome(handlerErr))
+		if handlerErr != nil {
+			causes = append(causes, handlerErr)
+		}
+	}
+
+	switch aggregateMilestoneOutcomes(outcomes) {
+	case outcomeFatal:
+		return milestoneDecision{
+			decision: natsclient.DeliveryDecisionQuarantine,
+			cause:    errors.Join(causes...),
+			reason:   reasonHandlerFatal,
+			event:    ev,
+		}
+	case outcomeTransient:
+		return milestoneDecision{
+			decision: natsclient.DeliveryDecisionRetry,
+			cause:    errors.Join(causes...),
+			reason:   reasonHandlerTransient,
+			event:    ev,
+		}
+	case outcomeInvalid:
+		return milestoneDecision{
+			decision: natsclient.DeliveryDecisionTerminate,
+			cause:    errors.Join(causes...),
+			reason:   reasonHandlerInvalid,
+			event:    ev,
+		}
+	default:
+		return milestoneDecision{decision: natsclient.DeliveryDecisionAck, event: ev}
+	}
+}
+
+// invokeHandler runs one handler under a recover and returns what that handler
+// contributed to the attempt. A panic becomes a Fatal-classified error rather
+// than unwinding the NATS callback, so the remaining handlers still run and the
+// attempt quarantines instead of acknowledging a crash.
+func (s *MilestoneSubscriber) invokeHandler(
+	ctx context.Context,
+	index int,
+	ev LoopTerminalEvent,
+	run *AgentRun,
+	handler MilestoneHandler,
+) (handlerErr error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			handlerErr = semerrs.WrapFatal(fmt.Errorf("handler %d panicked: %v", index, recovered),
+				"agentrun", "OnLoopTerminal", "handler panicked")
+			s.logger.Error("agentrun: MilestoneHandler panicked",
+				slog.Int("handler_index", index),
+				slog.String("loop_id", ev.LoopID),
+				slog.Any("panic", recovered))
+		}
+	}()
+	handlerErr = handler.OnLoopTerminal(ctx, ev, run)
+	if handlerErr != nil {
+		s.logger.Warn("agentrun: MilestoneHandler error",
+			slog.Int("handler_index", index),
 			slog.String("loop_id", ev.LoopID),
-			slog.String("run_id", ev.RunID),
-			slog.String("category", ev.Category),
-			slog.Any("error", err))
-		return nil
+			slog.Any("error", handlerErr))
 	}
-
-	// Fan out to product handlers with panic guard.
-	for i, h := range s.handlers {
-		func(idx int, handler MilestoneHandler) {
-			defer func() {
-				if r := recover(); r != nil {
-					s.logger.Error("agentrun: MilestoneHandler panicked",
-						slog.Int("handler_index", idx),
-						slog.String("loop_id", ev.LoopID),
-						slog.Any("panic", r))
-				}
-			}()
-			if handlerErr := handler.OnLoopTerminal(ctx, ev, run); handlerErr != nil {
-				s.logger.Warn("agentrun: MilestoneHandler error",
-					slog.Int("handler_index", idx),
-					slog.String("loop_id", ev.LoopID),
-					slog.Any("error", handlerErr))
-			}
-		}(i, h)
-	}
-
-	return nil
+	return handlerErr
 }
 
 // resolveRunForEvent resolves the AgentRun for the event. Uses the wire RunEntityID
 // when available (fast path, no walk needed), then falls back to ResolveRun
 // (which does the typed triple lookup + ancestry walk).
+//
+// (nil, nil) means exactly one thing: no run entity exists, which is ordinary —
+// a standalone loop belongs to no run and its handlers run with a nil run.
+// EVERY other failure is returned for classification. The pre-#1249 fast path
+// answered (nil, nil) for any Manager.Get error at all, so an unreadable graph
+// looked identical to a loop that was never in a run.
 func (s *MilestoneSubscriber) resolveRunForEvent(ctx context.Context, ev LoopTerminalEvent) (*AgentRun, error) {
 	// Fast path: RunEntityID is on the wire (ADR-053 D8 typed propagation).
 	if ev.RunEntityID != "" {
 		participant, err := s.runs.Get(ctx, WorkflowName, ev.RunEntityID)
 		if err != nil {
-			// Run entity not found — may be a non-run loop. Log and return nil run.
-			s.logger.Debug("agentrun: resolveRunForEvent: Manager.Get from wire RunEntityID failed",
-				slog.String("run_entity_id", ev.RunEntityID),
-				slog.String("loop_id", ev.LoopID),
-				slog.Any("error", err))
-			return nil, nil //nolint:nilerr // deliberate: non-run loops have no run entity
+			if errors.Is(err, lifecycle.ErrEntityNotFound) {
+				s.logger.Debug("agentrun: resolveRunForEvent: no run entity for the wire RunEntityID",
+					slog.String("run_entity_id", ev.RunEntityID),
+					slog.String("loop_id", ev.LoopID))
+				return nil, nil
+			}
+			return nil, err
 		}
-		run, ok := participant.(*AgentRun)
-		if !ok {
-			return nil, fmt.Errorf("Manager.Get returned unexpected type %T", participant)
-		}
-		return run, nil
+		return asAgentRun(participant)
 	}
 
 	if ev.LoopID == "" {
-		return nil, nil
+		// Unreachable through agentterminal.Decode, which rejects an empty
+		// LoopID. It settles as Terminate rather than as the silent ACK it used
+		// to be so that a decoder which ever admits one is loud, not invisible.
+		return nil, semerrs.WrapInvalid(errors.New("terminal names no run and no loop"),
+			"agentrun", "HandleEvent", "resolve")
 	}
 
 	// Slow path: use ResolveRun (typed triple + ancestry walk).
@@ -823,20 +919,12 @@ func (s *MilestoneSubscriber) Start(
 	owner := &milestoneConsumerOwner{cancel: cancel}
 	stop = owner.stop
 
-	handleMsg := func(subject string) func(ctx context.Context, msg jetstream.Msg) {
-		return func(msgCtx context.Context, msg jetstream.Msg) {
-			handleErr := natsclient.ConsumeWithHeartbeat(msgCtx, msg, 10*time.Second, func(workCtx context.Context) error {
-				if err := s.HandleEvent(workCtx, msg.Data()); err != nil {
-					return natsclient.TerminateDelivery(err)
-				}
-				return nil
-			})
-			if handleErr != nil {
-				s.logger.Warn("agentrun: MilestoneSubscriber: HandleEvent error",
-					slog.String("subject", subject),
-					slog.Any("error", handleErr))
-			}
-		}
+	// One semantic retry policy for both lanes: a Retry means "not yet", so it
+	// waits instead of redelivering at line rate against a finite MaxDeliver.
+	retry, err := natsclient.DelayedDeliveryRetry(milestoneRetryDelay)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("agentrun: MilestoneSubscriber: construct milestone retry policy: %w", err)
 	}
 
 	completeCfg := natsclient.StreamConsumerConfig{
@@ -848,8 +936,20 @@ func (s *MilestoneSubscriber) Start(
 		MaxDeliver:    5,
 		AckWait:       30 * time.Second,
 	}
+	// Validated BEFORE acquisition, against the same config the lane is about to
+	// acquire: a heartbeat above half the AckWait is refused here rather than
+	// letting a lease expire in the middle of a fanout.
+	completePolicy, err := natsclient.ValidateHeartbeatDeliveryPolicy(
+		ctx, completeCfg, milestoneHeartbeatInterval, retry, s.deliveryWork(milestoneLaneComplete),
+	)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf(
+			"agentrun: MilestoneSubscriber: validate agent.complete.* delivery policy: %w", err)
+	}
+	completeAdmission := deliverylane.NewAdmission(s.recordDeliveryOwnerFatal, nil)
 	completeHandle, err := client.ConsumeInternalStreamWithConfig(
-		runCtx, completeCfg, handleMsg("agent.complete.*"),
+		runCtx, completeCfg, s.consumeLane(milestoneLaneComplete, completePolicy, completeAdmission),
 	)
 	if err != nil {
 		cancel()
@@ -899,8 +999,21 @@ func (s *MilestoneSubscriber) Start(
 		MaxDeliver:    5,
 		AckWait:       30 * time.Second,
 	}
+	failedPolicy, err := natsclient.ValidateHeartbeatDeliveryPolicy(
+		ctx, failedCfg, milestoneHeartbeatInterval, retry, s.deliveryWork(milestoneLaneFailed),
+	)
+	if err != nil {
+		rollbackErr := lifecyclecleanup.RollbackFailedStart(ctx, stop)
+		startErr := fmt.Errorf(
+			"agentrun: MilestoneSubscriber: validate agent.failed.* delivery policy: %w", err)
+		if rollbackErr == nil {
+			return nil, startErr
+		}
+		return stop, errors.Join(startErr, rollbackErr)
+	}
+	failedAdmission := deliverylane.NewAdmission(s.recordDeliveryOwnerFatal, nil)
 	failedHandle, err := client.ConsumeInternalStreamWithConfig(
-		runCtx, failedCfg, handleMsg("agent.failed.*"),
+		runCtx, failedCfg, s.consumeLane(milestoneLaneFailed, failedPolicy, failedAdmission),
 	)
 	if err != nil {
 		// Deliberately NOT graceful, including for a not-found: the complete

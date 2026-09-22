@@ -714,11 +714,17 @@ func TestSubscriber_PanicGuard_SecondHandlerRunsAfterFirstPanics(t *testing.T) {
 	}
 	data := mustMarshalBaseMessage(t, completed.Schema(), completed)
 
+	var handleErr error
 	require.NotPanics(t, func() {
-		err := sub.HandleEvent(context.Background(), data)
-		require.NoError(t, err, "HandleEvent must not propagate panic as error")
-	})
+		handleErr = sub.HandleEvent(context.Background(), data)
+	}, "a panicking handler must not unwind the subscriber goroutine")
 	assert.True(t, secondHandlerCalled, "second handler must run even when first panics")
+	// Since #1249 the fanout settles as one unit, so the panic is the attempt's
+	// outcome rather than a swallowed warning: HandleEvent returns the cause the
+	// lane quarantines on. Disposition is pinned by
+	// TestMilestoneFanoutQuarantinesOnHandlerPanic.
+	require.Error(t, handleErr, "a panicking handler must not acknowledge the delivery")
+	assert.True(t, errs.IsFatal(handleErr), "a handler panic is a fatal outcome: %v", handleErr)
 }
 
 // --- Non-run loops (no RunEntityID, no agent.loop.run triple) ---

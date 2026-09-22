@@ -65,6 +65,30 @@ func (h *integrationMilestoneHandler) OnLoopTerminal(_ context.Context, event ag
 //
 // The D1 invariant is specifically about exact authority projection, so this
 // test does not add mutation behavior already covered by lifecycle integration.
+// serveAbsentRunAuthority answers the exact-entity authority the way graph-ingest
+// does for an entity that has no state: a classified entity_not_found, which is
+// what lifecycle.Manager maps to ErrEntityNotFound and therefore to a nil run.
+//
+// Before #1249 these tests left the authority unserved, so Manager.Get failed
+// with "no responders available" and the subscriber could not tell an absent run
+// from an unreachable graph — it acknowledged both. An unreachable graph now
+// retries, so a test that wants an ABSENT run has to say so.
+func serveAbsentRunAuthority(ctx context.Context, t *testing.T, client *natsclient.Client) {
+	t.Helper()
+	_, err := client.SubscribeForRequests(ctx, "graph.ingest.query.entity",
+		func(_ context.Context, request []byte) ([]byte, error) {
+			var query struct {
+				ID string `json:"id"`
+			}
+			if decodeErr := json.Unmarshal(request, &query); decodeErr != nil {
+				return nil, decodeErr
+			}
+			return nil, semerrs.ClassifiedCode(semerrs.ErrorInvalid, graph.ErrorCodeEntityNotFound,
+				fmt.Errorf("no entity state for %q", query.ID))
+		})
+	require.NoError(t, err)
+}
+
 func TestIntegration_D1_ProjectionRoundTrip(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithFastStartup())
 	ctx := context.Background()
@@ -219,6 +243,7 @@ func TestIntegration_MilestoneSubscriberBindsAStreamThatAppearsDuringStart(t *te
 
 	mgr := lifecycle.NewManager(tc.Client, nil)
 	require.NoError(t, agentrun.Register(mgr))
+	serveAbsentRunAuthority(ctx, t, tc.Client)
 	sub := agentrun.NewMilestoneSubscriber(mgr, nil, "acme", "ops", nil)
 	handler := &integrationMilestoneHandler{events: make(chan agentrun.LoopTerminalEvent, 1)}
 	sub.AddHandler(handler)
@@ -300,6 +325,7 @@ func TestIntegration_MilestoneSubscriber_StartsWhenStreamPresent(t *testing.T) {
 
 	mgr := lifecycle.NewManager(tc.Client, nil)
 	require.NoError(t, agentrun.Register(mgr))
+	serveAbsentRunAuthority(ctx, t, tc.Client)
 	sub := agentrun.NewMilestoneSubscriber(mgr, nil, "acme", "ops", nil)
 	handler := &integrationMilestoneHandler{events: make(chan agentrun.LoopTerminalEvent, 1)}
 	sub.AddHandler(handler)
@@ -335,6 +361,7 @@ func TestIntegration_MilestoneSubscriberDrainsBothHandlesBeforeWaiting(t *testin
 	defer tc.Terminate()
 	mgr := lifecycle.NewManager(tc.Client, nil)
 	require.NoError(t, agentrun.Register(mgr))
+	serveAbsentRunAuthority(t.Context(), t, tc.Client)
 	sub := agentrun.NewMilestoneSubscriber(mgr, nil, "acme", "ops", nil)
 	handler := &blockingIntegrationMilestoneHandler{
 		entered: make(chan struct{}), release: make(chan struct{}), ctxErr: make(chan error, 1),
@@ -444,6 +471,7 @@ func TestIntegration_MilestoneSubscriberProductionEnvelopeCallbacks(t *testing.T
 	ctx := t.Context()
 	mgr := lifecycle.NewManager(tc.Client, nil)
 	require.NoError(t, agentrun.Register(mgr))
+	serveAbsentRunAuthority(ctx, t, tc.Client)
 	sub := agentrun.NewMilestoneSubscriber(mgr, nil, "acme", "ops", nil)
 	handler := &integrationMilestoneHandler{events: make(chan agentrun.LoopTerminalEvent, 3)}
 	sub.AddHandler(handler)

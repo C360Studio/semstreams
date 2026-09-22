@@ -45,34 +45,61 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
 
 ## 3. Decision matrix and settlement (design § 2.3–2.4; R1, R2, O1)
 
-- [ ] 3.1 Replace the `ConsumeWithHeartbeat` closure (`agentrun.go:810-819`) with `ValidateHeartbeatDeliveryPolicy` per
+- [x] 3.1 Replace the `ConsumeWithHeartbeat` closure (`agentrun.go:810-819`) with `ValidateHeartbeatDeliveryPolicy` per
       lane (`natsclient/delivery_settlement.go:155`) and `deliverylane.Consume`
       (`internal/deliverylane/deliverylane.go:105`) under the `admitted` guard (reconciliation B1) over one
       `DeliveryWork` (`natsclient/delivery_settlement.go:35`, signature unchanged:
       `func(context.Context, []byte) (DeliveryDecision, error)`); decode failure → Terminate (`decode`).
-- [ ] 3.2 Classify resolution on the AgentRun side: `errors.Is` against `ErrEntityNotFound`
+      Evidence: `Start` now validates one `HeartbeatDeliveryPolicy` per lane before acquisition
+      (`ValidateHeartbeatDeliveryPolicy(ctx, cfg, milestoneHeartbeatInterval, retry, s.deliveryWork(lane))`) and the NATS
+      callback is `consumeLane` in `agentic/agentrun/milestone_settlement.go`: `deliverylane.Consume` then
+      `if !admitted { return }` (B1). Decode Terminates with reason `decode`. `git grep -n -E 'ConsumeWithHeartbeat\(' --
+      '*.go' ':!**/*_test.go'` now returns the declaration only.
+- [x] 3.2 Classify resolution on the AgentRun side: `errors.Is` against `ErrEntityNotFound`
       (`pkg/lifecycle/manager.go:205`) → nil run; `ErrEntityNotLifecycleManaged` (`:244`) → Retry (R2);
       `ErrWorkflowNotRegistered` (`:169`) → Quarantine (R1); otherwise `errs.Classify` (`pkg/errs/errs.go:280`):
       Invalid → Terminate, Fatal → Quarantine, else Retry. Covers `agentrun.go:637`, `:641` (Terminate
       `resolution_type`), `:653`, `:657`; the nil-reader error (`manager.go:198`) and projection failures (`:250`)
       settle as bounded Retry. `pkg/lifecycle` is not edited.
-- [ ] 3.3 Wrap `errs.WrapInvalid` (`errs.go:435`) at the AgentRun-side origins: `agentrun.go:393`, `:405`, `:436`,
+      Evidence: `classifyResolutionFailure` in `milestone_settlement.go` — sentinels first, then `semerrs.Classify`.
+      `resolveRunForEvent` answers `(nil, nil)` only for `ErrEntityNotFound` and returns every other error.
+      `pkg/lifecycle` is untouched (`git diff --stat pkg/lifecycle` empty).
+- [x] 3.3 Wrap `errs.WrapInvalid` (`errs.go:435`) at the AgentRun-side origins: `agentrun.go:393`, `:405`, `:436`,
       `:455`, `:462`, `nats_reader.go:68` (chains kept, no signature change).
-- [ ] 3.4 The dead identity guard (`agentrun.go:646-647`) Terminates with cause
+      Evidence: `semerrs.WrapInvalid` at the five `ResolveRun` origins (build loop entity ID, build run entity ID from
+      triple, build run entity ID from ancestry root, parent-not-a-loop-entity, hop bound) and at
+      `nats_reader.go` `getStringTriple`'s non-string value. Chains kept via `%w`; no signature changed. The
+      `Manager.Get` and triple-read sites are deliberately NOT wrapped: they forward the reader's own class.
+- [x] 3.4 The dead identity guard (`agentrun.go:646-647`) Terminates with cause
       `errs.WrapInvalid(errors.New("terminal names no run and no loop"), "agentrun", "HandleEvent", "resolve")`, never
       nil (`interpretDeliveryWork`, `natsclient/delivery_settlement.go:403`/`:407`).
-- [ ] 3.5 Every attempt runs every handler in registration order under the per-handler recover (`agentrun.go:605`,
+      Evidence: the `ev.LoopID == ""` branch of `resolveRunForEvent` returns the ruled cause verbatim; its decision is
+      `resolution_invalid` through the same classifier, so no dedicated branch exists for it.
+- [x] 3.5 Every attempt runs every handler in registration order under the per-handler recover (`agentrun.go:605`,
       `:612`); collect outcomes; aggregate fatal > transient > invalid > Ack (O1). Tests:
       `TestMilestoneAggregateIsPureOverOrderedOutcomes` (rapid property, I4),
       `TestMilestoneFanoutAcksOnlyWhenEveryHandlerReturnsNil` (I1),
       `TestMilestoneFanoutRetriesOnTransientHandlerError`, `TestMilestoneFanoutTerminatesOnAllInvalid` (O1),
       `TestMilestoneFanoutQuarantinesOnHandlerPanic` (I3).
-- [ ] 3.6 Resolution tests: `TestMilestoneNotManagedEntityRetriesThenAcksAfterCreate` (I7/R2: Retry on attempt 1,
+      Evidence: `aggregateMilestoneOutcomes` + `classifyHandlerOutcome` in `milestone_settlement.go`; the fanout loop is
+      in `decide`, each handler under `invokeHandler`'s recover. Tests in
+      `agentic/agentrun/milestone_settlement_internal_test.go` and `milestone_aggregate_prop_test.go`, all green under
+      `-race`; the property carries `// spec: agent-run-milestones / milestone fanout settles as one replay-safe unit`
+      and `task spec:properties` moved 287/287 to 288/288.
+- [x] 3.6 Resolution tests: `TestMilestoneNotManagedEntityRetriesThenAcksAfterCreate` (I7/R2: Retry on attempt 1,
       `Manager.Create`, Ack on attempt 2), `TestMilestoneUnregisteredWorkflowQuarantinesAndLatches` (R1),
       `TestMilestoneResolutionInvalidTerminates` (grammar, non-string value, non-`*AgentRun`),
       `TestMilestoneNilReaderAndProjectionFailuresRetry`.
-- [ ] 3.7 Log and counter on every non-Ack decision (I5): one line with `source_message_id`, `loop_id`, `category`,
+      Evidence: all four tests green. `TestMilestoneUnregisteredWorkflowQuarantinesAndLatches` and the nil-reader half of
+      `TestMilestoneNilReaderAndProjectionFailuresRetry` drive the REAL `lifecycle.NewManager`, so their errors are
+      production values, not strings a test invented. Each asserts the decision REASON as well as the settlement method,
+      because four rows terminate and three retry.
+- [x] 3.7 Log and counter on every non-Ack decision (I5): one line with `source_message_id`, `loop_id`, `category`,
       `lane`, `reason`; one increment. Test: `TestMilestoneNonAckDecisionsLogOnceAndCountOnce`.
+      Evidence: `observeDecision` emits one `slog.Warn` with the five fields and one
+      `semstreams_agentrun_milestone_decisions_total{lane,decision,reason}` increment, both inside the `DeliveryWork`
+      (B1). The vec is built in `NewMilestoneSubscriberWithRunStateReader` so an unregistered increment is a local
+      no-op; `RegisterMetrics` and the root wiring stay with task 5.2.
 - [ ] 3.8 Mutation evidence for the wiring, not the primitive: `cp` `agentrun.go` aside; delete the aggregate call so
       the closure returns Ack unconditionally; run 3.5's tests and record the failing names; restore and `shasum` the
       restored file against the backup. Then delete the `SourceMessageID` copy at `:586` and record 2.2's failure the

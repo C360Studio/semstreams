@@ -415,9 +415,11 @@ func TestNewDurableHandlerRetirementIgnoresUnrelatedSelector(t *testing.T) {
 // TestLegacyHeartbeatProductionCallZeroGrowthStagingGuard prevents another
 // production caller while the remaining bindings migrate. The expected files
 // are not an API allowlist, a compatibility promise, or merge authority: the
-// set only ever shrinks. Layer L1 (#1327) removes the loop and model entries;
-// the PR migrating the last one (#1249, AgentRun) deletes ConsumeWithHeartbeat
-// and replaces this guard with zero callers and no export.
+// set only ever shrinks. Layer L1 (#1327) removed the loop and model entries;
+// #1249 migrated the last one, AgentRun, so the set is now EMPTY and the guard
+// asserts that no production caller exists anywhere. The declaration itself is
+// still asserted here because the symbol survives until the same PR's
+// natsclient layer deletes it without alias (#759).
 func TestLegacyHeartbeatProductionCallZeroGrowthStagingGuard(t *testing.T) {
 	files := parseProductionGoFiles(t, filepath.Clean(".."))
 	scan := scanLegacyHeartbeatReferences(files)
@@ -442,11 +444,9 @@ func TestLegacyHeartbeatProductionCallZeroGrowthStagingGuard(t *testing.T) {
 	if !reflect.DeepEqual(gotDeclaration, wantDeclaration) {
 		t.Fatalf("legacy ConsumeWithHeartbeat declaration = %#v, want %#v", gotDeclaration, wantDeclaration)
 	}
-	want := map[string]int{
-		"agentic/agentrun/agentrun.go": 1,
-	}
+	want := map[string]int{}
 	if !reflect.DeepEqual(scan.directCalls, want) {
-		t.Fatalf("legacy ConsumeWithHeartbeat callers = %#v, want exact branch-staging set %#v", scan.directCalls, want)
+		t.Fatalf("legacy ConsumeWithHeartbeat callers = %#v, want none: the last one migrated in #1249", scan.directCalls)
 	}
 }
 
