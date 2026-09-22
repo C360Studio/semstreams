@@ -1766,7 +1766,7 @@ conversation that happens to start with either string is kept.
 ### A replaced process re-arms no approval deadline
 
 A loop parked in `awaiting_approval` keeps its pending state across a process replacement — the record names the
-gated call, its execution identity and the request that gated it — but **the deadline is not re-armed**. The
+gated call, its execution identity and the request that gated it — but **the deadline is not re-armed at startup**. The
 approval-timeout sweeper snapshots the loops its own process holds, and nothing at startup reads `AGENT_LOOPS` to
 restore the ones it does not. A parked loop therefore stays `awaiting_approval` until the approval is answered or
 the loop is cancelled, rather than being auto-rejected by whichever process happens to come up.

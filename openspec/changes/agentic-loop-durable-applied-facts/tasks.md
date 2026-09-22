@@ -732,6 +732,9 @@
       The delta SCENARIO is scoped to startup and is exactly true; only the free-text sentence over-reaches. It is
       ruling text, so it is not edited here — the migration note and the doc comments state the narrow truth, and
       the narrowing is owed to the owner.
+      **Ratified by the owner 2026-09-22** (#1330 issuecomment-5781101792, "otherwise as recommended"): the
+      sentence now reads "at startup" with the rebuild clause (`specs/agentic-loop/spec.md:36-39`); design § 4 and
+      the § 9 OQ2 row (now CONFORMS), `proposal.md`, and the migration section's first paragraph carry the same scope.
 - [x] 5.4 `tasks_submitted_total` is at-least-once under redelivery (docket OQ4, owner ruling 2026-09-22): the new
       `specs/agentic-dispatch/spec.md` delta states it, plus one line in
       `docs/operations/migration-beta162-to-beta163.md` under the same `#1330` section; no arm change. Test: a
@@ -792,6 +795,10 @@
       `6a4df6f4ef8326fe250eaba97a9f7179` → restored `6c1eaf6d5e0a616a1b0a0626017dad17`, `git status --porcelain`
       empty after. RED at `tool_result_redelivery_integration_test.go:452` — zero messages on
       `agent.failed.<loopID>` where one is required.
+      Coordinator re-run 2026-09-22 after the disk reclaim, at `453a0f5c`, same mutant as `if false && …` on
+      `handlers.go:2610` (enclosing func `HandleToolResult`): `6c1eaf6d5e0a616a1b0a0626017dad17` →
+      `45f73fb14c6f945afbeafbdd41b4cc3f` → restored `6c1eaf6d5e0a616a1b0a0626017dad17`, porcelain empty. RED at
+      `:452`, `Not equal` on the `agent.failed` count, 1.09s.
 
 - [ ] 6.1 `task check:push` (schema drift expected empty — `LoopEntity` is in no schema); `go run ./cmd/entity-id-audit .`
       green.

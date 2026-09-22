@@ -33,9 +33,10 @@ a task, read the newest retained request for the loop and, when it is newer than
 into the record by identity first. Recovery SHALL never compare rendered messages or result content to decide whether
 an input was applied.
 
-An approval deadline is process-local and is not a durable fact: a replaced process SHALL re-arm no approval deadline,
-and a loop in `awaiting_approval` SHALL stay in `awaiting_approval` until the approval is answered or the loop is
-cancelled.
+An approval deadline is process-local and is not a durable fact: a replaced process SHALL re-arm no approval deadline
+at startup, and a loop in `awaiting_approval` SHALL stay in `awaiting_approval` until the approval is answered or the
+loop is cancelled. A loop the replacement later rebuilds for a redelivered input carries its record's own approval
+deadline from then on.
 
 #### Scenario: The next request was published but the record was not updated (W4, tool lane)
 

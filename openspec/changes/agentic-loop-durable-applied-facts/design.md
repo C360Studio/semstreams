@@ -35,9 +35,10 @@ finish." Applied to the reconciliation docket and its simplicity re-read
 table governs where the two differ.
 
 - **OQ1** build `continuation_unavailable` with the approval lane → L4b.
-- **OQ2** no hydration; the sentence "a replaced process re-arms no approval deadline; the loop stays
-  `awaiting_approval` until answered or cancelled" becomes a scenario in this change's `agentic-loop` delta and a
-  migration-note line.
+- **OQ2** no hydration; the sentence "a replaced process re-arms no approval deadline at startup; the loop stays
+  `awaiting_approval` until answered or cancelled; a loop it later rebuilds for a redelivered input carries its
+  record's own deadline" becomes a scenario in this change's `agentic-loop` delta and a migration-note line (the
+  "at startup" scope and the rebuild clause were ratified by the owner 2026-09-22, issuecomment-5781101792).
 - **OQ3** absorb: a CAS loss releases the loop's process state and Retries; birth by `Create`.
 - **OQ4** document `tasks_submitted_total` as at-least-once under redelivery; no new issue, no arm change.
 - **OQ5** absorb: classify the redelivered tool result at component entry; `TransitionTo` untouched.
@@ -180,8 +181,9 @@ For every AGENT_LOOPS record of a non-terminal loop L at revision r:
 - I4. `PendingApproval != nil` ⇒ `PendingApproval.RequestID == PublishedRequestID`. Step 0 (§ 3.6) preserves I4 by clearing the gate in the same update that advances `PublishedRequestID`.
 
 **No hydration (docket OQ2, owner ruling 2026-09-22).** An approval deadline is a process-local convenience, not a
-durable fact: **a replaced process re-arms no approval deadline; the loop stays `awaiting_approval` until answered or
-cancelled.** That is the standard, written as a scenario in this change's `agentic-loop` delta and as a migration-note
+durable fact: **a replaced process re-arms no approval deadline at startup; the loop stays `awaiting_approval` until
+answered or cancelled; a loop it later rebuilds for a redelivered input carries its record's own deadline.** That is
+the standard (scope ratified 2026-09-22, issuecomment-5781101792), written as a scenario in this change's `agentic-loop` delta and as a migration-note
 line — no startup hydration is built, and `approval_sweeper.go` keeps its memory-only snapshot (`AS:69`).
 
 > **Correction owed on the sentence's SCOPE (task 5.3, checkpoint 4, 2026-09-22).** The ruled sentence reads without
@@ -317,7 +319,7 @@ and has no W4.
   the rule, and the duplicate proposed/verdict pair is the declared residual.
 - Timer/startup: the sweeper keeps its memory-only snapshot (`AS:69`) and **no startup hydration is built** — a replaced
   process re-arms no approval deadline at startup; the loop stays `awaiting_approval` until answered or cancelled
-  (docket OQ2, owner ruling 2026-09-22; § 4, including the scope correction owed on that sentence). Its write pair moves onto the carrier **with the approval lane in #1362**: the timeout
+  (docket OQ2, owner ruling 2026-09-22, scope ratified 2026-09-22 issuecomment-5781101792; § 4). Its write pair moves onto the carrier **with the approval lane in #1362**: the timeout
   sweeper's own publish-then-`Put` pair (`AS:100-101`) is replaced by the carrier (`persistHandlerResult`, `C:1923`)
   so the auto-reject takes the same publish → `Update` order and the same CAS as an operator rejection (D39). In L4a
   the pair is untouched; only its `persistLoopState` call (`AS:101`) rides the writer's change to `Update`.
@@ -470,7 +472,7 @@ Every row points at a line in this tree or names the change that carries it. One
 | **Q8** retention proof → `continuation_unavailable` | **L4b (#1362)** as OQ1; it ships with the approval lane | `tasks.md` § "Moved to L4b (#1362)", bullet OQ1 |
 | **Terminal outcome adoption** (owner ruling 2026-09-18) — a redelivered terminal adopts the loop's durable terminal by identity; content differences are logged, never a disposition | **L4b (#1362).** The single terminal owner that replaces the three `Put` paths is task 3.7, moved out under OQ7 | `design.md` § 5.7, `tasks.md` § "Moved to L4b (#1362)", bullet 3.7 |
 | **OQ1** build `continuation_unavailable` with the approval lane | **L4b (#1362)** | `tasks.md` § "Moved to L4b (#1362)", bullet OQ1 |
-| **OQ2** no approval-deadline hydration; the sentence becomes a spec scenario and a migration line | **CONFORMS, with a recorded narrowing owed on the requirement's prose.** No hydration is built: `SnapshotExpiredApprovals` reads `m.loops`, and no startup path reads the bucket. The scenario, the migration section and the measured-delta test all landed. The requirement's free-text sentence says "a replaced process SHALL re-arm no approval deadline" without qualification, and that is measurably too broad — a replacement that rebuilds a loop for another reason (task 1.2) seats its `PendingApproval` with it. The scenario, which is the testable form, is scoped to startup and is exactly true. The narrowing is the owner's to ratify because the sentence is verbatim ruling text; it is NOT applied here | scenario `specs/agentic-loop/spec.md:67-72`; test `approval_deadline_hydration_integration_test.go:41` (`TestAReplacementReArmsNoApprovalDeadline`); migration `docs/operations/migration-beta162-to-beta163.md:1766`; sweeper `state.go:634`, doc `approval_sweeper.go:40-46`; the over-broad sentence `specs/agentic-loop/spec.md:36-38` |
+| **OQ2** no approval-deadline hydration; the sentence becomes a spec scenario and a migration line | **CONFORMS.** No hydration is built: `SnapshotExpiredApprovals` reads `m.loops`, and no startup path reads the bucket. The scenario, the migration section and the measured-delta test all landed. The requirement's free-text sentence originally said "a replaced process SHALL re-arm no approval deadline" without qualification, which was measurably too broad — a replacement that rebuilds a loop for another reason (task 1.2) seats its `PendingApproval` with it. The owner ratified the narrowing 2026-09-22 (issuecomment-5781101792) and the sentence now reads "at startup" with the rebuild clause, matching the scenario, which was always scoped to startup | scenario `specs/agentic-loop/spec.md:67-72`; test `approval_deadline_hydration_integration_test.go:41` (`TestAReplacementReArmsNoApprovalDeadline`); migration `docs/operations/migration-beta162-to-beta163.md:1766`; sweeper `state.go:634`, doc `approval_sweeper.go:40-46`; the narrowed sentence `specs/agentic-loop/spec.md:36-39` |
 | **OQ3** a CAS loss releases the loop's process state and Retries; birth by `Create` | Birth is `Create`; a lost CAS releases this loop's in-process state and returns the sentinel, which the lane reads as Retry | `component.go:2906` (`Create`), `component.go:2979-2983` (release + `ErrKVRevisionMismatch`), lane reads at `component.go:2193`, `:2239` |
 | **OQ4** document `tasks_submitted_total` as at-least-once under redelivery; no arm change | **CONFORMS.** No arm changed: `recordTaskSubmitted` is still called unconditionally after the task publication, on both submission lanes. The delta landed `0e327a51`; the migration section and the test carrying the citation landed with task 5.4 | delta `specs/agentic-dispatch/spec.md:9-22`; counter `processor/agentic-dispatch/metrics.go:109-114`, recorder `:321`, unconditional call sites `component.go:1168` and `http.go:428`; test `task_submission_counter_integration_test.go:41`; migration `docs/operations/migration-beta162-to-beta163.md:1790` |
 | **OQ5** classify the redelivered tool result at component entry; `TransitionTo` untouched | The terminal and ordering checks sit before `HandleToolResult`; `LoopEntity.TransitionTo`'s same-state `nil` is left alone | `component.go:2495`, `agentic/state.go` `TransitionTo` unchanged |

@@ -106,5 +106,6 @@ Every fact recovery needs is already durable except one: which request is outsta
   under redelivery; `specs/agentic-dispatch/spec.md` states it, the migration note repeats it and a test pins its
   scenario, rather than a new arm in the task lane.
 - **No approval-deadline hydration, documented (owner ruling 2026-09-22, OQ2):** a replaced process re-arms no approval
-  deadline; the loop stays `awaiting_approval` until answered or cancelled. It is a spec scenario and a migration-note
-  line, not a startup path.
+  deadline at startup; the loop stays `awaiting_approval` until answered or cancelled; a loop it later rebuilds for a
+  redelivered input carries its record's own deadline. It is a spec scenario and a migration-note line, not a startup
+  path.
