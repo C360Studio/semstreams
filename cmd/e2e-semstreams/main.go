@@ -769,6 +769,23 @@ func configureAndCreateServices(
 // rules wired) so callers that need to emit immediately on boot —
 // e.g. lifecycle seed via Manager.Create — can do so without racing
 // the cold-start path captured in gh#170.
+func runWithSignalHandling(
+	ctx context.Context,
+	manager *service.Manager,
+	shutdownTimeout time.Duration,
+	postStart func(context.Context) error,
+	closeTransport func(context.Context) error,
+) error {
+	signalCtx, signalCancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer signalCancel()
+	return runUntilShutdown(ctx, signalCtx.Done(), manager, shutdownTimeout, postStart, closeTransport)
+}
+
+type runtimeManager interface {
+	StartAll(context.Context) error
+	StopAll(context.Context) error
+}
+
 // registerMilestoneService wires the agent-run milestone subscriber into the
 // ServiceManager, publishing its decisions counter on the process registry on
 // the way.
@@ -807,23 +824,6 @@ func registerMilestoneService(
 		return fmt.Errorf("register milestone service: %w", err)
 	}
 	return nil
-}
-
-func runWithSignalHandling(
-	ctx context.Context,
-	manager *service.Manager,
-	shutdownTimeout time.Duration,
-	postStart func(context.Context) error,
-	closeTransport func(context.Context) error,
-) error {
-	signalCtx, signalCancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-	defer signalCancel()
-	return runUntilShutdown(ctx, signalCtx.Done(), manager, shutdownTimeout, postStart, closeTransport)
-}
-
-type runtimeManager interface {
-	StartAll(context.Context) error
-	StopAll(context.Context) error
 }
 
 func runUntilShutdown(
