@@ -184,6 +184,16 @@ durable fact: **a replaced process re-arms no approval deadline; the loop stays 
 cancelled.** That is the standard, written as a scenario in this change's `agentic-loop` delta and as a migration-note
 line — no startup hydration is built, and `approval_sweeper.go` keeps its memory-only snapshot (`AS:69`).
 
+> **Correction owed on the sentence's SCOPE (task 5.3, checkpoint 4, 2026-09-22).** The ruled sentence reads without
+> qualification, and measured against this tree it is too broad. The cold rebuild of task 1.2 seats the record
+> WHOLESALE (`state.go:383-384`), `State = awaiting_approval` and `PendingApproval` included, so a replacement that
+> rebuilds a gated loop for some OTHER reason — a redelivered model response or tool result naming the request the
+> record names — does hold that deadline again, at the record's own `RequestedAt + Timeout`. Probe, run and
+> discarded: predecessor snapshot 1, replacement at start 0, replacement after redelivering the gated result 1.
+> The delta SCENARIO (`specs/agentic-loop/spec.md:58-63`) is scoped to startup and is exactly true, and that is what
+> task 5.3's test asserts; only the free-text sentence over-reaches. It is verbatim ruling text, so it is NOT edited
+> here — the doc comments and the migration note state the narrow truth, and the narrowing is the owner's to ratify.
+
 PBT decision (`docs/contributing/01-testing.md`): I1–I4 hold over action sequences (deliver / crash at W1–W4 /
 redeliver), so one bounded Rapid state-machine property over an in-memory KV plus a fake retained-stream reader (the
 evidence-reader seam built in task 2.3) covers the tool and response lanes and checks I2 as membership, never by
@@ -306,8 +316,8 @@ and has no W4.
   stale → Ack `C:2773`, live → Retry `C:2780`). No retained-verdict reader is built (D14/D15): the re-proposal re-fires
   the rule, and the duplicate proposed/verdict pair is the declared residual.
 - Timer/startup: the sweeper keeps its memory-only snapshot (`AS:69`) and **no startup hydration is built** — a replaced
-  process re-arms no approval deadline; the loop stays `awaiting_approval` until answered or cancelled (docket OQ2,
-  owner ruling 2026-09-22; § 4). Its write pair moves onto the carrier **with the approval lane in #1362**: the timeout
+  process re-arms no approval deadline at startup; the loop stays `awaiting_approval` until answered or cancelled
+  (docket OQ2, owner ruling 2026-09-22; § 4, including the scope correction owed on that sentence). Its write pair moves onto the carrier **with the approval lane in #1362**: the timeout
   sweeper's own publish-then-`Put` pair (`AS:100-101`) is replaced by the carrier (`persistHandlerResult`, `C:1923`)
   so the auto-reject takes the same publish → `Update` order and the same CAS as an operator rejection (D39). In L4a
   the pair is untouched; only its `persistLoopState` call (`AS:101`) rides the writer's change to `Update`.
