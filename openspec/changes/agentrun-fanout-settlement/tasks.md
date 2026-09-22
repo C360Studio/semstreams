@@ -354,9 +354,15 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       scanner catches the plain re-addition and not only the alias forms. The surface guard is kept intact:
       `TestLegacyHeartbeatGuardRejectsTakingOrAliasingSymbol`, `...RejectsAlternateExportedSurface`,
       `...CountsDotImportAsDirectCall`, `...IgnoresUnrelatedSelector` all still run and pass.
-      Repo-wide reference sweep, stderr visible: `git grep -n 'ConsumeWithHeartbeat' --include='*.go'` returns only
-      the ratchet's own string literals, the ported test's provenance note, and `mockmsg_test.go`'s provenance note —
-      every one of them a statement ABOUT the removal, not a use. Outside Go: `docs/operations/` and
+      Repo-wide reference sweep, stderr visible: `git grep -n 'ConsumeWithHeartbeat' -- '*.go'` — the pathspec goes
+      AFTER the pattern, because `--include=` is git-grep-fatal (`option '--include=*.go' must come before
+      non-option arguments`, exit 128), and a recorded command nobody can re-run is not evidence. Re-run, exit 0:
+      20 hits in 3 files, none a declaration and none a call. 18 are the ratchet
+      `natsclient/consumer_policy_callsite_test.go` — its scanner comparison literals at `:96`-`:164`, its
+      failure-message format strings at `:431`/`:434`, the ratchet test's OWN name at `:417`/`:428`, and the
+      synthetic `source:` fixtures at `:442`-`:516` the scanner must reject. The other two are the ported test's
+      provenance note at `natsclient/delivery_settlement_test.go:326` and `natsclient/mockmsg_test.go:17`'s.
+      Every one is a statement ABOUT the removal, not a use. Outside Go: `docs/operations/` and
       `openspec/specs/` are 8.1/8.3's work; `docs/adr/070-gated-dag-durable-dispatch.md` (3),
       `docs/proposals/` (4) and `openspec/changes/archive/` are historical records of decisions taken when the helper
       existed and are deliberately left as written.
@@ -375,10 +381,16 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       permits the defect the other two catch: the work is cancelled by the renewal failure (nothing cancels the
       owner's context), `ControlError()` carries `ErrHeartbeatFailed`, "failed to send InProgress" and the renewal
       cause, `Err()` retains the work's cleanup error, `OwnerStopRequired()` is true, and no terminal method is
-      attempted. Before it, `ErrHeartbeatFailed` was asserted ONLY by the three deleted tests and one deleted
-      integration test — `git grep -n ErrHeartbeatFailed -- '*_test.go'` on the pre-deletion tree returned four hits,
-      all of them in the two files this task removes, so deleting them without the port would have left the sentinel
-      with no assertion anywhere.
+      attempted. Before it, `ErrHeartbeatFailed` was ASSERTED ONLY by the three deleted tests and one deleted
+      integration test, but the sweep behind that claim was miscounted:
+      `git -C . grep -n ErrHeartbeatFailed 3a1ede7a^ -- '*_test.go'` returns FIVE hits on the pre-deletion tree,
+      not four. Four assert it and are in the two files this task removes — `heartbeat_test.go:346`, `:372`, `:387`
+      and `heartbeat_integration_test.go:118`, each a `require.ErrorIs(t, err, ErrHeartbeatFailed)`. The fifth,
+      `processor/agentic-tools/outcome_metrics_test.go:79`, CONSTRUCTS the sentinel as input
+      (`errors.Join(natsclient.ErrHeartbeatFailed, errors.New("lost"))` fed to `recordHandlerError`) and asserts
+      nothing about it: its assertions are on the `cause=heartbeat` metric label and the log line. It keeps the
+      symbol compiling, never pinned, so the conclusion stands — deleting the two files without the port would have
+      left `ErrHeartbeatFailed` with no assertion anywhere.
       Twin analysis for the rest of the two files, so the deletion is not a silent coverage drop. `SurfacesSettlementErrors`,
       `_AcksOnSuccess`, `_NaksWithDelayOnWorkError`, `TermsPermanentWorkError`, `_NaksOnContextCancel` → the typed
       truth tables `TestConsumeDeliveryWithHeartbeatValidDecisionTruthTable` and `TestSettleDeliveryDecisionTruthTable`,
