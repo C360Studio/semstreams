@@ -2,11 +2,13 @@ package agenticloop
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
@@ -158,4 +160,52 @@ func TestAColdAdoptAndAWarmWriteOfOneLoopDoNotRefuseEachOther(t *testing.T) {
 	require.Equal(t, []string{loopID, loopID}, bucket.written(), "both writers must have committed")
 	require.Equal(t, retained, decodeRecord(t, c, loopID).PublishedRequestID,
 		"the adopt ran last, so the record must name what the stream retains")
+}
+
+// TestRenderingTheRecordDoesNotRaceAStoredToolResult pins the one thing the
+// record lock cannot do.
+//
+// loopRecordMu serializes the record WRITERS of this process. It does not
+// freeze the loop's in-memory state: marshalLoopRecord takes its snapshot
+// through LoopManager.GetLoop, under the manager's own mutex, and marshals it
+// after that mutex is released. GetLoop returned a shallow struct copy, so the
+// snapshot shared PendingToolResults with the live entity — and StoreToolResult
+// on the handler goroutine writes that same map. Marshalling a map another
+// goroutine is writing is a data race, not a stale read.
+//
+// The barrier makes both goroutines start together and the repetition is what
+// makes the detector's shadow history certain to hold both accesses; no sleep
+// decides anything.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestRenderingTheRecordDoesNotRaceAStoredToolResult(t *testing.T) {
+	c, _, loopID := carrierLoop(t)
+	require.NoError(t, c.handler.loopManager.StoreToolResult(loopID,
+		agentic.ToolResult{ExecutionID: "exec-seed", Name: "seed", Content: "seeded"}))
+
+	for round := range 100 {
+		start := make(chan struct{})
+		errs := make(chan error, 2)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := c.marshalLoopRecord(loopID)
+			errs <- err
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- c.handler.loopManager.StoreToolResult(loopID, agentic.ToolResult{
+				ExecutionID: fmt.Sprintf("exec-%d", round), Name: "tool", Content: "answered",
+			})
+		}()
+		close(start)
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			require.NoError(t, err)
+		}
+	}
 }

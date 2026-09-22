@@ -2858,12 +2858,21 @@ func (c *Component) persistLoopState(ctx context.Context, loopID string) error {
 
 	// Render, observe and write as one critical section (loopRecordMu). Two
 	// lanes of THIS process write the same loop — the carrier, cancel,
-	// approval, the timeout sweeper — and a revision read outside the lock is
-	// stale the moment another lane commits: the CAS then refuses a write that
-	// has no conflict to report, and the loop is released as though a foreign
-	// process had taken it. The render is inside too, because a value
-	// marshalled before another lane's mutation would commit a record that
-	// silently loses it.
+	// approval, the timeout sweeper, step 0's adopt — and a revision read
+	// outside the lock is stale the moment another lane commits: the CAS then
+	// refuses a write that has no conflict to report, and the loop is released
+	// as though a foreign process had taken it. The render is inside for the
+	// same reason: rendering before the lock would marshal a record from one
+	// observation and commit it against another.
+	//
+	// What this lock does NOT do is freeze the loop's in-memory state.
+	// marshalLoopRecord takes its snapshot through LoopManager.GetLoop, under
+	// the MANAGER's mutex, and marshals it after that mutex is released — so a
+	// mutation landing on the handler goroutine in between is not in these
+	// bytes. That is a boundary, not a loss: the mutation belongs to another
+	// delivery, and that delivery's own write carries it. What the snapshot
+	// must be is a VALUE, which is why GetLoop copies the applied set:
+	// marshalling a map another goroutine is writing is a data race.
 	c.loopRecordMu.Lock()
 	defer c.loopRecordMu.Unlock()
 

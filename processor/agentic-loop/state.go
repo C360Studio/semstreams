@@ -358,7 +358,22 @@ func (m *LoopManager) GetLoop(loopID string) (agentic.LoopEntity, error) {
 		return agentic.LoopEntity{}, errs.Wrap(fmt.Errorf("loop %s not found", loopID), "LoopManager", "GetLoop", "find loop")
 	}
 
-	return *entity, nil
+	// A struct copy is shallow, so the applied set would travel out of this
+	// lock as the SAME map the live entity holds — and every caller reads the
+	// returned entity after this lock is released. marshalLoopRecord marshals
+	// it into the record's bytes while StoreToolResult, on the handler
+	// goroutine, writes the same map under this mutex: a data race, not a
+	// stale read. One copy makes the returned entity a value the caller owns.
+	//
+	// The applied set is the only reference field a live loop mutates in
+	// place. PendingApproval is replaced wholesale by BeginAwaitingApproval
+	// and cleared by ResolveApproval, and Metadata is written once at birth.
+	copied := *entity
+	if entity.PendingToolResults != nil {
+		copied.PendingToolResults = make(map[string]agentic.ToolResult, len(entity.PendingToolResults))
+		maps.Copy(copied.PendingToolResults, entity.PendingToolResults)
+	}
+	return copied, nil
 }
 
 // UpdateLoop updates an existing loop entity
