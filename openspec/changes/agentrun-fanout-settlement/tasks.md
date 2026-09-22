@@ -263,8 +263,9 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       `TestReadinessWaitsForInitialServiceHealthObservation` (`startup_observability_test.go:305`, `/readyz` answered
       200 where it requires 503 while the first check is blocked), `TestReadinessIncludesHealthyNonLifecycleDiscoverables`
       (`:223`) and `TestStartAllBindsSharedAndMetricsBeforeBlockedService` (`:570`), the last two because the store
-      removes the false->true edge their callbacks fire on. Owner/coordinator ruling 2026-09-22: the substrate
-      contract stays; `service/base.go` is untouched.
+      removes the false->true edge their callbacks fire on. Coordinator ruling 2026-09-22: the substrate
+      contract stays; `service/base.go` is untouched. (No owner artifact stands behind it; the substrate decision
+      was the coordinator's, and it is recorded as that.)
       The fix is `awaitFirstHealthObservation` in `service/milestone_health_test.go`: both subtests register
       `svc.OnHealthChange` BEFORE `Start` — the same exported seam
       `TestReadinessWaitsForInitialServiceHealthObservation` uses — and block on that edge, with a bounded failsafe
@@ -276,8 +277,13 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       place (`service/milestone_health_test.go` md5 `42455974ad3bb1fac89228f142d581a0` before and after) — the same
       `-race -count=200` command exited 1, with 10 of 200 iterations failing `a latched lane reports unhealthy with
       its cause` ("precondition: healthy before the latch") and 7 failing `owned lanes stay healthy` ("an owned lane
-      must not report a delivery fatal: Service is unhealthy (failed checks: 0)"). The wait is what holds the test,
-      not the machine's mood.
+      must not report a delivery fatal: Service is unhealthy (failed checks: 0)").
+      The same mutant on two other machines, recorded beside that one because they do not agree: the reviewer
+      measured 53 of 200 iterations red at `-race -count=100 -cpu 2,4`; the coordinator measured 0 of 200 at the
+      default CPU count and 0 of 200 at `-cpu 2,4`. The kill rate is a property of the host, not of the test, so
+      the wait is judged on the EDGE it synchronizes on — `service/base.go:448` stores `healthy` and `:451` fires
+      the callback after it, which is the store the `/health` read depends on — and never on a rate. A 0/200 arm
+      is not evidence the mutant is harmless; it is evidence that machine never lost the race.
 - [x] 5.2 Add `MilestoneSubscriber.RegisterMetrics(r metric.MetricsRegistrar) error` registering
       `semstreams_agentrun_milestone_decisions_total{lane,decision,reason}` via `RegisterCounterVec`
       (`metric/registry.go:216`); the vec is built in `NewMilestoneSubscriber` (`agentrun.go:521`). Wire one call after
@@ -301,11 +307,26 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       `TestRegisterMilestoneServicePublishesTheDecisionsCounter`, present in BOTH `cmd/semstreams` and
       `cmd/e2e-semstreams`, which asserts the service reached the `ServiceManager` and that
       `metricsRegistry.Unregister("agentrun", "milestone_decisions_total")` answers true.
-- [ ] 5.3 Mutation evidence: delete the `RegisterMetrics` call in one root; run the e2e `verify-streaming-metrics`
-      stage; record the failure; restore and checksum.
-      The in-tree half is DONE; the `verify-streaming-metrics` stage runs with the § 9 proof, which owns the e2e tier.
-      All three mutants used a `cp` backup, printed `[applied]` between mutating and testing, and re-checked the md5
-      after restoring.
+- [x] 5.3 Mutation evidence: delete the `RegisterMetrics` call in one root; record the failure; restore and
+      checksum. It ticks on mutant J below, NOT on the e2e stage the task named.
+      **The task's own detector could not fail.** As written it says "run the e2e `verify-streaming-metrics`
+      stage", and that stage reads `semstreams_agentic_model_stream_chunks_total` and
+      `..._stream_ttft_seconds_count` — neither of them a series `RegisterMetrics` publishes. The refuting
+      measurement: `git grep -n milestone_decisions_total 884b8600 -- test/e2e/` returns nothing, exit 1. No e2e
+      assertion read the counter at all, so deleting the call would have left the tier green and the mutant would
+      have been recorded as "survived" against a test that was never looking.
+      Mutant J is the same fault — a composition root wired without its metrics registration — observed where it IS
+      detectable: the e2e root's `subscriber.RegisterMetrics(metricsRegistry)` call deleted, that root's
+      `TestRegisterMilestoneServicePublishesTheDecisionsCounter` red and `cmd/semstreams`' green. Existing evidence
+      covering the same fault is what the discipline asks for here rather than a repeated experiment
+      (`docs/contributing/01-testing.md:109-111`).
+      After review M1 the tier DOES read the counter: `verify-milestone-exhaustion` waits for
+      `semstreams_agentrun_milestone_decisions_total{lane="complete",decision="retry",reason="handler_transient"}`
+      = 5 (`test/e2e/scenarios/agentic/stage_d_milestone_settlement.go`). That assertion is the e2e detector this
+      task originally wanted, and it is the target for any future e2e run of this mutant. It was NOT run as a
+      mutant: § 9's budget is one tier run, spent on the green re-run recorded in 10.2.
+      All three in-tree mutants used a `cp` backup, printed `[applied]` between mutating and testing, and re-checked
+      the md5 after restoring.
       H, `MilestoneService.Health()` reduced to `return s.BaseService.Health()` so the override never consults the
       latch (`service/milestone_service.go` md5 `d4e05bdffc4d975c22dd58d5b1be22bc` before and after) —
       `TestMilestoneServiceHealthReportsDeliveryFatal/a_latched_lane_reports_unhealthy_with_its_cause` went red on
@@ -586,9 +607,10 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       file in `docker/compose/` not to — an arming leak into another tier would look like a flake, since the probe
       crashes and quarantines on purpose. `TestRegisterIsInertWithoutTheEnvironmentVariable` and
       `TestRegisterRefusesIncompleteWiringWhenArmed` pin the runtime gate's both directions.
-      The registration is one line inside `registerMilestoneService` in `cmd/semstreams/main.go`. That is now the one
-      deliberate divergence between the two hand-copied bodies (#1301) and BOTH roots' doc comments say so, replacing
-      the previous "identical registerMilestoneService body" claim, which would otherwise have become false silently.
+      The registration is one call inside `registerMilestoneService` in `cmd/semstreams/main.go` — an eight-line
+      block: five comment lines and one guarded call. That is the one deliberate divergence between the two
+      hand-copied bodies (#1301) and BOTH roots' doc comments say so in those words, replacing the previous
+      "identical registerMilestoneService body" claim, which would otherwise have become false silently.
       Shape: the probe demuxes on `LoopTerminalEvent.Role` (already on both terminal payloads, so no framework change
       makes it addressable) and returns nil before any IO for every role it does not own — pinned without NATS by
       `TestOrdinaryTerminalIsANoOpBeforeAnyIO`, which holds a nil client so any read or publish would panic.
@@ -614,12 +636,21 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       so it cannot see a call removed from inside a stage — and that particular tail was also skippable by its host
       stage's early `return nil` on a streaming warning. A named stage fails `TestStagesAreExactlyThisOrderedList`
       in plain `go test` when it goes away.
+      Three pre-implementation artifacts name `verify-streaming-metrics` as the exhaustion assertion's home —
+      `design.md:199`, `inventory.md:388` (which also names that stage as the decisions counter's consumer at
+      birth) and `tasks-pins.md:82`. They are NOT edited: they are pre-change evidence of what was designed and
+      measured then, and re-pinning them would destroy exactly that. This task line is where the move is recorded,
+      and `inventory.md:388`'s consumer claim becomes true of `verify-milestone-exhaustion` — it was not true of
+      `verify-streaming-metrics` at any revision (see 5.3's refuting grep).
       `verify-milestone-exhaustion` reads the exhaustion advisory counter AND
       `semstreams_agentrun_milestone_decisions_total{lane="complete",decision="retry",reason="handler_transient"}`
       = 5 — the first e2e observer of the operator signal section 5.2 added. `observeDecision` returns before the
       increment on an Ack (`agentic/agentrun/milestone_settlement.go:218-219`), so an ordinary milestone contributes
       nothing to that series and the armed probe's five transient returns are what it counts. The wait costs no
       wall clock: the advisory it follows cannot fire before the fifth attempt has already been counted.
+      Both counter figures in this task are `waitMetricWithLabels` targets, so each assertion is "reaches N", not
+      "equals N" — the exactly-five half is held beside them by the handler attempt count, which IS an equality
+      (`attempts != milestoneLaneMaxDeliver` fails).
       The settlement stage sits after stage A so no later replacement resets what it measures, and before the
       approval and signal walks, whose loops publish terminals onto the same two lanes.
       Quarantine is proven on the FAILED lane: nothing else in this tier publishes `agent.failed.*`, so latching it
@@ -627,6 +658,13 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       lane's fatal leaves the other consuming. The spec scenario "a fatal on one lane leaves the other consuming"
       states its WHEN on the complete lane; the requirement itself is lane-symmetric ("a fatal on one lane drains
       only that lane's exact handle") and the tier proves the failed-lane instance of it.
+      The complete-lane instance is proven in-tree, which is why the spec delta needs no amendment for the tier's
+      lane choice: `agentic/agentrun/milestone_owner_internal_test.go:86-104`
+      (`TestMilestoneFatalDrainsOnlyTheFailedLane`) delivers the panicking terminal on the COMPLETE lane and
+      asserts that lane drains its exact handle and admits nothing while the failed lane is untouched and still
+      admitting; `:110-140` (`TestMilestoneStopAfterFatalWaitsClosedWithoutSecondDrain`) pins that a later Stop
+      does not order a second drain of the lane the observer already drained. Both lanes are therefore covered,
+      one per level: the symmetric requirement in-tree, the deployed instance in the tier.
       Each injected terminal persists a route-LESS `AGENT_LOOPS` record first. Without one, agentic-dispatch answers
       an absent record with an unbounded transient retry (`processor/agentic-dispatch/terminal_settlement.go`), so
       the terminal would stay pending on the dispatch lane forever and break the settled-consumer assertions stage A
@@ -645,12 +683,14 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       arrived, so a broken publish would have read as a working latch.
       Mutation evidence (both at `97703c65`, both `cp` + md5 + `[applied]` + restore + re-checksum;
       `test/e2e/harness/milestoneprobe/milestoneprobe.go` md5 `f1deebec4965f64c51795becfacacc47` before and after
-      BOTH):
-      L, non-idempotent effect — `commitEffect` publishing via `PublishToStream` (no `Nats-Msg-Id`) instead of
+      BOTH). The pair was lettered L and M and is renamed at review, because both letters were already spent:
+      § 7 carries L (`tasks.md:464`) and M and N (`:469`) on `natsclient`. The sequence therefore continues at O.
+      The review asked for N/O, which would have re-created on N the exact collision it was fixing on L.
+      O, non-idempotent effect — `commitEffect` publishing via `PublishToStream` (no `Nats-Msg-Id`) instead of
       `PublishToStreamWithMsgID(..., ev.SourceMessageID)`. `task e2e:agentic` exit 201:
       `verify-milestone-settlement failed: complete lane replacement: durable effects for
       eac98d82-7d95-4f6f-a0b8-a2a9e08ca618 = 2, want exactly 1 across every attempt`, `assertions_run=10`.
-      M, Ack before the effect commits — `return nil` inserted at the top of the `BehaviorExitBeforeAck` arm, so the
+      P, Ack before the effect commits — `return nil` inserted at the top of the `BehaviorExitBeforeAck` arm, so the
       handler acknowledges without committing or ending the process. `task e2e:agentic` exit 201:
       `verify-milestone-settlement failed: complete lane replacement: the SemStreams process still answered within
       30s; the probe did not end it`, `assertions_run=10` — the handler is never re-invoked, which is the shape the
@@ -685,9 +725,35 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       `6b002817` probe handler and wiring; `867cb225` the BaseService health-race measurement;
       `287fb8b3` the tier stages; `97703c65` per-proof result keys and the measured tier duration;
       `dc9a2f7b` the milestone health test's wait; `6dde2eed` this evidence.
+      **Re-run after the review**, over `b9e3c4d3` (the review's code) and `8f441f8e` (the gate), with only this
+      evidence after them. Same rule: each exit code is the command's own, captured as `EXIT=$?` immediately after
+      it, never after an echo.
+
+      | Command | Exit | Final line |
+      |---|---|---|
+      | `task lint` | 0 | `ok  	github.com/c360studio/semstreams/test/natsclient	0.683s` |
+      | `go build ./...` | 0 | no output |
+      | `go build -tags=e2e_process_barrier ./cmd/semstreams` | 0 | no output |
+      | `go vet -tags=e2e_process_barrier ./cmd/semstreams ./test/e2e/...` | 0 | no output |
+      | `go test -race -count=1 ./test/e2e/... ./service/... ./cmd/...` | 0 | `ok  	github.com/c360studio/semstreams/cmd/semstreams	3.025s` |
+      | `task spec:properties` | 0 | `spec-properties: 288/288 citations resolve.` |
+      | `openspec validate --all --strict` | 0 | `Totals: 56 passed, 0 failed (56 items)` |
+      | `go run ./cmd/entity-id-audit .` | 0 | `entity ID audit passed: 1333 structured candidates across 1 roots` |
+      | `git diff --check b7ce8727..HEAD` | 0 | no output |
+      | `task check:push` | 0 | `[INTEGRATION] tests complete` |
+      | `task e2e:agentic` | 0 | recorded in 10.2 |
+
+      Denominators again, because a green tail over a truncated list is not a green suite: the race run above
+      produced 33 package result lines with 0 beginning `FAIL`, and `task check:push` produced 356 with 0 beginning
+      `FAIL`. `check:push` now carries the third tagged vet (`task: [check:push] go vet
+      -tags=e2e_process_barrier ...`, line 14 of its log), so the agentic tier's own build is compiled by a local
+      gate rather than only by a Docker run. CI itself still runs the untagged `go vet ./...` alone
+      (`.github/workflows/ci.yml:44`) — no tagged vet has ever been a CI step — so this gate is pre-push, not CI.
+      The tagged build drops a `semstreams` binary at the worktree root; it is gitignored and was deleted, and
+      `git status --porcelain` is empty.
 - [x] 10.2 `task e2e:agentic` green on the pushed head (the BREAKING rule, `docs/contributing/02-e2e-tests.md:299`),
       every stage's result verbatim in the PR body.
-      Ran 2026-09-22 at `6dde2eed`, the final head (this evidence is the only later commit). Host state before the
+      Ran 2026-09-22 at `6dde2eed`; later commits are evidence and the review fixes. Host state before the
       run, pasted: `pgrep -fl e2e.test` printed nothing (exit 1), `docker compose ls` listed no stacks.
       `task e2e:agentic` exit 0:
       `level=INFO msg="Scenario completed successfully" duration=5m23.017389458s ... assertions_run=16`.
@@ -713,3 +779,30 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
       measured figure rather than the stale one. An earlier green run of the same stages at `287fb8b3` took
       5m23.074s, so the cost is the two AckWait expiries, three container replacements and the exhaustion wait, not
       run-to-run noise.
+      **Re-run at `b9e3c4d3` after the review**, which is the commit carrying M1 (the exhaustion proof promoted to
+      its own stage plus the decisions-counter assertion), M2 (the NumPending positive control) and M3 (the 503 and
+      the latched cause). The records above are kept: this is a second measurement of the same tier, not a
+      replacement for the first.
+      Host state before the run, pasted: `pgrep -fl e2e.test` printed nothing (exit 1), `docker compose ls` listed
+      no stacks; both print the same after it, and `task e2e:clean` was not used. `task e2e:agentic` exit 0:
+      `level=INFO msg="Scenario completed successfully" duration=5m22.934382917s ... assertions_run=17`, with 0
+      `level=ERROR` lines in the whole log.
+      All 20 stages in execution order, with the durations this run printed (ms): `verify-components` 3;
+      `capture-baseline` 7; `arm-milestone-exhaustion` 9; `inject-task` 0; `wait-for-completion` 511;
+      `verify-terminal-response` 5; `validate-trajectory` 6; `verify-graph-triples` 4; `verify-tool-execution` 6;
+      `verify-durable-tool-replay` 44742; `verify-streaming-metrics` 15; `verify-milestone-exhaustion` 104989;
+      `verify-tool-call-governance` 18; `verify-stage-a-process-replacement` 78681; `verify-milestone-settlement`
+      93086; `walk-approval-path` 499; `refuse-non-canonical-approval` 40; `walk-signal-path` 270;
+      `refuse-non-canonical-signal` 33; `validate-results` 0. `assertions_run=17` is the count
+      `assertingStageCount()` derives from that list, and `TestStagesAreExactlyThisOrderedList` now pins 20 names
+      in order.
+      The promotion is visible in the numbers and cost no wall clock: `verify-streaming-metrics` drops
+      104959 -> 15 ms, the new `verify-milestone-exhaustion` picks up 104989 ms, and the tier moves
+      5m23.017 -> 5m22.934 — the wait was always the exhaustion, never the streaming read.
+      The stage-D measurements are identical to the pre-review run, which is the point of re-running it:
+      `milestone_exit-before-ack_agentrun-milestone-complete_handler_attempts:2` /
+      `..._durable_effects:1`; `milestone_exit-before-ack_agentrun-milestone-failed_handler_attempts:2` /
+      `..._durable_effects:1`; `milestone_panic-once_agentrun-milestone-failed_handler_attempts:2` /
+      `..._durable_effects:1`; `milestone_exhaustion_attempts:5`. The three tightened assertions — the decisions
+      counter at 5, `NumPending` growing across the blocked publish, and `/health` = 503 naming `delivery ownership
+      lost` — all held on the deployed binary.
