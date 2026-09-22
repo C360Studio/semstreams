@@ -244,6 +244,16 @@
 // refusing it; the replayed conversation lands in one region, so compaction attribution
 // starts over (docs/concepts/13-agentic-systems.md).
 //
+// "[Iteration Budget]" and "[Working list" are RESERVED prefixes. A request is not the
+// loop's conversation: the loop prepends that iteration's budget line, and when it has a
+// working list that block, both Role "system" and both belonging to the one request. The
+// rebuild drops the LEADING run of them, because seating them would pin one iteration's
+// framing at the top of the rebuilt system prompt for the rest of the loop's life while
+// every later request prepends a fresh one. A configured system prompt whose first message
+// begins with either string is indistinguishable from that framing and is dropped with it,
+// so do not start one with them. Only a leading run is dropped: a message further in is the
+// conversation, whatever it says.
+//
 // A rebuild is not a reprieve. TimeoutAt is written at birth and lives on the record, so a
 // rebuilt loop keeps its ORIGINAL deadline; nothing refreshes it and downtime is not
 // excluded from it. A replacement whose gap outran that deadline therefore rebuilds the

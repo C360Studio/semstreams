@@ -1763,6 +1763,11 @@ them, because seating them would pin one iteration's budget at the top of the re
 the loop's life while every later request prepends a fresh one. Only a LEADING run is dropped, so a message of the
 conversation that happens to start with either string is kept.
 
+**`[Iteration Budget]` and `[Working list` are reserved prefixes.** A *configured system prompt* whose first message
+begins with either string is indistinguishable from the framing the loop generates, and on a cold rebuild it is
+dropped along with it. Do not start a system prompt, persona fragment or prompt-registry entry with either string;
+anything further into the conversation is safe.
+
 ### A replaced process re-arms no approval deadline
 
 A loop parked in `awaiting_approval` keeps its pending state across a process replacement — the record names the
