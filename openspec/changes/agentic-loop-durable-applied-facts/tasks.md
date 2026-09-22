@@ -656,11 +656,24 @@
       - `docs/concepts/13-agentic-systems.md:216-223` gained the durable one-region fact beside the compaction
         list, agreeing with the operator version in `docs/operations/migration-beta162-to-beta163.md`
         § "A rebuilt loop's conversation is one region" (no "nothing moves" claim on either side).
-      Class sweep for the same defect elsewhere: `git grep -n -i 'restart|replacement|survives|persist'` over every
-      doc naming `PendingApproval`/`awaiting_approval`/`approval_timeout` found one further hit,
-      `docs/operations/migration-beta24-to-beta25.md:155-162` ("An expired loop in KV at restart will auto-reject
-      within `approvalSweepInterval` of the new process booting"). It is a SHIPPED release note for a past release
-      and is left as written; the beta162→beta163 note's #1330 section names and supersedes it (task 5.3).
+      Class sweep for the same defect elsewhere. **The first sweep was VOID** (checkpoint-4 review MEDIUM-4): it was
+      recorded as `git grep -n -i 'restart|replacement|survives|persist'`, which is POSIX BRE — `|` is a literal
+      there, so the alternation matched nothing and the file-set query `git grep -rln
+      "PendingApproval|awaiting_approval|approval_timeout" -- 'docs/**'` returned **0 files**. The `-E` form returns
+      **13 files**. Re-run with `-E`, three hits in the class, all now resolved:
+      - `processor/agentic-loop/approval_sweeper.go:40-46` — FIXED above.
+      - `docs/concepts/27-frontier-harness-mapping.md:117` — "The loop is a Lifecycle Participant (ADR-049):
+        **current-state restart hydration**, …". FALSE, and the same claim class: there is no hydration anywhere in
+        `agentic-loop`, and the package does not import `pkg/lifecycle` at all (`git grep -n 'pkg/lifecycle' --
+        processor/agentic-loop/` returns two comment lines and no import). CORRECTED to say durable state in
+        `AGENT_LOOPS` plus on-demand recovery when a delivery names the loop, and that nothing scans the bucket at
+        boot.
+      - `docs/operations/migration-beta24-to-beta25.md:155-162` ("An expired loop in KV at restart will auto-reject
+        within `approvalSweepInterval` of the new process booting"). SHIPPED release note for a past release, left
+        as written; the beta162→beta163 note's #1330 section names and supersedes it (task 5.3).
+      One further hit read and left as CORRECT: `docs/operations/migration-beta19.md:76-77` ("a process restart
+      mid-approval still remembers what's pending") — the record does remember; it is the timer that does not, which
+      is the distinction 5.3's migration section draws.
 - [x] 5.2 Apply the `specs/agentic-loop/spec.md` and `specs/agentic-dispatch/spec.md` deltas;
       `openspec validate agentic-loop-durable-applied-facts --strict` green; `task spec:properties` resolves the `// spec:` citation from 4.1 against the ADDED requirement.
       **Landed.** Both deltas are in the tree: `specs/agentic-loop/spec.md` (one ADDED requirement with seven

@@ -106,9 +106,10 @@ type LoopEntity struct {
 	// duplicate window drops the second. This marker is how the loop keeps that
 	// invariant without a third identity segment (owner ruling Q4).
 	//
-	// Residual, declared: restoring this across a process replacement is L4's
-	// (#1330). In-process it is authoritative; after a replacement the whole
-	// loop needs recovery, not just this bit.
+	// Since #1330 this survives a process replacement: it is part of the record,
+	// and the cold rebuild seats the record wholesale, so a rebuilt loop carries
+	// the marker its predecessor set rather than re-deferring a turn that was
+	// already carried.
 	PendingContinuation bool `json:"pending_continuation,omitempty"`
 
 	// PendingContinuationRequestID names the request that carries the deferred

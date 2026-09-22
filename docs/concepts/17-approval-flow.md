@@ -71,8 +71,12 @@ Key design points:
   the deadline. The timeout sweeper reads the loops its own process
   holds, and nothing at startup reads the bucket to restore one, so a
   parked loop waits rather than being auto-rejected by whichever process
-  happens to come up. A replacement that answers an approval for a loop
-  it never started - the cold branch of the response lane - is
+  happens to come up. The one exception, recorded rather than relied on:
+  a loop that some *other* redelivery causes the replacement to rebuild
+  is seated with its pending approval, and from then on is swept against
+  the record's own `RequestedAt + Timeout` — the original deadline, not
+  a fresh wait. A replacement that answers an approval for a loop it
+  never started - the cold branch of the response lane - is
   [#1362](https://github.com/C360Studio/semstreams/issues/1362).
 
 ## Timeouts

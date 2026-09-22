@@ -114,10 +114,13 @@ durably:
 - Trajectory is observable in real time via operator gateways.
 - Tool calls flow through governance rules (ADR-039) before
   execution.
-- The loop is a Lifecycle Participant (ADR-049): current-state restart hydration,
-  operator-visible trajectory, and a writable cancel control (pause/resume were
-  advertised and never implemented; deleted in #1239). Repair
-  and audit retention require an explicit owner design.
+- The loop is a Lifecycle Participant (ADR-049): durable current state in
+  `AGENT_LOOPS`, operator-visible trajectory, and a writable cancel control
+  (pause/resume were advertised and never implemented; deleted in #1239).
+  There is no startup hydration: a replacement process recovers a loop ON
+  DEMAND, when a delivery names it, from the record plus the `AgentRequest` the
+  stream retains (#1330). Nothing scans the bucket at boot. Repair and audit
+  retention require an explicit owner design.
 - Multiple loops run concurrently in the same service; each has its
   own entity-ID; cross-loop reasoning is graph-native.
 
