@@ -1,334 +1,472 @@
-# L4 inventory — #1146 restart recovery on `origin/codex/gh1146-agentic-loop-restart`
+# L4 inventory — #1330 restart recovery, re-derived on `main`
 
-base: 68c14c8eb25c512e988f740cbf7ea14b6815976f
-merge-base with origin/main: 461b6902f0746d4fbc5e5c22911aa34ab4fe121c
-role: semstreams-architect, inventory-only phase (read-only; no worktree, branch, or GitHub mutation)
-sources: every `file:line` below is at `68c14c8e` unless prefixed `main:`; files were read via `git show <branch>:<path>`.
+base: b7ce8727a770c9f880049def24abe887545bccbe
+role: semstreams-architect, reconciliation pass (read-only; written to the scratchpad, never to the repository)
+sources: every `file:line` below is at `b7ce8727` (`origin/main`; the seed commit `ed667305` is its child and touches only `openspec/changes/`). The predecessor inventory (163 pins at `68c14c8e`, the head of PR #1159's Codex branch, never merged) is `openspec/changes/agentic-loop-durable-applied-facts/inventory.md`; its rows are carried below by number (D1–D49) so the reconciliation can cite both. Facts of the Codex branch that have no home on `main` carry no pin here — they are listed as non-pin notes in `reconciliation.md` § H, because every section the verifier parses is strict except `## Searches` (skipped) and `## Adjacent claims` (lenient), and a Codex fact is neither a search nor an adjacent claim.
 
-Abbreviations: SR = `processor/agentic-loop/settlement_recovery.go`, ST = `processor/agentic-loop/state.go`,
-C = `processor/agentic-loop/component.go`, H = `processor/agentic-loop/handlers.go`,
-ARH = `processor/agentic-loop/approval_response_handler.go`, AS = `processor/agentic-loop/approval_sweeper.go`,
-GD = `processor/agentic-loop/governance_dispatcher.go`, EI = `processor/agentic-loop/execution_identity.go`,
-TR = `processor/agentic-dispatch/task_recovery.go`, PS = `processor/agentic-model/provider_settlement.go`,
-TC = `processor/agentic-tools/component.go`, AG = `agentic/state.go`.
+Abbreviations: ST = `processor/agentic-loop/state.go`, C = `processor/agentic-loop/component.go`, H = `processor/agentic-loop/handlers.go`, LP = `processor/agentic-loop/loop_presence.go`, ARH = `processor/agentic-loop/approval_response_handler.go`, AS = `processor/agentic-loop/approval_sweeper.go`, GD = `processor/agentic-loop/governance_dispatcher.go`, EI = `processor/agentic-loop/execution_identity.go`, M = `processor/agentic-loop/metrics.go`, TR = `processor/agentic-dispatch/task_recovery.go`, PS = `processor/agentic-model/provider_settlement.go`, TC = `processor/agentic-tools/component.go`, AG = `agentic/state.go`, DL = `internal/deliverylane/deliverylane.go`, KV = `natsclient/kv.go`. `SR:` (settlement_recovery.go) exists only at `68c14c8e`.
 
-## 0. Premises measured before anything else
+## 0. Premises measured on `main` before anything else
 
-| Premise (from the brief) | Measurement | Result |
+| Premise (from the accepted design) | Measurement at `b7ce8727` | Result |
 |---|---|---|
-| "RequestIDs are deterministic (L2)" | `ST:1364-1365` `GenerateRequestID` returns `loopID:req:<uuid.NewString()>`; minted at `H:1083` (task), `H:1981` (truncation retry), `H:2654` (tools-complete) | **NOT true at 68c14c8e.** L4 inherits it as a dependency on L2; the three minting sites are L2's. |
-| "agentic-model reuses a matching retained response (L2)" | `processor/agentic-model/component.go:616-627` reads `agent.response.<requestID>` before the provider call; `PS:76-122` | True at 68c14c8e; keyed by RequestID, so it only helps once L2 makes IDs stable. |
-| "LoopEntity already persists PendingToolResults, Iterations, PendingApproval, five states" | `AG:46-93`, `AG:18-24`, `AG:54` (`PendingToolResults map[string]ToolResult` keyed by ExecutionID) | True. `main:agentic/state.go:53` has `PendingToolResults` keyed by call ID; the branch re-keyed it to ExecutionID. |
-| "no applied-ID / published-request field exists under any spelling" | `git grep -n -i -E 'applied_execution\|AppliedExecution\|applied_ids\|current_request_id\|CurrentRequestID\|published_request\|PublishedRequest\|active_request_id\|LastRequestID\|iteration_request' <ref> -- agentic processor schemas openspec/specs docs/adr` on both refs | 0 hits on both. **But** the current batch's applied execution IDs already have a durable home: the keys of `PendingToolResults` (`ST:1084-1119`, Put via `C:1795 → C:2411`). See § 2. |
-| "ExecutionID is deterministic" | `EI:24-26`, `EI:31-40`: `sha256(requestID, callID, ordinal)` | True, given a stable RequestID. |
-| "LoopEntity appears in generated schemas / OpenAPI" | scan of every `schemas/*.json` + `specs/openapi.v3.yaml` for `pending_tool_results` | 0 hits; the `max_iterations` hits are component config. Adding a field does not touch `task schema:generate`. `agentic/payload_registry.go` does not register `LoopEntity`. |
-| "proposals/verdicts carry a Nats-Msg-Id" | `GD:665` `publisher.PublishToStream(ctx, subject, data)`; `git show <branch>:processor/rule/publisher.go \| grep -n 'MsgID\|Nats-Msg-Id'` → 0 | Neither side dedups; a re-proposal re-fires the rule and yields a fresh verdict. |
-| "AGENT_LOOPS retention is the bucket's, unmeasured" (my § 3 Lifecycle, first draft) | `processor/agentic-loop/internal/loopbucket/acquire.go:20` creates `History: 10, TTL: 24 * time.Hour`; `:42-43` refuse any other policy at startup (`require History=10 TTL=24h MaxAge=24h MaxBytes<=0`) | **Measured:** a record expires 24h after its last write; the `agent.request` stream's retention is separate and is the only retention D33 observes (`SR:938-940`). I1 is scoped to records that exist: an expired record is a gone loop (pre-existing property); a redelivery after expiry reads "not observable" → Retry (`SR:488-490`, `:574-575`) to `MaxDeliver`. semspec's 24h claim (`recovery-consumer/backstop.go:247`) is correct |
-| "one outstanding delivery per lane" | `C:1162-1163` `MaxAckPending` fixed at 1 for `agent.task`, `agent.response`, `tool.result`; 10 elsewhere | Tool/response/task lanes are serialized per consumer; approval/signal/verdict lanes are not. |
+| "RequestIDs are deterministic (L2)" | `ST:1339-1347`: `%s:req:%d:%d`; iteration part = `entity.Iterations + 1` (`ST:1345`); retry part = process-local `truncationRetryAttempts` (`ST:466-482`, cleared at `ST:588`) | TRUE. The design's premise correction is moot. The iteration part of a record's request is `Iterations + 1` (birth writes `Iterations = 0` beside `…:req:1:0`), so § 3.6's "`Iterations` = its parsed iteration" is off by one on `main` (reconciliation S4) |
+| "agentic-model reuses a matching retained response (L2)" | `processor/agentic-model/component.go:633-643`; `PS:76-89` | TRUE |
+| "L2 shipped no `<iteration>:<retry>` parser" (Q4, L2 archive) | `ST:1360-1367` splits on `:req:` and returns `parts[0]`; `LP:50-60` takes the prefix before the separator; `git grep -n looprequest` → 0 | TRUE; task 1.0 stands |
+| "request publishes stamp `Nats-Msg-Id`" (Q5) | `H:55` `MsgID` on `PublishedMessage`; stamped at the three mints `H:1174`, `H:2194`, `H:2958`; `C:2328` routes every published message through `PublishToStreamWithMsgID` (`natsclient/client.go:963`) | SHIPPED by L2. Task 2.2 is complete before L4 starts (`publication_semantics_integration_test.go` exists) |
+| "no applied-ID / published-request field exists" | `git grep -n 'PublishedRequestID\|published_request_id' -- ':!openspec'` → only the forward-reference comment `ST:1338`; `AG:49-113` carries two L2 fields the design predates, `PendingContinuation` (`AG:98`) and `PendingContinuationRequestID` (`AG:113`) | TRUE; step 0 must say what it does with the two L2 fields (reconciliation S6) |
+| "`LoopEntity` appears in generated schemas / OpenAPI" | `git grep -l 'pending_tool_results\|published_request_id' -- schemas specs` → 0 (stderr visible) | 0 hits; `task schema:generate` untouched |
+| "proposals/verdicts carry a MsgID" | `GD:727` `publisher.PublishToStream`; `git grep -n 'MsgID\|Nats-Msg-Id' -- processor/rule/publisher.go` → 0 | Neither side dedups; the re-proposal residual stands |
+| AGENT_LOOPS policy | `processor/agentic-loop/internal/loopbucket/acquire.go:20`, `:42-43` | Unchanged: History 10, TTL 24h, refused otherwise |
+| "one outstanding delivery per lane" | `C:1191-1192`: `MaxAckPending` fixed 1 for `agent.task`, `agent.response`, `tool.result`; 10 elsewhere | Unchanged |
+| "both lanes already hold the revision" (Q2) | `git grep -n -E 'loopsBucket\.(Update\|Create)\(' -- processor/agentic-loop` → 0. Four writers, all `Put`, each discarding the revision `Put` returns: `C:2401`, `:2432`, `:2456`, `:2483`. The one reader, `LP:75`, discards `entry.Revision()` | FALSE on `main` (reconciliation § C Q2, S3) |
+| "the terminal owner already publishes before its Update; the approval owner already does; birth keeps Put → publish" (§ 3.1, Q1) | Carrier `C:1947` (write) → `:1959` (publish) for every result, terminal included. Birth `C:1496` (publish) → `:1499` (Put, error ignored). Failure `C:1752` (entity Put) → `:1809` (marker Put) → `:1831` (publish). Cancel `C:2631` (Put) → `:2668` (publish) → `:2683` (marker Put). Sweeper `AS:100` (publish) → `:101` (Put, error ignored) | FALSE on `main`: no lane publishes before its entity write except birth and the sweeper, and those two are the ones the design wants write-first (§ C Q1, S1, S2, S13) |
+| "`COMPLETE_<loopID>` is a Create-once marker read back on `ErrKeyExists`" (§ 5.7 b) | `C:2400-2401`, `:2431-2432`, `:2455-2456` — all `Put`; `KV:211` `Create` exists and returns `ErrKVKeyExists` (`KV:218`) | FALSE; § 5.7(b) needs a marker read (S13) |
+| "a recovery layer exists to prune (§ 6)" | `ls processor/agentic-loop` → no `settlement_recovery.go`; `git grep -n 'GetLastMsgForSubject\|readRetained' -- processor/agentic-loop` → 0; `git grep -n continuation_unavailable -- .` → only this change's own inventory | FALSE; § 6 inverts — "survives" becomes "build", "deleted" becomes "never built" (reconciliation § B) |
+| "the applied set is retained across the advance; the adopt writes one eviction ahead" (§ 3.6) | `H:2850` → `H:2870` `GetAndClearToolResults` (`ST:1107`, nil at `ST:1121`) drains the batch BEFORE the mint at `H:2927` | FALSE on `main`: the normal path already writes an empty set at the advance; pass-3's MEDIUM reverses (S5) |
+| "the tool lane classifies a terminal loop before acting" (Q7 warm) | `H:2580` StopLoop branch precedes the lane's only terminal guard `H:2652`; `H:2546` stores by key before any check | FALSE: L2's placed comment #3 (`complete → complete`); the Q7 warm check must precede `HandleToolResult` at `C:2195` (S9) |
+| Cold-path entry points | response `C:1623` → `C:1698-1700`; tool `C:2175` → `C:2287-2292`; verdict `C:2734` → `C:2759-2780`; cancel `C:2602`; approval `ARH:54-58` (memory only: `ErrLoopNotFound` → `staleDrop` → Ack at `ARH:194-199`); task: none (`HandleTask` `C:1396` creates the loop anew) | The loop-presence classifier (`LP:66-94`) is the attach point on four lanes; the approval and task lanes have none (S7, S11) |
 
-## 1. Recovery decisions (one row per decision, not per function)
+## 1. Recovery decisions on `main` (one row per predecessor decision; main-only rows M1–M4)
 
-Legend for the last column: **AF** = applied-fact answers it; **DF(x)** = existing durable fact x answers it; **NEED(x)** = still needs x; **GONE** = decision disappears; **KEEP** = not a proof (rebuild / warm-cold fork / validation), survives unchanged.
+Legend: **DF(x)** = existing durable fact x answers it on `main`; **AF** = the applied fact answers it; **NEED** = the decision has no home on `main` and L4 must build the site it attaches to; **KEEP** = present on `main`, survives unchanged; **GONE** = never built on `main`, nothing to delete.
 
-| # | Where | Input | Question the decision answers | Facts read today | Verdict |
+| # | `68c14c8e` | `main` site | Input | Facts read today on `main` | Verdict on `main` |
 |---|---|---|---|---|---|
-| D1 | `C:1310-1311` | task | Is the process task→loop map empty (cold)? | process map `HasActiveLoopForTask` | KEEP (warm/cold fork) |
-| D2 | `SR:384-397` | task | Does AGENT_LOOPS hold `task.LoopID` and agree on task/role/model? | KV entity | DF(`LoopEntity.ID/TaskID/Role/Model`) |
-| D3 | `SR:398-400` | task | Is the loop terminal → ACK without effects? | KV entity `State` | DF(`State`) |
-| D4 | `SR:402-422` | task | Was the initial AgentRequest already published, or must it be rebuilt from the TaskMessage? | retained request on `agent.request.<loopID>` (`SR:63`) | AF (`PublishedRequestID` set ⇒ published; rebuild + republish otherwise; with L2 IDs a rebuilt R1 == retained R1, republish is dup-safe) |
-| D5 | `SR:424`, `ST:349-430` | task/response/tool/approval | Rebuild ContextManager, tool cache, timeout, format from the retained request | retained request | KEEP (rebuild, not proof; brief keeps it) |
-| D6 | `C:1339-1350`, `C:1406-1409` | task | Same-process retry after transient lineage NAK: reuse the unpublished spawn result? | process map `pendingTaskResults` | KEEP (same-process only; cold path is D2/D4) |
-| D7 | `C:1532-1541` | task (birth failure) | Was a birth record already committed by another owner? | KV `Create` → `ErrKeyExists` → `DeepEqual` | DF(Create-once) |
-| D8 | `SR:457-476` | model response | Does the warm map's loop agree with the loop encoded in RequestID? | process map + `loopID:req:` grammar (`SR:369-375`) | KEEP (correlation) |
-| D9 | `SR:478-492` | model response | Cold: does AGENT_LOOPS hold the encoded loop? | KV entity | DF(entity presence) |
-| D10 | `SR:494-513` | model response | Did durable authority move under the warm copy (terminal / PendingApproval drift)? | KV entity vs process entity | DF(`State`, `PendingApproval`, revision) |
-| D11 | `SR:517-535` | model response | Is this response's RequestID the loop's CURRENT request? | retained request (`GetLastMsgForSubject`) `SR:524` | **AF, conditional on ruling Q4** (`PublishedRequestID == response.RequestID` ⇒ current; "older" ⇒ lower `(iteration, retry)` under the L2 grammar `<loopID>:req:<iteration>:<retry>`, #1328; at 68c14c8e IDs are UUID-suffixed, `ST:1364-1365`, and the classification is not decidable); retained read survives only as D5 source. `SR:524-529` quarantines a merely stale response; under Q4 older → ACK, newer → Retry, unparseable → Quarantine |
-| D12 | `C:1569-1586` | model response | Process says terminal: is the durable marker terminal → ACK? | KV entity `State` | DF(`State`) |
-| D13 | `H:1249-1254`, `H:1257-1264` | model response | Terminal-in-process ignore; `Iterations >= MaxIterations` fail | process entity (rebuilt from KV) | KEEP; with AF a redelivered response after the advancing Put is caught by D11 first |
-| D14 | `SR:131-195` | model response (governance) | For each proposed call, was a verdict already retained on `agent.toolcall.{approved,rejected}.<executionID>`? | retained verdict (`SR:211`) | DF(retained verdict). Not correctness-critical: `GD:665` and the rule publisher stamp no MsgID, so a re-proposal re-fires the rule; the retained read saves a re-evaluation and duplicate audit pairs |
-| D15 | `SR:197-235` | governance | Does the retained verdict correlate to the proposal (fingerprint, subject)? | retained verdict + `matchVerdictProposal` | DF (part of D14) |
-| D16 | `GD:547-560`, `C:2585-2595` | governance verdict (redelivered) | Is there a live waiter for `ExecutionID`? No → Retry forever | process `waiters` map | **NEED**: a verdict redelivered after restart has no ACK path (retries to `MaxDeliver`); `VerdictPayload.RequestID`/`ExecutionID` (`GD:131-137`) vs `PublishedRequestID`/`PendingToolResults` answers it — **ruled Q6** (#1330, 2026-09-18): L4 owns a minimal ACK path with the tool lane's classification |
-| D17 | `C:2146-2148` | tool result | Warm route for `ExecutionID` (and not approval-required)? | process map `toolCallToLoop` | KEEP (warm/cold fork) |
-| D18 | `SR:556-569`, `C:2269-2306` | tool result | Does the result carry request_id/execution_id/ordinal and encode the loop; does ExecutionID re-derive? | payload identity + `EI:31` | KEEP (validation) |
-| D19 | `SR:570-576` | tool result | Does AGENT_LOOPS hold the loop? | KV entity | DF(entity presence) |
-| D20 | `SR:577-621` | tool result | Did the originating AgentResponse contain this execution at this ordinal/callID/name? What are its siblings? | retained response on `agent.response.<requestID>` | DF(retained response) — needed to rebuild the batch (queued siblings are not in KV); identity compare only |
-| D21 | `SR:622-632` | tool result | Does the current retained request agree on role/model? | retained request | AF replaces (D22); role/model already in KV entity |
-| D22 | `SR:651-665`, `SR:686-740` | tool result | `request.RequestID != result.RequestID`: was this result already applied into a later request? | retained request `Messages` + `buildToolMessages` rendering (`SR:687`, `SR:723`, `SR:735`) — **the hazard** | **AF, conditional on L2 (same caveat as D11):** a *known-older* `result.RequestID` ⇒ applied (the iteration cannot advance before `AllToolsComplete`, `H:2410-2414`); `== PublishedRequestID` ⇒ current ⇒ normal handler, idempotent via `PendingToolResults` key overwrite (`ST:1119`); a cold read first adopts a newer retained request into the record (design § 3.6), so the cold rebuild source is always the newest retained request. "Older" means lower `(iteration, retry)` under ruling Q4's grammar `<loopID>:req:<iteration>:<retry>` (lands in L2, #1328); at 68c14c8e IDs are UUID-suffixed and unordered (`ST:1364-1365`), so without Q4 the classification is not decidable — an unparseable ID quarantines, never falls to a content compare. **Semantics change:** deleting `SR:763-817` also deletes the `!reflect.DeepEqual(stored, result)` → Fatal quarantine at `SR:799-802`; a divergent duplicate for an already-stored ExecutionID in the current batch overwrites by key instead of quarantining — declared residual |
-| D23 | `SR:634-636` | tool result | Truncate content to `ToolResultMaxBytes` so the rendering compare matches | config + content | GONE (only served D22) |
-| D24 | `ST:473-521`, `ST:486-488` | tool result | Rebuild batch state; **decrement `Iterations`** because the branch Puts the advanced iteration before publishing the next request | KV entity `Iterations`, `PendingToolResults`, retained response | Rebuild KEEP; the `Iterations--` at `ST:486-488` is GONE once the advancing Put follows the request PubAck (design § 2) |
-| D25 | `ST:435-468` | tool result / approval | Every stored result of this batch correlates; a preceding ordinal missing ⇒ retry | KV `PendingToolResults` | DF; `requirePreceding` GONE (serial dispatch means a later ordinal implies earlier ones are stored, but redelivery order is not needed as proof) |
-| D26 | `SR:666-667`, `SR:821-852` | tool result | Loop terminal: was THIS result the one that produced the terminal (`entity.Result == result.Content`, `SR:843`; or max-iteration failure with full batch, `SR:846-848`)? | KV entity terminal fields + `PendingToolResults` + content equality | DF(`State` terminal) suffices for an effect-free ACK, as the cancel lane already does at `C:2518-2526`; the content-equality proof is GONE. Semantics change (Codex retries unproven terminal results forever, `SR:851`) — **ruled Q7** (#1330, 2026-09-18): effect-free ACK with a metric and an audit line, no retry-to-`MaxDeliver` |
-| D27 | `SR:637-650`, `SR:763-817` | approval-required tool result | Is this gate status stale (a later phase consumed the gate)? | KV `State`, `PendingApproval`, `PendingToolResults`; falls to D22 for older RequestIDs (`SR:810`) | AF for the older-request branch; `SR:793-798` already answers the same-request branch from KV alone |
-| D28 | `SR:669-670`, `SR:743-758` | approval-required tool result | Loop awaiting this exact call → re-echo `ApprovalPendingEvent` | KV `PendingApproval`; `validatePendingApprovalEvidence` reads retained request + response (`SR:984-1013`) | DF(`PendingApproval`); the request/response validation reduces to `PendingApproval.RequestID == PublishedRequestID` |
-| D29 | `ARH:176-181` | approval response | Process holds the loop with a matching gate route? | process map | KEEP (warm/cold fork) |
-| D30 | `ARH:182-215` | approval response | Durable loop awaiting approval with matching `ExecutionID`/`CallID`; else ACK inapplicable (`ARH:200-206`) or quarantine | KV entity | DF(`State`, `PendingApproval`) |
-| D31 | `SR:857-866`, `SR:1015-1032` | approval response | Is the gated result stored and coherent with the gate? | KV `PendingToolResults[pending.ExecutionID]` | DF |
-| D32 | `SR:867-899`, `SR:1034-1040` | approval response | Retained request == `PendingApproval.RequestID`; retained response present and tool_call | retained request + response | AF for the ID compare (`PendingApproval.RequestID == PublishedRequestID`); retained reads survive only as D5/D20 rebuild sources |
-| D33 | `SR:921-981` | approval response | Required retained evidence absent: is absence proven by stream retention config and unchanged revision → fail `continuation_unavailable` | `stream.Info().Config` (`SR:938-940`), KV revision (`SR:948`) | NEED(retention observation) — required verbatim by #1146 Acceptance ("Confirmed missing required evidence durably fails continuation_unavailable"); independent of the applied fact |
-| D34 | `SR:904-916` | approval response | Rebuild batch, drop queued siblings | retained response + KV | KEEP (rebuild) |
-| D35 | `ARH:238-241` | approval response | Handler found no local gate (staleDrop) → Retry | process | KEEP |
-| D36 | `ARH:255-279` | approval response (approve) | Publish `tool.execute` then CAS-clear the gate (`ARH:269`, `ARH:275`) | PubAck, KV revision | DF(TOOL_CALL_OUTCOMES replays a duplicate dispatch: `TC:710-713`, key `outcomes.go:82`) — publish-then-Update already closes the crash window |
-| D37 | `ARH:130-149` | approval response (reject) | Synthetic result through `HandleToolResult` | same as tool result | AF via D22/D25 |
-| D38 | `AS:21-86` | startup | Which loops await approval with a timeout → hydrate timer candidates | KV `WatchAll(MetaOnly)` + `Get` (`AS:69-73`) | DF(`State`, `PendingApproval.Timeout`) |
-| D39 | `AS:134-169` | timer | Expired gate → publish `ApprovalResponse` to the wire (`AS:156`), consumed by D29-D37 | process snapshot of hydrated entities | KEEP |
-| D40 | `C:2508-2526` | cancel signal | Terminal → ACK inapplicable; else hydrate and cancel through the terminal owner | KV entity | DF(`State`) |
-| D41 | `C:1833-1845`, `C:1959-1964`, `C:1917-1927` | terminal (all lanes) | Authority unchanged (revision CAS); which terminal payload won (`COMPLETE_<loopID>` Create-once); publish then `Update(revision)` | KV revision, Create-once, PubAck | DF; the single terminal-persistence owner stays |
-| D42 | `TR:65-110` | dispatch (UserMessage) | Is there a retained dispatch task for this stable task ID? | retained task on `agent.task.<taskID>` (hash `TR:65-74`) | DF — agentic-dispatch layer, outside L4, unchanged |
-| D43 | `PS:76-122`, `agentic-model/component.go:616-627` | agent request (model side) | Was this RequestID already answered → ACK | retained response | DF — layer L2, stays |
-| D44 | `C:1833-1843` (`:1838-1839`, `:1841-1842`) | terminal (all lanes, `persistTerminalOutcome`) | Is the record observable at this delivery's revision and still non-terminal, else Retry "terminal authority changed or is not observable"; does its TaskID match the marker, else Quarantine? | KV revision + `State` + `TaskID` | DF; **ruled 2026-09-18 (Q7 applied):** record terminal at the observed revision → effect-free ACK with metric and audit line, never Retry; revision conflict alone → Retry (CAS re-read, short-lived); TaskID conflict → Quarantine unchanged |
-| D49 | `C:1846-1870` (`:1846`, `:1852-1856`, `:1861-1866`) | terminal (all lanes, redelivered) | Does this delivery's candidate terminal payload equal the saved `COMPLETE_<loopID>` payload that `selectTerminalOutcome` reads back on `ErrKeyExists` (Create-once at `C:1959-1960`; Result/Decision; Reason/Error), else Retry "lacks this delivery's compatible applied proof"? | KV Create-once terminal payload vs re-derived candidate — **content equality on the terminal owner, the twin of D26** | **DELETE the compare; ruled 2026-09-18 (Q7 + the Q4 identity principle):** (b) record not terminal and the loop's durable terminal exists → ADOPT it by identity (loop ID + terminal kind): the saved payload replaces the candidate (`:1857-1858`, `:1867-1869`, unchanged), publish proceeds with it (a terminal republish is an accepted duplicate, `main:spec.md:430-446`), the entity is written to match under `Update(revision)` (`C:1927`), ACK; content differences are logged at the audit line, never a disposition; (c) no durable terminal → Create, publish, `Update`, ACK. At 68c14c8e the "retained published terminal" the ruling names is this KV marker, not a stream read |
-| D45 | `C:2162-2170` | tool result (warm route) | Warm route with no observed revision: is the loop observable in KV, else Retry? | KV revision (`:2163`, `:2168`) | DF(entity presence); Retry stays; the revision now feeds the CAS `Update` (design § 3) instead of being discarded |
-| D46 | `C:2171-2177` | tool result (warm route) | Do the durable and process copies agree on TaskID/Role/Model, else Quarantine? | KV vs process entity | DF; Quarantine stays; consumes the same revision |
-| D47 | `C:2178-2181` | tool result (warm route) | Has authority moved — durable terminal, or `PendingApproval` drift — → release process state, Retry | KV `State`, `PendingApproval` | DF; under the CAS re-read: terminal → Q7 effect-free ACK (as D26); gate mismatch → re-classify per the approval-lane rule (design § 5.4), not Retry "authority changed" |
-| D48 | `C:2182-2190` | tool result (warm route) | Does this execution own the current gate (six-field `PendingApproval` compare), else Retry? | KV `PendingApproval` identity | DF; survives — an identity compare, not content; Retry until the gate's own CAS lands is correct and short-lived (one redelivery); I4 adds `PendingApproval.RequestID == PublishedRequestID` |
+| D1 | `C:1310-1311` | none; `C:1396` `HandleTask` → `ST:225` `CreateLoopWithID` / `H:876` `attachContinuation`; `C:1345` reads memory only | task | process map | NEED: no cold fork; a task naming a loop this process lost is born again in memory and its record overwritten by `Put` (`C:1499`) |
+| D2 | `SR:384-397` | none | task | — | NEED (entity fields exist: `AG:49-57`) |
+| D3 | `SR:398-400` | none on this lane; pattern `LP:91-92` | task | — | NEED |
+| D4 | `SR:402-422` | `H:1120` `buildTaskRequest` mints `…:req:1:0` with MsgId (`H:1122`, `:1174`) | task | process only | AF; the birth path is the rebuild (S7) |
+| D5 | `SR:424`, `ST:349-430` | none | task, response, tool, approval | — | NEED: rebuild ContextManager, caches, routing from the retained request (S8) |
+| D6 | `C:1339-1350`, `C:1406-1409` | `C:1429-1437`, `C:1510` | task | `pendingTaskResults` | KEEP |
+| D7 | `C:1532-1541` | none; birth failure → `C:1596` → `C:1752` `Put` | task | last-writer `Put` | GONE (no Create-once); a redelivered task after a birth failure meets a terminal record → D3 |
+| D8 | `SR:457-476` | `C:1679`, `ST:1380` | response | process map + grammar | KEEP |
+| D9 | `SR:478-492` | `C:1698-1700`, `LP:66-94` | response | KV entity | DF(entity presence); live → Retry today (`C:1700` default arm) |
+| D10 | `SR:494-513` | none (no warm KV read) | response | — | GONE; the CAS write (Q2) is what detects a moved record |
+| D11 | `SR:517-535` | `H:1253` `CurrentRequest` (process-local; empty after replacement, let through — L2's declared residual `ST:955-961`) | response | process map | AF: the guard reads `PublishedRequestID` (S8) |
+| D12 | `C:1569-1586` | `H:1322`; cold `C:1700` stale = terminal | response | process entity / KV | DF(`State`); Q7's metric and audit line to add |
+| D13 | `H:1249-1264` | `H:1322`, `H:1330-1337` | response | process entity | KEEP |
+| D14 | `SR:131-195` | none; `GD:727` no MsgID | response (governance) | — | GONE; not built (S8); duplicate proposed/verdict pair is the declared residual |
+| D15 | `SR:197-235` | none | governance | — | GONE (with D14) |
+| D16 | `GD:547-560`, `C:2585-2595` | `GD:608-629` (`ErrNoGovernanceWaiter`, `GD:337`), `C:2734` → `C:2759-2780` (stale → Ack `:2773`; live → Retry `:2780`) | verdict | KV entity via `LP` | DF skeleton exists; Q6's classification replaces `:2773` (S12) |
+| D17 | `C:2146-2148` | `C:2173` `findLoopIDForToolCall` | tool | process map | KEEP |
+| D18 | `SR:556-569`, `C:2269-2306` | none at the wire; `EI:31` re-derives | tool | — | NEED in the cold path; `agentic/tools.go:637-641` fields exist |
+| D19 | `SR:570-576` | `C:2287-2292` | tool | KV entity | DF(entity presence) |
+| D20 | `SR:577-621` | none; pattern `PS:28-49`, `TR:51` | tool | — | NEED: retained-response reader (identity only) |
+| D21 | `SR:622-632` | none | tool | — | GONE |
+| D22 | `SR:651-665`, `SR:686-740` | none; warm path `H:2546` stores by key before any check | tool | — | AF (S9): classification before `C:2195` and in `C:2292`'s live arm |
+| D23 | `SR:634-636` | none; `H:200` normal truncation | tool | — | GONE |
+| D24 | `ST:473-521`, `ST:486-488` | none | tool | — | NEED: `restoreToolBatch` without the decrement (the advance is written after the PubAck, S2) |
+| D25 | `ST:435-468` | none | tool, approval | — | NEED inside D24: stored keys ⊆ retained response's calls, else Quarantine; `requirePreceding` GONE |
+| D26 | `SR:666-667`, `SR:821-852` | cold `C:2296-2303` (`tool_results_dropped_total{stale_execution}`, Warn); warm: none before `C:2195` | tool | KV `State` (cold) | DF(`State`): cold half is already Q7's effect-free ACK; warm half NEED (S9) |
+| D27 | `SR:637-650`, `SR:763-817` | `H:2573` → `H:2667-2702`; store at `H:2546` precedes it | approval-required result | process entity | AF (S10): a resolved gate's redelivered `approval_required` result overwrites the real result by key (`ST:1082`) and re-gates via `H:2704-2723` |
+| D28 | `SR:669-670`, `SR:743-758` | `H:2674` absorbs silently (no re-echo) | approval-required result | process `State` | NEED: re-echo in the awaiting branch when `PendingApproval.ExecutionID` matches (accepted gate order kept, S2) |
+| D29 | `ARH:176-181` | `ARH:54-58` `ResolveApprovalIfPending` (`ST:499`) | approval response | process map | KEEP for warm; cold `ErrLoopNotFound` → `staleDrop` → Ack `ARH:78`, `:194-199` (S11) |
+| D30 | `ARH:182-215` | none (no KV read) | approval response | — | NEED (S11) |
+| D31 | `SR:857-866`, `SR:1015-1032` | none | approval response | — | NEED: I4 + key presence |
+| D32 | `SR:867-899`, `SR:1034-1040` | none | approval response | — | AF (I4) |
+| D33 | `SR:921-981` | none; `continuation_unavailable` → 0 hits outside this change | approval response | — | NEED — OWNER QUESTION (Q8 "unchanged" has no referent; reconciliation § C Q8) |
+| D34 | `SR:904-916` | none | approval response | — | NEED (with D24) |
+| D35 | `ARH:238-241` | `ARH:194-199` (`staleDrop` → Ack) | approval response | process | AF split: in-memory not-awaiting → Ack (W3); `ErrLoopNotFound` → record (S11) |
+| D36 | `ARH:255-279` | `ARH:205` `persistHandlerResult` (Put `C:1947` → publish `:1959`) | approval (approve) | — | DF(TOOL_CALL_OUTCOMES replay `TC:740-743`); the order is the carrier's (S2) |
+| D37 | `ARH:130-149` | `ARH:139-158` (`RequestID: pending.RequestID` at `:149`) | approval (reject) | same as tool | KEEP |
+| D38 | `AS:21-86` | none; `AS:69` `SnapshotExpiredApprovals` reads memory | startup | — | NEED — OWNER QUESTION (§ C Q8 companion) |
+| D39 | `AS:134-169` | `AS:65-129`: in-process `HandleApprovalResponse`, then `publishResults` `:100` → `persistLoopState` `:101` (errors ignored), then `:130` publishes the response to the wire for observers only | timer | process snapshot | AF via D37; the sweeper's own publish → Put pair must ride the carrier (S11) |
+| D40 | `C:2508-2526` | `C:2593-2612` (`signals_dropped_total{already_terminal,stale_loop_id}`) | cancel | process refusal + KV | DF(`State`); the Q7 pattern the ruling names |
+| D41 | `C:1833-1845`, `C:1959-1964`, `C:1917-1927` | three terminal write paths: carrier `C:1974-2023` (entity `:1975` → marker `:1982`/`:2002` → stamps → publish `:1959`); failure `C:1752` → `:1809` → `:1831`; cancel `C:2631` → `:2668` → `:2683`; all `Put` | terminal | none (no revision, no Create-once) | NEED (S13): no single owner, no CAS, no marker identity, write-before-publish |
+| D42 | `TR:65-110` | `TR:64`, `TR:89`, `TR:147` | dispatch | retained task | KEEP (outside L4) |
+| D43 | `PS:76-122`, model `:616-627` | `PS:76-89`, model `:633-643` | agent request | retained response | KEEP (L2) |
+| D44 | `C:1833-1843` | none | terminal | — | Q7(a) attaches before `C:2195` and inside `C:2296` (S9); the TaskID-vs-marker Quarantine has no warm read to attach to and is dropped |
+| D45 | `C:2162-2170` | none | tool (warm) | — | GONE; the process-retained revision is the CAS input (S3) |
+| D46 | `C:2171-2177` | none | tool (warm) | — | GONE |
+| D47 | `C:2178-2181` | none | tool (warm) | — | GONE; terminal → Q7 at `C:2195` (S9) |
+| D48 | `C:2182-2190` | none; the six-field identity lives at `H:2710-2713` (write) and `ST:499` (resolve) | tool (warm) | — | GONE; I4 is new |
+| D49 | `C:1846-1870` | none; markers are `Put` (`C:2401`, `:2432`, `:2456`) | terminal (redelivered) | — | NEED (S13): (b) reads the marker `Create` refused |
+| M1 | — | `C:1420-1425` deferred continuation: `Put` only, error ignored | task | process entity | main-only writer; rides `Update(revision)` (S3); a CAS loss here is the two-consumer window (§ D 2) |
+| M2 | — | `C:1429-1437` `!result.Created` dedup → Ack without publish unless `pendingTaskResult` | task | process map | KEEP warm; cold has no dedup (D1) |
+| M3 | — | `C:1108-1110` (`deliverylane.Consume`, heartbeat lanes task/response/tool) and `C:1130-1132` (`deliverylane.Settle`, signal/approval/verdict); `C:980-1024` names the lanes | all | admission latch | KEEP: L4's ACK paths and adoption are decisions inside the handlers (#1341 design § L4); no latch spelling is added |
+| M4 | — | `H:1253` empty-`CurrentRequest` let-through after replacement (L2 residual `ST:955-961`); `H:2580` before `H:2652` (L2 comment #3); `ST:333` admission vs `ST:887` mint window (L2 comment #2) | response, tool, task | process maps | the three placed inventory comments; reconciliation § D |
 
-## 2. Every non-recovery Put of `LoopEntity` to KV (the applied fact must ride one of these)
+## 2. Every writer of AGENT_LOOPS on `main` (the applied fact must ride one of these)
 
 | Site | Form | Order relative to the outputs it implies | Lane |
 |---|---|---|---|
-| `C:1405 → C:2396-2415` (`persistLoopState`, `Put` at `C:2411`) | plain `Put` | **Put, then** `publishResults` (`C:1410`) — birth: `agent.created` + R1 | task |
-| `C:1532` | `Create` (birth on graph-birth failure) | before the failure publication | task |
-| `C:1795 → C:2411` inside `persistHandlerResult` (`C:1782-1799`) | plain `Put` | **Put (`C:1795`), then** `publishResults` (`C:1798`) — covers: response→tool dispatch (`C:1618`), tool result mid-batch and tools-complete R(N+1) (`C:2257`), truncation retry R' (`C:1618`) | response, tool |
-| `C:2319` (`persistApprovalGate`) | `Update(revision)` | Update, then publish `ApprovalPendingEvent` (`C:2323`) | tool (gate) |
-| `ARH:275` | `Update(revision)` | publish `tool.execute` (`ARH:269`), then Update | approval |
-| `C:1927` (`persistTerminalOutcome`) | `Update(revision)` | `COMPLETE_` Create (`C:1960`), publish (`C:1917`), then Update | all terminal lanes |
-| `SR:961-976` (`settleAbsentApprovalEvidence`) | via terminal owner | as above | approval |
+| `C:1499` via `persistLoopState` (`C:2468`, `Put` at `:2483`) | `Put`, error ignored | publish `C:1496` (R1 + `agent.created`) THEN `Put` | task birth |
+| `C:1425` via `persistLoopState` | `Put`, error ignored | marker only; nothing published | task, deferred continuation |
+| `C:1975` via `persistResultState` (`C:1974`) inside `persistHandlerResult` (`C:1923`) | `Put` | `Put` (`C:1947`) THEN `publishResults` (`C:1959`); callers `C:1638` response, `C:2220` tool, `C:2271` failed terminal tool result, `ARH:205` approval | response, tool, approval, gate (the gate result is `result.State = awaiting_approval` from `H:2573`; there is no separate gate writer) |
+| `C:1982` `persistCompletionState` (`Put` `:2401`), `C:2002` `persistFailureState` (`Put` `:2432`) | `Put` | inside `persistResultState`, after the entity `Put`, before graph stamps, before publish | terminal via the carrier |
+| `C:1752` (entity) and `C:1809` (marker) in `handleLoopFailure` (`C:1734`) / `publishFailureEvents` (`C:1794`) | `Put` | entity `Put` → marker `Put` → stamp → publish `C:1831` | terminal failure (handler error, spawn-identity failure `C:1596`) |
+| `C:2631` (entity), `C:2683` → `:2456` (marker) in `handleCancelSignal` (`C:2614`) | `Put` | entity `Put` → publish `C:2668` (no MsgID) → graph → marker `Put` | cancel |
+| `AS:101` via `persistLoopState` | `Put`, error ignored | publish `AS:100` THEN `Put`; the wire publish `AS:130` is for observers only | approval timeout sweeper |
 
-Observation (not a design): the only non-CAS writer is `C:2411`, reached from lanes that read `observedRevision` at `C:2163` / `C:1564` and then discard it. The entity written by `C:2411` is the process copy (`C:2401`), so a lane that wins the race between `C:2163` and `C:2411` (cancel signal at `C:1927`, approval at `ARH:275`) is overwritten. `MaxAckPending=1` (`C:1162-1163`) serializes only within one port's consumer.
+Observation (not a design): seven writer sites, one form, three orders. The predecessor's seven sites had two forms (`Put`, `Update`) and one CAS-protected terminal owner; `main` has neither a revision anywhere nor a Create-once marker. The single-holder model (one process holds a loop; `MaxAckPending` 1 on the three heartbeat lanes) means the process copy written by `C:2483` is the only source on every lane, so a CAS on `main` protects against the two-consumer window (§ 1 M1, M4) and against a replaced process's stale write, not against a warm cross-lane race the Codex branch had.
 
 ## 3. Same-class collision table (durable primitive: "current published request + applied set on the loop record")
 
-| Dimension | Evidence |
+| Dimension | Evidence on `main` |
 |---|---|
 | Semantic class | "Which model request is outstanding for loop L, and which tool executions of that request have been applied" |
-| Owners | agentic-loop only. Applied set: `LoopEntity.PendingToolResults` keys (`AG:54`, written at `ST:1119`, retained across the advance by `ST:1146-1160` with `clearResults=false` at `H:2612`, superseded by the next batch's first result at `ST:1100-1106`). Current request: **no durable owner** — today reconstructed from `GetLastMsgForSubject(agent.request.<loopID>)` (`SR:63`, `SR:276`) and process map `requestToLoop` (`ST:976-989`). |
-| Catalogs | AGENT_LOOPS declared as `component.KVWritePort{Bucket: "AGENT_LOOPS"}` at `config.go:426`; ADR-028:61/141 (COMPLETE_ records); `openspec/specs/framework-bucket-catalog/spec.md` — `git grep -n AGENT_LOOPS origin/main -- openspec/specs/framework-bucket-catalog/spec.md` → 0 (no catalog descriptor). |
-| Status | `LoopEntity.State` (five values, `AG:18-24`); no readiness key involved. |
-| Lifecycle | Written at birth (`C:1405`), every handler result (`C:1795`), gate (`C:2319`), gate clear (`ARH:275`), terminal (`C:1927`); `COMPLETE_` Create-once (`C:1960`). Bucket policy at `internal/loopbucket/acquire.go:20,42-43`: `History: 10`, `TTL: 24h` (age eviction per key since last write), `MaxBytes<=0`, refused otherwise at startup; `COMPLETE_` markers share it. An expired record is a gone loop. |
-| Ownership | Single writer component; per-port consumers with `MaxAckPending` 1/10 (`C:1162-1163`); no lease. |
-| Readers (in-repo) | recovery paths D2-D41; trajectory query reads AGENT_TRAJECTORIES not loops (`C:2417-2419`). |
-| Readers (sisters, read-only inventory) | **Control planes (Watch):** semspec `processor/execution-bridge/completion.go:22,25,39,54` and `review_completion.go:28,51` watch AGENT_LOOPS for terminal loops and translate them into `exec_produced` / `review_verdict_signal`; `processor/lesson-decomposer/component.go:901,924` and `processor/qa-reviewer/component.go:302,323` watch for completions. **Liveness:** semspec `processor/recovery-consumer/backstop.go:40,45,167,247` treats entry presence as liveness for orphan detection and asserts the 24h TTL at `:247`; `config.go:32,35,70` exposes `loops_bucket` (default `AGENT_LOOPS`) as an operator key. **Key-space parsers:** `pkg/health/orchestrate.go:14,73,92`, `detector_repeattoolfailure.go:230` (know both `<uuid>` and `COMPLETE_` keys). **Mirrors:** semsage `processor/ui-api/component.go:2,50,160,217`, `sse.go:15` (one SSE event per KV change), `http.go:72,137,297`, own struct `types.go:12`; semteams `cmd/semteams/main.go:492`, `cmd/semteams/approvalpause/doc.go:40` (reimplement against `LoopEntity.State`); semspec `cmd/semspec/watch_live.go:193-238`, `pkg/health/capture.go:75`; semmachina `internal/resume/pending.go:88` (records AGENT_LOOPS cannot answer its question). **Config coupling (L3 #1329 migration-note item, not L4 scope):** semspec `configs/e2e-claude.json:311,818` and `configs/e2e-gemini.json:345,874` set the agentic-loop `loops_bucket` key that the port-owned bucket retires. semsource, semconnect, semboids, semmem: 0 hits. |
-| Writers | agentic-loop only (`git grep -n 'AGENT_LOOPS' origin/main -- processor | grep -v agentic-loop` not run; sister scan above shows readers only). |
-| Recovery | This inventory. Closest same-shape instances: `TOOL_CALL_OUTCOMES` post-effect Create-once keyed by ExecutionID (`outcomes.go:82`, `TC:773`), `COMPLETE_<loopID>` Create-once (`C:1959-1964`), `PendingApproval` committed in the same Update as the state transition (`C:2319`). All three are "applied fact written atomically with the state it describes" — the problem shape L4 adopts; none is a pre-call marker. |
+| Owners | agentic-loop only. Applied set: `LoopEntity.PendingToolResults` keys (`AG:57`; written at `ST:1075-1082`; drained and nilled at the advance by `ST:1107-1121` via `H:2870`, before the mint at `H:2927`). Current request: **no durable owner** — process maps `currentRequests` / `outstandingRequests` (`ST:79`, `ST:887-888`, read at `ST:933`, `ST:955`), the structured-ID route rebuild (`ST:1380`), and the comment reserving the field (`ST:1338`) |
+| Catalogs | `processor/agentic-loop/config.go:426` declares AGENT_LOOPS as a `KVWritePort`; `git grep -n AGENT_LOOPS -- openspec/specs/framework-bucket-catalog/spec.md` → 0 |
+| Status | `LoopEntity.State` (`AG:49-57`); no readiness key |
+| Lifecycle | Written at the seven sites of § 2; bucket policy `acquire.go:20`, `:42-43`; `COMPLETE_` markers share the bucket (`C:2400`, `:2431`, `:2455`) |
+| Ownership | Single writer component; one process per loop; `MaxAckPending` 1/10 (`C:1191-1192`); admission latch per lane (`C:1108`, `:1130`; `DL:27-58`); no lease |
+| Readers (in-repo) | `LP:75` (presence classification, four lanes); `processor/agentic-dispatch` reads loop authority through its own view (`http_activity.go:321-337`, terminal-skipping conjunct at `:329`); the trajectory query reads AGENT_TRAJECTORIES |
+| Readers (sisters) | Not re-swept: the predecessor's Readers row was pinned against sister HEADs, which are outside this base and unchanged by it (semspec control planes watch AGENT_LOOPS; recovery-consumer treats presence as liveness; semsage mirrors one SSE event per change). One new adopter-visible fact is added in § 4 |
+| Writers | agentic-loop only (`git grep -n 'loopsBucket\.' -- processor ':!processor/agentic-loop'` → 0) |
+| Recovery | This inventory. Closest same-shape instances on `main`: `TOOL_CALL_OUTCOMES` post-effect Create-once keyed by ExecutionID (`TC:808`, `TC:869`, `outcomes.go:100`); the dispatch retained-task read-back (`TR:51`, `:89`); the model plane's retained-response reuse (`PS:37`, model `:633-643`). All three are "read the durable fact by identity before acting" — the shape L4 adopts; none is a pre-call marker |
 
 ## 4. Adopter seam inventory (surfaces reached from outside this repo)
 
-Surface A — `LoopEntity` JSON in AGENT_LOOPS gains one optional field.
-1. What must they know: nothing to keep working (Go `encoding/json` ignores unknown fields; semsage decodes into a mirror struct). To *use* it: that `published_request_id` names the outstanding request and is not cleared at terminal.
-2. If they do nothing: unchanged behaviour. No silent loss. Write cadence is unchanged — one KV write per settled input; a CAS failure writes nothing and re-handles on redelivery; identity adoption writes once — so semsage's one-SSE-event-per-change (`ui-api/sse.go:15`) sees no new event class, and the semspec watchers/liveness scan (Readers row) see `Update` exactly as they saw `Put`.
-3. Where they find out: doc only (`LoopEntity` is in no generated schema; measured § 0). Acceptable because no correctness fact is at stake for a reader.
-4. Should have to know: nothing. Gap: none for readers. Finding, sharpened: semspec `pkg/health/agent_response_walk.go:119-127` splits the subject on the **first colon** — the loop id is the UUID half, so the UUID-suffix worry is refuted, so L2's grammar must keep the loop-id half colon-free and the literal `:req:` separator (`SR:369-375`, `ST:1378-1386` parse it too); the suffix is unconstrained by any sister.
+Surface A — `LoopEntity` JSON in AGENT_LOOPS gains one optional field. Unchanged from the predecessor: nothing to know to keep working; no silent loss; write cadence unchanged (one write per settled input; a CAS failure writes nothing); doc-level discoverability is acceptable because no reader correctness fact is at stake.
 
-Surface B — tool authors / agentic-tools: no change; `ToolResult` identity fields (`agentic/tools.go` `request_id`, `execution_id`, `call_ordinal`) are already required by `C:2277-2282`.
+Surface A' — ordering, new on `main`. Today every terminal lane except cancel writes the entity's terminal `state` before publishing the terminal event (`C:1947` → `:1959`; `C:1752` → `:1831`), the beta.57 contract at `C:1798-1803`. Under the reconciled terminal order (marker → stamps → publish → entity `Update`, reconciliation S13) a watcher keyed on the `COMPLETE_` marker sees it before the event, as today; a watcher keyed on the entity's `state` sees terminal AFTER the event. semspec's two control planes and its liveness scan are keyed on AGENT_LOOPS (predecessor Readers row) and which key each reads was not re-verified here. Finding: the terminal reorder is adopter-visible and belongs in the migration note with the key each sister watcher reads.
 
-Surface C — approval UIs publishing `ApprovalResponse`: no change; D29-D37 unchanged in shape.
+Surface B — tool authors / agentic-tools: no change; `ToolResult` carries `request_id`, `execution_id`, `call_ordinal` (`agentic/tools.go:637-641`) and the tools plane already stamps `Nats-Msg-Id` per execution (`TC:1224`, `TC:780`).
 
-Surface D — the framework-owned prediction check: nothing in L4 asks a caller to predict a value. The one prediction-shaped input in the Codex layer is the *rendering* compare (`SR:687`): recovery predicts what `buildToolMessages` will produce. Deleting it is the design.
+Surface C — approval UIs publishing `ApprovalResponse`: no wire change; the lane stops acknowledging a decision for a live loop the process lost (`ARH:58-78`, `:194-199` today).
+
+Surface D — the framework-owned prediction check: nothing in L4 asks a caller to predict a value. The Codex rendering compare that motivated the change was never merged; on `main` the prediction-shaped input is absent.
 
 ## Adjacent claims on the territory (§ 5)
 
-- `openspec/specs/agentic-loop/spec.md:212-213` (main): "A restart-surviving answer SHALL NOT be sourced from loop state records either: only a handler transitions a loop out of `state=running`" — scoped to the in-flight query; L4 does not derive in-flight from the record, but the spec delta must say so explicitly.
-- `openspec/specs/agentic-tools/spec.md:452-537` (main): completed-outcome replay is the existing authority for duplicate `tool.execute` (D36).
-- `openspec/specs/agentic-loop/spec.md:430-446` (main): terminal redelivery creates another terminal observation — duplicate terminal publication is accepted today.
-- `docs/concepts/17-approval-flow.md:65-68` (main): "Restart-safe. `LoopEntity.PendingApproval` lives in the AGENT_LOOPS KV bucket" — the claim #1146 Acceptance calls false; must be corrected with L4.
-- No active `openspec/changes/` entry touches agentic-loop (`ls openspec/changes` → only `archive`).
-- ADRs: none mention #1146/#759/settlement (`git grep -l -i -E '1146|#759|restart-safe|settlement' origin/main -- docs/adr` hits are unrelated: 045, 046, 068, 094, 095, 098, 101).
+- `openspec/specs/agentic-loop/spec.md:212` — `A restart-surviving answer SHALL NOT be sourced from loop state records either: only a handler`
+- `openspec/specs/agentic-loop/spec.md:421` — `### Requirement: Terminal trajectory facts are ordinary observations`
+- `openspec/specs/agentic-loop/spec.md:443` — `#### Scenario: terminal redelivery creates another terminal observation`
+- `openspec/specs/agentic-tools/spec.md:437` — ``agentic-tools` SHALL own one immutable COMPLETED outcome per framework execution identity, retaining the provider`
+- `docs/concepts/17-approval-flow.md:65` — `- **Restart-safe.** `LoopEntity.PendingApproval` lives in the`
+- #1345 (beta.163, `class:swallowed-degrade`, placement candidate L4): five task-intake branches ACK on failure; Q1's Put → publish converts the failed-write branch at `C:1499` by necessity, the other four stay #1345's (reconciliation S1).
+- #1342 (blocked by #1341): silent-refusal lanes; L4 adds no lane and no latch spelling.
+- Archived L1 `openspec/changes/archive/2026-09-19-settle-after-durable-effect/design.md` residuals naming L4: identity-preserving replay at `persistHandlerResult` (`:95-96`, `:136`), task intake (`:238-255`), cancelled tool result after mutation (`:257-283`), `loopPresenceLive` Retry (`:313`).
+- Archived L2 `openspec/changes/archive/2026-09-21-stable-request-identity/design.md` residuals naming L4: retry ordinal (`:157-161`), restore-from-KV (`:186`), completing-path queued sibling (`:212`), `complete → complete` (`:230-232`), admission/mint window (`:248-251`), outstanding registry (`:256`), superseded guard after replacement (`:264-265`), parser deviation accepted (`:276`).
+- Archived L3 `openspec/changes/archive/2026-09-21-durable-loop-authority/design.md:50`: clearing `PendingApproval` on a terminal transition is deferred to L4 ("the layer that owns terminal and adopt transitions"); `:107-114` the route-ambiguity residual the 2026-09-21 ruling places on L4.
+- Archived #1341 `openspec/changes/archive/2026-09-21-delivery-lane-admission-package/design.md:377-381`: L4's Survives list loses `delivery_owner.go`; L4's ACK paths are `DeliveryWork` decisions inside the handlers.
+- Sibling change `openspec/changes/agentrun-fanout-settlement/` (#1249, other worktree): `grep -n -i '#1330\|L4\b\|PublishedRequestID\|durable-applied' design.md` → 0 references.
+- `ls openspec/changes` on this branch → `archive` and this change only.
 
-## 6. Commands run (verbatim, in order)
+## Searches run (verbatim, in order)
 
 ```
-git rev-parse origin/codex/gh1146-agentic-loop-restart; git merge-base <branch> origin/main
-git diff --stat 461b6902 68c14c8e | tail -60
-for f in $(git ls-tree -r --name-only <branch> -- processor/agentic-loop processor/agentic-model processor/agentic-dispatch processor/agentic-tools agentic | grep -v _test.go); do git show <branch>:$f > scratch/src/$f; done
-gh issue view 1146 --json body -q .body; sed -n '43,97p'
-grep -n '^func ' on: settlement_recovery.go state.go approval_response_handler.go approval_sweeper.go delivery_owner.go execution_identity.go inflight.go task_recovery.go provider_settlement.go handlers.go component.go governance_dispatcher.go
-grep -n '\.Put(\|\.Update(\|\.Create(\|UpdateLoop(\|persistLoop' component.go handlers.go state.go approval_response_handler.go approval_sweeper.go settlement_recovery.go governance_dispatcher.go
-grep -n 'recoverGovernance\|recoverTaskDelivery\|ensureResponseLoop\|recoverToolResult(\|recoverApprovalResponse\|restoreApprovalDeadlines\|releaseLoopTransientState\|GetLoopFor.*WithRecovery\|settlementEvidence\|pendingTaskResult' agentic-loop/*.go
-grep -n 'GenerateRequestID\|:req:\|RequestID: \|RequestID = ' agentic-loop/*.go (non-test)
-grep -n 'completedOutcome\|outcomeStore\|toolCallOutcomeKey\|publishStream(\|toolResultMessageID(' agentic-tools/component.go outcomes.go
-git grep -n 'PublishToStreamWithMsgID' origin/main -- natsclient   # hits client.go:946,963,968,1056 (receiver is (m *Client), decl at :963)
-git grep -n -i -E 'applied_execution|AppliedExecution|applied_ids|AppliedIDs|applied_results|AppliedResults|current_request_id|CurrentRequestID|published_request|PublishedRequest|active_request_id|ActiveRequestID|LastRequestID|last_request_id|iteration_request' <branch|origin/main> -- agentic processor schemas openspec/specs docs/adr   → 0 / 0
-git show origin/main:agentic/state.go | grep -n 'PendingToolResults\|ExecutionID\|CallOrdinal\|RequestID'   → only :53 (call-ID keyed)
-for f in $(git ls-tree -r --name-only <branch> -- schemas specs); do git show <branch>:$f | grep -l 'pending_tool_results\|max_iterations'; done   → 4 files, all max_iterations config; git show <branch>:specs/openapi.v3.yaml | grep -c pending_tool_results → 0
-git grep -n 'AGENT_LOOPS' origin/main -- openspec/specs/framework-bucket-catalog/spec.md docs/adr
-git grep -n -i 'restart\|redeliver\|settlement\|applied' origin/main -- 'openspec/specs/agentic-loop*/spec.md' 'openspec/specs/agentic-tool*/spec.md'
-git grep -l -i -E '1146|#759|restart-safe|restart safety|settlement' origin/main -- docs/adr; ls openspec/changes
-git show <branch>:processor/rule/publisher.go | grep -n 'MsgID\|Nats-Msg-Id\|fingerprint'   → 0
-grep -n 'LoopEntity' scratch/src/agentic/payload_registry.go   → 0
-sister scan (read-only, tracked files, non-test): git ls-files | grep -E '\.(go|ts)$' | xargs grep -n -E 'agentic\.LoopEntity|AGENT_LOOPS'  per sister dir
-grep -rn --include='*.go' ':req:' /Users/coby/Code/c360 (excluding semstreams*, tests) | head -5
-grep -n 'agentic.LoopEntity\|json.Unmarshal\|DisallowUnknownFields' semsage/processor/ui-api/{component,sse,types}.go
-# after INVENTORY FAIL (inventory-pass.md), 2026-09-18:
-git grep -n -E 'AGENT_LOOPS|loopbucket|TTL' 68c14c8e -- processor/agentic-dispatch/*.go processor/agentic-loop/internal natsclient/*.go service/*.go config/*.go; git show 68c14c8e:processor/agentic-loop/internal/loopbucket/acquire.go
-per cited semspec/semteams/semsage pin: git -C <sister> show HEAD:<file> | sed -n '<n>p'   (all confirmed at the quoted lines)
-sed -n '36,76p' scripts/inventory-verify.sh; scripts/inventory-verify.sh <this file> from /Users/coby/Code/c360/semstreams-wt/verify-68c14c8e
-# design review round (2026-09-18): sed -n '20p;113p;304p;336p' processor/agentic-loop/metrics.go; sed -n '984,990p' processor/agentic-loop/settlement_recovery.go; grep -n 'type ToolResult struct' -A 14 agentic/tools.go; sed -n '24,40p' processor/agentic-loop/execution_identity.go; sed -n '349,356p;1100,1119p' processor/agentic-loop/state.go; git show origin/main:natsclient/client.go | sed -n '960,970p'
-# coordinator rulings 2026-09-18 (terminal owner, warm lane, D11/D22, seam, lifecycle): sed -n '1833,1870p;1934,1995p' processor/agentic-loop/component.go; sed -n '18,21p;40,44p' processor/agentic-loop/internal/loopbucket/acquire.go  (pins 19/41 were mis-lined: 20 creates, 42-43 refuse)
+git rev-parse HEAD b7ce8727 origin/main ; git status --porcelain
+sed -n '1,140p' scripts/inventory-verify.sh
+gh issue view 1330 --comments ; gh pr view 1361 ; gh issue view 1327 --json body,comments ; gh issue view 1146 --json body ; gh issue view 1146 --json comments | grep -n -i 'continuation_unavailable\|2026-09-13'
+grep -n '^func ' processor/agentic-loop/{component,handlers,state,approval_response_handler,approval_sweeper,governance_dispatcher}.go
+git grep -n -E 'loopsBucket\.(Put|Update|Create|Get|Delete)\(' -- processor/agentic-loop ':!*_test.go'        # 4 Put + 1 Get; 0 Update, 0 Create
+git grep -n -E 'persistLoopState\(|persistHandlerResult\(|persistResultState\(|persist(Completion|Failure|Cancellation)State\(|publishResults\(' -- processor/agentic-loop ':!*_test.go'
+git grep -n -E 'GenerateRequestID\(|Nats-Msg-Id|PublishToStreamWithMsgID|MsgID' -- processor/agentic-loop ':!*_test.go'
+git grep -n -E 'COMPLETE_' -- processor/agentic-loop agentic ':!*_test.go'
+git grep -n -E 'PublishedRequestID|published_request_id|outstandingRequests|attachContinuation\(|OutstandingRequest\(|CurrentRequest\(|SettleRequest\(' -- processor agentic ':!*_test.go'
+git grep -n -E 'loopIDFromStructuredID|:req:|ExtractLoopIDFromRequest' -- processor/agentic-loop processor/agentic-dispatch agentic ':!*_test.go'
+git grep -n -E 'deliverylane\.' -- processor ':!*_test.go'
+git grep -n -E 'loop_route_ambiguous|func .*activeLoop' -- processor/agentic-dispatch ; git grep -n TestRouteAmbiguityRefusalIsAnsweredWithoutMeteringTheGate -- processor
+git grep -n 'continuation_unavailable' -- .        # only openspec/changes/agentic-loop-durable-applied-facts/inventory.md
+git grep -n 'tasks_submitted_total\|tasksSubmitted' -- processor ':!*_test.go'
+git grep -n -E 'func \(m \*Client\) (PublishToStream|PublishToStreamWithMsgID|PublishToStreamAsync)' -- natsclient ; git grep -n -E 'func .*\) (Update|Put|Create)\(ctx' -- natsclient
+git grep -n 'GetLastMsgForSubject' -- processor natsclient ':!*_test.go'        # dispatch task_recovery.go:51, model provider_settlement.go:37; 0 in agentic-loop
+git grep -n -E 'Nats-Msg-Id|WithMsgID\(' -- processor/agentic-tools processor/agentic-model processor/agentic-dispatch processor/agentic-governance processor/rule ':!*_test.go'
+git grep -n 'IncrementTruncationRetry\|ResetTruncationRetry\|truncationRetryAttempts' -- processor/agentic-loop ':!*_test.go'
+git grep -n 'classifyMissingLoop(' -- processor/agentic-loop ':!*_test.go'        # component.go:1700, 2292, 2602, 2773
+git grep -n 'PendingToolResults' -- processor/agentic-loop agentic ':!*_test.go'
+git grep -l 'pending_tool_results\|published_request_id' -- schemas specs        # 0
+git grep -n 'MsgID\|Nats-Msg-Id' -- processor/rule/publisher.go        # 0
+git grep -n 'acknowledgement floor' -- '*_test.go'        # 0
+git grep -n 'PublishedRequestID\|published_request_id' -- ':!processor/agentic-loop' ':!agentic'        # openspec only
+ls processor/agentic-loop/*_test.go ; ls test/e2e/harness/processbarrier test/e2e/scenarios/agentic
+sed -n '201,226p' openspec/specs/agentic-loop/spec.md > live_req.txt ; sed -n '102,136p' <delta> > delta_req.txt ; diff live_req.txt delta_req.txt
+grep -n -i '#1330\|L4\b\|PublishedRequestID\|durable-applied' /Users/coby/Code/c360/semstreams-wt/claude/gh1249-agentrun-fanout-settlement/openspec/changes/agentrun-fanout-settlement/design.md        # 0
+for ref in $(cat pins.txt); do sed -n "${n}p" "$p"; done        # every pin below generated, none transcribed
+scripts/inventory-verify.sh <abs>/arch1330/inventory.md        # from the worktree root; final line in verify.out
 ```
-Skills applied: `entity-or-bucket` (loaded; outcome: existing bucket AGENT_LOOPS, ground 1 — CAS atomicity with `Iterations`/`PendingToolResults`; no new bucket, no ADR trigger). `kv-or-stream`, `orchestration-check`, `new-payload`, `query-pattern`: not triggered (no new path, orchestration, payload type, or query access).
 
-## 7. Pins (`task inventory:verify` grammar; generated with `sed -n "${n}p"` from `git show 68c14c8e:<path>`)
+Skills applied: `entity-or-bucket` (existing bucket AGENT_LOOPS, ground 1 — CAS atomicity with `Iterations` / `PendingToolResults`; unchanged outcome). `kv-or-stream`, `orchestration-check`, `new-payload`, `query-pattern`: not triggered on `main` either (the retained-request read adopts the shape at `PS:28-49` / `TR:51`; no new path, payload, or query access).
 
-- `processor/agentic-loop/settlement_recovery.go:63` — `raw, err := stream.GetLastMsgForSubject(ctx, subject)`
-- `processor/agentic-loop/settlement_recovery.go:131` — `func (c *Component) recoverGovernance(ctx context.Context, loopID, parentLoopID string, calls []agentic.ToolCall) (DispatcherResult, error) {`
-- `processor/agentic-loop/settlement_recovery.go:384` — `entity, found, err := c.readLoopEntity(ctx, task.LoopID)`
-- `processor/agentic-loop/settlement_recovery.go:398` — `if entity.State.IsTerminal() {`
-- `processor/agentic-loop/settlement_recovery.go:402` — `request, retained, err := c.readRetainedAgentRequest(ctx, entity.ID)`
-- `processor/agentic-loop/settlement_recovery.go:424` — `if err := c.handler.loopManager.restoreLoopFromRequest(entity, request, nil); err != nil {`
-- `processor/agentic-loop/settlement_recovery.go:457` — `mappedLoopID, _ := c.handler.loopManager.GetLoopForRequest(response.RequestID)`
-- `processor/agentic-loop/settlement_recovery.go:484` — `entity, revision, err = c.readLoopEntityRevision(ctx, loopID)`
-- `processor/agentic-loop/settlement_recovery.go:517` — `request, found, err := c.readRetainedAgentRequest(ctx, loopID)`
-- `processor/agentic-loop/settlement_recovery.go:524` — `if request.RequestID != response.RequestID {`
-- `processor/agentic-loop/settlement_recovery.go:553` — `func (c *Component) recoverToolResult(`
-- `processor/agentic-loop/settlement_recovery.go:577` — `response, found, err := c.readRetainedAgentResponse(ctx, result.RequestID)`
-- `processor/agentic-loop/settlement_recovery.go:622` — `request, found, err := c.readRetainedAgentRequest(ctx, result.LoopID)`
-- `processor/agentic-loop/settlement_recovery.go:634` — `if c.config.ToolResultMaxBytes > 0 && len(result.Content) > c.config.ToolResultMaxBytes {`
-- `processor/agentic-loop/settlement_recovery.go:637` — `if agentic.IsApprovalRequired(result.Error) {`
-- `processor/agentic-loop/settlement_recovery.go:651` — `if request.RequestID != result.RequestID {`
-- `processor/agentic-loop/settlement_recovery.go:656` — `applied, err := c.toolResultProvenInLaterRequest(request, calls, result)`
-- `processor/agentic-loop/settlement_recovery.go:666` — `if entity.State.IsTerminal() {`
-- `processor/agentic-loop/settlement_recovery.go:669` — `if entity.State == agentic.LoopStateAwaitingApproval {`
-- `processor/agentic-loop/settlement_recovery.go:672` — `if err := c.handler.loopManager.restoreToolBatch(entity, request, response, result); err != nil {`
-- `processor/agentic-loop/settlement_recovery.go:686` — `func (c *Component) toolResultProvenInLaterRequest(request agentic.AgentRequest, calls []agentic.ToolCall, result agentic.ToolResult) (bool, error) {`
-- `processor/agentic-loop/settlement_recovery.go:687` — `want := c.handler.buildToolMessages([]agentic.ToolResult{result})[0]`
-- `processor/agentic-loop/settlement_recovery.go:723` — `resultIndex := index + int(result.CallOrdinal)`
-- `processor/agentic-loop/settlement_recovery.go:735` — `} else if reflect.DeepEqual(stored, want) {`
-- `processor/agentic-loop/settlement_recovery.go:743` — `func (c *Component) republishPendingApproval(`
-- `processor/agentic-loop/settlement_recovery.go:763` — `func (c *Component) approvalRequiredResultSuperseded(entity agentic.LoopEntity, request agentic.AgentRequest, calls []agentic.ToolCall, result agentic.ToolResult) (bool, error) {`
-- `processor/agentic-loop/settlement_recovery.go:793` — `if pending == nil && reflect.DeepEqual(stored, result) {`
-- `processor/agentic-loop/settlement_recovery.go:821` — `func proveTerminalToolResultApplied(entity agentic.LoopEntity, requestID string, calls []agentic.ToolCall, result agentic.ToolResult) error {`
-- `processor/agentic-loop/settlement_recovery.go:843` — `entity.Outcome == agentic.OutcomeSuccess && entity.Result == result.Content {`
-- `processor/agentic-loop/settlement_recovery.go:857` — `func (c *Component) recoverApprovalResponse(ctx context.Context, approval agentic.ApprovalResponse, entity agentic.LoopEntity, revision uint64) (bool, natsclient.DeliveryDecision, error) {`
-- `processor/agentic-loop/settlement_recovery.go:867` — `request, found, err := c.readRetainedAgentRequest(ctx, entity.ID)`
-- `processor/agentic-loop/settlement_recovery.go:881` — `response, found, err := c.readRetainedAgentResponse(ctx, request.RequestID)`
-- `processor/agentic-loop/settlement_recovery.go:904` — `if err := c.handler.loopManager.restoreToolBatch(entity, request, response, result); err != nil {`
-- `processor/agentic-loop/settlement_recovery.go:921` — `func (c *Component) settleAbsentApprovalEvidence(ctx context.Context, entity agentic.LoopEntity, streamName, subject string, revision uint64) (bool, natsclient.DeliveryDecision, error) {`
-- `processor/agentic-loop/settlement_recovery.go:938` — `if retention.Retention != jetstream.LimitsPolicy || retention.Discard != jetstream.DiscardNew ||`
-- `processor/agentic-loop/settlement_recovery.go:975` — `decision, err := c.persistTerminalOutcome(ctx, HandlerResult{LoopID: entity.ID, State: agentic.LoopStateFailed,`
-- `processor/agentic-loop/state.go:349` — `func (m *LoopManager) restoreLoopFromRequest(entity agentic.LoopEntity, request agentic.AgentRequest, batch *agentic.ChatMessage) error {`
-- `processor/agentic-loop/state.go:435` — `func validatedToolBatchResults(entity agentic.LoopEntity, requestID string, calls []agentic.ToolCall, incoming agentic.ToolResult, requirePreceding bool) (map[string]agentic.ToolResult, bool, error) {`
-- `processor/agentic-loop/state.go:473` — `func (m *LoopManager) restoreToolBatch(entity agentic.LoopEntity, request agentic.AgentRequest, response agentic.AgentResponse, incoming agentic.ToolResult) error {`
-- `processor/agentic-loop/state.go:486` — `if len(results) == len(calls) && ordinaryBatch && entity.PendingApproval == nil && entity.Iterations > 0 {`
-- `processor/agentic-loop/state.go:487` — `entity.Iterations--`
-- `processor/agentic-loop/state.go:601` — `func (m *LoopManager) IncrementTruncationRetry(loopID string) int {`
-- `processor/agentic-loop/state.go:1084` — `func (m *LoopManager) StoreToolResult(loopID string, result agentic.ToolResult) error {`
-- `processor/agentic-loop/state.go:1100` — `if result.RequestID != "" {`
-- `processor/agentic-loop/state.go:1139` — `func (m *LoopManager) GetAndClearToolResults(loopID string) []agentic.ToolResult {`
-- `processor/agentic-loop/state.go:1146` — `func (m *LoopManager) toolResults(loopID string, clearResults bool) []agentic.ToolResult {`
-- `processor/agentic-loop/state.go:1364` — `func (m *LoopManager) GenerateRequestID(loopID string) string {`
-- `processor/agentic-loop/state.go:1365` — `return fmt.Sprintf("%s:req:%s", loopID, uuid.NewString())`
-- `processor/agentic-loop/component.go:563` — `if err := c.restoreApprovalDeadlines(runCtx); err != nil {`
-- `processor/agentic-loop/component.go:1162` — `if port.Name == "agent.task" || port.Name == "agent.response" || port.Name == "tool.result" {`
-- `processor/agentic-loop/component.go:1163` — `fixed = 1`
-- `processor/agentic-loop/component.go:1310` — `if _, active := c.handler.loopManager.HasActiveLoopForTask(task.TaskID); !active {`
-- `processor/agentic-loop/component.go:1311` — `result, err = c.recoverTaskDelivery(ctx, *task)`
-- `processor/agentic-loop/component.go:1405` — `if err := c.persistLoopState(ctx, result.LoopID); err != nil {`
-- `processor/agentic-loop/component.go:1410` — `if err := c.publishResults(ctx, result); err != nil {`
-- `processor/agentic-loop/component.go:1532` — `revision, createErr = c.loopsBucket.Create(ctx, loopID, data)`
-- `processor/agentic-loop/component.go:1564` — `entity, revision, err := c.ensureResponseLoop(ctx, *response)`
-- `processor/agentic-loop/component.go:1569` — `if entity.State.IsTerminal() {`
-- `processor/agentic-loop/component.go:1588` — `result, err := c.handler.handleModelResponse(ctx, loopID, *response, c.recoverGovernance)`
-- `processor/agentic-loop/component.go:1618` — `if err := c.persistHandlerResult(ctx, result, revision); err != nil {`
-- `processor/agentic-loop/component.go:1795` — `if err := c.persistLoopState(ctx, result.LoopID); err != nil {`
-- `processor/agentic-loop/component.go:1798` — `return c.publishResults(ctx, result)`
-- `processor/agentic-loop/component.go:1917` — `if err := c.publishResults(ctx, result); err != nil {`
-- `processor/agentic-loop/component.go:1927` — `if _, err := c.loopsBucket.Update(ctx, result.LoopID, data, revision); err != nil {`
-- `processor/agentic-loop/component.go:2147` — `loopID = c.findLoopIDForToolCall(toolResult.ExecutionID)`
-- `processor/agentic-loop/component.go:2150` — `loopID, observedRevision, err = c.recoverToolResult(ctx, toolResult)`
-- `processor/agentic-loop/component.go:2163` — `current, observed, readErr := c.readLoopEntityRevision(ctx, loopID)`
-- `processor/agentic-loop/component.go:2178` — `if current.State.IsTerminal() || (process.PendingApproval != nil && !reflect.DeepEqual(process.PendingApproval, current.PendingApproval)) {`
-- `processor/agentic-loop/component.go:2231` — `if err := c.persistApprovalGate(ctx, result, observedRevision); err != nil {`
-- `processor/agentic-loop/component.go:2257` — `if err := c.persistHandlerResult(ctx, result, observedRevision); err != nil {`
-- `processor/agentic-loop/component.go:2319` — `if _, err := c.loopsBucket.Update(ctx, result.LoopID, data, revision); err != nil {`
-- `processor/agentic-loop/component.go:2323` — `return c.publishResults(ctx, result)`
-- `processor/agentic-loop/component.go:2337` — `if err := c.natsClient.PublishToStream(ctx, msg.Subject, msg.Data); err != nil {`
-- `processor/agentic-loop/component.go:2411` — `if _, err := c.loopsBucket.Put(ctx, loopID, data); err != nil {`
-- `processor/agentic-loop/component.go:2518` — `if current.State.IsTerminal() {`
-- `processor/agentic-loop/handlers.go:1083` — `RequestID:      h.loopManager.GenerateRequestID(loopID),`
-- `processor/agentic-loop/handlers.go:1257` — `if entity.Iterations >= entity.MaxIterations {`
-- `processor/agentic-loop/handlers.go:1318` — `if err := h.handleToolCallResponse(ctx, &result, loopID, response.RequestID, response.Message.ToolCalls, propose); err != nil {`
-- `processor/agentic-loop/handlers.go:1981` — `RequestID:      h.loopManager.GenerateRequestID(loopID),`
-- `processor/agentic-loop/handlers.go:2346` — `err = h.loopManager.StoreToolResult(loopID, toolResult)`
-- `processor/agentic-loop/handlers.go:2379` — `if gated, err := h.checkApprovalGate(loopID, &entity, toolResult, &result); gated || err != nil {`
-- `processor/agentic-loop/handlers.go:2465` — `if err := entity.BeginAwaitingApproval(toolResult.CallID, toolName, args, toolResult.Error, h.config.ApprovalTimeout(), toolResult.TraceID); err != nil {`
-- `processor/agentic-loop/handlers.go:2478` — `if err := h.loopManager.UpdateLoop(*entity); err != nil {`
-- `processor/agentic-loop/handlers.go:2566` — `err := h.loopManager.IncrementIteration(loopID)`
-- `processor/agentic-loop/handlers.go:2612` — `allResults := h.loopManager.toolResults(loopID, false)`
-- `processor/agentic-loop/handlers.go:2654` — `RequestID:      h.loopManager.GenerateRequestID(loopID),`
-- `processor/agentic-loop/handlers.go:2730` — `func (h *MessageHandler) buildToolMessages(results []agentic.ToolResult) []agentic.ChatMessage {`
-- `processor/agentic-loop/approval_response_handler.go:176` — `entity, getErr := c.handler.GetLoop(response.LoopID)`
-- `processor/agentic-loop/approval_response_handler.go:182` — `persisted, revision, err := c.readLoopEntityRevision(ctx, response.LoopID)`
-- `processor/agentic-loop/approval_response_handler.go:200` — `if persisted.State != agentic.LoopStateAwaitingApproval || pending.ExecutionID != response.ExecutionID {`
-- `processor/agentic-loop/approval_response_handler.go:206` — `return natsclient.DeliveryDecisionAck, nil`
-- `processor/agentic-loop/approval_response_handler.go:217` — `settled, decision, err := c.recoverApprovalResponse(ctx, response, persisted, revision)`
-- `processor/agentic-loop/approval_response_handler.go:238` — `if result.staleDrop {`
-- `processor/agentic-loop/approval_response_handler.go:269` — `if err := c.publishResults(ctx, result); err != nil {`
-- `processor/agentic-loop/approval_response_handler.go:275` — `if _, err := c.loopsBucket.Update(ctx, result.LoopID, data, revision); err != nil {`
-- `processor/agentic-loop/approval_sweeper.go:21` — `func (c *Component) restoreApprovalDeadlines(ctx context.Context) (restoreErr error) {`
-- `processor/agentic-loop/approval_sweeper.go:69` — `entity, found, err := c.readLoopEntity(ctx, key)`
-- `processor/agentic-loop/approval_sweeper.go:156` — `if err := c.publishApprovalResponseToWire(ctx, response); err != nil {`
-- `processor/agentic-loop/governance_dispatcher.go:131` — `type VerdictPayload struct {`
-- `processor/agentic-loop/governance_dispatcher.go:557` — `// source for redelivery, including after the waiter has been recreated.`
-- `processor/agentic-loop/governance_dispatcher.go:560` — `slog.String("decision", decision))`
-- `processor/agentic-loop/governance_dispatcher.go:665` — `if err := publisher.PublishToStream(ctx, subject, data); err != nil {`
-- `processor/agentic-loop/execution_identity.go:24` — `calls[i].RequestID = requestID`
-- `processor/agentic-loop/execution_identity.go:26` — `calls[i].ExecutionID = deriveToolExecutionID(requestID, calls[i].ID, ordinal)`
-- `processor/agentic-dispatch/task_recovery.go:65` — `func stableDispatchTaskID(msg agentic.UserMessage) string {`
-- `processor/agentic-dispatch/task_recovery.go:90` — `retained, retainedData, found, err := c.readRetainedDispatchTask(ctx, streamName, subject)`
-- `processor/agentic-model/provider_settlement.go:76` — `func (c *Component) readRetainedAgentResponse(`
-- `processor/agentic-model/provider_settlement.go:89` — `evidence, found, err := reader.ReadRetainedResponse(ctx, streamName, subject)`
-- `processor/agentic-model/component.go:616` — `_, found, err := c.readRetainedAgentResponse(ctx, req.RequestID)`
-- `processor/agentic-model/component.go:626` — `c.requestsProcessed++`
-- `processor/agentic-tools/component.go:710` — `if outcome, found, err := c.loadCompletedOutcome(ctx, call, storeOperationGet); err != nil {`
-- `processor/agentic-tools/component.go:713` — `return c.publishCompletedResult(ctx, call, outcome.Result, outcomePathReplay)`
-- `processor/agentic-tools/component.go:773` — `if err := c.persistAndPublishOutcome(ctx, call, result, outcomePathNew, true); err != nil {`
-- `processor/agentic-tools/component.go:1184` — `return c.publishResultWithMsgID(ctx, result, toolResultMessageID(result.ExecutionID))`
-- `processor/agentic-tools/outcomes.go:82` — `func toolCallOutcomeKey(executionID string) string {`
-- `processor/agentic-tools/outcomes.go:86` — `func toolResultMessageID(executionID string) string {`
-- `agentic/state.go:46` — `type LoopEntity struct {`
-- `agentic/state.go:52` — `Iterations         int                   `json:"iterations"``
-- `agentic/state.go:54` — `PendingToolResults map[string]ToolResult `json:"pending_tool_results,omitempty"` // ExecutionID; synthetic failures use CallID`
-- `agentic/state.go:74` — `PendingApproval *PendingApprovalState `json:"pending_approval,omitempty"``
-- `agentic/state.go:148` — `e.PendingApproval = nil`
-- `agentic/state.go:226` — `e.Iterations++`
-- `processor/agentic-loop/config.go:426` — `Name: "loops", Config: component.KVWritePort{Bucket: "AGENT_LOOPS"}, Description: "Loop state storage",`
-- `processor/agentic-loop/component.go:1854` — `if !ok || marker.State != agentic.LoopStateComplete || marker.Outcome != agentic.OutcomeSuccess || marker.Result != saved.Result ||`
-- `processor/agentic-loop/component.go:1855` — `prepared.Result != saved.Result || !reflect.DeepEqual(prepared.Decision, saved.Decision) {`
-- `processor/agentic-loop/component.go:1856` — `return natsclient.DeliveryDecisionRetry, fmt.Errorf("selected success for loop %q lacks this delivery's compatible applied proof", result.LoopID)`
-- `processor/agentic-loop/component.go:1863` — `(marker.Outcome != agentic.OutcomeFailed && marker.Outcome != agentic.OutcomeTruncated) ||`
-- `processor/agentic-loop/component.go:1865` — `return natsclient.DeliveryDecisionRetry, fmt.Errorf("selected failure for loop %q lacks this delivery's compatible applied proof", result.LoopID)`
-- `processor/agentic-loop/component.go:2168` — `if observedRevision == 0 {`
-- `processor/agentic-loop/component.go:2175` — `if current.TaskID != process.TaskID || current.Role != process.Role || current.Model != process.Model {`
-- `processor/agentic-loop/component.go:2178` — `if current.State.IsTerminal() || (process.PendingApproval != nil && !reflect.DeepEqual(process.PendingApproval, current.PendingApproval)) {`
-- `processor/agentic-loop/component.go:2185` — `(pending.RequestID != toolResult.RequestID || pending.ExecutionID != toolResult.ExecutionID ||`
-- `processor/agentic-loop/component.go:2189` — `return natsclient.DeliveryDecisionRetry, fmt.Errorf("tool execution %q does not own the current gate", toolResult.ExecutionID)`
-- `processor/agentic-loop/settlement_recovery.go:799` — `if !reflect.DeepEqual(stored, result) {`
-- `processor/agentic-loop/settlement_recovery.go:802` — `}`
-- `processor/agentic-loop/component.go:1838` — `if revision == 0 || observed != revision || current.State.IsTerminal() {`
-- `processor/agentic-loop/component.go:1839` — `return natsclient.DeliveryDecisionRetry, fmt.Errorf("terminal authority for loop %q changed or is not observable", result.LoopID)`
-- `processor/agentic-loop/component.go:1841` — `if current.TaskID != marker.TaskID {`
-- `processor/agentic-loop/component.go:1846` — `selected, err := c.selectTerminalOutcome(ctx, result.LoopID, marker.TaskID, candidate)`
-- `processor/agentic-loop/component.go:1852` — `case *agentic.LoopCompletedEvent:`
-- `processor/agentic-loop/component.go:1861` — `prepared, ok := candidate.(*agentic.LoopFailedEvent)`
-- `processor/agentic-loop/component.go:1959` — `key := "COMPLETE_" + loopID`
-- `processor/agentic-loop/component.go:1960` — `if _, err := c.loopsBucket.Create(ctx, key, data); err == nil {`
-- `processor/agentic-loop/internal/loopbucket/acquire.go:20` — `bucket, err = js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: name, History: 10, TTL: 24 * time.Hour})`
-- `processor/agentic-loop/internal/loopbucket/acquire.go:42` — `if status.History() != 10 || status.TTL() != 24*time.Hour || info.Config.MaxAge != 24*time.Hour || info.Config.MaxBytes > 0 {`
-- `processor/agentic-loop/internal/loopbucket/acquire.go:43` — `return nil, fmt.Errorf("loop bucket %q policy: observed History=%d TTL=%s MaxAge=%s MaxBytes=%d; require History=10 TTL=24h MaxAge=24h MaxBytes<=0 (no reconciliation)", name, status.History(), status.TTL(), info.Config.MaxAge, info.Config.MaxBytes)`
-- `processor/agentic-loop/execution_identity.go:31` — `func deriveToolExecutionID(requestID, callID string, ordinal uint32) string {`
-- `processor/agentic-loop/execution_identity.go:36` — `binary.BigEndian.PutUint32(ordinalBytes[:], ordinal)`
-- `processor/agentic-loop/metrics.go:20` — `approvalDecisionsInapplicable  prometheus.Counter`
-- `processor/agentic-loop/metrics.go:113` — `approvalDecisionsInapplicable: prometheus.NewCounter(prometheus.CounterOpts{`
-- `processor/agentic-loop/metrics.go:304` — `_ = registry.RegisterCounter("agentic-loop", "approval_decisions_inapplicable_total", metrics.approvalDecisionsInapplicable)`
-- `processor/agentic-loop/metrics.go:336` — `_ = prometheus.DefaultRegisterer.Register(metrics.approvalDecisionsInapplicable)`
-- `processor/agentic-loop/settlement_recovery.go:984` — `func validatePendingApprovalEvidence(entity agentic.LoopEntity, request agentic.AgentRequest, calls []agentic.ToolCall) (agentic.ToolResult, error) {`
-- `processor/agentic-loop/state.go:356` — `if entity.ID != request.LoopID || entity.Role != request.Role || entity.Model != request.Model {`
+## 7. Pins (`task inventory:verify` grammar; each generated with `sed -n "${n}p"` at `b7ce8727`)
+
+- `agentic/state.go:49` — `type LoopEntity struct {`
+- `agentic/state.go:55` — `Iterations         int                   `json:"iterations"``
+- `agentic/state.go:57` — `PendingToolResults map[string]ToolResult `json:"pending_tool_results,omitempty"` // ExecutionID; synthetic failures use CallID`
+- `agentic/state.go:79` — `PendingApproval     *PendingApprovalState `json:"pending_approval,omitempty"``
+- `agentic/state.go:98` — `PendingContinuation bool `json:"pending_continuation,omitempty"``
+- `agentic/state.go:113` — `PendingContinuationRequestID string `json:"pending_continuation_request_id,omitempty"``
+- `agentic/state.go:136` — `func (e *LoopEntity) Validate() error {`
+- `agentic/state.go:171` — `func (e *LoopEntity) TransitionTo(newState LoopState) error {`
+- `agentic/state.go:181` — `if e.State == newState {`
+- `agentic/state.go:185` — `if e.State.IsTerminal() {`
+- `agentic/state.go:196` — `type PendingApprovalState struct {`
+- `agentic/state.go:197` — `RequestID   string         `json:"request_id,omitempty"``
+- `agentic/state.go:215` — `func (e *LoopEntity) BeginAwaitingApproval(callID, toolName string, arguments map[string]any, reason string, timeout time.Duration, traceID string) error {`
+- `agentic/state.go:246` — `func (e *LoopEntity) ResolveApproval() error {`
+- `agentic/state.go:279` — `func (e *LoopEntity) IncrementIteration() error {`
+- `agentic/state.go:283` — `e.Iterations++`
 - `agentic/tools.go:629` — `type ToolResult struct {`
+- `agentic/tools.go:637` — `LoopID      string         `json:"loop_id,omitempty"``
 - `agentic/tools.go:639` — `RequestID   string         `json:"request_id,omitempty"``
 - `agentic/tools.go:640` — `ExecutionID string         `json:"execution_id,omitempty"``
 - `agentic/tools.go:641` — `CallOrdinal uint32         `json:"call_ordinal,omitempty"``
-- `processor/agentic-loop/state.go:441` — `return nil, false, fmt.Errorf("result for preceding execution %q is not yet observable", call.ExecutionID)`
-- `processor/agentic-loop/state.go:1100` — `if result.RequestID != "" {`
-- `processor/agentic-loop/state.go:1161` — `entity.PendingToolResults = nil`
-- `processor/agentic-loop/approval_response_handler.go:130` — `func (h *MessageHandler) handleRejectedApproval(ctx context.Context, loopID string, pending agentic.PendingApprovalState, response agentic.ApprovalResponse) (HandlerResult, error) {`
-- `processor/agentic-loop/state.go:1144` — `// transition retains its durable evidence until the new request's first result`
+- `processor/agentic-loop/state.go:79` — `outstandingRequests map[string]string // loopID -> requestID`
+- `processor/agentic-loop/state.go:298` — `func (m *LoopManager) attachContinuation(loopID, taskID string) (agentic.LoopEntity, bool, error) {`
+- `processor/agentic-loop/state.go:333` — `if _, outstanding := m.outstandingRequests[loopID]; outstanding {`
+- `processor/agentic-loop/state.go:391` — `func (m *LoopManager) UpdateLoop(entity agentic.LoopEntity) error {`
+- `processor/agentic-loop/state.go:466` — `func (m *LoopManager) IncrementTruncationRetry(loopID string) int {`
+- `processor/agentic-loop/state.go:477` — `func (m *LoopManager) ResetTruncationRetry(loopID string) {`
+- `processor/agentic-loop/state.go:574` — `func (m *LoopManager) DeleteLoop(loopID string) error {`
+- `processor/agentic-loop/state.go:883` — `func (m *LoopManager) TrackRequest(requestID, loopID string) {`
+- `processor/agentic-loop/state.go:887` — `m.outstandingRequests[loopID] = requestID`
+- `processor/agentic-loop/state.go:888` — `m.currentRequests[loopID] = requestID`
+- `processor/agentic-loop/state.go:915` — `func (m *LoopManager) SettleRequest(loopID, requestID string) {`
+- `processor/agentic-loop/state.go:933` — `func (m *LoopManager) OutstandingRequest(loopID string) string {`
+- `processor/agentic-loop/state.go:955` — `func (m *LoopManager) CurrentRequest(loopID string) string {`
+- `processor/agentic-loop/state.go:962` — `func (m *LoopManager) GetLoopForRequest(requestID string) (string, bool) {`
+- `processor/agentic-loop/state.go:1063` — `func (m *LoopManager) StoreToolResult(loopID string, result agentic.ToolResult) error {`
+- `processor/agentic-loop/state.go:1075` — `resultKey := result.ExecutionID`
+- `processor/agentic-loop/state.go:1082` — `entity.PendingToolResults[resultKey] = result`
+- `processor/agentic-loop/state.go:1107` — `func (m *LoopManager) GetAndClearToolResults(loopID string) []agentic.ToolResult {`
+- `processor/agentic-loop/state.go:1121` — `entity.PendingToolResults = nil`
+- `processor/agentic-loop/state.go:1338` — `// (#1330, LoopEntity.PublishedRequestID).`
+- `processor/agentic-loop/state.go:1339` — `func (m *LoopManager) GenerateRequestID(loopID string) string {`
+- `processor/agentic-loop/state.go:1345` — `iteration = entity.Iterations + 1`
+- `processor/agentic-loop/state.go:1347` — `return fmt.Sprintf("%s:req:%d:%d", loopID, iteration, m.truncationRetryAttempts[loopID])`
+- `processor/agentic-loop/state.go:1360` — `func (m *LoopManager) ExtractLoopIDFromRequest(requestID string) string {`
+- `processor/agentic-loop/state.go:1361` — `parts := strings.Split(requestID, ":req:")`
+- `processor/agentic-loop/state.go:1380` — `func (m *LoopManager) GetLoopForRequestWithRecovery(requestID string) (string, bool) {`
+- `processor/agentic-loop/component.go:77` — `consumers     []*deliverylane.Binding`
+- `processor/agentic-loop/component.go:980` — `func (c *Component) resolveLoopLaneDelivery(`
+- `processor/agentic-loop/component.go:990` — `case "agent.task", "agent.response", "tool.result":`
+- `processor/agentic-loop/component.go:999` — `default: // agent.signal, agent.approval_response, agent.toolcall.* — fast`
+- `processor/agentic-loop/component.go:1026` — `func (c *Component) recordDeliveryOwnerFatal(result natsclient.DeliveryResult) {`
+- `processor/agentic-loop/component.go:1036` — `func (c *Component) setupConsumer(`
+- `processor/agentic-loop/component.go:1108` — `admission = deliverylane.NewAdmission(c.recordDeliveryOwnerFatal, nil)`
+- `processor/agentic-loop/component.go:1110` — `result, admitted := deliverylane.Consume(msgCtx, msg, policy, admission)`
+- `processor/agentic-loop/component.go:1130` — `admission = deliverylane.NewAdmission(c.recordDeliveryOwnerFatal, nil)`
+- `processor/agentic-loop/component.go:1132` — `result, admitted := deliverylane.Settle(msgCtx, msg, settleRetry, admission, "loop", settleHandlerFn)`
+- `processor/agentic-loop/component.go:1185` — `func agenticLoopConsumerPolicy(port component.Port) (component.ConsumerConfig, int, error) {`
+- `processor/agentic-loop/component.go:1191` — `if port.Name == "agent.task" || port.Name == "agent.response" || port.Name == "tool.result" {`
+- `processor/agentic-loop/component.go:1192` — `fixed = 1`
+- `processor/agentic-loop/component.go:1313` — `func (c *Component) taskInputHandler(workTimeout time.Duration) inputHandler {`
+- `processor/agentic-loop/component.go:1345` — `func (c *Component) refuseConflictingTaskIdentity(task agentic.TaskMessage, suppliedLoopID string) error {`
+- `processor/agentic-loop/component.go:1360` — `func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {`
+- `processor/agentic-loop/component.go:1396` — `result, err := c.handler.HandleTask(ctx, *task)`
+- `processor/agentic-loop/component.go:1420` — `if result.Deferred {`
+- `processor/agentic-loop/component.go:1425` — `c.persistLoopState(ctx, result.LoopID)`
+- `processor/agentic-loop/component.go:1429` — `if !result.Created {`
+- `processor/agentic-loop/component.go:1496` — `c.publishResults(ctx, result)`
+- `processor/agentic-loop/component.go:1499` — `c.persistLoopState(ctx, result.LoopID)`
+- `processor/agentic-loop/component.go:1510` — `func (c *Component) rememberPendingTaskResult(taskID string, result HandlerResult) {`
+- `processor/agentic-loop/component.go:1596` — `func (c *Component) handleSpawnIdentityFailure(ctx context.Context, loopID string, entity agentic.LoopEntity, err error) error {`
+- `processor/agentic-loop/component.go:1617` — `func (c *Component) handleResponseMessage(ctx context.Context, data []byte) error {`
+- `processor/agentic-loop/component.go:1623` — `return c.settleResponseWithoutLoop(ctx, response.RequestID)`
+- `processor/agentic-loop/component.go:1628` — `result, err := c.handler.HandleModelResponse(ctx, loopID, *response)`
+- `processor/agentic-loop/component.go:1638` — `return c.persistHandlerResult(ctx, result)`
+- `processor/agentic-loop/component.go:1664` — `func (c *Component) extractAgentResponse(data []byte) (*agentic.AgentResponse, string, error) {`
+- `processor/agentic-loop/component.go:1679` — `loopID := c.findLoopIDForRequest(responsePtr.RequestID)`
+- `processor/agentic-loop/component.go:1698` — `func (c *Component) settleResponseWithoutLoop(ctx context.Context, requestID string) error {`
+- `processor/agentic-loop/component.go:1699` — `loopID := loopIDFromStructuredID(requestID, ":req:")`
+- `processor/agentic-loop/component.go:1700` — `switch c.classifyMissingLoop(ctx, loopID) {`
+- `processor/agentic-loop/component.go:1734` — `func (c *Component) handleLoopFailure(`
+- `processor/agentic-loop/component.go:1752` — `established := c.persistLoopState(ctx, loopID)`
+- `processor/agentic-loop/component.go:1794` — `func (c *Component) publishFailureEvents(ctx context.Context, loopID, reason, errorMsg string) error {`
+- `processor/agentic-loop/component.go:1809` — `if persistErr := c.persistFailureState(errorCtx, loopID, failure); persistErr != nil {`
+- `processor/agentic-loop/component.go:1831` — `if pubErr := c.natsClient.PublishToStream(errorCtx, msg.Subject, msg.Data); pubErr != nil {`
+- `processor/agentic-loop/component.go:1923` — `func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResult) error {`
+- `processor/agentic-loop/component.go:1947` — `if err := c.persistResultState(ctx, result, terminal); err != nil {`
+- `processor/agentic-loop/component.go:1959` — `if err := c.publishResults(ctx, result); err != nil {`
+- `processor/agentic-loop/component.go:1964` — `c.releaseLoopTransientState(result.LoopID)`
+- `processor/agentic-loop/component.go:1974` — `func (c *Component) persistResultState(ctx context.Context, result HandlerResult, terminal bool) error {`
+- `processor/agentic-loop/component.go:1975` — `if err := c.persistLoopState(ctx, result.LoopID); err != nil {`
+- `processor/agentic-loop/component.go:1982` — `if err := c.persistCompletionState(ctx, result.LoopID, result.CompletionState); err != nil {`
+- `processor/agentic-loop/component.go:2002` — `if err := c.persistFailureState(ctx, result.LoopID, result.FailureState); err != nil {`
+- `processor/agentic-loop/component.go:2140` — `func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) error {`
+- `processor/agentic-loop/component.go:2173` — `loopID := c.findLoopIDForToolCall(toolResult.ExecutionID)`
+- `processor/agentic-loop/component.go:2175` — `return c.settleToolResultWithoutLoop(ctx, toolResult)`
+- `processor/agentic-loop/component.go:2195` — `result, err := c.handler.HandleToolResult(ctx, loopID, toolResult)`
+- `processor/agentic-loop/component.go:2220` — `return c.persistHandlerResult(ctx, result)`
+- `processor/agentic-loop/component.go:2263` — `func (c *Component) settleFailedToolResult(`
+- `processor/agentic-loop/component.go:2271` — `return c.persistHandlerResult(ctx, result)`
+- `processor/agentic-loop/component.go:2287` — `func (c *Component) settleToolResultWithoutLoop(ctx context.Context, toolResult agentic.ToolResult) error {`
+- `processor/agentic-loop/component.go:2290` — `loopID = loopIDFromStructuredID(toolResult.CallID, ":tool:")`
+- `processor/agentic-loop/component.go:2292` — `switch c.classifyMissingLoop(ctx, loopID) {`
+- `processor/agentic-loop/component.go:2318` — `func (c *Component) publishResults(ctx context.Context, result HandlerResult) error {`
+- `processor/agentic-loop/component.go:2328` — `if err := c.natsClient.PublishToStreamWithMsgID(ctx, msg.Subject, msg.Data, msg.MsgID); err != nil {`
+- `processor/agentic-loop/component.go:2389` — `func (c *Component) persistCompletionState(ctx context.Context, loopID string, completion *agentic.LoopCompletedEvent) error {`
+- `processor/agentic-loop/component.go:2400` — `key := fmt.Sprintf("COMPLETE_%s", loopID)`
+- `processor/agentic-loop/component.go:2401` — `if _, err := c.loopsBucket.Put(ctx, key, data); err != nil {`
+- `processor/agentic-loop/component.go:2421` — `func (c *Component) persistFailureState(ctx context.Context, loopID string, failure *agentic.LoopFailedEvent) error {`
+- `processor/agentic-loop/component.go:2431` — `key := fmt.Sprintf("COMPLETE_%s", loopID)`
+- `processor/agentic-loop/component.go:2432` — `if _, err := c.loopsBucket.Put(ctx, key, data); err != nil {`
+- `processor/agentic-loop/component.go:2445` — `func (c *Component) persistCancellationState(ctx context.Context, loopID string, cancelled *agentic.LoopCancelledEvent) error {`
+- `processor/agentic-loop/component.go:2455` — `key := fmt.Sprintf("COMPLETE_%s", loopID)`
+- `processor/agentic-loop/component.go:2456` — `if _, err := c.loopsBucket.Put(ctx, key, data); err != nil {`
+- `processor/agentic-loop/component.go:2468` — `func (c *Component) persistLoopState(ctx context.Context, loopID string) error {`
+- `processor/agentic-loop/component.go:2483` — `if _, err := c.loopsBucket.Put(ctx, loopID, data); err != nil {`
+- `processor/agentic-loop/component.go:2529` — `func (c *Component) findLoopIDForRequest(requestID string) string {`
+- `processor/agentic-loop/component.go:2540` — `func (c *Component) findLoopIDForToolCall(executionID string) string {`
+- `processor/agentic-loop/component.go:2550` — `func (c *Component) handleSignalMessage(ctx context.Context, data []byte) (natsclient.DeliveryDecision, error) {`
+- `processor/agentic-loop/component.go:2593` — `func (c *Component) settleUncancellableLoop(ctx context.Context, loopID string, cause error) error {`
+- `processor/agentic-loop/component.go:2602` — `if errors.Is(cause, ErrLoopNotFound) && c.classifyMissingLoop(ctx, loopID) == loopPresenceStale {`
+- `processor/agentic-loop/component.go:2614` — `func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserSignal) error {`
+- `processor/agentic-loop/component.go:2631` — `if err := c.persistLoopState(ctx, loopID); err != nil {`
+- `processor/agentic-loop/component.go:2668` — `if err := c.natsClient.PublishToStream(ctx, subject, completionData); err != nil {`
+- `processor/agentic-loop/component.go:2683` — `if err := c.persistCancellationState(ctx, loopID, &completion); err != nil {`
+- `processor/agentic-loop/component.go:2716` — `func (c *Component) handleToolCallVerdictMessage(ctx context.Context, data []byte) (natsclient.DeliveryDecision, error) {`
+- `processor/agentic-loop/component.go:2734` — `settled, err := dispatcher.HandleVerdict(decision, executionID, payload)`
+- `processor/agentic-loop/component.go:2759` — `func (c *Component) settleVerdictWithoutWaiter(`
+- `processor/agentic-loop/component.go:2773` — `if c.classifyMissingLoop(ctx, loopID) == loopPresenceStale {`
+- `processor/agentic-loop/component.go:2780` — `return natsclient.DeliveryDecisionRetry, cause`
+- `processor/agentic-loop/loop_presence.go:50` — `func loopIDFromStructuredID(structuredID, separator string) string {`
+- `processor/agentic-loop/loop_presence.go:66` — `func (c *Component) classifyMissingLoop(ctx context.Context, loopID string) loopPresence {`
+- `processor/agentic-loop/loop_presence.go:70` — `return loopPresenceStale`
+- `processor/agentic-loop/loop_presence.go:75` — `entry, err := c.loopsBucket.Get(ctx, loopID)`
+- `processor/agentic-loop/loop_presence.go:78` — `return loopPresenceStale`
+- `processor/agentic-loop/loop_presence.go:84` — `if err := json.Unmarshal(entry.Value(), &entity); err != nil {`
+- `processor/agentic-loop/loop_presence.go:91` — `if entity.State.IsTerminal() {`
+- `processor/agentic-loop/loop_presence.go:94` — `return loopPresenceLive`
+- `processor/agentic-loop/handlers.go:55` — `MsgID string`
+- `processor/agentic-loop/handlers.go:824` — `func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (HandlerResult, error) {`
+- `processor/agentic-loop/handlers.go:876` — `entity, deferred, err = h.loopManager.attachContinuation(task.LoopID, task.TaskID)`
+- `processor/agentic-loop/handlers.go:1077` — `func (h *MessageHandler) deferredContinuationResult(loopID, taskID string, entity agentic.LoopEntity) HandlerResult {`
+- `processor/agentic-loop/handlers.go:1120` — `func (h *MessageHandler) buildTaskRequest(loopID string, task TaskMessage, entity agentic.LoopEntity, messages []agentic.ChatMessage, tools []agentic.ToolDefinition) (HandlerResult, error) {`
+- `processor/agentic-loop/handlers.go:1122` — `RequestID:      h.loopManager.GenerateRequestID(loopID),`
+- `processor/agentic-loop/handlers.go:1174` — `MsgID:   request.RequestID,`
+- `processor/agentic-loop/handlers.go:1212` — `func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string, response agentic.AgentResponse) (HandlerResult, error) {`
+- `processor/agentic-loop/handlers.go:1253` — `if current := h.loopManager.CurrentRequest(loopID); current != "" && current != response.RequestID {`
+- `processor/agentic-loop/handlers.go:1275` — `h.loopManager.SettleRequest(loopID, response.RequestID)`
+- `processor/agentic-loop/handlers.go:1322` — `if entity.State.IsTerminal() {`
+- `processor/agentic-loop/handlers.go:1389` — `h.loopManager.ResetTruncationRetry(loopID)`
+- `processor/agentic-loop/handlers.go:1409` — `h.loopManager.ResetTruncationRetry(loopID)`
+- `processor/agentic-loop/handlers.go:1424` — `carried, err := h.carryDeferredContinuation(ctx, loopID, entity, cm, &result)`
+- `processor/agentic-loop/handlers.go:2029` — `func (h *MessageHandler) handleLengthTruncation(ctx context.Context, loopID string, entity agentic.LoopEntity, cm *ContextManager, response agentic.AgentResponse, result *HandlerResult) error {`
+- `processor/agentic-loop/handlers.go:2037` — `retryCount := h.loopManager.IncrementTruncationRetry(loopID)`
+- `processor/agentic-loop/handlers.go:2141` — `func (h *MessageHandler) emitRetryRequest(ctx context.Context, loopID string, entity agentic.LoopEntity, cm *ContextManager, result *HandlerResult, postUtilization float64) error {`
+- `processor/agentic-loop/handlers.go:2168` — `RequestID:      h.loopManager.GenerateRequestID(loopID),`
+- `processor/agentic-loop/handlers.go:2194` — `MsgID:   request.RequestID,`
+- `processor/agentic-loop/handlers.go:2480` — `func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, toolResult agentic.ToolResult) (HandlerResult, error) {`
+- `processor/agentic-loop/handlers.go:2546` — `err = h.loopManager.StoreToolResult(loopID, toolResult)`
+- `processor/agentic-loop/handlers.go:2552` — `err = h.loopManager.RemovePendingTool(loopID, toolResult.CallID)`
+- `processor/agentic-loop/handlers.go:2573` — `if h.checkApprovalGate(loopID, &entity, toolResult, &result) {`
+- `processor/agentic-loop/handlers.go:2580` — `if toolResult.StopLoop {`
+- `processor/agentic-loop/handlers.go:2619` — `h.absorbToolResultsIntoContext(loopID, cm)`
+- `processor/agentic-loop/handlers.go:2620` — `carried, err := h.carryDeferredContinuation(ctx, loopID, entity, cm, &result)`
+- `processor/agentic-loop/handlers.go:2651` — `if h.loopManager.AllToolsComplete(loopID) {`
+- `processor/agentic-loop/handlers.go:2652` — `if entity.State.IsTerminal() {`
+- `processor/agentic-loop/handlers.go:2653` — `return result, nil`
+- `processor/agentic-loop/handlers.go:2667` — `func (h *MessageHandler) checkApprovalGate(loopID string, entity *agentic.LoopEntity, toolResult agentic.ToolResult, result *HandlerResult) bool {`
+- `processor/agentic-loop/handlers.go:2674` — `if entity.State == agentic.LoopStateAwaitingApproval {`
+- `processor/agentic-loop/handlers.go:2704` — `func (h *MessageHandler) gateForApproval(loopID string, entity *agentic.LoopEntity, toolResult agentic.ToolResult) (*PublishedMessage, error) {`
+- `processor/agentic-loop/handlers.go:2710` — `if err := entity.BeginAwaitingApproval(toolResult.CallID, toolName, args, toolResult.Error, h.config.ApprovalTimeout(), toolResult.TraceID); err != nil {`
+- `processor/agentic-loop/handlers.go:2713` — `entity.PendingApproval.RequestID = toolResult.RequestID`
+- `processor/agentic-loop/handlers.go:2723` — `if err := h.loopManager.UpdateLoop(*entity); err != nil {`
+- `processor/agentic-loop/handlers.go:2792` — `func (h *MessageHandler) handleToolsComplete(`
+- `processor/agentic-loop/handlers.go:2805` — `err := h.loopManager.IncrementIteration(loopID)`
+- `processor/agentic-loop/handlers.go:2850` — `h.absorbToolResultsIntoContext(loopID, cm)`
+- `processor/agentic-loop/handlers.go:2852` — `if err := h.publishIterationRequest(ctx, loopID, entity, cm, result, newIteration); err != nil {`
+- `processor/agentic-loop/handlers.go:2869` — `func (h *MessageHandler) absorbToolResultsIntoContext(loopID string, cm *ContextManager) {`
+- `processor/agentic-loop/handlers.go:2870` — `for _, tm := range h.buildToolMessages(h.loopManager.GetAndClearToolResults(loopID)) {`
+- `processor/agentic-loop/handlers.go:2886` — `func (h *MessageHandler) publishIterationRequest(`
+- `processor/agentic-loop/handlers.go:2927` — `RequestID:      h.loopManager.GenerateRequestID(loopID),`
+- `processor/agentic-loop/handlers.go:2958` — `MsgID:   request.RequestID,`
+- `processor/agentic-loop/handlers.go:3031` — `if err := h.publishIterationRequest(ctx, loopID, entity, cm, result, newIteration); err != nil {`
+- `processor/agentic-loop/handlers.go:3066` — `func (h *MessageHandler) buildToolMessages(results []agentic.ToolResult) []agentic.ChatMessage {`
+- `processor/agentic-loop/approval_response_handler.go:32` — `func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response agentic.ApprovalResponse) (result HandlerResult, err error) {`
+- `processor/agentic-loop/approval_response_handler.go:54` — `pending, ok, resolveErr := h.loopManager.ResolveApprovalIfPending(loopID, response.CallID, response.ExecutionID)`
+- `processor/agentic-loop/approval_response_handler.go:58` — `if !ok {`
+- `processor/agentic-loop/approval_response_handler.go:78` — `return HandlerResult{LoopID: loopID, State: state, staleDrop: true}, nil`
+- `processor/agentic-loop/approval_response_handler.go:117` — `func (h *MessageHandler) dispatchApprovedCall(loopID string, pending agentic.PendingApprovalState, args map[string]any, approvedBy string, result *HandlerResult) error {`
+- `processor/agentic-loop/approval_response_handler.go:122` — `RequestID:   pending.RequestID,`
+- `processor/agentic-loop/approval_response_handler.go:139` — `func (h *MessageHandler) handleRejectedApproval(ctx context.Context, loopID string, pending agentic.PendingApprovalState, response agentic.ApprovalResponse) (HandlerResult, error) {`
+- `processor/agentic-loop/approval_response_handler.go:149` — `RequestID:   pending.RequestID,`
+- `processor/agentic-loop/approval_response_handler.go:158` — `return h.HandleToolResult(ctx, loopID, synthetic)`
+- `processor/agentic-loop/approval_response_handler.go:164` — `func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []byte) (natsclient.DeliveryDecision, error) {`
+- `processor/agentic-loop/approval_response_handler.go:182` — `result, err := c.handler.HandleApprovalResponse(ctx, response)`
+- `processor/agentic-loop/approval_response_handler.go:194` — `if result.staleDrop {`
+- `processor/agentic-loop/approval_response_handler.go:199` — `return natsclient.DeliveryDecisionAck, nil`
+- `processor/agentic-loop/approval_response_handler.go:205` — `if err := c.persistHandlerResult(ctx, result); err != nil {`
+- `processor/agentic-loop/approval_response_handler.go:209` — `return natsclient.DeliveryDecisionAck, nil`
+- `processor/agentic-loop/approval_sweeper.go:43` — `func (c *Component) runApprovalTimeoutSweeper(ctx context.Context) {`
+- `processor/agentic-loop/approval_sweeper.go:65` — `func (c *Component) sweepExpiredApprovals(ctx context.Context) {`
+- `processor/agentic-loop/approval_sweeper.go:69` — `candidates := c.handler.loopManager.SnapshotExpiredApprovals(time.Now().UTC())`
+- `processor/agentic-loop/approval_sweeper.go:100` — `c.publishResults(ctx, result)`
+- `processor/agentic-loop/approval_sweeper.go:101` — `c.persistLoopState(ctx, cand.LoopID)`
+- `processor/agentic-loop/approval_sweeper.go:130` — `func (c *Component) publishApprovalResponseToWire(ctx context.Context, response agentic.ApprovalResponse) {`
+- `processor/agentic-loop/governance_dispatcher.go:207` — `func (v VerdictPayload) effectiveLoopID() string {`
+- `processor/agentic-loop/governance_dispatcher.go:337` — `var ErrNoGovernanceWaiter = errors.New("no active governance waiter")`
+- `processor/agentic-loop/governance_dispatcher.go:600` — `func (d *enforceDispatcher) HandleVerdict(decision, executionID string, verdict VerdictPayload) (natsclient.DeliveryDecision, error) {`
+- `processor/agentic-loop/governance_dispatcher.go:608` — `ch, ok := d.lookupWaiter(executionID)`
+- `processor/agentic-loop/governance_dispatcher.go:629` — `fmt.Errorf("%w for execution_id %q", ErrNoGovernanceWaiter, executionID)`
+- `processor/agentic-loop/governance_dispatcher.go:667` — `func publishProposed(ctx context.Context, publisher VerdictPublisher, loopID, parentLoopID string, call agentic.ToolCall, logger *slog.Logger) error {`
+- `processor/agentic-loop/governance_dispatcher.go:727` — `if err := publisher.PublishToStream(ctx, subject, data); err != nil {`
+- `processor/agentic-loop/execution_identity.go:24` — `calls[i].RequestID = requestID`
+- `processor/agentic-loop/execution_identity.go:26` — `calls[i].ExecutionID = deriveToolExecutionID(requestID, calls[i].ID, ordinal)`
+- `processor/agentic-loop/execution_identity.go:31` — `func deriveToolExecutionID(requestID, callID string, ordinal uint32) string {`
+- `processor/agentic-loop/execution_identity.go:36` — `binary.BigEndian.PutUint32(ordinalBytes[:], ordinal)`
+- `processor/agentic-loop/metrics.go:35` — `toolResultsDropped  *prometheus.CounterVec`
+- `processor/agentic-loop/metrics.go:38` — `modelResponsesDropped *prometheus.CounterVec`
+- `processor/agentic-loop/metrics.go:169` — `Name:      "tool_results_dropped_total",`
+- `processor/agentic-loop/metrics.go:176` — `Name:      "model_responses_dropped_total",`
+- `processor/agentic-loop/metrics.go:275` — `Name:      "tool_call_governance_subscribe_before_publish_failures_total",`
+- `processor/agentic-loop/metrics.go:301` — `_ = registry.RegisterCounterVec("agentic-loop", "tool_results_dropped_total", metrics.toolResultsDropped)`
+- `processor/agentic-loop/metrics.go:302` — `_ = registry.RegisterCounterVec("agentic-loop", "model_responses_dropped_total", metrics.modelResponsesDropped)`
+- `processor/agentic-loop/metrics.go:303` — `_ = registry.RegisterCounterVec("agentic-loop", "signals_dropped_total", metrics.signalsDropped)`
+- `processor/agentic-loop/metrics.go:382` — `verdictDropMissingWaiter         = "missing_waiter"`
+- `processor/agentic-loop/metrics.go:383` — `verdictDropUnrecoverableIdentity = "unrecoverable_loop_identity"`
+- `processor/agentic-loop/metrics.go:393` — `func (m *loopMetrics) RecordGovernanceVerdictMissingWaiter() {`
+- `processor/agentic-loop/metrics.go:404` — `func (m *loopMetrics) recordVerdictIdentityUnrecoverable() {`
+- `processor/agentic-loop/metrics.go:527` — `func (m *loopMetrics) recordToolResultDropped(reason string) {`
+- `processor/agentic-loop/metrics.go:532` — `func (m *loopMetrics) recordSignalDropped(reason string) {`
+- `processor/agentic-loop/metrics.go:544` — `func (m *loopMetrics) recordModelResponseDropped(reason string) {`
+- `processor/agentic-loop/trajectory_handler_wiring.go:63` — `func (c *Component) releaseLoopTransientState(loopID string) {`
+- `processor/agentic-loop/internal/loopbucket/acquire.go:20` — `bucket, err = js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: name, History: 10, TTL: 24 * time.Hour})`
+- `processor/agentic-loop/internal/loopbucket/acquire.go:42` — `if status.History() != 10 || status.TTL() != 24*time.Hour || info.Config.MaxAge != 24*time.Hour || info.Config.MaxBytes > 0 {`
+- `processor/agentic-loop/internal/loopbucket/acquire.go:43` — `return nil, fmt.Errorf("loop bucket %q policy: observed History=%d TTL=%s MaxAge=%s MaxBytes=%d; require History=10 TTL=24h MaxAge=24h MaxBytes<=0 (no reconciliation)", name, status.History(), status.TTL(), info.Config.MaxAge, info.Config.MaxBytes)`
+- `processor/agentic-loop/config.go:426` — `Name: "loops", Config: component.KVWritePort{Bucket: "AGENT_LOOPS"}, Description: "Loop state storage",`
+- `internal/deliverylane/deliverylane.go:27` — `type Admission struct {`
+- `internal/deliverylane/deliverylane.go:45` — `func NewAdmission(`
+- `internal/deliverylane/deliverylane.go:58` — `func (a *Admission) Admit() bool {`
+- `internal/deliverylane/deliverylane.go:105` — `func Consume(`
+- `internal/deliverylane/deliverylane.go:136` — `func Settle(`
+- `internal/deliverylane/deliverylane.go:225` — `func Observe(`
+- `natsclient/client.go:942` — `func (m *Client) PublishToStream(ctx context.Context, subject string, data []byte) error {`
+- `natsclient/client.go:963` — `func (m *Client) PublishToStreamWithMsgID(ctx context.Context, subject string, data []byte, msgID string) error {`
+- `natsclient/kv.go:194` — `func (kv *KVStore) Put(ctx context.Context, key string, value []byte) (uint64, error) {`
+- `natsclient/kv.go:211` — `func (kv *KVStore) Create(ctx context.Context, key string, value []byte) (uint64, error) {`
+- `natsclient/kv.go:218` — `return 0, ErrKVKeyExists`
+- `natsclient/kv.go:231` — `func (kv *KVStore) Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error) {`
+- `natsclient/kv.go:238` — `return 0, ErrKVRevisionMismatch`
+- `processor/agentic-model/component.go:633` — `_, found, err := c.readRetainedAgentResponse(ctx, req.RequestID)`
+- `processor/agentic-model/component.go:643` — `c.requestsProcessed++`
+- `processor/agentic-model/provider_settlement.go:21` — `ReadRetainedResponse(context.Context, string, string) (retainedResponseEvidence, bool, error)`
+- `processor/agentic-model/provider_settlement.go:28` — `func (r natsRetainedResponseEvidenceReader) ReadRetainedResponse(`
+- `processor/agentic-model/provider_settlement.go:37` — `raw, err := stream.GetLastMsgForSubject(ctx, subject)`
+- `processor/agentic-model/provider_settlement.go:76` — `func (c *Component) readRetainedAgentResponse(`
+- `processor/agentic-model/provider_settlement.go:89` — `evidence, found, err := reader.ReadRetainedResponse(ctx, streamName, subject)`
+- `processor/agentic-dispatch/task_recovery.go:51` — `raw, err := stream.GetLastMsgForSubject(ctx, subject)`
+- `processor/agentic-dispatch/task_recovery.go:64` — `func stableDispatchTaskID(msg agentic.UserMessage) string {`
+- `processor/agentic-dispatch/task_recovery.go:89` — `retained, retainedData, found, err := c.readRetainedDispatchTask(ctx, streamName, subject)`
+- `processor/agentic-dispatch/task_recovery.go:147` — `func (c *Component) readRetainedDispatchTask(`
+- `processor/agentic-dispatch/http_activity.go:321` — `func (c *Component) activeLoop(ctx context.Context, msg agentic.UserMessage) (string, error) {`
+- `processor/agentic-dispatch/http_activity.go:334` — `return "", &errs.ClassifiedError{Class: errs.ErrorInvalid, Code: "loop_route_ambiguous", Err: fmt.Errorf("multiple current loops match the user/channel route")}`
+- `processor/agentic-dispatch/command_target_resolution_test.go:313` — `func TestRouteAmbiguityRefusalIsAnsweredWithoutMeteringTheGate(t *testing.T) {`
+- `processor/agentic-dispatch/commands.go:71` — `// residuals; TestRouteAmbiguityRefusalIsAnsweredWithoutMeteringTheGate pins it.`
+- `processor/agentic-dispatch/component.go:896` — `// retry. `loop_route_ambiguous` (http_activity.go:334) is`
+- `processor/agentic-dispatch/component.go:1168` — `c.metrics.recordTaskSubmitted()`
+- `processor/agentic-dispatch/component.go:1189` — `// survives is the counter at :1118 — tasks_submitted_total moves twice`
+- `processor/agentic-dispatch/metrics.go:112` — `Name:      "tasks_submitted_total",`
+- `processor/agentic-dispatch/metrics.go:180` — `Name:      "loop_admission_refusals_total",`
+- `processor/agentic-dispatch/metrics.go:322` — `m.tasksSubmitted.Inc()`
+- `processor/agentic-dispatch/terminal_settlement.go:272` — `if err := c.natsClient.PublishToStreamWithMsgID(ctx, subject, data, msgID); err != nil {`
+- `processor/agentic-tools/component.go:740` — `if outcome, found, err := c.loadCompletedOutcome(ctx, call, storeOperationGet); err != nil {`
+- `processor/agentic-tools/component.go:743` — `return c.publishCompletedResult(ctx, call, outcome.Result, outcomePathReplay)`
+- `processor/agentic-tools/component.go:780` — `err := c.publishResultWithMsgID(ctx, result, toolApprovalRequiredMessageID(call.ExecutionID))`
+- `processor/agentic-tools/component.go:808` — `if err := c.persistAndPublishOutcome(ctx, call, result, outcomePathNew, true); err != nil {`
+- `processor/agentic-tools/component.go:837` — `func (c *Component) loadCompletedOutcome(`
+- `processor/agentic-tools/component.go:869` — `func (c *Component) persistAndPublishOutcome(`
+- `processor/agentic-tools/component.go:1224` — `return c.publishResultWithMsgID(ctx, result, toolResultMessageID(result.ExecutionID))`
+- `processor/agentic-tools/component.go:1227` — `func (c *Component) publishResultWithMsgID(ctx context.Context, result agentic.ToolResult, msgID string) error {`
+- `processor/agentic-tools/outcomes.go:100` — `func toolCallOutcomeKey(executionID string) string {`
+- `processor/agentic-tools/outcomes.go:104` — `func toolResultMessageID(executionID string) string {`
+- `docs/concepts/17-approval-flow.md:65` — `- **Restart-safe.** `LoopEntity.PendingApproval` lives in the`
+- `openspec/specs/agentic-loop/spec.md:201` — `### Requirement: In-flight state MUST NOT be derived from the acknowledgement floor`
+- `openspec/specs/agentic-loop/spec.md:212` — `A restart-surviving answer SHALL NOT be sourced from loop state records either: only a handler`
+- `openspec/specs/agentic-loop/spec.md:421` — `### Requirement: Terminal trajectory facts are ordinary observations`
+- `openspec/specs/agentic-loop/spec.md:443` — `#### Scenario: terminal redelivery creates another terminal observation`
+- `openspec/specs/agentic-tools/spec.md:437` — ``agentic-tools` SHALL own one immutable COMPLETED outcome per framework execution identity, retaining the provider`
+- `test/e2e/scenarios/agentic/stage_a_process_replacement.go:26` — `func (s *Scenario) verifyStageAProcessReplacement(`

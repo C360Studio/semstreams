@@ -1,18 +1,15 @@
 # Tasks — agentic-loop-durable-applied-facts (#1330)
 
-> **Seed note (2026-09-22, at the claim PR's opening).** Copied verbatim from the accepted design package (owner
-> acceptance 2026-09-18 on #1330, "accept L4"; rulings Q1–Q8 and terminal-outcome adoption on the same issue). The
-> base is `main` at `b7ce8727` (L1–L3 and #1341 merged). Every pin below is at `68c14c8e`, the head of PR #1159's
-> Codex branch, which never merged: `main` carries no `settlement_recovery.go`, so § 6 "deleted from the Codex layer"
-> has nothing to delete there and the design's positive content is what lands. The first implementation step is an
-> architect reconciliation of every pin and every "deleted / survives" row against `b7ce8727`, bringing
-> `scripts/inventory-verify.sh inventory.md` to exit 0 at that base, before any code. Placed on #1330 after the
-> acceptance and not yet in this package: three L2/L3 inventory comments (task-lane Quarantine → Retry precondition;
-> the two-consumer `…:req:N:0` window; `complete → complete` replay on the tool lane), owner placement owed; and one
-> ruling (2026-09-21): L4 meters the `loop_route_ambiguous` refusal on the delivery lane and retires the pinning
-> test's absence half. The only other edit at seed time is task 1.0's wording ("deliberately shipped no parser" →
-> "shipped no parser because no reader existed yet") so `task openspec:queue` stops reading a live task as a
-> deliberate-not-done marker.
+> **Re-pin and reconciliation done (2026-09-22).** Base `b7ce8727`; `scripts/inventory-verify.sh inventory.md` →
+> `pins=293 ok=293 moved=0 ambiguous=0 drift=0 malformed=0 unparsed=0`. The reconciliation is SEMANTIC, not mechanical:
+> the Codex recovery layer this design was accepted as a pruning of never landed on `main`, so § 6 inverts (nine
+> "survives" items are builds; one real deletion target) and three ruling premises read differently here (Q1 birth
+> order, Q2 revision availability, § 3.6's applied-set rationale). Rows, replacement sentences, the L4a/L4b split and
+> the no-home Codex facts are in `reconciliation.md`; pin substitutions for this file are in `tasks-pins.md`. Neither
+> the design text nor these tasks are amended until the owner rules on the 2026-09-22 docket on #1330; every
+> `68c14c8e` pin below maps through `reconciliation.md` § A. From here `scripts/inventory-verify.sh` is expected to go
+> RED as the implementation lands (pins are pre-change evidence; never re-pin a landed change). The seed-time edit to
+> task 1.0's wording stands.
 
 > File:line pins are at `68c14c8e`. Dependency order; each task names its file and the proving test. No landing tasks (claim PR, CI,
 > merge, archive) — PR checklist, owner ruling #1230 Option 1. Prerequisites #1327–#1329 merged; #1328 supplies the RequestID grammar and its helpers, named `looprequest.Next/Parse`.
