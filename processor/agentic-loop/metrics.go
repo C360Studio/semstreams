@@ -167,14 +167,14 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "tool_results_dropped_total",
-				Help:      "Total tool results acknowledged without effect, by reason. reason=\"stale_execution\": no loop mapping exists for the execution ID and the loop record is absent or terminal. reason=\"older_request\": the result names an earlier request than the loop record does, so the loop already applied it. reason=\"terminal_unproven\": the loop is terminal, so no result can still be applied to it. Sustained non-zero rate points at NATS redelivery or executor double-publish. A result for a loop that is live but held by another process is NOT counted here: it is retried, not dropped.",
+				Help:      "Total tool results acknowledged without effect, by reason. reason=\"stale_execution\": no loop mapping exists for the execution ID and the loop record is absent or terminal. reason=\"older_request\": the result names an earlier request than the loop record does, so the loop already applied it — counted on the warm lane and on the cold lane after the record has been brought forward to the loop newest retained request, whichever process holds the loop. reason=\"terminal_unproven\": the loop is terminal, so no result can still be applied to it. Sustained non-zero rate points at NATS redelivery or executor double-publish. A result the loop record still names is NOT counted here: it is retried until a process can apply it, and a result naming a request of no loop is quarantined rather than dropped.",
 			}, []string{"reason"}),
 
 			modelResponsesDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "model_responses_dropped_total",
-				Help:      "Total model responses acknowledged without advancing a loop. reason=\"stale_request_id\" is a response whose RequestID maps to no loop and whose loop record is absent or terminal — expected after a loop settles and releases its per-loop state. reason=\"superseded_request\" is a response for a live loop that is waiting on a DIFFERENT request, which is what a redelivery of a response the loop already advanced past looks like. A sustained rate on either points at NATS redelivery. A response for a loop that is live but held by another process is NOT counted here: it is retried, not dropped.",
+				Help:      "Total model responses acknowledged without advancing a loop, by reason. reason=\"stale_request_id\": the RequestID maps to no loop and the loop record is absent or terminal — expected after a loop settles and releases its per-loop state. reason=\"superseded_request\": the response names an EARLIER request than the loop record does, so the loop already advanced past it — counted on the warm lane and on the cold lane after the record has been brought forward to the loop newest retained request, whichever process holds the loop. A sustained rate on either points at NATS redelivery. A response the loop record still names is NOT counted here: it is retried until a process can apply it, and a response naming a request of no loop is quarantined rather than dropped.",
 			}, []string{"reason"}),
 
 			signalsDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -528,11 +528,15 @@ func (m *loopMetrics) recordToolResultReceived(hasError bool) {
 //     result was applied before the loop settled is deliberately not
 //     re-derived: it would change nothing this delivery can do.
 //
-// A result naming a live loop another process holds is deliberately not
-// counted here: that delivery returns an error and is retried, and a retried
-// result is not a dropped one. The arm is in settleToolResultWithoutLoop's
-// default branch, which warns with the execution id and leaves the work owed
-// to whichever process holds the loop.
+// What is deliberately NOT counted here is a result the loop record still
+// names: that delivery returns an error and is retried, and a retried result
+// is not a dropped one. settleToolResultWithoutLoop warns with the execution
+// id and leaves the work owed to whichever process holds the loop. Nor is a
+// result naming a request of no loop — that is quarantined, not dropped.
+// "older_request" is counted on BOTH lanes, warm and cold, and being held by
+// another process does not exempt it: the cold arm brings the record forward
+// to the loop's newest retained request first, and after that a result naming
+// an earlier request is owed to nobody at all.
 func (m *loopMetrics) recordToolResultDropped(reason string) {
 	m.toolResultsDropped.WithLabelValues(reason).Inc()
 }
@@ -545,11 +549,17 @@ func (m *loopMetrics) recordSignalDropped(reason string) {
 // recordModelResponseDropped records a model response acknowledged without
 // advancing a loop. Reason "stale_request_id" is the settled-loop case: terminal
 // release takes the request routing with it, so a response that arrives after
-// the loop settled resolves nothing. Reason "superseded_request" is the live-loop
-// case: the loop is waiting on a different request, so this one cannot advance it
-// — a redelivery of a response the loop already moved past. Both drops are
-// deliberate and safe, and both are counted so that "safe" stays a claim an
-// operator can check rather than one only the code makes.
+// the loop settled resolves nothing. Reason "superseded_request" is the
+// advanced-loop case: the record names a LATER request, so this response
+// answers a question the loop is already past. It is counted on both lanes —
+// warm, and cold after step 0 has brought the record forward — and being held
+// by another process does not exempt it, because a response older than the
+// record is owed to no process at all.
+//
+// What is not counted here is a response the record still names (retried until
+// a process can apply it) and one naming a request of no loop (quarantined).
+// Both drops above are deliberate and safe, and both are counted so that "safe"
+// stays a claim an operator can check rather than one only the code makes.
 func (m *loopMetrics) recordModelResponseDropped(reason string) {
 	m.modelResponsesDropped.WithLabelValues(reason).Inc()
 }

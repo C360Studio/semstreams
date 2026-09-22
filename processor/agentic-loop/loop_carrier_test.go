@@ -10,10 +10,13 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -673,6 +676,87 @@ func TestColdArmsRefuseAnUnreadableRecordRatherThanAdoptIntoIt(t *testing.T) {
 			require.Zero(t, msg.acks.Load()+msg.terms.Load())
 			require.Empty(t, bucket.written(),
 				"a record that could not be read was written anyway")
+		})
+	}
+}
+
+// dropHelpText returns the Help string an operator reads for one of the two
+// acknowledged-without-effect counters, from the Desc the registry publishes.
+func dropHelpText(t *testing.T, counter *prometheus.CounterVec) string {
+	t.Helper()
+	desc := counter.WithLabelValues("probe").Desc().String()
+	require.NotEmpty(t, desc)
+	return desc
+}
+
+// TestADropCounterDoesNotDenyTheDropItCounts pins the operator-facing text
+// against the arm that emits it.
+//
+// Both counters carried a sentence written before #1330: "a … for a loop that
+// is live but held by another process is NOT counted here: it is retried, not
+// dropped." The cold arms now count exactly that — step 0 brings the record
+// forward to the loop's newest retained request, and a delivery older than the
+// adopted request is acknowledged and counted whoever holds the loop. An
+// operator reading the Help would have read a non-zero counter as impossible.
+//
+// The behaviour is the first half of this test and the text is the second, so
+// neither can drift from the other without a failure.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestADropCounterDoesNotDenyTheDropItCounts(t *testing.T) {
+	const loopID = "9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c65"
+	const deniedClaim = "held by another process is NOT counted here"
+	retained := looprequest.ID{LoopID: loopID, Iteration: 3, Retry: 0}.String()
+
+	for name, lane := range map[string]struct {
+		port    string
+		handler func(*Component) inputHandler
+		payload message.Payload
+		counter func(*Component) *prometheus.CounterVec
+		reason  string
+	}{
+		"model response": {
+			port:    "agent.response",
+			handler: func(c *Component) inputHandler { return c.handleResponseMessage },
+			payload: &agentic.AgentResponse{
+				RequestID: looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String(),
+				Status:    agentic.StatusComplete,
+				Message:   agentic.ChatMessage{Role: "assistant", Content: "done"},
+			},
+			counter: func(c *Component) *prometheus.CounterVec { return c.metrics.modelResponsesDropped },
+			reason:  "superseded_request",
+		},
+		"tool result": {
+			port:    "tool.result",
+			handler: func(c *Component) inputHandler { return c.handleToolResultMessage },
+			payload: &agentic.ToolResult{
+				CallID: loopID + ":tool:1", Name: "search", Content: "result", LoopID: loopID,
+				RequestID: looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String(),
+			},
+			counter: func(c *Component) *prometheus.CounterVec { return c.metrics.toolResultsDropped },
+			reason:  "older_request",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := evidenceComponent(t, retained)
+			c.metrics = getMetrics(metric.NewMetricsRegistry())
+			coldRecord(t, c, loopID, func(e *agentic.LoopEntity) {
+				e.PublishedRequestID = looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String()
+				e.Iterations = 1
+			})
+			counter := lane.counter(c)
+			before := testutil.ToFloat64(counter.WithLabelValues(lane.reason))
+
+			msg := &loopDeliveryOwnerMsg{data: baseMessageBytes(t, lane.payload)}
+			delivered, admitted := deliverylane.Consume(t.Context(), msg,
+				heartbeatPolicyForTest(t, lane.port, lane.handler(c)), deliverylane.NewAdmission(nil, nil))
+			require.True(t, admitted)
+
+			require.Equal(t, natsclient.DeliveryDecisionAck, delivered.Decision())
+			require.Equal(t, before+1, testutil.ToFloat64(counter.WithLabelValues(lane.reason)),
+				"a loop this process does not hold produced a counted drop")
+			require.NotContains(t, dropHelpText(t, counter), deniedClaim,
+				"the Help text tells an operator this drop cannot happen, and the delivery above just made it happen")
 		})
 	}
 }
