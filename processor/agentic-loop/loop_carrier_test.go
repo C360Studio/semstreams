@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
-
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -155,6 +155,31 @@ func TestBirthRefusesASecondCreateForTheSameLoop(t *testing.T) {
 	require.ErrorIs(t, err, natsclient.ErrKVKeyExists)
 }
 
+// And birth must CALL it, before it publishes.
+//
+// Deleting the write from the task lane left every test above green, because
+// they drive createLoopState directly. This one drives the real intake seam
+// with a client that cannot publish: a record in the bucket afterwards can
+// only have been written before the publish that failed. The task lane
+// deliberately discards that publish error (#1345), which is exactly why the
+// record has to precede it — task 3.4 republishes R1 from this record.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestBirthRecordsTheLoopBeforeItPublishes(t *testing.T) {
+	c := evidenceComponent(t, "")
+	c.natsClient = unpublishableClient(t)
+	bucket, ok := c.loopsBucket.(*recordingLoopBucket)
+	require.True(t, ok)
+
+	task := agentic.TaskMessage{TaskID: "task-birth", Role: "general", Model: "model-a", Prompt: "first turn"}
+	require.NoError(t, c.handleTaskMessage(t.Context(), baseMessageBytes(t, &task)))
+
+	written := bucket.written()
+	require.Len(t, written, 1, "birth published its first request without recording the loop first")
+	record := decodeRecord(t, c, written[0])
+	require.Equal(t, written[0], record.ID)
+}
+
 func mustNotExist(bucket *recordingLoopBucket, key string) []byte {
 	value, ok := bucket.value(key)
 	if !ok {
@@ -199,6 +224,33 @@ func TestMintedRequestAdoptsAnAlreadyRetainedIdentity(t *testing.T) {
 			require.Equal(t, tc.wantAdopt, adopted)
 		})
 	}
+}
+
+// And the same wiring question one level up: publishResults must ASK the
+// identity check before it publishes a minted request, not merely contain it.
+// With a client that cannot publish, adoption is the only way this returns
+// nil — and the second arm shows the nil is adoption's, not the path's.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestPublishingAMintedRequestConsultsTheRetainedIdentity(t *testing.T) {
+	loopID := "1a5ba1b7-1f2b-4a2f-9f8a-2a52e2f5f9aa"
+	minting := looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String()
+	result := HandlerResult{
+		LoopID: loopID,
+		PublishedMessages: []PublishedMessage{
+			{Subject: "agent.request." + loopID, Data: []byte(`{"n":1}`), MsgID: minting},
+		},
+	}
+
+	alreadyRetained := evidenceComponent(t, minting)
+	alreadyRetained.natsClient = unpublishableClient(t)
+	require.NoError(t, alreadyRetained.publishResults(t.Context(), result),
+		"a request the stream already retains was published a second time")
+
+	neverRetained := evidenceComponent(t, "")
+	neverRetained.natsClient = unpublishableClient(t)
+	require.Error(t, neverRetained.publishResults(t.Context(), result),
+		"a request nothing retains must still go out")
 }
 
 // TestColdReadAdoptsTheNewestRetainedRequestFirst is step 0: before any
@@ -309,6 +361,62 @@ func TestColdReadAdoptsTheNewestRetainedRequestFirst(t *testing.T) {
 		require.Error(t, err)
 		require.True(t, errs.IsFatal(err))
 	})
+}
+
+// The two cold arms must RUN step 0, not merely contain it.
+//
+// This pin exists because deleting the adoption call from BOTH
+// settleResponseWithoutLoop and settleToolResultWithoutLoop left every arm of
+// the test above green: that one drives the decision directly, so it proves
+// the decision and nothing about who asks for it. This one drives the real
+// callbacks through the delivery lane and reads the record afterwards.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestColdSettlementArmsAdoptBeforeTheyRefuseTheDelivery(t *testing.T) {
+	const loopID = "b0f7a1e2-2c4d-4a5b-8e6f-1d2c3b4a5e60"
+	retained := looprequest.ID{LoopID: loopID, Iteration: 3, Retry: 0}.String()
+
+	for name, lane := range map[string]struct {
+		port    string
+		handler func(*Component) inputHandler
+		payload message.Payload
+	}{
+		"model response": {
+			port:    "agent.response",
+			handler: func(c *Component) inputHandler { return c.handleResponseMessage },
+			payload: &agentic.AgentResponse{
+				RequestID: looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String(),
+				Status:    agentic.StatusComplete,
+				Message:   agentic.ChatMessage{Role: "assistant", Content: "done"},
+			},
+		},
+		"tool result": {
+			port:    "tool.result",
+			handler: func(c *Component) inputHandler { return c.handleToolResultMessage },
+			payload: &agentic.ToolResult{
+				CallID: loopID + ":tool:1", Name: "search", Content: "result", LoopID: loopID,
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := evidenceComponent(t, retained)
+			coldRecord(t, c, loopID, func(e *agentic.LoopEntity) {
+				e.PublishedRequestID = looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String()
+				e.Iterations = 1
+			})
+
+			msg := &loopDeliveryOwnerMsg{data: baseMessageBytes(t, lane.payload)}
+			result, admitted := deliverylane.Consume(t.Context(), msg,
+				heartbeatPolicyForTest(t, lane.port, lane.handler(c)), deliverylane.NewAdmission(nil, nil))
+			require.True(t, admitted)
+
+			// The arm still refuses the delivery — classification is section 3
+			// — but it refuses against a record it has brought forward first.
+			require.Equal(t, natsclient.DeliveryDecisionRetry, result.Decision())
+			require.Equal(t, retained, decodeRecord(t, c, loopID).PublishedRequestID,
+				"the cold arm settled without running step 0")
+		})
+	}
 }
 
 // stubEvidenceReader answers the retained-request read from a fixed body, so

@@ -34,6 +34,9 @@
       `TestPropCompareIsATotalOrderConsistentWithNext` (boundary-hugging generators: iteration at 1, retry at 0,
       loop IDs that contain colons and that END in `:req`), `FuzzParseNeverPanicsAndRoundTrips` (15 seeds across
       both grammar classes; 2,316,130 execs / 21s clean, `new interesting: 134`).
+      Mutant (`cp` backup + md5 + printed `[applied]`, restored and checksum-verified): delete the
+      `looprequest.Parse`/`Next` read from `GenerateRequestID` (`ST:1385-1390`) → seven tests red, among them
+      `TestRetryOrdinalSurvivesARebuiltLoopManager` and `TestRequestIDCarriesTheTruncationRetryOrdinal`.
 - [x] 1.1 `agentic/state.go`: add `PublishedRequestID string \`json:"published_request_id,omitempty"\`` beside `AG:57`
       with the I1 doc comment; `Validate` (`AG:136`) unchanged. Test: `agentic/state_test.go` JSON round-trip;
       `TransitionTo` (`AG:171`) keeps it.
@@ -101,6 +104,10 @@
       Birth order: `carried_continuation_durability_test.go`
       `TestQuarantinedCarryWritesNoRecordAndLeavesTheTurnUncarried` asserts `bucket.written()` is EMPTY after a
       failed publish, which is the order assertion on the response lane's real path.
+      Mutants: delete the `publishThenWrite` dispatch (`C:2021-2023`) →
+      `TestCarrierOrderDecidesWhatAFailedPublishLeavesBehind` +
+      `TestQuarantinedCarryWritesNoRecordAndLeavesTheTurnUncarried` red; replace the CAS `Update` (`C:2724`) with a
+      blind `Put` → `TestCarrierCompareAndSwapLossRetriesAndReleasesTheLoop` red.
 - [x] 2.2 `C:2318-2333` `publishResults`: messages on the `agent.request` subject publish via `PublishToStreamWithMsgID`
       with `Nats-Msg-Id = RequestID`. **Shipped by L2 (#1328, PR #1335)** — recorded here because tasks record work when
       it happens. Verified at `b7ce8727`:
@@ -134,6 +141,11 @@
       Test: `loop_carrier_test.go` `TestMintedRequestAdoptsAnAlreadyRetainedIdentity`, six arms through the
       evidence-reader seam — already retained (adopt, publish nothing), previous request, retry of the previous,
       nothing retained (publish), a LATER request (Quarantine), another loop's request (Quarantine).
+      **The ritual found that test blind to its own wiring**, and a second pin exists because of it: deleting the
+      whole identity check from `publishResults` (`C:2469-2477`) left it green, because it drives
+      `adoptRetainedRequest` directly. `TestPublishingAMintedRequestConsultsTheRetainedIdentity` drives
+      `publishResults` with a client that cannot publish — adoption is then the only thing that can make it return
+      nil — and goes red on that mutant; its never-retained arm shows the nil is adoption's, not the path's.
 - [x] 2.4 `handlers.go`: set the field at the three minting sites (`H:1122` in `buildTaskRequest`, `H:2168` in
       `emitRetryRequest`, `H:2927` in `publishIterationRequest`); mint via `looprequest.Next(PublishedRequestID)`
       (task 1.0); retry ordinal from the parsed field; delete `IncrementTruncationRetry` (`ST:466`) and
@@ -161,6 +173,9 @@
       `TestHandleLengthTruncation_ResetAfterForwardProgress`, which encoded the counter's semantics (a tool-call
       response mid-iteration renewed the budget); the durable rule is one self-heal per ITERATION, and the new test
       drives a real tool batch to the advance.
+      Mutant: delete the `SetPublishedRequest` call from `publishIterationRequest` (`H:2956-2958`) →
+      `TestEveryMintedRequestIsNamedOnTheLoopRecord`, `TestMintedRequestIDsAreInjectiveAcrossTheHandlerPath` and
+      `TestHandleLengthTruncation_BudgetRenewsOnTheNextIteration` red.
 - [x] 2.5 Step 0 for every cold read but the task lane (design § 3.6): read the newest retained request (task 2.3's
       reader), order it against `PublishedRequestID` with `looprequest.Parse`/`Compare` (task 1.0); newer →
       `Update(revision)` the record before classifying — field, `Iterations = parsed iteration − 1` (`ST:1345`: a
@@ -186,6 +201,10 @@
       `awaiting_approval` record (gate nil, state restored), current (nothing written), nothing retained (nothing
       written), record naming a request the stream never retained (Quarantine), unparseable retained (Quarantine),
       unparseable record field (Quarantine).
+      **Same blind spot, same remedy:** deleting the `adoptNewerRetainedRequest` call from BOTH cold arms
+      (`C:1775`, `C:2446`) left all seven arms green. `TestColdSettlementArmsAdoptBeforeTheyRefuseTheDelivery`
+      drives `handleResponseMessage` and `handleToolResultMessage` through `deliverylane.Consume` and reads the
+      record afterwards; both its arms go red on that mutant.
 - [x] 2.6 Birth by `Create` and CAS-loss release (docket OQ3, owner ruling 2026-09-22): birth writes the record with
       `loopsBucket.Create` (`KV:211`) so a second consumer's birth is refused with `ErrKVKeyExists` (`KV:218`) and
       takes the cold fork; a CAS loss anywhere on the carrier releases the loop's process state (`ST:574` `DeleteLoop`,
@@ -205,6 +224,10 @@
       Tests: `loop_carrier_test.go` `TestBirthRefusesASecondCreateForTheSameLoop` and
       `TestCarrierCompareAndSwapLossRetriesAndReleasesTheLoop` (the loop is gone from memory and its revision with
       it).
+      Mutants: `Create` → `Put` in `createLoopState` (`C:2674`) → `TestBirthRefusesASecondCreateForTheSameLoop` red.
+      Deleting the `createLoopState` CALL at birth (`C:1535-1547`) left the package green — the third pin the ritual
+      bought: `TestBirthRecordsTheLoopBeforeItPublishes` drives `handleTaskMessage` with an unpublishable client, so
+      a record in the bucket can only have been written before the publish that failed, and it goes red there.
 ## 3. Lane classification (3.9 is L4b's — see "Moved to L4b")
 
 - [ ] 3.1 Tool-result classification: nothing to delete on `main`; build it at component entry `C:2195` (ahead of
