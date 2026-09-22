@@ -693,9 +693,10 @@
       Mutant (`cp` backup + `md5 -q`, `[applied]` printed between mutating and testing, restore verified by
       checksum): hydrate the replacement — `initializeKVBuckets` lists `AGENT_LOOPS` after acquiring it and seats
       every non-terminal record into the LoopManager, which is exactly the startup pass OQ2 refused. `component.go`
-      `5b8b3f27a45bbf05a86e6dfca2f83f68` → `a83ad6b3bdc25bcc5e5b0e3dd3b6c2ec` → restored
-      `5b8b3f27a45bbf05a86e6dfca2f83f68`. RED: `TestAReplacementReArmsNoApprovalDeadline` at the replacement
-      snapshot — "a replacement re-armed a deadline its predecessor held".
+      `77064b5e84396c23a6fdf20a389a712e` → `2333f89a51f9782b80eb857035968c8b` → restored
+      `77064b5e84396c23a6fdf20a389a712e`, `git status --porcelain` empty after. RED at
+      `approval_deadline_hydration_integration_test.go:59` — "a replacement re-armed a deadline its predecessor
+      held", the snapshot returning the gated candidate `{… call-gated … 12h0m0s}`.
       **Finding, escalated not applied (contract § 0.2).** The requirement's free-text sentence
       (`specs/agentic-loop/spec.md:36-38`, verbatim OQ2 ruling text) says a replaced process SHALL re-arm no
       approval deadline, without qualification. Measured false in this tree: task 1.2's rebuild seats the record
