@@ -747,6 +747,44 @@
       `process_replacement_test.go`) named in the PR body with exit codes; BREAKING for the recovery contract, so this
       tier is the gate (`docs/contributing/02-e2e-tests.md` § Breaking Changes). The approval-after-restart stage is
       L4b's.
+      **Stage assertion written; the tier run is BLOCKED on host storage. NOT ticked.**
+      What the stage was missing: its three checks (completed-outcome replay, tool quarantine, dispatch quarantine)
+      are all SETTLEMENT checks. None of them holds a LOOP across the replacement, which is the one claim task 4.2's
+      in-process `Component` pair cannot make (recorded deviation, 4.2 above). Added
+      `verifyMidFlightLoopAcrossReplacement` (`test/e2e/scenarios/agentic/stage_a_process_replacement.go:806`),
+      wired as the stage's fourth check (`:69`).
+      Shape, built only from knobs the tier already has — the existing `composeProcessController`, `PauseConsumer`
+      (the dispatch check's own knob), `waitForStreamSubject`/`streamSubjectCount`/`waitForConsumerSettled`, and the
+      `AGENT_LOOPS` bucket the approval walk already reads. No new harness package, no Dockerfile target, no env var:
+      pause `agentic-model`'s request consumer, inject the tier's ordinary task, let the loop publish R1 and write
+      the record naming it, kill the process, resume the consumer while nothing is running, start the replacement.
+      The answer to the retained request then arrives at a process with no memory of the loop.
+      Assertions, all on durable state: the record's revision MOVED, it names `<loopID>:req:2:0` (so the loop
+      advanced an iteration rather than being rewritten), `iterations >= 1`, exactly TWO messages on
+      `agent.request.<loopID>` (the retained first and one next), the terminal exists, the response lane settled,
+      and `agentic-loop` is still healthy — the two shapes a refusal takes here are a failed health check
+      (quarantine) and an unsettled delivery (retry to MaxDeliver), and neither is present.
+      **Why the run is blocked, measured 2026-09-22.** `task e2e:agentic` → exit 201, 31s wall. The SemStreams
+      container exits 1 during boot, before any stage runs:
+      `Boot phase failed … boot_stage="stream-provisioning" error="ensure streams: create stream LOGS: create
+      stream: nats: API error: code=500 err_code=10047 description=insufficient storage resources available"`.
+      Not the change: this is the host's Docker disk. `/jsz` on the tier's own NATS reports
+      `config.max_storage = 1085048832` (NATS auto-sizes it from free disk) against
+      `reserved_storage = 1061158912` already taken by the five file streams created before LOGS; LOGS asks for
+      100 MiB (`config/streams.go:115`) and 1061158912 + 104857600 > 1085048832. `docker run --rm alpine df -h /`
+      → `102.1G size, 95.5G used, 1.3G available, 99%`; `docker system df` → Build Cache 86.48GB (9.93GB
+      reclaimable), Images 15.88GB (14.28GB reclaimable).
+      **Not remedied here, deliberately.** `.claude/skills/e2e-doctor/SKILL.md` § "Reclaim only the identified run":
+      "Host-wide builder/image pruning is not a routine preflight step … removing another project's image requires
+      its owner's explicit authorization." Only the agentic stack this session started was torn down
+      (`docker compose -f docker/compose/agentic.yml down -v`; `docker compose ls` and `docker ps` both empty
+      after). The owner's one-command remedy is `docker builder prune -f` (9.93GB reclaimable, images untouched),
+      after which this tier run is owed.
+      **Mutant OWED, not run.** The intended record — short-circuit `restoreLoopFromEvidence` to a Retry and watch
+      this stage go red — needs a tier run, so it is UNVERIFIED rather than recorded. It lands with the run above.
+      Note for whoever runs it: `task e2e:agentic` depends on `e2e:clean`, which tears down every compose stack on
+      the host (`Taskfile` → `e2e:clean` lines visible at the head of the run log). Nothing was running on this
+      host, so nothing was lost; the "never run `e2e:clean`" rule cannot be honoured while running this tier.
 
 ## Moved to L4b (#1362)
 
