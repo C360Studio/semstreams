@@ -264,23 +264,12 @@ func run() (runErr error) {
 
 	// ADR-058 Phase B — agent-run milestone subscriber (ADR-053 D6) under the
 	// ServiceManager's ordered shutdown. Mirrors cmd/semstreams wiring (identical
-	// RegisterInstance block — the half-migration guard). Registered before
+	// registerMilestoneService body — the half-migration guard). Registered before
 	// component services so StopAll stops it after their event publishers. Lifecycle
 	// terminal mutations remain coordinator/component work through declared ports.
 	// Start can abort boot on a genuine consumer-start failure; stream absence skips.
-	if err := manager.RegisterInstance("milestone", service.NewMilestoneService(
-		agentrun.NewMilestoneSubscriber(
-			svcDeps.LifecycleManager,
-			agentrun.NewNATSLoopTripleReader(natsClient),
-			platform.Org,
-			platform.Platform,
-			logger,
-		),
-		natsClient,
-		agentrun.StartConfig{StreamName: agentrun.AgentStreamName},
-		logger,
-	)); err != nil {
-		return fmt.Errorf("register milestone service: %w", err)
+	if err := registerMilestoneService(manager, svcDeps, natsClient, metricsRegistry, platform, logger); err != nil {
+		return err
 	}
 
 	if err := configureAndCreateServices(cfg, manager, svcDeps); err != nil {
@@ -780,6 +769,46 @@ func configureAndCreateServices(
 // rules wired) so callers that need to emit immediately on boot —
 // e.g. lifecycle seed via Manager.Create — can do so without racing
 // the cold-start path captured in gh#170.
+// registerMilestoneService wires the agent-run milestone subscriber into the
+// ServiceManager, publishing its decisions counter on the process registry on
+// the way.
+//
+// The registration is a separate step from construction and cannot be folded
+// into either constructor: the counter vec is built with the subscriber so a
+// delivery never nil-dereferences, which means every increment stays a LOCAL
+// no-op until it is published here, and service.Service's own RegisterMetrics
+// is called by nothing (service/storage_observability.go records why). The two
+// composition roots are hand-copied (#1301), so keeping the whole wiring in one
+// per-root function is what makes the copy checkable.
+func registerMilestoneService(
+	manager *service.Manager,
+	svcDeps *service.Dependencies,
+	natsClient *natsclient.Client,
+	metricsRegistry *metric.MetricsRegistry,
+	platform types.PlatformMeta,
+	logger *slog.Logger,
+) error {
+	subscriber := agentrun.NewMilestoneSubscriber(
+		svcDeps.LifecycleManager,
+		agentrun.NewNATSLoopTripleReader(natsClient),
+		platform.Org,
+		platform.Platform,
+		logger,
+	)
+	if err := subscriber.RegisterMetrics(metricsRegistry); err != nil {
+		return fmt.Errorf("register milestone metrics: %w", err)
+	}
+	if err := manager.RegisterInstance("milestone", service.NewMilestoneService(
+		subscriber,
+		natsClient,
+		agentrun.StartConfig{StreamName: agentrun.AgentStreamName},
+		logger,
+	)); err != nil {
+		return fmt.Errorf("register milestone service: %w", err)
+	}
+	return nil
+}
+
 func runWithSignalHandling(
 	ctx context.Context,
 	manager *service.Manager,

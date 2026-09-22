@@ -38,6 +38,7 @@ import (
 	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/internal/looptoken"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
 	semerrs "github.com/c360studio/semstreams/pkg/errs"
@@ -584,6 +585,30 @@ func NewMilestoneSubscriberWithRunStateReader(
 			Help:      "Milestone deliveries that did not acknowledge, by lane, decision and reason",
 		}, []string{"lane", "decision", "reason"}),
 	}
+}
+
+// RegisterMetrics publishes this subscriber's decisions counter on r, and is
+// the one thing that makes the delivery path's increments visible.
+//
+// The vec is built in the constructor, so an increment before (or without)
+// registration is a local no-op: the counts accumulate on a vec no /metrics
+// scrape can reach. Service.RegisterMetrics is NOT that path — nothing in the
+// framework calls it (service/storage_observability.go records why) — so each
+// composition root calls this once, after construction and before Start.
+//
+// A nil registrar is refused rather than accepted as "no metrics wanted": the
+// only callers are composition roots that hold a registry, so nil is a wiring
+// defect, and returning nil for it would publish exactly the silence this
+// method exists to remove. Registration itself is idempotent.
+func (s *MilestoneSubscriber) RegisterMetrics(r metric.MetricsRegistrar) error {
+	if r == nil {
+		return semerrs.WrapInvalid(errors.New("nil metrics registrar"),
+			"MilestoneSubscriber", "RegisterMetrics", "milestone decisions would never reach /metrics")
+	}
+	if err := r.RegisterCounterVec("agentrun", "milestone_decisions_total", s.decisions); err != nil {
+		return fmt.Errorf("agentrun: register milestone decisions counter: %w", err)
+	}
+	return nil
 }
 
 // AddHandler registers a product MilestoneHandler. Must be called before

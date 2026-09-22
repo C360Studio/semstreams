@@ -231,19 +231,45 @@ the L1 attributions are retired. The developer re-derives with `sed -n` any pin 
 
 ## 5. Health and metrics (O3; design § 2.7)
 
-- [ ] 5.1 `MilestoneSubscriber.DeliveryFatal() error` LANDED in checkpoint 1 (task 4.1/4.2, on `*MilestoneSubscriber`
+- [x] 5.1 `MilestoneSubscriber.DeliveryFatal() error` LANDED in checkpoint 1 (task 4.1/4.2, on `*MilestoneSubscriber`
       in `milestone_settlement.go`, and listed by `task api:compat:report` under Compatible changes); only the
       `Health()` override below remains. `MilestoneService.Health()` override (the
       `service/base.go:209` pattern) type-asserts `interface{ DeliveryFatal() error }` on the `milestoneStarter`
       (`service/milestone_service.go:21-22`, unchanged) and returns `health.NewUnhealthy("milestone", …)`.
       Test: `TestMilestoneServiceHealthReportsDeliveryFatal`, observed through `/health`
       (`service/service_manager.go:1302` → `:1722` → `:1736`).
-- [ ] 5.2 Add `MilestoneSubscriber.RegisterMetrics(r metric.MetricsRegistrar) error` registering
+      Evidence: `(*MilestoneService).Health()` in `service/milestone_service.go` asserts the named
+      `deliveryFatalReporter` interface on `s.subscriber` and answers `health.NewUnhealthy(s.Name(), …)` carrying the
+      latched cause; `milestoneStarter` is unchanged, so a lifecycle-only double is still a valid starter.
+      `TestMilestoneServiceHealthReportsDeliveryFatal` in `service/milestone_health_test.go` reads the REAL aggregate —
+      `Manager.handleSystemHealth` over a registered `MilestoneService` — and asserts both halves: an owned lane is
+      healthy at HTTP 200, and a latched lane is not healthy, answers 503, and carries the cause string.
+      `TestMilestoneServiceHealthReadsTheProductionSubscriber` pins the assertion against a real
+      `agentrun.NewMilestoneSubscriber`, because the `!ok` arm falls back to the base status: a renamed or resigned
+      `DeliveryFatal` would otherwise turn the whole signal off silently and no other test would notice.
+- [x] 5.2 Add `MilestoneSubscriber.RegisterMetrics(r metric.MetricsRegistrar) error` registering
       `semstreams_agentrun_milestone_decisions_total{lane,decision,reason}` via `RegisterCounterVec`
       (`metric/registry.go:216`); the vec is built in `NewMilestoneSubscriber` (`agentrun.go:521`). Wire one call after
       construction in `cmd/semstreams/main.go:347` and `cmd/e2e-semstreams/main.go:272` (`metricsRegistry` in scope:
       `:170`, `:159`). Not `Service.RegisterMetrics` (`service/base.go:389`; nothing calls it).
       Test: `TestMilestoneDecisionsCounterIsRegisteredOnce`.
+      Evidence: `(*MilestoneSubscriber).RegisterMetrics` in `agentic/agentrun/agentrun.go` calls
+      `r.RegisterCounterVec("agentrun", "milestone_decisions_total", s.decisions)` and REFUSES a nil registrar with an
+      `errs` Invalid — accepting nil would answer "registered" to a root holding no registry and leave exactly the
+      silence the method removes (`TestMilestoneRegisterMetricsRefusesANilRegistrar`).
+      `TestMilestoneDecisionsCounterIsRegisteredOnce` (`agentic/agentrun/milestone_metrics_test.go`) drives real
+      deliveries through the production lane fixture and reads the counts back through
+      `registry.PrometheusRegistry().Gather()` — where a `/metrics` scrape reads — not off the vec the subscriber
+      holds; it also asserts a repeat registration is a no-op that keeps counting on the SAME series rather than
+      forking a second one. `TestMilestoneDecisionsCounterCarriesTheRuledIdentity` pins the ruled name and the
+      `{lane,decision,reason}` label set (Q3, 2026-09-18).
+      Root wiring: both roots call one `registerMilestoneService(manager, svcDeps, natsClient, metricsRegistry,
+      platform, logger)`, which constructs the subscriber, registers the counter, and registers the service. The
+      previous inline block pushed `cmd/e2e-semstreams/main.go`'s `run()` to 82 statements against revive's 80
+      (`task lint` red); extracting the function both fixes that and gives the per-root wiring a test —
+      `TestRegisterMilestoneServicePublishesTheDecisionsCounter`, present in BOTH `cmd/semstreams` and
+      `cmd/e2e-semstreams`, which asserts the service reached the `ServiceManager` and that
+      `metricsRegistry.Unregister("agentrun", "milestone_decisions_total")` answers true.
 - [ ] 5.3 Mutation evidence: delete the `RegisterMetrics` call in one root; run the e2e `verify-streaming-metrics`
       stage; record the failure; restore and checksum.
 

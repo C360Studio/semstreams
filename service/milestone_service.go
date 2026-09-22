@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/c360studio/semstreams/agentic/agentrun"
+	"github.com/c360studio/semstreams/health"
 	"github.com/c360studio/semstreams/internal/lifecyclecleanup"
 	"github.com/c360studio/semstreams/natsclient"
 	semerrs "github.com/c360studio/semstreams/pkg/errs"
@@ -134,6 +135,37 @@ func (s *MilestoneService) Start(ctx context.Context) error {
 	}
 	s.mu.Unlock()
 	return errors.Join(fmt.Errorf("milestone subscriber start: %w", err), rollbackErr)
+}
+
+// deliveryFatalReporter is the half of the subscriber Health reads. It is
+// asserted rather than added to milestoneStarter so a lifecycle-only test
+// double stays a valid starter; the production *agentrun.MilestoneSubscriber
+// satisfies it, and TestMilestoneServiceHealthAssertsTheProductionSubscriber
+// pins that so the assertion cannot go stale silently.
+type deliveryFatalReporter interface {
+	DeliveryFatal() error
+}
+
+// Health reports a lost milestone delivery lane as unhealthy, not merely as a
+// message on a healthy status.
+//
+// A lane that loses delivery ownership drains its exact handle and admits no
+// further local work: the service is still running, its consumers are still
+// bound in NATS, and BaseService.Health() would keep saying "operating
+// normally" while every later milestone went unacknowledged. The latched cause
+// is the only thing that distinguishes that from an idle deployment, so it
+// becomes the verdict at every read site — /health, the per-service health
+// publish, and the aggregate — rather than prose beside a healthy one.
+func (s *MilestoneService) Health() health.Status {
+	reporter, ok := s.subscriber.(deliveryFatalReporter)
+	if !ok {
+		return s.BaseService.Health()
+	}
+	if err := reporter.DeliveryFatal(); err != nil {
+		return health.NewUnhealthy(s.Name(),
+			fmt.Sprintf("milestone delivery ownership lost; milestones are unacknowledged: %v", err))
+	}
+	return s.BaseService.Health()
 }
 
 // Stop cancels the subscriber's local consumption (durable offsets persist in
