@@ -1418,8 +1418,8 @@ red before it was written, against the unfixed tree.
       landed rather than silently dropped — a deviation escalates, it never executes — and the correction is
       recorded here, in task 4.1, in the example's own doc comment and in the commit body. What the new example adds
       beside the existing arm is the record the adopt RETURNS, which the classification running next reads and the
-      durable check cannot see, plus a gate built by the production constructor. Whether that earns its place is the
-      owner's call, not a developer's.
+      durable check cannot see, plus a gate built by the production constructor. **Q9 RULED 2026-09-23 "keep
+      both"** (#1330 issuecomment-5792236322): both examples stay; nothing further is owed on this finding.
       Mutant: the step-0 `ResolveApproval` call deleted from `adoptNewerRetainedRequest`. `loop_evidence.go`
       `e56941d1783bc386c74de88742e946a6` → `5e4a31e10d3ff97724c459af4c8d24a6` → restored
       `e56941d1783bc386c74de88742e946a6`, `go vet ./processor/agentic-loop/` 0 with the mutant applied, porcelain
