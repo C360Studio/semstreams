@@ -3,6 +3,7 @@ package agenticloop
 import (
 	"bytes"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -444,12 +445,12 @@ func TestARebuiltLoopDoesNotReAskForATurnItCannotRecover(t *testing.T) {
 	assert.False(t, rebuilt.PendingContinuation,
 		"the rebuilt loop still claims a deferred turn whose text died with the predecessor; the "+
 			"next completion will spend an iteration re-asking the model with nothing new")
-	warning := logs.String()
-	assert.Contains(t, warning, "cleared a deferred turn it cannot recover",
-		"the drop is a declared event: a turn the caller was told was accepted is gone, and the "+
-			"warning is the whole signal this clear was ruled to carry")
-	assert.Contains(t, warning, "loop_id="+rebuildLoopID,
-		"a warning that does not name the loop on its loop_id attribute cannot be acted on")
+	// The LINE, not the buffer: the rebuild emits other warnings that carry a
+	// loop_id, so a buffer-wide check would report a match this clear never
+	// made.
+	dropped := logLineContaining(t, logs.String(), "cleared a deferred turn it cannot recover")
+	assert.Contains(t, dropped, "loop_id="+rebuildLoopID,
+		"the drop is a declared event and must name the loop whose turn it dropped")
 
 	completion, err := handler.HandleModelResponse(t.Context(), rebuildLoopID, agentic.AgentResponse{
 		RequestID: requestID,
@@ -525,4 +526,20 @@ func TestRestoringARecordsDeadlineTouchesOnlyTheTwoFieldsItOwns(t *testing.T) {
 	want.TimeoutAt = recordedTimeout
 	assert.Equal(t, want, restored,
 		"the restore owns two fields: anything else that differs was re-rendered from a stale read")
+}
+
+// logLineContaining returns the one log line carrying substr, or "" with the
+// whole buffer reported. Warning-level lines from unrelated paths share the
+// buffer, so an assertion made against the buffer as a whole can pass on a
+// neighbour's attributes.
+func logLineContaining(t *testing.T, logs, substr string) string {
+	t.Helper()
+	for _, line := range strings.Split(logs, "\n") {
+		if strings.Contains(line, substr) {
+			return line
+		}
+	}
+	assert.Fail(t, "no log line carries the expected message",
+		"expected a line containing %q, logged:\n%s", substr, logs)
+	return ""
 }
