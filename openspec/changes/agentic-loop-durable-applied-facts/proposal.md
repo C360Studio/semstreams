@@ -89,7 +89,8 @@ Every fact recovery needs is already durable except one: which request is outsta
 - **Audit-noise residual:** a crash between governance proposals and the update re-proposes on redelivery; neither
   `governance_dispatcher.go:727` nor `processor/rule/publisher.go` stamps a MsgID, so a duplicate proposed/verdict pair lands.
 - **Pre-existing bound, residual:** record size is `len(PendingToolResults) × ToolResultMaxBytes`, bounded only by NATS max payload; L4 neither widens nor guards it.
-- **Accepted duplicates:** `agent.created` republishes at iteration 0 (Q5); terminal events already republish (`openspec/specs/agentic-loop/spec.md:430-446`), which terminal adoption relies on.
+- **Accepted duplicates:** `agent.created` republishes at iteration 0 when the stream retains no request for the
+  loop, which is the only case the task lane rebuilds (Q5, narrowed by Q11 2026-09-23); terminal events already republish (`openspec/specs/agentic-loop/spec.md:430-446`), which terminal adoption relies on.
 - **Adoption drift, residual:** the model answers the adopted retained request body, equal to in-process context up to
   request-time decoration (the request builder in `handlers.go`); an adopted terminal's content differences are logged,
   never a disposition.

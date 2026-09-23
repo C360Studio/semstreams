@@ -69,7 +69,7 @@ Effect legend — **unchanged**: the site exists on `main` and the design's trea
 | P6 | `C:1927` `persistTerminalOutcome` (`Update`; marker `Create` `:1960`; publish `:1917`) | three `Put` paths (D41) | **semantic** | as D41 |
 | P7 | `SR:961-976` `settleAbsentApprovalEvidence` | NONE | no target | OQ1 |
 
-Main-only writers with no predecessor row: `C:1425` (deferred continuation, `Put`, error ignored; rides `Update`, and a CAS loss here is placed comment #2's window — § D 2); `AS:101` (D39).
+Main-only writers with no predecessor row: `C:1425` (deferred continuation, `Put`, error ignored; a CAS loss here is placed comment #2's window — § D 2); `AS:101` (D39). **Amended 2026-09-23 (round 3, finding 2):** the deferred continuation does NOT ride the carrier's `Update` — it renders the live entity, which at that instant carries the tool lane's unpublished advance — so it gets its own record-overlay writer (`persistDeferredContinuationMarker`), keeping the CAS and the OQ3 fence.
 
 ## B. Design § 6 rows on `main`
 
