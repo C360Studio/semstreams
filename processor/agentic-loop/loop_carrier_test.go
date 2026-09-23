@@ -17,6 +17,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -197,6 +198,102 @@ func TestAnApprovalGateIsWrittenBeforeItsEventIsPublished(t *testing.T) {
 	require.Equal(t, []string{loopID}, bucket.written(),
 		"the gate must be durable before its ApprovalPendingEvent is visible: a crash between the two "+
 			"leaves a human an approval request whose answer the replacement stale-drops")
+}
+
+// TestTheApprovalTimeoutSweepNamesTheRequestItPublished is the STAMP half of
+// the approval lane, on the one publisher that is not a carrier call site.
+//
+// The approval-timeout sweeper does not reach persistHandlerResult: it calls
+// publishResults and persistLoopState directly (approval_sweeper.go). Its
+// auto-reject is a request-MINTING transition all the same — the rejection
+// runs through handleRejectedApproval -> HandleToolResult ->
+// handleToolsComplete, which increments the iteration and publishes the next
+// request. With the stamp only at the carrier, the sweep wrote a record whose
+// iterations had moved and whose published_request_id had not: invariant I3
+// ("iterations changes only in an update whose published_request_id also
+// changes") violated on a record nothing later repairs, and every response to
+// the request the sweep did publish refused as not-yet-observable until the
+// consumer's MaxDeliver ran out.
+//
+// The assertion is on the record the SWEEP WROTE, against the request the
+// sweep's own mint tracked as outstanding — two facts written by two different
+// production paths, not one fact read twice.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestTheApprovalTimeoutSweepNamesTheRequestItPublished(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+
+	born, err := handler.HandleTask(t.Context(), TaskMessage{
+		TaskID: "task-approval-timeout-stamp", Role: "general", Model: "model",
+		Prompt: "delete a rule",
+	})
+	require.NoError(t, err)
+	loopID := born.LoopID
+	firstRequest, err := mintedRequestID(born)
+	require.NoError(t, err)
+
+	const callID = "call-approval-timeout"
+	_, err = handler.HandleModelResponse(t.Context(), loopID, agentic.AgentResponse{
+		RequestID:    firstRequest,
+		Status:       agentic.StatusToolCall,
+		FinishReason: "tool_calls",
+		Message: agentic.ChatMessage{Role: "assistant", ToolCalls: []agentic.ToolCall{
+			{ID: callID, Name: "delete_rule", Arguments: map[string]any{"rule_id": "rule-42"}},
+		}},
+	})
+	require.NoError(t, err)
+
+	c := releaseTestComponent(t, handler)
+	bucket := &recordingLoopBucket{}
+	c.loopsBucket = bucket
+	seedLoopRecord(t, c, loopID)
+
+	// One gated call, built the way the agentic-tools approval filter builds
+	// it, through the production tool-result lane.
+	gating := &agentic.ToolResult{
+		LoopID:      loopID,
+		CallID:      callID,
+		Name:        "delete_rule",
+		ErrorKind:   agentic.ToolErrorPermission,
+		Error:       agentic.ApprovalRequiredPrefix + "delete_rule requires human approval",
+		RequestID:   firstRequest,
+		ExecutionID: deriveToolExecutionID(firstRequest, callID, 1),
+		CallOrdinal: 1,
+	}
+	require.NoError(t, c.handleToolResultMessage(t.Context(), baseMessageBytes(t, gating)))
+
+	gated, err := handler.GetLoop(loopID)
+	require.NoError(t, err)
+	require.Equal(t, agentic.LoopStateAwaitingApproval, gated.State,
+		"the fixture must actually gate the loop, or the sweep has no candidate")
+	require.Equal(t, firstRequest, decodeRecord(t, c, loopID).PublishedRequestID,
+		"the gate creates no request, so the record still names the loop's first one")
+
+	// The deadline elapses. Backdated rather than waited on: the timeout is
+	// the config's 12h and the sweep reads RequestedAt + Timeout.
+	gated.PendingApproval.RequestedAt = time.Now().UTC().Add(-2 * DefaultConfig().ApprovalTimeout())
+	require.NoError(t, handler.UpdateLoop(gated))
+	bucket.resetWritten()
+
+	c.sweepExpiredApprovals(t.Context())
+
+	require.Equal(t, []string{loopID}, bucket.written(),
+		"the sweep must have committed the record whose fields are under test")
+	published := handler.loopManager.OutstandingRequest(loopID)
+	require.NotEqual(t, firstRequest, published,
+		"fixture check: the auto-reject must have minted and published the loop's next request")
+	record := decodeRecord(t, c, loopID)
+
+	// assert, not require: the name and the invariant derived from it are two
+	// readings of the same missed stamp, and a run that stops at the first
+	// reports half of what an operator would see.
+	assert.Equal(t, published, record.PublishedRequestID,
+		"the sweep published a request its record does not name: every response to it is refused as "+
+			"not yet observable until the consumer's MaxDeliver runs out, and nothing moves the record")
+	named, parseErr := looprequest.Parse(record.PublishedRequestID)
+	require.NoError(t, parseErr)
+	assert.Equal(t, record.Iterations, named.Iteration-1,
+		"derived I3: the sweep moved iterations in an update whose published_request_id did not move")
 }
 
 // TestCarrierCompareAndSwapLossRetriesAndReleasesTheLoop: the record moved, so

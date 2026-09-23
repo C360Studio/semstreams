@@ -102,16 +102,29 @@ func (c *Component) sweepExpiredApprovals(ctx context.Context) {
 			continue
 		}
 		// The sweeper keeps its own publish-then-write order until #1362; only
-		// the writer itself changed, to the carrier's compare-and-swap.
+		// the writer itself changed, to the carrier's compare-and-swap. The
+		// stamp sits between the pair, where the carrier's own publish-first
+		// order puts it: the auto-reject is a request-MINTING transition
+		// (handleRejectedApproval → HandleToolResult → handleToolsComplete),
+		// and a record whose iterations moved without its published_request_id
+		// is invariant I3 violated on a loop nothing later repairs. A sweep
+		// that minted nothing stamps nothing — mintedRequestID returns "" and
+		// stampPublishedRequest is a no-op.
 		//
-		// Neither failure below has a delivery to retry — this is a timer, not
-		// a consumer — so each is named rather than silently swallowed. Both
-		// are log-only: there is no loop-side counter whose subject is "a
-		// write this process meant to make did not commit", and #1362, which
-		// moves this lane onto the carrier, owns whether one is owed
-		// (design § 5.6).
+		// None of the three failures below has a delivery to retry — this is a
+		// timer, not a consumer — so each is named rather than silently
+		// swallowed. All are log-only: there is no loop-side counter whose
+		// subject is "a write this process meant to make did not commit", and
+		// #1362, which moves this lane onto the carrier, owns whether one is
+		// owed (design § 5.6).
 		if err := c.publishResults(ctx, result); err != nil {
 			c.logger.Warn("approval timeout auto-reject did not publish its results",
+				slog.String("loop_id", cand.LoopID),
+				slog.String("call_id", cand.CallID),
+				slog.String("error", err.Error()))
+		}
+		if err := c.stampPublishedRequest(result); err != nil {
+			c.logger.Warn("approval timeout auto-reject did not name the request it published",
 				slog.String("loop_id", cand.LoopID),
 				slog.String("call_id", cand.CallID),
 				slog.String("error", err.Error()))
