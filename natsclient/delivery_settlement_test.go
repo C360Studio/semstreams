@@ -322,6 +322,68 @@ func TestConsumeDeliveryWithHeartbeatMetadataFailureFailsClosedBeforeWork(t *tes
 	}
 }
 
+// TestConsumeDeliveryWithHeartbeatInProgressFailureRequiresOwnerStop is the
+// lease-renewal failure row, ported from the three ConsumeWithHeartbeat tests
+// deleted with that helper (#1249/#759): _ReturnsErrorOnInProgressFailure,
+// _CancelsWorkOnInProgressFailure and _JoinsCleanupErrorOnInProgressFailure.
+//
+// It is the one claim of theirs with no twin on the typed path, and it is the
+// row every delivery-lane latch rests on: a renewal failure means the server
+// may already have handed this message to someone else, so the work must be
+// cancelled, the delivery must be left unsettled for that redelivery, and the
+// owner must be told to stop its lane. Settling it here would race the new
+// owner; answering without OwnerStopRequired would leave this process
+// consuming a lane it no longer owns.
+//
+// The three assertions the deleted tests carried between them — work cancelled
+// before return, ErrHeartbeatFailed joined, cleanup error retained — are kept
+// together because each alone permits the defect the other two catch.
+func TestConsumeDeliveryWithHeartbeatInProgressFailureRequiresOwnerStop(t *testing.T) {
+	renewalErr := errors.New("connection lost")
+	cleanupErr := errors.New("cleanup failed")
+	msg := &mockMsg{subject: "renewal", inProgressErr: renewalErr}
+
+	workStarted := make(chan struct{})
+	workCancelled := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	returned := make(chan DeliveryResult, 1)
+
+	policy, err := ValidateHeartbeatDeliveryPolicy(t.Context(), StreamConsumerConfig{}, time.Millisecond,
+		ImmediateDeliveryRetry(), func(workCtx context.Context, _ []byte) (DeliveryDecision, error) {
+			close(workStarted)
+			<-workCtx.Done()
+			close(workCancelled)
+			<-releaseCleanup
+			return DeliveryDecisionRetry, errors.Join(workCtx.Err(), cleanupErr)
+		})
+	require.NoError(t, err)
+
+	go func() { returned <- ConsumeDeliveryWithHeartbeat(t.Context(), msg, policy) }()
+
+	<-workStarted
+	// The renewal failure, not the owner's context, is what ends the work:
+	// nothing here cancels t.Context().
+	<-workCancelled
+	close(releaseCleanup)
+
+	var result DeliveryResult
+	select {
+	case result = <-returned:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "ConsumeDeliveryWithHeartbeat did not return after work cleanup")
+	}
+
+	require.True(t, result.OwnerStopRequired(),
+		"a lane whose lease renewal failed may already have lost the delivery")
+	require.ErrorIs(t, result.ControlError(), ErrHeartbeatFailed)
+	require.ErrorContains(t, result.ControlError(), "failed to send InProgress")
+	require.ErrorIs(t, result.ControlError(), renewalErr)
+	require.ErrorIs(t, result.Err(), cleanupErr, "the work's cleanup error survives the control loss")
+	require.False(t, result.SettlementAttempted(),
+		"settling would race the redelivery the server is free to make")
+	require.Zero(t, msg.ackCount.Load()+msg.nakCount.Load()+msg.termCount.Load())
+}
+
 func TestConsumeDeliveryWithHeartbeatPassesNilPayloadOnce(t *testing.T) {
 	var observed []byte
 	policy, err := ValidateHeartbeatDeliveryPolicy(t.Context(), StreamConsumerConfig{}, time.Second,

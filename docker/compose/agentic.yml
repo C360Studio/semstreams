@@ -79,6 +79,12 @@ services:
       - SEMSTREAMS_DEBUG=${SEMSTREAMS_DEBUG:-false}
       - SEMSTREAMS_DEBUG_PORT=6060
       - AGENTIC_LLM_URL=${AGENTIC_LLM_URL:-http://mock-llm:8080/v1}
+      # Arms the E2E milestone settlement probe (#1155 stage D). The handler it
+      # registers deliberately crashes the process, panics, and stays transient,
+      # so it is gated twice: this variable, and the e2e_process_barrier build
+      # tag that is the only build containing the code that reads it. No other
+      # compose file sets it; no production binary can.
+      - SEMSTREAMS_E2E_MILESTONE_PROBE=1
     volumes:
       - ../../configs:/app/configs:ro
       - ../../testdata:/data/testdata:ro

@@ -149,12 +149,18 @@ tasks:
       - task: test:default
 
   check:push:
-    desc: "Full pre-push gate, mirrors CI (~11min, needs Docker): build, lint, vet integration+live_llm, schema drift, contract, race unit + integration. Use /preflight for the judgment layer (diff scope, breaking->e2e)."
+    desc: "Full pre-push gate, mirrors CI (~11min, needs Docker): build, lint, vet integration+live_llm+e2e_process_barrier, schema drift, contract, race unit + integration. Use /preflight for the judgment layer (diff scope, breaking->e2e)."
     cmds:
       - task: build:default
       - task: lint:default
       - go vet -tags=integration ./...
       - go vet -tags=live_llm ./...
+      # A THIRD tagged tree, and the only build the agentic tier's image runs:
+      # cmd/semstreams' process_barrier_e2e.go and milestone_probe_e2e.go are
+      # compiled by no untagged vet, so a break in them used to surface only in
+      # a Docker tier run. ./test/e2e/... rides along because it is what those
+      # files import.
+      - go vet -tags=e2e_process_barrier ./cmd/semstreams ./test/e2e/...
       - task: schema:generate
       - task: schema:check-changes
       - go test ./test/contract/...

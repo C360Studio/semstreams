@@ -101,11 +101,12 @@ and no sibling; and the handle is drained once no matter how many results demand
 closed refuses further deliveries without running work and without attempting a terminal method, leaving them to
 JetStream's own redelivery.
 
-`ConsumeWithHeartbeat` is still exported while its last callers migrate — #1327 takes model and loop, #1249 takes
-AgentRun — and it is deleted by that last PR, with no deprecation period, alias, or shim. Its zero-growth AST ratchet
-(`natsclient/consumer_policy_callsite_test.go`) is not an API allowlist, compatibility promise, current capability,
-or merge authority: the pinned set only shrinks, and no new integration may call it. New and migrated integrations
-use only the typed API above. (Owner ruling 2026-09-18 on #759.)
+`ConsumeWithHeartbeat` is removed. #1327 migrated model and loop, #1249 migrated AgentRun and deleted the helper in
+the same PR, with no deprecation period, alias, or shim. Its AST guard
+(`natsclient/consumer_policy_callsite_test.go`) is inverted rather than retired: it now asserts that no declaration,
+alias, or reference to the symbol exists in any package, so the helper cannot return as a wrapper or a receiver
+method. Every integration uses the typed API above; the fixed 30-second NAK that helper applied to a transient work
+error is `DelayedDeliveryRetry(30 * time.Second)` here, asked for explicitly. (Owner ruling 2026-09-18 on #759.)
 
 ## Removed Client lifecycle authority
 

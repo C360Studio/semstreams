@@ -339,23 +339,12 @@ func run() (runErr error) {
 	// ServiceManager's ordered shutdown. Subscribes to agent.complete.* /
 	// agent.failed.*, pre-resolves the run, and fans out to registered product
 	// handlers (none in the framework binary). Lifecycle terminal mutations remain
-	// coordinator/component work through declared ports. Registered before
-	// component services so StopAll stops it after their event publishers. Its Start
-	// can abort boot on a genuine consumer-start failure;
-	// the stream-absent case graceful-skips inside the subscriber (gh#246).
-	if err := manager.RegisterInstance("milestone", service.NewMilestoneService(
-		agentrun.NewMilestoneSubscriber(
-			svcDeps.LifecycleManager,
-			agentrun.NewNATSLoopTripleReader(natsClient),
-			platform.Org,
-			platform.Platform,
-			logger,
-		),
-		natsClient,
-		agentrun.StartConfig{StreamName: agentrun.AgentStreamName},
-		logger,
-	)); err != nil {
-		return fmt.Errorf("register milestone service: %w", err)
+	// coordinator/component work through declared ports. Registered HERE, before
+	// component services, so StopAll stops it after their event publishers. Its
+	// Start can abort boot on a genuine consumer-start failure; the stream-absent
+	// case graceful-skips inside the subscriber (gh#246).
+	if err := registerMilestoneService(manager, svcDeps, natsClient, metricsRegistry, platform, logger); err != nil {
+		return err
 	}
 
 	// 11. Configure and create services
@@ -602,6 +591,57 @@ type runtimeManager interface {
 	StartAll(context.Context) error
 	StartHealthListener(context.Context, int) error
 	StopAll(context.Context) error
+}
+
+// registerMilestoneService wires the agent-run milestone subscriber into the
+// ServiceManager, publishing its decisions counter on the process registry on
+// the way.
+//
+// The registration is a separate step from construction and cannot be folded
+// into either constructor: the counter vec is built with the subscriber so a
+// delivery never nil-dereferences, which means every increment stays a LOCAL
+// no-op until it is published here, and service.Service's own RegisterMetrics
+// is called by nothing (service/storage_observability.go records why). The two
+// composition roots are hand-copied (#1301), so keeping the whole wiring in one
+// per-root function is what makes the copy checkable. The copies differ by one
+// call (an eight-line block: five comment lines and one guarded call), marked
+// below: the E2E milestone probe hook, which is a compile-time no-op here and
+// absent from the other root because the agentic tier boots this one.
+func registerMilestoneService(
+	manager *service.Manager,
+	svcDeps *service.Dependencies,
+	natsClient *natsclient.Client,
+	metricsRegistry *metric.MetricsRegistry,
+	platform types.PlatformMeta,
+	logger *slog.Logger,
+) error {
+	subscriber := agentrun.NewMilestoneSubscriber(
+		svcDeps.LifecycleManager,
+		agentrun.NewNATSLoopTripleReader(natsClient),
+		platform.Org,
+		platform.Platform,
+		logger,
+	)
+	if err := subscriber.RegisterMetrics(metricsRegistry); err != nil {
+		return fmt.Errorf("register milestone metrics: %w", err)
+	}
+	// The ONE deliberate divergence from cmd/e2e-semstreams' copy of this
+	// function, and it is a test-only one: the agentic tier boots THIS root
+	// (docker/compose/agentic.yml target e2e-process-barrier builds
+	// ./cmd/semstreams), so the #1155 stage-D proof's probe handler has to be
+	// registrable here. It is a compile-time no-op in every ordinary build.
+	if err := registerE2EMilestoneProbe(subscriber, natsClient, logger); err != nil {
+		return err
+	}
+	if err := manager.RegisterInstance("milestone", service.NewMilestoneService(
+		subscriber,
+		natsClient,
+		agentrun.StartConfig{StreamName: agentrun.AgentStreamName},
+		logger,
+	)); err != nil {
+		return fmt.Errorf("register milestone service: %w", err)
+	}
+	return nil
 }
 
 func runUntilShutdown(

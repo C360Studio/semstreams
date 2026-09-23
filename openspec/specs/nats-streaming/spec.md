@@ -155,31 +155,6 @@ logging MUST remain unchanged.
 - **WHEN** a publish path accounts for that error
 - **THEN** it retains the existing circuit-failure behavior
 
-### Requirement: Heartbeat consumption SHALL expose settlement failure
-
-`ConsumeWithHeartbeat` SHALL return ACK, delayed NAK, and Term settlement errors to its caller while preserving the
-existing heartbeat and shutdown delays. It SHALL not discard a settlement error after work has returned.
-
-This contract SHALL bind only the helper's remaining ratcheted callers. It is not the framework's settlement
-contract: a migrated binding defines an owner-specific `DeliveryWork` decision matrix, validates
-`HeartbeatDeliveryPolicy` from the exact acquisition configuration, calls `ConsumeDeliveryWithHeartbeat`, inspects
-every `DeliveryResult`, and stops the exact retained consumer owner outside the callback when `OwnerStopRequired` is
-true. ACK, Retry, Terminate, and Quarantine replace inferred success/error handling there.
-
-This requirement is deleted together with the helper by the PR that migrates its last caller (#1249).
-
-#### Scenario: transient work fails and delayed NAK fails
-
-- **WHEN** work returns a transient error
-- **AND** `NakWithDelay` also fails
-- **THEN** the returned error chain contains both failures
-
-#### Scenario: shutdown NAK fails
-
-- **WHEN** context cancellation owns the delivery outcome
-- **AND** the five-second delayed NAK fails
-- **THEN** the returned error chain contains context cancellation and the settlement failure
-
 ### Requirement: JetStream remains durable restart authority
 
 Semantic settlement SHALL use existing JetStream consumer position and redelivery. Quarantine SHALL attempt no
@@ -235,22 +210,4 @@ a prior invocation ran, that an external effect committed, or that replay is ide
 - **WHEN** redelivery follows an external effect whose prior commit cannot be proved or disproved
 - **THEN** the binding follows its accepted ambiguity decision rather than mechanically ACKing or retrying
 - **AND** JetStream redelivery is not treated as provider-outcome authority
-
-### Requirement: the legacy helper is a shrinking remainder, never a compatibility surface
-
-While `ConsumeWithHeartbeat` still has production callers, its coexistence with the typed surface SHALL NOT be
-described as a compatibility period. It SHALL remain unadvertised, SHALL admit no new production caller — enforced
-by an AST ratchet over the exact remaining set, which only shrinks — and SHALL carry no deprecation window, alias,
-or shim. It is deleted by the PR that migrates its last caller. Adopters get the removal from
-`docs/operations/migration-beta162-to-beta163.md`, not from a deprecation marker. (Owner ruling 2026-09-18.)
-
-JetStream remains the delivery and redelivery authority. This rule adds no supervisor, checkpoint, outbox, receipt
-ledger, state-machine runtime, or new durable primitive.
-
-#### Scenario: a new caller is refused while the remainder shrinks
-
-- **GIVEN** the typed surface and the unremoved legacy helper are both present
-- **WHEN** any production file adds a call to the legacy helper
-- **THEN** the AST ratchet fails
-- **AND** the recorded caller set is never widened, only reduced by the migrating PRs
 

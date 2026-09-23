@@ -237,6 +237,12 @@ func (s *Scenario) stages() []agenticStage {
 		// capture-baseline records metric baselines and downgrades its own
 		// failure to a warning, so it proves nothing and is not counted.
 		{name: "capture-baseline", fn: s.captureBaseline},
+		// arm-milestone-exhaustion publishes the terminal whose five transient
+		// attempts exhaust the complete lane's MaxDeliver. It is armed here and
+		// asserted in verify-milestone-exhaustion because exhaustion costs four
+		// redeliveries at the lane's 30s retry delay; arming it late would turn
+		// two minutes of the tier into waiting. It verifies nothing itself.
+		{name: "arm-milestone-exhaustion", fn: s.armMilestoneExhaustion},
 		// inject-task publishes the primary task; it performs no verification
 		// of its own, so it is an action stage rather than a counted one.
 		{name: "inject-task", fn: s.injectTask},
@@ -247,8 +253,16 @@ func (s *Scenario) stages() []agenticStage {
 		{name: "verify-tool-execution", fn: s.verifyToolExecution, asserts: true},
 		{name: "verify-durable-tool-replay", fn: s.verifyDurableToolReplay, asserts: true},
 		{name: "verify-streaming-metrics", fn: s.verifyStreamingMetrics, asserts: true},
+		// verify-milestone-exhaustion is its own named stage rather than the
+		// tail of the one above it. A tail is deleted in one line and every
+		// in-tree guard stays green, because TestStagesAreExactlyThisOrderedList
+		// pins stage NAMES; a named stage makes that deletion fail in plain
+		// `go test`. It also cannot be skipped by the stage above returning
+		// early on a streaming warning, which the tail could be.
+		{name: "verify-milestone-exhaustion", fn: s.verifyMilestoneExhaustion, asserts: true},
 		{name: "verify-tool-call-governance", fn: s.verifyToolCallGovernance, asserts: true},
 		{name: "verify-stage-a-process-replacement", fn: s.verifyStageAProcessReplacement, asserts: true},
+		{name: "verify-milestone-settlement", fn: s.verifyMilestoneSettlement, asserts: true},
 		{name: "walk-approval-path", fn: s.walkApprovalPath, asserts: true},
 		{name: "refuse-non-canonical-approval", fn: s.refuseNonCanonicalApproval, asserts: true},
 		{name: "walk-signal-path", fn: s.walkSignalPath, asserts: true},

@@ -16,7 +16,7 @@ E2E tests follow the **Observer Pattern**: they run against real services in Doc
 ## Quick Reference
 
 ```bash
-# 5 E2E tasks - one per tier
+# The four tiers this page details; `task --list` shows every tier task
 task e2e:core        # Platform boots, data flows (~10s)
 task e2e:structural  # Rules + PathRAG (~30s)
 task e2e:statistical # BM25 + community detection (~60s)
@@ -27,6 +27,9 @@ task e2e:clean
 ```
 
 ## Test Tiers
+
+The four sections below detail the four oldest tiers. [Every tier and the binary it boots](#every-tier-and-the-binary-it-boots)
+lists all thirteen.
 
 ### Core (`task e2e:core`)
 
@@ -174,45 +177,67 @@ task e2e:core:debug
 docker logs -f semstreams-e2e-app
 ```
 
-## Docker Compose Files
+## Every tier and the binary it boots
 
-All compose files are in `docker/compose/`:
+All compose files are in `docker/compose/`. A tier boots the binary whose composition it proves: a tier proving the
+production composition boots `cmd/semstreams`, and a tier that needs non-production registrations — examples,
+fixtures, the mission workflow, a control responder — boots `cmd/e2e-semstreams`. An E2E-only hook that must run
+*inside* the production composition lands in the binary its tier boots, behind that tier's build tag and, where it
+must stay inert in the tier's other stages, an environment variable only that tier sets.
 
-| File | Purpose | Profiles |
-|------|---------|----------|
-| `e2e.yml` | Core E2E tests | - |
-| `structural.yml` | Structural tier | - |
-| `tiered.yml` | Statistical + Semantic | `statistical`, `semantic` |
-| `federation.yml` | Edge-to-cloud federation | - |
+**The source of truth is the tier table in `openspec/specs/payload-registry/spec.md`** — until this change archives,
+the table lives in `openspec/changes/agentrun-fanout-settlement/specs/payload-registry/spec.md`, and
+`test/contract/e2e_tier_binary_contract_test.go` reads the live spec when it carries the table, otherwise exactly one
+in-flight delta. That table
+additionally carries each tier's gate, its E2E-only hooks, and the synthetic types it stamps, and the test re-reads it
+against these compose files and `docker/Dockerfile` on every run. The list below is the navigation copy — when the two
+disagree, the spec is right.
+
+Twelve compose services, thirteen `e2e:<tier>` tasks. The units differ on purpose: `core` runs in two phases
+against two services (rows 1 and 2), and rows 2 and 4 each serve two tasks off one service.
+
+| Tier (`task e2e:<tier>`) | Compose file : service | Dockerfile target | Binary |
+|---|---|---|---|
+| `core` phase 1 | `e2e.yml` : `semstreams` | `production` | `cmd/semstreams` |
+| `core` phase 2, `lessons` | `e2e.yml` : `semstreams-fixtures` (profile `fixtures`) | `e2e` | `cmd/e2e-semstreams` |
+| `structural` | `tiered.yml` : `semstreams-structural` (profile `structural`) | `e2e` | `cmd/e2e-semstreams` |
+| `statistical`, `throughput` | `tiered.yml` : `semstreams` (profile `statistical`) | `e2e` | `cmd/e2e-semstreams` |
+| `semantic` (`:8b`, `:frontier` overlays) | `tiered.yml` : `semstreams-ml` (profile `semantic`) | `e2e` | `cmd/e2e-semstreams` |
+| `lifecycle` | `lifecycle.yml` : `semstreams` | `e2e` | `cmd/e2e-semstreams` |
+| `ops` | `ops.yml` : `semstreams` | `e2e` | `cmd/e2e-semstreams` |
+| `research-graph` | `research-graph.yml` : `semstreams` | `e2e` | `cmd/e2e-semstreams` |
+| `crud-tools` | `crud-tools.yml` : `semstreams` | `production` | `cmd/semstreams` |
+| `deep-research` | `deep-research.yml` : `semstreams` | `production` | `cmd/semstreams` |
+| `agentic` | `agentic.yml` : `semstreams` | `e2e-process-barrier` | `cmd/semstreams` (tagged) |
+| `slow-consumer` | `e2e-slow-consumer.yml` : `semstreams` | `e2e-slow-consumer` | `cmd/semstreams` (tagged) |
+
+`task e2e:openai-responses` is the fourteenth task and is not in this table: it is a live wire test against the paid
+API with no container of its own. Each tier file above defines its own `nats:`; `services.yml` carries the shared
+side services (semembed, seminstruct, step-ca, prometheus, grafana). `tiered.8b.yml` and `tiered.frontier.yml` are
+model overlays for the semantic tier: they build no SemStreams image, and because compose merges `environment:`
+across `-f` files, a variable set on their `semstreams-ml` block still reaches the running container — which is why
+the contract test sweeps every compose file's raw text for `SEMSTREAMS_E2E_*`, not just the services that build.
 
 ## Directory Structure
 
 ```
 test/e2e/
-├── client/
-│   ├── observability.go    # HTTP client for component API
-│   ├── nats.go             # NATS KV validation
-│   └── metrics.go          # Prometheus metrics client
-├── config/
-│   └── constants.go        # Test configuration
-└── scenarios/
-    ├── core_health.go
-    ├── core_dataflow.go
-    ├── semantic_basic.go
-    ├── semantic_indexes.go
-    ├── tiered.go           # Statistical + Semantic tiers
-    └── tiered_structural.go  # Structural tier validation
+├── client/                 # Observability HTTP, NATS KV and Prometheus clients
+├── config/                 # constants.go, per-tier validation thresholds
+├── harness/                # E2E-only server-side hooks (see the tier table above)
+│   ├── lessoncuration/     # ops: lesson-promotion control responder
+│   ├── milestoneprobe/     # agentic: milestone settlement probe
+│   └── processbarrier/     # agentic: process-replacement barrier
+├── mock/                   # mock LLM image
+└── scenarios/              # one package or file per scenario (core_health.go, ops/, agentic/, ...)
 
 cmd/e2e/
 └── main.go                 # Test runner CLI
 
 taskfiles/e2e/
-├── common.yml              # Shared tasks (clean, check-ports)
-├── core.yml                # Core protocol tests
-├── structural.yml          # Structural tier
-├── statistical.yml         # Statistical tier
-├── semantic.yml            # Semantic tier
-└── federation.yml          # Federation tests
+├── common.yml              # Shared tasks (clean, check-ports, reserve-ports)
+├── openai-responses.yml    # The live paid-API test; no container, no table row
+└── <tier>.yml              # One file per tier in the table above
 ```
 
 ## KV Validation

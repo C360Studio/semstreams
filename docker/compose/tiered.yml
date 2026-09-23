@@ -243,7 +243,9 @@ services:
       retries: 10
 
   # SemStreams Application (structural tier config)
-  # Structural variant - uses e2e-semstreams binary with reactive workflow engine
+  # Structural variant - boots cmd/e2e-semstreams for the example components and
+  # fixture payloads e2e-structural.json selects; the reactive workflow engine
+  # this comment used to cite was removed in e1c66cbd (2026-03-12).
   # PROFILE: structural - Only started when --profile structural is specified
   semstreams-structural:
     # Per-target image tag — see docker/compose/e2e.yml for rationale.

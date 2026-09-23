@@ -1223,12 +1223,87 @@ framework has to interpret. `NewDurableHandler` and its `consume_durable*.go` su
 range; `docs/operations/migration-restart-safe-nats-client.md` carries the complete composition, including the
 `DeliveryResult` inspection and the exact-handle stop that `OwnerStopRequired` demands.
 
-`ConsumeWithHeartbeat` is still exported at this tag but is **removed without a deprecation period**: it is deleted
-by the same PR that migrates its last in-tree caller (`agentic/agentrun/agentrun.go`, the #1249 layer). There is no
-`Deprecated:` window, no alias, and no compatibility shim to migrate against later — an adopter still calling it
-should move to the typed API now. `natsclient/consumer_policy_callsite_test.go` pins the exact remaining caller set
-and fails on any addition, so the set only shrinks. SemStreams owns no non-heartbeat exported settlement operation:
-a lane that does not want a heartbeat keeps owning its own `msg` settlement, as it does today.
+`ConsumeWithHeartbeat` is **gone at this tag**, without a deprecation period, alias, or compatibility shim. The
+#1249 layer migrated its last in-tree caller (`agentic/agentrun`) and deleted the helper in the same PR, as the
+ratchet in `natsclient/consumer_policy_callsite_test.go` had said it would; that ratchet now asserts the opposite —
+no declaration, alias, or reference anywhere — so the symbol cannot come back as a convenience wrapper either.
+`ErrHeartbeatFailed`, `PermanentDeliveryError`, and `TerminateDelivery` survive: they are the typed path's vocabulary
+too. A lane that does not want a heartbeat is not left settling its own `msg` either: `SettleDelivery` and
+`SettleDeliveryWithRetry` are exported settlement-only operations. Each takes the same closed
+`(DeliveryDecision, error)` tuple, validates it, and attempts at most one terminal method on the message —
+`SettleDelivery`'s Retry is a bare Nak, and `SettleDeliveryWithRetry` takes the retry policy as an argument so a
+Retry meaning "not yet" does not redeliver at line rate. They settle the message and nothing more: running the work,
+owning its context and any heartbeat, inspecting the returned `DeliveryResult`, and stopping the exact consumer
+handle when `OwnerStopRequired()` is true all stay the caller's.
+
+**What a caller does instead.** Validate a `HeartbeatDeliveryPolicy` from the same `StreamConsumerConfig` you
+acquire the consumer with, then call `ConsumeDeliveryWithHeartbeat` — or, for a lane that settles without a
+heartbeat, `SettleDelivery` / `SettleDeliveryWithRetry`. The work returns `(natsclient.DeliveryDecision, error)`
+rather than a bare error: **nil-means-ACK is gone**, and so is the framework's guess about what your error meant. A
+returned `DeliveryResult` must be inspected, and the exact consumer handle stopped when `OwnerStopRequired()` is
+true. `docs/operations/migration-restart-safe-nats-client.md` carries the full composition.
+
+**The 30s NAK budget is preserved, but you now ask for it.** The deleted helper NAKed every transient work error
+with a fixed 30-second delay, and adopters sized `max_deliver` against that constant. `DelayedDeliveryRetry(30 *
+time.Second)` is the same budget, declared where the policy is built; `ImmediateDeliveryRetry()` is the plain Nak.
+A `max_deliver` of 10 still buys ≈4.5 minutes with the 30s policy.
+
+**Measured direct callers outside this repository** (SemDev `ca3956a`, read-only inventory): two call sites,
+`internal/conversationchannel/component.go:476` and `internal/intake/component.go:378`, both with a 20s heartbeat
+around `handleEvent`. Four SemDev comments also name the helper: three size `max_deliver 10` on its 30s NAK
+(`internal/conversationchannel/apply.go:113`, `internal/conversationchannel/component.go:435`,
+`internal/intake/component.go:355`) and one explains that the per-message context is cancelled when the helper's
+`InProgress` fails (`internal/conversationchannel/apply.go:202`) — on the typed path that cancellation is
+`ConsumeDeliveryWithHeartbeat`'s, with the same meaning, and the result additionally reports `OwnerStopRequired()`.
+No other sister repository calls it.
+
+### Three agent-run changes `api-compat` cannot see
+
+None of the three shows up in the Tier 1 report: the first two sit behind unchanged signatures, the third behind a
+method set `apidiff` already saw. The first two are in `agentic/agentrun` and a product that registers a
+`MilestoneHandler` or calls `ResolveRun` should read them; the third is in `service` and changes what `/health`
+returns to every probe you have pointed at it.
+
+1. **`ResolveRun`'s errors now carry the `errs` Invalid class.** Entity-ID grammar failures, a parent that is not a
+   loop entity, the hop bound, and a non-string predicate value are wrapped with `errs.WrapInvalid` at their origin;
+   the underlying chains are preserved, so `errors.Is` against whatever you matched before still works. What changes
+   is that `errs.Classify` now places them deterministically instead of falling through to a substring guess — which
+   is what lets the milestone lanes Terminate a poison identity on first sight rather than retrying it five times.
+
+2. **`MilestoneSubscriber.HandleEvent` returns nil exactly when the attempt would be acknowledged.** It used to
+   return an error only for infrastructure failures — decode, NATS — and logged handler errors without propagating
+   them, so a fanout where every handler failed still returned nil. It now returns the classified cause of every
+   non-Ack decision. A caller that treated a nil return as "the message was processed" keeps working; a caller that
+   treated a non-nil return as "the transport broke" will now also see handler and resolution failures. Every
+   attempt of one delivery presents the same `LoopTerminalEvent.SourceMessageID`, which is the key a handler makes
+   its own effect idempotent on — the framework does not verify that obligation and never will.
+
+3. **`/health` now returns 503 once a milestone delivery lane latches.** `(*MilestoneService).Health()` is a new
+   override of a method the type previously inherited from `BaseService`. Overriding a promoted method does not
+   change the type's exported method set, so `task api:compat:report` prints nothing for it: on this branch the
+   `github.com/c360studio/semstreams/service` section lists only the `FlowService` removals and two signature
+   re-spellings, and never names `MilestoneService`.
+
+   What changes is process-wide. `handleSystemHealth` collects `Health()` from every registered service and
+   aggregates them, and `service/service_manager.go:1757` turns one unhealthy sub-status into a whole-process 503
+   on `/health`. The lane's fatal cause is latched, so a `/health` that goes 503 on a milestone latch stays 503
+   until the process restarts. `/readyz` is unaffected — `handleReadiness` (`service/service_manager.go:1778`)
+   reads the startup snapshot and never consults service health.
+
+   **Who gates on `/health` as a binary, measured.** The shipped image declares a `HEALTHCHECK` against it in both
+   stages — `docker/Dockerfile:104-105` (`AS production`) and `docker/Dockerfile:155-156` (`AS e2e`), both
+   `wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1` at
+   `--interval=30s --retries=3`, so a container flips to `unhealthy` about 3x30s after a milestone latch. The
+   published adopter examples gate the same way with their own intervals:
+   `semdocs/examples/production/docker-compose.yml:71` (`interval: 10s`, `retries: 5`) and
+   `semdocs/examples/quickstart/docker-compose.yml:55` (`interval: 10s`, `retries: 3`). Whatever reads that bit —
+   a `depends_on: service_healthy`, an orchestrator restart policy, a load-balancer pool — now acts on a latched
+   milestone lane rather than on process liveness.
+
+   This repository's own agentic stack already overrides the healthcheck to `/readyz`
+   (`docker/compose/agentic.yml:91-103`, the URL at `:99`) and is unaffected. If your probe means "is the process
+   up", point it at `/readyz` or `/healthz`. If it means "is this deployment doing its job", leave it on `/health`:
+   a lane whose milestones go unacknowledged is the case this change exists to make visible.
 
 ## A RequestID's suffix is no longer a UUID (#1328, owner ruling Q4 on #1330)
 

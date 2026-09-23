@@ -96,11 +96,13 @@ func scanLegacyHeartbeatReferences(files []productionGoFile) legacyHeartbeatRefe
 					if declaration.Name.Name != "ConsumeWithHeartbeat" {
 						continue
 					}
+					// Any declaration is a violation now. Until #1249 the
+					// scan exempted natsclient/heartbeat.go, because the
+					// symbol still had to exist for its last caller; that
+					// exemption is what would let the helper come back.
 					declarationNames[declaration.Name] = struct{}{}
-					if declaration.Recv != nil || parsed.rel != "natsclient/heartbeat.go" {
-						result.violations = append(result.violations,
-							parsed.rel+": alternate function or receiver method")
-					}
+					result.violations = append(result.violations,
+						parsed.rel+": function or receiver method")
 				case *ast.GenDecl:
 					for _, spec := range declaration.Specs {
 						switch spec := spec.(type) {
@@ -412,41 +414,24 @@ func TestNewDurableHandlerRetirementIgnoresUnrelatedSelector(t *testing.T) {
 	}
 }
 
-// TestLegacyHeartbeatProductionCallZeroGrowthStagingGuard prevents another
-// production caller while the remaining bindings migrate. The expected files
-// are not an API allowlist, a compatibility promise, or merge authority: the
-// set only ever shrinks. Layer L1 (#1327) removes the loop and model entries;
-// the PR migrating the last one (#1249, AgentRun) deletes ConsumeWithHeartbeat
-// and replaces this guard with zero callers and no export.
-func TestLegacyHeartbeatProductionCallZeroGrowthStagingGuard(t *testing.T) {
-	files := parseProductionGoFiles(t, filepath.Clean(".."))
-	scan := scanLegacyHeartbeatReferences(files)
+// TestConsumeWithHeartbeatHasNoDeclarationOrProductionCalls is the inverted
+// ratchet (#1249/#759). Until this layer the guard pinned the EXACT remaining
+// caller set and asserted that the declaration still existed, because the
+// symbol had to survive for its last caller; AgentRun migrated to the typed
+// path and the helper was deleted without alias, so the guard now asserts
+// absence everywhere — no declaration, no alias, no reference, in any package.
+//
+// It is the same shape as the NewDurableHandler retirement above, and for the
+// same reason: a retired helper comes back as a convenience wrapper, an
+// exported variable, or a receiver method long before anyone re-adds the
+// original function, and each of those is caught here rather than in review.
+func TestConsumeWithHeartbeatHasNoDeclarationOrProductionCalls(t *testing.T) {
+	scan := scanLegacyHeartbeatReferences(parseProductionGoFiles(t, filepath.Clean("..")))
 	if len(scan.violations) != 0 {
-		t.Fatalf("legacy ConsumeWithHeartbeat surface violations: %v", scan.violations)
+		t.Fatalf("retired ConsumeWithHeartbeat surface remains: %v", scan.violations)
 	}
-	wantDeclaration := map[string]string{
-		"natsclient/heartbeat.go": "func(ctx context.Context, msg jetstream.Msg, heartbeatInterval time.Duration, work func(context.Context) error) error",
-	}
-	gotDeclaration := map[string]string{}
-	for _, parsed := range files {
-		if parsed.file.Name.Name != "natsclient" {
-			continue
-		}
-		for _, declaration := range parsed.file.Decls {
-			fn, ok := declaration.(*ast.FuncDecl)
-			if ok && fn.Name.Name == "ConsumeWithHeartbeat" {
-				gotDeclaration[parsed.rel] = compactNode(t, fn.Type)
-			}
-		}
-	}
-	if !reflect.DeepEqual(gotDeclaration, wantDeclaration) {
-		t.Fatalf("legacy ConsumeWithHeartbeat declaration = %#v, want %#v", gotDeclaration, wantDeclaration)
-	}
-	want := map[string]int{
-		"agentic/agentrun/agentrun.go": 1,
-	}
-	if !reflect.DeepEqual(scan.directCalls, want) {
-		t.Fatalf("legacy ConsumeWithHeartbeat callers = %#v, want exact branch-staging set %#v", scan.directCalls, want)
+	if len(scan.directCalls) != 0 {
+		t.Fatalf("ConsumeWithHeartbeat callers = %#v, want none: the helper no longer exists", scan.directCalls)
 	}
 }
 
@@ -473,6 +458,10 @@ func TestLegacyHeartbeatGuardRejectsAlternateExportedSurface(t *testing.T) {
 		name   string
 		source string
 	}{
+		{
+			name:   "function declaration",
+			source: "package natsclient\nfunc ConsumeWithHeartbeat() {}\n",
+		},
 		{
 			name:   "variable alias",
 			source: "package natsclient\nvar ConsumeWithHeartbeat = func() {}\n",

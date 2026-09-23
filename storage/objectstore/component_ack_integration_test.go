@@ -37,9 +37,10 @@ import (
 //	transient store failure   -> NakWithDelay(30s) -> redelivery
 //	required emit failure     -> NakWithDelay(30s) -> redelivery (store committed)
 //
-// Delivery timing note: the transient NAK delay is the 30s heartbeat-precedent
-// constant (natsclient.ConsumeWithHeartbeat), so redelivery-observing tests
-// poll consumer info with a 90s deadline (3x headroom) instead of sleeping.
+// Delivery timing note: the transient NAK delay is the framework's 30s
+// semantic-retry constant (natsclient.DelayedDeliveryRetry), so
+// redelivery-observing tests poll consumer info with a 90s deadline (3x
+// headroom) instead of sleeping.
 
 // writeConsumerName mirrors the durable-consumer naming in
 // Component.setupJetStreamConsumer: "objectstore-<instance>-<sanitized subject>"

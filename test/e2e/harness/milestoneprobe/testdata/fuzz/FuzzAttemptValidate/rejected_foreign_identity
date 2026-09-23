@@ -1,0 +1,8 @@
+go test fuzz v1
+string("msg-1")
+string("other-terminal")
+string("loop-1")
+string("exit-before-ack")
+string("process-a")
+int(42)
+int64(100)
