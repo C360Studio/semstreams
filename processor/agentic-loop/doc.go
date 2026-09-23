@@ -244,6 +244,15 @@
 // refusing it; the replayed conversation lands in one region, so compaction attribution
 // starts over (docs/concepts/13-agentic-systems.md).
 //
+// A redelivered TASK is the one lane the record cannot answer on its own. A record naming
+// the loop's first request at iteration zero with an empty applied set is rebuilt from the
+// task and that request republished - but only when the stream retains NO request for the
+// loop, which is the crash window between the record write and the publish. Anything
+// retained means the request went out, answered or not, so the task is acknowledged without
+// effect, no loop is seated, and the loop is rebuilt by the lane that owns its outstanding
+// work: the request's own response, or the first result of the batch that response
+// dispatched.
+//
 // "[Iteration Budget]" and "[Working list" are RESERVED prefixes. A request is not the
 // loop's conversation: the loop prepends that iteration's budget line, and when it has a
 // working list that block, both Role "system" and both belonging to the one request. The

@@ -29,8 +29,33 @@ func retainedRequestIdentity(t *testing.T, client *natsclient.Client, subject st
 	return raw.Header.Get(jetstream.MsgIDHeader)
 }
 
+// birthWhosePublishNeverLanded is the W2 residue the republish arm exists
+// for: a birth that wrote its record and never got its request onto the
+// stream.
+//
+// It is built by running the real task lane on a process whose NATS client
+// cannot publish. Birth writes the record BEFORE it publishes (#1330, owner
+// ruling Q1), so what is left behind is the record naming R1 with nothing
+// retained for the loop — and the delivery is NOT acknowledged, which is what
+// hands the same task to the replacement. No fixture writes the record.
+func birthWhosePublishNeverLanded(
+	t *testing.T, client *natsclient.Client, config Config, task agentic.TaskMessage,
+) *Component {
+	t.Helper()
+	c, _ := startLoopProcess(t, client, config)
+	c.natsClient = unpublishableClient(t)
+	msg, birth := deliverTask(t, c, task)
+	require.NotEqual(t, natsclient.DeliveryDecisionAck, birth.Decision(),
+		"a birth whose request never reached the stream must not acknowledge the task away")
+	require.Zero(t, msg.acks.Load())
+	require.Equal(t, uint64(0), messagesOn(t, client, "agent.request."+task.LoopID),
+		"the residue this helper builds is a record with NOTHING retained for its loop")
+	return c
+}
+
 // TestTaskRedeliveredToAReplacementLeavesOneFirstRequest is the task lane's
-// cold fork over a real broker (#1330 task 3.4, owner ruling Q1).
+// cold fork over a real broker (#1330 task 3.4, owner ruling Q1, as amended by
+// Q11 on 2026-09-23).
 //
 // The unit arm of that fork asserts what the delivery does NOT do — it does
 // not acknowledge and does not write the record — and both of those are also
@@ -38,8 +63,13 @@ func retainedRequestIdentity(t *testing.T, client *natsclient.Client, subject st
 // again is refused by the record's Create, which neither acknowledges nor
 // writes. Only a real server can tell the two apart, because only there does
 // the republish have somewhere to land: the fork ACKNOWLEDGES, and
-// agent.request.<loopID> still holds exactly one message, under the identity
-// the record already names.
+// agent.request.<loopID> holds exactly one message, under the identity the
+// record already names.
+//
+// The arm runs only where its job is real — a record naming R1 with nothing
+// retained for the loop (Q11) — so the predecessor here is a birth that wrote
+// its record and died before its publish, which is the crash window the
+// republish was always for.
 //
 // Assertions read the record's fields, the per-subject message count and the
 // retained message's Nats-Msg-Id. No message body is compared.
@@ -59,13 +89,7 @@ func TestTaskRedeliveredToAReplacementLeavesOneFirstRequest(t *testing.T) {
 	firstRequest := looprequest.ID{LoopID: loopID, Iteration: 1, Retry: 0}.String()
 	requestSubject := "agent.request." + loopID
 
-	// A real birth through the real task lane: record by Create, then publish.
-	predecessor, _ := startLoopProcess(t, client, DefaultConfig())
-	born, birthDelivery := deliverTask(t, predecessor, task)
-	require.Equal(t, natsclient.DeliveryDecisionAck, birthDelivery.Decision())
-	require.Equal(t, int32(1), born.acks.Load())
-	require.Equal(t, uint64(1), messagesOn(t, client, requestSubject))
-	require.Equal(t, firstRequest, retainedRequestIdentity(t, client, requestSubject))
+	predecessor := birthWhosePublishNeverLanded(t, client, DefaultConfig(), task)
 
 	birthRecord := loopRecordOf(t, predecessor, loopID)
 	require.Equal(t, firstRequest, birthRecord.entity.PublishedRequestID)
@@ -84,9 +108,9 @@ func TestTaskRedeliveredToAReplacementLeavesOneFirstRequest(t *testing.T) {
 	require.Equal(t, int32(1), redelivered.acks.Load())
 
 	require.Equal(t, uint64(1), messagesOn(t, client, requestSubject),
-		"the redelivery put a second copy of the loop's first request on the stream")
+		"the request the record has named all along is what the fork puts on the stream, once")
 	require.Equal(t, firstRequest, retainedRequestIdentity(t, client, requestSubject),
-		"the one retained request must still be the one the record names")
+		"the one retained request must be the one the record names")
 
 	after := loopRecordOf(t, replacement, loopID)
 	require.Equal(t, birthRecord.revision, after.revision,
@@ -212,6 +236,130 @@ func TestATaskRedeliveredOverAProgressedFirstBatchIsNotRepublished(t *testing.T)
 
 	require.Equal(t, natsclient.DeliveryDecisionAck, deliveredSibling.Decision(),
 		"the sibling belongs to the batch the record names; a replacement must be able to apply it")
+	completed := loopRecordOf(t, replacement, loopID)
+	require.Equal(t, 1, completed.entity.Iterations,
+		"the completed batch advances the loop it belongs to")
+	require.Equal(t, secondRequest, completed.entity.PublishedRequestID)
+	require.Equal(t, uint64(2), messagesOn(t, client, requestSubject),
+		"the loop's second request is what a recovered batch produces")
+}
+
+// TestATaskRedeliveredOverADispatchedFirstBatchIsAcknowledged is the arm the
+// applied set cannot answer either, because the batch that proves the loop
+// progressed has been dispatched and nothing has come back yet (owner Codex
+// round 3 on PR #1361, finding 3; #1330 Q11, ruled 2026-09-23).
+//
+// A handled tool-call response for R1 leaves the record at
+// `{R1, iterations 0, empty applied set}` — byte-for-byte the untouched birth
+// the republish arm is for — while the loop is in fact mid-batch: its
+// executions are on tool.execute and its routing table lives only in the
+// process that dispatched them. Republishing there seated a FRESH loop with no
+// batch, R1 was adopted rather than published so the task acknowledged, and
+// the first tool result then arrived with no execution to route to: the cold
+// rebuild refuses to build over the loop the republish had just seated, and an
+// executor's completed work retried to MaxDeliver with nothing ever releasing
+// the seat.
+//
+// The durable fact that separates the two is not on the record at all — it is
+// the stream. A retained request for the loop means R1 went out, answered or
+// not, so this delivery has nothing to republish: acknowledge it, seat
+// nothing, and let the loop be rebuilt by the lane that owns the outstanding
+// work — its own response, or its first tool result. The tail below is that
+// proof.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestATaskRedeliveredOverADispatchedFirstBatchIsAcknowledged(t *testing.T) {
+	client := newLoopNATS(t)
+
+	const loopID = "b8e5a31c-6d47-4f92-a05b-3c1d7e9f2a48"
+	task := agentic.TaskMessage{
+		TaskID: "task-dispatched-first-batch",
+		LoopID: loopID,
+		Role:   "general",
+		Model:  "test-model",
+		Prompt: "the prompt whose first batch is dispatched and unanswered",
+	}
+	firstRequest := looprequest.ID{LoopID: loopID, Iteration: 1, Retry: 0}.String()
+	secondRequest := looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String()
+	requestSubject := "agent.request." + loopID
+
+	predecessor, handler := startLoopProcess(t, client, DefaultConfig())
+	_, birth := deliverTask(t, predecessor, task)
+	require.Equal(t, natsclient.DeliveryDecisionAck, birth.Decision())
+	require.Equal(t, uint64(1), messagesOn(t, client, requestSubject))
+
+	// Two calls so the batch cannot complete on one result, and NOTHING is
+	// delivered back: the applied set stays empty, which is the residue the
+	// existing progressed-batch arm never reaches.
+	batch := agentic.AgentResponse{
+		RequestID:    firstRequest,
+		Status:       agentic.StatusToolCall,
+		FinishReason: "tool_calls",
+		Message: agentic.ChatMessage{
+			Role: "assistant",
+			ToolCalls: []agentic.ToolCall{
+				{ID: "call-dispatched-a", Name: "dispatched_tool"},
+				{ID: "call-dispatched-b", Name: "dispatched_tool"},
+			},
+		},
+	}
+	retainModelResponse(t, client, batch)
+	dispatch, err := handler.HandleModelResponse(t.Context(), loopID, batch)
+	require.NoError(t, err)
+	require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch, publishThenWrite))
+	callA, executeSubject := dispatchedToolCall(t, dispatch)
+
+	dispatched := loopRecordOf(t, predecessor, loopID)
+	require.Equal(t, firstRequest, dispatched.entity.PublishedRequestID)
+	require.Equal(t, 0, dispatched.entity.Iterations,
+		"a tool-call response does not advance the loop; the batch it dispatched does, when it is all in")
+	require.Empty(t, dispatched.entity.PendingToolResults,
+		"no result came back, so the applied set cannot separate this record from an untouched birth")
+	require.Equal(t, uint64(1), messagesOn(t, client, executeSubject),
+		"the batch's first call is dispatched and outstanding")
+
+	// The replacement has no memory of the loop, so the ORIGINAL task meets the
+	// cold fork rather than HandleTask's warm dedup.
+	replacement, replacementHandler := startLoopProcess(t, client, DefaultConfig())
+
+	_, redelivered := deliverTask(t, replacement, task)
+
+	require.Equal(t, natsclient.DeliveryDecisionAck, redelivered.Decision(),
+		"a task whose first request the stream already retains is settled, not re-run")
+	_, seated := replacementHandler.loopManager.GetLoop(loopID)
+	require.Error(t, seated,
+		"the redelivery seated a fresh loop with no batch over a loop whose executions are already "+
+			"outstanding; the first result then has no execution to route to and its rebuild is refused "+
+			"over the seat")
+	require.Equal(t, uint64(1), messagesOn(t, client, requestSubject),
+		"a request the stream already retains must not be published a second time")
+
+	after := loopRecordOf(t, replacement, loopID)
+	require.Equal(t, dispatched.revision, after.revision,
+		"an acknowledged-without-effect task writes nothing")
+
+	// The proof the loop is not stranded: the batch's first result arrives at
+	// the replacement, rebuilds the loop from the record and the two retained
+	// messages, and releases the sibling.
+	resultA := agentic.ToolResult{
+		CallID: callA.ID, Name: callA.Name, Content: "the first tool answered", LoopID: loopID,
+		RequestID: callA.RequestID, ExecutionID: callA.ExecutionID, CallOrdinal: callA.CallOrdinal,
+	}
+	_, appliedA := deliverToolResult(t, replacement, resultA)
+
+	require.Equal(t, natsclient.DeliveryDecisionAck, appliedA.Decision(),
+		"the first result rebuilds the loop the task lane declined to seat, and is applied")
+	require.Equal(t, uint64(2), messagesOn(t, client, executeSubject),
+		"the applied result releases its sibling, which is what a recovered batch does next")
+
+	siblingResult := agentic.ToolResult{
+		CallID: "call-dispatched-b", Name: "dispatched_tool", Content: "the sibling answered",
+		LoopID: loopID, RequestID: firstRequest,
+		ExecutionID: deriveToolExecutionID(firstRequest, "call-dispatched-b", 2), CallOrdinal: 2,
+	}
+	_, deliveredSibling := deliverToolResult(t, replacement, siblingResult)
+
+	require.Equal(t, natsclient.DeliveryDecisionAck, deliveredSibling.Decision())
 	completed := loopRecordOf(t, replacement, loopID)
 	require.Equal(t, 1, completed.entity.Iterations,
 		"the completed batch advances the loop it belongs to")
@@ -461,10 +609,10 @@ func TestAColdR1ReconstructionKeepsTheRecordsDeadline(t *testing.T) {
 	firstRequest := looprequest.ID{LoopID: loopID, Iteration: 1, Retry: 0}.String()
 	requestSubject := "agent.request." + loopID
 
-	predecessor, _ := startLoopProcess(t, client, config)
-	_, birth := deliverTask(t, predecessor, task)
-	require.Equal(t, natsclient.DeliveryDecisionAck, birth.Decision())
-	require.Equal(t, uint64(1), messagesOn(t, client, requestSubject))
+	// The arm this test is about runs only where nothing is retained for the
+	// loop (#1330 Q11), so the predecessor is the birth that wrote its record
+	// and died before its publish.
+	predecessor := birthWhosePublishNeverLanded(t, client, config, task)
 
 	born := loopRecordOf(t, predecessor, loopID)
 	require.Equal(t, firstRequest, born.entity.PublishedRequestID,
@@ -480,9 +628,9 @@ func TestAColdR1ReconstructionKeepsTheRecordsDeadline(t *testing.T) {
 	_, redelivered := deliverTask(t, replacement, task)
 
 	require.Equal(t, natsclient.DeliveryDecisionAck, redelivered.Decision(),
-		"the R1 arm adopts the retained request and acknowledges")
+		"the R1 arm rebuilds the loop, publishes the request its record names, and acknowledges")
 	require.Equal(t, uint64(1), messagesOn(t, client, requestSubject),
-		"R1 is already retained, so the rebuild adopts it rather than publishing a second copy")
+		"the request the birth never got out is published once, under the name the record carries")
 
 	// assert, not require, from here down: the deadline and the outcome it
 	// decides are one fact seen twice, and a run that reports only the first

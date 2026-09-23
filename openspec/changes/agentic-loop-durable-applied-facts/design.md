@@ -17,7 +17,7 @@
 
 | Was | Decision |
 |---|---|
-| Q1 birth order | Birth keeps Put → publish. A task redelivered while the record still names R1 at iteration 0 with an empty applied set rebuilds R1 and hands it to the publish path, which adopts an R1 the stream already retains and otherwise publishes it ([amended 2026-09-22](https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5776942078)). On `main` birth publishes first (`C:1496`) and writes after (`C:1499`, error ignored), so task 2.1 reorders it — P1, § 3.1. |
+| Q1 birth order | Birth keeps Put → publish. A task redelivered while the record still names R1 at iteration 0 with an empty applied set rebuilds R1 and publishes it ([amended 2026-09-22](https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5776942078)) — and, since **Q11** (ruled 2026-09-23), only when the stream retains no request for the loop; a retained R1 is acknowledged without effect and the loop is rebuilt by its own response or first tool result. Q1/Q5's "the publish path adopts a retained R1" is superseded ON THE TASK LANE; its substance — never publish R1 twice — is what the retained read enforces, earlier. On `main` birth publishes first (`C:1496`) and writes after (`C:1499`, error ignored), so task 2.1 reorders it — P1, § 3.1. |
 | Q2 carrier form | The non-terminal carrier becomes `Update(observedRevision)`; in L4 scope. |
 | Q3 applied set | `PendingToolResults` keys ARE the applied execution IDs; no separate field. |
 | Q4 ID grammar (lands in #1328) | `<loopID>:req:<iteration>:<retry>`; the truncation-retry ordinal is derived from `PublishedRequestID`; recovery ADOPTS an already-published next request by identity (`readExact` = `GetLastMsgForSubject` on `agent.request.<loopID>`; the reader is built here, task 2.3) instead of republishing. Applied to the cold read in § 3.6 (coordinator, 2026-09-18, on the design review's BLOCKING). |
@@ -229,20 +229,28 @@ ACK; W4 = next request PubAck'd, crash before the update. "Classify" = terminal 
    Role and model are deliberately NOT verified: a continuation legitimately re-sends them, and neither decides
    whether this delivery can be applied. Terminal → ACK (`SR:398-400`); terminal records never reach the identity
    gate, since `readLoopRecord` reports them stale.
-3. Present, `PublishedRequestID == R1`, `Iterations == 0`, `PendingToolResults` empty: rebuild R1 from the
-   TaskMessage (`SR:414-421`) and hand it to the publish path, which adopts an R1 the stream already retains and
-   otherwise publishes it with
-   `Nats-Msg-Id = R1` (Q1 as amended 2026-09-22 — https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5776942078 — Q5),
-   rebuild ContextManager (`SR:424`), ACK.
+3. Present, `PublishedRequestID == R1`, `Iterations == 0`, `PendingToolResults` empty, **and nothing retained on
+   `agent.request.<loopID>`** (`readRetainedAgentRequest`, the reader already on this path): rebuild R1 from the
+   TaskMessage (`SR:414-421`) and publish it with `Nats-Msg-Id = R1`, rebuild ContextManager (`SR:424`), ACK. A
+   transient read failure returns transient as the record read above does; a fatal one stays fatal (owner ruling Q11,
+   2026-09-23; Q1 as amended 2026-09-22 — https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5776942078
+   — Q5, whose substance "never publish R1 twice" is what the retained read now enforces before the loop is seated).
 4. Present, belonging to THIS task (step 2), and advanced, OR present at `Iterations == 0` with a non-empty
-   `PendingToolResults`, OR present naming any request other than R1: applied → ACK. The whole first batch runs at
+   `PendingToolResults`, OR present naming any request other than R1, OR present in step 3's shape with a request
+   the stream retains: applied → ACK. The whole first batch runs at
    iteration 0 and a length-truncated first response re-asks it under the next retry ordinal, so neither the ordinal
    nor the applied set separates an untouched birth from a progressed one on its own; the batch is rebuilt by its next
    tool result and the request the record does name is answered by its own response, each on the lane that owns it.
+   The retained request is the fact none of the three record fields carries: a handled tool-call response for R1
+   leaves the record at exactly step 3's shape while the batch it dispatched is outstanding, and seating a fresh loop
+   there strands every execution already on `tool.execute` — the loop is rebuilt instead by its own response (cold
+   response arm) or by the first tool result (cold tool arm).
    A record belonging to a DIFFERENT task never reaches steps 3 or 4: it is refused at step 2, because "applied"
    would name a turn nobody ever sent and the R1 rebuild would build the loop's conversation out of it.
-Windows: W1 redo. W2 (record written, R1 unpublished) → step 3 publishes. W3 (R1 already retained) → step 3 adopts it
-and publishes nothing. No W4 at birth (Put precedes publish by ruling).
+Windows: W1 redo. W2 (record written, R1 unpublished) → step 3 publishes: its whole remaining job. W3 (R1 already
+retained) → step 4 ACKs, seats nothing and publishes nothing. No W4 at birth by ruling (Put precedes publish), and
+the retry-ordinal twin of one — `:req:1:1` published, the record still naming `:req:1:0` — is ACKed by the retained
+read rather than republishing `:req:1:0` under a newer retained name, which the cold adopt refuses as Fatal.
 Counter semantics (docket OQ4, owner ruling 2026-09-22): a redelivered task submission counts again on
 `tasks_submitted_total` (agentic-dispatch `metrics.go:112`; `recordTaskSubmitted` `:321`, increment `:322`). The counter is **at-least-once under
 redelivery**; that is documented in the migration note and pinned by a test, not armed away — no Quarantine arm, no new
@@ -496,7 +504,7 @@ records commit that follows it changes markdown only. Every pin the round's fix 
 | Ruling | Landed as | Where |
 |---|---|---|
 | **Q1** birth order — Put → publish; a task redelivered at iteration 0 republishes R1 | Birth writes the record by `Create` and publishes after; the cold task fork rebuilds R1 through the ordinary birth path. **DEVIATION — see the row below.** | `component.go:3049` (`createLoopState`, `Create` at `:3072`), `component.go:1485` → `loop_classification.go:137` (`classifyRedeliveredTask`), republish arm `component.go:1631` |
-| **Q1 DEVIATION** — "republish it unconditionally with the MsgId, no retained read" | The rebuilt R1 goes out through `publishResults`, which consults `adoptRetainedRequest` first, so an R1 the stream already retains is **adopted, not republished**. The birth is never blocked behind a read (Q1's intent); the one divergent state — R1 retained, dedup window expired — yields no duplicate instead of a second copy under the same name, which is what task 2.3 exists to prevent. **Owner-ratified 2026-09-22**, verbatim "1330 agree with recommendation": [issuecomment-5776942078](https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5776942078). Q1 is amended to the adopt-not-republish reading. | `component.go:2855` (the `msg.MsgID != ""` arm of `publishResults`) → `loop_evidence.go:340` (`adoptRetainedRequest`); evidence `task_redelivery_integration_test.go` |
+| **Q1 DEVIATION** — "republish it unconditionally with the MsgId, no retained read" | The rebuilt R1 goes out through `publishResults`, which consults `adoptRetainedRequest` first, so an R1 the stream already retains is **adopted, not republished**. The birth is never blocked behind a read (Q1's intent); the one divergent state — R1 retained, dedup window expired — yields no duplicate instead of a second copy under the same name, which is what task 2.3 exists to prevent. **Owner-ratified 2026-09-22**, verbatim "1330 agree with recommendation": [issuecomment-5776942078](https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5776942078). Q1 is amended to the adopt-not-republish reading. **Superseded ON THE TASK LANE by Q11 (2026-09-23), the row below:** the task lane no longer reaches the publish path's adopt at all, because it no longer seats a loop over a retained R1. The deviation stands as written for every other minting lane. | `component.go:2855` (the `msg.MsgID != ""` arm of `publishResults`) → `loop_evidence.go:340` (`adoptRetainedRequest`); evidence `task_redelivery_integration_test.go` |
 | **Q2** carrier form — non-terminal carrier becomes `Update(observedRevision)` | `persistLoopState` compare-and-swaps against the revision this process observed, for every caller; the ORDER flip is scoped to the task, model-response and tool-result lanes (coordinator scoping under OQ7/OQ8) | `component.go:3165` (`Update` at `:3217`), order at `component.go:2354` (`publishThenPersistResultState`) |
 | **Q3** applied set — `PendingToolResults` keys ARE the applied execution IDs; no separate field | No field added; the map's keys are the applied identities and the rebuild reads them as such | `agentic/state.go:57`, read at `state.go:519` (`restoreToolBatch`) |
 | **Q4** ID grammar `<loopID>:req:<iteration>:<retry>`; recovery ADOPTS by identity | Shipped by L2 (#1328) as `internal/looprequest`; L4a's step 0 adopts the newest retained request before any classification | `processor/agentic-loop/internal/looprequest`, `loop_evidence.go:425` (`adoptNewerRetainedRequest`) |

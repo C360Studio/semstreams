@@ -1234,8 +1234,8 @@ a lane that does not want a heartbeat keeps owning its own `msg` settlement, as 
 
 `agent.request` RequestIDs are minted as `<loopID>:req:<iteration>:<retry>` instead of `<loopID>:req:<uuid>`. The
 two ordinals name the logical work — iteration ordinal within the loop, truncation-retry ordinal within the
-iteration — so a redelivered task republishes the *same* RequestID and agentic-model answers it from the retained
-response instead of calling the provider a second time.
+iteration — so a redelivered task that has a request to republish at all mints the *same* RequestID, and the
+`Nats-Msg-Id` header below is what stops a second copy landing under that name.
 
 **What did not change.** The `<loopID>:req:` prefix, and therefore everything built on it: the framework's own
 `ExtractLoopIDFromRequest`, the `agent.response.<requestID>` subject grammar, and any consumer that splits a
@@ -1855,8 +1855,8 @@ No action, but two reading rules:
   otherwise idempotent: same `task_id`, same `loop_id`, no second loop.
 
 `agent.created` is at-least-once in the same way, and for the same reason. A task redelivered while its record is
-still at iteration zero rebuilds the loop through the ordinary birth path, which builds the loop-created event
-again; the event carries no `Nats-Msg-Id`, so the server cannot collapse it the way it collapses a republished
+still at iteration zero AND the stream retains no request for its loop rebuilds the loop through the ordinary birth
+path, which builds the loop-created event again; the event carries no `Nats-Msg-Id`, so the server cannot collapse it the way it collapses a republished
 `agent.request`. A consumer of `agent.created` must treat it as an announcement it may see more than once for one
 loop, keyed on `loop_id`, not as a birth counter. Recorded, not armed away: the loop, its record and its first
 request are all still exactly one.

@@ -842,7 +842,7 @@ func TestTaskRedeliveredToAProcessWithNoMemoryOfItsLoop(t *testing.T) {
 		// one — the fork deliberately does not write the record. A holder with
 		// no observed revision fails its first compare-and-swap closed and
 		// strands the loop it just recovered.
-		c, h := coldTaskLane(t, firstRequest)
+		c, h := coldTaskLane(t, "")
 		c.natsClient = nil // the publish is not what this arm is about
 		coldRecordAtIterationZero(t, c)
 		before := c.loopsBucket.(*recordingLoopBucket).revisionOf(loopID)
@@ -860,6 +860,30 @@ func TestTaskRedeliveredToAProcessWithNoMemoryOfItsLoop(t *testing.T) {
 		revision, held := c.observedLoopRevision(loopID)
 		require.True(t, held, "the holder took no revision, so its next write cannot compare-and-swap")
 		require.Equal(t, before, revision, "the revision taken must be the one the record was read at")
+	})
+
+	t.Run("a first request the stream retains acknowledges the task without effect", func(t *testing.T) {
+		// The record is the untouched-birth shape on every field it carries —
+		// R1, iteration zero, empty applied set — and the stream says
+		// otherwise: R1 went out. A handled tool-call response leaves exactly
+		// this pair while the loop is mid-batch, so republishing here seated a
+		// fresh loop with no batch and stranded the executions that were
+		// already outstanding (#1330, owner ruling Q11, 2026-09-23).
+		c, h := coldTaskLane(t, firstRequest)
+		coldRecordAtIterationZero(t, c)
+
+		msg, delivered := deliverTask(t, c, task)
+
+		require.Equal(t, natsclient.DeliveryDecisionAck, delivered.Decision())
+		require.Equal(t, int32(1), msg.acks.Load())
+		require.Empty(t, c.loopsBucket.(*recordingLoopBucket).written(),
+			"an acknowledged-without-effect task writes nothing")
+		_, err := h.loopManager.GetLoop(loopID)
+		require.Error(t, err,
+			"a loop whose first request is outstanding must be rebuilt by that request's own "+
+				"answer or its first tool result, never seated fresh by a redelivered task")
+		_, held := c.observedLoopRevision(loopID)
+		require.False(t, held, "this process holds nothing, so it must take no revision")
 	})
 
 	t.Run("a loop that advanced acknowledges the task without effect", func(t *testing.T) {

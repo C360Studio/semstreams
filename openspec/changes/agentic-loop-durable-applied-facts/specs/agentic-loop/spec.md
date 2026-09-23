@@ -122,14 +122,23 @@ deadline from then on.
   apply nothing either way and re-deriving which side of the settlement this result fell on would change nothing
   this delivery can do
 
-#### Scenario: A task redelivered at iteration zero adopts or publishes the first request
+#### Scenario: A task redelivered at iteration zero publishes the first request nothing retains
 
-- **GIVEN** a loop record at `iterations = 0` with `published_request_id = R1`, an empty `pending_tool_results`, and
-  a `task_id` that is the redelivered task's
+- **GIVEN** a loop record at `iterations = 0` with `published_request_id = R1`, an empty `pending_tool_results`, a
+  `task_id` that is the redelivered task's, and the stream retains no request for the loop
 - **WHEN** the task message is redelivered to a process with no memory of the loop
-- **THEN** `R1` is rebuilt from the task and handed to the publish path, which adopts an `R1` the stream already
-  retains and otherwise publishes it with `Nats-Msg-Id = R1`, the in-process conversation is rebuilt, and the task
-  is acknowledged
+- **THEN** `R1` is rebuilt from the task and published with `Nats-Msg-Id = R1`, the in-process conversation is
+  rebuilt, and the task is acknowledged
+
+#### Scenario: A task redelivered over a first request the stream retains is acknowledged without effect
+
+- **GIVEN** a loop record at `iterations = 0` with `published_request_id = R1`, an empty `pending_tool_results`, a
+  `task_id` that is the redelivered task's, and a request the stream retains for the loop
+- **WHEN** the task message is redelivered to a process with no memory of the loop
+- **THEN** it is acknowledged without effect: no request is published, no record is written, and no loop is seated in
+  memory — a retained request means `R1` went out, answered or not, so this delivery has nothing to republish, and
+  the loop is rebuilt by the lane that owns its outstanding work: its own response, or the first tool result of the
+  batch that response dispatched
 
 #### Scenario: A task redelivered over a first batch that already applied something is acknowledged without effect
 

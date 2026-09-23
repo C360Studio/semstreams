@@ -186,7 +186,12 @@ func (c *Component) classifyRedeliveredTask(
 		return taskContinuationUnheld, record, nil
 	}
 	// Every fact the delta's GIVEN names, because no one of them is the
-	// untouched birth it looks like on its own.
+	// untouched birth it looks like on its own. Each still earns its place
+	// under the retained-request check below: the NAME is the arm's gate — a
+	// record naming R2 or a retry ordinal with nothing retained is an I1
+	// breach and must never answer with R1 — the applied set keeps the
+	// half-run first batch out without a stream read, and iteration zero
+	// documents the birth shape the arm is for.
 	//
 	// The applied set: a loop advances its iteration only when a whole tool
 	// batch is in, so the entire FIRST batch runs at zero while its applied set
@@ -201,7 +206,10 @@ func (c *Component) classifyRedeliveredTask(
 	// the cold adopt refuses that backward name as Fatal — a routine
 	// at-least-once redelivery quarantining the task lane. So the arm runs only
 	// for a record naming the loop's FIRST request, which is what the delta's
-	// GIVEN has always said (published_request_id = R1).
+	// GIVEN has always said (published_request_id = R1). The crash-window twin
+	// of that case — :req:1:1 published, the record still naming :req:1:0 —
+	// is not separated by the name, and the retained read below is what
+	// acknowledges it instead of walking into the same Fatal.
 	//
 	// Everything else is a loop that moved past THIS task — the gate above has
 	// already established that the record is about it: its batch is rebuilt by
@@ -212,7 +220,38 @@ func (c *Component) classifyRedeliveredTask(
 	firstRequest := looprequest.ID{LoopID: loopID, Iteration: 1, Retry: 0}.String()
 	if record.entity.PublishedRequestID == firstRequest &&
 		record.entity.Iterations == 0 && len(record.entity.PendingToolResults) == 0 {
-		return taskRepublishFirstRequest, record, nil
+		// And the last fact, which is not on the record at all: does the
+		// stream retain a request for this loop? A handled tool-call response
+		// for R1 leaves the record at exactly the shape above while the loop
+		// is mid-batch — its executions dispatched, its routing table in the
+		// process that is gone — so the three facts above cannot see it, and
+		// republishing there seated a fresh loop with no batch: the first tool
+		// result had no execution to route to and its rebuild was refused over
+		// the seat (#1330, owner ruling Q11, 2026-09-23).
+		//
+		// So the arm keeps its real job and nothing more: a record written by
+		// a birth whose request never reached the stream. Anything retained —
+		// answered or not — means R1 went out, so this delivery has nothing to
+		// publish and nothing to seat: the loop is rebuilt by the lane that
+		// owns its outstanding work, its own response or its first tool result.
+		// The read is the one adoptRetainedRequest would have paid on the
+		// publish path, taken before the loop is seated instead of after.
+		retained, found, err := c.readRetainedAgentRequest(ctx, loopID)
+		if err != nil {
+			// Classified by the reader: a stream that cannot be read is
+			// transient, a request that cannot be addressed or decoded is
+			// fatal. Never republish on a failed read — that is the same
+			// fail-open shape the unreadable record above refuses, one layer
+			// out.
+			return taskApplied, record, err
+		}
+		if !found {
+			return taskRepublishFirstRequest, record, nil
+		}
+		c.logger.InfoContext(ctx, "Task acknowledged without effect — its loop's first request is already retained",
+			slog.String("task_id", task.TaskID), slog.String("loop_id", loopID),
+			slog.String("published_request_id", record.entity.PublishedRequestID),
+			slog.String("retained_request_id", retained.RequestID))
 	}
 	return taskApplied, record, nil
 }
