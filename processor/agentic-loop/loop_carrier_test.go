@@ -124,6 +124,81 @@ func TestApprovalLaneKeepsWriteThenPublish(t *testing.T) {
 		"the approval lane must still write its record before it publishes (#1362 moves it)")
 }
 
+// TestAnApprovalGateIsWrittenBeforeItsEventIsPublished is the GATE-CREATION
+// half of the approval lane's order (owner Codex round 2 on PR #1361,
+// finding 2).
+//
+// TestApprovalLaneKeepsWriteThenPublish above pins the approval RESPONSE: the
+// lane that settles an answer. Nothing pinned the delivery that creates the
+// gate, and that one arrives on the TOOL-RESULT lane, which passes
+// publishThenWrite. An awaiting_approval result is not terminal, so it took
+// that order: ApprovalPendingEvent was published before the gate was written,
+// and a crash between them left a visible approval request with no durable
+// gate behind it. The replacement's approval-response handler stale-drops an
+// answer to a gate it cannot find and acknowledges it — a human decision
+// silently lost, on the one lane whose whole purpose is a human decision.
+//
+// Design § 5.4 and moved task 2.7 keep the gate on write-then-publish in L4a;
+// its cold branch and the early-answer retry proof are #1362's.
+//
+// The delivery runs through the real lane, so what is asserted is the order
+// the CALL SITE and the carrier produce together, not the carrier alone.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestAnApprovalGateIsWrittenBeforeItsEventIsPublished(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+
+	born, err := handler.HandleTask(t.Context(), TaskMessage{
+		TaskID: "task-approval-gate", Role: "general", Model: "model",
+		Prompt: "delete a rule",
+	})
+	require.NoError(t, err)
+	loopID := born.LoopID
+	firstRequest, err := mintedRequestID(born)
+	require.NoError(t, err)
+
+	const callID = "call-approval-gate"
+	_, err = handler.HandleModelResponse(t.Context(), loopID, agentic.AgentResponse{
+		RequestID:    firstRequest,
+		Status:       agentic.StatusToolCall,
+		FinishReason: "tool_calls",
+		Message: agentic.ChatMessage{Role: "assistant", ToolCalls: []agentic.ToolCall{
+			{ID: callID, Name: "delete_rule", Arguments: map[string]any{"rule_id": "rule-42"}},
+		}},
+	})
+	require.NoError(t, err)
+
+	c := releaseTestComponent(t, handler)
+	bucket := &recordingLoopBucket{}
+	c.loopsBucket = bucket
+	seedLoopRecord(t, c, loopID)
+	c.natsClient = unpublishableClient(t)
+
+	// The agentic-tools approval filter refuses the call, which is the only
+	// producer of an awaiting_approval result anywhere in this component.
+	gating := &agentic.ToolResult{
+		LoopID:      loopID,
+		CallID:      callID,
+		Name:        "delete_rule",
+		ErrorKind:   agentic.ToolErrorPermission,
+		Error:       agentic.ApprovalRequiredPrefix + "delete_rule requires human approval",
+		RequestID:   firstRequest,
+		ExecutionID: deriveToolExecutionID(firstRequest, callID, 1),
+		CallOrdinal: 1,
+	}
+
+	err = c.handleToolResultMessage(t.Context(), baseMessageBytes(t, gating))
+
+	require.Error(t, err, "the unconnected publish must fail so the order is observable")
+	entity, getErr := handler.GetLoop(loopID)
+	require.NoError(t, getErr)
+	require.Equal(t, agentic.LoopStateAwaitingApproval, entity.State,
+		"the fixture must actually gate the loop, or the order under test was never chosen")
+	require.Equal(t, []string{loopID}, bucket.written(),
+		"the gate must be durable before its ApprovalPendingEvent is visible: a crash between the two "+
+			"leaves a human an approval request whose answer the replacement stale-drops")
+}
+
 // TestCarrierCompareAndSwapLossRetriesAndReleasesTheLoop: the record moved, so
 // this process is holding a loop somebody else advanced. It must not retry in
 // place against its own stale view — it releases the loop and returns the

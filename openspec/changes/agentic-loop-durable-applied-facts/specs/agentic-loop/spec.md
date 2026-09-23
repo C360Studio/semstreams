@@ -25,7 +25,9 @@ The following SHALL hold for every record of a non-terminal loop `L`:
 The non-terminal record SHALL be written with a compare-and-swap update against the revision observed when the
 delivery was admitted. On the model-response and tool-result lanes that update SHALL follow the PubAck of every
 output the new record implies; at loop birth the record SHALL be written before the first request is published. The
-approval lane and the approval-timeout sweeper keep their present write-then-publish order until #1362. A redelivered
+approval lane and the approval-timeout sweeper keep their present write-then-publish order until #1362, and so does
+an update that CREATES an approval gate, on whichever lane produces it: a gate published before it is written leaves a
+human an approval request with no durable gate behind it. A redelivered
 input whose `request_id` is older than `published_request_id` SHALL be acknowledged without effect; one whose
 `request_id` is newer SHALL be retried until the record names it; one whose `request_id` is not a request of the loop
 SHALL be quarantined. A redelivered tool result whose `request_id` equals `published_request_id` and whose execution

@@ -2183,12 +2183,14 @@ type carrierOrder int
 
 const (
 	// writeThenPublish records first and publishes after — the order every
-	// lane took before #1330, and the order the approval lane and the
-	// approval-timeout sweeper keep until #1362.
+	// lane took before #1330, and the order the approval lane, the
+	// approval-timeout sweeper, and any result that CREATES an approval gate
+	// keep until #1362.
 	writeThenPublish carrierOrder = iota
 	// publishThenWrite publishes first and records after, so the record is
 	// written only against outputs that already PubAck'd. It is the order the
-	// model-response and tool-result lanes take for a non-terminal result.
+	// model-response and tool-result lanes take for a non-terminal result that
+	// does not gate the loop for approval.
 	publishThenWrite
 )
 
@@ -2216,12 +2218,27 @@ const (
 // terminal result keeps write-then-publish on every lane — the terminal record
 // and its graph stamps must precede agent.complete, and the single terminal
 // owner is #1362's.
+//
+// An awaiting_approval result keeps it too, whichever order its lane asked
+// for, and the tool-result lane is the only producer of one (checkApprovalGate
+// in handlers.go). The gate is a durable promise to a HUMAN: published first,
+// a crash between the ApprovalPendingEvent and the record leaves an approval
+// request visible with no gate behind it, and the replacement's
+// approval-response handler stale-drops the answer and acknowledges it. What
+// closes that window is the approval lane's own cold branch, which is #1362's
+// (design § 5.4, moved task 2.7). Nothing is lost by keeping the old order
+// here: a gate result mints no request — its only publication is the
+// ApprovalPendingEvent, which carries no MsgID — so mintedRequestID returns ""
+// for it and the stamp below is a no-op on this path either way.
 func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResult, order carrierOrder) error {
 	terminal := result.State == agentic.LoopStateComplete || result.State == agentic.LoopStateFailed
+	// A result that creates an approval gate keeps write-then-publish whatever
+	// its lane asked for — see the order contract above.
+	gated := result.State == agentic.LoopStateAwaitingApproval
 
 	c.recordHandlerResultTrajectory(ctx, result)
 
-	if order == publishThenWrite && !terminal {
+	if order == publishThenWrite && !terminal && !gated {
 		return c.publishThenPersistResultState(ctx, result)
 	}
 
