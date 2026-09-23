@@ -1856,6 +1856,165 @@ markdown only. Logs in the coordinator scratchpad `l4a/`.
 `pgrep -fl e2e.test` printed nothing and `docker compose ls` listed no stacks before the tier run
 (`l4a/tier-predicheck-round3.log`).
 
+## 8.9 Owner round 4 (2026-09-23)
+
+The owner's fourth Codex round ([issuecomment-5794412825](https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5794412825),
+reviewed at `0429956b`) raised three findings: one BLOCKING on the approval-timeout sweeper's publish-failure path,
+one MEDIUM on the Q12 warning having no observer, and one MEDIUM on three surviving comments that still state the
+pre-Q11/Q12 rule. Its verification note confirms the round-3 fixes hold: the deferred lane overlays its marker onto
+the record it read, Q11 checks retained evidence before seating a loop, the lost-turn warning has a direct observer,
+and the sweeper's SUCCESSFUL-publication stamp is correct.
+
+Every code fix carries a regression proven RED without it, observed against the tree before the fix was written, and
+a mutant through the `cp` backup + `md5 -q` ritual with `[applied]` printed between mutating and testing, `go vet`
+(and `go vet -tags=integration`) exit 0 with the mutant applied so a non-compiling mutant cannot pass as a red, and
+the restore verified by checksum with `git status --porcelain` empty after each. Pins in this section are at
+`3e9f7ba3`, the round's last commit that touches a Go file.
+
+- [x] 8.9.1 **Round 4, finding 1 (BLOCKING) — a failed publication still advanced the durable request identity.**
+      **Claimed:** the sweeper's auto-reject logs a publish failure and continues through `stampPublishedRequest` and
+      `persistLoopState`, so with KV writable the record names `R2` while the stream retains only `R1`.
+      **What the code did:** exactly that. The auto-reject is a request-MINTING transition (`handleRejectedApproval`
+      → `HandleToolResult` → `handleToolsComplete`), and round 3 gave the sweeper the carrier's stamp between its
+      publish and its write — but left both running after a publication that failed. The consequence is not the name
+      alone: every later cold read of that loop takes `adoptNewerRetainedRequest`'s Fatal I1 arm ("the record names
+      `R2` but the stream retains only `R1`"), which quarantines a lane over an approval that merely timed out, and
+      the gate is already resolved in memory so no later sweep retries the publication.
+      **Landed:** `approval_sweeper.go:139` — the publish-failure arm `continue`s, so neither the stamp (`:146`) nor
+      the persist (`:152`) runs and the record keeps the gated predecessor state a replacement can still recover
+      from. This is the carrier's own shape for the same error (`component.go:2363`,
+      `publishThenPersistResultState`, which returns before it stamps). Skipping ONLY the stamp was refused
+      explicitly at the site: persisting the advanced entity under the old name is the iteration/identity mismatch
+      the stamp exists to prevent. The in-memory advance this process already made is left as it is and named in one
+      sentence at the site — a timer has no delivery to classify, so there is nothing here to retry or quarantine,
+      and the sweeper's retry/counter policy travels with the lane to #1362 (`design.md` § 5.6, which already
+      deferred it). **Net size:** +20 lines in one file, 16 of them the comment. Commit `9b641bc7`.
+      **Spec:** one new scenario under the requirement's approval-timeout text
+      (`specs/agentic-loop/spec.md:103`, "An approval timeout whose rejection could not be published leaves the
+      record as it was"); the free-text sentence at `:30-32` gains "and writes neither the request name nor the
+      advance when that publication fails"; `design.md` § 5.6's residual paragraph and § 9's carrier-reorder row say
+      the conditional shape.
+      **Test:** `approval_timeout_publish_failure_integration_test.go:48`,
+      `TestAnApprovalTimeoutWhosePublicationFailedLeavesTheRecordAsItWas` — a real broker, a real gated batch through
+      the real tool lane (`gatedLoop`), `R1` really retained, the deadline backdated, and then the arrangement
+      `birthWhosePublishNeverLanded` uses: `c.natsClient = unpublishableClient(t)` AFTER `initializeKVBuckets`, so
+      the publication fails on the production path while the KV handle stays bound to the live connection. Two
+      fixture checks make the assertions non-vacuous — the sweep really minted (`OutstandingRequest` no longer names
+      `R1`) and the mint really did not land (one message on `agent.request.<loopID>`). Then the record's four facts
+      (name, iterations, revision, gate) by `assert`, the skip's own `Warn` line by `logLineContaining`, and a
+      REPLACEMENT taking the gating tool result again — rebuilt from the record's own `PendingApproval`, the only
+      place a replacement could find it — which must acknowledge it as work the record already applied instead of
+      quarantining on step 0. Observed RED before the fix at `:89`:
+      "Not equal: expected `5d1632dc-4bf2-4f56-a6e3-89130214f78d:req:1:0`, actual
+      `5d1632dc-4bf2-4f56-a6e3-89130214f78d:req:2:0` … the record names a request the stream does not retain: every
+      cold read of this loop now meets adoptNewerRetainedRequest's Fatal I1 arm", with `:92` (iterations 0 vs 1),
+      `:94` (revision 0x3 vs 0x4), `:96` (`awaiting_approval` vs `exploring`) and `:103` ("Expected value not to be
+      nil" — the gate itself was gone) red in the same run.
+      **Mutant:** the `continue` removed, so the arm falls through to the stamp and the persist. `approval_sweeper.go`
+      `6419d6f760bafa292edc5e94fa2d0fd4` → `08cd57f963fa7cc50a146c97f8820df8` → restored
+      `6419d6f760bafa292edc5e94fa2d0fd4`, `go vet` and `go vet -tags=integration` both 0 with the mutant applied,
+      porcelain empty after. RED at `:89` with the same four values as the pre-fix run
+      ("expected `245e53ee-6b8f-4dca-a266-abf5c4e85998:req:1:0`, actual `…:req:2:0`").
+      **Sweep, one path over — every production site that publishes and then stamps or persists.** Six, enumerated
+      from `git grep -n 'c.publishResults(ctx' -- 'processor/agentic-loop/*.go'` plus the two terminal writers that
+      publish after their write:
+      | Site | Order | On a publish error |
+      |---|---|---|
+      | `component.go:2341` (`persistHandlerResult`, write-then-publish) | stamp → persist → publish | the publish is LAST; nothing follows it |
+      | `component.go:2363` (`publishThenPersistResultState`) | publish → stamp → persist | returns Fatal before the stamp |
+      | `component.go:1714` (birth) | `Create` → publish | releases the loop and returns; no stamp, no second write |
+      | `approval_sweeper.go:120` (the timeout sweeper) | publish → stamp → persist | **HIT** — logged and continued through both; fixed here |
+      | `component.go:2060` (`handleLoopFailure`) | persist → publish | terminal, mints nothing, no stamp follows |
+      | `component.go:3469` (`handleCancelSignal`) | persist → publish | terminal, mints nothing, no stamp follows |
+      One hit, the one the finding names. The operator approval lane is not a seventh: it publishes through
+      `persistHandlerResult` with `writeThenPublish` (`approval_response_handler.go:208`), which is row one.
+
+- [x] 8.9.2 **Round 4, finding 2 (MEDIUM) — the Q12 replay warning had no observer.**
+      **Claimed:** Q12's regression observes the `already_applied` counter, one dispatch, one assistant turn and an
+      unchanged revision, but never `handlers.go`'s warning, so deleting only that `Warn` leaves every assertion
+      satisfied while the new scenario promises an audit line naming the loop and the request.
+      **What the code did:** true as claimed, and the recorded guard mutant does not stand in for it — that one
+      forces the guard false and fails on the duplicate dispatch, which says nothing about the warning.
+      **Landed (test only):** the handler's own logger is captured for the replay delivery ONLY
+      (`response_redelivery_integration_test.go:92-93`, `SetLogger` after the first delivery), so the buffer holds
+      what the delivery under test emitted. The assertion reads the one LINE carrying the message
+      (`:125`, `logLineContaining`, the helper the rebuild test uses at `loop_rebuild_test.go:535`) and then its two
+      attributes: the response lane warns on superseded and foreign responses too, and both carry a `loop_id`, so a
+      buffer-wide check would report a match this drop never made. Commit `15cf51b5`.
+      **Mutant, warning-only and distinct from the recorded guard mutant:** the five-line `h.logger.Warn` deleted,
+      the guard, the counter and the sentinel untouched. `handlers.go` `4bc69e312f37470e938edceb7fbd07e3` →
+      `6e72d029ceebec9ff993de0e700393bf` → restored `4bc69e312f37470e938edceb7fbd07e3`, `go vet` and
+      `go vet -tags=integration` both 0 with the mutant applied, porcelain empty after. RED at
+      `response_redelivery_integration_test.go:125` — "no log line carries the expected message … expected a line
+      containing \"ignoring a model response this loop already applied\", logged:" (the buffer empty), plus `:126`
+      and `:128` on the two attributes. Every OTHER assertion in that test stayed green under this mutant, which is
+      the finding restated as evidence. The round-3 guard mutant
+      (`23001fea3da9a180000f1b5e479113e9`, RED at `:92` on the dispatch count) is a different experiment and stands.
+
+- [x] 8.9.3 **Round 4, finding 3 (MEDIUM) — three surviving comments stated the pre-Q11/Q12 rule.** Commit
+      `12ccb48f`.
+      **The three the round named.** `loop_classification.go:94-101`, the republish disposition, still included "a
+      birth that … did and died before acknowledging"; that birth leaves `R1` retained, which Q11 sends to
+      `taskApplied`, so the disposition now states the no-retained-request condition and says where the other case
+      went. `recovery_test.go:795-799` said the cold fork runs "with no retained read to decide it (Q1)", which
+      `classifyRedeliveredTask`'s own read made false. `state.go:1186-1200`, `OutstandingRequest`'s doc, said a
+      redelivery arriving after the mark was cleared "must still be handled"; it now distinguishes the loop's
+      outstanding FIRST delivery from an already-applied replay, and says plainly that the mark decides nothing
+      about supersession, which the record owns.
+      **A fourth the same comment block owed.** `loop_classification.go:103-107`, `taskApplied`, listed four ways a
+      loop moves past its task and not the one Q11 handed it — still at iteration zero, first request on the stream,
+      waiting on the answer.
+      **Sweep, one path over.** `git grep -n` for "died before Ack", "no retained read", "outstanding mark" and
+      "must still be handled" across `processor/agentic-loop/` and the change docs, plus "died before acknowledging",
+      which is how the tree actually spells the first phrase (the brief's literal returned zero — recorded, not
+      silently widened):
+      | Phrase | Hits | Disposition |
+      |---|---|---|
+      | "died before Ack" | 0 | the tree spells it "died before acknowledging"; swept as that |
+      | "died before acknowledging" | 1 (`loop_classification.go`) | FIXED — finding 3's first comment |
+      | "no retained read" | 4 | 1 FIXED (`recovery_test.go:795-799`); 3 stand — `design.md`'s Q1 DEVIATION row already carries the Q11 supersession, and `tasks.md:505`/`:517` QUOTE the ruling's own words, which are what the ruling said |
+      | "outstanding mark" | 12 | 1 FIXED (`state.go`); 1 further hit FIXED one path over (`outstanding_request_test.go:9-13`, which opened by calling the mark the authority on superseded responses); 10 state the current rule |
+      | "must still be handled" | 1 | FIXED (`state.go`) |
+      Two further hits came out of reading the neighbours rather than the phrases: `handlers.go:1327-1330`, whose
+      ordering comment promised that "a redelivery of the CURRENT request is still handled" full stop — now scoped
+      to this check, with the replay question handed to the mark below it — and the change docs, where three task
+      lines state rules later work overtook. Those are marked **superseded in place** rather than rewritten, because
+      `tasks.md`'s task descriptions are baseline evidence: task 2.1's sweeper sentence (its pair keeps its ORDER,
+      but a failed publication now stops it — 8.9.1), task 2.1's "the birth publish error stays discarded" (task 2.3
+      already returns it, with `TestBirthWhosePublishFailsIsNotAcknowledged` holding it there), and task 3.4's
+      iteration-zero arm (Q11's retained condition, 8.8.1).
+
+- [x] 8.9.4 **Pins and provenance.** Every `design.md` § 9 and § 7 pin into a file this round touched was re-derived
+      by reading its OLD line at `0429956b` and finding that exact text again in the new tree, never by arithmetic:
+      23 pins moved (`handlers.go` ×3, `loop_classification.go` ×11, `state.go` ×4, `recovery_test.go` ×1,
+      `response_redelivery_integration_test.go` ×1, `approval_sweeper.go` ×1, plus two range ends). Each was then
+      printed back with `sed -n "${n}p"` and read against the symbol its row names. The provenance line now says
+      `3e9f7ba3`, which is `12ccb48f` plus one comment-only, line-count-neutral correction to the sweeper's own
+      failure-count sentence (it still counted all three failures below it the same way after 8.9.1 made one of
+      them stop the candidate); no pin moved with it, re-checked by printing all five `approval_sweeper.go` pins
+      back. The historical pins at line 13 (`68c14c8e`, `af829616`) are pins at OTHER revisions and are left
+      alone; `tasks.md` § 8.7's pins stay at `4abfe31f` and § 8.8's at `0bbee770`, which is what those headers say.
+
+### 8.9.5 Gates for the round, exit codes verbatim
+
+Re-run at `3e9f7ba3`, the round's last commit that touches a Go file, plus this records commit, which changes
+markdown only. Logs in the coordinator scratchpad `l4a/`.
+
+| Gate | Exit | Result |
+|---|---|---|
+| `task lint` | 0 | vet, fmt, pinned revive, fixed-port guard, raw-Request guard |
+| `go test -race -count=1 ./processor/agentic-loop/... ./agentic/... ./test/contract/...` | 0 | 10 `ok` lines, zero `FAIL` lines, no race |
+| `go test -race -count=1 -tags=integration -p 2 ./processor/agentic-loop/` | 0 | the package's own real-NATS arms, `ok … 49.690s` |
+| `openspec validate --all --strict` | 0 | 56 passed, 0 failed (56 items) |
+| `task spec:properties` | 0 | 343/343 citations resolve — 342 before this round, **+1, exactly the one new `// spec:` citation** (`TestAnApprovalTimeoutWhosePublicationFailedLeavesTheRecordAsItWas`); counted after `git add`, since the script reads tracked files only |
+| `git diff --check` | 0 | no whitespace defect |
+| `task api:compat:report` | 0 | compared 62, clean 47, incompatible 15, removed 0, added 0 — the whole report BYTE-IDENTICAL to round 3's and the sweep's logs (`md5` `8b3388e949bd1eeac9b67d02ebfb924c`). No exported surface: one `continue` in an unexported method, one test observer, and comments |
+| `task e2e:agentic` | 0 | `Scenario completed successfully duration=2m11.032035s`, `assertions_run=15`, zero `level=ERROR` lines; `verify-stage-a-process-replacement_duration_ms:84890`, `midflight_record_revision_delta:3`, `midflight_requests_published:2`. Log `l4a/tier-round4-3e9f7ba3.log` |
+| `task check:push` | 0 | build, lint, tagged vet, schema drift, contract, race unit, then integration through the canonical runner and its host lock. Log `l4a/checkpush-round4.log` |
+
+`pgrep -fl e2e.test` printed nothing and `docker compose ls` listed no stacks before the tier run
+(`l4a/tier-predicheck-round4.log`).
+
 ## Moved to L4b (#1362)
 
 Plain bullets, deliberately not checkboxes: these are #1362's tasks, listed so the reader sees exactly what left this
