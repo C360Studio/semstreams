@@ -111,12 +111,12 @@ func (c *Component) sweepExpiredApprovals(ctx context.Context) {
 		// that minted nothing stamps nothing — mintedRequestID returns "" and
 		// stampPublishedRequest is a no-op.
 		//
-		// Neither of the two failures below has a delivery to retry — this is
-		// a timer, not a consumer — so each is named rather than silently
-		// swallowed. Both are log-only: there is no loop-side counter whose
-		// subject is "a write this process meant to make did not commit", and
-		// #1362, which moves this lane onto the carrier, owns whether one is
-		// owed (design § 5.6).
+		// None of the three failures below has a delivery to retry — this is a
+		// timer, not a consumer — so each is named rather than silently
+		// swallowed. The publish failure STOPS this candidate, for the reason
+		// written at it; the two writes after it are log-only, because no
+		// loop-side counter's subject is "a write this process meant to make
+		// did not commit" and #1362 owns whether one is owed (design § 5.6).
 		if err := c.publishResults(ctx, result); err != nil {
 			// The advance goes no further than this process's memory. Stamping
 			// or persisting past a failed publication commits a record naming a
