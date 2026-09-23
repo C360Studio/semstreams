@@ -517,6 +517,15 @@ func TestAColdR1ReconstructionKeepsTheRecordsDeadline(t *testing.T) {
 		// claim here is which deadline the loop failed against, not how the
 		// lane spells its wrapper.
 		assert.Contains(t, failureReasonOn(t, client, failureSubject), "loop timeout exceeded")
+		// The prompt is the OTHER half of what this arm proves about the R1
+		// rebuild. A loop rebuilt from its record and a retained request
+		// publishes its terminal event with an empty Prompt, because the
+		// record carries no prompt to restore; this arm is not that rebuild.
+		// It runs the ordinary HandleTask, which caches the redelivered task's
+		// prompt, so the empty-prompt limitation an adopter is told about
+		// stops at the wholesale seat and this event carries the real one.
+		assert.Equal(t, task.Prompt, failureEventOn(t, client, failureSubject).Prompt,
+			"the cold R1 arm rebuilds through HandleTask, so its terminal event keeps the task's prompt")
 	}
 	assert.Equal(t, uint64(0), messagesOn(t, client, "agent.complete."+loopID),
 		"a loop handed a fresh budget would have completed instead")

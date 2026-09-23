@@ -1,6 +1,8 @@
 package agenticloop
 
 import (
+	"bytes"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -418,7 +420,12 @@ func TestAColdToolResultRebuildsTheBatchItBelongsTo(t *testing.T) {
 // spec: agentic-loop / The loop record names its outstanding request
 func TestARebuiltLoopDoesNotReAskForATurnItCannotRecover(t *testing.T) {
 	requestID := looprequest.ID{LoopID: rebuildLoopID, Iteration: 3, Retry: 0}.String()
-	handler := NewMessageHandler(DefaultConfig())
+	// The rebuild's own logger, so the warning the delta's THEN promises has an
+	// observer. Without it the clear is silent: a turn an operator was told was
+	// accepted is dropped, and the only trace is the field it cleared.
+	var logs bytes.Buffer
+	handler := NewMessageHandler(DefaultConfig(),
+		WithLoopManagerLogger(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))))
 	record := rebuiltRecord(requestID, func(e *agentic.LoopEntity) {
 		e.PendingContinuation = true
 		e.PendingContinuationRequestID = ""
@@ -437,6 +444,12 @@ func TestARebuiltLoopDoesNotReAskForATurnItCannotRecover(t *testing.T) {
 	assert.False(t, rebuilt.PendingContinuation,
 		"the rebuilt loop still claims a deferred turn whose text died with the predecessor; the "+
 			"next completion will spend an iteration re-asking the model with nothing new")
+	warning := logs.String()
+	assert.Contains(t, warning, "cleared a deferred turn it cannot recover",
+		"the drop is a declared event: a turn the caller was told was accepted is gone, and the "+
+			"warning is the whole signal this clear was ruled to carry")
+	assert.Contains(t, warning, rebuildLoopID,
+		"a warning that does not name the loop cannot be acted on")
 
 	completion, err := handler.HandleModelResponse(t.Context(), rebuildLoopID, agentic.AgentResponse{
 		RequestID: requestID,

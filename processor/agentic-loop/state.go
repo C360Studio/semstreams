@@ -406,6 +406,13 @@ func (m *LoopManager) restoreLoopFromRequest(
 	// inside a retained request, so the replay above carries it and the marker
 	// still has the job it was set for — stopping the carrier's own completion
 	// from settling before the turn is answered.
+	//
+	// The warning is the whole signal, by the ruled shape of this clear
+	// (#1330 Q2, 2026-09-23: the two-line clear plus a warning naming the
+	// loop). The sibling drop at intake, settleUnheldContinuation, carries a
+	// counted reason as well because a REFUSED turn is a rate an operator acts
+	// on; this one is a consequence of a replacement that is already visible.
+	// A counter here would be an owner question, not a developer's.
 	if entity.PendingContinuation && entity.PendingContinuationRequestID == "" {
 		m.logger.WarnContext(ctx,
 			"rebuilt loop cleared a deferred turn it cannot recover — the turn's text lived only in "+

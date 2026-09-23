@@ -499,9 +499,9 @@ func waitPastLoopDeadline(t *testing.T, deadline time.Time) {
 		"the recorded deadline %s is further out than this arm budgets for", deadline.UTC().Format(time.RFC3339Nano))
 }
 
-// failureReasonOn reads the error the loop's failure event carries, through the
-// same envelope the component published it in.
-func failureReasonOn(t *testing.T, client *natsclient.Client, subject string) string {
+// failureEventOn reads the loop's failure event back through the same envelope
+// the component published it in.
+func failureEventOn(t *testing.T, client *natsclient.Client, subject string) agentic.LoopFailedEvent {
 	t.Helper()
 	stream, err := client.GetStream(t.Context(), loopStreamName)
 	require.NoError(t, err)
@@ -511,7 +511,13 @@ func failureReasonOn(t *testing.T, client *natsclient.Client, subject string) st
 		Payload agentic.LoopFailedEvent `json:"payload"`
 	}
 	require.NoError(t, json.Unmarshal(stored.Data, &envelope))
-	return envelope.Payload.Error
+	return envelope.Payload
+}
+
+// failureReasonOn reads the error that event carries.
+func failureReasonOn(t *testing.T, client *natsclient.Client, subject string) string {
+	t.Helper()
+	return failureEventOn(t, client, subject).Error
 }
 
 // TestAReplayedAppliedToolResultDoesNotQuarantineItsLane is the lost-ACK arm
