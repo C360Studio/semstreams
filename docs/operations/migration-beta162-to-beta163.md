@@ -1774,6 +1774,20 @@ them, because seating them would pin one iteration's budget at the top of the re
 the loop's life while every later request prepends a fresh one. Only a LEADING run is dropped, so a message of the
 conversation that happens to start with either string is kept.
 
+**A deferred turn is durable as a MARKER only, and so is nothing about the task prompt.** A continuation admitted
+while the loop's model request is outstanding puts the user's turn into the loop's context and records only *that* a
+turn was admitted (`pending_continuation`). Across a process replacement the turn's TEXT is gone: it lived in the
+replaced process. The rebuild clears the marker and logs a warning rather than leaving a loop that would spend an
+iteration re-asking the model with nothing new — **the turn has to be re-sent.** A turn that a retained request
+already carries is a different case and is unaffected: that request replays and the marker still names its carrier.
+
+The loop's task prompt is the same limitation one field over. A rebuilt loop does not recover it, so its
+`LoopCompletedEvent.prompt` and `LoopFailedEvent.prompt` are published **empty**, and the empty-context recovery path
+falls back to its literal `"Continue with the task."` placeholder instead of the original task. **Action:** a consumer
+that reads `prompt` off a completion or failure event must tolerate an empty one — correlate on `task_id` or
+`loop_id` if it needs the prompt. The durable field for both the turn and the prompt is
+[#1365](https://github.com/C360Studio/semstreams/issues/1365), not this tag.
+
 **`[Iteration Budget]` and `[Working list` are reserved prefixes.** A *configured system prompt* whose first message
 begins with either string is indistinguishable from the framing the loop generates, and on a cold rebuild it is
 dropped along with it. Do not start a system prompt, persona fragment or prompt-registry entry with either string;

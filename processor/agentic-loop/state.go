@@ -1,6 +1,7 @@
 package agenticloop
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -360,7 +361,9 @@ func (m *LoopManager) attachContinuation(loopID, taskID string) (agentic.LoopEnt
 // RepairToolPairs runs last: a request retained mid-batch can carry an
 // assistant tool_call whose results were never appended, and a provider refuses
 // that pair outright.
-func (m *LoopManager) restoreLoopFromRequest(record agentic.LoopEntity, request agentic.AgentRequest) error {
+func (m *LoopManager) restoreLoopFromRequest(
+	ctx context.Context, record agentic.LoopEntity, request agentic.AgentRequest,
+) error {
 	if record.ID == "" {
 		return errs.WrapInvalid(fmt.Errorf("loop record carries no id"),
 			"LoopManager", "restoreLoopFromRequest", "validate the record to rebuild from")
@@ -385,6 +388,33 @@ func (m *LoopManager) restoreLoopFromRequest(record agentic.LoopEntity, request 
 	}
 
 	entity := record
+	// A continuation admitted while a request was outstanding is durable as a
+	// MARKER and nothing else. The turn's TEXT went into the predecessor's
+	// context manager, which died with it, and PendingContinuationRequestID is
+	// empty precisely because no request ever carried it. Seated as-is, the
+	// marker makes HasPendingContinuation true on a loop that has nothing new
+	// to say: the next completion spends an iteration re-asking the model with
+	// a context that gained nothing, and then settles anyway.
+	//
+	// So it is cleared here, with a warning, and the limitation is documented
+	// where an adopter reads it (doc.go § Recovery across a process
+	// replacement, the beta.163 migration note, and this change's delta): the
+	// turn must be re-sent. The durable-turn field that would recover it is
+	// #1365 (owner ruling on #1330 Q2, 2026-09-23).
+	//
+	// A NON-EMPTY PendingContinuationRequestID is left alone: that turn is
+	// inside a retained request, so the replay above carries it and the marker
+	// still has the job it was set for — stopping the carrier's own completion
+	// from settling before the turn is answered.
+	if entity.PendingContinuation && entity.PendingContinuationRequestID == "" {
+		m.logger.WarnContext(ctx,
+			"rebuilt loop cleared a deferred turn it cannot recover — the turn's text lived only in "+
+				"the replaced process and must be re-sent",
+			slog.String("loop_id", record.ID),
+			slog.String("published_request_id", record.PublishedRequestID),
+			slog.Int("iterations", record.Iterations))
+		entity.PendingContinuation = false
+	}
 	m.loops[record.ID] = &entity
 	m.pendingTools[record.ID] = make(map[string]bool)
 

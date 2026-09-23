@@ -8,6 +8,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -73,7 +74,7 @@ func TestARebuiltLoopIsTheRecordPlusItsRetainedRequest(t *testing.T) {
 			agentic.ChatMessage{Role: "assistant", Content: "thinking"},
 		)
 
-		require.NoError(t, manager.restoreLoopFromRequest(record, request))
+		require.NoError(t, manager.restoreLoopFromRequest(t.Context(), record, request))
 
 		rebuilt, err := manager.GetLoop(rebuildLoopID)
 		require.NoError(t, err)
@@ -110,7 +111,7 @@ func TestARebuiltLoopIsTheRecordPlusItsRetainedRequest(t *testing.T) {
 			agentic.ChatMessage{Role: "assistant", ToolCalls: []agentic.ToolCall{{ID: "call-orphan", Name: "search"}}},
 		)
 
-		require.NoError(t, manager.restoreLoopFromRequest(rebuiltRecord(requestID, nil), request))
+		require.NoError(t, manager.restoreLoopFromRequest(t.Context(), rebuiltRecord(requestID, nil), request))
 
 		require.Equal(t, []string{"system", "user"}, roles(manager.GetContextManager(rebuildLoopID).GetContext()),
 			"a request retained mid-batch carries an assistant tool_call with no tool message, and a "+
@@ -121,7 +122,7 @@ func TestARebuiltLoopIsTheRecordPlusItsRetainedRequest(t *testing.T) {
 		manager := NewLoopManager()
 		older := looprequest.ID{LoopID: rebuildLoopID, Iteration: 2, Retry: 0}.String()
 
-		err := manager.restoreLoopFromRequest(rebuiltRecord(requestID, nil),
+		err := manager.restoreLoopFromRequest(t.Context(), rebuiltRecord(requestID, nil),
 			retainedRequest(older, agentic.ChatMessage{Role: "user", Content: "an older turn"}))
 
 		require.Error(t, err)
@@ -153,7 +154,7 @@ func TestARebuiltLoopIsTheRecordPlusItsRetainedRequest(t *testing.T) {
 			"the fixture must carry BOTH prefix messages, or this arm proves nothing")
 
 		manager := NewLoopManager()
-		require.NoError(t, manager.restoreLoopFromRequest(
+		require.NoError(t, manager.restoreLoopFromRequest(t.Context(),
 			rebuiltRecord(requestID, nil), retainedRequest(requestID, minted...)))
 
 		rebuilt := manager.GetContextManager(rebuildLoopID).GetContext()
@@ -172,7 +173,7 @@ func TestARebuiltLoopIsTheRecordPlusItsRetainedRequest(t *testing.T) {
 			{Role: "user", Content: "[Iteration Budget] explain what this line means"},
 			{Role: "system", Content: "[Working list — quoted back by a tool]"},
 		}
-		require.NoError(t, manager.restoreLoopFromRequest(
+		require.NoError(t, manager.restoreLoopFromRequest(t.Context(),
 			rebuiltRecord(requestID, nil), retainedRequest(requestID, body...)))
 
 		// Membership, not order: the two-region rebuild renders every system
@@ -192,7 +193,7 @@ func TestARebuiltLoopIsTheRecordPlusItsRetainedRequest(t *testing.T) {
 		require.NoError(t, manager.GetContextManager(rebuildLoopID).AddMessage(
 			RegionRecentHistory, agentic.ChatMessage{Role: "user", Content: "the live conversation"}))
 
-		err = manager.restoreLoopFromRequest(rebuiltRecord(requestID, nil),
+		err = manager.restoreLoopFromRequest(t.Context(), rebuiltRecord(requestID, nil),
 			retainedRequest(requestID, agentic.ChatMessage{Role: "user", Content: "a retained conversation"}))
 
 		require.ErrorIs(t, err, ErrLoopAlreadyExists)
@@ -226,7 +227,7 @@ func TestARestoredToolBatchKnowsWhatIsLeftToRun(t *testing.T) {
 		executionOf(0): {ExecutionID: executionOf(0), CallID: calls[0].ID, Name: "search", Content: "answered"},
 	}
 	record := rebuiltRecord(requestID, func(e *agentic.LoopEntity) { e.PendingToolResults = applied })
-	require.NoError(t, manager.restoreLoopFromRequest(record,
+	require.NoError(t, manager.restoreLoopFromRequest(t.Context(), record,
 		retainedRequest(requestID, agentic.ChatMessage{Role: "user", Content: "do three things"})))
 
 	require.NoError(t, manager.restoreToolBatch(rebuildLoopID, response, applied, executionOf(1)))
@@ -387,4 +388,83 @@ func TestAColdToolResultRebuildsTheBatchItBelongsTo(t *testing.T) {
 		"the sibling that never ran must be dispatched next; an applied one must not be re-run")
 	_, queued := h.loopManager.DequeueToolCall(rebuildLoopID)
 	require.False(t, queued, "the batch's last call is in flight, so nothing is left queued")
+}
+
+// TestARebuiltLoopDoesNotReAskForATurnItCannotRecover is the documented
+// limitation, asserted.
+//
+// A continuation admitted while a request was outstanding is durable as a
+// MARKER only: PendingContinuation says a turn was admitted, and its TEXT went
+// into the predecessor's context manager, which died with it.
+// PendingContinuationRequestID is empty precisely because no request ever
+// carried it. Seated wholesale by the rebuild, that marker made
+// HasPendingContinuation true on a loop with nothing new to say — the next
+// completion spent an iteration re-asking the model with a context that had
+// gained nothing, and then settled anyway.
+//
+// So the rebuild clears it with a warning, and the limitation is documented
+// where an adopter reads it: the turn must be re-sent. The durable-turn field
+// that would recover it is filed as #1365 (owner ruling on #1330 Q2,
+// 2026-09-23, answering finding 4 of the owner Codex round on PR #1361).
+//
+// The completion event's empty Prompt is the SAME limitation, one field over
+// (#1330 Q8): taskPrompts is the one per-loop cache the rebuild does not
+// restore, because the record has no field to restore it from, so
+// LoopCompletedEvent.Prompt, LoopFailedEvent.Prompt and recoverEmptyContext's
+// fallback all see it empty after a replacement. It rides #1365 too, and it is
+// asserted here so the documented limitation is a tested one.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestARebuiltLoopDoesNotReAskForATurnItCannotRecover(t *testing.T) {
+	requestID := looprequest.ID{LoopID: rebuildLoopID, Iteration: 3, Retry: 0}.String()
+	handler := NewMessageHandler(DefaultConfig())
+	record := rebuiltRecord(requestID, func(e *agentic.LoopEntity) {
+		e.PendingContinuation = true
+		e.PendingContinuationRequestID = ""
+	})
+
+	require.NoError(t, handler.loopManager.restoreLoopFromRequest(t.Context(), record,
+		retainedRequest(requestID,
+			agentic.ChatMessage{Role: "system", Content: "you are a test agent"},
+			agentic.ChatMessage{Role: "user", Content: "the original task"})))
+
+	rebuilt, err := handler.loopManager.GetLoop(rebuildLoopID)
+	require.NoError(t, err)
+	// assert, not require: the marker and the phantom iteration it causes are
+	// two independent facts about the same rebuild, and a run that stops at
+	// the first reports only half of what broke.
+	assert.False(t, rebuilt.PendingContinuation,
+		"the rebuilt loop still claims a deferred turn whose text died with the predecessor; the "+
+			"next completion will spend an iteration re-asking the model with nothing new")
+
+	completion, err := handler.HandleModelResponse(t.Context(), rebuildLoopID, agentic.AgentResponse{
+		RequestID: requestID,
+		Status:    agentic.StatusComplete,
+		Message:   agentic.ChatMessage{Role: "assistant", Content: "the task is done"},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, mintedRequestIDsFromResult(t, completion),
+		"the rebuilt loop minted another request to re-ask a turn it does not have")
+	assert.True(t, completion.State.IsTerminal(),
+		"with nothing carryable deferred the completion must settle the loop")
+	require.NotNil(t, completion.CompletionState,
+		"a settling completion builds its terminal record")
+	require.Empty(t, completion.CompletionState.Prompt,
+		"a rebuilt loop has no durable task prompt to publish (#1330 Q8, see #1365); an assertion "+
+			"that expects one here would be asserting a field the record does not carry")
+}
+
+// mintedRequestIDsFromResult returns the RequestID of every agent.request in a
+// handler result. The internal-package twin of the external fixture helper: a
+// request is minted when one of those messages is appended, whatever the loop
+// then does with it.
+func mintedRequestIDsFromResult(t *testing.T, result HandlerResult) []string {
+	t.Helper()
+	var ids []string
+	for _, msg := range result.PublishedMessages {
+		if msg.MsgID != "" {
+			ids = append(ids, msg.MsgID)
+		}
+	}
+	return ids
 }

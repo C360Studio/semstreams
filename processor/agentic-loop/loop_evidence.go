@@ -597,7 +597,7 @@ func (c *Component) restoreLoopFromEvidence(
 			"agentic-loop", "restoreLoopFromEvidence", "match the retained request to the record")
 	}
 
-	if err := c.handler.loopManager.restoreLoopFromRequest(record.entity, request); err != nil {
+	if err := c.handler.loopManager.restoreLoopFromRequest(ctx, record.entity, request); err != nil {
 		return err
 	}
 

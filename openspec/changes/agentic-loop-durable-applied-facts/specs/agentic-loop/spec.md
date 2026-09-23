@@ -36,6 +36,11 @@ a task, read the newest retained request for the loop and, when it is newer than
 into the record by identity first. Recovery SHALL never compare rendered messages or result content to decide whether
 an input was applied.
 
+A deferred continuation is durable as a MARKER only. Where the record carries `pending_continuation` with an empty
+`pending_continuation_request_id`, the admitted turn's text was never inside a retained request and is not
+recoverable: a rebuild SHALL clear the marker and warn, and SHALL NOT synthesise the turn. Neither the turn nor the
+loop's task prompt is carried by the record, so a rebuilt loop publishes its terminal event with an empty `prompt`.
+
 An approval deadline is process-local and is not a durable fact: a replaced process SHALL re-arm no approval deadline
 at startup, and a loop in `awaiting_approval` SHALL stay in `awaiting_approval` until the approval is answered or the
 loop is cancelled. A loop the replacement later rebuilds for a redelivered input carries its record's own approval
@@ -123,6 +128,16 @@ deadline from then on.
 - **THEN** it is acknowledged without effect before any rebuild is attempted, the inapplicable-result metric and an
   audit log line name the loop and the execution, the record is not written, and the unfinished siblings of `e`'s
   batch are untouched and still recoverable by their own arrival
+
+#### Scenario: A rebuilt loop clears a deferred turn whose text it cannot recover
+
+- **GIVEN** a loop record with `pending_continuation = true` and an empty `pending_continuation_request_id` — a
+  continuation admitted while the loop's request was outstanding, whose text lived only in the replaced process
+- **WHEN** a replacement rebuilds the loop from that record and its retained request
+- **THEN** the rebuilt loop's marker is cleared and a warning names the loop, the next completion settles the loop
+  instead of spending an iteration re-asking the model with a context that gained nothing, and the completion event
+  it publishes carries an empty `prompt`, because a rebuilt loop recovers neither the deferred turn's text nor its
+  task prompt — both must be re-sent by the caller
 
 ## MODIFIED Requirements
 

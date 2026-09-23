@@ -254,6 +254,22 @@
 // so do not start one with them. Only a leading run is dropped: a message further in is the
 // conversation, whatever it says.
 //
+// A deferred turn is durable as a MARKER, not as the turn. A continuation admitted while
+// a request is outstanding writes its text into the loop's context and sets
+// PendingContinuation; only the marker reaches the record, so across a process
+// replacement the text is not recovered. The rebuild CLEARS the marker with a warning
+// rather than leave a loop that would spend an iteration re-asking the model with nothing
+// new, and the turn must be re-sent. A turn already inside a retained request is a
+// different case and is untouched: that request replays, so the marker still names its
+// carrier and still stops the carrier's own completion from settling early.
+//
+// The loop's TASK PROMPT is the same limitation one field over. taskPrompts is the one
+// per-loop cache the rebuild does not restore, because the record has no field to restore
+// it from, so a rebuilt loop publishes LoopCompletedEvent.Prompt and LoopFailedEvent.Prompt
+// EMPTY and recoverEmptyContext falls back to its "Continue with the task." placeholder. A
+// consumer that reads Prompt off a completion must tolerate an empty one. The durable field
+// for the turn and the prompt is https://github.com/C360Studio/semstreams/issues/1365.
+//
 // A rebuild is not a reprieve. TimeoutAt is written at birth and lives on the record, so a
 // rebuilt loop keeps its ORIGINAL deadline; nothing refreshes it and downtime is not
 // excluded from it. A replacement whose gap outran that deadline therefore rebuilds the
