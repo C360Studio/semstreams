@@ -961,8 +961,12 @@
 
 The owner's round on PR #1361 at `952d7eacf0c9f559d541c4d7515a883a873fd9f4`
 ([issuecomment-5783708903](https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5783708903)) requested
-changes on findings 1-6 and raised four more. Eight are answered here. **Findings 3 and 4 are GATED on owner rulings
-and were not touched**; neither the mint/carrier ordering nor `PendingContinuation` semantics changed in this round.
+changes on findings 1-6 and raised four more. **All ten are answered here.** Eight landed first, at `3f76e16b`;
+findings 3 and 4 were held on owner rulings and landed after them, once the owner ruled on 2026-09-23
+([issuecomment-5790258247](https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5790258247), verbatim
+"As recommended on all eight") — Q1 puts the stamp-after-PubAck reorder in L4a, Q2/Q3 make the deferred turn a
+documented limitation plus a two-line clear-on-rebuild, and Q8 rides Q2's sentence with the task prompt. The durable
+turn and task-prompt fields are #1365.
 
 Every code fix carries a regression proven red WITHOUT the fix through the `cp` backup + `md5 -q` ritual, with
 `[applied]` printed between mutating and testing and the restore verified by checksum (`git status --porcelain`
@@ -1092,32 +1096,102 @@ empty after each). `go vet` precedes every tier run, so a non-compiling mutant c
       was not stored within 1m30s"` — the stage's own assertion, now under a forced schedule rather than an observed
       one. Log: `l4a/tier-3f76e16b-mutant-no-rebuild.log`.
 
-- [ ] 7.3 **Finding 3 — a sibling lane can commit `PublishedRequestID = R2` before R2 is published. GATED.**
-      CONFIRMED and NOT implemented: it is held on an owner ruling (#1330 Q1 of the round's docket — land the
-      stamp-after-PubAck reorder in L4a, or weaken I1 in the delta and file the window as its own issue, not #1362).
-      The mint/carrier ordering was deliberately not touched in this round.
+- [x] 7.3 **Finding 3 — a sibling lane can commit `PublishedRequestID = R2` before R2 is published.** Ruled into L4a
+      by the owner on 2026-09-23 ([issuecomment-5790258247](https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5790258247),
+      "as recommended on all eight", Q1): the MEMORY stamp moves from the mint to the carrier, `TrackRequest` stays
+      at the mint, birth untouched.
+      The name was set on the SHARED entity the moment the request was built, so every other writer of that loop
+      could commit it — a deferred continuation's record write on the task lane, a tool lane's compare-and-swap —
+      while the stream still retained only R1. `MaxAckPending=1` is per consumer and `loopRecordMu` serializes the
+      record WRITERS, not the handler mutations that precede them, so nothing ordered the two.
+      Landed: `component.go:3029` (`stampPublishedRequest`, under `loopRecordMu`) with its selector
+      `component.go:2982` (`mintedRequestID`, reading the identity off `PublishedMessage.MsgID` — the field
+      `publishResults` already reads — rather than a second spelling on `HandlerResult`); call sites
+      `component.go:2255` (after `publishResults` PubAcks, before `persistResultState`) and `component.go:2202` (the
+      write-first branch, whose order is unchanged); the two iteration mint sites in `handlers.go`
+      (`publishIterationRequest`, `emitRetryRequest`) no longer call `SetPublishedRequest`; birth still does at
+      `handlers.go:1168`. Commit `99cef493`.
+      **Hole class enumerated before claiming the guard:** every `persistHandlerResult` call site was resolved, not
+      just the publish-first ones. `approval_response_handler.go:208` settles with `writeThenPublish`, and the
+      approval-REJECTION path reaches `publishIterationRequest` through `handleRejectedApproval` →
+      `HandleToolResult` → `handleToolsComplete`; a carrier that stamped only on the publish-first order would have
+      left that lane's record naming the previous request forever, and every response to the new one refused as
+      not-yet-named. The stamp is therefore at the carrier for both orders.
+      Test: `loop_record_writer_test.go`, `TestARecordNeverNamesARequestBeforeItsPubAck` — the carrier is held
+      inside its own publication, on the evidence read `publishResults` runs before it sends a minted request, and
+      the SIBLING lane commits the loop's record while it waits. Releasing the gate makes the request retained,
+      which is what a PubAck does; the record must then name it, and both lanes' writes must have committed.
+      Mutant: `stampPublishedRequest` moved BEFORE `publishResults`, today's order. `component.go`
+      `dcff6f256a9fa0877971c12af7f336bf` → `610600dc0352af455bb0c4cfb89fbc79` → restored
+      `dcff6f256a9fa0877971c12af7f336bf`, `go vet` 0 with the mutant applied, porcelain empty after. RED at
+      `loop_record_writer_test.go:322` — "Not equal: expected `<loop>:req:1:0`, actual `<loop>:req:2:0` … a sibling
+      lane committed a record naming a request whose PubAck has not landed: KV now names a request the stream does
+      not retain, which is the state I1 declares impossible and which every later cold read answers with
+      Quarantine".
+      Twelve handler-only fixtures drove more than one model turn with no carrier to advance the record's name and
+      went red on `errRequestNotYetObservable`; each now takes the one carrier step through `CarrierStampForTest`,
+      which selects the request with the PRODUCTION selector.
+      Claim sweep (the claim, not the line): `agentic/state.go:68` ("set at birth and by every request-minting
+      transition") and `state.go:1116` (`SetPublishedRequest`'s "called at each of the three mint sites") were both
+      FALSE and are amended in the same commit; `design.md` § 3 item 4 is amended with the ruling cited; `tasks.md`
+      2.4 carries a "superseded in part by 7.3" line. `doc.go`'s I1 text, the delta's I1 bullet and the migration
+      note's I1 paragraph all state the INVARIANT, never where the field is set, and are true as written — the
+      reorder is what makes them true by construction.
 
-- [ ] 7.4 **Finding 4 — an acknowledged deferred turn is lost across a replacement. GATED.** CONFIRMED and NOT
-      implemented: it is held on owner rulings #1330 Q2 and Q3 of the round's docket — the documented limitation plus
-      a two-line clear-on-rebuild, or the durable-turn field on `agentic.LoopEntity` now (an exported-surface
-      addition), with Q3 asking whether #1146's acceptance for L3's continuation marker promises the TURN survives.
-      `PendingContinuation` semantics were deliberately not touched in this round.
+- [x] 7.4 **Finding 4 — an acknowledged deferred turn is lost across a replacement.** Ruled a DOCUMENTED LIMITATION
+      for beta.163 plus the two-line clear-on-rebuild (owner, 2026-09-23, Q2; Q3 read with it — #1146's acceptance
+      for L3's continuation marker promises the MARKER survives a replacement, not the turn's text; Q8 rides the
+      same sentence). The durable-turn and durable-task-prompt fields are an exported-surface addition to a Tier 1
+      package and are their own issue, see #1365.
+      `PendingContinuation` is a marker: the turn's TEXT went into the predecessor's context manager and
+      `PendingContinuationRequestID` is empty precisely because no request carried it. Seated wholesale,
+      `HasPendingContinuation` was true on a loop with nothing new to say, and the next completion spent an
+      iteration re-asking the model with a context that had gained nothing before settling anyway.
+      Landed: `state.go:409` — clear plus a `WarnContext` naming the loop, its published request and its iteration;
+      `restoreLoopFromRequest` takes `ctx` for it. A non-empty carrier is left alone: that turn is inside a retained
+      request and the replay carries it. The rebuild writes no record of its own (checked: `restoreLoopFromEvidence`
+      only remembers the revision), so the cleared marker becomes durable on the carrier's next write like every
+      other rebuilt field. Commit `1709421e`.
+      Docs, one sentence family at three homes: `doc.go:257` § "Recovery across a process replacement";
+      `docs/operations/migration-beta162-to-beta163.md:1777`, beside the "deliberately NOT replayed" framing; and
+      the delta, as scenario `specs/agentic-loop/spec.md:132` plus a normative sentence at `:39-42`. **Q8 rides it**
+      in all three: a rebuilt loop publishes `LoopCompletedEvent.Prompt` and `LoopFailedEvent.Prompt` EMPTY and
+      `recoverEmptyContext` falls back to its placeholder, with the durable field filed as #1365.
+      Test: `loop_rebuild_test.go`, `TestARebuiltLoopDoesNotReAskForATurnItCannotRecover` — the rebuilt marker is
+      cleared, the completion settles without minting, and (the owner's anti-gaming condition on a documented
+      limitation) the SAME arm asserts the empty `Prompt` on the rebuilt loop's completion event. The three are
+      `assert` rather than `require` so one run reports every consequence.
+      Mutant: the clear and its warning removed from `restoreLoopFromRequest`. `state.go`
+      `b6903aadeaf28e927ab871a52aca7d1f` → `10d2437953d1183fca848619e4fbce3e` → restored
+      `b6903aadeaf28e927ab871a52aca7d1f`, `go vet` 0 with the mutant applied, porcelain empty after. RED at
+      `loop_rebuild_test.go:436` — "the rebuilt loop still claims a deferred turn whose text died with the
+      predecessor; the next completion will spend an iteration re-asking the model with nothing new" — and, in the
+      same run, `:446` "Should be empty, but was [4b7d2e91-…:req:4:0] … the rebuilt loop minted another request to
+      re-ask a turn it does not have", `:448` "with nothing carryable deferred the completion must settle the loop",
+      `:450` "a settling completion builds its terminal record". The phantom iteration is the `:req:4:0` in that
+      output.
 
 ### 7.11 Gates for the round, exit codes verbatim
 
-Run at `3f76e16b` plus this records commit, which changes markdown only. Logs in the coordinator scratchpad
+Re-run at `1709421e`, the GATED pair's last content commit, plus this records commit, which changes markdown only.
+(The first eight findings were gated at `3f76e16b` with the same table and the same results; findings 3 and 4 changed
+the carrier and the rebuild, so every row was re-run rather than carried forward.) Logs in the coordinator scratchpad
 `l4a/` unless named otherwise.
 
 | Gate | Exit | Result |
 |---|---|---|
 | `task lint` | 0 | vet, fmt, pinned revive, fixed-port guard, raw-Request guard |
 | `go test -race -count=1 ./processor/agentic-loop/... ./processor/agentic-dispatch/... ./test/contract/... ./test/e2e/scenarios/agentic/...` | 0 | 8 packages ok, no race |
+| `go test -race -count=1 -tags=integration -p 2 ./processor/agentic-loop/` | 0 | the package's own real-NATS arms, run after each of the two fixes |
 | `openspec validate --all --strict` | 0 | 56 passed, 0 failed (56 items) |
-| `task spec:properties` | 0 | 330/330 citations resolve (326 before the round; the four new regressions each carry one) |
+| `task spec:properties` | 0 | 332/332 citations resolve — 330 before this round, +2, exactly the two new regressions |
 | `git diff --check b7ce8727` | 0 | no whitespace defect |
-| `task api:compat:report` | 0 | compared 62, clean 47, incompatible 15, removed 0, added 0 — IDENTICAL totals to the run at `952d7eac`, and the `processor/agentic-loop` block is byte-for-byte the same. No exported surface was added or changed by this round |
-| `task e2e:agentic` | 0 | `assertions_run=15`, no `level=ERROR`; the no-rebuild mutant at the same commit exits 201 on the stage's own assertion (7.10) |
-| `task check:push` | 0 | build, lint, tagged vet, schema drift, contract, race unit, then integration through the canonical runner and its host lock |
+| `task api:compat:report` | 0 | compared 62, clean 47, incompatible 15, removed 0, added 0 — IDENTICAL totals to the runs at `952d7eac` and `3f76e16b`, and the `processor/agentic-loop` block diffs clean against the owner-round log. This round adds no exported surface: the stamp and its selector are unexported and `CarrierStampForTest` is in `export_test.go` |
+| `task e2e:agentic` | 0 | `assertions_run=15`, no `level=ERROR`; log `l4a/tier-1709421e.log` |
+| `task e2e:agentic` with the no-rebuild mutant | 201 | `level=ERROR msg="Scenario completed with failure" error="verify-stage-a-process-replacement failed: mid-flight loop: replacement did not carry the mid-flight loop to a terminal: subject agent.complete.9bd9ef51-6d75-4e77-ae76-f8904cae0551 was not stored within 1m30s"`, `assertions_run=9`. `restoreLoopFromEvidence`'s whole body replaced with an unconditional `errs.WrapTransient`; `go vet ./processor/agentic-loop/` and `go vet -tags=e2e ./test/e2e/...` both 0 with it applied. `loop_evidence.go` `e56941d1783bc386c74de88742e946a6` → `bf1526e35d6db96b218fc39d2605aca1` → restored `e56941d1783bc386c74de88742e946a6`, porcelain empty. Log `l4a/tier-1709421e-mutant-no-rebuild.log` |
+| `task check:push` | 0 | build, lint, tagged vet, schema drift, contract, race unit, then integration through the canonical runner and its host lock. Log `l4a/checkpush-gated-pair.log` |
+
+`pgrep -fl e2e.test` and `docker compose ls` were both empty before each tier run and after the mutant restore.
 
 ## Moved to L4b (#1362)
 
