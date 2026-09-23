@@ -264,18 +264,23 @@
 // carrier and still stops the carrier's own completion from settling early.
 //
 // A turn arriving AFTER the replacement is the same limitation from the other side. A
-// continuation reaches only a loop some process holds: a task naming a loop whose record
-// belongs to a different task is REFUSED — acknowledged without effect, with a warning
-// naming both tasks and a continuation_unheld reason on task_intake_rejections_total —
-// because the loop's conversation is in no process's memory and no redelivery of that
-// turn could ever be applied. Re-send the turn once a redelivered input has rebuilt the
-// loop.
+// continuation reaches only a loop some process holds: a task whose id differs from the one
+// the live record names is REFUSED — acknowledged without effect, with a warning naming both
+// tasks and a continuation_unheld reason on task_intake_rejections_total — because the loop's
+// conversation is in no process's memory and no redelivery of that turn could ever be applied
+// here. The test is task identity, so the same refusal also answers a redelivered BIRTH task
+// whose record a later continuation moved onto its own id; that one needs no re-send, because
+// the turn it carries was applied when the loop was born. Re-send a turn that was never
+// applied once a redelivered input has rebuilt the loop.
 //
 // The loop's TASK PROMPT is the same limitation one field over. taskPrompts is the one
-// per-loop cache the rebuild does not restore, because the record has no field to restore
-// it from, so a rebuilt loop publishes LoopCompletedEvent.Prompt and LoopFailedEvent.Prompt
-// EMPTY and recoverEmptyContext falls back to its "Continue with the task." placeholder. A
-// consumer that reads Prompt off a completion must tolerate an empty one. The durable field
+// per-loop cache the WHOLESALE rebuild does not restore, because the record has no field to
+// restore it from, so a loop rebuilt from its record and a retained request — the
+// model-response and tool-result cold arms — publishes LoopCompletedEvent.Prompt and
+// LoopFailedEvent.Prompt EMPTY and recoverEmptyContext falls back to its "Continue with the
+// task." placeholder. The cold task arm is the exception: it runs the ordinary HandleTask,
+// which caches the redelivered task's prompt, so its terminal events carry it. A consumer
+// that reads Prompt off a completion must tolerate an empty one. The durable field
 // for the turn and the prompt is https://github.com/C360Studio/semstreams/issues/1365.
 //
 // A rebuild is not a reprieve. TimeoutAt is written at birth and lives on the record, so a

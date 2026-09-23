@@ -1420,13 +1420,19 @@ func (c *Component) refuseConflictingTaskIdentity(task agentic.TaskMessage, supp
 // A skip is a declared event: the warning names the record's task and the
 // arriving one, and the reason value is counted on the existing
 // task_intake_rejections_total (#1330, owner ruling 2026-09-23).
+//
+// The gate is task identity and nothing else, so the same refusal answers a
+// redelivered BIRTH task whose record a warm continuation has since moved onto
+// another task id. The disposition is the same either way — the delivery
+// cannot be applied by this process — which is why the reason value stays
+// continuation_unheld and the message names what was actually observed.
 func (c *Component) settleUnheldContinuation(
 	ctx context.Context, disposition taskDisposition, task agentic.TaskMessage, record loopRecord,
 ) bool {
 	if disposition != taskContinuationUnheld {
 		return false
 	}
-	c.logger.WarnContext(ctx, "Task refused — it continues a loop no process holds",
+	c.logger.WarnContext(ctx, "Task refused — the loop's record names a different task",
 		slog.String("task_id", task.TaskID),
 		slog.String("loop_id", task.LoopID),
 		slog.String("record_task_id", record.entity.TaskID),
@@ -2212,9 +2218,11 @@ type carrierOrder int
 
 const (
 	// writeThenPublish records first and publishes after — the order every
-	// lane took before #1330, and the order the approval lane, the
-	// approval-timeout sweeper, and any result that CREATES an approval gate
-	// keep until #1362.
+	// lane took before #1330, and the order the approval lane and any result
+	// that CREATES an approval gate keep until #1362. The approval-timeout
+	// sweeper is not a carrier caller at all: it publishes and then writes
+	// through its own pair (approval_sweeper.go), and #1362 moves it onto the
+	// carrier with the lane.
 	writeThenPublish carrierOrder = iota
 	// publishThenWrite publishes first and records after, so the record is
 	// written only against outputs that already PubAck'd. It is the order the
@@ -2240,10 +2248,12 @@ const (
 // non-terminal result on the model-response and tool-result lanes publishes
 // FIRST and then writes (#1330 L4a), so the record's published_request_id is
 // only ever written after that request's PubAck — which is exactly what makes
-// it readable as "this request is retained". Every other caller keeps
-// write-then-publish: the approval lane and the approval-timeout sweeper move
-// in #1362, because the reject-minted crash window that reorder opens is
-// closed only by the approval lane's own cold branch, which is #1362's. A
+// it readable as "this request is retained". Every other caller of THIS
+// function keeps write-then-publish: the approval lane moves in #1362, because
+// the reject-minted crash window that reorder opens is closed only by the
+// approval lane's own cold branch, which is #1362's. The approval-timeout
+// sweeper reaches neither order from here — it publishes and writes through
+// its own pair, and takes only the stamp below out of this file. A
 // terminal result keeps write-then-publish on every lane — the terminal record
 // and its graph stamps must precede agent.complete, and the single terminal
 // owner is #1362's.
@@ -3143,8 +3153,9 @@ func (c *Component) stampPublishedRequest(result HandlerResult) error {
 // Every caller takes this form. Two lanes reach it through persistHandlerResult
 // AFTER their publications have PubAck'd, which is what makes the written
 // PublishedRequestID mean "this request is durably retained" rather than "a
-// process meant to publish one"; the rest write before they publish and keep
-// that order until #1362.
+// process meant to publish one". The rest keep the order they already had: the
+// approval lane writes before it publishes, the approval-timeout sweeper
+// publishes before it writes, and #1362 moves both onto the carrier.
 //
 // A lost CAS is not a retry-in-place. The record moved, so this process is
 // holding a loop somebody else has advanced: its in-memory state is released

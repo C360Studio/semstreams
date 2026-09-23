@@ -1786,9 +1786,11 @@ without effect**, with a warning naming both tasks and a `continuation_unheld` r
 `task_intake_rejections_total`. **Action:** re-send the turn once a redelivered input has rebuilt the loop; nothing
 retries it for you, and the submission itself still counted on `tasks_submitted_total`.
 
-The loop's task prompt is the same limitation one field over. A rebuilt loop does not recover it, so its
-`LoopCompletedEvent.prompt` and `LoopFailedEvent.prompt` are published **empty**, and the empty-context recovery path
-falls back to its literal `"Continue with the task."` placeholder instead of the original task. **Action:** a consumer
+The loop's task prompt is the same limitation one field over. A loop rebuilt from its record and a retained request —
+the model-response and tool-result cold arms — does not recover it, so its `LoopCompletedEvent.prompt` and
+`LoopFailedEvent.prompt` are published **empty**, and the empty-context recovery path falls back to its literal
+`"Continue with the task."` placeholder instead of the original task. A loop rebuilt from a *redelivered task* is the
+exception: that arm runs the ordinary birth path, which caches the task's prompt, so its terminal events carry it. **Action:** a consumer
 that reads `prompt` off a completion or failure event must tolerate an empty one — correlate on `task_id` or
 `loop_id` if it needs the prompt. The durable field for both the turn and the prompt is
 [#1365](https://github.com/C360Studio/semstreams/issues/1365), not this tag.

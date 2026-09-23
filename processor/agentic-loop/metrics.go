@@ -257,7 +257,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "task_intake_rejections_total",
-				Help:      "Total tasks refused at intake, by bounded lane and reason. lane=\"decoded-task\", reason=\"structural-invalid\": the decoded task is structurally unusable (lineage identity), so the delivery is terminated rather than retried. lane=\"cold-fork\", reason=\"continuation_unheld\": the task continues a loop whose record belongs to a DIFFERENT task and which no process holds, so the turn cannot be applied anywhere — it is acknowledged without effect and must be re-sent once a redelivered input has rebuilt the loop. Sustained non-zero continuation_unheld points at continuations submitted across a process replacement.",
+				Help:      "Total tasks refused at intake, by bounded lane and reason. lane=\"decoded-task\", reason=\"structural-invalid\": the decoded task is structurally unusable (lineage identity), so the delivery is terminated rather than retried. lane=\"cold-fork\", reason=\"continuation_unheld\": the task's id differs from the one the live record names, and no process holds the loop — either a new turn submitted for a loop no process holds, or a redelivered task the record has already moved past. Either way the delivery cannot be applied here: it is acknowledged without effect, and a turn that was never applied must be re-sent once a redelivered input has rebuilt the loop. Sustained non-zero continuation_unheld points at work arriving for loops across a process replacement.",
 			}, []string{"lane", "reason"}),
 
 			// Tool-call governance (ADR-039) drives the timeout-tuning

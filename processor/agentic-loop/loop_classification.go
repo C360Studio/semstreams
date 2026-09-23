@@ -104,13 +104,15 @@ const (
 	// this arm — it cannot say anything about a task it is not about, and is
 	// refused below.
 	taskApplied
-	// taskContinuationUnheld — the record is live and belongs to a DIFFERENT
-	// task, so this delivery is a new turn for a loop no process holds. The
-	// turn cannot be applied here: the loop's conversation lived in the
-	// process that is gone, and neither arm above is about this message.
-	// Refuse it — acknowledge without effect, with a warning and a counted
-	// reason — and let the caller re-send once a redelivered input has
-	// rebuilt the loop (#1330, owner ruling 2026-09-23).
+	// taskContinuationUnheld — the record is live and names a DIFFERENT task,
+	// so nothing here can answer for this delivery: usually a new turn for a
+	// loop no process holds, and equally a redelivered BIRTH task whose record
+	// a warm continuation has since moved onto its own id. The loop's
+	// conversation lived in the process that is gone, and neither arm above is
+	// about this message. Refuse it — acknowledge without effect, with a
+	// warning and a counted reason — and let the caller re-send an unapplied
+	// turn once a redelivered input has rebuilt the loop (#1330, owner ruling
+	// 2026-09-23).
 	taskContinuationUnheld
 )
 

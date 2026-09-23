@@ -25,9 +25,10 @@ The following SHALL hold for every record of a non-terminal loop `L`:
 The non-terminal record SHALL be written with a compare-and-swap update against the revision observed when the
 delivery was admitted. On the model-response and tool-result lanes that update SHALL follow the PubAck of every
 output the new record implies; at loop birth the record SHALL be written before the first request is published. The
-approval lane and the approval-timeout sweeper keep their present write-then-publish order until #1362, and so does
-an update that CREATES an approval gate, on whichever lane produces it: a gate published before it is written leaves a
-human an approval request with no durable gate behind it. A redelivered
+approval lane keeps its present write-then-publish order until #1362, and so does an update that CREATES an approval
+gate, on whichever lane produces it: a gate published before it is written leaves a human an approval request with no
+durable gate behind it. The approval-timeout sweeper keeps its own publish-then-write pair, which is the order it
+already had; #1362 moves it onto the carrier with the lane. A redelivered
 input whose `request_id` is older than `published_request_id` SHALL be acknowledged without effect; one whose
 `request_id` is newer SHALL be retried until the record names it; one whose `request_id` is not a request of the loop
 SHALL be quarantined. A redelivered tool result whose `request_id` equals `published_request_id` and whose execution
@@ -41,7 +42,9 @@ an input was applied.
 A deferred continuation is durable as a MARKER only. Where the record carries `pending_continuation` with an empty
 `pending_continuation_request_id`, the admitted turn's text was never inside a retained request and is not
 recoverable: a rebuild SHALL clear the marker and warn, and SHALL NOT synthesise the turn. Neither the turn nor the
-loop's task prompt is carried by the record, so a rebuilt loop publishes its terminal event with an empty `prompt`.
+loop's task prompt is carried by the record, so a loop rebuilt FROM that record and its retained request — the
+model-response and tool-result cold arms — publishes its terminal event with an empty `prompt`; a loop rebuilt from a
+redelivered task runs the ordinary birth path and keeps the prompt that task carries.
 A continuation reaches only a loop some process holds: a task whose `task_id` differs from the one the live record
 carries SHALL be refused — acknowledged without effect, with a warning naming both tasks and a counted intake
 rejection — and SHALL NOT be acknowledged as an applied task nor used to rebuild the loop's first request, because
@@ -121,7 +124,8 @@ deadline from then on.
 
 #### Scenario: A task redelivered at iteration zero adopts or publishes the first request
 
-- **GIVEN** a loop record at `iterations = 0` with `published_request_id = R1` and an empty `pending_tool_results`
+- **GIVEN** a loop record at `iterations = 0` with `published_request_id = R1`, an empty `pending_tool_results`, and
+  a `task_id` that is the redelivered task's
 - **WHEN** the task message is redelivered to a process with no memory of the loop
 - **THEN** `R1` is rebuilt from the task and handed to the publish path, which adopts an `R1` the stream already
   retains and otherwise publishes it with `Nats-Msg-Id = R1`, the in-process conversation is rebuilt, and the task
