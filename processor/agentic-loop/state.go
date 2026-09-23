@@ -1368,6 +1368,37 @@ func (m *LoopManager) SetTimeout(loopID string, timeout time.Duration) error {
 	return nil
 }
 
+// restoreDeadline puts a loop record's own StartedAt and TimeoutAt back onto
+// the loop this process rebuilt from its task. The cold R1 arm runs the
+// ordinary HandleTask, whose configureLoopMetadata stamps a FRESH deadline, and
+// a rebuild is not a reprieve — "the loop's deadline means what its record
+// says" (owner ruling #1330, 2026-09-23). Every other reconstruction seats the
+// record wholesale and inherits both fields for free.
+//
+// Beside SetTimeout, and in place under this mutex, because these two fields
+// have ONE writer. GetLoop → set → UpdateLoop would replace the whole entity,
+// discarding whatever a sibling lane committed between the read and the write:
+// by the time this runs the loop is registered and its first request tracked,
+// so the response lane — a separate consumer — can be applying the
+// predecessor's answer to it. That is a lost update, not a data race, and
+// -race is blind to it.
+//
+// A record with no deadline overlays zero onto zero, which is what the
+// wholesale seat gives and what IsTimedOut reads as "no deadline".
+func (m *LoopManager) restoreDeadline(loopID string, startedAt, timeoutAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entity, exists := m.loops[loopID]
+	if !exists {
+		return errs.Wrap(fmt.Errorf("loop %s not found", loopID), "LoopManager", "restoreDeadline", "find loop")
+	}
+
+	entity.StartedAt = startedAt
+	entity.TimeoutAt = timeoutAt
+	return nil
+}
+
 // IsTimedOut checks if a loop has exceeded its timeout
 func (m *LoopManager) IsTimedOut(loopID string) bool {
 	m.mu.RLock()

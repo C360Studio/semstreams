@@ -2,6 +2,7 @@ package agenticloop
 
 import (
 	"testing"
+	"time"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/metric"
@@ -467,4 +468,48 @@ func mintedRequestIDsFromResult(t *testing.T, result HandlerResult) []string {
 		}
 	}
 	return ids
+}
+
+// TestRestoringARecordsDeadlineTouchesOnlyTheTwoFieldsItOwns is the in-place
+// half of the cold R1 arm's deadline restore.
+//
+// The restore used to be a component-level read-modify-write — GetLoop, set the
+// two fields, UpdateLoop — and UpdateLoop replaces the WHOLE entity, so
+// anything a sibling lane committed between the two calls was discarded. The
+// window is reachable: the loop is registered and its first request tracked
+// before the restore runs, so the response lane can be applying the
+// predecessor's answer to the same loop. It is a lost update, not a data race,
+// so -race cannot see it and only the shape can rule it out.
+//
+// What is asserted is exactly that: the entity the manager holds afterwards is
+// the one it held before with two fields changed and nothing else re-rendered.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestRestoringARecordsDeadlineTouchesOnlyTheTwoFieldsItOwns(t *testing.T) {
+	manager := NewLoopManager()
+	loopID, err := manager.CreateLoop("task-restore-deadline", "general", "test-model", 5)
+	require.NoError(t, err)
+	require.NoError(t, manager.SetTimeout(loopID, time.Hour))
+
+	// A sibling lane's work, already applied to the held entity.
+	require.NoError(t, manager.IncrementIteration(loopID))
+	require.NoError(t, manager.SetPublishedRequest(loopID,
+		looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String()))
+	before, err := manager.GetLoop(loopID)
+	require.NoError(t, err)
+
+	// The record's own timing, as a rebuild reads it: started long ago, with a
+	// deadline this loop is already close to.
+	recordedStart := time.Now().UTC().Add(-90 * time.Minute)
+	recordedTimeout := recordedStart.Add(2 * time.Hour)
+
+	require.NoError(t, manager.restoreDeadline(loopID, recordedStart, recordedTimeout))
+
+	restored, err := manager.GetLoop(loopID)
+	require.NoError(t, err)
+	want := before
+	want.StartedAt = recordedStart
+	want.TimeoutAt = recordedTimeout
+	assert.Equal(t, want, restored,
+		"the restore owns two fields: anything else that differs was re-rendered from a stale read")
 }

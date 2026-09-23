@@ -1651,7 +1651,8 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 		// republished, because the alternative is running the loop on a
 		// deadline the ruling forbids. Released and returned transient for the
 		// same reason the two birth arms below release.
-		if err := c.restoreRecordedLoopDeadline(result.LoopID, record.entity); err != nil {
+		if err := c.handler.loopManager.restoreDeadline(
+			result.LoopID, record.entity.StartedAt, record.entity.TimeoutAt); err != nil {
 			c.logger.Error("Rebuilt loop could not be given its record's deadline — the request is not republished",
 				"loop_id", result.LoopID, "task_id", task.TaskID, "error", err)
 			c.releaseLoopTransientState(result.LoopID)
@@ -1711,24 +1712,6 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 		return err
 	}
 	return nil
-}
-
-// restoreRecordedLoopDeadline overlays a loop record's own StartedAt and
-// TimeoutAt onto the loop this process just rebuilt from its task.
-//
-// It exists for the ONE reconstruction that does not seat the record
-// wholesale: the cold R1 arm runs HandleTask, and HandleTask stamps a fresh
-// deadline. Everything else about that rebuild is deliberately the ordinary
-// birth path, so the two fields the ruling protects are put back here rather
-// than by teaching the birth path what a rebuild is.
-func (c *Component) restoreRecordedLoopDeadline(loopID string, recorded agentic.LoopEntity) error {
-	entity, err := c.handler.GetLoop(loopID)
-	if err != nil {
-		return err
-	}
-	entity.StartedAt = recorded.StartedAt
-	entity.TimeoutAt = recorded.TimeoutAt
-	return c.handler.UpdateLoop(entity)
 }
 
 func (c *Component) writeLineageTriples(ctx context.Context, loopID string, related map[string]any) error {
