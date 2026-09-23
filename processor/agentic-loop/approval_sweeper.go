@@ -111,17 +111,37 @@ func (c *Component) sweepExpiredApprovals(ctx context.Context) {
 		// that minted nothing stamps nothing — mintedRequestID returns "" and
 		// stampPublishedRequest is a no-op.
 		//
-		// None of the three failures below has a delivery to retry — this is a
-		// timer, not a consumer — so each is named rather than silently
-		// swallowed. All are log-only: there is no loop-side counter whose
+		// Neither of the two failures below has a delivery to retry — this is
+		// a timer, not a consumer — so each is named rather than silently
+		// swallowed. Both are log-only: there is no loop-side counter whose
 		// subject is "a write this process meant to make did not commit", and
 		// #1362, which moves this lane onto the carrier, owns whether one is
 		// owed (design § 5.6).
 		if err := c.publishResults(ctx, result); err != nil {
-			c.logger.Warn("approval timeout auto-reject did not publish its results",
+			// The advance goes no further than this process's memory. Stamping
+			// or persisting past a failed publication commits a record naming a
+			// request the stream does not retain, which is I1; with KV still
+			// writable that is exactly what lands — the record names R2, the
+			// stream holds only R1, and every later cold read of the loop takes
+			// adoptNewerRetainedRequest's Fatal I1 arm, quarantining a lane
+			// over an approval that merely timed out. Skipping only the stamp
+			// is not the answer either: persisting the advanced entity under
+			// the old name is the iteration/identity mismatch the stamp exists
+			// to prevent. So the record keeps the gated predecessor state it
+			// already holds, which is what a replacement can still recover
+			// from. This is the carrier's own shape for the same error
+			// (publishThenPersistResultState returns before it stamps).
+			//
+			// The loop this process already advanced IN MEMORY is left as it
+			// is: a timer has no delivery to classify, so there is nothing here
+			// to retry or quarantine, and the sweeper's retry/counter policy
+			// travels with the lane to #1362 (design § 5.6).
+			c.logger.Warn("approval timeout auto-reject did not publish its results — "+
+				"the record keeps the gated state it already holds",
 				slog.String("loop_id", cand.LoopID),
 				slog.String("call_id", cand.CallID),
 				slog.String("error", err.Error()))
+			continue
 		}
 		if err := c.stampPublishedRequest(result); err != nil {
 			c.logger.Warn("approval timeout auto-reject did not name the request it published",

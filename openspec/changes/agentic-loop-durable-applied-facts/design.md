@@ -377,8 +377,13 @@ and has no W4.
   (docket OQ2, owner ruling 2026-09-22, scope ratified 2026-09-22 issuecomment-5781101792; § 4). Its write pair moves onto the carrier **with the approval lane in #1362**: the timeout
   sweeper's own publish-then-`Put` pair (`AS:100-101`) is replaced by the carrier (`persistHandlerResult`, `C:1923`)
   so the auto-reject takes the same publish → `Update` order and the same CAS as an operator rejection (D39). In L4a
-  the pair is untouched; only its `persistLoopState` call (`AS:101`) rides the writer's change to `Update`.
-  **Residual for #1362, recorded in L4a:** both halves of that pair fail log-only. A timer has no delivery to
+  the pair keeps its order; its `persistLoopState` call (`AS:101`) rides the writer's change to `Update`, and
+  a failed publication now stops the pair rather than running past it (owner round 4, finding 1): neither the
+  stamp nor the persist follows a publication that did not land, so the record keeps the gated predecessor
+  state — a record naming a request the stream does not retain is I1 broken, and with KV writable that was
+  exactly the state the sweep used to leave.
+  **Residual for #1362, recorded in L4a:** both halves of that pair fail log-only, and the advance this process
+  already made IN MEMORY when its publication failed is left as it is. A timer has no delivery to
   classify, so neither the publish nor the record write can settle anything — L4a names each in its own `Warn`
   line ("did not publish its results", "did not commit the loop record") and adds no counter. No existing loop-side counter's subject is "a write this process meant to
   make did not commit": `tool_results_dropped_total`, `model_responses_dropped_total` and `signals_dropped_total`

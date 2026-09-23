@@ -28,7 +28,8 @@ output the new record implies; at loop birth the record SHALL be written before 
 approval lane keeps its present write-then-publish order until #1362, and so does an update that CREATES an approval
 gate, on whichever lane produces it: a gate published before it is written leaves a human an approval request with no
 durable gate behind it. The approval-timeout sweeper keeps its own publish-then-write pair, which is the order it
-already had; #1362 moves it onto the carrier with the lane. A redelivered
+already had, and writes neither the request name nor the advance when that publication fails; #1362 moves it onto the
+carrier with the lane. A redelivered
 input whose `request_id` is older than `published_request_id` SHALL be acknowledged without effect; one whose
 `request_id` is newer SHALL be retried until the record names it; one whose `request_id` is not a request of the loop
 SHALL be quarantined. A redelivered tool result whose `request_id` equals `published_request_id` and whose execution
@@ -98,6 +99,16 @@ deadline from then on.
 - **WHEN** the replacement starts and holds no in-memory approval deadline for that loop
 - **THEN** no approval deadline is re-armed and no record is written, and the loop stays `awaiting_approval` until the
   approval is answered or the loop is cancelled
+
+#### Scenario: An approval timeout whose rejection could not be published leaves the record as it was
+
+- **GIVEN** a loop gated on a human approval whose deadline has passed, whose record names `R` with the gate on it,
+  and whose stream retains `R`
+- **WHEN** the sweep's auto-reject mints `R(N+1)` and its publication fails while the record is still writable
+- **THEN** neither the new request name nor the iteration it implies is written: the record still names `R` with its
+  approval gate intact, and a redelivered result of the gated batch is still classified against it — a record naming a
+  request the stream does not retain is refused by every later cold read, so the advance is committed only behind its
+  PubAck
 
 #### Scenario: A stale tool result is acknowledged without effect
 
