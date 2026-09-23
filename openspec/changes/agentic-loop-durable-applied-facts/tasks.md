@@ -577,15 +577,35 @@
       response lanes; checks I1–I4 after every step (I2 as membership, never rendering) and "no duplicate request
       published unless absent from the fake stream". The approval-response lane's three shapes use named examples and
       land with L4b (#1362).
-      **Landed.** `applied_facts_property_test.go` `TestPropAppliedFactsHoldAcrossEveryCrashWindow`: a Rapid state
-      machine over the recording bucket and the evidence-reader seam with five actions — advance the loop (its crash
-      point is a drawn bool, so "the record write never landed" is an ordinary draw, with or without a tool batch),
-      replay the mint of the current request, replace the process, redeliver a tool result to a cold process, redeliver
-      a model response to a cold process — plus an unnamed invariant action that checks I1–I4 and "no request is
-      published twice while the stream holds it" after EVERY step. The decisions under test are production's:
-      `adoptRetainedRequest`, `adoptNewerRetainedRequest`, `persistLoopState` and both cold lane arms run unchanged,
-      and the model supplies only retention and crash points. I2 is checked as membership of what the request
-      dispatched, never by rendering. 300 checks under `-race` in 11.09s.
+      **Landed, and NARROWED in round 2 — see 8.5.** `applied_facts_property_test.go`
+      `TestPropAppliedFactsHoldAcrossEveryCrashWindow`: a Rapid state machine over the recording bucket and the
+      evidence-reader seam with five actions — advance the loop (its crash point is a drawn bool, so "the record write
+      never landed" is an ordinary draw, with or without a tool batch), replay the mint of the current request, replace
+      the process, redeliver a tool result to a cold process, redeliver a model response to a cold process — plus an
+      unnamed invariant action that runs after EVERY step. What that action GENERATES, and all this task claims, is
+      **I1, I3 in its derived form (`iterations == the named request's iteration − 1`), and "no request is published
+      twice while the stream holds it"**. The decisions under test are production's: `adoptRetainedRequest`,
+      `adoptNewerRetainedRequest`, `persistLoopState` and both cold lane arms run unchanged, and the model supplies
+      only retention and crash points. 300 checks under `-race` in 11.09s.
+      **I2 and I4 are NOT generated, and the two checks that claimed them were DELETED** (owner ruling 2026-09-23,
+      docket question 2 — NARROW): neither could fire. The advance action drains the applied set and writes the
+      advanced record with it empty, so the durable set between actions was always empty and the I2 loop never reached
+      an assertion; no action creates an approval gate, so the I4 branch was never true. The `toolCalls` ledger the
+      deleted I2 check was the only reader of went with them. Both invariants are carried by NAMED examples instead,
+      listed in the test's own doc comment: I2 by `TestToolResultRedeliveredToAReplacementProcess`'s "W2" arm,
+      `TestAReplayedAppliedToolResultDoesNotQuarantineItsLane`,
+      `TestATaskRedeliveredOverAProgressedFirstBatchIsNotRepublished`, `TestARestoredToolBatchKnowsWhatIsLeftToRun`
+      and `TestAColdToolResultRebuildsTheBatchItBelongsTo`; I4 by the step-0 adopt's two arms —
+      `TestColdReadAdoptsTheNewestRetainedRequestFirst`'s "a pending approval gate is cleared in the same write"
+      (`loop_carrier_test.go`), which pins the DURABLE record, and `TestAnAdoptedRequestClearsTheGateItAdvancedPast`
+      (`loop_record_writer_test.go`), added in round 2, which pins the record the adopt RETURNS to the classification
+      running next.
+      **Premise correction, measured (see 8.5):** the docket recommended the new example on the ground that the
+      step-0 gate clear was untested in L4a. It was not untested — the first arm above already covered it, and the
+      finding-5 mutant reds BOTH. The docket's search enumerated a fixed file list that excluded
+      `loop_carrier_test.go`. The example was still landed as ruled; what it adds is the returned record and a gate
+      built by the production constructor, and whether it is worth keeping beside the existing arm is the owner's
+      call, not a developer's.
       The approval lane's three shapes stay with L4b (#1362).
       Mutant (c) in 4.3 is what proves the property is not self-satisfying.
 - [x] 4.2 Real-NATS W4 on the tool lane — the W4 case RESTARTS the process via `test/e2e/harness/processbarrier`

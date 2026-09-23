@@ -174,6 +174,65 @@ func TestAColdAdoptAndAWarmWriteOfOneLoopDoNotRefuseEachOther(t *testing.T) {
 		"the adopt ran last, so the record must name what the stream retains")
 }
 
+// TestAnAdoptedRequestClearsTheGateItAdvancedPast is I4's named example, at
+// the one write in L4a that touches an approval gate.
+//
+// Step 0 brings a cold record forward to the loop's newest retained request
+// before any redelivered input is classified, and a record parked at a gate is
+// reachable there: the gate named the request the record named when the human
+// was asked, and the predecessor published the NEXT request before it died. An
+// adopt that moved `published_request_id` and left `pending_approval` behind
+// would leave a gate naming a request the record no longer names — exactly
+// what I4 forbids — and the delta's THEN for the step-0 adoption scenario
+// spells the answer out: any `pending_approval` cleared, `state = running`.
+//
+// This is the kind of example the generated property cannot be: no action of
+// that state machine creates a gate, so its I4 branch was never true and the
+// check was deleted rather than left standing (applied_facts_property_test.go).
+//
+// It is not the seam's only cover, and the round-2 docket's claim that the
+// step-0 gate clear was untested is measurably wrong — its search excluded
+// loop_carrier_test.go. TestColdReadAdoptsTheNewestRetainedRequestFirst's "a
+// pending approval gate is cleared in the same write" arm already pins the
+// DURABLE record, and deleting the ResolveApproval call reds it too. What
+// this one adds is the record the adopt RETURNS — the one the classification
+// running next reads, which the durable check cannot see — and a gate built
+// by the production constructor rather than a hand-written struct.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestAnAdoptedRequestClearsTheGateItAdvancedPast(t *testing.T) {
+	const loopID = "6d2b8f51-0a93-4c17-8e46-9b3f7a1c5d20"
+	gatedRequest := looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String()
+	retained := looprequest.ID{LoopID: loopID, Iteration: 3, Retry: 0}.String()
+
+	c := evidenceComponent(t, retained)
+	coldRecord(t, c, loopID, func(e *agentic.LoopEntity) {
+		e.PublishedRequestID = gatedRequest
+		e.Iterations = 1
+		require.NoError(t, e.BeginAwaitingApproval(
+			"call-gated", "gated_tool", nil, "approval_required: a human decides", 0, ""))
+		// I4 as the record carried it: the gate names the request the record
+		// named when it gated.
+		e.PendingApproval.RequestID = gatedRequest
+	})
+
+	adopted, err := c.adoptNewerRetainedRequest(t.Context(), loopID)
+	require.NoError(t, err)
+
+	require.Equal(t, retained, adopted.entity.PublishedRequestID,
+		"the adopt is the write under test; without it there is no I4 question to ask")
+	require.Nil(t, adopted.entity.PendingApproval,
+		"the adopt moved the record past the request the gate named, so a surviving gate names a "+
+			"request the record no longer does")
+	require.Equal(t, agentic.LoopStateExecuting, adopted.entity.State,
+		"a loop whose gate is gone is running again, not parked at a decision nobody will answer")
+
+	written := decodeRecord(t, c, loopID)
+	require.Nil(t, written.PendingApproval,
+		"the durable record is what every later reader classifies against")
+	require.Equal(t, retained, written.PublishedRequestID)
+}
+
 // TestRenderingTheRecordDoesNotRaceAStoredToolResult pins the one thing the
 // record lock cannot do.
 //

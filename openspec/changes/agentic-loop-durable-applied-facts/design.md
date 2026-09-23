@@ -208,6 +208,10 @@ PBT decision (`docs/contributing/01-testing.md`): I1–I4 hold over action seque
 redeliver), so one bounded Rapid state-machine property over an in-memory KV plus a fake retained-stream reader (the
 evidence-reader seam built in task 2.3) covers the tool and response lanes and checks I2 as membership, never by
 rendering; the approval lane has three shapes, uses named examples, and lands with L4b (#1362).
+**Amended by round 2 (finding 5, owner ruling 2026-09-23 — NARROW):** the built property GENERATES I1, I3 and the
+publication property only. Its actions never leave a populated applied set between steps and never create an approval
+gate, so the I2 and I4 checks could not fire and were deleted; both invariants are carried by named examples instead,
+enumerated in the test's doc comment and in task 4.1.
 
 ## 5. Per lane: algorithm and crash windows
 

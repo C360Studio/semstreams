@@ -22,10 +22,6 @@ type appliedFactsStream struct {
 	loopID    string
 	retained  []string
 	publishes map[string]int
-	// toolCalls names, per request, the executions that request dispatched.
-	// I2 is checked against it as MEMBERSHIP: no rendered message, no content
-	// comparison, which is the whole point of the invariant.
-	toolCalls map[string][]string
 }
 
 func (s *appliedFactsStream) publish(requestID string) {
@@ -78,21 +74,45 @@ func (s *appliedFactsStream) ReadRetainedResponse(context.Context, string, strin
 
 // TestPropAppliedFactsHoldAcrossEveryCrashWindow drives the loop record
 // through advances, lost record writes (W4), process replacements and
-// redeliveries in arbitrary order, and checks I1–I4 after every single step.
+// redeliveries in arbitrary order, and checks after every single step the
+// invariants this model actually reaches.
 //
-// The invariants are the ones the change's own requirement states, not ones
-// read back out of the implementation:
+// They are the ones the change's own requirement states, not ones read back
+// out of the implementation:
 //
 //   - I1 a record naming R means the stream retains R.
-//   - I2 every applied-set entry for R names an execution R dispatched
-//     (membership; nothing is rendered or compared).
 //   - I3 iterations moves only with published_request_id — checked in its
 //     derived form, iterations == the named request's iteration minus one,
 //     which is what every writer must maintain.
-//   - I4 a pending approval names the published request.
+//   - The publication property: no request is ever published twice while the
+//     stream still holds it.
 //
-// Plus the publication property: no request is ever published twice while the
-// stream still holds it.
+// I2 and I4 are deliberately NOT claimed here, and the two checks that
+// claimed them were DELETED rather than left standing (owner ruling
+// 2026-09-23 on #1330, round-2 docket question 2 — NARROW). Neither could
+// fire: the advance action drains the applied set and writes the advanced
+// record with it empty, so the durable set between actions is always empty
+// and the I2 loop never reached an assertion; and no action here creates an
+// approval gate, so the I4 branch was never true. A check that cannot fire is
+// a coverage claim written in code, which is worse than no claim at all.
+//
+// What those two invariants have instead is named examples, each driving the
+// real production path:
+//
+//   - I2 (membership) — TestToolResultRedeliveredToAReplacementProcess's
+//     "W2" arm and TestAReplayedAppliedToolResultDoesNotQuarantineItsLane in
+//     tool_result_redelivery_integration_test.go,
+//     TestATaskRedeliveredOverAProgressedFirstBatchIsNotRepublished in
+//     task_redelivery_integration_test.go, and
+//     TestARestoredToolBatchKnowsWhatIsLeftToRun and
+//     TestAColdToolResultRebuildsTheBatchItBelongsTo in loop_rebuild_test.go.
+//   - I4 (a gate names the published request) — the one write in L4a that
+//     touches a gate is step 0's adopt, pinned by
+//     TestColdReadAdoptsTheNewestRetainedRequestFirst's "a pending approval
+//     gate is cleared in the same write" arm (loop_carrier_test.go) on the
+//     DURABLE record, and by TestAnAdoptedRequestClearsTheGateItAdvancedPast
+//     (loop_record_writer_test.go) on the record the adopt RETURNS, which is
+//     what the classification running next reads.
 //
 // Boundary coverage is by construction: the advance action draws its own
 // crash flag, so "the record write never landed" is an ordinary draw rather
@@ -106,7 +126,6 @@ func TestPropAppliedFactsHoldAcrossEveryCrashWindow(t *testing.T) {
 		stream := &appliedFactsStream{
 			loopID:    loopID,
 			publishes: map[string]int{},
-			toolCalls: map[string][]string{},
 		}
 		bucket := &recordingLoopBucket{}
 		ctx := context.Background()
@@ -164,7 +183,6 @@ func TestPropAppliedFactsHoldAcrossEveryCrashWindow(t *testing.T) {
 					// One dispatched execution of the CURRENT request, stored
 					// the way the handler stores it. The advance drains it.
 					execution := deriveToolExecutionID(current, "call-prop", 1)
-					stream.toolCalls[current] = append(stream.toolCalls[current], execution)
 					if err := h.loopManager.StoreToolResult(loopID, agentic.ToolResult{
 						CallID: "call-prop", ExecutionID: execution, RequestID: current, CallOrdinal: 1,
 					}); err != nil {
@@ -285,29 +303,10 @@ func TestPropAppliedFactsHoldAcrossEveryCrashWindow(t *testing.T) {
 						entity.Iterations, entity.PublishedRequestID, named.Iteration)
 				}
 
-				// I2: membership, never rendering.
-				for key, result := range entity.PendingToolResults {
-					if result.RequestID != entity.PublishedRequestID {
-						continue
-					}
-					dispatched := false
-					for _, execution := range stream.toolCalls[result.RequestID] {
-						if execution == key {
-							dispatched = true
-							break
-						}
-					}
-					if !dispatched {
-						rt.Fatalf("I2: the applied set holds %q, which request %q never dispatched",
-							key, result.RequestID)
-					}
-				}
-
-				// I4: a gate always names the published request.
-				if entity.PendingApproval != nil && entity.PendingApproval.RequestID != entity.PublishedRequestID {
-					rt.Fatalf("I4: the gate names %q beside published request %q",
-						entity.PendingApproval.RequestID, entity.PublishedRequestID)
-				}
+				// I2 and I4 are not checked here: no action of this model
+				// leaves a populated applied set between steps or creates an
+				// approval gate, so both checks were unfirable. Their named
+				// examples are listed in this test's doc comment.
 
 				// The publication property: a request the stream already holds
 				// is adopted, never published a second time.
