@@ -294,13 +294,14 @@ func TestArchitectWithToolCalls_CompletionAfterTools(t *testing.T) {
 	}
 
 	// Complete tool execution
-	_, err = handler.HandleToolResult(ctx, architectLoopID, agentic.ToolResult{
+	advanced, err := handler.HandleToolResult(ctx, architectLoopID, agentic.ToolResult{
 		CallID:  "call-001",
 		Content: "Found patterns: ...",
 	})
 	if err != nil {
 		t.Fatalf("HandleToolResult() error = %v", err)
 	}
+	carrierStamp(t, handler, advanced)
 
 	// Now architect completes
 	completeResponse := agentic.AgentResponse{
@@ -396,13 +397,14 @@ func TestCompletionState_IncludesIterations(t *testing.T) {
 		t.Fatalf("HandleModelResponse() error = %v", err)
 	}
 
-	_, err = handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
+	advanced, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
 		CallID:  "call-001",
 		Content: "Result 1",
 	})
 	if err != nil {
 		t.Fatalf("HandleToolResult() error = %v", err)
 	}
+	carrierStamp(t, handler, advanced)
 
 	// Complete
 	result, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{

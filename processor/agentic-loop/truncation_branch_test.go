@@ -174,6 +174,9 @@ func TestHandleLengthTruncation_BudgetRenewsOnTheNextIteration(t *testing.T) {
 	if ids := mintedRequestIDs(t, firstResult); len(ids) != 1 || !strings.HasSuffix(ids[0], ":req:1:1") {
 		t.Fatalf("the iteration-1 self-heal must mint :req:1:1; got %v", ids)
 	}
+	// The retry budget below is read off the request the RECORD names, and the
+	// carrier is what names it (#1330 finding 3).
+	carrierStamp(t, handler, firstResult)
 
 	// Advance an iteration for real: a tool_call response dispatches a tool,
 	// and its result completes the batch, which is what increments the
@@ -206,6 +209,7 @@ func TestHandleLengthTruncation_BudgetRenewsOnTheNextIteration(t *testing.T) {
 	if ids := mintedRequestIDs(t, advanced); len(ids) != 1 || !strings.HasSuffix(ids[0], ":req:2:0") {
 		t.Fatalf("the tool batch must advance the loop to :req:2:0; got %v", ids)
 	}
+	carrierStamp(t, handler, advanced)
 
 	// A truncation at the new iteration has its own self-heal.
 	fillContextToHighUtilization(t, handler, loopID, 80000)
@@ -357,6 +361,7 @@ func TestHandleLengthTruncation_SecondTruncation_FailWithCompactionAttempted(t *
 	if firstResult.State == agentic.LoopStateFailed {
 		t.Fatalf("first call failed unexpectedly; state=%s", firstResult.State)
 	}
+	carrierStamp(t, handler, firstResult)
 
 	// Second truncation arrives — same iteration, retry counter is now 1.
 	second := agentic.AgentResponse{

@@ -229,12 +229,14 @@ func TestHandleModelResponse_MaxIterationsGuard_ReturnsTypedSentinel(t *testing.
 	}); err != nil {
 		t.Fatalf("HandleModelResponse() iteration 1 error = %v", err)
 	}
-	if _, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
+	advanced, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
 		CallID:  "call-001",
 		Content: "Result 1",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("HandleToolResult() iteration 1 error = %v", err)
 	}
+	carrierStamp(t, handler, advanced)
 
 	entity, err := handler.GetLoop(loopID)
 	if err != nil {
@@ -1442,13 +1444,14 @@ func TestMessageHandler_MaxIterationsGuard(t *testing.T) {
 		t.Fatalf("HandleModelResponse() iteration 1 error = %v", err)
 	}
 
-	_, err = handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
+	firstAdvance, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
 		CallID:  "call-001",
 		Content: "Result 1",
 	})
 	if err != nil {
 		t.Fatalf("HandleToolResult() iteration 1 error = %v", err)
 	}
+	carrierStamp(t, handler, firstAdvance)
 
 	// Iteration 2: tool call and result
 	_, err = handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{

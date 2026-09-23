@@ -298,6 +298,7 @@ func TestTruncationRetryCarriesTheDeferredTurn(t *testing.T) {
 
 	// The turn has gone out. The completion that answers the retry must settle
 	// the loop, not defer a turn the model has already been asked.
+	carrierStamp(t, handler, retry)
 	completion, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
 		RequestID: retryID,
 		Status:    agentic.StatusComplete,
@@ -364,6 +365,7 @@ func TestASecondContinuationUncarriesTheDeferralAndSendsBothTurns(t *testing.T) 
 		t.Fatalf("carrier = %q, want the request carrying turn one %q",
 			entity.PendingContinuationRequestID, carrier)
 	}
+	carrierStamp(t, handler, firstCarry)
 
 	// Someone types again while THAT request is in flight.
 	second, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
@@ -527,6 +529,7 @@ func TestDeferredContinuationIsCarriedByATerminalTool(t *testing.T) {
 
 	// Nothing is deferred now, so the answer to the carried request settles the
 	// loop — the terminal tool delayed the completion, it did not cancel it.
+	carrierStamp(t, handler, terminal)
 	completion, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
 		RequestID: next,
 		Status:    agentic.StatusComplete,

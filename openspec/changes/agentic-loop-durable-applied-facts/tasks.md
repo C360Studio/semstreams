@@ -332,6 +332,10 @@
       Mutant: delete the `SetPublishedRequest` call from `publishIterationRequest` (`H:2956-2958`) →
       `TestEveryMintedRequestIsNamedOnTheLoopRecord`, `TestMintedRequestIDsAreInjectiveAcrossTheHandlerPath` and
       `TestHandleLengthTruncation_BudgetRenewsOnTheNextIteration` red.
+      **Superseded in part by 7.3** (owner Codex round, finding 3; #1330 Q1, 2026-09-23): "the three minting sites"
+      is no longer where the field is set. Birth keeps its mint-site call; the two ITERATION sites lost theirs to
+      the carrier, which stamps after the request PubAcks. Everything else on this row — the grammar, the durable
+      retry ordinal, the deletions, the migration note — stands.
 - [x] 2.5 Step 0 for every cold read but the task lane (design § 3.6): read the newest retained request (task 2.3's
       reader), order it against `PublishedRequestID` with `looprequest.Parse`/`Compare` (task 1.0); newer →
       `Update(revision)` the record before classifying — field, `Iterations = parsed iteration − 1` (`ST:1345`: a

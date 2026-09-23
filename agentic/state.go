@@ -65,7 +65,13 @@ type LoopEntity struct {
 	// response or tool result by identity — older, current or newer — instead
 	// of comparing retained conversation content.
 	//
-	// Set at birth and by every request-minting transition; never cleared.
+	// Set at birth, where the record is written before the first request is
+	// published, and on every later request-minting transition by the CARRIER,
+	// once that request's PubAck has landed — never at the mint, because a
+	// name stamped at the mint is visible to every other lane writing this
+	// loop and one of them committing it would put a request in the record
+	// that the stream does not hold. Never cleared.
+	//
 	// It is a settlement fact, not an in-flight answer: a record naming a
 	// request says nothing about whether any process is still working on it.
 	PublishedRequestID string    `json:"published_request_id,omitempty"`

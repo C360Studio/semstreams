@@ -134,9 +134,15 @@ Two more callers ride the same write: the deferred-continuation marker (`C:1425`
    current R → publish with `Nats-Msg-Id = R'` (Q5); anything else (older than R, beyond R', unparseable) → Quarantine
    as a conflict (`errs.WrapFatal`; on `main` each lane returns its own `natsclient.DeliveryDecision` in place, the
    `C:2780` shape — there is no `loopSettlementDecision` helper and none is built). No content compare.
-4. **Setting the field:** `LoopManager.SetPublishedRequest(loopID, requestID)` at the three minting sites on `main`
-   (`H:1122` inside `buildTaskRequest`, `H:2168` inside `emitRetryRequest`, `H:2927` inside `publishIterationRequest`);
-   the marshal inside `persistLoopState` (`C:2468`) carries it.
+4. **Setting the field** (amended 2026-09-23 by the owner ruling on the Codex round's finding 3, #1330 Q1):
+   `LoopManager.SetPublishedRequest(loopID, requestID)` at BIRTH only (`buildTaskRequest`), where Q1 writes the record
+   before the first publish. The two iteration mint sites (`emitRetryRequest`, `publishIterationRequest`) do not set
+   it; the CARRIER does, in `Component.stampPublishedRequest` under `loopRecordMu`, after `publishResults` PubAcks and
+   before `persistResultState`. The entity is shared with every other lane that writes this loop — a deferred
+   continuation on the task lane, a tool lane's CAS — so a name set at the mint is one a SIBLING can commit while the
+   request is still in flight, writing a record that names a request the stream does not retain. `TrackRequest` stays
+   at the mint: route, outstanding and the deferred turn's carrier are attach-order facts. The marshal inside
+   `persistLoopState` carries the field as before.
 5. **Retry ordinal:** `IncrementTruncationRetry` (`ST:466`) and `ResetTruncationRetry` (`ST:477`), both process-local,
    are replaced by parsing the `<retry>` part of `PublishedRequestID` (`looprequest`, added in THIS change — L2 declined
    to export a parser with no reader, deviation accepted by the coordinator 2026-09-19 on #1328; task 1.0). Their

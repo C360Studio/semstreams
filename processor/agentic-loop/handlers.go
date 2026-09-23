@@ -2265,11 +2265,10 @@ func (h *MessageHandler) emitRetryRequest(ctx context.Context, loopID string, en
 		ResponseFormat: h.loopManager.GetCachedResponseFormat(loopID),
 	}
 
+	// As in publishIterationRequest: the carrier stamps PublishedRequestID once
+	// this retry is retained (stampPublishedRequest, #1330 Q1).
 	h.loopManager.TrackRequest(request.RequestID, loopID)
 	h.loopManager.TrackRequestStart(request.RequestID)
-	if err := h.loopManager.SetPublishedRequest(loopID, request.RequestID); err != nil {
-		return err
-	}
 
 	requestMsg := message.NewBaseMessage(request.Schema(), &request, "agentic-loop")
 	requestData, err := json.Marshal(requestMsg)
@@ -3031,11 +3030,13 @@ func (h *MessageHandler) publishIterationRequest(
 	// also records this request as the carrier of any deferred turn, because
 	// every request that goes out carries the turn and this is the call every
 	// publish site already makes.
+	//
+	// The loop's PublishedRequestID is NOT set here. Route, outstanding and the
+	// deferred turn's carrier are attach-order facts about this process; the
+	// record's name is a claim that the request is retained, and only the
+	// carrier knows when that became true (stampPublishedRequest, #1330 Q1).
 	h.loopManager.TrackRequest(request.RequestID, loopID)
 	h.loopManager.TrackRequestStart(request.RequestID)
-	if err := h.loopManager.SetPublishedRequest(loopID, request.RequestID); err != nil {
-		return err
-	}
 
 	requestMsg := message.NewBaseMessage(request.Schema(), &request, "agentic-loop")
 	requestData, err := json.Marshal(requestMsg)

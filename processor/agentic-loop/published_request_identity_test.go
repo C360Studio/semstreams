@@ -11,14 +11,23 @@ import (
 
 // TestEveryMintedRequestIsNamedOnTheLoopRecord walks the three sites that mint
 // an agent.request — birth, the compaction retry, and the advance after a tool
-// batch — and asserts each one leaves its RequestID on the loop entity the
-// carrier is about to write.
+// batch — and asserts each one's RequestID is the one the loop names by the
+// time its carrier has run.
 //
-// This is invariant I1's producer half (#1330). A mint that published a
-// request the record did not name would leave a replacement process unable to
-// tell the response for that request from a response for a superseded one, and
-// the failure is silent: the record still validates, the loop still runs, and
-// the hole only opens when a process is replaced.
+// This is invariant I1's producer half (#1330). A published request the record
+// never named would leave a replacement unable to tell that request's response
+// from a superseded one, and the failure is silent: the record still
+// validates, the loop still runs, and the hole only opens at a replacement.
+//
+// WHERE the name is written moved with the owner Codex round's finding 3
+// (#1330 Q1, 2026-09-23). Birth still names it at the mint — its record is
+// written before the first publish, so the name has to exist first. The two
+// ITERATION sites do not: they build the request and the carrier names it
+// after publishResults PubAcks it, because a name stamped at the mint is
+// visible to every other lane writing this loop, and one of them committing it
+// would put a request in the record that the stream does not hold. So each
+// iteration site is asserted twice here — the record still names the PREVIOUS
+// request at the mint, and the new one once the carrier has run.
 //
 // spec: agentic-loop / The loop record names its outstanding request
 func TestEveryMintedRequestIsNamedOnTheLoopRecord(t *testing.T) {
@@ -53,7 +62,12 @@ func TestEveryMintedRequestIsNamedOnTheLoopRecord(t *testing.T) {
 	retry := mintedRequestIDs(t, retryResult)
 	require.Len(t, retry, 1, "the self-heal mints exactly one request")
 	require.Equal(t, loopID+":req:1:1", retry[0])
-	requirePublishedRequest(t, handler, loopID, retry[0])
+	requirePublishedRequest(t, handler, loopID, birth[0],
+		"the mint must not name a request whose PubAck has not landed: a sibling lane writing this "+
+			"loop would commit it, and the stream would not hold it")
+	carrierStamp(t, handler, retryResult)
+	requirePublishedRequest(t, handler, loopID, retry[0],
+		"once the request is retained the carrier names it")
 
 	// The advance: a tool batch completes and the loop moves to iteration 2.
 	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
@@ -83,6 +97,9 @@ func TestEveryMintedRequestIsNamedOnTheLoopRecord(t *testing.T) {
 	advance := mintedRequestIDs(t, advanced)
 	require.Len(t, advance, 1, "the completed batch mints exactly one request")
 	require.Equal(t, loopID+":req:2:0", advance[0])
+	requirePublishedRequest(t, handler, loopID, retry[0],
+		"the advance mints the next request; naming it is the carrier's, after its PubAck")
+	carrierStamp(t, handler, advanced)
 	requirePublishedRequest(t, handler, loopID, advance[0])
 }
 

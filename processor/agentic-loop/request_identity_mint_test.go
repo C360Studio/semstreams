@@ -30,6 +30,22 @@ func mintedRequestIDs(t *testing.T, result agenticloop.HandlerResult) []string {
 	return ids
 }
 
+// carrierStamp stands in for the ONE Component step a handler-only fixture
+// does not have: naming the request a result minted on the loop, which since
+// the owner Codex round's finding 3 (#1330 Q1) happens at the carrier after
+// the request PubAcks rather than at the mint.
+//
+// A fixture that drives more than one model turn needs it, because the next
+// response is ordered against the name the record carries: without the stamp
+// the loop is still naming the previous request and the response is refused as
+// "not yet named", which is precisely what a live replacement would retry.
+func carrierStamp(t *testing.T, handler *agenticloop.MessageHandler, result agenticloop.HandlerResult) {
+	t.Helper()
+	if _, err := handler.CarrierStampForTest(result); err != nil {
+		t.Fatalf("carrier stamp for loop %s: %v", result.LoopID, err)
+	}
+}
+
 // oneMintedRequestID asserts the result published exactly one agent.request and
 // returns its RequestID.
 func oneMintedRequestID(t *testing.T, stage string, result agenticloop.HandlerResult) string {
@@ -109,6 +125,10 @@ func TestMintedRequestIDsAreInjectiveAcrossTheHandlerPath(t *testing.T) {
 	if continuation == birth {
 		t.Fatalf("birth and continuation minted the same RequestID %q — two logical requests share one name", birth)
 	}
+	// The carrier names it: the retry ordinal below is derived from the request
+	// the RECORD carries, and in production the carrier has stamped it by the
+	// time the next response arrives.
+	carrierStamp(t, handler, toolsComplete)
 
 	// Truncation retry: within-iteration recovery. The iteration ordinal is
 	// unchanged and the retry ordinal advances, so the retry is a request of
@@ -134,6 +154,7 @@ func TestMintedRequestIDsAreInjectiveAcrossTheHandlerPath(t *testing.T) {
 	if retry == continuation {
 		t.Fatalf("the retry reused the truncated request's name %q", continuation)
 	}
+	carrierStamp(t, handler, retryResult)
 
 	// Forward progress after a retry: the NEXT iteration starts at retry
 	// ordinal 0 again. Without the reset the mint would read :3:1 — still

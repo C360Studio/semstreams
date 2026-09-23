@@ -55,6 +55,7 @@ func TestRedeliveredCompletionIsRefusedWhileTheCarrierWaitsOnTools(t *testing.T)
 
 	// Request two answers with a tool call: its request is settled, the tool is
 	// dispatched, and the loop now waits on an executor rather than a model.
+	carrierStamp(t, handler, carry)
 	dispatch, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
 		RequestID: carrier,
 		Status:    agentic.StatusToolCall,

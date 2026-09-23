@@ -124,6 +124,31 @@ func (h *MessageHandler) CurrentRequestForTest(loopID string) string {
 	return entity.PublishedRequestID
 }
 
+// CarrierStampForTest applies the CARRIER's PublishedRequestID stamp to a
+// handler result, and reports the request it named.
+//
+// Since the owner Codex round's finding 3 (#1330 Q1) the two iteration mint
+// sites no longer name the request on the loop: the Component does, after
+// publishResults has PubAck'd it and before the record write, so a record can
+// never name a request the stream does not retain. A fixture that drives the
+// MessageHandler alone across more than one model turn has no Component, so it
+// stands in for that one step; without it the next response is classified as
+// naming a request the record has not reached, which is what a real
+// replacement correctly retries.
+//
+// The request it stamps is chosen by the PRODUCTION selector (mintedRequestID)
+// off the result's own published messages, never by the fixture. What it does
+// not reproduce is loopRecordMu, which orders this stamp against the other
+// lanes of a live process — that ordering is the subject of
+// TestARecordNeverNamesARequestBeforeItsPubAck, at the carrier itself.
+func (h *MessageHandler) CarrierStampForTest(result HandlerResult) (string, error) {
+	minted, err := mintedRequestID(result)
+	if err != nil || minted == "" {
+		return "", err
+	}
+	return minted, h.loopManager.SetPublishedRequest(result.LoopID, minted)
+}
+
 // EnableDropCountingForTest gives the handler a metrics set, so an
 // external-package fixture can observe that a refusal was COUNTED and under
 // which reason — a drop nobody can see is a drop an operator cannot act on.

@@ -2192,6 +2192,17 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 	// quarantines rather than retrying into a handler that will refuse to
 	// rebuild the result. L4 (#1330) — replay that reproduces the original
 	// result — is what relaxes this to Retry.
+	// The stamp is here rather than at the mint for every lane, including the
+	// ones that still write before they publish: one home for "the loop names
+	// the request it minted" is what keeps a lane from silently losing it. On
+	// THIS order the stamp precedes the publication — the window the approval
+	// lane and the terminal paths already carry until #1362, where the record
+	// names a request whose PubAck has not landed. Moving the call does not
+	// change that order; it is the order these lanes already had.
+	if err := c.stampPublishedRequest(result); err != nil {
+		return errs.WrapFatal(err, "agentic-loop", "persistHandlerResult",
+			"name the published request on the loop this process holds")
+	}
 	if err := c.persistResultState(ctx, result, terminal); err != nil {
 		// A lost compare-and-swap is the one failure here that is NOT unknown:
 		// nothing was written, nothing was published, and persistLoopState has
@@ -2236,6 +2247,14 @@ func (c *Component) publishThenPersistResultState(ctx context.Context, result Ha
 	if err := c.publishResults(ctx, result); err != nil {
 		return errs.WrapFatal(err, "agentic-loop", "persistHandlerResult",
 			"published results have unknown durability")
+	}
+	// The request this result minted is now retained, so this is the first
+	// moment the loop may name it. Before the PubAck the name is an intention,
+	// and a SIBLING LANE writing this same loop would have made that intention
+	// durable on its behalf.
+	if err := c.stampPublishedRequest(result); err != nil {
+		return errs.WrapFatal(err, "agentic-loop", "persistHandlerResult",
+			"name the published request on the loop this process holds")
 	}
 	if err := c.persistResultState(ctx, result, false); err != nil {
 		// A compare-and-swap loss already released this loop and is transient:
@@ -2944,6 +2963,80 @@ func (c *Component) createLoopState(ctx context.Context, loopID string) error {
 	}
 	c.rememberLoopRevision(loopID, revision)
 	return nil
+}
+
+// mintedRequestID reports the AgentRequest this handler result minted, and ""
+// when it minted none.
+//
+// PublishedMessage.MsgID already IS that identity: every request publish
+// carries its deterministic RequestID there so the server can collapse a
+// duplicate, and publishResults reads the same field to decide whether the
+// stream already retains it. Reading it back here keeps one spelling of the
+// fact rather than adding a second one to HandlerResult for the carrier to
+// disagree with.
+//
+// A result with two different minted names is refused rather than resolved:
+// one result mints at most one request (the three mint sites each append
+// exactly one), so a second name means the shape changed underneath this
+// function and the record has no unambiguous request to name.
+func mintedRequestID(result HandlerResult) (string, error) {
+	minted := ""
+	for _, msg := range result.PublishedMessages {
+		if msg.MsgID == "" || msg.MsgID == minted {
+			continue
+		}
+		if minted != "" {
+			return "", fmt.Errorf("loop %s: one handler result minted two requests, %q and %q",
+				result.LoopID, minted, msg.MsgID)
+		}
+		minted = msg.MsgID
+	}
+	return minted, nil
+}
+
+// stampPublishedRequest records the request this result minted as the one the
+// loop's record will name (LoopEntity.PublishedRequestID, invariant I1).
+//
+// It lives at the CARRIER, not at the mint, because I1 is a claim about
+// durability and only the carrier knows when the request became durable. The
+// two iteration mint sites — publishIterationRequest and emitRetryRequest —
+// build the request and hand it to the carrier; on the model-response and
+// tool-result lanes the carrier publishes first, so the stamp lands after the
+// PubAck and before the record write (owner ruling #1330 Q1, 2026-09-23).
+// Birth is the one lane that stamps at the mint, by the same ruling: it writes
+// the record BEFORE the first publish, so the name has to exist first.
+//
+// The hazard this closes is a SIBLING LANE, not this one. Stamped at the mint,
+// PublishedRequestID = R2 is visible to every writer of this loop the moment
+// the request is built: a deferred continuation on the task lane, or a tool
+// lane's compare-and-swap, renders the shared entity and commits a record
+// naming R2 over a stream that still retains only R1 — and a crash there
+// leaves a loop no replacement can adopt (the fatal older-retained-request
+// branch) and no operator can settle.
+//
+// Under loopRecordMu for the same reason every record write is: the lanes of
+// this process interleave, and a stamp landing inside another lane's
+// render-observe-write critical section would put the record's name and the
+// revision it was rendered from on opposite sides of a publication. Its own
+// short critical section, not the caller's — persistLoopState takes the same
+// lock next, and a sync.Mutex is not reentrant. Between the two the loop names
+// a request that is already retained, so any lane that writes there is
+// writing a true record.
+//
+// TrackRequest stays at the mint. Route, outstanding and the deferred turn's
+// carrier are attach-order facts about what this process is doing, not claims
+// about what the stream holds.
+func (c *Component) stampPublishedRequest(result HandlerResult) error {
+	minted, err := mintedRequestID(result)
+	if err != nil {
+		return err
+	}
+	if minted == "" {
+		return nil
+	}
+	c.loopRecordMu.Lock()
+	defer c.loopRecordMu.Unlock()
+	return c.handler.loopManager.SetPublishedRequest(result.LoopID, minted)
 }
 
 // persistLoopState writes the loop's record under compare-and-swap against the

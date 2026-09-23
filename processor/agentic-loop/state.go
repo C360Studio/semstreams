@@ -1086,11 +1086,15 @@ func (m *LoopManager) TrackRequest(requestID, loopID string) {
 // SetPublishedRequest records the request this loop has minted as the one its
 // record will name (LoopEntity.PublishedRequestID, invariant I1 of #1330).
 //
-// It is called at each of the three mint sites, beside TrackRequest, and the
-// value only becomes durable when the carrier writes the record — which, on
-// the model-response and tool-result lanes, happens after the request's PubAck.
-// That ordering is what makes the durable field mean "an AgentRequest with this
-// identity is retained", rather than "a process intended to publish one".
+// Two callers, and the split is the ordering. Birth calls it at the mint: its
+// record is written BEFORE the first request is published (owner ruling Q1), so
+// the name has to exist first. Every later transition is stamped by the CARRIER
+// instead (Component.stampPublishedRequest), after publishResults has PubAck'd
+// the request and before the record write — because this entity is shared with
+// every other lane writing this loop, and a name set at the mint is one they
+// can commit while the request is still in flight. That ordering is what makes
+// the durable field mean "an AgentRequest with this identity is retained",
+// rather than "a process intended to publish one".
 //
 // A loop this manager does not hold is refused rather than ignored: a request
 // this process cannot record is a request whose PubAck nothing will ever

@@ -2,6 +2,7 @@ package agenticloop
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
@@ -218,4 +220,116 @@ func TestRenderingTheRecordDoesNotRaceAStoredToolResult(t *testing.T) {
 			require.NoError(t, err)
 		}
 	}
+}
+
+// gatedEvidenceReader stands in for the request stream at the one moment the
+// carrier consults it: the identity check publishResults runs before it sends a
+// minted request. Held open, it IS the interval between the mint and its
+// PubAck — the stream still retains only the previous request. The test closes
+// the interval by making the minted request retained, which is what a PubAck
+// does.
+type gatedEvidenceReader struct {
+	entered  chan struct{}
+	release  chan struct{}
+	retained atomic.Value
+}
+
+func (g *gatedEvidenceReader) ReadRetainedRequest(
+	_ context.Context, _, _ string,
+) ([]byte, bool, error) {
+	g.entered <- struct{}{}
+	<-g.release
+	request := agentic.AgentRequest{
+		RequestID: g.retained.Load().(string),
+		LoopID:    "unused",
+		Messages:  []agentic.ChatMessage{{Role: "user", Content: "retained"}},
+	}
+	data, err := json.Marshal(message.NewBaseMessage(request.Schema(), &request, "test"))
+	if err != nil {
+		return nil, false, err
+	}
+	return data, true, nil
+}
+
+func (g *gatedEvidenceReader) ReadRetainedResponse(
+	_ context.Context, _, _ string,
+) ([]byte, bool, error) {
+	return nil, false, nil
+}
+
+var _ loopEvidenceReader = (*gatedEvidenceReader)(nil)
+
+// TestARecordNeverNamesARequestBeforeItsPubAck is invariant I1 held against the
+// lane that did not mint.
+//
+// PublishedRequestID used to be stamped into the shared entity at the MINT, so
+// from the moment the carrier built R2 every writer of this loop could see it:
+// a deferred continuation's record write on the task lane, or a tool lane's
+// compare-and-swap, rendered that entity and committed a record naming R2 while
+// the stream still retained only R1. MaxAckPending=1 is per consumer and
+// loopRecordMu serializes the writers, not the handler mutations that precede
+// them, so nothing ordered the two. A crash in that window leaves a record
+// naming a request no reader can find: every later cold read takes the fatal
+// older-retained-request branch, and a cold parked loop is not settleable
+// (owner Codex round finding 3, #1330 Q1, 2026-09-23).
+//
+// The assertion is therefore about the SIBLING's write, not the carrier's. The
+// carrier is held inside its own publication and the other lane commits while
+// it waits; what the record may name at that instant is the whole question.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestARecordNeverNamesARequestBeforeItsPubAck(t *testing.T) {
+	c, bucket, loopID := carrierLoop(t)
+	outstanding := looprequest.ID{LoopID: loopID, Iteration: 1, Retry: 0}.String()
+	minted := looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String()
+
+	// Fixture, as the task lane's birth leaves it: the loop names R1 and the
+	// record says so. written() is reset after it for the same reason
+	// seedLoopRecord's is — only the two lanes' writes are under test.
+	require.NoError(t, c.handler.loopManager.SetPublishedRequest(loopID, outstanding))
+	require.NoError(t, c.persistLoopState(t.Context(), loopID))
+	bucket.resetWritten()
+
+	gate := &gatedEvidenceReader{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	gate.retained.Store(outstanding)
+	c.requestEvidence = gate
+	// publishResults consults the stream only when it has a client to publish
+	// through; this one never connects, and never has to — the request is
+	// retained by the time the gate opens, so the identity check adopts it.
+	c.natsClient = unpublishableClient(t)
+	var once sync.Once
+	releaseGate := func() { once.Do(func() { close(gate.release) }) }
+	t.Cleanup(releaseGate)
+
+	carrier := make(chan error, 1)
+	go func() {
+		carrier <- c.publishThenPersistResultState(context.Background(), HandlerResult{
+			LoopID: loopID,
+			State:  agentic.LoopStateExecuting,
+			PublishedMessages: []PublishedMessage{{
+				Subject: "agent.request." + loopID,
+				Data:    []byte(`{"request":true}`),
+				MsgID:   minted,
+			}},
+		})
+	}()
+	<-gate.entered
+
+	// The sibling lane: a deferred continuation admitted on the task lane
+	// persists the shared entity while the carrier's request is in flight.
+	require.NoError(t, c.persistLoopState(t.Context(), loopID),
+		"the sibling lane's compare-and-swap was refused by its own process")
+	require.Equal(t, outstanding, decodeRecord(t, c, loopID).PublishedRequestID,
+		"a sibling lane committed a record naming a request whose PubAck has not landed: KV now "+
+			"names a request the stream does not retain, which is the state I1 declares impossible "+
+			"and which every later cold read answers with Quarantine")
+
+	gate.retained.Store(minted)
+	releaseGate()
+	require.NoError(t, <-carrier)
+
+	require.Equal(t, minted, decodeRecord(t, c, loopID).PublishedRequestID,
+		"once the request is retained the record must name it — the stamp moved, it did not vanish")
+	require.Equal(t, []string{loopID, loopID}, bucket.written(),
+		"both lanes must have committed: closing the window must not cost the sibling its write")
 }
