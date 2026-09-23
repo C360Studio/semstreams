@@ -3,6 +3,8 @@
 package agenticloop
 
 import (
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -10,6 +12,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -83,6 +86,12 @@ func TestARedeliveredResponseTheLoopAlreadyAppliedIsAcknowledged(t *testing.T) {
 
 	before := drops("already_applied")
 
+	// The handler's own logger, so the audit line the new scenario promises has
+	// an observer. Set here rather than at construction: the buffer then holds
+	// only what the delivery under test emitted.
+	var logs strings.Builder
+	handler.SetLogger(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+
 	// The same bytes again: an acknowledgement lost between the server and
 	// this process, which is ordinary at-least-once delivery.
 	_, replayed := deliverResponse(t, c, answer)
@@ -107,4 +116,15 @@ func TestARedeliveredResponseTheLoopAlreadyAppliedIsAcknowledged(t *testing.T) {
 		"a response that changed nothing must not move the record's revision")
 	require.Equal(t, before+1, drops("already_applied"),
 		"a drop is a declared event: it carries the reason value an operator greps for")
+
+	// The LINE, not the buffer: the response lane warns on superseded and
+	// foreign responses too, and both carry a loop_id, so a buffer-wide check
+	// would report a match this drop never made. The counter above says a drop
+	// happened; only this line says WHICH answer was dropped, which is what an
+	// operator holding a loop that stopped making progress has to reconstruct.
+	dropped := logLineContaining(t, logs.String(), "ignoring a model response this loop already applied")
+	assert.Contains(t, dropped, "loop_id="+loopID,
+		"the drop must name the loop whose answer it discarded")
+	assert.Contains(t, dropped, "response_request_id="+firstRequest,
+		"without the request it named, this drop is indistinguishable from a superseded one")
 }
