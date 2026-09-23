@@ -1222,8 +1222,10 @@ the carrier and the rebuild, so every row was re-run rather than carried forward
 
 The owner's second round on PR #1361 at `c8c1f1bc`
 ([issuecomment-5790425046](https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5790425046)) requested
-changes on findings 1-4 and raised a fifth. **Three landed here: 8.3, 8.4 and 8.2, in that order.** Findings 1 and 5
-are GATED on owner rulings and are untouched — 8.1 and 8.5 below name the question each is waiting on.
+changes on findings 1-4 and raised a fifth. **All five landed: 8.3, 8.4 and 8.2 first, then 8.1 and 8.5 once the
+owner ruled.** The two questions the coordinator's docket put to the owner were answered 2026-09-23
+([issuecomment-5791390564](https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5791390564), verbatim
+"agree on both - continue"): finding 1 REFUSE, finding 5 NARROW.
 
 Every code fix carries a regression proven red WITHOUT it through the `cp` backup + `md5 -q` ritual, with `[applied]`
 printed between mutating and testing, `go vet` exit 0 with the mutant applied so a non-compiling mutant cannot pass as
@@ -1329,41 +1331,122 @@ red before it was written, against the unfixed tree.
       ApprovalPendingEvent is visible: a crash between the two leaves a human an approval request whose answer the
       replacement stale-drops".
 
-- [ ] 8.1 **Finding 1 — a new cold continuation is acknowledged as an already-applied task. GATED, not touched.**
-      `classifyRedeliveredTask` receives only the loop ID, so a task T2 naming a loop whose record belongs to T1 is
-      answered from the record alone: advanced, it Acks as applied and T2's prompt is never applied; at iteration
-      zero with an empty set it takes the republish arm and seats loop L in memory with T2's prompt as its
-      conversation. The settlement is an owner question, not a developer's — refuse and acknowledge (the shape the
-      warm `ErrLoopBusy` refusal already takes), or restore and attach — and the coordinator's docket carries the
-      recommendation and the rejected alternatives. It is therefore left for the ruling on #1330, and the
-      continuation-limitation paragraph in `doc.go` § Recovery, the migration note and the delta is deliberately
-      left with room for its sentence beside the one 7.4 landed.
+- [x] 8.1 **Finding 1 — a new cold continuation was acknowledged as an already-applied task.**
+      `classifyRedeliveredTask` received only the loop ID, so a task T2 naming a loop whose record belongs to T1 was
+      answered from the record alone — and a record can only answer for the task it is about. Advanced, it Acked as
+      applied and T2's prompt was never sent to anyone; at iteration zero with an empty set it took the republish
+      arm, where `HandleTask` on a cold process CREATED loop L from the arriving task: the loop's whole conversation
+      seated from T2's prompt, and the record's `task_id` overwritten on the next compare-and-swap. This is the one
+      arm of the cold fork that is not a redelivery at all — agentic-dispatch admits a continuation against the
+      durable record, which cannot know whether any process holds the loop.
+      **Owner ruling 2026-09-23** ([issuecomment-5791390564](https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5791390564),
+      verbatim "agree on both - continue", recorded row by row): **REFUSE**; restore-and-attach rejected.
+      Landed: `classifyRedeliveredTask` now takes the task (`loop_classification.go:135`) and compares its `TaskID`
+      with the record's at `:183`, BEFORE either existing arm, returning a fourth disposition
+      `taskContinuationUnheld` (`:114`). The component arm is `settleUnheldContinuation` (`component.go:1423`,
+      called at `:1483`): a `WarnContext` naming the loop, the record's task and the arriving one, then one new
+      reason value on the EXISTING `task_intake_rejections_total` — lane `cold-fork`, reason `continuation_unheld`
+      (`component.go:42-43`), both enumerated in the metric's Help (`metrics.go:259`) and in the recorder's doc
+      (`:428`) — and `return nil`. That is the settlement the WARM refusal already takes (`ErrLoopBusy` → Warn →
+      Ack): on a lane at `MaxAckPending` 1, Retry parks every task behind a message no redelivery can fix and
+      Quarantine latches the lane and health over a valid turn. It was extracted into its own function because the
+      arm pushed `handleTaskMessage` to 82 statements and revive's limit is 80. Commit `d0b7aeda`.
+      **Class sweep — every cold arm that treats the record as proof a task was applied.** The two LIVE arms are the
+      finding and share the one fix. The stale+terminal arm (`loop_classification.go:160-166`) checks `State` only
+      and is deliberately left as it is: a continuation of a settled loop settles either way, and the warm lane
+      answers it the same (`ErrLoopTerminal` → Ack). `refuseConflictingTaskIdentity` (`component.go:1401`) covers
+      the INVERSE relation — same task, another loop — on the warm map, and has no cold analogue; the cold analogue
+      was exactly the missing check. **Design correction:** § 5.1 step 2 claimed "verify task/role/model" and no such
+      check existed; it now names where the task check happens and records that role and model are deliberately NOT
+      verified, because a continuation legitimately re-sends them and neither decides whether the delivery can be
+      applied. Step 4 gains the precondition. The `taskApplied` doc comment and the republish arm's comment are
+      scoped to the record's own task with it. Task 3.4's "advanced or terminal → `taskApplied`" is superseded in
+      part by this entry.
+      **Residual RECORDED, not built and not filed** (owner placement, not a developer's): the caller sees "Task
+      submitted" from agentic-dispatch and then silence, which is exactly what it sees for the warm `ErrLoopBusy`
+      refusal today. Closing that seam is dispatch's, not L4a's.
+      Docs: the continuation limitation is now ONE two-sentence paragraph at all three homes beside 7.4's
+      marker-only sentence — `doc.go:266` § Recovery across a process replacement, the migration note's marker
+      paragraph (`docs/operations/migration-beta162-to-beta163.md:1783`, with the re-send action and the note that
+      the submission still counted on `tasks_submitted_total`), and the delta's normative text
+      (`specs/agentic-loop/spec.md:45-49`) — plus one delta scenario at `:139`. The ADDED block gained a scenario,
+      so nothing was restated; `openspec validate --all --strict` stays 56/56.
+      Test: `task_redelivery_integration_test.go:561`,
+      `TestAColdContinuationForALoopNoProcessHoldsIsRefused` — a real broker, both arms built by running them: (a) a
+      real birth as T1, a replacement, T2 naming L delivered while the record is still the untouched birth; (b) the
+      same after a one-call batch has been applied, so the record has advanced to `iterations = 1` and names R2.
+      Both assert the Ack, that no loop is seated, that nothing is published, that the record's revision and
+      `task_id` are unmoved, and that the reason value is counted (a delta, because the metric is a process-wide
+      singleton). Both were observed RED against the unfixed tree before the fix was written.
+      Mutant: the `TaskID` comparison dropped from the classifier. `loop_classification.go`
+      `cec2afc1d8ed33b53aa0af05cb9112fd` → `4052cadb94d2506c2035d33ef07b2798` → restored
+      `cec2afc1d8ed33b53aa0af05cb9112fd`, `go vet ./processor/agentic-loop/` and `go vet -tags=integration
+      ./processor/agentic-loop/` both 0 with the mutant applied, porcelain empty after. RED in both arms of one run:
+      `task_redelivery_integration_test.go:612` — "An error is expected but got nil" — "the republish arm created
+      loop L from the ARRIVING task, so the loop's conversation was seated from the new turn's prompt and its own
+      first turn was gone"; and `:701` — expected `1`, actual `0` — "an advanced record acknowledged the turn as
+      'its loop already moved past it' — a turn nobody ever sent is not an applied task, and an operator saw no
+      reason at all".
 
-- [ ] 8.5 **Finding 5 — the generated I2/I4 coverage claimed in 4.1 is vacuous. GATED, not touched.** The property's
-      advance action drains the applied set and overwrites the record before the invariant runs, its crash arm skips
-      the earlier applied-set write, no action creates a `PendingApproval`, and the cold-tool action supplies no
-      execution identity — so the I2 and I4 assertions never inspect populated state. Whether to NARROW the claim
-      (delete the two checks that cannot fire, cite the named examples, and land one I4 example at the step-0 seam)
-      or to BUILD the generated application step is an owner question on #1330. Task 4.1's claim stands as written
-      until it is answered, and this entry is the record that it is not yet evidence.
+- [x] 8.5 **Finding 5 — the generated I2/I4 coverage claimed in 4.1 was vacuous.** The property's advance action
+      drains the applied set and overwrites the record before the invariant action runs, and its crash arm skips the
+      earlier applied-set write, so the durable set between actions was ALWAYS empty and the I2 loop never reached
+      an assertion; no action creates a `PendingApproval`, so the I4 branch was never true. Neither could fire.
+      **Owner ruling 2026-09-23** (same comment as 8.1): **NARROW**; the generated apply/gate steps are not built.
+      Landed: the two checks are DELETED — a check that cannot fire is a coverage claim written in code, which reads
+      as evidence and is not — together with the `toolCalls` ledger the deleted I2 check was the only reader of. The
+      test header (`applied_facts_property_test.go:75-111`), task 4.1 and design § 4's PBT decision (`:211`) now
+      claim exactly what the property generates: I1, I3 in its derived form (`iterations == the named request's
+      iteration − 1`), and "no request is published twice while the stream holds it" — the one mutant 4.3(c) kills.
+      The deleted checks leave a comment at `:306-309` saying why they are gone. Commit `a3de104c`. No production
+      code changed.
+      I2's five named examples are cited by NAME in the header: `TestToolResultRedeliveredToAReplacementProcess`'s
+      "W2" arm and `TestAReplayedAppliedToolResultDoesNotQuarantineItsLane`
+      (`tool_result_redelivery_integration_test.go`), `TestATaskRedeliveredOverAProgressedFirstBatchIsNotRepublished`
+      (`task_redelivery_integration_test.go`), and `TestARestoredToolBatchKnowsWhatIsLeftToRun` and
+      `TestAColdToolResultRebuildsTheBatchItBelongsTo` (`loop_rebuild_test.go`).
+      The ruled I4 example landed at `loop_record_writer_test.go:203`,
+      `TestAnAdoptedRequestClearsTheGateItAdvancedPast`: a gated record naming R with `PendingApproval.RequestID = R`
+      built through the production `BeginAwaitingApproval`, a retained R(N+1), `adoptNewerRetainedRequest` → the gate
+      cleared, `state` running again, `published_request_id = R(N+1)` — the delta's THEN for the step-0 adoption
+      scenario, asserted on the record the adopt RETURNS and on the durable one.
+      **PREMISE CORRECTION, measured — the docket was wrong about the absence.** The docket recommended this example
+      on the ground that the step-0 gate clear was untested in L4a. It was not untested:
+      `loop_carrier_test.go:423`, `TestColdReadAdoptsTheNewestRetainedRequestFirst`'s "a pending approval gate is
+      cleared in the same write" arm, already covered it on the DURABLE record, and the mutant below reds BOTH. The
+      docket's search enumerated a fixed file list that did not include `loop_carrier_test.go`. The ruled example was
+      landed rather than silently dropped — a deviation escalates, it never executes — and the correction is
+      recorded here, in task 4.1, in the example's own doc comment and in the commit body. What the new example adds
+      beside the existing arm is the record the adopt RETURNS, which the classification running next reads and the
+      durable check cannot see, plus a gate built by the production constructor. Whether that earns its place is the
+      owner's call, not a developer's.
+      Mutant: the step-0 `ResolveApproval` call deleted from `adoptNewerRetainedRequest`. `loop_evidence.go`
+      `e56941d1783bc386c74de88742e946a6` → `5e4a31e10d3ff97724c459af4c8d24a6` → restored
+      `e56941d1783bc386c74de88742e946a6`, `go vet ./processor/agentic-loop/` 0 with the mutant applied, porcelain
+      empty after. RED in TWO tests in one run, which is the evidence for the premise correction above:
+      `loop_record_writer_test.go:224` — "Expected nil, but got: &agentic.PendingApprovalState{RequestID:
+      \"…:req:2:0\", …}" — "the adopt moved the record past the request the gate named, so a surviving gate names a
+      request the record no longer does"; and `loop_carrier_test.go:440` — the same surviving gate — "a request newer
+      than the gate was minted after the gate's batch closed".
 
 ### 8.6 Gates for the round, exit codes verbatim
 
-Run at `c0a31dff`, the round's last code commit, plus this records commit, which changes markdown only. Logs in the
-coordinator scratchpad `l4a/`.
+Re-run at `a3de104c`, the round's last code commit, plus this records commit, which changes markdown only. The
+earlier run at `c0a31dff` (findings 3, 4 and 2 only) is superseded by this one. Logs in the coordinator scratchpad
+`l4a/`.
 
 | Gate | Exit | Result |
 |---|---|---|
-| `task lint` | 0 | vet, fmt, pinned revive, fixed-port guard, raw-Request guard |
+| `task lint` | 0 | vet, fmt, pinned revive, fixed-port guard, raw-Request guard. Revive's 80-statement function limit is why finding 1's refusal is its own function |
 | `go test -race -count=1 ./processor/agentic-loop/... ./processor/agentic-dispatch/... ./test/contract/... ./test/e2e/scenarios/agentic/...` | 0 | 8 packages ok, no race |
-| `go test -race -count=1 -tags=integration -p 2 ./processor/agentic-loop/` | 0 | the package's own real-NATS arms |
+| `go test -race -count=1 -tags=integration -p 2 ./processor/agentic-loop/` | 0 | the package's own real-NATS arms, `ok … 49.572s` |
 | `openspec validate --all --strict` | 0 | 56 passed, 0 failed (56 items) |
-| `task spec:properties` | 0 | 335/335 citations resolve — 332 before this round, +3, exactly the three new regressions |
+| `task spec:properties` | 0 | 337/337 citations resolve — 335 before this pair, **+2, exactly the two new citations** (`TestAColdContinuationForALoopNoProcessHoldsIsRefused`, `TestAnAdoptedRequestClearsTheGateItAdvancedPast`); the deleted property checks carried none |
 | `git diff --check b7ce8727` | 0 | no whitespace defect |
-| `task api:compat:report` | 0 | compared 62, clean 47, incompatible 15, removed 0, added 0 — the whole report is BYTE-IDENTICAL to the gated pair's log (`md5` `8b3388e949bd1eeac9b67d02ebfb924c` both), `processor/agentic-loop` block included. This round adds no exported surface: `restoreRecordedLoopDeadline` and `gated` are unexported |
-| `task e2e:agentic` | 0 | `Scenario completed successfully duration=2m10.873115875s`, `assertions_run=15`, zero `level=ERROR` lines; `verify-stage-a-process-replacement_duration_ms:84886`, `midflight_record_revision_delta:3`, `midflight_requests_published:2`. Log `l4a/tier-c0a31dff.log` |
-| `task e2e:agentic` with the no-rebuild mutant | 201 | `level=ERROR msg="Scenario completed with failure" error="verify-stage-a-process-replacement failed: mid-flight loop: replacement did not carry the mid-flight loop to a terminal: subject agent.complete.0306c3d1-fd65-40bc-9361-7d9437e71b09 was not stored within 1m30s"`, `assertions_run=9` — the stage's own assertion. `restoreLoopFromEvidence`'s whole body replaced with an unconditional `errs.WrapTransient`; `go vet ./processor/agentic-loop/` and `go vet -tags=e2e ./test/e2e/...` both 0 with it applied. `loop_evidence.go` `e56941d1783bc386c74de88742e946a6` → `b0ea9ec0814f7573ae49267952773d13` → restored `e56941d1783bc386c74de88742e946a6`, porcelain empty. Log `l4a/tier-c0a31dff-mutant-no-rebuild.log` |
-| `task check:push` | 0 | build, lint, tagged vet, schema drift, contract, race unit, then integration through the canonical runner and its host lock. Log `l4a/checkpush-round2.log` |
+| `task api:compat:report` | 0 | compared 62, clean 47, incompatible 15, removed 0, added 0 — the whole report is BYTE-IDENTICAL to the gated pair's log (`md5` `8b3388e949bd1eeac9b67d02ebfb924c` both). Neither fix adds exported surface: `settleUnheldContinuation`, `taskContinuationUnheld`, `taskIntakeColdForkLane` and `taskIntakeContinuationUnheldReason` are all unexported |
+| `task e2e:agentic` | 0 | `Scenario completed successfully duration=2m11.301544583s`, `assertions_run=15`, zero `level=ERROR` lines; `verify-stage-a-process-replacement_duration_ms:85137`, `midflight_record_revision_delta:3`, `midflight_requests_published:2`. Log `l4a/tier-a3de104c.log` |
+| `task e2e:agentic` with the no-rebuild mutant | 201 | `level=ERROR msg="Scenario completed with failure" error="verify-stage-a-process-replacement failed: mid-flight loop: replacement did not carry the mid-flight loop to a terminal: subject agent.complete.2c54f020-6e65-460a-a955-a4e181e51fd9 was not stored within 1m30s"`, `assertions_run=9` — the stage's own assertion. `restoreLoopFromEvidence`'s whole body replaced with an unconditional `errs.WrapTransient`; `go vet ./processor/agentic-loop/` and `go vet -tags=e2e ./test/e2e/...` both 0 with it applied. `loop_evidence.go` `e56941d1783bc386c74de88742e946a6` → `770db4fcce274b44ad8bf167f8ee67c1` → restored `e56941d1783bc386c74de88742e946a6`, porcelain empty. Log `l4a/tier-a3de104c-mutant-no-rebuild.log` |
+| `task check:push` | 0 | build, lint, tagged vet, schema drift, contract, race unit, then integration through the canonical runner and its host lock. Log `l4a/checkpush-round2b.log` |
 
 `pgrep -fl e2e.test` and `docker compose ls` were both empty before each tier run and after the mutant restore.
 
