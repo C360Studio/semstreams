@@ -1752,6 +1752,51 @@ func isValidOutcome(outcome string) bool {
 	}
 }
 
+// settleTerminal is the terminal owner's in-memory half of the entity write
+// (#1362, design § 5.7): the entity the record is rendered from, just before
+// the compare-and-swap that writes it terminal.
+//
+// The terminal transition clears the pending approval gate. A record that is
+// terminal AND gated names a human decision nothing will ever apply; the
+// transitions themselves (TransitionTo, CancelLoop) leave the gate in place,
+// so the owner that writes every terminal record is where it goes (L3's
+// deferred item, archived durable-loop-authority design :50).
+//
+// adopted is the durable terminal the owner adopted, or nil when this
+// delivery's own terminal was committed. Adopted, the entity is written to
+// match the saved terminal's content rather than the candidate's; its kind is
+// already this entity's, because adoption requires it.
+//
+// A loop this process no longer holds has nothing in memory to settle; the
+// record write that follows answers for it (persistLoopState refuses to render
+// a loop it cannot find).
+func (m *LoopManager) settleTerminal(loopID string, adopted *terminalOutcome) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entity, exists := m.loops[loopID]
+	if !exists {
+		return
+	}
+	entity.PendingApproval = nil
+	entity.StateBeforeApproval = ""
+	if adopted == nil {
+		return
+	}
+	switch {
+	case adopted.completed != nil:
+		entity.Result = adopted.completed.Result
+		entity.CompletedAt = adopted.completed.CompletedAt
+	case adopted.failed != nil:
+		entity.Error = adopted.failed.Error
+		entity.CompletedAt = adopted.failed.FailedAt
+	case adopted.cancelled != nil:
+		entity.CancelledBy = adopted.cancelled.CancelledBy
+		entity.CancelledAt = adopted.cancelled.CancelledAt
+		entity.CompletedAt = adopted.cancelled.CancelledAt
+	}
+}
+
 // CancelLoop atomically cancels a loop and populates completion data.
 // Returns the updated entity for further processing, or an error if the loop
 // cannot be cancelled (not found or already terminal).

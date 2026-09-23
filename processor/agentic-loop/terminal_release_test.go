@@ -291,7 +291,7 @@ func TestTerminalReleaseHappensAfterTerminalReaders(t *testing.T) {
 	}
 
 	// BuildFailureMessages is the other terminal reader: it reads the loop to
-	// build the failure event that persistFailureState and the graph stamp
+	// build the failure event that the terminal owner's marker and graph stamp
 	// consume. If the release had preceded it, it would have logged this.
 	if strings.Contains(logs.String(), "Failed to build failure event") {
 		t.Fatalf("the failure-event build ran after the release:\n%s", logs.String())

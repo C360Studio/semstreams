@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The terminal record is written BEFORE the failure event is published, and
-// the delivery settles on that write. This needs a broker because the claim is
+// The terminal record (COMPLETE_<loopID>) is created BEFORE the failure event
+// is published, and the delivery settles on the whole terminal commit. This needs a broker because the claim is
 // about what reached the stream: with a nil client "nothing was published" is
 // true by construction and proves nothing.
 //
@@ -89,8 +89,10 @@ func TestIntegrationTerminalFailureRecordPrecedesItsPublication(t *testing.T) {
 
 	t.Run("a terminal record that cannot be written publishes nothing", func(t *testing.T) {
 		c, tc, bucket, loopID, executionID, callID := timedOutLoop(t)
-		// Only the record write fails: the loop key still lands, which is what
-		// makes this discriminating — the old branch wrote that one and ACKed.
+		// Only the record write fails. Before #1362 the loop key still landed
+		// here, and a branch that wrote it and ACKed was the defect this test
+		// was written for; the terminal owner now writes the loop key LAST, so
+		// a marker that did not land leaves it unwritten.
 		bucket.fail = errKVUnavailable
 		bucket.failPrefix = "COMPLETE_"
 
@@ -102,7 +104,8 @@ func TestIntegrationTerminalFailureRecordPrecedesItsPublication(t *testing.T) {
 			"a terminal failure whose record did not land cannot be acknowledged")
 		require.Zero(t, msg.acks.Load()+msg.naks.Load()+msg.terms.Load())
 
-		require.Contains(t, bucket.written(), loopID, "the loop key still landed")
+		require.NotContains(t, bucket.written(), loopID,
+			"the loop record was written terminal ahead of its marker: the record is the terminal owner's last step")
 		require.Zero(t, published(t, tc),
 			"the failure event was published before its record: a watcher would read agent.failed "+
 				"and find no COMPLETE_ record behind it")

@@ -84,9 +84,13 @@ func TestRequiredLoopStatePersistenceReturnsErrors(t *testing.T) {
 
 	err = c.persistLoopState(t.Context(), loopID)
 	require.ErrorIs(t, err, want)
-	err = c.persistCompletionState(t.Context(), loopID, &agentic.LoopCompletedEvent{LoopID: loopID})
+	// The terminal marker is created, not Put (#1362): a Create that fails for
+	// any reason but an existing key reports that failure.
+	_, _, err = c.createTerminalMarker(t.Context(), loopID,
+		terminalOutcome{completed: &agentic.LoopCompletedEvent{LoopID: loopID}})
 	require.ErrorIs(t, err, want)
-	err = c.persistCancellationState(t.Context(), loopID, &agentic.LoopCancelledEvent{LoopID: loopID})
+	_, _, err = c.createTerminalMarker(t.Context(), loopID,
+		terminalOutcome{cancelled: &agentic.LoopCancelledEvent{LoopID: loopID}})
 	require.ErrorIs(t, err, want)
 }
 

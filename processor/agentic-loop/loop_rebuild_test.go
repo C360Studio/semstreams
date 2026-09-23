@@ -329,15 +329,20 @@ func TestAColdResponseRebuildsTheLoopItAnswers(t *testing.T) {
 		roles(h.loopManager.GetContextManager(rebuildLoopID).GetContext()),
 		"the conversation is the retained request plus the answer just applied")
 
-	// A completion compare-and-swaps the record against the revision the
-	// observer read it at, BEFORE it publishes. The rebuilt process wrote it,
-	// which it could only do by taking the record's revision with the loop —
-	// without that, its first write is refused and the loop is recovered and
-	// then immediately stranded.
-	require.Equal(t, agentic.LoopStateComplete, decodeRecord(t, c, rebuildLoopID).State,
-		"the rebuilt holder could not write the record it had just read")
+	// This component cannot publish, so the terminal owner stops at its
+	// publication: the completion is commit-unknown, and the record — the
+	// owner's LAST step since #1362 — is not written terminal.
 	require.Equal(t, natsclient.DeliveryDecisionQuarantine, delivered.Decision(),
 		"a completion this component cannot publish is commit-unknown, not retryable")
+	require.False(t, decodeRecord(t, c, rebuildLoopID).State.IsTerminal(),
+		"the record was written terminal ahead of the terminal's publication")
+
+	// The rebuilt holder took the record's revision with the loop: its
+	// compare-and-swap lands. Without that, its first write is refused and the
+	// loop is recovered and then immediately stranded.
+	require.NoError(t, c.persistLoopState(t.Context(), rebuildLoopID),
+		"the rebuilt holder could not write the record it had just read")
+	require.Equal(t, agentic.LoopStateComplete, decodeRecord(t, c, rebuildLoopID).State)
 }
 
 // TestAColdToolResultRebuildsTheBatchItBelongsTo is the tool lane's half, and

@@ -255,8 +255,9 @@ func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 		require.True(t, result.OwnerStopRequired())
 		require.Zero(t, msg.acks.Load()+msg.naks.Load()+msg.terms.Load(),
 			"a quarantined delivery attempts no terminal method at all")
-		require.Contains(t, result.Err().Error(), "persist loop state")
-		require.Contains(t, result.Err().Error(), "unknown durability")
+		// The terminal owner's first step is the marker's Create (#1362), so
+		// that is the write this unavailable bucket refuses.
+		require.Contains(t, result.Err().Error(), "create terminal marker")
 
 		// The lane is latched, so this owner runs no further work on it.
 		redelivery := &loopDeliveryOwnerMsg{data: data}

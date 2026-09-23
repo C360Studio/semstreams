@@ -360,7 +360,13 @@
 //	    "channel_id": "session_001"
 //	}
 //
-// **COMPLETE_{loopID}**: Written when a loop completes, for rules engine consumption
+// **COMPLETE_{loopID}**: The loop's durable terminal — completed, failed or
+// cancelled, told apart by "outcome" — for rules engine consumption. It is
+// created once, by Create, BEFORE the terminal event (agent.complete /
+// agent.failed) is published, and the loop's own record is written terminal
+// only AFTER that event (#1362). A redelivered terminal whose Create is
+// refused adopts the saved terminal by loop ID and outcome and republishes
+// it; it never overwrites it.
 //
 //	{
 //	    "loop_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
