@@ -13,6 +13,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // terminalOutcome is one loop's terminal as its COMPLETE_<loopID> marker
@@ -286,6 +287,106 @@ func (c *Component) stampTerminal(ctx context.Context, loopID string, outcome te
 		if err := c.stampSyntheticDecideWithBudget(ctx, outcome.syntheticDecide); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// adoptDurableCancel is the cancel lane's cold arm (b) (owner ruling
+// 2026-09-23, #1362 issuecomment-5802753726). The terminal owner writes
+// COMPLETE_<loopID> before the cancellation event and the record last, so a
+// crash between them leaves a cancel marker, a published cancellation and a
+// live record. A replacement holds no loop for the redelivered cancel to act
+// on, and the lanes that DO rebuild the loop would carry on past a published
+// cancel. So when this process does not hold the loop and the record is live,
+// the cancel lane reads the marker: a cancel marker is adopted — its saved
+// terminal is stamped and republished and the record is written cancelled
+// under compare-and-swap — and the delivery ACKs.
+//
+// It reports whether it adopted. No marker, or a marker of another kind, is
+// not this arm's: the caller keeps its existing answer. A marker naming
+// another loop is poison and fatal. Scoped to the cancel lane by the ruling:
+// the non-terminal lanes do not consult the marker.
+func (c *Component) adoptDurableCancel(ctx context.Context, loopID string) (bool, error) {
+	if c.loopsBucket == nil {
+		return false, nil
+	}
+	entry, err := c.loopsBucket.Get(ctx, terminalMarkerKey(loopID))
+	switch {
+	case errors.Is(err, jetstream.ErrKeyNotFound), errors.Is(err, jetstream.ErrKeyDeleted):
+		return false, nil
+	case err != nil:
+		return false, errs.WrapTransient(fmt.Errorf("read terminal marker for loop %s: %w", loopID, err),
+			"agentic-loop", "adoptDurableCancel", "read the loop's durable terminal")
+	}
+	saved, err := decodeTerminalMarker(entry.Value())
+	if err != nil {
+		return false, errs.WrapFatal(fmt.Errorf("loop %s: %w", loopID, err),
+			"agentic-loop", "adoptDurableCancel", "decode the loop's durable terminal")
+	}
+	if saved.cancelled == nil {
+		return false, nil
+	}
+	if saved.loopID() != loopID {
+		return false, errs.WrapFatal(
+			fmt.Errorf("loop %s: durable cancel names loop %q", loopID, saved.loopID()),
+			"agentic-loop", "adoptDurableCancel", "match the durable terminal to its loop")
+	}
+
+	if err := c.stampTerminal(ctx, loopID, saved); err != nil {
+		return false, errs.WrapFatal(err, "agentic-loop", "adoptDurableCancel", "stamp the adopted cancel on the graph")
+	}
+	messages, err := c.terminalPublication(loopID, saved)
+	if err != nil {
+		return false, errs.WrapFatal(err, "agentic-loop", "adoptDurableCancel", "build the adopted cancel's publication")
+	}
+	if err := c.publishResults(ctx, HandlerResult{LoopID: loopID, PublishedMessages: messages}); err != nil {
+		return false, errs.WrapFatal(err, "agentic-loop", "adoptDurableCancel", "published cancel has unknown durability")
+	}
+	if err := c.writeRecordCancelled(ctx, loopID, saved.cancelled); err != nil {
+		return false, err
+	}
+	c.logger.WarnContext(ctx, "Cancel adopted the loop's durable cancel terminal",
+		slog.String("loop_id", loopID),
+		slog.Uint64("marker_revision", entry.Revision()))
+	return true, nil
+}
+
+// writeRecordCancelled writes a record this process does not hold to match an
+// adopted cancel, under compare-and-swap against the revision it read. A
+// record that moved retries; a record that is already terminal is settled.
+func (c *Component) writeRecordCancelled(ctx context.Context, loopID string, cancelled *agentic.LoopCancelledEvent) error {
+	c.loopRecordMu.Lock()
+	defer c.loopRecordMu.Unlock()
+
+	record := c.readLoopRecord(ctx, loopID)
+	switch record.presence {
+	case loopPresenceStale:
+		return nil
+	case loopPresenceUnknown:
+		return errs.WrapTransient(fmt.Errorf("loop %s: the loop record could not be read", loopID),
+			"agentic-loop", "adoptDurableCancel", "read the loop record before writing it cancelled")
+	}
+	entity := record.entity
+	entity.State = agentic.LoopStateCancelled
+	entity.Outcome = agentic.OutcomeCancelled
+	entity.CancelledBy = cancelled.CancelledBy
+	entity.CancelledAt = cancelled.CancelledAt
+	entity.CompletedAt = cancelled.CancelledAt
+	entity.Error = "cancelled by user"
+	entity.PendingApproval = nil
+	entity.StateBeforeApproval = ""
+	data, err := json.Marshal(entity)
+	if err != nil {
+		return errs.WrapFatal(err, "agentic-loop", "adoptDurableCancel", "marshal the cancelled loop record")
+	}
+	if _, err := c.loopsBucket.Update(ctx, loopID, data, record.revision); err != nil {
+		if natsclient.IsKVConflictError(err) {
+			return errs.WrapTransient(
+				fmt.Errorf("loop %s record moved past revision %d: %w", loopID, record.revision, natsclient.ErrKVRevisionMismatch),
+				"agentic-loop", "adoptDurableCancel", "compare-and-swap loop record")
+		}
+		return errs.WrapFatal(fmt.Errorf("persist cancelled loop state %s: %w", loopID, err),
+			"agentic-loop", "adoptDurableCancel", "cancelled loop record has unknown durability")
 	}
 	return nil
 }

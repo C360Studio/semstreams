@@ -31,7 +31,10 @@ record SHALL be written before the first request is published. An update that CR
 lane produces it, SHALL be written before the gate is published: a gate published before it is written leaves a human
 an approval request with no durable gate behind it. A terminal outcome SHALL be committed as `COMPLETE_<loopID>` by
 create-once before its terminal event is published, and the loop entity's terminal state SHALL be written after that
-event. A redelivered terminal input SHALL adopt the loop's durable terminal by loop ID and terminal kind. A redelivered
+event. A redelivered terminal input SHALL adopt the loop's durable terminal by loop ID and terminal kind. A durable
+terminal of a different kind from the one the redelivered input derives SHALL be quarantined, not adopted: the first
+terminal wins. A redelivered cancel that reaches a process not holding the loop, whose record is live and whose durable
+terminal is a cancel, SHALL adopt that cancel. A redelivered
 input whose `request_id` is older than `published_request_id` SHALL be acknowledged without effect; one whose
 `request_id` is newer SHALL be retried until the record names it; one whose `request_id` is not a request of the loop
 SHALL be quarantined. A redelivered tool result whose `request_id` equals `published_request_id` and whose execution

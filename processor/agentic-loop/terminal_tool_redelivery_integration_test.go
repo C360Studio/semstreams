@@ -123,6 +123,70 @@ func TestATerminalRedeliveredAfterItsPublicationAdoptsTheDurableTerminal(t *test
 		"an effect-free ACK publishes nothing")
 }
 
+// TestACancelRedeliveredAfterItsPublicationAdoptsTheDurableCancel covers the
+// cancel lane's cold window (owner ruling 2026-09-23, #1362
+// issuecomment-5802753726): cancel creates COMPLETE_<loopID> and publishes its
+// event before it writes the record, and the process dies before the record.
+// The redelivered cancel reaches a replacement that does not hold the loop;
+// the record is live, so before the ruling it retried to MaxDeliver while the
+// loop's other lanes carried on past a published cancel. It now adopts the
+// cancel marker: republish, record cancelled under compare-and-swap, ACK.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestACancelRedeliveredAfterItsPublicationAdoptsTheDurableCancel(t *testing.T) {
+	client := newLoopNATS(t)
+	predecessor, handler := startLoopProcess(t, client, DefaultConfig())
+	loopID, _ := bornLoop(t, predecessor, handler, "task-cancel-adopt")
+	completeSubject := "agent.complete." + loopID
+	markerKey := "COMPLETE_" + loopID
+	signal := baseMessageBytes(t, &agentic.UserSignal{
+		SignalID: "signal-cancel-adopt", Type: agentic.SignalCancel, LoopID: loopID, UserID: "operator",
+	})
+
+	predecessor.loopsBucket = crashedBeforeRecordUpdate{KeyValue: predecessor.loopsBucket}
+	died, err := predecessor.handleSignalMessage(t.Context(), signal)
+	require.Error(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionQuarantine, died,
+		"a cancelled record write of unknown durability is not an acknowledgement")
+
+	marker, err := predecessor.loopsBucket.Get(t.Context(), markerKey)
+	require.NoError(t, err, "cancel's marker precedes its event")
+	savedMarker := append([]byte(nil), marker.Value()...)
+	require.Equal(t, uint64(1), messagesOn(t, client, completeSubject))
+	require.False(t, loopRecordOf(t, predecessor, loopID).entity.State.IsTerminal(),
+		"fixture check: the record is the step the crash lost")
+	var saved agentic.LoopCancelledEvent
+	require.NoError(t, json.Unmarshal(savedMarker, &saved))
+
+	replacement, _ := startLoopProcess(t, client, DefaultConfig())
+	decision, err := replacement.handleSignalMessage(t.Context(), signal)
+	require.NoError(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionAck, decision,
+		"a cancel whose marker and event are durable is adopted, not retried to MaxDeliver")
+
+	adopted, err := replacement.loopsBucket.Get(t.Context(), markerKey)
+	require.NoError(t, err)
+	require.Equal(t, marker.Revision(), adopted.Revision(), "the durable cancel was overwritten")
+	require.Equal(t, uint64(2), messagesOn(t, client, completeSubject),
+		"the adopted cancel is republished — an accepted duplicate")
+	stream, err := client.GetStream(t.Context(), loopStreamName)
+	require.NoError(t, err)
+	raw, err := stream.GetLastMsgForSubject(t.Context(), completeSubject)
+	require.NoError(t, err)
+	var envelope struct {
+		Payload agentic.LoopCancelledEvent `json:"payload"`
+	}
+	require.NoError(t, json.Unmarshal(raw.Data, &envelope))
+	require.Equal(t, agentic.OutcomeCancelled, envelope.Payload.Outcome)
+	require.True(t, saved.CancelledAt.Equal(envelope.Payload.CancelledAt),
+		"the republished cancel is the saved one")
+
+	record := loopRecordOf(t, replacement, loopID)
+	require.Equal(t, agentic.LoopStateCancelled, record.entity.State)
+	require.Equal(t, saved.CancelledBy, record.entity.CancelledBy)
+	require.Nil(t, record.entity.PendingApproval)
+}
+
 // lastCompletionOn decodes the newest completion event the stream retains on
 // subject, through the BaseMessage envelope it was published in.
 func lastCompletionOn(t *testing.T, client *natsclient.Client, subject string) agentic.LoopCompletedEvent {

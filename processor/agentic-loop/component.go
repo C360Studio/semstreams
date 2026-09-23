@@ -3231,7 +3231,9 @@ func (c *Component) handleSignalMessage(ctx context.Context, data []byte) (natsc
 // operator asked for. Not found in memory is the same two-case question every
 // other lane asks, and the loops bucket answers it: no record means nothing to
 // cancel anywhere; a live record means the loop is running in another process
-// and the cancel is still owed to it.
+// and the cancel is still owed to it — unless COMPLETE_<loopID> already holds
+// a cancel, which is a cancel committed up to its record and adopted here
+// (adoptDurableCancel).
 func (c *Component) settleUncancellableLoop(ctx context.Context, loopID string, cause error) error {
 	if errs.IsInvalid(cause) {
 		c.logger.Info("Cancel signal for an already-terminal loop; acknowledging without effect",
@@ -3248,6 +3250,18 @@ func (c *Component) settleUncancellableLoop(ctx context.Context, loopID string, 
 			c.metrics.recordSignalDropped("stale_loop_id")
 		}
 		return nil
+	}
+	if errors.Is(cause, ErrLoopNotFound) {
+		// A live record this process does not hold may be a cancel that
+		// already committed its marker and event and crashed before its record
+		// (#1362): adopt it rather than retrying a cancel no process can take.
+		adopted, err := c.adoptDurableCancel(ctx, loopID)
+		if err != nil {
+			return err
+		}
+		if adopted {
+			return nil
+		}
 	}
 	return fmt.Errorf("cancel loop %q: %w", loopID, cause)
 }
