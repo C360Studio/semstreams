@@ -3,6 +3,15 @@ version: "3"
 # Agentic Tier: Agent loop, model, and tools E2E testing
 # Uses mock OpenAI server by default for deterministic CI testing
 # Override with AGENTIC_LLM_URL for local testing with real LLMs (e.g., Ollama)
+#
+# configs/agentic.json sets agentic-loop.timeout to 180s, which JSON cannot
+# explain in place. The reason is this tier's own process-replacement stage: a
+# loop's TimeoutAt is written at birth and is NOT refreshed by a rebuild
+# (#1330), so a loop held across a kill + `up --wait` + health settle - 10-25s
+# on a warm host, more on a cold one - dies of its own deadline the moment the
+# replacement touches it. 30s raced that window. 180s is the replacement budget
+# with room, not a claim about how long an agentic loop should take; the stage
+# asserts the premise and fails loudly if the deadline passed during the gap.
 
 tasks:
   default:

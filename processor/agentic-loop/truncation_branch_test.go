@@ -126,15 +126,22 @@ func TestHandleLengthTruncation_FailFast_LowUtilization(t *testing.T) {
 	}
 }
 
-// TestHandleLengthTruncation_ResetAfterForwardProgress verifies the
-// retry counter is cleared on a normal advancement (StatusComplete /
-// StatusToolCall) so a future truncation can self-heal once again.
-// Sequence: high-util truncation → retry (counter=1) → tool_call
-// response → counter resets → high-util truncation again → retry
-// fires (not fails as second-strike). Catches a regression that
-// dropped the reset from one of the forward-progress arms.
-func TestHandleLengthTruncation_ResetAfterForwardProgress(t *testing.T) {
+// TestHandleLengthTruncation_BudgetRenewsOnTheNextIteration verifies that the
+// compaction self-heal is available once per ITERATION: a high-utilization
+// truncation retries, the loop then advances an iteration through a real tool
+// batch, and a truncation at the new iteration retries again rather than
+// taking the second-strike fail.
+//
+// Before #1330 the budget was a process-local counter cleared by the
+// forward-progress arms of HandleModelResponse. It is now read out of the
+// loop's own PublishedRequestID: the retry of iteration N is named :N:1, so
+// the ordinal that spends the budget is durable, and the advance to iteration
+// N+1 renews it by minting :N+1:0. The counter's version of this test could
+// pass on a replacement process that had lost the counter and would happily
+// re-mint a name it had already published.
+func TestHandleLengthTruncation_BudgetRenewsOnTheNextIteration(t *testing.T) {
 	handler := agenticloop.NewMessageHandler(createTestConfig())
+	handler.SetToolRegistry(newTestToolRegistry(t))
 	ctx := context.Background()
 
 	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
@@ -148,7 +155,7 @@ func TestHandleLengthTruncation_ResetAfterForwardProgress(t *testing.T) {
 	}
 	loopID := taskResult.LoopID
 
-	// First truncation at high utilization → retry (counter=1).
+	// First truncation at high utilization → the iteration-1 self-heal.
 	fillContextToHighUtilization(t, handler, loopID, 80000)
 	first := agentic.AgentResponse{
 		RequestID:    handler.OutstandingRequestForTest(loopID),
@@ -157,42 +164,55 @@ func TestHandleLengthTruncation_ResetAfterForwardProgress(t *testing.T) {
 		Message:      agentic.ChatMessage{Role: "assistant", Content: "p1"},
 		TokenUsage:   agentic.TokenUsage{PromptTokens: 50, CompletionTokens: 4096},
 	}
-	if firstResult, err := handler.HandleModelResponse(ctx, loopID, first); err != nil {
+	firstResult, err := handler.HandleModelResponse(ctx, loopID, first)
+	if err != nil {
 		t.Fatalf("first HandleModelResponse: %v", err)
-	} else if firstResult.State == agentic.LoopStateFailed {
+	}
+	if firstResult.State == agentic.LoopStateFailed {
 		t.Fatalf("first call failed unexpectedly; state=%s", firstResult.State)
 	}
+	if ids := mintedRequestIDs(t, firstResult); len(ids) != 1 || !strings.HasSuffix(ids[0], ":req:1:1") {
+		t.Fatalf("the iteration-1 self-heal must mint :req:1:1; got %v", ids)
+	}
+	// The retry budget below is read off the request the RECORD names, and the
+	// carrier is what names it (#1330 finding 3).
+	carrierStamp(t, handler, firstResult)
 
-	// Forward progress: a normal tool_call response. This must reset
-	// the truncation retry counter.
-	progress := agentic.AgentResponse{
+	// Advance an iteration for real: a tool_call response dispatches a tool,
+	// and its result completes the batch, which is what increments the
+	// iteration and mints the next request.
+	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
 		RequestID:    handler.OutstandingRequestForTest(loopID),
 		Status:       agentic.StatusToolCall,
 		FinishReason: "tool_calls",
 		Message: agentic.ChatMessage{
-			Role: "assistant",
-			ToolCalls: []agentic.ToolCall{
-				{ID: "call-1", Name: "noop", Arguments: map[string]any{}},
-			},
+			Role:      "assistant",
+			ToolCalls: []agentic.ToolCall{{ID: "call-1", Name: "test_tool"}},
 		},
 		TokenUsage: agentic.TokenUsage{PromptTokens: 100, CompletionTokens: 50},
-	}
-	if _, err := handler.HandleModelResponse(ctx, loopID, progress); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("progress HandleModelResponse: %v", err)
 	}
+	dispatched := dispatchedToolCallFromResult(t, dispatchResult)
+	advanced, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
+		CallID:      dispatched.ID,
+		Name:        dispatched.Name,
+		Content:     "tool answered",
+		RequestID:   dispatched.RequestID,
+		ExecutionID: dispatched.ExecutionID,
+		CallOrdinal: dispatched.CallOrdinal,
+	})
+	if err != nil {
+		t.Fatalf("HandleToolResult: %v", err)
+	}
+	if ids := mintedRequestIDs(t, advanced); len(ids) != 1 || !strings.HasSuffix(ids[0], ":req:2:0") {
+		t.Fatalf("the tool batch must advance the loop to :req:2:0; got %v", ids)
+	}
+	carrierStamp(t, handler, advanced)
 
-	// Re-fill context (compaction freed room earlier) and feed
-	// another truncation. The counter should have been reset, so this
-	// is "first truncation since progress" — retry must fire, not
-	// second-strike-fail.
+	// A truncation at the new iteration has its own self-heal.
 	fillContextToHighUtilization(t, handler, loopID, 80000)
-	// The CURRENT request, not the outstanding one. The tool-call response
-	// above dispatched a tool and settled its request, so the loop is waiting
-	// on no model response here and the outstanding mark reads "" — a response
-	// naming no request is a state production cannot route, and since the
-	// guard compares against the loop's current request it is now also one the
-	// guard drops as superseded. The live request is what a redelivered answer
-	// at this point would name.
 	second := agentic.AgentResponse{
 		RequestID:    handler.CurrentRequestForTest(loopID),
 		Status:       agentic.StatusLengthTruncated,
@@ -204,20 +224,13 @@ func TestHandleLengthTruncation_ResetAfterForwardProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second HandleModelResponse: %v", err)
 	}
-
 	if secondResult.State == agentic.LoopStateFailed {
-		t.Errorf("post-reset truncation incorrectly hit second-strike fail; state=%s",
+		t.Errorf("a truncation at a new iteration incorrectly hit second-strike fail; state=%s",
 			secondResult.State)
 	}
-	var sawRequest bool
-	for _, msg := range secondResult.PublishedMessages {
-		if strings.HasPrefix(msg.Subject, "agent.request.") {
-			sawRequest = true
-		}
-	}
-	if !sawRequest {
-		t.Errorf("post-reset truncation should fire a retry agent.request; got: %v",
-			subjectsOf(secondResult.PublishedMessages))
+	if ids := mintedRequestIDs(t, secondResult); len(ids) != 1 || !strings.HasSuffix(ids[0], ":req:2:1") {
+		t.Errorf("the iteration-2 self-heal must mint :req:2:1; got %v (published %v)",
+			ids, subjectsOf(secondResult.PublishedMessages))
 	}
 }
 
@@ -312,7 +325,8 @@ func TestHandleLengthTruncation_Retry_HighUtilization(t *testing.T) {
 
 // TestHandleLengthTruncation_SecondTruncation_FailWithCompactionAttempted
 // verifies the second-strike branch: when the loop already retried
-// once (truncationRetryAttempts == 1 going in) and another truncation
+// once (the record's published request names retry ordinal 1 going in)
+// and another truncation
 // arrives, fail with the post-compaction diagnostic message saying
 // compaction_attempted=true so the operator knows compaction did
 // its job and the response still doesn't fit.
@@ -347,6 +361,7 @@ func TestHandleLengthTruncation_SecondTruncation_FailWithCompactionAttempted(t *
 	if firstResult.State == agentic.LoopStateFailed {
 		t.Fatalf("first call failed unexpectedly; state=%s", firstResult.State)
 	}
+	carrierStamp(t, handler, firstResult)
 
 	// Second truncation arrives — same iteration, retry counter is now 1.
 	second := agentic.AgentResponse{

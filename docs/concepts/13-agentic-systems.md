@@ -213,6 +213,15 @@ When context approaches the model's token limit:
 2. **GC** removes tool results older than N iterations
 3. **Hydration** recovers relevant context from the knowledge graph
 
+A process replacement resets that accounting: a loop rebuilt by a replacement is replayed from its
+retained `AgentRequest` into one region — system messages to the system prompt, everything else to
+recent history in retained order — so a conversation the predecessor had compacted comes back as
+recent history and the next compaction fires earlier, with no content lost. The per-iteration prefix
+the request carried (the `[Iteration Budget]` line, and the working list when there is one) belongs
+to that request rather than to the conversation, so it is stripped on replay instead of being seated
+at the top of the rebuilt system prompt. Operator detail:
+[migration-beta162-to-beta163.md](../operations/migration-beta162-to-beta163.md).
+
 Context events are published to `agent.context.compaction.*` for observability — the OTel span
 collector (`output/otel`) records each as a span event on the active loop span.
 

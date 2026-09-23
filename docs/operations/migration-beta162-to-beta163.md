@@ -1179,8 +1179,10 @@ Exactly one payload type now travels that subject.
   not act on. `reason="stale_request_id"` is a response with no loop mapping for its `RequestID`, expected after a
   loop settles and releases its per-loop state or after a process replacement. `reason="superseded_request"` is a
   response naming a request the loop is no longer waiting on: the loop minted a newer one, most often because a
-  redelivery of an already-handled response arrived after the loop had moved on. Both are Acked, because
-  redelivering them cannot help. A sustained rate against live loops points at NATS redelivery. It is the sibling
+  redelivery of an already-handled response arrived after the loop had moved on. `reason="already_applied"` is the
+  redelivery that arrives BEFORE the loop moves on: it names the request the record still names, and the loop
+  holding it is waiting on no request, so the answer was already used — re-applying it would append the assistant
+  turn a second time and re-dispatch the batch. All three are Acked, because redelivering them cannot help. A sustained rate against live loops points at NATS redelivery. It is the sibling
   of the existing `semstreams_agentic_loop_tool_results_dropped_total{reason}`, which the same drop class already
   had.
 - **`/status` reports the state it read.** For a loop this process is not running — after dispatch was replaced,
@@ -1309,8 +1311,8 @@ returns to every probe you have pointed at it.
 
 `agent.request` RequestIDs are minted as `<loopID>:req:<iteration>:<retry>` instead of `<loopID>:req:<uuid>`. The
 two ordinals name the logical work — iteration ordinal within the loop, truncation-retry ordinal within the
-iteration — so a redelivered task republishes the *same* RequestID and agentic-model answers it from the retained
-response instead of calling the provider a second time.
+iteration — so a redelivered task that has a request to republish at all mints the *same* RequestID, and the
+`Nats-Msg-Id` header below is what stops a second copy landing under that name.
 
 **What did not change.** The `<loopID>:req:` prefix, and therefore everything built on it: the framework's own
 `ExtractLoopIDFromRequest`, the `agent.response.<requestID>` subject grammar, and any consumer that splits a
@@ -1369,7 +1371,7 @@ an execution id is still one dotless subject token.
   bucket does not repair it — the ledger was never consulted. Drain in-flight tool calls before the upgrade, or
   accept that the loops holding them fail on timeout.
 
-### `tool_results_dropped_total`'s only `reason` value is renamed
+### `tool_results_dropped_total`'s `reason` values: one renamed, three added
 
 The routing key moved, and the drop reason that names it moved with it. The one value
 `semstreams_agentic_loop_tool_results_dropped_total{reason}` emits is now `stale_execution`; it was `stale_callid`
@@ -1387,7 +1389,18 @@ valid PromQL and reads zero forever.** An alert written as
 `rate(semstreams_agentic_loop_tool_results_dropped_total{reason="stale_callid"}[5m]) > 0` never fires again and a
 panel filtered to it draws a flat line that reads as "no drops are happening". Nothing errors, and nothing in the
 upgrade tells you. Edit the selector to `reason="stale_execution"`, or drop the matcher and aggregate
-`by (reason)`; `stale_execution` is the only value this build emits, so that aggregation returns one series.
+`by (reason)`. Aggregated that way the series now has four values, because this release also adds the three
+reasons the cold lanes need. The metric's Help text carries the same definitions.
+
+| `reason` | Counted when |
+|---|---|
+| `stale_execution` | no loop mapping exists for the execution ID and the loop record is absent or terminal (the rename above) |
+| `older_request` | the result names an earlier request than the record does, so the loop already applied it; counted on the warm lane and on the cold lane once the record has been brought forward |
+| `already_applied` | the result names the request the record names AND its execution is already in the record's `pending_tool_results`: a replay of work the loop kept, and the batch's unfinished siblings go on running |
+| `terminal_unproven` | the loop is terminal, so no result can still be applied to it |
+
+A result the record still names is NOT counted: it is retried until a process can apply it. A result naming a
+request of no loop is quarantined, not dropped.
 
 ## An approval response must echo the execution identity it answers (#1328)
 
@@ -1767,3 +1780,160 @@ token as the key and a record that validates, or the terminal it names will neve
 Verify pending approval and explicit continuation after dispatch replacement, unavailable-view 503 responses,
 exact-route auto-continue and its birth gap, and terminal routing after replacement. No beta-state preservation,
 tracker hydration, or compatibility layer is required.
+
+## The loop record names its outstanding request, and the truncation-retry helpers are removed (#1330, restart safety L4a)
+
+### Two exported methods are removed from `processor/agentic-loop`
+
+`LoopManager.IncrementTruncationRetry` and `LoopManager.ResetTruncationRetry` are deleted, together with the
+process-local `truncationRetryAttempts` map they maintained. They counted consecutive within-iteration retries driven
+by length-truncation responses, in memory. A replacement process read zero and spent the self-heal a second time
+under a request name its predecessor had already published, which the stream's duplicate window then dropped — the
+retry was stranded, which is the class #1330 closes.
+
+The budget is durable now. It is read back out of the retry ordinal of `LoopEntity.PublishedRequestID`
+(`<loopID>:req:<iteration>:<retry>`, #1328), so it survives process replacement and is one spelling of one fact
+rather than two. `handleLengthTruncation` keeps its behaviour: one self-heal per iteration, renewed by forward
+progress because a new iteration mints retry ordinal `0` by construction.
+
+**No adopter impact, measured 2026-09-22.** A `grep -rn -E 'IncrementTruncationRetry|ResetTruncationRetry'` across
+every `sem*` repository in the workspace returned hits in exactly one place: frozen `.txt` copies of SemStreams'
+own `state.go` and `handlers.go` under `semdev/openspec/changes/spec-driven-test-sensitivity/evidence/`. No sister
+repository calls either method from Go. A control grep for `LoopManager` over the same tree set reached sister
+sources (`semdev/test/conformance/upstream_asks_test.go`), so the empty result is an absence and not an unreachable
+search.
+
+If you did call either method: delete the call. An `Increment` site that gated a budget reads
+`publishedRetryOrdinal` equivalents from the record's request name; a `Reset` site has no successor, because nothing
+has to clear a counter for the budget to renew.
+
+### One field is added to `agentic.LoopEntity`
+
+`PublishedRequestID string` (`published_request_id`, `omitempty`) names the request the loop currently has
+outstanding. It is additive and optional: a record written before this change decodes with the field empty, and a
+consumer that does not know the field is unaffected. `Validate()` does not require it.
+
+What it means is a contract, not a hint (invariant I1): while the record exists, an `AgentRequest` carrying that
+exact `RequestID` is durably retained on `agent.request.<loopID>`. A consumer may therefore read the record to learn
+which request a loop is waiting on, and recovery orders request identities rather than comparing message bodies.
+Anything that writes `AGENT_LOOPS` directly — a migration script, a replay harness, a fixture — must either leave
+the field empty or set it to a request it has actually published, or a replacement process will refuse the loop.
+
+### A rebuilt loop's conversation is one region, so compaction attribution does not survive a replacement
+
+A process that meets a redelivered response or tool result for a loop it never started now rebuilds that loop from
+its record and its retained `AgentRequest` instead of refusing the delivery. The replay is deliberately flat: the
+system messages go back to the system-prompt region and every other retained message goes to recent history in the
+order the request carried them, so a conversation that its predecessor had compacted comes back as recent history
+rather than as compacted history.
+
+Two things change at a replacement, neither of which needs an action:
+
+- **Compaction attribution resets.** A dashboard that reads per-region sizes or a compacted-history counter sees the
+  attribution start over, and the rebuilt loop may compact again sooner than its predecessor would have. No
+  conversation content is lost.
+- **System messages are rendered before the recent history.** A retained request carrying more than one system
+  message has them re-seated together at the front, which is where `GetContext()` renders them anyway; a request
+  that interleaved a system message with the conversation does not get that interleaving back.
+
+**A rebuild is not a reprieve.** `TimeoutAt` is written at loop birth and lives on the record, so a rebuilt loop
+keeps its ORIGINAL deadline: nothing refreshes it, and the time the process was down is not excluded from it. A
+replacement whose gap outran that deadline rebuilds the loop and then fails it on the very first delivery, with a
+terminal on `agent.failed.<loopID>` carrying `loop timeout exceeded`. The delivery itself is ACKNOWLEDGED — the loop
+settled and nothing is owed — so this shape is invisible to consumer-health and settlement checks and shows up only
+on `agent.failed`. **Action:** size `timeout` on the `agentic-loop` component above the replacement window you
+expect to operate under. A 30s loop timeout and a 60s rolling restart mean every in-flight loop dies on recovery.
+
+What is deliberately NOT replayed is the per-iteration framing. A retained request is not the loop's conversation —
+the loop prepends an `[Iteration Budget]` line, and when the loop has a working list a `[Working list …]` block,
+before publishing. Both are `system` messages that belong to that one request. The rebuild drops the leading run of
+them, because seating them would pin one iteration's budget at the top of the rebuilt system prompt for the rest of
+the loop's life while every later request prepends a fresh one. Only a LEADING run is dropped, so a message of the
+conversation that happens to start with either string is kept.
+
+**A deferred turn is durable as a MARKER only, and so is nothing about the task prompt.** A continuation admitted
+while the loop's model request is outstanding puts the user's turn into the loop's context and records only *that* a
+turn was admitted (`pending_continuation`). Across a process replacement the turn's TEXT is gone: it lived in the
+replaced process. The rebuild clears the marker and logs a warning rather than leaving a loop that would spend an
+iteration re-asking the model with nothing new — **the turn has to be re-sent.** A turn that a retained request
+already carries is a different case and is unaffected: that request replays and the marker still names its carrier.
+A turn *arriving after* the replacement is the same limitation from the other side: a continuation reaches only a loop
+some process holds, so a task naming a loop whose record belongs to a different task is **refused — acknowledged
+without effect**, with a warning naming both tasks and a `continuation_unheld` reason on
+`task_intake_rejections_total`. **Action:** re-send the turn once a redelivered input has rebuilt the loop; nothing
+retries it for you, and the submission itself still counted on `tasks_submitted_total`.
+
+The loop's task prompt is the same limitation one field over. A loop rebuilt from its record and a retained request —
+the model-response and tool-result cold arms — does not recover it, so its `LoopCompletedEvent.prompt` and
+`LoopFailedEvent.prompt` are published **empty**, and the empty-context recovery path falls back to its literal
+`"Continue with the task."` placeholder instead of the original task. A loop rebuilt from a *redelivered task* is the
+exception: that arm runs the ordinary birth path, which caches the task's prompt, so its terminal events carry it. **Action:** a consumer
+that reads `prompt` off a completion or failure event must tolerate an empty one — correlate on `task_id` or
+`loop_id` if it needs the prompt. The durable field for both the turn and the prompt is
+[#1365](https://github.com/C360Studio/semstreams/issues/1365), not this tag.
+
+**`[Iteration Budget]` and `[Working list` are reserved prefixes.** A *configured system prompt* whose first message
+begins with either string is indistinguishable from the framing the loop generates, and on a cold rebuild it is
+dropped along with it. Do not start a system prompt, persona fragment or prompt-registry entry with either string;
+anything further into the conversation is safe.
+
+### A replaced process re-arms no approval deadline
+
+A loop parked in `awaiting_approval` keeps its pending state across a process replacement — the record names the
+gated call, its execution identity and the request that gated it — but **the deadline is not re-armed at startup**. The
+approval-timeout sweeper snapshots the loops its own process holds, and nothing at startup reads `AGENT_LOOPS` to
+restore the ones it does not. A parked loop therefore stays `awaiting_approval` until the approval is answered or
+the loop is cancelled, rather than being auto-rejected by whichever process happens to come up.
+
+This **supersedes** the beta.25 note's "Restart safety" paragraph
+([migration-beta24-to-beta25.md](migration-beta24-to-beta25.md) § Restart safety), which said an expired loop in KV
+at restart would auto-reject within one sweep interval of the new process booting. It would not: that paragraph
+described fields the sweeper reads, not a process that reads the bucket.
+
+**Operational consequence, and what beta.163 can and cannot do about it.** The wait a parked loop is nominally
+under (`approval_timeout`, at most 12h) is not a settlement guarantee across a replacement, and was never one.
+Neither is answering it from outside: **an `ApprovalResponse` and a `cancel` signal both reach only a loop that is
+present in process memory.** For a parked loop no process holds:
+
+- an `ApprovalResponse` finds no pending approval to resolve, is dropped as stale, and is **acknowledged without
+  changing `AGENT_LOOPS`** — so it looks answered and is not;
+- a `cancel` signal against a live record finds no loop to cancel and is **retried until `MaxDeliver` stops
+  redelivering it**, after which it is recorded in the framework's MaxDeliver ledger.
+
+**A cold parked loop is not settleable in beta.163.** The cold approval branch — the one that rebuilds a parked loop
+from its record so an `ApprovalResponse` can land — is [#1362](https://github.com/C360Studio/semstreams/issues/1362),
+not this tag. Until it lands, the only thing that revives such a loop is the narrow exception below: a redelivered
+input naming the request the record names. That is not a recovery path to rely on.
+
+So the action for beta.163 is to keep the window small rather than to answer into it: size the `agentic-loop`
+component's `timeout` above the replacement window you operate under (see the loop-deadline note above), and expect
+loops parked at an approval across a replacement to sit until #1362.
+
+One narrow exception, recorded rather than built on: a replacement that rebuilds a loop for some *other* reason — a
+redelivered model response or tool result naming the request the record names — seats that loop's pending approval
+along with the rest of the record, and from then on sweeps it against the record's own `RequestedAt` plus `Timeout`.
+That is the record's original deadline, not a fresh wait, and it depends on a redelivery arriving. It is not a
+recovery path to rely on.
+
+### `tasks_submitted_total` is at-least-once, and stays that way
+
+`semstreams_router_tasks_submitted_total` counts task submission ATTEMPTS, not distinct tasks. A redelivered
+`UserMessage` whose task already committed increments it a second time: dispatch recovers the committed task by its
+stable ID, republishes that same task under the same `task_id` and the same `loop_id`, and counts the submission
+again. Nothing suppresses the second increment, and **no arm was added to make it exactly-once** — the arm would
+have to distinguish a redelivery from a retry at a seam that cannot see the difference, and would buy a dashboard
+number at the cost of a guard on the path that carries real work.
+
+No action, but two reading rules:
+
+- Do not take this counter for a count of distinct tasks or loops. For that, count loops in `AGENT_LOOPS`, or count
+  distinct `task_id` values on `agent.task.>`.
+- A step in this counter with no matching new loop is a redelivery, not a duplicated task. The redelivery is
+  otherwise idempotent: same `task_id`, same `loop_id`, no second loop.
+
+`agent.created` is at-least-once in the same way, and for the same reason. A task redelivered while its record is
+still at iteration zero AND the stream retains no request for its loop rebuilds the loop through the ordinary birth
+path, which builds the loop-created event again; the event carries no `Nats-Msg-Id`, so the server cannot collapse it the way it collapses a republished
+`agent.request`. A consumer of `agent.created` must treat it as an announcement it may see more than once for one
+loop, keyed on `loop_id`, not as a birth counter. Recorded, not armed away: the loop, its record and its first
+request are all still exactly one.

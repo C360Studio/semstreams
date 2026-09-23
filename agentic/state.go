@@ -55,9 +55,35 @@ type LoopEntity struct {
 	Iterations         int                   `json:"iterations"`
 	MaxIterations      int                   `json:"max_iterations"`
 	PendingToolResults map[string]ToolResult `json:"pending_tool_results,omitempty"` // ExecutionID; synthetic failures use CallID
-	StartedAt          time.Time             `json:"started_at,omitempty"`           // When the loop was created
-	TimeoutAt          time.Time             `json:"timeout_at,omitempty"`           // When the loop should timeout
-	ParentLoopID       string                `json:"parent_loop_id,omitempty"`       // Parent loop ID for architect->editor relationship
+	// PublishedRequestID names the AgentRequest outstanding for this loop: the
+	// RequestID whose PubAck preceded the KV update that wrote this record.
+	//
+	// It is the loop's durable settlement fact (invariant I1, #1330): while
+	// this record exists, an AgentRequest{RequestID: PublishedRequestID,
+	// LoopID: ID} is durably retained on agent.request.<loop id>. That is what
+	// lets a process with no memory of the loop classify a redelivered model
+	// response or tool result by identity — older, current or newer — instead
+	// of comparing retained conversation content.
+	//
+	// Set at birth, where the record is written before the first request is
+	// published, and on every later request-minting transition by the CARRIER
+	// — never at the mint, because a name stamped at the mint is visible to
+	// every other lane writing this loop and one of them committing it would
+	// put a request in the record that the stream does not hold. On the
+	// model-response and tool-result lanes, and in the approval-timeout
+	// sweeper's own publish-stamp-write sequence, the stamp follows that
+	// request's PubAck, which is what makes I1 true by construction there. The
+	// approval lane keeps the pre-#1330 write-then-publish order until #1362,
+	// and it mints — its rejection advances the loop — so there alone the name
+	// is written before the PubAck and I1 holds only as far as that publish
+	// does. Never cleared.
+	//
+	// It is a settlement fact, not an in-flight answer: a record naming a
+	// request says nothing about whether any process is still working on it.
+	PublishedRequestID string    `json:"published_request_id,omitempty"`
+	StartedAt          time.Time `json:"started_at,omitempty"`     // When the loop was created
+	TimeoutAt          time.Time `json:"timeout_at,omitempty"`     // When the loop should timeout
+	ParentLoopID       string    `json:"parent_loop_id,omitempty"` // Parent loop ID for architect->editor relationship
 	// RunID is the 6-part-derived run anchor; the run loop-id this loop belongs to.
 	// Empty for loops not in a run. Inherited at spawn (ADR-053 D7).
 	RunID string `json:"run_id,omitempty"`
@@ -92,24 +118,26 @@ type LoopEntity struct {
 	// duplicate window drops the second. This marker is how the loop keeps that
 	// invariant without a third identity segment (owner ruling Q4).
 	//
-	// Residual, declared: restoring this across a process replacement is L4's
-	// (#1330). In-process it is authoritative; after a replacement the whole
-	// loop needs recovery, not just this bit.
+	// Since #1330 this survives a process replacement: it is part of the record,
+	// and the cold rebuild seats the record wholesale, so a rebuilt loop carries
+	// the marker its predecessor set rather than re-deferring a turn that was
+	// already carried.
 	PendingContinuation bool `json:"pending_continuation,omitempty"`
 
 	// PendingContinuationRequestID names the request that carries the deferred
-	// turn, empty while no request does. It exists because the marker is
-	// persisted BEFORE the publish it describes: persistHandlerResult stamps
-	// the entity and only then emits the request, so a marker cleared when the
-	// request was BUILT would be durably clear while the publish that justified
-	// the clear had unknown durability — the delivery quarantines and the only
-	// state that could re-carry the turn is already gone.
+	// turn, empty while no request does. It is what keeps the turn from being
+	// carried twice: once a request names it, the next completion settles
+	// instead of spending an iteration re-asking with a context that gained
+	// nothing. It clears when that request's response settles, which is the
+	// first moment the send is known to have happened.
 	//
-	// Recording the carrier instead keeps both obligations: the turn is not
-	// carried twice (a request already names it), and a quarantined publish
-	// leaves "pending, carried by <requestID>" durable for recovery to act on.
-	// It clears when that request's response settles, which is the first moment
-	// the send is known to have happened.
+	// It was originally introduced to survive a publish whose durability was
+	// unknown, because the carrier stamped the entity BEFORE it emitted the
+	// request. Since #1330 the model-response and tool-result lanes publish
+	// first and write after, so a publish that did not commit writes no record
+	// at all and the durable state stays "deferred and uncarried" — and the
+	// opposite window, a request that PubAck'd before the record update, is
+	// closed by identity adoption rather than by this field.
 	PendingContinuationRequestID string `json:"pending_continuation_request_id,omitempty"`
 
 	// User context (for routing responses)

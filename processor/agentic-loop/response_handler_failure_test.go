@@ -53,6 +53,7 @@ func TestResponseHandlerFailureSettlesOnTheDurableRecord(t *testing.T) {
 		c := releaseTestComponent(t, handler)
 		bucket := &recordingLoopBucket{}
 		c.loopsBucket = bucket
+		seedLoopRecord(t, c, loopID)
 		return c, bucket, loopID, requestID
 	}
 

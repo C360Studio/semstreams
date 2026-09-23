@@ -47,6 +47,7 @@ func loopWithADeferredTurn(t *testing.T) (*Component, *recordingLoopBucket, stri
 	c := releaseTestComponent(t, handler)
 	bucket := &recordingLoopBucket{}
 	c.loopsBucket = bucket
+	seedLoopRecord(t, c, loopID)
 	return c, bucket, loopID, requestID
 }
 
@@ -134,9 +135,15 @@ func timedOutLoopWithASupersededRequest(t *testing.T) (*Component, *recordingLoo
 
 	superseded := handler.loopManager.GenerateRequestID(loopID)
 	handler.loopManager.TrackRequest(superseded, loopID)
+	// SetPublishedRequest beside TrackRequest is what every production mint
+	// site does (#1330), and it is the identity the superseded guard compares
+	// against. A fixture that tracked without naming would leave the record
+	// naming nothing and let the stale response through.
+	require.NoError(t, handler.loopManager.SetPublishedRequest(loopID, superseded))
 	require.NoError(t, handler.loopManager.IncrementIteration(loopID))
 	current := handler.loopManager.GenerateRequestID(loopID)
 	handler.loopManager.TrackRequest(current, loopID)
+	require.NoError(t, handler.loopManager.SetPublishedRequest(loopID, current))
 	require.NotEqual(t, superseded, current, "the fixture must leave the first request superseded")
 	require.Equal(t, current, handler.loopManager.OutstandingRequest(loopID))
 
@@ -148,6 +155,7 @@ func timedOutLoopWithASupersededRequest(t *testing.T) (*Component, *recordingLoo
 	c := releaseTestComponent(t, handler)
 	bucket := &recordingLoopBucket{}
 	c.loopsBucket = bucket
+	seedLoopRecord(t, c, loopID)
 	return c, bucket, loopID, superseded
 }
 
@@ -201,8 +209,9 @@ func TestSupersededResponseDoesNotSettleATimedOutLoop(t *testing.T) {
 		"the stale response advanced the loop")
 	require.Empty(t, entity.Outcome, "the stale response settled the timed-out loop")
 	require.Empty(t, entity.CompletedAt)
-	require.Equal(t, []string{loopID}, bucket.written(),
-		"only the loop entity may be written; a COMPLETE_ record means the loop was terminated")
+	require.Empty(t, bucket.written(),
+		"a superseded response must write nothing at all: an empty HandlerResult still reaches the "+
+			"record's compare-and-swap, and a delivery that changed nothing must not move its revision")
 	require.Equal(t, loopID+":req:2:0", c.handler.loopManager.OutstandingRequest(loopID),
 		"the stale response settled the request the loop is actually waiting on")
 }

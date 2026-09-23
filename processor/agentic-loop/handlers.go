@@ -309,6 +309,16 @@ func (h *MessageHandler) maybeBuildTodoMessage(ctx context.Context, loopID strin
 	return BuildTodoStateMessage(todos)
 }
 
+// iterationBudgetPrefix and workingListPrefix open the two per-iteration
+// messages prependIterationContext attaches. They are constants because three
+// places depend on the exact text — the two builders that write it and
+// isIterationPrefixMessage, which is how a rebuild recognises it — and a
+// literal in any one of them could drift from the others silently.
+const (
+	iterationBudgetPrefix = "[Iteration Budget]"
+	workingListPrefix     = "[Working list"
+)
+
 // prependIterationContext is the canonical prefix the loop attaches
 // to every iteration's message slice: the iteration-budget warning
 // (mandatory) followed by the optional working-list block. Both go
@@ -319,6 +329,26 @@ func (h *MessageHandler) prependIterationContext(ctx context.Context, loopID str
 		prefix = append(prefix, todoMsg)
 	}
 	return append(prefix, messages...)
+}
+
+// isIterationPrefixMessage is the inverse of prependIterationContext: it
+// reports whether a message is one of the two per-iteration system messages
+// that function attaches, rather than a message of the loop's conversation.
+//
+// It exists for the cold rebuild. A retained AgentRequest is prependIterationContext's
+// OUTPUT, not GetContext(), so it opens with a budget line and possibly a
+// working list — both Role "system". A rebuild that trusted the role alone
+// would pin ONE iteration's budget at the top of RegionSystemPrompt for the
+// rest of the loop's life, while every later request prepends a fresh one.
+//
+// Only a LEADING run of these is ever dropped: a user is free to type either
+// string, and a message in the body of the conversation is the conversation.
+func isIterationPrefixMessage(msg agentic.ChatMessage) bool {
+	if msg.Role != "system" {
+		return false
+	}
+	return strings.HasPrefix(msg.Content, iterationBudgetPrefix) ||
+		strings.HasPrefix(msg.Content, workingListPrefix)
 }
 
 // lookupLoopUserID resolves the owning user for a loop, returning "" when the
@@ -794,11 +824,11 @@ func BuildIterationBudgetMessage(iteration, maxIterations int) agentic.ChatMessa
 	var content string
 	switch {
 	case pct > 75:
-		content = fmt.Sprintf("[Iteration Budget] Iteration %d of %d (%d%% used). Budget nearly exhausted — finalize and submit your work now.", iteration, maxIterations, pct)
+		content = fmt.Sprintf(iterationBudgetPrefix+" Iteration %d of %d (%d%% used). Budget nearly exhausted — finalize and submit your work now.", iteration, maxIterations, pct)
 	case pct > 50:
-		content = fmt.Sprintf("[Iteration Budget] Iteration %d of %d (%d%% used). Consider wrapping up — focus on completing the current objective.", iteration, maxIterations, pct)
+		content = fmt.Sprintf(iterationBudgetPrefix+" Iteration %d of %d (%d%% used). Consider wrapping up — focus on completing the current objective.", iteration, maxIterations, pct)
 	default:
-		content = fmt.Sprintf("[Iteration Budget] Iteration %d of %d (%d%% used).", iteration, maxIterations, pct)
+		content = fmt.Sprintf(iterationBudgetPrefix+" Iteration %d of %d (%d%% used).", iteration, maxIterations, pct)
 	}
 	return agentic.ChatMessage{Role: "system", Content: content}
 }
@@ -1132,6 +1162,12 @@ func (h *MessageHandler) buildTaskRequest(loopID string, task TaskMessage, entit
 
 	h.loopManager.TrackRequest(request.RequestID, loopID)
 	h.loopManager.TrackRequestStart(request.RequestID)
+	// The record must name the request it is about to publish (I1). The
+	// carrier writes the record before this first publish (owner ruling Q1),
+	// so birth is the one lane where the name is durable ahead of the PubAck.
+	if err := h.loopManager.SetPublishedRequest(loopID, request.RequestID); err != nil {
+		return HandlerResult{}, err
+	}
 
 	requestMsg := message.NewBaseMessage(request.Schema(), &request, "agentic-loop")
 	requestData, err := json.Marshal(requestMsg)
@@ -1208,6 +1244,50 @@ func (h *MessageHandler) buildTaskRequest(loopID string, task TaskMessage, entit
 	return result, nil
 }
 
+// errRequestNotYetObservable marks an input whose request the loop's record
+// does not name YET: the request was published and the update that records it
+// has not landed (#1330, crash window W4).
+//
+// It is a sentinel rather than a classified error because the delivery lane
+// and the loop-failure path read it differently. The lane must RETRY — the
+// record catches up and the next delivery classifies cleanly — while
+// handleResponseMessage must NOT treat it as this loop's business failure:
+// nothing about the loop has failed, and failing it here would settle a
+// running loop on a timing window.
+var errRequestNotYetObservable = errors.New("request is not yet named by the loop record")
+
+// errResponseSuperseded marks a model response the loop has already moved past:
+// its request is OLDER than the one the record names, so the loop advanced,
+// which it can only do by applying it (#1330, design § 5.2).
+//
+// The delivery is finished — acknowledge it — and the handler returns it as an
+// error rather than as an empty HandlerResult so that nothing flows on to the
+// carrier. An empty result still reaches persistLoopState, which is a
+// compare-and-swap write: a response that changed nothing would move the
+// record's revision, which is the one thing a drop must not do.
+var errResponseSuperseded = errors.New("response names a request the loop has moved past")
+
+// errResponseAlreadyApplied marks a SECOND delivery of the response the loop
+// is currently on: it names the request the record names, and the loop is
+// waiting on no request, which it can only be because this answer was already
+// used (#1330, owner ruling Q12, 2026-09-23).
+//
+// Ordering cannot decide this one — both deliveries name the same request —
+// and applying it twice is not idempotent for the loop's CONVERSATION: the
+// assistant turn is appended again and rides the next request the model is
+// asked to answer. It is a sentinel, and returned as an error rather than as
+// an empty HandlerResult, for the same reason errResponseSuperseded is: an
+// empty result still reaches the carrier's compare-and-swap, and a response
+// that changed nothing must not move the record's revision.
+var errResponseAlreadyApplied = errors.New("response was already applied by this process")
+
+// errResponseForeign marks a model response naming something that is not a
+// request of this loop at all. Nothing orders it, no later delivery will make
+// it order, and applying it would act on another loop's identity — so it is
+// quarantined, which is the disposition the tool lane and both cold arms
+// already give the same input.
+var errResponseForeign = errors.New("response names a request that is not this loop's")
+
 // HandleModelResponse processes a model response
 func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string, response agentic.AgentResponse) (HandlerResult, error) {
 	// Check for cancellation before starting work
@@ -1244,30 +1324,85 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 	// request's own answer would then be dropped by the terminal guard, which is
 	// exactly the lost turn the deferral exists to prevent.
 	//
-	// A redelivery of the CURRENT request is still handled: same identity,
-	// same request, and refusing it would drop the answer the loop is owed.
-	// The empty case is let through too, but it now means only "this process
-	// minted nothing for this loop" — a restart, where the routing was rebuilt
-	// from the RequestID. Deciding that one needs durable request identity and
-	// is L4's (#1330, declared in design.md § Declared residuals).
-	if current := h.loopManager.CurrentRequest(loopID); current != "" && current != response.RequestID {
+	// A redelivery of the CURRENT request passes THIS check: same identity,
+	// same request, and refusing it here would drop the answer the loop is
+	// owed. Whether it is the answer the loop is still owed or a replay of one
+	// already used is the outstanding mark's question, below (Q12).
+	//
+	// The identity compared against is the DURABLE one — the request the
+	// loop's record names (#1330, I1). It used to be LoopManager.CurrentRequest,
+	// a process-local map that is empty after a replacement, so every response
+	// reaching a rebuilt process passed this guard whatever it named (L2's
+	// declared residual). The record's name survives the process, so a
+	// replacement classifies with the same authority the original had.
+	order := orderAgainstPublished(loopID, entity.PublishedRequestID, response.RequestID)
+	switch order {
+	case requestOrderApplied:
 		h.logger.Warn("ignoring superseded model response — the loop has moved on to a different request",
 			slog.String("loop_id", loopID),
 			slog.String("response_request_id", response.RequestID),
-			slog.String("current_request_id", current),
+			slog.String("published_request_id", entity.PublishedRequestID),
 			slog.String("outstanding_request_id", h.loopManager.OutstandingRequest(loopID)),
 			slog.String("state", entity.State.String()))
 		if h.metrics != nil {
 			h.metrics.recordModelResponseDropped("superseded_request")
 		}
+		return HandlerResult{}, fmt.Errorf("%w: loop %s response names request %q, its record names %q",
+			errResponseSuperseded, loopID, response.RequestID, entity.PublishedRequestID)
+	case requestOrderForeign:
+		h.logger.Warn("refusing a model response that names a request of no loop",
+			slog.String("loop_id", loopID),
+			slog.String("response_request_id", response.RequestID),
+			slog.String("published_request_id", entity.PublishedRequestID),
+			slog.String("state", entity.State.String()))
+		return HandlerResult{}, fmt.Errorf("%w: loop %s response names request %q, its record names %q",
+			errResponseForeign, loopID, response.RequestID, entity.PublishedRequestID)
+	case requestOrderAhead:
+		// The answer arrived before the record that names its question. It is
+		// not superseded and must not be dropped: the delivery is retried
+		// until the record catches up, which is the only reading under which
+		// the record stays the authority (#1330, design § 5.2).
 		return HandlerResult{
-			LoopID:            loopID,
-			State:             entity.State,
-			PublishedMessages: []PublishedMessage{},
-			TrajectorySteps:   []agentic.TrajectoryStep{},
-			ContextEvents:     []agentic.ContextEvent{},
-		}, nil
+				LoopID:            loopID,
+				State:             entity.State,
+				PublishedMessages: []PublishedMessage{},
+				TrajectorySteps:   []agentic.TrajectoryStep{},
+				ContextEvents:     []agentic.ContextEvent{},
+			}, fmt.Errorf("%w: loop %s response names request %q, its record names %q",
+				errRequestNotYetObservable, loopID, response.RequestID, entity.PublishedRequestID)
 	}
+	// The fourth case, which ORDERING cannot reach: a second delivery of the
+	// answer this loop is currently on. Both deliveries name the request the
+	// record names, so the record is the same authority either way; what
+	// separates them is the outstanding mark, which SettleRequest clears below
+	// the moment an answer is used. A response naming the current request
+	// while the loop is waiting on NO request is therefore one this process
+	// already applied, and applying it again appends the assistant turn a
+	// second time and re-dispatches its calls — the duplicate turn then rides
+	// the next request the model is asked to answer (#1330, owner ruling Q12,
+	// 2026-09-23).
+	//
+	// Scoped to requestOrderCurrent deliberately. requestOrderUnnamed reaches
+	// here too — a record written before this field existed, or a producer
+	// that correlates neither side — and it has no mark to compare, so it
+	// keeps the pre-#1330 answer rather than being dropped on an absence.
+	//
+	// A loop REBUILT for this very response is not a replay: restoreLoopFromRequest
+	// marks the retained request outstanding from the only evidence it has
+	// (its publication), so the cold arm's first delivery passes this gate.
+	if order == requestOrderCurrent && h.loopManager.OutstandingRequest(loopID) != response.RequestID {
+		h.logger.Warn("ignoring a model response this loop already applied — it is waiting on no request",
+			slog.String("loop_id", loopID),
+			slog.String("response_request_id", response.RequestID),
+			slog.String("published_request_id", entity.PublishedRequestID),
+			slog.String("state", entity.State.String()))
+		if h.metrics != nil {
+			h.metrics.recordModelResponseDropped("already_applied")
+		}
+		return HandlerResult{}, fmt.Errorf("%w: loop %s response names request %q, which the loop is "+
+			"no longer waiting on", errResponseAlreadyApplied, loopID, response.RequestID)
+	}
+
 	// This request is answered, whatever the outcome below. Clearing the
 	// outstanding mark here rather than in the success arms means an early
 	// return (timeout, terminal loop, budget exhausted) does not leave the loop
@@ -1384,9 +1519,10 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 
 	switch response.Status {
 	case agentic.StatusToolCall:
-		// Forward progress — clear the truncation retry counter so a
-		// future truncation can self-heal once.
-		h.loopManager.ResetTruncationRetry(loopID)
+		// Forward progress needs no explicit reset since #1330: the next
+		// request this loop mints names a NEW iteration, and a new iteration
+		// always starts at retry ordinal 0, so the self-heal budget renews
+		// itself in the name rather than in a counter somebody has to clear.
 
 		if err := h.handleToolCallResponse(ctx, &result, loopID, response.RequestID, response.Message.ToolCalls); err != nil {
 			return result, err
@@ -1405,9 +1541,6 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 		}
 
 	case agentic.StatusComplete:
-		// Forward progress — clear the truncation retry counter.
-		h.loopManager.ResetTruncationRetry(loopID)
-
 		// gh#158: fall back to ReasoningContent when Content is empty so
 		// the LLM's terminal text always lands on Result + downstream
 		// read_loop_result, even when the provider adapter routed it to
@@ -2034,7 +2167,14 @@ func (h *MessageHandler) handleLengthTruncation(ctx context.Context, loopID stri
 	// Branch 1: structurally can't recover. Either we already tried
 	// (the prior retry hit the same wall) or there's nothing for the
 	// compactor to compact away.
-	retryCount := h.loopManager.IncrementTruncationRetry(loopID)
+	//
+	// The budget is read out of the loop's durable record rather than a
+	// process-local counter (#1330): PublishedRequestID names this iteration's
+	// retry ordinal, so ordinal 0 means the self-heal has not been spent and
+	// ordinal 1 means it has. A replacement process reads the same answer its
+	// predecessor would have, where the counter read zero and spent the budget
+	// a second time under a name the first attempt had already published.
+	retryCount := h.loopManager.publishedRetryOrdinal(loopID) + 1
 	canRetry := preUtilization >= h.config.Context.CompactThreshold && retryCount == 1
 
 	if !canRetry {
@@ -2050,8 +2190,6 @@ func (h *MessageHandler) handleLengthTruncation(ctx context.Context, loopID stri
 			slog.Bool("compaction_attempted", compactionAttempted),
 			slog.Int("retry_count", retryCount))
 
-		// Reset so a parent retry (new loop) starts fresh.
-		h.loopManager.ResetTruncationRetry(loopID)
 		return h.failLoop(result, loopID, agentic.OutcomeTruncated, "length_truncated", message)
 	}
 
@@ -2067,9 +2205,9 @@ func (h *MessageHandler) handleLengthTruncation(ctx context.Context, loopID stri
 	compactResult, compactErr := h.compactor.Compact(ctx, cm)
 	if compactErr != nil {
 		// Compaction failed — fall through to the failure branch with a
-		// diagnostic that names the failure. Don't burn another retry
-		// attempt; the parent decides whether a fresh-loop retry helps.
-		h.loopManager.ResetTruncationRetry(loopID)
+		// diagnostic that names the failure. Nothing was published, so the
+		// record still names the same request and the budget is untouched;
+		// the parent decides whether a fresh-loop retry helps.
 		message := fmt.Sprintf("truncated and compaction failed (model_limit=%d, utilization=%.0f%%, completion_tokens=%d, compactor_error=%s) — try a larger model or tune CompactThreshold/HeadroomTokens",
 			modelLimit, preUtilization*100, completionTokens, compactErr.Error())
 		return h.failLoop(result, loopID, agentic.OutcomeTruncated, "length_truncated", message)
@@ -2128,9 +2266,9 @@ func (h *MessageHandler) handleLengthTruncation(ctx context.Context, loopID stri
 
 	// Build and emit the retry agent.request from the freshly-compacted
 	// context. We do NOT increment the iteration counter — this is a
-	// within-iteration self-heal. The truncationRetryAttempts counter
-	// (now ==1) prevents a second truncation from re-entering this
-	// branch.
+	// within-iteration self-heal. The retry request's own name carries the
+	// budget: it mints :N:1 at the same iteration, so a second truncation of
+	// iteration N reads retry ordinal 1 and falls through to the hard fail.
 	return h.emitRetryRequest(ctx, loopID, entity, cm, result, postUtilization)
 }
 
@@ -2176,6 +2314,8 @@ func (h *MessageHandler) emitRetryRequest(ctx context.Context, loopID string, en
 		ResponseFormat: h.loopManager.GetCachedResponseFormat(loopID),
 	}
 
+	// As in publishIterationRequest: the carrier stamps PublishedRequestID once
+	// this retry is retained (stampPublishedRequest, #1330 Q1).
 	h.loopManager.TrackRequest(request.RequestID, loopID)
 	h.loopManager.TrackRequestStart(request.RequestID)
 
@@ -2939,6 +3079,11 @@ func (h *MessageHandler) publishIterationRequest(
 	// also records this request as the carrier of any deferred turn, because
 	// every request that goes out carries the turn and this is the call every
 	// publish site already makes.
+	//
+	// The loop's PublishedRequestID is NOT set here. Route, outstanding and the
+	// deferred turn's carrier are attach-order facts about this process; the
+	// record's name is a claim that the request is retained, and only the
+	// carrier knows when that became true (stampPublishedRequest, #1330 Q1).
 	h.loopManager.TrackRequest(request.RequestID, loopID)
 	h.loopManager.TrackRequestStart(request.RequestID)
 

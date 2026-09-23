@@ -2,13 +2,17 @@ package agenticloop
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/internal/deliverylane"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest"
+	"github.com/stretchr/testify/require"
 )
 
 type contextCapturingGovernanceDispatcher struct {
@@ -757,4 +761,197 @@ func TestRepairToolPairs_NoOpOnWellFormedContext(t *testing.T) {
 	if pre != post {
 		t.Errorf("context length changed: %d → %d (well-formed should be unchanged)", pre, post)
 	}
+}
+
+// coldTaskLane is a process with no memory of any loop: the record store is
+// the only thing that knows this task was already admitted once.
+func coldTaskLane(t *testing.T, retained string) (*Component, *MessageHandler) {
+	t.Helper()
+	h := NewMessageHandler(DefaultConfig())
+	c := releaseTestComponent(t, h)
+	c.loopsBucket = &recordingLoopBucket{}
+	c.natsClient = unpublishableClient(t)
+	c.requestEvidence = stubEvidenceReader{requestID: retained}
+	return c, h
+}
+
+func deliverTask(t *testing.T, c *Component, task agentic.TaskMessage) (*loopDeliveryOwnerMsg, natsclient.DeliveryResult) {
+	t.Helper()
+	msg := &loopDeliveryOwnerMsg{data: baseMessageBytes(t, &task)}
+	delivered, admitted := deliverylane.Consume(t.Context(), msg,
+		heartbeatPolicyForTest(t, "agent.task", c.taskInputHandler(time.Minute)),
+		deliverylane.NewAdmission(nil, nil))
+	require.True(t, admitted)
+	return msg, delivered
+}
+
+// TestTaskRedeliveredToAProcessWithNoMemoryOfItsLoop is the task lane's cold
+// fork (#1330 task 3.4, owner ruling Q1).
+//
+// Before it, a replacement process answered a redelivered task by trying to
+// birth the loop again: the record's Create refused it, the delivery retried,
+// and it retried to MaxDeliver while the loop sat at iteration zero with a
+// record naming a request that may never have been published. The record is
+// what decides instead — birth, republish, or acknowledge — and at iteration
+// zero, where the stream retains NO request for the loop, R1 is rebuilt from
+// the task itself and republished under its own identity (Q1 as amended by
+// Q11, 2026-09-23: a retained request means R1 went out, so the delivery is
+// acknowledged without effect rather than republished).
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestTaskRedeliveredToAProcessWithNoMemoryOfItsLoop(t *testing.T) {
+	const loopID = "5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d"
+	task := agentic.TaskMessage{
+		TaskID: "task-cold-redelivery", LoopID: loopID,
+		Role: "general", Model: "model", Prompt: "the original prompt",
+	}
+	firstRequest := looprequest.ID{LoopID: loopID, Iteration: 1, Retry: 0}.String()
+
+	// coldRecordAtIterationZero writes what a birth leaves behind: the record
+	// naming R1, written before the request was published (Q1's order).
+	coldRecordAtIterationZero := func(t *testing.T, c *Component) {
+		t.Helper()
+		entity := agentic.NewLoopEntity(loopID, task.TaskID, task.Role, task.Model, 10)
+		entity.PublishedRequestID = firstRequest
+		entity.Iterations = 0
+		data, err := json.Marshal(entity)
+		require.NoError(t, err)
+		_, err = c.loopsBucket.Put(t.Context(), loopID, data)
+		require.NoError(t, err)
+		c.loopsBucket.(*recordingLoopBucket).resetWritten()
+	}
+
+	t.Run("at iteration zero the first request goes out again", func(t *testing.T) {
+		// Nothing is retained on the stream: this is the birth that wrote its
+		// record and never got its request out. The client cannot publish, so
+		// the delivery failing at the publish is the proof the republish was
+		// attempted rather than skipped.
+		c, _ := coldTaskLane(t, "")
+		coldRecordAtIterationZero(t, c)
+
+		msg, delivered := deliverTask(t, c, task)
+
+		require.NotEqual(t, natsclient.DeliveryDecisionAck, delivered.Decision(),
+			"the redelivery acknowledged a task whose first request was never published")
+		require.Zero(t, msg.acks.Load())
+		require.Empty(t, c.loopsBucket.(*recordingLoopBucket).written(),
+			"the record at iteration zero is already the truth and must not be written again")
+	})
+
+	t.Run("the replacement becomes the loop's holder and takes its revision", func(t *testing.T) {
+		// Once the request is out, this process IS the loop's holder: it must
+		// carry the record's revision, because no write of its own will seed
+		// one — the fork deliberately does not write the record. A holder with
+		// no observed revision fails its first compare-and-swap closed and
+		// strands the loop it just recovered.
+		c, h := coldTaskLane(t, "")
+		c.natsClient = nil // the publish is not what this arm is about
+		coldRecordAtIterationZero(t, c)
+		before := c.loopsBucket.(*recordingLoopBucket).revisionOf(loopID)
+
+		msg, delivered := deliverTask(t, c, task)
+
+		require.Equal(t, natsclient.DeliveryDecisionAck, delivered.Decision())
+		require.Equal(t, int32(1), msg.acks.Load())
+		require.Empty(t, c.loopsBucket.(*recordingLoopBucket).written())
+
+		entity, err := h.loopManager.GetLoop(loopID)
+		require.NoError(t, err, "the replacement must now HOLD the loop it recovered")
+		require.Equal(t, firstRequest, entity.PublishedRequestID,
+			"the rebuilt loop mints the same first request its record already names")
+		revision, held := c.observedLoopRevision(loopID)
+		require.True(t, held, "the holder took no revision, so its next write cannot compare-and-swap")
+		require.Equal(t, before, revision, "the revision taken must be the one the record was read at")
+	})
+
+	t.Run("a first request the stream retains acknowledges the task without effect", func(t *testing.T) {
+		// The record is the untouched-birth shape on every field it carries —
+		// R1, iteration zero, empty applied set — and the stream says
+		// otherwise: R1 went out. A handled tool-call response leaves exactly
+		// this pair while the loop is mid-batch, so republishing here seated a
+		// fresh loop with no batch and stranded the executions that were
+		// already outstanding (#1330, owner ruling Q11, 2026-09-23).
+		c, h := coldTaskLane(t, firstRequest)
+		coldRecordAtIterationZero(t, c)
+
+		msg, delivered := deliverTask(t, c, task)
+
+		require.Equal(t, natsclient.DeliveryDecisionAck, delivered.Decision())
+		require.Equal(t, int32(1), msg.acks.Load())
+		require.Empty(t, c.loopsBucket.(*recordingLoopBucket).written(),
+			"an acknowledged-without-effect task writes nothing")
+		_, err := h.loopManager.GetLoop(loopID)
+		require.Error(t, err,
+			"a loop whose first request is outstanding must be rebuilt by that request's own "+
+				"answer or its first tool result, never seated fresh by a redelivered task")
+		_, held := c.observedLoopRevision(loopID)
+		require.False(t, held, "this process holds nothing, so it must take no revision")
+	})
+
+	t.Run("a loop that advanced acknowledges the task without effect", func(t *testing.T) {
+		c, h := coldTaskLane(t, "")
+		entity := agentic.NewLoopEntity(loopID, task.TaskID, task.Role, task.Model, 10)
+		entity.PublishedRequestID = looprequest.ID{LoopID: loopID, Iteration: 3, Retry: 0}.String()
+		entity.Iterations = 2
+		data, err := json.Marshal(entity)
+		require.NoError(t, err)
+		_, err = c.loopsBucket.Put(t.Context(), loopID, data)
+		require.NoError(t, err)
+		c.loopsBucket.(*recordingLoopBucket).resetWritten()
+
+		msg, delivered := deliverTask(t, c, task)
+
+		require.Equal(t, natsclient.DeliveryDecisionAck, delivered.Decision())
+		require.Equal(t, int32(1), msg.acks.Load())
+		require.Empty(t, c.loopsBucket.(*recordingLoopBucket).written())
+		_, err = h.loopManager.GetLoop(loopID)
+		require.Error(t, err,
+			"an applied task rebuilt the loop in memory, which is a second conversation under one name")
+	})
+
+	t.Run("a settled loop acknowledges the task without re-birthing it", func(t *testing.T) {
+		c, h := coldTaskLane(t, "")
+		entity := agentic.NewLoopEntity(loopID, task.TaskID, task.Role, task.Model, 10)
+		entity.State = agentic.LoopStateComplete
+		entity.Iterations = 4
+		data, err := json.Marshal(entity)
+		require.NoError(t, err)
+		_, err = c.loopsBucket.Put(t.Context(), loopID, data)
+		require.NoError(t, err)
+		c.loopsBucket.(*recordingLoopBucket).resetWritten()
+
+		msg, delivered := deliverTask(t, c, task)
+
+		require.Equal(t, natsclient.DeliveryDecisionAck, delivered.Decision())
+		require.Equal(t, int32(1), msg.acks.Load())
+		require.Empty(t, c.loopsBucket.(*recordingLoopBucket).written(),
+			"a settled loop's record was overwritten by a redelivered task")
+		_, err = h.loopManager.GetLoop(loopID)
+		require.Error(t, err, "a settled loop was re-birthed in memory")
+	})
+
+	t.Run("no record at all is an ordinary birth", func(t *testing.T) {
+		c, _ := coldTaskLane(t, "")
+
+		_, delivered := deliverTask(t, c, task)
+
+		// The birth writes its record first and then fails at the publish this
+		// component cannot make — which is the ordinary path, not the fork.
+		require.Equal(t, []string{loopID}, c.loopsBucket.(*recordingLoopBucket).written(),
+			"an unknown loop must still be born")
+		require.NotEqual(t, natsclient.DeliveryDecisionAck, delivered.Decision())
+	})
+
+	t.Run("an unreadable record never births a second loop", func(t *testing.T) {
+		c, h := coldTaskLane(t, "")
+		c.loopsBucket = recordLoopBucket{getErr: errors.New("kv unavailable")}
+
+		msg, delivered := deliverTask(t, c, task)
+
+		require.Equal(t, natsclient.DeliveryDecisionRetry, delivered.Decision(),
+			"a failed read must never be read as 'no loop exists'")
+		require.Equal(t, int32(1), msg.naks.Load())
+		_, err := h.loopManager.GetLoop(loopID)
+		require.Error(t, err)
+	})
 }

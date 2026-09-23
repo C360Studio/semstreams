@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // TestInFlight_NoBoundConsumerIsUnknownNotZero is the defect gh#733 was filed
@@ -175,5 +177,58 @@ func TestStartFailure_TearsDownRequestSubscriptions(t *testing.T) {
 	}
 	if c.trajectorySub != nil || c.inflightSub != nil {
 		t.Error("teardown must leave both subscription handles nil")
+	}
+}
+
+// readCountingLoopBucket fails the test if anything reads the loop record.
+type readCountingLoopBucket struct {
+	jetstream.KeyValue
+	t      *testing.T
+	entity agentic.LoopEntity
+}
+
+func (b readCountingLoopBucket) Get(context.Context, string) (jetstream.KeyValueEntry, error) {
+	b.t.Error("the in-flight answer read the loop record; it must come from consumer bookkeeping alone")
+	return nil, jetstream.ErrKeyNotFound
+}
+
+// TestInFlight_ALoudLoopRecordIsNotAnInFlightAnswer: #1330 gives the loop
+// record two new settlement facts — published_request_id and a non-empty
+// pending_tool_results — and a record carrying both, left by a process that
+// crashed after publishing its request, is the loudest "work is in flight" the
+// loop's own state can say. It is still not the answer.
+//
+// Those fields classify a REDELIVERED INPUT. They cannot say whether work is
+// outstanding: only a handler moves a loop out of running, so a crashed
+// process leaves exactly this record whether its work is still on the stream
+// or was applied and acknowledged by a replacement. The answer stays
+// consumer bookkeeping — and, with no consumer bound here, UNKNOWN rather than
+// zero.
+//
+// spec: agentic-loop / In-flight state MUST NOT be derived from the acknowledgement floor
+func TestInFlight_ALoudLoopRecordIsNotAnInFlightAnswer(t *testing.T) {
+	t.Parallel()
+
+	entity := agentic.NewLoopEntity("5c6d7e8f-9a0b-4c1d-8e2f-3a4b5c6d7e8f", "task-inflight", "general", "model", 10)
+	entity.State = agentic.LoopStateExecuting
+	entity.Iterations = 2
+	entity.PublishedRequestID = entity.ID + ":req:3:0"
+	entity.PendingToolResults = map[string]agentic.ToolResult{
+		"tool-exec-v1-abc": {ExecutionID: "tool-exec-v1-abc", CallID: "call-1", RequestID: entity.PublishedRequestID},
+	}
+	c := &Component{loopsBucket: readCountingLoopBucket{t: t, entity: entity}}
+
+	_, err := c.outstandingForSubject(context.Background(), "agent.task.*")
+	if !errors.Is(err, ErrInFlightUnknownNoConsumer) {
+		t.Fatalf("a record naming an outstanding request must not become an in-flight answer; got %v", err)
+	}
+
+	req, marshalErr := json.Marshal(InFlightRequest{Subject: "agent.task.*"})
+	if marshalErr != nil {
+		t.Fatalf("marshal: %v", marshalErr)
+	}
+	payload, err := c.handleInFlightQuery(context.Background(), req)
+	if err == nil || payload != nil {
+		t.Fatalf("the loop record produced an in-flight payload: payload=%s err=%v", payload, err)
 	}
 }

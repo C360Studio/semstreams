@@ -221,7 +221,102 @@
 // The loops KV-write output is the sole loop bucket declaration (default AGENT_LOOPS).
 // The removed top-level loops_bucket key fails configuration admission. Startup observes
 // History 10, TTL 24h and nonbinding MaxBytes before work. The 12h approval limit
-// provides nominal grace, not a recovery guarantee; replacement preserves retained deadlines.
+// provides nominal grace, not a recovery guarantee.
+//
+// # Recovery across a process replacement
+//
+// Nothing in this process survives a replacement. A loop's durable facts are its
+// AGENT_LOOPS record and the AgentRequest the stream retains for it, and four
+// invariants make the pair decidable (#1330):
+//
+//   - I1. LoopEntity.PublishedRequestID names the request the loop has outstanding, and
+//     while the record exists that exact AgentRequest is retained on agent.request.<loopID>.
+//   - I2. The keys of PendingToolResults are the executions already applied against that
+//     request - membership only, never rendered content.
+//   - I3. Iterations moves only in the update that moves PublishedRequestID.
+//   - I4. A PendingApproval names the request the record names.
+//
+// A replacement therefore classifies a redelivered model response or tool result by
+// ORDERING its RequestID against PublishedRequestID, never by comparing conversation
+// content: older is acknowledged without effect, newer is retried until the record names
+// it, and one naming a request of another loop is quarantined. A delivery naming the
+// current request rebuilds the loop from the record plus the retained request rather than
+// refusing it; the replayed conversation lands in one region, so compaction attribution
+// starts over (docs/concepts/13-agentic-systems.md).
+//
+// A SECOND delivery of the current request's answer is the one case ordering cannot
+// decide, because both deliveries name the request the record names. The outstanding mark
+// decides it instead: a response naming the current request while the loop holding it is
+// waiting on no request is one this process already used, so it is acknowledged without
+// effect and counted already_applied on model_responses_dropped_total. Tool execution
+// would survive a second apply — the execution identity is deterministic and
+// TOOL_CALL_OUTCOMES replays the outcome — but the loop's conversation would not: the
+// assistant turn would be appended again and ride the next request the model is asked to
+// answer.
+//
+// A redelivered TASK is the one lane the record cannot answer on its own. A record naming
+// the loop's first request at iteration zero with an empty applied set is rebuilt from the
+// task and that request republished - but only when the stream retains NO request for the
+// loop, which is the crash window between the record write and the publish. Anything
+// retained means the request went out, answered or not, so the task is acknowledged without
+// effect, no loop is seated, and the loop is rebuilt by the lane that owns its outstanding
+// work: the request's own response, or the first result of the batch that response
+// dispatched.
+//
+// "[Iteration Budget]" and "[Working list" are RESERVED prefixes. A request is not the
+// loop's conversation: the loop prepends that iteration's budget line, and when it has a
+// working list that block, both Role "system" and both belonging to the one request. The
+// rebuild drops the LEADING run of them, because seating them would pin one iteration's
+// framing at the top of the rebuilt system prompt for the rest of the loop's life while
+// every later request prepends a fresh one. A configured system prompt whose first message
+// begins with either string is indistinguishable from that framing and is dropped with it,
+// so do not start one with them. Only a leading run is dropped: a message further in is the
+// conversation, whatever it says.
+//
+// A deferred turn is durable as a MARKER, not as the turn. A continuation admitted while
+// a request is outstanding writes its text into the loop's context and sets
+// PendingContinuation; only the marker reaches the record, so across a process
+// replacement the text is not recovered. The rebuild CLEARS the marker with a warning
+// rather than leave a loop that would spend an iteration re-asking the model with nothing
+// new, and the turn must be re-sent. A turn already inside a retained request is a
+// different case and is untouched: that request replays, so the marker still names its
+// carrier and still stops the carrier's own completion from settling early.
+//
+// A turn arriving AFTER the replacement is the same limitation from the other side. A
+// continuation reaches only a loop some process holds: a task whose id differs from the one
+// the live record names is REFUSED — acknowledged without effect, with a warning naming both
+// tasks and a continuation_unheld reason on task_intake_rejections_total — because the loop's
+// conversation is in no process's memory and no redelivery of that turn could ever be applied
+// here. The test is task identity, so the same refusal also answers a redelivered BIRTH task
+// whose record a later continuation moved onto its own id; that one needs no re-send, because
+// the turn it carries was applied when the loop was born. Re-send a turn that was never
+// applied once a redelivered input has rebuilt the loop.
+//
+// The loop's TASK PROMPT is the same limitation one field over. taskPrompts is the one
+// per-loop cache the WHOLESALE rebuild does not restore, because the record has no field to
+// restore it from, so a loop rebuilt from its record and a retained request — the
+// model-response and tool-result cold arms — publishes LoopCompletedEvent.Prompt and
+// LoopFailedEvent.Prompt EMPTY and recoverEmptyContext falls back to its "Continue with the
+// task." placeholder. The cold task arm is the exception: it runs the ordinary HandleTask,
+// which caches the redelivered task's prompt, so its terminal events carry it. A consumer
+// that reads Prompt off a completion must tolerate an empty one. The durable field
+// for the turn and the prompt is https://github.com/C360Studio/semstreams/issues/1365.
+//
+// A rebuild is not a reprieve. TimeoutAt is written at birth and lives on the record, so a
+// rebuilt loop keeps its ORIGINAL deadline; nothing refreshes it and downtime is not
+// excluded from it. A replacement whose gap outran that deadline therefore rebuilds the
+// loop and then fails it on the first delivery, publishing a terminal on
+// agent.failed.<loopID> with the reason "loop timeout exceeded" - and the delivery is
+// ACKNOWLEDGED, because the loop settled and nothing is owed. Size a loop's timeout above
+// the replacement window you expect to operate under.
+//
+// An approval deadline is not recovered. PendingApproval is durable, but the timer is the
+// snapshot in approval_sweeper.go over the loops this process holds, and no startup pass
+// reads the bucket to restore one. A replacement holds a deadline again only for a loop
+// some other redelivery rebuilt, and then it is the record's own RequestedAt plus Timeout,
+// not a fresh wait. A parked loop otherwise stays in awaiting_approval until the approval
+// is answered or the loop is cancelled. The cold approval-response branch - a replacement
+// answering an approval for a loop it never started - is #1362.
 //
 // # Ports
 //

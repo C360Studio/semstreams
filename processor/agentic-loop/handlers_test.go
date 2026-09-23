@@ -229,12 +229,14 @@ func TestHandleModelResponse_MaxIterationsGuard_ReturnsTypedSentinel(t *testing.
 	}); err != nil {
 		t.Fatalf("HandleModelResponse() iteration 1 error = %v", err)
 	}
-	if _, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
+	advanced, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
 		CallID:  "call-001",
 		Content: "Result 1",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("HandleToolResult() iteration 1 error = %v", err)
 	}
+	carrierStamp(t, handler, advanced)
 
 	entity, err := handler.GetLoop(loopID)
 	if err != nil {
@@ -1246,6 +1248,14 @@ func TestHandleToolResult_StopLoopClearsQueue(t *testing.T) {
 
 // TestHandleModelResponse_TerminalLoop verifies that model responses for loops
 // already in terminal state are rejected (defense-in-depth against stale agent.request).
+//
+// The response it sends is the one the loop is STILL WAITING ON, answered
+// after a cancel settled the loop on another lane — which is the shape the
+// guard's own comment names, a request published before a parallel terminal
+// transition was visible. A response the loop already ANSWERED is a different
+// case and is refused one guard earlier as already applied (#1330 Q12); a
+// fixture that sent one would leave this test green without ever reaching the
+// terminal guard.
 func TestHandleModelResponse_TerminalLoop(t *testing.T) {
 	handler := agenticloop.NewMessageHandler(createTestConfig())
 
@@ -1261,43 +1271,18 @@ func TestHandleModelResponse_TerminalLoop(t *testing.T) {
 	}
 
 	loopID := taskResult.LoopID
-
-	// Complete the loop via StopLoop
-	toolResponse := agentic.AgentResponse{
-		RequestID: handler.OutstandingRequestForTest(loopID),
-		Status:    "tool_call",
-		Message: agentic.ChatMessage{
-			Role:      "assistant",
-			ToolCalls: []agentic.ToolCall{{ID: "call-001", Name: "submit_work"}},
-		},
-	}
-	dispatchResult, err := handler.HandleModelResponse(ctx, loopID, toolResponse)
-	if err != nil {
-		t.Fatalf("HandleModelResponse() error = %v", err)
-	}
-	dispatched := dispatchedToolCallFromResult(t, dispatchResult)
-
-	_, err = handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
-		CallID:      dispatched.ID,
-		Name:        dispatched.Name,
-		Content:     "done",
-		RequestID:   dispatched.RequestID,
-		ExecutionID: dispatched.ExecutionID,
-		CallOrdinal: dispatched.CallOrdinal,
-		StopLoop:    true,
-	})
-	if err != nil {
-		t.Fatalf("HandleToolResult(StopLoop) error = %v", err)
+	outstanding := handler.OutstandingRequestForTest(loopID)
+	if outstanding == "" {
+		t.Fatal("the birth must leave its first request outstanding, or the guard under test is unreachable")
 	}
 
-	// Now send a model response to the terminal loop (simulates stale agent.request).
-	// It names the loop's CURRENT request: the terminal guard is what is under
-	// test, and a response naming anything else — including the "" the
-	// outstanding mark reads once the loop settled — is dropped one guard
-	// earlier as superseded, which would leave this test green for the wrong
-	// reason.
+	// The loop settles while that request is still in flight.
+	if _, err := handler.CancelLoop(loopID, "operator"); err != nil {
+		t.Fatalf("CancelLoop() error = %v", err)
+	}
+
 	staleResponse := agentic.AgentResponse{
-		RequestID: handler.CurrentRequestForTest(loopID),
+		RequestID: outstanding,
 		Status:    "tool_call",
 		Message: agentic.ChatMessage{
 			Role:      "assistant",
@@ -1310,8 +1295,8 @@ func TestHandleModelResponse_TerminalLoop(t *testing.T) {
 	}
 
 	// Should return terminal state with no published messages
-	if result.State != agentic.LoopStateComplete {
-		t.Errorf("State = %q, want %q", result.State, agentic.LoopStateComplete)
+	if result.State != agentic.LoopStateCancelled {
+		t.Errorf("State = %q, want %q", result.State, agentic.LoopStateCancelled)
 	}
 	if len(result.PublishedMessages) != 0 {
 		t.Errorf("Terminal loop should not publish any messages, got %d", len(result.PublishedMessages))
@@ -1442,13 +1427,14 @@ func TestMessageHandler_MaxIterationsGuard(t *testing.T) {
 		t.Fatalf("HandleModelResponse() iteration 1 error = %v", err)
 	}
 
-	_, err = handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
+	firstAdvance, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
 		CallID:  "call-001",
 		Content: "Result 1",
 	})
 	if err != nil {
 		t.Fatalf("HandleToolResult() iteration 1 error = %v", err)
 	}
+	carrierStamp(t, handler, firstAdvance)
 
 	// Iteration 2: tool call and result
 	_, err = handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{

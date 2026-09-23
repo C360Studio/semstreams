@@ -22,6 +22,14 @@ func (b failingLoopBucket) Put(context.Context, string, []byte) (uint64, error) 
 	return 0, b.err
 }
 
+func (b failingLoopBucket) Create(context.Context, string, []byte, ...jetstream.KVCreateOpt) (uint64, error) {
+	return 0, b.err
+}
+
+func (b failingLoopBucket) Update(context.Context, string, []byte, uint64) (uint64, error) {
+	return 0, b.err
+}
+
 // TestRunWithBudget_ReturnsCompletedFalseWhenFnReturnsFast asserts the
 // happy path: when fn returns well within the budget, runWithBudget
 // reports timedOut=false. This is the case persistHandlerResult relies
@@ -55,7 +63,7 @@ func TestPersistHandlerResultReturnsPublicationFailureBeforeTerminalRelease(t *t
 			Subject: "agent.complete." + loopID,
 			Data:    []byte(`{"complete":true}`),
 		}},
-	})
+	}, writeThenPublish)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "publish result")
 	_, err = handler.trajectoryManager.getTrajectory(loopID)
@@ -69,6 +77,10 @@ func TestRequiredLoopStatePersistenceReturnsErrors(t *testing.T) {
 	loopID, err := handler.loopManager.CreateLoop("task-persist", "general", "model", 3)
 	require.NoError(t, err)
 	c := &Component{handler: handler, loopsBucket: failingLoopBucket{err: want}}
+	// The record's revision is what a birth or a cold read leaves behind. Seed
+	// it directly so this test observes the WRITE failing, not the missing
+	// observation that would refuse the write before it reached the bucket.
+	c.rememberLoopRevision(loopID, 7)
 
 	err = c.persistLoopState(t.Context(), loopID)
 	require.ErrorIs(t, err, want)

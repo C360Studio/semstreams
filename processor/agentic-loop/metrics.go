@@ -38,6 +38,9 @@ type loopMetrics struct {
 	modelResponsesDropped *prometheus.CounterVec
 	signalsDropped        *prometheus.CounterVec
 
+	// Recovery
+	recoveryDegradations *prometheus.CounterVec
+
 	// Token usage per LLM request
 	requestTokensIn  prometheus.Histogram
 	requestTokensOut prometheus.Histogram
@@ -167,15 +170,22 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "tool_results_dropped_total",
-				Help:      "Total tool results dropped at the wire because no loop mapping exists for the execution ID and the loop record is absent or terminal. Sustained non-zero rate points at NATS redelivery or executor double-publish. A result for a loop that is live but held by another process is NOT counted here: it is retried, not dropped.",
+				Help:      "Total tool results acknowledged without effect, by reason. reason=\"stale_execution\": no loop mapping exists for the execution ID and the loop record is absent or terminal. reason=\"older_request\": the result names an earlier request than the loop record does, so the loop already applied it — counted on the warm lane and on the cold lane after the record has been brought forward to the loop newest retained request, whichever process holds the loop. reason=\"already_applied\": the result names the request the record names AND its execution is already in that record pending_tool_results, so this is a replay of work the loop kept — the unfinished siblings of its batch are untouched and go on running. reason=\"terminal_unproven\": the loop is terminal, so no result can still be applied to it. Sustained non-zero rate points at NATS redelivery or executor double-publish. A result the loop record still names is NOT counted here: it is retried until a process can apply it, and a result naming a request of no loop is quarantined rather than dropped.",
 			}, []string{"reason"}),
 
 			modelResponsesDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "model_responses_dropped_total",
-				Help:      "Total model responses acknowledged without advancing a loop. reason=\"stale_request_id\" is a response whose RequestID maps to no loop and whose loop record is absent or terminal — expected after a loop settles and releases its per-loop state. reason=\"superseded_request\" is a response for a live loop that is waiting on a DIFFERENT request, which is what a redelivery of a response the loop already advanced past looks like. A sustained rate on either points at NATS redelivery. A response for a loop that is live but held by another process is NOT counted here: it is retried, not dropped.",
+				Help:      "Total model responses acknowledged without advancing a loop, by reason. reason=\"stale_request_id\": the RequestID maps to no loop and the loop record is absent or terminal — expected after a loop settles and releases its per-loop state. reason=\"superseded_request\": the response names an EARLIER request than the loop record does, so the loop already advanced past it — counted on the warm lane and on the cold lane after the record has been brought forward to the loop newest retained request, whichever process holds the loop. reason=\"already_applied\": the response names the request the record names AND the loop holding it is waiting on no request, so this process already used that answer — re-applying it would append the assistant turn a second time and re-dispatch its calls. A sustained rate on any of them points at NATS redelivery. A response the loop record still names is NOT counted here: it is retried until a process can apply it, and a response naming a request of no loop is quarantined rather than dropped.",
 			}, []string{"reason"}),
+
+			recoveryDegradations: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_loop",
+				Name:      "recovery_degradations_total",
+				Help:      "Total times a recovery path continued past a failure it could not repair, by site. site=\"tool_result_classification\": the loop was released between the routing lookup and the component-entry classification, so the redelivered tool result was handed to the handler unclassified — safe, because the handler answers that race as it did before the check existed, but the guard did not run. It drops no work and changes no delivery decision — it is a degraded continue that the matching log line names in full.",
+			}, []string{"site"}),
 
 			signalsDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Namespace: "semstreams",
@@ -247,7 +257,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "task_intake_rejections_total",
-				Help:      "Permanent structural task-intake rejections by bounded lane and reason",
+				Help:      "Total tasks refused at intake, by bounded lane and reason. lane=\"decoded-task\", reason=\"structural-invalid\": the decoded task is structurally unusable (lineage identity), so the delivery is terminated rather than retried. lane=\"cold-fork\", reason=\"continuation_unheld\": the task's id differs from the one the live record names, and no process holds the loop — either a new turn submitted for a loop no process holds, or a redelivered task the record has already moved past. Either way the delivery cannot be applied here: it is acknowledged without effect, and a turn that was never applied must be re-sent once a redelivered input has rebuilt the loop. Sustained non-zero continuation_unheld points at work arriving for loops across a process replacement.",
 			}, []string{"lane", "reason"}),
 
 			// Tool-call governance (ADR-039) drives the timeout-tuning
@@ -301,6 +311,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = registry.RegisterCounterVec("agentic-loop", "tool_results_dropped_total", metrics.toolResultsDropped)
 			_ = registry.RegisterCounterVec("agentic-loop", "model_responses_dropped_total", metrics.modelResponsesDropped)
 			_ = registry.RegisterCounterVec("agentic-loop", "signals_dropped_total", metrics.signalsDropped)
+			_ = registry.RegisterCounterVec("agentic-loop", "recovery_degradations_total", metrics.recoveryDegradations)
 			_ = registry.RegisterHistogram("agentic-loop", "request_tokens_in", metrics.requestTokensIn)
 			_ = registry.RegisterHistogram("agentic-loop", "request_tokens_out", metrics.requestTokensOut)
 			_ = registry.RegisterCounter("agentic-loop", "tool_results_truncated_total", metrics.toolResultsTruncated)
@@ -331,6 +342,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.toolResultsDropped)
 			_ = prometheus.DefaultRegisterer.Register(metrics.modelResponsesDropped)
 			_ = prometheus.DefaultRegisterer.Register(metrics.signalsDropped)
+			_ = prometheus.DefaultRegisterer.Register(metrics.recoveryDegradations)
 			_ = prometheus.DefaultRegisterer.Register(metrics.requestTokensIn)
 			_ = prometheus.DefaultRegisterer.Register(metrics.requestTokensOut)
 			_ = prometheus.DefaultRegisterer.Register(metrics.toolResultsTruncated)
@@ -413,6 +425,13 @@ func (m *loopMetrics) recordGraphWritePublishTimeout(state string) {
 	m.graphWritePublishTimeouts.WithLabelValues(state).Inc()
 }
 
+// recordTaskIntakeRejection counts a task the component refused at intake.
+//
+// Two (lane, reason) pairs exist, and they are different kinds of refusal:
+// ("decoded-task", "structural-invalid") is a malformed task the lane
+// TERMINATES, and ("cold-fork", "continuation_unheld") is a well-formed turn
+// for a loop no process holds, which is acknowledged without effect because
+// no redelivery of it could ever be applied (#1330).
 func (m *loopMetrics) recordTaskIntakeRejection(lane, reason string) {
 	m.taskIntakeRejections.WithLabelValues(lane, reason).Inc()
 }
@@ -511,21 +530,54 @@ func (m *loopMetrics) recordToolResultReceived(hasError bool) {
 	m.toolResultsReceived.WithLabelValues(status).Inc()
 }
 
-// recordToolResultDropped records a tool result this process did not route to
-// a loop. One reason is emitted:
+// recordToolResultDropped records a tool result acknowledged without effect.
+// Four reasons are emitted:
 //
 //   - "stale_execution" — no loop mapping exists for the execution ID. The
 //     dominant case after GetAndClearToolResults eviction: a re-delivered
 //     result for an already-drained execution. A sustained non-zero rate
 //     points at NATS redelivery or an executor double-publishing.
+//   - "older_request" — the result names an EARLIER request than the loop
+//     record does (#1330). A loop cannot advance past a request until its
+//     whole tool batch is in, so an earlier request is one this loop already
+//     applied; the redelivery is settled rather than re-applied, which would
+//     otherwise re-send the result to the model in the next turn.
+//   - "already_applied" — the result names the request the record still names,
+//     and its execution is already in that record's `pending_tool_results`
+//     (#1330, owner Codex round on PR #1361). A lost ACK is ordinary
+//     at-least-once delivery, and ordering cannot see this case because the
+//     batch is the current request's; membership is the only fact that
+//     decides. Settled rather than rebuilt: the rebuild leaves applied
+//     executions unrouted, so it would end in a quarantined tool lane. The
+//     batch's unfinished siblings are untouched and go on running.
+//   - "terminal_unproven" — the loop is terminal, so no result can be applied
+//     to it any more (owner ruling Q7 on #1330). Whether this particular
+//     result was applied before the loop settled is deliberately not
+//     re-derived: it would change nothing this delivery can do.
 //
-// A result naming a live loop another process holds is deliberately not
-// counted here: that delivery returns an error and is retried, and a retried
-// result is not a dropped one. The arm is in settleToolResultWithoutLoop's
-// default branch, which warns with the execution id and leaves the work owed
-// to whichever process holds the loop.
+// What is deliberately NOT counted here is a result the loop record still
+// names: that delivery returns an error and is retried, and a retried result
+// is not a dropped one. settleToolResultWithoutLoop warns with the execution
+// id and leaves the work owed to whichever process holds the loop. Nor is a
+// result naming a request of no loop — that is quarantined, not dropped.
+// "older_request" is counted on BOTH lanes, warm and cold, and being held by
+// another process does not exempt it: the cold arm brings the record forward
+// to the loop's newest retained request first, and after that a result naming
+// an earlier request is owed to nobody at all.
 func (m *loopMetrics) recordToolResultDropped(reason string) {
 	m.toolResultsDropped.WithLabelValues(reason).Inc()
+}
+
+// recordRecoveryDegradation records a recovery path that continued past a
+// failure it could not repair.
+//
+// It is the metric half of a declared degrade: each site logs the failure in
+// full AND counts it here, because a log line alone is not something an
+// operator can alert on. Nothing counted here drops work or changes a delivery
+// decision. One site today: a tool result handed to the handler without its
+// component-entry classification, because the loop was released underneath it.
+func (m *loopMetrics) recordRecoveryDegradation(site string) {
+	m.recoveryDegradations.WithLabelValues(site).Inc()
 }
 
 // recordSignalDropped records a control signal acknowledged without effect.
@@ -536,11 +588,17 @@ func (m *loopMetrics) recordSignalDropped(reason string) {
 // recordModelResponseDropped records a model response acknowledged without
 // advancing a loop. Reason "stale_request_id" is the settled-loop case: terminal
 // release takes the request routing with it, so a response that arrives after
-// the loop settled resolves nothing. Reason "superseded_request" is the live-loop
-// case: the loop is waiting on a different request, so this one cannot advance it
-// — a redelivery of a response the loop already moved past. Both drops are
-// deliberate and safe, and both are counted so that "safe" stays a claim an
-// operator can check rather than one only the code makes.
+// the loop settled resolves nothing. Reason "superseded_request" is the
+// advanced-loop case: the record names a LATER request, so this response
+// answers a question the loop is already past. It is counted on both lanes —
+// warm, and cold after step 0 has brought the record forward — and being held
+// by another process does not exempt it, because a response older than the
+// record is owed to no process at all.
+//
+// What is not counted here is a response the record still names (retried until
+// a process can apply it) and one naming a request of no loop (quarantined).
+// Both drops above are deliberate and safe, and both are counted so that "safe"
+// stays a claim an operator can check rather than one only the code makes.
 func (m *loopMetrics) recordModelResponseDropped(reason string) {
 	m.modelResponsesDropped.WithLabelValues(reason).Inc()
 }

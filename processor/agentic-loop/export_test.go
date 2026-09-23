@@ -104,15 +104,53 @@ func (h *MessageHandler) OutstandingRequestForTest(loopID string) string {
 	return h.loopManager.OutstandingRequest(loopID)
 }
 
-// CurrentRequestForTest returns the newest request the loop has minted in this
-// process, answered or not. It is the identity the superseded-response guard
-// compares against, so a fixture that must reach the handler PAST that guard —
-// a redelivery, or a response arriving while the loop waits on tools, where
-// the outstanding mark is empty and reads "" — names this one. Asking for the
-// outstanding request there would build a response naming no request at all,
-// which production cannot route.
+// CurrentRequestForTest returns the request the loop's record names, which is
+// the identity the superseded-response guard compares against. A fixture whose
+// loop has ADVANCED across a turn boundary names this one: the mint that
+// advanced it made a new request outstanding, and the record names the same
+// one, so the two agree and either would do — but only this one survives a
+// fixture that stamps the carrier's step by hand.
+//
+// It is NOT the way to build a redelivery. Since #1330 Q12 a response naming
+// the current request that the loop is no longer waiting on is refused as
+// already applied, which is exactly what a redelivery is; a fixture that must
+// reach the handler for an answer the loop already used has to say so.
+//
+// It reads LoopEntity.PublishedRequestID (#1330) rather than the process-local
+// mint map that used to answer this: the durable name is what the guard now
+// compares against, and a test helper that answered from a different source
+// could pass while production failed.
 func (h *MessageHandler) CurrentRequestForTest(loopID string) string {
-	return h.loopManager.CurrentRequest(loopID)
+	entity, err := h.loopManager.GetLoop(loopID)
+	if err != nil {
+		return ""
+	}
+	return entity.PublishedRequestID
+}
+
+// CarrierStampForTest applies the CARRIER's PublishedRequestID stamp to a
+// handler result, and reports the request it named.
+//
+// Since the owner Codex round's finding 3 (#1330 Q1) the two iteration mint
+// sites no longer name the request on the loop: the Component does, after
+// publishResults has PubAck'd it and before the record write, so a record can
+// never name a request the stream does not retain. A fixture that drives the
+// MessageHandler alone across more than one model turn has no Component, so it
+// stands in for that one step; without it the next response is classified as
+// naming a request the record has not reached, which is what a real
+// replacement correctly retries.
+//
+// The request it stamps is chosen by the PRODUCTION selector (mintedRequestID)
+// off the result's own published messages, never by the fixture. What it does
+// not reproduce is loopRecordMu, which orders this stamp against the other
+// lanes of a live process — that ordering is the subject of
+// TestARecordNeverNamesARequestBeforeItsPubAck, at the carrier itself.
+func (h *MessageHandler) CarrierStampForTest(result HandlerResult) (string, error) {
+	minted, err := mintedRequestID(result)
+	if err != nil || minted == "" {
+		return "", err
+	}
+	return minted, h.loopManager.SetPublishedRequest(result.LoopID, minted)
 }
 
 // EnableDropCountingForTest gives the handler a metrics set, so an
@@ -139,3 +177,8 @@ func (h *MessageHandler) ModelResponseDropsForTest(reason string) float64 {
 func (h *MessageHandler) HasPendingContinuationForTest(loopID string) bool {
 	return h.loopManager.HasPendingContinuation(loopID)
 }
+
+// ErrResponseSupersededForTest is the sentinel HandleModelResponse returns for
+// a response the loop has already moved past (#1330). External-package tests
+// match on it so the refusal is asserted by identity rather than by a message.
+var ErrResponseSupersededForTest = errResponseSuperseded

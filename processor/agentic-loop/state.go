@@ -1,6 +1,7 @@
 package agenticloop
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/internal/looptoken"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest"
 	"github.com/google/uuid"
 )
 
@@ -76,40 +78,17 @@ type LoopManager struct {
 	// so it records "this loop published X", never "X is still in flight".
 	// Process-local on purpose — a replacement has lost the whole loop, not
 	// just this entry, and durable recovery is L4's (#1330).
-	outstandingRequests map[string]string // loopID -> requestID
-	// currentRequests names the NEWEST request this process has minted for a
-	// loop, answered or not. outstandingRequests answers "is a model answer
-	// owed"; this answers "which request is the live one", and the two are not
-	// the same question for the whole tool or approval phase: a tool-call
-	// response settles its request, so the outstanding mark is empty while the
-	// loop sits mid-iteration waiting on executors. A redelivered completion
-	// for an EARLIER request meets that empty mark, and identity is the only
-	// thing left that can tell it from a legitimate retry of the live one.
-	//
-	// Set by TrackRequest, never cleared by SettleRequest, dropped with the
-	// loop in DeleteLoop. Process-local, so empty means "this process has
-	// minted nothing for this loop" — the restart case, which needs durable
-	// request identity to decide and is L4's (#1330).
-	currentRequests        map[string]string         // loopID -> requestID
+	outstandingRequests    map[string]string         // loopID -> requestID
 	toolCallToLoop         map[string]string         // executionID -> loopID
 	executionIDToName      map[string]string         // executionID -> function name (for Gemini tool result name field)
 	executionIDToArguments map[string]map[string]any // executionID -> tool arguments (for trajectory audit)
 	executionIDToOrdinal   map[string]uint32         // executionID -> model response order (for trajectory audit)
 	requestStartTimes      map[string]time.Time      // requestID -> start time (for duration measurement)
 	executionStartTimes    map[string]time.Time      // executionID -> start time (for duration measurement)
-	// truncationRetryAttempts counts consecutive within-iteration retries
-	// driven by length-truncation responses. Reset to 0 whenever the loop
-	// makes forward progress (StatusComplete or StatusToolCall response).
-	// Capped at 1 in the handler — second truncation in a row falls
-	// through to a hard fail with diagnostic so a structurally-too-small
-	// model doesn't burn iterations indefinitely. Runtime-only; a
-	// process restart mid-retry resets to 0, which is the desired
-	// behavior (the parent sees a generic loop failure and decides).
-	truncationRetryAttempts map[string]int
-	contextConfig           ContextConfig        // shared context config
-	modelRegistry           model.RegistryReader // model registry for context managers
-	logger                  *slog.Logger         // logger for context managers
-	mu                      sync.RWMutex
+	contextConfig          ContextConfig             // shared context config
+	modelRegistry          model.RegistryReader      // model registry for context managers
+	logger                 *slog.Logger              // logger for context managers
+	mu                     sync.RWMutex
 }
 
 // LoopManagerOption is a functional option for configuring LoopManager
@@ -132,28 +111,26 @@ func WithLoopManagerModelRegistry(reg model.RegistryReader) LoopManagerOption {
 // NewLoopManager creates a new LoopManager
 func NewLoopManager(opts ...LoopManagerOption) *LoopManager {
 	lm := &LoopManager{
-		loops:                   make(map[string]*agentic.LoopEntity),
-		contextManagers:         make(map[string]*ContextManager),
-		pendingTools:            make(map[string]map[string]bool),
-		queuedToolCalls:         make(map[string][]agentic.ToolCall),
-		cachedTools:             make(map[string][]agentic.ToolDefinition),
-		cachedToolChoice:        make(map[string]*agentic.ToolChoice),
-		cachedMetadata:          make(map[string]map[string]any),
-		cachedRequestTimeout:    make(map[string]string),
-		cachedResponseFormat:    make(map[string]*agentic.ResponseFormat),
-		taskPrompts:             make(map[string]string),
-		requestToLoop:           make(map[string]string),
-		outstandingRequests:     make(map[string]string),
-		currentRequests:         make(map[string]string),
-		toolCallToLoop:          make(map[string]string),
-		executionIDToName:       make(map[string]string),
-		executionIDToArguments:  make(map[string]map[string]any),
-		executionIDToOrdinal:    make(map[string]uint32),
-		requestStartTimes:       make(map[string]time.Time),
-		executionStartTimes:     make(map[string]time.Time),
-		truncationRetryAttempts: make(map[string]int),
-		contextConfig:           DefaultContextConfig(),
-		logger:                  slog.Default(),
+		loops:                  make(map[string]*agentic.LoopEntity),
+		contextManagers:        make(map[string]*ContextManager),
+		pendingTools:           make(map[string]map[string]bool),
+		queuedToolCalls:        make(map[string][]agentic.ToolCall),
+		cachedTools:            make(map[string][]agentic.ToolDefinition),
+		cachedToolChoice:       make(map[string]*agentic.ToolChoice),
+		cachedMetadata:         make(map[string]map[string]any),
+		cachedRequestTimeout:   make(map[string]string),
+		cachedResponseFormat:   make(map[string]*agentic.ResponseFormat),
+		taskPrompts:            make(map[string]string),
+		requestToLoop:          make(map[string]string),
+		outstandingRequests:    make(map[string]string),
+		toolCallToLoop:         make(map[string]string),
+		executionIDToName:      make(map[string]string),
+		executionIDToArguments: make(map[string]map[string]any),
+		executionIDToOrdinal:   make(map[string]uint32),
+		requestStartTimes:      make(map[string]time.Time),
+		executionStartTimes:    make(map[string]time.Time),
+		contextConfig:          DefaultContextConfig(),
+		logger:                 slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(lm)
@@ -164,28 +141,26 @@ func NewLoopManager(opts ...LoopManagerOption) *LoopManager {
 // NewLoopManagerWithConfig creates a new LoopManager with custom context config
 func NewLoopManagerWithConfig(contextConfig ContextConfig, opts ...LoopManagerOption) *LoopManager {
 	lm := &LoopManager{
-		loops:                   make(map[string]*agentic.LoopEntity),
-		contextManagers:         make(map[string]*ContextManager),
-		pendingTools:            make(map[string]map[string]bool),
-		queuedToolCalls:         make(map[string][]agentic.ToolCall),
-		cachedTools:             make(map[string][]agentic.ToolDefinition),
-		cachedToolChoice:        make(map[string]*agentic.ToolChoice),
-		cachedMetadata:          make(map[string]map[string]any),
-		cachedRequestTimeout:    make(map[string]string),
-		cachedResponseFormat:    make(map[string]*agentic.ResponseFormat),
-		taskPrompts:             make(map[string]string),
-		requestToLoop:           make(map[string]string),
-		outstandingRequests:     make(map[string]string),
-		currentRequests:         make(map[string]string),
-		toolCallToLoop:          make(map[string]string),
-		executionIDToName:       make(map[string]string),
-		executionIDToArguments:  make(map[string]map[string]any),
-		executionIDToOrdinal:    make(map[string]uint32),
-		requestStartTimes:       make(map[string]time.Time),
-		executionStartTimes:     make(map[string]time.Time),
-		truncationRetryAttempts: make(map[string]int),
-		contextConfig:           contextConfig,
-		logger:                  slog.Default(),
+		loops:                  make(map[string]*agentic.LoopEntity),
+		contextManagers:        make(map[string]*ContextManager),
+		pendingTools:           make(map[string]map[string]bool),
+		queuedToolCalls:        make(map[string][]agentic.ToolCall),
+		cachedTools:            make(map[string][]agentic.ToolDefinition),
+		cachedToolChoice:       make(map[string]*agentic.ToolChoice),
+		cachedMetadata:         make(map[string]map[string]any),
+		cachedRequestTimeout:   make(map[string]string),
+		cachedResponseFormat:   make(map[string]*agentic.ResponseFormat),
+		taskPrompts:            make(map[string]string),
+		requestToLoop:          make(map[string]string),
+		outstandingRequests:    make(map[string]string),
+		toolCallToLoop:         make(map[string]string),
+		executionIDToName:      make(map[string]string),
+		executionIDToArguments: make(map[string]map[string]any),
+		executionIDToOrdinal:   make(map[string]uint32),
+		requestStartTimes:      make(map[string]time.Time),
+		executionStartTimes:    make(map[string]time.Time),
+		contextConfig:          contextConfig,
+		logger:                 slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(lm)
@@ -343,6 +318,270 @@ func (m *LoopManager) attachContinuation(loopID, taskID string) (agentic.LoopEnt
 	return *entity, false, nil
 }
 
+// restoreLoopFromRequest rebuilds, in THIS process's memory, the loop that the
+// record and the newest retained request describe (#1330, design § 5.2 step 2
+// and § 5.3 step 3; task 1.2).
+//
+// It is the second half of the create-versus-exists fence's third case. A task
+// naming a live loop attaches (attachContinuation); a task naming a loop no
+// process holds rebuilds it — and so does a model response or a tool result
+// arriving at a process that was started after the loop was born. Without this,
+// a replacement can only refuse the delivery and retry it to MaxDeliver.
+//
+// Nothing here is derived, inferred or synthesised. The record supplies the
+// entity — identity, role, model, iteration, state, the applied set and the
+// request it named — and the retained request supplies the conversation and the
+// per-loop settings the loop was actually running with (tools, tool choice,
+// response format, per-request timeout). Both are durable facts of the loop,
+// not a reconstruction of them.
+//
+// The conversation is replayed into ONE region: the system messages go to the
+// system prompt at the front, and everything else to RegionRecentHistory in the
+// order the request carried it. The predecessor's compacted and summarised
+// regions are not reconstructed — that is the whole simplification, and every
+// other layer describes it the same way. The request is NOT GetContext() —
+// prependIterationContext wraps it — so the per-iteration prefix is dropped
+// first (isIterationPrefixMessage); what is left is GetContext()'s order,
+// because the request's Messages were built from it.
+//
+// Two things do NOT survive, both recorded rather than repaired:
+//
+//   - Compaction ATTRIBUTION. A summary the predecessor had in
+//     RegionCompactedHistory returns as ordinary recent history, so the next
+//     compaction fires slightly earlier than it would have. Visible on
+//     context_compactions_total and context_compacted_region_tokens.
+//   - The ordering of MORE THAN ONE system message relative to the rest: they
+//     are re-seated together at the front in retained order, which is the order
+//     GetContext() rendered them in, rather than wherever the request
+//     interleaved them.
+//
+// Re-attributing regions would mean guessing which retained message came from
+// which region, which is exactly the content-comparison this change removes.
+//
+// RepairToolPairs runs last: a request retained mid-batch can carry an
+// assistant tool_call whose results were never appended, and a provider refuses
+// that pair outright.
+func (m *LoopManager) restoreLoopFromRequest(
+	ctx context.Context, record agentic.LoopEntity, request agentic.AgentRequest,
+) error {
+	if record.ID == "" {
+		return errs.WrapInvalid(fmt.Errorf("loop record carries no id"),
+			"LoopManager", "restoreLoopFromRequest", "validate the record to rebuild from")
+	}
+	if request.RequestID == "" || request.RequestID != record.PublishedRequestID {
+		return errs.WrapInvalid(
+			fmt.Errorf("loop %s: the retained request is %q but the record names %q",
+				record.ID, request.RequestID, record.PublishedRequestID),
+			"LoopManager", "restoreLoopFromRequest", "match the retained request to the record")
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.loops[record.ID]; exists {
+		// This process already holds the loop, so there is nothing to rebuild
+		// and rebuilding would overwrite a live conversation with a retained
+		// one. Same refusal CreateLoopWithID gives, for the same reason.
+		return errs.WrapInvalid(
+			fmt.Errorf("loop %s: %w", record.ID, ErrLoopAlreadyExists),
+			"LoopManager", "restoreLoopFromRequest", "refuse a rebuild over a held loop")
+	}
+
+	entity := record
+	// A continuation admitted while a request was outstanding is durable as a
+	// MARKER and nothing else. The turn's TEXT went into the predecessor's
+	// context manager, which died with it, and PendingContinuationRequestID is
+	// empty precisely because no request ever carried it. Seated as-is, the
+	// marker makes HasPendingContinuation true on a loop that has nothing new
+	// to say: the next completion spends an iteration re-asking the model with
+	// a context that gained nothing, and then settles anyway.
+	//
+	// So it is cleared here, with a warning, and the limitation is documented
+	// where an adopter reads it (doc.go § Recovery across a process
+	// replacement, the beta.163 migration note, and this change's delta): the
+	// turn must be re-sent. The durable-turn field that would recover it is
+	// #1365 (owner ruling on #1330 Q2, 2026-09-23).
+	//
+	// A NON-EMPTY PendingContinuationRequestID is left alone: that turn is
+	// inside a retained request, so the replay above carries it and the marker
+	// still has the job it was set for — stopping the carrier's own completion
+	// from settling before the turn is answered.
+	//
+	// The warning is the whole signal, by the ruled shape of this clear
+	// (#1330 Q2, 2026-09-23: the two-line clear plus a warning naming the
+	// loop). The sibling drop at intake, settleUnheldContinuation, carries a
+	// counted reason as well because a REFUSED turn is a rate an operator acts
+	// on; this one is a consequence of a replacement that is already visible.
+	// A counter here would be an owner question, not a developer's.
+	if entity.PendingContinuation && entity.PendingContinuationRequestID == "" {
+		m.logger.WarnContext(ctx,
+			"rebuilt loop cleared a deferred turn it cannot recover — the turn's text lived only in "+
+				"the replaced process and must be re-sent",
+			slog.String("loop_id", record.ID),
+			slog.String("published_request_id", record.PublishedRequestID),
+			slog.Int("iterations", record.Iterations))
+		entity.PendingContinuation = false
+	}
+	m.loops[record.ID] = &entity
+	m.pendingTools[record.ID] = make(map[string]bool)
+
+	opts := []ContextManagerOption{WithLogger(m.logger)}
+	if m.modelRegistry != nil {
+		opts = append(opts, WithModelRegistry(m.modelRegistry))
+	}
+	cm := NewContextManager(record.ID, record.Model, m.contextConfig, opts...)
+	// A retained request is prependIterationContext's OUTPUT, not GetContext():
+	// it opens with that iteration's budget line and possibly its working list,
+	// both Role "system". They belong to the REQUEST, not to the conversation,
+	// and seating them would pin one iteration's budget at the top of
+	// RegionSystemPrompt for the rest of the loop's life while every later
+	// request prepends a fresh one. Only the leading run is dropped — a message
+	// further in is the conversation, whatever it says.
+	conversation := request.Messages
+	for len(conversation) > 0 && isIterationPrefixMessage(conversation[0]) {
+		conversation = conversation[1:]
+	}
+	for _, msg := range conversation {
+		region := RegionRecentHistory
+		if msg.Role == "system" {
+			region = RegionSystemPrompt
+		}
+		if err := cm.AddMessage(region, msg); err != nil {
+			delete(m.loops, record.ID)
+			delete(m.pendingTools, record.ID)
+			return errs.WrapTransient(err, "LoopManager", "restoreLoopFromRequest",
+				"replay the retained request into the rebuilt conversation")
+		}
+	}
+	cm.RepairToolPairs()
+	m.contextManagers[record.ID] = cm
+
+	// The settings the loop was running with, read off the request it last
+	// sent rather than off a TaskMessage this process never saw. Without them
+	// the rebuilt loop's next request would advertise no tools at all.
+	m.cachedTools[record.ID] = request.Tools
+	m.cachedToolChoice[record.ID] = request.ToolChoice
+	m.cachedResponseFormat[record.ID] = request.ResponseFormat
+	if request.Timeout != "" {
+		m.cachedRequestTimeout[record.ID] = request.Timeout
+	}
+
+	// The task's ENFORCEMENT metadata (ADR-067), off the RECORD rather than
+	// off the request: it is written there once at birth, and the request
+	// never carried it. dispatchToolCall stamps
+	// DispatchEnforcedMetadataKeys onto every outgoing call from this cache,
+	// and both consumers read an ABSENT key as permissive — agentic-tools'
+	// bash executor treats no policy as the workspace-write default, and
+	// decide permits any action with no allowlist. A rebuild that skipped it
+	// turned a recovered read-only task writable, silently. Defensive copy for
+	// the same reason CacheMetadata makes one: the caller's map is the
+	// record's, and this cache outlives the read.
+	if len(record.Metadata) > 0 {
+		metadata := make(map[string]any, len(record.Metadata))
+		maps.Copy(metadata, record.Metadata)
+		m.cachedMetadata[record.ID] = metadata
+	}
+
+	// TrackRequest's shape: the request is routable AND outstanding. Outstanding
+	// is the right claim here because the only evidence in hand is that the
+	// request was published; restoreToolBatch settles it when the response that
+	// answered it is read.
+	m.requestToLoop[request.RequestID] = record.ID
+	m.outstandingRequests[record.ID] = request.RequestID
+	return nil
+}
+
+// restoreToolBatch re-seats the tool batch the retained response dispatched, so
+// a rebuilt loop can decide AllToolsComplete (#1330, design § 5.3 step 3).
+//
+// The record alone cannot answer that question. It carries which executions are
+// APPLIED; only the response carries how many there were. A rebuild that skipped
+// this would advance the loop on the first redelivered result of a three-call
+// batch and send the model a turn missing two tool messages.
+//
+// Membership only, by identity. Execution IDs are re-derived from the retained
+// response with the same deterministic stamp the dispatch used
+// (stampToolExecutionCorrelation), never matched by comparing arguments or
+// content.
+//
+// inFlight names the execution whose result this delivery is about to apply. It
+// is excluded from the queue for the same reason serial dispatch never queues
+// the call it has in flight: the queue is what HandleToolResult dispatches NEXT,
+// and putting the arriving call back on it would re-execute work that has just
+// answered.
+//
+// Declared residual: a governance rejection that was stored and lost with the
+// crash is not in the applied set, so its call is queued and dispatched again.
+// The retained response is the only durable record of the batch and it predates
+// the rejection; re-taking that decision on dispatch is the same answer the
+// ordinary serial-dispatch path gives a queued call, which is never re-proposed
+// either.
+func (m *LoopManager) restoreToolBatch(
+	loopID string,
+	response agentic.AgentResponse,
+	applied map[string]agentic.ToolResult,
+	inFlight string,
+) error {
+	calls := make([]agentic.ToolCall, len(response.Message.ToolCalls))
+	copy(calls, response.Message.ToolCalls)
+	if err := stampToolExecutionCorrelation(response.RequestID, calls); err != nil {
+		return errs.WrapInvalid(err, "LoopManager", "restoreToolBatch",
+			"re-derive the retained batch's execution identities")
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	cm, held := m.contextManagers[loopID]
+	if !held {
+		return errs.Wrap(fmt.Errorf("loop %s: %w", loopID, ErrLoopNotFound),
+			"LoopManager", "restoreToolBatch", "find the rebuilt conversation")
+	}
+	// The assistant turn the batch belongs to. It is in the retained RESPONSE,
+	// never in the retained request, and without it every tool message the
+	// batch produces is an orphan that RepairToolPairs removes — taking the
+	// model's own tool calls out of the next request with it.
+	if err := cm.AddMessage(RegionRecentHistory, response.Message); err != nil {
+		return errs.WrapTransient(err, "LoopManager", "restoreToolBatch",
+			"replay the assistant turn the batch belongs to")
+	}
+
+	var queued []agentic.ToolCall
+	for _, call := range calls {
+		m.executionIDToName[call.ExecutionID] = call.Name
+		m.executionIDToArguments[call.ExecutionID] = call.Arguments
+		m.executionIDToOrdinal[call.ExecutionID] = call.CallOrdinal
+		if _, done := applied[call.ExecutionID]; done {
+			// Already answered. Its route stays unseated on purpose: a drained
+			// execution is unroutable on the ordinary path too, which is what
+			// keeps a late duplicate out of the next turn's applied set.
+			continue
+		}
+		m.toolCallToLoop[call.ExecutionID] = loopID
+		if call.ExecutionID == inFlight {
+			continue
+		}
+		queued = append(queued, call)
+	}
+	m.queuedToolCalls[loopID] = queued
+
+	// pendingTools stays empty on purpose. Dispatch is serial: at most one
+	// call is in flight, and the QUEUE is what says how much of the batch is
+	// left. HandleToolResult dispatches from that queue before it ever asks
+	// AllToolsComplete, so a rebuilt loop with a non-empty queue cannot
+	// advance early, and one with an empty queue has nothing left but the
+	// result it is applying — which is the same answer pendingTools would
+	// give. Seating it would be a second bookkeeping of one fact.
+
+	// The response for this request is in hand, so the loop is not waiting on
+	// a model. SettleRequest's half, applied to the mark restoreLoopFromRequest
+	// set from the only evidence it had.
+	if outstanding, ok := m.outstandingRequests[loopID]; ok && outstanding == response.RequestID {
+		delete(m.outstandingRequests, loopID)
+	}
+	return nil
+}
+
 // HasPendingContinuation reports whether a continuation turn is waiting for a
 // request to carry it — pending AND uncarried. Once a request names the turn,
 // the answer is false: carrying it a second time would spend an iteration
@@ -384,7 +623,22 @@ func (m *LoopManager) GetLoop(loopID string) (agentic.LoopEntity, error) {
 		return agentic.LoopEntity{}, errs.Wrap(fmt.Errorf("loop %s not found", loopID), "LoopManager", "GetLoop", "find loop")
 	}
 
-	return *entity, nil
+	// A struct copy is shallow, so the applied set would travel out of this
+	// lock as the SAME map the live entity holds — and every caller reads the
+	// returned entity after this lock is released. marshalLoopRecord marshals
+	// it into the record's bytes while StoreToolResult, on the handler
+	// goroutine, writes the same map under this mutex: a data race, not a
+	// stale read. One copy makes the returned entity a value the caller owns.
+	//
+	// The applied set is the only reference field a live loop mutates in
+	// place. PendingApproval is replaced wholesale by BeginAwaitingApproval
+	// and cleared by ResolveApproval, and Metadata is written once at birth.
+	copied := *entity
+	if entity.PendingToolResults != nil {
+		copied.PendingToolResults = make(map[string]agentic.ToolResult, len(entity.PendingToolResults))
+		maps.Copy(copied.PendingToolResults, entity.PendingToolResults)
+	}
+	return copied, nil
 }
 
 // UpdateLoop updates an existing loop entity
@@ -456,28 +710,6 @@ func (m *LoopManager) SnapshotExpiredApprovals(now time.Time) []ApprovalTimeoutC
 		})
 	}
 	return out
-}
-
-// IncrementTruncationRetry bumps the within-loop truncation retry
-// counter and returns the new value. Caller branches on the return
-// to decide between "first retry — compact and try again" (==1) and
-// "already retried — fail loud" (>1). The counter is cleared by
-// ResetTruncationRetry whenever the loop makes forward progress.
-func (m *LoopManager) IncrementTruncationRetry(loopID string) int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.truncationRetryAttempts[loopID]++
-	return m.truncationRetryAttempts[loopID]
-}
-
-// ResetTruncationRetry clears the within-loop truncation retry
-// counter. Called when the loop makes forward progress (a normal
-// StatusComplete or StatusToolCall response arrives) so a future
-// truncation can self-heal once.
-func (m *LoopManager) ResetTruncationRetry(loopID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.truncationRetryAttempts, loopID)
 }
 
 // ResolveApprovalIfPending atomically transitions the loop out of
@@ -585,9 +817,7 @@ func (m *LoopManager) DeleteLoop(loopID string) error {
 	delete(m.cachedRequestTimeout, loopID)
 	delete(m.cachedResponseFormat, loopID)
 	delete(m.taskPrompts, loopID)
-	delete(m.truncationRetryAttempts, loopID)
 	delete(m.outstandingRequests, loopID)
-	delete(m.currentRequests, loopID)
 
 	prefix := loopID + ":"
 	for k, owner := range m.requestToLoop {
@@ -885,10 +1115,39 @@ func (m *LoopManager) TrackRequest(requestID, loopID string) {
 	defer m.mu.Unlock()
 	m.requestToLoop[requestID] = loopID
 	m.outstandingRequests[loopID] = requestID
-	m.currentRequests[loopID] = requestID
 	if entity, exists := m.loops[loopID]; exists && entity.PendingContinuation {
 		entity.PendingContinuationRequestID = requestID
 	}
+}
+
+// SetPublishedRequest records the request this loop has minted as the one its
+// record will name (LoopEntity.PublishedRequestID, invariant I1 of #1330).
+//
+// Two callers, and the split is the ordering. Birth calls it at the mint: its
+// record is written BEFORE the first request is published (owner ruling Q1), so
+// the name has to exist first. Every later transition is stamped by the CARRIER
+// instead (Component.stampPublishedRequest), after publishResults has PubAck'd
+// the request and before the record write — because this entity is shared with
+// every other lane writing this loop, and a name set at the mint is one they
+// can commit while the request is still in flight. That ordering is what makes
+// the durable field mean "an AgentRequest with this identity is retained",
+// rather than "a process intended to publish one".
+//
+// A loop this manager does not hold is refused rather than ignored: a request
+// this process cannot record is a request whose PubAck nothing will ever
+// classify, so the mint fails instead of publishing an unrecordable name.
+func (m *LoopManager) SetPublishedRequest(loopID, requestID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entity, exists := m.loops[loopID]
+	if !exists {
+		return errs.Wrap(
+			fmt.Errorf("loop %s: %w", loopID, ErrLoopNotFound),
+			"LoopManager", "SetPublishedRequest", "find loop")
+	}
+	entity.PublishedRequestID = requestID
+	return nil
 }
 
 // registerRequestRoute records only that this request belongs to this loop, so
@@ -925,37 +1184,24 @@ func (m *LoopManager) SettleRequest(loopID, requestID string) {
 }
 
 // OutstandingRequest returns the one model request this loop is waiting on, or
-// "" when it is waiting on none. The identity, not just the fact, is what
-// callers need: a response that names a DIFFERENT request than the loop is
-// waiting on is superseded, and the empty answer has to be distinguishable from
-// a mismatch, because a redelivery of the first delivery arrives after the mark
-// was cleared and must still be handled.
+// "" when it is waiting on none.
+//
+// It does not decide whether a response is SUPERSEDED — the record does that,
+// ordering the response against published_request_id (#1330, I1). What it
+// decides is the one case ordering cannot reach (owner ruling Q12,
+// 2026-09-23): a response naming the request the record already calls current
+// is the loop's outstanding FIRST delivery while the mark still names it, and
+// once SettleRequest has cleared it the same bytes are a replay of an answer
+// this process already applied — acknowledged without effect rather than
+// appended to the conversation a second time. So the identity is what callers
+// need and not the bare fact; and the guard is scoped to a response the record
+// already calls current, because a tool-call response settles its request while
+// the loop stays on that iteration — "waiting on nothing" is the ordinary
+// mid-iteration state, never evidence on its own.
 func (m *LoopManager) OutstandingRequest(loopID string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.outstandingRequests[loopID]
-}
-
-// CurrentRequest returns the newest request this process has minted for the
-// loop, answered or not, or "" when it has minted none.
-//
-// This is what decides whether a model response may advance the loop.
-// OutstandingRequest cannot: it is cleared the moment a response settles, and
-// a tool-call response settles its request while the loop is still on that
-// iteration waiting for executors. For that whole window the loop is waiting
-// on nothing, and a redelivered completion for an earlier request would pass
-// an emptiness test and settle a loop that has moved on — with the wrong
-// task's answer, because the carried turn is what the live request is asking.
-//
-// The empty answer still means "this process minted nothing", which is the
-// restart case: the routing that resolved the response was rebuilt from the
-// RequestID, not from a mint. Deciding THAT needs durable request identity
-// (L4, #1330); until it exists the response is handled rather than dropped,
-// because refusing it would strand a live loop whose process was replaced.
-func (m *LoopManager) CurrentRequest(loopID string) string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.currentRequests[loopID]
 }
 
 // GetLoopForRequest retrieves the loop ID for a request ID
@@ -1135,6 +1381,37 @@ func (m *LoopManager) SetTimeout(loopID string, timeout time.Duration) error {
 	now := time.Now()
 	entity.StartedAt = now
 	entity.TimeoutAt = now.Add(timeout)
+	return nil
+}
+
+// restoreDeadline puts a loop record's own StartedAt and TimeoutAt back onto
+// the loop this process rebuilt from its task. The cold R1 arm runs the
+// ordinary HandleTask, whose configureLoopMetadata stamps a FRESH deadline, and
+// a rebuild is not a reprieve — "the loop's deadline means what its record
+// says" (owner ruling #1330, 2026-09-23). Every other reconstruction seats the
+// record wholesale and inherits both fields for free.
+//
+// Beside SetTimeout, and in place under this mutex, because these two fields
+// have ONE writer. GetLoop → set → UpdateLoop would replace the whole entity,
+// discarding whatever a sibling lane committed between the read and the write:
+// by the time this runs the loop is registered and its first request tracked,
+// so the response lane — a separate consumer — can be applying the
+// predecessor's answer to it. That is a lost update, not a data race, and
+// -race is blind to it.
+//
+// A record with no deadline overlays zero onto zero, which is what the
+// wholesale seat gives and what IsTimedOut reads as "no deadline".
+func (m *LoopManager) restoreDeadline(loopID string, startedAt, timeoutAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entity, exists := m.loops[loopID]
+	if !exists {
+		return errs.Wrap(fmt.Errorf("loop %s not found", loopID), "LoopManager", "restoreDeadline", "find loop")
+	}
+
+	entity.StartedAt = startedAt
+	entity.TimeoutAt = timeoutAt
 	return nil
 }
 
@@ -1321,9 +1598,11 @@ func (m *LoopManager) SetMetadata(loopID string, metadata map[string]any) error 
 //     is :1:0; handleToolsComplete increments Iterations before it mints, so
 //     the request that follows a tool batch takes the next ordinal. A loop this
 //     manager does not know has not iterated, so its ordinal is 1.
-//   - retry is the within-iteration truncation-retry ordinal, read from the
-//     same process-local counter IncrementTruncationRetry advances and
-//     ResetTruncationRetry clears. A compaction retry of iteration N is :N:1.
+//   - retry is the within-iteration truncation-retry ordinal, read back out of
+//     the loop's own durable PublishedRequestID: a mint at the iteration that
+//     field already names is a retry of it and takes the next retry ordinal;
+//     any other mint is a new iteration at retry 0. A compaction retry of
+//     iteration N is :N:1.
 //
 // Both inputs are facts this manager already holds, so no caller computes them
 // and no caller can disagree with the state the loop is actually in. The
@@ -1332,19 +1611,51 @@ func (m *LoopManager) SetMetadata(loopID string, metadata map[string]any) error 
 // calling the provider a second time, and the Nats-Msg-Id stamped from this ID
 // lets the server reject the duplicate outright inside its window.
 //
-// Residual, declared: the retry ordinal is process-local. After a process
-// replacement mid-iteration the counter is zero, so a retry minted by the
-// replacement reads :N:0 rather than :N:1. Deriving it durably is L4's
-// (#1330, LoopEntity.PublishedRequestID).
+// The retry ordinal was process-local until #1330: after a process replacement
+// mid-iteration the counter read zero, so a retry minted by the replacement
+// took the name its predecessor had already published and the duplicate window
+// dropped it. Reading it from the durable record is what closes that.
 func (m *LoopManager) GenerateRequestID(loopID string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	iteration := 1
-	if entity, exists := m.loops[loopID]; exists {
-		iteration = entity.Iterations + 1
+	next := looprequest.ID{LoopID: loopID, Iteration: 1}
+	entity, exists := m.loops[loopID]
+	if !exists {
+		return next.String()
 	}
-	return fmt.Sprintf("%s:req:%d:%d", loopID, iteration, m.truncationRetryAttempts[loopID])
+	next.Iteration = entity.Iterations + 1
+	published, err := looprequest.Parse(entity.PublishedRequestID)
+	if err == nil && published.LoopID == loopID && published.Iteration == next.Iteration {
+		// Minting a second name for an iteration the record already names is
+		// the truncation retry, and only that.
+		next = looprequest.Next(published, true)
+	}
+	return next.String()
+}
+
+// publishedRetryOrdinal reports the within-iteration retry ordinal the loop's
+// durable record already names, and zero when it names none. It is the budget
+// the compaction self-heal spends: ordinal 0 means no retry of this iteration
+// has been published, so one is still available.
+//
+// An empty or unparseable field answers zero. That is the pre-#1330 answer for
+// a loop whose first request is still in flight, and it fails toward the
+// behaviour the loop had before the field existed — one self-heal attempt —
+// rather than toward refusing a recoverable truncation.
+func (m *LoopManager) publishedRetryOrdinal(loopID string) int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	entity, exists := m.loops[loopID]
+	if !exists {
+		return 0
+	}
+	published, err := looprequest.Parse(entity.PublishedRequestID)
+	if err != nil || published.LoopID != loopID || published.Iteration != entity.Iterations+1 {
+		return 0
+	}
+	return published.Retry
 }
 
 // GenerateToolCallID creates a structured tool call ID that embeds the loop ID.

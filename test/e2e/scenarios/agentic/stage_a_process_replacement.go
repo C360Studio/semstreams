@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -19,8 +20,16 @@ import (
 const (
 	toolsConsumerName            = "agentic-tools-tool-execute-all"
 	dispatchCompleteConsumerName = "agentic-dispatch-agent-complete"
-	harnessFinalizationTimeout   = 5 * time.Second
-	barrierReleaseFlushTimeout   = 2 * time.Second
+	// modelRequestConsumerName is agentic-model's durable consumer over
+	// agent.request.>; pausing it is how the mid-flight window below is
+	// arranged rather than raced.
+	modelRequestConsumerName = "agentic-model-agent-request-all"
+	// loopResponseConsumerName is agentic-loop's durable consumer over
+	// agent.response.>; its settlement is what proves the recovered delivery
+	// was neither quarantined nor left retrying.
+	loopResponseConsumerName   = "agentic-loop-agent-response-all"
+	harnessFinalizationTimeout = 5 * time.Second
+	barrierReleaseFlushTimeout = 2 * time.Second
 )
 
 func (s *Scenario) verifyStageAProcessReplacement(
@@ -57,6 +66,9 @@ func (s *Scenario) verifyStageAProcessReplacement(
 	}
 	if err := s.verifyDispatchAcrossReplacement(ctx, result, controller); err != nil {
 		return fmt.Errorf("dispatch quarantine: %w", err)
+	}
+	if err := s.verifyMidFlightLoopAcrossReplacement(ctx, result, controller); err != nil {
+		return fmt.Errorf("mid-flight loop: %w", err)
 	}
 	return nil
 }
@@ -751,6 +763,39 @@ func waitForConsumerSettled(
 		lastFloor, wantAckFloor, lastPending, timeout)
 }
 
+// taskLaneConsumerName asks the server which durable consumer covers
+// agent.task, instead of assuming the framework's consumer-naming pattern. The
+// stage names four consumers as constants because it PAUSES or reads them by
+// identity; this one is only waited on, and a guessed name that resolved to
+// some other consumer would make that wait pass vacuously — which is the exact
+// failure the wait exists to close. Exactly one match is required, so a second
+// consumer over agent.task fails the check rather than being picked at random.
+func taskLaneConsumerName(ctx context.Context, stream jetstream.Stream) (string, error) {
+	const taskSubjectRoot = "agent.task"
+	lister := stream.ListConsumers(ctx)
+	var matched []string
+	for info := range lister.Info() {
+		filters := info.Config.FilterSubjects
+		if len(filters) == 0 && info.Config.FilterSubject != "" {
+			filters = []string{info.Config.FilterSubject}
+		}
+		for _, filter := range filters {
+			if filter == taskSubjectRoot || strings.HasPrefix(filter, taskSubjectRoot+".") {
+				matched = append(matched, info.Name)
+				break
+			}
+		}
+	}
+	if err := lister.Err(); err != nil {
+		return "", fmt.Errorf("list AGENT consumers: %w", err)
+	}
+	if len(matched) != 1 {
+		return "", fmt.Errorf("want exactly one AGENT consumer filtering %s, found %d: %v",
+			taskSubjectRoot, len(matched), matched)
+	}
+	return matched[0], nil
+}
+
 func joinHarnessFinalizationError(
 	parent context.Context,
 	runErr *error,
@@ -762,4 +807,338 @@ func joinHarnessFinalizationError(
 	if err := finalize(finalCtx); err != nil {
 		*runErr = errors.Join(*runErr, fmt.Errorf("%s: %w", operation, err))
 	}
+}
+
+// midFlightHandles are the server-side handles the mid-flight check reads and
+// waits on: the stream and bucket its assertions read, and the two consumers
+// whose settlement separates a recovery from a retry. Each consumer carries the
+// acknowledgement floor observed BEFORE the check publishes anything, because
+// wantAckFloor = 0 is vacuous — a consumer that has ever acked anything
+// satisfies it, including one whose recovery delivery is being retried to death.
+type midFlightHandles struct {
+	stream           jetstream.Stream
+	loops            jetstream.KeyValue
+	responseConsumer jetstream.Consumer
+	responseFloor    uint64
+	taskConsumer     jetstream.Consumer
+	taskFloor        uint64
+}
+
+func (s *Scenario) openMidFlightHandles(ctx context.Context) (midFlightHandles, error) {
+	var handles midFlightHandles
+	js, err := s.nats.Client().JetStream()
+	if err != nil {
+		return handles, err
+	}
+	handles.stream, err = js.Stream(ctx, "AGENT")
+	if err != nil {
+		return handles, fmt.Errorf("open AGENT stream: %w", err)
+	}
+	handles.loops, err = js.KeyValue(ctx, agentLoopsBucket)
+	if err != nil {
+		return handles, fmt.Errorf("open %s bucket: %w", agentLoopsBucket, err)
+	}
+	handles.responseConsumer, handles.responseFloor, err =
+		openConsumerWithFloor(ctx, handles.stream, loopResponseConsumerName)
+	if err != nil {
+		return handles, fmt.Errorf("open loop response consumer: %w", err)
+	}
+	taskName, err := taskLaneConsumerName(ctx, handles.stream)
+	if err != nil {
+		return handles, err
+	}
+	handles.taskConsumer, handles.taskFloor, err = openConsumerWithFloor(ctx, handles.stream, taskName)
+	if err != nil {
+		return handles, fmt.Errorf("open loop task consumer %q: %w", taskName, err)
+	}
+	return handles, nil
+}
+
+// openConsumerWithFloor opens a durable consumer and reads the acknowledgement
+// floor it is at right now.
+func openConsumerWithFloor(
+	ctx context.Context, stream jetstream.Stream, name string,
+) (jetstream.Consumer, uint64, error) {
+	consumer, err := stream.Consumer(ctx, name)
+	if err != nil {
+		return nil, 0, err
+	}
+	info, err := consumer.Info(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("read %s baseline: %w", name, err)
+	}
+	return consumer, info.AckFloor.Consumer, nil
+}
+
+// verifyMidFlightLoopAcrossReplacement is the one claim of #1330 that an
+// in-process Component pair cannot make: that a REPLACEMENT OS PROCESS picks up
+// a loop it never started and carries it forward, rather than refusing the
+// delivery or retrying it to MaxDeliver.
+//
+// The three checks above are settlement checks — a completed outcome replayed,
+// a quarantined tool call redelivered, a quarantined terminal republished.
+// None of them holds a LOOP across the replacement. Task 4.2 proves the
+// recovery classification against a real broker with two Components in one
+// process; what it cannot prove is that the loop survives the process itself,
+// which is what the durable record and the retained request exist for.
+//
+// The window is ARRANGED, not raced. agentic-model's request consumer is paused
+// before the task goes in, so the loop reaches exactly the mid-flight state the
+// change is about — first request published and named by the record, nothing
+// answered — and stays there until the process is killed. After the
+// replacement, the model consumer resumes and the answer to that retained
+// request arrives at a process with no memory of the loop: the cold arm reads
+// the record, rebuilds the loop from the record plus its retained request, and
+// advances it.
+//
+// What the assertions read is the durable state, never a log line: the record's
+// revision moved, it names the SECOND request (so the loop advanced an
+// iteration, not merely got rewritten), exactly one next request went out on
+// agent.request.<loopID>, the loop reached its terminal, and the response lane
+// settled with agentic-loop still healthy.
+//
+// There are THREE ways this can fail to be a recovery, and the assertions
+// distinguish all three:
+//
+//  1. QUARANTINE — the delivery is refused and the component latches. Caught by
+//     the agentic-loop health assertion.
+//  2. RETRY TO MaxDeliver — the delivery is never applied and never settles.
+//     Caught by the consumer-settlement assertion, which requires the ack floor
+//     to have PASSED this delivery rather than merely be nonzero.
+//  3. REBUILT, THEN FAILED ON THE INHERITED DEADLINE — the subtle one. TimeoutAt
+//     is written at loop birth and a rebuild does not refresh it (#1330, task
+//     5.5), so a replacement gap longer than the loop's timeout rebuilds the
+//     loop and immediately fails it. That ACKNOWLEDGES the delivery and leaves
+//     agentic-loop healthy, so shapes 1 and 2 both read clean; what betrays it
+//     is that the terminal lands on agent.failed rather than agent.complete.
+//     The wait at the end of this check is on agent.complete for exactly that
+//     reason, and the premise assertion below refuses to let the race go
+//     unnoticed: it reads the record's TimeoutAt after the replacement and says
+//     so, naming the budget, rather than timing out on a message that never
+//     comes.
+func (s *Scenario) verifyMidFlightLoopAcrossReplacement(
+	ctx context.Context,
+	result *scenarios.Result,
+	controller composeProcessController,
+) (runErr error) {
+	handles, err := s.openMidFlightHandles(ctx)
+	if err != nil {
+		return err
+	}
+	agentStream, loops := handles.stream, handles.loops
+
+	if _, err := agentStream.PauseConsumer(ctx, modelRequestConsumerName, time.Now().Add(2*time.Minute)); err != nil {
+		return fmt.Errorf("pause model request consumer: %w", err)
+	}
+	resumed := false
+	defer func() {
+		if !resumed {
+			joinHarnessFinalizationError(ctx, &runErr, "resume model request consumer", func(finalCtx context.Context) error {
+				return resumeConsumerIfPaused(finalCtx, agentStream, modelRequestConsumerName)
+			})
+		}
+	}()
+
+	task := newTestTask(time.Now())
+	loopID := task.LoopID
+	taskData, err := json.Marshal(message.NewBaseMessage(task.Schema(), &task, "e2e-test"))
+	if err != nil {
+		return fmt.Errorf("marshal mid-flight task: %w", err)
+	}
+	if err := s.nats.Publish(ctx, "agent.task.midflight", taskData); err != nil {
+		return fmt.Errorf("publish mid-flight task: %w", err)
+	}
+
+	requestSubject := "agent.request." + loopID
+	firstRequest := fmt.Sprintf("%s:req:1:0", loopID)
+	nextRequest := fmt.Sprintf("%s:req:2:0", loopID)
+	if err := waitForStreamSubject(ctx, agentStream, requestSubject, 30*time.Second); err != nil {
+		return fmt.Errorf("loop did not publish its first request: %w", err)
+	}
+	midFlight, err := waitForLoopRecord(ctx, loops, loopID, 30*time.Second, func(entity agentic.LoopEntity) bool {
+		return entity.PublishedRequestID == firstRequest
+	})
+	if err != nil {
+		return fmt.Errorf("loop record did not reach the mid-flight state: %w", err)
+	}
+	if midFlight.entity.State.IsTerminal() {
+		return fmt.Errorf("mid-flight loop %s is already terminal (%s); the model consumer pause did not hold",
+			loopID, midFlight.entity.State)
+	}
+
+	// Settle the TASK before killing, or this check can pass on the wrong path.
+	// Both observations above are made before the task's own acknowledgement —
+	// birth writes the record by Create and publishes the request, both ahead of
+	// the lane's return — so a kill here can leave the task delivery unsettled.
+	// Its redelivery then races the model response to the replacement, and if it
+	// wins, the replacement rebuilds the loop from the TASK; the response arrives
+	// WARM and the cold-response reconstruction this check exists for never runs.
+	// The recorded no-rebuild mutant would go green on that schedule.
+	//
+	// Waiting here cannot let the loop advance: the model consumer is still
+	// paused, so the arranged mid-flight window is unchanged by the wait.
+	if err := waitForConsumerSettled(ctx, handles.taskConsumer, handles.taskFloor+1, 30*time.Second); err != nil {
+		return fmt.Errorf("the mid-flight task never settled, so killing now would let its redelivery "+
+			"rebuild the loop warm and the response would never take the cold arm: %w", err)
+	}
+
+	// The process that minted the first request is gone. Nothing of this loop
+	// survives except its record and the request the stream retains.
+	//
+	// The resume sits BETWEEN the kill and the start, rather than after
+	// replaceSemStreams, for two reasons: nothing is running to answer the
+	// request in that gap, so the window stays arranged; and the replacement
+	// then reconciles an ordinary consumer at boot instead of one the harness
+	// left paused, which is not a state production ever starts from.
+	if err := controller.kill(ctx); err != nil {
+		return err
+	}
+	if err := resumeConsumerIfPaused(ctx, agentStream, modelRequestConsumerName); err != nil {
+		return fmt.Errorf("resume model request consumer before the replacement boots: %w", err)
+	}
+	resumed = true
+	if err := controller.start(ctx); err != nil {
+		return err
+	}
+	if err := s.obs.WaitForAllComponentsHealthy(ctx, 60*time.Second); err != nil {
+		return fmt.Errorf("replacement components did not become healthy: %w", err)
+	}
+
+	// Assert the PREMISE before waiting on a message that depends on it. The
+	// loop inherits the TimeoutAt its birth wrote, and a rebuild does not
+	// refresh it, so if the replacement gap outran configs/agentic.json's
+	// agentic-loop.timeout the loop is already doomed: the recovery will
+	// rebuild it and then fail it, agent.complete will never arrive, and the
+	// wait below would spend 90s and blame the recovery. Say what actually
+	// happened instead.
+	gapCheck, err := waitForLoopRecord(ctx, loops, loopID, 10*time.Second, func(agentic.LoopEntity) bool {
+		return true
+	})
+	if err != nil {
+		return fmt.Errorf("read the loop record after the replacement: %w", err)
+	}
+	if !gapCheck.entity.TimeoutAt.IsZero() && time.Now().After(gapCheck.entity.TimeoutAt) {
+		return fmt.Errorf(
+			"the replacement gap outran the loop's own deadline (timeout_at %s, now %s): the loop will be rebuilt "+
+				"and then failed, not recovered. Raise agentic-loop.timeout in configs/agentic.json above the "+
+				"replacement window (see taskfiles/e2e/agentic.yml)",
+			gapCheck.entity.TimeoutAt.UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339))
+	}
+
+	// agent.complete, never merely "a terminal": a loop that was rebuilt and
+	// then failed on its inherited deadline settles on agent.failed, and that
+	// is the third refusal shape this check exists to catch.
+	if err := waitForStreamSubject(ctx, agentStream, "agent.complete."+loopID, 90*time.Second); err != nil {
+		failed, failedErr := streamSubjectCount(ctx, agentStream, "agent.failed."+loopID)
+		if failedErr == nil && failed > 0 {
+			return fmt.Errorf(
+				"the replacement settled the mid-flight loop on agent.failed, not agent.complete: it was rebuilt "+
+					"and then failed, most likely on the deadline it inherited from its record: %w", err)
+		}
+		return fmt.Errorf("replacement did not carry the mid-flight loop to a terminal: %w", err)
+	}
+	advanced, err := waitForLoopRecord(ctx, loops, loopID, 30*time.Second, func(entity agentic.LoopEntity) bool {
+		return entity.PublishedRequestID == nextRequest
+	})
+	if err != nil {
+		return fmt.Errorf("replacement did not advance the record past %s: %w", firstRequest, err)
+	}
+	if advanced.revision <= midFlight.revision {
+		return fmt.Errorf("loop record revision did not move: %d -> %d", midFlight.revision, advanced.revision)
+	}
+	if advanced.entity.Iterations < 1 {
+		return fmt.Errorf("loop %s iterations = %d, want at least 1", loopID, advanced.entity.Iterations)
+	}
+
+	// Settlement before counting: a request appears on the stream before the
+	// delivery that produced it is acknowledged, so counting first can read one
+	// request while a duplicate is still inside its callback.
+	if err := waitForConsumerSettled(ctx, handles.responseConsumer, handles.responseFloor+1, 30*time.Second); err != nil {
+		return fmt.Errorf("replacement response deliveries did not settle past the baseline floor: %w", err)
+	}
+	requests, err := streamSubjectCount(ctx, agentStream, requestSubject)
+	if err != nil {
+		return fmt.Errorf("count mid-flight loop requests: %w", err)
+	}
+	if requests != 2 {
+		return fmt.Errorf("requests on %s = %d, want exactly 2 (the retained first and one next)",
+			requestSubject, requests)
+	}
+	if err := s.waitForComponentHealth(ctx, "agentic-loop", true, 10*time.Second); err != nil {
+		return fmt.Errorf("agentic-loop did not stay healthy across the mid-flight recovery: %w", err)
+	}
+
+	result.Details["midflight_loop_id"] = loopID
+	result.Details["midflight_published_request_id"] = advanced.entity.PublishedRequestID
+	result.Metrics["midflight_requests_published"] = requests
+	result.Metrics["midflight_record_revision_delta"] = advanced.revision - midFlight.revision
+	return nil
+}
+
+// loopRecordObservation is one read of a loop's AGENT_LOOPS record with the
+// revision it was observed at. The revision is the point: a record that was
+// rewritten with the same content is indistinguishable from one nothing
+// touched, unless the revision travels with it.
+type loopRecordObservation struct {
+	entity   agentic.LoopEntity
+	revision uint64
+}
+
+// waitForLoopRecord polls the durable record until it satisfies want. It reads
+// the bucket directly rather than through GetKV because GetKV returns only the
+// value, and this assertion is about the revision as much as the content.
+func waitForLoopRecord(
+	ctx context.Context,
+	loops jetstream.KeyValue,
+	loopID string,
+	timeout time.Duration,
+	want func(agentic.LoopEntity) bool,
+) (loopRecordObservation, error) {
+	deadline := time.Now().Add(timeout)
+	var last string
+	for time.Now().Before(deadline) {
+		entry, err := loops.Get(ctx, loopID)
+		switch {
+		case err == nil:
+			var entity agentic.LoopEntity
+			if err := json.Unmarshal(entry.Value(), &entity); err != nil {
+				return loopRecordObservation{}, fmt.Errorf("decode %s/%s: %w", agentLoopsBucket, loopID, err)
+			}
+			if want(entity) {
+				return loopRecordObservation{entity: entity, revision: entry.Revision()}, nil
+			}
+			last = fmt.Sprintf("state=%s iterations=%d published_request_id=%q revision=%d",
+				entity.State, entity.Iterations, entity.PublishedRequestID, entry.Revision())
+		case errors.Is(err, jetstream.ErrKeyNotFound), errors.Is(err, jetstream.ErrKeyDeleted):
+			last = "no record"
+		default:
+			return loopRecordObservation{}, fmt.Errorf("read %s/%s: %w", agentLoopsBucket, loopID, err)
+		}
+		if err := waitDuration(ctx, 200*time.Millisecond); err != nil {
+			return loopRecordObservation{}, err
+		}
+	}
+	return loopRecordObservation{}, fmt.Errorf("loop %s record never matched within %v (last %s)", loopID, timeout, last)
+}
+
+// resumeConsumerIfPaused resumes only a consumer that is actually paused. A
+// replacement recreates its consumers from configuration that carries no pause,
+// so by the time this runs the pause may already be gone; asking the server
+// first keeps the recovery path from failing on a no-op.
+func resumeConsumerIfPaused(ctx context.Context, stream jetstream.Stream, name string) error {
+	consumer, err := stream.Consumer(ctx, name)
+	if err != nil {
+		return fmt.Errorf("open consumer %s: %w", name, err)
+	}
+	info, err := consumer.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("read consumer %s: %w", name, err)
+	}
+	if !info.Paused {
+		return nil
+	}
+	if _, err := stream.ResumeConsumer(ctx, name); err != nil {
+		return fmt.Errorf("resume consumer %s: %w", name, err)
+	}
+	return nil
 }

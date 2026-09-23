@@ -37,9 +37,13 @@ const approvalTimeoutSystemApprover = "system:approval-timeout"
 // synth-rejection through the existing HandleApprovalResponse path
 // rather than leaving the gated tool_call orphaned indefinitely.
 //
-// Restart-safe: PendingApproval is KV-persisted with RequestedAt and
-// Timeout, so a restored loop's deadline is computed correctly on the
-// first sweep after process restart.
+// Memory-only, deliberately (#1330, docket OQ2): the sweep reads the
+// loops THIS process holds, and no startup pass reads AGENT_LOOPS to
+// restore the ones it does not. PendingApproval is KV-persisted with
+// RequestedAt and Timeout, so a loop a redelivery rebuilds here comes
+// back with its original deadline already computed; a loop nothing
+// rebuilds is never swept by this process at all and stays parked
+// until the approval is answered or the loop is cancelled.
 func (c *Component) runApprovalTimeoutSweeper(ctx context.Context) {
 	ticker := time.NewTicker(approvalSweepInterval)
 	defer ticker.Stop()
@@ -97,8 +101,62 @@ func (c *Component) sweepExpiredApprovals(ctx context.Context) {
 				slog.String("error", err.Error()))
 			continue
 		}
-		c.publishResults(ctx, result)
-		c.persistLoopState(ctx, cand.LoopID)
+		// The sweeper keeps its own publish-then-write order until #1362; only
+		// the writer itself changed, to the carrier's compare-and-swap. The
+		// stamp sits between the pair, where the carrier's own publish-first
+		// order puts it: the auto-reject is a request-MINTING transition
+		// (handleRejectedApproval → HandleToolResult → handleToolsComplete),
+		// and a record whose iterations moved without its published_request_id
+		// is invariant I3 violated on a loop nothing later repairs. A sweep
+		// that minted nothing stamps nothing — mintedRequestID returns "" and
+		// stampPublishedRequest is a no-op.
+		//
+		// None of the three failures below has a delivery to retry — this is a
+		// timer, not a consumer — so each is named rather than silently
+		// swallowed. The publish failure STOPS this candidate, for the reason
+		// written at it; the two writes after it are log-only, because no
+		// loop-side counter's subject is "a write this process meant to make
+		// did not commit" and #1362 owns whether one is owed (design § 5.6).
+		if err := c.publishResults(ctx, result); err != nil {
+			// The advance goes no further than this process's memory. Stamping
+			// or persisting past a failed publication commits a record naming a
+			// request the stream does not retain, which is I1; with KV still
+			// writable that is exactly what lands — the record names R2, the
+			// stream holds only R1, and every later cold read of the loop takes
+			// adoptNewerRetainedRequest's Fatal I1 arm, quarantining a lane
+			// over an approval that merely timed out. Skipping only the stamp
+			// is not the answer either: persisting the advanced entity under
+			// the old name is the iteration/identity mismatch the stamp exists
+			// to prevent. So the record keeps the gated predecessor state it
+			// already holds, which is what a replacement can still recover
+			// from. This is the carrier's own shape for the same error
+			// (publishThenPersistResultState returns before it stamps).
+			//
+			// The loop this process already advanced IN MEMORY is left as it
+			// is: a timer has no delivery to classify, so there is nothing here
+			// to retry or quarantine, and the sweeper's retry/counter policy
+			// travels with the lane to #1362 (design § 5.6).
+			c.logger.Warn("approval timeout auto-reject did not publish its results — "+
+				"the record keeps the gated state it already holds",
+				slog.String("loop_id", cand.LoopID),
+				slog.String("call_id", cand.CallID),
+				slog.String("error", err.Error()))
+			continue
+		}
+		if err := c.stampPublishedRequest(result); err != nil {
+			c.logger.Warn("approval timeout auto-reject did not name the request it published",
+				slog.String("loop_id", cand.LoopID),
+				slog.String("call_id", cand.CallID),
+				slog.String("error", err.Error()))
+		}
+		if err := c.persistLoopState(ctx, cand.LoopID); err != nil {
+			// On a lost compare-and-swap the loop's in-process state is
+			// already released, and the record that won holds the gate.
+			c.logger.Warn("approval timeout auto-reject did not commit the loop record",
+				slog.String("loop_id", cand.LoopID),
+				slog.String("call_id", cand.CallID),
+				slog.String("error", err.Error()))
+		}
 		// Publish the ApprovalResponse onto agent.approval_response.<loopID> so
 		// wire observers (sister-repo dashboards, audit consumers) see timeout
 		// auto-rejects the same way they see human responses. The component's

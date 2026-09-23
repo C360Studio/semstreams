@@ -202,7 +202,10 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 	// Approval responses use the same persistence boundary as every other
 	// handler result. This keeps a rejection that reaches the iteration cap from
 	// bypassing the ordinary-observations-then-terminal audit ordering.
-	if err := c.persistHandlerResult(ctx, result); err != nil {
+	// The approval lane keeps write-then-publish until #1362: reordering it
+	// opens a reject-minted crash window whose only handler is that lane's own
+	// cold branch, which #1362 builds (design.md § 1, coordinator scoping).
+	if err := c.persistHandlerResult(ctx, result, writeThenPublish); err != nil {
 		return natsclient.DeliveryDecisionQuarantine,
 			fmt.Errorf("approval result for loop %q has unknown durable state: %w", response.LoopID, err)
 	}
