@@ -11,6 +11,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -524,4 +525,181 @@ func TestAColdR1ReconstructionKeepsTheRecordsDeadline(t *testing.T) {
 	assert.Equal(t, agentic.LoopStateFailed, expired.entity.State)
 	assert.Equal(t, born.entity.TimeoutAt.UTC(), expired.entity.TimeoutAt.UTC(),
 		"the deadline the loop failed against is the one its record carried all along")
+}
+
+// TestAColdContinuationForALoopNoProcessHoldsIsRefused is the fourth arm of
+// the task lane's cold fork, and the only one that is not a redelivery at all
+// (owner Codex round 2 on PR #1361, finding 1; owner ruling
+// https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5791390564,
+// REFUSE).
+//
+// Every other arm answers the same task twice. This one answers a NEW task: a
+// second turn, admitted by agentic-dispatch against a live record, that names
+// a loop no process holds. The classifier read the record alone, so the record
+// answered for a task it was never about — advanced, it acknowledged the turn
+// as "already applied" and the user's text was never sent to anyone; at
+// iteration zero with an empty set it took the republish arm, and `HandleTask`
+// on a cold process happily created loop L from the ARRIVING task, seating the
+// loop's whole conversation from the new turn's prompt and overwriting the
+// record's `task_id` on the next write.
+//
+// The durable fact that separates them is the record's own `task_id`, which
+// birth writes and a warm continuation moves. When it is not the arriving
+// task's, this process cannot apply the turn — the loop's context lived in the
+// process that is gone — so the turn is refused: acknowledged without effect,
+// with a warning naming both tasks and a reason value on
+// `task_intake_rejections_total`. That is the same settlement the WARM refusal
+// takes when a continuation meets a busy loop, and on a lane that runs at
+// `MaxAckPending` 1 it is the only one that does not park every task behind
+// it. The turn has to be re-sent once a redelivered input has rebuilt the
+// loop.
+//
+// Both arms are built by running them, so the record under test is the one
+// production writes.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestAColdContinuationForALoopNoProcessHoldsIsRefused(t *testing.T) {
+	client := newLoopNATS(t)
+
+	// The counter is a process-wide singleton, so every assertion below is a
+	// DELTA taken across the delivery under test.
+	refusals := func(c *Component) float64 {
+		return testutil.ToFloat64(c.metrics.taskIntakeRejections.WithLabelValues(
+			taskIntakeColdForkLane, taskIntakeContinuationUnheldReason))
+	}
+
+	t.Run("the record is still the untouched birth", func(t *testing.T) {
+		const loopID = "8b1e4a07-5c92-4d3f-a610-7e2b9c4d5f81"
+		born := agentic.TaskMessage{
+			TaskID: "task-continuation-birth",
+			LoopID: loopID,
+			Role:   "general",
+			Model:  "test-model",
+			Prompt: "the turn the loop was born from",
+		}
+		continuation := agentic.TaskMessage{
+			TaskID: "task-continuation-second-turn",
+			LoopID: loopID,
+			Role:   "general",
+			Model:  "test-model",
+			Prompt: "a second turn, typed while no process held the loop",
+		}
+		firstRequest := looprequest.ID{LoopID: loopID, Iteration: 1, Retry: 0}.String()
+		requestSubject := "agent.request." + loopID
+
+		predecessor, _ := startLoopProcess(t, client, DefaultConfig())
+		_, birth := deliverTask(t, predecessor, born)
+		require.Equal(t, natsclient.DeliveryDecisionAck, birth.Decision())
+		require.Equal(t, uint64(1), messagesOn(t, client, requestSubject))
+
+		record := loopRecordOf(t, predecessor, loopID)
+		require.Equal(t, firstRequest, record.entity.PublishedRequestID)
+		require.Equal(t, 0, record.entity.Iterations)
+		require.Empty(t, record.entity.PendingToolResults,
+			"this arm is the one every other field calls an untouched birth")
+		require.Equal(t, born.TaskID, record.entity.TaskID,
+			"the record carries the task that owns the loop, which is the fact under test")
+
+		replacement, replacementHandler := startLoopProcess(t, client, DefaultConfig())
+		before := refusals(replacement)
+
+		_, refused := deliverTask(t, replacement, continuation)
+
+		require.Equal(t, natsclient.DeliveryDecisionAck, refused.Decision(),
+			"a refusal this redelivery cannot fix settles; Retry would park the MaxAckPending-1 "+
+				"task lane behind it and Quarantine would latch the lane over a valid turn")
+		_, seated := replacementHandler.loopManager.GetLoop(loopID)
+		require.Error(t, seated,
+			"the republish arm created loop L from the ARRIVING task, so the loop's conversation "+
+				"was seated from the new turn's prompt and its own first turn was gone")
+		require.Equal(t, uint64(1), messagesOn(t, client, requestSubject),
+			"a refused turn publishes nothing: the request the record names is already retained")
+
+		after := loopRecordOf(t, replacement, loopID)
+		require.Equal(t, record.revision, after.revision,
+			"an acknowledged-without-effect turn writes nothing")
+		require.Equal(t, born.TaskID, after.entity.TaskID,
+			"the record must still belong to the task that created the loop")
+
+		require.Equal(t, before+1, refusals(replacement),
+			"a refused turn is a declared event: it carries the reason value an operator greps for")
+	})
+
+	t.Run("the record has advanced past its first batch", func(t *testing.T) {
+		const loopID = "3c7d2f18-6a04-4b95-8e13-5d9f0a2b6c74"
+		born := agentic.TaskMessage{
+			TaskID: "task-continuation-advanced",
+			LoopID: loopID,
+			Role:   "general",
+			Model:  "test-model",
+			Prompt: "the turn whose batch already ran",
+		}
+		continuation := agentic.TaskMessage{
+			TaskID: "task-continuation-advanced-second-turn",
+			LoopID: loopID,
+			Role:   "general",
+			Model:  "test-model",
+			Prompt: "a second turn for a loop that has moved on",
+		}
+		firstRequest := looprequest.ID{LoopID: loopID, Iteration: 1, Retry: 0}.String()
+		secondRequest := looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String()
+		requestSubject := "agent.request." + loopID
+
+		predecessor, handler := startLoopProcess(t, client, DefaultConfig())
+		_, birth := deliverTask(t, predecessor, born)
+		require.Equal(t, natsclient.DeliveryDecisionAck, birth.Decision())
+
+		// One call, so applying its result completes the batch and the loop
+		// advances: the record leaves iteration zero and names R2.
+		batch := agentic.AgentResponse{
+			RequestID:    firstRequest,
+			Status:       agentic.StatusToolCall,
+			FinishReason: "tool_calls",
+			Message: agentic.ChatMessage{
+				Role:      "assistant",
+				ToolCalls: []agentic.ToolCall{{ID: "call-advanced", Name: "advanced_tool"}},
+			},
+		}
+		retainModelResponse(t, client, batch)
+		dispatch, err := handler.HandleModelResponse(t.Context(), loopID, batch)
+		require.NoError(t, err)
+		require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch, publishThenWrite))
+		call, _ := dispatchedToolCall(t, dispatch)
+
+		_, applied := deliverToolResult(t, predecessor, agentic.ToolResult{
+			CallID: call.ID, Name: call.Name, Content: "the tool answered", LoopID: loopID,
+			RequestID: call.RequestID, ExecutionID: call.ExecutionID, CallOrdinal: call.CallOrdinal,
+		})
+		require.Equal(t, natsclient.DeliveryDecisionAck, applied.Decision())
+
+		record := loopRecordOf(t, predecessor, loopID)
+		require.Equal(t, 1, record.entity.Iterations,
+			"the completed batch advanced the loop, which is what this arm is about")
+		require.Equal(t, secondRequest, record.entity.PublishedRequestID)
+		require.Equal(t, born.TaskID, record.entity.TaskID)
+		require.Equal(t, uint64(2), messagesOn(t, client, requestSubject))
+
+		replacement, replacementHandler := startLoopProcess(t, client, DefaultConfig())
+		before := refusals(replacement)
+
+		_, refused := deliverTask(t, replacement, continuation)
+
+		require.Equal(t, natsclient.DeliveryDecisionAck, refused.Decision(),
+			"the settlement is the same on both arms; what changes is that this one was already "+
+				"acknowledged as an applied task, with the turn's text silently dropped")
+		_, seated := replacementHandler.loopManager.GetLoop(loopID)
+		require.Error(t, seated, "a refused turn seats no loop")
+		require.Equal(t, uint64(2), messagesOn(t, client, requestSubject),
+			"a refused turn publishes nothing")
+
+		after := loopRecordOf(t, replacement, loopID)
+		require.Equal(t, record.revision, after.revision,
+			"an acknowledged-without-effect turn writes nothing")
+		require.Equal(t, born.TaskID, after.entity.TaskID,
+			"the record must still belong to the task that created the loop")
+
+		require.Equal(t, before+1, refusals(replacement),
+			"an advanced record acknowledged the turn as 'its loop already moved past it' — a turn "+
+				"nobody ever sent is not an applied task, and an operator saw no reason at all")
+	})
 }

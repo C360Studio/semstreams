@@ -42,6 +42,11 @@ A deferred continuation is durable as a MARKER only. Where the record carries `p
 `pending_continuation_request_id`, the admitted turn's text was never inside a retained request and is not
 recoverable: a rebuild SHALL clear the marker and warn, and SHALL NOT synthesise the turn. Neither the turn nor the
 loop's task prompt is carried by the record, so a rebuilt loop publishes its terminal event with an empty `prompt`.
+A continuation reaches only a loop some process holds: a task whose `task_id` differs from the one the live record
+carries SHALL be refused — acknowledged without effect, with a warning naming both tasks and a counted intake
+rejection — and SHALL NOT be acknowledged as an applied task nor used to rebuild the loop's first request, because
+the record can answer only for the task it belongs to. The turn must be re-sent once a redelivered input has rebuilt
+the loop.
 
 An approval deadline is process-local and is not a durable fact: a replaced process SHALL re-arm no approval deadline
 at startup, and a loop in `awaiting_approval` SHALL stay in `awaiting_approval` until the approval is answered or the
@@ -130,6 +135,15 @@ deadline from then on.
   memory — `iterations` alone is not evidence of an untouched birth, because a loop advances its iteration only when a
   whole tool batch is in, and seating a fresh loop would leave the batch's remaining results with no execution to
   route to
+
+#### Scenario: A continuation naming a loop no process holds is refused
+
+- **GIVEN** a live loop record whose `task_id` is `T1`, and a replacement process with no memory of the loop
+- **WHEN** a task `T2` naming that loop is delivered to the replacement
+- **THEN** it is acknowledged without effect whatever the record's `iterations`, `published_request_id` and
+  `pending_tool_results` say: no request is published, no record is written, no loop is seated in memory, and a
+  warning plus a counted intake rejection name the record's task and the arriving one — the turn's text is in no
+  durable place, so it must be re-sent once a redelivered input has rebuilt the loop
 
 #### Scenario: A tool result the record already applied is replayed
 

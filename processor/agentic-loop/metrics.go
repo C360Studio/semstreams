@@ -257,7 +257,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "task_intake_rejections_total",
-				Help:      "Permanent structural task-intake rejections by bounded lane and reason",
+				Help:      "Total tasks refused at intake, by bounded lane and reason. lane=\"decoded-task\", reason=\"structural-invalid\": the decoded task is structurally unusable (lineage identity), so the delivery is terminated rather than retried. lane=\"cold-fork\", reason=\"continuation_unheld\": the task continues a loop whose record belongs to a DIFFERENT task and which no process holds, so the turn cannot be applied anywhere — it is acknowledged without effect and must be re-sent once a redelivered input has rebuilt the loop. Sustained non-zero continuation_unheld points at continuations submitted across a process replacement.",
 			}, []string{"lane", "reason"}),
 
 			// Tool-call governance (ADR-039) drives the timeout-tuning
@@ -425,6 +425,13 @@ func (m *loopMetrics) recordGraphWritePublishTimeout(state string) {
 	m.graphWritePublishTimeouts.WithLabelValues(state).Inc()
 }
 
+// recordTaskIntakeRejection counts a task the component refused at intake.
+//
+// Two (lane, reason) pairs exist, and they are different kinds of refusal:
+// ("decoded-task", "structural-invalid") is a malformed task the lane
+// TERMINATES, and ("cold-fork", "continuation_unheld") is a well-formed turn
+// for a loop no process holds, which is acknowledged without effect because
+// no redelivery of it could ever be applied (#1330).
 func (m *loopMetrics) recordTaskIntakeRejection(lane, reason string) {
 	m.taskIntakeRejections.WithLabelValues(lane, reason).Inc()
 }

@@ -219,18 +219,24 @@ ACK; W4 = next request PubAck'd, crash before the update. "Classify" = terminal 
 
 ### 5.1 Task (`agent.task`)
 1. Warm map hit → `HandleTask` dedup (`H:843-855`, `HasActiveLoopForTask`), unchanged.
-2. Cold: read entity by `task.LoopID`. Absent → normal birth (Put → publish, R1 with MsgId). Present: verify
-   task/role/model (`SR:391-397`); terminal → ACK (`SR:398-400`).
+2. Cold: read entity by `task.LoopID`. Absent → normal birth (Put → publish, R1 with MsgId). Present: verify the
+   task — `classifyRedeliveredTask` compares the record's `TaskID` with the arriving task's and refuses a mismatch
+   before any other arm runs (round 2, finding 1), because a record can answer only for the task it belongs to.
+   Role and model are deliberately NOT verified: a continuation legitimately re-sends them, and neither decides
+   whether this delivery can be applied. Terminal → ACK (`SR:398-400`); terminal records never reach the identity
+   gate, since `readLoopRecord` reports them stale.
 3. Present, `PublishedRequestID == R1`, `Iterations == 0`, `PendingToolResults` empty: rebuild R1 from the
    TaskMessage (`SR:414-421`) and hand it to the publish path, which adopts an R1 the stream already retains and
    otherwise publishes it with
    `Nats-Msg-Id = R1` (Q1 as amended 2026-09-22 — https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5776942078 — Q5),
    rebuild ContextManager (`SR:424`), ACK.
-4. Present and advanced, OR present at `Iterations == 0` with a non-empty `PendingToolResults`, OR present naming
-   any request other than R1: applied → ACK. The whole first batch runs at iteration 0 and a length-truncated first
-   response re-asks it under the next retry ordinal, so neither the ordinal nor the applied set separates an untouched
-   birth from a progressed one on its own; the batch is rebuilt by its next tool result and the request the record
-   does name is answered by its own response, each on the lane that owns it.
+4. Present, belonging to THIS task (step 2), and advanced, OR present at `Iterations == 0` with a non-empty
+   `PendingToolResults`, OR present naming any request other than R1: applied → ACK. The whole first batch runs at
+   iteration 0 and a length-truncated first response re-asks it under the next retry ordinal, so neither the ordinal
+   nor the applied set separates an untouched birth from a progressed one on its own; the batch is rebuilt by its next
+   tool result and the request the record does name is answered by its own response, each on the lane that owns it.
+   A record belonging to a DIFFERENT task never reaches steps 3 or 4: it is refused at step 2, because "applied"
+   would name a turn nobody ever sent and the R1 rebuild would build the loop's conversation out of it.
 Windows: W1 redo. W2 (record written, R1 unpublished) → step 3 publishes. W3 (R1 already retained) → step 3 adopts it
 and publishes nothing. No W4 at birth (Put precedes publish by ruling).
 Counter semantics (docket OQ4, owner ruling 2026-09-22): a redelivered task submission counts again on

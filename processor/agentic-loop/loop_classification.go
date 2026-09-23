@@ -97,10 +97,21 @@ const (
 	// rebuilt from the task and republished under its own identity; the record
 	// is NOT written again.
 	taskRepublishFirstRequest
-	// taskApplied — the loop moved past this task: it advanced beyond its first
-	// iteration, retried that iteration under a later ordinal, applied part of
-	// its first batch, or settled. Acknowledge without effect.
+	// taskApplied — the loop moved past THIS task, which the record names as
+	// its own: it advanced beyond its first iteration, retried that iteration
+	// under a later ordinal, applied part of its first batch, or settled.
+	// Acknowledge without effect. A record belonging to another task is not
+	// this arm — it cannot say anything about a task it is not about, and is
+	// refused below.
 	taskApplied
+	// taskContinuationUnheld — the record is live and belongs to a DIFFERENT
+	// task, so this delivery is a new turn for a loop no process holds. The
+	// turn cannot be applied here: the loop's conversation lived in the
+	// process that is gone, and neither arm above is about this message.
+	// Refuse it — acknowledge without effect, with a warning and a counted
+	// reason — and let the caller re-send once a redelivered input has
+	// rebuilt the loop (#1330, owner ruling 2026-09-23).
+	taskContinuationUnheld
 )
 
 // classifyRedeliveredTask decides what a task delivery means for a loop this
@@ -113,12 +124,18 @@ const (
 // exists, be refused by the record's Create, and retry to MaxDeliver while the
 // loop it was supposed to resume sat waiting for a request nobody republished.
 //
+// It takes the whole task because the loop ID alone cannot say whether the
+// record is even ABOUT this task: the record carries the task that owns the
+// loop, and a continuation admitted against a live record arrives as a new
+// task naming the same loop.
+//
 // It returns the record it read as well, because the caller that goes on to
 // HOLD this loop must compare-and-swap against the revision this read
 // observed — there is no other write on the republish path that could seed it.
 func (c *Component) classifyRedeliveredTask(
-	ctx context.Context, loopID string,
+	ctx context.Context, task agentic.TaskMessage,
 ) (taskDisposition, loopRecord, error) {
+	loopID := task.LoopID
 	if loopID == "" {
 		return taskBirth, loopRecord{}, nil
 	}
@@ -148,6 +165,24 @@ func (c *Component) classifyRedeliveredTask(
 		}
 		return taskBirth, record, nil
 	}
+	// WHOSE task this record is, before any question about what its loop did
+	// with it. Both arms below answer from the record, and the record can only
+	// answer for the task it belongs to: birth writes that task ID and a warm
+	// continuation moves it, so a live record naming another task means this
+	// delivery is a NEW turn for a loop no process holds. Neither arm is about
+	// it — the applied arm would settle a turn nobody ever sent as work
+	// already done, and the republish arm would build the loop's whole
+	// conversation out of the arriving turn's prompt and overwrite the
+	// record's task on the next write. It is refused instead, and the caller
+	// re-sends once a redelivered input has rebuilt the loop.
+	//
+	// Terminal records never reach this: readLoopRecord reports them stale, so
+	// the arm above keeps its terminal acknowledgement — which is the answer
+	// the WARM refusal gives a continuation of a settled loop too
+	// (ErrLoopTerminal).
+	if record.entity.TaskID != task.TaskID {
+		return taskContinuationUnheld, record, nil
+	}
 	// Every fact the delta's GIVEN names, because no one of them is the
 	// untouched birth it looks like on its own.
 	//
@@ -166,11 +201,12 @@ func (c *Component) classifyRedeliveredTask(
 	// for a record naming the loop's FIRST request, which is what the delta's
 	// GIVEN has always said (published_request_id = R1).
 	//
-	// Everything else is a loop that moved past its task: its batch is rebuilt
-	// by the next tool result and its outstanding request is answered by its
-	// own response, each on the lane that owns it. A record naming NO request
-	// falls here too — it is not the R1 birth this arm rebuilds, and I1 says a
-	// live record of this build always names one.
+	// Everything else is a loop that moved past THIS task — the gate above has
+	// already established that the record is about it: its batch is rebuilt by
+	// the next tool result and its outstanding request is answered by its own
+	// response, each on the lane that owns it. A record naming NO request falls
+	// here too — it is not the R1 birth this arm rebuilds, and I1 says a live
+	// record of this build always names one.
 	firstRequest := looprequest.ID{LoopID: loopID, Iteration: 1, Retry: 0}.String()
 	if record.entity.PublishedRequestID == firstRequest &&
 		record.entity.Iterations == 0 && len(record.entity.PendingToolResults) == 0 {

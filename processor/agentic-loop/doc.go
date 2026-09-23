@@ -263,6 +263,14 @@
 // different case and is untouched: that request replays, so the marker still names its
 // carrier and still stops the carrier's own completion from settling early.
 //
+// A turn arriving AFTER the replacement is the same limitation from the other side. A
+// continuation reaches only a loop some process holds: a task naming a loop whose record
+// belongs to a different task is REFUSED — acknowledged without effect, with a warning
+// naming both tasks and a continuation_unheld reason on task_intake_rejections_total —
+// because the loop's conversation is in no process's memory and no redelivery of that
+// turn could ever be applied. Re-send the turn once a redelivered input has rebuilt the
+// loop.
+//
 // The loop's TASK PROMPT is the same limitation one field over. taskPrompts is the one
 // per-loop cache the rebuild does not restore, because the record has no field to restore
 // it from, so a rebuilt loop publishes LoopCompletedEvent.Prompt and LoopFailedEvent.Prompt

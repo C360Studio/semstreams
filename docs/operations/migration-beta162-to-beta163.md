@@ -1780,6 +1780,11 @@ turn was admitted (`pending_continuation`). Across a process replacement the tur
 replaced process. The rebuild clears the marker and logs a warning rather than leaving a loop that would spend an
 iteration re-asking the model with nothing new — **the turn has to be re-sent.** A turn that a retained request
 already carries is a different case and is unaffected: that request replays and the marker still names its carrier.
+A turn *arriving after* the replacement is the same limitation from the other side: a continuation reaches only a loop
+some process holds, so a task naming a loop whose record belongs to a different task is **refused — acknowledged
+without effect**, with a warning naming both tasks and a `continuation_unheld` reason on
+`task_intake_rejections_total`. **Action:** re-send the turn once a redelivered input has rebuilt the loop; nothing
+retries it for you, and the submission itself still counted on `tasks_submitted_total`.
 
 The loop's task prompt is the same limitation one field over. A rebuilt loop does not recover it, so its
 `LoopCompletedEvent.prompt` and `LoopFailedEvent.prompt` are published **empty**, and the empty-context recovery path

@@ -34,6 +34,13 @@ var schema = component.GenerateConfigSchema(reflect.TypeOf(Config{}))
 const (
 	taskIntakeRejectionLane   = "decoded-task"
 	taskIntakeRejectionReason = "structural-invalid"
+
+	// The cold fork's own refusal (#1330, owner ruling 2026-09-23 on the
+	// round-2 docket's question 1). Its own lane label, because nothing
+	// about it is structural: the message decoded, the loop is real, and the
+	// turn is a turn no process can apply.
+	taskIntakeColdForkLane             = "cold-fork"
+	taskIntakeContinuationUnheldReason = "continuation_unheld"
 )
 
 // Component implements the agentic-loop processor
@@ -1394,6 +1401,42 @@ func (c *Component) refuseConflictingTaskIdentity(task agentic.TaskMessage, supp
 		"agentic-loop", "handleTaskMessage", "reject conflicting task identity")
 }
 
+// settleUnheldContinuation settles a task that continues a loop no process
+// holds, and reports whether it did.
+//
+// The record belongs to another task, so nothing in this process can apply
+// this one: the loop's conversation lived in the process that is gone, and
+// the turn's text is on neither the record nor the stream. The turn is
+// acknowledged WITHOUT EFFECT — the settlement the warm refusal already takes
+// when a continuation meets a busy loop (ErrLoopBusy, handleTaskMessage) — and
+// re-sending it once a redelivered input has rebuilt the loop is the
+// documented recovery (doc.go § Recovery across a process replacement).
+//
+// The other two settlements were rejected on this lane: Retry parks the whole
+// task lane, which runs at MaxAckPending 1, for MaxDeliver attempts on a
+// message no redelivery can fix, and Quarantine latches the lane and the
+// component's health over a perfectly valid turn.
+//
+// A skip is a declared event: the warning names the record's task and the
+// arriving one, and the reason value is counted on the existing
+// task_intake_rejections_total (#1330, owner ruling 2026-09-23).
+func (c *Component) settleUnheldContinuation(
+	ctx context.Context, disposition taskDisposition, task agentic.TaskMessage, record loopRecord,
+) bool {
+	if disposition != taskContinuationUnheld {
+		return false
+	}
+	c.logger.WarnContext(ctx, "Task refused — it continues a loop no process holds",
+		slog.String("task_id", task.TaskID),
+		slog.String("loop_id", task.LoopID),
+		slog.String("record_task_id", record.entity.TaskID),
+		slog.String("state", record.entity.State.String()))
+	if c.metrics != nil {
+		c.metrics.recordTaskIntakeRejection(taskIntakeColdForkLane, taskIntakeContinuationUnheldReason)
+	}
+	return true
+}
+
 // handleTaskMessage processes incoming task messages
 func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 	baseMsg, err := c.decoder.Decode(data)
@@ -1433,9 +1476,12 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 	// The cold fork (#1330, design § 5.1, owner ruling Q1): what this task
 	// means for a loop this process has no memory of is answered by the
 	// record, before anything is built in memory.
-	disposition, record, err := c.classifyRedeliveredTask(ctx, task.LoopID)
+	disposition, record, err := c.classifyRedeliveredTask(ctx, *task)
 	if err != nil {
 		return err
+	}
+	if c.settleUnheldContinuation(ctx, disposition, *task, record) {
+		return nil
 	}
 	if disposition == taskApplied {
 		c.logger.Info("Task acknowledged without effect — its loop already moved past it",
