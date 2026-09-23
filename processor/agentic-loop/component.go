@@ -1877,6 +1877,14 @@ func (c *Component) handleResponseMessage(ctx context.Context, data []byte) erro
 			// not move the record's revision. The handler has already logged
 			// it and counted it on model_responses_dropped_total.
 			return nil
+		case errors.Is(err, errResponseAlreadyApplied):
+			// This process already used this answer: the delivery is a lost
+			// acknowledgement, not new work. It returns HERE for the same
+			// reason the superseded arm does — an empty result flowing through
+			// the carrier ends in a compare-and-swap, and a response that
+			// changed nothing must not move the record's revision. The handler
+			// has logged it and counted it on model_responses_dropped_total.
+			return nil
 		case errors.Is(err, errResponseForeign):
 			// Not this loop's request at all. Nothing orders it and no later
 			// delivery will, which is the disposition the tool lane and both

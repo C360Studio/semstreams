@@ -105,12 +105,16 @@ func (h *MessageHandler) OutstandingRequestForTest(loopID string) string {
 }
 
 // CurrentRequestForTest returns the request the loop's record names, which is
-// the identity the superseded-response guard compares against. A fixture that
-// must reach the handler PAST that guard — a redelivery, or a response
-// arriving while the loop waits on tools, where the outstanding mark is empty
-// and reads "" — names this one. Asking for the outstanding request there
-// would build a response naming no request at all, which production cannot
-// route.
+// the identity the superseded-response guard compares against. A fixture whose
+// loop has ADVANCED across a turn boundary names this one: the mint that
+// advanced it made a new request outstanding, and the record names the same
+// one, so the two agree and either would do — but only this one survives a
+// fixture that stamps the carrier's step by hand.
+//
+// It is NOT the way to build a redelivery. Since #1330 Q12 a response naming
+// the current request that the loop is no longer waiting on is refused as
+// already applied, which is exactly what a redelivery is; a fixture that must
+// reach the handler for an answer the loop already used has to say so.
 //
 // It reads LoopEntity.PublishedRequestID (#1330) rather than the process-local
 // mint map that used to answer this: the durable name is what the guard now

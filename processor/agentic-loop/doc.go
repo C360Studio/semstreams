@@ -244,6 +244,16 @@
 // refusing it; the replayed conversation lands in one region, so compaction attribution
 // starts over (docs/concepts/13-agentic-systems.md).
 //
+// A SECOND delivery of the current request's answer is the one case ordering cannot
+// decide, because both deliveries name the request the record names. The outstanding mark
+// decides it instead: a response naming the current request while the loop holding it is
+// waiting on no request is one this process already used, so it is acknowledged without
+// effect and counted already_applied on model_responses_dropped_total. Tool execution
+// would survive a second apply — the execution identity is deterministic and
+// TOOL_CALL_OUTCOMES replays the outcome — but the loop's conversation would not: the
+// assistant turn would be appended again and ride the next request the model is asked to
+// answer.
+//
 // A redelivered TASK is the one lane the record cannot answer on its own. A record naming
 // the loop's first request at iteration zero with an empty applied set is rebuilt from the
 // task and that request republished - but only when the stream retains NO request for the

@@ -34,8 +34,17 @@ func replacementProcessHoldingALoop(t *testing.T, published string, loopID strin
 	require.NoError(t, err)
 	require.NoError(t, h.loopManager.IncrementIteration(loopID))
 	require.NoError(t, h.loopManager.SetPublishedRequest(loopID, published))
-	require.Empty(t, h.OutstandingRequestForTest(loopID),
-		"a replacement has minted nothing for this loop; that is the state under test")
+	// A process that HOLDS a loop holds its outstanding request too: every
+	// production seat sets both — birth and the R1 republish through
+	// TrackRequest at the mint, the cold rebuild through restoreLoopFromRequest
+	// from the only evidence it has. A fixture that seats the loop without the
+	// mark asks the classification to decide a state production cannot
+	// produce, and since Q12 that state has its own meaning ("this process
+	// already applied that answer"). What is under test is which AUTHORITY
+	// orders the response — the record, not this process's mints — and every
+	// arm below names a request the mark cannot answer for.
+	h.loopManager.TrackRequest(published, loopID)
+	require.Equal(t, published, h.OutstandingRequestForTest(loopID))
 	seedLoopRecord(t, c, loopID)
 	return c, h
 }

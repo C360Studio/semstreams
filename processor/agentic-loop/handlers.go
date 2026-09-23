@@ -1267,6 +1267,20 @@ var errRequestNotYetObservable = errors.New("request is not yet named by the loo
 // record's revision, which is the one thing a drop must not do.
 var errResponseSuperseded = errors.New("response names a request the loop has moved past")
 
+// errResponseAlreadyApplied marks a SECOND delivery of the response the loop
+// is currently on: it names the request the record names, and the loop is
+// waiting on no request, which it can only be because this answer was already
+// used (#1330, owner ruling Q12, 2026-09-23).
+//
+// Ordering cannot decide this one — both deliveries name the same request —
+// and applying it twice is not idempotent for the loop's CONVERSATION: the
+// assistant turn is appended again and rides the next request the model is
+// asked to answer. It is a sentinel, and returned as an error rather than as
+// an empty HandlerResult, for the same reason errResponseSuperseded is: an
+// empty result still reaches the carrier's compare-and-swap, and a response
+// that changed nothing must not move the record's revision.
+var errResponseAlreadyApplied = errors.New("response was already applied by this process")
+
 // errResponseForeign marks a model response naming something that is not a
 // request of this loop at all. Nothing orders it, no later delivery will make
 // it order, and applying it would act on another loop's identity — so it is
@@ -1319,7 +1333,8 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 	// reaching a rebuilt process passed this guard whatever it named (L2's
 	// declared residual). The record's name survives the process, so a
 	// replacement classifies with the same authority the original had.
-	switch orderAgainstPublished(loopID, entity.PublishedRequestID, response.RequestID) {
+	order := orderAgainstPublished(loopID, entity.PublishedRequestID, response.RequestID)
+	switch order {
 	case requestOrderApplied:
 		h.logger.Warn("ignoring superseded model response — the loop has moved on to a different request",
 			slog.String("loop_id", loopID),
@@ -1354,6 +1369,38 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 			}, fmt.Errorf("%w: loop %s response names request %q, its record names %q",
 				errRequestNotYetObservable, loopID, response.RequestID, entity.PublishedRequestID)
 	}
+	// The fourth case, which ORDERING cannot reach: a second delivery of the
+	// answer this loop is currently on. Both deliveries name the request the
+	// record names, so the record is the same authority either way; what
+	// separates them is the outstanding mark, which SettleRequest clears below
+	// the moment an answer is used. A response naming the current request
+	// while the loop is waiting on NO request is therefore one this process
+	// already applied, and applying it again appends the assistant turn a
+	// second time and re-dispatches its calls — the duplicate turn then rides
+	// the next request the model is asked to answer (#1330, owner ruling Q12,
+	// 2026-09-23).
+	//
+	// Scoped to requestOrderCurrent deliberately. requestOrderUnnamed reaches
+	// here too — a record written before this field existed, or a producer
+	// that correlates neither side — and it has no mark to compare, so it
+	// keeps the pre-#1330 answer rather than being dropped on an absence.
+	//
+	// A loop REBUILT for this very response is not a replay: restoreLoopFromRequest
+	// marks the retained request outstanding from the only evidence it has
+	// (its publication), so the cold arm's first delivery passes this gate.
+	if order == requestOrderCurrent && h.loopManager.OutstandingRequest(loopID) != response.RequestID {
+		h.logger.Warn("ignoring a model response this loop already applied — it is waiting on no request",
+			slog.String("loop_id", loopID),
+			slog.String("response_request_id", response.RequestID),
+			slog.String("published_request_id", entity.PublishedRequestID),
+			slog.String("state", entity.State.String()))
+		if h.metrics != nil {
+			h.metrics.recordModelResponseDropped("already_applied")
+		}
+		return HandlerResult{}, fmt.Errorf("%w: loop %s response names request %q, which the loop is "+
+			"no longer waiting on", errResponseAlreadyApplied, loopID, response.RequestID)
+	}
+
 	// This request is answered, whatever the outcome below. Clearing the
 	// outstanding mark here rather than in the success arms means an early
 	// return (timeout, terminal loop, budget exhausted) does not leave the loop

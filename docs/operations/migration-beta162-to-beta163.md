@@ -1179,8 +1179,10 @@ Exactly one payload type now travels that subject.
   not act on. `reason="stale_request_id"` is a response with no loop mapping for its `RequestID`, expected after a
   loop settles and releases its per-loop state or after a process replacement. `reason="superseded_request"` is a
   response naming a request the loop is no longer waiting on: the loop minted a newer one, most often because a
-  redelivery of an already-handled response arrived after the loop had moved on. Both are Acked, because
-  redelivering them cannot help. A sustained rate against live loops points at NATS redelivery. It is the sibling
+  redelivery of an already-handled response arrived after the loop had moved on. `reason="already_applied"` is the
+  redelivery that arrives BEFORE the loop moves on: it names the request the record still names, and the loop
+  holding it is waiting on no request, so the answer was already used — re-applying it would append the assistant
+  turn a second time and re-dispatch the batch. All three are Acked, because redelivering them cannot help. A sustained rate against live loops points at NATS redelivery. It is the sibling
   of the existing `semstreams_agentic_loop_tool_results_dropped_total{reason}`, which the same drop class already
   had.
 - **`/status` reports the state it read.** For a loop this process is not running — after dispatch was replaced,

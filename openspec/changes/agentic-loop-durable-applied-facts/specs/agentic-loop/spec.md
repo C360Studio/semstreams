@@ -112,6 +112,16 @@ deadline from then on.
 - **WHEN** the model response for `R(N+1)` is delivered
 - **THEN** the delivery is retried as not yet observable, and no effect is applied
 
+#### Scenario: A second delivery of an applied response is acknowledged without effect
+
+- **GIVEN** a running loop whose record names `R`, whose model response for `R` has been applied by the process
+  holding it, and which is therefore waiting on no request
+- **WHEN** the response for `R` is delivered to that process a second time
+- **THEN** it is acknowledged without effect, no message is published, the record is not written, and the
+  model-response drop metric and an audit log line name the loop and the request — ordering cannot decide this case,
+  because both deliveries name the request the record names, and re-applying it would append the assistant turn a
+  second time and re-dispatch the batch it already dispatched
+
 #### Scenario: A terminal loop receives a result it cannot prove it applied
 
 - **GIVEN** a loop whose record is terminal

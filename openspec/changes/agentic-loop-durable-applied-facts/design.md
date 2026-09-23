@@ -286,7 +286,13 @@ issue.
    retry mints R' (`emitRetryRequest`, `H:2141`, minting at `H:2168`, retry ordinal from R): identity-adopt or publish (§ 3.3), then Update `PublishedRequestID = R'`.
 4. Update(revision) after PubAck; a tool_call response leaves `PublishedRequestID = R`.
 Windows: W1 redo. W2 → re-proposal re-fires the rule (no MsgID either side, measured); duplicate `tool.execute`
-replays via TOOL_CALL_OUTCOMES (`loadCompletedOutcome` → `publishCompletedResult`, `TC:740-743`). W3 → step 2 sees R unchanged, re-runs; same idempotency. W4 (retry
+replays via TOOL_CALL_OUTCOMES (`loadCompletedOutcome` → `publishCompletedResult`, `TC:740-743`). W3 → step 2 sees R
+unchanged; tool EXECUTION is idempotent for the reason just given, but the loop's CONVERSATION is not — a second
+apply appends the assistant turn again and re-dispatches its calls — so the second delivery is refused rather than
+re-run: `requestOrderCurrent` on a loop whose outstanding mark no longer names the request is acknowledged without
+effect and counted `already_applied` (owner ruling Q12, 2026-09-23). A loop REBUILT for the response is not that
+case: `restoreLoopFromRequest` marks the retained request outstanding, so the cold arm's first delivery applies.
+W4 (retry
 lane only): R' retained, record says R → warm: re-runs, finds R' by identity, adopts, Update, ACK; cold: step 0 adopts
 R' first, then the response for R classifies older → ACK.
 
