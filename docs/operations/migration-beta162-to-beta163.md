@@ -1846,3 +1846,10 @@ No action, but two reading rules:
   distinct `task_id` values on `agent.task.>`.
 - A step in this counter with no matching new loop is a redelivery, not a duplicated task. The redelivery is
   otherwise idempotent: same `task_id`, same `loop_id`, no second loop.
+
+`agent.created` is at-least-once in the same way, and for the same reason. A task redelivered while its record is
+still at iteration zero rebuilds the loop through the ordinary birth path, which builds the loop-created event
+again; the event carries no `Nats-Msg-Id`, so the server cannot collapse it the way it collapses a republished
+`agent.request`. A consumer of `agent.created` must treat it as an announcement it may see more than once for one
+loop, keyed on `loop_id`, not as a birth counter. Recorded, not armed away: the loop, its record and its first
+request are all still exactly one.

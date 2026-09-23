@@ -419,3 +419,109 @@ func TestATaskRedeliveredAfterItsFirstIterationRetriedIsNotRepublished(t *testin
 	settled := loopRecordOf(t, replacement, loopID)
 	require.Equal(t, agentic.LoopStateComplete, settled.entity.State)
 }
+
+// TestAColdR1ReconstructionKeepsTheRecordsDeadline is the task lane's arm of
+// "a rebuild is not a reprieve" (owner Codex round 2 on PR #1361, finding 4).
+//
+// The cold response and tool arms rebuild through restoreLoopFromRequest,
+// which seats the record wholesale — its deadline included. The task lane's R1
+// arm does not: it runs the ORDINARY HandleTask, whose configureLoopMetadata
+// calls SetTimeout, and SetTimeout stamps `StartedAt = now` and
+// `TimeoutAt = now + budget` on the fresh entity. Only the durable revision
+// was restored afterwards, so an expired record whose task happened to
+// redeliver first resumed on a full fresh budget — a loop outliving the budget
+// its caller set, which the owner ruled out explicitly
+// (https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5781101792:
+// "no refresh on rebuild ... the loop's deadline means what its record says").
+//
+// Both halves are asserted: the rebuilt loop's own timing fields, and the
+// OUTCOME the deadline decides — the R1 response settles the loop on the
+// timeout rather than running it. The second is what an operator would see;
+// the first is why.
+//
+// The gap is expressed the way production expresses it — wall clock against
+// the record's own TimeoutAt — rather than by rewriting the record.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestAColdR1ReconstructionKeepsTheRecordsDeadline(t *testing.T) {
+	client := newLoopNATS(t)
+
+	config := DefaultConfig()
+	config.Timeout = shortLoopDeadline.String()
+
+	const loopID = "4f0a2c68-9b17-4e53-8d24-6a5c3b1e7f90"
+	task := agentic.TaskMessage{
+		TaskID: "task-cold-r1-deadline",
+		LoopID: loopID,
+		Role:   "general",
+		Model:  "test-model",
+		Prompt: "the task whose loop ran out of time while nobody held it",
+	}
+	firstRequest := looprequest.ID{LoopID: loopID, Iteration: 1, Retry: 0}.String()
+	requestSubject := "agent.request." + loopID
+
+	predecessor, _ := startLoopProcess(t, client, config)
+	_, birth := deliverTask(t, predecessor, task)
+	require.Equal(t, natsclient.DeliveryDecisionAck, birth.Decision())
+	require.Equal(t, uint64(1), messagesOn(t, client, requestSubject))
+
+	born := loopRecordOf(t, predecessor, loopID)
+	require.Equal(t, firstRequest, born.entity.PublishedRequestID,
+		"the arm under test is the R1 one: the record still names the loop's first request")
+	require.False(t, born.entity.TimeoutAt.IsZero(),
+		"the deadline this arm is about must be ON the record, or the rebuild inherits nothing")
+	waitPastLoopDeadline(t, born.entity.TimeoutAt)
+
+	// The replacement has no memory of the loop, so the task meets the cold
+	// fork and R1 is rebuilt from it.
+	replacement, replacementHandler := startLoopProcess(t, client, config)
+
+	_, redelivered := deliverTask(t, replacement, task)
+
+	require.Equal(t, natsclient.DeliveryDecisionAck, redelivered.Decision(),
+		"the R1 arm adopts the retained request and acknowledges")
+	require.Equal(t, uint64(1), messagesOn(t, client, requestSubject),
+		"R1 is already retained, so the rebuild adopts it rather than publishing a second copy")
+
+	// assert, not require, from here down: the deadline and the outcome it
+	// decides are one fact seen twice, and a run that reports only the first
+	// leaves a reader guessing what a fresh budget actually costs.
+	rebuilt, err := replacementHandler.loopManager.GetLoop(loopID)
+	require.NoError(t, err, "the replacement must HOLD the loop it rebuilt")
+	assert.Equal(t, born.entity.TimeoutAt.UTC(), rebuilt.TimeoutAt.UTC(),
+		"a rebuild is not a reprieve: the rebuilt loop carries the record's deadline, not a fresh budget")
+	assert.Equal(t, born.entity.StartedAt.UTC(), rebuilt.StartedAt.UTC(),
+		"StartedAt is half of the same fact and is stamped by the same call")
+
+	// The outcome the deadline decides. The answer to R1 arrives; a loop
+	// carrying its record's expired deadline settles on the timeout, and a loop
+	// handed a fresh one would have run.
+	answer := agentic.AgentResponse{
+		RequestID:    firstRequest,
+		Status:       agentic.StatusComplete,
+		FinishReason: "stop",
+		Message:      agentic.ChatMessage{Role: "assistant", Content: "the answer nobody was still waiting for"},
+	}
+	retainModelResponse(t, client, answer)
+	_, answered := deliverResponse(t, replacement, answer)
+	require.Equal(t, natsclient.DeliveryDecisionAck, answered.Decision(),
+		"a settled failure owes nobody a redelivery")
+
+	failureSubject := "agent.failed." + loopID
+	if assert.Equal(t, uint64(1), messagesOn(t, client, failureSubject),
+		"the rebuilt loop was already past its deadline, so its answer settles it on the timeout") {
+		// Contains, not Equal: the response lane settles a handler failure
+		// through handleLoopFailure, which publishes the WRAPPED error
+		// ("agentic-loop.HandleModelResponse: check timeout failed: …"). The
+		// claim here is which deadline the loop failed against, not how the
+		// lane spells its wrapper.
+		assert.Contains(t, failureReasonOn(t, client, failureSubject), "loop timeout exceeded")
+	}
+	assert.Equal(t, uint64(0), messagesOn(t, client, "agent.complete."+loopID),
+		"a loop handed a fresh budget would have completed instead")
+
+	expired := loopRecordOf(t, replacement, loopID)
+	assert.Equal(t, agentic.LoopStateFailed, expired.entity.State)
+	assert.Equal(t, born.entity.TimeoutAt.UTC(), expired.entity.TimeoutAt.UTC(),
+		"the deadline the loop failed against is the one its record carried all along")
+}

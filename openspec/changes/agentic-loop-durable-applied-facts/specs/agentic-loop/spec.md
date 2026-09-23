@@ -73,6 +73,15 @@ deadline from then on.
   refreshed nor extended by the time the process was down — and the rebuilt loop fails on that delivery, writing the
   record terminal and publishing a loop-failed event carrying the timeout reason, and the delivery is acknowledged
 
+#### Scenario: A task rebuilt at iteration zero keeps its record's deadline
+
+- **GIVEN** a loop record at `iterations = 0` naming `published_request_id = R1`, whose `timeout_at` has already
+  passed, and a replacement process with no memory of the loop
+- **WHEN** the task message is redelivered to the replacement and `R1` is rebuilt from it
+- **THEN** the rebuilt loop carries the record's own `started_at` and `timeout_at` — this reconstruction runs the
+  ordinary birth path, which would otherwise stamp a fresh budget — so the answer to `R1` settles the loop on the
+  timeout instead of running it
+
 #### Scenario: A replaced process re-arms no approval deadline
 
 - **GIVEN** a loop whose record is `awaiting_approval` and whose process was replaced
