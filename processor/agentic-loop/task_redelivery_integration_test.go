@@ -309,3 +309,113 @@ func TestABirthWhoseRecordWriteFailedIsFinishedByItsRetry(t *testing.T) {
 	require.Equal(t, firstRequest, record.entity.PublishedRequestID,
 		"the record and the stream must name the same request, or I1 does not hold for this loop")
 }
+
+// TestATaskRedeliveredAfterItsFirstIterationRetriedIsNotRepublished is the
+// third arm of the task lane's cold fork, and the one the applied set cannot
+// answer either (owner Codex round 2 on PR #1361, finding 3).
+//
+// A length-truncated first response self-heals by re-asking the SAME iteration
+// under the next retry ordinal: it publishes `:req:1:1` and deliberately does
+// not advance `iterations`, and no tool ran, so the applied set is still
+// empty. The record left behind — iteration zero, empty set — is byte-for-byte
+// the shape the previous two arms call an untouched birth, and the fork
+// republished over it: `HandleTask` on a fresh entity mints `:req:1:0`, the
+// publish path finds the NEWER `:req:1:1` retained, and the cold adopt refuses
+// the backward name as Fatal. A routine at-least-once redelivery quarantined
+// the task lane, and a quarantine latches it for every task behind it.
+//
+// The durable fact that separates the two is the one the delta's GIVEN already
+// names and the code did not read: `published_request_id = R1`. A record
+// naming anything else — a within-iteration retry, or a later iteration — is a
+// loop that has moved past its task, and the request it does name is answered
+// on the lane that owns it. The last arm below is that proof: the retained
+// retry's own response reaches the replacement, rebuilds the loop from the
+// record and the retained request, and settles it.
+//
+// The residue is built by running it — a real birth, a real length-truncated
+// response through the real carrier — so the record under test is the one
+// production writes.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestATaskRedeliveredAfterItsFirstIterationRetriedIsNotRepublished(t *testing.T) {
+	client := newLoopNATS(t)
+
+	const loopID = "c7b41e93-2d86-4f05-9a3c-1b2e4d6f8a70"
+	task := agentic.TaskMessage{
+		TaskID: "task-first-iteration-retried",
+		LoopID: loopID,
+		Role:   "general",
+		Model:  "test-model",
+		Prompt: "the prompt whose first answer came back truncated",
+	}
+	firstRequest := looprequest.ID{LoopID: loopID, Iteration: 1, Retry: 0}.String()
+	retryRequest := looprequest.ID{LoopID: loopID, Iteration: 1, Retry: 1}.String()
+	requestSubject := "agent.request." + loopID
+
+	predecessor, handler := startLoopProcess(t, client, compactingConfig())
+	_, birth := deliverTask(t, predecessor, task)
+	require.Equal(t, natsclient.DeliveryDecisionAck, birth.Decision())
+	require.Equal(t, uint64(1), messagesOn(t, client, requestSubject))
+	fillContextAboveCompactThreshold(t, handler, loopID)
+
+	truncated := agentic.AgentResponse{
+		RequestID:    firstRequest,
+		Status:       agentic.StatusLengthTruncated,
+		FinishReason: agentic.FinishReasonLength,
+		Message:      agentic.ChatMessage{Role: "assistant", Content: "partial output"},
+		TokenUsage:   agentic.TokenUsage{PromptTokens: 50, CompletionTokens: 4096},
+	}
+	_, selfHealed := deliverResponse(t, predecessor, truncated)
+	require.Equal(t, natsclient.DeliveryDecisionAck, selfHealed.Decision(),
+		"the self-heal is an ordinary settled delivery; the residue under test is what it left durable")
+
+	retried := loopRecordOf(t, predecessor, loopID)
+	require.Equal(t, retryRequest, retried.entity.PublishedRequestID,
+		"the self-heal re-asks the same iteration under the next retry ordinal")
+	require.Equal(t, 0, retried.entity.Iterations,
+		"a within-iteration retry does not advance the loop; if this ever changes the finding changes with it")
+	require.Empty(t, retried.entity.PendingToolResults,
+		"no tool ran, so the applied set cannot separate this record from an untouched birth")
+	require.Equal(t, uint64(2), messagesOn(t, client, requestSubject),
+		"the first request and its retry are both retained")
+
+	// The replacement has no memory of the loop, so the ORIGINAL task meets the
+	// cold fork rather than HandleTask's warm dedup.
+	replacement, replacementHandler := startLoopProcess(t, client, compactingConfig())
+
+	_, redelivered := deliverTask(t, replacement, task)
+
+	require.Equal(t, natsclient.DeliveryDecisionAck, redelivered.Decision(),
+		"republishing over a retried first iteration mints :req:1:0 under a retained :req:1:1, which the "+
+			"cold adopt refuses as Fatal — quarantining the task lane over a valid redelivery")
+	_, seated := replacementHandler.loopManager.GetLoop(loopID)
+	require.Error(t, seated,
+		"a loop whose first iteration already retried must not have a fresh one seated over it")
+	require.Equal(t, uint64(2), messagesOn(t, client, requestSubject),
+		"an acknowledged-without-effect task publishes nothing")
+
+	after := loopRecordOf(t, replacement, loopID)
+	require.Equal(t, retried.revision, after.revision,
+		"an acknowledged-without-effect task writes nothing")
+	require.Equal(t, retryRequest, after.entity.PublishedRequestID,
+		"the record must still name the request the stream retains")
+
+	// The proof the loop is not stranded: the request the record DOES name is
+	// outstanding on the response lane, and its answer rebuilds the loop from
+	// the record and the retained retry, then settles it.
+	answer := agentic.AgentResponse{
+		RequestID:    retryRequest,
+		Status:       agentic.StatusComplete,
+		FinishReason: "stop",
+		Message:      agentic.ChatMessage{Role: "assistant", Content: "the retry answered in full"},
+	}
+	retainModelResponse(t, client, answer)
+	_, answered := deliverResponse(t, replacement, answer)
+
+	require.Equal(t, natsclient.DeliveryDecisionAck, answered.Decision(),
+		"the retained retry is answered on the lane that owns it, cold")
+	require.Equal(t, uint64(1), messagesOn(t, client, "agent.complete."+loopID),
+		"the loop the task lane declined to rebuild is settled by its own outstanding request")
+	settled := loopRecordOf(t, replacement, loopID)
+	require.Equal(t, agentic.LoopStateComplete, settled.entity.State)
+}

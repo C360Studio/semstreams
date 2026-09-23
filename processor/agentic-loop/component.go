@@ -1442,6 +1442,12 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 			slog.String("task_id", task.TaskID),
 			slog.String("loop_id", task.LoopID),
 			slog.Int("iterations", record.entity.Iterations),
+			// The request the record names is the fact that decides this arm
+			// for a loop still at iteration zero — a within-iteration retry
+			// reads as an untouched birth on every other field — so an
+			// operator reading this line can see WHICH of the three facts
+			// settled the task.
+			slog.String("published_request_id", record.entity.PublishedRequestID),
 			slog.String("state", record.entity.State.String()))
 		return nil
 	}
@@ -1571,9 +1577,10 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 	// it, and the redelivery is owed to the process holding that loop. The
 	// cold fork above is what resolves the expected case in place.
 	if disposition == taskRepublishFirstRequest {
-		// The record exists at iteration zero and this process just rebuilt R1
-		// from the same task that produced it — the grammar is deterministic,
-		// so the name is the one the record already carries. There is nothing
+		// The record still names the loop's first request and this process
+		// just rebuilt R1 from the same task that produced it — the grammar is
+		// deterministic and the classifier checked the record's name, so the
+		// name is the one the record already carries. There is nothing
 		// to write: the record is already the truth, and writing it again
 		// would move a revision no reader is waiting on. What IS taken is that
 		// revision: this process is now the loop's holder, and its next

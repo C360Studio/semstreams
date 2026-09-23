@@ -91,13 +91,15 @@ const (
 	// taskBirth — no record names this task's loop, so this delivery is the
 	// birth: the ordinary path, unchanged.
 	taskBirth taskDisposition = iota
-	// taskRepublishFirstRequest — a record exists at iteration zero. The birth
-	// that wrote it did not get its first request onto the stream, or did and
-	// died before acknowledging. R1 is rebuilt from the task and republished
-	// under its own identity; the record is NOT written again.
+	// taskRepublishFirstRequest — a record exists, still names the loop's FIRST
+	// request and has done nothing since. The birth that wrote it did not get
+	// that request onto the stream, or did and died before acknowledging. R1 is
+	// rebuilt from the task and republished under its own identity; the record
+	// is NOT written again.
 	taskRepublishFirstRequest
-	// taskApplied — the loop moved past this task: it advanced beyond its
-	// first iteration, or it settled. Acknowledge without effect.
+	// taskApplied — the loop moved past this task: it advanced beyond its first
+	// iteration, retried that iteration under a later ordinal, applied part of
+	// its first batch, or settled. Acknowledge without effect.
 	taskApplied
 )
 
@@ -146,15 +148,32 @@ func (c *Component) classifyRedeliveredTask(
 		}
 		return taskBirth, record, nil
 	}
-	// Both halves of the delta's GIVEN, because the ordinal alone is not the
-	// untouched birth it looks like: a loop advances its iteration only when a
-	// whole tool batch is in, so the entire FIRST batch runs at zero while its
-	// applied set fills. Republishing over that seats a fresh loop with no
-	// batch on top of a record that carries one, and the sibling result then
-	// has no execution to route to. A record that already applied something is
-	// a loop that moved past its task; its batch is rebuilt by the next tool
-	// result, on the lane that owns it.
-	if record.entity.Iterations == 0 && len(record.entity.PendingToolResults) == 0 {
+	// Every fact the delta's GIVEN names, because no one of them is the
+	// untouched birth it looks like on its own.
+	//
+	// The applied set: a loop advances its iteration only when a whole tool
+	// batch is in, so the entire FIRST batch runs at zero while its applied set
+	// fills. Republishing over that seats a fresh loop with no batch on top of
+	// a record that carries one, and the sibling result then has no execution
+	// to route to.
+	//
+	// The NAME: a length-truncated first response self-heals by re-asking the
+	// same iteration under the next retry ordinal, which publishes :req:1:1 and
+	// deliberately leaves both of the other two facts untouched. Rebuilding
+	// from the task there mints :req:1:0 under a NEWER retained request, and
+	// the cold adopt refuses that backward name as Fatal — a routine
+	// at-least-once redelivery quarantining the task lane. So the arm runs only
+	// for a record naming the loop's FIRST request, which is what the delta's
+	// GIVEN has always said (published_request_id = R1).
+	//
+	// Everything else is a loop that moved past its task: its batch is rebuilt
+	// by the next tool result and its outstanding request is answered by its
+	// own response, each on the lane that owns it. A record naming NO request
+	// falls here too — it is not the R1 birth this arm rebuilds, and I1 says a
+	// live record of this build always names one.
+	firstRequest := looprequest.ID{LoopID: loopID, Iteration: 1, Retry: 0}.String()
+	if record.entity.PublishedRequestID == firstRequest &&
+		record.entity.Iterations == 0 && len(record.entity.PendingToolResults) == 0 {
 		return taskRepublishFirstRequest, record, nil
 	}
 	return taskApplied, record, nil
