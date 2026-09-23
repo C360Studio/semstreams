@@ -1184,11 +1184,20 @@ func (m *LoopManager) SettleRequest(loopID, requestID string) {
 }
 
 // OutstandingRequest returns the one model request this loop is waiting on, or
-// "" when it is waiting on none. The identity, not just the fact, is what
-// callers need: a response that names a DIFFERENT request than the loop is
-// waiting on is superseded, and the empty answer has to be distinguishable from
-// a mismatch, because a redelivery of the first delivery arrives after the mark
-// was cleared and must still be handled.
+// "" when it is waiting on none.
+//
+// It does not decide whether a response is SUPERSEDED — the record does that,
+// ordering the response against published_request_id (#1330, I1). What it
+// decides is the one case ordering cannot reach (owner ruling Q12,
+// 2026-09-23): a response naming the request the record already calls current
+// is the loop's outstanding FIRST delivery while the mark still names it, and
+// once SettleRequest has cleared it the same bytes are a replay of an answer
+// this process already applied — acknowledged without effect rather than
+// appended to the conversation a second time. So the identity is what callers
+// need and not the bare fact; and the guard is scoped to a response the record
+// already calls current, because a tool-call response settles its request while
+// the loop stays on that iteration — "waiting on nothing" is the ordinary
+// mid-iteration state, never evidence on its own.
 func (m *LoopManager) OutstandingRequest(loopID string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

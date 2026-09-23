@@ -208,9 +208,12 @@
       (`publishThenPersistResultState`, `C:2085`); `writeThenPublish` on the approval lane (`ARH:208`), on the
       failed-terminal tool result (`C:2295`), and for every terminal result on every lane. The sweeper's own
       publish-then-`Put` pair is untouched in order and only rides the new writer (`AS:103`, which now names its
-      write failure instead of discarding it — a timer has no delivery to retry).
+      write failure instead of discarding it — a timer has no delivery to retry). **Superseded in part by 8.9**
+      (owner round 4, finding 1): the pair keeps its ORDER, but a publication that fails now stops it — neither the
+      stamp nor the write follows a request the stream does not hold.
       Birth is `Put` → publish at `C:1535`, its error returns Retry; the birth publish error stays discarded, which
-      is #1345's remaining branch.
+      is #1345's remaining branch. **Superseded by 2.3:** the birth publish error is returned, not discarded, and
+      `TestBirthWhosePublishFailsIsNotAcknowledged` holds it there.
       **A second recorded deviation:** the transient test in the carrier is `errors.Is(err,
       natsclient.ErrKVRevisionMismatch)`, NOT `errs.IsTransient`. The latter substring-matches error TEXT for
       "unavailable"/"timeout" (`pkg/errs/errs.go:177-187`), which handed a commit-unknown KV failure a Retry it had
@@ -505,7 +508,9 @@
       the MsgId, no retained read (Q1); present and advanced → ACK. Test: `recovery_test.go` (exists, extend) — cold
       redelivery at iteration 0 and after advance.
       **Landed.** `classifyRedeliveredTask` (`loop_classification.go:117`) is the cold fork, called before `HandleTask`
-      (`C:1436`): no record → birth; a record at iteration 0 → `taskRepublishFirstRequest`; advanced or terminal →
+      (`C:1436`): no record → birth; a record at iteration 0 → `taskRepublishFirstRequest` (**superseded in part by
+      8.8.1, owner ruling Q11:** only where the stream retains NO request for the loop; anything retained is
+      `taskApplied`); advanced or terminal →
       `taskApplied`, an Ack with an audit line naming the iteration and state; an unreadable record → a transient
       error, never a birth, because birthing on a failed read is a second loop under a name that may already have one.
       The republish arm rebuilds R1 through the ordinary birth path and takes the record's own revision as its own

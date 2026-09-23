@@ -1324,8 +1324,10 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 	// request's own answer would then be dropped by the terminal guard, which is
 	// exactly the lost turn the deferral exists to prevent.
 	//
-	// A redelivery of the CURRENT request is still handled: same identity,
-	// same request, and refusing it would drop the answer the loop is owed.
+	// A redelivery of the CURRENT request passes THIS check: same identity,
+	// same request, and refusing it here would drop the answer the loop is
+	// owed. Whether it is the answer the loop is still owed or a replay of one
+	// already used is the outstanding mark's question, below (Q12).
 	//
 	// The identity compared against is the DURABLE one — the request the
 	// loop's record names (#1330, I1). It used to be LoopManager.CurrentRequest,

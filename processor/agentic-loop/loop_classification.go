@@ -92,14 +92,19 @@ const (
 	// birth: the ordinary path, unchanged.
 	taskBirth taskDisposition = iota
 	// taskRepublishFirstRequest — a record exists, still names the loop's FIRST
-	// request and has done nothing since. The birth that wrote it did not get
-	// that request onto the stream, or did and died before acknowledging. R1 is
-	// rebuilt from the task and republished under its own identity; the record
-	// is NOT written again.
+	// request, has done nothing since, and the stream retains NO request for
+	// the loop. That last condition is the arm's whole job (owner ruling Q11):
+	// the birth wrote its record and never got R1 onto the stream. A birth that
+	// DID publish and then died before acknowledging leaves R1 retained, and
+	// that is taskApplied below — republishing there would seat a fresh loop
+	// over a batch already outstanding. R1 is rebuilt from the task and
+	// republished under its own identity; the record is NOT written again.
 	taskRepublishFirstRequest
 	// taskApplied — the loop moved past THIS task, which the record names as
 	// its own: it advanced beyond its first iteration, retried that iteration
-	// under a later ordinal, applied part of its first batch, or settled.
+	// under a later ordinal, applied part of its first batch, settled, or —
+	// still at iteration zero — got its first request onto the stream and is
+	// waiting on the answer (Q11).
 	// Acknowledge without effect. A record belonging to another task is not
 	// this arm — it cannot say anything about a task it is not about, and is
 	// refused below.

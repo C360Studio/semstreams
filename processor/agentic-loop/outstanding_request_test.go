@@ -6,9 +6,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The outstanding mark is what tells a superseded response from a live one, so
-// what clears it decides whether a stale answer can un-mark a request that is
-// still in flight. SettleRequest matches on the request id for exactly that
+// The outstanding mark no longer tells a superseded response from a live one —
+// the record does that, ordering against published_request_id (#1330, I1). What
+// the mark decides is the case ordering cannot reach: a response the record
+// already calls current is a first delivery while the mark names it and a
+// replay once it does not (Q12). Either way, what CLEARS it decides whether a
+// stale answer can un-mark a request that is still in flight. SettleRequest matches on the request id for exactly that
 // reason, and nothing exercised the mismatch: an unconditional delete passes
 // every other test in this package.
 //

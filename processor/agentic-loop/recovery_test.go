@@ -793,8 +793,10 @@ func deliverTask(t *testing.T, c *Component, task agentic.TaskMessage) (*loopDel
 // and it retried to MaxDeliver while the loop sat at iteration zero with a
 // record naming a request that may never have been published. The record is
 // what decides instead — birth, republish, or acknowledge — and at iteration
-// zero R1 is rebuilt from the task itself and republished under its own
-// identity, with no retained read to decide it (Q1).
+// zero, where the stream retains NO request for the loop, R1 is rebuilt from
+// the task itself and republished under its own identity (Q1 as amended by
+// Q11, 2026-09-23: a retained request means R1 went out, so the delivery is
+// acknowledged without effect rather than republished).
 //
 // spec: agentic-loop / The loop record names its outstanding request
 func TestTaskRedeliveredToAProcessWithNoMemoryOfItsLoop(t *testing.T) {
