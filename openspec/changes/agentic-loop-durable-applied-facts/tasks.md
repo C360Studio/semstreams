@@ -184,7 +184,9 @@
       (coordinator scoping under OQ7/OQ8, `design.md` § 1): `persistHandlerResult` (`C:1923`) publishes (`C:1959`)
       before it writes (`C:1947`) for a non-terminal result on the model-response and tool-result lanes only; the
       approval lane's call site (`ARH:205`) keeps today's write → publish, and the sweeper keeps its own
-      publish-then-`Put` pair (`AS:100-101`) — both move in #1362. Birth (`C:1496` publish → `C:1499` `Put` with the
+      publish-then-`Put` pair (`AS:100-101`) — both move in #1362. **Superseded in part by 8.2:** a result that
+      CREATES an approval gate keeps write → publish too, and it arrives on the tool-result lane, so the carve-out is
+      in the carrier rather than at a call site. Birth (`C:1496` publish → `C:1499` `Put` with the
       error ignored today) becomes `Put` → publish, and a birth write that errors returns Retry — the first of
       #1345's five task-intake branches, converted by necessity; the other four stay #1345's. On
       `ErrKVRevisionMismatch` (`KV:238`) return Retry and release the loop's process state (`ST:574`, `C:1964`).
@@ -1038,7 +1040,10 @@ empty after each). `go vet` precedes every tier run, so a non-compiling mutant c
       Mutant: the membership check deleted from the `requestOrderCurrent` arm. `component.go`
       `fa89de94644214b792ca70b3f304956f` → `49f37f530e5ce0713ca783d6b1bc674b` → restored
       `fa89de94644214b792ca70b3f304956f`. RED at the decision assertion — expected `0x1` (Ack), actual `0x4`
-      (Terminate) — "a lost ACK is ordinary at-least-once delivery; terminating it quarantines the tool lane".
+      (Quarantine; the parenthetical read "Terminate" until 8.3 re-read the enum —
+      `natsclient/delivery_settlement.go:19-29` is Invalid 0, Ack 1, Retry 2, Terminate 3, Quarantine 4, and the
+      finding's own prose says quarantine) — "a lost ACK is ordinary at-least-once delivery; terminating it
+      quarantines the tool lane".
 
 - [x] 7.8 **Finding 8 — the active deltas contradicted the Q1 amendment and their own test.** Documentation only; no
       accepted runtime behaviour changed. The loop scenario is now "adopts or publishes the first request"; `design.md`
@@ -1190,6 +1195,155 @@ the carrier and the rebuild, so every row was re-run rather than carried forward
 | `task e2e:agentic` | 0 | `assertions_run=15`, no `level=ERROR`; log `l4a/tier-1709421e.log` |
 | `task e2e:agentic` with the no-rebuild mutant | 201 | `level=ERROR msg="Scenario completed with failure" error="verify-stage-a-process-replacement failed: mid-flight loop: replacement did not carry the mid-flight loop to a terminal: subject agent.complete.9bd9ef51-6d75-4e77-ae76-f8904cae0551 was not stored within 1m30s"`, `assertions_run=9`. `restoreLoopFromEvidence`'s whole body replaced with an unconditional `errs.WrapTransient`; `go vet ./processor/agentic-loop/` and `go vet -tags=e2e ./test/e2e/...` both 0 with it applied. `loop_evidence.go` `e56941d1783bc386c74de88742e946a6` → `bf1526e35d6db96b218fc39d2605aca1` → restored `e56941d1783bc386c74de88742e946a6`, porcelain empty. Log `l4a/tier-1709421e-mutant-no-rebuild.log` |
 | `task check:push` | 0 | build, lint, tagged vet, schema drift, contract, race unit, then integration through the canonical runner and its host lock. Log `l4a/checkpush-gated-pair.log` |
+
+`pgrep -fl e2e.test` and `docker compose ls` were both empty before each tier run and after the mutant restore.
+
+## 8. Owner Codex round 2 (2026-09-23)
+
+The owner's second round on PR #1361 at `c8c1f1bc`
+([issuecomment-5790425046](https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5790425046)) requested
+changes on findings 1-4 and raised a fifth. **Three landed here: 8.3, 8.4 and 8.2, in that order.** Findings 1 and 5
+are GATED on owner rulings and are untouched — 8.1 and 8.5 below name the question each is waiting on.
+
+Every code fix carries a regression proven red WITHOUT it through the `cp` backup + `md5 -q` ritual, with `[applied]`
+printed between mutating and testing, `go vet` exit 0 with the mutant applied so a non-compiling mutant cannot pass as
+a red, and the restore verified by checksum (`git status --porcelain` empty after each). Each fix was also observed
+red before it was written, against the unfixed tree.
+
+- [x] 8.3 **Finding 3 — a first-iteration truncation retry still read as an untouched birth.** A length-truncated
+      first response self-heals by re-asking the SAME iteration under the next retry ordinal: it publishes `:req:1:1`,
+      deliberately leaves `Iterations` at zero, and no tool has run, so the applied set is empty. The record is
+      byte-for-byte the shape the republish arm called an untouched birth. Redelivering the original task to a process
+      not holding the loop therefore minted `:req:1:0` under a NEWER retained request, and `adoptRetainedRequest`
+      refused the backward name as Fatal — a routine at-least-once redelivery quarantining the `agent.task` lane,
+      which runs at `MaxAckPending` 1, for every task queued behind it.
+      Landed: `loop_classification.go:175` — the republish arm now also requires the record to NAME the loop's first
+      request (`looprequest.ID{L, 1, 0}`, minted at `:174`), which is exactly what the delta's GIVEN at
+      `specs/agentic-loop/spec.md:117` has always said and the code did not read. The applied arm's audit line gains
+      `published_request_id` (`component.go:1450`) so an operator can see which of the three facts settled a task
+      still at iteration zero. Commit `122606ed`.
+      Claim sweep (the claim, not the line): `design.md` § 5.1 steps 3 and 4, the § 1 Q1 row and § 3 item 6's
+      task-lane sentence each named `Iterations == 0` and the applied set as the whole test and are amended; the two
+      `taskDisposition` doc comments and the republish arm's comment are amended with them. The delta scenario is
+      unchanged — it already stated the condition, which is what made this a code/delta divergence rather than a
+      design gap.
+      Test: `task_redelivery_integration_test.go:340`,
+      `TestATaskRedeliveredAfterItsFirstIterationRetriedIsNotRepublished` — a real birth, a real length-truncated
+      response through the real carrier, the ORIGINAL task redelivered to a replacement, and a last arm proving the
+      loop is not stranded: the retained `:req:1:1` is answered on the response lane, cold, and settles it.
+      Mutant: the name clause removed from the republish arm. `loop_classification.go`
+      `98e2e3458984e82f19bf7d909833bb9a` → `48a281b07ca355312c04b59ea42e13c1` → restored
+      `98e2e3458984e82f19bf7d909833bb9a`, `go vet` 0 with the mutant applied, porcelain empty after. RED at
+      `task_redelivery_integration_test.go:388` — expected `0x1` (Ack), actual `0x4` (Quarantine) —
+      "republishing over a retried first iteration mints :req:1:0 under a retained :req:1:1, which the cold adopt
+      refuses as Fatal — quarantining the task lane over a valid redelivery".
+
+- [x] 8.4 **Finding 4 — cold R1 reconstruction refreshed the original deadline.** The cold response and tool arms
+      rebuild through `restoreLoopFromRequest`, which seats the record wholesale and inherits its timing. The task
+      lane's R1 arm does not: it runs the ORDINARY `HandleTask`, whose `configureLoopMetadata` calls `SetTimeout`
+      (`state.go:1356`), which stamps `StartedAt = now` and `TimeoutAt = now + budget` on the entity it just built.
+      Only the durable revision was restored afterwards, so an expired record whose task redelivered before its
+      response resumed on a full fresh budget — a loop outliving the budget its caller set. The owner ruled that out
+      explicitly ([issuecomment-5781101792](https://github.com/C360Studio/semstreams/issues/1330#issuecomment-5781101792)),
+      and a deviation from a binding ruling is blocking at any label.
+      Landed: `component.go:1608` overlays the record's `StartedAt`/`TimeoutAt` onto the rebuilt loop through
+      `restoreRecordedLoopDeadline` (`component.go:1678`), using the existing `GetLoop`/`UpdateLoop` seam. A record
+      with no deadline overlays zero onto zero, which is what the wholesale seat gives. Neither call can fail for a
+      loop `HandleTask` just built in this process; if one does, the delivery is released and returned transient
+      rather than republished on a deadline the ruling forbids — the shape the two birth arms below it already take.
+      Commit `73370641`.
+      **Class sweep, re-run at this head:** the only writers of either field in production code are `SetTimeout`,
+      reached only from `configureLoopMetadata`, reached from `HandleTask` on three paths — birth (intended), this
+      arm (fixed), and a WARM continuation (`handlers.go:932` runs for `continuation == true`).
+      `adoptNewerRetainedRequest`, `attachContinuation` and `agentic.NewLoopEntity` touch neither.
+      **Three residuals RECORDED, none built and none filed** (owner placement, not a developer's): (a) a warm
+      continuation refreshes a live loop's deadline — pre-existing on `main`, not this change's; (b) the R1 arm
+      republishes `agent.created` on every redelivery, and that event carries no `Nats-Msg-Id`, so the server cannot
+      collapse it — stated for adopters at `docs/operations/migration-beta162-to-beta163.md:1850`, beside the
+      `tasks_submitted_total` at-least-once rule; (c) the R1 arm drops a `PendingContinuation` marker without the
+      warning the ruled clear-on-rebuild gives, because it builds a fresh entity rather than seating the record —
+      the turn is lost either way and the ruled limitation sentence already covers the loss.
+      The delta gains the task-lane scenario at `specs/agentic-loop/spec.md:78`: the existing one at `:69` is scoped
+      by its WHEN to an input naming the REQUEST the record names, and a task names the loop.
+      Test: `task_redelivery_integration_test.go:446`, `TestAColdR1ReconstructionKeepsTheRecordsDeadline` — an
+      expired R1 record, a cold task replay, then the R1 response. The consequence chain is `assert` rather than
+      `require` so one run reports both the refreshed deadline and the completion it produces.
+      Mutant: the overlay call deleted from the R1 arm. `component.go` `7aa4db3c87cc5c42e8b0a0f6bba94ec6` →
+      `e364d6db202abae5891610bdebc4422e` → restored `7aa4db3c87cc5c42e8b0a0f6bba94ec6`, `go vet` 0 with the mutant
+      applied, porcelain empty after. RED in six places in one run: `:491` "a rebuild is not a reprieve: the rebuilt
+      loop carries the record's deadline, not a fresh budget" (expected `07:39:07.212342`, actual `07:39:08.28446`),
+      `:493` the same for `StartedAt`, `:511` no `agent.failed` (expected `0x1`, actual `0x0`), `:520` "a loop handed
+      a fresh budget would have completed instead" (`agent.complete` expected `0x0`, actual `0x1`), `:524` record
+      state `"complete"` where `"failed"` was required, and `:525` the record's own `TimeoutAt`.
+
+- [x] 8.2 **Finding 2 — approval-gate creation took the publication order deferred to L4b.** An `awaiting_approval`
+      result is not terminal, so the carrier's non-terminal branch took the tool-result lane's `publishThenWrite`:
+      the `ApprovalPendingEvent` was published before the gate was written. A crash between the two leaves a human an
+      approval request with no durable gate behind it, and the replacement's approval-response handler stale-drops
+      the answer to a gate it cannot find and acknowledges it — an admitted human decision silently lost, on the one
+      lane whose whole purpose is a human decision. `design.md` § 5.4 and moved task 2.7 already kept the gate on
+      write → publish in L4a; § 5.4's "there is no W4 here" was false as shipped.
+      Landed: one clause at `component.go:2241` (`gated` at `:2237`), in the CARRIER rather than at the call site,
+      because the `carrierOrder` contract is where the reader looks for which result takes which order and the
+      tool-result lane asks for publish-first for every other result it produces. Commit `c0a31dff`.
+      **Hole class enumerated:** `checkApprovalGate` (`handlers.go:2784`) is the only producer of an
+      `awaiting_approval` `HandlerResult` in production code and is reachable only from `HandleToolResult`; the
+      response lane cannot produce one. Every other result class of both lanes was re-read against design § 5.3 and
+      § 5.7 and conforms.
+      **Interaction with 7.3's stamp reorder, verified at this head and stated in the carrier's doc
+      (`component.go:2222-2232`):** a gate result mints no request — its only publication is the
+      `ApprovalPendingEvent`, built by `gateForApproval` with no `MsgID` — so `mintedRequestID` returns `""` for it
+      and `stampPublishedRequest` is a no-op on this path under either order. Nothing is lost by keeping the old
+      order here.
+      Claim sweep: the `carrierOrder` const doc (`component.go:2184-2195`), the delta's carve-out sentence
+      (`specs/agentic-loop/spec.md:28-30`) and `design.md` § 9's carrier-reorder scoping row each enumerated who
+      keeps write-first and are amended with the gate. Task 2.1's own wording is superseded in part by this entry.
+      Test: `loop_carrier_test.go:148`, `TestAnApprovalGateIsWrittenBeforeItsEventIsPublished` — the gating tool
+      result runs through the real `handleToolResultMessage`, so what is pinned is the order the CALL SITE and the
+      carrier produce together, not the carrier alone. `TestApprovalLaneKeepsWriteThenPublish` (the approval
+      RESPONSE) and 7.3's `TestARecordNeverNamesARequestBeforeItsPubAck` both stay green.
+      Mutant: the `!gated` clause dropped from the order selection. `component.go`
+      `de593e4f1ea19b7a33c33c917a24c9a6` → `6230b5873f1c29414f7b343b1b09ba81` → restored
+      `de593e4f1ea19b7a33c33c917a24c9a6`, `go vet` 0 with the mutant applied, porcelain empty after. RED at
+      `loop_carrier_test.go:197` — expected `[<loopID>]`, actual `[]` — "the gate must be durable before its
+      ApprovalPendingEvent is visible: a crash between the two leaves a human an approval request whose answer the
+      replacement stale-drops".
+
+- [ ] 8.1 **Finding 1 — a new cold continuation is acknowledged as an already-applied task. GATED, not touched.**
+      `classifyRedeliveredTask` receives only the loop ID, so a task T2 naming a loop whose record belongs to T1 is
+      answered from the record alone: advanced, it Acks as applied and T2's prompt is never applied; at iteration
+      zero with an empty set it takes the republish arm and seats loop L in memory with T2's prompt as its
+      conversation. The settlement is an owner question, not a developer's — refuse and acknowledge (the shape the
+      warm `ErrLoopBusy` refusal already takes), or restore and attach — and the coordinator's docket carries the
+      recommendation and the rejected alternatives. It is therefore left for the ruling on #1330, and the
+      continuation-limitation paragraph in `doc.go` § Recovery, the migration note and the delta is deliberately
+      left with room for its sentence beside the one 7.4 landed.
+
+- [ ] 8.5 **Finding 5 — the generated I2/I4 coverage claimed in 4.1 is vacuous. GATED, not touched.** The property's
+      advance action drains the applied set and overwrites the record before the invariant runs, its crash arm skips
+      the earlier applied-set write, no action creates a `PendingApproval`, and the cold-tool action supplies no
+      execution identity — so the I2 and I4 assertions never inspect populated state. Whether to NARROW the claim
+      (delete the two checks that cannot fire, cite the named examples, and land one I4 example at the step-0 seam)
+      or to BUILD the generated application step is an owner question on #1330. Task 4.1's claim stands as written
+      until it is answered, and this entry is the record that it is not yet evidence.
+
+### 8.6 Gates for the round, exit codes verbatim
+
+Run at `c0a31dff`, the round's last code commit, plus this records commit, which changes markdown only. Logs in the
+coordinator scratchpad `l4a/`.
+
+| Gate | Exit | Result |
+|---|---|---|
+| `task lint` | 0 | vet, fmt, pinned revive, fixed-port guard, raw-Request guard |
+| `go test -race -count=1 ./processor/agentic-loop/... ./processor/agentic-dispatch/... ./test/contract/... ./test/e2e/scenarios/agentic/...` | 0 | 8 packages ok, no race |
+| `go test -race -count=1 -tags=integration -p 2 ./processor/agentic-loop/` | 0 | the package's own real-NATS arms |
+| `openspec validate --all --strict` | 0 | 56 passed, 0 failed (56 items) |
+| `task spec:properties` | 0 | 335/335 citations resolve — 332 before this round, +3, exactly the three new regressions |
+| `git diff --check b7ce8727` | 0 | no whitespace defect |
+| `task api:compat:report` | 0 | compared 62, clean 47, incompatible 15, removed 0, added 0 — the whole report is BYTE-IDENTICAL to the gated pair's log (`md5` `8b3388e949bd1eeac9b67d02ebfb924c` both), `processor/agentic-loop` block included. This round adds no exported surface: `restoreRecordedLoopDeadline` and `gated` are unexported |
+| `task e2e:agentic` | 0 | `Scenario completed successfully duration=2m10.873115875s`, `assertions_run=15`, zero `level=ERROR` lines; `verify-stage-a-process-replacement_duration_ms:84886`, `midflight_record_revision_delta:3`, `midflight_requests_published:2`. Log `l4a/tier-c0a31dff.log` |
+| `task e2e:agentic` with the no-rebuild mutant | 201 | `level=ERROR msg="Scenario completed with failure" error="verify-stage-a-process-replacement failed: mid-flight loop: replacement did not carry the mid-flight loop to a terminal: subject agent.complete.0306c3d1-fd65-40bc-9361-7d9437e71b09 was not stored within 1m30s"`, `assertions_run=9` — the stage's own assertion. `restoreLoopFromEvidence`'s whole body replaced with an unconditional `errs.WrapTransient`; `go vet ./processor/agentic-loop/` and `go vet -tags=e2e ./test/e2e/...` both 0 with it applied. `loop_evidence.go` `e56941d1783bc386c74de88742e946a6` → `b0ea9ec0814f7573ae49267952773d13` → restored `e56941d1783bc386c74de88742e946a6`, porcelain empty. Log `l4a/tier-c0a31dff-mutant-no-rebuild.log` |
+| `task check:push` | 0 | build, lint, tagged vet, schema drift, contract, race unit, then integration through the canonical runner and its host lock. Log `l4a/checkpush-round2.log` |
 
 `pgrep -fl e2e.test` and `docker compose ls` were both empty before each tier run and after the mutant restore.
 
