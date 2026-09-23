@@ -1534,7 +1534,7 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 			slog.String("loop_id", result.LoopID),
 			slog.String("task_id", task.TaskID))
 		c.recordTrajectoryObservations(ctx, result)
-		if err := c.persistLoopState(ctx, result.LoopID); errors.Is(err, natsclient.ErrKVRevisionMismatch) {
+		if err := c.persistDeferredContinuationMarker(ctx, result.LoopID); errors.Is(err, natsclient.ErrKVRevisionMismatch) {
 			// A lost compare-and-swap already released this loop, so the
 			// user's turn is held by nothing in this process. Acknowledging
 			// here would discard it; the delivery retries into whichever
@@ -3217,6 +3217,86 @@ func (c *Component) persistLoopState(ctx context.Context, loopID string) error {
 				"agentic-loop", "persistLoopState", "compare-and-swap loop record")
 		}
 		return fmt.Errorf("persist loop state %s: %w", loopID, err)
+	}
+	c.rememberLoopRevision(loopID, committed)
+	return nil
+}
+
+// persistDeferredContinuationMarker commits the deferred-continuation marker
+// onto the record it READ, rather than onto a render of the live entity.
+//
+// A lane writes only the fields it owns. The deferred turn owns exactly two —
+// PendingContinuation and PendingContinuationRequestID — and the entity it
+// would otherwise render belongs, at this instant, to the tool lane: by the
+// time a continuation can defer, the request it is deferring behind has been
+// tracked as outstanding, which means handleToolsComplete has already
+// incremented Iterations and drained PendingToolResults in memory while the
+// request that justifies both is still unpublished. Rendering there commits an
+// iteration the stream cannot account for (I3) and an empty applied set for a
+// batch whose results a replay would then re-run (#1330, owner Codex round 3,
+// finding 2; docket option (b)).
+//
+// The advance is not lost by being left behind: it rides the carrier's own
+// write, after the PubAck that makes the record's new name true.
+//
+// Everything else is persistLoopState's contract, deliberately: one critical
+// section around read-and-swap, the compare-and-swap against the revision this
+// process observed, and a lost CAS releasing the loop and returning the
+// sentinel the task lane reads as "redeliver this turn to whoever holds the
+// record now" (docket OQ3).
+func (c *Component) persistDeferredContinuationMarker(ctx context.Context, loopID string) error {
+	if c.loopsBucket == nil {
+		return nil
+	}
+
+	c.loopRecordMu.Lock()
+	defer c.loopRecordMu.Unlock()
+
+	revision, held := c.observedLoopRevision(loopID)
+	if !held {
+		return errs.WrapFatal(
+			fmt.Errorf("loop %s: this process holds no observed record revision to write against", loopID),
+			"agentic-loop", "persistDeferredContinuationMarker", "observe loop record revision")
+	}
+
+	record := c.readLoopRecord(ctx, loopID)
+	switch record.presence {
+	case loopPresenceUnknown:
+		return errs.WrapTransient(
+			fmt.Errorf("loop %s: the loop record could not be read, so the deferred turn's marker "+
+				"cannot be written", loopID),
+			"agentic-loop", "persistDeferredContinuationMarker", "read loop record")
+	case loopPresenceStale:
+		// Gone or settled. There is no live record to mark and nothing a
+		// rebuild could clear; the turn is held only in this process's memory,
+		// which is what the marker exists to warn about, so the skip is
+		// declared rather than silent.
+		c.logger.WarnContext(ctx, "Deferred turn not marked — the loop's record is absent or terminal",
+			slog.String("loop_id", loopID), slog.String("state", record.entity.State.String()))
+		return nil
+	}
+
+	entity := record.entity
+	entity.PendingContinuation = true
+	// A turn admitted while a request is outstanding is inside no retained
+	// request, so the marker names no carrier. LoopManager.attachContinuation
+	// writes the same pair in memory; this is that fact reaching the record.
+	entity.PendingContinuationRequestID = ""
+	data, err := json.Marshal(entity)
+	if err != nil {
+		return fmt.Errorf("marshal loop entity %s: %w", loopID, err)
+	}
+
+	committed, err := c.loopsBucket.Update(ctx, loopID, data, revision)
+	if err != nil {
+		if natsclient.IsKVConflictError(err) {
+			c.releaseLoopTransientState(loopID)
+			return errs.WrapTransient(
+				fmt.Errorf("loop %s record moved past revision %d: %w",
+					loopID, revision, natsclient.ErrKVRevisionMismatch),
+				"agentic-loop", "persistDeferredContinuationMarker", "compare-and-swap loop record")
+		}
+		return fmt.Errorf("persist deferred continuation marker %s: %w", loopID, err)
 	}
 	c.rememberLoopRevision(loopID, committed)
 	return nil

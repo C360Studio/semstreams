@@ -167,6 +167,17 @@ deadline from then on.
   audit log line name the loop and the execution, the record is not written, and the unfinished siblings of `e`'s
   batch are untouched and still recoverable by their own arrival
 
+#### Scenario: A continuation deferred while a request is unpublished writes only its marker
+
+- **GIVEN** a loop whose tool batch has just completed, so the process has advanced the loop in memory and minted its
+  next request `R(N+1)` but that request's PubAck has not landed, and a record still naming `R(N)` at `iterations = N`
+  with the completed batch's applied executions
+- **WHEN** a continuation is admitted to that loop and deferred behind the outstanding request
+- **THEN** the record it writes carries `pending_continuation = true` with an empty `pending_continuation_request_id`
+  and leaves `published_request_id`, `iterations` and `pending_tool_results` exactly as it read them — the advance is
+  committed by the write that follows the PubAck of the request it implies, so no record ever counts an iteration
+  against a request the stream does not retain
+
 #### Scenario: A rebuilt loop clears a deferred turn whose text it cannot recover
 
 - **GIVEN** a loop record with `pending_continuation = true` and an empty `pending_continuation_request_id` — a

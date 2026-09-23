@@ -143,6 +143,18 @@ Two more callers ride the same write: the deferred-continuation marker (`C:1425`
    request is still in flight, writing a record that names a request the stream does not retain. `TrackRequest` stays
    at the mint: route, outstanding and the deferred turn's carrier are attach-order facts. The marshal inside
    `persistLoopState` carries the field as before.
+   **Amended 2026-09-23 by round 3, finding 2 (docket option (b); Q10 unanswered, so the admission write stays):**
+   moving the NAME alone still let a sibling serialise the advance's other fields. By the time a continuation can
+   defer, `TrackRequest` has run, which means `handleToolsComplete` has already incremented `Iterations` and drained
+   `PendingToolResults` in the shared entity behind a request that is still unpublished — so the sibling's render
+   committed `{R1, N+1, empty}`: `iterations` moved in an update whose `published_request_id` did not (I3), and a
+   crash there leaves a batch whose results a replay re-runs. The deferred lane therefore no longer renders the live
+   entity at all: `persistDeferredContinuationMarker` reads the RECORD under `loopRecordMu`, overlays the two fields
+   the lane owns (`PendingContinuation = true`, `PendingContinuationRequestID = ""`) onto what it read, and
+   compare-and-swaps against the revision this process observed — keeping OQ3's fence, so a foreign advance still
+   refuses and the turn is redelivered. The tool lane's advance is not lost by being left behind: it rides the
+   carrier's own write, after the PubAck that makes the new name true. The rule a reader holds: **a lane writes only
+   the fields it owns.**
 5. **Retry ordinal:** `IncrementTruncationRetry` (`ST:466`) and `ResetTruncationRetry` (`ST:477`), both process-local,
    are replaced by parsing the `<retry>` part of `PublishedRequestID` (`looprequest`, added in THIS change — L2 declined
    to export a parser with no reader, deviation accepted by the coordinator 2026-09-19 on #1328; task 1.0). Their
@@ -222,7 +234,11 @@ ACK; W4 = next request PubAck'd, crash before the update. "Classify" = terminal 
 "Cold" = a process with no memory of the loop: § 3.6 step 0 runs first on every lane but task.
 
 ### 5.1 Task (`agent.task`)
-1. Warm map hit → `HandleTask` dedup (`H:843-855`, `HasActiveLoopForTask`), unchanged.
+1. Warm map hit → `HandleTask` dedup (`H:843-855`, `HasActiveLoopForTask`), unchanged. A warm CONTINUATION whose loop
+   has a request outstanding is DEFERRED, and its durable effect is the marker alone: it writes the record it read
+   plus `PendingContinuation`/`PendingContinuationRequestID`, never a render of the live entity, because the entity
+   at that instant carries the tool lane's unpublished advance (§ 3 item 4, round 3 finding 2). A lost CAS releases
+   the loop and returns the turn for redelivery (OQ3), as it did before.
 2. Cold: read entity by `task.LoopID`. Absent → normal birth (Put → publish, R1 with MsgId). Present: verify the
    task — `classifyRedeliveredTask` compares the record's `TaskID` with the arriving task's and refuses a mismatch
    before any other arm runs (round 2, finding 1), because a record can answer only for the task it belongs to.
@@ -462,6 +478,14 @@ full list so nothing is silently lost.
     retained request is adopted into the record before any classification; "the request for R" is never fetched.
 14. AGENT_LOOPS 24h TTL vs stream retention — **residual**, measured (`acquire.go:20,42-43`); I1 is scoped to records
     that exist; an expired record is a gone loop; a post-expiry redelivery takes the existing not-observable Retry path.
+15. A LIVE (non-deferred) attach can mint concurrently with the tool lane — **residual, observed not designed**
+    (round 3 docket, beside finding 2). In the interval between `RemovePendingTool` (`handlers.go:2643`) and
+    `TrackRequest` (`handlers.go:3038`) both `outstandingRequests` and `pendingTools` are empty for the loop, so a
+    task arriving there attaches LIVE rather than deferring and mints its own request through `buildTaskRequest`
+    (`handlers.go:1163` `TrackRequest`, `:1168` `SetPublishedRequest`) concurrently with the tool lane's mint: two
+    mints for one loop. It is the pre-existing #1227 attach shape on `b7ce8727`, not opened by L4a — option (b)
+    narrows what a DEFERRED sibling writes and does not touch this path — and only the rejected one-region-per-loop
+    option (a) would fence it.
 
 ## 8. Other capabilities, skills, adopter seam
 
