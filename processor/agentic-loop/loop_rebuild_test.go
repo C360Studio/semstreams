@@ -448,8 +448,8 @@ func TestARebuiltLoopDoesNotReAskForATurnItCannotRecover(t *testing.T) {
 	assert.Contains(t, warning, "cleared a deferred turn it cannot recover",
 		"the drop is a declared event: a turn the caller was told was accepted is gone, and the "+
 			"warning is the whole signal this clear was ruled to carry")
-	assert.Contains(t, warning, rebuildLoopID,
-		"a warning that does not name the loop cannot be acted on")
+	assert.Contains(t, warning, "loop_id="+rebuildLoopID,
+		"a warning that does not name the loop on its loop_id attribute cannot be acted on")
 
 	completion, err := handler.HandleModelResponse(t.Context(), rebuildLoopID, agentic.AgentResponse{
 		RequestID: requestID,

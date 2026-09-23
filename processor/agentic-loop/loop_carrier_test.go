@@ -294,6 +294,23 @@ func TestTheApprovalTimeoutSweepNamesTheRequestItPublished(t *testing.T) {
 	require.NoError(t, parseErr)
 	assert.Equal(t, record.Iterations, named.Iteration-1,
 		"derived I3: the sweep moved iterations in an update whose published_request_id did not move")
+
+	// The behavioural arm: what the unnamed request costs the loop. The model
+	// answers the request the sweep published, on the production response
+	// lane. Ordered against a record that still named the PREVIOUS request it
+	// was refused as not-yet-observable and returned for retry, so the answer
+	// redelivered to MaxDeliver against a record nothing would ever move — the
+	// loop stops, silently, on a human approval that merely timed out.
+	answer := &agentic.AgentResponse{
+		RequestID:    published,
+		Status:       agentic.StatusComplete,
+		FinishReason: "stop",
+		Message:      agentic.ChatMessage{Role: "assistant", Content: "understood, I will not delete the rule"},
+	}
+	require.NoError(t, c.handleResponseMessage(t.Context(), baseMessageBytes(t, answer)),
+		"the answer to the request the sweep published must be applied, not retried until MaxDeliver")
+	assert.Contains(t, bucket.written(), "COMPLETE_"+loopID,
+		"an applied terminal answer settles the loop; a refused one leaves no completion record")
 }
 
 // TestCarrierCompareAndSwapLossRetriesAndReleasesTheLoop: the record moved, so
