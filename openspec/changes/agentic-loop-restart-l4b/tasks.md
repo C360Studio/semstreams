@@ -120,7 +120,7 @@ Mutation evidence uses a `cp` backup and a checksum.
 
 ## 6. E2E and #1155
 
-- [ ] 6.1 [6.2] New `approval_restart.go` and `approval_restart_test.go` in `test/e2e/scenarios/agentic/`, beside
+- [x] 6.1 [6.2] New `approval_restart.go` and `approval_restart_test.go` in `test/e2e/scenarios/agentic/`, beside
   `stage_a_process_replacement.go`.
   - Park a loop on approval, kill the process, then answer.
   - Assert that the replacement **applies** the answer. Asserting that a deadline fires is not enough.
@@ -129,6 +129,9 @@ Mutation evidence uses a `cp` backup and a checksum.
     from AGENT_LOOPS exists; that re-hydration is deferred as OQ2
     (`processor/agentic-loop/approval_sweeper.go:41-47`), and if OQ2 lands this stage must be revisited (owner ruling,
     #1362 issuecomment-5812283590).
+  - Evidence (2026-09-24): `task e2e:agentic` green at `ec49e08e` (5m35s; stage 6.4s). Under a cold-branch mutant
+    (`settleApprovalResponseWithoutLoop` returns `false, nil` after step 0, the pre-#1362 ack-and-drop) the tier went
+    red at this stage (exit 201: the approve loop reached no terminal, with 1m24s of loop deadline left).
 
 ## 7. Truth maintenance
 
