@@ -283,7 +283,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "tool_call_governance_subscribe_before_publish_failures_total",
-				Help:      "Verdicts that reached no waiter, by reason. reason=\"missing_waiter\" is the subscribe-before-publish race regressing (ADR-039 race-fix option 3) or a late arrival — the loop record then decides ack-vs-retry. reason=\"unrecoverable_loop_identity\" is a verdict whose payload carries neither a canonical loop_id nor a request_id in the <loopID>:req: grammar, so no record can be read for it; those terminate as malformed rather than acknowledging like a settled loop. Non-zero on either reason means investigate.",
+				Help:      "Verdicts that reached no waiter, by reason. reason=\"missing_waiter\" is the subscribe-before-publish race regressing (ADR-039 race-fix option 3) or a late arrival — the loop record then decides ack-vs-retry. reason=\"unrecoverable_loop_identity\" is a verdict whose payload carries neither a canonical loop_id nor a request_id in the <loopID>:req: grammar, so no record can be read for it; those terminate as malformed rather than acknowledging like a settled loop. reason=\"older_request\", \"already_applied\", \"loop_absent\" and \"loop_terminal\" count, in addition to missing_waiter, a waiterless verdict acknowledged because the loop record shows it settled: its request is older than the record's, its execution is already in the record's pending tool results, or the record is absent or terminal. A live verdict the record cannot settle is retried and adds no second reason. Non-zero on missing_waiter or unrecoverable_loop_identity means investigate.",
 			}, []string{"reason"}),
 
 			lessonInjection: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -393,6 +393,14 @@ func (m *loopMetrics) RecordGovernanceVerdict(decision, mode string, duration fl
 const (
 	verdictDropMissingWaiter         = "missing_waiter"
 	verdictDropUnrecoverableIdentity = "unrecoverable_loop_identity"
+	// The four ways a waiterless verdict is acknowledged after its loop record
+	// is read (#1362, design § 5.6, D16). Each is counted IN ADDITION to the
+	// missing_waiter the dispatcher already counted for the same verdict:
+	// missing_waiter is every miss, these say how an acknowledged one settled.
+	verdictDropOlderRequest   = "older_request"
+	verdictDropAlreadyApplied = "already_applied"
+	verdictDropLoopAbsent     = "loop_absent"
+	verdictDropLoopTerminal   = "loop_terminal"
 )
 
 // RecordGovernanceVerdictMissingWaiter increments the
@@ -415,6 +423,14 @@ func (m *loopMetrics) RecordGovernanceVerdictMissingWaiter() {
 // from reading as a settled loop on the same series.
 func (m *loopMetrics) recordVerdictIdentityUnrecoverable() {
 	m.governanceSubscribeBeforePublishFailures.WithLabelValues(verdictDropUnrecoverableIdentity).Inc()
+}
+
+// recordVerdictSettledByRecord counts a waiterless verdict acknowledged
+// because its loop record shows it settled; reason is one of the four
+// verdictDrop* values classifyWaiterlessVerdict returns. The same verdict was
+// already counted as missing_waiter by the dispatcher.
+func (m *loopMetrics) recordVerdictSettledByRecord(reason string) {
+	m.governanceSubscribeBeforePublishFailures.WithLabelValues(reason).Inc()
 }
 
 // recordGraphWritePublishTimeout increments the counter when the

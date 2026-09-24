@@ -3503,14 +3503,59 @@ func (c *Component) settleVerdictWithoutWaiter(
 		return natsclient.DeliveryDecisionTerminate,
 			fmt.Errorf("tool-call verdict for execution_id %q carries no recoverable loop identity: %w", executionID, cause)
 	}
-	if c.classifyMissingLoop(ctx, loopID) == loopPresenceStale {
-		c.logger.Debug("Verdict has no waiter and its loop is finished or foreign; acknowledging",
-			slog.String("execution_id", executionID), slog.String("loop_id", loopID))
+	requestID := payload.effectiveRequestID()
+	record := c.readLoopRecord(ctx, loopID)
+	if reason := classifyWaiterlessVerdict(loopID, record, requestID, executionID); reason != "" {
+		c.logger.InfoContext(ctx, "Verdict has no waiter and its loop record shows it settled; acknowledging",
+			slog.String("execution_id", executionID), slog.String("loop_id", loopID),
+			slog.String("request_id", requestID),
+			slog.String("published_request_id", record.entity.PublishedRequestID),
+			slog.String("reason", reason))
+		if c.metrics != nil {
+			c.metrics.recordVerdictSettledByRecord(reason)
+		}
 		return natsclient.DeliveryDecisionAck, nil
 	}
 	c.logger.Warn("Verdict names a live loop this process does not hold",
 		slog.String("execution_id", executionID), slog.String("loop_id", loopID))
 	return natsclient.DeliveryDecisionRetry, cause
+}
+
+// classifyWaiterlessVerdict reads a waiterless verdict against its loop record
+// (#1362, design § 5.6, D16) and names the reason it is acknowledged, or ""
+// when it is still owed and must be Retried.
+//
+// Acknowledged: no record, a terminal record, a verdict naming a request older
+// than the record's, or an execution the record already holds in
+// PendingToolResults. Under OQ-D these win over the live-record retry. An
+// approval_required placeholder counts as held: a gate exists only for a call
+// that was dispatched, and in enforce mode a call is dispatched only after its
+// verdict was consumed, so no verdict for that execution is still owed. The
+// tool lane's narrower placeholder rule answers a different question — whether
+// a RESULT is a replay — and does not apply here.
+//
+// A verdict with no request_id (it is omitempty on the wire) cannot be ordered
+// and is classified on membership only. Verdicts do not run step 0 (OQ-F): no
+// retained request is adopted and no retained verdict is read (D14/D15). An
+// unreadable record is not evidence of anything and Retries.
+func classifyWaiterlessVerdict(loopID string, record loopRecord, requestID, executionID string) string {
+	switch record.presence {
+	case loopPresenceStale:
+		if record.entity.State.IsTerminal() {
+			return verdictDropLoopTerminal
+		}
+		return verdictDropLoopAbsent
+	case loopPresenceLive:
+	default:
+		return ""
+	}
+	if orderAgainstPublished(loopID, record.entity.PublishedRequestID, requestID) == requestOrderApplied {
+		return verdictDropOlderRequest
+	}
+	if _, held := record.entity.PendingToolResults[executionID]; held {
+		return verdictDropAlreadyApplied
+	}
+	return ""
 }
 
 // decodeVerdictPayload reads a VerdictPayload from wire bytes,

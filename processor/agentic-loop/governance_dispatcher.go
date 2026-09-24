@@ -208,13 +208,22 @@ func (v VerdictPayload) effectiveLoopID() string {
 	if looptoken.Valid(v.LoopID) {
 		return v.LoopID
 	}
-	requestID := v.RequestID
-	if requestID == "" && v.Properties != nil {
+	return loopIDFromStructuredID(v.effectiveRequestID(), ":req:")
+}
+
+// effectiveRequestID returns the request the verdict's proposal was made under,
+// top-level (approve action) or under properties (publish action). Empty is a
+// real answer: request_id is omitempty on the wire, and a rule may not echo it.
+func (v VerdictPayload) effectiveRequestID() string {
+	if v.RequestID != "" {
+		return v.RequestID
+	}
+	if v.Properties != nil {
 		if id, ok := v.Properties["request_id"].(string); ok {
-			requestID = id
+			return id
 		}
 	}
-	return loopIDFromStructuredID(requestID, ":req:")
+	return ""
 }
 
 // EffectiveDecision returns the routing decision from the payload,
