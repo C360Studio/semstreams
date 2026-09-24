@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -168,11 +167,29 @@ func TestIntegrationConcurrentReplicasConvergeOnOneCompletedOutcome(t *testing.T
 	assert.Equal(t, authoritative, loaded.Result.Content)
 }
 
-// ackReplayStopBudget bounds each Stop in the ACK-failure restart test. The
-// first Stop measured 116-264µs across three instrumented runs; five seconds
-// is slack for a loaded host, and it is the longest a drain that cannot
-// observe closure can hold the test (#1370).
+// ackReplayStopBudget is a backstop on each Stop in the ACK-failure restart
+// test, not an expected wait: both Stops are local drains that should finish
+// far inside it, and five seconds is slack for a loaded host. If a Stop ever
+// reaches it, the test fails with the deadline instead of hanging until the
+// package timeout (#1370).
 const ackReplayStopBudget = 5 * time.Second
+
+// errorLeaves flattens errors.Join trees so an assertion can require an exact
+// set of causes; errors.Is on a join matches any member, so it would let an
+// unexpected extra cause through.
+func errorLeaves(err error) []error {
+	if err == nil {
+		return nil
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		var leaves []error
+		for _, member := range joined.Unwrap() {
+			leaves = append(leaves, errorLeaves(member)...)
+		}
+		return leaves
+	}
+	return []error{err}
+}
 
 func TestIntegrationAckFailureRestartReplaysWithoutSecondExecution(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithStreams(
@@ -233,30 +250,27 @@ func TestIntegrationAckFailureRestartReplaysWithoutSecondExecution(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, publisher.PublishToStream(ctx, "tool.execute."+call.ID, wire))
 	require.Eventually(t, func() bool { return executor.calls.Load() == 1 }, 5*time.Second, 25*time.Millisecond)
-	// Stop runs against a connection the test severed, so its outcome depends
-	// on where the close lands relative to cleanup's tool.list drain (#1370):
-	//   - closed before Stop, the usual order: nats.ErrBadSubscription, or
-	//     nats.ErrConnectionClosed if the close lands between the validity
-	//     check and the native drain;
-	//   - closed while that drain is pending: natsclient.Subscription.Drain
-	//     waits for SubscriptionClosed, which nats.go emits only from
-	//     removeSub, and a closed connection never reaches removeSub. The
-	//     drain returns only when ctx ends, so Stop returns
-	//     context.DeadlineExceeded at its budget;
-	//   - closed after the drain completed: nil.
-	// The budget is what turns the middle case from a hang into a bounded
-	// wait. Under Background it hung until the 20-minute package timeout.
+	// Wait for the sever to land before stopping. Racing Stop against the
+	// close made its outcome depend on where the close fell relative to the
+	// tool.list drain. A close while that drain is pending leaves
+	// natsclient.Subscription.Drain waiting for a SubscriptionClosed status
+	// that a closed connection never emits (#1372), so Stop could only return
+	// at its ctx deadline. That is the likely cause of #1370's 20-minute hang
+	// under context.Background(): the natural stack resolved only to
+	// component.go:632, and the Drain frame beneath it comes from a forced
+	// reproduction.
+	require.Eventually(t, func() bool { return testClient.GetNativeConnection().IsClosed() },
+		5*time.Second, 5*time.Millisecond, "the wrapped publish must sever the first component's connection")
 	firstStopCtx, cancelFirstStop := context.WithTimeout(context.Background(), ackReplayStopBudget)
 	firstStopErr := first.Stop(firstStopCtx)
 	cancelFirstStop()
-	if firstStopErr != nil {
-		require.Truef(t,
-			errors.Is(firstStopErr, nats.ErrBadSubscription) ||
-				errors.Is(firstStopErr, nats.ErrConnectionClosed) ||
-				errors.Is(firstStopErr, context.DeadlineExceeded),
-			"Stop on a severed connection may fail only as bad subscription, closed connection, or its own deadline; got %v",
-			firstStopErr)
-	}
+	// With the connection already closed, the tool.list subscription is
+	// invalid and its closed status never fired, so the drain reports
+	// nats.ErrBadSubscription (natsclient/client.go:789-796). The JetStream
+	// consumer's Closed does fire on connection loss, so the lane adds nothing.
+	// That one cause is the whole result; any other member of the join fails.
+	require.Equal(t, []error{nats.ErrBadSubscription}, errorLeaves(firstStopErr),
+		"Stop after the connection closed must report exactly the invalid tool.list subscription; got %v", firstStopErr)
 	replayBefore := testutil.ToFloat64(first.metrics.outcomeTotal.WithLabelValues(string(outcomePathReplay)))
 
 	secondClient, err := natsclient.NewClient(testClient.URL)
