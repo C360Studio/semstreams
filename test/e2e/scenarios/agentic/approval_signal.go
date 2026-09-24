@@ -219,7 +219,7 @@ func (s *Scenario) walkApprovalPath(ctx context.Context, result *scenarios.Resul
 			parked.PendingApproval.CallID, pending.CallID)
 	}
 
-	if err := s.submitApproval(ctx, task.LoopID, gatedExecutionID, agentic.ApprovalDecisionApprove); err != nil {
+	if err := s.submitApproval(ctx, task.LoopID, gatedExecutionID, agentic.ApprovalDecisionApprove, ""); err != nil {
 		return err
 	}
 	if err := s.verifyApprovalResponsePublished(ctx, task.LoopID, pending.CallID); err != nil {
@@ -739,8 +739,9 @@ func terminalOutcome(payload message.Payload) (string, error) {
 // which can beat dispatch's own subscription delivering the same event into
 // the tracker the endpoint reads. That is a race between two observers of one
 // fact, not a refusal. Every other status is the answer and is reported as
-// one, and a 409 that outlasts the window still fails.
-func (s *Scenario) submitApproval(ctx context.Context, loopID, executionID, decision string) error {
+// one, and a 409 that outlasts the window still fails. reason is the free
+// text a reviewer attaches; empty sends none.
+func (s *Scenario) submitApproval(ctx context.Context, loopID, executionID, decision, reason string) error {
 	deadline := time.Now().Add(approvalTrackerWindow)
 	for {
 		status, body, err := s.postJSON(ctx,
@@ -748,6 +749,7 @@ func (s *Scenario) submitApproval(ctx context.Context, loopID, executionID, deci
 			agenticdispatch.ApprovalRequest{
 				Decision:    decision,
 				ExecutionID: executionID,
+				Reason:      reason,
 				UserID:      approvalRequester,
 			})
 		if err != nil {

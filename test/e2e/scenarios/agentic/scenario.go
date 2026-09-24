@@ -230,7 +230,9 @@ func (s *Scenario) assertingStageCount() int {
 // The approval and signal walks come last on purpose. Every stage above them
 // asserts on counters and stream contents that additional loops would perturb,
 // and verify-durable-tool-replay installs (and restores) a TOOL-stream
-// admission fault that nothing else may be in flight across.
+// admission fault that nothing else may be in flight across. The approval
+// lane's process replacement follows the walks for the reason given at its
+// entry.
 func (s *Scenario) stages() []agenticStage {
 	return []agenticStage{
 		{name: "verify-components", fn: s.verifyComponents, asserts: true},
@@ -267,6 +269,10 @@ func (s *Scenario) stages() []agenticStage {
 		{name: "refuse-non-canonical-approval", fn: s.refuseNonCanonicalApproval, asserts: true},
 		{name: "walk-signal-path", fn: s.walkSignalPath, asserts: true},
 		{name: "refuse-non-canonical-signal", fn: s.refuseNonCanonicalSignal, asserts: true},
+		// verify-approval-across-replacement runs after the approval walk, not
+		// before it: the walk asserts the gated tool has never succeeded on the
+		// running process, and this stage's approved call makes that one.
+		{name: "verify-approval-across-replacement", fn: s.verifyApprovalAcrossReplacement, asserts: true},
 		{name: "validate-results", fn: s.validateResults, asserts: true},
 	}
 }
@@ -1176,6 +1182,12 @@ func (s *Scenario) validateResults(_ context.Context, result *scenarios.Result) 
 	}
 	if count, _ := result.Details["signal_refusal_non_canonical_count"].(float64); count < 1 {
 		return fmt.Errorf("non-canonical cancel refusal counter = %v, want at least 1", count)
+	}
+	for _, decision := range []string{"approve", "reject"} {
+		key := "approval_restart_" + decision + "_outcome"
+		if outcome, _ := result.Details[key].(string); outcome != agentic.OutcomeSuccess {
+			return fmt.Errorf("approval-across-replacement %s outcome = %q, want %q", decision, outcome, agentic.OutcomeSuccess)
+		}
 	}
 
 	result.Details["validation_passed"] = true

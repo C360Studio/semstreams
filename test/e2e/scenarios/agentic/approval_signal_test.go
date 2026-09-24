@@ -46,6 +46,7 @@ func TestStagesAreExactlyThisOrderedList(t *testing.T) {
 		{"refuse-non-canonical-approval", true},
 		{"walk-signal-path", true},
 		{"refuse-non-canonical-signal", true},
+		{"verify-approval-across-replacement", true},
 		{"validate-results", true},
 	}
 
@@ -129,6 +130,8 @@ func TestValidateResultsRequiresBothWalks(t *testing.T) {
 			"signal_outcome":                        agentic.OutcomeCancelled,
 			"approval_refusal_non_canonical_status": http.StatusBadRequest,
 			"signal_refusal_non_canonical_count":    float64(1),
+			"approval_restart_approve_outcome":      agentic.OutcomeSuccess,
+			"approval_restart_reject_outcome":       agentic.OutcomeSuccess,
 		}
 	}
 	s := NewScenario(nil, DefaultConfig())
@@ -142,6 +145,8 @@ func TestValidateResultsRequiresBothWalks(t *testing.T) {
 		"signal_outcome",
 		"approval_refusal_non_canonical_status",
 		"signal_refusal_non_canonical_count",
+		"approval_restart_approve_outcome",
+		"approval_restart_reject_outcome",
 	} {
 		details := complete()
 		delete(details, missing)
