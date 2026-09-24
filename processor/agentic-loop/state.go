@@ -59,6 +59,23 @@ var (
 	ErrLoopNotFound = errors.New("agentic-loop: loop not found")
 )
 
+// gateRefusedError is beginApprovalGate refusing a gate because the loop
+// settled between the handler's terminal guard and the gate: it is terminal in
+// memory (a cancel landed), or released (state is empty). Either way the
+// terminal belongs to its owner, and the handler answers as its terminal guard
+// does (#1362 checkpoint 2 delta review, HIGH).
+type gateRefusedError struct {
+	loopID string
+	state  agentic.LoopState
+}
+
+func (e *gateRefusedError) Error() string {
+	if e.state == "" {
+		return fmt.Sprintf("approval gate refused: loop %s was released", e.loopID)
+	}
+	return fmt.Sprintf("approval gate refused: loop %s is %s", e.loopID, e.state)
+}
+
 // LoopManager manages loop entity lifecycle and state
 type LoopManager struct {
 	loops                map[string]*agentic.LoopEntity
@@ -851,8 +868,10 @@ func (m *LoopManager) beginApprovalGate(
 
 	entity, exists := m.loops[loopID]
 	if !exists {
-		return agentic.PendingApprovalState{}, errs.Wrap(
-			fmt.Errorf("loop %s: %w", loopID, ErrLoopNotFound), "LoopManager", "beginApprovalGate", "find loop")
+		return agentic.PendingApprovalState{}, &gateRefusedError{loopID: loopID}
+	}
+	if entity.State.IsTerminal() {
+		return agentic.PendingApprovalState{}, &gateRefusedError{loopID: loopID, state: entity.State}
 	}
 	if err := entity.BeginAwaitingApproval(
 		toolResult.CallID, toolName, args, toolResult.Error, timeout, toolResult.TraceID); err != nil {

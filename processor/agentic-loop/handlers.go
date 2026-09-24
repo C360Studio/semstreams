@@ -97,7 +97,9 @@ type HandlerResult struct {
 
 	// terminalOwnedElsewhere marks a result the handler returned without acting,
 	// because the loop was already terminal in memory on entry: both terminal
-	// guards run before anything is touched. This delivery owns no terminal and
+	// guards run before anything is touched. The approval gate answers the
+	// same way when the loop settles between that guard and the gate
+	// (gateRefusedError); a released loop carries an empty State. This delivery owns no terminal and
 	// must write nothing — rendering the record from that entity would commit a
 	// terminal outside the owner. A terminal in memory is a commit in flight on
 	// another lane — the terminal owner releases the loop whether its commit
@@ -2872,6 +2874,10 @@ func (h *MessageHandler) checkApprovalGate(loopID string, entity *agentic.LoopEn
 				result.PublishedMessages = append(result.PublishedMessages, *echo)
 			}
 		}
+		// Residual: a result that is NOT approval_required yet carries the
+		// gated execution is absorbed as a sibling and replaces the gate's
+		// placeholder; no production path sends one, and it is stored before
+		// this branch runs, while a handler error here would quarantine.
 		return true
 	}
 	// Approval-gated rejection: the agentic-tools approval filter
@@ -2882,6 +2888,19 @@ func (h *MessageHandler) checkApprovalGate(loopID string, entity *agentic.LoopEn
 		return false
 	}
 	pubMsg, err := h.gateForApproval(loopID, toolResult)
+	var refused *gateRefusedError
+	if errors.As(err, &refused) {
+		// The loop settled after the terminal guard let this result in. No
+		// gate was written, so claiming awaiting_approval would have the
+		// carrier render the live — terminal — entity into the record, a
+		// terminal committed outside its owner. The record decides instead.
+		h.logger.Warn("approval gate refused: the loop settled before it could gate",
+			slog.String("loop_id", loopID),
+			slog.String("execution_id", toolResult.ExecutionID),
+			slog.String("error", err.Error()))
+		*result = terminalGuardResult(loopID, refused.state)
+		return true
+	}
 	if err != nil {
 		h.logger.Warn("failed to gate loop for approval",
 			slog.String("loop_id", loopID),
