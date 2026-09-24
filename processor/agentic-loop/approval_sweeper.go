@@ -143,7 +143,9 @@ func (c *Component) sweepExpiredApprovals(ctx context.Context) {
 		// auto-rejects the same way they see human responses. The component's
 		// own consumer receives this and acknowledges it without effect — the
 		// gate is already resolved, in memory and in the record — so there is
-		// no double-processing risk.
+		// no double-processing risk. It is recognised as this sweeper's echo
+		// (isTimeoutSweepEcho), logged at Debug and not counted as an
+		// inapplicable answer.
 		c.publishApprovalResponseToWire(ctx, response)
 		c.logger.Info("approval timed out; auto-rejected",
 			slog.String("loop_id", cand.LoopID),

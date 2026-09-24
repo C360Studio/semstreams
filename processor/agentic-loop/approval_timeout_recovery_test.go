@@ -1,10 +1,14 @@
 package agenticloop
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/metric"
+	"github.com/c360studio/semstreams/natsclient"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -75,4 +79,43 @@ func TestAnApprovalTimeoutTakesTheCarrier(t *testing.T) {
 		require.NotEqual(t, before.PublishedRequestID, record.PublishedRequestID,
 			"the advance names the request it minted (I3)")
 	})
+}
+
+// TestTheSweepersOwnEchoIsNotCountedAsAnInapplicableAnswer (#1362 checkpoint 2
+// re-review, M3): the sweeper publishes its auto-reject on
+// agent.approval_response for wire observers, and the component's own
+// consumer receives it after the gate is already resolved. That echo is not a
+// human answer arriving too late, so it is acknowledged without being counted
+// as approval_inapplicable, whether the loop is still held (the rejection
+// advanced it) or already released (the rejection ended it).
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestTheSweepersOwnEchoIsNotCountedAsAnInapplicableAnswer(t *testing.T) {
+	for name, spent := range map[string]bool{
+		"the loop is still held":        false,
+		"the loop was already released": true,
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, _, _ := expiredGateOnALoop(t, spent)
+			c.metrics = getMetrics(metric.NewMetricsRegistry())
+			c.handler.SetMetrics(c.metrics)
+			var echo []byte
+			c.SetTestPublishHook(func(subject string, data []byte) {
+				if strings.HasPrefix(subject, "agent.approval_response.") {
+					echo = data
+				}
+			})
+			c.sweepExpiredApprovals(t.Context())
+			require.NotEmpty(t, echo, "fixture: the sweep published its auto-reject to the wire")
+			inapplicable := c.metrics.toolResultsDropped.WithLabelValues("approval_inapplicable")
+			before := testutil.ToFloat64(inapplicable)
+
+			decision, err := c.handleApprovalResponseMessage(t.Context(), echo)
+
+			require.NoError(t, err)
+			require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+			require.Equal(t, before, testutil.ToFloat64(inapplicable),
+				"the sweeper's own echo was counted as a human answer arriving too late")
+		})
+	}
 }

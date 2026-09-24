@@ -208,7 +208,7 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 		}
 	}
 	if result.staleDrop {
-		c.recordApprovalInapplicable()
+		c.recordApprovalInapplicable(response)
 		// The handler dispatched nothing and resolved nothing. Persisting would
 		// re-Put a settled entity, or — once its per-loop state is released —
 		// report a persistence failure for a loop that is supposed to be gone.
@@ -252,17 +252,38 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 
 // recordApprovalInapplicable counts an approval answer acknowledged without
 // effect, on the tool-result drop family (owner ruling 3, #1362
-// issuecomment-5809906669).
-func (c *Component) recordApprovalInapplicable() {
-	if c.metrics != nil {
+// issuecomment-5809906669). The ruling covers ANSWERS; the timeout sweeper's
+// echo of its own auto-reject is not one, and is not counted (#1362
+// checkpoint 2 re-review, M3).
+func (c *Component) recordApprovalInapplicable(response agentic.ApprovalResponse) {
+	if c.metrics != nil && !isTimeoutSweepEcho(response) {
 		c.metrics.recordToolResultDropped("approval_inapplicable")
 	}
 }
 
+// isTimeoutSweepEcho recognises the approval-timeout sweeper's own auto-reject
+// coming back on agent.approval_response: the sweeper publishes it for wire
+// observers only after its carrier committed the rejection
+// (approval_sweeper.go), so by the time any consumer takes it the gate is
+// resolved and it reaches only the inapplicable paths. It is recognised there,
+// by the approver the sweeper stamps and the decision it makes.
+func isTimeoutSweepEcho(response agentic.ApprovalResponse) bool {
+	return response.ApprovedBy == approvalTimeoutSystemApprover &&
+		response.Decision == agentic.ApprovalDecisionReject
+}
+
 // logApprovalResponseIgnored is the one audit line for an answer that is
 // acknowledged without effect, warm or cold, so an operator greps one string
-// whichever process took the delivery.
+// whichever process took the delivery. The sweeper's own echo is expected
+// and logs at Debug.
 func logApprovalResponseIgnored(logger *slog.Logger, response agentic.ApprovalResponse, state agentic.LoopState) {
+	if isTimeoutSweepEcho(response) {
+		logger.Debug("approval response ignored: the timeout sweeper's own auto-reject echo",
+			slog.String("loop_id", response.LoopID),
+			slog.String("response_execution_id", response.ExecutionID),
+			slog.String("loop_state", string(state)))
+		return
+	}
 	logger.Warn("approval response ignored: not awaiting, or its identity does not match the pending call",
 		slog.String("loop_id", response.LoopID),
 		slog.String("response_call_id", response.CallID),
@@ -313,7 +334,7 @@ func (c *Component) settleApprovalResponseWithoutLoop(
 	}
 	if record.presence == loopPresenceStale {
 		logApprovalResponseIgnored(c.logger, response, record.entity.State)
-		c.recordApprovalInapplicable()
+		c.recordApprovalInapplicable(response)
 		return false, nil
 	}
 
@@ -321,7 +342,7 @@ func (c *Component) settleApprovalResponseWithoutLoop(
 	if record.entity.State != agentic.LoopStateAwaitingApproval ||
 		!approvalAnswersGate(gate, response.CallID, response.ExecutionID) {
 		logApprovalResponseIgnored(c.logger, response, record.entity.State)
-		c.recordApprovalInapplicable()
+		c.recordApprovalInapplicable(response)
 		return false, nil
 	}
 
