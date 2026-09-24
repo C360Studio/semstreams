@@ -154,7 +154,7 @@ Mutation evidence uses a `cp` backup and a checksum.
     not hold, instead of a stale-drop result with a nil error.
   - `tool_call_governance_subscribe_before_publish_failures_total`: `missing_waiter` counts every waiterless verdict and
     the six settle reasons (`older_request`, `already_applied`, `loop_absent`, `loop_terminal`,
-    `unrecoverable_loop_identity`, `foreign_request`) are subsets of it, so `sum(...)` across reasons double-counts; the
+    `unrecoverable_loop_identity`, `foreign_request`, the last two terminated) are subsets of it, so `sum(...)` across reasons double-counts; the
     signal is `missing_waiter` minus the settle reasons (the counter's section, rewritten with task 2.1).
 
   Size the section against the keys the semspec watchers read, in one read-only pass.

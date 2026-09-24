@@ -3517,8 +3517,8 @@ func (c *Component) settleVerdictWithoutWaiter(
 			c.metrics.recordVerdictSettledByRecord(reason)
 		}
 		return natsclient.DeliveryDecisionAck, nil
-	case natsclient.DeliveryDecisionQuarantine:
-		c.logger.ErrorContext(ctx, "Verdict names a request that is not a request of its loop; quarantining",
+	case natsclient.DeliveryDecisionTerminate:
+		c.logger.ErrorContext(ctx, "Verdict names a request that is not a request of its loop; terminating",
 			slog.String("execution_id", executionID), slog.String("loop_id", loopID),
 			slog.String("request_id", requestID),
 			slog.String("published_request_id", record.entity.PublishedRequestID),
@@ -3526,7 +3526,7 @@ func (c *Component) settleVerdictWithoutWaiter(
 		if c.metrics != nil {
 			c.metrics.recordVerdictSettledByRecord(reason)
 		}
-		return natsclient.DeliveryDecisionQuarantine,
+		return natsclient.DeliveryDecisionTerminate,
 			fmt.Errorf("loop %s: verdict for execution_id %q names request %q, which is not a request of this loop: %w",
 				loopID, executionID, requestID, cause)
 	}
@@ -3543,7 +3543,7 @@ func (c *Component) settleVerdictWithoutWaiter(
 
 // classifyWaiterlessVerdict reads a waiterless verdict against its loop record
 // (#1362, design § 5.6, D16) and returns the settle reason with its decision:
-// Ack or Quarantine with a reason, or Retry with "" when the verdict is still
+// Ack or Terminate with a reason, or Retry with "" when the verdict is still
 // owed.
 //
 // Acknowledged: no record, a terminal record, a verdict naming a request older
@@ -3555,9 +3555,14 @@ func (c *Component) settleVerdictWithoutWaiter(
 // tool lane's narrower placeholder rule answers a different question — whether
 // a RESULT is a replay — and does not apply here.
 //
-// Quarantined: a request_id that is not a request of the loop, as on the
-// model-response and tool-result lanes. It is decided before membership, so a
-// verdict carrying a foreign request is never acknowledged as applied.
+// Terminated: a request_id that is not a request of the loop (owner ruling
+// 2026-09-24 on #1362). The other lanes quarantine this case, but Quarantine
+// here stops the whole verdict consumer, so one adopter rule echoing a
+// mismatched loop_id/request_id pair would halt every governance verdict in
+// the process. Terminate is the per-message disposition this lane already
+// gives unrecoverable_loop_identity: the delivery is dead-lettered, counted,
+// and the lane keeps running. It is decided before membership, so a verdict
+// carrying a foreign request is never acknowledged as applied.
 //
 // A verdict with no request_id (it is omitempty on the wire) cannot be ordered
 // and is classified on membership only. Verdicts do not run step 0 (OQ-F): no
@@ -3580,7 +3585,7 @@ func classifyWaiterlessVerdict(
 	case requestOrderApplied:
 		return verdictDropOlderRequest, natsclient.DeliveryDecisionAck
 	case requestOrderForeign:
-		return verdictDropForeignRequest, natsclient.DeliveryDecisionQuarantine
+		return verdictDropForeignRequest, natsclient.DeliveryDecisionTerminate
 	}
 	if _, held := record.entity.PendingToolResults[executionID]; held {
 		return verdictDropAlreadyApplied, natsclient.DeliveryDecisionAck

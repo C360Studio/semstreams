@@ -342,7 +342,7 @@ Three Prometheus metrics drive the operational view:
 |---|---|---|
 | `semstreams_agentic_loop_tool_call_governance_verdict_duration_seconds` | `decision`, `mode` | Buckets 1ms → 5s. Drives the timeout-tuning decision in beta.70 — set `timeout` after measuring p99 from this histogram. |
 | `semstreams_agentic_loop_tool_call_governance_verdict_total` | `decision`, `mode` | Sum of approved+rejected+timeout per mode. Sustained `decision=timeout` rate signals undersized timeout or stuck rule engine. |
-| `semstreams_agentic_loop_tool_call_governance_subscribe_before_publish_failures_total` | `reason` | `reason="missing_waiter"` counts every verdict delivery that reached no registered waiter. Each other reason is a subset of it, naming how that delivery settled: `older_request`, `already_applied`, `loop_absent`, `loop_terminal` (acknowledged; expected), `unrecoverable_loop_identity` (terminated) and `foreign_request` (quarantined). `missing_waiter` minus the other six is the deliveries retried as still owed: a sustained non-zero rate there, or any `unrecoverable_loop_identity` or `foreign_request`, is the signal to investigate. Do not `sum` across reasons. See [below](#subscribe_before_publish_failures-rate-is-non-zero). |
+| `semstreams_agentic_loop_tool_call_governance_subscribe_before_publish_failures_total` | `reason` | `reason="missing_waiter"` counts every verdict delivery that reached no registered waiter. Each other reason is a subset of it, naming how that delivery settled: `older_request`, `already_applied`, `loop_absent`, `loop_terminal` (acknowledged; expected), `unrecoverable_loop_identity` and `foreign_request` (both terminated: dead-lettered, and the lane keeps running). `missing_waiter` minus the other six is the deliveries retried as still owed: a sustained non-zero rate there, or any `unrecoverable_loop_identity` or `foreign_request`, is the signal to investigate. Do not `sum` across reasons. See [below](#subscribe_before_publish_failures-rate-is-non-zero). |
 | `semstreams_rule_governance_verdict_audit_failures_total` | `decision` | A deny/approve verdict was applied but its append-only audit record failed to publish (ADR-055 §3a). The verdict still holds — but a non-zero value is a compliance-visibility gap, critical in `enforce` mode. |
 
 ### Verdict audit trail
@@ -395,8 +395,8 @@ counts, as a subset of `missing_waiter`, how the delivery settled:
 | `already_applied` | acknowledged | The record already holds the verdict's execution in its pending tool results (an approval gate's placeholder included). |
 | `loop_absent` | acknowledged | No loop record exists. |
 | `loop_terminal` | acknowledged | The loop has finished. |
-| `unrecoverable_loop_identity` | terminated | The payload carries neither a canonical `loop_id` nor a `request_id` in the `<loopID>:req:<iteration>:<retry>` grammar. The rule must echo one. |
-| `foreign_request` | quarantined | The verdict's `request_id` is not a request of its `loop_id`. The rule is echoing a mismatched pair. |
+| `unrecoverable_loop_identity` | terminated (dead-lettered) | The payload carries neither a canonical `loop_id` nor a `request_id` in the `<loopID>:req:<iteration>:<retry>` grammar. The rule must echo one. |
+| `foreign_request` | terminated (dead-lettered) | The verdict's `request_id` is not a request of its `loop_id`. The rule is echoing a mismatched pair. Only that delivery is dead-lettered; the verdict lane keeps running. |
 
 The four acknowledged reasons are expected. Investigate:
 

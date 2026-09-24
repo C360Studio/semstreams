@@ -144,12 +144,12 @@ func TestVerdictWithoutWaiterIsClassifiedAgainstTheLoopRecord(t *testing.T) {
 			want: natsclient.DeliveryDecisionRetry,
 		},
 		{
-			name: "a verdict naming another loop's request is quarantined, even when its execution is held",
+			name: "a verdict naming another loop's request is terminated, even when its execution is held",
 			fields: map[string]any{
 				"loop_id": liveLoopID, "request_id": request(awaitingLoopID, 3), "execution_id": executionID,
 			},
-			want: natsclient.DeliveryDecisionQuarantine, reason: verdictDropForeignRequest,
-			guidance: "a request that is not the loop's is quarantined on every lane, and is decided before membership",
+			want: natsclient.DeliveryDecisionTerminate, reason: verdictDropForeignRequest,
+			guidance: "a request that is not the loop's is terminated on this lane (owner ruling 2026-09-24 on #1362), decided before membership",
 		},
 		{
 			name:   "a verdict for a loop with no record is acknowledged",
@@ -206,9 +206,11 @@ func TestVerdictWithoutWaiterIsClassifiedAgainstTheLoopRecord(t *testing.T) {
 			case natsclient.DeliveryDecisionAck:
 				require.Equal(t, int32(1), msg.acks.Load())
 				require.Zero(t, msg.naks.Load()+msg.terms.Load())
-			case natsclient.DeliveryDecisionQuarantine:
-				require.True(t, result.OwnerStopRequired(), "a quarantine stops the lane's owner")
-				require.Zero(t, msg.acks.Load(), "a quarantined verdict is never acknowledged as applied")
+			case natsclient.DeliveryDecisionTerminate:
+				require.False(t, result.OwnerStopRequired(),
+					"one misconfigured rule dead-letters its own delivery; the verdict lane keeps running")
+				require.Equal(t, int32(1), msg.terms.Load(), "the delivery is dead-lettered")
+				require.Zero(t, msg.acks.Load()+msg.naks.Load(), "never acknowledged as applied, never retried")
 				require.ErrorIs(t, result.Err(), ErrNoGovernanceWaiter)
 				require.ErrorContains(t, result.Err(), "is not a request of this loop")
 			default:
