@@ -156,6 +156,14 @@ func (c *Component) sweepExpiredApprovals(ctx context.Context) {
 				slog.String("loop_id", cand.LoopID),
 				slog.String("call_id", cand.CallID),
 				slog.String("error", err.Error()))
+		} else if result.State.IsTerminal() {
+			// The auto-reject ended the loop (a max_iterations failure through
+			// handleToolsComplete) and that terminal is committed. Release it,
+			// as the terminal owner does after its commit, so no later
+			// delivery meets a settled loop in memory. This terminal still
+			// bypasses the owner — no COMPLETE_ marker — until #1362 task 1.5
+			// moves the sweeper onto the carrier.
+			c.releaseLoopTransientState(cand.LoopID)
 		}
 		// Publish the ApprovalResponse onto agent.approval_response.<loopID> so
 		// wire observers (sister-repo dashboards, audit consumers) see timeout

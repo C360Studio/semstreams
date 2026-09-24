@@ -205,7 +205,24 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 	// The approval lane keeps write-then-publish until #1362: reordering it
 	// opens a reject-minted crash window whose only handler is that lane's own
 	// cold branch, which #1362 builds (design.md § 1, coordinator scoping).
+	if result.terminalOwnedElsewhere {
+		// The rejection reached a loop already terminal in memory. The gate
+		// was resolved while the loop was awaiting_approval, so this is a
+		// terminal (a cancel) that landed between that resolve and the
+		// synthesized result's handling. The record decides.
+		if err := c.settleTerminalGuard(ctx, result, c.recordTerminalToolResultDropped); err != nil {
+			return natsclient.DeliveryDecisionRetry, err
+		}
+		return natsclient.DeliveryDecisionAck, nil
+	}
 	if err := c.persistHandlerResult(ctx, result, writeThenPublish); err != nil {
+		// A transient failure — a lost compare-and-swap, which has released
+		// the loop — is retried, not quarantined (#1362 re-review M3):
+		// quarantining it would latch the lane's health on a benign race.
+		if !errs.IsFatal(err) {
+			return natsclient.DeliveryDecisionRetry,
+				fmt.Errorf("approval result for loop %q must be retried: %w", response.LoopID, err)
+		}
 		return natsclient.DeliveryDecisionQuarantine,
 			fmt.Errorf("approval result for loop %q has unknown durable state: %w", response.LoopID, err)
 	}

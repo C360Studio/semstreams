@@ -1905,6 +1905,15 @@ func (c *Component) handleResponseMessage(ctx context.Context, data []byte) erro
 		return c.handleLoopFailure(ctx, loopID, entity, failureReasonForHandlerError(err), err)
 	}
 
+	if result.terminalOwnedElsewhere {
+		// Before metrics and trajectory: a guard result changed nothing, and
+		// counting it would count the loop's terminal again on every attempt.
+		return c.settleTerminalGuard(ctx, result, func() {
+			if c.metrics != nil {
+				c.metrics.recordModelResponseDropped("stale_request_id")
+			}
+		})
+	}
 	c.recordResponseMetrics(response, result, entity)
 	return c.persistHandlerResult(ctx, result, publishThenWrite)
 }
@@ -2237,19 +2246,15 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 	// its lane asked for — see the order contract above.
 	gated := result.State == agentic.LoopStateAwaitingApproval
 
-	c.recordHandlerResultTrajectory(ctx, result)
-
 	if result.terminalOwnedElsewhere {
-		// The handler found this loop already terminal in memory and did
-		// nothing. That terminal belongs to the lane committing it, which
-		// releases the loop either way; writing the record from this entity
-		// would commit a terminal (of any kind, cancelled included) outside
-		// the terminal owner. Retry: the redelivery finds the record terminal
-		// and ACKs, or finds it live and rebuilds.
-		return errs.WrapTransient(
-			fmt.Errorf("loop %s is terminal in memory with its terminal commit not yet settled", result.LoopID),
-			"agentic-loop", "persistHandlerResult", "leave an uncommitted terminal to its owner")
+		// The lanes settle a terminal-guard result before they record metrics
+		// or trajectory; this is the backstop for any caller that did not.
+		// Writing the record from this entity would commit a terminal outside
+		// the owner, so the record decides instead.
+		return c.settleTerminalGuard(ctx, result, nil)
 	}
+
+	c.recordHandlerResultTrajectory(ctx, result)
 
 	if terminal {
 		// A terminal result mints no request — its one publication is the
@@ -2566,6 +2571,11 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 	result, err := c.handler.HandleToolResult(ctx, loopID, toolResult)
 	if err != nil {
 		return c.settleFailedToolResult(ctx, loopID, result, err)
+	}
+	if result.terminalOwnedElsewhere {
+		// Before metrics and trajectory, for the same reason as the response
+		// lane: a guard result changed nothing.
+		return c.settleTerminalGuard(ctx, result, c.recordTerminalToolResultDropped)
 	}
 
 	// Decrement active_loops if HandleToolResult drove the loop to a terminal
@@ -3334,11 +3344,16 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 	completionMsg := message.NewBaseMessage(completion.Schema(), &completion, "agentic-loop")
 	completionData, err := json.Marshal(completionMsg)
 	if err != nil {
+		// The loop is cancelled in memory and nothing is committed: release it,
+		// as the terminal owner does for a commit that did not land, so no
+		// later delivery is answered by this uncommitted terminal.
+		c.releaseLoopTransientState(loopID)
 		return errs.WrapFatal(err, "agentic-loop", "handleCancelSignal", "marshal cancellation after state transition")
 	}
 
 	subject, err := component.ResolveSubject(c.config.Ports.Outputs, "agent.complete", loopID)
 	if err != nil {
+		c.releaseLoopTransientState(loopID)
 		return errs.WrapFatal(err, "agentic-loop", "handleCancelSignal", "resolve cancellation subject after state transition")
 	}
 

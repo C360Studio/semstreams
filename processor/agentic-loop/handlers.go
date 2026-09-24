@@ -95,12 +95,16 @@ type HandlerResult struct {
 	// the synthesis opt-in is off; either way, no synthetic triples.
 	SyntheticDecide *SyntheticDecideRequest
 
-	// terminalOwnedElsewhere marks a result the handler returned WITHOUT acting,
-	// because the loop was already terminal in memory on entry. A terminal in
-	// memory is one whose commit is in flight on another lane (the terminal
-	// owner releases the loop whether its commit lands or fails, #1362), so
-	// this delivery owns no terminal and must write nothing: rendering the
-	// record from that entity would commit a terminal outside the owner.
+	// terminalOwnedElsewhere marks a result the handler returned without acting,
+	// because the loop was already terminal in memory on entry: both terminal
+	// guards run before anything is touched. This delivery owns no terminal and
+	// must write nothing — rendering the record from that entity would commit a
+	// terminal outside the owner. A terminal in memory is either a commit in
+	// flight on another lane (the terminal owner releases the loop whether its
+	// commit lands or fails) or one committed without the owner by the
+	// approval-timeout sweeper until #1362 task 1.5 brings it under the owner.
+	// The component therefore decides it by the RECORD (settleTerminalGuard):
+	// a terminal record is acknowledged without effect, a live one retried.
 	terminalOwnedElsewhere bool
 
 	// trajectoryObservations are full-fidelity audit inputs carried only to
@@ -1416,6 +1420,19 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 			"no longer waiting on", errResponseAlreadyApplied, loopID, response.RequestID)
 	}
 
+	// Reject responses for loops already in terminal state (defense-in-depth:
+	// catches stale agent.request messages published before a parallel StopLoop
+	// transition was visible). It runs BEFORE anything is touched — the
+	// outstanding mark, the timeout arm — so the result is truly effect-free:
+	// the timeout arm would otherwise rewrite Outcome and Error on a terminal
+	// whose commit may be in flight on another lane (#1362 re-review M2).
+	if entity.State.IsTerminal() {
+		h.logger.Warn("ignoring model response for terminal loop",
+			slog.String("loop_id", loopID),
+			slog.String("state", entity.State.String()))
+		return terminalGuardResult(loopID, entity.State), nil
+	}
+
 	// This request is answered, whatever the outcome below. Clearing the
 	// outstanding mark here rather than in the success arms means an early
 	// return (timeout, terminal loop, budget exhausted) does not leave the loop
@@ -1462,17 +1479,6 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 			result.FailureState = failure
 		}
 		return result, errs.WrapFatal(fmt.Errorf("loop timeout exceeded"), "agentic-loop", "HandleModelResponse", "check timeout")
-	}
-
-	// Reject responses for loops already in terminal state (defense-in-depth:
-	// catches stale agent.request messages published before a parallel StopLoop
-	// transition was visible).
-	if entity.State.IsTerminal() {
-		h.logger.Warn("ignoring model response for terminal loop",
-			slog.String("loop_id", loopID),
-			slog.String("state", entity.State.String()))
-		result.terminalOwnedElsewhere = true
-		return result, nil
 	}
 
 	// Check if max iterations reached
@@ -2630,6 +2636,19 @@ func (h *MessageHandler) handleCompleteResponse(result *HandlerResult, loopID st
 // existing errors.Is(err, context.Canceled) reader is unaffected.
 var errCancelledBeforeMutation = errors.New("cancelled before any loop mutation")
 
+// terminalGuardResult is the effect-free answer both handlers give a delivery
+// that finds its loop already terminal in memory.
+func terminalGuardResult(loopID string, state agentic.LoopState) HandlerResult {
+	return HandlerResult{
+		LoopID:                 loopID,
+		State:                  state,
+		PublishedMessages:      []PublishedMessage{},
+		TrajectorySteps:        []agentic.TrajectoryStep{},
+		ContextEvents:          []agentic.ContextEvent{},
+		terminalOwnedElsewhere: true,
+	}
+}
+
 // HandleToolResult processes a tool execution result
 func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, toolResult agentic.ToolResult) (HandlerResult, error) {
 	// Check for cancellation before processing
@@ -2640,6 +2659,17 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 	entity, err := h.loopManager.GetLoop(loopID)
 	if err != nil {
 		return HandlerResult{}, err
+	}
+	// A terminal loop can apply nothing. Refused BEFORE the result is stored,
+	// the pending set touched, a trajectory step added or the timeout arm run,
+	// so the refusal is effect-free (#1362 re-review M2, M4). It used to sit
+	// behind all of those, reached only when the batch was complete.
+	if entity.State.IsTerminal() {
+		h.logger.Warn("ignoring tool result for terminal loop",
+			slog.String("loop_id", loopID),
+			slog.String("execution_id", toolResult.ExecutionID),
+			slog.String("state", entity.State.String()))
+		return terminalGuardResult(loopID, entity.State), nil
 	}
 	result := HandlerResult{
 		LoopID:            loopID,
@@ -2803,10 +2833,6 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 
 	// All tools dispatched and complete — proceed to next model request.
 	if h.loopManager.AllToolsComplete(loopID) {
-		if entity.State.IsTerminal() {
-			result.terminalOwnedElsewhere = true
-			return result, nil
-		}
 		return h.handleToolsComplete(ctx, loopID, entity, cm, &result)
 	}
 

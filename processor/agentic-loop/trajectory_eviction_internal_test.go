@@ -67,8 +67,10 @@ func TestTerminalPathsEvictActiveTrajectory(t *testing.T) {
 		})
 		require.Error(t, err, "missing completion output is an unknown terminal side effect")
 
+		// Since #1362 a cancellation that commits nothing releases the loop:
+		// memory never holds a terminal the owner did not commit.
 		_, err = handler.trajectoryManager.getTrajectory(loopID)
-		require.NoError(t, err, "failed cancellation durability released its active trajectory")
+		require.Error(t, err, "an uncommitted cancellation kept the loop's active trajectory")
 	})
 }
 
@@ -236,7 +238,8 @@ func TestTerminalPathsReleaseObservedAuditLoss(t *testing.T) {
 		})
 		require.Error(t, err, "missing completion output is an unknown terminal side effect")
 
-		require.True(t, component.trajectoryAuditLoss.observed(loopID),
-			"failed cancellation durability released its audit-loss marker")
+		// Since #1362 a cancellation that commits nothing releases the loop.
+		require.False(t, component.trajectoryAuditLoss.observed(loopID),
+			"an uncommitted cancellation kept the loop's audit-loss marker")
 	})
 }

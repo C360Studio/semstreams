@@ -12,6 +12,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -312,4 +313,122 @@ func TestAResponseMeetingAnUncommittedTerminalWritesNothing(t *testing.T) {
 	require.Equal(t, natsclient.DeliveryDecisionRetry, delivered.Decision(),
 		"the terminal belongs to the lane committing it; this delivery re-reads once it settles")
 	require.Empty(t, bucket.written(), "the carrier wrote a terminal record outside the terminal owner")
+}
+
+// A terminal in memory is not always a commit in flight: the approval-timeout
+// sweeper commits its own terminal outside the owner until #1362 task 1.5. So a
+// terminal-guard result is decided by the RECORD (#1362 re-review M1): a
+// terminal record is acknowledged without effect, with the drop counted.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestAResponseMeetingACommittedTerminalIsAcknowledged(t *testing.T) {
+	c, bucket, published, _ := terminalOwnerLoop(t)
+	require.NoError(t, c.handler.loopManager.TransitionLoop(terminalOwnerLoopID, agentic.LoopStateFailed))
+	committed, err := json.Marshal(agentic.LoopEntity{
+		ID: terminalOwnerLoopID, TaskID: "task-replacement", State: agentic.LoopStateFailed,
+		Role: "general", Model: "model", PublishedRequestID: published,
+	})
+	require.NoError(t, err)
+	_, err = bucket.Put(t.Context(), terminalOwnerLoopID, committed)
+	require.NoError(t, err)
+	bucket.resetWritten()
+	dropped := testutil.ToFloat64(c.metrics.modelResponsesDropped.WithLabelValues("stale_request_id"))
+
+	msg, delivered := deliverResponse(t, c, completionFor(published, "an answer after the loop settled"))
+
+	require.Equal(t, natsclient.DeliveryDecisionAck, delivered.Decision(),
+		"a terminal record is settled: retrying would run the delivery to MaxDeliver")
+	require.Equal(t, int32(1), msg.acks.Load())
+	require.Empty(t, bucket.written())
+	require.Equal(t, dropped+1, testutil.ToFloat64(c.metrics.modelResponsesDropped.WithLabelValues("stale_request_id")))
+}
+
+// A loop that is terminal in memory and past its deadline gets a late
+// response: the terminal guard runs before the timeout arm, so the in-flight
+// terminal's Outcome and Error are not rewritten to a timeout failure and no
+// failure is committed for it (#1362 re-review M2).
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestALateResponseToATimedOutCancelledLoopTouchesNothing(t *testing.T) {
+	c, bucket, published, _ := terminalOwnerLoop(t)
+	require.NoError(t, c.handler.loopManager.SetTimeout(terminalOwnerLoopID, -time.Second))
+	_, err := c.handler.CancelLoop(terminalOwnerLoopID, "operator")
+	require.NoError(t, err)
+
+	_, delivered := deliverResponse(t, c, completionFor(published, "a late answer"))
+
+	require.Equal(t, natsclient.DeliveryDecisionRetry, delivered.Decision(),
+		"the record is live: the cancel's commit is in flight and decides")
+	require.Empty(t, bucket.written(), "a timeout failure was committed over an in-flight cancel")
+	entity, err := c.handler.GetLoop(terminalOwnerLoopID)
+	require.NoError(t, err)
+	require.Equal(t, agentic.OutcomeCancelled, entity.Outcome,
+		"the timeout arm rewrote the in-flight cancel's outcome")
+}
+
+// The tool handler's terminal guard refuses before it touches anything — the
+// stored result, the pending set, the trajectory, the timeout arm (#1362
+// re-review M2, M4) — and the carrier then leaves the terminal to its owner.
+// The tool LANE settles a terminal loop earlier (Q7's warm classification);
+// this guard is reached by the approval lane's synthesized rejection.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestAToolResultForATerminalLoopTouchesNothing(t *testing.T) {
+	c, bucket, published, _ := terminalOwnerLoop(t)
+	executionID := deriveToolExecutionID(published, "call-late", 1)
+	c.handler.loopManager.TrackToolCall(executionID, terminalOwnerLoopID)
+	require.NoError(t, c.handler.loopManager.AddPendingTool(terminalOwnerLoopID, "call-late"))
+	require.NoError(t, c.handler.loopManager.SetTimeout(terminalOwnerLoopID, -time.Second))
+	_, err := c.handler.CancelLoop(terminalOwnerLoopID, "operator")
+	require.NoError(t, err)
+	pendingBefore := c.handler.loopManager.GetPendingTools(terminalOwnerLoopID)
+
+	result, err := c.handler.HandleToolResult(t.Context(), terminalOwnerLoopID, agentic.ToolResult{
+		RequestID: published, ExecutionID: executionID, CallID: "call-late", CallOrdinal: 1,
+		Name: "search", Content: "a result for a loop that has ended",
+	})
+
+	require.NoError(t, err)
+	require.True(t, result.terminalOwnedElsewhere, "the terminal guard did not answer")
+	require.Equal(t, pendingBefore, c.handler.loopManager.GetPendingTools(terminalOwnerLoopID),
+		"the guard ran after the result was already applied to the pending set")
+	entity, err := c.handler.GetLoop(terminalOwnerLoopID)
+	require.NoError(t, err)
+	require.Equal(t, agentic.OutcomeCancelled, entity.Outcome, "the timeout arm rewrote the cancel")
+
+	persistErr := c.persistHandlerResult(t.Context(), result, publishThenWrite)
+	require.Error(t, persistErr)
+	require.False(t, errs.IsFatal(persistErr), "an in-flight terminal is retried, not quarantined")
+	require.Empty(t, bucket.written(), "the carrier wrote a terminal outside the owner")
+}
+
+// The approval lane honours a transient carrier failure: a lost
+// compare-and-swap has released the loop and is retried, never quarantined
+// (#1362 re-review M3).
+//
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
+func TestAnApprovalWhoseRecordMovedIsRetried(t *testing.T) {
+	c, bucket, published, _ := terminalOwnerLoop(t)
+	executionID := deriveToolExecutionID(published, "call-gated", 1)
+	entity, err := c.handler.GetLoop(terminalOwnerLoopID)
+	require.NoError(t, err)
+	require.NoError(t, entity.BeginAwaitingApproval("call-gated", "delete_rule", nil,
+		"approval_required: destructive", time.Minute, ""))
+	entity.PendingApproval.RequestID = published
+	entity.PendingApproval.ExecutionID = executionID
+	entity.PendingApproval.CallOrdinal = 1
+	require.NoError(t, c.handler.UpdateLoop(entity))
+	_, err = bucket.Put(t.Context(), terminalOwnerLoopID, []byte(`{"id":"moved"}`))
+	require.NoError(t, err)
+	bucket.resetWritten()
+
+	decision, err := c.handleApprovalResponseMessage(t.Context(), baseMessageBytes(t, &agentic.ApprovalResponse{
+		LoopID: terminalOwnerLoopID, CallID: "call-gated", ExecutionID: executionID, RequestID: published,
+		Decision: agentic.ApprovalDecisionApprove, ApprovedBy: "operator", DecidedAt: time.Now().UTC(),
+	}))
+
+	require.Error(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionRetry, decision,
+		"a lost compare-and-swap is transient; quarantining it latches the lane on a benign race")
+	require.Empty(t, bucket.written())
 }

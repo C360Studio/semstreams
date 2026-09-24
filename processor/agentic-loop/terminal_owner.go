@@ -413,3 +413,37 @@ func (c *Component) writeRecordCancelled(ctx context.Context, loopID string, can
 	}
 	return nil
 }
+
+// settleTerminalGuard decides a result the handler returned from a terminal
+// guard: the loop was terminal in memory, and the handler touched nothing.
+// The record answers it, not memory (#1362 re-review M1). A terminal record
+// — or none — is settled: the delivery is acknowledged without effect, with
+// an audit line and the lane's drop metric (Q7). A live record means the
+// terminal in memory is a commit still in flight on another lane: the
+// delivery is retried, and the redelivery finds that commit landed (a
+// terminal record) or failed and released the loop (a live record to rebuild
+// from). An unreadable record is retried.
+func (c *Component) settleTerminalGuard(ctx context.Context, result HandlerResult, recordDrop func()) error {
+	record := c.readLoopRecord(ctx, result.LoopID)
+	if record.presence == loopPresenceStale {
+		c.logger.WarnContext(ctx, "Delivery acknowledged without effect — the loop's record is terminal",
+			slog.String("loop_id", result.LoopID),
+			slog.String("state", result.State.String()))
+		if recordDrop != nil {
+			recordDrop()
+		}
+		return nil
+	}
+	return errs.WrapTransient(
+		fmt.Errorf("loop %s is terminal in memory and its record is not: the terminal commit is not settled",
+			result.LoopID),
+		"agentic-loop", "settleTerminalGuard", "leave an uncommitted terminal to its owner")
+}
+
+// recordTerminalToolResultDropped counts a tool result a terminal loop can no
+// longer apply, on the reason Q7 already names.
+func (c *Component) recordTerminalToolResultDropped() {
+	if c.metrics != nil {
+		c.metrics.recordToolResultDropped("terminal_unproven")
+	}
+}
