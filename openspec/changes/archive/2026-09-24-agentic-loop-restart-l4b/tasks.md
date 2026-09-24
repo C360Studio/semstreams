@@ -174,8 +174,10 @@ Mutation evidence uses a `cp` backup and a checksum.
   - Evidence (2026-09-24): exit 0 at `6533d3bd`, 318 packages ok, 0 FAIL.
 - [x] 8.2 `task e2e:agentic` green, including 6.1. This is the BREAKING gate for 3.1's order change.
   - Evidence (2026-09-24): exit 0 at `6533d3bd`, 5m35s; `verify-approval-across-replacement` 6.5s.
-- [ ] 8.3 The PR body carries:
+- [x] 8.3 The PR body carries:
   - `Closes #1362` and `Closes #1155`
   - `implemented-by:`
   - the branch 1.6 took, and why
   - the breaker count, if any rider rode along
+  - No rider rode along: the owner ruled on 2026-09-24 that #1342, #1238 and #1345 follow #1366 (#1362
+    issuecomment-5820695479), so there is no breaker count.
