@@ -131,18 +131,19 @@ func TestApprovalLanePublishesBeforeItWrites(t *testing.T) {
 // half of the approval lane's order (owner Codex round 2 on PR #1361,
 // finding 2).
 //
-// TestApprovalLaneKeepsWriteThenPublish above pins the approval RESPONSE: the
-// lane that settles an answer. Nothing pinned the delivery that creates the
-// gate, and that one arrives on the TOOL-RESULT lane, which passes
+// TestApprovalLanePublishesBeforeItWrites above pins the approval RESPONSE:
+// the lane that settles an answer. Nothing pinned the delivery that creates
+// the gate, and that one arrives on the TOOL-RESULT lane, which passes
 // publishThenWrite. An awaiting_approval result is not terminal, so it took
 // that order: ApprovalPendingEvent was published before the gate was written,
 // and a crash between them left a visible approval request with no durable
-// gate behind it. The replacement's approval-response handler stale-drops an
-// answer to a gate it cannot find and acknowledges it — a human decision
-// silently lost, on the one lane whose whole purpose is a human decision.
+// gate behind it. The replacement's approval lane finds a record that is not
+// awaiting approval and acknowledges the answer — a human decision silently
+// lost, on the one lane whose whole purpose is a human decision.
 //
-// Design § 5.4 and moved task 2.7 keep the gate on write-then-publish in L4a;
-// its cold branch and the early-answer retry proof are #1362's.
+// Design § 5.4 keeps the gate on write-then-publish, and #1362 task 1.6
+// confirmed it: the cold branch cannot retry an answer that outran its gate
+// (TestAnApprovalAnswerThatOutrunsItsGateIsAcknowledged).
 //
 // The delivery runs through the real lane, so what is asserted is the order
 // the CALL SITE and the carrier produce together, not the carrier alone.

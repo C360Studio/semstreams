@@ -197,3 +197,74 @@ func TestGraphWritePublishBudget_IsReasonable(t *testing.T) {
 		t.Errorf("graphWritePublishBudget too wide (%v); defeats the bounded-wait property — publish can be delayed by a degraded graph-gateway", graphWritePublishBudget)
 	}
 }
+
+// TestAGateIsWrittenBeforeItIsPublishedWhateverItsLaneAsks is task 1.6's gate
+// branch at the carrier seam (docket OQ8): a result that CREATES an approval
+// gate is written before its ApprovalPendingEvent is published even when the
+// lane asks for publish-then-write, so an unpublishable client still leaves
+// the gate durable.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestAGateIsWrittenBeforeItIsPublishedWhateverItsLaneAsks(t *testing.T) {
+	c, bucket, loopID := carrierLoop(t)
+	entity, err := c.handler.GetLoop(loopID)
+	require.NoError(t, err)
+	require.NoError(t, entity.BeginAwaitingApproval(
+		"call-gate", "delete_rule", nil, agentic.ApprovalRequiredPrefix+"needs a human", time.Hour, ""))
+	require.NoError(t, c.handler.UpdateLoop(entity))
+	c.natsClient = unpublishableClient(t)
+
+	err = c.persistHandlerResult(t.Context(), HandlerResult{
+		LoopID: loopID,
+		State:  agentic.LoopStateAwaitingApproval,
+		PublishedMessages: []PublishedMessage{{
+			Subject: "agent.approval_pending." + loopID,
+			Data:    []byte(`{"gate":true}`),
+		}},
+	}, publishThenWrite)
+
+	require.Error(t, err, "the unconnected publish must fail so the order is observable")
+	require.Equal(t, []string{loopID}, bucket.written(),
+		"the gate must be durable before its event is visible")
+}
+
+// TestAnApprovalAnswerThatOutrunsItsGateIsAcknowledged is task 1.6's
+// conditional test, written first as ruled (#1362 issuecomment-5799118983,
+// OQ-A), and kept as the recorded proof of the branch that shipped.
+//
+// The question: were a gate to take the uniform publish → Update order, a
+// crash between its ApprovalPendingEvent and its record would leave the event
+// visible and the record still running at the gate's request, with no gate on
+// it. The human answers; the answer reaches a replacement. Would the approval
+// lane's cold branch RETRY that answer until the gate became durable?
+//
+// It would not, and the test was first written asserting that it would and
+// observed to fail ("An error is expected but got nil"): design § 5.5 step 1
+// acknowledges an answer whose record is not awaiting_approval, because that
+// is also the shape of an answer whose gate was already consumed (W3), and
+// the record cannot tell the two apart. So the uniform order would lose the
+// human's answer, and a gate keeps write → publish (variant A of the delta):
+// the gate is durable before any human can see it, and no answer can outrun
+// it. Adding an ahead-of-gate Retry arm is new scope and an owner question
+// (OQ-A), not built.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestAnApprovalAnswerThatOutrunsItsGateIsAcknowledged(t *testing.T) {
+	a := newColdApproval(t, nil, func(e *agentic.LoopEntity) {
+		// The gate's write never landed: the record is as the tool lane's
+		// dispatch left it, running at R with nothing applied.
+		e.State = agentic.LoopStateExecuting
+		e.StateBeforeApproval = ""
+		e.PendingApproval = nil
+		e.PendingToolResults = nil
+	})
+
+	decision, err := a.deliver(t, a.answer(agentic.ApprovalDecisionApprove))
+
+	require.NoError(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionAck, decision,
+		"step 1 acknowledges an answer whose record is not awaiting approval: the answer is gone, "+
+			"which is why a gate must be written before it is published")
+	require.Empty(t, a.bucket.written(), "the acknowledged answer applied nothing")
+	require.False(t, a.held())
+}

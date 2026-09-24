@@ -2,8 +2,8 @@
 
 > The MODIFIED block restates the requirement at `openspec/specs/agentic-loop/spec.md:1451-1652` (`c4a79fd5`) in
 > full: every existing scenario verbatim, plus three carried from the L4a archive. Gate-order text is variant A (write
-> → publish for gates); task 1.6 swaps it if its test selects the uniform order. Owner rulings: #1362
-> issuecomment-5799118983.
+> → publish for gates): task 1.6's test showed the cold branch acknowledges an answer that outruns its gate, so the
+> uniform order is not taken. Owner rulings: #1362 issuecomment-5799118983.
 
 ## MODIFIED Requirements
 

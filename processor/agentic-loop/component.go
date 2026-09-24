@@ -2228,15 +2228,17 @@ const (
 // reject-minted crash window, and the lane's own cold branch closes it
 // (settleApprovalResponseWithoutLoop).
 //
-// An awaiting_approval result keeps write-then-publish too, whichever order its
+// An awaiting_approval result keeps write-then-publish, whichever order its
 // lane asked for, and the tool-result lane is the only producer of one
 // (checkApprovalGate in handlers.go). The gate is a durable promise to a HUMAN:
 // published first, a crash between the ApprovalPendingEvent and the record
-// leaves an approval request visible with no gate behind it, and the
-// replacement's approval-response handler stale-drops the answer and
-// acknowledges it. What closes that window is the approval lane's own cold
-// branch (design § 5.4, moved task 2.7). Nothing is lost by keeping the old
-// order here: a gate result mints no request — its only publication is the
+// leaves an approval request visible with no gate behind it, and the approval
+// lane's cold branch acknowledges the answer as inapplicable — design § 5.5
+// step 1 cannot tell a gate not yet written from one already consumed. Task
+// 1.6 of #1362 settled this with a test
+// (TestAnApprovalAnswerThatOutrunsItsGateIsAcknowledged): the uniform order
+// would lose the answer, so the gate is written first (OQ-A). Nothing is lost
+// by the order: a gate result mints no request — its only publication is the
 // ApprovalPendingEvent, which carries no MsgID — so mintedRequestID returns ""
 // for it and the stamp below is a no-op on this path either way.
 func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResult, order carrierOrder) error {
