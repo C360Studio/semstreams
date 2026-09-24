@@ -1,7 +1,8 @@
 # agentic-loop — delta (#1362, restart-safety L4b)
 
 > The MODIFIED block restates the requirement at `openspec/specs/agentic-loop/spec.md:1451-1652` (`c4a79fd5`) in
-> full: every existing scenario verbatim, plus three carried from the L4a archive. Gate-order text is variant A (write
+> full: every existing scenario verbatim, plus three carried from the L4a archive and one pinning the owner ruling that
+> a foreign-request governance verdict is terminated (#1362 issuecomment-5811131953). Gate-order text is variant A (write
 > → publish for gates): task 1.6's test showed the cold branch acknowledges an answer that outruns its gate, so the
 > uniform order is not taken. Owner rulings: #1362 issuecomment-5799118983.
 
@@ -31,7 +32,8 @@ record SHALL be written before the first request is published. An update that CR
 lane produces it, SHALL be written before the gate is published: a gate published before it is written leaves a human
 an approval request with no durable gate behind it. A terminal outcome SHALL be committed as `COMPLETE_<loopID>` by
 create-once before its terminal event is published, and the loop entity's terminal state SHALL be written after that
-event, the approval-timeout sweeper's automatic rejection included. A redelivered
+event, the approval-timeout sweeper's automatic rejection included. The terminal transition SHALL clear the loop's
+approval gate, so a terminal record carries neither `pending_approval` nor `state_before_approval`. A redelivered
 terminal input SHALL adopt the loop's durable terminal by loop ID and terminal kind. On that commit path a durable
 terminal of a different kind from the one the redelivered input derives SHALL be quarantined, not adopted: the first
 terminal wins. A redelivered cancel that reaches a process not holding the loop, whose record is live and whose durable
@@ -258,3 +260,13 @@ deadline from then on.
 - **WHEN** the input that produced the terminal is redelivered and this delivery derives a terminal whose content differs
 - **THEN** the loop adopts the durable terminal by loop ID and terminal kind, publishes it, writes the record terminal under
   compare-and-swap, acknowledges, and logs the content difference at the audit line without retrying or quarantining
+
+#### Scenario: A governance verdict naming a request of another loop is terminated and the verdict lane keeps consuming
+
+- **GIVEN** a loop `L` whose record is live, and a governance verdict that reaches no waiter whose `loop_id` is `L`
+  and whose `request_id` is not a request of `L`
+- **WHEN** the verdict is delivered
+- **THEN** it is terminated (JetStream Term: never redelivered, no dead-letter copy — the Error log line carries its
+  execution, loop and request identities), counted once under `missing_waiter` and once under `foreign_request`, and
+  never acknowledged as applied, because the request is checked before membership; the verdict consumer is not
+  stopped, so one misconfigured verdict rule terminates only its own deliveries and later verdicts are still consumed
