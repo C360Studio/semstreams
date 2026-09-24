@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -166,6 +168,12 @@ func TestIntegrationConcurrentReplicasConvergeOnOneCompletedOutcome(t *testing.T
 	assert.Equal(t, authoritative, loaded.Result.Content)
 }
 
+// ackReplayStopBudget bounds each Stop in the ACK-failure restart test. The
+// first Stop measured 116-264µs across three instrumented runs; five seconds
+// is slack for a loaded host, and it is the longest a drain that cannot
+// observe closure can hold the test (#1370).
+const ackReplayStopBudget = 5 * time.Second
+
 func TestIntegrationAckFailureRestartReplaysWithoutSecondExecution(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithStreams(
 		natsclient.TestStreamConfig{Name: "TOOL_ACK_REPLAY", Subjects: []string{"tool.execute.>", "tool.result.>"}},
@@ -225,7 +233,30 @@ func TestIntegrationAckFailureRestartReplaysWithoutSecondExecution(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, publisher.PublishToStream(ctx, "tool.execute."+call.ID, wire))
 	require.Eventually(t, func() bool { return executor.calls.Load() == 1 }, 5*time.Second, 25*time.Millisecond)
-	_ = first.Stop(context.Background())
+	// Stop runs against a connection the test severed, so its outcome depends
+	// on where the close lands relative to cleanup's tool.list drain (#1370):
+	//   - closed before Stop, the usual order: nats.ErrBadSubscription, or
+	//     nats.ErrConnectionClosed if the close lands between the validity
+	//     check and the native drain;
+	//   - closed while that drain is pending: natsclient.Subscription.Drain
+	//     waits for SubscriptionClosed, which nats.go emits only from
+	//     removeSub, and a closed connection never reaches removeSub. The
+	//     drain returns only when ctx ends, so Stop returns
+	//     context.DeadlineExceeded at its budget;
+	//   - closed after the drain completed: nil.
+	// The budget is what turns the middle case from a hang into a bounded
+	// wait. Under Background it hung until the 20-minute package timeout.
+	firstStopCtx, cancelFirstStop := context.WithTimeout(context.Background(), ackReplayStopBudget)
+	firstStopErr := first.Stop(firstStopCtx)
+	cancelFirstStop()
+	if firstStopErr != nil {
+		require.Truef(t,
+			errors.Is(firstStopErr, nats.ErrBadSubscription) ||
+				errors.Is(firstStopErr, nats.ErrConnectionClosed) ||
+				errors.Is(firstStopErr, context.DeadlineExceeded),
+			"Stop on a severed connection may fail only as bad subscription, closed connection, or its own deadline; got %v",
+			firstStopErr)
+	}
 	replayBefore := testutil.ToFloat64(first.metrics.outcomeTotal.WithLabelValues(string(outcomePathReplay)))
 
 	secondClient, err := natsclient.NewClient(testClient.URL)
@@ -233,7 +264,11 @@ func TestIntegrationAckFailureRestartReplaysWithoutSecondExecution(t *testing.T)
 	require.NoError(t, secondClient.Connect(ctx))
 	t.Cleanup(func() { require.NoError(t, secondClient.Close(context.Background())) })
 	second := newRunning(secondClient)
-	defer second.Stop(context.Background())
+	defer func() {
+		secondStopCtx, cancelSecondStop := context.WithTimeout(context.Background(), ackReplayStopBudget)
+		defer cancelSecondStop()
+		assert.NoError(t, second.Stop(secondStopCtx), "Stop on a live connection must drain cleanly")
+	}()
 	require.Eventually(t, func() bool {
 		return testutil.ToFloat64(second.metrics.outcomeTotal.WithLabelValues(string(outcomePathReplay))) > replayBefore
 	}, 20*time.Second, 100*time.Millisecond, "redelivery must traverse durable replay after configured 15s backoff")
