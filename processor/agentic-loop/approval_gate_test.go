@@ -197,6 +197,9 @@ func TestHandleToolResult_AwaitingApprovalAbsorbsSiblings(t *testing.T) {
 		if strings.HasPrefix(msg.Subject, "agent.request.") {
 			t.Errorf("sibling tool result triggered agent.request while awaiting approval: %s", msg.Subject)
 		}
+		if strings.HasPrefix(msg.Subject, "agent.approval_pending.") {
+			t.Errorf("a sibling's result re-echoed a gate it does not belong to: %s", msg.Subject)
+		}
 	}
 
 	// Loop entity remains in awaiting_approval; PendingApproval still
@@ -210,6 +213,97 @@ func TestHandleToolResult_AwaitingApprovalAbsorbsSiblings(t *testing.T) {
 	}
 	if entity.PendingApproval == nil || entity.PendingApproval.CallID != "call-A" {
 		t.Errorf("PendingApproval drifted: %+v", entity.PendingApproval)
+	}
+}
+
+// TestARedeliveredGatedResultReEchoesItsGate is #1362 task 1.3 (design § 5.4,
+// D28): the gated result is redelivered to the process that holds the gated
+// loop — its acknowledgement was lost, or its ApprovalPendingEvent's was. The
+// loop is already awaiting THIS gate, so nothing is re-gated or advanced, and
+// the ApprovalPendingEvent is published again so a human who never saw the
+// first one sees this one. Before, the awaiting branch returned with no echo.
+func TestARedeliveredGatedResultReEchoesItsGate(t *testing.T) {
+	handler := agenticloop.NewMessageHandler(createTestConfig())
+	ctx := context.Background()
+
+	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		TaskID: "task-approval-reecho", Role: "general", Model: "qwen-32b", Prompt: "Delete a rule",
+	})
+	if err != nil {
+		t.Fatalf("HandleTask: %v", err)
+	}
+	loopID := taskResult.LoopID
+	dispatched, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+		RequestID: handler.OutstandingRequestForTest(loopID),
+		Status:    "tool_call",
+		Message: agentic.ChatMessage{Role: "assistant", ToolCalls: []agentic.ToolCall{
+			{ID: "call-A", Name: "delete_rule"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("HandleModelResponse: %v", err)
+	}
+	var call agentic.ToolCall
+	for _, msg := range dispatched.PublishedMessages {
+		if !strings.HasPrefix(msg.Subject, "tool.execute.") {
+			continue
+		}
+		var envelope struct {
+			Payload agentic.ToolCall `json:"payload"`
+		}
+		if err := json.Unmarshal(msg.Data, &envelope); err != nil {
+			t.Fatalf("decode tool.execute: %v", err)
+		}
+		call = envelope.Payload
+	}
+	if call.ExecutionID == "" {
+		t.Fatal("fixture: the dispatched call carries no execution identity")
+	}
+	gated := agentic.ToolResult{
+		LoopID: loopID, CallID: call.ID, Name: call.Name,
+		RequestID: call.RequestID, ExecutionID: call.ExecutionID, CallOrdinal: call.CallOrdinal,
+		ErrorKind: agentic.ToolErrorPermission, Error: agentic.ApprovalRequiredPrefix + "needs approval",
+	}
+	if first, err := handler.HandleToolResult(ctx, loopID, gated); err != nil || first.State != agentic.LoopStateAwaitingApproval {
+		t.Fatalf("fixture: the first delivery must gate the loop: %v, %s", err, first.State)
+	}
+
+	again, err := handler.HandleToolResult(ctx, loopID, gated)
+	if err != nil {
+		t.Fatalf("redelivered HandleToolResult: %v", err)
+	}
+
+	if again.State != agentic.LoopStateAwaitingApproval {
+		t.Fatalf("state = %s, want awaiting_approval", again.State)
+	}
+	var echoes []agentic.ApprovalPendingEvent
+	for _, msg := range again.PublishedMessages {
+		if !strings.HasPrefix(msg.Subject, "agent.approval_pending.") {
+			t.Errorf("the re-echo published something other than the gate: %s", msg.Subject)
+			continue
+		}
+		var envelope struct {
+			Payload agentic.ApprovalPendingEvent `json:"payload"`
+		}
+		if err := json.Unmarshal(msg.Data, &envelope); err != nil {
+			t.Fatalf("decode approval_pending: %v", err)
+		}
+		echoes = append(echoes, envelope.Payload)
+	}
+	if len(echoes) != 1 {
+		t.Fatalf("a redelivered gated result re-echoed %d ApprovalPendingEvents, want 1", len(echoes))
+	}
+	entity, err := handler.GetLoop(loopID)
+	if err != nil {
+		t.Fatalf("GetLoop: %v", err)
+	}
+	echo, gate := echoes[0], entity.PendingApproval
+	if echo.ExecutionID != gate.ExecutionID || echo.CallID != gate.CallID || echo.RequestID != gate.RequestID {
+		t.Errorf("the re-echo names another gate: %+v, pending %+v", echo, gate)
+	}
+	if !echo.RequestedAt.Equal(gate.RequestedAt) || echo.Timeout != gate.Timeout {
+		t.Errorf("the re-echo restarts the human's deadline: echoed %s+%s, gate %s+%s",
+			echo.RequestedAt, echo.Timeout, gate.RequestedAt, gate.Timeout)
 	}
 }
 

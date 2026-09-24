@@ -2851,7 +2851,25 @@ func (h *MessageHandler) checkApprovalGate(loopID string, entity *agentic.LoopEn
 	// approval_required hit gated the loop — they must not advance the
 	// loop or trigger the next model request. The pending approval
 	// handler drains PendingToolResults when the loop resumes.
+	//
+	// The gated result ITSELF arriving again is a redelivery — its
+	// acknowledgement was lost — and the ApprovalPendingEvent it produced may
+	// never have been seen. It is re-echoed from the gate the loop holds
+	// (#1362 task 1.3, design § 5.4, D28); the carrier writes the gate before
+	// it publishes, as for the first echo. Matched by the one identity rule an
+	// answer is matched by, so a sibling never echoes a gate it is not.
 	if entity.State == agentic.LoopStateAwaitingApproval {
+		if approvalAnswersGate(entity.PendingApproval, toolResult.CallID, toolResult.ExecutionID) {
+			echo, err := h.approvalPendingMessage(loopID, *entity.PendingApproval)
+			if err != nil {
+				h.logger.Warn("failed to re-echo the pending approval for a redelivered gated result",
+					slog.String("loop_id", loopID),
+					slog.String("execution_id", toolResult.ExecutionID),
+					slog.String("error", err.Error()))
+			} else {
+				result.PublishedMessages = append(result.PublishedMessages, *echo)
+			}
+		}
 		return true
 	}
 	// Approval-gated rejection: the agentic-tools approval filter
@@ -2904,20 +2922,28 @@ func (h *MessageHandler) gateForApproval(loopID string, entity *agentic.LoopEnti
 		return nil, fmt.Errorf("persist awaiting-approval state: %w", err)
 	}
 
+	return h.approvalPendingMessage(loopID, *entity.PendingApproval)
+}
+
+// approvalPendingMessage builds the ApprovalPendingEvent for a gate, from the
+// gate itself: the first echo when the gate fires and the re-echo when its
+// gated result is redelivered carry the same identity and the same deadline,
+// because both read the one PendingApprovalState the record carries.
+func (h *MessageHandler) approvalPendingMessage(loopID string, gate agentic.PendingApprovalState) (*PublishedMessage, error) {
 	pending := &agentic.ApprovalPendingEvent{
 		LoopID: loopID,
-		CallID: toolResult.CallID,
+		CallID: gate.CallID,
 		// The identity the approval authorises, carried to whoever answers so
 		// the answer can be matched on it rather than on a provider CallID the
 		// provider may reuse next turn.
-		ExecutionID: toolResult.ExecutionID,
-		RequestID:   toolResult.RequestID,
-		ToolName:    toolName,
-		Arguments:   args,
-		Reason:      toolResult.Error,
-		RequestedAt: time.Now().UTC(),
-		Timeout:     h.config.ApprovalTimeout(),
-		TraceID:     toolResult.TraceID,
+		ExecutionID: gate.ExecutionID,
+		RequestID:   gate.RequestID,
+		ToolName:    gate.ToolName,
+		Arguments:   gate.Arguments,
+		Reason:      gate.Reason,
+		RequestedAt: gate.RequestedAt,
+		Timeout:     gate.Timeout,
+		TraceID:     gate.TraceID,
 	}
 	envelope := message.NewBaseMessage(pending.Schema(), pending, "agentic-loop")
 	data, err := json.Marshal(envelope)
