@@ -1,70 +1,44 @@
 ## Why
 
-`natsclient.(*Subscription).Drain` waits for a `SubscriptionClosed` status that nats.go never emits when the
-connection closes. A drain that is pending when its connection closes therefore returns only when the caller's ctx
-ends ([#1372](https://github.com/C360Studio/semstreams/issues/1372)). Connections tend to close during process
-shutdown, and that is exactly when every component that drains a subscription runs `Stop`. Each such `Stop` spends
-its whole budget and returns `context.DeadlineExceeded` for a subscription that is already gone. Under
-`context.Background()` the wait is a hang, and that is how #1370 surfaced it.
+`natsclient.(*Subscription).Drain` waits for nats.go to report `SubscriptionClosed`. In nats.go v1.52.0 that status
+comes only from `removeSub`, and `checkDrained` skips `removeSub` when the connection is closed. So a drain that is
+pending when the connection closes waits out the caller's whole context and returns `DeadlineExceeded`. Under
+`context.Background()` it hangs forever, which is how #1370 found it. Every component that drains a subscription
+stops during process shutdown, and that is exactly when connections die (#1372).
 
 ## What Changes
 
-- `Subscription.Drain` completes on the subscription's native terminal state instead of on a status event. It
-  waits on the native closed handler, which nats.go calls after the subscription's in-flight callback has
-  returned. nats.go calls it on a normal drain, an external unsubscribe, the max-reached path, and a connection
-  close.
-- Drain returns `nil` when the connection closes, on every path, including a connection that was already closed
-  before `Drain` was called. A subscription that was already invalid when the wrapper was built (closed before the
-  closed handler was registered) still returns `nats.ErrBadSubscription`. A native drain error other than the
-  terminal sentinels is still returned.
-- Drain after an external `Unsubscribe` now joins the in-flight callback. Today it returns while the callback may
-  still be running.
-- `Client.handleClosed` logs one Warn line for an unrequested close (one `Client.Close` did not ask for), saying
-  that messages queued but not yet delivered on core subscriptions may be dropped. A requested close logs the same
-  fact at Debug. There is no metric (owner ruling 4, amended in round 2).
-- The `Drain` doc comment states the connection-close contract: callbacks are still joined, and queued-but-undelivered
-  messages are discarded (core NATS at-most-once).
-- The #1371 test assertion that expected `ErrBadSubscription` from a `Stop` after the connection closed now expects
-  no error.
-
-The signature, the exported surface, and the ctx-wins and rejoin semantics are unchanged. This is not a breaking
-change: the commit class is `fix(natsclient)` with no `!`, and no E2E tier is owed (owner ruling 3).
+- `Subscription` waits on nats.go's closed handler (`SetClosedHandler`) instead of the `SubscriptionClosed`
+  status. nats.go calls that handler once, after the subscription's delivery goroutine exits. By then every
+  callback has returned, whether the subscription was drained, unsubscribed, or lost its connection.
+- `Drain` treats a native `nats.ErrConnectionClosed` as terminal rather than as a failure. On connection loss it
+  returns `nil` once the in-flight callback returns. The caller's context still wins.
+- The `Drain` doc comment says that on connection loss, queued-but-undelivered messages are discarded (core NATS
+  is at-most-once).
 
 ## Capabilities
 
 ### New Capabilities
 
-- `nats-subscription-lifecycle`: the completion contract of a core NATS subscription handle's `Drain`. It defines
-  when Drain returns, which callbacks it joins, and what it reports when the subscription or its connection is
-  already gone.
+- `nats-subscription-lifecycle`: when `Subscription.Drain` returns, and what it reports.
 
 ### Modified Capabilities
 
-None. `openspec/specs/jetstream-consumer-policy/spec.md:312` ("`Subscription.Drain(context.Context)` behavior
-remains unchanged by this capability") stays as written (owner ruling 2). This change sets `Drain`'s behavior in its
-own capability.
+None. `jetstream-consumer-policy/spec.md:312` stays literally true, because that capability did not change `Drain`.
 
 ## Non-goals
 
-- Counting or recovering messages dropped at a connection close. Core NATS is at-most-once, and after a close the
-  native `Pending` returns `ErrBadSubscription`, so the dropped count cannot be read.
-- A metric for the dropped-message signal (owner ruling 4: a log line only, for now).
-- JetStream consumer handles. `ConsumeContext.Closed()` already fires on connection loss (#1372 evidence), so the
-  delivery-lane `binding.Closed()` waits are not affected.
-- `Client.Close` and connection-level drain (`jetstream-consumer-policy`).
-- A typed "connection closed during drain" error (owner ruling 1 chose `nil`).
+These were designed, reviewed, and deliberately cut. The reasons are in `design.md` § Deliberately not handled.
+
+- Special handling for a connection that closes while the subscription is being constructed.
+- A log line or metric for messages dropped on connection loss.
+- Exhaustive mutation coverage of every nats.go terminal path.
 
 ## Impact
 
-- Code: `natsclient/client.go` (`nativeSubscription`, `Subscription`, `newSubscription`, `Drain` and its doc
-  comment, `handleClosed`); `natsclient/subscription_test.go`; a new `natsclient` integration test;
-  `processor/agentic-tools/outcomes_integration_test.go:253-274`.
-- Callers: 29 non-test `Subscription.Drain` references (gopls), in processors, outputs, storage, examples, and
-  `service/message_logger.go`. None branches on the error value. When the connection closes under a Stop, that Stop now
-  returns cleanly once any in-flight callback finishes, not at its ctx deadline.
-- Consumers: every `sem*` product that composes SemStreams components gets this through component `Stop`. A
-  read-only scan of the local sister checkouts on 2026-09-24 found `natsclient.Subscription` held in semboids,
-  semdev, semdragon, semmachina, semops, semsage, semsource and semspec, and `ErrBadSubscription` named in none of
-  them. No migration note is owed.
-- Dependencies: none added. The contract rests on nats.go v1.52.0's `SetClosedHandler` timing, which the new
-  integration test guards.
+- `natsclient/client.go`: `newSubscription`, `Subscription.Drain`, its doc comment, and the unexported
+  `nativeSubscription` interface. No exported API changes.
+- `natsclient/subscription_test.go` and one new integration test.
+- `processor/agentic-tools/outcomes_integration_test.go:272`: the assertion `#1371` added becomes `NoError`.
+- Commit class `fix(natsclient)`, with no `!` and no E2E tier (owner ruling 3). No sister repo reads the error
+  values that change, so no migration note is owed.

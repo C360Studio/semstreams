@@ -1,79 +1,41 @@
 ## Purpose
 
-The completion contract of a core NATS subscription handle returned by the SemStreams client: when its `Drain`
-returns, which message callbacks it joins first, and what it reports when the subscription or its connection is
-already gone.
+When a SemStreams core NATS subscription handle's `Drain` returns, and what it reports, including when the
+connection is lost.
 
 ## ADDED Requirements
 
-### Requirement: Subscription Drain completes on native terminal state
+### Requirement: Subscription Drain returns after its callbacks, including on connection loss
 
-`Subscription.Drain(ctx)` SHALL return only after the native subscription has reached its terminal state and its
-in-flight message callback has returned, or when `ctx` ends, whichever comes first, except for the two immediate
-error results named below: a born-invalid subscription and a preserved native drain error.
-
-The native terminal state covers a completed drain, an external unsubscribe, and the connection closing. (nats.go
-also reaches it when a subscription hits its message limit; SemStreams handles expose no way to set one.) A
-connection close SHALL NOT turn into a wait for `ctx`. When the terminal state is reached, `Drain` MUST return `nil`,
-including when the connection closed before `Drain` was called, unless the caller's `ctx` has already ended, in which
-case it returns the ctx error. Messages that were queued but not yet delivered when the connection closed are
-discarded (core NATS at-most-once), and `Drain` does not report them.
-
-`Drain` MUST start at most one native drain per subscription. When `ctx` ends first, `Drain` MUST return the ctx
-error without recording it as the drain's outcome, and a later call MUST rejoin the same native drain. A subscription
-that was already invalid when its handle was created MUST return `nats.ErrBadSubscription` without waiting, on every
-call. "When its handle was created" includes the handle's own validity read, so a subscription that closes after the
-handle registers for the closed notification but before that read counts as born invalid. A native drain error other
-than connection-closed or bad-subscription MUST be returned on every call.
+`Subscription.Drain(ctx)` SHALL return only after the subscription's delivery goroutine has exited and its
+in-flight callback has returned, or when `ctx` ends first. A connection that closes before or during the drain
+SHALL count as a completed drain, not a failure. Once the delivery goroutine has exited, `Drain` returns `nil`. If
+`ctx` ends first, it returns the context error. A native drain error other than a closed connection is returned
+unchanged.
 
 #### Scenario: Normal drain joins its callback
 
-- **GIVEN** a subscription whose callback is processing a message
-- **WHEN** `Drain` is called with a live connection
+- **GIVEN** a subscription whose callback is running
+- **WHEN** `Drain` is called on a live connection
 - **THEN** `Drain` does not return before the callback returns
-- **AND** `Drain` returns `nil` once the native drain completes
+- **AND** `Drain` returns `nil`
 
-#### Scenario: Connection closes mid-drain with a callback in flight
+#### Scenario: Connection closes while a drain is pending
 
-- **GIVEN** a subscription whose callback is blocked processing a message
-- **AND** a `Drain` call whose native drain is pending
-- **WHEN** the underlying connection closes
-- **THEN** `Drain` does not return before the blocked callback returns
-- **AND** `Drain` returns `nil` after the callback returns, before its ctx ends
+- **GIVEN** a pending drain whose callback is running
+- **WHEN** the connection closes
+- **THEN** `Drain` does not return before the callback returns
+- **AND** `Drain` returns `nil` before its context ends
 
 #### Scenario: Connection already closed before Drain
 
-- **GIVEN** a subscription created on a live connection whose callback is processing a message
-- **AND** the connection has since closed
+- **GIVEN** a subscription whose connection has closed while its callback is running
 - **WHEN** `Drain` is called
-- **THEN** `Drain` does not return before the in-flight callback returns
+- **THEN** `Drain` does not return before the callback returns
 - **AND** `Drain` returns `nil`
 
-#### Scenario: External unsubscribe then Drain joins the callback
+#### Scenario: Caller context ends first
 
-- **GIVEN** a subscription whose callback is processing a message
-- **AND** the subscription has been unsubscribed directly
-- **WHEN** `Drain` is called
-- **THEN** `Drain` does not return before the in-flight callback returns
-- **AND** `Drain` returns `nil`
-
-#### Scenario: Caller ctx ends first and a later call rejoins
-
-- **GIVEN** a `Drain` call whose native drain has not completed
-- **WHEN** the caller's ctx ends
-- **THEN** that call returns the ctx error
-- **AND** a later `Drain` call starts no second native drain and returns `nil` once the first native drain completes
-
-#### Scenario: Born-invalid subscription reports ErrBadSubscription
-
-- **GIVEN** a subscription handle whose native subscription was already closed when the handle was created
-- **WHEN** `Drain` is called
-- **THEN** `Drain` returns `nats.ErrBadSubscription` without waiting
-- **AND** every later call returns the same error
-
-#### Scenario: Another native drain error is preserved
-
-- **GIVEN** a native drain that fails with an error other than connection-closed or bad-subscription
-- **WHEN** `Drain` is called
-- **THEN** `Drain` returns that error
-- **AND** every later call returns that error
+- **GIVEN** a drain whose callback does not return
+- **WHEN** the caller's context ends
+- **THEN** `Drain` returns the context error
