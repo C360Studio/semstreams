@@ -56,3 +56,79 @@ substantively equivalent, and confirmed all 46 pins. The final artifact's two re
 The approved golden remains unchanged. This is a documentation design review: it establishes neither runtime
 conformance nor human usability, and it does not authorize audit execution or implementation of findings.
 Owner adoption remains pending.
+
+## Owner adoption and preparation — 2026-09-24
+
+The owner accepted the bounded golden extension, agreed that publication of `v1.0.0-beta.164` is the run-1
+trigger, and requested durable preparation/evidence preservation.
+[Owner-decision transcription](https://github.com/C360Studio/semstreams/issues/1367#issuecomment-5811785203).
+
+The canonical procedure is now `docs/contributing/08-golden-edge-agent.md`. #1315 remains its execution owner.
+This adoption does not execute the audit, create automatic monitoring, approve findings for implementation,
+or adopt the candidate v1 objective.
+
+The original inventory, design, golden draft, manifests, and review identities above remain historical evidence.
+Their “pending owner adoption” wording describes the reviewed checkpoint, not current status. The adoption
+adds the exact tag trigger and coordinator/evidence checklist while preserving R1–R10, seven baseline measures,
+the builder brief, P2 information boundaries, and N1 bounds.
+
+### Decision conformance and implementation checkpoint
+
+| Owner decision | Materialized evidence |
+|---|---|
+| Adopt bounded P2/N1 extension. | `docs/contributing/08-golden-edge-agent.md:4`; reviewed limits retained. |
+| Trigger run 1 on published beta.164. | `docs/contributing/08-golden-edge-agent.md:20`; preflight remains required. |
+| Preserve preparation and evidence durably. | `docs/contributing/08-golden-edge-agent.md:249`; `docs/proposals/near-governance-audit/evidence/README.md:1`. |
+| Keep v1 objective separate. | `docs/contributing/08-golden-edge-agent.md:292` states the candidate objective remains unadopted. |
+
+Adoption source: reviewed package commit 952041882caff65a0e0fe102a7796219d220efaf.
+Canonical golden SHA-256: adcb08439864ce50d4ac2aae267711fa5dd813edf61df50adc13adcc774e72f0.
+The leading hash in the checklist's issue reference is escaped for Markdown; rendered meaning is unchanged.
+Implementation review of this adoption delta returned APPROVE; exact identities and limits are recorded below.
+Execution is NOT RUN; no runtime or human-usability proof is claimed. Prior package identities remain unchanged.
+
+### Preservation and local verification
+
+The [evidence index](evidence/README.md) points to eleven preserved source/verification artifacts. The runtime
+exploration and nine supplied snapshots were copied byte for byte and verified against their source bytes.
+Evidence SHA256SUMS SHA-256: da6a11af5cf8ffa97c84eab7306b0c01944c3d596080bff3b8c7d06100b2e83e.
+Historical source-pin checks matched planning 46/46 and runtime exploration 966/966 at their declared bases.
+The 966/966 pre-adoption check and hosted CI snapshot describe package commit
+952041882caff65a0e0fe102a7796219d220efaf, not this adoption revision or an executed NEAR audit.
+
+- All five frozen package files retain their recorded hashes.
+- All eleven preserved evidence files pass their checksum manifest.
+- R1–R10, all seven baseline measures, and the §9 builder brief match the pre-adoption canonical bytes.
+- Markdown validation: PASS for the canonical instrument, evidence index, and this review record.
+- Relative artifact links: 20 verified before this section; its additional evidence-index link resolves.
+- git diff --check: PASS. No runtime tests or audit cases were run by the writer.
+
+These checks establish artifact preservation and documentary consistency only. Independent implementation
+review of the adoption returned APPROVE under the exact checkpoint below.
+
+The full [preparation check-push log](evidence/preparation-check-push.txt) is retained byte for byte. The
+coordinator reported exit 201 at baseline 952041882caff65a0e0fe102a7796219d220efaf with the adopted canonical
+hash recorded above: build, lint, tagged vet, schema, contract, and unit-race stages passed; integration was
+NOT RUN because the shared host lock was held by PID 42141 at elapsed 230 seconds. No queue or retry was made.
+Runtime code was unchanged. Later preservation/index/review prose does not extend those checks into runtime
+conformance or an executed audit result.
+
+## Independent implementation gate — 2026-09-24
+
+The independent near_reviewer returned APPROVE with no remaining findings in the documentation adoption and
+preparation delta from 952041882caff65a0e0fe102a7796219d220efaf. The coordinator transcribed that verdict here.
+
+- Canonical golden: adcb08439864ce50d4ac2aae267711fa5dd813edf61df50adc13adcc774e72f0.
+- Review record examined before this verdict was appended: 3c47bfd3398daf39ac38a417fba6c5edb866eb719e38dd3201fd1af84f23075d.
+- Corrected evidence index: 8cf027180013cc89ffcc3e261a8573608d1d8a7287e6e7b07fde1b9a09bf4e51.
+- Evidence manifest: da6a11af5cf8ffa97c84eab7306b0c01944c3d596080bff3b8c7d06100b2e83e.
+
+The reviewer verified all eleven retained artifact hashes, unchanged historical files, baseline sections,
+46/46 and 966/966 historical pins, relative artifact links, and owner-decision conformance. One nonblocking
+clarification now distinguishes coordinator-reported baseline/hash/exit metadata from the raw validation log;
+the reviewer confirmed the corrected index hash above. Raw evidence bytes were unchanged.
+
+The reviewer confirmed that beta.164 publication and execution readiness remain pending. Integration did not
+run because of the shared host lock; earlier hosted checks remain scoped to their recorded revision. No audit
+or tests were run during this review. This approval establishes documentary consistency and preserved evidence,
+not runtime correctness, human usability, or merge readiness.

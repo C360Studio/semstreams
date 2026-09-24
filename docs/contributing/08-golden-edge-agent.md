@@ -1,6 +1,8 @@
 # Golden: the edge triage agent, built blind
 
-Version 1 — written 2026-09-14 at owner direction. Tracked by #1306. Status: READY, not yet run.
+Version 1 — written 2026-09-14 at owner direction. Tracked by #1306 / #1315. Status: not yet run.
+Protocol P2 and NEAR supplement N1 were adopted on 2026-09-24. R1–R10 behavior is unchanged.
+Run 1 is triggered by publication of `v1.0.0-beta.164`, subject to the coordinator preflight in §12.
 
 This is a measurement instrument, not a product. It is rerun by a fresh agent at every milestone tag and release
 candidate. The metric is how far an outside developer gets on the agentic path from the documentation alone, and
@@ -11,11 +13,12 @@ the friction log is the delta between runs.
 
 Preconditions for run 1, all three:
 
-1. PR #1159 (agentic-loop restart, stacked on #1156) has squashed to main.
+1. The restart work under #1146 (including #1362) and the composition work in #1301 have landed on main.
 2. The four known docs defects have landed: `docs/basics/05` retired payload registration; `docs/basics/07`
    `publish_agent` example (missing `subject`, `{{.EntityID}}` templating); `docs/advanced/06` omits `publish_agent`;
    the approval flow unreachable from `docs/basics`. Running before they land re-records known friction.
-3. A tag exists at or after both. **Every run pins to a tag, never HEAD.** Record the tag in the run record.
+3. `v1.0.0-beta.164` is published and contains the prerequisites above. Pin its full resolved commit SHA;
+   never substitute HEAD, an unpublished candidate, or another tag. Record the Release URL and publication time.
 
 Reruns: at every milestone tag and every RC tag. Compare counts against the previous run at its tag.
 
@@ -41,6 +44,7 @@ The builder may NOT read, and must log every violation:
 - `cmd/`, `examples/`, `configs/`, `test/`, `scripts/`, `taskfiles/`, `openspec/`, `.agents/`, `.claude/` except via a
   docs link.
 - Any sister repository. Any prior run record. GitHub issues, pull requests, and discussions.
+- Protocol P2: this document's §12 and `docs/proposals/near-governance-audit/` (planning and scoring material).
 
 A violation is logged with the reason it was necessary and the run continues. **The violation count is the primary
 metric.** Zero is the target state; the number is the truth.
@@ -140,3 +144,150 @@ this golden swaps `set_station_mode`'s neighbour for SemSource over MCP and meas
 
 The spec is versioned in its header. A change to a requirement's behavior invalidates comparison with earlier runs
 and says so in the next run record. Adding a measurement does not.
+
+## 12. NEAR supplement N1
+
+NEAR means Necessity, Evidence, Authority, and Recovery. #1315 owns the run;
+this supplement adds observations to the same worked application, not another audit or a release gate.
+
+### Scheduling and comparison
+
+The prerequisite correction follows the [owner-transcribed sequence](https://github.com/C360Studio/semstreams/issues/1362#issuecomment-5797928199)
+\#1362 → #1301 → tag. [PR #1159 closed without merge](https://github.com/C360Studio/semstreams/pull/1159#issuecomment-5733410892).
+The [owner adopted the extension and beta.164 trigger](https://github.com/C360Studio/semstreams/issues/1367#issuecomment-5811785203).
+Run 1 uses the published `v1.0.0-beta.164` tag after the coordinator verifies its prerequisites and execution
+readiness. Publication is the scheduling trigger, not an automatic launch: this preparation installs no watcher,
+reminder, or background run. If the tag or a required participant/resource is unavailable, record the outstanding
+item on #1315. Do not silently substitute another tag. This post-tag run cannot gate publication of that same tag.
+Existing milestone/RC rerun cadence remains.
+
+Record behavioral version 1, protocol P2, and supplement N1 separately. P2 excludes the new planning corpus and
+this section from builder reading; give the builder the unchanged §9 brief and permitted baseline instructions.
+The R1–R10 requirements, statuses, and seven measures are unchanged. Compare across different knowledge
+boundaries only with an explicit qualification; never claim unqualified comparability or hide prior exposure.
+Seal the baseline transcript, source commit, timings, and results before supplemental preparation or debrief.
+Keep the original continuous builder clock; no composition, evidence retrieval, or repair work is transferred
+outside it to improve the baseline. Record pre-run environment setup separately. Do not modify the sealed app.
+
+### Roles, limits, and reference facts
+
+The existing scorer coordinates this supplement. The operator is a human who did not build the application and
+has not read its transcript, audit planning/review corpus, prior results, or the scorer's reference sheet.
+Record relevant prior experience. No substitute agent produces a human-usability result; absent a human, NOT RUN.
+
+Additional ceiling: two hours total, comprising 30 minutes preparation, 60 minutes operator time, and
+30 minutes scoring. The baseline builder ceiling remains eight hours. Record actual time for each phase.
+Before execution, record available endpoint, maximum provider calls, and any monetary/resource cap. Prefer the
+existing local reference configuration. Stop at a cap, loss of isolation, or a provably wedged run; log the reason
+and remaining cases as NOT RUN. Paid/resource-intensive runs require authoritative progress checks every 30–60s.
+Preparation uses existing documented surfaces and fresh test data in the same built application. No framework,
+application, or documentation repair; no new harness. An unavailable case is NOT RUN with its missing prerequisite.
+
+Before showing cases, the scorer timestamps and saves a reference sheet: task purpose; deterministic/model steps;
+named accountable role; permitted station/mode changes and evidence requirements; test inputs and observable facts;
+expected human choices; expected runtime observations; and facts that remain unknown. Cite source or record IDs.
+Use the example's declared policy; do not invent framework authorization, spending enforcement, rollback, or retry
+guarantees. If the expected result cannot be justified, label that reference UNRESOLVED before observing the human.
+Keep the answer sheet private until responses are recorded. Never rewrite it afterward to make an answer correct.
+
+Give the operator only the neutral task, declared policy/role, documented public entry points, and their allowed
+actions. They may use the example's existing user guidance and linked public guides. They may not inspect source,
+issues, planning/review documents, run records, the builder transcript, or the reference sheet. Log every requested
+hint and document lookup; retain the unassisted answer before offering help. Stop each case after 15 minutes.
+
+Operator brief:
+
+> You are responsible for the supplied station task within the stated policy. Inspect the proposed action and
+> its evidence. Explain why model judgment is involved, what you may authorize, and what remains uncertain.
+> Approve, reject, or leave the action undecided, stating your reason. Inspect the resulting state and evidence.
+> After an interruption, identify what happened and the next documented action you can take. Say “unknown” where
+> the available record cannot establish an answer. Ask for help if needed; we will record the difficulty.
+
+### Four cases and four questions
+
+Use isolated cases with predeclared facts. These are supplemental observations, never new R1–R10 pass conditions.
+
+| Case | Reference and observation |
+|---|---|
+| Supported action | A policy-permitted call with its required evidence; observe approval and recorded result. |
+| Disallowed action | A call outside the declared policy; observe rejection and whether an effect occurred. |
+| Insufficient evidence | Missing input/basis through existing surfaces; observe whether uncertainty is recognized. |
+| Process replacement | A pending approval across replacement; inspect retained identity, evidence, and next action. |
+
+Do not delete retained evidence to manufacture the insufficient-evidence case or claim its absence from a failed
+read. The replacement case does not presume restored deadlines, safe blind retry, or automatic reconciliation.
+If a case cannot be prepared within the bounds, record NOT RUN; do not implement the missing behavior.
+
+| NEAR question | Observation |
+|---|---|
+| Necessity | Identify deterministic steps, model contribution, and the check on its output; “no model needed” is valid. |
+| Evidence | Locate basis, decision, and result; distinguish reported results, observed effects, and unknowns. |
+| Authority | Identify accountable role, permitted action, and approval scope; recognize missing enforcement. |
+| Recovery | Identify retained outcome and next documented action; recognize when a responsible person must intervene. |
+
+Record the builder's Necessity explanation only after sealing the baseline, within supplemental preparation time.
+Do not require building a second deterministic implementation or reward use of a model for its own sake.
+
+### Evidence and disposition
+
+Append an N1 section to the existing tag run record: versions, application commit, reference sheet, operator brief,
+transcript, case results, provenance links, phase durations, resource use, and limitations. Publish the reference
+sheet after the exercise. Record human answer MATCH / MISMATCH / UNRESOLVED / NOT RUN against the frozen reference,
+separately from runtime outcome OBSERVED AS EXPECTED / OBSERVED DIFFERENCE / UNKNOWN / NOT RUN. An accurate answer
+of “unknown” can MATCH. No response, an inaccessible record, or an omitted case is never evidence of success.
+
+For each case count document opens, requests for assistance, approval prompts, retrieval requests and distinct
+services; include repeats and elapsed time to the unassisted answer. Use NA with a reason where not measurable.
+Retain operator words and observed state with timestamps and IDs. Record unsupported assumptions and contradictory
+facts. Use counts and evidence, not an aggregate NEAR score. These measurements do not enter the baseline totals.
+
+The run record remains observations without recommendations. Owner disposition follows separately on #1315 or
+properly placed follow-up issues: existing-contract defect, documentation/usability improvement, product-owned
+need, or accepted/deferred limitation. A finding neither authorizes a fix nor automatically becomes a v1 blocker.
+ADR-106 and the release-candidate-proof contract remain authoritative; this exercise does not certify all surfaces.
+
+### Coordinator preflight and retained evidence
+
+\#1315 owns scheduling, readiness, and the run. Record each check there with its evidence or outstanding item.
+The coordinator/scorer reads this checklist; the blind builder and operator do not.
+
+1. Verify the published `v1.0.0-beta.164` Release, publication time, tag resolution to a full commit SHA, and
+   inclusion of the restart, composition, and documentation prerequisites. Record the instrument commit and
+   its hash separately from the framework commit under test. A missing prerequisite stops preparation for
+   execution; it is not permission to repair the framework or change the selected tag.
+2. Name the fresh builder, independent scorer/coordinator, and human operator. Record their independence and
+   prior exposure declarations, operator availability, and allowed reading packets. Supply the unchanged §9
+   brief plus permitted baseline instructions. Keep planning, reference answers, and prior results excluded.
+3. Record hardware, NATS/model availability, endpoint/model identity, isolation, and means of exercising uplink
+   loss and process replacement. Declare maximum provider calls and monetary/resource caps, who observes them,
+   and how. If a needed resource or reliable observation method is unavailable, state the limitation before
+   starting; do not promise framework enforcement. Confirm the eight-hour baseline and two-hour N1 ceilings.
+4. Reserve durable evidence locations before execution. Keep small artifacts under
+   `docs/contributing/golden-edge-agent-runs/<tag>/`; link larger artifacts from a durable SemStreams-owned
+   attachment. Record SHA-256 for each artifact. Session history and temporary directories are not the sole copy.
+5. Run the baseline with its continuous clock and friction log. Record resource use and any early stop. Preserve
+   the complete builder transcript, application source at its commit, configuration/fixtures, R1–R10 results,
+   seven measures, and supporting request/response or state observations. Seal these before N1 preparation.
+6. Freeze the N1 reference sheet before the operator sees cases. Retain its timestamp/hash, expected decisions,
+   justified runtime expectations, unknowns, policy, and source references. Preserve the exact operator packet,
+   unassisted answers, assistance, case observations, IDs, times, and counts. Use the sealed application unchanged.
+7. File the baseline and N1 evidence together under §8, with unattempted/not-run cases and reasons explicit.
+   Confirm every evidence link is accessible to the scorer and owner and every recorded hash matches.
+   Route disposition separately; completion of this record does not approve fixes or admit release blockers.
+
+The run record at `docs/contributing/golden-edge-agent-runs/<tag>.md` uses these sections:
+
+| Section | Required contents |
+|---|---|
+| Identity | Release URL/time; tag/full SHA; instrument commit/hash; behavior 1/P2/N1; app commit; run UTC times. |
+| Readiness | Prerequisite evidence; participants/independence; hardware/model; limits and observation methods. |
+| Baseline | R1–R10 table; seven measures; verified friction; transcript and sealed source/configuration links. |
+| N1 | Reference sheet and operator packet; four case rows; separate human/runtime outcomes and evidence. |
+| N1 measurements | Per-case lookups, assistance, prompts, retrieval requests/services, and unassisted answer time. |
+| Limits | Phase durations; actual resource use; exposures; redactions; UNKNOWN/NOT RUN/NA reasons; early stops. |
+| Artifact manifest | Relative path or durable URL, SHA-256, purpose, and originating phase for each artifact. |
+| Comparison | Previous run reference and knowledge-boundary differences; qualified comparisons where required. |
+
+Keep operational secrets out of published artifacts and identify any redactions that limit interpretation.
+No artifact or record may describe preparation as an executed test. The candidate v1 objective remains unadopted;
+ADR-106 and existing release authority are unchanged.
