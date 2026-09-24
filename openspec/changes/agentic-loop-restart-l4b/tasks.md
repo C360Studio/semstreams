@@ -126,7 +126,15 @@ Mutation evidence uses a `cp` backup and a checksum.
   - `docs/operations/migration-beta162-to-beta163.md:1904-1910`
 - [ ] 7.2 Add a migration section to `docs/operations/migration-beta162-to-beta163.md`, after `:1784`. It states:
   - the entity's terminal `state` now lands after `agent.complete` / `agent.failed`;
-  - `COMPLETE_` precedes the event on all three paths, and cancel's marker moves ahead of its event;
+  - `COMPLETE_` precedes the event on the carrier, loop-failure and cancel paths, and cancel's marker moves ahead of
+    its event; until task 1.5 the approval-timeout sweeper's own terminal (`max_iterations`) is published and written
+    without `COMPLETE_`;
+  - a crashed cancel is settled cold: its redelivery republishes the saved event and writes the record cancelled;
+  - a terminal whose record update lost its CAS after `COMPLETE_` and its event landed is not reconciled (the loop may
+    keep running; its own later terminal is quarantined), and the same follows a spawn-path birth failure under a
+    producer-supplied loop ID (#1362 issuecomment-5808903072);
+  - a response delivered on a context cancelled before handling is retried, not failed;
+  - terminal records no longer carry `pending_approval` or `state_before_approval`;
   - `continuation_unavailable` is a new failure reason.
 
   Size the section against the keys the semspec watchers read, in one read-only pass.
