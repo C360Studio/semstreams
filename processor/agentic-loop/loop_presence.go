@@ -27,9 +27,11 @@ const (
 	// input cannot be applied by this or any other process. Ack.
 	loopPresenceStale loopPresence = iota
 	// loopPresenceLive — a non-terminal record exists, so the loop is real
-	// and unfinished; this process simply is not the one holding it. The
-	// delivery is still owed, so it is never acknowledged. A lane with a cold
-	// branch takes it here: the model-response, tool-result and approval
+	// and unfinished; this process simply is not the one holding it. A live
+	// presence alone is never grounds to acknowledge: a lane may still
+	// acknowledge or terminate the delivery after classifying it against the
+	// record (an older or already-applied request, a mismatched answer, a
+	// foreign verdict). A lane with a cold branch takes it here: the model-response, tool-result and approval
 	// lanes rebuild the loop from its record and retained evidence, and a
 	// cancel adopts a durable cancel. Whatever a lane cannot yet take is
 	// retried, bounded by the lane's MaxDeliver and BackOff rather than being

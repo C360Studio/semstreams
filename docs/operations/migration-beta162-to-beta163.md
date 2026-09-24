@@ -2114,8 +2114,9 @@ domain vocabulary, not the loop record's field.
 - **Mechanism:** the approval-pause subscriber stamps `agent.run.approval-resumed` as soon as
   `agent.approval_response.<loopID>` is published (`cmd/semteams/approvalpause/subscriber.go:150-162`), and rule
   `agent-run/13` moves the run to `executing` and removes both markers. The loop keeps its gate until the approval lane
-  takes that answer; warm, that is when the lane resolves it, and on a replacement it is when the cold rebuild
-  finishes and the record is written, after the approved call's `tool.execute` is published. A stream read failure
+  takes that answer and the record write lands, after the approved call's `tool.execute` is published. Warm, the gate
+  clears in memory at resolve, but a write that loses its compare-and-swap releases the loop and a redelivery re-echoes
+  from the record; on a replacement the write also waits for the cold rebuild. A stream read failure
   retries the rebuild, so the window can span several redeliveries. A gated result redelivered inside that window
   re-echoes the gate (cold: `processor/agentic-loop/component.go`, `settleToolResultWithoutLoop`; warm:
   `handlers.go`, `checkApprovalGate`). `HandlePending` then stamps `agent.run.approval-pending` again
@@ -2128,7 +2129,7 @@ domain vocabulary, not the loop record's field.
 - **Obligation:** the pause must not re-apply to a gate that was already answered. `ApprovalPendingEvent` and
   `ApprovalResponse` both carry `execution_id` (`agentic/approval.go`); key the pause on `loop_id` and
   `execution_id`, and skip a pending event whose execution the run has already resumed from. Record the answered
-  execution durably on the run entity, not in subscriber memory, so a semteams restart does not forget it. Reading
+  execution durably (the run entity is the natural home), not in subscriber memory, so a semteams restart does not forget it. Reading
   the loop record does not help: inside this window it still reads `awaiting_approval` with the same gate.
 - **Verification:** publish an `ApprovalPendingEvent`, then its `ApprovalResponse`, then the same
   `ApprovalPendingEvent` again; the run ends in `executing` and a later loop terminal still moves it to

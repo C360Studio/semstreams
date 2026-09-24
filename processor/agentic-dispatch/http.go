@@ -870,7 +870,7 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 	}
 	// The recorded state decides before anything about PendingApproval does.
 	// loopOpApprove deliberately skips the gate's terminal check, so a terminal
-	// record reaches here. Before #1362 no transition cleared PendingApproval,
+	// record reaches here. Before #1362 no terminal transition cleared PendingApproval,
 	// so a loop cancelled while awaiting approval landed `state: cancelled`
 	// WITH a pending block, and reading that combination as incoherence
 	// answered 503 "not readable right now" for a record that read perfectly,
