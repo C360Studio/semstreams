@@ -18,14 +18,18 @@ import (
 // A governance verdict whose waiter is gone is classified against the loop
 // record (#1362 task 2.1, design § 5.6, D16). Before this, every verdict naming
 // a live record was Retried, including one whose execution the record already
-// shows applied: a restarted loop re-proposes, so the waiter the old verdict
-// was owed never comes back, and the retry could only end at MaxDeliver.
+// shows applied. A re-proposal does re-register the same derived execution ID,
+// so a verdict that arrives while its call is still being proposed finds a
+// waiter; the stuck case is a verdict that reaches no waiter AFTER its call has
+// moved on — Propose already timed out, or the second verdict of the duplicate
+// proposed/verdict pair design § 5.6 declares as a residual. Nothing will ever
+// wait for it again, so its Retry could only end at MaxDeliver.
 //
-// Each case drives the verdict's wire bytes through the lane the component
-// registers for agent.toolcall.* (deliverylane.Settle over
-// handleToolCallVerdictMessage, with the delayed retry setupConsumer builds),
-// and reads the settlement off the message and the reason off the production
-// counter.
+// Each case feeds the verdict's wire bytes to handleToolCallVerdictMessage
+// through deliverylane.Settle with the delayed retry, mirroring the closure
+// setupConsumer builds for agent.toolcall.* (it does not drive setupConsumer
+// itself), and reads the settlement off the message and the reason off the
+// production counter.
 //
 // Deliberately NOT parallel: loopMetrics is a process-global singleton, so a
 // before/after delta on it only means something while nothing else moves it.
@@ -77,7 +81,7 @@ func TestVerdictWithoutWaiterIsClassifiedAgainstTheLoopRecord(t *testing.T) {
 		fields   map[string]any
 		wireRaw  bool // the publish-action shape: raw JSON with fields under properties
 		want     natsclient.DeliveryDecision
-		reason   string // the ack reason expected to move; "" for a Retry
+		reason   string // the settle reason expected to move; "" for a Retry
 		guidance string
 	}{
 		{
@@ -140,6 +144,14 @@ func TestVerdictWithoutWaiterIsClassifiedAgainstTheLoopRecord(t *testing.T) {
 			want: natsclient.DeliveryDecisionRetry,
 		},
 		{
+			name: "a verdict naming another loop's request is quarantined, even when its execution is held",
+			fields: map[string]any{
+				"loop_id": liveLoopID, "request_id": request(awaitingLoopID, 3), "execution_id": executionID,
+			},
+			want: natsclient.DeliveryDecisionQuarantine, reason: verdictDropForeignRequest,
+			guidance: "a request that is not the loop's is quarantined on every lane, and is decided before membership",
+		},
+		{
 			name:   "a verdict for a loop with no record is acknowledged",
 			fields: map[string]any{"loop_id": absentLoopID, "execution_id": executionID},
 			want:   natsclient.DeliveryDecisionAck, reason: verdictDropLoopAbsent,
@@ -151,7 +163,10 @@ func TestVerdictWithoutWaiterIsClassifiedAgainstTheLoopRecord(t *testing.T) {
 		},
 	}
 
-	ackReasons := []string{verdictDropOlderRequest, verdictDropAlreadyApplied, verdictDropLoopAbsent, verdictDropLoopTerminal}
+	settleReasons := []string{
+		verdictDropOlderRequest, verdictDropAlreadyApplied, verdictDropLoopAbsent, verdictDropLoopTerminal,
+		verdictDropForeignRequest, verdictDropUnrecoverableIdentity,
+	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -172,8 +187,8 @@ func TestVerdictWithoutWaiterIsClassifiedAgainstTheLoopRecord(t *testing.T) {
 			count := func(reason string) float64 {
 				return testutil.ToFloat64(metrics.governanceSubscribeBeforePublishFailures.WithLabelValues(reason))
 			}
-			before := make(map[string]float64, len(ackReasons)+1)
-			for _, reason := range append([]string{verdictDropMissingWaiter}, ackReasons...) {
+			before := make(map[string]float64, len(settleReasons)+1)
+			for _, reason := range append([]string{verdictDropMissingWaiter}, settleReasons...) {
 				before[reason] = count(reason)
 			}
 
@@ -191,12 +206,17 @@ func TestVerdictWithoutWaiterIsClassifiedAgainstTheLoopRecord(t *testing.T) {
 			case natsclient.DeliveryDecisionAck:
 				require.Equal(t, int32(1), msg.acks.Load())
 				require.Zero(t, msg.naks.Load()+msg.terms.Load())
+			case natsclient.DeliveryDecisionQuarantine:
+				require.True(t, result.OwnerStopRequired(), "a quarantine stops the lane's owner")
+				require.Zero(t, msg.acks.Load(), "a quarantined verdict is never acknowledged as applied")
+				require.ErrorIs(t, result.Err(), ErrNoGovernanceWaiter)
+				require.ErrorContains(t, result.Err(), "is not a request of this loop")
 			default:
 				require.Equal(t, int32(1), msg.naks.Load(), "a retry is a delayed Nak")
 				require.Zero(t, msg.acks.Load()+msg.terms.Load())
 				require.ErrorIs(t, result.Err(), ErrNoGovernanceWaiter)
 			}
-			for _, reason := range ackReasons {
+			for _, reason := range settleReasons {
 				want := before[reason]
 				if reason == tc.reason {
 					want++

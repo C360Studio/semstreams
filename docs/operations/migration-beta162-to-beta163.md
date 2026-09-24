@@ -1574,19 +1574,30 @@ trades enforcement for availability rather than losing both.
 
 ### `tool_call_governance_subscribe_before_publish_failures_total` gains a `reason` label
 
-The counter was unlabelled at beta.162 and is now a `CounterVec` over `reason`, with two values:
+The counter was unlabelled at beta.162 and is now a `CounterVec` over `reason`. `missing_waiter` counts every verdict
+delivery that reached no waiter, which is what the unlabelled counter counted. Every other reason is a subset of it: the
+loop reads the loop record and counts, once, how that delivery settled.
 
-| `reason` | Means |
-|---|---|
-| `missing_waiter` | The verdict reached no waiter: the subscribe-before-publish race (ADR-039 race-fix option 3) or a late arrival. The loop record then decides ack-vs-retry. |
-| `unrecoverable_loop_identity` | The verdict carries neither a canonical `loop_id` nor a `request_id` in the `<loopID>:req:<iteration>:<retry>` grammar, so no loop record can be read for it. The delivery **terminates as malformed** rather than acknowledging as if the loop had settled. |
+| `reason` | Settles as | Means |
+|---|---|---|
+| `missing_waiter` | (every miss) | The verdict reached no waiter: the subscribe-before-publish race (ADR-039 race-fix option 3), a late arrival after Propose timed out, or the second verdict of a duplicate proposed/verdict pair after a restart. |
+| `older_request` | acknowledged | Its request is older than the one the loop record names. |
+| `already_applied` | acknowledged | The record already holds its execution in `pending_tool_results`, an approval gate's placeholder included. |
+| `loop_absent` | acknowledged | No loop record exists. |
+| `loop_terminal` | acknowledged | The loop has finished. |
+| `unrecoverable_loop_identity` | terminated as malformed | The verdict carries neither a canonical `loop_id` nor a `request_id` in the `<loopID>:req:<iteration>:<retry>` grammar, so no loop record can be read for it. |
+| `foreign_request` | quarantined | Its `request_id` is not a request of its `loop_id`. |
 
 A PromQL selector that names the metric keeps matching, but it now returns one series per reason instead of one
-series total. An alert written as a bare `rate(...) > 0` still fires; a recording rule or dashboard panel that
-assumed a single series should wrap it in `sum(...)` or add `by (reason)`. Both reasons mean investigate, and they
-mean different things: `missing_waiter` points at the loop process or delivery timing, `unrecoverable_loop_identity`
-points at a *rule* — it is the observable symptom of a verdict rule that echoes neither identity, which is the same
-edit this section already asks for.
+series total. Select by `reason`; do not wrap it in `sum(...)`, which counts each settled delivery twice (once as
+`missing_waiter`, once under its reason). `sum(rate(...{reason="missing_waiter"}))` reproduces the beta.162 series.
+
+The four acknowledged reasons are expected in normal operation. Investigate two things:
+
+- `missing_waiter` minus the other six reasons: deliveries retried because the record says the verdict is still owed or
+  could not be read. This points at the loop process or delivery timing.
+- Any `unrecoverable_loop_identity` or `foreign_request`: each points at a *rule* that echoes no identity or a mismatched
+  one, which is the same edit this section already asks for.
 
 ### `GovernanceDispatcher.HandleVerdict` takes the decoded verdict
 

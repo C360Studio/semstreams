@@ -283,7 +283,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "tool_call_governance_subscribe_before_publish_failures_total",
-				Help:      "Verdicts that reached no waiter, by reason. reason=\"missing_waiter\" is the subscribe-before-publish race regressing (ADR-039 race-fix option 3) or a late arrival — the loop record then decides ack-vs-retry. reason=\"unrecoverable_loop_identity\" is a verdict whose payload carries neither a canonical loop_id nor a request_id in the <loopID>:req: grammar, so no record can be read for it; those terminate as malformed rather than acknowledging like a settled loop. reason=\"older_request\", \"already_applied\", \"loop_absent\" and \"loop_terminal\" count, in addition to missing_waiter, a waiterless verdict acknowledged because the loop record shows it settled: its request is older than the record's, its execution is already in the record's pending tool results, or the record is absent or terminal. A live verdict the record cannot settle is retried and adds no second reason. Non-zero on missing_waiter or unrecoverable_loop_identity means investigate.",
+				Help:      "Verdict deliveries that reached no waiter. reason=\"missing_waiter\" counts EVERY such delivery, before any classification; every other reason is a subset of it, counted at most once per delivery, naming how the delivery settled. Acknowledged: \"older_request\" (its request is older than the loop record's), \"already_applied\" (its execution is already in the record's pending tool results), \"loop_absent\" and \"loop_terminal\" — expected in normal operation. Terminated or quarantined: \"unrecoverable_loop_identity\" (the payload names no loop: neither a canonical loop_id nor a request_id in the <loopID>:req: grammar) and \"foreign_request\" (its request_id is not a request of its loop) — both point at a verdict rule; investigate. missing_waiter minus the sum of the other six is the deliveries Retried because the record says the verdict is still owed or could not be read; a sustained nonzero there is the signal to investigate (the subscribe-before-publish race regressing, ADR-039 race-fix option 3, or a verdict arriving after its call moved on). Do not sum across reasons: that counts each settled delivery twice.",
 			}, []string{"reason"}),
 
 			lessonInjection: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -386,30 +386,35 @@ func (m *loopMetrics) RecordGovernanceVerdict(decision, mode string, duration fl
 	m.governanceVerdictTotal.WithLabelValues(decision, mode).Inc()
 }
 
-// The two reasons emitted on
+// The reasons emitted on
 // semstreams_agentic_loop_tool_call_governance_subscribe_before_publish_failures_total.
-// Both are enumerated in the metric's Help; a value that is not one of these
-// is a bug.
+// All are enumerated in the metric's Help; a value that is not one of these is
+// a bug. missing_waiter is counted by the dispatcher for every waiterless
+// delivery; each other reason is a subset of it, counted by the component
+// when it settles that delivery.
 const (
 	verdictDropMissingWaiter         = "missing_waiter"
 	verdictDropUnrecoverableIdentity = "unrecoverable_loop_identity"
 	// The four ways a waiterless verdict is acknowledged after its loop record
-	// is read (#1362, design § 5.6, D16). Each is counted IN ADDITION to the
-	// missing_waiter the dispatcher already counted for the same verdict:
-	// missing_waiter is every miss, these say how an acknowledged one settled.
+	// is read (#1362, design § 5.6, D16). Like every reason below
+	// missing_waiter, each is a subset of it: counted IN ADDITION to the
+	// missing_waiter the dispatcher already counted for the same delivery.
 	verdictDropOlderRequest   = "older_request"
 	verdictDropAlreadyApplied = "already_applied"
 	verdictDropLoopAbsent     = "loop_absent"
 	verdictDropLoopTerminal   = "loop_terminal"
+	// verdictDropForeignRequest is the one settle reason that quarantines: the
+	// verdict's request_id is not a request of its loop.
+	verdictDropForeignRequest = "foreign_request"
 )
 
 // RecordGovernanceVerdictMissingWaiter increments the
 // subscribe-before-publish-failures counter. Implements
-// DispatcherMetrics. Each non-zero increment signals a verdict
-// arrived for an execution_id that no longer had a registered waiter —
-// either the race-fix regressed (verdict beat the pre-register) or a
-// verdict arrived after Propose's timeout already fired (benign in
-// audit mode, signal in enforce mode).
+// DispatcherMetrics. It counts every verdict delivery that reached no
+// registered waiter, before the component classifies it; the component then
+// counts the settle reason, if any, as a subset. What remains after those
+// subsets — deliveries Retried as still owed — is the race-fix regressing
+// (verdict beat the pre-register) or a verdict arriving after its call moved on.
 func (m *loopMetrics) RecordGovernanceVerdictMissingWaiter() {
 	m.governanceSubscribeBeforePublishFailures.WithLabelValues(verdictDropMissingWaiter).Inc()
 }
@@ -425,9 +430,9 @@ func (m *loopMetrics) recordVerdictIdentityUnrecoverable() {
 	m.governanceSubscribeBeforePublishFailures.WithLabelValues(verdictDropUnrecoverableIdentity).Inc()
 }
 
-// recordVerdictSettledByRecord counts a waiterless verdict acknowledged
-// because its loop record shows it settled; reason is one of the four
-// verdictDrop* values classifyWaiterlessVerdict returns. The same verdict was
+// recordVerdictSettledByRecord counts a waiterless verdict the loop record
+// settled — acknowledged, or quarantined as foreign_request; reason is a
+// verdictDrop* value classifyWaiterlessVerdict returns. The same delivery was
 // already counted as missing_waiter by the dispatcher.
 func (m *loopMetrics) recordVerdictSettledByRecord(reason string) {
 	m.governanceSubscribeBeforePublishFailures.WithLabelValues(reason).Inc()

@@ -134,6 +134,8 @@ Mutation evidence uses a `cp` backup and a checksum.
     `approval_timeout_publish_failure_integration_test.go:42`
   - `docs/concepts/17-approval-flow.md:74-80`
   - `docs/operations/migration-beta162-to-beta163.md:1904-1910`
+  - `docs/operations/17-tool-call-governance.md` (the verdict counter's row in § Observability and its troubleshooting
+    section, rewritten with task 2.1)
 - [ ] 7.2 Add a migration section to `docs/operations/migration-beta162-to-beta163.md`, after `:1784`. It states:
   - the entity's terminal `state` now lands after `agent.complete` / `agent.failed`;
   - `COMPLETE_` precedes the event on the carrier, loop-failure and cancel paths, and cancel's marker moves ahead of
@@ -150,6 +152,10 @@ Mutation evidence uses a `cp` backup and a checksum.
     terminal (owner ruling 2, #1362 issuecomment-5809906669);
   - `MessageHandler.HandleApprovalResponse` now returns an error wrapping `ErrLoopNotFound` for a loop the process does
     not hold, instead of a stale-drop result with a nil error.
+  - `tool_call_governance_subscribe_before_publish_failures_total`: `missing_waiter` counts every waiterless verdict and
+    the six settle reasons (`older_request`, `already_applied`, `loop_absent`, `loop_terminal`,
+    `unrecoverable_loop_identity`, `foreign_request`) are subsets of it, so `sum(...)` across reasons double-counts; the
+    signal is `missing_waiter` minus the settle reasons (the counter's section, rewritten with task 2.1).
 
   Size the section against the keys the semspec watchers read, in one read-only pass.
 - [ ] 7.3 Keep the `agentic-loop` delta in step with what shipped (variant A or B from 1.6). Then run

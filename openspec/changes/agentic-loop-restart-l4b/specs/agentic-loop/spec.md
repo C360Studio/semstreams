@@ -51,7 +51,12 @@ request's. An `approval_required` result stored there by an approval gate is a p
 applied only against another `approval_required` result. The approved call's own result SHALL be applied, and SHALL
 be retried while the record still holds the gate for that execution. A redelivered `approval_required` result whose
 gate the record still holds SHALL re-publish that gate's approval request from the record and be acknowledged; a
-re-publication that fails SHALL be retried. A process with no memory of the loop SHALL, before classifying a redelivered model response, tool result,
+re-publication that fails SHALL be retried. A governance verdict that reaches no waiter, and whose `request_id`, when
+present, is a request of its loop, SHALL be acknowledged without effect when its execution is named in
+`pending_tool_results`, an approval gate's `approval_required` placeholder included, because a gated call is dispatched
+only after its verdict was consumed; one whose loop record is absent or terminal SHALL be acknowledged; one with no
+`request_id` SHALL be classified on that membership alone; and a current verdict whose execution is not named SHALL be
+retried. A process with no memory of the loop SHALL, before classifying a redelivered model response, tool result,
 or approval response, read the newest retained request for the loop and, when it is newer than
 `published_request_id`, adopt it into the record by identity first. An approval response whose loop's retained
 request or its response is confirmed absent SHALL fail the loop with reason `continuation_unavailable`; an unreadable

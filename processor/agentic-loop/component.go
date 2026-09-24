@@ -3505,7 +3505,9 @@ func (c *Component) settleVerdictWithoutWaiter(
 	}
 	requestID := payload.effectiveRequestID()
 	record := c.readLoopRecord(ctx, loopID)
-	if reason := classifyWaiterlessVerdict(loopID, record, requestID, executionID); reason != "" {
+	reason, decision := classifyWaiterlessVerdict(loopID, record, requestID, executionID)
+	switch decision {
+	case natsclient.DeliveryDecisionAck:
 		c.logger.InfoContext(ctx, "Verdict has no waiter and its loop record shows it settled; acknowledging",
 			slog.String("execution_id", executionID), slog.String("loop_id", loopID),
 			slog.String("request_id", requestID),
@@ -3515,15 +3517,34 @@ func (c *Component) settleVerdictWithoutWaiter(
 			c.metrics.recordVerdictSettledByRecord(reason)
 		}
 		return natsclient.DeliveryDecisionAck, nil
+	case natsclient.DeliveryDecisionQuarantine:
+		c.logger.ErrorContext(ctx, "Verdict names a request that is not a request of its loop; quarantining",
+			slog.String("execution_id", executionID), slog.String("loop_id", loopID),
+			slog.String("request_id", requestID),
+			slog.String("published_request_id", record.entity.PublishedRequestID),
+			slog.String("reason", reason))
+		if c.metrics != nil {
+			c.metrics.recordVerdictSettledByRecord(reason)
+		}
+		return natsclient.DeliveryDecisionQuarantine,
+			fmt.Errorf("loop %s: verdict for execution_id %q names request %q, which is not a request of this loop: %w",
+				loopID, executionID, requestID, cause)
 	}
-	c.logger.Warn("Verdict names a live loop this process does not hold",
-		slog.String("execution_id", executionID), slog.String("loop_id", loopID))
+	// Only a live or an unreadable record reaches here.
+	presence := "live"
+	if record.presence == loopPresenceUnknown {
+		presence = "unreadable"
+	}
+	c.logger.Warn("Verdict has no waiter and its loop record does not settle it; retrying",
+		slog.String("execution_id", executionID), slog.String("loop_id", loopID),
+		slog.String("request_id", requestID), slog.String("record_presence", presence))
 	return natsclient.DeliveryDecisionRetry, cause
 }
 
 // classifyWaiterlessVerdict reads a waiterless verdict against its loop record
-// (#1362, design § 5.6, D16) and names the reason it is acknowledged, or ""
-// when it is still owed and must be Retried.
+// (#1362, design § 5.6, D16) and returns the settle reason with its decision:
+// Ack or Quarantine with a reason, or Retry with "" when the verdict is still
+// owed.
 //
 // Acknowledged: no record, a terminal record, a verdict naming a request older
 // than the record's, or an execution the record already holds in
@@ -3534,28 +3555,37 @@ func (c *Component) settleVerdictWithoutWaiter(
 // tool lane's narrower placeholder rule answers a different question — whether
 // a RESULT is a replay — and does not apply here.
 //
+// Quarantined: a request_id that is not a request of the loop, as on the
+// model-response and tool-result lanes. It is decided before membership, so a
+// verdict carrying a foreign request is never acknowledged as applied.
+//
 // A verdict with no request_id (it is omitempty on the wire) cannot be ordered
 // and is classified on membership only. Verdicts do not run step 0 (OQ-F): no
 // retained request is adopted and no retained verdict is read (D14/D15). An
 // unreadable record is not evidence of anything and Retries.
-func classifyWaiterlessVerdict(loopID string, record loopRecord, requestID, executionID string) string {
+func classifyWaiterlessVerdict(
+	loopID string, record loopRecord, requestID, executionID string,
+) (string, natsclient.DeliveryDecision) {
 	switch record.presence {
 	case loopPresenceStale:
 		if record.entity.State.IsTerminal() {
-			return verdictDropLoopTerminal
+			return verdictDropLoopTerminal, natsclient.DeliveryDecisionAck
 		}
-		return verdictDropLoopAbsent
+		return verdictDropLoopAbsent, natsclient.DeliveryDecisionAck
 	case loopPresenceLive:
 	default:
-		return ""
+		return "", natsclient.DeliveryDecisionRetry
 	}
-	if orderAgainstPublished(loopID, record.entity.PublishedRequestID, requestID) == requestOrderApplied {
-		return verdictDropOlderRequest
+	switch orderAgainstPublished(loopID, record.entity.PublishedRequestID, requestID) {
+	case requestOrderApplied:
+		return verdictDropOlderRequest, natsclient.DeliveryDecisionAck
+	case requestOrderForeign:
+		return verdictDropForeignRequest, natsclient.DeliveryDecisionQuarantine
 	}
 	if _, held := record.entity.PendingToolResults[executionID]; held {
-		return verdictDropAlreadyApplied
+		return verdictDropAlreadyApplied, natsclient.DeliveryDecisionAck
 	}
-	return ""
+	return "", natsclient.DeliveryDecisionRetry
 }
 
 // decodeVerdictPayload reads a VerdictPayload from wire bytes,
