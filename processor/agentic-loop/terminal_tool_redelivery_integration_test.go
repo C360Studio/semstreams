@@ -14,13 +14,79 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Task 4.1 of #1362, over a real broker: a terminal tool result redelivered
-// to a replacement process after its predecessor died inside the terminal
-// owner.
+// Task 4.1 of #1362, over a real broker: a delivery redelivered to a
+// replacement process after its predecessor died between a publication and
+// the record update that should have followed it. Case (i) is the approval
+// lane's reject-minted W4; case (ii) is a terminal tool result dying inside the
+// terminal owner.
+
+// TestARejectionRedeliveredAfterItsNextRequestWasPublished is case (i): the
+// approval lane publishes before it writes (task 1.4), so a rejection that
+// completes its batch publishes the loop's next request R(N+1) and only then
+// compare-and-swaps the record. The predecessor dies between the two. The
+// record is still gated at R(N) while the stream retains R(N+1).
 //
-// Case (i) — the approval lane's reject-minted W4 — is checkpoint 2's
-// (tasks 1.1–1.6 build the cold branch it exercises).
-// TODO(#1362, checkpoint 2): case (i).
+// The redelivered answer reaches a replacement that does not hold the loop.
+// Its cold branch (task 1.1) runs step 0 first, which adopts R(N+1) and clears
+// the gate in the same compare-and-swap, so the answer then finds no gate and
+// is acknowledged as inapplicable: the rejection is not applied a second time
+// and R(N+1) is not published a second time.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestARejectionRedeliveredAfterItsNextRequestWasPublished(t *testing.T) {
+	client := newLoopNATS(t)
+	predecessor, handler := startLoopProcess(t, client, DefaultConfig())
+	loopID := gatedLoop(t, client, predecessor, handler, "task-approval-reject-w4")
+	requestSubject := "agent.request." + loopID
+
+	gated := loopRecordOf(t, predecessor, loopID)
+	require.Equal(t, agentic.LoopStateAwaitingApproval, gated.entity.State)
+	gate := gated.entity.PendingApproval
+	require.NotNil(t, gate)
+	require.Equal(t, uint64(1), messagesOn(t, client, requestSubject), "fixture: the gate mints no request")
+	answer := baseMessageBytes(t, &agentic.ApprovalResponse{
+		LoopID: loopID, CallID: gate.CallID, ExecutionID: gate.ExecutionID, RequestID: gate.RequestID,
+		Decision: agentic.ApprovalDecisionReject, ApprovedBy: "operator", Reason: "not this rule",
+	})
+
+	// The predecessor dies between the carrier's publication and its Update.
+	predecessor.loopsBucket = crashedBeforeRecordUpdate{KeyValue: predecessor.loopsBucket}
+	died, err := predecessor.handleApprovalResponseMessage(t.Context(), answer)
+	require.Error(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionQuarantine, died,
+		"a record write of unknown durability is not an acknowledgement")
+
+	// The residue, read off the server: R(N+1) retained, the record gated at R(N).
+	require.Equal(t, uint64(2), messagesOn(t, client, requestSubject),
+		"the rejection's next request is published before the record update")
+	next := retainedRequestIdentity(t, client, requestSubject)
+	require.NotEqual(t, gated.entity.PublishedRequestID, next)
+	residue := loopRecordOf(t, predecessor, loopID)
+	require.Equal(t, gated.revision, residue.revision, "the record is the step the crash lost")
+	require.Equal(t, agentic.LoopStateAwaitingApproval, residue.entity.State)
+
+	replacement, _ := startLoopProcess(t, client, DefaultConfig())
+	var logs lockedLogBuffer
+	replacement.logger = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	decision, err := replacement.handleApprovalResponseMessage(t.Context(), answer)
+
+	require.NoError(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionAck, decision,
+		"after step 0 adopts R(N+1) the answer is inapplicable, not retried to MaxDeliver")
+	require.Contains(t, logs.String(), "approval response ignored",
+		"the inapplicable answer is declared at its audit line")
+	require.Equal(t, uint64(2), messagesOn(t, client, requestSubject),
+		"R(N+1) is counted once: nothing was republished and the rejection was not re-applied")
+	record := loopRecordOf(t, replacement, loopID)
+	require.Equal(t, next, record.entity.PublishedRequestID)
+	require.Equal(t, gated.entity.Iterations+1, record.entity.Iterations)
+	require.False(t, record.entity.State.IsTerminal())
+	require.NotEqual(t, agentic.LoopStateAwaitingApproval, record.entity.State,
+		"the record is running at R(N+1)")
+	require.Nil(t, record.entity.PendingApproval, "the gate is cleared by the adopt that advanced past it")
+	_, heldErr := replacement.handler.GetLoop(loopID)
+	require.Error(t, heldErr, "an inapplicable answer rebuilds nothing")
+}
 
 // TestATerminalRedeliveredAfterItsPublicationAdoptsTheDurableTerminal is case
 // (ii): the terminal lane crashes after its publication and before its record
