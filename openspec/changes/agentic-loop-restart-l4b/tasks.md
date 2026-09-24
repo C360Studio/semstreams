@@ -15,7 +15,7 @@ Archived task numbers are in brackets. Spec-text rulings are OQ-A to OQ-F in #13
 
 ## 1. Approval lane (design § 5.5, and the § 5.4 re-echo)
 
-- [ ] 1.1 [3.3] Build the cold KV branch at ARH:58 (`if !ok {`). Today `ErrLoopNotFound` folds into `staleDrop`
+- [x] 1.1 [3.3] Build the cold KV branch at ARH:58 (`if !ok {`). Today `ErrLoopNotFound` folds into `staleDrop`
   (ARH:78) and is acknowledged (ARH:194-199).
   - Step 0 runs through `adoptNewerRetainedRequest` (LE:425); the gate clear is LE:508-509.
   - Then require `awaiting_approval` with a matching `ExecutionID` and `CallID`; anything else is ACKed as
@@ -28,25 +28,25 @@ Archived task numbers are in brackets. Spec-text rulings are OQ-A to OQ-F in #13
   - Approve and modify go through `dispatchApprovedCall` (ARH:117-130); reject goes through `handleRejectedApproval`
     (ARH:139-158).
   - Tests (both new): `approval_timeout_recovery_test.go`, `approval_restore_order_test.go`.
-- [ ] 1.2 [OQ1] Build one branch, inside 1.1:
+- [x] 1.2 [OQ1] Build one branch, inside 1.1:
   - The retained R, or its response, is confirmed absent → the loop fails with `continuation_unavailable` through the
     terminal owner (§ 3).
   - Transient uncertainty → Retry.
   - Conflicting or poison evidence keeps its existing disposition (owner ruling 2026-09-13 on #1146).
-- [ ] 1.3 [3.3, D28] Warm re-echo at H:2814 (`if entity.State == agentic.LoopStateAwaitingApproval {`), which today
+- [x] 1.3 [3.3, D28] Warm re-echo at H:2814 (`if entity.State == agentic.LoopStateAwaitingApproval {`), which today
   returns without an echo. When the result's `ExecutionID` equals `PendingApproval.ExecutionID`, re-echo the
   `ApprovalPendingEvent`, built as in `gateForApproval` (H:2844), and ACK.
-- [ ] 1.4 [2.1] Flip ARH:208 from `writeThenPublish` to `publishThenWrite`; the carrier's branch at C:2288 does the
+- [x] 1.4 [2.1] Flip ARH:208 from `writeThenPublish` to `publishThenWrite`; the carrier's branch at C:2288 does the
   rest (C:2362).
   - Land it in the same commit as 1.1. The flip opens the reject-minted W4 window, and 1.1 closes it (§ 5.5).
   - Update `loop_carrier_test.go:125`, which asserts the old order.
-- [ ] 1.5 [2.1, D39] Move the sweeper onto the carrier. Replace the publish, stamp and write sequence at AS:120,
+- [x] 1.5 [2.1, D39] Move the sweeper onto the carrier. Replace the publish, stamp and write sequence at AS:120,
   AS:146 and AS:152 with `persistHandlerResult(ctx, result, publishThenWrite)`.
   - L4a already gave the sweeper that order and the CAS, so only its home changes.
   - `approval_timeout_publish_failure_integration_test.go` and the scenario "An approval timeout whose rejection could
     not be published leaves the record as it was" stay green unchanged.
   - Failure signal: log-only (OQ-B).
-- [ ] 1.6 [2.7, docket OQ8, conditional] Write the test first. It proves that an approval answer arriving before its
+- [x] 1.6 [2.7, docket OQ8, conditional] Write the test first. It proves that an approval answer arriving before its
   gate is durable is Retried by 1.1's cold branch (the gate branch in `persist_handler_result_test.go`, plus the lane
   case).
   - If the test passes: drop `gated` from C:2284 and C:2288 (uniform publish → `Update`), and swap the delta's gate
@@ -97,14 +97,14 @@ Archived task numbers are in brackets. Spec-text rulings are OQ-A to OQ-F in #13
 
 ## 4. Evidence
 
-- [ ] 4.1 [4.2] New `terminal_tool_redelivery_integration_test.go` (real NATS, `test/e2e/harness/processbarrier`).
+- [x] 4.1 [4.2] New `terminal_tool_redelivery_integration_test.go` (real NATS, `test/e2e/harness/processbarrier`).
   - (i) The approval lane's reject W4. Crash between the carrier's publish (C:2363) and its `Update` (C:2375) for the
     approval result, then restart and redeliver. Expect ACK inapplicable, R(N+1) counted once, and the record `running`
     at R(N+1) with no gate.
   - (ii) The terminal lane crashes after publish and before `Update`. Expect adoption through arm (b). — landed with checkpoint 1
     (`TestATerminalRedeliveredAfterItsPublicationAdoptsTheDurableTerminal`); (i) is checkpoint 2's.
 - [x] 4.2 [4.3(d)] Mutation: restore `Put` for the marker in 3.1, dropping the `Create` read-back. Case (ii) must fail.
-- [ ] 4.3 [4.3(f)] Mutation: drop the gate clear at LE:508-511. Case (i) must fail on I4 and re-run the rejection.
+- [x] 4.3 [4.3(f)] Mutation: drop the gate clear at LE:508-511. Case (i) must fail on I4 and re-run the rejection.
 
 Mutation evidence uses a `cp` backup and a checksum.
 
