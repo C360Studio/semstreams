@@ -1586,7 +1586,7 @@ loop reads the loop record and counts, once, how that delivery settled.
 | `loop_absent` | acknowledged | No loop record exists. |
 | `loop_terminal` | acknowledged | The loop has finished. |
 | `unrecoverable_loop_identity` | terminated as malformed | The verdict carries neither a canonical `loop_id` nor a `request_id` in the `<loopID>:req:<iteration>:<retry>` grammar, so no loop record can be read for it. |
-| `foreign_request` | terminated (dead-lettered) | Its `request_id` is not a request of its `loop_id`. Like `unrecoverable_loop_identity`, only that delivery is dead-lettered; the verdict lane keeps running. |
+| `foreign_request` | terminated (JetStream Term: never redelivered; no dead-letter copy — the Error log line carries the identities) | Its `request_id` is not a request of its `loop_id`. Like `unrecoverable_loop_identity`, only that delivery is terminated; the verdict lane keeps running. |
 
 A PromQL selector that names the metric keeps matching, but it now returns one series per reason instead of one
 series total. Select by `reason`; do not wrap it in `sum(...)`, which counts each settled delivery twice (once as

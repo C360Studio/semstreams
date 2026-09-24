@@ -3560,8 +3560,9 @@ func (c *Component) settleVerdictWithoutWaiter(
 // here stops the whole verdict consumer, so one adopter rule echoing a
 // mismatched loop_id/request_id pair would halt every governance verdict in
 // the process. Terminate is the per-message disposition this lane already
-// gives unrecoverable_loop_identity: the delivery is dead-lettered, counted,
-// and the lane keeps running. It is decided before membership, so a verdict
+// gives unrecoverable_loop_identity: the delivery is terminated (never
+// redelivered; no dead-letter copy, the Error log carries the identities),
+// counted, and the lane keeps running. It is decided before membership, so a verdict
 // carrying a foreign request is never acknowledged as applied.
 //
 // A verdict with no request_id (it is omitempty on the wire) cannot be ordered

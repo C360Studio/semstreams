@@ -45,7 +45,7 @@ applied cold on a loop that already has a durable failed terminal. A
 redelivered input whose `request_id` is older than `published_request_id` SHALL be acknowledged without effect; one whose
 `request_id` is newer SHALL be retried until the record names it; one whose `request_id` is not a request of the loop
 SHALL be quarantined, except that such a governance verdict SHALL be terminated, so that one misconfigured verdict rule
-dead-letters its own deliveries without stopping the verdict lane. A redelivered tool result whose `request_id` equals `published_request_id` and whose execution
+terminates its own deliveries (JetStream Term: never redelivered, no dead-letter copy) without stopping the verdict lane. A redelivered tool result whose `request_id` equals `published_request_id` and whose execution
 is already named in `pending_tool_results` is a replay of applied work and SHALL be acknowledged without effect, with
 the batch's unfinished executions left untouched; ordering cannot decide that case, because the batch is the current
 request's. An `approval_required` result stored there by an approval gate is a placeholder, not an answer: it counts as

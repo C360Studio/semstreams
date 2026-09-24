@@ -208,8 +208,8 @@ func TestVerdictWithoutWaiterIsClassifiedAgainstTheLoopRecord(t *testing.T) {
 				require.Zero(t, msg.naks.Load()+msg.terms.Load())
 			case natsclient.DeliveryDecisionTerminate:
 				require.False(t, result.OwnerStopRequired(),
-					"one misconfigured rule dead-letters its own delivery; the verdict lane keeps running")
-				require.Equal(t, int32(1), msg.terms.Load(), "the delivery is dead-lettered")
+					"one misconfigured rule terminates its own delivery; the verdict lane keeps running")
+				require.Equal(t, int32(1), msg.terms.Load(), "the delivery is terminated (Term), never redelivered")
 				require.Zero(t, msg.acks.Load()+msg.naks.Load(), "never acknowledged as applied, never retried")
 				require.ErrorIs(t, result.Err(), ErrNoGovernanceWaiter)
 				require.ErrorContains(t, result.Err(), "is not a request of this loop")
