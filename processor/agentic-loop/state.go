@@ -94,7 +94,9 @@ type LoopManager struct {
 	// append-only for the loop's whole life (its only delete is releaseLoop),
 	// so it records "this loop published X", never "X is still in flight".
 	// Process-local on purpose — a replacement has lost the whole loop, not
-	// just this entry, and durable recovery is L4's (#1330).
+	// just this entry. The durable name is the record's PublishedRequestID
+	// (#1330), and a rebuild re-seats this entry from the retained request
+	// (restoreLoopFromRequest).
 	outstandingRequests    map[string]string         // loopID -> requestID
 	toolCallToLoop         map[string]string         // executionID -> loopID
 	executionIDToName      map[string]string         // executionID -> function name (for Gemini tool result name field)

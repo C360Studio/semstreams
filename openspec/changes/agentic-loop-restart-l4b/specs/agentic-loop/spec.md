@@ -263,8 +263,10 @@ deadline from then on.
 
 #### Scenario: A governance verdict naming a request of another loop is terminated and the verdict lane keeps consuming
 
-- **GIVEN** a loop `L` whose record is live, and a governance verdict that reaches no waiter whose `loop_id` is `L`
-  and whose `request_id` is not a request of `L`
+- **GIVEN** a loop `L` whose record is live and names a non-empty `published_request_id` that parses as a request of
+  `L`, and a governance verdict that reaches no waiter whose `loop_id` is `L` and whose `request_id` is non-empty and
+  not a request of `L` (an empty side, or a record naming a request that does not parse, orders as unnamed and is
+  decided on membership: `loop_classification.go:58-60,68-73`)
 - **WHEN** the verdict is delivered
 - **THEN** it is terminated (JetStream Term: never redelivered, no dead-letter copy — the Error log line carries its
   execution, loop and request identities), counted once under `missing_waiter` and once under `foreign_request`, and

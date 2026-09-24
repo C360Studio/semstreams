@@ -1527,8 +1527,10 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 	// delivery owns is the pending-continuation marker on the loop entity. There
 	// is nothing to publish and no graph birth to do — the loop was born on its
 	// first task. Persisting the entity is best-effort here exactly as it is on
-	// the spawn path below; what the marker survives in-process is this
-	// process, and restoring it across a replacement is L4's (#1330).
+	// the spawn path below. Across a replacement the marker reaches the record
+	// but the turn's text does not: a rebuild clears a marker that names no
+	// carrying request, with a warning, and the turn must be re-sent
+	// (restoreLoopFromRequest in state.go; #1365 owns recovering it).
 	if result.Deferred {
 		c.logger.Debug("Task deferred behind the loop's outstanding model request",
 			slog.String("loop_id", result.LoopID),
@@ -2265,8 +2267,14 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 		// terminal in memory, so the owner releases it whenever its commit
 		// does not land (review H1): memory never answers for a terminal
 		// that is not durable. The redelivery, into this process or another,
-		// re-reads the record and finishes the commit through the owner's
-		// adoption.
+		// re-reads the record, and adopts the durable terminal through the
+		// owner only while the record still names the request this terminal
+		// came from. A compare-and-swap lost to a writer that moved the
+		// record to a later request is not reconciled: the redelivered input
+		// then classifies as older and is acknowledged
+		// (loop_classification.go, requestOrderApplied). That is the recorded
+		// residual (#1362 issuecomment-5808903072; migration
+		// beta162-to-beta163, "Two residuals, recorded and not reconciled").
 		if err := c.commitTerminal(ctx, terminalOutcomeOf(result), result); err != nil {
 			return err
 		}
@@ -2641,7 +2649,8 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 // the same Quarantine as any other partial effect. The cancellation is not
 // always a shutdown either: delivery_settlement.go:366-373 cancels the work
 // context when a heartbeat InProgress fails, in a process that is still alive.
-// L4 (#1330) is what relaxes this to replay.
+// The restart-safety layers (#1330, #1362) left this as it is: a cancellation
+// after a mutation is still quarantined, not replayed.
 func (c *Component) settleFailedToolResult(
 	ctx context.Context, loopID string, result HandlerResult, cause error,
 ) error {

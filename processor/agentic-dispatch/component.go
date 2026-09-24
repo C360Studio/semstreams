@@ -997,8 +997,9 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 	//     failed response to a read-only command.
 	//
 	// Recovering the target in case 1 would mean a durable per-command
-	// selection record written on every bare command for a rare path; L4
-	// (#1330) is where identity-preserving replay makes that unnecessary.
+	// selection record written on every bare command for a rare path. The
+	// restart-safety layers (#1330, #1362) carry no command's resolved
+	// target, so this lane still stops on case 1.
 	if err := c.sendResponse(ctx, resp); err != nil {
 		if effect.signalled() && targetResolved {
 			return errs.WrapFatal(err, "Component", "handleCommand", fmt.Sprintf(
