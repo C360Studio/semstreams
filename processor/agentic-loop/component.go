@@ -2192,16 +2192,15 @@ type carrierOrder int
 
 const (
 	// writeThenPublish records first and publishes after — the order every
-	// lane took before #1330, and the order the approval lane and any result
-	// that CREATES an approval gate keep until #1362. The approval-timeout
-	// sweeper is not a carrier caller at all: it publishes and then writes
-	// through its own pair (approval_sweeper.go), and #1362 moves it onto the
-	// carrier with the lane.
+	// lane took before #1330, and the order any result that CREATES an
+	// approval gate keeps. The approval-timeout sweeper is not a carrier
+	// caller at all: it publishes and then writes through its own pair
+	// (approval_sweeper.go), and #1362 moves it onto the carrier with the lane.
 	writeThenPublish carrierOrder = iota
 	// publishThenWrite publishes first and records after, so the record is
 	// written only against outputs that already PubAck'd. It is the order the
-	// model-response and tool-result lanes take for a non-terminal result that
-	// does not gate the loop for approval.
+	// model-response, tool-result and approval lanes take for a non-terminal
+	// result that does not gate the loop for approval.
 	publishThenWrite
 )
 
@@ -2221,13 +2220,13 @@ const (
 // an unknown partial state; the caller quarantines rather than claiming done.
 //
 // order names which of the two carrier orders the calling lane takes for a
-// NON-terminal result. On the model-response and tool-result lanes it
-// publishes FIRST and then writes (#1330 L4a), so the record's
-// published_request_id is only ever written after that request's PubAck —
-// which is exactly what makes it readable as "this request is retained". The
-// approval lane still asks for write-then-publish: that reorder opens the
-// reject-minted crash window, which only the approval lane's own cold branch
-// closes, and that branch is a later checkpoint of #1362.
+// NON-terminal result. On the model-response, tool-result and approval lanes
+// it publishes FIRST and then writes (#1330 L4a; #1362 task 1.4 for the
+// approval lane), so the record's published_request_id is only ever written
+// after that request's PubAck — which is exactly what makes it readable as
+// "this request is retained". On the approval lane the order opens the
+// reject-minted crash window, and the lane's own cold branch closes it
+// (settleApprovalResponseWithoutLoop).
 //
 // An awaiting_approval result keeps write-then-publish too, whichever order its
 // lane asked for, and the tool-result lane is the only producer of one
@@ -2277,12 +2276,11 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 		return c.publishThenPersistResultState(ctx, result)
 	}
 
-	// The stamp is here rather than at the mint for every lane, including the
-	// ones that still write before they publish: one home for "the loop names
-	// the request it minted" is what keeps a lane from silently losing it. On
-	// THIS order the stamp precedes the publication — the window the approval
-	// lane carries until its cold branch lands, where the record names a
-	// request whose PubAck has not landed.
+	// The stamp is here rather than at the mint for every lane, including a
+	// result that writes before it publishes: one home for "the loop names the
+	// request it minted" is what keeps a lane from silently losing it. Only a
+	// gate result reaches this order, and a gate mints nothing, so the stamp
+	// is a no-op here.
 	if err := c.stampPublishedRequest(result); err != nil {
 		return errs.WrapFatal(err, "agentic-loop", "persistHandlerResult",
 			"name the published request on the loop this process holds")
@@ -2992,16 +2990,16 @@ func (c *Component) stampPublishedRequest(result HandlerResult) error {
 // persistLoopState writes the loop's record under compare-and-swap against the
 // revision this process observed (#1330, owner ruling Q2).
 //
-// Every caller takes this form. Two lanes reach it through persistHandlerResult
-// AFTER their publications have PubAck'd, which is what makes the written
-// PublishedRequestID mean "this request is durably retained" rather than "a
-// process meant to publish one". The terminal owner (commitTerminal) reaches it
-// last on the carrier, loop-failure and cancel lanes, after the
-// COMPLETE_<loopID> marker, the graph stamps and the terminal event; the
-// approval-timeout sweeper's terminal writes it directly, with no marker,
-// until #1362 task 1.5. The rest keep the order they already
-// had: the approval lane writes before it publishes, the approval-timeout
-// sweeper publishes before it writes, and #1362 moves both onto the carrier.
+// Every caller takes this form. The model-response, tool-result and approval
+// lanes reach it through persistHandlerResult AFTER their publications have
+// PubAck'd, which is what makes the written PublishedRequestID mean "this
+// request is durably retained" rather than "a process meant to publish one".
+// The terminal owner (commitTerminal) reaches it last on the carrier,
+// loop-failure and cancel lanes, after the COMPLETE_<loopID> marker, the graph
+// stamps and the terminal event; the approval-timeout sweeper's terminal
+// writes it directly, with no marker, until #1362 task 1.5. The sweeper
+// publishes before it writes through its own pair, and #1362 moves it onto the
+// carrier.
 //
 // A lost CAS is not a retry-in-place. The record moved, so this process is
 // holding a loop somebody else has advanced: its in-memory state is released

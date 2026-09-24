@@ -315,8 +315,20 @@
 // reads the bucket to restore one. A replacement holds a deadline again only for a loop
 // some other redelivery rebuilt, and then it is the record's own RequestedAt plus Timeout,
 // not a fresh wait. A parked loop otherwise stays in awaiting_approval until the approval
-// is answered or the loop is cancelled. The cold approval-response branch - a replacement
-// answering an approval for a loop it never started - is #1362.
+// is answered or the loop is cancelled.
+//
+// An approval ANSWER reaching a replacement is applied, not dropped. The approval lane reads
+// the loop's record: a record that is absent or terminal acknowledges the answer, and so does
+// a live one that is no longer awaiting that gate (the answer arrived too late). A record
+// still awaiting it is rebuilt from the retained request and the retained response carrying
+// the gated batch, and the answer is then applied as the gating process would have applied
+// it. When that request or response is confirmed gone from the stream, the loop cannot be
+// continued: it fails with the reason continuation_unavailable, committed through
+// COMPLETE_<loopID> like every terminal, and the answer is acknowledged. A stream that could
+// not be read is retried. The lane publishes before it writes its record, so a rejection that
+// minted the loop's next request and crashed before the record update is settled by the
+// redelivered answer adopting that request; the answer is then acknowledged with nothing
+// republished.
 //
 // # Ports
 //

@@ -747,25 +747,7 @@ func (m *LoopManager) ResolveApprovalIfPending(loopID, callID, executionID strin
 	if entity.State != agentic.LoopStateAwaitingApproval {
 		return agentic.PendingApprovalState{}, false, nil
 	}
-	if entity.PendingApproval == nil {
-		return agentic.PendingApprovalState{}, false, nil
-	}
-	// Execution identity decides, whenever the pending state carries one.
-	// Provider CallID is request-scoped conversation data: a provider may reuse
-	// it on a later turn of the SAME loop, and an approval replayed from the
-	// earlier turn would then authorise the later call — a different tool
-	// invocation than the human saw. A response that omits ExecutionID against
-	// a pending approval that has one is refused as stale rather than falling
-	// back to CallID, because the fallback IS the hole.
-	//
-	// CallID still decides for a pending approval minted before execution
-	// identity existed (a loop gated across the upgrade), which carries no
-	// ExecutionID to match on.
-	if entity.PendingApproval.ExecutionID != "" {
-		if entity.PendingApproval.ExecutionID != executionID {
-			return agentic.PendingApprovalState{}, false, nil
-		}
-	} else if entity.PendingApproval.CallID != callID {
+	if !approvalAnswersGate(entity.PendingApproval, callID, executionID) {
 		return agentic.PendingApprovalState{}, false, nil
 	}
 
@@ -774,6 +756,60 @@ func (m *LoopManager) ResolveApprovalIfPending(loopID, callID, executionID strin
 		return agentic.PendingApprovalState{}, false, errs.Wrap(err, "LoopManager", "ResolveApprovalIfPending", "resolve approval")
 	}
 	return pending, true, nil
+}
+
+// approvalAnswersGate reports whether an approval answer names the pending
+// gate. It is the one identity rule for an answer, used by the warm resolve
+// above and by the cold branch that reads the gate off the loop's record
+// (approval_response_handler.go), so the two cannot disagree about which
+// answer a gate accepts.
+//
+// Execution identity decides, whenever the pending state carries one.
+// Provider CallID is request-scoped conversation data: a provider may reuse
+// it on a later turn of the SAME loop, and an approval replayed from the
+// earlier turn would then authorise the later call — a different tool
+// invocation than the human saw. A response that omits ExecutionID against
+// a pending approval that has one is refused as stale rather than falling
+// back to CallID, because the fallback IS the hole.
+//
+// CallID still decides for a pending approval minted before execution
+// identity existed (a loop gated across the upgrade), which carries no
+// ExecutionID to match on.
+func approvalAnswersGate(gate *agentic.PendingApprovalState, callID, executionID string) bool {
+	if gate == nil {
+		return false
+	}
+	if gate.ExecutionID != "" {
+		return gate.ExecutionID == executionID
+	}
+	return gate.CallID == callID
+}
+
+// seatRecordToFail gives this process a loop from its record alone — no
+// conversation, no batch, no routing — so the terminal owner, which renders
+// the record it writes from the loop this process holds, can fail it.
+//
+// It has one caller and one purpose: the approval lane's cold branch, when the
+// evidence a rebuild needs is confirmed gone (#1362, OQ1). A loop seated here
+// is never continued; the failure path releases it once its terminal is
+// committed. A loop this process already holds is refused, as every seat
+// refuses one.
+func (m *LoopManager) seatRecordToFail(record agentic.LoopEntity) error {
+	if record.ID == "" {
+		return errs.WrapInvalid(fmt.Errorf("loop record carries no id"),
+			"LoopManager", "seatRecordToFail", "validate the record to seat")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.loops[record.ID]; exists {
+		return errs.WrapInvalid(
+			fmt.Errorf("loop %s: %w", record.ID, ErrLoopAlreadyExists),
+			"LoopManager", "seatRecordToFail", "refuse a seat over a held loop")
+	}
+	entity := record
+	m.loops[record.ID] = &entity
+	m.pendingTools[record.ID] = make(map[string]bool)
+	return nil
 }
 
 // DeleteLoop releases every per-loop entry the manager holds for loopID: the

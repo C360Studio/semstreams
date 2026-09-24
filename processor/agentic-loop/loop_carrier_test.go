@@ -60,11 +60,12 @@ func nonTerminalResultWithAPublication(loopID string) HandlerResult {
 // TestCarrierOrderDecidesWhatAFailedPublishLeavesBehind is the order assertion
 // for both lanes at once, at the carrier seam that owns the choice.
 //
-// publishThenWrite is the L4a order for a non-terminal result on the
-// model-response and tool-result lanes: the publication runs first, so a
-// publish that did not commit leaves NO record behind. writeThenPublish is
-// what the approval lane and the approval-timeout sweeper keep until #1362:
-// the record is written first, so the same failure leaves it committed.
+// publishThenWrite is the order for a non-terminal result on the
+// model-response, tool-result and approval lanes and the approval-timeout
+// sweeper: the publication runs first, so a publish that did not commit leaves
+// NO record behind. writeThenPublish is what a result that CREATES an approval
+// gate keeps (task 1.6): the record is written first, so the same failure
+// leaves it committed.
 //
 // spec: agentic-loop / The loop record names its outstanding request
 func TestCarrierOrderDecidesWhatAFailedPublishLeavesBehind(t *testing.T) {
@@ -90,13 +91,14 @@ func TestCarrierOrderDecidesWhatAFailedPublishLeavesBehind(t *testing.T) {
 	})
 }
 
-// TestApprovalLaneKeepsWriteThenPublish pins the CALL SITE, not the carrier:
-// the approval lane's own settlement must ask for write-then-publish until
-// #1362 moves it. A carrier that honours both orders proves nothing about
-// which one this lane passes.
+// TestApprovalLanePublishesBeforeItWrites pins the CALL SITE, not the carrier:
+// the approval lane's own settlement asks for publish-then-write (#1362 task
+// 1.4), landed with the cold branch that closes the reject-minted window the
+// order opens. A carrier that honours both orders proves nothing about which
+// one this lane passes.
 //
 // spec: agentic-loop / The loop record names its outstanding request
-func TestApprovalLaneKeepsWriteThenPublish(t *testing.T) {
+func TestApprovalLanePublishesBeforeItWrites(t *testing.T) {
 	handler := NewMessageHandler(DefaultConfig())
 	loopID, err := handler.loopManager.CreateLoop("task-approval-order", "general", "model", 5)
 	require.NoError(t, err)
@@ -121,8 +123,8 @@ func TestApprovalLaneKeepsWriteThenPublish(t *testing.T) {
 	decision, err := c.handleApprovalResponseMessage(t.Context(), baseMessageBytes(t, response))
 	require.Error(t, err, "the unconnected publish must fail so the order is observable")
 	require.Equal(t, natsclient.DeliveryDecisionQuarantine, decision)
-	require.Equal(t, []string{loopID}, bucket.written(),
-		"the approval lane must still write its record before it publishes (#1362 moves it)")
+	require.Empty(t, bucket.written(),
+		"the approval lane wrote its record before it published: a failed publication must leave the record as it was")
 }
 
 // TestAnApprovalGateIsWrittenBeforeItsEventIsPublished is the GATE-CREATION

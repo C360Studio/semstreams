@@ -26,9 +26,12 @@ import (
 // load-bearing for the safety claim: a sensitive tool must not
 // dispatch twice off two responses for the same call_id.
 //
-// Other mismatches (loop not found, response.Validate() fails) return
-// a defensive log + non-error empty result so duplicate or stale UI
-// clicks don't crash the loop.
+// A loop this process does not hold is not decided here: memory cannot tell a
+// settled loop from one a replaced process left gated, so ErrLoopNotFound is
+// returned and the component reads the loop's record (the cold branch,
+// settleApprovalResponseWithoutLoop; #1362, design § 5.5, D35). A loop this
+// process holds that is not awaiting this gate is a stale drop: logged,
+// never an error, never a dispatch.
 func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response agentic.ApprovalResponse) (result HandlerResult, err error) {
 	// A panic makes delivery ownership unsafe. Recover for diagnosis but return
 	// a fatal error so the callback quarantines and drains the exact owner.
@@ -52,29 +55,26 @@ func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response ag
 	loopID := response.LoopID
 
 	pending, ok, resolveErr := h.loopManager.ResolveApprovalIfPending(loopID, response.CallID, response.ExecutionID)
-	if resolveErr != nil && !errors.Is(resolveErr, ErrLoopNotFound) {
-		return HandlerResult{}, resolveErr
+	if resolveErr != nil {
+		// ErrLoopNotFound included. A released loop and a loop some other
+		// process gated look the same from here, and only the second still
+		// owes the human's answer, so the RECORD decides — at the component,
+		// which reads it (D35). Before #1362 absence was folded into the stale
+		// drop below and acknowledged, and a replacement lost every answer.
+		return HandlerResult{LoopID: loopID}, resolveErr
 	}
 	if !ok {
-		// Stale, duplicate, or settled: the loop is no longer awaiting
-		// approval, the response targets a different call_id than the one
-		// currently pinned, or the loop settled and its per-loop state was
-		// released. All three are the same event — a response that arrived too
-		// late to act on — and the right move is to log and drop, never error,
-		// never dispatch. A released loop MUST land here rather than on the
-		// error return above: absence and terminal presence are the same fact
-		// to a late arrival, and reporting one as a fault would make an
-		// expected steady state look like a defect.
+		// Stale or duplicate: the loop this process holds is no longer
+		// awaiting approval (it was answered, timed out, or settled), or the
+		// response names another gate than the one pinned. Both are an answer
+		// that arrived too late to act on — log and drop, never error, never
+		// dispatch.
 		entity, getErr := h.GetLoop(loopID)
 		state := agentic.LoopState("")
 		if getErr == nil {
 			state = entity.State
 		}
-		h.logger.Warn("approval response ignored: not awaiting, or its identity does not match the pending call",
-			slog.String("loop_id", loopID),
-			slog.String("response_call_id", response.CallID),
-			slog.String("response_execution_id", response.ExecutionID),
-			slog.String("loop_state", string(state)))
+		logApprovalResponseIgnored(h.logger, response, state)
 		return HandlerResult{LoopID: loopID, State: state, staleDrop: true}, nil
 	}
 
@@ -180,6 +180,22 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 		slog.String("approved_by", response.ApprovedBy))
 
 	result, err := c.handler.HandleApprovalResponse(ctx, response)
+	if errors.Is(err, ErrLoopNotFound) {
+		rebuilt, coldErr := c.settleApprovalResponseWithoutLoop(ctx, response)
+		if coldErr != nil {
+			wrapped := fmt.Errorf("approval response for loop %q call %q: %w", response.LoopID, response.CallID, coldErr)
+			if errs.IsFatal(coldErr) {
+				return natsclient.DeliveryDecisionQuarantine, wrapped
+			}
+			return natsclient.DeliveryDecisionRetry, wrapped
+		}
+		if !rebuilt {
+			return natsclient.DeliveryDecisionAck, nil
+		}
+		// Rebuilt: this process holds the gated loop now, and the answer takes
+		// the warm path it would have taken on the process that gated it.
+		result, err = c.handler.HandleApprovalResponse(ctx, response)
+	}
 	if err != nil {
 		wrapped := fmt.Errorf("handle approval response for loop %q call %q: %w", response.LoopID, response.CallID, err)
 		switch {
@@ -202,9 +218,13 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 	// Approval responses use the same persistence boundary as every other
 	// handler result. This keeps a rejection that reaches the iteration cap from
 	// bypassing the ordinary-observations-then-terminal audit ordering.
-	// The approval lane keeps write-then-publish until #1362: reordering it
-	// opens a reject-minted crash window whose only handler is that lane's own
-	// cold branch, which #1362 builds (design.md § 1, coordinator scoping).
+	// The lane publishes before it writes (#1362 task 1.4). A rejection that
+	// completes its batch mints the loop's next request, and a crash between
+	// that publication and the record update leaves the request retained under
+	// a record still gated at the previous one — the reject-minted W4. The
+	// redelivered answer closes it through the cold branch: step 0 adopts the
+	// retained request and clears the gate in one compare-and-swap, and the
+	// answer is then acknowledged as inapplicable with nothing republished.
 	if result.terminalOwnedElsewhere {
 		// The rejection reached a loop already terminal in memory. The gate
 		// was resolved while the loop was awaiting_approval, so this is a
@@ -215,7 +235,7 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 		}
 		return natsclient.DeliveryDecisionAck, nil
 	}
-	if err := c.persistHandlerResult(ctx, result, writeThenPublish); err != nil {
+	if err := c.persistHandlerResult(ctx, result, publishThenWrite); err != nil {
 		// A transient failure — a lost compare-and-swap, which has released
 		// the loop — is retried, not quarantined (#1362 re-review M3):
 		// quarantining it would latch the lane's health on a benign race.
@@ -227,4 +247,117 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 			fmt.Errorf("approval result for loop %q has unknown durable state: %w", response.LoopID, err)
 	}
 	return natsclient.DeliveryDecisionAck, nil
+}
+
+// logApprovalResponseIgnored is the one audit line for an answer that is
+// acknowledged without effect, warm or cold, so an operator greps one string
+// whichever process took the delivery.
+func logApprovalResponseIgnored(logger *slog.Logger, response agentic.ApprovalResponse, state agentic.LoopState) {
+	logger.Warn("approval response ignored: not awaiting, or its identity does not match the pending call",
+		slog.String("loop_id", response.LoopID),
+		slog.String("response_call_id", response.CallID),
+		slog.String("response_execution_id", response.ExecutionID),
+		slog.String("loop_state", string(state)))
+}
+
+// continuationUnavailableReason is the failure reason of a loop whose approval
+// could not be continued because the retained evidence a rebuild needs is
+// confirmed gone (owner ruling 2026-09-13 on #1146; #1362 OQ-C).
+const continuationUnavailableReason = "continuation_unavailable"
+
+// settleApprovalResponseWithoutLoop is the approval lane's cold branch (#1362,
+// design § 5.5, D35): an answer for a loop this process does not hold. It
+// reports whether it REBUILT the loop, in which case the caller applies the
+// answer warm; false with a nil error is an acknowledgement.
+//
+// In order:
+//
+//  1. Step 0 (design § 3.6): read the record and adopt a newer retained
+//     request into it. A request newer than the gate's can only have been
+//     minted after the gate's batch completed — the reject-minted W4 — so the
+//     adopt clears the gate in the same compare-and-swap.
+//  2. Only a record that is absent or terminal is settled as such; a live one
+//     must be awaiting THIS gate, by the same identity rule the warm resolve
+//     applies. Anything else is an answer that arrived too late to act on:
+//     acknowledged as inapplicable, nothing written, nothing rebuilt.
+//  3. I4 (the gate names the request the record names) and the gated result
+//     in the applied set, against the record step 0 left. Either missing is
+//     conflicting evidence and is quarantined.
+//  4. Rebuild from the retained request and the retained response that
+//     carries the gated batch. Either confirmed absent fails the loop with
+//     continuation_unavailable through the terminal owner; an unreadable
+//     stream is retried.
+//
+// The rebuild seats the batch from the retained response, which still lists
+// every call. The gate cleared the calls queued behind it when it fired
+// (gateForApproval), and the record carries that only as "gated", so the
+// rebuilt queue is cleared here to match: the process that gated the loop
+// would never have dispatched them either.
+func (c *Component) settleApprovalResponseWithoutLoop(
+	ctx context.Context, response agentic.ApprovalResponse,
+) (bool, error) {
+	loopID := response.LoopID
+	record, err := c.adoptNewerRetainedRequest(ctx, loopID)
+	if err != nil {
+		return false, err
+	}
+	if record.presence == loopPresenceStale {
+		logApprovalResponseIgnored(c.logger, response, record.entity.State)
+		return false, nil
+	}
+
+	gate := record.entity.PendingApproval
+	if record.entity.State != agentic.LoopStateAwaitingApproval ||
+		!approvalAnswersGate(gate, response.CallID, response.ExecutionID) {
+		logApprovalResponseIgnored(c.logger, response, record.entity.State)
+		return false, nil
+	}
+
+	if gate.RequestID != record.entity.PublishedRequestID {
+		return false, errs.WrapFatal(
+			fmt.Errorf("loop %s: its approval gate names request %q and its record names %q (I4)",
+				loopID, gate.RequestID, record.entity.PublishedRequestID),
+			"agentic-loop", "settleApprovalResponseWithoutLoop", "check the gate against the record")
+	}
+	gatedKey := gate.ExecutionID
+	if gatedKey == "" {
+		gatedKey = gate.CallID
+	}
+	if _, present := record.entity.PendingToolResults[gatedKey]; !present {
+		return false, errs.WrapFatal(
+			fmt.Errorf("loop %s: its record is gated on execution %q and carries no result for it",
+				loopID, gatedKey),
+			"agentic-loop", "settleApprovalResponseWithoutLoop", "check the gated result against the record")
+	}
+
+	if err := c.restoreLoopFromEvidence(ctx, loopID, record, gate.ExecutionID); err != nil {
+		if errors.Is(err, errRetainedEvidenceAbsent) {
+			return false, c.failContinuationUnavailable(ctx, record, err)
+		}
+		return false, err
+	}
+	c.handler.loopManager.ClearQueuedTools(loopID)
+	return true, nil
+}
+
+// failContinuationUnavailable fails a loop whose approval cannot be continued
+// because its retained request or response is confirmed gone. The failure is
+// the ordinary loop failure, committed by the terminal owner — COMPLETE_ by
+// Create, the graph stamps, agent.failed, then the record by compare-and-swap
+// — so the answer is acknowledged only once the failure is durable, and a
+// redelivery after a partial commit adopts it.
+//
+// The loop is seated from its record alone for the owner to write from: there
+// is no conversation to rebuild, and the loop is never continued.
+func (c *Component) failContinuationUnavailable(ctx context.Context, record loopRecord, cause error) error {
+	loopID := record.entity.ID
+	if err := c.handler.loopManager.seatRecordToFail(record.entity); err != nil {
+		return err
+	}
+	c.rememberLoopRevision(loopID, record.revision)
+	// The failure path records a terminal observation into the loop's
+	// trajectory aggregate, which a seat does not create. Its error is always
+	// nil (see restoreLoopFromEvidence).
+	_, _ = c.handler.trajectoryManager.startTrajectory(loopID)
+	return c.handleLoopFailure(ctx, loopID, record.entity, continuationUnavailableReason, cause)
 }

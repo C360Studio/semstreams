@@ -113,13 +113,12 @@ type HandlerResult struct {
 	trajectoryObservations []trajectoryObservation
 
 	// staleDrop marks a result for a message that arrived too late to act on:
-	// the loop it names is no longer awaiting that call — because it advanced,
-	// because it settled, or because its per-loop state was released at
-	// terminal (#1233). The handler did no work, so the component publishes and
-	// persists nothing for it. That is what makes a settled loop's ABSENCE and
-	// a terminal loop's PRESENCE produce the same outcome for a late arrival;
-	// persisting the absent case would report "failed to get loop for
-	// persistence" for what is an expected drop.
+	// the loop this process holds is no longer awaiting that call — because it
+	// advanced or because it settled. The handler did no work, so the
+	// component publishes and persists nothing for it. A loop this process
+	// does not hold at all is not a stale drop: the handler returns
+	// ErrLoopNotFound and the component's cold branch reads the record, which
+	// acknowledges a settled loop the same way (#1362, D35).
 	staleDrop bool
 }
 
