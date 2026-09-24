@@ -69,9 +69,12 @@ func TestARejectionRedeliveredAfterItsNextRequestWasPublished(t *testing.T) {
 	replacement, _ := startLoopProcess(t, client, DefaultConfig())
 	var logs lockedLogBuffer
 	replacement.logger = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	// A delta: the metrics collector is shared by every process in the test
+	// binary, so an absolute count depends on what ran before.
 	inapplicable := replacement.metrics.toolResultsDropped.WithLabelValues("approval_inapplicable")
+	counted := testutil.ToFloat64(inapplicable)
 	decision, err := replacement.handleApprovalResponseMessage(t.Context(), answer)
-	require.Equal(t, float64(1), testutil.ToFloat64(inapplicable), "the inapplicable answer is counted")
+	require.Equal(t, counted+1, testutil.ToFloat64(inapplicable), "the inapplicable answer is counted")
 
 	require.NoError(t, err)
 	require.Equal(t, natsclient.DeliveryDecisionAck, decision,
