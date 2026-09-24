@@ -2855,10 +2855,13 @@ func (h *MessageHandler) checkApprovalGate(loopID string, entity *agentic.LoopEn
 	// acknowledgement was lost — and the ApprovalPendingEvent it produced may
 	// never have been seen. It is re-echoed from the gate the loop holds
 	// (#1362 task 1.3, design § 5.4, D28); the carrier writes the gate before
-	// it publishes, as for the first echo. Matched by the one identity rule an
-	// answer is matched by, so a sibling never echoes a gate it is not.
+	// it publishes, as for the first echo. Only an approval_required result
+	// re-echoes — the same test the cold arm applies — and it is matched by the
+	// one identity rule an answer is matched by, so a sibling never echoes a
+	// gate it is not.
 	if entity.State == agentic.LoopStateAwaitingApproval {
-		if approvalAnswersGate(entity.PendingApproval, toolResult.CallID, toolResult.ExecutionID) {
+		if agentic.IsApprovalRequired(toolResult.Error) &&
+			approvalAnswersGate(entity.PendingApproval, toolResult.CallID, toolResult.ExecutionID) {
 			echo, err := h.approvalPendingMessage(loopID, *entity.PendingApproval)
 			if err != nil {
 				h.logger.Warn("failed to re-echo the pending approval for a redelivered gated result",

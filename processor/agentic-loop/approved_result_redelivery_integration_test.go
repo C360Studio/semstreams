@@ -7,6 +7,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -174,4 +175,61 @@ func TestAWarmGatedResultReEchoesItsGateThroughTheLane(t *testing.T) {
 	require.Equal(t, int32(1), msg.acks.Load())
 	require.Equal(t, uint64(2), messagesOn(t, client, pendingSubject), "the warm lane did not re-echo the gate")
 	require.Equal(t, agentic.LoopStateAwaitingApproval, loopRecordOf(t, holder, loopID).entity.State)
+}
+
+// TestAWarmGatedResultRedeliveredAfterItsApprovalIsAcknowledged (#1362
+// checkpoint 2 re-review, M2b): the gated result is redelivered to the process
+// holding the loop AFTER its gate was answered. The loop is running again, so
+// the gated result used to re-gate it — a second gate and a second event for
+// an already-approved call — while the cold arm acknowledges the same input.
+// Warm and cold now agree: an approval_required result for an execution the
+// record already holds is applied work.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestAWarmGatedResultRedeliveredAfterItsApprovalIsAcknowledged(t *testing.T) {
+	client := newLoopNATS(t)
+	holder, handler := startLoopProcess(t, client, DefaultConfig())
+	loopID := gatedLoop(t, client, holder, handler, "task-warm-regate")
+	pendingSubject := "agent.approval_pending." + loopID
+	gate := loopRecordOf(t, holder, loopID).entity.PendingApproval
+	require.NotNil(t, gate)
+	decision, err := holder.handleApprovalResponseMessage(t.Context(), approveAnswer(t, gate, loopID))
+	require.NoError(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+	approved := loopRecordOf(t, holder, loopID)
+	require.Nil(t, approved.entity.PendingApproval)
+	dropped := holder.metrics.toolResultsDropped.WithLabelValues("already_applied")
+	before := testutil.ToFloat64(dropped)
+
+	msg, delivered := deliverToolResult(t, holder, agentic.ToolResult{
+		LoopID: loopID, CallID: gate.CallID, Name: gate.ToolName, Error: gate.Reason,
+		RequestID: gate.RequestID, ExecutionID: gate.ExecutionID, CallOrdinal: gate.CallOrdinal,
+	})
+
+	require.Equal(t, natsclient.DeliveryDecisionAck, delivered.Decision())
+	require.Equal(t, int32(1), msg.acks.Load())
+	require.Equal(t, uint64(1), messagesOn(t, client, pendingSubject), "the answered gate was gated a second time")
+	after := loopRecordOf(t, holder, loopID)
+	require.Equal(t, approved.revision, after.revision, "an effect-free ACK writes nothing")
+	require.Nil(t, after.entity.PendingApproval)
+	require.Equal(t, before+1, testutil.ToFloat64(dropped))
+}
+
+// TestAWarmResultThatIsNotAGateDoesNotReEchoIt (M2a): only a redelivered
+// approval_required result re-echoes a pending gate, as on the cold arm; a
+// result that merely shares the gate's identity does not.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestAWarmResultThatIsNotAGateDoesNotReEchoIt(t *testing.T) {
+	client := newLoopNATS(t)
+	holder, handler := startLoopProcess(t, client, DefaultConfig())
+	loopID := gatedLoop(t, client, holder, handler, "task-warm-no-reecho")
+	pendingSubject := "agent.approval_pending." + loopID
+	gate := loopRecordOf(t, holder, loopID).entity.PendingApproval
+	require.NotNil(t, gate)
+
+	_, _ = deliverToolResult(t, holder, approvedResult(gate, loopID))
+
+	require.Equal(t, uint64(1), messagesOn(t, client, pendingSubject),
+		"a result that is not approval_required re-echoed the gate")
 }
