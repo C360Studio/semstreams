@@ -66,7 +66,7 @@ Archived task numbers are in brackets. Spec-text rulings are OQ-A to OQ-F in #13
 
 ## 3. One terminal owner (design § 5.7, D41/P6; ruling 2026-09-18 on #1330)
 
-- [ ] 3.1 [3.7] Replace the three marker `Put`s with one owner. The three paths today:
+- [x] 3.1 [3.7] Replace the three marker `Put`s with one owner. The three paths today:
   - carrier: C:2322 → C:2396 (entity) → C:2403/C:2423 → C:2950/C:2981 → stamps → publish C:2341
   - loop failure: C:2042 → C:2060 → C:2102 → C:2117 → C:2139
   - cancel: C:3452 → C:3469 → publish C:3506 → marker C:3521 → C:3005 (the marker is written after the event today)
@@ -86,14 +86,22 @@ Archived task numbers are in brackets. Spec-text rulings are OQ-A to OQ-F in #13
 
   Test (new): `terminal_owner_test.go`, arms (a), (b) and (c).
 
+  Landed with checkpoint 1 (PR #1366): the cold cancel adopts its durable cancel marker; a failed commit releases the
+  loop; terminal guards decide by the record (terminal → ACK, live → Retry) and run before any mutation or timeout arm
+  (#1362 issuecomment-5802753726, -5808903072). Residual, recorded not built: Q7's warm arm
+  (`classifyRedeliveredToolResult`) ACKs a tool result for a loop terminal in memory without reading the record; after
+  this checkpoint that memory is only a commit in flight, so a failed commit can lose one ACKed result of a loop that
+  was ending.
+
 ## 4. Evidence
 
 - [ ] 4.1 [4.2] New `terminal_tool_redelivery_integration_test.go` (real NATS, `test/e2e/harness/processbarrier`).
   - (i) The approval lane's reject W4. Crash between the carrier's publish (C:2363) and its `Update` (C:2375) for the
     approval result, then restart and redeliver. Expect ACK inapplicable, R(N+1) counted once, and the record `running`
     at R(N+1) with no gate.
-  - (ii) The terminal lane crashes after publish and before `Update`. Expect adoption through arm (b).
-- [ ] 4.2 [4.3(d)] Mutation: restore `Put` for the marker in 3.1, dropping the `Create` read-back. Case (ii) must fail.
+  - (ii) The terminal lane crashes after publish and before `Update`. Expect adoption through arm (b). — landed with checkpoint 1
+    (`TestATerminalRedeliveredAfterItsPublicationAdoptsTheDurableTerminal`); (i) is checkpoint 2's.
+- [x] 4.2 [4.3(d)] Mutation: restore `Put` for the marker in 3.1, dropping the `Create` read-back. Case (ii) must fail.
 - [ ] 4.3 [4.3(f)] Mutation: drop the gate clear at LE:508-511. Case (i) must fail on I4 and re-run the rejection.
 
 Mutation evidence uses a `cp` backup and a checksum.
