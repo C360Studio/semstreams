@@ -16,9 +16,9 @@ import (
 // It is the whole of the recovery decision this change is built on: an input
 // is applied, current, or ahead of the record, and that is decided by ORDERING
 // two names — never by comparing rendered conversation content, tool output or
-// terminal payloads. One function so the four sites that ask (warm and cold, on
-// the model-response and tool-result lanes) cannot drift into four readings of
-// the same grammar.
+// terminal payloads. One function so the sites that ask (warm and cold, on the
+// model-response and tool-result lanes, and since #1362 the verdict lane's
+// waiterless settle) cannot drift into several readings of the same grammar.
 type requestOrder int
 
 const (

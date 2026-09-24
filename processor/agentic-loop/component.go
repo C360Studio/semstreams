@@ -2262,10 +2262,11 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 		// stamp. The owner classifies its own failures: a lost
 		// compare-and-swap is transient with the loop already released, and
 		// everything else is fatal. The handler has already moved this loop
-		// in memory, so a redelivery into THIS process meets the terminal
-		// guard (handlers.go:1322-1327) and returns an empty result; the
-		// commit this delivery could not finish is recovered only by a
-		// process that re-reads the record — through the owner's adoption.
+		// terminal in memory, so the owner releases it whenever its commit
+		// does not land (review H1): memory never answers for a terminal
+		// that is not durable. The redelivery, into this process or another,
+		// re-reads the record and finishes the commit through the owner's
+		// adoption.
 		if err := c.commitTerminal(ctx, terminalOutcomeOf(result), result); err != nil {
 			return err
 		}
@@ -2310,7 +2311,8 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 }
 
 // publishThenPersistResultState is the L4a order for a non-terminal result on
-// the model-response and tool-result lanes: publish, then compare-and-swap the
+// the model-response, tool-result and approval lanes and the approval-timeout
+// sweeper (the last two since #1362): publish, then compare-and-swap the
 // record.
 //
 // The crash window it opens is the one the design names W4 — the next request
@@ -2999,8 +3001,9 @@ func mintedRequestID(result HandlerResult) (string, error) {
 // It lives at the CARRIER, not at the mint, because I1 is a claim about
 // durability and only the carrier knows when the request became durable. The
 // two iteration mint sites — publishIterationRequest and emitRetryRequest —
-// build the request and hand it to the carrier; on the model-response and
-// tool-result lanes the carrier publishes first, so the stamp lands after the
+// build the request and hand it to the carrier; on the model-response,
+// tool-result and approval lanes and in the approval-timeout sweeper (the last
+// two since #1362) the carrier publishes first, so the stamp lands after the
 // PubAck and before the record write (owner ruling #1330 Q1, 2026-09-23).
 // Birth is the one lane that stamps at the mint, by the same ruling: it writes
 // the record BEFORE the first publish, so the name has to exist first.

@@ -45,6 +45,13 @@ const approvalTimeoutSystemApprover = "system:approval-timeout"
 // back with its original deadline already computed; a loop nothing
 // rebuilds is never swept by this process at all and stays parked
 // until the approval is answered or the loop is cancelled.
+//
+// A startup pass that re-hydrates parked loops from AGENT_LOOPS (OQ2)
+// would also move a replacement's approval answer from the cold branch
+// (settleApprovalResponseWithoutLoop) onto the warm path. The e2e stage
+// verify-approval-across-replacement proves the cold branch only while no
+// such pass exists, so landing OQ2 must revisit that stage (owner ruling,
+// #1362 issuecomment-5812283590).
 func (c *Component) runApprovalTimeoutSweeper(ctx context.Context) {
 	ticker := time.NewTicker(approvalSweepInterval)
 	defer ticker.Stop()

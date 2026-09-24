@@ -81,6 +81,14 @@ Key design points:
   is applied; a loop whose retained evidence is confirmed gone fails
   with reason `continuation_unavailable`; any other record acknowledges
   the answer without effect ([#1362](https://github.com/C360Studio/semstreams/issues/1362)).
+  The e2e stage `verify-approval-across-replacement`
+  (`test/e2e/scenarios/agentic/approval_restart.go`) is the proof of that
+  cold branch, and it holds only while nothing at startup re-hydrates
+  parked loops from AGENT_LOOPS. That re-hydration is deferred (docket
+  OQ2, the doc comment on `runApprovalTimeoutSweeper`); if it lands, the
+  answer takes the warm path and the stage stays green without proving
+  the cold branch, so it must be revisited (owner ruling,
+  [#1362 issuecomment-5812283590](https://github.com/C360Studio/semstreams/issues/1362#issuecomment-5812283590)).
 
 ## Timeouts
 

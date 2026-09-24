@@ -62,8 +62,9 @@ type LoopEntity struct {
 	// this record exists, an AgentRequest{RequestID: PublishedRequestID,
 	// LoopID: ID} is durably retained on agent.request.<loop id>. That is what
 	// lets a process with no memory of the loop classify a redelivered model
-	// response or tool result by identity — older, current or newer — instead
-	// of comparing retained conversation content.
+	// response, tool result, approval response or governance verdict by
+	// identity — older, current or newer — instead of comparing retained
+	// conversation content.
 	//
 	// Set at birth, where the record is written before the first request is
 	// published, and on every later request-minting transition by the CARRIER
@@ -98,7 +99,9 @@ type LoopEntity struct {
 	// LoopStateAwaitingApproval and persists the pending call here so
 	// it can be re-dispatched on approval. StateBeforeApproval lets us
 	// restore the prior workflow state once the approval response
-	// arrives.
+	// arrives. Both are cleared when the approval is resolved and, since
+	// #1362, on the terminal transition, so a terminal record carries
+	// neither.
 	PendingApproval     *PendingApprovalState `json:"pending_approval,omitempty"`
 	StateBeforeApproval LoopState             `json:"state_before_approval,omitempty"`
 
