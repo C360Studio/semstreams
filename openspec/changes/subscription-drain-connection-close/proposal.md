@@ -19,8 +19,9 @@ its whole budget and returns `context.DeadlineExceeded` for a subscription that 
   terminal sentinels is still returned.
 - Drain after an external `Unsubscribe` now joins the in-flight callback. Today it returns while the callback may
   still be running.
-- `Client.handleClosed` logs one Warn line saying that messages queued but not yet delivered on core subscriptions
-  may be dropped. There is no metric (owner ruling 4).
+- `Client.handleClosed` logs one Warn line for an unrequested close (one `Client.Close` did not ask for), saying
+  that messages queued but not yet delivered on core subscriptions may be dropped. A requested close logs the same
+  fact at Debug. There is no metric (owner ruling 4, amended in round 2).
 - The `Drain` doc comment states the connection-close contract: callbacks are still joined, and queued-but-undelivered
   messages are discarded (core NATS at-most-once).
 - The #1371 test assertion that expected `ErrBadSubscription` from a `Stop` after the connection closed now expects
@@ -59,8 +60,8 @@ own capability.
   comment, `handleClosed`); `natsclient/subscription_test.go`; a new `natsclient` integration test;
   `processor/agentic-tools/outcomes_integration_test.go:253-274`.
 - Callers: 29 non-test `Subscription.Drain` references (gopls), in processors, outputs, storage, examples, and
-  `service/message_logger.go`. None branches on the error value. Each one's Stop now returns promptly and cleanly
-  when the connection closes under it.
+  `service/message_logger.go`. None branches on the error value. When the connection closes under a Stop, that Stop now
+  returns cleanly once any in-flight callback finishes, not at its ctx deadline.
 - Consumers: every `sem*` product that composes SemStreams components gets this through component `Stop`. A
   read-only scan of the local sister checkouts on 2026-09-24 found `natsclient.Subscription` held in semboids,
   semdev, semdragon, semmachina, semops, semsage, semsource and semspec, and `ErrBadSubscription` named in none of

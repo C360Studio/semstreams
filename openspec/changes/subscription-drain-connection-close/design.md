@@ -3,7 +3,9 @@
 > Baseline: `main` at `5748fe85`, with nats.go v1.52.0 (`go.mod:12`). Every `client.go`, `request.go`, and test pin
 > below is at `5748fe85`. Every `nats.go:` pin is `$(go env GOMODCACHE)/github.com/nats-io/nats.go@v1.52.0/nats.go`.
 > Design: architect design O2, reviewed pre-owner as "revise, no BLOCKING or HIGH". Owner rulings:
-> [#1372, 2026-09-24](https://github.com/C360Studio/semstreams/issues/1372#issuecomment-5814983813).
+> [#1372, 2026-09-24](https://github.com/C360Studio/semstreams/issues/1372#issuecomment-5814983813); round 2, the
+> same day ([issuecomment-5817564164](https://github.com/C360Studio/semstreams/issues/1372#issuecomment-5817564164)):
+> the D2 window is a clarification of ruling 1, and ruling 4's Warn is amended to unrequested closes only.
 
 ## Context
 
@@ -98,8 +100,10 @@ must not block. A `sync.Once`-guarded channel close meets that. The unexported `
 When `IsValid` observes `closed`, the subscription was already terminal before the wrapper could prove the handler
 would fire. `closedAuthority` is then false, and `Drain` returns `ErrBadSubscription` as it does today. That is
 conservative: a close that lands between the two critical sections gives `ErrBadSubscription` even though the
-handler may still fire. This ordering cannot be tested deterministically, so it is recorded here as an argument
-(tasks.md 4.4).
+handler may still fire. The wrapper cannot tell this window apart from a subscription born invalid. The owner
+accepted it as a clarification of ruling 1, not a deviation (round 2, item 1), and the spec's "already invalid when
+its handle was created" includes the handle's `IsValid` read. This ordering cannot be tested deterministically, so it
+is recorded here as an argument (tasks.md 4.5).
 
 ### D3. Simplified Drain
 
@@ -119,12 +123,23 @@ ctx wins, a ctx error is never stored, a later call rejoins the same drain, and 
 initiation, all as today (`client.go:808-822`). The `drainComplete` field disappears because `done` carries that
 fact.
 
-### D4. Observability (owner ruling 4)
+### D4. Observability (owner ruling 4, amended in round 2)
 
-`handleClosed` logs one Warn line: the connection closed, and messages queued but not yet delivered on core
-subscriptions may have been dropped. The line goes where the loss happens, whether or not anyone drains. There is no
-metric. The developer contract's log-and-metric rule for a declared drop is satisfied by this owner ruling, not
-waived silently. The count is not observable anyway (inventory 4).
+`handleClosed` branches on the client's closed flag. For an **unrequested** close (the flag is not set), it logs one
+Warn line: the connection closed, and messages queued but not yet delivered on core subscriptions may have been
+dropped. For a **requested** close (`Client.Close` set the flag), it logs the same fact at Debug. A Warn on every clean
+shutdown and every test cleanup would train readers to ignore it, and unrequested closes are where queued messages
+are actually lost. The line goes where the loss happens, whether or not anyone drains. There is no metric. The
+developer contract's log-and-metric rule for a declared drop is satisfied by this owner ruling, not waived silently.
+The count is not observable anyway (inventory 4).
+
+The flag is `closed atomic.Bool` (`client.go:148`), so `handleClosed` reads it with `Load()` and needs no lock.
+`Client.Close` stores `true` at `client.go:586`, under `closeMu`, before it calls `drainAndCloseConnection` at
+`client.go:605`. nats.go dispatches the connection closed handler only after that native drain or close, so the store
+is sequenced before the `Load` and a requested close reads `true`. Nothing stores `false` (`grep -n "closed.Store"`
+finds only `:586`). The connection-loss watchdog already reads the same flag this way (`client.go:1569`). A close that
+the server or network causes while `Client.Close` is racing in is logged at Debug. That is acceptable: the caller
+asked for the close.
 
 The `Drain` doc comment (`client.go:778-780`) is reworded. On a connection close, `Drain` still joins the in-flight
 callback and returns `nil`. Queued-but-undelivered messages are discarded (core NATS at-most-once).
@@ -148,9 +163,9 @@ callback and returns `nil`. Queued-but-undelivered messages are discarded (core 
   NATS is at-most-once, so the loss is the transport's contract and not a drain failure. No caller branches on the
   value (P4). A non-nil sticky result would leave the ten retrying callers stuck on it. The loss is declared once,
   where it happens, by the `handleClosed` Warn (D4).
-- **[nats.go upgrade changes when `pDone` fires]** → The new integration test (tasks.md 2.1) drives the real
-  connection-close path and fails if `Drain` stops completing or stops joining. Keeping `ErrBadSubscription` in
-  the terminal sentinel list (D3) covers a new native return path.
+- **[nats.go upgrade changes when `pDone` fires]** → The integration tests (tasks.md 2.1, 2.2, 2.3) drive the real
+  close-mid-drain and close-before-Drain paths and fail if `Drain` stops completing or stops joining on them.
+  Keeping `ErrBadSubscription` in the terminal sentinel list (D3) covers a new native return path.
 - **[A slow callback lengthens Stop]** → Bounded by the per-message timeout or the caller's ctx (behavior change 1).
   The caller's ctx still wins.
 - **[Close between `SetClosedHandler` and `IsValid`]** → Returns `ErrBadSubscription` as today (D2). The window is
@@ -163,5 +178,8 @@ Impact). Rollback is a revert of the `fix(natsclient)` commit.
 
 ## Residual
 
-A nats.go upgrade could change when `SetClosedHandler` fires. The integration test is the guard, and D3's sentinel
-list absorbs a new terminal error. No issue is filed for this: it is the design's recorded residual.
+A nats.go upgrade could change when `SetClosedHandler` fires. Against real NATS, the integration tests guard only
+the two connection-close paths: close mid-drain (tasks.md 2.1) and close before `Drain`, including the callback join
+(2.2, 2.3). The normal-drain, external-unsubscribe and max-reached paths rest on the unit tests' fake and on the
+nats.go reading in § Context. D3's sentinel list absorbs a new terminal error. No issue is filed for this: it is the
+design's recorded residual.
