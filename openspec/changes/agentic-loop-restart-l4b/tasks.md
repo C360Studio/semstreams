@@ -125,6 +125,10 @@ Mutation evidence uses a `cp` backup and a checksum.
   - Park a loop on approval, kill the process, then answer.
   - Assert that the replacement **applies** the answer. Asserting that a deadline fires is not enough.
   - This stage is #1155's remaining acceptance.
+  - It proves the cold branch (`settleApprovalResponseWithoutLoop`) only while no startup re-hydration of parked loops
+    from AGENT_LOOPS exists; that re-hydration is deferred as OQ2
+    (`processor/agentic-loop/approval_sweeper.go:41-47`), and if OQ2 lands this stage must be revisited (owner ruling,
+    #1362 issuecomment-5812283590).
 
 ## 7. Truth maintenance
 

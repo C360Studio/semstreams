@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -768,32 +767,12 @@ func waitForConsumerSettled(
 // stage names four consumers as constants because it PAUSES or reads them by
 // identity; this one is only waited on, and a guessed name that resolved to
 // some other consumer would make that wait pass vacuously — which is the exact
-// failure the wait exists to close. Exactly one match is required, so a second
-// consumer over agent.task fails the check rather than being picked at random.
+// failure the wait exists to close. The lookup, and its exactly-one rule, is
+// laneConsumerName's.
 func taskLaneConsumerName(ctx context.Context, stream jetstream.Stream) (string, error) {
-	const taskSubjectRoot = "agent.task"
-	lister := stream.ListConsumers(ctx)
-	var matched []string
-	for info := range lister.Info() {
-		filters := info.Config.FilterSubjects
-		if len(filters) == 0 && info.Config.FilterSubject != "" {
-			filters = []string{info.Config.FilterSubject}
-		}
-		for _, filter := range filters {
-			if filter == taskSubjectRoot || strings.HasPrefix(filter, taskSubjectRoot+".") {
-				matched = append(matched, info.Name)
-				break
-			}
-		}
-	}
-	if err := lister.Err(); err != nil {
-		return "", fmt.Errorf("list AGENT consumers: %w", err)
-	}
-	if len(matched) != 1 {
-		return "", fmt.Errorf("want exactly one AGENT consumer filtering %s, found %d: %v",
-			taskSubjectRoot, len(matched), matched)
-	}
-	return matched[0], nil
+	return laneConsumerName(ctx, stream, consumerLane{
+		stream: agentStream, owner: loopLaneOwner, subjectRoot: "agent.task",
+	})
 }
 
 func joinHarnessFinalizationError(
@@ -1082,6 +1061,9 @@ func (s *Scenario) verifyMidFlightLoopAcrossReplacement(
 type loopRecordObservation struct {
 	entity   agentic.LoopEntity
 	revision uint64
+	// committed is the time the NATS server stored this revision, on the
+	// server's clock.
+	committed time.Time
 }
 
 // waitForLoopRecord polls the durable record until it satisfies want. It reads
@@ -1105,7 +1087,7 @@ func waitForLoopRecord(
 				return loopRecordObservation{}, fmt.Errorf("decode %s/%s: %w", agentLoopsBucket, loopID, err)
 			}
 			if want(entity) {
-				return loopRecordObservation{entity: entity, revision: entry.Revision()}, nil
+				return loopRecordObservation{entity: entity, revision: entry.Revision(), committed: entry.Created()}, nil
 			}
 			last = fmt.Sprintf("state=%s iterations=%d published_request_id=%q revision=%d",
 				entity.State, entity.Iterations, entity.PublishedRequestID, entry.Revision())

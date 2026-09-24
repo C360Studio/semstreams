@@ -734,13 +734,18 @@ func terminalOutcome(payload message.Payload) (string, error) {
 // not, and refuses one that names an execution other than the pending gate.
 //
 // A 409 is retried inside a bounded window instead of being failed on. The
-// endpoint answers 409 for "this loop is not awaiting approval", and the
-// scenario reads the ApprovalPendingEvent off the AGENT stream directly —
-// which can beat dispatch's own subscription delivering the same event into
-// the tracker the endpoint reads. That is a race between two observers of one
-// fact, not a refusal. Every other status is the answer and is reported as
-// one, and a 409 that outlasts the window still fails. reason is the free
-// text a reviewer attaches; empty sends none.
+// endpoint decides from the loop's AGENT_LOOPS record, not from an in-memory
+// tracker: it answers 409 when that record is not awaiting approval, or when
+// the execution named is not the record's pending gate. The scenario reads the
+// ApprovalPendingEvent off the AGENT stream directly, and that event can be on
+// the stream before the loop writes the awaiting_approval record. That is a
+// race between the event and the record, not a refusal. Across a process
+// replacement there is no such race: verify-approval-across-replacement has
+// already read the record awaiting before it answers, so a 409 there means the
+// record is not awaiting, and the retry only delays that failure by the
+// window. Every other status is the answer and is reported as one, and a 409
+// that outlasts the window still fails. reason is the free text a reviewer
+// attaches; empty sends none.
 func (s *Scenario) submitApproval(ctx context.Context, loopID, executionID, decision, reason string) error {
 	deadline := time.Now().Add(approvalTrackerWindow)
 	for {
