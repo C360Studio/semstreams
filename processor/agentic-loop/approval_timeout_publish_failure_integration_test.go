@@ -15,16 +15,16 @@ import (
 )
 
 // TestAnApprovalTimeoutWhosePublicationFailedLeavesTheRecordAsItWas is I1 on
-// the one publisher that is not a carrier call site (#1330, owner round 4
-// finding 1).
+// the approval-timeout sweeper (#1330, owner round 4 finding 1; since #1362
+// task 1.5 the sweeper is a carrier call site).
 //
 // The approval-timeout auto-reject MINTS: the rejection runs through
 // handleRejectedApproval -> HandleToolResult -> handleToolsComplete, which
 // increments the iteration and mints the loop's next request. The sweeper
-// publishes that request and then writes the record itself
-// (approval_sweeper.go), so when the publication fails and KV stays writable
-// the two halves disagree in the direction I1 forbids: the record names R2
-// while the stream retains only R1. Every later cold read of that loop then
+// publishes that request and then writes the record, so if a failed
+// publication did not stop the write, and KV stayed writable, the two halves
+// would disagree in the direction I1 forbids: the record naming R2 while the
+// stream retains only R1. Every later cold read of that loop then
 // meets adoptNewerRetainedRequest's I1 arm — "the record names a request the
 // stream does not retain" — which is Fatal, so a routine redelivery
 // quarantines a lane instead of recovering a loop that merely had an approval
@@ -39,10 +39,10 @@ import (
 // initializeKVBuckets acquired stays bound to the live connection, so the
 // publication fails on the production path with the record still writable.
 //
-// What happens to the loop this process advanced IN MEMORY is #1362's: the
-// sweeper is a timer, so it has no delivery to classify and no retry policy
-// yet (design § 5.6). This test asserts the DURABLE half, which is the half a
-// replacement recovers from.
+// The loop this process advanced IN MEMORY is left as it is: the sweeper is a
+// timer, so it has no delivery to classify, and its failures are logged, not
+// counted or retried (#1362 OQ-B). This test asserts the DURABLE half, which
+// is the half a replacement recovers from.
 //
 // spec: agentic-loop / The loop record names its outstanding request
 func TestAnApprovalTimeoutWhosePublicationFailedLeavesTheRecordAsItWas(t *testing.T) {
@@ -104,9 +104,10 @@ func TestAnApprovalTimeoutWhosePublicationFailedLeavesTheRecordAsItWas(t *testin
 
 	// A replacement takes the gating tool result again — a lost acknowledgement
 	// is ordinary at-least-once delivery — rebuilt from the record's own gate,
-	// which is the only place a replacement could find it. It must be
-	// acknowledged as work the record already applied; against a record naming
-	// an unretained R2 it is quarantined by step 0 instead.
+	// which is the only place a replacement could find it. The gate is still
+	// pending on the record, so the replacement re-echoes it and acknowledges
+	// (#1362, § 5.4); against a record naming an unretained R2 it is
+	// quarantined by step 0 instead.
 	replacement, _ := startLoopProcess(t, client, DefaultConfig())
 	_, redelivered := deliverToolResult(t, replacement, agentic.ToolResult{
 		CallID:      gate.CallID,

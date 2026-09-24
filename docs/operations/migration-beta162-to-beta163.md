@@ -1890,24 +1890,21 @@ This **supersedes** the beta.25 note's "Restart safety" paragraph
 at restart would auto-reject within one sweep interval of the new process booting. It would not: that paragraph
 described fields the sweeper reads, not a process that reads the bucket.
 
-**Operational consequence, and what beta.163 can and cannot do about it.** The wait a parked loop is nominally
-under (`approval_timeout`, at most 12h) is not a settlement guarantee across a replacement, and was never one.
-Neither is answering it from outside: **an `ApprovalResponse` and a `cancel` signal both reach only a loop that is
-present in process memory.** For a parked loop no process holds:
+**Operational consequence.** The wait a parked loop is nominally under (`approval_timeout`, at most 12h) is not a
+settlement guarantee across a replacement, and was never one: a replacement re-arms no deadline. Answering it from
+outside does work, since #1362:
 
-- an `ApprovalResponse` finds no pending approval to resolve, is dropped as stale, and is **acknowledged without
-  changing `AGENT_LOOPS`** — so it looks answered and is not;
+- an `ApprovalResponse` for a parked loop no process holds is settled by the loop's record. The replacement rebuilds
+  the loop from the record, its retained request and the retained response that carries the gated batch, and applies
+  the answer. When that request or response is confirmed gone from the stream the loop fails with reason
+  `continuation_unavailable` instead; a stream that cannot be read is retried. An answer whose record is absent,
+  terminal, or no longer awaiting that gate is acknowledged without effect, with a warning and a count on
+  `tool_results_dropped_total{reason="approval_inapplicable"}`;
 - a `cancel` signal against a live record finds no loop to cancel and is **retried until `MaxDeliver` stops
   redelivering it**, after which it is recorded in the framework's MaxDeliver ledger.
 
-**A cold parked loop is not settleable in beta.163.** The cold approval branch — the one that rebuilds a parked loop
-from its record so an `ApprovalResponse` can land — is [#1362](https://github.com/C360Studio/semstreams/issues/1362),
-not this tag. Until it lands, the only thing that revives such a loop is the narrow exception below: a redelivered
-input naming the request the record names. That is not a recovery path to rely on.
-
-So the action for beta.163 is to keep the window small rather than to answer into it: size the `agentic-loop`
-component's `timeout` above the replacement window you operate under (see the loop-deadline note above), and expect
-loops parked at an approval across a replacement to sit until #1362.
+So the practical action is to answer a parked loop, or to size the `agentic-loop` component's `timeout` above the
+replacement window you operate under (see the loop-deadline note above) when nobody will.
 
 One narrow exception, recorded rather than built on: a replacement that rebuilds a loop for some *other* reason — a
 redelivered model response or tool result naming the request the record names — seats that loop's pending approval
