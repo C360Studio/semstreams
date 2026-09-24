@@ -170,8 +170,10 @@ Mutation evidence uses a `cp` backup and a checksum.
 
 ## 8. Verification
 
-- [ ] 8.1 `task check:push`: build, lint, tagged vet, schema drift, contract, race unit, integration.
-- [ ] 8.2 `task e2e:agentic` green, including 6.1. This is the BREAKING gate for 3.1's order change.
+- [x] 8.1 `task check:push`: build, lint, tagged vet, schema drift, contract, race unit, integration.
+  - Evidence (2026-09-24): exit 0 at `6533d3bd`, 318 packages ok, 0 FAIL.
+- [x] 8.2 `task e2e:agentic` green, including 6.1. This is the BREAKING gate for 3.1's order change.
+  - Evidence (2026-09-24): exit 0 at `6533d3bd`, 5m35s; `verify-approval-across-replacement` 6.5s.
 - [ ] 8.3 The PR body carries:
   - `Closes #1362` and `Closes #1155`
   - `implemented-by:`
