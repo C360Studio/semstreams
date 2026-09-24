@@ -135,7 +135,7 @@ Mutation evidence uses a `cp` backup and a checksum.
 
 ## 7. Truth maintenance
 
-- [ ] 7.1 Rewrite every "#1362" deferral that these tasks make false:
+- [x] 7.1 Rewrite every "#1362" deferral that these tasks make false:
   - `processor/agentic-loop/`: AG:76; ARH:205-207; AS:104-119 and :138; C:2227-2233, :2254-2279, :2315 and :3166;
     `doc.go:319`; `loop_carrier_test.go:66`, `:95`, `:125` and `:143`;
     `approval_timeout_publish_failure_integration_test.go:42`
@@ -143,7 +143,7 @@ Mutation evidence uses a `cp` backup and a checksum.
   - `docs/operations/migration-beta162-to-beta163.md:1904-1910`
   - `docs/operations/17-tool-call-governance.md` (the verdict counter's row in § Observability and its troubleshooting
     section, rewritten with task 2.1)
-- [ ] 7.2 Add a migration section to `docs/operations/migration-beta162-to-beta163.md`, after `:1784`. It states:
+- [x] 7.2 Add a migration section to `docs/operations/migration-beta162-to-beta163.md`, after `:1784`. It states:
   - the entity's terminal `state` now lands after `agent.complete` / `agent.failed`;
   - `COMPLETE_` precedes the event on the carrier, loop-failure and cancel paths, and cancel's marker moves ahead of
     its event; the approval-timeout sweeper's own terminal (`max_iterations`) takes the same order;
@@ -165,7 +165,7 @@ Mutation evidence uses a `cp` backup and a checksum.
     signal is `missing_waiter` minus the settle reasons (the counter's section, rewritten with task 2.1).
 
   Size the section against the keys the semspec watchers read, in one read-only pass.
-- [ ] 7.3 Keep the `agentic-loop` delta in step with what shipped (variant A or B from 1.6). Then run
+- [x] 7.3 Keep the `agentic-loop` delta in step with what shipped (variant A or B from 1.6). Then run
   `openspec validate agentic-loop-restart-l4b --strict` and `task spec:properties`.
 
 ## 8. Verification
