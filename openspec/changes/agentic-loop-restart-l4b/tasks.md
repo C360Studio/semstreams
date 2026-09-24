@@ -57,7 +57,7 @@ Archived task numbers are in brackets. Spec-text rulings are OQ-A to OQ-F in #13
 
 ## 2. Governance verdict after waiter loss (design § 5.6, D16)
 
-- [ ] 2.1 [3.6] At C:3611, inside `settleVerdictWithoutWaiter` (C:3597, entered from C:3572), read the record.
+- [x] 2.1 [3.6] At C:3611, inside `settleVerdictWithoutWaiter` (C:3597, entered from C:3572), read the record.
   - Acknowledge when any of these holds: `verdict.RequestID` is older than `PublishedRequestID`; the `ExecutionID` is
     in `PendingToolResults`; the record is absent or terminal.
   - Each acknowledgement carries a reason label beside M:394-395 (recorder M:405).
@@ -110,7 +110,7 @@ Mutation evidence uses a `cp` backup and a checksum.
 
 ## 5. Route-ambiguity metering (owner ruling 2026-09-21, docket OQ6)
 
-- [ ] 5.1 [3.9] Meter the refusal at DHA:334, inside `activeLoop` (DHA:321).
+- [x] 5.1 [3.9] Meter the refusal at DHA:334, inside `activeLoop` (DHA:321).
   - Meter through `Component.recordLoopAdmissionRefusal`, so the single-caller property (DM:373-377) holds.
   - Add one resolver-seam value (`route`) and one reason value (`route_ambiguous`) to the Help at DM:181.
   - Update the comment at DC:67-71.
