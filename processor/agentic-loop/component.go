@@ -2193,14 +2193,13 @@ type carrierOrder int
 const (
 	// writeThenPublish records first and publishes after — the order every
 	// lane took before #1330, and the order any result that CREATES an
-	// approval gate keeps. The approval-timeout sweeper is not a carrier
-	// caller at all: it publishes and then writes through its own pair
-	// (approval_sweeper.go), and #1362 moves it onto the carrier with the lane.
+	// approval gate keeps.
 	writeThenPublish carrierOrder = iota
 	// publishThenWrite publishes first and records after, so the record is
 	// written only against outputs that already PubAck'd. It is the order the
-	// model-response, tool-result and approval lanes take for a non-terminal
-	// result that does not gate the loop for approval.
+	// model-response, tool-result and approval lanes and the approval-timeout
+	// sweeper take for a non-terminal result that does not gate the loop for
+	// approval.
 	publishThenWrite
 )
 
@@ -2208,7 +2207,7 @@ const (
 //
 // A terminal result goes to the terminal owner, commitTerminal, on every lane
 // that reaches this carrier and whatever order the lane asked for (#1362,
-// design § 5.7; the approval-timeout sweeper does not reach it until task 1.5): the
+// design § 5.7), the approval-timeout sweeper's auto-reject included: the
 // COMPLETE_<loopID> marker by Create, the graph stamps, the terminal event,
 // and the loop record last by compare-and-swap. The stamps precede the event
 // so any subscriber consuming agent.complete.<loop_id> from JetStream can
@@ -2993,15 +2992,12 @@ func (c *Component) stampPublishedRequest(result HandlerResult) error {
 // revision this process observed (#1330, owner ruling Q2).
 //
 // Every caller takes this form. The model-response, tool-result and approval
-// lanes reach it through persistHandlerResult AFTER their publications have
-// PubAck'd, which is what makes the written PublishedRequestID mean "this
-// request is durably retained" rather than "a process meant to publish one".
-// The terminal owner (commitTerminal) reaches it last on the carrier,
-// loop-failure and cancel lanes, after the COMPLETE_<loopID> marker, the graph
-// stamps and the terminal event; the approval-timeout sweeper's terminal
-// writes it directly, with no marker, until #1362 task 1.5. The sweeper
-// publishes before it writes through its own pair, and #1362 moves it onto the
-// carrier.
+// lanes and the approval-timeout sweeper reach it through persistHandlerResult
+// AFTER their publications have PubAck'd, which is what makes the written
+// PublishedRequestID mean "this request is durably retained" rather than "a
+// process meant to publish one". The terminal owner (commitTerminal) reaches
+// it last on the carrier, loop-failure and cancel lanes, after the
+// COMPLETE_<loopID> marker, the graph stamps and the terminal event.
 //
 // A lost CAS is not a retry-in-place. The record moved, so this process is
 // holding a loop somebody else has advanced: its in-memory state is released

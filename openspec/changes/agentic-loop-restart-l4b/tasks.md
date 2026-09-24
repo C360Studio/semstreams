@@ -135,8 +135,7 @@ Mutation evidence uses a `cp` backup and a checksum.
 - [ ] 7.2 Add a migration section to `docs/operations/migration-beta162-to-beta163.md`, after `:1784`. It states:
   - the entity's terminal `state` now lands after `agent.complete` / `agent.failed`;
   - `COMPLETE_` precedes the event on the carrier, loop-failure and cancel paths, and cancel's marker moves ahead of
-    its event; until task 1.5 the approval-timeout sweeper's own terminal (`max_iterations`) is published and written
-    without `COMPLETE_`;
+    its event; the approval-timeout sweeper's own terminal (`max_iterations`) takes the same order;
   - a crashed cancel is settled cold: its redelivery republishes the saved event and writes the record cancelled;
   - a terminal whose record update lost its CAS after `COMPLETE_` and its event landed is not reconciled (the loop may
     keep running; its own later terminal is quarantined), and the same follows a spawn-path birth failure under a

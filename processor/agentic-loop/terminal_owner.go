@@ -115,12 +115,9 @@ func decodeTerminalMarker(data []byte) (terminalOutcome, error) {
 }
 
 // commitTerminal is the one owner of a loop's terminal (#1362, design § 5.7,
-// D41/P6; owner ruling 2026-09-18 on #1330). The carrier, the loop-failure
-// path and cancel commit through it. The approval-timeout sweeper is the one exception until #1362 task 1.5: it
-// publishes and writes a handler result through its own pair
-// (approval_sweeper.go), so a terminal its auto-reject produces — a
-// max_iterations failure — is published and written with no COMPLETE_ marker.
-// The order:
+// D41/P6; owner ruling 2026-09-18 on #1330). The carrier — the approval-timeout
+// sweeper's auto-reject included — the loop-failure path and cancel commit
+// through it. The order:
 //
 //  1. COMPLETE_<loopID> by Create. A refused Create means the loop already has
 //     a durable terminal: it is read back and ADOPTED by loop ID and terminal

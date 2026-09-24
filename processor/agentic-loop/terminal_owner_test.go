@@ -315,10 +315,10 @@ func TestAResponseMeetingAnUncommittedTerminalWritesNothing(t *testing.T) {
 	require.Empty(t, bucket.written(), "the carrier wrote a terminal record outside the terminal owner")
 }
 
-// A terminal in memory is not always a commit in flight: the approval-timeout
-// sweeper commits its own terminal outside the owner until #1362 task 1.5. So a
-// terminal-guard result is decided by the RECORD (#1362 re-review M1): a
-// terminal record is acknowledged without effect, with the drop counted.
+// A terminal in memory is a commit in flight whose outcome the delivery cannot
+// see, so a terminal-guard result is decided by the RECORD (#1362 re-review
+// M1): a terminal record is acknowledged without effect, with the drop
+// counted.
 //
 // spec: agentic-loop / The loop record names its outstanding request
 func TestAResponseMeetingACommittedTerminalIsAcknowledged(t *testing.T) {

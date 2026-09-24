@@ -1797,8 +1797,7 @@ func isValidOutcome(outcome string) bool {
 // transitions themselves (TransitionTo, CancelLoop) leave the gate in place,
 // so the terminal owner is where it goes (L3's deferred item, archived
 // durable-loop-authority design :50). The approval-timeout sweeper's terminal
-// does not pass through here until #1362 task 1.5; its auto-reject has already
-// resolved the gate by then.
+// passes through here too; its auto-reject has already resolved the gate.
 //
 // adopted is the durable terminal the owner adopted, or nil when this
 // delivery's own terminal was committed. Adopted, the entity is written to

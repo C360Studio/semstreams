@@ -44,7 +44,7 @@ left four gaps to #1362:
 - **One terminal owner.** The order becomes marker `Create` → graph stamps → publish → entity `Update`. An existing
   marker is adopted by loop ID and terminal kind. `PendingApproval` is cleared on the terminal transition. The entity
   writes are already CAS `Update`s since L4a; what changes is the marker's create-once and the order. The approval-timeout
-  sweeper joins the owner with task 1.5; until then its own terminal bypasses it.
+  sweeper's own terminal takes the owner too, through the carrier.
 - **Metering.** `activeLoop` meters `loop_route_ambiguous` on `loop_admission_refusals_total`.
 - **Gate order (docket OQ8).** A test settles it, and the PR body records which branch shipped. Under design § 5.5
   step 1, the expected outcome is write → publish for gates (#1362 issuecomment-5799118983, OQ-A).
@@ -56,7 +56,7 @@ left four gaps to #1362:
   not metering.
 - **Adopters.**
   - The entity's terminal `state` now lands after the terminal event. `COMPLETE_<loopID>` precedes the event on the
-    carrier, loop-failure and cancel paths (the sweeper's own terminal joins with task 1.5).
+    carrier (the approval-timeout sweeper's auto-reject included), loop-failure and cancel paths.
   - `continuation_unavailable` is a new failure reason.
   - Both go in a section of `docs/operations/migration-beta162-to-beta163.md`.
   - This is BREAKING for watchers, so `task e2e:agentic` must be green before merge.

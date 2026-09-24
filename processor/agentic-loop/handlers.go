@@ -99,10 +99,9 @@ type HandlerResult struct {
 	// because the loop was already terminal in memory on entry: both terminal
 	// guards run before anything is touched. This delivery owns no terminal and
 	// must write nothing — rendering the record from that entity would commit a
-	// terminal outside the owner. A terminal in memory is either a commit in
-	// flight on another lane (the terminal owner releases the loop whether its
-	// commit lands or fails) or one committed without the owner by the
-	// approval-timeout sweeper until #1362 task 1.5 brings it under the owner.
+	// terminal outside the owner. A terminal in memory is a commit in flight on
+	// another lane — the terminal owner releases the loop whether its commit
+	// lands or fails — and whether it lands is not known here.
 	// The component therefore decides it by the RECORD (settleTerminalGuard):
 	// a terminal record is acknowledged without effect, a live one retried.
 	terminalOwnedElsewhere bool

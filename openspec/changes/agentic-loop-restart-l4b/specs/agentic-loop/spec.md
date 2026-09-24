@@ -31,8 +31,7 @@ record SHALL be written before the first request is published. An update that CR
 lane produces it, SHALL be written before the gate is published: a gate published before it is written leaves a human
 an approval request with no durable gate behind it. A terminal outcome SHALL be committed as `COMPLETE_<loopID>` by
 create-once before its terminal event is published, and the loop entity's terminal state SHALL be written after that
-event; until the approval-timeout sweeper's automatic rejection takes the carrier, a terminal it produces (a
-`max_iterations` failure) is the one exception, published and written without `COMPLETE_<loopID>`. A redelivered
+event, the approval-timeout sweeper's automatic rejection included. A redelivered
 terminal input SHALL adopt the loop's durable terminal by loop ID and terminal kind. On that commit path a durable
 terminal of a different kind from the one the redelivered input derives SHALL be quarantined, not adopted: the first
 terminal wins. A redelivered cancel that reaches a process not holding the loop, whose record is live and whose durable
