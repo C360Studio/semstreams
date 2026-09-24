@@ -31,11 +31,16 @@ record SHALL be written before the first request is published. An update that CR
 lane produces it, SHALL be written before the gate is published: a gate published before it is written leaves a human
 an approval request with no durable gate behind it. A terminal outcome SHALL be committed as `COMPLETE_<loopID>` by
 create-once before its terminal event is published, and the loop entity's terminal state SHALL be written after that
-event. A redelivered terminal input SHALL adopt the loop's durable terminal by loop ID and terminal kind. A durable
+event; until the approval-timeout sweeper's automatic rejection takes the carrier, a terminal it produces (a
+`max_iterations` failure) is the one exception, published and written without `COMPLETE_<loopID>`. A redelivered
+terminal input SHALL adopt the loop's durable terminal by loop ID and terminal kind. On that commit path a durable
 terminal of a different kind from the one the redelivered input derives SHALL be quarantined, not adopted: the first
 terminal wins. A redelivered cancel that reaches a process not holding the loop, whose record is live and whose durable
-terminal is a cancel, SHALL adopt that cancel. A redelivered
-input whose `request_id` is older than `published_request_id` SHALL be acknowledged without effect; one whose
+terminal is a cancel, SHALL adopt that cancel; when that durable terminal is a completion or a failure, the cancel SHALL
+be retried, not quarantined, because the loop's own terminal redelivery writes the record terminal. A terminal whose
+record update loses its compare-and-swap after `COMPLETE_<loopID>` and its event have landed is not reconciled: the
+loop may keep running under a durable terminal and a published event, and its own later terminal is quarantined. A
+redelivered input whose `request_id` is older than `published_request_id` SHALL be acknowledged without effect; one whose
 `request_id` is newer SHALL be retried until the record names it; one whose `request_id` is not a request of the loop
 SHALL be quarantined. A redelivered tool result whose `request_id` equals `published_request_id` and whose execution
 is already named in `pending_tool_results` is a replay of applied work and SHALL be acknowledged without effect, with

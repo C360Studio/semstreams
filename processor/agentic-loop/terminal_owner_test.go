@@ -2,6 +2,7 @@ package agenticloop
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest"
 	"github.com/stretchr/testify/require"
 )
@@ -201,4 +203,113 @@ func TestCancelTakesTheTerminalOwnerAndClearsAPendingApproval(t *testing.T) {
 	require.Nil(t, record.PendingApproval,
 		"a terminal record carrying a pending approval gate names a human decision nothing will apply")
 	require.Empty(t, record.StateBeforeApproval)
+}
+
+// exhaustedTerminalOwnerLoop is terminalOwnerLoop with its iteration budget
+// spent, so the next response fails the loop through handleLoopFailure.
+func exhaustedTerminalOwnerLoop(t *testing.T) (*Component, *recordingLoopBucket, string) {
+	t.Helper()
+	c, bucket, published, _ := terminalOwnerLoop(t)
+	entity, err := c.handler.GetLoop(terminalOwnerLoopID)
+	require.NoError(t, err)
+	entity.Iterations = entity.MaxIterations
+	require.NoError(t, c.handler.UpdateLoop(entity))
+	return c, bucket, published
+}
+
+// The loop-failure lane takes the terminal owner's order, driven through the
+// response lane (#1362 review M5): marker first, record last; a lost
+// compare-and-swap is a Retry; and a failed step stops every step after it.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestLoopFailureTakesTheTerminalOwnersOrder(t *testing.T) {
+	t.Run("marker first, record last", func(t *testing.T) {
+		c, bucket, published := exhaustedTerminalOwnerLoop(t)
+
+		msg, delivered := deliverResponse(t, c, completionFor(published, "one answer too many"))
+
+		require.Equal(t, natsclient.DeliveryDecisionAck, delivered.Decision())
+		require.Equal(t, int32(1), msg.acks.Load())
+		require.Equal(t, []string{"COMPLETE_" + terminalOwnerLoopID, terminalOwnerLoopID}, bucket.written(),
+			"the failed record was written ahead of its durable terminal")
+		marker := terminalMarkerOf(t, bucket, terminalOwnerLoopID)
+		require.Equal(t, agentic.OutcomeFailed, marker["outcome"])
+		require.Equal(t, "max_iterations", marker["reason"])
+		require.Equal(t, agentic.LoopStateFailed, persistedLoop(t, bucket, terminalOwnerLoopID).State)
+	})
+
+	t.Run("a lost compare-and-swap on the record retries", func(t *testing.T) {
+		c, bucket, published := exhaustedTerminalOwnerLoop(t)
+		_, err := bucket.Put(t.Context(), terminalOwnerLoopID, []byte(`{"id":"moved"}`))
+		require.NoError(t, err)
+		bucket.resetWritten()
+
+		_, delivered := deliverResponse(t, c, completionFor(published, "one answer too many"))
+
+		require.Equal(t, natsclient.DeliveryDecisionRetry, delivered.Decision(),
+			"a revision conflict alone is transient: the redelivery re-reads the record")
+		require.Equal(t, []string{"COMPLETE_" + terminalOwnerLoopID}, bucket.written())
+		_, heldErr := c.handler.GetLoop(terminalOwnerLoopID)
+		require.Error(t, heldErr)
+	})
+
+	t.Run("a failed step stops every step after it", func(t *testing.T) {
+		c, bucket, published := exhaustedTerminalOwnerLoop(t)
+		bucket.fail = errKVUnavailable
+		bucket.failPrefix = "COMPLETE_"
+
+		_, delivered := deliverResponse(t, c, completionFor(published, "one answer too many"))
+
+		require.Equal(t, natsclient.DeliveryDecisionQuarantine, delivered.Decision())
+		require.Empty(t, bucket.written(),
+			"the record was written although the durable terminal before it did not land")
+		_, heldErr := c.handler.GetLoop(terminalOwnerLoopID)
+		require.Error(t, heldErr, "a failed terminal commit left the loop terminal in memory")
+	})
+}
+
+// A response delivered on a context that ended before the handler touched
+// anything is retried, not turned into the loop's failure (#1362 review M4,
+// owner ruling 3): failing it would create the loop's create-once terminal on
+// a shutdown.
+//
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
+func TestAResponseCancelledBeforeMutationRetries(t *testing.T) {
+	c, bucket, published, _ := terminalOwnerLoop(t)
+	before, err := c.handler.GetLoop(terminalOwnerLoopID)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	err = c.handleResponseMessage(ctx, baseMessageBytes(t, &agentic.AgentResponse{
+		RequestID: published, Status: agentic.StatusComplete,
+		Message: agentic.ChatMessage{Role: "assistant", Content: "the answer"},
+	}))
+
+	require.ErrorIs(t, err, errCancelledBeforeMutation)
+	require.False(t, errs.IsFatal(err), "a pre-mutation cancellation is not a partial effect")
+	require.Empty(t, bucket.written(), "a retried delivery wrote the loop's terminal")
+	after, err := c.handler.GetLoop(terminalOwnerLoopID)
+	require.NoError(t, err, "a pre-mutation cancellation released the loop")
+	require.Equal(t, before.State, after.State, "a cancelled delivery context failed the loop")
+}
+
+// The warm variant of review H1: a response meets a loop that is terminal in
+// memory because another lane's terminal commit is in flight — here a cancel
+// transitioned and not yet committed. The handler's terminal guard does
+// nothing; the carrier must not then render that entity into the record, which
+// would commit a cancelled record outside the terminal owner, possibly beside
+// a marker that says something else.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestAResponseMeetingAnUncommittedTerminalWritesNothing(t *testing.T) {
+	c, bucket, published, _ := terminalOwnerLoop(t)
+	_, err := c.handler.CancelLoop(terminalOwnerLoopID, "operator")
+	require.NoError(t, err)
+
+	_, delivered := deliverResponse(t, c, completionFor(published, "an answer racing the cancel"))
+
+	require.Equal(t, natsclient.DeliveryDecisionRetry, delivered.Decision(),
+		"the terminal belongs to the lane committing it; this delivery re-reads once it settles")
+	require.Empty(t, bucket.written(), "the carrier wrote a terminal record outside the terminal owner")
 }

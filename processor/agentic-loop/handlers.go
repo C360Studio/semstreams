@@ -95,6 +95,14 @@ type HandlerResult struct {
 	// the synthesis opt-in is off; either way, no synthetic triples.
 	SyntheticDecide *SyntheticDecideRequest
 
+	// terminalOwnedElsewhere marks a result the handler returned WITHOUT acting,
+	// because the loop was already terminal in memory on entry. A terminal in
+	// memory is one whose commit is in flight on another lane (the terminal
+	// owner releases the loop whether its commit lands or fails, #1362), so
+	// this delivery owns no terminal and must write nothing: rendering the
+	// record from that entity would commit a terminal outside the owner.
+	terminalOwnedElsewhere bool
+
 	// trajectoryObservations are full-fidelity audit inputs carried only to
 	// Component's local recorder. They are never published or persisted in the
 	// loop aggregate; large bodies leave the process only through StoreRegistry.
@@ -1290,9 +1298,14 @@ var errResponseForeign = errors.New("response names a request that is not this l
 
 // HandleModelResponse processes a model response
 func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string, response agentic.AgentResponse) (HandlerResult, error) {
-	// Check for cancellation before starting work
+	// Check for cancellation before starting work. Nothing has been touched
+	// yet, so the delivery may be retried — the same marker the tool lane
+	// carries (errCancelledBeforeMutation). Without it the response lane
+	// failed the loop on a cancelled delivery context, and under the
+	// create-once terminal marker that failure is permanent (#1362 review,
+	// owner ruling 3 in issuecomment-5808903072).
 	if err := ctx.Err(); err != nil {
-		return HandlerResult{}, err
+		return HandlerResult{}, fmt.Errorf("%w: %w", errCancelledBeforeMutation, err)
 	}
 	entity, err := h.loopManager.GetLoop(loopID)
 	if err != nil {
@@ -1458,6 +1471,7 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 		h.logger.Warn("ignoring model response for terminal loop",
 			slog.String("loop_id", loopID),
 			slog.String("state", entity.State.String()))
+		result.terminalOwnedElsewhere = true
 		return result, nil
 	}
 
@@ -2790,6 +2804,7 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 	// All tools dispatched and complete — proceed to next model request.
 	if h.loopManager.AllToolsComplete(loopID) {
 		if entity.State.IsTerminal() {
+			result.terminalOwnedElsewhere = true
 			return result, nil
 		}
 		return h.handleToolsComplete(ctx, loopID, entity, cm, &result)

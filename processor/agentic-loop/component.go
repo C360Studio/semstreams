@@ -1885,6 +1885,12 @@ func (c *Component) handleResponseMessage(ctx context.Context, data []byte) erro
 			// changed nothing must not move the record's revision. The handler
 			// has logged it and counted it on model_responses_dropped_total.
 			return nil
+		case errors.Is(err, errCancelledBeforeMutation):
+			// The delivery context ended before the handler touched anything:
+			// retry it rather than failing the loop (#1362 review, owner ruling
+			// 3). Failing it here would create the loop's durable terminal on
+			// a shutdown or a lost heartbeat, and that marker is create-once.
+			return err
 		case errors.Is(err, errResponseForeign):
 			// Not this loop's request at all. Nothing orders it and no later
 			// delivery will, which is the disposition the tool lane and both
@@ -2035,11 +2041,14 @@ func (c *Component) settleResponseWithoutLoop(ctx context.Context, requestID str
 // (commitTerminal): the business failure is a finished effect and the delivery
 // that produced it may ACK. A lost compare-and-swap on the record is returned
 // transient, with the loop already released, so the redelivery re-reads the
-// record — and adopts the marker this attempt created. Any other error is
-// fatal: the loop is failed in memory behind a partial or absent durable
-// terminal, which is the partial effect the lane quarantines — acknowledging
-// it would settle a failure nothing downstream can observe, and redelivering
-// it would meet a loop this process has already released. The one ordinary
+// record. That redelivery adopts the marker this attempt created only when it
+// re-derives a failure; a response the record has moved past is superseded
+// and ACKed, which leaves the marker and the published failure on a loop that
+// keeps running — a recorded residual, not reconciled (#1362 review M2). Any
+// other error is fatal: the failure is committed partially or not at all,
+// which is the partial effect the lane quarantines — acknowledging it would
+// settle a failure nothing downstream can observe. Either way the loop is
+// released, so no later delivery is answered by the uncommitted failure. The one ordinary
 // error is a loop that could not be transitioned at all: nothing was written,
 // so there is no partial effect, and the redelivery resolves against the loop
 // record instead of memory.
@@ -2189,8 +2198,9 @@ const (
 
 // persistHandlerResult publishes messages and persists state from a handler result.
 //
-// A terminal result goes to the one terminal owner, commitTerminal, on every
-// lane and whatever order the lane asked for (#1362, design § 5.7): the
+// A terminal result goes to the terminal owner, commitTerminal, on every lane
+// that reaches this carrier and whatever order the lane asked for (#1362,
+// design § 5.7; the approval-timeout sweeper does not reach it until task 1.5): the
 // COMPLETE_<loopID> marker by Create, the graph stamps, the terminal event,
 // and the loop record last by compare-and-swap. The stamps precede the event
 // so any subscriber consuming agent.complete.<loop_id> from JetStream can
@@ -2228,6 +2238,18 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 	gated := result.State == agentic.LoopStateAwaitingApproval
 
 	c.recordHandlerResultTrajectory(ctx, result)
+
+	if result.terminalOwnedElsewhere {
+		// The handler found this loop already terminal in memory and did
+		// nothing. That terminal belongs to the lane committing it, which
+		// releases the loop either way; writing the record from this entity
+		// would commit a terminal (of any kind, cancelled included) outside
+		// the terminal owner. Retry: the redelivery finds the record terminal
+		// and ACKs, or finds it live and rebuilds.
+		return errs.WrapTransient(
+			fmt.Errorf("loop %s is terminal in memory with its terminal commit not yet settled", result.LoopID),
+			"agentic-loop", "persistHandlerResult", "leave an uncommitted terminal to its owner")
+	}
 
 	if terminal {
 		// A terminal result mints no request — its one publication is the
@@ -2964,8 +2986,10 @@ func (c *Component) stampPublishedRequest(result HandlerResult) error {
 // AFTER their publications have PubAck'd, which is what makes the written
 // PublishedRequestID mean "this request is durably retained" rather than "a
 // process meant to publish one". The terminal owner (commitTerminal) reaches it
-// last on all three terminal lanes, after the COMPLETE_<loopID> marker, the
-// graph stamps and the terminal event. The rest keep the order they already
+// last on the carrier, loop-failure and cancel lanes, after the
+// COMPLETE_<loopID> marker, the graph stamps and the terminal event; the
+// approval-timeout sweeper's terminal writes it directly, with no marker,
+// until #1362 task 1.5. The rest keep the order they already
 // had: the approval lane writes before it publishes, the approval-timeout
 // sweeper publishes before it writes, and #1362 moves both onto the carrier.
 //

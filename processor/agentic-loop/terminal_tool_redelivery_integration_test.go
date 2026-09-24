@@ -3,7 +3,10 @@
 package agenticloop
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
+	"sync"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -185,6 +188,76 @@ func TestACancelRedeliveredAfterItsPublicationAdoptsTheDurableCancel(t *testing.
 	require.Equal(t, agentic.LoopStateCancelled, record.entity.State)
 	require.Equal(t, saved.CancelledBy, record.entity.CancelledBy)
 	require.Nil(t, record.entity.PendingApproval)
+}
+
+// TestAResponseRedeliveredFirstDoesNotStrandACrashedCancel is review H1 of
+// #1362: P1's cancel creates its marker and publishes, then dies before its
+// record. On P2 the loop's model response is redelivered FIRST: it rebuilds the
+// loop cold and completes it in memory, and the terminal owner refuses that
+// completion against the cancel marker (a durable terminal of another kind).
+// The cancel's redelivery must still be adopted. Before the fix the refused
+// completion stayed terminal in memory, so CancelLoop answered "already
+// terminal", the cancel was acknowledged without effect, and the record stayed
+// live under a published cancellation.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestAResponseRedeliveredFirstDoesNotStrandACrashedCancel(t *testing.T) {
+	client := newLoopNATS(t)
+	predecessor, handler := startLoopProcess(t, client, DefaultConfig())
+	loopID, firstRequest := bornLoop(t, predecessor, handler, "task-cancel-then-response")
+	completion := agentic.AgentResponse{
+		RequestID: firstRequest, Status: agentic.StatusComplete, FinishReason: "stop",
+		Message: agentic.ChatMessage{Role: "assistant", Content: "an answer that arrived after the cancel"},
+	}
+	retainModelResponse(t, client, completion)
+	signal := baseMessageBytes(t, &agentic.UserSignal{
+		SignalID: "signal-cancel-first", Type: agentic.SignalCancel, LoopID: loopID, UserID: "operator",
+	})
+
+	predecessor.loopsBucket = crashedBeforeRecordUpdate{KeyValue: predecessor.loopsBucket}
+	died, err := predecessor.handleSignalMessage(t.Context(), signal)
+	require.Error(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionQuarantine, died)
+	require.False(t, loopRecordOf(t, predecessor, loopID).entity.State.IsTerminal(),
+		"fixture check: the cancel's record is the step the crash lost")
+
+	replacement, _ := startLoopProcess(t, client, DefaultConfig())
+	var logs lockedLogBuffer
+	replacement.logger = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	_, answered := deliverResponse(t, replacement, completion)
+	require.Equal(t, natsclient.DeliveryDecisionQuarantine, answered.Decision(),
+		"a completion against a durable cancel is conflicting evidence: the first terminal wins")
+	_, heldErr := replacement.handler.GetLoop(loopID)
+	require.Error(t, heldErr, "the refused completion stayed terminal in memory")
+
+	decision, err := replacement.handleSignalMessage(t.Context(), signal)
+	require.NoError(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+	record := loopRecordOf(t, replacement, loopID)
+	require.Equal(t, agentic.LoopStateCancelled, record.entity.State,
+		"the cancel was acknowledged as already terminal and never adopted: the record is still live "+
+			"under a published cancellation")
+	require.Contains(t, logs.String(), "Cancel adopted the loop's durable cancel terminal",
+		"the cold cancel adoption is declared at its audit line")
+}
+
+// lockedLogBuffer is a log sink safe for the goroutines a component logs from.
+type lockedLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // lastCompletionOn decodes the newest completion event the stream retains on

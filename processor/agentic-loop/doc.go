@@ -366,7 +366,10 @@
 // agent.failed) is published, and the loop's own record is written terminal
 // only AFTER that event (#1362). A redelivered terminal whose Create is
 // refused adopts the saved terminal by loop ID and outcome and republishes
-// it; it never overwrites it.
+// it; it never overwrites it, and a saved terminal of another outcome is
+// quarantined (the first terminal wins). The exception, until #1362 task 1.5:
+// a terminal produced by the approval-timeout sweeper's auto-reject (a
+// max_iterations failure) is published and written without this key.
 //
 //	{
 //	    "loop_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",

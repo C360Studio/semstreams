@@ -115,8 +115,12 @@ func decodeTerminalMarker(data []byte) (terminalOutcome, error) {
 }
 
 // commitTerminal is the one owner of a loop's terminal (#1362, design § 5.7,
-// D41/P6; owner ruling 2026-09-18 on #1330). Every terminal lane — the carrier,
-// the loop-failure path and cancel — commits through it, in this order:
+// D41/P6; owner ruling 2026-09-18 on #1330). The carrier, the loop-failure
+// path and cancel commit through it. The approval-timeout sweeper is the one exception until #1362 task 1.5: it
+// publishes and writes a handler result through its own pair
+// (approval_sweeper.go), so a terminal its auto-reject produces — a
+// max_iterations failure — is published and written with no COMPLETE_ marker.
+// The order:
 //
 //  1. COMPLETE_<loopID> by Create. A refused Create means the loop already has
 //     a durable terminal: it is read back and ADOPTED by loop ID and terminal
@@ -143,6 +147,21 @@ func decodeTerminalMarker(data []byte) (terminalOutcome, error) {
 // transient, with the loop already released — so the redelivery re-reads the
 // record. Every other failure leaves the terminal commit unknown and is fatal.
 func (c *Component) commitTerminal(ctx context.Context, candidate terminalOutcome, publication HandlerResult) error {
+	err := c.commitTerminalSteps(ctx, candidate, publication)
+	if err != nil && !errors.Is(err, natsclient.ErrKVRevisionMismatch) {
+		// Memory never holds a terminal the owner did not commit (#1362
+		// review, H1). The handler moved this loop terminal before the owner
+		// ran; left in memory after a refused or failed commit, that terminal
+		// answered every later lane — a redelivered cancel was acknowledged as
+		// "already terminal" and never reached its own adoption. Released, the
+		// redelivery re-reads the record, which the commit did not make
+		// terminal. A lost compare-and-swap has already released the loop.
+		c.releaseLoopTransientState(publication.LoopID)
+	}
+	return err
+}
+
+func (c *Component) commitTerminalSteps(ctx context.Context, candidate terminalOutcome, publication HandlerResult) error {
 	loopID := publication.LoopID
 	outcome, adopted, err := c.createTerminalMarker(ctx, loopID, candidate)
 	if err != nil {
@@ -303,7 +322,11 @@ func (c *Component) stampTerminal(ctx context.Context, loopID string, outcome te
 // under compare-and-swap — and the delivery ACKs.
 //
 // It reports whether it adopted. No marker, or a marker of another kind, is
-// not this arm's: the caller keeps its existing answer. A marker naming
+// not this arm's: the caller keeps its existing answer, Retry. A completion or
+// failure marker over a live record is the carrier's own crash window, which
+// that terminal's redelivery closes; quarantining the cancel there would latch
+// the lane on a benign race (owner ruling 1, #1362 issuecomment-5808903072).
+// A marker naming
 // another loop is poison and fatal. Scoped to the cancel lane by the ruling:
 // the non-terminal lanes do not consult the marker.
 func (c *Component) adoptDurableCancel(ctx context.Context, loopID string) (bool, error) {

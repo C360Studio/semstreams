@@ -1759,8 +1759,10 @@ func isValidOutcome(outcome string) bool {
 // The terminal transition clears the pending approval gate. A record that is
 // terminal AND gated names a human decision nothing will ever apply; the
 // transitions themselves (TransitionTo, CancelLoop) leave the gate in place,
-// so the owner that writes every terminal record is where it goes (L3's
-// deferred item, archived durable-loop-authority design :50).
+// so the terminal owner is where it goes (L3's deferred item, archived
+// durable-loop-authority design :50). The approval-timeout sweeper's terminal
+// does not pass through here until #1362 task 1.5; its auto-reject has already
+// resolved the gate by then.
 //
 // adopted is the durable terminal the owner adopted, or nil when this
 // delivery's own terminal was committed. Adopted, the entity is written to

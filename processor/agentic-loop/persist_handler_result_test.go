@@ -49,7 +49,10 @@ func TestRunWithBudget_ReturnsCompletedFalseWhenFnReturnsFast(t *testing.T) {
 }
 
 // spec: agentic-loop / Loop input classes settle after owner-specific durable done
-func TestPersistHandlerResultReturnsPublicationFailureBeforeTerminalRelease(t *testing.T) {
+// A terminal whose publication failed is not committed, and since #1362
+// (review H1) the terminal owner releases the loop on any failed commit: the
+// error is returned AND nothing of the loop is held for a later delivery.
+func TestPersistHandlerResultReleasesTheLoopWhenItsTerminalPublicationFails(t *testing.T) {
 	handler := NewMessageHandler(DefaultConfig())
 	loopID := "publish-failure-loop"
 	_, err := handler.trajectoryManager.startTrajectory(loopID)
@@ -67,7 +70,7 @@ func TestPersistHandlerResultReturnsPublicationFailureBeforeTerminalRelease(t *t
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "publish result")
 	_, err = handler.trajectoryManager.getTrajectory(loopID)
-	require.NoError(t, err, "failed required publication released terminal transient state")
+	require.Error(t, err, "a failed terminal commit kept the loop's transient state")
 }
 
 // spec: agentic-loop / Loop input classes settle after owner-specific durable done

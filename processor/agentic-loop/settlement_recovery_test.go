@@ -155,7 +155,7 @@ func TestAReplacementClassifiesAResponseAgainstTheRecordNotItsOwnMints(t *testin
 	})
 
 	t.Run("a response for the request the record names is handled", func(t *testing.T) {
-		c, h := replacementProcessHoldingALoop(t, published, loopID)
+		c, _ := replacementProcessHoldingALoop(t, published, loopID)
 
 		_, delivered := deliverResponse(t, c, agentic.AgentResponse{
 			RequestID: published,
@@ -168,10 +168,10 @@ func TestAReplacementClassifiesAResponseAgainstTheRecordNotItsOwnMints(t *testin
 		// the proof the classification let it through to the handler.
 		require.Equal(t, natsclient.DeliveryDecisionQuarantine, delivered.Decision(),
 			"the classification refused the answer the loop was waiting for")
-		entity, err := h.loopManager.GetLoop(loopID)
-		require.NoError(t, err)
-		require.True(t, entity.State.IsTerminal(),
-			"the completion never reached the handler")
+		// The terminal owner's first step landed before the publish failed:
+		// only a completion the handler produced creates the marker.
+		_, marked := c.loopsBucket.(*recordingLoopBucket).value("COMPLETE_" + loopID)
+		require.True(t, marked, "the completion never reached the handler")
 	})
 }
 
