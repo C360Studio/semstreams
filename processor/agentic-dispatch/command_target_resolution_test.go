@@ -299,9 +299,8 @@ func TestCommandsThatConsumeNoTargetRunUnderRouteAmbiguity(t *testing.T) {
 // The route-ambiguity refusal is metered where it is built, on the resolver's
 // own seam (owner ruling 2026-09-21 on #1330, docket OQ6; #1362 task 5.1).
 // L3 answered it without metering it, because the resolver had no seam at its
-// site to label; once L4 closed the two-consumer admission window that made
-// two current loops on one route reachable, ambiguity became a
-// should-never-fire condition, and any nonzero on seam="route" is a bug.
+// site to label. The series counts refusals of an ambiguous route — a state the
+// user resolves by naming a loop, which /loops lists — and says nothing more.
 //
 // activeLoop is shared by both lanes, so each subtest observes exactly one
 // count on loop_admission_refusals_total{seam="route",reason="route_ambiguous"}
