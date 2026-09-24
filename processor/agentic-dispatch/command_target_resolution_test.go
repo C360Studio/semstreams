@@ -296,56 +296,52 @@ func TestCommandsThatConsumeNoTargetRunUnderRouteAmbiguity(t *testing.T) {
 	})
 }
 
-// The route-ambiguity refusal is the one refusal in this component that is
-// neither metered nor logged where it is built, and the two doc comments that
-// used to claim otherwise now say so (commands.go:61-71, component.go:1068-1072).
+// The route-ambiguity refusal is metered where it is built, on the resolver's
+// own seam (owner ruling 2026-09-21 on #1330, docket OQ6; #1362 task 5.1).
+// L3 answered it without metering it, because the resolver had no seam at its
+// site to label; once L4 closed the two-consumer admission window that made
+// two current loops on one route reachable, ambiguity became a
+// should-never-fire condition, and any nonzero on seam="route" is a bug.
 //
-// This pins the corrected claim rather than the absence: the refusal reaches
-// the user on the delivery lane and moves no series on the admission gate's
-// counter, because the gate never made it — nothing was named, no record was
-// read, and `activeLoop` has no seam at its site to label. Wiring it into
-// `loop_admission_refusals_total` would turn this test red, which is the point:
-// the comment and the metric cannot drift apart silently. The HTTP lane's own
-// count of the same condition is the second subtest, so the asymmetry the
-// comment describes is observed rather than asserted.
+// activeLoop is shared by both lanes, so each subtest observes exactly one
+// count on loop_admission_refusals_total{seam="route",reason="route_ambiguous"}
+// and nothing else on that counter: the refusal is metered once, in the
+// resolver, and never again by a caller. The HTTP lane also keeps its 409.
 //
 // spec: agentic-dispatch / Every dispatch durable input settles through its owner
-func TestRouteAmbiguityRefusalIsAnsweredWithoutMeteringTheGate(t *testing.T) {
-	t.Run("the delivery lane answers and the gate counter stays empty", func(t *testing.T) {
+func TestRouteAmbiguityRefusalIsAnsweredAndMeteredOnTheRouteSeam(t *testing.T) {
+	t.Run("the delivery lane answers and meters the refusal once", func(t *testing.T) {
 		published := make([]agentic.UserResponse, 0, 1)
 		c, deliver, _, ctx := newInstalledCommandLane(t, &published)
 		seedCurrentLoops(t, c, routeLoop(routeLoopA), routeLoop(routeLoopB))
 		withPersistedLoops(c, nil)
 		require.Zero(t, testutil.CollectAndCount(c.metrics.loopAdmissionRefusals),
-			"the isolated registry must start empty, or the assertion below proves nothing")
+			"the isolated registry must start empty, or the count below proves nothing")
 
 		msg := commandDelivery(t, "message-ambiguous-metering", "/cancel")
 		deliver(ctx, msg)
 
-		require.Len(t, published, 1, "the refusal must have happened for the absence below to mean anything")
+		require.Len(t, published, 1, "the refusal is answered to the user")
 		require.Equal(t, int32(1), msg.acks.Load())
-		// The absence below would also hold on a component whose metrics were
-		// never wired, so this delivery's own positive count comes first:
-		// handleUserMessage meters every message it receives (component.go:824)
-		// on the same registry, and it is the last counter this path moves —
-		// the refusal returns before recordCommandExecuted.
-		require.Equal(t, float64(1),
-			testutil.ToFloat64(c.metrics.messagesReceived.WithLabelValues("cli")),
-			"this lane's registry must be live, or the absence below proves nothing")
-		require.Zero(t, testutil.CollectAndCount(c.metrics.loopAdmissionRefusals),
-			"the admission gate's counter must not grow a series for a refusal the gate never made")
+		require.Equal(t, 1, testutil.CollectAndCount(c.metrics.loopAdmissionRefusals),
+			"exactly one series: the resolver meters, no caller meters again")
+		require.Equal(t, float64(1), testutil.ToFloat64(
+			c.metrics.loopAdmissionRefusals.WithLabelValues(seamRoute, reasonRouteAmbiguous)))
 	})
 
-	t.Run("the HTTP lane counts the same condition as a 409", func(t *testing.T) {
+	t.Run("the HTTP lane answers 409 and meters the refusal once", func(t *testing.T) {
 		// newSeamTestComponent already builds on a per-component registry.
 		c := newAmbiguousHTTPRoute(t)
+		require.Zero(t, testutil.CollectAndCount(c.metrics.loopAdmissionRefusals))
 
 		rec := httpCommand(t, c, "/status")
 
 		require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
 		require.Equal(t, float64(1),
 			testutil.ToFloat64(c.metrics.httpRequestsTotal.WithLabelValues("/message", "POST", "409")),
-			"the HTTP lane meters this refusal through its request counter, which the delivery lane has no analogue of")
-		require.Zero(t, testutil.CollectAndCount(c.metrics.loopAdmissionRefusals))
+			"the HTTP lane still counts the refusal as a 409")
+		require.Equal(t, 1, testutil.CollectAndCount(c.metrics.loopAdmissionRefusals))
+		require.Equal(t, float64(1), testutil.ToFloat64(
+			c.metrics.loopAdmissionRefusals.WithLabelValues(seamRoute, reasonRouteAmbiguous)))
 	})
 }

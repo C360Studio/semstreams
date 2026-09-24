@@ -1069,10 +1069,9 @@ func (c *Component) buildTaskMessage(ctx context.Context, msg agentic.UserMessag
 // field TaskMessage.Validate rejected on a refused payload.
 //
 // It never counts anything. A refusal from the admission gate was metered and
-// logged exactly once where it was built; the route ambiguity this lane can
-// also be handed (:1117-1124, from http_activity.go:334) is the one refusal in
-// this component that is neither, for the reason and with the safety argument
-// recorded at commandRefusalResponse (commands.go:61-71).
+// logged exactly once where it was built, and so was the route ambiguity this
+// lane can also be handed (from activeLoop, http_activity.go), which the
+// resolver meters on seam="route" (see commandRefusalResponse, commands.go).
 func (c *Component) answerRefusedSubmission(ctx context.Context, msg agentic.UserMessage, refusal error) error {
 	return c.sendResponse(ctx, agentic.UserResponse{
 		ResponseID:  uuid.New().String(),

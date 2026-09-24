@@ -178,7 +178,7 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 			Namespace: "semstreams",
 			Subsystem: "router",
 			Name:      "loop_admission_refusals_total",
-			Help:      "Requests dispatch refused, by the seam they arrived on and the single mapped reason (form_malformed, existence_absent, existence_unreadable, existence_conflict, state_terminal, ownership_not_owner, ownership_not_permitted, submission_invalid, submission_undeliverable)",
+			Help:      "Requests dispatch refused, by the seam they arrived on and the single mapped reason (form_malformed, existence_absent, existence_unreadable, existence_conflict, state_terminal, ownership_not_owner, ownership_not_permitted, submission_invalid, submission_undeliverable, route_ambiguous). seam=route is the active-loop resolver refusing a user/channel route that matches more than one current loop (reason route_ambiguous); it should never fire, so any nonzero there is a bug",
 		}, []string{"seam", "reason"}),
 
 		// SSE metrics

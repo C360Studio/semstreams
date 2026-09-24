@@ -331,7 +331,13 @@ func (c *Component) activeLoop(ctx context.Context, msg agentic.UserMessage) (st
 			continue
 		}
 		if selected != "" {
-			return "", &errs.ClassifiedError{Class: errs.ErrorInvalid, Code: "loop_route_ambiguous", Err: fmt.Errorf("multiple current loops match the user/channel route")}
+			// Metered here, once, for both lanes (owner ruling 2026-09-21 on
+			// #1330, docket OQ6): no caller meters it again. With the
+			// two-consumer admission window closed (L4), this should never
+			// fire, so any count on seam="route" is a bug.
+			refusal := &errs.ClassifiedError{Class: errs.ErrorInvalid, Code: codeLoopRouteAmbiguous, Err: fmt.Errorf("multiple current loops match the user/channel route")}
+			c.recordLoopAdmissionRefusal(loopAdmissionRequest{Seam: seamRoute}, codeLoopRouteAmbiguous, refusal)
+			return "", refusal
 		}
 		selected = entity.ID
 	}

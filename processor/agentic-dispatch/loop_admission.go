@@ -45,6 +45,10 @@ const (
 	// codeSubmissionUndeliverable: the task validated but could not be put on
 	// the wire — its subject would not resolve, or the publish failed.
 	codeSubmissionUndeliverable = "submission_undeliverable"
+	// codeLoopRouteAmbiguous: more than one current loop matches the
+	// user/channel route, so the resolver (activeLoop) refuses to pick one.
+	// Nothing was named and no record was read; it is refused before the gate.
+	codeLoopRouteAmbiguous = "loop_route_ambiguous"
 )
 
 // The seam tokens. Seam is a Prometheus label value, so the set is CLOSED and
@@ -66,6 +70,9 @@ const (
 	seamHTTPLoopRead = "http_loop_read"
 	// seamHTTPLoopApproval: POST /loops/{id}/approval.
 	seamHTTPLoopApproval = "http_loop_approval"
+	// seamRoute: the active-loop resolver (activeLoop), shared by both lanes,
+	// refusing a route that matches more than one current loop.
+	seamRoute = "route"
 )
 
 // The Detail keys a refusal carries. The spec requires the seam and the failing
@@ -92,6 +99,7 @@ const (
 	reasonOwnershipNotPermitted = "ownership_not_permitted"
 	reasonSubmissionInvalid     = "submission_invalid"
 	reasonSubmissionUndeliver   = "submission_undeliverable"
+	reasonRouteAmbiguous        = "route_ambiguous"
 )
 
 // loopAdmissionRefusalLogMessage is the single WARN a refused request produces
@@ -470,6 +478,8 @@ func loopAdmissionMetricReason(err error) (string, bool) {
 		return reasonSubmissionInvalid, true
 	case codeSubmissionUndeliverable:
 		return reasonSubmissionUndeliver, true
+	case codeLoopRouteAmbiguous:
+		return reasonRouteAmbiguous, true
 	default:
 		return "", false
 	}
