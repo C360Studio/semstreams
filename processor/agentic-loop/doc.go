@@ -319,7 +319,8 @@
 //
 // An approval ANSWER reaching a replacement is applied, not dropped. The approval lane reads
 // the loop's record: a record that is absent or terminal acknowledges the answer, and so does
-// a live one that is no longer awaiting that gate (the answer arrived too late). A record
+// a live one that is no longer awaiting that gate (the answer arrived too late), counted as
+// tool_results_dropped_total{reason="approval_inapplicable"}. A record
 // still awaiting it is rebuilt from the retained request and the retained response carrying
 // the gated batch, and the answer is then applied as the gating process would have applied
 // it. When that request or response is confirmed gone from the stream, the loop cannot be
@@ -329,6 +330,13 @@
 // minted the loop's next request and crashed before the record update is settled by the
 // redelivered answer adopting that request; the answer is then acknowledged with nothing
 // republished.
+//
+// The gate's approval_required result stays in the record's applied set under the gated
+// execution's ID, and it is a placeholder, not an answer. The approved call's own result,
+// reaching a process that does not hold the loop, is applied rather than acknowledged as a
+// replay — and retried while the record still holds the gate, until the approval's own record
+// update lands. A redelivered gated result whose gate the record still holds re-publishes the
+// approval request from the record, so a human who never saw the first one sees it.
 //
 // # Ports
 //

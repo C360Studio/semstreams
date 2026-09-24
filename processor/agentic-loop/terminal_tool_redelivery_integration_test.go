@@ -11,6 +11,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -68,7 +69,9 @@ func TestARejectionRedeliveredAfterItsNextRequestWasPublished(t *testing.T) {
 	replacement, _ := startLoopProcess(t, client, DefaultConfig())
 	var logs lockedLogBuffer
 	replacement.logger = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	inapplicable := replacement.metrics.toolResultsDropped.WithLabelValues("approval_inapplicable")
 	decision, err := replacement.handleApprovalResponseMessage(t.Context(), answer)
+	require.Equal(t, float64(1), testutil.ToFloat64(inapplicable), "the inapplicable answer is counted")
 
 	require.NoError(t, err)
 	require.Equal(t, natsclient.DeliveryDecisionAck, decision,

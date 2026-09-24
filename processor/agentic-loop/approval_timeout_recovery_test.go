@@ -61,7 +61,7 @@ func TestAnApprovalTimeoutTakesTheCarrier(t *testing.T) {
 		require.Error(t, held, "the terminal owner releases the loop once its terminal is committed")
 	})
 
-	t.Run("a rejection that advances the loop writes its record once, behind the publication", func(t *testing.T) {
+	t.Run("a rejection that advances the loop writes its record once, naming the request it minted", func(t *testing.T) {
 		c, bucket, loopID := expiredGateOnALoop(t, false)
 		before := persistedLoop(t, bucket, loopID)
 

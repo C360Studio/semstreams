@@ -546,12 +546,24 @@ func (m *LoopManager) restoreToolBatch(
 			"replay the assistant turn the batch belongs to")
 	}
 
+	// An approval gate's approval_required result is a placeholder, not an
+	// answer: the gated call's real result is still owed, so its execution is
+	// routed like any unanswered one. And the gate cleared the calls queued
+	// behind it when it fired (gateForApproval) — the record carries that only
+	// as the placeholder — so a batch that holds one rebuilds with an empty
+	// queue, as the process that gated it held (#1362 checkpoint 2).
+	gated := false
 	var queued []agentic.ToolCall
 	for _, call := range calls {
 		m.executionIDToName[call.ExecutionID] = call.Name
 		m.executionIDToArguments[call.ExecutionID] = call.Arguments
 		m.executionIDToOrdinal[call.ExecutionID] = call.CallOrdinal
-		if _, done := applied[call.ExecutionID]; done {
+		if stored, done := applied[call.ExecutionID]; done {
+			if agentic.IsApprovalRequired(stored.Error) {
+				gated = true
+				m.toolCallToLoop[call.ExecutionID] = loopID
+				continue
+			}
 			// Already answered. Its route stays unseated on purpose: a drained
 			// execution is unroutable on the ordinary path too, which is what
 			// keeps a late duplicate out of the next turn's applied set.
@@ -562,6 +574,9 @@ func (m *LoopManager) restoreToolBatch(
 			continue
 		}
 		queued = append(queued, call)
+	}
+	if gated {
+		queued = nil
 	}
 	m.queuedToolCalls[loopID] = queued
 
@@ -773,8 +788,10 @@ func (m *LoopManager) ResolveApprovalIfPending(loopID, callID, executionID strin
 // back to CallID, because the fallback IS the hole.
 //
 // CallID still decides for a pending approval minted before execution
-// identity existed (a loop gated across the upgrade), which carries no
-// ExecutionID to match on.
+// identity existed, which carries no ExecutionID to match on. That branch is
+// unreachable on this tree — every gate is minted from a routed result that
+// carries its execution identity, and pre-v1 storage is greenfield — and is
+// kept only because the warm resolve always had it.
 func approvalAnswersGate(gate *agentic.PendingApprovalState, callID, executionID string) bool {
 	if gate == nil {
 		return false

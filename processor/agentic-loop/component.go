@@ -2729,7 +2729,26 @@ func (c *Component) settleToolResultWithoutLoop(ctx context.Context, toolResult 
 		// The TERMINAL arm stays membership-free (owner ruling Q7): there,
 		// re-deriving which side of the settlement a result fell on changes
 		// nothing the delivery can do. Here it is the whole decision.
-		if _, applied := adopted.entity.PendingToolResults[toolResult.ExecutionID]; applied {
+		//
+		// An approval gate is the one entry that is not an answer. The gate
+		// stores its approval_required result under the gated execution's ID,
+		// and the approved call's REAL result arrives under that same ID, so
+		// the placeholder counts as applied only against another
+		// approval_required result (#1362 checkpoint 2 review, BLOCKING).
+		stored, applied := adopted.entity.PendingToolResults[toolResult.ExecutionID]
+		arrivingGate := agentic.IsApprovalRequired(toolResult.Error)
+		placeholder := applied && agentic.IsApprovalRequired(stored.Error)
+		gate := adopted.entity.PendingApproval
+		gatePending := adopted.entity.State == agentic.LoopStateAwaitingApproval &&
+			approvalAnswersGate(gate, toolResult.CallID, toolResult.ExecutionID)
+		switch {
+		case arrivingGate && gatePending:
+			// The gated result redelivered while its gate is still pending:
+			// its ApprovalPendingEvent may never have been published. Re-echo
+			// it from the record's gate without seating the loop (design
+			// § 5.4; owner ruling 1, #1362 issuecomment-5809906669).
+			return false, c.republishPendingApproval(ctx, loopID, *gate)
+		case applied && (!placeholder || arrivingGate):
 			c.logger.WarnContext(ctx, "Tool result acknowledged without effect — the record already applied it",
 				"loop_id", loopID, "execution_id", toolResult.ExecutionID,
 				"request_id", toolResult.RequestID)
@@ -2737,6 +2756,18 @@ func (c *Component) settleToolResultWithoutLoop(ctx context.Context, toolResult 
 				c.metrics.recordToolResultDropped("already_applied")
 			}
 			return false, nil
+		case placeholder && gatePending:
+			// The approved call's real result, ahead of the approval's own
+			// record update (the approve-W2 window: tool.execute published,
+			// the record still gated). The answer's redelivery commits the
+			// approval; until then this result is owed, not applied. Retried,
+			// bounded by the consumer's MaxDeliver like every other result
+			// the record cannot yet place.
+			c.logger.WarnContext(ctx, "Tool result retried — its approval is not yet on the loop record",
+				"loop_id", loopID, "execution_id", toolResult.ExecutionID)
+			return false, errs.WrapTransient(
+				fmt.Errorf("loop %s: execution %q is still gated on its record", loopID, toolResult.ExecutionID),
+				"agentic-loop", "settleToolResultWithoutLoop", "wait for the approval to be recorded")
 		}
 		// The executor's work belongs to the batch the record names, and no
 		// process holds that loop. Rebuild it here — record, retained request,
@@ -2758,6 +2789,25 @@ func (c *Component) settleToolResultWithoutLoop(ctx context.Context, toolResult 
 	c.logger.Warn("Tool result names a loop this process does not hold",
 		"execution_id", toolResult.ExecutionID, "call_id", toolResult.CallID, "loop_id", loopID)
 	return false, fmt.Errorf("loop %q for tool call %q is not held by this process", loopID, toolResult.CallID)
+}
+
+// republishPendingApproval re-publishes the ApprovalPendingEvent for a gate
+// the loop's record still holds, for a process that does not hold the loop
+// (#1362; design § 5.4, "Cold → step 0 first", W2/W3 → re-echo). Nothing is
+// seated and nothing is written: the event is rebuilt from the record's own
+// gate, so it carries the gate's identity and its original deadline. A
+// publication that did not land is retried.
+func (c *Component) republishPendingApproval(ctx context.Context, loopID string, gate agentic.PendingApprovalState) error {
+	echo, err := c.handler.approvalPendingMessage(loopID, gate)
+	if err != nil {
+		return errs.WrapFatal(err, "agentic-loop", "republishPendingApproval", "build the pending approval")
+	}
+	if err := c.publishResults(ctx, HandlerResult{LoopID: loopID, PublishedMessages: []PublishedMessage{*echo}}); err != nil {
+		return errs.WrapTransient(err, "agentic-loop", "republishPendingApproval", "publish the pending approval")
+	}
+	c.logger.InfoContext(ctx, "Re-echoed a pending approval for a redelivered gated result",
+		slog.String("loop_id", loopID), slog.String("execution_id", gate.ExecutionID))
+	return nil
 }
 
 // publishResults publishes all output messages from a handler result using JetStream.

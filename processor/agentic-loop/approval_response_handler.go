@@ -208,6 +208,7 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 		}
 	}
 	if result.staleDrop {
+		c.recordApprovalInapplicable()
 		// The handler dispatched nothing and resolved nothing. Persisting would
 		// re-Put a settled entity, or — once its per-loop state is released —
 		// report a persistence failure for a loop that is supposed to be gone.
@@ -247,6 +248,15 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 			fmt.Errorf("approval result for loop %q has unknown durable state: %w", response.LoopID, err)
 	}
 	return natsclient.DeliveryDecisionAck, nil
+}
+
+// recordApprovalInapplicable counts an approval answer acknowledged without
+// effect, on the tool-result drop family (owner ruling 3, #1362
+// issuecomment-5809906669).
+func (c *Component) recordApprovalInapplicable() {
+	if c.metrics != nil {
+		c.metrics.recordToolResultDropped("approval_inapplicable")
+	}
 }
 
 // logApprovalResponseIgnored is the one audit line for an answer that is
@@ -290,8 +300,8 @@ const continuationUnavailableReason = "continuation_unavailable"
 //
 // The rebuild seats the batch from the retained response, which still lists
 // every call. The gate cleared the calls queued behind it when it fired
-// (gateForApproval), and the record carries that only as "gated", so the
-// rebuilt queue is cleared here to match: the process that gated the loop
+// (gateForApproval), and restoreToolBatch rebuilds that empty queue from the
+// gate's placeholder in the applied set: the process that gated the loop
 // would never have dispatched them either.
 func (c *Component) settleApprovalResponseWithoutLoop(
 	ctx context.Context, response agentic.ApprovalResponse,
@@ -303,6 +313,7 @@ func (c *Component) settleApprovalResponseWithoutLoop(
 	}
 	if record.presence == loopPresenceStale {
 		logApprovalResponseIgnored(c.logger, response, record.entity.State)
+		c.recordApprovalInapplicable()
 		return false, nil
 	}
 
@@ -310,6 +321,7 @@ func (c *Component) settleApprovalResponseWithoutLoop(
 	if record.entity.State != agentic.LoopStateAwaitingApproval ||
 		!approvalAnswersGate(gate, response.CallID, response.ExecutionID) {
 		logApprovalResponseIgnored(c.logger, response, record.entity.State)
+		c.recordApprovalInapplicable()
 		return false, nil
 	}
 
@@ -321,6 +333,10 @@ func (c *Component) settleApprovalResponseWithoutLoop(
 	}
 	gatedKey := gate.ExecutionID
 	if gatedKey == "" {
+		// Unreachable on this tree: every gate is minted from a routed tool
+		// result, which carries its execution identity. Storage is greenfield
+		// (pre-v1), so no record holds a gate from before execution identity.
+		// Kept to mirror StoreToolResult's own keying.
 		gatedKey = gate.CallID
 	}
 	if _, present := record.entity.PendingToolResults[gatedKey]; !present {
@@ -336,7 +352,6 @@ func (c *Component) settleApprovalResponseWithoutLoop(
 		}
 		return false, err
 	}
-	c.handler.loopManager.ClearQueuedTools(loopID)
 	return true, nil
 }
 

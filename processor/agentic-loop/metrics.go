@@ -170,7 +170,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "tool_results_dropped_total",
-				Help:      "Total tool results acknowledged without effect, by reason. reason=\"stale_execution\": no loop mapping exists for the execution ID and the loop record is absent or terminal. reason=\"older_request\": the result names an earlier request than the loop record does, so the loop already applied it — counted on the warm lane and on the cold lane after the record has been brought forward to the loop newest retained request, whichever process holds the loop. reason=\"already_applied\": the result names the request the record names AND its execution is already in that record pending_tool_results, so this is a replay of work the loop kept — the unfinished siblings of its batch are untouched and go on running. reason=\"terminal_unproven\": the loop is terminal, so no result can still be applied to it. Sustained non-zero rate points at NATS redelivery or executor double-publish. A result the loop record still names is NOT counted here: it is retried until a process can apply it, and a result naming a request of no loop is quarantined rather than dropped.",
+				Help:      "Total tool results acknowledged without effect, by reason. reason=\"stale_execution\": no loop mapping exists for the execution ID and the loop record is absent or terminal. reason=\"older_request\": the result names an earlier request than the loop record does, so the loop already applied it — counted on the warm lane and on the cold lane after the record has been brought forward to the loop newest retained request, whichever process holds the loop. reason=\"already_applied\": the result names the request the record names AND its execution is already in that record pending_tool_results, so this is a replay of work the loop kept — the unfinished siblings of its batch are untouched and go on running; an approval gate's approval_required placeholder counts only against another approval_required result, never against the approved call's own result. reason=\"terminal_unproven\": the loop is terminal, so no result can still be applied to it. reason=\"approval_inapplicable\": an approval RESPONSE (not a tool result) acknowledged without effect — its loop record is absent or terminal, or the loop is no longer awaiting that gate; it includes the agent.approval_response echo of the timeout sweeper's own auto-reject. Sustained non-zero rate points at NATS redelivery or executor double-publish. A result the loop record still names is NOT counted here: it is retried until a process can apply it, and a result naming a request of no loop is quarantined rather than dropped.",
 			}, []string{"reason"}),
 
 			modelResponsesDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -531,7 +531,7 @@ func (m *loopMetrics) recordToolResultReceived(hasError bool) {
 }
 
 // recordToolResultDropped records a tool result acknowledged without effect.
-// Four reasons are emitted:
+// Five reasons are emitted:
 //
 //   - "stale_execution" — no loop mapping exists for the execution ID. The
 //     dominant case after GetAndClearToolResults eviction: a re-delivered
@@ -549,11 +549,21 @@ func (m *loopMetrics) recordToolResultReceived(hasError bool) {
 //     batch is the current request's; membership is the only fact that
 //     decides. Settled rather than rebuilt: the rebuild leaves applied
 //     executions unrouted, so it would end in a quarantined tool lane. The
-//     batch's unfinished siblings are untouched and go on running.
+//     batch's unfinished siblings are untouched and go on running. An
+//     approval gate's approval_required placeholder counts only against
+//     another approval_required result (#1362 checkpoint 2): the approved
+//     call's own result is applied, not dropped.
 //   - "terminal_unproven" — the loop is terminal, so no result can be applied
 //     to it any more (owner ruling Q7 on #1330). Whether this particular
 //     result was applied before the loop settled is deliberately not
 //     re-derived: it would change nothing this delivery can do.
+//   - "approval_inapplicable" — an approval RESPONSE acknowledged without
+//     effect (owner ruling 3, #1362 issuecomment-5809906669): the record is
+//     absent or terminal, or the loop is no longer awaiting that gate, so the
+//     answer arrived too late to act on. It rides this family, rather than a
+//     new one, because the answer settles a gated tool call. The echo of the
+//     timeout sweeper's own auto-reject on agent.approval_response lands here
+//     too, once per timeout.
 //
 // What is deliberately NOT counted here is a result the loop record still
 // names: that delivery returns an error and is retried, and a retried result

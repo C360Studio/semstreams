@@ -200,7 +200,7 @@ func TestAnApprovalGateIsWrittenBeforeItsEventIsPublished(t *testing.T) {
 		"the fixture must actually gate the loop, or the order under test was never chosen")
 	require.Equal(t, []string{loopID}, bucket.written(),
 		"the gate must be durable before its ApprovalPendingEvent is visible: a crash between the two "+
-			"leaves a human an approval request whose answer the replacement stale-drops")
+			"leaves a human an approval request whose answer the replacement acknowledges as inapplicable")
 }
 
 // TestTheApprovalTimeoutSweepNamesTheRequestItPublished is the STAMP half of

@@ -22,7 +22,9 @@ Archived task numbers are in brackets. Spec-text rulings are OQ-A to OQ-F in #13
     inapplicable. As today, only an absent or terminal record is acknowledged (D35).
   - Check I4, and that the gated result is present, against the adopted record.
   - Rebuild through `restoreLoopFromEvidence` (LE:577) and `restoreLoopFromRequest` (ST:364).
-  - Build `republishPendingApproval` inside the branch.
+  - `republishPendingApproval` shipped in the cold tool arm, not this branch (design § 5.4; owner ruling 1, #1362
+    issuecomment-5809906669): a redelivered `approval_required` result whose gate the record still holds re-publishes
+    the `ApprovalPendingEvent` from the record without seating the loop, then ACKs; a publish error retries.
   - Approve and modify go through `dispatchApprovedCall` (ARH:117-130); reject goes through `handleRejectedApproval`
     (ARH:139-158).
   - Tests (both new): `approval_timeout_recovery_test.go`, `approval_restore_order_test.go`.
@@ -143,6 +145,11 @@ Mutation evidence uses a `cp` backup and a checksum.
   - a response delivered on a context cancelled before handling is retried, not failed;
   - terminal records no longer carry `pending_approval` or `state_before_approval`;
   - `continuation_unavailable` is a new failure reason.
+  - an approval-timeout `max_iterations` terminal that commits `COMPLETE_` and then fails to publish is not reconciled:
+    the record stays `awaiting_approval`, and a later human answer is applied cold on a loop with a durable failed
+    terminal (owner ruling 2, #1362 issuecomment-5809906669);
+  - `MessageHandler.HandleApprovalResponse` now returns an error wrapping `ErrLoopNotFound` for a loop the process does
+    not hold, instead of a stale-drop result with a nil error.
 
   Size the section against the keys the semspec watchers read, in one read-only pass.
 - [ ] 7.3 Keep the `agentic-loop` delta in step with what shipped (variant A or B from 1.6). Then run

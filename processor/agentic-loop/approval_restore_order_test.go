@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -81,6 +83,8 @@ func newColdApproval(t *testing.T, evidence loopEvidenceReader, shape func(*agen
 
 	handler := NewMessageHandler(DefaultConfig())
 	c := releaseTestComponent(t, handler)
+	c.metrics = getMetrics(metric.NewMetricsRegistry())
+	handler.SetMetrics(c.metrics)
 	bucket := &recordingLoopBucket{}
 	c.loopsBucket = bucket
 	if evidence == nil {
@@ -128,6 +132,11 @@ func (a coldApproval) deliver(t *testing.T, response agentic.ApprovalResponse) (
 	return a.c.handleApprovalResponseMessage(t.Context(), baseMessageBytes(t, &response))
 }
 
+// inapplicable reads the approval_inapplicable drop count.
+func (a coldApproval) inapplicable() float64 {
+	return testutil.ToFloat64(a.c.metrics.toolResultsDropped.WithLabelValues("approval_inapplicable"))
+}
+
 func (a coldApproval) held() bool {
 	_, err := a.c.handler.GetLoop(coldApprovalLoopID)
 	return err == nil
@@ -156,6 +165,7 @@ func TestAColdApprovalAnswerIsSettledByTheRecord(t *testing.T) {
 		a.bucket = &recordingLoopBucket{}
 		a.c.loopsBucket = a.bucket
 
+		before := a.inapplicable()
 		decision, err := a.deliver(t, a.answer(agentic.ApprovalDecisionApprove))
 
 		require.NoError(t, err)
@@ -163,6 +173,7 @@ func TestAColdApprovalAnswerIsSettledByTheRecord(t *testing.T) {
 			"nothing any process can apply an answer to: acknowledged (D35)")
 		require.Empty(t, a.bucket.written())
 		require.False(t, a.held())
+		require.Equal(t, before+1, a.inapplicable(), "an inapplicable answer is counted")
 	})
 
 	t.Run("a terminal record is acknowledged", func(t *testing.T) {
@@ -175,12 +186,14 @@ func TestAColdApprovalAnswerIsSettledByTheRecord(t *testing.T) {
 		require.NoError(t, err)
 		a.bucket.resetWritten()
 
+		before := a.inapplicable()
 		decision, err := a.deliver(t, a.answer(agentic.ApprovalDecisionApprove))
 
 		require.NoError(t, err)
 		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
 		require.Empty(t, a.bucket.written())
 		require.False(t, a.held())
+		require.Equal(t, before+1, a.inapplicable(), "an inapplicable answer is counted")
 	})
 
 	t.Run("a live record no longer awaiting approval is acknowledged as inapplicable", func(t *testing.T) {
@@ -191,12 +204,14 @@ func TestAColdApprovalAnswerIsSettledByTheRecord(t *testing.T) {
 			e.PendingApproval = nil
 		})
 
+		before := a.inapplicable()
 		decision, err := a.deliver(t, a.answer(agentic.ApprovalDecisionApprove))
 
 		require.NoError(t, err)
 		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
 		require.Empty(t, a.bucket.written(), "an inapplicable answer writes nothing")
 		require.False(t, a.held(), "an inapplicable answer rebuilds nothing")
+		require.Equal(t, before+1, a.inapplicable(), "an inapplicable answer is counted")
 	})
 
 	t.Run("an answer for another gate is acknowledged as inapplicable", func(t *testing.T) {
@@ -204,12 +219,14 @@ func TestAColdApprovalAnswerIsSettledByTheRecord(t *testing.T) {
 		other := a.answer(agentic.ApprovalDecisionApprove)
 		other.ExecutionID = deriveToolExecutionID(a.request, "call-other", 3)
 
+		before := a.inapplicable()
 		decision, err := a.deliver(t, other)
 
 		require.NoError(t, err)
 		require.Equal(t, natsclient.DeliveryDecisionAck, decision)
 		require.Empty(t, a.bucket.written())
 		require.False(t, a.held())
+		require.Equal(t, before+1, a.inapplicable(), "an inapplicable answer is counted")
 	})
 
 	t.Run("a gate naming another request than the record is quarantined (I4)", func(t *testing.T) {
@@ -373,4 +390,71 @@ func TestAColdReplacementAdoptsPastARejectionAndAcknowledgesTheApproval(t *testi
 	require.Equal(t, agentic.LoopStateExecuting, record.State)
 	require.Nil(t, record.PendingApproval)
 	require.False(t, a.held(), "an inapplicable answer rebuilds nothing")
+}
+
+// TestAColdGatedResultReEchoesItsPendingGate is the cold half of § 5.4's
+// re-echo (owner ruling 1, #1362 issuecomment-5809906669): the gated result is
+// redelivered to a process that does not hold the loop, whose record is still
+// awaiting that gate. The ApprovalPendingEvent is re-published from the
+// record's gate without seating the loop, and the delivery is acknowledged. A
+// publication that fails is retried. Before, the placeholder in the applied
+// set answered "already applied", so a gate whose event never went out was
+// never shown to a human.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestAColdGatedResultReEchoesItsPendingGate(t *testing.T) {
+	gatedResult := func(a coldApproval) agentic.ToolResult {
+		return agentic.ToolResult{
+			LoopID: coldApprovalLoopID, RequestID: a.request, ExecutionID: a.gate.ExecutionID,
+			CallID: a.gate.CallID, CallOrdinal: a.gate.CallOrdinal, Name: a.gate.ToolName,
+			ErrorKind: agentic.ToolErrorPermission, Error: a.gate.Reason,
+		}
+	}
+
+	t.Run("the delivery is acknowledged without seating the loop", func(t *testing.T) {
+		// No client, so the publication is a no-op here; the echo itself is
+		// counted on a real stream in approved_result_redelivery_integration_test.go.
+		a := newColdApproval(t, nil, nil)
+
+		_, delivered := deliverToolResult(t, a.c, gatedResult(a))
+
+		require.Equal(t, natsclient.DeliveryDecisionAck, delivered.Decision())
+		require.Empty(t, a.bucket.written(), "a re-echo writes nothing")
+		require.False(t, a.held(), "a re-echo seats nothing")
+	})
+
+	t.Run("a re-echo that could not be published is retried", func(t *testing.T) {
+		a := newColdApproval(t, nil, nil)
+		a.c.natsClient = unpublishableClient(t)
+
+		_, delivered := deliverToolResult(t, a.c, gatedResult(a))
+
+		require.Equal(t, natsclient.DeliveryDecisionRetry, delivered.Decision(),
+			"an echo that did not reach the stream must not be acknowledged away")
+		require.Empty(t, a.bucket.written())
+		require.False(t, a.held())
+	})
+}
+
+// TestADuplicateApprovalAnswerIsCountedAsInapplicable: the answer is applied
+// once, and its redelivery to the process that now holds the loop — no longer
+// awaiting — is acknowledged without effect and counted.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestADuplicateApprovalAnswerIsCountedAsInapplicable(t *testing.T) {
+	a := newColdApproval(t, nil, nil)
+	answer := a.answer(agentic.ApprovalDecisionApprove)
+	decision, err := a.deliver(t, answer)
+	require.NoError(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+	require.True(t, a.held())
+	before := a.inapplicable()
+	a.bucket.resetWritten()
+
+	decision, err = a.deliver(t, answer)
+
+	require.NoError(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
+	require.Empty(t, a.bucket.written())
+	require.Equal(t, before+1, a.inapplicable(), "a duplicate answer is counted")
 }

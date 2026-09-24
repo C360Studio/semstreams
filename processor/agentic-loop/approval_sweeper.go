@@ -3,6 +3,7 @@ package agenticloop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -94,6 +95,14 @@ func (c *Component) sweepExpiredApprovals(ctx context.Context) {
 			DecidedAt:  time.Now().UTC(),
 		}
 		result, err := c.handler.HandleApprovalResponse(ctx, response)
+		if errors.Is(err, ErrLoopNotFound) {
+			// The loop settled and was released between the snapshot and this
+			// call: a benign race, nothing left to reject.
+			c.logger.Warn("approval timeout auto-reject found its loop already released",
+				slog.String("loop_id", cand.LoopID),
+				slog.String("call_id", cand.CallID))
+			continue
+		}
 		if err != nil {
 			c.logger.Error("approval timeout auto-reject failed",
 				slog.String("loop_id", cand.LoopID),

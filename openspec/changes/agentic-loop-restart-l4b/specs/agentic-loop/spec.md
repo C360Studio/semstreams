@@ -38,13 +38,20 @@ terminal wins. A redelivered cancel that reaches a process not holding the loop,
 terminal is a cancel, SHALL adopt that cancel; when that durable terminal is a completion or a failure, the cancel SHALL
 be retried, not quarantined, because the loop's own terminal redelivery writes the record terminal. A terminal whose
 record update loses its compare-and-swap after `COMPLETE_<loopID>` and its event have landed is not reconciled: the
-loop may keep running under a durable terminal and a published event, and its own later terminal is quarantined. A
+loop may keep running under a durable terminal and a published event, and its own later terminal is quarantined. An
+approval-timeout sweep whose `max_iterations` terminal commits `COMPLETE_<loopID>` and then fails to publish is not
+reconciled either: a timer is never redelivered, the record stays `awaiting_approval`, and a later human answer is
+applied cold on a loop that already has a durable failed terminal. A
 redelivered input whose `request_id` is older than `published_request_id` SHALL be acknowledged without effect; one whose
 `request_id` is newer SHALL be retried until the record names it; one whose `request_id` is not a request of the loop
 SHALL be quarantined. A redelivered tool result whose `request_id` equals `published_request_id` and whose execution
 is already named in `pending_tool_results` is a replay of applied work and SHALL be acknowledged without effect, with
 the batch's unfinished executions left untouched; ordering cannot decide that case, because the batch is the current
-request's. A process with no memory of the loop SHALL, before classifying a redelivered model response, tool result,
+request's. An `approval_required` result stored there by an approval gate is a placeholder, not an answer: it counts as
+applied only against another `approval_required` result. The approved call's own result SHALL be applied, and SHALL
+be retried while the record still holds the gate for that execution. A redelivered `approval_required` result whose
+gate the record still holds SHALL re-publish that gate's approval request from the record and be acknowledged; a
+re-publication that fails SHALL be retried. A process with no memory of the loop SHALL, before classifying a redelivered model response, tool result,
 or approval response, read the newest retained request for the loop and, when it is newer than
 `published_request_id`, adopt it into the record by identity first. An approval response whose loop's retained
 request or its response is confirmed absent SHALL fail the loop with reason `continuation_unavailable`; an unreadable
@@ -228,7 +235,8 @@ deadline from then on.
   and the process crashed before the record was updated
 - **WHEN** the approval response is redelivered to a replacement process with no memory of the loop
 - **THEN** the replacement writes the record to `R(N+1)` with the gate cleared and `state = running` under
-  compare-and-swap, classifies the approval response as inapplicable, acknowledges it, and publishes nothing
+  compare-and-swap, classifies the approval response as inapplicable, acknowledges it, and publishes nothing; the
+  inapplicable-result metric and an audit log line name the loop
 
 #### Scenario: A governance verdict redelivered after its waiter is gone
 
