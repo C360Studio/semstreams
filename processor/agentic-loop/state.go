@@ -829,6 +829,45 @@ func (m *LoopManager) seatRecordToFail(record agentic.LoopEntity) error {
 	return nil
 }
 
+// beginApprovalGate gates the loop on one tool call, atomically: the live
+// entity is moved to awaiting_approval with its pending call, and the calls
+// queued behind it are cleared, under the manager's lock — the shape of
+// ResolveApprovalIfPending, its inverse (#1362 checkpoint 2 re-review, M1).
+//
+// The gate used to read the loop, gate the COPY and write the copy back, in
+// two lock sections. Anything another lane did to the loop in between was
+// overwritten: the gated result StoreToolResult had just put into the applied
+// set (so the record lost the gate's own placeholder), a continuation's
+// pending marker, a cancel (reverted to awaiting_approval). Gating the live
+// entity under the one lock leaves nothing to overwrite.
+//
+// A loop that is terminal, or already gated on another call, is refused by
+// BeginAwaitingApproval before anything is mutated.
+func (m *LoopManager) beginApprovalGate(
+	loopID string, toolResult agentic.ToolResult, toolName string, args map[string]any, timeout time.Duration,
+) (agentic.PendingApprovalState, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entity, exists := m.loops[loopID]
+	if !exists {
+		return agentic.PendingApprovalState{}, errs.Wrap(
+			fmt.Errorf("loop %s: %w", loopID, ErrLoopNotFound), "LoopManager", "beginApprovalGate", "find loop")
+	}
+	if err := entity.BeginAwaitingApproval(
+		toolResult.CallID, toolName, args, toolResult.Error, timeout, toolResult.TraceID); err != nil {
+		return agentic.PendingApprovalState{}, fmt.Errorf("begin awaiting approval: %w", err)
+	}
+	entity.PendingApproval.RequestID = toolResult.RequestID
+	entity.PendingApproval.ExecutionID = toolResult.ExecutionID
+	entity.PendingApproval.CallOrdinal = toolResult.CallOrdinal
+	// Clear sibling tool calls queued behind this one. Once the human
+	// responds, the LLM will get a fresh round-trip with the approve/reject
+	// result and can decide whether to re-issue the other calls.
+	delete(m.queuedToolCalls, loopID)
+	return *entity.PendingApproval, nil
+}
+
 // DeleteLoop releases every per-loop entry the manager holds for loopID: the
 // loop entity, its context manager, its pending-tool set, its queued tool
 // calls, its cached tool definitions, tool choice, metadata, request timeout

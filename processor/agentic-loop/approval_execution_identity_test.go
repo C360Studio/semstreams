@@ -19,9 +19,7 @@ func gateCallForApproval(t *testing.T, h *MessageHandler, loopID, requestID, cal
 	require.NoError(t, stampToolExecutionCorrelation(requestID, calls))
 	require.NoError(t, h.dispatchToolCall(&HandlerResult{}, loopID, calls[0]))
 
-	entity, err := h.loopManager.GetLoop(loopID)
-	require.NoError(t, err)
-	_, err = h.gateForApproval(loopID, &entity, agentic.ToolResult{
+	_, err := h.gateForApproval(loopID, agentic.ToolResult{
 		CallID:      calls[0].ID,
 		RequestID:   calls[0].RequestID,
 		ExecutionID: calls[0].ExecutionID,
@@ -147,9 +145,7 @@ func TestApprovalPendingEventCarriesTheGatedExecutionIdentity(t *testing.T) {
 	require.NoError(t, stampToolExecutionCorrelation(loopID+":req:1:0", calls))
 	require.NoError(t, h.dispatchToolCall(&HandlerResult{}, loopID, calls[0]))
 
-	entity, err := h.loopManager.GetLoop(loopID)
-	require.NoError(t, err)
-	published, err := h.gateForApproval(loopID, &entity, agentic.ToolResult{
+	published, err := h.gateForApproval(loopID, agentic.ToolResult{
 		CallID:      calls[0].ID,
 		RequestID:   calls[0].RequestID,
 		ExecutionID: calls[0].ExecutionID,

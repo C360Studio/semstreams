@@ -2878,7 +2878,7 @@ func (h *MessageHandler) checkApprovalGate(loopID string, entity *agentic.LoopEn
 	if !agentic.IsApprovalRequired(toolResult.Error) {
 		return false
 	}
-	pubMsg, err := h.gateForApproval(loopID, entity, toolResult)
+	pubMsg, err := h.gateForApproval(loopID, toolResult)
 	if err != nil {
 		h.logger.Warn("failed to gate loop for approval",
 			slog.String("loop_id", loopID),
@@ -2898,42 +2898,17 @@ func (h *MessageHandler) checkApprovalGate(loopID string, entity *agentic.LoopEn
 // Returns the published message (or nil if event construction fails)
 // alongside any non-fatal error so the caller can decide whether to
 // surface it.
-func (h *MessageHandler) gateForApproval(loopID string, entity *agentic.LoopEntity, toolResult agentic.ToolResult) (*PublishedMessage, error) {
+func (h *MessageHandler) gateForApproval(loopID string, toolResult agentic.ToolResult) (*PublishedMessage, error) {
 	// Falls back to the tool name on the result envelope when the
 	// LoopManager cache has been cleared (e.g., process restart).
 	toolName := h.resolveToolName(toolResult)
 	args := h.loopManager.GetToolArguments(toolResult.ExecutionID)
 
-	// The gate is written over the LIVE entity, not the caller's copy.
-	// HandleToolResult took that copy before StoreToolResult put the gated
-	// result into the applied set, and GetLoop copies the set (#1330), so
-	// writing the copy back erased the gated result from the record. The
-	// approval lane's cold branch and the tool lane's cold arm both read that
-	// entry as the gate's own (design § 5.4, § 5.5; #1362 checkpoint 2).
-	current, err := h.loopManager.GetLoop(loopID)
+	gate, err := h.loopManager.beginApprovalGate(loopID, toolResult, toolName, args, h.config.ApprovalTimeout())
 	if err != nil {
-		return nil, fmt.Errorf("read the loop to gate: %w", err)
+		return nil, err
 	}
-	*entity = current
-
-	if err := entity.BeginAwaitingApproval(toolResult.CallID, toolName, args, toolResult.Error, h.config.ApprovalTimeout(), toolResult.TraceID); err != nil {
-		return nil, fmt.Errorf("begin awaiting approval: %w", err)
-	}
-	entity.PendingApproval.RequestID = toolResult.RequestID
-	entity.PendingApproval.ExecutionID = toolResult.ExecutionID
-	entity.PendingApproval.CallOrdinal = toolResult.CallOrdinal
-
-	// Clear sibling tool calls queued behind this one. Once the human
-	// responds, the LLM will get a fresh round-trip with the
-	// approve/reject result and can decide whether to re-issue the
-	// other calls.
-	h.loopManager.ClearQueuedTools(loopID)
-
-	if err := h.loopManager.UpdateLoop(*entity); err != nil {
-		return nil, fmt.Errorf("persist awaiting-approval state: %w", err)
-	}
-
-	return h.approvalPendingMessage(loopID, *entity.PendingApproval)
+	return h.approvalPendingMessage(loopID, gate)
 }
 
 // approvalPendingMessage builds the ApprovalPendingEvent for a gate, from the

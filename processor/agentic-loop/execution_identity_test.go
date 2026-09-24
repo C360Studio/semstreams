@@ -186,17 +186,13 @@ func TestApprovalRedispatchSeparatesRepeatedProviderCallIDAcrossLoops(t *testing
 	require.NoError(t, handler.dispatchToolCall(&HandlerResult{}, loopA, callsA[0]))
 	require.NoError(t, handler.dispatchToolCall(&HandlerResult{}, loopB, callsB[0]))
 
-	entityA, err := handler.loopManager.GetLoop(loopA)
-	require.NoError(t, err)
-	_, err = handler.gateForApproval(loopA, &entityA, agentic.ToolResult{
+	_, err = handler.gateForApproval(loopA, agentic.ToolResult{
 		CallID: callsA[0].ID, RequestID: callsA[0].RequestID, ExecutionID: callsA[0].ExecutionID,
 		CallOrdinal: callsA[0].CallOrdinal, Error: agentic.ApprovalRequiredPrefix + "review",
 	})
 	require.NoError(t, err)
 
-	entityB, err := handler.loopManager.GetLoop(loopB)
-	require.NoError(t, err)
-	_, err = handler.gateForApproval(loopB, &entityB, agentic.ToolResult{
+	_, err = handler.gateForApproval(loopB, agentic.ToolResult{
 		CallID: callsB[0].ID, RequestID: callsB[0].RequestID, ExecutionID: callsB[0].ExecutionID,
 		CallOrdinal: callsB[0].CallOrdinal, Error: agentic.ApprovalRequiredPrefix + "review",
 	})
