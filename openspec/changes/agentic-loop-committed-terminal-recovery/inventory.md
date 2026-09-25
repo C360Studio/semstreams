@@ -60,12 +60,14 @@ Writer 2: `writeRecordCancelled`, the cancel lane's cold-branch second writer, r
 - `processor/agentic-loop/terminal_owner.go:429` — `c.recordCommittedTerminal(*written, saved)`
 
 Writer 3, the W3 second writer, OUTSIDE the owner: `publishThenPersistResultState`, reached from
-`persistHandlerResult` whenever `result.State` is `LoopStateCancelled`. `persistHandlerResult`'s own `terminal`
-predicate tests only Complete/Failed, never Cancelled, so a Cancelled-state `HandlerResult` (the shape
-`dispatchApprovedCall`/`checkApprovalGate` produce when they observe the loop cancelled in memory mid-dispatch)
-takes the non-terminal branch and CAS-writes the record through `persistLoopState` — never through `commitTerminal`,
-never through `recordCommittedTerminal`. This is exactly the shape the probe's
-`TestProbeW3HeldLoopCancelDuringApprovalDispatch` observes.
+`persistHandlerResult` for any non-terminal result. Corrected after the design's premise P1 (design review, 2026-09-25):
+the result the approval lane carries is NOT cancelled-shaped — `HandleApprovalResponse` captures `State: entity.State`
+at `approval_response_handler.go:90` from the entity it read at `:83`, which `ResolveApproval` restored to the
+pre-gate state — so `persistHandlerResult`'s `terminal` predicate is not where W3 is decided. The cancelled record
+comes from the carrier's write rendering the loop's IN-MEMORY state at write time: `marshalLoopRecord`'s `GetLoop`
+(`component.go:3168`) sees the cancel lane's `CancelLoop` transition, and `persistLoopState` CAS-writes that snapshot —
+never through `commitTerminal`, never through `recordCommittedTerminal`. This is exactly the shape the probe's
+`TestProbeW3HeldLoopCancelDuringApprovalDispatch` observes (rev 4 = the carrier rendering the cancelled state).
 
 - `processor/agentic-loop/component.go:2306` — `func (c *Component) publishThenPersistResultState(ctx context.Context, result HandlerResult) error {`
 - `processor/agentic-loop/component.go:2218` — `func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResult) error {`
@@ -216,8 +218,8 @@ Cancel lane:
 Candidate seams for a re-check of the loop's terminal state (listed, not chosen, per the brief): (1)
 `approval_response_handler.go:83`, the `GetLoop` right after the resolve race is won, before `IsTimedOut`; (2)
 `handlers.go:2036`, the literal pre-`AddPendingTool` point the probe's own header says has NO seam today; (3)
-`component.go:2219`, `persistHandlerResult`'s own `terminal` predicate, where a Cancelled state currently falls
-through to the non-terminal branch; (4) `terminal_owner.go:389`, `adoptDurableCancel`'s Get, currently scoped to the
+`component.go:2219`, `persistHandlerResult`'s own `terminal` predicate — noted, not a fix site: the carried result is
+not cancelled-shaped (§ 1 correction), so the seam is the carrier reading memory, not the predicate; (4) `terminal_owner.go:389`, `adoptDurableCancel`'s Get, currently scoped to the
 cancel lane only.
 
 The latch: `recordDeliveryOwnerFatal` sets `c.deliveryFatalErr` once and never resets it in this file;
