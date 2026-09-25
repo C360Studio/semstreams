@@ -193,5 +193,10 @@ Owner-run review of `c45d1063` (PR #1366 issuecomment-5827554362). Spec text cha
   Scenario: "An approval answer does not outlive its loop's deadline". Tests: `approval_loop_deadline_test.go`.
   The approval-timeout sweeper had the same drop one caller over (its auto-reject on a loop past its own deadline
   logged the timeout failure and discarded it); it now commits that failure through the terminal owner too.
+- P2: a cold-recovered result of an approved call recorded the retained response's PROPOSED arguments as its
+  dispatch arguments, which a `modify` makes false. Owner ruling "omit, do not falsify" (#1362
+  issuecomment-5827720719): `restoreToolBatch` seats no arguments for a gated execution, so that result records
+  none; an approval applied on the rebuild re-seats the real set at dispatch. Carve-out and scenario in "Full
+  trajectory evidence uses the registered Store". Tests: `approval_modified_arguments_test.go`.
 - P3: `submitApproval`'s 409 retry was justified by an event-before-record race the write-then-publish gate order rules
   out, and every caller reads the record awaiting before it answers. The retry is removed; a 409 fails the walk.

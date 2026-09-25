@@ -333,6 +333,14 @@ the full decoded model completion and usage; full tool dispatch metadata and arg
 `tool_result_max_bytes` truncation; full before/after compaction evidence; and terminal result/error evidence when one
 exists. `trajectory_detail` SHALL NOT gate fidelity.
 
+One exception, for dispatch arguments a process cannot know. When a loop is rebuilt from its record for the
+result of a call that went through an approval gate, the dispatched arguments are not available: a `modify` may
+have replaced them, and the retained model response holds only the proposal. The tool completion evidence's
+`dispatch_arguments` and the tool trajectory step's arguments SHALL then be empty, and SHALL NOT be filled from the
+proposal. The `tool.requested` observation recorded at dispatch is the record of the arguments that ran. A process
+that dispatched the approved call itself, including one that rebuilt the loop to apply the approval, still records
+the arguments it dispatched.
+
 Each operation SHALL lazily resolve the configured `trajectory_evidence_storage_instance` through `StoreRegistry`,
 defaulting to `objectstore`. Agentic-loop SHALL NOT construct, cache, close, or claim ownership of the borrowed store.
 The writer SHALL Get first, accept identical bytes, reject mismatching bytes as integrity failure, Put on not-found,
@@ -377,6 +385,14 @@ a transaction, general CAS service, repair worker, or automatic evidence expiry.
 - **WHEN** a later evidence operation runs
 - **THEN** agentic-loop resolves the current handle through `StoreRegistry`
 - **AND** no cached or closed borrowed handle is used
+
+#### Scenario: a cold-recovered approved call records no dispatch arguments
+
+- **GIVEN** a gated call approved with `modify`, whose approval is on the loop record and whose process then lost
+  the loop
+- **WHEN** the approved call's result rebuilds the loop from its record, retained request and retained response
+- **THEN** its tool completion evidence carries no `dispatch_arguments` and its trajectory step no arguments
+- **AND** neither carries the proposed arguments from the retained model response
 
 ### Requirement: Audit loss degrades loudly and never fails agent work
 

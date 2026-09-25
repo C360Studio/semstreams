@@ -575,14 +575,22 @@ func (m *LoopManager) restoreToolBatch(
 	var queued []agentic.ToolCall
 	for _, call := range calls {
 		m.executionIDToName[call.ExecutionID] = call.Name
-		m.executionIDToArguments[call.ExecutionID] = call.Arguments
 		m.executionIDToOrdinal[call.ExecutionID] = call.CallOrdinal
-		if stored, done := applied[call.ExecutionID]; done {
-			if agentic.IsApprovalRequired(stored.Error) {
-				gated = true
-				m.toolCallToLoop[call.ExecutionID] = loopID
-				continue
-			}
+		stored, done := applied[call.ExecutionID]
+		if done && agentic.IsApprovalRequired(stored.Error) {
+			// A gated call's arguments are NOT seated. An approval may have
+			// dispatched a human's modified set, and the retained response
+			// holds only the proposal: omit, do not falsify (owner ruling,
+			// #1362 issuecomment-5827720719). An approval applied on this
+			// rebuild re-seats the real set at dispatch (dispatchToolCall →
+			// TrackToolArguments); a result recovered cold records no
+			// dispatch arguments.
+			gated = true
+			m.toolCallToLoop[call.ExecutionID] = loopID
+			continue
+		}
+		m.executionIDToArguments[call.ExecutionID] = call.Arguments
+		if done {
 			// Already answered. Its route stays unseated on purpose: a drained
 			// execution is unroutable on the ordinary path too, which is what
 			// keeps a late duplicate out of the next turn's applied set.

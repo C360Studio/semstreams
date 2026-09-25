@@ -1913,6 +1913,11 @@ outside does work, since #1362:
   `continuation_unavailable` instead; a stream that cannot be read is retried. An answer whose record is absent,
   terminal, or no longer awaiting that gate is acknowledged without effect, with a warning and a count on
   `tool_results_dropped_total{reason="approval_inapplicable"}`;
+- the approved call's own result, when it reaches a process that no longer holds the loop, rebuilds the loop and is
+  applied, but its tool completion evidence records **no** `dispatch_arguments` and its trajectory step no
+  arguments. A `modify` may have replaced the proposed arguments and nothing retained says with what, so they are
+  omitted rather than falsified. The `tool.requested` observation recorded when the call was dispatched is the
+  record of what ran;
 - a `cancel` signal against a live record finds no loop to cancel and is **retried until `MaxDeliver` stops
   redelivering it**, after which it is recorded in the framework's MaxDeliver ledger. The one exception is a cancel
   that already committed `COMPLETE_<loopID>` and crashed before its record update: its redelivery adopts that cancel
