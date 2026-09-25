@@ -86,3 +86,14 @@ The reviewer compared the delta to the accepted design hash and found no added o
 Transfer on success, rejection ownership and one-shot distinctions, actual address observation, TLS/context
 behavior, native Start proof, and terminal ownership remain represented. No unstable Go changes were inspected
 and no tests were run in this review. Implementation approval remains outstanding.
+
+## Implementation checkpoint
+
+Implementation snapshot: `ba8962f46fbc3f11ba5a0a0ed622590816c545f6`.
+The final-byte focused race and five mutation comparisons are retained in `evidence.md`;
+`conformance.md` maps accepted constraints to source/test observations.
+
+The first full `task check:push` attempt on this snapshot built successfully, then stopped in revive
+with `context-as-argument` at `service/service_manager_health_listener_test.go:281`.
+The helper's context parameter requires first position. This is a deterministic lint finding, not a flaky run.
+No full-suite success is claimed for that attempt (Task exit 201). Implementation review is in progress.

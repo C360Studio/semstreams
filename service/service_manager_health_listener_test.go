@@ -14,7 +14,7 @@ import (
 func TestHealthServeDoneDoesNotCompleteBeforeServeReturns(t *testing.T) {
 	deps := createTestServiceDependencies(nil)
 	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
-	listener := startHealthOnBoundListener(t, manager, t.Context())
+	listener := startHealthOnBoundListener(t.Context(), t, manager)
 	t.Cleanup(func() { _ = manager.StopHealthListener(context.Background()) })
 	waitForListener(t, "http://"+listener.Addr().String()+"/healthz", 10*time.Second)
 
@@ -58,7 +58,7 @@ func TestListenerBaseContextsPreserveExactStartValues(t *testing.T) {
 	require.Equal(t, "exact-parent", manager.httpServer.BaseContext(manager.httpListener).Value(key))
 
 	healthManager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, createTestServiceDependencies(nil))
-	startHealthOnBoundListener(t, healthManager, startCtx)
+	startHealthOnBoundListener(startCtx, t, healthManager)
 	t.Cleanup(func() { _ = healthManager.StopHealthListener(context.Background()) })
 	require.Equal(t, "exact-parent", healthManager.healthServer.BaseContext(healthManager.healthListener).Value(key))
 }
@@ -103,7 +103,7 @@ func TestStartHealthListener_BindsHealthAndHealthz(t *testing.T) {
 	deps := createTestServiceDependencies(nil)
 	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
 
-	listener := startHealthOnBoundListener(t, manager, t.Context())
+	listener := startHealthOnBoundListener(t.Context(), t, manager)
 	t.Cleanup(func() {
 		if err := manager.StopHealthListener(context.Background()); err != nil {
 			t.Errorf("StopHealthListener cleanup error = %v", err)
@@ -207,7 +207,7 @@ func TestStartHTTPRuntimeReportsBindFailureSynchronously(t *testing.T) {
 
 func TestHealthListenerCannotRebindAfterCompletedStop(t *testing.T) {
 	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, createTestServiceDependencies(nil))
-	startHealthOnBoundListener(t, manager, t.Context())
+	startHealthOnBoundListener(t.Context(), t, manager)
 	require.NoError(t, manager.StopHealthListener(t.Context()))
 
 	called := false
@@ -234,7 +234,7 @@ func TestStartHealthListener_DoubleStartErrors(t *testing.T) {
 	deps := createTestServiceDependencies(nil)
 	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
 
-	startHealthOnBoundListener(t, manager, t.Context())
+	startHealthOnBoundListener(t.Context(), t, manager)
 	t.Cleanup(func() { _ = manager.StopHealthListener(context.Background()) })
 
 	if err := manager.StartHealthListener(context.Background(), 1); err == nil {
@@ -253,7 +253,7 @@ func TestStopAll_TearsDownHealthListener(t *testing.T) {
 	deps := createTestServiceDependencies(nil)
 	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
 
-	listener := startHealthOnBoundListener(t, manager, t.Context())
+	listener := startHealthOnBoundListener(t.Context(), t, manager)
 
 	// Sanity: listener is up before shutdown.
 	// gh#209/gh#220: 3s → 10s for the same reason as the sister test.
@@ -278,7 +278,7 @@ func TestStopAll_TearsDownHealthListener(t *testing.T) {
 	waitForListenerGone(t, addr+"/healthz", 2*time.Second)
 }
 
-func startHealthOnBoundListener(t *testing.T, manager *Manager, ctx context.Context) net.Listener {
+func startHealthOnBoundListener(ctx context.Context, t *testing.T, manager *Manager) net.Listener {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)

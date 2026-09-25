@@ -259,3 +259,7 @@ ok  	github.com/c360studio/semstreams/service	0.439s
 ok  	github.com/c360studio/semstreams/metric	1.320s
 ok  	github.com/c360studio/semstreams/service	1.700s
 ```
+
+## Lint argument-order correction
+
+The full gate's revive pass found `context-as-argument` in the test-only `startHealthOnBoundListener` helper. Its signature is now `(ctx context.Context, t *testing.T, manager *Manager)` and its six call sites pass context first. Only `service/service_manager_health_listener_test.go` changed in this correction; mutation-target source and test bytes above are unchanged. New SHA-256 for this file is `8f9209c2680d4a121a7b0ed2bf3b5326ef40b720158e11db22ae7e1996c758e3` (replacing the one entry in the final-byte snapshot above). `go test -race ./service -run '^(TestHealthServeDoneDoesNotCompleteBeforeServeReturns|TestListenerBaseContextsPreserveExactStartValues|TestStartHealthListener_BindsHealthAndHealthz|TestHealthListenerCannotRebindAfterCompletedStop|TestStartHealthListener_DoubleStartErrors|TestStopAll_TearsDownHealthListener)$' -count=1 -timeout=3m` exited 0 (`service` 1.756s); `/private/tmp/semstreams-1386-health-arg-order-race.log`. `git diff --check -- service/service_manager_health_listener_test.go` exited 0. Full gate retry remains parent-owned.
