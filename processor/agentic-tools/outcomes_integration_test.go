@@ -18,7 +18,6 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
-	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -174,23 +173,6 @@ func TestIntegrationConcurrentReplicasConvergeOnOneCompletedOutcome(t *testing.T
 // package timeout (#1370).
 const ackReplayStopBudget = 5 * time.Second
 
-// errorLeaves flattens errors.Join trees so an assertion can require an exact
-// set of causes; errors.Is on a join matches any member, so it would let an
-// unexpected extra cause through.
-func errorLeaves(err error) []error {
-	if err == nil {
-		return nil
-	}
-	if joined, ok := err.(interface{ Unwrap() []error }); ok {
-		var leaves []error
-		for _, member := range joined.Unwrap() {
-			leaves = append(leaves, errorLeaves(member)...)
-		}
-		return leaves
-	}
-	return []error{err}
-}
-
 func TestIntegrationAckFailureRestartReplaysWithoutSecondExecution(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithStreams(
 		natsclient.TestStreamConfig{Name: "TOOL_ACK_REPLAY", Subjects: []string{"tool.execute.>", "tool.result.>"}},
@@ -250,27 +232,14 @@ func TestIntegrationAckFailureRestartReplaysWithoutSecondExecution(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, publisher.PublishToStream(ctx, "tool.execute."+call.ID, wire))
 	require.Eventually(t, func() bool { return executor.calls.Load() == 1 }, 5*time.Second, 25*time.Millisecond)
-	// Wait for the sever to land before stopping. Racing Stop against the
-	// close made its outcome depend on where the close fell relative to the
-	// tool.list drain. A close while that drain is pending leaves
-	// natsclient.Subscription.Drain waiting for a SubscriptionClosed status
-	// that a closed connection never emits (#1372), so Stop could only return
-	// at its ctx deadline. That is the likely cause of #1370's 20-minute hang
-	// under context.Background(): the natural stack resolved only to
-	// component.go:632, and the Drain frame beneath it comes from a forced
-	// reproduction.
+	// Wait for the sever to land so Stop drains on a closed connection.
 	require.Eventually(t, func() bool { return testClient.GetNativeConnection().IsClosed() },
 		5*time.Second, 5*time.Millisecond, "the wrapped publish must sever the first component's connection")
 	firstStopCtx, cancelFirstStop := context.WithTimeout(context.Background(), ackReplayStopBudget)
 	firstStopErr := first.Stop(firstStopCtx)
 	cancelFirstStop()
-	// With the connection already closed, the tool.list subscription is
-	// invalid and its closed status never fired, so the drain reports
-	// nats.ErrBadSubscription (natsclient/client.go:789-796). The JetStream
-	// consumer's Closed does fire on connection loss, so the lane adds nothing.
-	// That one cause is the whole result; any other member of the join fails.
-	require.Equal(t, []error{nats.ErrBadSubscription}, errorLeaves(firstStopErr),
-		"Stop after the connection closed must report exactly the invalid tool.list subscription; got %v", firstStopErr)
+	// A closed connection counts as a completed drain (#1372).
+	require.NoError(t, firstStopErr, "Stop after the connection closed must drain cleanly")
 	replayBefore := testutil.ToFloat64(first.metrics.outcomeTotal.WithLabelValues(string(outcomePathReplay)))
 
 	secondClient, err := natsclient.NewClient(testClient.URL)

@@ -1,26 +1,26 @@
 ## 1. Unit tests (`natsclient/subscription_test.go`)
 
-- [ ] 1.1 Give the fake `SetClosedHandler` and a `fireClosed()` helper, and drop its status channel. Migrate the
+- [x] 1.1 Give the fake `SetClosedHandler` and a `fireClosed()` helper, and drop its status channel. Migrate the
   existing tests to it; where a test's intent changes, the design's behavior-change list says why.
-- [ ] 1.2 Connection closes mid-drain: native `Drain` returns `nil`, then the fake goes invalid. `Drain` is still
+- [x] 1.2 Connection closes mid-drain: native `Drain` returns `nil`, then the fake goes invalid. `Drain` is still
   blocked, and returns `nil` after `fireClosed()`. Use a bounded ctx.
-- [ ] 1.3 Native `Drain` returns `nats.ErrConnectionClosed`: `Drain` is still blocked, and returns `nil` after
+- [x] 1.3 Native `Drain` returns `nats.ErrConnectionClosed`: `Drain` is still blocked, and returns `nil` after
   `fireClosed()`. Use a bounded ctx.
 
 ## 2. Integration test (`natsclient`, `//go:build integration`), with no sleeps
 
-- [ ] 2.1 Block the handler on `release`. Close the native connection with `GetNativeConnection().Close()`, then
+- [x] 2.1 Block the handler on `release`. Close the native connection with `GetNativeConnection().Close()`, then
   call `Drain(ctx 10s)`. Assert that `Drain` has not returned. Release the handler, then require `nil` and that the
   handler had already returned. This test also guards against a nats.go upgrade changing when the closed handler
   fires.
-- [ ] 2.2 `processor/agentic-tools/outcomes_integration_test.go:272`: change the assertion to `NoError` and trim
+- [x] 2.2 `processor/agentic-tools/outcomes_integration_test.go:272`: change the assertion to `NoError` and trim
   the comment block at `:253-261`.
 
 ## 3. Implementation (`natsclient/client.go`)
 
-- [ ] 3.1 Make the `newSubscription` and `Drain` changes in `design.md`. The unexported `nativeSubscription`
+- [x] 3.1 Make the `newSubscription` and `Drain` changes in `design.md`. The unexported `nativeSubscription`
   interface gains `SetClosedHandler` and drops `StatusChanged`.
-- [ ] 3.2 Rewrite the `Drain` doc comment: callbacks are joined; on connection loss, queued-but-undelivered
+- [x] 3.2 Rewrite the `Drain` doc comment: callbacks are joined; on connection loss, queued-but-undelivered
   messages are discarded (core NATS is at-most-once).
 
 ## 4. Mutation evidence

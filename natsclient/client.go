@@ -746,7 +746,7 @@ func (m *Client) RTT() (time.Duration, error) {
 type nativeSubscription interface {
 	Drain() error
 	IsValid() bool
-	StatusChanged(...nats.SubStatus) <-chan nats.SubStatus
+	SetClosedHandler(func(subject string))
 	Unsubscribe() error
 }
 
@@ -754,17 +754,27 @@ type nativeSubscription interface {
 type Subscription struct {
 	sub nativeSubscription
 
-	drainOnce     sync.Once
-	drainErr      error
-	drainComplete bool
-	closed        <-chan nats.SubStatus
+	drainOnce sync.Once
+	drainErr  error
+	done      chan struct{}
+	doneOnce  sync.Once
 }
 
 func newSubscription(sub nativeSubscription) *Subscription {
-	return &Subscription{
-		sub:    sub,
-		closed: sub.StatusChanged(nats.SubscriptionClosed),
+	s := &Subscription{sub: sub, done: make(chan struct{})}
+	// nats.go calls the closed handler once, after the delivery goroutine
+	// exits, on drain, unsubscribe, and connection close alike.
+	sub.SetClosedHandler(func(string) { s.closeDone() })
+	if !sub.IsValid() {
+		// Closed before the handler was set, so it will never fire.
+		s.closeDone()
 	}
+	return s
+}
+
+// closeDone runs on the nats.go delivery goroutine, so it must not block.
+func (s *Subscription) closeDone() {
+	s.doneOnce.Do(func() { close(s.done) })
 }
 
 // Unsubscribe unsubscribes from the subject
@@ -775,9 +785,13 @@ func (s *Subscription) Unsubscribe() error {
 	return s.sub.Unsubscribe()
 }
 
-// Drain stops new deliveries and waits for NATS to close the subscription
-// after all queued callbacks finish. If ctx expires, a later call rejoins the
-// same native drain; it never starts a second drain operation.
+// Drain stops new deliveries and returns once the subscription's delivery
+// goroutine has exited, so every callback has returned. If the connection
+// closes before or during the drain, Drain still returns nil after the
+// in-flight callback returns; messages queued but not yet delivered are
+// discarded, because core NATS is at-most-once. If ctx ends first, Drain
+// returns ctx's error and a later call rejoins the same native drain; it never
+// starts a second one.
 func (s *Subscription) Drain(ctx context.Context) error {
 	if ctx == nil {
 		return stderrors.New("natsclient: nil Subscription.Drain context")
@@ -786,37 +800,18 @@ func (s *Subscription) Drain(ctx context.Context) error {
 		return nil
 	}
 	s.drainOnce.Do(func() {
-		if !s.sub.IsValid() {
-			select {
-			case <-s.closed:
-				s.drainComplete = true
-			default:
-				s.drainErr = nats.ErrBadSubscription
-			}
-			return
-		}
-		s.drainErr = s.sub.Drain()
-		if stderrors.Is(s.drainErr, nats.ErrBadSubscription) {
-			select {
-			case <-s.closed:
-				s.drainErr = nil
-				s.drainComplete = true
-			default:
-			}
+		// A closed connection ends the subscription; done still joins the
+		// in-flight callback.
+		if err := s.sub.Drain(); !stderrors.Is(err, nats.ErrConnectionClosed) {
+			s.drainErr = err
 		}
 	})
 	if s.drainErr != nil {
-		return stderrors.Join(s.drainErr, ctx.Err())
-	}
-	if s.drainComplete {
-		return ctx.Err()
-	}
-	if err := ctx.Err(); err != nil {
-		return err
+		return s.drainErr
 	}
 	select {
-	case <-s.closed:
-		return ctx.Err()
+	case <-s.done:
+		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
