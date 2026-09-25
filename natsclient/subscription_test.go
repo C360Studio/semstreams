@@ -6,29 +6,29 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 )
 
+// fakeNativeSubscription models the nats.go closed handler: it fires once,
+// after the delivery goroutine exits, on every terminal path.
 type fakeNativeSubscription struct {
 	valid        atomic.Bool
 	drainCalls   atomic.Int32
 	drainErr     error
 	drainCalled  chan struct{}
-	status       chan nats.SubStatus
 	drainOnce    sync.Once
-	statusOnce   sync.Once
 	closeOnDrain bool
-	statusesMu   sync.Mutex
-	statuses     []nats.SubStatus
+
+	closedMu   sync.Mutex
+	closed     func(string)
+	closedOnce sync.Once
 }
 
 func newFakeNativeSubscription() *fakeNativeSubscription {
-	sub := &fakeNativeSubscription{
-		drainCalled: make(chan struct{}),
-		status:      make(chan nats.SubStatus),
-	}
+	sub := &fakeNativeSubscription{drainCalled: make(chan struct{})}
 	sub.valid.Store(true)
 	return sub
 }
@@ -38,7 +38,7 @@ func (s *fakeNativeSubscription) Drain() error {
 	s.drainOnce.Do(func() { close(s.drainCalled) })
 	if s.closeOnDrain {
 		s.valid.Store(false)
-		s.statusOnce.Do(func() { close(s.status) })
+		s.fireClosed()
 	}
 	return s.drainErr
 }
@@ -47,16 +47,25 @@ func (s *fakeNativeSubscription) IsValid() bool {
 	return s.valid.Load()
 }
 
-func (s *fakeNativeSubscription) StatusChanged(statuses ...nats.SubStatus) <-chan nats.SubStatus {
-	s.statusesMu.Lock()
-	s.statuses = append([]nats.SubStatus(nil), statuses...)
-	s.statusesMu.Unlock()
-	return s.status
+func (s *fakeNativeSubscription) SetClosedHandler(handler func(string)) {
+	s.closedMu.Lock()
+	s.closed = handler
+	s.closedMu.Unlock()
+}
+
+// fireClosed stands in for the delivery goroutine exiting.
+func (s *fakeNativeSubscription) fireClosed() {
+	s.closedMu.Lock()
+	handler := s.closed
+	s.closedMu.Unlock()
+	if handler != nil {
+		s.closedOnce.Do(func() { handler("fake") })
+	}
 }
 
 func (s *fakeNativeSubscription) Unsubscribe() error {
 	s.valid.Store(false)
-	s.statusOnce.Do(func() { close(s.status) })
+	s.fireClosed()
 	return nil
 }
 
@@ -72,10 +81,9 @@ func TestSubscriptionDrainWaitsForNativeClosure(t *testing.T) {
 		t.Fatalf("Drain returned before native subscription closed: %v", err)
 	default:
 	}
-	native.status <- nats.SubscriptionClosed
+	native.fireClosed()
 	require.NoError(t, <-result)
 	require.Equal(t, int32(1), native.drainCalls.Load())
-	require.Equal(t, []nats.SubStatus{nats.SubscriptionClosed}, native.statuses)
 }
 
 func TestSubscriptionDrainExternallyUnsubscribedIsSuccessfulAndRepeatable(t *testing.T) {
@@ -85,26 +93,26 @@ func TestSubscriptionDrainExternallyUnsubscribedIsSuccessfulAndRepeatable(t *tes
 
 	require.NoError(t, sub.Drain(context.Background()))
 	require.NoError(t, sub.Drain(context.Background()))
-	require.Zero(t, native.drainCalls.Load())
+	require.Equal(t, int32(1), native.drainCalls.Load(), "native Drain on an unsubscribed sub is a nil no-op")
 }
 
-func TestSubscriptionDrainInvalidWithoutClosedAuthorityPreservesErrBadSubscription(t *testing.T) {
+func TestSubscriptionDrainBornInvalidIsSuccessful(t *testing.T) {
 	native := newFakeNativeSubscription()
 	native.valid.Store(false)
 	sub := newSubscription(native)
 
-	require.ErrorIs(t, sub.Drain(context.Background()), nats.ErrBadSubscription)
-	require.Zero(t, native.drainCalls.Load())
+	require.NoError(t, sub.Drain(context.Background()))
+	require.NoError(t, sub.Drain(context.Background()))
 }
 
-func TestSubscriptionDrainClosedErrBadSubscriptionIsSuccessful(t *testing.T) {
+func TestSubscriptionDrainNativeErrBadSubscriptionIsSticky(t *testing.T) {
 	native := newFakeNativeSubscription()
 	native.drainErr = nats.ErrBadSubscription
 	native.closeOnDrain = true
 	sub := newSubscription(native)
 
-	require.NoError(t, sub.Drain(context.Background()))
-	require.NoError(t, sub.Drain(context.Background()))
+	require.ErrorIs(t, sub.Drain(context.Background()), nats.ErrBadSubscription)
+	require.ErrorIs(t, sub.Drain(context.Background()), nats.ErrBadSubscription)
 	require.Equal(t, int32(1), native.drainCalls.Load())
 }
 
@@ -115,6 +123,44 @@ func TestSubscriptionDrainOtherNativeErrorSurvivesClosure(t *testing.T) {
 	sub := newSubscription(native)
 
 	require.EqualError(t, sub.Drain(context.Background()), "native drain failed")
+}
+
+func TestSubscriptionDrainConnectionClosesMidDrain(t *testing.T) {
+	native := newFakeNativeSubscription()
+	sub := newSubscription(native)
+
+	// A canceled ctx proves Drain is still waiting once native Drain has
+	// returned nil and the connection has gone.
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, sub.Drain(canceled), context.Canceled)
+	native.valid.Store(false) // the connection goes; Drain does not read IsValid after construction
+	require.ErrorIs(t, sub.Drain(canceled), context.Canceled)
+
+	native.fireClosed()
+	ctx, cancelBounded := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelBounded()
+	require.NoError(t, sub.Drain(ctx))
+	require.Equal(t, int32(1), native.drainCalls.Load())
+}
+
+func TestSubscriptionDrainNativeConnectionClosedWaitsForClosure(t *testing.T) {
+	native := newFakeNativeSubscription()
+	sub := newSubscription(native)
+	// The connection closes after construction, so native Drain refuses.
+	native.valid.Store(false)
+	native.drainErr = nats.ErrConnectionClosed
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, sub.Drain(canceled), context.Canceled,
+		"ErrConnectionClosed must wait for the closed handler, not return early")
+
+	native.fireClosed()
+	ctx, cancelBounded := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelBounded()
+	require.NoError(t, sub.Drain(ctx))
+	require.Equal(t, int32(1), native.drainCalls.Load())
 }
 
 func TestSubscriptionDrainCanceledCallerDoesNotConsumeOrDetachAuthority(t *testing.T) {
@@ -141,12 +187,12 @@ func TestSubscriptionDrainCanceledCallerDoesNotConsumeOrDetachAuthority(t *testi
 		t.Fatalf("later Drain did not rejoin native completion: %v", err)
 	default:
 	}
-	close(native.status)
+	native.fireClosed()
 	require.NoError(t, <-joined)
 	require.Equal(t, int32(1), native.drainCalls.Load())
 }
 
-func TestSubscriptionDrainDeadlineWinsAfterNativeClosure(t *testing.T) {
+func TestSubscriptionDrainContextEndsFirst(t *testing.T) {
 	native := newFakeNativeSubscription()
 	sub := newSubscription(native)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -154,8 +200,9 @@ func TestSubscriptionDrainDeadlineWinsAfterNativeClosure(t *testing.T) {
 	go func() { result <- sub.Drain(ctx) }()
 	<-native.drainCalled
 	cancel()
-	close(native.status)
 	require.ErrorIs(t, <-result, context.Canceled)
+
+	native.fireClosed()
 	require.NoError(t, sub.Drain(context.Background()))
 }
 
@@ -177,7 +224,7 @@ func TestSubscriptionDrainConcurrentCallersShareNativeDrain(t *testing.T) {
 	ready.Wait()
 	close(start)
 	<-native.drainCalled
-	close(native.status)
+	native.fireClosed()
 	for range callers {
 		require.NoError(t, <-results)
 	}

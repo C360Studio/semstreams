@@ -5,6 +5,7 @@ package natsclient
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -74,4 +75,51 @@ func TestIntegration_PublicSubscriptionFactoriesReturnDrainableAuthority(t *test
 			require.NoError(t, sub.Drain(drainCtx))
 		})
 	}
+}
+
+// A connection that closes while a callback runs must still let Drain return
+// nil once that callback returns (#1372). This also guards a nats.go upgrade
+// that changes when the closed handler fires.
+func TestIntegration_SubscriptionDrainAfterConnectionCloseJoinsCallback(t *testing.T) {
+	testClient := NewTestClient(t, WithMinimalFeatures())
+	client := testClient.Client
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var handlerReturned atomic.Bool
+	sub, err := client.Subscribe(t.Context(), "subscription.drain.closed", func(context.Context, *nats.Msg) {
+		close(entered)
+		<-release
+		handlerReturned.Store(true)
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, client.Publish(t.Context(), "subscription.drain.closed", []byte("x")))
+	require.NoError(t, testClient.GetNativeConnection().Flush())
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("handler never received the message")
+	}
+
+	// Close the native connection directly: Client.Close would drain first.
+	testClient.GetNativeConnection().Close()
+
+	drainCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- sub.Drain(drainCtx) }()
+
+	// A Drain that does not wait for the callback returns within
+	// microseconds; 200ms is ample to see it, and a slow host can only make
+	// this check miss a defect, never fail a correct Drain.
+	select {
+	case err := <-result:
+		t.Fatalf("Drain returned while the callback was still running: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(release)
+	require.NoError(t, <-result)
+	require.True(t, handlerReturned.Load(), "Drain must return only after the callback has returned")
 }
