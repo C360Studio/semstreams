@@ -110,7 +110,7 @@ delta as written assumes the pre-selection.
     this one case. No second write: the marker does not land either, which is today's W-a state.
   - a carrier write (`persistLoopState` C:3025, the CAS at C:3071): a non-conflict error is returned plain (C:3079)
     and the carrier's ordinary row quarantines it ("other write → Quarantine", archived transition-result design § 2
-    B5; C:2352-area). The row is unchanged by this change and is stated in the delta because the text fields now
+    B5; C:2271-2281, C:2319-2329). The row is unchanged by this change and is stated in the delta because the text fields now
     count toward it; under OQ5 (a) the only text a carrier write can add beyond the birth prompt (which fit at birth
     or was terminated) is a deferred turn that fit its own marker write, so this refusal needs the record's other
     fields to have grown since — the pre-existing #857 class, not a new one.
@@ -133,7 +133,7 @@ delta as written assumes the pre-selection.
 - **(b) class-derived Retry — rejected.** The task lane runs at MaxAckPending 1 (C:1260-1263), so a Retry parks ALL
   intake for the redelivery budget, and the repo already rejected exactly this on this lane: "Retry parks the whole
   task lane, which runs at MaxAckPending 1, for MaxDeliver attempts on a message no redelivery can fix" (C:1440-1442,
-  the unheld-continuation skip). On the default policy the turn is redelivered once, 30 s later (C:1193; MaxDeliver 2),
+  the unheld-continuation skip; that quote states the unheld case's reason — a busy loop can clear, so for the busy refusal the only reason is that a Retry parks the lane). On the default policy the turn is redelivered once, 30 s later (C:1193; MaxDeliver 2),
   and on the second miss it is dropped with no settlement of ours. The archived transition-result design's O3 row
   ("the error rows take the class-derived disposition") is amended by this design for this one refusal, and the
   delta's requirement paragraph says so.
@@ -320,7 +320,7 @@ the property, it is a follow-up on the model, not on this change.
   rather than deleted (the tag range is the same).
 - **What a consumer sees**: `LoopCompletedEvent.prompt` / `LoopFailedEvent.prompt` are populated after a process
   replacement (they were empty; a consumer that tolerated empty keeps working) and, on a loop that took a
-  continuation, carry the BIRTH prompt where they carried the latest turn's (OQ5 (a); under (b) this line goes); a loop
+  continuation, carry the BIRTH prompt where they carried the latest turn's (OQ5 (a); under (b) this line goes), and `recoverEmptyContext` on a continued loop re-injects the birth prompt as its "Original task" where it re-injected the latest turn (H:3313-3315; same option); a loop
   record now carries prompt text, so a listing that decodes the whole record pulls it (semsage's
   `processor/ui-api/types.go:14-27` decodes a narrow struct and is unaffected — I: § Fact 6); the terminal trajectory
   evidence embeds the whole record and therefore carries both keys (§ 8).
