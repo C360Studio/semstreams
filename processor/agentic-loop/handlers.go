@@ -95,19 +95,31 @@ type HandlerResult struct {
 	// the synthesis opt-in is off; either way, no synthetic triples.
 	SyntheticDecide *SyntheticDecideRequest
 
+	// terminalOwnedElsewhere marks a result the handler returned without acting,
+	// because the loop was already terminal in memory on entry: both terminal
+	// guards run before anything is touched. The approval gate answers the
+	// same way when the loop settles between that guard and the gate
+	// (gateRefusedError); a released loop carries an empty State. This delivery owns no terminal and
+	// must write nothing — rendering the record from that entity would commit a
+	// terminal outside the owner. A terminal in memory is a commit in flight on
+	// another lane — the terminal owner releases the loop whether its commit
+	// lands or fails — and whether it lands is not known here.
+	// The component therefore decides it by the RECORD (settleTerminalGuard):
+	// a terminal record is acknowledged without effect, a live one retried.
+	terminalOwnedElsewhere bool
+
 	// trajectoryObservations are full-fidelity audit inputs carried only to
 	// Component's local recorder. They are never published or persisted in the
 	// loop aggregate; large bodies leave the process only through StoreRegistry.
 	trajectoryObservations []trajectoryObservation
 
 	// staleDrop marks a result for a message that arrived too late to act on:
-	// the loop it names is no longer awaiting that call — because it advanced,
-	// because it settled, or because its per-loop state was released at
-	// terminal (#1233). The handler did no work, so the component publishes and
-	// persists nothing for it. That is what makes a settled loop's ABSENCE and
-	// a terminal loop's PRESENCE produce the same outcome for a late arrival;
-	// persisting the absent case would report "failed to get loop for
-	// persistence" for what is an expected drop.
+	// the loop this process holds is no longer awaiting that call — because it
+	// advanced or because it settled. The handler did no work, so the
+	// component publishes and persists nothing for it. A loop this process
+	// does not hold at all is not a stale drop: the handler returns
+	// ErrLoopNotFound and the component's cold branch reads the record, which
+	// acknowledges a settled loop the same way (#1362, D35).
 	staleDrop bool
 }
 
@@ -1290,9 +1302,14 @@ var errResponseForeign = errors.New("response names a request that is not this l
 
 // HandleModelResponse processes a model response
 func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string, response agentic.AgentResponse) (HandlerResult, error) {
-	// Check for cancellation before starting work
+	// Check for cancellation before starting work. Nothing has been touched
+	// yet, so the delivery may be retried — the same marker the tool lane
+	// carries (errCancelledBeforeMutation). Without it the response lane
+	// failed the loop on a cancelled delivery context, and under the
+	// create-once terminal marker that failure is permanent (#1362 review,
+	// owner ruling 3 in issuecomment-5808903072).
 	if err := ctx.Err(); err != nil {
-		return HandlerResult{}, err
+		return HandlerResult{}, fmt.Errorf("%w: %w", errCancelledBeforeMutation, err)
 	}
 	entity, err := h.loopManager.GetLoop(loopID)
 	if err != nil {
@@ -1403,6 +1420,19 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 			"no longer waiting on", errResponseAlreadyApplied, loopID, response.RequestID)
 	}
 
+	// Reject responses for loops already in terminal state (defense-in-depth:
+	// catches stale agent.request messages published before a parallel StopLoop
+	// transition was visible). It runs BEFORE anything is touched — the
+	// outstanding mark, the timeout arm — so the result is truly effect-free:
+	// the timeout arm would otherwise rewrite Outcome and Error on a terminal
+	// whose commit may be in flight on another lane (#1362 re-review M2).
+	if entity.State.IsTerminal() {
+		h.logger.Warn("ignoring model response for terminal loop",
+			slog.String("loop_id", loopID),
+			slog.String("state", entity.State.String()))
+		return terminalGuardResult(loopID, entity.State), nil
+	}
+
 	// This request is answered, whatever the outcome below. Clearing the
 	// outstanding mark here rather than in the success arms means an early
 	// return (timeout, terminal loop, budget exhausted) does not leave the loop
@@ -1436,29 +1466,7 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 
 	// Check for timeout before processing
 	if h.loopManager.IsTimedOut(loopID) {
-		_ = h.loopManager.TransitionLoop(loopID, agentic.LoopStateFailed)
-		if err := h.loopManager.UpdateCompletion(loopID, agentic.OutcomeFailed, "", "loop timeout exceeded"); err != nil {
-			h.logger.Warn("failed to update completion for timed out loop",
-				slog.String("loop_id", loopID),
-				slog.String("error", err.Error()))
-		}
-		result.State = agentic.LoopStateFailed
-		// Publish failure events for reactive workflows to observe
-		if failure, failMsgs, fErr := h.BuildFailureMessages(loopID, "timeout", "loop timeout exceeded"); fErr == nil {
-			result.PublishedMessages = failMsgs
-			result.FailureState = failure
-		}
-		return result, errs.WrapFatal(fmt.Errorf("loop timeout exceeded"), "agentic-loop", "HandleModelResponse", "check timeout")
-	}
-
-	// Reject responses for loops already in terminal state (defense-in-depth:
-	// catches stale agent.request messages published before a parallel StopLoop
-	// transition was visible).
-	if entity.State.IsTerminal() {
-		h.logger.Warn("ignoring model response for terminal loop",
-			slog.String("loop_id", loopID),
-			slog.String("state", entity.State.String()))
-		return result, nil
+		return h.failTimedOutLoop(loopID, result, "HandleModelResponse")
 	}
 
 	// Check if max iterations reached
@@ -2616,6 +2624,19 @@ func (h *MessageHandler) handleCompleteResponse(result *HandlerResult, loopID st
 // existing errors.Is(err, context.Canceled) reader is unaffected.
 var errCancelledBeforeMutation = errors.New("cancelled before any loop mutation")
 
+// terminalGuardResult is the effect-free answer both handlers give a delivery
+// that finds its loop already terminal in memory.
+func terminalGuardResult(loopID string, state agentic.LoopState) HandlerResult {
+	return HandlerResult{
+		LoopID:                 loopID,
+		State:                  state,
+		PublishedMessages:      []PublishedMessage{},
+		TrajectorySteps:        []agentic.TrajectoryStep{},
+		ContextEvents:          []agentic.ContextEvent{},
+		terminalOwnedElsewhere: true,
+	}
+}
+
 // HandleToolResult processes a tool execution result
 func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, toolResult agentic.ToolResult) (HandlerResult, error) {
 	// Check for cancellation before processing
@@ -2626,6 +2647,17 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 	entity, err := h.loopManager.GetLoop(loopID)
 	if err != nil {
 		return HandlerResult{}, err
+	}
+	// A terminal loop can apply nothing. Refused BEFORE the result is stored,
+	// the pending set touched, a trajectory step added or the timeout arm run,
+	// so the refusal is effect-free (#1362 re-review M2, M4). It used to sit
+	// behind all of those, reached only when the batch was complete.
+	if entity.State.IsTerminal() {
+		h.logger.Warn("ignoring tool result for terminal loop",
+			slog.String("loop_id", loopID),
+			slog.String("execution_id", toolResult.ExecutionID),
+			slog.String("state", entity.State.String()))
+		return terminalGuardResult(loopID, entity.State), nil
 	}
 	result := HandlerResult{
 		LoopID:            loopID,
@@ -2656,19 +2688,7 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 
 	// Check for timeout before processing
 	if h.loopManager.IsTimedOut(loopID) {
-		_ = h.loopManager.TransitionLoop(loopID, agentic.LoopStateFailed)
-		if err := h.loopManager.UpdateCompletion(loopID, agentic.OutcomeFailed, "", "loop timeout exceeded"); err != nil {
-			h.logger.Warn("failed to update completion for timed out loop",
-				slog.String("loop_id", loopID),
-				slog.String("error", err.Error()))
-		}
-		result.State = agentic.LoopStateFailed
-		// Publish failure events for reactive workflows to observe
-		if failure, failMsgs, fErr := h.BuildFailureMessages(loopID, "timeout", "loop timeout exceeded"); fErr == nil {
-			result.PublishedMessages = failMsgs
-			result.FailureState = failure
-		}
-		return result, errs.WrapFatal(fmt.Errorf("loop timeout exceeded"), "agentic-loop", "HandleToolResult", "check timeout")
+		return h.failTimedOutLoop(loopID, result, "HandleToolResult")
 	}
 
 	// Truncate oversized tool results before they enter the context window.
@@ -2789,9 +2809,6 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 
 	// All tools dispatched and complete — proceed to next model request.
 	if h.loopManager.AllToolsComplete(loopID) {
-		if entity.State.IsTerminal() {
-			return result, nil
-		}
 		return h.handleToolsComplete(ctx, loopID, entity, cm, &result)
 	}
 
@@ -2811,7 +2828,32 @@ func (h *MessageHandler) checkApprovalGate(loopID string, entity *agentic.LoopEn
 	// approval_required hit gated the loop — they must not advance the
 	// loop or trigger the next model request. The pending approval
 	// handler drains PendingToolResults when the loop resumes.
+	//
+	// The gated result ITSELF arriving again is a redelivery — its
+	// acknowledgement was lost — and the ApprovalPendingEvent it produced may
+	// never have been seen. It is re-echoed from the gate the loop holds
+	// (#1362 task 1.3, design § 5.4, D28); the carrier writes the gate before
+	// it publishes, as for the first echo. Only an approval_required result
+	// re-echoes — the same test the cold arm applies — and it is matched by the
+	// one identity rule an answer is matched by, so a sibling never echoes a
+	// gate it is not.
 	if entity.State == agentic.LoopStateAwaitingApproval {
+		if agentic.IsApprovalRequired(toolResult.Error) &&
+			approvalAnswersGate(entity.PendingApproval, toolResult.CallID, toolResult.ExecutionID) {
+			echo, err := h.approvalPendingMessage(loopID, *entity.PendingApproval)
+			if err != nil {
+				h.logger.Warn("failed to re-echo the pending approval for a redelivered gated result",
+					slog.String("loop_id", loopID),
+					slog.String("execution_id", toolResult.ExecutionID),
+					slog.String("error", err.Error()))
+			} else {
+				result.PublishedMessages = append(result.PublishedMessages, *echo)
+			}
+		}
+		// Residual: a result that is NOT approval_required yet carries the
+		// gated execution is absorbed as a sibling and replaces the gate's
+		// placeholder; no production path sends one, and it is stored before
+		// this branch runs, while a handler error here would quarantine.
 		return true
 	}
 	// Approval-gated rejection: the agentic-tools approval filter
@@ -2821,7 +2863,20 @@ func (h *MessageHandler) checkApprovalGate(loopID string, entity *agentic.LoopEn
 	if !agentic.IsApprovalRequired(toolResult.Error) {
 		return false
 	}
-	pubMsg, err := h.gateForApproval(loopID, entity, toolResult)
+	pubMsg, err := h.gateForApproval(loopID, toolResult)
+	var refused *gateRefusedError
+	if errors.As(err, &refused) {
+		// The loop settled after the terminal guard let this result in. No
+		// gate was written, so claiming awaiting_approval would have the
+		// carrier render the live — terminal — entity into the record, a
+		// terminal committed outside its owner. The record decides instead.
+		h.logger.Warn("approval gate refused: the loop settled before it could gate",
+			slog.String("loop_id", loopID),
+			slog.String("execution_id", toolResult.ExecutionID),
+			slog.String("error", err.Error()))
+		*result = terminalGuardResult(loopID, refused.state)
+		return true
+	}
 	if err != nil {
 		h.logger.Warn("failed to gate loop for approval",
 			slog.String("loop_id", loopID),
@@ -2841,43 +2896,38 @@ func (h *MessageHandler) checkApprovalGate(loopID string, entity *agentic.LoopEn
 // Returns the published message (or nil if event construction fails)
 // alongside any non-fatal error so the caller can decide whether to
 // surface it.
-func (h *MessageHandler) gateForApproval(loopID string, entity *agentic.LoopEntity, toolResult agentic.ToolResult) (*PublishedMessage, error) {
+func (h *MessageHandler) gateForApproval(loopID string, toolResult agentic.ToolResult) (*PublishedMessage, error) {
 	// Falls back to the tool name on the result envelope when the
 	// LoopManager cache has been cleared (e.g., process restart).
 	toolName := h.resolveToolName(toolResult)
 	args := h.loopManager.GetToolArguments(toolResult.ExecutionID)
 
-	if err := entity.BeginAwaitingApproval(toolResult.CallID, toolName, args, toolResult.Error, h.config.ApprovalTimeout(), toolResult.TraceID); err != nil {
-		return nil, fmt.Errorf("begin awaiting approval: %w", err)
+	gate, err := h.loopManager.beginApprovalGate(loopID, toolResult, toolName, args, h.config.ApprovalTimeout())
+	if err != nil {
+		return nil, err
 	}
-	entity.PendingApproval.RequestID = toolResult.RequestID
-	entity.PendingApproval.ExecutionID = toolResult.ExecutionID
-	entity.PendingApproval.CallOrdinal = toolResult.CallOrdinal
+	return h.approvalPendingMessage(loopID, gate)
+}
 
-	// Clear sibling tool calls queued behind this one. Once the human
-	// responds, the LLM will get a fresh round-trip with the
-	// approve/reject result and can decide whether to re-issue the
-	// other calls.
-	h.loopManager.ClearQueuedTools(loopID)
-
-	if err := h.loopManager.UpdateLoop(*entity); err != nil {
-		return nil, fmt.Errorf("persist awaiting-approval state: %w", err)
-	}
-
+// approvalPendingMessage builds the ApprovalPendingEvent for a gate, from the
+// gate itself: the first echo when the gate fires and the re-echo when its
+// gated result is redelivered carry the same identity and the same deadline,
+// because both read the one PendingApprovalState the record carries.
+func (h *MessageHandler) approvalPendingMessage(loopID string, gate agentic.PendingApprovalState) (*PublishedMessage, error) {
 	pending := &agentic.ApprovalPendingEvent{
 		LoopID: loopID,
-		CallID: toolResult.CallID,
+		CallID: gate.CallID,
 		// The identity the approval authorises, carried to whoever answers so
 		// the answer can be matched on it rather than on a provider CallID the
 		// provider may reuse next turn.
-		ExecutionID: toolResult.ExecutionID,
-		RequestID:   toolResult.RequestID,
-		ToolName:    toolName,
-		Arguments:   args,
-		Reason:      toolResult.Error,
-		RequestedAt: time.Now().UTC(),
-		Timeout:     h.config.ApprovalTimeout(),
-		TraceID:     toolResult.TraceID,
+		ExecutionID: gate.ExecutionID,
+		RequestID:   gate.RequestID,
+		ToolName:    gate.ToolName,
+		Arguments:   gate.Arguments,
+		Reason:      gate.Reason,
+		RequestedAt: gate.RequestedAt,
+		Timeout:     gate.Timeout,
+		TraceID:     gate.TraceID,
 	}
 	envelope := message.NewBaseMessage(pending.Schema(), pending, "agentic-loop")
 	data, err := json.Marshal(envelope)
@@ -3305,6 +3355,28 @@ func (h *MessageHandler) buildFailureEvent(loopID, reason, errorMsg string) (*ag
 // BuildFailureEvent creates a failure event (public wrapper for component.go).
 func (h *MessageHandler) BuildFailureEvent(loopID, reason, errorMsg string) (*agentic.LoopFailedEvent, error) {
 	return h.buildFailureEvent(loopID, reason, errorMsg)
+}
+
+// failTimedOutLoop is the one timeout arm: a loop past its deadline fails in
+// memory and returns its populated failure — the failed state, the failure
+// event and its publication — WITH a fatal error. The lane owns the commit: it
+// persists a terminal result through the terminal owner (the tool-result and
+// approval lanes) or re-derives the failure (the model-response lane), and
+// never discards the populated result behind the error.
+func (h *MessageHandler) failTimedOutLoop(loopID string, result HandlerResult, op string) (HandlerResult, error) {
+	_ = h.loopManager.TransitionLoop(loopID, agentic.LoopStateFailed)
+	if err := h.loopManager.UpdateCompletion(loopID, agentic.OutcomeFailed, "", "loop timeout exceeded"); err != nil {
+		h.logger.Warn("failed to update completion for timed out loop",
+			slog.String("loop_id", loopID),
+			slog.String("error", err.Error()))
+	}
+	result.State = agentic.LoopStateFailed
+	// Publish failure events for reactive workflows to observe
+	if failure, failMsgs, fErr := h.BuildFailureMessages(loopID, "timeout", "loop timeout exceeded"); fErr == nil {
+		result.PublishedMessages = failMsgs
+		result.FailureState = failure
+	}
+	return result, errs.WrapFatal(fmt.Errorf("loop timeout exceeded"), "agentic-loop", op, "check timeout")
 }
 
 // BuildFailureMessages creates a failure event and serializes it for NATS publishing.

@@ -307,7 +307,9 @@
 // excluded from it. A replacement whose gap outran that deadline therefore rebuilds the
 // loop and then fails it on the first delivery, publishing a terminal on
 // agent.failed.<loopID> with the reason "loop timeout exceeded" - and the delivery is
-// ACKNOWLEDGED, because the loop settled and nothing is owed. Size a loop's timeout above
+// ACKNOWLEDGED, because the loop settled and nothing is owed. An approval answer is such an
+// input: an approve or a modify reaching a loop past its deadline dispatches nothing, and every
+// decision fails the loop on the timeout, held or rebuilt. Size a loop's timeout above
 // the replacement window you expect to operate under.
 //
 // An approval deadline is not recovered. PendingApproval is durable, but the timer is the
@@ -315,8 +317,28 @@
 // reads the bucket to restore one. A replacement holds a deadline again only for a loop
 // some other redelivery rebuilt, and then it is the record's own RequestedAt plus Timeout,
 // not a fresh wait. A parked loop otherwise stays in awaiting_approval until the approval
-// is answered or the loop is cancelled. The cold approval-response branch - a replacement
-// answering an approval for a loop it never started - is #1362.
+// is answered or the loop is cancelled.
+//
+// An approval ANSWER reaching a replacement is applied, not dropped. The approval lane reads
+// the loop's record: a record that is absent or terminal acknowledges the answer, and so does
+// a live one that is no longer awaiting that gate (the answer arrived too late), counted as
+// tool_results_dropped_total{reason="approval_inapplicable"}. A record
+// still awaiting it is rebuilt from the retained request and the retained response carrying
+// the gated batch, and the answer is then applied as the gating process would have applied
+// it. When that request or response is confirmed gone from the stream, the loop cannot be
+// continued: it fails with the reason continuation_unavailable, committed through
+// COMPLETE_<loopID> like every terminal, and the answer is acknowledged. A stream that could
+// not be read is retried. The lane publishes before it writes its record, so a rejection that
+// minted the loop's next request and crashed before the record update is settled by the
+// redelivered answer adopting that request; the answer is then acknowledged with nothing
+// republished.
+//
+// The gate's approval_required result stays in the record's applied set under the gated
+// execution's ID, and it is a placeholder, not an answer. The approved call's own result,
+// reaching a process that does not hold the loop, is applied rather than acknowledged as a
+// replay — and retried while the record still holds the gate, until the approval's own record
+// update lands. A redelivered gated result whose gate the record still holds re-publishes the
+// approval request from the record, so a human who never saw the first one sees it.
 //
 // # Ports
 //
@@ -360,7 +382,16 @@
 //	    "channel_id": "session_001"
 //	}
 //
-// **COMPLETE_{loopID}**: Written when a loop completes, for rules engine consumption
+// **COMPLETE_{loopID}**: The loop's durable terminal — completed, failed or
+// cancelled, told apart by "outcome" — for rules engine consumption. It is
+// created once, by Create, BEFORE the terminal event (agent.complete /
+// agent.failed) is published, and the loop's own record is written terminal
+// only AFTER that event (#1362). A redelivered terminal whose Create is
+// refused adopts the saved terminal by loop ID and outcome and republishes
+// it; it never overwrites it, and a saved terminal of another outcome is
+// quarantined (the first terminal wins). A terminal produced by the
+// approval-timeout sweeper's auto-reject (a max_iterations failure) takes the
+// same order.
 //
 //	{
 //	    "loop_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",

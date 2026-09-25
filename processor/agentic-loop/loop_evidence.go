@@ -547,6 +547,15 @@ func (c *Component) adoptNewerRetainedRequest(ctx context.Context, loopID string
 	return loopRecord{entity: adopted, revision: committed, presence: record.presence}, nil
 }
 
+// errRetainedEvidenceAbsent marks a rebuild that READ the stream and found the
+// request or response it needs gone — confirmed absence, as opposed to a read
+// that failed. The two are the same answer on the model-response and
+// tool-result lanes, which retry both. The approval lane tells them apart,
+// because confirmed absence there fails the loop continuation_unavailable
+// while an unreadable stream is retried (owner ruling 2026-09-13 on #1146;
+// #1362 OQ-C).
+var errRetainedEvidenceAbsent = errors.New("retained continuation evidence is absent")
+
 // restoreLoopFromEvidence gives THIS process the loop a redelivered input names,
 // so the delivery can be applied instead of refused (#1330, design § 5.2 step 2
 // and § 5.3 step 3; task 1.2).
@@ -586,8 +595,8 @@ func (c *Component) restoreLoopFromEvidence(
 		// rather than fatal because the loop is real and unfinished: refusing
 		// it forever on one unreadable stream state would settle a live loop.
 		return errs.WrapTransient(
-			fmt.Errorf("loop %s: its record names request %q and the stream retains none",
-				loopID, record.entity.PublishedRequestID),
+			fmt.Errorf("loop %s: its record names request %q and the stream retains none: %w",
+				loopID, record.entity.PublishedRequestID, errRetainedEvidenceAbsent),
 			"agentic-loop", "restoreLoopFromEvidence", "read the request to rebuild from")
 	}
 	if request.RequestID != record.entity.PublishedRequestID {
@@ -610,8 +619,8 @@ func (c *Component) restoreLoopFromEvidence(
 		if !found {
 			c.releaseLoopTransientState(loopID)
 			return errs.WrapTransient(
-				fmt.Errorf("loop %s: a tool result for request %q arrived and the stream retains no response for it",
-					loopID, request.RequestID),
+				fmt.Errorf("loop %s: a tool result for request %q arrived and the stream retains no response for it: %w",
+					loopID, request.RequestID, errRetainedEvidenceAbsent),
 				"agentic-loop", "restoreLoopFromEvidence", "read the batch to rebuild from")
 		}
 		if err := c.handler.loopManager.restoreToolBatch(

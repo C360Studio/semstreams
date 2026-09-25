@@ -1574,19 +1574,30 @@ trades enforcement for availability rather than losing both.
 
 ### `tool_call_governance_subscribe_before_publish_failures_total` gains a `reason` label
 
-The counter was unlabelled at beta.162 and is now a `CounterVec` over `reason`, with two values:
+The counter was unlabelled at beta.162 and is now a `CounterVec` over `reason`. `missing_waiter` counts every verdict
+delivery that reached no waiter, which is what the unlabelled counter counted. Every other reason is a subset of it: the
+loop reads the loop record and counts, once, how that delivery settled.
 
-| `reason` | Means |
-|---|---|
-| `missing_waiter` | The verdict reached no waiter: the subscribe-before-publish race (ADR-039 race-fix option 3) or a late arrival. The loop record then decides ack-vs-retry. |
-| `unrecoverable_loop_identity` | The verdict carries neither a canonical `loop_id` nor a `request_id` in the `<loopID>:req:<iteration>:<retry>` grammar, so no loop record can be read for it. The delivery **terminates as malformed** rather than acknowledging as if the loop had settled. |
+| `reason` | Settles as | Means |
+|---|---|---|
+| `missing_waiter` | (every miss) | The verdict reached no waiter: the subscribe-before-publish race (ADR-039 race-fix option 3), a late arrival after Propose timed out, or the second verdict of a duplicate proposed/verdict pair after a restart. |
+| `older_request` | acknowledged | Its request is older than the one the loop record names. |
+| `already_applied` | acknowledged | The record already holds its execution in `pending_tool_results`, an approval gate's placeholder included. |
+| `loop_absent` | acknowledged | No loop record exists. |
+| `loop_terminal` | acknowledged | The loop has finished. |
+| `unrecoverable_loop_identity` | terminated as malformed | The verdict carries neither a canonical `loop_id` nor a `request_id` in the `<loopID>:req:<iteration>:<retry>` grammar, so no loop record can be read for it. |
+| `foreign_request` | terminated (JetStream Term: never redelivered; no dead-letter copy — the Error log line carries the identities) | Its `request_id` is not a request of its `loop_id`. Like `unrecoverable_loop_identity`, only that delivery is terminated; the verdict lane keeps running. |
 
 A PromQL selector that names the metric keeps matching, but it now returns one series per reason instead of one
-series total. An alert written as a bare `rate(...) > 0` still fires; a recording rule or dashboard panel that
-assumed a single series should wrap it in `sum(...)` or add `by (reason)`. Both reasons mean investigate, and they
-mean different things: `missing_waiter` points at the loop process or delivery timing, `unrecoverable_loop_identity`
-points at a *rule* — it is the observable symptom of a verdict rule that echoes neither identity, which is the same
-edit this section already asks for.
+series total. Select by `reason`; do not wrap it in `sum(...)`, which counts each settled delivery twice (once as
+`missing_waiter`, once under its reason). `sum(rate(...{reason="missing_waiter"}))` reproduces the beta.162 series.
+
+The four acknowledged reasons are expected in normal operation. Investigate two things:
+
+- `missing_waiter` minus the other six reasons: deliveries retried because the record says the verdict is still owed or
+  could not be read. This points at the loop process or delivery timing.
+- Any `unrecoverable_loop_identity` or `foreign_request`: each points at a *rule* that echoes no identity or a mismatched
+  one, which is the same edit this section already asks for.
 
 ### `GovernanceDispatcher.HandleVerdict` takes the decoded verdict
 
@@ -1841,7 +1852,9 @@ keeps its ORIGINAL deadline: nothing refreshes it, and the time the process was 
 replacement whose gap outran that deadline rebuilds the loop and then fails it on the very first delivery, with a
 terminal on `agent.failed.<loopID>` carrying `loop timeout exceeded`. The delivery itself is ACKNOWLEDGED — the loop
 settled and nothing is owed — so this shape is invisible to consumer-health and settlement checks and shows up only
-on `agent.failed`. **Action:** size `timeout` on the `agentic-loop` component above the replacement window you
+on `agent.failed`. An approval answer is one such delivery: an approve or modify reaching a loop past its deadline
+dispatches nothing, and approve, modify and reject alike fail the loop on the timeout, whether this process held the
+loop or rebuilt it for the answer. **Action:** size `timeout` on the `agentic-loop` component above the replacement window you
 expect to operate under. A 30s loop timeout and a 60s rolling restart mean every in-flight loop dies on recovery.
 
 What is deliberately NOT replayed is the per-iteration framing. A retained request is not the loop's conversation —
@@ -1890,24 +1903,29 @@ This **supersedes** the beta.25 note's "Restart safety" paragraph
 at restart would auto-reject within one sweep interval of the new process booting. It would not: that paragraph
 described fields the sweeper reads, not a process that reads the bucket.
 
-**Operational consequence, and what beta.163 can and cannot do about it.** The wait a parked loop is nominally
-under (`approval_timeout`, at most 12h) is not a settlement guarantee across a replacement, and was never one.
-Neither is answering it from outside: **an `ApprovalResponse` and a `cancel` signal both reach only a loop that is
-present in process memory.** For a parked loop no process holds:
+**Operational consequence.** The wait a parked loop is nominally under (`approval_timeout`, at most 12h) is not a
+settlement guarantee across a replacement, and was never one: a replacement re-arms no deadline. Answering it from
+outside does work, since #1362:
 
-- an `ApprovalResponse` finds no pending approval to resolve, is dropped as stale, and is **acknowledged without
-  changing `AGENT_LOOPS`** — so it looks answered and is not;
+- an `ApprovalResponse` for a parked loop no process holds is settled by the loop's record. The replacement rebuilds
+  the loop from the record, its retained request and the retained response that carries the gated batch, and applies
+  the answer, unless the loop's own deadline (`timeout_at`) has passed, in which case the loop fails on the timeout
+  and nothing is dispatched. When that request or response is confirmed gone from the stream the loop fails with reason
+  `continuation_unavailable` instead; a stream that cannot be read is retried. An answer whose record is absent,
+  terminal, or no longer awaiting that gate is acknowledged without effect, with a warning and a count on
+  `tool_results_dropped_total{reason="approval_inapplicable"}`;
+- the approved call's own result, when it reaches a process that no longer holds the loop, rebuilds the loop and is
+  applied, but its tool completion evidence records **no** `dispatch_arguments` and its trajectory step no
+  arguments. A `modify` may have replaced the proposed arguments and nothing retained says with what, so they are
+  omitted rather than falsified. The `tool.requested` observation recorded when the call was dispatched is the
+  record of what ran;
 - a `cancel` signal against a live record finds no loop to cancel and is **retried until `MaxDeliver` stops
-  redelivering it**, after which it is recorded in the framework's MaxDeliver ledger.
+  redelivering it**, after which it is recorded in the framework's MaxDeliver ledger. The one exception is a cancel
+  that already committed `COMPLETE_<loopID>` and crashed before its record update: its redelivery adopts that cancel
+  (see the section below).
 
-**A cold parked loop is not settleable in beta.163.** The cold approval branch — the one that rebuilds a parked loop
-from its record so an `ApprovalResponse` can land — is [#1362](https://github.com/C360Studio/semstreams/issues/1362),
-not this tag. Until it lands, the only thing that revives such a loop is the narrow exception below: a redelivered
-input naming the request the record names. That is not a recovery path to rely on.
-
-So the action for beta.163 is to keep the window small rather than to answer into it: size the `agentic-loop`
-component's `timeout` above the replacement window you operate under (see the loop-deadline note above), and expect
-loops parked at an approval across a replacement to sit until #1362.
+So the practical action is to answer a parked loop, or to size the `agentic-loop` component's `timeout` above the
+replacement window you operate under (see the loop-deadline note above) when nobody will.
 
 One narrow exception, recorded rather than built on: a replacement that rebuilds a loop for some *other* reason — a
 redelivered model response or tool result naming the request the record names — seats that loop's pending approval
@@ -1937,3 +1955,194 @@ path, which builds the loop-created event again; the event carries no `Nats-Msg-
 `agent.request`. A consumer of `agent.created` must treat it as an announcement it may see more than once for one
 loop, keyed on `loop_id`, not as a birth counter. Recorded, not armed away: the loop, its record and its first
 request are all still exactly one.
+
+## One terminal owner, and an approval answer survives a process replacement (#1362, restart safety L4b)
+
+This layer finishes the #1330 split. It changes three things a watcher can see: the order in which a loop's terminal
+lands, the shape of a terminal record, and what happens to an approval answer that reaches a process not holding its
+loop. The first is **BREAKING** for anything that reads the loop record in response to the terminal event.
+
+### The terminal order: `COMPLETE_<loopID>`, then the event, then the record — BREAKING
+
+Every terminal is committed by one owner, in one order. That covers a completion or failure on the carrier, a loop
+failure, a cancel, and the approval-timeout sweeper's own `max_iterations` failure:
+
+1. `COMPLETE_<loopID>` in `AGENT_LOOPS`, by create-once (`Create`, not `Put`).
+2. The graph stamps, before the event. The carrier and loop-failure paths already stamped before the event at beta.162.
+   Cancel stamped after its event there (publish, then `WriteLoopCancellation`, then its marker), and the sweeper's
+   `max_iterations` terminal wrote no graph stamp at all (it published, then wrote its record).
+3. The terminal event on `agent.complete.<loopID>` or `agent.failed.<loopID>`.
+4. The loop's own record in `AGENT_LOOPS`, by compare-and-swap `Update`, with its terminal `state`.
+
+What moved:
+
+- **The record's terminal `state` now lands AFTER the event.** At beta.162 the carrier and loop-failure paths wrote
+  the record terminal first and published last, so a consumer of `agent.complete` / `agent.failed` that then read the
+  record found it terminal. It can now find it still `running` (or `awaiting_approval`) for the time between steps 3
+  and 4, and for longer if step 4 fails.
+- **`COMPLETE_<loopID>` precedes the event on the carrier, loop-failure and cancel paths.** Cancel moved the most: at
+  beta.162 it wrote its record, published, and wrote its marker last. The sweeper's `max_iterations` terminal takes the
+  same order, because it now rides the carrier.
+- **Two terminals write `COMPLETE_<loopID>` that never did at beta.162.** There the carrier wrote the marker for a
+  completion only; a failure delivered on the carrier (the iteration cap, the loop timeout) got a graph stamp and an
+  event but no marker. The carrier-failure marker arrived with #1334 (`94cd8e4c`), and no section of this note
+  recorded it. The approval-timeout sweeper's `max_iterations` terminal wrote no marker either, and gets one in this
+  layer because it rides the carrier. A `COMPLETE_` reader therefore now sees a marker for loops it never saw one for:
+  semspec's key scan (`cmd/semspec/watch_live.go:263`) and the in-tree dispatch `/activity` SSE, which emits
+  `loop_completed` for every `COMPLETE_` key (`processor/agentic-dispatch/http.go:1017`), both count those loops as
+  finished. They are finished, so the effect is benign. semteams reads that SSE; its row in the table below.
+- **A second terminal for the same loop adopts the first; it never overwrites it.** A redelivered terminal whose
+  `Create` is refused reads the saved terminal back and, when its outcome matches, republishes that saved terminal and
+  writes the record from it. A content difference is logged at the audit line and changes nothing. A saved terminal of
+  a different outcome is quarantined: the first terminal wins.
+- **A crashed cancel is settled cold.** A cancel that created its marker and published, then died before its record
+  update, leaves a cancel marker, a published cancellation and a live record. Its redelivery, on a process that does
+  not hold the loop, now reads the marker, republishes the saved cancellation, writes the record `cancelled` under
+  compare-and-swap, and acknowledges. A completion or failure marker over a live record is retried instead, because
+  that terminal's own redelivery writes the record.
+
+**Action.** A consumer that reacts to `agent.complete` / `agent.failed` and needs the durable terminal reads
+`COMPLETE_<loopID>`, which is present before the event is published. A consumer that needs the record terminal
+watches `AGENT_LOOPS` for it and does not assume it is terminal when the event arrives. A consumer that already keys
+on the record's terminal `state` (a KV watch) sees the same transition, slightly later.
+
+**Two residuals, recorded and not reconciled** (#1362 issuecomment-5808903072 and issuecomment-5809906669):
+
+- A terminal whose record update loses its compare-and-swap after `COMPLETE_<loopID>` and its event have landed is not
+  reconciled. The loop may keep running under a durable terminal and a published event, and its own later terminal of
+  a different outcome is quarantined. The same shape follows a spawn-path birth failure under a producer-supplied loop
+  ID. A watcher keyed on the record's terminal `state` may never see that loop go terminal. One keyed on
+  `COMPLETE_<loopID>` counts it as finished while it runs.
+- An approval-timeout sweep terminal (its `max_iterations` auto-reject, or the loop's own timeout) that commits
+  `COMPLETE_<loopID>` and then fails to publish is not reconciled either. A timer is never redelivered, so the record
+  stays `awaiting_approval`. After a `max_iterations` terminal, a later human answer is applied cold on a loop that
+  already has a durable failed terminal. After the loop's own timeout, a later answer to that gate re-derives the
+  timeout on the rebuilt loop and adopts the durable failed terminal, so the loop settles on that answer. (The owner
+  ruling cited above covers the `max_iterations` case; the loop-timeout case is this change's residual beside it.)
+
+### A terminal record carries no approval gate
+
+The terminal transition now clears `pending_approval` and `state_before_approval`. At beta.162 only resolving the
+approval cleared them, so a loop cancelled or failed while gated kept a gate on a record nothing would ever answer.
+**Action:** none for a consumer that reads the gate only while `state` is `awaiting_approval`. A consumer that read
+`pending_approval` off a terminal record to learn which call was pending when the loop ended loses it; the
+trajectory and the terminal event are the record of that.
+
+### `continuation_unavailable` is a new failure reason
+
+An approval answer for a loop no process holds is applied by rebuilding the loop from its record, its retained
+request and the retained response carrying the gated batch, unless the loop's own deadline has passed, in which case
+the loop fails on the timeout (the section above, "A replaced process re-arms no approval deadline", has the whole
+cold branch). When that request or response is confirmed gone from the stream, the
+loop fails with reason `continuation_unavailable`. It appears on `LoopFailedEvent.reason` on `agent.failed.<loopID>`,
+in the failed `COMPLETE_<loopID>` marker, and as `reason="continuation_unavailable"` on
+`semstreams_agentic_loop_loops_failed_total`. A stream that could not be read is retried, not failed. **Action:** a
+consumer that switches on failure reasons adds the value; the cure is to answer inside the stream's retention.
+
+### The approval lane publishes before it writes, and may re-announce a gate
+
+- **Approve, modify and reject now publish before they write the record.** A rejection that mints the loop's next
+  request and crashes before the record update is settled by the redelivered answer, which adopts that request and is
+  then acknowledged with nothing republished. A gate itself is still written before its `ApprovalPendingEvent` is
+  published, so an approval request never goes out with no durable gate behind it.
+- **`agent.approval_pending.<loopID>` may carry the same gate more than once.** A redelivered `approval_required`
+  result whose gate is still pending republishes that gate's `ApprovalPendingEvent`, built from the gate the loop
+  holds: in memory when this process holds the loop, from the record otherwise. At beta.162 a redelivered gated result
+  published nothing. **Action:** a consumer of `ApprovalPendingEvent` treats it as idempotent, keyed on `loop_id` and
+  `execution_id`, and does not treat a repeat as a new pause after that gate was answered. The repeat can land
+  after the answer was published: the loop keeps the gate until the approval lane takes the answer, and on a
+  replacement until the cold rebuild writes the record, which follows the `tool.execute` publish. semteams is exposed
+  to exactly that; its migration step is under the table below.
+- **An answer that arrives too late is counted.** An answer acknowledged without effect — its loop absent or terminal,
+  or no longer awaiting that gate — logs a warning and counts on
+  `tool_results_dropped_total{reason="approval_inapplicable"}`. The approval-timeout sweeper's echo of its own
+  auto-reject is not a human answer: it logs at Debug and is not counted.
+
+### Behaviour changes on the Go surface
+
+- **`MessageHandler.HandleApprovalResponse` returns an error wrapping `ErrLoopNotFound`** for a loop this process
+  does not hold. beta.162 returned an unclassified "loop not found" error there. Between the two tags (#1231) it
+  returned a stale-drop result with a nil error instead, so a build from `main` in that window sees nil become an
+  error. Only an in-process caller sees any of this: the component's approval lane catches the error and runs the
+  cold branch. **Action:** a direct caller matches the case with `errors.Is(err, ErrLoopNotFound)`.
+- **A model response delivered on a context cancelled before the handler touched anything is retried, not failed.**
+  It mirrors the tool lane. Under a create-once terminal marker a failure written on a shutdown or a lost heartbeat
+  would be permanent, so the delivery is handed back instead.
+
+### Metrics: read the verdict counter by reason
+
+`semstreams_agentic_loop_tool_call_governance_subscribe_before_publish_failures_total` gains five settle reasons in
+this layer: `older_request`, `already_applied`, `loop_absent`, `loop_terminal` and `foreign_request`, beside the
+`missing_waiter` and `unrecoverable_loop_identity` of #1328. `missing_waiter` counts every waiterless verdict, and the
+six settle reasons (`older_request`,
+`already_applied`, `loop_absent`, `loop_terminal`, `unrecoverable_loop_identity`, `foreign_request`) are subsets of
+it, so `sum(...)` across reasons double-counts. The signal to investigate is `missing_waiter` minus the settle
+reasons. `unrecoverable_loop_identity` and `foreign_request` are terminated (JetStream Term: never redelivered; no
+dead-letter copy — the Error log line carries the identities), and the verdict lane keeps running. The full table is
+in "`tool_call_governance_subscribe_before_publish_failures_total` gains a `reason` label" above.
+
+`semstreams_router_loop_admission_refusals_total` gains `seam="route"` with `reason="route_ambiguous"`: the
+active-loop resolver refusing to pick a loop for a user/channel route that matches more than one current loop. The
+refusal itself is not in beta.162: it arrived with #1329 ("Dispatch reads loop authority instead of tracking
+notifications" above), uncounted. HTTP answers it with a 409; the chat lane answers it with an error `UserResponse`
+(`processor/agentic-dispatch/commands.go:66-68`). Both lanes now count it once. The user resolves it by naming a
+loop, which `/loops` lists.
+
+### Measured impact across the family
+
+Measured read-only on 2026-09-24 with plain `grep`, excluding `.git`, `node_modules`, `vendor`, `archive`,
+`evidence` and `.claude/worktrees` copies, at semspec `5a9496ee`, semteams `ce22c961`, semsage `4d28b4d`, semdragon
+`07f4de9`, semmachina `841c45e` and semstreams-ui `39f5f04`. `git status --porcelain` for every sister was the same
+before and after. One sister needs a change for this layer: semteams, for the repeated `ApprovalPendingEvent` (the
+step is under the table). Every other row is read-only impact.
+
+| Changed key | Reader or writer | Where | Impact |
+|---|---|---|---|
+| Record terminal `state` | reader (KV watch) | semspec `processor/qa-reviewer/component.go:337` | Fires on the terminal record, now after the event. No event read; no change. |
+| Record terminal `state` | reader (KV watch) | semspec `processor/lesson-decomposer/component.go:937` | Same. |
+| Record terminal `state` | reader (KV watch) | semspec `processor/execution-bridge/completion.go:72` | Same. |
+| Record `state == complete` | reader (KV watch) | semspec `processor/execution-bridge/review_completion.go:80` | Same. |
+| Record terminal `state` | reader (liveness scan) | semspec `processor/recovery-consumer/backstop.go:301` | A loop between its event and its record update counts as live until the update lands. Live is the side that resets nothing, so at most a reset waits. |
+| `COMPLETE_<loopID>` ordering | reader (key scan) | semspec `cmd/semspec/watch_live.go:263` | Counts a loop done once its marker exists, which is now before the event. Under the CAS-loss residual above it counts a still-running loop as done. |
+| `pending_approval` | reader (UI) | semteams `ui/src/lib/components/board/TaskDetailPanel.svelte:245`, `ui/src/lib/stores/agentStore.svelte.ts:189` | Read only while `state` is `awaiting_approval`; the terminal clear matches what the store's doc already claims. No change. |
+| `ApprovalPendingEvent` repeat | reader (core subscribe) | semteams `cmd/semteams/approvalpause/subscriber.go:110`, `pauser.go:108-114`; rules `configs/rules/agent-run/12-executing-to-awaiting-on-approval.json`, `13-resume-awaiting-to-executing-on-approval.json` | **Change needed.** A gate re-announced after its answer was published re-stamps `agent.run.approval-pending` on a run that rule 13 already resumed; rule 12 fires again and parks the run in `awaiting_approval` while the loop runs on. No second answer comes, so the run is stuck. The window and the step are below. |
+| `COMPLETE_<loopID>` via SSE | reader (`/activity` SSE) | semteams `ui/src/lib/types/agent.ts:51,122`, `ui/src/lib/stores/agentStore.svelte.ts:81-99` | Each marker arrives as `loop_completed` with the bare loop ID (`processor/agentic-dispatch/http.go:1017`, the same at beta.162), so the `COMPLETE_`-prefix branches (`agent.ts:127,162`) do not match and the envelope is merged as a loop entry whose missing `state` defaults (`agent.ts:135`). The record's terminal update now follows the marker, so the last write is the terminal `state` (at beta.162 the marker came last). The new carrier-failure and sweeper markers take the same path. No change. |
+| Terminal events | reader (event waiters) | semdragon `processor/questtools/explore.go:179`, semsage `tools/spawn/executor.go:184` | Read the event payload only, never the loop record. No change. |
+
+Four keys have no sister reader. Each was searched across every `sem*` repository with stderr visible, and each
+search exited 1 with no output:
+
+- `grep -rn --include='*.go' 'HandleApprovalResponse'`
+- `grep -rn 'continuation_unavailable'`
+- `grep -rn -E 'state_before_approval|StateBeforeApproval'`
+- `grep -rn -E 'subscribe_before_publish|missing_waiter|foreign_request|unrecoverable_loop_identity'`
+
+The control, `grep -rln --include='*.go' 'agentic.LoopEntity'` over the same trees, listed 12 sister files, so the
+search reached sister sources. semspec's own `pending_approval` (a task status in `ui/src/lib/types/task.ts`) is its
+domain vocabulary, not the loop record's field.
+
+### semteams — pinned `ce22c961`: a repeated `ApprovalPendingEvent` re-pauses a resumed run
+
+- **Mechanism:** the approval-pause subscriber stamps `agent.run.approval-resumed` as soon as
+  `agent.approval_response.<loopID>` is published (`cmd/semteams/approvalpause/subscriber.go:150-162`), and rule
+  `agent-run/13` moves the run to `executing` and removes both markers. The loop keeps its gate until the approval lane
+  takes that answer and the record write lands, after the approved call's `tool.execute` is published. Warm, the gate
+  clears in memory at resolve, but a write that loses its compare-and-swap releases the loop and a redelivery re-echoes
+  from the record; on a replacement the write also waits for the cold rebuild. A stream read failure
+  retries the rebuild, so the window can span several redeliveries. A gated result redelivered inside that window
+  re-echoes the gate (cold: `processor/agentic-loop/component.go`, `settleToolResultWithoutLoop`; warm:
+  `handlers.go`, `checkApprovalGate`). `HandlePending` then stamps `agent.run.approval-pending` again
+  (`pauser.go:108-114`), and rule `agent-run/12` matches (the marker set, the phase `executing`, no resume marker) and
+  moves the run back to `awaiting_approval`. No second answer is ever published for that gate, and rules
+  `agent-run/03` and `04` require the phase `executing`, so the run never completes. At beta.162 a redelivered gated
+  result published nothing, so this exposure is new.
+- **Day one:** nothing fails at boot. A run is stranded only when a gated result is redelivered after its answer was
+  published and before the loop has taken it.
+- **Obligation:** the pause must not re-apply to a gate that was already answered. `ApprovalPendingEvent` and
+  `ApprovalResponse` both carry `execution_id` (`agentic/approval.go`); key the pause on `loop_id` and
+  `execution_id`, and skip a pending event whose execution the run has already resumed from. Record the answered
+  execution durably (the run entity is the natural home), not in subscriber memory, so a semteams restart does not forget it. Reading
+  the loop record does not help: inside this window it still reads `awaiting_approval` with the same gate.
+- **Verification:** publish an `ApprovalPendingEvent`, then its `ApprovalResponse`, then the same
+  `ApprovalPendingEvent` again; the run ends in `executing` and a later loop terminal still moves it to
+  `completed` or `failed`.

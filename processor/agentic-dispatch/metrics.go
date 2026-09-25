@@ -178,7 +178,7 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 			Namespace: "semstreams",
 			Subsystem: "router",
 			Name:      "loop_admission_refusals_total",
-			Help:      "Requests dispatch refused, by the seam they arrived on and the single mapped reason (form_malformed, existence_absent, existence_unreadable, existence_conflict, state_terminal, ownership_not_owner, ownership_not_permitted, submission_invalid, submission_undeliverable)",
+			Help:      "Requests dispatch refused, by the seam they arrived on and the single mapped reason (form_malformed, existence_absent, existence_unreadable, existence_conflict, state_terminal, ownership_not_owner, ownership_not_permitted, submission_invalid, submission_undeliverable, route_ambiguous). seam=route is the active-loop resolver refusing to pick a loop for a user/channel route that matches more than one current loop (reason route_ambiguous); the user resolves it by naming a loop, which /loops lists",
 		}, []string{"seam", "reason"}),
 
 		// SSE metrics
@@ -369,9 +369,11 @@ func (m *routerMetrics) recordLoopApproval(decision string, success bool) {
 	m.loopApprovalsSubmitted.WithLabelValues(decision, status).Inc()
 }
 
-// recordLoopAdmissionRefusal counts one refusal by the loop admission gate.
-// Both labels are closed sets: seam is a fixed token naming where the request
-// arrived, reason is one of the mapped refusal reasons. Called from exactly one
+// recordLoopAdmissionRefusal counts one refusal this package makes of a loop
+// request: the admission gate's, the submission path's, and the active-loop
+// resolver's route ambiguity (seam "route"). Both labels are closed sets: seam
+// is a fixed token naming where the request arrived or was resolved, reason is
+// one of the mapped refusal reasons. Called from exactly one
 // place (Component.recordLoopAdmissionRefusal), which is what keeps "counted
 // exactly once per refusal" a property of the code.
 func (m *routerMetrics) recordLoopAdmissionRefusal(seam, reason string) {

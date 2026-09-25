@@ -170,14 +170,14 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "tool_results_dropped_total",
-				Help:      "Total tool results acknowledged without effect, by reason. reason=\"stale_execution\": no loop mapping exists for the execution ID and the loop record is absent or terminal. reason=\"older_request\": the result names an earlier request than the loop record does, so the loop already applied it — counted on the warm lane and on the cold lane after the record has been brought forward to the loop newest retained request, whichever process holds the loop. reason=\"already_applied\": the result names the request the record names AND its execution is already in that record pending_tool_results, so this is a replay of work the loop kept — the unfinished siblings of its batch are untouched and go on running. reason=\"terminal_unproven\": the loop is terminal, so no result can still be applied to it. Sustained non-zero rate points at NATS redelivery or executor double-publish. A result the loop record still names is NOT counted here: it is retried until a process can apply it, and a result naming a request of no loop is quarantined rather than dropped.",
+				Help:      "Total tool results acknowledged without effect, by reason. reason=\"stale_execution\": no loop mapping exists for the execution ID and the loop record is absent or terminal. reason=\"older_request\": the result names an earlier request than the loop record does, so the loop already applied it — counted on the warm lane and on the cold lane after the record has been brought forward to the loop newest retained request, whichever process holds the loop. reason=\"already_applied\": the result names the request the record names AND its execution is already in that record pending_tool_results, so this is a replay of work the loop kept — the unfinished siblings of its batch are untouched and go on running; an approval gate's approval_required placeholder counts only against another approval_required result, never against the approved call's own result. reason=\"terminal_unproven\": the loop is terminal, so no result can still be applied to it. reason=\"approval_inapplicable\": an approval RESPONSE (not a tool result) acknowledged without effect — its loop record is absent or terminal, or the loop is no longer awaiting that gate. The agent.approval_response echo of the timeout sweeper's own auto-reject is not an answer and is not counted. Sustained non-zero rate points at NATS redelivery or executor double-publish. A result the loop record still names is NOT counted here: it is retried until a process can apply it, and a result naming a request of no loop is quarantined rather than dropped.",
 			}, []string{"reason"}),
 
 			modelResponsesDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "model_responses_dropped_total",
-				Help:      "Total model responses acknowledged without advancing a loop, by reason. reason=\"stale_request_id\": the RequestID maps to no loop and the loop record is absent or terminal — expected after a loop settles and releases its per-loop state. reason=\"superseded_request\": the response names an EARLIER request than the loop record does, so the loop already advanced past it — counted on the warm lane and on the cold lane after the record has been brought forward to the loop newest retained request, whichever process holds the loop. reason=\"already_applied\": the response names the request the record names AND the loop holding it is waiting on no request, so this process already used that answer — re-applying it would append the assistant turn a second time and re-dispatch its calls. A sustained rate on any of them points at NATS redelivery. A response the loop record still names is NOT counted here: it is retried until a process can apply it, and a response naming a request of no loop is quarantined rather than dropped.",
+				Help:      "Total model responses acknowledged without advancing a loop, by reason. reason=\"stale_request_id\": the RequestID maps to no loop, or to one this process holds already terminal, and the loop record is absent or terminal — expected after a loop settles and releases its per-loop state. reason=\"superseded_request\": the response names an EARLIER request than the loop record does, so the loop already advanced past it — counted on the warm lane and on the cold lane after the record has been brought forward to the loop newest retained request, whichever process holds the loop. reason=\"already_applied\": the response names the request the record names AND the loop holding it is waiting on no request, so this process already used that answer — re-applying it would append the assistant turn a second time and re-dispatch its calls. A sustained rate on any of them points at NATS redelivery. A response the loop record still names is NOT counted here: it is retried until a process can apply it, and a response naming a request of no loop is quarantined rather than dropped.",
 			}, []string{"reason"}),
 
 			recoveryDegradations: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -283,7 +283,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "tool_call_governance_subscribe_before_publish_failures_total",
-				Help:      "Verdicts that reached no waiter, by reason. reason=\"missing_waiter\" is the subscribe-before-publish race regressing (ADR-039 race-fix option 3) or a late arrival — the loop record then decides ack-vs-retry. reason=\"unrecoverable_loop_identity\" is a verdict whose payload carries neither a canonical loop_id nor a request_id in the <loopID>:req: grammar, so no record can be read for it; those terminate as malformed rather than acknowledging like a settled loop. Non-zero on either reason means investigate.",
+				Help:      "Verdict deliveries that reached no waiter. reason=\"missing_waiter\" counts EVERY such delivery, before any classification; every other reason is a subset of it, counted at most once per delivery, naming how the delivery settled. Acknowledged: \"older_request\" (its request is older than the loop record's), \"already_applied\" (its execution is already in the record's pending tool results), \"loop_absent\" and \"loop_terminal\" — expected in normal operation. Terminated (JetStream Term: never redelivered, no dead-letter copy, the Error log line carries the identities; the lane keeps running): \"unrecoverable_loop_identity\" (the payload names no loop: neither a canonical loop_id nor a request_id in the <loopID>:req: grammar) and \"foreign_request\" (its request_id is not a request of its loop) — both point at a verdict rule; investigate. missing_waiter minus the sum of the other six is the deliveries Retried because the record says the verdict is still owed or could not be read; a sustained nonzero there is the signal to investigate (the subscribe-before-publish race regressing, ADR-039 race-fix option 3, or a verdict arriving after its call moved on). Do not sum across reasons: that counts each settled delivery twice.",
 			}, []string{"reason"}),
 
 			lessonInjection: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -386,22 +386,36 @@ func (m *loopMetrics) RecordGovernanceVerdict(decision, mode string, duration fl
 	m.governanceVerdictTotal.WithLabelValues(decision, mode).Inc()
 }
 
-// The two reasons emitted on
+// The reasons emitted on
 // semstreams_agentic_loop_tool_call_governance_subscribe_before_publish_failures_total.
-// Both are enumerated in the metric's Help; a value that is not one of these
-// is a bug.
+// All are enumerated in the metric's Help; a value that is not one of these is
+// a bug. missing_waiter is counted by the dispatcher for every waiterless
+// delivery; each other reason is a subset of it, counted by the component
+// when it settles that delivery.
 const (
 	verdictDropMissingWaiter         = "missing_waiter"
 	verdictDropUnrecoverableIdentity = "unrecoverable_loop_identity"
+	// The four ways a waiterless verdict is acknowledged after its loop record
+	// is read (#1362, design § 5.6, D16). Like every reason below
+	// missing_waiter, each is a subset of it: counted IN ADDITION to the
+	// missing_waiter the dispatcher already counted for the same delivery.
+	verdictDropOlderRequest   = "older_request"
+	verdictDropAlreadyApplied = "already_applied"
+	verdictDropLoopAbsent     = "loop_absent"
+	verdictDropLoopTerminal   = "loop_terminal"
+	// verdictDropForeignRequest terminates, like unrecoverable_loop_identity:
+	// the verdict's request_id is not a request of its loop (owner ruling
+	// 2026-09-24 on #1362).
+	verdictDropForeignRequest = "foreign_request"
 )
 
 // RecordGovernanceVerdictMissingWaiter increments the
 // subscribe-before-publish-failures counter. Implements
-// DispatcherMetrics. Each non-zero increment signals a verdict
-// arrived for an execution_id that no longer had a registered waiter —
-// either the race-fix regressed (verdict beat the pre-register) or a
-// verdict arrived after Propose's timeout already fired (benign in
-// audit mode, signal in enforce mode).
+// DispatcherMetrics. It counts every verdict delivery that reached no
+// registered waiter, before the component classifies it; the component then
+// counts the settle reason, if any, as a subset. What remains after those
+// subsets — deliveries Retried as still owed — is the race-fix regressing
+// (verdict beat the pre-register) or a verdict arriving after its call moved on.
 func (m *loopMetrics) RecordGovernanceVerdictMissingWaiter() {
 	m.governanceSubscribeBeforePublishFailures.WithLabelValues(verdictDropMissingWaiter).Inc()
 }
@@ -415,6 +429,14 @@ func (m *loopMetrics) RecordGovernanceVerdictMissingWaiter() {
 // from reading as a settled loop on the same series.
 func (m *loopMetrics) recordVerdictIdentityUnrecoverable() {
 	m.governanceSubscribeBeforePublishFailures.WithLabelValues(verdictDropUnrecoverableIdentity).Inc()
+}
+
+// recordVerdictSettledByRecord counts a waiterless verdict the loop record
+// settled — acknowledged, or terminated as foreign_request; reason is a
+// verdictDrop* value classifyWaiterlessVerdict returns. The same delivery was
+// already counted as missing_waiter by the dispatcher.
+func (m *loopMetrics) recordVerdictSettledByRecord(reason string) {
+	m.governanceSubscribeBeforePublishFailures.WithLabelValues(reason).Inc()
 }
 
 // recordGraphWritePublishTimeout increments the counter when the
@@ -531,7 +553,7 @@ func (m *loopMetrics) recordToolResultReceived(hasError bool) {
 }
 
 // recordToolResultDropped records a tool result acknowledged without effect.
-// Four reasons are emitted:
+// Five reasons are emitted:
 //
 //   - "stale_execution" — no loop mapping exists for the execution ID. The
 //     dominant case after GetAndClearToolResults eviction: a re-delivered
@@ -549,11 +571,21 @@ func (m *loopMetrics) recordToolResultReceived(hasError bool) {
 //     batch is the current request's; membership is the only fact that
 //     decides. Settled rather than rebuilt: the rebuild leaves applied
 //     executions unrouted, so it would end in a quarantined tool lane. The
-//     batch's unfinished siblings are untouched and go on running.
+//     batch's unfinished siblings are untouched and go on running. An
+//     approval gate's approval_required placeholder counts only against
+//     another approval_required result (#1362 checkpoint 2): the approved
+//     call's own result is applied, not dropped.
 //   - "terminal_unproven" — the loop is terminal, so no result can be applied
 //     to it any more (owner ruling Q7 on #1330). Whether this particular
 //     result was applied before the loop settled is deliberately not
 //     re-derived: it would change nothing this delivery can do.
+//   - "approval_inapplicable" — an approval RESPONSE acknowledged without
+//     effect (owner ruling 3, #1362 issuecomment-5809906669): the record is
+//     absent or terminal, or the loop is no longer awaiting that gate, so the
+//     answer arrived too late to act on. It rides this family, rather than a
+//     new one, because the answer settles a gated tool call. The timeout
+//     sweeper's echo of its own auto-reject on agent.approval_response is not
+//     an answer: it is acknowledged at Debug and not counted.
 //
 // What is deliberately NOT counted here is a result the loop record still
 // names: that delivery returns an error and is retried, and a retried result

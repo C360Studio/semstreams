@@ -291,7 +291,7 @@ func TestTerminalReleaseHappensAfterTerminalReaders(t *testing.T) {
 	}
 
 	// BuildFailureMessages is the other terminal reader: it reads the loop to
-	// build the failure event that persistFailureState and the graph stamp
+	// build the failure event that the terminal owner's marker and graph stamp
 	// consume. If the release had preceded it, it would have logged this.
 	if strings.Contains(logs.String(), "Failed to build failure event") {
 		t.Fatalf("the failure-event build ran after the release:\n%s", logs.String())
@@ -304,9 +304,15 @@ func TestTerminalReleaseHappensAfterTerminalReaders(t *testing.T) {
 
 // TestLateApprovalResponseForSettledLoopIsExpectedDrop is I8 for the approval
 // reader: a response for a released loop and a response for a still-present
-// terminal loop must produce the same outcome. Before this, absence returned an
-// error out of ResolveApprovalIfPending and the component logged it at ERROR,
-// which is an expected steady state reported as a fault.
+// terminal loop must produce the same outcome at the DELIVERY. Before this,
+// absence returned an error out of ResolveApprovalIfPending and the component
+// logged it at ERROR, which is an expected steady state reported as a fault.
+//
+// Since #1362 (D35) the two take different routes to that outcome. Memory
+// cannot tell a released loop from one another process gated, so absence
+// leaves the handler as ErrLoopNotFound and the component's cold branch reads
+// the record — terminal, because the loop settled — and acknowledges with the
+// same declared drop line.
 func TestLateApprovalResponseForSettledLoopIsExpectedDrop(t *testing.T) {
 	ctx := context.Background()
 
@@ -323,6 +329,22 @@ func TestLateApprovalResponseForSettledLoopIsExpectedDrop(t *testing.T) {
 		if err := h.loopManager.TransitionLoop(loopID, agentic.LoopStateFailed); err != nil {
 			t.Fatalf("TransitionLoop: %v", err)
 		}
+		// The settled loop's record, which is what the terminal commit left
+		// and what the cold branch reads for a released loop.
+		settled, err := h.GetLoop(loopID)
+		if err != nil {
+			t.Fatalf("GetLoop: %v", err)
+		}
+		settledRecord, err := json.Marshal(settled)
+		if err != nil {
+			t.Fatalf("marshal settled record: %v", err)
+		}
+		bucket := &recordingLoopBucket{}
+		if _, err := bucket.Put(ctx, loopID, settledRecord); err != nil {
+			t.Fatalf("seed settled record: %v", err)
+		}
+		bucket.resetWritten()
+		c.loopsBucket = bucket
 		if release {
 			c.releaseLoopTransientState(loopID)
 		}
@@ -345,18 +367,32 @@ func TestLateApprovalResponseForSettledLoopIsExpectedDrop(t *testing.T) {
 		if err != nil {
 			t.Fatalf("marshal approval response: %v", err)
 		}
-		c.handleApprovalResponseMessage(ctx, data)
+		decision, deliveryErr := c.handleApprovalResponseMessage(ctx, data)
+		if deliveryErr != nil || decision != natsclient.DeliveryDecisionAck {
+			t.Fatalf("late approval response was not acknowledged (release=%v): %v, %v",
+				release, decision, deliveryErr)
+		}
 
 		result, handlerErr := h.HandleApprovalResponse(ctx, response)
-		if handlerErr != nil {
-			t.Fatalf("late approval response returned an error (release=%v): %v", release, handlerErr)
-		}
-		if !result.staleDrop {
-			t.Fatalf("late approval response was not a stale drop (release=%v)", release)
+		if release {
+			if !errors.Is(handlerErr, ErrLoopNotFound) {
+				t.Fatalf("a released loop must leave the handler as ErrLoopNotFound, for the record to decide: %v",
+					handlerErr)
+			}
+		} else {
+			if handlerErr != nil {
+				t.Fatalf("late approval response returned an error: %v", handlerErr)
+			}
+			if !result.staleDrop {
+				t.Fatal("late approval response was not a stale drop")
+			}
 		}
 		if len(result.PublishedMessages) != 0 {
 			t.Fatalf("late approval response dispatched %d messages (release=%v)",
 				len(result.PublishedMessages), release)
+		}
+		if written := bucket.written(); len(written) != 0 {
+			t.Fatalf("a stale drop wrote the record (release=%v): %v", release, written)
 		}
 		probe.mu.Lock()
 		defer probe.mu.Unlock()

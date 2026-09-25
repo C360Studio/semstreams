@@ -997,8 +997,9 @@ func (c *Component) handleCommand(ctx context.Context, msg agentic.UserMessage) 
 	//     failed response to a read-only command.
 	//
 	// Recovering the target in case 1 would mean a durable per-command
-	// selection record written on every bare command for a rare path; L4
-	// (#1330) is where identity-preserving replay makes that unnecessary.
+	// selection record written on every bare command for a rare path. The
+	// restart-safety layers (#1330, #1362) carry no command's resolved
+	// target, so this lane still stops on case 1.
 	if err := c.sendResponse(ctx, resp); err != nil {
 		if effect.signalled() && targetResolved {
 			return errs.WrapFatal(err, "Component", "handleCommand", fmt.Sprintf(
@@ -1069,10 +1070,9 @@ func (c *Component) buildTaskMessage(ctx context.Context, msg agentic.UserMessag
 // field TaskMessage.Validate rejected on a refused payload.
 //
 // It never counts anything. A refusal from the admission gate was metered and
-// logged exactly once where it was built; the route ambiguity this lane can
-// also be handed (:1117-1124, from http_activity.go:334) is the one refusal in
-// this component that is neither, for the reason and with the safety argument
-// recorded at commandRefusalResponse (commands.go:61-71).
+// logged exactly once where it was built, and so was the route ambiguity this
+// lane can also be handed (from activeLoop, http_activity.go), which the
+// resolver meters on seam="route" (see commandRefusalResponse, commands.go).
 func (c *Component) answerRefusedSubmission(ctx context.Context, msg agentic.UserMessage, refusal error) error {
 	return c.sendResponse(ctx, agentic.UserResponse{
 		ResponseID:  uuid.New().String(),

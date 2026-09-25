@@ -207,16 +207,13 @@ func (b *recordingLoopBucket) written() []string {
 // so the delivery that produced it can no longer be replayed: this is the R1
 // case, and the classification is Quarantine rather than Retry.
 //
-// The response subtest carries the counterfactual that makes the rule
-// load-bearing rather than stylistic. A complete model response drives the loop
-// to complete in memory and builds its completion record; the KV write then
-// fails. Under the retired Retry classification the redelivery meets
-// HandleModelResponse's terminal guard (handlers.go:1322-1327), which returns an
-// empty result — so the second attempt writes the loop key, writes no
-// COMPLETE_<loopID>, publishes nothing, and ACKs. The completion is gone with
-// the delivery that carried it. The second half of this test drives exactly that
-// redelivery with a healed bucket and asserts the completion record is absent,
-// which is what a Retry would have settled as done.
+// The response subtest also pins what the failed terminal commit leaves in
+// memory: nothing. A complete model response drives the loop to complete in
+// memory; the terminal owner's first write then fails. Before #1362 the loop
+// stayed terminal in memory, so a redelivery met HandleModelResponse's terminal
+// guard and settled on a completion nothing downstream could read. The owner
+// now releases the loop whenever its commit fails (review H1), so no later
+// delivery can be answered by a terminal that was never committed.
 //
 // spec: agentic-loop / Loop input classes settle after owner-specific durable done
 func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
@@ -255,8 +252,9 @@ func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 		require.True(t, result.OwnerStopRequired())
 		require.Zero(t, msg.acks.Load()+msg.naks.Load()+msg.terms.Load(),
 			"a quarantined delivery attempts no terminal method at all")
-		require.Contains(t, result.Err().Error(), "persist loop state")
-		require.Contains(t, result.Err().Error(), "unknown durability")
+		// The terminal owner's first step is the marker's Create (#1362), so
+		// that is the write this unavailable bucket refuses.
+		require.Contains(t, result.Err().Error(), "create terminal marker")
 
 		// The lane is latched, so this owner runs no further work on it.
 		redelivery := &loopDeliveryOwnerMsg{data: data}
@@ -264,17 +262,12 @@ func TestResponseAndToolResultPersistenceFailureCannotAck(t *testing.T) {
 		require.False(t, readmitted, "a latched lane admitted more work after a quarantined delivery")
 		require.Zero(t, redelivery.dataCalls.Load())
 
-		// The counterfactual: what the retired Retry would have settled. Same
-		// loop, same bytes, healthy KV, a lane that had not latched.
-		bucket.heal()
-		retried := &loopDeliveryOwnerMsg{data: data}
-		retriedResult, admitted := deliverylane.Consume(
-			t.Context(), retried, policy, deliverylane.NewAdmission(nil, nil))
-		require.True(t, admitted)
-		require.Equal(t, natsclient.DeliveryDecisionAck, retriedResult.Decision())
-		require.Equal(t, []string{loopID}, bucket.written(),
-			"the redelivered response persisted the loop key and no COMPLETE_ record: "+
-				"a Retry would have acknowledged a completion nothing downstream can read")
+		// What the failed commit leaves behind: no record written, and no
+		// terminal held in memory for a later delivery to be answered by.
+		require.Empty(t, bucket.written(), "the terminal owner wrote past its failed first step")
+		_, heldErr := handler.GetLoop(loopID)
+		require.Error(t, heldErr,
+			"the loop stayed terminal in memory behind a terminal the owner never committed")
 	})
 
 	t.Run("tool result", func(t *testing.T) {
@@ -562,8 +555,12 @@ func TestLoopApprovalPanicProductionCallbackQuarantinesExactOwner(t *testing.T) 
 	}
 }
 
+// Since #1362 (review H1) a terminal commit that did not land releases the
+// loop: memory never holds a terminal the owner did not commit, so the cancel's
+// redelivery re-reads the record instead of meeting "already terminal".
+//
 // spec: agentic-loop / Loop input classes settle after owner-specific durable done
-func TestLoopCancellationUnknownPublicationQuarantinesWithoutReleasingTransientState(t *testing.T) {
+func TestLoopCancellationUnknownPublicationQuarantinesAndReleasesTheLoop(t *testing.T) {
 	discoverable, err := NewComponent([]byte(`{}`), component.Dependencies{
 		NATSClient: &natsclient.Client{}, PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	})
@@ -597,8 +594,10 @@ func TestLoopCancellationUnknownPublicationQuarantinesWithoutReleasingTransientS
 
 	require.Zero(t, msg.acks.Load()+msg.naks.Load()+msg.terms.Load())
 	require.Eventually(t, func() bool { return handles["agent.signal"].drains.Load() == 1 }, time.Second, time.Millisecond)
+	_, err = c.handler.GetLoop(loopID)
+	require.Error(t, err, "an unknown terminal publication left the cancelled loop in memory")
 	_, err = c.handler.trajectoryManager.getTrajectory(loopID)
-	require.NoError(t, err, "unknown terminal publication released the loop trajectory")
+	require.Error(t, err, "the released loop kept its trajectory")
 	require.Contains(t, c.Health().LastError, "unknown durability")
 	for port, handle := range handles {
 		if port != "agent.signal" {

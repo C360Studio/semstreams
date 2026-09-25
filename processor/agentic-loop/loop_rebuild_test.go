@@ -310,17 +310,22 @@ func TestAColdResponseRebuildsTheLoopItAnswers(t *testing.T) {
 	requestID := looprequest.ID{LoopID: rebuildLoopID, Iteration: 4, Retry: 0}.String()
 	c, h, record := coldRebuildComponent(t, requestID, nil, nil)
 
+	// A tool-call answer, not a completion: a completion ends in the terminal
+	// owner, which releases the loop when its commit cannot land (#1362 review
+	// H1), and this test reads the rebuilt loop back out of memory.
 	_, delivered := deliverResponse(t, c, agentic.AgentResponse{
-		RequestID: requestID,
-		Status:    agentic.StatusComplete,
-		Message:   agentic.ChatMessage{Role: "assistant", Content: "the answer the predecessor never saw"},
+		RequestID:    requestID,
+		Status:       agentic.StatusToolCall,
+		FinishReason: "tool_calls",
+		Message: agentic.ChatMessage{
+			Role:      "assistant",
+			ToolCalls: []agentic.ToolCall{{ID: "call-rebuilt", Name: "search"}},
+		},
 	})
 
 	entity, err := h.loopManager.GetLoop(rebuildLoopID)
 	require.NoError(t, err,
 		"the response was refused instead of rebuilding the loop it answers")
-	require.True(t, entity.State.IsTerminal(),
-		"the rebuilt loop was seated but the response never reached the handler")
 	require.Equal(t, record.entity.Iterations, entity.Iterations,
 		"the rebuilt loop took its iteration count from the record, not from zero")
 	require.Equal(t, requestID, entity.PublishedRequestID)
@@ -329,15 +334,17 @@ func TestAColdResponseRebuildsTheLoopItAnswers(t *testing.T) {
 		roles(h.loopManager.GetContextManager(rebuildLoopID).GetContext()),
 		"the conversation is the retained request plus the answer just applied")
 
-	// A completion compare-and-swaps the record against the revision the
-	// observer read it at, BEFORE it publishes. The rebuilt process wrote it,
-	// which it could only do by taking the record's revision with the loop —
-	// without that, its first write is refused and the loop is recovered and
-	// then immediately stranded.
-	require.Equal(t, agentic.LoopStateComplete, decodeRecord(t, c, rebuildLoopID).State,
-		"the rebuilt holder could not write the record it had just read")
+	// This component cannot publish, and the answer's dispatch publishes
+	// before it writes (#1330): the delivery is commit-unknown and the record
+	// is untouched.
 	require.Equal(t, natsclient.DeliveryDecisionQuarantine, delivered.Decision(),
-		"a completion this component cannot publish is commit-unknown, not retryable")
+		"a dispatch this component cannot publish is commit-unknown, not retryable")
+
+	// The rebuilt holder took the record's revision with the loop: its
+	// compare-and-swap lands. Without that, its first write is refused and the
+	// loop is recovered and then immediately stranded.
+	require.NoError(t, c.persistLoopState(t.Context(), rebuildLoopID),
+		"the rebuilt holder could not write the record it had just read")
 }
 
 // TestAColdToolResultRebuildsTheBatchItBelongsTo is the tool lane's half, and

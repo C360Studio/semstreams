@@ -62,6 +62,10 @@ Key design points:
   `ToolCall.ApprovedBy`, flows through `tool.execute`, lands in
   the trajectory step. Audit consumers can correlate every gated
   action to the human who said yes.
+- **The loop's own deadline outranks the answer.** An answer that
+  reaches a loop past its `timeout_at` fails the loop on the timeout,
+  whatever it decided: approve and modify dispatch nothing, and reject
+  advances nothing.
 - **The pending state is durable; the timer is not.**
   `LoopEntity.PendingApproval` lives in the AGENT_LOOPS KV bucket, so a
   process replacement mid-approval loses nothing: the record still names
@@ -75,9 +79,22 @@ Key design points:
   a loop that some *other* redelivery causes the replacement to rebuild
   is seated with its pending approval, and from then on is swept against
   the record's own `RequestedAt + Timeout` — the original deadline, not
-  a fresh wait. A replacement that answers an approval for a loop it
-  never started - the cold branch of the response lane - is
-  [#1362](https://github.com/C360Studio/semstreams/issues/1362).
+  a fresh wait. A replacement that receives an answer for a loop it
+  never started reads the loop's record: a record still awaiting that
+  gate is rebuilt from its retained request and response and the answer
+  is applied, unless the loop's own deadline (`timeout_at`) has passed,
+  in which case the loop fails on the timeout and nothing is dispatched;
+  a loop whose retained evidence is confirmed gone fails
+  with reason `continuation_unavailable`; any other record acknowledges
+  the answer without effect ([#1362](https://github.com/C360Studio/semstreams/issues/1362)).
+  The e2e stage `verify-approval-across-replacement`
+  (`test/e2e/scenarios/agentic/approval_restart.go`) is the proof of that
+  cold branch, and it holds only while nothing at startup re-hydrates
+  parked loops from AGENT_LOOPS. That re-hydration is deferred (docket
+  OQ2, the doc comment on `runApprovalTimeoutSweeper`); if it lands, the
+  answer takes the warm path and the stage stays green without proving
+  the cold branch, so it must be revisited (owner ruling,
+  [#1362 issuecomment-5812283590](https://github.com/C360Studio/semstreams/issues/1362#issuecomment-5812283590)).
 
 ## Timeouts
 

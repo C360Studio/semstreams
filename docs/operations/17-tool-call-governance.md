@@ -342,7 +342,7 @@ Three Prometheus metrics drive the operational view:
 |---|---|---|
 | `semstreams_agentic_loop_tool_call_governance_verdict_duration_seconds` | `decision`, `mode` | Buckets 1ms → 5s. Drives the timeout-tuning decision in beta.70 — set `timeout` after measuring p99 from this histogram. |
 | `semstreams_agentic_loop_tool_call_governance_verdict_total` | `decision`, `mode` | Sum of approved+rejected+timeout per mode. Sustained `decision=timeout` rate signals undersized timeout or stuck rule engine. |
-| `semstreams_agentic_loop_tool_call_governance_subscribe_before_publish_failures_total` | (none) | Increments when a verdict arrives without a registered waiter. Non-zero rate is the canonical signal that the subscribe-before-publish race-fix regressed; investigate immediately. |
+| `semstreams_agentic_loop_tool_call_governance_subscribe_before_publish_failures_total` | `reason` | `reason="missing_waiter"` counts every verdict delivery that reached no registered waiter. Each other reason is a subset of it, naming how that delivery settled: `older_request`, `already_applied`, `loop_absent`, `loop_terminal` (acknowledged; expected), `unrecoverable_loop_identity` and `foreign_request` (both terminated: JetStream Term, never redelivered, no dead-letter copy — the Error log line carries the identities; the lane keeps running). `missing_waiter` minus the other six is the deliveries retried as still owed: a sustained non-zero rate there, or any `unrecoverable_loop_identity` or `foreign_request`, is the signal to investigate. Do not `sum` across reasons. See [below](#subscribe_before_publish_failures-rate-is-non-zero). |
 | `semstreams_rule_governance_verdict_audit_failures_total` | `decision` | A deny/approve verdict was applied but its append-only audit record failed to publish (ADR-055 §3a). The verdict still holds — but a non-zero value is a compliance-visibility gap, critical in `enforce` mode. |
 
 ### Verdict audit trail
@@ -383,16 +383,37 @@ contended NATS).
 
 ### `subscribe_before_publish_failures` rate is non-zero
 
-Verdicts are arriving for `execution_id`s that no longer have a registered
-waiter. Either:
+`reason="missing_waiter"` counts every verdict delivery that reached no
+registered waiter, so it is non-zero in healthy operation: a verdict can arrive
+after Propose timed out, or twice for one call (a restarted loop re-proposes,
+and the rule answers both proposals). The loop then reads the loop record and
+counts, as a subset of `missing_waiter`, how the delivery settled:
 
-- The race-fix regressed (verdict reached the loop before Propose's
-  pre-register — should be impossible given the in-process buffered
-  channel pattern, but worth checking against a recent diff).
-- The verdict is from a different loop component (multi-component
-  deployment sharing the AGENT stream). Filter by inspecting the
-  proposed `loop_id` in the verdict payload — if it doesn't match a
-  known loop, route via a different subject or stream.
+| `reason` | Settles as | Means |
+|---|---|---|
+| `older_request` | acknowledged | The verdict's request is older than the one the loop record names; the loop has moved past it. |
+| `already_applied` | acknowledged | The record already holds the verdict's execution in its pending tool results (an approval gate's placeholder included). |
+| `loop_absent` | acknowledged | No loop record exists. |
+| `loop_terminal` | acknowledged | The loop has finished. |
+| `unrecoverable_loop_identity` | terminated (JetStream Term: never redelivered; no dead-letter copy — the Error log line carries the identities) | The payload carries neither a canonical `loop_id` nor a `request_id` in the `<loopID>:req:<iteration>:<retry>` grammar. The rule must echo one. |
+| `foreign_request` | terminated (JetStream Term: never redelivered; no dead-letter copy — the Error log line carries the identities) | The verdict's `request_id` is not a request of its `loop_id`. The rule is echoing a mismatched pair. Only that delivery is terminated; the verdict lane keeps running. |
+
+The four acknowledged reasons are expected. Investigate:
+
+- **`missing_waiter` minus the six reasons above.** These deliveries were retried
+  because the record says the verdict is still owed or could not be read. A
+  sustained rate means the race-fix regressed (the verdict reached the loop
+  before Propose's pre-register), or the loop record is unreadable.
+- **Any `unrecoverable_loop_identity` or `foreign_request`.** Both point at a verdict
+  rule: fix what it echoes.
+
+A verdict from a different loop component (a multi-component deployment
+sharing the AGENT stream) whose loop this component's record bucket does not
+hold settles as `loop_absent`. Route such deployments via a different subject or
+stream.
+
+Because each settled delivery is counted under `missing_waiter` and under its
+reason, `sum(...)` across reasons double-counts; select by `reason` instead.
 
 ### `audit` mode shows verdicts but `enforce` mode times out
 

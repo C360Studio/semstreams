@@ -517,13 +517,14 @@ func TestGateRefusesInvalidCurrentAuthorityBeforeOwnership(t *testing.T) {
 // This is the "one home" property the mapper exists for.
 func TestLoopAdmissionMetricReasonHasOneHomePerCode(t *testing.T) {
 	want := map[string]string{
-		codeLoopTokenInvalid:  reasonFormMalformed,
-		codeLoopNotFound:      reasonExistenceAbsent,
-		codeLoopUnreadable:    reasonExistenceUnreadable,
-		codeLoopOwnerConflict: reasonExistenceConflict,
-		codeLoopTerminal:      reasonStateTerminal,
-		codeLoopNotOwned:      reasonOwnershipNotOwner,
-		codeLoopNotPermitted:  reasonOwnershipNotPermitted,
+		codeLoopTokenInvalid:   reasonFormMalformed,
+		codeLoopNotFound:       reasonExistenceAbsent,
+		codeLoopUnreadable:     reasonExistenceUnreadable,
+		codeLoopOwnerConflict:  reasonExistenceConflict,
+		codeLoopTerminal:       reasonStateTerminal,
+		codeLoopNotOwned:       reasonOwnershipNotOwner,
+		codeLoopNotPermitted:   reasonOwnershipNotPermitted,
+		codeLoopRouteAmbiguous: reasonRouteAmbiguous,
 	}
 	seen := make(map[string]string, len(want))
 	for code, reason := range want {

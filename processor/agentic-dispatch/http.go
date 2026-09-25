@@ -870,16 +870,17 @@ func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {
 	}
 	// The recorded state decides before anything about PendingApproval does.
 	// loopOpApprove deliberately skips the gate's terminal check, so a terminal
-	// record reaches here; and no transition clears PendingApproval, so a loop
-	// cancelled while awaiting approval lands `state: cancelled` WITH a pending
-	// block. Reading that combination as incoherence answered 503 "not readable
-	// right now" for a record that read perfectly, forever — a polling client
-	// retrying a permanent state. State first makes it the 409 it is, and keeps
-	// 503 for records that genuinely cannot be read or do not validate.
+	// record reaches here. Before #1362 no terminal transition cleared PendingApproval,
+	// so a loop cancelled while awaiting approval landed `state: cancelled`
+	// WITH a pending block, and reading that combination as incoherence
+	// answered 503 "not readable right now" for a record that read perfectly,
+	// forever — a polling client retrying a permanent state. State first makes
+	// any terminal record the 409 it is, and keeps 503 for records that
+	// genuinely cannot be read or do not validate.
 	//
-	// Clearing the pending block on a terminal transition is the other half and
-	// is NOT done here: it belongs to the layer that owns terminal/adopt
-	// transitions (L4, #1330). See design.md.
+	// The other half is not done here: the agentic-loop's terminal owner
+	// clears the gate on every terminal transition (#1362), so a terminal
+	// record it writes carries no pending block.
 	if persisted.State != agentic.LoopStateAwaitingApproval {
 		c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "409")
 		c.writeJSONError(w, http.StatusConflict, "loop not awaiting approval")

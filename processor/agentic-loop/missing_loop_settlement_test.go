@@ -306,13 +306,17 @@ func TestVerdictWithoutWaiterSettlesByRecordNotByWaiterMap(t *testing.T) {
 		config := DefaultConfig()
 		config.ToolCallGovernance.Mode = ToolCallGovernanceModeEnforce
 		config.ToolCallGovernance.Timeout = "1s"
+		// The dispatcher shares the component's metrics, as the production
+		// constructor wires them (NewComponent), so the waiter miss the
+		// dispatcher counts first is observed too.
+		metrics := getMetrics(nil)
 		handler := NewMessageHandler(config)
 		handler.SetGovernanceDispatcher(NewGovernanceDispatcher(
-			config.ToolCallGovernance, nil, discardLogger(), nil))
+			config.ToolCallGovernance, nil, discardLogger(), metrics))
 		c := releaseTestComponent(t, handler)
 		c.config = config
 		c.loopsBucket = bucket
-		c.metrics = getMetrics(nil)
+		c.metrics = metrics
 
 		// Deltas, not absolutes: getMetrics is a package singleton shared by
 		// the whole test binary.
@@ -330,8 +334,8 @@ func TestVerdictWithoutWaiterSettlesByRecordNotByWaiterMap(t *testing.T) {
 		require.ErrorContains(t, err, "carries no recoverable loop identity")
 		require.Equal(t, beforeIdentity+1, reason(verdictDropUnrecoverableIdentity),
 			"the identity loss must be countable apart from a waiter miss")
-		require.Equal(t, beforeWaiter, reason(verdictDropMissingWaiter),
-			"and must not be counted as one")
+		require.Equal(t, beforeWaiter+1, reason(verdictDropMissingWaiter),
+			"missing_waiter counts every waiterless delivery; unrecoverable_loop_identity is a subset of it")
 	})
 
 	t.Run("live loop is still owed the verdict", func(t *testing.T) {

@@ -27,10 +27,15 @@ const (
 	// input cannot be applied by this or any other process. Ack.
 	loopPresenceStale loopPresence = iota
 	// loopPresenceLive — a non-terminal record exists, so the loop is real
-	// and unfinished; this process simply is not the one holding it. Retry:
-	// the delivery is still owed to somebody. L4 (#1330) is what makes that
-	// somebody actually able to take it; until then Retry is bounded by the
-	// lane's MaxDeliver and BackOff rather than being a hot loop.
+	// and unfinished; this process simply is not the one holding it. A live
+	// presence alone is never grounds to acknowledge: a lane may still
+	// acknowledge or terminate the delivery after classifying it against the
+	// record (an older or already-applied request, a mismatched answer, a
+	// foreign verdict). A lane with a cold branch takes it here: the model-response, tool-result and approval
+	// lanes rebuild the loop from its record and retained evidence, and a
+	// cancel adopts a durable cancel. Whatever a lane cannot yet take is
+	// retried, bounded by the lane's MaxDeliver and BackOff rather than being
+	// a hot loop.
 	loopPresenceLive
 	// loopPresenceUnknown — the record could not be read. Never assume
 	// stale from a failed read: that is the fail-open shape this whole

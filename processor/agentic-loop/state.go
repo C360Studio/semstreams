@@ -59,6 +59,23 @@ var (
 	ErrLoopNotFound = errors.New("agentic-loop: loop not found")
 )
 
+// gateRefusedError is beginApprovalGate refusing a gate because the loop
+// settled between the handler's terminal guard and the gate: it is terminal in
+// memory (a cancel landed), or released (state is empty). Either way the
+// terminal belongs to its owner, and the handler answers as its terminal guard
+// does (#1362 checkpoint 2 delta review, HIGH).
+type gateRefusedError struct {
+	loopID string
+	state  agentic.LoopState
+}
+
+func (e *gateRefusedError) Error() string {
+	if e.state == "" {
+		return fmt.Sprintf("approval gate refused: loop %s was released", e.loopID)
+	}
+	return fmt.Sprintf("approval gate refused: loop %s is %s", e.loopID, e.state)
+}
+
 // LoopManager manages loop entity lifecycle and state
 type LoopManager struct {
 	loops                map[string]*agentic.LoopEntity
@@ -77,7 +94,9 @@ type LoopManager struct {
 	// append-only for the loop's whole life (its only delete is releaseLoop),
 	// so it records "this loop published X", never "X is still in flight".
 	// Process-local on purpose — a replacement has lost the whole loop, not
-	// just this entry, and durable recovery is L4's (#1330).
+	// just this entry. The durable name is the record's PublishedRequestID
+	// (#1330), and a rebuild re-seats this entry from the retained request
+	// (restoreLoopFromRequest).
 	outstandingRequests    map[string]string         // loopID -> requestID
 	toolCallToLoop         map[string]string         // executionID -> loopID
 	executionIDToName      map[string]string         // executionID -> function name (for Gemini tool result name field)
@@ -546,12 +565,32 @@ func (m *LoopManager) restoreToolBatch(
 			"replay the assistant turn the batch belongs to")
 	}
 
+	// An approval gate's approval_required result is a placeholder, not an
+	// answer: the gated call's real result is still owed, so its execution is
+	// routed like any unanswered one. And the gate cleared the calls queued
+	// behind it when it fired (gateForApproval) — the record carries that only
+	// as the placeholder — so a batch that holds one rebuilds with an empty
+	// queue, as the process that gated it held (#1362 checkpoint 2).
+	gated := false
 	var queued []agentic.ToolCall
 	for _, call := range calls {
 		m.executionIDToName[call.ExecutionID] = call.Name
-		m.executionIDToArguments[call.ExecutionID] = call.Arguments
 		m.executionIDToOrdinal[call.ExecutionID] = call.CallOrdinal
-		if _, done := applied[call.ExecutionID]; done {
+		stored, done := applied[call.ExecutionID]
+		if done && agentic.IsApprovalRequired(stored.Error) {
+			// A gated call's arguments are NOT seated. An approval may have
+			// dispatched a human's modified set, and the retained response
+			// holds only the proposal: omit, do not falsify (owner ruling,
+			// #1362 issuecomment-5827720719). An approval applied on this
+			// rebuild re-seats the real set at dispatch (dispatchToolCall →
+			// TrackToolArguments); a result recovered cold records no
+			// dispatch arguments.
+			gated = true
+			m.toolCallToLoop[call.ExecutionID] = loopID
+			continue
+		}
+		m.executionIDToArguments[call.ExecutionID] = call.Arguments
+		if done {
 			// Already answered. Its route stays unseated on purpose: a drained
 			// execution is unroutable on the ordinary path too, which is what
 			// keeps a late duplicate out of the next turn's applied set.
@@ -562,6 +601,9 @@ func (m *LoopManager) restoreToolBatch(
 			continue
 		}
 		queued = append(queued, call)
+	}
+	if gated {
+		queued = nil
 	}
 	m.queuedToolCalls[loopID] = queued
 
@@ -747,25 +789,7 @@ func (m *LoopManager) ResolveApprovalIfPending(loopID, callID, executionID strin
 	if entity.State != agentic.LoopStateAwaitingApproval {
 		return agentic.PendingApprovalState{}, false, nil
 	}
-	if entity.PendingApproval == nil {
-		return agentic.PendingApprovalState{}, false, nil
-	}
-	// Execution identity decides, whenever the pending state carries one.
-	// Provider CallID is request-scoped conversation data: a provider may reuse
-	// it on a later turn of the SAME loop, and an approval replayed from the
-	// earlier turn would then authorise the later call — a different tool
-	// invocation than the human saw. A response that omits ExecutionID against
-	// a pending approval that has one is refused as stale rather than falling
-	// back to CallID, because the fallback IS the hole.
-	//
-	// CallID still decides for a pending approval minted before execution
-	// identity existed (a loop gated across the upgrade), which carries no
-	// ExecutionID to match on.
-	if entity.PendingApproval.ExecutionID != "" {
-		if entity.PendingApproval.ExecutionID != executionID {
-			return agentic.PendingApprovalState{}, false, nil
-		}
-	} else if entity.PendingApproval.CallID != callID {
+	if !approvalAnswersGate(entity.PendingApproval, callID, executionID) {
 		return agentic.PendingApprovalState{}, false, nil
 	}
 
@@ -774,6 +798,103 @@ func (m *LoopManager) ResolveApprovalIfPending(loopID, callID, executionID strin
 		return agentic.PendingApprovalState{}, false, errs.Wrap(err, "LoopManager", "ResolveApprovalIfPending", "resolve approval")
 	}
 	return pending, true, nil
+}
+
+// approvalAnswersGate reports whether an approval answer names the pending
+// gate. It is the one identity rule for an answer, used by the warm resolve
+// above and by the cold branch that reads the gate off the loop's record
+// (approval_response_handler.go), so the two cannot disagree about which
+// answer a gate accepts.
+//
+// Execution identity decides, whenever the pending state carries one.
+// Provider CallID is request-scoped conversation data: a provider may reuse
+// it on a later turn of the SAME loop, and an approval replayed from the
+// earlier turn would then authorise the later call — a different tool
+// invocation than the human saw. A response that omits ExecutionID against
+// a pending approval that has one is refused as stale rather than falling
+// back to CallID, because the fallback IS the hole.
+//
+// CallID still decides for a pending approval minted before execution
+// identity existed, which carries no ExecutionID to match on. That branch is
+// unreachable on this tree — every gate is minted from a routed result that
+// carries its execution identity, and pre-v1 storage is greenfield — and is
+// kept only because the warm resolve always had it.
+func approvalAnswersGate(gate *agentic.PendingApprovalState, callID, executionID string) bool {
+	if gate == nil {
+		return false
+	}
+	if gate.ExecutionID != "" {
+		return gate.ExecutionID == executionID
+	}
+	return gate.CallID == callID
+}
+
+// seatRecordToFail gives this process a loop from its record alone — no
+// conversation, no batch, no routing — so the terminal owner, which renders
+// the record it writes from the loop this process holds, can fail it.
+//
+// It has one caller and one purpose: the approval lane's cold branch, when the
+// evidence a rebuild needs is confirmed gone (#1362, OQ1). A loop seated here
+// is never continued; the failure path releases it once its terminal is
+// committed. A loop this process already holds is refused, as every seat
+// refuses one.
+func (m *LoopManager) seatRecordToFail(record agentic.LoopEntity) error {
+	if record.ID == "" {
+		return errs.WrapInvalid(fmt.Errorf("loop record carries no id"),
+			"LoopManager", "seatRecordToFail", "validate the record to seat")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.loops[record.ID]; exists {
+		return errs.WrapInvalid(
+			fmt.Errorf("loop %s: %w", record.ID, ErrLoopAlreadyExists),
+			"LoopManager", "seatRecordToFail", "refuse a seat over a held loop")
+	}
+	entity := record
+	m.loops[record.ID] = &entity
+	m.pendingTools[record.ID] = make(map[string]bool)
+	return nil
+}
+
+// beginApprovalGate gates the loop on one tool call, atomically: the live
+// entity is moved to awaiting_approval with its pending call, and the calls
+// queued behind it are cleared, under the manager's lock — the shape of
+// ResolveApprovalIfPending, its inverse (#1362 checkpoint 2 re-review, M1).
+//
+// The gate used to read the loop, gate the COPY and write the copy back, in
+// two lock sections. Anything another lane did to the loop in between was
+// overwritten: the gated result StoreToolResult had just put into the applied
+// set (so the record lost the gate's own placeholder), a continuation's
+// pending marker, a cancel (reverted to awaiting_approval). Gating the live
+// entity under the one lock leaves nothing to overwrite.
+//
+// A loop that is terminal, or already gated on another call, is refused by
+// BeginAwaitingApproval before anything is mutated.
+func (m *LoopManager) beginApprovalGate(
+	loopID string, toolResult agentic.ToolResult, toolName string, args map[string]any, timeout time.Duration,
+) (agentic.PendingApprovalState, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entity, exists := m.loops[loopID]
+	if !exists {
+		return agentic.PendingApprovalState{}, &gateRefusedError{loopID: loopID}
+	}
+	if entity.State.IsTerminal() {
+		return agentic.PendingApprovalState{}, &gateRefusedError{loopID: loopID, state: entity.State}
+	}
+	if err := entity.BeginAwaitingApproval(
+		toolResult.CallID, toolName, args, toolResult.Error, timeout, toolResult.TraceID); err != nil {
+		return agentic.PendingApprovalState{}, fmt.Errorf("begin awaiting approval: %w", err)
+	}
+	entity.PendingApproval.RequestID = toolResult.RequestID
+	entity.PendingApproval.ExecutionID = toolResult.ExecutionID
+	entity.PendingApproval.CallOrdinal = toolResult.CallOrdinal
+	// Clear sibling tool calls queued behind this one. Once the human
+	// responds, the LLM will get a fresh round-trip with the approve/reject
+	// result and can decide whether to re-issue the other calls.
+	delete(m.queuedToolCalls, loopID)
+	return *entity.PendingApproval, nil
 }
 
 // DeleteLoop releases every per-loop entry the manager holds for loopID: the
@@ -1749,6 +1870,52 @@ func isValidOutcome(outcome string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// settleTerminal is the terminal owner's in-memory half of the entity write
+// (#1362, design § 5.7): the entity the record is rendered from, just before
+// the compare-and-swap that writes it terminal.
+//
+// The terminal transition clears the pending approval gate. A record that is
+// terminal AND gated names a human decision nothing will ever apply; the
+// transitions themselves (TransitionTo, CancelLoop) leave the gate in place,
+// so the terminal owner is where it goes (L3's deferred item, archived
+// durable-loop-authority design :50). The approval-timeout sweeper's terminal
+// passes through here too; its auto-reject has already resolved the gate.
+//
+// adopted is the durable terminal the owner adopted, or nil when this
+// delivery's own terminal was committed. Adopted, the entity is written to
+// match the saved terminal's content rather than the candidate's; its kind is
+// already this entity's, because adoption requires it.
+//
+// A loop this process no longer holds has nothing in memory to settle; the
+// record write that follows answers for it (persistLoopState refuses to render
+// a loop it cannot find).
+func (m *LoopManager) settleTerminal(loopID string, adopted *terminalOutcome) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entity, exists := m.loops[loopID]
+	if !exists {
+		return
+	}
+	entity.PendingApproval = nil
+	entity.StateBeforeApproval = ""
+	if adopted == nil {
+		return
+	}
+	switch {
+	case adopted.completed != nil:
+		entity.Result = adopted.completed.Result
+		entity.CompletedAt = adopted.completed.CompletedAt
+	case adopted.failed != nil:
+		entity.Error = adopted.failed.Error
+		entity.CompletedAt = adopted.failed.FailedAt
+	case adopted.cancelled != nil:
+		entity.CancelledBy = adopted.cancelled.CancelledBy
+		entity.CancelledAt = adopted.cancelled.CancelledAt
+		entity.CompletedAt = adopted.cancelled.CancelledAt
 	}
 }
 

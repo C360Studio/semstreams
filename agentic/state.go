@@ -62,21 +62,19 @@ type LoopEntity struct {
 	// this record exists, an AgentRequest{RequestID: PublishedRequestID,
 	// LoopID: ID} is durably retained on agent.request.<loop id>. That is what
 	// lets a process with no memory of the loop classify a redelivered model
-	// response or tool result by identity — older, current or newer — instead
-	// of comparing retained conversation content.
+	// response, tool result, approval response or governance verdict by
+	// identity — older, current or newer — instead of comparing retained
+	// conversation content.
 	//
 	// Set at birth, where the record is written before the first request is
 	// published, and on every later request-minting transition by the CARRIER
 	// — never at the mint, because a name stamped at the mint is visible to
 	// every other lane writing this loop and one of them committing it would
-	// put a request in the record that the stream does not hold. On the
-	// model-response and tool-result lanes, and in the approval-timeout
-	// sweeper's own publish-stamp-write sequence, the stamp follows that
-	// request's PubAck, which is what makes I1 true by construction there. The
-	// approval lane keeps the pre-#1330 write-then-publish order until #1362,
-	// and it mints — its rejection advances the loop — so there alone the name
-	// is written before the PubAck and I1 holds only as far as that publish
-	// does. Never cleared.
+	// put a request in the record that the stream does not hold. On every lane
+	// that mints — the model-response, tool-result and approval lanes and the
+	// approval-timeout sweeper, all through the carrier — the stamp follows
+	// that request's PubAck, which is what makes I1 true by construction.
+	// Never cleared.
 	//
 	// It is a settlement fact, not an in-flight answer: a record naming a
 	// request says nothing about whether any process is still working on it.
@@ -101,7 +99,9 @@ type LoopEntity struct {
 	// LoopStateAwaitingApproval and persists the pending call here so
 	// it can be re-dispatched on approval. StateBeforeApproval lets us
 	// restore the prior workflow state once the approval response
-	// arrives.
+	// arrives. Both are cleared when the approval is resolved and, since
+	// #1362, on the terminal transition, so a terminal record carries
+	// neither.
 	PendingApproval     *PendingApprovalState `json:"pending_approval,omitempty"`
 	StateBeforeApproval LoopState             `json:"state_before_approval,omitempty"`
 

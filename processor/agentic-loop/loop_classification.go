@@ -16,9 +16,9 @@ import (
 // It is the whole of the recovery decision this change is built on: an input
 // is applied, current, or ahead of the record, and that is decided by ORDERING
 // two names — never by comparing rendered conversation content, tool output or
-// terminal payloads. One function so the four sites that ask (warm and cold, on
-// the model-response and tool-result lanes) cannot drift into four readings of
-// the same grammar.
+// terminal payloads. One function so the sites that ask (warm and cold, on the
+// model-response and tool-result lanes, and since #1362 the verdict lane's
+// waiterless settle) cannot drift into several readings of the same grammar.
 type requestOrder int
 
 const (
@@ -323,6 +323,24 @@ func (c *Component) classifyRedeliveredToolResult(
 				loopID, toolResult.RequestID),
 			"agentic-loop", "handleToolResultMessage", "classify the tool result against the loop record")
 	default:
+		// An approval_required result for an execution the loop already holds,
+		// on a loop that is not awaiting approval, is the gated result
+		// redelivered after its gate was answered. Applying it would gate the
+		// loop a second time for an already-answered call. It is applied work,
+		// as on the cold arm (#1362 checkpoint 2 re-review, M2); while the loop
+		// IS awaiting, the handler re-echoes the pending gate instead.
+		if agentic.IsApprovalRequired(toolResult.Error) && entity.State != agentic.LoopStateAwaitingApproval {
+			if _, held := entity.PendingToolResults[toolResult.ExecutionID]; held {
+				c.logger.WarnContext(ctx, "Tool result acknowledged without effect — its gate was already answered",
+					slog.String("loop_id", loopID),
+					slog.String("execution_id", toolResult.ExecutionID),
+					slog.String("request_id", toolResult.RequestID))
+				if c.metrics != nil {
+					c.metrics.recordToolResultDropped("already_applied")
+				}
+				return false, nil
+			}
+		}
 		return true, nil
 	}
 }
