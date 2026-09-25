@@ -14,14 +14,14 @@ import (
 
 // The publish-phase half of the commit-unknown rule, without a broker.
 //
-// persistHandlerResult's stamp phase is a whole-entity upsert and is safe to
-// re-run; its publish phase is not, because it emits results one at a time and
-// a failure at result k leaves 1..k-1 already PubAck'd with no record of how
-// far it got. The wrap at the publish call is what tells the lane those two
-// phases classify differently. An unconnected client fails the very first
+// A non-gated result publishes first (#1376: the result's shape decides the
+// order), and its publish phase is commit-unknown because it emits results one
+// at a time: a failure at result k leaves 1..k-1 already PubAck'd with no
+// record of how far it got. An unconnected client fails the very first
 // publish, which is the same phase and the same wrap: what this observes is
-// that a publish-phase error leaves persistHandlerResult fatal-classified,
-// and a pre-publish error does not.
+// that a publish-phase error leaves persistHandlerResult fatal-classified with
+// the publish's own cause, and that the same result with nothing to publish
+// succeeds, so the classification is the publish's and not the path's.
 //
 // The end-to-end partial case (first publish durable, second fails) needs a
 // real stream and lives in TestIntegrationPartialPublishQuarantinesRatherThanRetrying.

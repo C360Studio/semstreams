@@ -93,6 +93,15 @@ func TestFailedTerminalReadsEachProducedPairOnce(t *testing.T) {
 			context.Canceled, false},
 		{"D3 approved call not dispatched", HandlerResult{LoopID: loopID, State: agentic.LoopStateExecuting},
 			errs.Wrap(errors.New("resolve subject"), "agentic-loop", "dispatchApprovedCall", "dispatch approved tool call"), false},
+		// A cancel that lands between the approval's resolve and its GetLoop
+		// hands the lane a cancelled loop; once the cancel lane has released
+		// it, dispatchApprovedCall fails in AddPendingTool, before any
+		// publication (design P1, amended). Cancelled is terminal: the
+		// failed-terminal reading takes it to the carrier.
+		{"D3 cancelled: an approved call racing a cancel", HandlerResult{LoopID: loopID,
+			State: agentic.LoopStateCancelled, PublishedMessages: []PublishedMessage{}},
+			errs.Wrap(errs.Wrap(fmt.Errorf("loop %s not found", loopID), "LoopManager", "operation", "find loop"),
+				"agentic-loop", "dispatchApprovedCall", "dispatch approved tool call"), true},
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			require.Equal(t, row.want, failedTerminal(row.result, row.err))
