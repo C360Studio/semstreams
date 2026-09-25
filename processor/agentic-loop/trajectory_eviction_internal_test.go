@@ -28,7 +28,7 @@ func TestTerminalPathsEvictActiveTrajectory(t *testing.T) {
 		component.persistHandlerResult(context.Background(), HandlerResult{
 			LoopID: loopID,
 			State:  agentic.LoopStateComplete,
-		}, writeThenPublish)
+		})
 
 		_, err = handler.trajectoryManager.getTrajectory(loopID)
 		require.Error(t, err, "completed loop retained its active trajectory")
@@ -194,7 +194,7 @@ func TestTerminalPathsReleaseObservedAuditLoss(t *testing.T) {
 		component.persistHandlerResult(context.Background(), HandlerResult{
 			LoopID: loopID,
 			State:  agentic.LoopStateComplete,
-		}, writeThenPublish)
+		})
 
 		require.False(t, component.trajectoryAuditLoss.observed(loopID),
 			"completed loop retained its audit-loss marker")

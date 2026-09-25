@@ -128,7 +128,7 @@ func TestATerminalRedeliveredAfterItsPublicationAdoptsTheDurableTerminal(t *test
 	retainModelResponse(t, client, batch)
 	dispatch, err := handler.HandleModelResponse(t.Context(), loopID, batch)
 	require.NoError(t, err)
-	require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch, publishThenWrite))
+	require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch))
 	call, _ := dispatchedToolCall(t, dispatch)
 	result := agentic.ToolResult{
 		CallID: call.ID, Name: call.Name, Content: "the work, submitted", LoopID: loopID,

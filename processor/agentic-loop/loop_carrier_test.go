@@ -57,45 +57,50 @@ func nonTerminalResultWithAPublication(loopID string) HandlerResult {
 	}
 }
 
-// TestCarrierOrderDecidesWhatAFailedPublishLeavesBehind is the order assertion
-// for both lanes at once, at the carrier seam that owns the choice.
+// TestTheResultShapeDecidesWhatAFailedPublishLeavesBehind is the order
+// assertion at the carrier seam, which reads the order from the result's shape
+// alone (#1376): no lane chooses it.
 //
-// publishThenWrite is the order for a non-terminal result on the
-// model-response, tool-result and approval lanes and the approval-timeout
-// sweeper: the publication runs first, so a publish that did not commit leaves
-// NO record behind. writeThenPublish is what a result that CREATES an approval
-// gate keeps (task 1.6): the record is written first, so the same failure
-// leaves it committed.
+// An ordinary advance — a non-terminal result that does not gate the loop,
+// whichever lane produced it — publishes first, so a publish that did not
+// commit leaves NO record behind. A result that CREATES an approval gate is
+// written first (task 1.6 of #1362), so the same failure leaves it committed.
 //
 // spec: agentic-loop / The loop record names its outstanding request
-func TestCarrierOrderDecidesWhatAFailedPublishLeavesBehind(t *testing.T) {
-	t.Run("publish then write leaves no record", func(t *testing.T) {
+func TestTheResultShapeDecidesWhatAFailedPublishLeavesBehind(t *testing.T) {
+	t.Run("an ordinary advance publishes first and leaves no record", func(t *testing.T) {
 		c, bucket, loopID := carrierLoop(t)
 		c.natsClient = unpublishableClient(t)
 
-		err := c.persistHandlerResult(t.Context(), nonTerminalResultWithAPublication(loopID), publishThenWrite)
+		err := c.persistHandlerResult(t.Context(), nonTerminalResultWithAPublication(loopID))
 		require.Error(t, err)
 		require.True(t, errs.IsFatal(err), "a publish of unknown durability is commit-unknown")
 		require.Empty(t, bucket.written(),
 			"the publish ran first, so its failure must have stopped the record write")
 	})
 
-	t.Run("write then publish commits the record", func(t *testing.T) {
+	t.Run("a gate writes first and commits the record", func(t *testing.T) {
 		c, bucket, loopID := carrierLoop(t)
+		entity, err := c.handler.GetLoop(loopID)
+		require.NoError(t, err)
+		require.NoError(t, entity.BeginAwaitingApproval(
+			"call-gate", "delete_rule", nil, agentic.ApprovalRequiredPrefix+"needs a human", time.Hour, ""))
+		require.NoError(t, c.handler.UpdateLoop(entity))
 		c.natsClient = unpublishableClient(t)
+		gate := nonTerminalResultWithAPublication(loopID)
+		gate.State = agentic.LoopStateAwaitingApproval
 
-		err := c.persistHandlerResult(t.Context(), nonTerminalResultWithAPublication(loopID), writeThenPublish)
+		err = c.persistHandlerResult(t.Context(), gate)
 		require.Error(t, err)
 		require.Equal(t, []string{loopID}, bucket.written(),
 			"the record ran first, so it is committed even though the publish was not")
 	})
 }
 
-// TestApprovalLanePublishesBeforeItWrites pins the CALL SITE, not the carrier:
-// the approval lane's own settlement asks for publish-then-write (#1362 task
-// 1.4), landed with the cold branch that closes the reject-minted window the
-// order opens. A carrier that honours both orders proves nothing about which
-// one this lane passes.
+// TestApprovalLanePublishesBeforeItWrites pins the approval lane end to end,
+// not the carrier alone: the ordinary advance an approved answer produces
+// publishes before it writes (#1362 task 1.4), landed with the cold branch
+// that closes the reject-minted window the order opens.
 //
 // spec: agentic-loop / The loop record names its outstanding request
 func TestApprovalLanePublishesBeforeItWrites(t *testing.T) {
@@ -133,9 +138,9 @@ func TestApprovalLanePublishesBeforeItWrites(t *testing.T) {
 //
 // TestApprovalLanePublishesBeforeItWrites above pins the approval RESPONSE:
 // the lane that settles an answer. Nothing pinned the delivery that creates
-// the gate, and that one arrives on the TOOL-RESULT lane, which passes
-// publishThenWrite. An awaiting_approval result is not terminal, so it took
-// that order: ApprovalPendingEvent was published before the gate was written,
+// the gate, and that one arrives on the TOOL-RESULT lane, which then passed
+// publish-then-write for every non-terminal result. An awaiting_approval
+// result is not terminal, so it took that order: ApprovalPendingEvent was published before the gate was written,
 // and a crash between them left a visible approval request with no durable
 // gate behind it. The replacement's approval lane finds a record that is not
 // awaiting approval and acknowledges the answer — a human decision silently

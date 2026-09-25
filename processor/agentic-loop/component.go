@@ -1940,7 +1940,7 @@ func (c *Component) handleResponseMessage(ctx context.Context, data []byte) erro
 		})
 	}
 	c.recordResponseMetrics(response)
-	return c.persistHandlerResult(ctx, result, publishThenWrite)
+	return c.persistHandlerResult(ctx, result)
 }
 
 // failureReasonForHandlerError classifies a HandleModelResponse error into
@@ -2170,34 +2170,22 @@ func (c *Component) recordResponseMetrics(response *agentic.AgentResponse) {
 // after confirming the writer's retry budget is the actual bottleneck.
 const graphWritePublishBudget = 2 * time.Second
 
-// carrierOrder names the two orders in which the carrier commits a handler
-// result: the record write and the publications it implies.
-//
-// The distinction is not stylistic. Whichever runs first is the one a crash
-// between them leaves durable, and the recovery a lane can perform depends on
-// which of the two facts survived.
-type carrierOrder int
-
-const (
-	// writeThenPublish records first and publishes after — the order every
-	// lane took before #1330, and the order any result that CREATES an
-	// approval gate keeps.
-	writeThenPublish carrierOrder = iota
-	// publishThenWrite publishes first and records after, so the record is
-	// written only against outputs that already PubAck'd. It is the order the
-	// model-response, tool-result and approval lanes and the approval-timeout
-	// sweeper take for a non-terminal result that does not gate the loop for
-	// approval.
-	publishThenWrite
-)
-
 // persistHandlerResult publishes messages and persists state from a handler result.
 //
+// The order the carrier commits a result in is decided by the result's shape,
+// never by the calling lane (#1376): the same shape takes the same order on
+// every lane that produces it. The distinction is not stylistic — whichever of
+// the record write and the publications runs first is the one a crash between
+// them leaves durable, and the recovery a lane can perform depends on which of
+// the two facts survived. Birth is not this carrier's: the task lane writes a
+// created loop by create-once before its first publication itself
+// (createLoopState, then publishResults).
+//
 // A terminal result goes to the terminal owner, commitTerminal, on every lane
-// that reaches this carrier and whatever order the lane asked for (#1362,
-// design § 5.7), the approval-timeout sweeper's auto-reject included: the
-// COMPLETE_<loopID> marker by Create, the graph stamps, the terminal event,
-// and the loop record last by compare-and-swap. The stamps precede the event
+// that reaches this carrier (#1362, design § 5.7), the approval-timeout
+// sweeper's auto-reject included: the COMPLETE_<loopID> marker by Create, the
+// graph stamps, the terminal event, and the loop record last by
+// compare-and-swap. The stamps precede the event
 // so any subscriber consuming agent.complete.<loop_id> from JetStream can
 // immediately walk loop-entity triples (agent.loop.parent etc.) without racing
 // the writer — the concrete consumer was semteams ADR-038 PR B chain.evidence.*
@@ -2206,18 +2194,17 @@ const (
 // A required persistence or publication failure leaves the joined delivery in
 // an unknown partial state; the caller quarantines rather than claiming done.
 //
-// order names which of the two carrier orders the calling lane takes for a
-// NON-terminal result. On the model-response, tool-result and approval lanes
-// it publishes FIRST and then writes (#1330 L4a; #1362 task 1.4 for the
-// approval lane), so the record's published_request_id is only ever written
-// after that request's PubAck — which is exactly what makes it readable as
-// "this request is retained". On the approval lane the order opens the
-// reject-minted crash window, and the lane's own cold branch closes it
+// Any other NON-terminal result that does not gate the loop publishes FIRST
+// and then writes by compare-and-swap, on the model-response, tool-result and
+// approval lanes and the approval-timeout sweeper alike (#1330 L4a; #1362 task
+// 1.4 for the approval lane), so the record's published_request_id is only
+// ever written after that request's PubAck — which is exactly what makes it
+// readable as "this request is retained". On the approval lane the order opens
+// the reject-minted crash window, and the lane's own cold branch closes it
 // (settleApprovalResponseWithoutLoop).
 //
-// An awaiting_approval result keeps write-then-publish, whichever order its
-// lane asked for, and the tool-result lane is the only producer of one
-// (checkApprovalGate in handlers.go). The gate is a durable promise to a HUMAN:
+// An awaiting_approval result writes before it publishes, and the tool-result
+// lane is the only producer of one (checkApprovalGate in handlers.go). The gate is a durable promise to a HUMAN:
 // published first, a crash between the ApprovalPendingEvent and the record
 // leaves an approval request visible with no gate behind it, and the approval
 // lane's cold branch acknowledges the answer as inapplicable — design § 5.5
@@ -2228,10 +2215,10 @@ const (
 // by the order: a gate result mints no request — its only publication is the
 // ApprovalPendingEvent, which carries no MsgID — so mintedRequestID returns ""
 // for it and the stamp below is a no-op on this path either way.
-func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResult, order carrierOrder) error {
+func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResult) error {
 	terminal := result.State == agentic.LoopStateComplete || result.State == agentic.LoopStateFailed
-	// A result that creates an approval gate keeps write-then-publish whatever
-	// its lane asked for — see the order contract above.
+	// A result that creates an approval gate writes before it publishes — see
+	// the order contract above.
 	gated := result.State == agentic.LoopStateAwaitingApproval
 
 	if result.terminalOwnedElsewhere {
@@ -2268,7 +2255,7 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 		return nil
 	}
 
-	if order == publishThenWrite && !gated {
+	if !gated {
 		return c.publishThenPersistResultState(ctx, result)
 	}
 
@@ -2577,7 +2564,7 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 	// persistHandlerResult covers publishResults + persistLoopState for all states,
 	// plus finalization and completion-state persistence
 	// when the loop reaches a terminal state.
-	return c.persistHandlerResult(ctx, result, publishThenWrite)
+	return c.persistHandlerResult(ctx, result)
 }
 
 // settleFailedToolResult decides a tool result whose handler returned an error
@@ -2626,12 +2613,11 @@ func (c *Component) settleFailedToolResult(
 ) error {
 	c.logger.Error("Failed to handle tool result", "error", cause, "loop_id", loopID)
 
-	if result.State.IsTerminal() {
+	if failedTerminal(result, cause) {
 		// persistHandlerResult records the trajectory and releases the
-		// per-loop aggregate itself once the terminal state is durable. A
-		// terminal result takes the terminal owner's order whatever order is
-		// passed here.
-		return c.persistHandlerResult(ctx, result, writeThenPublish)
+		// per-loop aggregate itself once the terminal state is durable, and a
+		// terminal result takes the terminal owner's order.
+		return c.persistHandlerResult(ctx, result)
 	}
 
 	c.recordHandlerResultTrajectory(ctx, result)

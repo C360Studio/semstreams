@@ -149,7 +149,7 @@ func TestTerminalStampCarriesObservedAuditLoss_Integration(t *testing.T) {
 			CompletionState: &agentic.LoopCompletedEvent{
 				LoopID: loopID, Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now(),
 			},
-		}, writeThenPublish)
+		})
 
 		outcome, withCondition, values := collector.outcomeRequests()
 		require.Equal(t, 1, outcome, "expected exactly one terminal append carrying agent.loop.outcome")
@@ -227,7 +227,7 @@ func TestTerminalStampOmitsConditionWithoutObservedLoss_Integration(t *testing.T
 		CompletionState: &agentic.LoopCompletedEvent{
 			LoopID: loopID, Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now(),
 		},
-	}, writeThenPublish)
+	})
 
 	outcome, withCondition, _ := collector.outcomeRequests()
 	require.Equal(t, 1, outcome, "expected exactly one terminal append carrying agent.loop.outcome")
@@ -295,7 +295,7 @@ func TestStartWithoutUsableTrajectoryBucketMarksEveryLoop_Integration(t *testing
 		CompletionState: &agentic.LoopCompletedEvent{
 			LoopID: loopID, Outcome: agentic.OutcomeSuccess, CompletedAt: time.Now(),
 		},
-	}, writeThenPublish)
+	})
 
 	outcome, withCondition, values := collector.outcomeRequests()
 	require.Equal(t, 1, outcome, "expected exactly one terminal append carrying agent.loop.outcome")

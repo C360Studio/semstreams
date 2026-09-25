@@ -67,7 +67,7 @@ func startMidAdvance(t *testing.T, client *natsclient.Client, loopID, taskID, to
 	retainModelResponse(t, client, batch)
 	dispatch, err := handler.HandleModelResponse(t.Context(), loopID, batch)
 	require.NoError(t, err)
-	require.NoError(t, c.persistHandlerResult(t.Context(), dispatch, publishThenWrite))
+	require.NoError(t, c.persistHandlerResult(t.Context(), dispatch))
 	callA, executeSubject := dispatchedToolCall(t, dispatch)
 
 	resultA := agentic.ToolResult{

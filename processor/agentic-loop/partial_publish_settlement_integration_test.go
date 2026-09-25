@@ -50,7 +50,7 @@ func TestIntegrationPartialPublishQuarantinesRatherThanRetrying(t *testing.T) {
 		},
 	}
 
-	persistErr := c.persistHandlerResult(ctx, result, writeThenPublish)
+	persistErr := c.persistHandlerResult(ctx, result)
 	require.Error(t, persistErr)
 	require.Contains(t, persistErr.Error(), "unknown durability",
 		"a partial publish must be declared commit-unknown, not a bare publish error")
@@ -66,7 +66,7 @@ func TestIntegrationPartialPublishQuarantinesRatherThanRetrying(t *testing.T) {
 	policy, err := newLoopHeartbeatDeliveryPolicy(ctx, natsclient.StreamConsumerConfig{
 		AckWait: 2 * time.Minute, BackOff: []time.Duration{30 * time.Second, 2 * time.Minute}, MaxDeliver: 2,
 	}, 15*time.Second, "agent.response", func(workCtx context.Context, _ []byte) error {
-		return c.persistHandlerResult(workCtx, result, writeThenPublish)
+		return c.persistHandlerResult(workCtx, result)
 	})
 	require.NoError(t, err)
 
@@ -83,19 +83,38 @@ func TestIntegrationPartialPublishQuarantinesRatherThanRetrying(t *testing.T) {
 	require.False(t, health.Healthy)
 	require.Contains(t, health.LastError, "unknown durability")
 
-	// The other half, corrected in round 1: a failure BEFORE the first publish
-	// is safe to re-WRITE — every stamp is a whole-value Put — but the delivery
-	// that would re-run it is not safe to re-deliver. The handler has already
-	// moved the loop, so the redelivery is answered from its new state and the
-	// result the first attempt built cannot be rebuilt. Same partial effect,
-	// same quarantine, different reason; only the cause text separates them.
+	// The other half: the record write that follows a publication which did
+	// land. A non-gated result publishes first (#1376: the result's shape
+	// decides the order), so a write that fails after it leaves every output
+	// already PubAck'd behind a record that does not name them. The handler
+	// has already moved the loop, so the redelivery is answered from its new
+	// state and the result the first attempt built cannot be rebuilt. Same
+	// partial effect, same quarantine, different reason; only the cause text
+	// separates them. The observed revision is seeded so the failing bucket's
+	// compare-and-swap actually runs, rather than refusing for want of one.
+	seedLoopRecord(t, c, loopID)
+	published := HandlerResult{
+		LoopID: loopID,
+		State:  agentic.LoopStateExploring,
+		PublishedMessages: []PublishedMessage{
+			{Subject: "agent.first." + loopID, Data: []byte(`{"n":1}`)},
+			{Subject: "agent.second." + loopID, Data: []byte(`{"n":2}`)},
+		},
+	}
 	c.loopsBucket = failingLoopBucket{err: errors.New("kv unavailable")}
-	preMsg := &loopDeliveryOwnerMsg{data: []byte("{}")}
-	prePublish, admitted := deliverylane.Consume(ctx, preMsg, policy, deliverylane.NewAdmission(nil, nil))
+	writePolicy, err := newLoopHeartbeatDeliveryPolicy(ctx, natsclient.StreamConsumerConfig{
+		AckWait: 2 * time.Minute, BackOff: []time.Duration{30 * time.Second, 2 * time.Minute}, MaxDeliver: 2,
+	}, 15*time.Second, "agent.response", func(workCtx context.Context, _ []byte) error {
+		return c.persistHandlerResult(workCtx, published)
+	})
+	require.NoError(t, err)
+	writeMsg := &loopDeliveryOwnerMsg{data: []byte("{}")}
+	afterPublish, admitted := deliverylane.Consume(ctx, writeMsg, writePolicy, deliverylane.NewAdmission(nil, nil))
 	require.True(t, admitted)
-	require.Equal(t, natsclient.DeliveryDecisionQuarantine, prePublish.Decision())
-	require.Zero(t, preMsg.acks.Load()+preMsg.naks.Load()+preMsg.terms.Load())
-	require.Contains(t, prePublish.Err().Error(), "after the loop was already mutated")
-	require.NotContains(t, prePublish.Err().Error(), "published results",
-		"the stamp phase and the publish phase must stay distinguishable by cause")
+	require.Equal(t, natsclient.DeliveryDecisionQuarantine, afterPublish.Decision())
+	require.Zero(t, writeMsg.acks.Load()+writeMsg.naks.Load()+writeMsg.terms.Load())
+	require.Contains(t, afterPublish.Err().Error(), "after its results were published")
+	require.Contains(t, afterPublish.Err().Error(), "kv unavailable")
+	require.NotContains(t, afterPublish.Err().Error(), "published results have unknown durability",
+		"the write phase and the publish phase must stay distinguishable by cause")
 }

@@ -396,7 +396,7 @@ func TestAToolResultForATerminalLoopTouchesNothing(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, agentic.OutcomeCancelled, entity.Outcome, "the timeout arm rewrote the cancel")
 
-	persistErr := c.persistHandlerResult(t.Context(), result, publishThenWrite)
+	persistErr := c.persistHandlerResult(t.Context(), result)
 	require.Error(t, persistErr)
 	require.False(t, errs.IsFatal(persistErr), "an in-flight terminal is retried, not quarantined")
 	require.Empty(t, bucket.written(), "the carrier wrote a terminal outside the owner")

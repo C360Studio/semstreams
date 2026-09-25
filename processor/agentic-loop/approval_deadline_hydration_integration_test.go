@@ -96,7 +96,7 @@ func gatedLoop(t *testing.T, client *natsclient.Client, c *Component, h *Message
 	retainModelResponse(t, client, batch)
 	dispatch, err := h.HandleModelResponse(t.Context(), loopID, batch)
 	require.NoError(t, err)
-	require.NoError(t, c.persistHandlerResult(t.Context(), dispatch, publishThenWrite))
+	require.NoError(t, c.persistHandlerResult(t.Context(), dispatch))
 	call, _ := dispatchedToolCall(t, dispatch)
 
 	_, delivered := deliverToolResult(t, c, agentic.ToolResult{
