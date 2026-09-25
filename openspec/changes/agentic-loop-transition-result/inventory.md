@@ -70,7 +70,7 @@ immediately after names the fields it sets (beyond zero value) and whether an er
 - `processor/agentic-loop/handlers.go:1312` — `return HandlerResult{}, fmt.Errorf("%w: %w", errCancelledBeforeMutation, err)`
   Zero value; error wraps sentinel `errCancelledBeforeMutation`.
 - `processor/agentic-loop/handlers.go:1316` — `return HandlerResult{}, err`
-  Zero value; error = record-classification failure.
+  Zero value; error = GetLoop failure (handlers.go:1314-1316).
 - `processor/agentic-loop/handlers.go:1367` — `return HandlerResult{}, fmt.Errorf("%w: loop %s response names request %q, its record names %q",`
   Zero value; error wraps sentinel `errResponseSuperseded`.
 - `processor/agentic-loop/handlers.go:1375` — `return HandlerResult{}, fmt.Errorf("%w: loop %s response names request %q, its record names %q",`
@@ -394,6 +394,7 @@ Every mention in tests (14 files; `## Searches` records the sweep):
 
 ### `openspec/specs/agentic-loop/spec.md` — settlement, publication order, terminal ownership, redelivery, residuals
 
+- `openspec/specs/agentic-loop/spec.md:886` — `### Requirement: Loop input classes settle after owner-specific durable done`
 - `openspec/specs/agentic-loop/spec.md:1408` — `### Requirement: Loop-state authority is acquired and observed before loop work`
 - `openspec/specs/agentic-loop/spec.md:1467` — `### Requirement: The loop record names its outstanding request`
 - `openspec/specs/agentic-loop/spec.md:1487` — `record SHALL be written before the first request is published. An update that CREATES an approval gate, on whichever`
