@@ -62,6 +62,10 @@ Key design points:
   `ToolCall.ApprovedBy`, flows through `tool.execute`, lands in
   the trajectory step. Audit consumers can correlate every gated
   action to the human who said yes.
+- **The loop's own deadline outranks the answer.** An answer that
+  reaches a loop past its `timeout_at` fails the loop on the timeout,
+  whatever it decided: approve and modify dispatch nothing, and reject
+  advances nothing.
 - **The pending state is durable; the timer is not.**
   `LoopEntity.PendingApproval` lives in the AGENT_LOOPS KV bucket, so a
   process replacement mid-approval loses nothing: the record still names
@@ -78,7 +82,9 @@ Key design points:
   a fresh wait. A replacement that receives an answer for a loop it
   never started reads the loop's record: a record still awaiting that
   gate is rebuilt from its retained request and response and the answer
-  is applied; a loop whose retained evidence is confirmed gone fails
+  is applied, unless the loop's own deadline (`timeout_at`) has passed,
+  in which case the loop fails on the timeout and nothing is dispatched;
+  a loop whose retained evidence is confirmed gone fails
   with reason `continuation_unavailable`; any other record acknowledges
   the answer without effect ([#1362](https://github.com/C360Studio/semstreams/issues/1362)).
   The e2e stage `verify-approval-across-replacement`

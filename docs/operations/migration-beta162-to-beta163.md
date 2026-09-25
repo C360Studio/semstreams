@@ -1909,7 +1909,8 @@ outside does work, since #1362:
 
 - an `ApprovalResponse` for a parked loop no process holds is settled by the loop's record. The replacement rebuilds
   the loop from the record, its retained request and the retained response that carries the gated batch, and applies
-  the answer. When that request or response is confirmed gone from the stream the loop fails with reason
+  the answer, unless the loop's own deadline (`timeout_at`) has passed, in which case the loop fails on the timeout
+  and nothing is dispatched. When that request or response is confirmed gone from the stream the loop fails with reason
   `continuation_unavailable` instead; a stream that cannot be read is retried. An answer whose record is absent,
   terminal, or no longer awaiting that gate is acknowledged without effect, with a warning and a count on
   `tool_results_dropped_total{reason="approval_inapplicable"}`;
@@ -2012,9 +2013,11 @@ on the record's terminal `state` (a KV watch) sees the same transition, slightly
   a different outcome is quarantined. The same shape follows a spawn-path birth failure under a producer-supplied loop
   ID. A watcher keyed on the record's terminal `state` may never see that loop go terminal. One keyed on
   `COMPLETE_<loopID>` counts it as finished while it runs.
-- An approval-timeout `max_iterations` terminal that commits `COMPLETE_<loopID>` and then fails to publish is not
-  reconciled either. A timer is never redelivered, so the record stays `awaiting_approval`, and a later human answer
-  is applied cold on a loop that already has a durable failed terminal.
+- An approval-timeout sweep terminal (its `max_iterations` auto-reject, or the loop's own timeout) that commits
+  `COMPLETE_<loopID>` and then fails to publish is not reconciled either. A timer is never redelivered, so the record
+  stays `awaiting_approval`. After a `max_iterations` terminal, a later human answer is applied cold on a loop that
+  already has a durable failed terminal. After the loop's own timeout, a later answer to that gate re-derives the
+  timeout on the rebuilt loop and adopts the durable failed terminal, so the loop settles on that answer.
 
 ### A terminal record carries no approval gate
 
@@ -2027,8 +2030,9 @@ trajectory and the terminal event are the record of that.
 ### `continuation_unavailable` is a new failure reason
 
 An approval answer for a loop no process holds is applied by rebuilding the loop from its record, its retained
-request and the retained response carrying the gated batch (the section above, "A replaced process re-arms no
-approval deadline", has the whole cold branch). When that request or response is confirmed gone from the stream, the
+request and the retained response carrying the gated batch, unless the loop's own deadline has passed, in which case
+the loop fails on the timeout (the section above, "A replaced process re-arms no approval deadline", has the whole
+cold branch). When that request or response is confirmed gone from the stream, the
 loop fails with reason `continuation_unavailable`. It appears on `LoopFailedEvent.reason` on `agent.failed.<loopID>`,
 in the failed `COMPLETE_<loopID>` marker, and as `reason="continuation_unavailable"` on
 `semstreams_agentic_loop_loops_failed_total`. A stream that could not be read is retried, not failed. **Action:** a

@@ -200,3 +200,12 @@ Owner-run review of `c45d1063` (PR #1366 issuecomment-5827554362). Spec text cha
   trajectory evidence uses the registered Store". Tests: `approval_modified_arguments_test.go`.
 - P3: `submitApproval`'s 409 retry was justified by an event-before-record race the write-then-publish gate order rules
   out, and every caller reads the record awaiting before it answers. The retry is removed; a 409 fails the walk.
+- Re-review MEDIUM-1: the approval lane's commit-failure disposition for an expired loop is tested — a lost
+  compare-and-swap on the record retries, a failed marker create quarantines and releases the loop
+  (`TestAnExpiredApprovalSettlesOnWhatItsTerminalCommitReturns`).
+- Re-review MEDIUM-2: `docs/concepts/17-approval-flow.md` and the migration note no longer say a cold answer is always
+  applied; an answer to a loop past its `timeout_at` fails the loop on the timeout.
+- Re-review MEDIUM-3: owner ruling 2's recorded residual (#1362 issuecomment-5809906669) names both approval-timeout
+  sweep terminals, its `max_iterations` auto-reject and the loop's own timeout; the timeout case settles on the next
+  answer to the gate, which re-derives the timeout and adopts the durable marker. Spec and migration note.
+  Test: `TestASweepTimeoutWhosePublishFailedSettlesOnTheNextAnswer`.

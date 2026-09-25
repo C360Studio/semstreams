@@ -1,6 +1,7 @@
 package agenticloop
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -150,5 +151,93 @@ func TestTheApprovalSweepSettlesAnExpiredLoopOnItsTimeout(t *testing.T) {
 
 	a.c.sweepExpiredApprovals(t.Context())
 
+	requireLoopTimedOut(t, a)
+}
+
+// TestAnExpiredApprovalSettlesOnWhatItsTerminalCommitReturns pins the approval
+// lane's disposition when the timeout's terminal commit does not land (PR
+// #1366 re-review MEDIUM-1). The lane settles on commitTerminal's own
+// classification: a lost compare-and-swap is retried, with the loop already
+// released so the redelivery re-reads the record; any other failure leaves the
+// commit unknown and is quarantined, with the loop released so memory never
+// answers for a terminal that is not durable.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestAnExpiredApprovalSettlesOnWhatItsTerminalCommitReturns(t *testing.T) {
+	t.Run("a lost compare-and-swap on the record is retried", func(t *testing.T) {
+		a := newColdApproval(t, nil, func(e *agentic.LoopEntity) {
+			e.TimeoutAt = time.Now().Add(-time.Minute)
+		})
+		response := a.answer(agentic.ApprovalDecisionApprove)
+		rebuilt, err := a.c.settleApprovalResponseWithoutLoop(t.Context(), response)
+		require.NoError(t, err)
+		require.True(t, rebuilt, "fixture: this process holds the expired loop")
+		// A foreign writer moves the record past the revision this process read.
+		foreign, ok := a.bucket.value(coldApprovalLoopID)
+		require.True(t, ok)
+		_, err = a.bucket.Put(t.Context(), coldApprovalLoopID, foreign)
+		require.NoError(t, err)
+
+		settled, err := a.deliver(t, response)
+
+		require.ErrorIs(t, err, natsclient.ErrKVRevisionMismatch)
+		require.Contains(t, a.bucket.written(), terminalMarkerKey(coldApprovalLoopID),
+			"fixture: the commit reached the record, its last step")
+		require.Equal(t, natsclient.DeliveryDecisionRetry, settled,
+			"a lost compare-and-swap wrote nothing to the record; the redelivery re-reads it")
+		require.Equal(t, agentic.LoopStateAwaitingApproval, persistedLoop(t, a.bucket, coldApprovalLoopID).State)
+		require.False(t, a.held(), "the lost compare-and-swap released the loop")
+	})
+
+	t.Run("a failed marker create is quarantined and releases the loop", func(t *testing.T) {
+		a := newColdApproval(t, nil, func(e *agentic.LoopEntity) {
+			e.TimeoutAt = time.Now().Add(-time.Minute)
+		})
+		a.bucket.failPrefix = terminalMarkerKey(coldApprovalLoopID)
+		a.bucket.arm(errors.New("injected marker write failure"))
+
+		settled, err := a.deliver(t, a.answer(agentic.ApprovalDecisionApprove))
+
+		require.Error(t, err)
+		require.Equal(t, natsclient.DeliveryDecisionQuarantine, settled,
+			"the terminal commit is unknown: never acknowledged, never blindly retried")
+		require.NotContains(t, a.bucket.written(), terminalMarkerKey(coldApprovalLoopID))
+		require.Equal(t, agentic.LoopStateAwaitingApproval, persistedLoop(t, a.bucket, coldApprovalLoopID).State)
+		require.False(t, a.held(), "memory never holds a terminal the owner did not commit")
+	})
+}
+
+// TestASweepTimeoutWhosePublishFailedSettlesOnTheNextAnswer pins the widened
+// residual (PR #1366 re-review MEDIUM-3; extends owner ruling 2, #1362
+// issuecomment-5809906669): the sweep commits the loop's timeout marker, its
+// publication fails, and the record stays awaiting_approval because a timer is
+// never redelivered. The next answer to that gate rebuilds the loop, re-derives
+// the same timeout, and adopts the durable marker — the kinds match — so the
+// loop settles on that answer rather than being applied.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestASweepTimeoutWhosePublishFailedSettlesOnTheNextAnswer(t *testing.T) {
+	a := newColdApproval(t, nil, func(e *agentic.LoopEntity) {
+		e.TimeoutAt = time.Now().Add(-time.Minute)
+		e.PendingApproval.RequestedAt = time.Now().Add(-2 * time.Hour)
+	})
+	rebuilt, err := a.c.settleApprovalResponseWithoutLoop(t.Context(), a.answer(agentic.ApprovalDecisionReject))
+	require.NoError(t, err)
+	require.True(t, rebuilt)
+
+	a.c.natsClient = unpublishableClient(t)
+	a.c.sweepExpiredApprovals(t.Context())
+
+	require.Contains(t, a.bucket.written(), terminalMarkerKey(coldApprovalLoopID),
+		"fixture: the sweep committed its marker before the publication failed")
+	require.Equal(t, agentic.LoopStateAwaitingApproval, persistedLoop(t, a.bucket, coldApprovalLoopID).State,
+		"the residual: the record stays gated")
+	require.False(t, a.held(), "the failed commit released the loop")
+
+	a.c.natsClient = nil
+	settled, err := a.deliver(t, a.answerOf(agentic.ApprovalDecisionApprove))
+
+	require.NoError(t, err)
+	require.Equal(t, natsclient.DeliveryDecisionAck, settled)
 	requireLoopTimedOut(t, a)
 }

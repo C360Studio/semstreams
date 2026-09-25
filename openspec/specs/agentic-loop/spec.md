@@ -1497,9 +1497,11 @@ terminal is a cancel, SHALL adopt that cancel; when that durable terminal is a c
 be retried, not quarantined, because the loop's own terminal redelivery writes the record terminal. A terminal whose
 record update loses its compare-and-swap after `COMPLETE_<loopID>` and its event have landed is not reconciled: the
 loop may keep running under a durable terminal and a published event, and its own later terminal is quarantined. An
-approval-timeout sweep whose `max_iterations` terminal commits `COMPLETE_<loopID>` and then fails to publish is not
-reconciled either: a timer is never redelivered, the record stays `awaiting_approval`, and a later human answer is
-applied cold on a loop that already has a durable failed terminal. A
+approval-timeout sweep terminal (its `max_iterations` auto-reject, or the loop's own timeout) that commits
+`COMPLETE_<loopID>` and then fails to publish is not reconciled either: a timer is never redelivered, and the record
+stays `awaiting_approval`. After a `max_iterations` terminal, a later human answer is applied cold on a loop that
+already has a durable failed terminal. After the loop's own timeout, a later answer to that gate re-derives the
+timeout on the rebuilt loop and adopts the durable failed terminal, so the loop settles on that answer. A
 redelivered input whose `request_id` is older than `published_request_id` SHALL be acknowledged without effect; one whose
 `request_id` is newer SHALL be retried until the record names it; one whose `request_id` is not a request of the loop
 SHALL be quarantined, except that such a governance verdict SHALL be terminated, so that one misconfigured verdict rule
