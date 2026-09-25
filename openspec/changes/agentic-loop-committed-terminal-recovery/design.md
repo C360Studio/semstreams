@@ -118,16 +118,22 @@ carrier's PubAck, so in every ordering a call may be published after the **durab
   redelivery lands it), B (no Fatal, no latch: the record decides), C (one terminal writer). **What remains:** a
   publication already out before the refusal — the executor runs it (P5) and its result is acknowledged without
   effect; because the owner's marker may land before that call's PubAck, this is still work published after the
-  durable terminal, and § 8 flags it as the amendment, narrower than under (i). **Cost:** ~25 lines — a `terminalWriter`
-  bool on the shared write, two carrier call sites mapping the refusal to the guard settlement, and `LoopManager.
-  GetLoop` wrapping `ErrLoopNotFound` at ST:664 as `CancelLoop` (ST:1936-1937) and `ResolveApprovalIfPending`
-  (ST:785-786) already do (an additive wrap of an unexported sentinel; the alternative is a private `(entity, held
-  bool)` accessor beside `GetLoop`). Consequence of the wrap, named: the approval lane's A8 producer (ARH:85, a loop
-  released between the resolve and its re-read) reaches the cold branch on its **first** delivery (ARH:194) instead
-  of after one Retry — same outcome one redelivery earlier; S:886's scenario "An approval answer whose loop was
-  released after its gate resolved is recovered cold" is updated in the second MODIFIED block (OQ6). No other
-  `errors.Is(…, ErrLoopNotFound)` site reads a `GetLoop` error (`git grep` → ARH:194, AS:105, C:3303, C:3311; the
-  tool lane's H:2649 and the model lane's H:1316 do not test the sentinel, so rows A3 keep their dispositions).
+  durable terminal, and § 8 flags it as the amendment, narrower than under (i). **Cost:** ~25 lines — a
+  `terminalWriter` bool on the shared write, two carrier call sites mapping the refusal to the guard settlement, and
+  `LoopManager. GetLoop` wrapping `ErrLoopNotFound` at ST:664 as `CancelLoop` (ST:1936-1937) and
+  `ResolveApprovalIfPending` (ST:785-786) already do (an additive wrap of an unexported sentinel; the alternative is a
+  private `(entity, held bool)` accessor beside `GetLoop`); and, in `publishThenPersistResultState`, a
+  `stampPublishedRequest` error that is `ErrLoopNotFound` (`SetPublishedRequest`, ST:1265-1268, via C:2996-3007)
+  mapped to `errTerminalOwnedElsewhere`: for a result that mints the next request — a model response, or a tool result
+  completing its batch — the stamp at C:2315 runs BEFORE the render, so without the mapping a release in ordering B is
+  wrapped Fatal (C:2315-2317), quarantined and latched before the refusal is reached; an approved `tool.execute` mints
+  nothing, so T8's approval arm cannot see it and T8 gains a tool-lane arm. Consequence of the wrap, named: the
+  approval lane's A8 producer (ARH:85, a loop released between the resolve and its re-read) reaches the cold branch on
+  its **first** delivery (ARH:194) instead of after one Retry — same outcome one redelivery earlier; S:886's scenario
+  "An approval answer whose loop was released after its gate resolved is recovered cold" is updated in the second
+  MODIFIED block (OQ6). No other `errors.Is(…, ErrLoopNotFound)` site reads a `GetLoop` error (`git grep` → ARH:194,
+  AS:105, C:3303, C:3311; the tool lane's H:2649 and the model lane's H:1316 do not test the sentinel, so rows A3 keep
+  their dispositions).
 - **(iii) — a post-publish `GetLoop` outside the lock (rejected).** Narrows the write-side window to the same shape as
   (i); the render under the lock is the only point that sees the state the write will carry.
 - **Drop metric on the carrier's Ack branch (all lanes).** The guard settlement counts through its callback and the
@@ -178,13 +184,15 @@ carrier's PubAck, so in every ordering a call may be published after the **durab
   "is not reconciled" sentences (S:1617-1623) contradicting the new row after archive. Rejected.
 - **Two blocks (recommended).** S:886 restated with four scenario changes and one text sentence (§ 2), S:1587 restated
   with the residual sentences replaced and six scenarios added. One block cannot reach both: the residuals live in
-  S:1587 and the row and the order scenarios ("The same result shape takes the same order on every lane",
-  S:1022-1031 — every non-terminal result "publishes every output first" — and the guard scenario S:1033-1038, which
-  covers only effect-free results) live in S:886. **Ruling 2's cost, per the call-out rule:** every child that
-  discharges a table row must restate S:886's 22 scenarios, and PR #1387 at `d2b6a20e` MODIFIES the same S:886 (and
-  REMOVES "Task intake is the one loop input class this layer does not convert") and lands first (ruling 5), so this
-  block is re-based on the synced spec before archive (task 0.2). The owner may prefer a lighter mechanism for later
-  children; this change pays the cost as ruled.
+  S:1587 and the row and the order scenarios ("The same result shape takes the same order on every lane", S:1022-1031
+  — every non-terminal result "publishes every output first" — and the guard scenario S:1033-1038, which covers only
+  effect-free results) live in S:886. **Ruling 2's cost, per the call-out rule:** every child that discharges a table
+  row must restate S:886's 22 scenarios, and PR #1387 at `d2b6a20e` MODIFIES the same S:886 (and REMOVES "Task intake
+  is the one loop input class this layer does not convert") and lands first (ruling 5), so this block is re-based on
+  the synced spec before archive (task 0.2). The owner may prefer a lighter mechanism for later children; this change
+  pays the cost as ruled. One more cost of the same ruling: the kept title "A durable terminal with a non-terminal
+  record is owed to #1377" reads as history after archive (openspec refuses renames) — the same class as #1387's two
+  headings under ruling 2.
 
 ### OQ7 — a cancel of a W2 loop retries to exhaustion: a ruling composition. Recommendation: **(a)** document, and ask
 
@@ -218,15 +226,15 @@ every row (2026-09-22 rule).
 
 ## 2. The two MODIFIED requirements — what changes and the scenarios, verbatim
 
-**Block 1 — `Loop input classes settle after owner-specific durable done` (S:886-1100, 22 scenarios restated).**
-One sentence appended to the partial-effect paragraph (S:907-911): "A non-terminal result whose loop is terminal in
-memory, or no longer held, when the carrier is entered or when it renders the loop's record is not this delivery's
-partial effect: the carrier publishes nothing further, writes nothing, and the loop's record decides the delivery."
-Four scenarios change (titles unchanged — openspec refuses renames):
+**Block 1 — `Loop input classes settle after owner-specific durable done` (S:886-1100, 22 scenarios restated).** One
+sentence appended to the partial-effect paragraph (S:907-911): "A non-terminal result whose loop is terminal in
+memory, or no longer held, when the carrier is entered, when it names the request it published, or when it renders the
+loop's record is not this delivery's partial effect: the carrier publishes nothing further, writes nothing, and the
+loop's record decides the delivery." Four scenarios change (titles unchanged — openspec refuses renames):
 
 - *The same result shape takes the same order on every lane* — new AND: "a non-terminal result whose loop is terminal
-  in memory or no longer held when the carrier is entered, or when it renders the loop's record, publishes nothing
-  further and writes nothing on every lane: the record decides it".
+  in memory or no longer held when the carrier is entered, when it names the request it published, or when it renders
+  the loop's record, publishes nothing further and writes nothing on every lane: the record decides it".
 - *A terminal-guard result is settled by the record, whichever lane produced it* — new AND: "the carrier settles a
   non-terminal result the same way when it finds the loop terminal in memory or no longer held — a case the handler's
   guard could not see because the loop moved after the handler returned — counting an acknowledged drop under the
@@ -245,27 +253,28 @@ Four scenarios change (titles unchanged — openspec refuses renames):
 sentences (S:1617-1623) are replaced by:
 
 > A terminal whose record update loses its compare-and-swap after `COMPLETE_<loopID>` and its event have landed leaves
-> a durable terminal and a published event over a live record — whether the record moved under a second process,
-> under this process's own adoption of a newer retained request for a loop it still held, or under a spawn-path birth
+> a durable terminal and a published event over a live record — whether the record moved under a second process, under
+> this process's own adoption of a newer retained request for a loop it still held, or under a spawn-path birth
 > failure with a producer-supplied loop ID. The record converges at the loop's next terminal commit in whichever
 > process holds it next: a terminal of the same kind adopts the durable terminal, republishes it and writes the record
 > from it; a terminal of a different kind is refused and quarantined, the first terminal wins. Until then the loop
 > runs on under a durable terminal, bounded only by its own remaining iteration budget and `timeout_at`, with no time
 > bound while `timeout_at` is zero or the loop is gated. An approval-timeout sweep terminal (its `max_iterations`
 > auto-reject, or the loop's own timeout) that commits `COMPLETE_<loopID>` and then fails to publish leaves a durable
-> failed terminal under a record that stays `awaiting_approval`: a timer is never redelivered, and the record converges
-> only on the next answer to that gate. A reject, and any answer to a loop past its own deadline, dispatches nothing:
-> the rebuilt loop re-derives the failure and adopts the durable terminal. An approve of a loop at its iteration cap
-> dispatches the approved call once, and the durable terminal is adopted when that call's result completes the batch.
-> A cancel of that loop is retried until the signal consumer's redelivery budget is exhausted and is observed there,
-> never applied, because the cold cancel arm adopts only a cancel marker. A non-terminal result that reaches the
-> carrier after its loop went terminal in memory, or after the loop was released, SHALL publish nothing and write
-> nothing, and a non-terminal result whose loop is terminal in memory or no longer held when the carrier renders its
-> record SHALL NOT be written: the loop's record decides the delivery exactly as it decides a terminal-guard result —
-> a terminal or absent record is acknowledged without effect, a live one is retried, and the redelivery is classified
-> by its lane against the record. A terminal that lands between the carrier's check and its publication lets that one
-> publication out, and the durable terminal may be created before that publication's PubAck; the published call's
-> result is acknowledged without effect on the terminal loop.
+> failed terminal under a record that stays `awaiting_approval`: a timer is never redelivered, and the record
+> converges only on the next answer to that gate. A reject, and any answer to a loop past its own deadline, dispatches
+> nothing: the rebuilt loop re-derives the failure and adopts the durable terminal. An approve of a loop at its
+> iteration cap dispatches the approved call once, and the durable terminal is adopted when that call's result
+> completes the batch. A cancel of that loop is retried until the signal consumer's redelivery budget is exhausted and
+> is observed there, never applied, because the cold cancel arm adopts only a cancel marker. A non-terminal result
+> that reaches the carrier after its loop went terminal in memory, or after the loop was released, SHALL publish
+> nothing and write nothing, and a non-terminal result whose loop is terminal in memory or no longer held when the
+> carrier names the request it published or renders its record SHALL NOT be written: the loop's record decides the
+> delivery exactly as it decides a terminal-guard result — a terminal or absent record is acknowledged without effect,
+> a live one is retried, and the redelivery is classified by its lane against the record. A terminal that lands
+> between the carrier's check and its publication lets that one publication out, and the durable terminal may be
+> created before that publication's PubAck; the published call's result is acknowledged without effect on the terminal
+> loop.
 
 Under OQ2 (b) the sentence "A reject, and any answer … completes the batch." becomes: "The next answer to that gate
 adopts the durable failed terminal before any rebuild — nothing is dispatched, the saved event is republished, the
@@ -297,7 +306,7 @@ the third scenario's first THEN reads as the (b) sentence above.
 | P8 | The approval lane's Retry is a NAK, and the redelivery of a cancelled loop's answer takes the cold branch and is acknowledged inapplicable. | DS:432/463 (`DeliveryDecisionRetry` → `msg.Nak()`), the fake counts it (delivery_owner_test.go:628); `ResolveApprovalIfPending` on a released loop → `ErrLoopNotFound` (ST:777-786) → ARH:194-204 → `settleApprovalResponseWithoutLoop` → terminal record → `loopPresenceStale` → `recordApprovalInapplicable` (ARH:368-371). |
 | P9 | There is no legitimate log seam after `AddPendingTool` on the approval lane. | `awk 'NR>=2035 && NR<=2165 && /logger\./' processor/agentic-loop/handlers.go` → 0 lines; the probe's Warn is H:632 inside `resolveRunEntityID`, a misconfiguration branch. |
 | P10 | PR #1387 collides with this design on **S:886**, not S:1587. | `gh pr diff 1387 --name-only` at `d2b6a20e` → its `specs/agentic-loop/spec.md` carries `## MODIFIED Requirements` → `### Requirement: Loop input classes settle after owner-specific durable done` and `## REMOVED Requirements` → `### Requirement: Task intake is the one loop input class this layer does not convert`. Ruling 5 orders #1387 first; this change's block 1 is re-based on the synced spec after #1387 archives (task 0.2). This design reads only `State` and writes no new field. |
-| P11 | W3/W4 are not approval-specific. | The tool lane's dispatch (`HandleToolResult` → `dispatchToolCall`) and the model lane's reach the same carrier with the same non-terminal shape; their handler-entry guards (H:2664, H:1433) run before the handler moves the loop, and a cancel can land between the handler's return and the carrier on either. The carrier is the one home for the check. |
+| P11 | W3/W4 are not approval-specific — and "every lane" holds only with § 3.2's stamp mapping. | The tool lane's dispatch (`HandleToolResult` → `dispatchToolCall`) and the model lane's reach the same carrier with the same non-terminal shape; their handler-entry guards (H:2664, H:1433) run before the handler moves the loop, and a cancel can land between the handler's return and the carrier on either. The carrier is the one home for the check. Unlike an approved `tool.execute`, a model response or a batch-completing tool result mints the next request and stamps it at C:2315 before the render (`SetPublishedRequest`, ST:1265-1268, refuses a released loop with `ErrLoopNotFound`), so on those lanes ordering B reaches the stamp first: the render-time refusal alone would not stop the Fatal wrap (C:2315-2317). |
 | P12 | `GetLoop` returns exactly two error classes and neither carries the sentinel. | ST:659-666: `WrapInvalid` for an empty ID; `errs.Wrap(fmt.Errorf("loop %s not found"))` otherwise. Hence the entry check scopes "not held" by the sentinel once ST:664 wraps it (OQ3 (ii)); an Invalid error is returned as it is, never acknowledged as stale. |
 
 ### 3.1 Change point — the carrier reads the loop it publishes for (W3, W4; OQ3 (i) and (ii))
@@ -343,11 +352,16 @@ critical section (C:3047-3050), the render's `GetLoop` result is checked before 
 
 `errTerminalOwnedElsewhere` is an unexported sentinel beside `errCancelledBeforeMutation` (H:2625). The two carrier
 sites test it first and return `settleTerminalGuard(ctx, result, c.recordTerminalToolResultDropped)`; everything else
-keeps its mapping (lost CAS → transient; other → Fatal). `LoopManager.GetLoop` (ST:664) wraps `ErrLoopNotFound`
-(`fmt.Errorf("loop %s: %w", loopID, ErrLoopNotFound)`), as ST:785-786 and ST:1936-1937 do; A8's consequence is in OQ3.
-The OQ5 `published` stage sits between `publishResults` and this write. Unchanged: the owner's step 4 (`terminalWriter`
-true renders and writes the terminal as today); `persistDeferredContinuationMarker` (C:3112, the task lane's marker —
-same shape, a different window; residual § 7).
+keeps its mapping (lost CAS → transient; other → Fatal). In `publishThenPersistResultState` the stamp's error is
+tested the same way first: `errors.Is(err, ErrLoopNotFound)` from `SetPublishedRequest` (ST:1265-1268, reached through
+`stampPublishedRequest`, C:2996-3007, at C:2315 before the render) maps to the same guard settlement; any other stamp
+error keeps its Fatal wrap (C:2315-2317). The `GetLoop` wrap also reaches the sweeper: a loop released between the
+sweeper's snapshot and `HandleApprovalResponse`'s re-read (ARH:85) now matches AS:105 and takes the "already released"
+Warn (AS:108-110) instead of the "auto-reject failed" Error (AS:131-135) — benign, § 7. `LoopManager.GetLoop` (ST:664)
+wraps `ErrLoopNotFound` (`fmt.Errorf("loop %s: %w", loopID, ErrLoopNotFound)`), as ST:785-786 and ST:1936-1937 do;
+A8's consequence is in OQ3. The OQ5 `published` stage sits between `publishResults` and this write. Unchanged: the
+owner's step 4 (`terminalWriter` true renders and writes the terminal as today); `persistDeferredContinuationMarker`
+(C:3112, the task lane's marker — same shape, a different window; residual § 7).
 
 ### 3.3 Change point — the test-only hooks (OQ5)
 
@@ -389,7 +403,7 @@ entry; and, for T9, after its own record `Update` returns for `laneOf() == "canc
 | T3 | **W3 flipped** (cancel before the carrier's check) | PROBE:373-461 with the pause moved from the Warn to `testApprovedDispatchHook("dispatched")`; the cancel lane paused at the marker `Create` | at approval return: acks=0, naks=1, terms=0; approved `tool.execute` unchanged; `bucket.recorded()` empty; no `COMPLETE_` yet. After the cancel lane releases: one write, `cancel-lane`, `cancelled`; `loops_failed_total{cancelled}` +1, `active_loops` −1. Redeliver the approval: acks=1, `tool_results_dropped_total{approval_inapplicable}` +1, nothing published. | the same approval with no cancel dispatches and acks. | delete the § 3.1 block → red on "approved tool.execute unchanged" and "no carrier write". |
 | T4 | **W4 flipped** (release before the check) | PROBE:467-542 with the same hook | acks=1, naks=0, terms=0, drains=0; health not `delivery ownership lost`; `tool.execute` unchanged; record revision unchanged; `tool_results_dropped_total{terminal_unproven}` +1; the second loop's approval: acks=1, its `tool.execute` +1, record `executing`, gate cleared. | the second-loop approval IS the control. | delete the § 3.1 block → red on acks (0) and health. |
 | T7 | **Ordering A** (cancel after the check, carrier write before the owner's marker) | approval paused at `testCarrierHook("published")`; then the cancel lane runs `CancelLoop` and pauses at the marker `Create`; release the carrier | (ii): the write is refused → naks=1, `bucket.recorded()` has no carrier write, record still live; release the cancel lane → marker, event, one `cancel-lane` write. Second half (the process dies): leave the cancel lane paused and deliver the cancel to a second `Component` → record live, no marker → Retry (the honest state), never `stale_loop_id`. (i), recorded as the counterexample: the carrier writes `cancelled` before any marker; the second component's cancel is acknowledged `stale_loop_id` and no `agent.complete` is ever retained. | T3. | delete the § 3.2 refusal → red on "no carrier write" and on the second component's `stale_loop_id`. |
-| T8 | **Ordering B** (owner commits and releases between publish and write) | approval paused at `published`; the cancel lane runs to completion; release the carrier | (ii): acks=1, no Fatal, health healthy, no drain; `tool.execute` = 1 (the one let out); its delivered result → `terminal_unproven` +1, nothing else. (i): Fatal `get loop … for persistence` → quarantine + latch (PROBE:517-520's text). | the next answer on the lane dispatches. | delete § 3.2 → red on acks/health (the probed W4 returns). |
+| T8 | **Ordering B** (owner commits and releases between publish and write) | approval paused at `published`; the cancel lane runs to completion; release the carrier. **Tool-lane arm:** a batch-completing tool result (it mints the next `agent.request`) paused at `published`; the cancel lane runs to completion; release the carrier — the stamp meets `ErrLoopNotFound` before the render | (ii): acks=1, no Fatal, health healthy, no drain; `tool.execute` = 1 (the one let out); its delivered result → `terminal_unproven` +1, nothing else. Tool-lane arm: the stamp's not-found is mapped → acks=1, no Fatal, no latch; the minted request is retained once and named by no record. (i): Fatal `get loop … for persistence` → quarantine + latch (PROBE:517-520's text); tool-lane arm: Fatal `name the published request` → quarantine + latch. | the next answer on the lane dispatches; a batch-completing tool result on a held loop mints, stamps and writes as today. | delete § 3.2's refusal → the approval arm red on acks/health (the probed W4 returns); drop the stamp mapping → the tool-lane arm red (quarantine + latch). |
 | T9 | **Ordering C** (owner wrote, not yet released) | approval paused at `published`; the cancel lane paused after its own record `Update` returns (raceProbeBucket, lane `cancel-lane`), before `releaseLoopTransientState` (C:3391); release the carrier | (ii): refused → record terminal → acks=1; `bucket.recorded()` = one terminal write (`cancel-lane`). (i): two terminal writes, the carrier's second, from a different snapshot. | T3. | delete § 3.2 → red on the write count. |
 | T5 | **Process replacement** | T1's two-component harness and the T7 second component are replacement at the component seam; the e2e `verifyApprovalAcrossReplacement` stage (`test/e2e/scenarios/agentic/approval_restart.go:188`) walks the cold approval branch across a real kill/start | unchanged stage; `task e2e:agentic` green on the final diff (proposal § Impact). | the stage's approve/reject settle on the replacement. | n/a. |
 | T6 | **Successful controls** | the 14 order tests the archived design § 5 lists, by name (task 4.6); ARO:316; `TestApprovalLanePublishesBeforeItWrites`; `TestTheResultShapeDecidesWhatAFailedPublishLeavesBehind` (its loop is held: `carrierLoop`, loop_carrier_test.go:40) | all green: a held, non-terminal loop passes both checks and takes the same order as today | — | — |
@@ -476,6 +490,10 @@ on § 3.1, T7–T9 on § 3.2, T2 on § 3.4 if taken.
 - **Inventory correction (applied to the prose, pins untouched).** Inventory § 1's "Writer 3" paragraph and § 5's
   candidate (3) described a Cancelled-state result; the mechanism is the carrier rendering the loop's in-memory state
   at write time (P1).
+- **The sentinel wrap reaches the sweeper** (OQ3 (ii)): with `GetLoop` wrapping `ErrLoopNotFound`, a loop released
+  between the sweeper's snapshot and `HandleApprovalResponse`'s re-read (ARH:85) now matches AS:105 and logs the
+  "already released" Warn (AS:108-110) instead of the "auto-reject failed" Error (AS:131-135) — benign; comment at
+  AS:105.
 - **Metric label at the carrier's Ack branch** (OQ3): every lane's carrier-settled result counts under
   `tool_results_dropped_total{terminal_unproven}`; the handler-entry guards keep their own families. Doc comment on
   `recordTerminalToolResultDropped` (TO:506-511) and on M:166-167; the § 5 sentence.

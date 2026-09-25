@@ -41,8 +41,8 @@ quarantined, never retried: the redelivery does not reach the loop the first att
 from the loop's new terminal state and the result the first attempt built cannot be rebuilt. A loop's terminal
 business failure SHALL be positively acknowledged only once its failed loop state, its terminal record and its failure
 events have committed. A non-terminal result whose loop is terminal in memory, or no longer held, when the carrier is
-entered or when it renders the loop's record is not this delivery's partial effect: the carrier publishes nothing
-further, writes nothing, and the loop's record decides the delivery.
+entered, when it names the request it published, or when it renders the loop's record is not this delivery's partial
+effect: the carrier publishes nothing further, writes nothing, and the loop's record decides the delivery.
 
 An error accompanying a result that carries a completion or failure event SHALL be read as that terminal's cause,
 never as the delivery's disposition: the terminal is the loop's settlement, the terminal owner commits it in its order,
@@ -163,8 +163,9 @@ every lane that produces it.
 - **AND** a gate, which only the tool-result lane creates, is written before it is published, and an ordinary
   advance produced on the model, tool or approval lane or by the sweep publishes before it writes on every one of
   them
-- **AND** a non-terminal result whose loop is terminal in memory or no longer held when the carrier is entered, or when
-  it renders the loop's record, publishes nothing further and writes nothing on every lane: the record decides it
+- **AND** a non-terminal result whose loop is terminal in memory or no longer held when the carrier is entered, when it
+  names the request it published, or when it renders the loop's record, publishes nothing further and writes nothing
+  on every lane: the record decides it
 
 #### Scenario: A terminal-guard result is settled by the record, whichever lane produced it
 
@@ -291,35 +292,35 @@ and the durable terminal is adopted when that call's result completes the batch.
 until the signal consumer's redelivery budget is exhausted and is observed there, never applied, because the cold
 cancel arm adopts only a cancel marker. A non-terminal result that reaches the carrier after its loop went terminal in
 memory, or after the loop was released, SHALL publish nothing and write nothing, and a non-terminal result whose loop
-is terminal in memory or no longer held when the carrier renders its record SHALL NOT be written: the loop's record
-decides the delivery exactly as it decides a terminal-guard result — a terminal or absent record is acknowledged
-without effect, a live one is retried, and the redelivery is classified by its lane against the record. A terminal
-that lands between the carrier's check and its publication lets that one publication out, and the durable terminal may
-be created before that publication's PubAck; the published call's result is acknowledged without effect on the
-terminal loop. A redelivered input whose `request_id` is older than `published_request_id` SHALL be acknowledged
-without effect; one whose `request_id` is newer SHALL be retried until the record names it; one whose `request_id` is
-not a request of the loop SHALL be quarantined, except that such a governance verdict SHALL be terminated, so that one
-misconfigured verdict rule terminates its own deliveries (JetStream Term: never redelivered, no dead-letter copy)
-without stopping the verdict lane. A redelivered tool result whose `request_id` equals `published_request_id` and
-whose execution is already named in `pending_tool_results` is a replay of applied work and SHALL be acknowledged
-without effect, with the batch's unfinished executions left untouched; ordering cannot decide that case, because the
-batch is the current request's. An `approval_required` result stored there by an approval gate is a placeholder, not
-an answer: it counts as applied only against another `approval_required` result. The approved call's own result SHALL
-be applied, and SHALL be retried while the record still holds the gate for that execution. A redelivered
-`approval_required` result whose gate the record still holds SHALL re-publish that gate's approval request from the
-record and be acknowledged; a re-publication that fails SHALL be retried. A governance verdict that reaches no waiter,
-and whose `request_id`, when present, is a request of its loop, SHALL be acknowledged without effect when its
-execution is named in `pending_tool_results`, an approval gate's `approval_required` placeholder included, because a
-gated call is dispatched only after its verdict was consumed; one whose loop record is absent or terminal SHALL be
-acknowledged; one with no `request_id` SHALL be classified on that membership alone; and a current verdict whose
-execution is not named SHALL be retried. A process with no memory of the loop SHALL, before classifying a redelivered
-model response, tool result, or approval response, read the newest retained request for the loop and, when it is newer
-than `published_request_id`, adopt it into the record by identity first. An approval response whose loop's retained
-request or its response is confirmed absent SHALL fail the loop with reason `continuation_unavailable`; an unreadable
-stream SHALL be retried. Where this requirement classifies a redelivered input as applied or inapplicable, that
-classification SHALL take precedence over the live-record retry of "A loop absent from process memory is settled from
-its record". Recovery SHALL never compare rendered messages, result content, or terminal content to decide whether an
-input was applied.
+is terminal in memory or no longer held when the carrier names the request it published or renders its record SHALL
+NOT be written: the loop's record decides the delivery exactly as it decides a terminal-guard result — a terminal or
+absent record is acknowledged without effect, a live one is retried, and the redelivery is classified by its lane
+against the record. A terminal that lands between the carrier's check and its publication lets that one publication
+out, and the durable terminal may be created before that publication's PubAck; the published call's result is
+acknowledged without effect on the terminal loop. A redelivered input whose `request_id` is older than
+`published_request_id` SHALL be acknowledged without effect; one whose `request_id` is newer SHALL be retried until
+the record names it; one whose `request_id` is not a request of the loop SHALL be quarantined, except that such a
+governance verdict SHALL be terminated, so that one misconfigured verdict rule terminates its own deliveries
+(JetStream Term: never redelivered, no dead-letter copy) without stopping the verdict lane. A redelivered tool result
+whose `request_id` equals `published_request_id` and whose execution is already named in `pending_tool_results` is a
+replay of applied work and SHALL be acknowledged without effect, with the batch's unfinished executions left
+untouched; ordering cannot decide that case, because the batch is the current request's. An `approval_required` result
+stored there by an approval gate is a placeholder, not an answer: it counts as applied only against another
+`approval_required` result. The approved call's own result SHALL be applied, and SHALL be retried while the record
+still holds the gate for that execution. A redelivered `approval_required` result whose gate the record still holds
+SHALL re-publish that gate's approval request from the record and be acknowledged; a re-publication that fails SHALL
+be retried. A governance verdict that reaches no waiter, and whose `request_id`, when present, is a request of its
+loop, SHALL be acknowledged without effect when its execution is named in `pending_tool_results`, an approval gate's
+`approval_required` placeholder included, because a gated call is dispatched only after its verdict was consumed; one
+whose loop record is absent or terminal SHALL be acknowledged; one with no `request_id` SHALL be classified on that
+membership alone; and a current verdict whose execution is not named SHALL be retried. A process with no memory of the
+loop SHALL, before classifying a redelivered model response, tool result, or approval response, read the newest
+retained request for the loop and, when it is newer than `published_request_id`, adopt it into the record by identity
+first. An approval response whose loop's retained request or its response is confirmed absent SHALL fail the loop with
+reason `continuation_unavailable`; an unreadable stream SHALL be retried. Where this requirement classifies a
+redelivered input as applied or inapplicable, that classification SHALL take precedence over the live-record retry of
+"A loop absent from process memory is settled from its record". Recovery SHALL never compare rendered messages, result
+content, or terminal content to decide whether an input was applied.
 
 A deferred continuation is durable as a MARKER only. Where the record carries `pending_continuation` with an empty
 `pending_continuation_request_id`, the admitted turn's text was never inside a retained request and is not

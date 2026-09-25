@@ -55,19 +55,28 @@ takes (i); **[OQ7 (b)]** likewise. Under an option not taken nothing replaces it
       read the entity first and, when `!terminalWriter` and the loop is not found or terminal, return the new
       unexported sentinel `errTerminalOwnedElsewhere` (declared beside `processor/agentic-loop/handlers.go:2625` — `var errCancelledBeforeMutation = errors.New("cancelled before any loop mutation")`).
 - [ ] 2.2 **[OQ3 (ii)]** The two carrier sites call the `false` form and map the sentinel first:
-      `processor/agentic-loop/component.go:2276` — `if err := c.persistLoopState(ctx, result.LoopID); err != nil {` (the gated tail) and
-      `processor/agentic-loop/component.go:2325` — `if err := c.persistLoopState(ctx, result.LoopID); err != nil {` (`publishThenPersistResultState`) —
-      `errors.Is(err, errTerminalOwnedElsewhere)` → `return c.settleTerminalGuard(ctx, result, c.recordTerminalToolResultDropped)`;
-      the lost-CAS and Fatal mappings below each are unchanged.
-- [ ] 2.3 **[OQ3 (ii)]** `LoopManager.GetLoop` wraps the sentinel: `processor/agentic-loop/state.go:664` — `return agentic.LoopEntity{}, errs.Wrap(fmt.Errorf("loop %s not found", loopID), "LoopManager", "GetLoop", "find loop")`
+      `processor/agentic-loop/component.go:2276` — `if err := c.persistLoopState(ctx, result.LoopID); err != nil {`
+      (the gated tail) and `processor/agentic-loop/component.go:2325` — `if err := c.persistLoopState(ctx,
+      result.LoopID); err != nil {` (`publishThenPersistResultState`) — `errors.Is(err, errTerminalOwnedElsewhere)` →
+      `return c.settleTerminalGuard(ctx, result, c.recordTerminalToolResultDropped)`; the lost-CAS and Fatal mappings
+      below each are unchanged. In `publishThenPersistResultState` the stamp's error is tested first too —
+      `processor/agentic-loop/component.go:2315` — `if err := c.stampPublishedRequest(result); err != nil {` —
+      `errors.Is(err, ErrLoopNotFound)` (from `SetPublishedRequest`, `processor/agentic-loop/state.go:1267` —
+      `fmt.Errorf("loop %s: %w", loopID, ErrLoopNotFound),`) → the same guard settlement; any other stamp error keeps
+      its Fatal wrap (the stamp runs before the render for a result that mints the next request, design § 3.2).
+- [ ] 2.3 **[OQ3 (ii)]** `LoopManager.GetLoop` wraps the sentinel: `processor/agentic-loop/state.go:664` — `return
+      agentic.LoopEntity{}, errs.Wrap(fmt.Errorf("loop %s not found", loopID), "LoopManager", "GetLoop", "find loop")`
       becomes `fmt.Errorf("loop %s: %w", loopID, ErrLoopNotFound)` inside the same `errs.Wrap`, as
       `processor/agentic-loop/state.go:785` — `fmt.Errorf("loop %s: %w", loopID, ErrLoopNotFound),` and
-      `processor/agentic-loop/state.go:1936` — `fmt.Errorf("loop %s: %w", loopID, ErrLoopNotFound), "LoopManager", "CancelLoop", "find loop")` do.
-      Verify the blast radius: `git grep -n "errors.Is([a-zA-Z]*, ErrLoopNotFound)" -- 'processor/agentic-loop/*.go' ':!*_test.go'`
-      → 4 sites at base (ARH:194, AS:105, C:3303, C:3311); the one whose input changes is ARH:194 via
-      `processor/agentic-loop/approval_response_handler.go:85` — `return HandlerResult{}, getErr` (row A8 takes the
-      cold branch on its first delivery; block 1's scenario is updated). Alternative if the owner refuses the wrap: a
-      private `(entity, held bool)` accessor beside `GetLoop`, used only by 1.1 and 2.1.
+      `processor/agentic-loop/state.go:1936` — `fmt.Errorf("loop %s: %w", loopID, ErrLoopNotFound), "LoopManager",
+      "CancelLoop", "find loop")` do. Verify the blast radius: `git grep -n "errors.Is([a-zA-Z]*, ErrLoopNotFound)" --
+      'processor/agentic-loop/*.go' ':!*_test.go'` → 4 sites at base (ARH:194, AS:105, C:3303, C:3311); the one whose
+      input changes is ARH:194 via `processor/agentic-loop/approval_response_handler.go:85` — `return HandlerResult{},
+      getErr` (row A8 takes the cold branch on its first delivery; block 1's scenario is updated). Alternative if the
+      owner refuses the wrap: a private `(entity, held bool)` accessor beside `GetLoop`, used only by 1.1 and 2.1.
+      Blast-radius addition: `processor/agentic-loop/approval_sweeper.go:105` — `if errors.Is(err, ErrLoopNotFound) {`
+      — now also matches an ARH:85 not-found, so the sweeper logs "already released" (AS:108) instead of "auto-reject
+      failed" (AS:131) for a loop released between its snapshot and the re-read — benign; comment it.
 
 ## 3. The test-only hooks (design § 3.3; OQ5)
 
@@ -110,9 +119,12 @@ takes (i); **[OQ7 (b)]** likewise. Under an option not taken nothing replaces it
 - [ ] 5.2 T7/T8/T9: the three sub-window orderings through the `published` stage, with the cancel lane paused at its
       marker `Create` (T7), run to completion (T8), or paused after its own record `Update` returns and before
       `processor/agentic-loop/component.go:3391` — `c.releaseLoopTransientState(loopID)` (T9; extend
-      `raceProbeBucket.Update` with a post-write pause for lane `cancel-lane`). T7's second half delivers the cancel to
-      a second `Component` while the first lane stays paused. Assertions per design § 4; under OQ3 (i) the three tests
-      record today's orderings A/B/C as the documented counterexamples instead.
+      `raceProbeBucket.Update` with a post-write pause for lane `cancel-lane`). T7's second half delivers the cancel
+      to a second `Component` while the first lane stays paused. Assertions per design § 4; under OQ3 (i) the three
+      tests record today's orderings A/B/C as the documented counterexamples instead. T8 also runs on the TOOL lane: a
+      batch-completing tool result (it mints the next request) paused at `published`, the cancel lane run to
+      completion, released — acks=1, no Fatal, no latch (the stamp's not-found is mapped by 2.2); mutation: drop that
+      mapping → this arm quarantines and latches.
 - [ ] 5.3 T1: the two-component W1 counterexample on the `predecessor`/replacement pattern —
       `processor/agentic-loop/task_redelivery_integration_test.go:187` — `require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch))` —
       with both arms (same kind converges; different kind refused, marker unchanged) and, if a seam is found, arm (c):
