@@ -2017,7 +2017,8 @@ on the record's terminal `state` (a KV watch) sees the same transition, slightly
   `COMPLETE_<loopID>` and then fails to publish is not reconciled either. A timer is never redelivered, so the record
   stays `awaiting_approval`. After a `max_iterations` terminal, a later human answer is applied cold on a loop that
   already has a durable failed terminal. After the loop's own timeout, a later answer to that gate re-derives the
-  timeout on the rebuilt loop and adopts the durable failed terminal, so the loop settles on that answer.
+  timeout on the rebuilt loop and adopts the durable failed terminal, so the loop settles on that answer. (The owner
+  ruling cited above covers the `max_iterations` case; the loop-timeout case is this change's residual beside it.)
 
 ### A terminal record carries no approval gate
 

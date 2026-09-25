@@ -205,7 +205,8 @@ Owner-run review of `c45d1063` (PR #1366 issuecomment-5827554362). Spec text cha
   (`TestAnExpiredApprovalSettlesOnWhatItsTerminalCommitReturns`).
 - Re-review MEDIUM-2: `docs/concepts/17-approval-flow.md` and the migration note no longer say a cold answer is always
   applied; an answer to a loop past its `timeout_at` fails the loop on the timeout.
-- Re-review MEDIUM-3: owner ruling 2's recorded residual (#1362 issuecomment-5809906669) names both approval-timeout
-  sweep terminals, its `max_iterations` auto-reject and the loop's own timeout; the timeout case settles on the next
-  answer to the gate, which re-derives the timeout and adopts the durable marker. Spec and migration note.
+- Re-review MEDIUM-3: the recorded residual now names both approval-timeout sweep terminals. The `max_iterations`
+  auto-reject is owner ruling 2's (#1362 issuecomment-5809906669). The loop's own timeout is this PR's residual beside
+  it, made by the sweeper timeout arm (`4dcd207f`), and it settles on the next answer to the gate, which re-derives the
+  timeout and adopts the durable marker. Spec and migration note.
   Test: `TestASweepTimeoutWhosePublishFailedSettlesOnTheNextAnswer`.

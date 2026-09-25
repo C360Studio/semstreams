@@ -208,8 +208,8 @@ func TestAnExpiredApprovalSettlesOnWhatItsTerminalCommitReturns(t *testing.T) {
 }
 
 // TestASweepTimeoutWhosePublishFailedSettlesOnTheNextAnswer pins the widened
-// residual (PR #1366 re-review MEDIUM-3; extends owner ruling 2, #1362
-// issuecomment-5809906669): the sweep commits the loop's timeout marker, its
+// residual (PR #1366 re-review MEDIUM-3; a residual beside owner ruling 2,
+// #1362 issuecomment-5809906669, which names only max_iterations): the sweep commits the loop's timeout marker, its
 // publication fails, and the record stays awaiting_approval because a timer is
 // never redelivered. The next answer to that gate rebuilds the loop, re-derives
 // the same timeout, and adopts the durable marker — the kinds match — so the
