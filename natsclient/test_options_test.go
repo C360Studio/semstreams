@@ -5,6 +5,19 @@ import (
 	"time"
 )
 
+func TestWithFastStartup_ConfiguresConnectionBudget(t *testing.T) {
+	t.Parallel()
+
+	cfg := defaultTestConfig()
+	WithFastStartup()(cfg)
+	if cfg.timeout != 2*time.Second {
+		t.Fatalf("connection timeout = %s, want 2s", cfg.timeout)
+	}
+	if cfg.startTimeout != defaultTestContainerStartTimeout {
+		t.Fatalf("container start timeout = %s, want default %s", cfg.startTimeout, defaultTestContainerStartTimeout)
+	}
+}
+
 func TestWithMinimalFeatures_PreservesExplicitContainerStartTimeout(t *testing.T) {
 	t.Parallel()
 

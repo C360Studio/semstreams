@@ -1,11 +1,5 @@
 package graphindex
 
-import (
-	"encoding/json"
-	"os/exec"
-	"testing"
-)
-
 // One pin for this package's evidence gates (owner-filter load, predicate-
 // layout smoke). Both integration harnesses alias these constants, so the
 // package cannot carry two divergent pins — the 2026-08-02 audit found both
@@ -17,32 +11,9 @@ import (
 //
 // Digest is the same normative pin natsclient's KV key contract runs
 // (natsclient/kv_key_contract_integration_test.go).
+// scripts/lint-nats-kv-sdk-pin.sh checks the resolved nats.go module against
+// this evidence pin and the KV contract matrix pin before test binaries run.
 const (
 	graphIndexNATSServerPin = "2.14.4-alpine@sha256:f2123f533c2b0cada0a5c5ec434fb2b8cfe1cf220215ef9d7517e1372917ad66"
 	graphIndexNATSGoPin     = "v1.52.0"
 )
-
-// TestGraphIndexPinnedNATSGoMatchesResolvedModule keeps the REPORTED SDK
-// version honest against the module the build actually resolves — the same
-// discipline natsclient applies to its own evidence constant
-// (TestKVContractPinnedNATSGoDependency). Runs in the unit tier so drift is
-// caught on every CI run, not only when the heavy gates are exercised.
-func TestGraphIndexPinnedNATSGoMatchesResolvedModule(t *testing.T) {
-	t.Parallel()
-
-	out, err := exec.Command("go", "list", "-m", "-json", "github.com/nats-io/nats.go").Output()
-	if err != nil {
-		t.Fatalf("resolve nats.go module: %v", err)
-	}
-	var mod struct {
-		Version string `json:"Version"`
-	}
-	if err := json.Unmarshal(out, &mod); err != nil {
-		t.Fatalf("decode resolved nats.go module: %v", err)
-	}
-	if mod.Version != graphIndexNATSGoPin {
-		t.Fatalf("graphIndexNATSGoPin = %q but the build resolves nats.go %q — the evidence "+
-			"log lines of this package's gates would report a version the binary does not use; "+
-			"update the pin with the dependency bump", graphIndexNATSGoPin, mod.Version)
-	}
-}

@@ -2,10 +2,7 @@ package natsclient
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
 	"testing"
@@ -211,99 +208,6 @@ func TestKVContractPinnedSDKAcceptanceMatrix(t *testing.T) {
 			t.Fatalf("fixture %q no longer records SDK-only acceptance", filter)
 		}
 	}
-}
-
-func TestKVContractPinnedNATSGoDependency(t *testing.T) {
-	t.Parallel()
-
-	command := exec.Command("go", "list", "-m", "-json", "github.com/nats-io/nats.go")
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("resolve nats.go module: %v", err)
-	}
-	var evidence resolvedModuleEvidence
-	if err := json.Unmarshal(output, &evidence); err != nil {
-		t.Fatalf("decode resolved nats.go module: %v", err)
-	}
-	if err := validatePinnedNATSGoEvidence(evidence); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestValidatePinnedNATSGoEvidenceRejectsReplacement(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		evidence resolvedModuleEvidence
-		wantErr  bool
-	}{
-		{
-			name: "direct pin",
-			evidence: resolvedModuleEvidence{
-				Path:    "github.com/nats-io/nats.go",
-				Version: pinnedNATSGoContractVersion,
-			},
-		},
-		{
-			name: "same-version fork replacement",
-			evidence: resolvedModuleEvidence{
-				Path:    "github.com/nats-io/nats.go",
-				Version: pinnedNATSGoContractVersion,
-				Replace: &resolvedModuleEvidence{
-					Path:    "example.com/fork/nats.go",
-					Version: pinnedNATSGoContractVersion,
-				},
-			},
-			wantErr: true,
-		},
-		{
-			name: "local replacement",
-			evidence: resolvedModuleEvidence{
-				Path:    "github.com/nats-io/nats.go",
-				Version: pinnedNATSGoContractVersion,
-				Replace: &resolvedModuleEvidence{Path: "../nats.go"},
-			},
-			wantErr: true,
-		},
-		{
-			name: "version drift",
-			evidence: resolvedModuleEvidence{
-				Path:    "github.com/nats-io/nats.go",
-				Version: "v1.49.0",
-			},
-			wantErr: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validatePinnedNATSGoEvidence(tt.evidence)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("validatePinnedNATSGoEvidence() error = %v, wantErr=%v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-type resolvedModuleEvidence struct {
-	Path    string                  `json:"Path"`
-	Version string                  `json:"Version"`
-	Replace *resolvedModuleEvidence `json:"Replace"`
-}
-
-func validatePinnedNATSGoEvidence(evidence resolvedModuleEvidence) error {
-	if evidence.Path != "github.com/nats-io/nats.go" {
-		return fmt.Errorf("resolved module path = %q", evidence.Path)
-	}
-	if evidence.Replace != nil {
-		return fmt.Errorf("nats.go replacement is not normative: path=%q version=%q",
-			evidence.Replace.Path, evidence.Replace.Version)
-	}
-	if evidence.Version != pinnedNATSGoContractVersion {
-		return fmt.Errorf("effective nats.go=%s, contract matrix pin=%s; update SDK and real-NATS evidence together",
-			evidence.Version, pinnedNATSGoContractVersion)
-	}
-	return nil
 }
 
 func TestKVOpaqueTokenCodec(t *testing.T) {

@@ -38,15 +38,16 @@ func TestIntegration_NewTestClient_BasicConnection(t *testing.T) {
 }
 
 func TestIntegration_NewTestClient_WithFastStartup(t *testing.T) {
-	start := time.Now()
 	testClient := NewTestClient(t, WithFastStartup())
-	elapsed := time.Since(start)
-
 	require.NotNil(t, testClient)
-	assert.True(t, testClient.IsReady())
+	require.True(t, testClient.IsReady())
 
-	// Should startup faster than default
-	assert.Less(t, elapsed, 15*time.Second, "Fast startup should complete quickly")
+	// A broker round trip proves the short connection budget still yields a usable client.
+	conn := testClient.GetNativeConnection()
+	require.NotNil(t, conn)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, conn.FlushWithContext(ctx))
 }
 
 func TestIntegration_NewTestClient_WithJetStream(t *testing.T) {

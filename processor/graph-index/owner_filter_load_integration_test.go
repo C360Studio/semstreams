@@ -25,8 +25,8 @@ import (
 
 const (
 	// Server and SDK pins are shared with the predicate-layout smoke gate —
-	// see nats_pin_test.go for why one source, and for the unit-tier
-	// assertion that keeps the reported SDK honest against go.mod.
+	// see nats_pin_test.go for why one source. The lint SDK pin guard checks
+	// the reported SDK against the selected module graph before tests run.
 	ownerLoadNATSServer = graphIndexNATSServerPin
 	ownerLoadNATSSDK    = graphIndexNATSGoPin
 	ownerLoadPredicate  = "robotics.status.ready"
