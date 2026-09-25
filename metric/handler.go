@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -54,11 +57,41 @@ func NewServer(port int, path string, registry *MetricsRegistry, securityCfg sec
 // returns only after this Server owns its listener. ctx is the exact base
 // context for served requests. Restart requires a freshly constructed Server.
 func (s *Server) Start(ctx context.Context) error {
+	return s.start(ctx, nil, false, "Start")
+}
+
+// StartWithListener starts the one-shot metrics HTTP server on a caller-bound
+// raw TCP listener. A successful return transfers listener ownership to Server;
+// every returned error leaves it with the caller. Server applies configured TLS
+// itself, so callers must not pass a TLS-wrapped listener.
+func (s *Server) StartWithListener(ctx context.Context, listener net.Listener) error {
+	return s.start(ctx, listener, true, "StartWithListener")
+}
+
+func (s *Server) start(ctx context.Context, supplied net.Listener, provided bool, operation string) error {
 	if ctx == nil {
-		return errs.WrapInvalid(errs.ErrInvalidData, "Server", "Start", "nil context")
+		return errs.WrapInvalid(errs.ErrInvalidData, "Server", operation, "nil context")
 	}
 	if err := ctx.Err(); err != nil {
-		return errs.WrapInvalid(err, "Server", "Start", "context already ended")
+		return errs.WrapInvalid(err, "Server", operation, "context already ended")
+	}
+	if provided {
+		if supplied == nil {
+			return errs.WrapInvalid(errs.ErrInvalidData, "Server", operation, "nil listener")
+		}
+		addr, ok := supplied.Addr().(*net.TCPAddr)
+		if !ok || addr.Port <= 0 {
+			return errs.WrapInvalid(errs.ErrInvalidData, "Server", operation, "listener has no assigned TCP endpoint")
+		}
+		if socket, ok := supplied.(syscall.Conn); ok {
+			raw, err := socket.SyscallConn()
+			if err == nil {
+				err = raw.Control(func(uintptr) {})
+			}
+			if err != nil {
+				return errs.WrapInvalid(err, "Server", operation, "listener is closed")
+			}
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -66,7 +99,7 @@ func (s *Server) Start(ctx context.Context) error {
 	if s.used {
 		return errs.WrapInvalid(
 			errs.ErrAlreadyStarted,
-			"Server", "Start", "server instance already used")
+			"Server", operation, "server instance already used")
 	}
 	s.used = true
 
@@ -74,7 +107,7 @@ func (s *Server) Start(ctx context.Context) error {
 	if s.registry == nil {
 		return errs.WrapFatal(
 			fmt.Errorf("nil registry"),
-			"Server", "Start", "metrics registry not provided")
+			"Server", operation, "metrics registry not provided")
 	}
 
 	mux := http.NewServeMux()
@@ -121,17 +154,21 @@ func (s *Server) Start(ctx context.Context) error {
 		tlsConfig, err := tlsutil.LoadServerTLSConfig(s.security.TLS.Server)
 		if err != nil {
 			s.server = nil
-			return errs.WrapFatal(err, "Server", "Start", "load TLS config")
+			return errs.WrapFatal(err, "Server", operation, "load TLS config")
 		}
 		s.server.TLSConfig = tlsConfig
 	}
 
 	httpServer := s.server
-	listener, err := net.Listen("tcp", httpServer.Addr)
-	if err != nil {
-		s.server = nil
-		return errs.WrapFatal(err, "Server", "Start",
-			fmt.Sprintf("failed to start server on port %d", s.port))
+	listener := supplied
+	if !provided {
+		var err error
+		listener, err = net.Listen("tcp", httpServer.Addr)
+		if err != nil {
+			s.server = nil
+			return errs.WrapFatal(err, "Server", operation,
+				fmt.Sprintf("failed to start server on port %d", s.port))
+		}
 	}
 	if s.security.TLS.Server.Enabled {
 		listener = tls.NewListener(listener, httpServer.TLSConfig)
@@ -230,11 +267,28 @@ func classifyServeError(err error) error {
 	return errs.WrapTransient(err, "Server", "Stop", "metrics server exited with an error")
 }
 
-// Address returns the server address
+// Address reports the accepted listener's endpoint while Server owns it.
+// Before startup and after completed Stop, it reports the configured endpoint.
+// The address does not assert that Serve is ready to accept requests.
 func (s *Server) Address() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	host := "localhost"
+	port := s.port
+	if s.listener != nil {
+		if addr, ok := s.listener.Addr().(*net.TCPAddr); ok {
+			port = addr.Port
+			if addr.IP != nil && !addr.IP.IsUnspecified() {
+				host = addr.IP.String()
+				if addr.Zone != "" {
+					host += "%" + addr.Zone
+				}
+			}
+		}
+	}
 	scheme := "http"
 	if s.security.TLS.Server.Enabled {
 		scheme = "https"
 	}
-	return fmt.Sprintf("%s://localhost:%d%s", scheme, s.port, s.path)
+	return (&url.URL{Scheme: scheme, Host: net.JoinHostPort(host, strconv.Itoa(port)), Path: s.path}).String()
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"sync"
 
 	"github.com/c360studio/semstreams/component"
@@ -40,6 +41,7 @@ type Metrics struct {
 	testServerPublished   chan<- struct{}
 	testStartRelease      <-chan struct{}
 	testStartWaitUnlocked chan<- struct{}
+	testListener          net.Listener
 }
 
 type metricsServer interface {
@@ -141,7 +143,7 @@ func (m *Metrics) Start(ctx context.Context) error {
 	if !managerClaimed {
 		server := metric.NewServer(m.config.Port, m.config.Path, m.registry, m.security)
 		slog.Info("Starting metrics server", "port", m.config.Port, "path", m.config.Path)
-		if err := server.Start(runCtx); err != nil {
+		if err := m.startServer(runCtx, server); err != nil {
 			cancel()
 			m.lifecycleMu.Lock()
 			m.cleanupPending = false
@@ -313,6 +315,15 @@ func (m *Metrics) claimManagerServer() (*metric.Server, error) {
 	}
 	m.managerClaimed = true
 	return metric.NewServer(m.config.Port, m.config.Path, m.registry, m.security), nil
+}
+
+// startServer keeps both standalone and Manager-owned metrics on the same
+// concrete Server lifecycle. Tests may supply an already-bound listener.
+func (m *Metrics) startServer(ctx context.Context, server *metric.Server) error {
+	if m.testListener != nil {
+		return server.StartWithListener(ctx, m.testListener)
+	}
+	return server.Start(ctx)
 }
 
 func (m *Metrics) setManagerServerHealthy(healthy bool) {

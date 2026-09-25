@@ -1,7 +1,7 @@
 package service
 
 import (
-	"fmt"
+	"net"
 	"net/http"
 	_ "net/http/pprof" // populate DefaultServeMux so the happy-path test serves /debug/pprof
 	"testing"
@@ -10,21 +10,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// (freePort lives in service_manager_health_listener_test.go — reused here.)
-
 // TestMaybeStartPProf_DisabledOrInvalid_NoListener verifies the gate: with debug
-// off or a non-positive port, no server is started (nothing answers on the port).
+// off or a non-positive port, no acquisition is attempted.
 func TestMaybeStartPProf_DisabledOrInvalid_NoListener(t *testing.T) {
-	// debug off → no goroutine spawned, so nothing serves on the port.
-	port := freePort(t)
-	MaybeStartPProf(false, port)
-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/debug/pprof/", port)) //nolint:bodyclose // err path
-	require.Error(t, err, "debug off must not start a pprof listener")
-	if resp != nil {
-		_ = resp.Body.Close()
+	called := false
+	refuse := func(string, string) (net.Listener, error) {
+		called = true
+		return nil, nil
 	}
-
-	// port <= 0 → early return, no panic, no bind.
+	for _, test := range []struct {
+		enabled bool
+		port    int
+	}{{false, 1}, {true, 0}, {true, -1}} {
+		done := startPProf(test.enabled, test.port, &http.Server{}, refuse)
+		select {
+		case <-done:
+		default:
+			t.Fatal("disabled pprof returned unfinished completion")
+		}
+	}
+	require.False(t, called)
+	MaybeStartPProf(false, 1)
 	MaybeStartPProf(true, 0)
 	MaybeStartPProf(true, -1)
 }
@@ -33,18 +39,34 @@ func TestMaybeStartPProf_DisabledOrInvalid_NoListener(t *testing.T) {
 // and a valid port, the pprof index becomes reachable over HTTP — proving the
 // full chain (blank import → DefaultServeMux → served by the helper).
 func TestMaybeStartPProf_Enabled_ServesPprof(t *testing.T) {
-	port := freePort(t)
-	MaybeStartPProf(true, port)
-
-	url := fmt.Sprintf("http://127.0.0.1:%d/debug/pprof/", port)
-	var resp *http.Response
-	var err error
-	for i := 0; i < 50; i++ { // listener comes up asynchronously; poll up to ~1s.
-		if resp, err = http.Get(url); err == nil { //nolint:bodyclose // closed below
-			break
+	server := &http.Server{}
+	acquired := make(chan net.Listener, 1)
+	done := startPProf(true, 1, server, func(_, _ string) (net.Listener, error) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err == nil {
+			acquired <- listener
 		}
-		time.Sleep(20 * time.Millisecond)
+		return listener, err
+	})
+	t.Cleanup(func() {
+		require.NoError(t, server.Close())
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Error("pprof Serve did not finish after Close")
+		}
+	})
+	var listener net.Listener
+	select {
+	case listener = <-acquired:
+	case <-done:
+		t.Fatal("pprof acquisition ended before providing a listener")
+	case <-time.After(2 * time.Second):
+		t.Fatal("pprof acquisition did not complete")
 	}
+	url := "http://" + listener.Addr().String() + "/debug/pprof/"
+	waitForListener(t, url, 2*time.Second)
+	resp, err := http.Get(url)
 	require.NoError(t, err, "pprof endpoint must become reachable")
 	require.Equal(t, http.StatusOK, resp.StatusCode, "/debug/pprof/ must serve the pprof index")
 	require.NoError(t, resp.Body.Close())

@@ -636,7 +636,7 @@ func (m *Manager) startStartupMetricsServer(ctx context.Context) error {
 	if server == nil {
 		return nil
 	}
-	if err := server.Start(ctx); err != nil {
+	if err := service.startServer(ctx, server); err != nil {
 		return err
 	}
 	service.setManagerServerHealthy(true)
@@ -1278,6 +1278,10 @@ func (m *Manager) commitStartup(mux *http.ServeMux) {
 // The listener is one-shot: calling twice, including after completed Stop,
 // returns an error rather than re-binding this Manager instance.
 func (m *Manager) StartHealthListener(ctx context.Context, port int) error {
+	return m.startHealthListener(ctx, port, net.Listen)
+}
+
+func (m *Manager) startHealthListener(ctx context.Context, port int, listen func(string, string) (net.Listener, error)) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Manager", "StartHealthListener", "nil context")
 	}
@@ -1293,7 +1297,7 @@ func (m *Manager) StartHealthListener(ctx context.Context, port int) error {
 	if m.healthUsed {
 		return fmt.Errorf("health listener instance already used")
 	}
-	listener, err := net.Listen("tcp", ":"+strconv.Itoa(port))
+	listener, err := listen("tcp", ":"+strconv.Itoa(port))
 	if err != nil {
 		return fmt.Errorf("bind health listener: %w", err)
 	}

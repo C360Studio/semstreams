@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,6 +32,79 @@ type gatedStartupService struct {
 	healthy atomic.Bool
 	starts  atomic.Int64
 	stops   atomic.Int64
+}
+
+func observedManagerHTTPURL(t *testing.T, manager *Manager) string {
+	t.Helper()
+	manager.mu.RLock()
+	listener := manager.httpListener
+	manager.mu.RUnlock()
+	require.NotNil(t, listener, "shared HTTP listener not yet acquired")
+	addr, ok := listener.Addr().(*net.TCPAddr)
+	require.True(t, ok, "shared HTTP listener must have a TCP endpoint")
+	return "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(addr.Port))
+}
+
+func observedManagerMetricsURL(t *testing.T, manager *Manager) string {
+	t.Helper()
+	manager.mu.RLock()
+	server := manager.startupMetricsServer
+	manager.mu.RUnlock()
+	require.NotNil(t, server, "startup metrics server not yet constructed")
+	return server.Address()
+}
+
+type observedManagerStart struct {
+	done chan struct{}
+	err  error
+}
+
+func beginObservedManagerStart(t *testing.T, manager *Manager, release func()) *observedManagerStart {
+	t.Helper()
+	result := &observedManagerStart{done: make(chan struct{})}
+	t.Cleanup(func() {
+		if release != nil {
+			release()
+		}
+		select {
+		case <-result.done:
+		case <-time.After(5 * time.Second):
+			t.Error("Manager.StartAll did not finish after test gates released")
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := manager.StopAll(ctx); err != nil {
+			t.Errorf("clean up Manager after StartAll: %v", err)
+		}
+	})
+	go func() {
+		result.err = manager.StartAll(t.Context())
+		close(result.done)
+	}()
+	return result
+}
+
+func (result *observedManagerStart) requireSignal(t *testing.T, signal <-chan struct{}, owner string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-result.done:
+		t.Fatalf("Manager.StartAll returned before %s: %v", owner, result.err)
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s was not observed while Manager.StartAll remained active", owner)
+	}
+}
+
+func (result *observedManagerStart) wait(t *testing.T) error {
+	t.Helper()
+	select {
+	case <-result.done:
+		return result.err
+	case <-time.After(5 * time.Second):
+		t.Fatal("Manager.StartAll did not complete")
+		return nil
+	}
 }
 
 func newGatedStartupService(name string, release <-chan struct{}) *gatedStartupService {
@@ -462,23 +536,20 @@ func TestStartupMuxCommitIsCausallyAtomic(t *testing.T) {
 }
 
 func TestStartAllBindsSharedAndMetricsBeforeBlockedService(t *testing.T) {
-	httpPort := freePort(t)
-	metricsPort := freePort(t)
 	metricsRegistry := metric.NewMetricsRegistry()
 	deps := &Dependencies{
 		Logger:          slog.Default(),
 		MetricsRegistry: metricsRegistry,
 	}
-	manager := createTestServiceManager(ManagerConfig{HTTPPort: httpPort}, deps)
+	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
 
 	release := make(chan struct{})
 	componentManager := newGatedStartupService("component-manager", release)
 	later := newGatedStartupService("later", nil)
-	metricsService, err := NewMetrics(
-		json.RawMessage(fmt.Sprintf(`{"port":%d,"path":"/metrics"}`, metricsPort)),
-		deps,
-	)
+	metricsService, err := NewMetrics(json.RawMessage(`{"port":9090,"path":"/metrics"}`), deps)
 	require.NoError(t, err)
+	metricsListener := boundMetricsListener(t)
+	metricsService.(*Metrics).testListener = metricsListener
 	require.NoError(t, manager.RegisterInstance("component-manager", componentManager))
 	require.NoError(t, manager.RegisterInstance("later", later))
 	require.NoError(t, manager.RegisterInstance("metrics", metricsService))
@@ -508,13 +579,10 @@ func TestStartAllBindsSharedAndMetricsBeforeBlockedService(t *testing.T) {
 		})
 	})
 
-	startDone := make(chan error, 1)
-	go func() { startDone <- manager.StartAll(t.Context()) }()
-	select {
-	case <-componentManager.entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("component-manager service did not enter Start")
-	}
+	var releaseOnce sync.Once
+	releaseGate := func() { releaseOnce.Do(func() { close(release) }) }
+	start := beginObservedManagerStart(t, manager, releaseGate)
+	start.requireSignal(t, componentManager.entered, "component-manager Start entry")
 	select {
 	case <-later.entered:
 		t.Fatal("later service started while component-manager Start was blocked")
@@ -522,7 +590,9 @@ func TestStartAllBindsSharedAndMetricsBeforeBlockedService(t *testing.T) {
 	}
 
 	client := &http.Client{Timeout: 2 * time.Second}
-	readyResponse, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/readyz", httpPort))
+	sharedURL := observedManagerHTTPURL(t, manager)
+	require.Equal(t, "http://"+metricsListener.Addr().String()+"/metrics", observedManagerMetricsURL(t, manager))
+	readyResponse, err := client.Get(sharedURL + "/readyz")
 	require.NoError(t, err)
 	readyBody, err := io.ReadAll(readyResponse.Body)
 	require.NoError(t, err)
@@ -530,7 +600,7 @@ func TestStartAllBindsSharedAndMetricsBeforeBlockedService(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, readyResponse.StatusCode)
 	require.Equal(t, "NOT READY", string(readyBody))
 
-	earlyRoute, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/openapi.json", httpPort))
+	earlyRoute, err := client.Get(sharedURL + "/openapi.json")
 	require.NoError(t, err)
 	earlyBody, err := io.ReadAll(earlyRoute.Body)
 	require.NoError(t, err)
@@ -539,7 +609,7 @@ func TestStartAllBindsSharedAndMetricsBeforeBlockedService(t *testing.T) {
 	require.Equal(t, "NOT READY", string(earlyBody))
 	require.EqualValues(t, 2, middlewareCalls.Load())
 
-	metricsResponse, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/metrics", metricsPort))
+	metricsResponse, err := client.Get(observedManagerMetricsURL(t, manager))
 	require.NoError(t, err)
 	metricsBody, err := io.ReadAll(metricsResponse.Body)
 	require.NoError(t, err)
@@ -550,12 +620,12 @@ func TestStartAllBindsSharedAndMetricsBeforeBlockedService(t *testing.T) {
 	require.Contains(t, metricsText, `semstreams_startup_units{owner="services",stage="starts_completed"} 0`)
 	require.Contains(t, metricsText, `semstreams_startup_units{owner="services",stage="starts_invoked"} 1`)
 
-	close(release)
+	releaseGate()
 	// StartAll starts services sequentially, so its return already establishes
 	// that later.Start ran to completion — assert that outcome rather than
 	// re-waiting later.entered, which Start closes before the gate and which
 	// therefore proves nothing here (#1189).
-	require.NoError(t, <-startDone)
+	require.NoError(t, start.wait(t))
 	require.EqualValues(t, 1, later.starts.Load(), "later service did not start after gate release")
 	require.Equal(t, StatusRunning, later.Status())
 
@@ -570,7 +640,7 @@ func TestStartAllBindsSharedAndMetricsBeforeBlockedService(t *testing.T) {
 		t.Fatal("metrics service did not publish its initial healthy observation")
 	}
 
-	readyResponse, err = client.Get(fmt.Sprintf("http://127.0.0.1:%d/readyz", httpPort))
+	readyResponse, err = client.Get(sharedURL + "/readyz")
 	require.NoError(t, err)
 	readyBody, err = io.ReadAll(readyResponse.Body)
 	require.NoError(t, err)
@@ -578,7 +648,7 @@ func TestStartAllBindsSharedAndMetricsBeforeBlockedService(t *testing.T) {
 	require.Equal(t, http.StatusOK, readyResponse.StatusCode)
 	require.Equal(t, "READY", string(readyBody))
 
-	fullRoute, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/openapi.json", httpPort))
+	fullRoute, err := client.Get(sharedURL + "/openapi.json")
 	require.NoError(t, err)
 	_, err = io.Copy(io.Discard, fullRoute.Body)
 	require.NoError(t, err)
@@ -592,10 +662,9 @@ func TestMetricsBindFailureClosesSharedAndStartsNoLaterService(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = occupied.Close() })
 	metricsPort := occupied.Addr().(*net.TCPAddr).Port
-	httpPort := freePort(t)
 	metricsRegistry := metric.NewMetricsRegistry()
 	deps := &Dependencies{Logger: slog.Default(), MetricsRegistry: metricsRegistry}
-	manager := createTestServiceManager(ManagerConfig{HTTPPort: httpPort}, deps)
+	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
 	sharedBound := make(chan struct{})
 	metricsBindRelease := make(chan struct{})
 	handlerEntered := make(chan struct{})
@@ -627,14 +696,22 @@ func TestMetricsBindFailureClosesSharedAndStartsNoLaterService(t *testing.T) {
 	require.NoError(t, manager.RegisterInstance("later", later))
 	require.NoError(t, manager.RegisterInstance("metrics", metricsService))
 
-	startDone := make(chan error, 1)
-	go func() { startDone <- manager.StartAll(t.Context()) }()
-	<-sharedBound
+	start := beginObservedManagerStart(t, manager, func() {
+		releaseMetricsOnce.Do(func() { close(metricsBindRelease) })
+		releaseHandlerOnce.Do(func() { close(handlerRelease) })
+	})
+	start.requireSignal(t, sharedBound, "shared HTTP bind")
+	sharedURL := observedManagerHTTPURL(t, manager)
 	shutdownStarted := make(chan struct{})
 	manager.mu.RLock()
+	sharedListener := manager.httpListener
 	sharedServer := manager.httpServer
 	manager.mu.RUnlock()
+	require.NotNil(t, sharedListener)
 	require.NotNil(t, sharedServer)
+	sharedEndpoint, ok := sharedListener.Addr().(*net.TCPAddr)
+	require.True(t, ok)
+	sharedAddress := net.JoinHostPort("127.0.0.1", strconv.Itoa(sharedEndpoint.Port))
 	sharedServer.RegisterOnShutdown(func() { close(shutdownStarted) })
 
 	type servicesResult struct {
@@ -644,7 +721,7 @@ func TestMetricsBindFailureClosesSharedAndStartsNoLaterService(t *testing.T) {
 	servicesDone := make(chan servicesResult, 1)
 	go func() {
 		request, requestErr := http.NewRequestWithContext(
-			t.Context(), http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/services", httpPort), nil,
+			t.Context(), http.MethodGet, sharedURL+"/services", nil,
 		)
 		if requestErr != nil {
 			servicesDone <- servicesResult{err: requestErr}
@@ -667,8 +744,8 @@ func TestMetricsBindFailureClosesSharedAndStartsNoLaterService(t *testing.T) {
 	<-shutdownStarted
 	require.Equal(t, "stopping", manager.currentStartupSnapshot().Status)
 	select {
-	case earlyErr := <-startDone:
-		t.Fatalf("StartAll returned before the blocked diagnostic handler drained: %v", earlyErr)
+	case <-start.done:
+		t.Fatalf("StartAll returned before the blocked diagnostic handler drained: %v", start.err)
 	default:
 	}
 	releaseHandlerOnce.Do(func() { close(handlerRelease) })
@@ -676,7 +753,7 @@ func TestMetricsBindFailureClosesSharedAndStartsNoLaterService(t *testing.T) {
 	require.NoError(t, servicesResponse.err)
 	require.Equal(t, "stopping", servicesResponse.startup.Status)
 
-	err = <-startDone
+	err = start.wait(t)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "start metrics diagnostics")
 	require.Zero(t, componentManager.starts.Load())
@@ -686,7 +763,7 @@ func TestMetricsBindFailureClosesSharedAndStartsNoLaterService(t *testing.T) {
 	require.Nil(t, manager.httpListener)
 	manager.mu.RUnlock()
 
-	connection, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", httpPort), 250*time.Millisecond)
+	connection, err := net.DialTimeout("tcp", sharedAddress, 250*time.Millisecond)
 	if connection != nil {
 		require.NoError(t, connection.Close())
 	}
