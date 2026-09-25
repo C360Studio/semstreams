@@ -49,7 +49,7 @@ task check              # lint + test
 task schema:generate    # Regenerate schemas; `git diff schemas/ specs/` must be empty before push
 task openspec:queue     # In-flight OpenSpec changes and WHY each is still open
 task e2e:core           # Docker tiers: core ~10s, structural ~30s, statistical ~60s,
-                        # semantic ~90s, agentic ~30s, all = every tier in sequence
+                        # semantic ~90s, agentic ~5m35s, all = every tier in sequence
 ```
 
 Before every push run `task check:push`: it mirrors CI (build, lint, tagged vet, schema drift, contract, race unit,
