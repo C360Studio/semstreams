@@ -2,18 +2,24 @@
 
 ## Why
 
-Issue #1120 records service tests selecting a TCP port by binding, closing the listener, and binding the same
-number later. The kernel may allocate the released port to another process before the service starts. The
-existing inventory identifies 18 calls in four test files; this claim will verify the listener owners and test
-paths before selecting a repair.
+Issue #1120 records tests binding a TCP port, closing the listener, and asking the production server to bind the
+same number later. Another process can take the released port. Independent inventory review confirmed the
+18 calls named by the issue and nine more calls through equivalent helpers in the same service/metric owners.
 
 ## What Changes
 
-Inventory and design phase only. No runtime behavior, public API, configuration meaning, or spec delta is
-proposed in this checkpoint. The scope is #1120; the agentic safe-restart hardening has separate claims.
+This is a proposed design awaiting owner acceptance, with no implementation or spec delta yet.
+The independently reviewed inventory identifies 27 calls across six test files. The design proposes one additive
+`metric.Server.StartWithListener` method, accurate active-listener reporting through existing `Address`, private
+health/pprof/service test seams, and tests that retain their acquired listeners through production cleanup.
+Startup tests would report an early StartAll error while waiting for child entry, avoiding a misleading timeout.
 
 ## Impact
 
-Candidate surfaces are service health/shared HTTP tests, startup-observability tests, pprof tests, and the
-listener ownership paths they exercise in `service` and `metric`. Independent inventory review precedes
-options and design. Any required contract change follows independent design review and owner acceptance.
+The proposed scope is the existing service health, shared HTTP, startup-observability, pprof, standalone metrics,
+and concrete metric-server owners and tests. Current disabled/default port meanings and ownership ordering remain
+constraints. Adjacent UDP, websocket, and maxdelivery helpers and agentic safe-restart claims have separate scope.
+
+`inventory.md` is the frozen inventory checkpoint. `design.md` defines the proposed ownership contract, alternatives,
+and verification slice. `review.md` records exact reviewed identities. Independent design review and explicit owner
+acceptance are required before the developer receives this design or a runtime/spec delta is written.
