@@ -766,7 +766,8 @@ func newSubscription(sub nativeSubscription) *Subscription {
 	// exits, on drain, unsubscribe, and connection close alike.
 	sub.SetClosedHandler(func(string) { s.closeDone() })
 	if !sub.IsValid() {
-		// Closed before the handler was set, so it will never fire.
+		// Closed before the handler was set, so it may never fire; doneOnce
+		// makes a late fire harmless.
 		s.closeDone()
 	}
 	return s

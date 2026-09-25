@@ -134,7 +134,7 @@ func TestSubscriptionDrainConnectionClosesMidDrain(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 	require.ErrorIs(t, sub.Drain(canceled), context.Canceled)
-	native.valid.Store(false)
+	native.valid.Store(false) // the connection goes; Drain does not read IsValid after construction
 	require.ErrorIs(t, sub.Drain(canceled), context.Canceled)
 
 	native.fireClosed()
