@@ -44,6 +44,7 @@ func TestStagesAreExactlyThisOrderedList(t *testing.T) {
 		{"verify-milestone-settlement", true},
 		{"walk-approval-path", true},
 		{"refuse-non-canonical-approval", true},
+		{"refuse-non-canonical-approval-carrier", true},
 		{"walk-signal-path", true},
 		{"refuse-non-canonical-signal", true},
 		{"verify-approval-across-replacement", true},

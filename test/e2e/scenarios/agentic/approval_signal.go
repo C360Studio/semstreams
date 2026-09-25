@@ -15,6 +15,7 @@ import (
 	agenticdispatch "github.com/c360studio/semstreams/processor/agentic-dispatch"
 	"github.com/c360studio/semstreams/test/e2e/scenarios"
 	"github.com/google/uuid"
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -427,6 +428,143 @@ func (s *Scenario) refuseNonCanonicalApproval(ctx context.Context, result *scena
 		result.Details["approval_refusal_"+refusal.name+"_status"] = status
 	}
 	return nil
+}
+
+// refuseNonCanonicalApprovalCarrier asserts the ApprovalResponse CARRIER's own
+// loop-token refusal (ApprovalResponse.Validate, agentic/approval.go), which
+// refuse-non-canonical-approval cannot reach: the dispatch admission gate
+// refuses a malformed token before any ApprovalResponse is built (#1238).
+//
+// The carrier is the one the loop validates on receipt
+// (HandleApprovalResponse), and the answer lane is open to any publisher — a
+// product approval UI answers on it directly. So the answer is published
+// straight onto the lane, with the completed approval loop's token re-spelled
+// out of canonical form. The production marshaller refuses to author that
+// payload (it runs the same Validate), so the bytes are built by marshalling
+// the canonical answer and re-spelling its one token occurrence.
+//
+// Two observations, both required:
+//   - the loop TERMINATES the delivery — the agentic-loop spec's disposition
+//     for an input the lane cannot accept — read from the server's
+//     MSG_TERMINATED advisory for the exact stream sequence published, on the
+//     exact consumer the loop runs over the lane;
+//   - the answer is NOT acknowledged as an inapplicable answer. Without the
+//     carrier refusal the re-spelled token is an ordinary key naming no record,
+//     so the loop's cold branch acknowledges it and moves
+//     approval_inapplicable; that is the effect whose absence is asserted.
+func (s *Scenario) refuseNonCanonicalApprovalCarrier(ctx context.Context, result *scenarios.Result) error {
+	loopID, _ := result.Details["approval_loop_id"].(string)
+	if loopID == "" {
+		return fmt.Errorf("approval carrier refusal proof requires the admitted loop id")
+	}
+	malformed := nonCanonicalToken(loopID)
+	answer := agentic.ApprovalResponse{
+		LoopID:      loopID,
+		CallID:      uuid.NewString(),
+		ExecutionID: uuid.NewString(),
+		Decision:    agentic.ApprovalDecisionApprove,
+		ApprovedBy:  approvalRequester,
+		Reason:      "e2e #1238: an answer whose loop token is not in canonical form",
+		DecidedAt:   time.Now().UTC(),
+	}
+	canonical, err := json.Marshal(message.NewBaseMessage(answer.Schema(), &answer, "e2e-test"))
+	if err != nil {
+		return fmt.Errorf("marshal the canonical answer: %w", err)
+	}
+	if n := bytes.Count(canonical, []byte(loopID)); n != 1 {
+		return fmt.Errorf("canonical answer carries loop token %s %d times, want exactly 1", loopID, n)
+	}
+	data := bytes.Replace(canonical, []byte(loopID), []byte(malformed), 1)
+
+	js, err := s.nats.Client().JetStream()
+	if err != nil {
+		return fmt.Errorf("open JetStream: %w", err)
+	}
+	stream, err := js.Stream(ctx, agentStream)
+	if err != nil {
+		return fmt.Errorf("open %s stream: %w", agentStream, err)
+	}
+	consumer, err := laneConsumerName(ctx, stream, consumerLane{
+		stream: agentStream, owner: loopLaneOwner, subjectRoot: "agent.approval_response",
+	})
+	if err != nil {
+		return fmt.Errorf("find the loop's approval-answer consumer: %w", err)
+	}
+
+	inapplicable := map[string]string{"reason": "approval_inapplicable"}
+	before, err := s.metricWithLabels(ctx, toolResultsDroppedMetric, inapplicable)
+	if err != nil {
+		return fmt.Errorf("read inapplicable approval answers before the malformed answer: %w", err)
+	}
+
+	// Subscribed and flushed BEFORE the publish, so the advisory cannot be
+	// emitted ahead of the subscription that is waiting for it.
+	conn := s.nats.Client().GetConnection()
+	advisories, err := conn.SubscribeSync(msgTerminatedAdvisoryPrefix + agentStream + "." + consumer)
+	if err != nil {
+		return fmt.Errorf("subscribe to %s terminations: %w", consumer, err)
+	}
+	defer func() { _ = advisories.Unsubscribe() }()
+	// FlushWithContext refuses a context without a deadline.
+	flushCtx, cancelFlush := context.WithTimeout(ctx, 5*time.Second)
+	err = conn.FlushWithContext(flushCtx)
+	cancelFlush()
+	if err != nil {
+		return fmt.Errorf("flush the advisory subscription: %w", err)
+	}
+
+	ack, err := js.Publish(ctx, "agent.approval_response."+malformed, data)
+	if err != nil {
+		return fmt.Errorf("publish the malformed answer: %w", err)
+	}
+	if err := awaitTermination(ctx, advisories, ack.Sequence, 15*time.Second); err != nil {
+		return fmt.Errorf("the loop did not terminate an answer naming non-canonical loop token %s "+
+			"(stream %s seq %d, consumer %s): %w", malformed, agentStream, ack.Sequence, consumer, err)
+	}
+
+	after, err := s.metricWithLabels(ctx, toolResultsDroppedMetric, inapplicable)
+	if err != nil {
+		return fmt.Errorf("read inapplicable approval answers after the malformed answer: %w", err)
+	}
+	if after != before {
+		return fmt.Errorf("%s%v moved %v -> %v: the malformed answer was acknowledged as an inapplicable "+
+			"answer instead of refused", toolResultsDroppedMetric, inapplicable, before, after)
+	}
+	result.Details["approval_carrier_refusal_stream_seq"] = ack.Sequence
+	return nil
+}
+
+// msgTerminatedAdvisoryPrefix is the JetStream advisory subject a consumer's
+// Term of a delivery is announced on, completed by "<stream>.<consumer>".
+const msgTerminatedAdvisoryPrefix = "$JS.EVENT.ADVISORY.CONSUMER.MSG_TERMINATED."
+
+// awaitTermination reads MSG_TERMINATED advisories until one names the stream
+// sequence the caller published. A termination of any other sequence is not
+// the answer and is skipped.
+func awaitTermination(ctx context.Context, advisories *nats.Subscription, seq uint64, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("no termination advisory for stream seq %d within %v", seq, timeout)
+		}
+		waitCtx, cancel := context.WithTimeout(ctx, remaining)
+		msg, err := advisories.NextMsgWithContext(waitCtx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("no termination advisory for stream seq %d within %v: %w", seq, timeout, err)
+		}
+		var advisory struct {
+			Type      string `json:"type"`
+			StreamSeq uint64 `json:"stream_seq"`
+		}
+		if err := json.Unmarshal(msg.Data, &advisory); err != nil {
+			return fmt.Errorf("decode termination advisory: %w", err)
+		}
+		if advisory.Type == "io.nats.jetstream.advisory.v1.terminated" && advisory.StreamSeq == seq {
+			return nil
+		}
+	}
 }
 
 // loopRefusalCase is one classified refusal to prove: the token that earns it,
