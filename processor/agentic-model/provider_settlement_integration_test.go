@@ -391,6 +391,19 @@ func TestIntegrationPreProviderReplacementSeesAbsenceAndInvokesOnce(t *testing.T
 	case <-time.After(5 * time.Second):
 		t.Fatal("first delivery owner did not enter drain before lookup release")
 	}
+	// Drain is issued but the pull subscription unsubscribes asynchronously.
+	// Until the server drops the first process's pull request, the Nak below
+	// can be redelivered to that draining process, which admits it by design;
+	// this harness fails that lookup too, and each re-entry spends one of the
+	// three MaxDeliver attempts the replacement needs (#1375).
+	sourceStream, err := tc.Client.GetStream(t.Context(), providerSettlementRequestStream)
+	require.NoError(t, err)
+	firstConsumer, err := sourceStream.Consumer(t.Context(), "agentic-model-agent-request-all-pre-provider-replacement")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		info, infoErr := firstConsumer.Info(t.Context())
+		return infoErr == nil && info.NumWaiting == 0
+	}, 5*time.Second, 10*time.Millisecond)
 	close(release)
 	select {
 	case stopErr := <-stopDone:
