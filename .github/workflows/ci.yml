@@ -78,6 +78,12 @@ jobs:
       - name: Run revive (pinned via go.mod tool directive)
         run: go tool revive -config revive.toml -formatter friendly ./...
 
+      - name: Verify selected nats.go matches KV and graph-index evidence pins
+        run: bash scripts/lint-nats-kv-sdk-pin.sh
+
+      - name: Verify nats.go evidence pin guard rejection matrix
+        run: bash scripts/lint-nats-kv-sdk-pin_fixture_test.sh
+
       - name: Entity-ID corpus audit (lexical + segment rules)
         # ADR-102 / entity-id-contract "Segment semantics are enforced by the
         # entity-ID corpus audit": the tracked corpus must have zero invalid or

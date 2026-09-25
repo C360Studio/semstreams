@@ -1,4 +1,4 @@
-//go:build integration
+//go:build live_llm
 
 package query
 
@@ -14,10 +14,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// These integration tests require a running Ollama instance at localhost:11434.
+// These live-provider tests require a running Ollama instance at localhost:11434.
 // The model defaults to qwen3:1.7b but can be overridden with OLLAMA_TEST_MODEL.
 //
-// Run with: go test -tags integration -run TestLLMClassifier_Integration ./graph/query/...
+// Run with: go test -tags=live_llm -run 'TestLLMClassifier_Integration_' ./graph/query/...
 
 func requireOllama(t *testing.T) {
 	t.Helper()

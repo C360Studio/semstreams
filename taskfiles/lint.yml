@@ -2,7 +2,7 @@ version: '3'
 
 tasks:
   default:
-    desc: Run Go linters (vet, fmt, revive, substrate-flake-guards)
+    desc: Run Go linters (vet, fmt, revive, substrate-flake-guards, NATS SDK pins)
     cmds:
       - go vet ./...
       - go fmt ./...
@@ -11,7 +11,19 @@ tasks:
       # feedback_substrate_flake_discipline.md.
       - go tool revive -config revive.toml -formatter friendly ./...
       - task: test-ports
+      - task: nats-kv-sdk-pin
+      - task: nats-kv-sdk-pin:test
       - task: request-guard
+
+  nats-kv-sdk-pin:
+    desc: Check selected nats.go against the KV contract matrix and graph-index evidence pins
+    cmds:
+      - bash scripts/lint-nats-kv-sdk-pin.sh
+
+  nats-kv-sdk-pin:test:
+    desc: Verify the NATS SDK pin guard accepts the direct pin and rejects drift, replacements, and malformed evidence
+    cmds:
+      - bash scripts/lint-nats-kv-sdk-pin_fixture_test.sh
 
   request-guard:
     desc: |

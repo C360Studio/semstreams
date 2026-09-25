@@ -55,12 +55,12 @@ The production-boundary inventory and assigned migrations live in
 
 ## Compatibility evidence
 
-The SDK matrix is pinned to `github.com/nats-io/nats.go v1.48.0`. Normative integration runs against default-config
-NATS Server `2.12.4-alpine` at manifest digest
-`sha256:31c6ed3b2da61645aaa3ad9217b5a52b34b6ebd555ecb71259cd7723c59ae1ea`.
+The SDK matrix is pinned to `github.com/nats-io/nats.go v1.52.0`. Normative integration runs against default-config
+NATS Server `2.14.4-alpine` at manifest digest
+`sha256:f2123f533c2b0cada0a5c5ec434fb2b8cfe1cf220215ef9d7517e1372917ad66`.
 
 The common current and legacy SDK matrix covers Put, direct Get, Create, Update, Delete, list, and watch paths. The
 current API also covers filtered lists. The unchanged SemStreams wrapper covers Put, Get, Create, Update,
 `UpdateWithRetry`'s direct Create, Delete, list, watch, prefix list, and fixed-position filter list; the raw
-`FilteredKeys` helper is exercised separately against the wrapper bucket. A dependency-pin change fails the unit guard
+`FilteredKeys` helper is exercised separately against the wrapper bucket. A dependency-pin change fails the lint guard
 until the SDK matrix and normative real-NATS evidence are deliberately updated together.

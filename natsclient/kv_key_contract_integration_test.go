@@ -31,8 +31,8 @@ import (
 //
 // pinnedNATSGoVersion is REPORTED in this test's log line. It must track the
 // module actually in go.mod — it read v1.48.0 while the build used v1.52.0
-// after the SDK bump, which made the evidence line silently false. The unit
-// test TestKVContractPinnedNATSGoDependency asserts the real resolved version;
+// after the SDK bump, which made the evidence line silently false.
+// scripts/lint-nats-kv-sdk-pin.sh asserts the real resolved version before tests run;
 // this constant exists so the logged evidence matches it.
 const (
 	normativeNATSServerVersion = "2.14.4-alpine"
