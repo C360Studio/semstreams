@@ -3375,7 +3375,7 @@ var errLoopTimedOut = errors.New("loop timeout exceeded")
 // never discards the populated result behind the error.
 func (h *MessageHandler) failTimedOutLoop(loopID string, result HandlerResult, op string) (HandlerResult, error) {
 	_ = h.loopManager.TransitionLoop(loopID, agentic.LoopStateFailed)
-	if err := h.loopManager.UpdateCompletion(loopID, agentic.OutcomeFailed, "", "loop timeout exceeded"); err != nil {
+	if err := h.loopManager.UpdateCompletion(loopID, agentic.OutcomeFailed, "", errLoopTimedOut.Error()); err != nil {
 		h.logger.Warn("failed to update completion for timed out loop",
 			slog.String("loop_id", loopID),
 			slog.String("error", err.Error()))

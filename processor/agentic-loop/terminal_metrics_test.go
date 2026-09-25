@@ -40,7 +40,9 @@ type terminalCounts struct {
 // terminalReasons is every reason label a test here reads: the ones a loop
 // fails with in these fixtures, and the two a mis-classified timeout used to
 // land on.
-var terminalReasons = []string{"timeout", "handler_error", "unknown", "cancelled", "operator_abort"}
+var terminalReasons = []string{
+	"timeout", "handler_error", "unknown", "cancelled", "operator_abort", "max_iterations",
+}
 
 func snapshotTerminalCounts(m *loopMetrics) terminalCounts {
 	counts := terminalCounts{m: m, failed: map[string]float64{}}
@@ -54,8 +56,21 @@ func snapshotTerminalCounts(m *loopMetrics) terminalCounts {
 
 // requireOneTerminal asserts that exactly one terminal was counted since the
 // snapshot — under reason for a failure, or as a completion when reason is "" —
-// and that active_loops went down by exactly one.
+// and that active_loops went down by exactly one. It is for a loop born in
+// this process; a loop this process rebuilt from its record uses
+// requireOneTerminalCounted.
 func (before terminalCounts) requireOneTerminal(t *testing.T, reason string) {
+	t.Helper()
+	before.requireOneTerminalCounted(t, reason)
+	after := snapshotTerminalCounts(before.m)
+	require.Equal(t, -1.0, after.active-before.active, "active_loops must go down exactly once")
+}
+
+// requireOneTerminalCounted asserts the terminal counters only. A loop this
+// process rebuilt from its record was never counted into active_loops here, so
+// its terminal's decrement is the per-process drift recorded on #1242, not a
+// property a test pins.
+func (before terminalCounts) requireOneTerminalCounted(t *testing.T, reason string) {
 	t.Helper()
 	after := snapshotTerminalCounts(before.m)
 	for _, label := range terminalReasons {
@@ -71,7 +86,6 @@ func (before terminalCounts) requireOneTerminal(t *testing.T, reason string) {
 		wantCompleted = 1
 	}
 	require.Equal(t, wantCompleted, after.completed-before.completed, "loops_completed_total")
-	require.Equal(t, -1.0, after.active-before.active, "active_loops must go down exactly once")
 }
 
 // requireNoTerminal asserts that nothing terminal was counted since the snapshot.
@@ -153,7 +167,8 @@ func TestAnApprovalLaneTimeoutCountsOneTimeoutFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, natsclient.DeliveryDecisionAck, settled)
 	require.Equal(t, "timeout", markerFailure(t, a.bucket, coldApprovalLoopID).Reason)
-	before.requireOneTerminal(t, "timeout")
+	// Counters only: the loop is rebuilt from its record (active_loops drift, #1242).
+	before.requireOneTerminalCounted(t, "timeout")
 }
 
 // TestTheApprovalSweepCountsOneTimeoutFailure: the approval-timeout sweeper's
@@ -174,7 +189,8 @@ func TestTheApprovalSweepCountsOneTimeoutFailure(t *testing.T) {
 
 	requireLoopTimedOut(t, a)
 	require.Equal(t, "timeout", markerFailure(t, a.bucket, coldApprovalLoopID).Reason)
-	before.requireOneTerminal(t, "timeout")
+	// Counters only: the loop is rebuilt from its record (active_loops drift, #1242).
+	before.requireOneTerminalCounted(t, "timeout")
 }
 
 // TestAModelLaneTimeoutIsATimeout: the model lane noticed the loop deadline in
@@ -269,7 +285,8 @@ func TestARetriedTerminalCommitIsCountedOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, natsclient.DeliveryDecisionAck, settled)
 	requireLoopTimedOut(t, a)
-	before.requireOneTerminal(t, "timeout")
+	// Counters only: the loop is rebuilt from its record (active_loops drift, #1242).
+	before.requireOneTerminalCounted(t, "timeout")
 }
 
 // TestACancelIsCountedOnceAtItsCommit: the cancel lane counted its terminal
@@ -288,4 +305,106 @@ func TestACancelIsCountedOnceAtItsCommit(t *testing.T) {
 
 	require.Equal(t, agentic.LoopStateCancelled, persistedLoop(t, bucket, loopID).State)
 	before.requireOneTerminal(t, "cancelled")
+}
+
+// TestARetriedCancelIsCountedOnceAtItsAdoption: a terminal loop record has two
+// writers, commitTerminal and adoptDurableCancel's writeRecordCancelled, and
+// both count. The first cancel creates the marker and loses its record write
+// to a foreign writer, counting nothing and releasing the loop; the
+// redelivered cancel finds no held loop, adopts the marker, writes the record
+// cancelled and counts it once.
+//
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
+func TestARetriedCancelIsCountedOnceAtItsAdoption(t *testing.T) {
+	h := NewMessageHandler(DefaultConfig())
+	c := releaseTestComponent(t, h)
+	m := withLoopMetrics(c)
+	bucket := &recordingLoopBucket{}
+	c.loopsBucket = bucket
+	loopID := populatedLoop(t, h)
+	seedLoopRecord(t, c, loopID)
+	foreign, ok := bucket.value(loopID)
+	require.True(t, ok)
+	_, err := bucket.Put(t.Context(), loopID, foreign)
+	require.NoError(t, err)
+	signal := agentic.UserSignal{LoopID: loopID, UserID: "operator"}
+	before := snapshotTerminalCounts(m)
+
+	require.ErrorIs(t, c.handleCancelSignal(t.Context(), signal), natsclient.ErrKVRevisionMismatch)
+	before.requireNoTerminal(t)
+	_, heldErr := h.GetLoop(loopID)
+	require.Error(t, heldErr, "fixture: the lost compare-and-swap released the loop")
+
+	require.NoError(t, c.handleCancelSignal(t.Context(), signal))
+
+	require.Equal(t, agentic.LoopStateCancelled, persistedLoop(t, bucket, loopID).State)
+	before.requireOneTerminal(t, "cancelled")
+}
+
+// TestAModelLaneCompletionCountsOneCompletion: a completion is counted by the
+// terminal owner as loops_completed_total, and under no failure reason.
+//
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
+func TestAModelLaneCompletionCountsOneCompletion(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+	loopID, err := handler.loopManager.CreateLoop("task-completes", "general", "model", 5)
+	require.NoError(t, err)
+	requestID := handler.loopManager.GenerateRequestID(loopID)
+	handler.loopManager.TrackRequest(requestID, loopID)
+	require.NoError(t, handler.loopManager.SetPublishedRequest(loopID, requestID))
+	c := releaseTestComponent(t, handler)
+	m := withLoopMetrics(c)
+	bucket := &recordingLoopBucket{}
+	c.loopsBucket = bucket
+	seedLoopRecord(t, c, loopID)
+	before := snapshotTerminalCounts(m)
+
+	msg := &loopDeliveryOwnerMsg{data: completionResponseBytes(t, requestID, "done")}
+	result, admitted := deliverylane.Consume(t.Context(), msg,
+		heartbeatPolicyForTest(t, "agent.response", c.handleResponseMessage), deliverylane.NewAdmission(nil, nil))
+
+	require.True(t, admitted)
+	require.Equal(t, natsclient.DeliveryDecisionAck, result.Decision())
+	require.Equal(t, agentic.LoopStateComplete, persistedLoop(t, bucket, loopID).State)
+	before.requireOneTerminal(t, "")
+}
+
+// TestAToolResultThatExhaustsTheBudgetCountsOneMaxIterations: the tool lane's
+// success path, where handleToolsComplete fails the loop on its iteration
+// budget, is counted under the event's reason "max_iterations". The branch this
+// replaced counted every non-budget terminal on that path as "unknown".
+//
+// spec: agentic-loop / Iteration exhaustion publishes one uniform reason
+func TestAToolResultThatExhaustsTheBudgetCountsOneMaxIterations(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+	loopID, err := handler.loopManager.CreateLoop("task-exhausts", "general", "model", 1)
+	require.NoError(t, err)
+	callID := "call-exhausts"
+	_, err = handler.HandleModelResponse(t.Context(), loopID, agentic.AgentResponse{
+		RequestID: "request-exhausts", Status: "tool_call",
+		Message: agentic.ChatMessage{Role: "assistant", ToolCalls: []agentic.ToolCall{{ID: callID, Name: "search"}}},
+	})
+	require.NoError(t, err)
+	// Spend the one iteration, so the increment the arriving result drives is
+	// the one past the budget.
+	require.NoError(t, handler.loopManager.IncrementIteration(loopID))
+	c := releaseTestComponent(t, handler)
+	m := withLoopMetrics(c)
+	bucket := &recordingLoopBucket{}
+	c.loopsBucket = bucket
+	seedLoopRecord(t, c, loopID)
+	executionID := dispatchedExecutionID(t, handler.loopManager, loopID)
+	toolResult := &agentic.ToolResult{ExecutionID: executionID, CallID: callID, Name: "search", Content: "ran"}
+	data, err := json.Marshal(message.NewBaseMessage(toolResult.Schema(), toolResult, "test"))
+	require.NoError(t, err)
+	before := snapshotTerminalCounts(m)
+
+	msg := &loopDeliveryOwnerMsg{data: data}
+	result, admitted := deliverylane.Consume(t.Context(), msg,
+		heartbeatPolicyForTest(t, "tool.result", c.handleToolResultMessage), deliverylane.NewAdmission(nil, nil))
+
+	require.True(t, admitted)
+	require.Equal(t, natsclient.DeliveryDecisionAck, result.Decision())
+	require.Equal(t, "max_iterations", markerFailure(t, bucket, loopID).Reason)
+	before.requireOneTerminal(t, "max_iterations")
 }

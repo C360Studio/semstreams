@@ -2154,21 +2154,24 @@ domain vocabulary, not the loop record's field.
 A loop that passes its own deadline fails with reason `timeout`. At beta.162 that held on the tool-result lane, the
 approval lane and the approval-timeout sweeper, but a model response that found the deadline passed failed the loop
 with reason `handler_error`. It is `timeout` now, in `LoopFailedEvent.reason` on `agent.failed.<loopID>`, in the failed
-`COMPLETE_<loopID>` marker and as `reason="timeout"` on `semstreams_agentic_loop_loops_failed_total`. `handler_error`
-remains the reason for every other handler error. **Action:** a consumer that maps `handler_error` to a class and
+`COMPLETE_<loopID>` marker, in the graph fact `agent.loop.terminal-reason` on the loop execution entity, and as
+`reason="timeout"` on `semstreams_agentic_loop_loops_failed_total`. `handler_error` remains the reason for every other
+handler error. **Action:** a consumer that maps `handler_error` to a class and
 `timeout` to another now sees model-lane deadlines under `timeout`, as it already saw them from the other lanes.
 
-### Terminal metrics are counted by the terminal owner
+### Terminal metrics are counted where the terminal record is written — BREAKING
 
 `loops_completed_total`, `loops_failed_total{reason}`, `iterations_per_loop`, `duration_seconds{status}` and the
-`active_loops` decrement are now counted once, when `COMPLETE_<loopID>`, the terminal event and the terminal record are
-committed. Before, each lane counted ahead of the commit, and three lanes did not count at all:
+`active_loops` decrement are now counted once, when this process writes the loop's terminal record: by the terminal
+owner after `COMPLETE_<loopID>`, the terminal event and the record are committed, or by a redelivered cancel that
+adopts a durable cancel marker and writes the record cancelled. Before, each lane counted ahead of the commit, and
+three lanes did not count at all. The counts per label shift:
 
 - **Newly counted:** a failure committed on the tool-result lane's handler-error branch (a loop deadline), on the
   approval lane (a loop deadline, or a rejection that exhausts the iteration budget) and by the approval-timeout
   sweeper. Each such loop used to leave `active_loops` one too high until the process restarted and was absent from
   `loops_failed_total`.
-- **No longer counted twice:** a failure whose commit did not land (a lost compare-and-swap, a failed write) is not
+- **No longer counted twice:** a terminal whose commit did not land (a lost compare-and-swap, a failed write) is not
   counted; its redelivery, which adopts the durable marker, is the one count. The model-response lane and cancel
   used to count before the commit, so a retried commit counted twice.
 - **The reason label is the event's reason.** `loops_failed_total{reason}` is the committed
@@ -2176,8 +2179,16 @@ committed. Before, each lane counted ahead of the commit, and three lanes did no
   tool-result terminal that was not a budget exhaustion was counted as `reason="unknown"`; it carries its event's
   reason now. `unknown` remains only for a failure whose event could not be built.
 
-**Action:** none for a dashboard that reads these series. `active_loops` now converges to the loops a process holds
-where it used to drift upward on every tool-lane, approval-lane and sweeper failure.
+**Action:** an alert or dashboard on `loops_failed_total{reason}` should expect new `timeout` and `max_iterations` counts
+from lanes that were silent, `handler_error` counts to drop by the model lane's deadlines, and `unknown` to all but
+disappear.
+
+**Residual — `active_loops` is per process and still drifts.** The gauge is incremented when this process creates a
+loop and decremented when this process writes a loop's terminal record. A loop this process rebuilt or seated from
+its record after a replacement (a cold tool result, response, approval answer or cancel) decrements on its terminal
+without a matching increment, so the gauge can read below the loops the process holds. The balanced definition —
+"loops this process holds", incremented on every insert into the loop manager and decremented on every removal — is a
+`LoopManager` change outside #1374 and is recorded on #1242. Read the gauge as per-process, not as a fleet count.
 
 ### `loops_timeout_total` is removed
 
@@ -2190,13 +2201,15 @@ replace `loops_timeout_total` with `loops_failed_total{reason="timeout"}`.
 
 Measured read-only on 2026-09-25 with plain `grep -rn`, stderr visible, excluding `.git`, `node_modules`, `vendor`,
 `archive`, `evidence` and `worktrees`, at semspec `5a9496ee`, semteams `ce22c961`, semsage `4d28b4d`, semdragon
-`07f4de9`, semmachina `841c45e`, semstreams-ui `39f5f04`, semsource `4093d3c`, semmem `b909cbf`, semconnect `d0d06e0`
-and semboids `8c03cc5`. No sister needs a change.
+`07f4de9`, semmachina `841c45e`, semstreams-ui `39f5f04`, semsource `4093d3c`, semmem `b909cbf`, semconnect `d0d06e0`,
+semboids `8c03cc5` and semdev `ca3956a`. No sister needs a change to keep working; two classify the reason and move a
+model-lane deadline to another class.
 
 | Changed key | Reader | Where | Impact |
 |---|---|---|---|
 | `LoopFailedEvent.reason` `handler_error` → `timeout` | reader (class map) | semmachina `internal/persona/failure.go:175-186` | `handler_error` maps to `FailureClassAgentRuntime`; `timeout` falls to `FailureClassUnknown`, as a deadline from the other three lanes already did. A model-lane deadline moves from agent-runtime to unknown. No change required; adding a `timeout` case is the sister's call. |
-| `active_loops` | reader (metrics parse) | semspec `pkg/health/metrics.go:78`, `cmd/semspec/watch_live.go:198-210` | The watcher records the gauge pinned above the loops the KV bucket shows live and prints both. The gauge now decrements on the lanes that leaked it; the two numbers agree more often. No change. |
+| `active_loops` | reader (metrics parse) | semspec `pkg/health/metrics.go:78`, `cmd/semspec/watch_live.go:198-210` | The watcher records the gauge pinned above the loops the KV bucket shows live and prints both. The gauge now decrements on the lanes that leaked it; after a replacement it can read low (the residual above). The watcher already prefers the KV count. No change. |
+| `agent.loop.terminal-reason` `handler_error` → `timeout` | reader (transient classifier) | semdev `ca3956a` `internal/tools/checkfloors/checkfloors.go:106-109` | `transientReasons` lists `model_error` and `handler_error`. A model-lane deadline moves from transient (retry granted) to a genuine terminal the convergence budget absorbs, as a deadline from the other lanes already was. Record only; the classification is semdev's call. |
 | `loops_timeout_total` | none | semspec `pkg/health/testdata/fixtures/*/metrics*.txt` | Captured scrape text only; `ParseMetrics` has no case for the series. No change. |
 
 `grep -rn -E '"handler_error"|handler_error'` over the Go, TypeScript, Svelte, JSON and YAML of every other listed
