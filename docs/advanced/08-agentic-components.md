@@ -650,9 +650,8 @@ All metrics use the `semstreams_` namespace.
 |--------|------|--------|-------------|
 | `semstreams_agentic_loop_loops_created_total` | counter | — | Loops created |
 | `semstreams_agentic_loop_loops_completed_total` | counter | — | Loops completed successfully |
-| `semstreams_agentic_loop_loops_failed_total` | counter | reason | Loops that failed (reason: max_iterations, length_truncated, model_error, etc.) |
-| `semstreams_agentic_loop_loops_timeout_total` | counter | — | Loops that timed out |
-| `semstreams_agentic_loop_active_loops` | gauge | — | Currently active loops |
+| `semstreams_agentic_loop_loops_failed_total` | counter | reason | Loops that failed, counted once when the failure is committed; `reason` is the published `LoopFailedEvent.Reason` (max_iterations, length_truncated, model_error, timeout, handler_error, etc.) or `cancelled` |
+| `semstreams_agentic_loop_active_loops` | gauge | — | Per process: incremented when this process creates a loop, decremented when this process writes a loop's terminal record. A loop rebuilt from its record after a replacement decrements without a matching increment (#1242) |
 | `semstreams_agentic_loop_iterations_total` | counter | — | Total iterations across all loops |
 | `semstreams_agentic_loop_iterations_per_loop` | histogram | — | Distribution of iterations per loop |
 | `semstreams_agentic_loop_duration_seconds` | histogram | status | Loop duration |

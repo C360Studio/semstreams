@@ -168,11 +168,9 @@ func TestTerminalStampCarriesObservedAuditLoss_Integration(t *testing.T) {
 		require.NoError(t, err)
 		_, err = c.handler.trajectoryManager.startTrajectory(loopID)
 		require.NoError(t, err)
-		entity, err := c.handler.loopManager.GetLoop(loopID)
-		require.NoError(t, err)
 		observeAuditLoss(t, c, loopID)
 
-		c.handleLoopFailure(ctx, loopID, entity, "test_failure", errors.New("boom"))
+		c.handleLoopFailure(ctx, loopID, "test_failure", errors.New("boom"))
 
 		outcome, withCondition, values := collector.outcomeRequests()
 		require.Equal(t, 1, outcome, "expected exactly one terminal append carrying agent.loop.outcome")

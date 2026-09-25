@@ -306,7 +306,7 @@
 // rebuilt loop keeps its ORIGINAL deadline; nothing refreshes it and downtime is not
 // excluded from it. A replacement whose gap outran that deadline therefore rebuilds the
 // loop and then fails it on the first delivery, publishing a terminal on
-// agent.failed.<loopID> with the reason "loop timeout exceeded" - and the delivery is
+// agent.failed.<loopID> with the reason "timeout" (error "loop timeout exceeded") - and the delivery is
 // ACKNOWLEDGED, because the loop settled and nothing is owed. An approval answer is such an
 // input: an approve or a modify reaching a loop past its deadline dispatches nothing, and every
 // decision fails the loop on the timeout, held or rebuilt. Size a loop's timeout above

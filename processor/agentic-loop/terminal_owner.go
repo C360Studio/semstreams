@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
@@ -143,6 +144,10 @@ func decodeTerminalMarker(data []byte) (terminalOutcome, error) {
 // A lost compare-and-swap is returned as persistLoopState returned it —
 // transient, with the loop already released — so the redelivery re-reads the
 // record. Every other failure leaves the terminal commit unknown and is fatal.
+//
+// The owner is also the one place a terminal is counted (#1374): a commit that
+// lands counts it once, after step 4, and a commit that does not land counts
+// nothing — its redelivery, which adopts the marker, is the commit that counts.
 func (c *Component) commitTerminal(ctx context.Context, candidate terminalOutcome, publication HandlerResult) error {
 	err := c.commitTerminalSteps(ctx, candidate, publication)
 	if err != nil && !errors.Is(err, natsclient.ErrKVRevisionMismatch) {
@@ -182,6 +187,14 @@ func (c *Component) commitTerminalSteps(ctx context.Context, candidate terminalO
 		match = &outcome
 	}
 	c.handler.loopManager.settleTerminal(loopID, match)
+	// The snapshot the terminal is counted from. persistLoopState renders the
+	// record from this same held loop, so a loop this process does not hold
+	// has no terminal to write here either way.
+	held, err := c.handler.GetLoop(loopID)
+	if err != nil {
+		return errs.WrapFatal(fmt.Errorf("loop %s: %w", loopID, err),
+			"agentic-loop", "commitTerminal", "hold the loop whose terminal record is written")
+	}
 	if err := c.persistLoopState(ctx, loopID); err != nil {
 		// The sentinel, never errs.IsTransient: that one matches any error
 		// whose text says "timeout", which would hand a commit-unknown write a
@@ -191,7 +204,50 @@ func (c *Component) commitTerminalSteps(ctx context.Context, candidate terminalO
 		}
 		return errs.WrapFatal(err, "agentic-loop", "commitTerminal", "terminal loop record has unknown durability")
 	}
+	c.recordCommittedTerminal(held, outcome)
 	return nil
+}
+
+// recordCommittedTerminal counts a terminal loop record this process just
+// wrote: one terminal counter and one active_loops decrement. It is the one
+// counting site, and it has exactly two callers because a terminal loop record
+// has exactly two writers — commitTerminal, and adoptDurableCancel's
+// writeRecordCancelled for a cancel whose marker outlived its record write.
+// entity is the loop as the record was written from it. The reason is the one
+// the committed failure event carries — the adopted one when the marker was
+// adopted — so loops_failed_total{reason} and LoopFailedEvent.Reason cannot
+// disagree. A cancel is counted as a failure with reason "cancelled", as the
+// cancel lane always counted it.
+//
+// A terminal whose event could not be built (BuildFailureMessages refused it)
+// still committed its record, so it is counted from the record's state, and a
+// failure with no event to name its reason is counted as "unknown".
+func (c *Component) recordCommittedTerminal(entity agentic.LoopEntity, outcome terminalOutcome) {
+	if c.metrics == nil {
+		return
+	}
+	duration := time.Since(entity.StartedAt).Seconds()
+	reason := ""
+	switch {
+	case outcome.completed != nil:
+		c.metrics.recordLoopCompleted(entity.Iterations, duration)
+	case outcome.failed != nil:
+		reason = outcome.failed.Reason
+	case outcome.cancelled != nil, entity.State == agentic.LoopStateCancelled:
+		reason = "cancelled"
+	case entity.State == agentic.LoopStateComplete:
+		c.metrics.recordLoopCompleted(entity.Iterations, duration)
+	default:
+		reason = "unknown"
+	}
+	if reason != "" {
+		c.metrics.recordLoopFailed(reason, entity.Iterations, duration)
+	}
+	c.logger.Info("Loop terminal committed",
+		slog.String("loop_id", entity.ID),
+		slog.String("state", entity.State.String()),
+		slog.String("reason", reason),
+		slog.Int("iterations", entity.Iterations))
 }
 
 // createTerminalMarker is step 1 of the terminal owner. It reports the terminal
@@ -362,8 +418,15 @@ func (c *Component) adoptDurableCancel(ctx context.Context, loopID string) (bool
 	if err := c.publishResults(ctx, HandlerResult{LoopID: loopID, PublishedMessages: messages}); err != nil {
 		return false, errs.WrapFatal(err, "agentic-loop", "adoptDurableCancel", "published cancel has unknown durability")
 	}
-	if err := c.writeRecordCancelled(ctx, loopID, saved.cancelled); err != nil {
+	written, err := c.writeRecordCancelled(ctx, loopID, saved.cancelled)
+	if err != nil {
 		return false, err
+	}
+	if written != nil {
+		// The second writer of a terminal record counts it like the first:
+		// the commitTerminal attempt that created this marker lost its record
+		// write and counted nothing.
+		c.recordCommittedTerminal(*written, saved)
 	}
 	c.logger.WarnContext(ctx, "Cancel adopted the loop's durable cancel terminal",
 		slog.String("loop_id", loopID),
@@ -374,16 +437,19 @@ func (c *Component) adoptDurableCancel(ctx context.Context, loopID string) (bool
 // writeRecordCancelled writes a record this process does not hold to match an
 // adopted cancel, under compare-and-swap against the revision it read. A
 // record that moved retries; a record that is already terminal is settled.
-func (c *Component) writeRecordCancelled(ctx context.Context, loopID string, cancelled *agentic.LoopCancelledEvent) error {
+// It returns the record it wrote, or nil when it wrote none.
+func (c *Component) writeRecordCancelled(
+	ctx context.Context, loopID string, cancelled *agentic.LoopCancelledEvent,
+) (*agentic.LoopEntity, error) {
 	c.loopRecordMu.Lock()
 	defer c.loopRecordMu.Unlock()
 
 	record := c.readLoopRecord(ctx, loopID)
 	switch record.presence {
 	case loopPresenceStale:
-		return nil
+		return nil, nil
 	case loopPresenceUnknown:
-		return errs.WrapTransient(fmt.Errorf("loop %s: the loop record could not be read", loopID),
+		return nil, errs.WrapTransient(fmt.Errorf("loop %s: the loop record could not be read", loopID),
 			"agentic-loop", "adoptDurableCancel", "read the loop record before writing it cancelled")
 	}
 	entity := record.entity
@@ -397,18 +463,18 @@ func (c *Component) writeRecordCancelled(ctx context.Context, loopID string, can
 	entity.StateBeforeApproval = ""
 	data, err := json.Marshal(entity)
 	if err != nil {
-		return errs.WrapFatal(err, "agentic-loop", "adoptDurableCancel", "marshal the cancelled loop record")
+		return nil, errs.WrapFatal(err, "agentic-loop", "adoptDurableCancel", "marshal the cancelled loop record")
 	}
 	if _, err := c.loopsBucket.Update(ctx, loopID, data, record.revision); err != nil {
 		if natsclient.IsKVConflictError(err) {
-			return errs.WrapTransient(
+			return nil, errs.WrapTransient(
 				fmt.Errorf("loop %s record moved past revision %d: %w", loopID, record.revision, natsclient.ErrKVRevisionMismatch),
 				"agentic-loop", "adoptDurableCancel", "compare-and-swap loop record")
 		}
-		return errs.WrapFatal(fmt.Errorf("persist cancelled loop state %s: %w", loopID, err),
+		return nil, errs.WrapFatal(fmt.Errorf("persist cancelled loop state %s: %w", loopID, err),
 			"agentic-loop", "adoptDurableCancel", "cancelled loop record has unknown durability")
 	}
-	return nil
+	return &entity, nil
 }
 
 // settleTerminalGuard decides a result the handler returned from a terminal

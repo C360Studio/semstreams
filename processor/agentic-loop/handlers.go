@@ -3357,6 +3357,16 @@ func (h *MessageHandler) BuildFailureEvent(loopID, reason, errorMsg string) (*ag
 	return h.buildFailureEvent(loopID, reason, errorMsg)
 }
 
+// loopTimeoutReason is the failure reason of a loop that passed its own
+// deadline, on every lane (#1374).
+const loopTimeoutReason = "timeout"
+
+// errLoopTimedOut is the error failTimedOutLoop returns. The model-response
+// lane re-derives its failure from the error rather than committing the
+// populated result, so the error has to carry the cause the reason names:
+// failureReasonForHandlerError reads it back as loopTimeoutReason.
+var errLoopTimedOut = errors.New("loop timeout exceeded")
+
 // failTimedOutLoop is the one timeout arm: a loop past its deadline fails in
 // memory and returns its populated failure — the failed state, the failure
 // event and its publication — WITH a fatal error. The lane owns the commit: it
@@ -3365,18 +3375,18 @@ func (h *MessageHandler) BuildFailureEvent(loopID, reason, errorMsg string) (*ag
 // never discards the populated result behind the error.
 func (h *MessageHandler) failTimedOutLoop(loopID string, result HandlerResult, op string) (HandlerResult, error) {
 	_ = h.loopManager.TransitionLoop(loopID, agentic.LoopStateFailed)
-	if err := h.loopManager.UpdateCompletion(loopID, agentic.OutcomeFailed, "", "loop timeout exceeded"); err != nil {
+	if err := h.loopManager.UpdateCompletion(loopID, agentic.OutcomeFailed, "", errLoopTimedOut.Error()); err != nil {
 		h.logger.Warn("failed to update completion for timed out loop",
 			slog.String("loop_id", loopID),
 			slog.String("error", err.Error()))
 	}
 	result.State = agentic.LoopStateFailed
 	// Publish failure events for reactive workflows to observe
-	if failure, failMsgs, fErr := h.BuildFailureMessages(loopID, "timeout", "loop timeout exceeded"); fErr == nil {
+	if failure, failMsgs, fErr := h.BuildFailureMessages(loopID, loopTimeoutReason, errLoopTimedOut.Error()); fErr == nil {
 		result.PublishedMessages = failMsgs
 		result.FailureState = failure
 	}
-	return result, errs.WrapFatal(fmt.Errorf("loop timeout exceeded"), "agentic-loop", op, "check timeout")
+	return result, errs.WrapFatal(errLoopTimedOut, "agentic-loop", op, "check timeout")
 }
 
 // BuildFailureMessages creates a failure event and serializes it for NATS publishing.

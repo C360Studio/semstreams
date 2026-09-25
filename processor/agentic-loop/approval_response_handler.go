@@ -428,5 +428,5 @@ func (c *Component) failContinuationUnavailable(ctx context.Context, record loop
 	// trajectory aggregate, which a seat does not create. Its error is always
 	// nil (see restoreLoopFromEvidence).
 	_, _ = c.handler.trajectoryManager.startTrajectory(loopID)
-	return c.handleLoopFailure(ctx, loopID, record.entity, continuationUnavailableReason, cause)
+	return c.handleLoopFailure(ctx, loopID, continuationUnavailableReason, cause)
 }

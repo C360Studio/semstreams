@@ -37,6 +37,16 @@ func TestFailureReasonForHandlerError(t *testing.T) {
 			want: "max_iterations",
 		},
 		{
+			name: "loop deadline wrapped exactly as failTimedOutLoop wraps it (#1374)",
+			err:  errs.WrapFatal(errLoopTimedOut, "agentic-loop", "HandleModelResponse", "check timeout"),
+			want: "timeout",
+		},
+		{
+			name: "text that mentions the deadline does NOT match by substring",
+			err:  errors.New("loop timeout exceeded"),
+			want: "handler_error",
+		},
+		{
 			name: "unrelated plain error falls through to handler_error",
 			err:  errors.New("model endpoint returned 500"),
 			want: "handler_error",
