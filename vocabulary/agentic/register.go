@@ -437,7 +437,7 @@ func registerLoopPredicates() {
 		vocabulary.WithDataType(vocabulary.DataTypeString))
 
 	vocabulary.Register(LoopTerminalReason,
-		vocabulary.WithDescription("Classified reason for a failed loop's terminal outcome (max_iterations, model_error, handler_error, timeout, graph_state_reset_required); absent on success"),
+		vocabulary.WithDescription("Classified reason for a failed loop's terminal outcome (max_iterations, model_error, length_truncated, handler_error, timeout, continuation_unavailable, spawn_identity_birth_failed, graph_state_reset_required); absent on success"),
 		vocabulary.WithDataType(vocabulary.DataTypeString))
 
 	// Rule-VISIBLE deliberately: this is a classification a rule must be
