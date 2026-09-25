@@ -28,5 +28,6 @@ conformance separately; source pins in the historical inventory are not rewritte
 
 ## Verification state
 
-Focused race checks and all five final-byte mutation comparisons passed their intended outcomes.
-Implementation review and full pre-push verification remain pending; these are not claims of merge readiness.
+Focused race checks and all five recorded mutation comparisons passed their intended outcomes.
+Independent implementation review approved `e316ba55d2b771edad90fe240b879e86908d87cf`.
+Full `task check:push` passed on that same source revision; archive/spec review and hosted checks are separate gates.

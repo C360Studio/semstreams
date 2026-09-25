@@ -119,3 +119,27 @@ The second full `task check:push` attempt cleared build, lint, tagged vet, schem
 the full unit race pass. Root deliberately stopped its own process group during early integration execution
 to address the confirmed review defect. The shell exited 143; this attempt is interrupted, not a full pass.
 The integration lock and Docker resources were released. Source remains unpushed pending corrected verification.
+
+## Implementation approval and full local verification
+
+Independent role: `semstreams-reviewer` (`/root/nats_flake_review`, GPT-6 Astra).
+Verdict: **APPROVE**, 2026-09-25, at `e316ba55d2b771edad90fe240b879e86908d87cf`.
+The reviewer verified the scoped IPv6 correction, exact source/test hashes, behavioral red/green output,
+refreshed Address mutation (0/1/0), restoration checksum, and focused race output. No introduced regression
+or remaining blocking/high finding was identified. Earlier unrelated mutation observations retain their
+original snapshot identity; they are not represented as reruns of later source.
+
+Full `task check:push` on that exact clean revision completed with exit 0 on 2026-09-25 at 17:20:09 UTC.
+Build, lint, integration/live_llm/e2e_process_barrier vet, schema generation/drift, and contract checks passed.
+The full unit race run passed 158 packages; the canonical additive integration run passed 158 packages with
+`-race -failfast -tags=integration -timeout=20m -count=1 -p 2`. These are package counts, not test-case counts;
+the integration run includes ordinary tests. The runner released its host lock, and Docker had no running
+test containers afterward. No source or generated-schema drift remained.
+
+The gate log is `/private/tmp/semstreams-1386-check-push-v3.log`; this durable record preserves its exit,
+revision, executed gates, and package outcomes. All 58 active specs/change items passed strict OpenSpec
+validation before archive, and all 402 property citations resolved. Archive validation is performed separately.
+
+The reconciled proposal and task list describe the implemented bounded repair. The capability delta remains
+byte-identical to its accepted spec-conformance hash. The design and inventory remain frozen historical
+checkpoints. Final archive/spec-sync review and hosted check outcomes are recorded on PR #1386.

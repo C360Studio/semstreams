@@ -10,5 +10,5 @@ The accepted design and inventory hashes are preserved in `review.md`. Broader E
 - [x] Implement the accepted concrete metrics API/address behavior and private service seams with focused behavioral proof.
 - [x] Replace all 27 racy allocations, preserve native acquisition/refusal coverage, and surface early startup errors.
 - [x] Record required sensitivity experiments and restored checks; complete the owner-ruling conformance table.
-- [ ] Run required preflight gates and obtain independent implementation review, resolving findings.
-- [ ] Reconcile and archive the capability delta as the final content commit; obtain narrow archive/spec-sync review.
+- [x] Run required preflight gates and obtain independent implementation review, resolving findings.
+- [x] Reconcile the capability delta with verified implementation for the final archive/spec-sync review.
