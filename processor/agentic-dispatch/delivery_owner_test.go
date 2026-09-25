@@ -246,7 +246,7 @@ func TestRefusedTerminalDeliveryIsLoggedAndCounted(t *testing.T) {
 	require.Equal(t, before+1,
 		testutil.ToFloat64(c.metrics.deliveryRefusals.WithLabelValues("agent.complete")),
 		"a refused delivery must increment the refusal counter")
-	require.Contains(t, logs.String(), "Terminal delivery refused by latched lane")
+	require.Contains(t, logs.String(), "Delivery refused by latched lane")
 	require.Contains(t, logs.String(), "subject=agent.complete")
 }
 
@@ -582,7 +582,7 @@ func TestLatchedSettlementLaneRefusesTheNextDeliveryWithoutWorkOrSettlement(t *t
 	callbacks["user.message"](ctx, replay)
 
 	require.Zero(t, replay.acks.Load()+replay.naks.Load()+replay.terms.Load(),
-		"a latched lane attempted a terminal method: the delivery must stay pending for the reconstructed owner")
+		"a latched lane attempted a terminal method: the delivery must stay unsettled, redelivered while max_deliver allows")
 	require.Equal(t, settledBefore, responses, "a latched lane ran its work again")
 	require.NotContains(t, logs.String(), "User message delivery did not settle cleanly",
 		"a refused delivery settled nothing, so it must not be reported as a settlement failure")

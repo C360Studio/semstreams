@@ -271,13 +271,29 @@ func (s *MilestoneSubscriber) consumeLane(
 }
 
 // newLaneAdmission builds one lane's admission latch. Both lanes and every test
-// that assembles a lane come through here, so the recorder health reads cannot
-// be wired on one path and missing on another.
-//
-// onRefused is nil: the milestone lanes declare no refusal today, and the
-// per-lane declarer sweep has one home in #1342 (owner ruling OQ1, 2026-09-22).
-func (s *MilestoneSubscriber) newLaneAdmission() *deliverylane.Admission {
-	return deliverylane.NewAdmission(s.recordDeliveryOwnerFatal, nil)
+// that assembles a lane come through here, so neither the recorder health reads
+// nor the refusal declaration can be wired on one path and missing on another.
+func (s *MilestoneSubscriber) newLaneAdmission(lane string) *deliverylane.Admission {
+	return deliverylane.NewAdmission(s.recordDeliveryOwnerFatal, func(subject string) {
+		s.recordDeliveryRefused(lane, subject)
+	})
+}
+
+// recordDeliveryRefused declares a delivery a latched lane refused. The lane's
+// exact handle is drained rather than stopped, so buffered milestones keep
+// arriving after the first fatal; refusing them is safe because no work runs
+// and no terminal method is attempted. Without this line the refusals are a
+// silent drop: consumeLane returns early on refusal.
+// Unsettled is not the same as kept: the delivery already consumed one attempt,
+// so it is redelivered while the consumer's MaxDeliver allows (always, where
+// MaxDeliver is 0) and otherwise reaches the max-delivery exhaustion path.
+func (s *MilestoneSubscriber) recordDeliveryRefused(lane, subject string) {
+	s.refusals.WithLabelValues(lane).Inc()
+	s.logger.Warn("agentrun: milestone delivery refused by latched lane",
+		slog.String("lane", lane),
+		slog.String("subject", subject),
+		slog.Bool("settled", false),
+		slog.String("resolution", "unsettled; consumes one delivery attempt, redelivered while max_deliver allows, otherwise counted by semstreams_nats_max_delivery_exhaustions_total"))
 }
 
 // observeLane wraps one acquired handle in its binding and starts that lane's

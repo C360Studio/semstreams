@@ -1077,6 +1077,27 @@ func (c *Component) recordDeliveryOwnerFatal(result natsclient.DeliveryResult) {
 	c.deliveryFatalErr = result.Err()
 }
 
+// recordDeliveryRefused declares a delivery a latched lane refused. The exact
+// handle is drained rather than stopped, so buffered deliveries keep arriving
+// after the first fatal; refusing them is safe because no work runs and no
+// terminal method is attempted. Without this line the refusals are a silent
+// drop: both call sites guard every branch on admission.
+// Unsettled is not the same as kept: the delivery already consumed one attempt,
+// so it is redelivered while the consumer's MaxDeliver allows (always, where
+// MaxDeliver is 0) and otherwise reaches the max-delivery exhaustion path.
+func (c *Component) recordDeliveryRefused(lane, subject string) {
+	if c.metrics != nil {
+		c.metrics.recordDeliveryRefused(lane)
+	}
+	if c.logger != nil {
+		c.logger.Warn("Loop delivery refused by latched lane",
+			"lane", lane,
+			"subject", subject,
+			"settled", false,
+			"resolution", "unsettled; consumes one delivery attempt, redelivered while max_deliver allows, otherwise counted by semstreams_nats_max_delivery_exhaustions_total")
+	}
+}
+
 // setupConsumer sets up a JetStream consumer for an input port.
 func (c *Component) setupConsumer(
 	setupCtx context.Context,
@@ -1150,7 +1171,9 @@ func (c *Component) setupConsumer(
 		if policyErr != nil {
 			return policyErr
 		}
-		admission = deliverylane.NewAdmission(c.recordDeliveryOwnerFatal, nil)
+		admission = deliverylane.NewAdmission(c.recordDeliveryOwnerFatal, func(subject string) {
+			c.recordDeliveryRefused(port.Name, subject)
+		})
 		handlerFn = func(msgCtx context.Context, msg jetstream.Msg) {
 			result, admitted := deliverylane.Consume(msgCtx, msg, policy, admission)
 			if admitted && result.Err() != nil && !result.OwnerStopRequired() {
@@ -1172,7 +1195,9 @@ func (c *Component) setupConsumer(
 			return errs.WrapInvalid(retryErr, "agentic-loop", "setupConsumer",
 				"construct settlement retry policy")
 		}
-		admission = deliverylane.NewAdmission(c.recordDeliveryOwnerFatal, nil)
+		admission = deliverylane.NewAdmission(c.recordDeliveryOwnerFatal, func(subject string) {
+			c.recordDeliveryRefused(port.Name, subject)
+		})
 		handlerFn = func(msgCtx context.Context, msg jetstream.Msg) {
 			result, admitted := deliverylane.Settle(msgCtx, msg, settleRetry, admission, "loop", settleHandlerFn)
 			// Early return, not a conjunct: a refused delivery returns the zero

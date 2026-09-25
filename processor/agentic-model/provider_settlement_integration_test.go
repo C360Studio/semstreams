@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -173,19 +174,46 @@ func requireProviderSourceUnacked(
 	require.Less(t, info.AckFloor.Stream, sequence)
 }
 
+// blockingRetainedResponseReader signals entry once and holds every lookup
+// until release. The first lookup's error NAKs the delivery, so on a slow
+// runner the redelivery can reach the same process before its subscription is
+// gone and call this a second time; the close is guarded so that second call
+// blocks and fails like the first instead of panicking, which the lane would
+// quarantine as delivery-work failure.
 type blockingRetainedResponseReader struct {
-	entered chan struct{}
-	release chan struct{}
+	entered     chan struct{}
+	release     chan struct{}
+	enteredOnce sync.Once
 }
 
-func (r blockingRetainedResponseReader) ReadRetainedResponse(
+func (r *blockingRetainedResponseReader) ReadRetainedResponse(
 	context.Context,
 	string,
 	string,
 ) (retainedResponseEvidence, bool, error) {
-	close(r.entered)
+	r.enteredOnce.Do(func() { close(r.entered) })
 	<-r.release
 	return retainedResponseEvidence{}, false, errors.New("process replaced before retained lookup completed")
+}
+
+// TestBlockingRetainedResponseReaderToleratesARedelivery pins the harness
+// guard above: a second lookup (a redelivery reaching the same process) must
+// block on release and fail the same way, never panic on a closed channel.
+func TestBlockingRetainedResponseReaderToleratesARedelivery(t *testing.T) {
+	reader := &blockingRetainedResponseReader{entered: make(chan struct{}), release: make(chan struct{})}
+	close(reader.release)
+	for attempt := range 2 {
+		require.NotPanics(t, func() {
+			_, found, err := reader.ReadRetainedResponse(t.Context(), "request", "model")
+			require.False(t, found)
+			require.EqualError(t, err, "process replaced before retained lookup completed", "attempt %d", attempt+1)
+		})
+	}
+	select {
+	case <-reader.entered:
+	default:
+		t.Fatal("the first lookup did not signal entry")
+	}
 }
 
 // spec: agentic-model / Request delivery settles only on its own response
@@ -337,7 +365,7 @@ func TestIntegrationPreProviderReplacementSeesAbsenceAndInvokesOnce(t *testing.T
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	first := newProviderSettlementComponent(t, tc, provider.URL, "pre-provider-replacement")
-	first.responseEvidence = blockingRetainedResponseReader{entered: entered, release: release}
+	first.responseEvidence = &blockingRetainedResponseReader{entered: entered, release: release}
 	drainIssued := make(chan struct{})
 	first.waitConsumerClosed = func(ctx context.Context, closed <-chan struct{}) error {
 		close(drainIssued)

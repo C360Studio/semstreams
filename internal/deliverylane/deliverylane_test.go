@@ -379,7 +379,7 @@ func TestSettleQuarantinesPanickingWorkWithTheOwnerNamedCause(t *testing.T) {
 	require.True(t, result.Quarantined())
 	require.True(t, result.OwnerStopRequired())
 	require.ErrorContains(t, result.Err(), "governance delivery work panicked: approval handler exploded")
-	require.Zero(t, msg.settlements(), "a quarantined delivery stays pending for the reconstructed owner")
+	require.Zero(t, msg.settlements(), "a quarantined delivery stays unsettled, redelivered while max_deliver allows")
 	require.False(t, admission.Admit())
 }
 

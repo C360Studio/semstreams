@@ -139,7 +139,7 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 			Namespace: "semstreams",
 			Subsystem: "router",
 			Name:      "delivery_refusals_total",
-			Help:      "Deliveries refused unsettled by a latched terminal lane, by port",
+			Help:      "Deliveries refused unsettled by a latched lane, by port",
 		}, []string{"lane"}),
 
 		responsePublishFailures: prometheus.NewCounterVec(prometheus.CounterOpts{

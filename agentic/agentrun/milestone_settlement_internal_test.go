@@ -47,7 +47,7 @@ func newMilestoneLaneFixture(t *testing.T, s *MilestoneSubscriber, lane string) 
 	t.Helper()
 	return milestoneLaneFixture{
 		policy:    milestonePolicyFor(t, s, lane),
-		admission: s.newLaneAdmission(),
+		admission: s.newLaneAdmission(lane),
 	}
 }
 
@@ -767,7 +767,7 @@ func TestMilestoneRefusedDeliveryIsNotLoggedAsASettlementFailure(t *testing.T) {
 		handlerCalls.Add(1)
 		panic("product handler exploded")
 	}))
-	admission := sub.newLaneAdmission()
+	admission := sub.newLaneAdmission(milestoneLaneComplete)
 	callback := sub.consumeLane(milestoneLaneComplete, milestonePolicyFor(t, sub, milestoneLaneComplete), admission)
 
 	// First delivery latches the lane.
@@ -788,6 +788,17 @@ func TestMilestoneRefusedDeliveryIsNotLoggedAsASettlementFailure(t *testing.T) {
 	assert.Empty(t, logLinesWithMessage(t, logs.String(), "agentrun: milestone delivery did not settle cleanly"),
 		"a refusal is not a settlement failure")
 	assert.Empty(t, decisionLogLines(t, logs.String()), "a refusal reached no decision to report")
+
+	// spec: jetstream-consumer-policy / control loss shuts down through the existing exact owner
+	// scenario: closed admission refuses a buffered delivery — the refusal is
+	// declared, not dropped: one log line naming the lane and subject, and one
+	// increment of the lane-labelled counter.
+	refused := logLinesWithMessage(t, logs.String(), "agentrun: milestone delivery refused by latched lane")
+	require.Len(t, refused, 1, "a refused delivery emits exactly one declaration")
+	assert.Equal(t, milestoneLaneComplete, refused[0]["lane"])
+	assert.Equal(t, "agent.complete.x", refused[0]["subject"])
+	assert.InDelta(t, 1.0, testutil.ToFloat64(sub.refusals.WithLabelValues(milestoneLaneComplete)), 0.0,
+		"a refused delivery increments its lane's refusal counter")
 }
 
 // logLinesWithMessage returns the records whose slog message is exactly msg.

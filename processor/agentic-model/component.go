@@ -399,7 +399,9 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port) erro
 			fmt.Sprintf("validate heartbeat delivery policy for port %s", port.Name),
 		)
 	}
-	admission := deliverylane.NewAdmission(c.recordDeliveryOwnerFatal, nil)
+	admission := deliverylane.NewAdmission(c.recordDeliveryOwnerFatal, func(subject string) {
+		c.recordDeliveryRefused(port.Name, subject)
+	})
 
 	consume := c.natsClient.ConsumeStreamWithConfig
 	if c.consumeStream != nil {
@@ -544,6 +546,27 @@ func (c *Component) recordDeliveryOwnerFatal(result natsclient.DeliveryResult) {
 	}
 	c.deliveryFatalErr = result.Err()
 	c.errors++
+}
+
+// recordDeliveryRefused declares a delivery the latched lane refused. The exact
+// handle is drained rather than stopped, so a delivery already buffered when
+// the lane latched still reaches the callback; refusing it is safe because no
+// work runs and no terminal method is attempted. Without this line the refusal
+// is a silent drop: the call site guards every branch on admission.
+// Unsettled is not the same as kept: the delivery already consumed one attempt,
+// so it is redelivered while the consumer's MaxDeliver allows (always, where
+// MaxDeliver is 0) and otherwise reaches the max-delivery exhaustion path.
+func (c *Component) recordDeliveryRefused(lane, subject string) {
+	if c.metrics != nil {
+		c.metrics.recordDeliveryRefused(lane)
+	}
+	if c.logger != nil {
+		c.logger.Warn("Model delivery refused by latched lane",
+			"lane", lane,
+			"subject", subject,
+			"settled", false,
+			"resolution", "unsettled; consumes one delivery attempt, redelivered while max_deliver allows, otherwise counted by semstreams_nats_max_delivery_exhaustions_total")
+	}
 }
 
 // reactDeliveryFatal is this component's asynchronous reaction to the first

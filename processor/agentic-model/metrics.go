@@ -42,6 +42,9 @@ type modelMetrics struct {
 	// stateless-echo cost on the Responses backend (ADR-051 D2),
 	// where echoed reasoning items add bytes to every request.
 	requestBytes *prometheus.HistogramVec
+
+	// Deliveries a latched input lane refused unsettled, by port.
+	deliveryRefusals *prometheus.CounterVec
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors)
@@ -148,6 +151,13 @@ func getMetrics(registry *metric.MetricsRegistry) *modelMetrics {
 				Help:      "Distribution of outgoing request body sizes by backend and model. Used to observe the stateless reasoning-echo cost on the Responses backend (ADR-051).",
 				Buckets:   prometheus.ExponentialBuckets(1024, 2, 14), // 1 KiB to ~16 MiB
 			}, []string{"backend", "model"}),
+
+			deliveryRefusals: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_model",
+				Name:      "delivery_refusals_total",
+				Help:      "Deliveries refused unsettled by a latched lane, by port",
+			}, []string{"lane"}),
 		}
 
 		// Register metrics with the metrics registry if available
@@ -165,6 +175,7 @@ func getMetrics(registry *metric.MetricsRegistry) *modelMetrics {
 			_ = registry.RegisterCounterVec("agentic-model", "length_truncations_total", metrics.lengthTruncationsTotal)
 			_ = registry.RegisterGaugeVec("agentic-model", "endpoint_health_state", metrics.endpointHealthState)
 			_ = registry.RegisterHistogramVec("agentic-model", "request_bytes", metrics.requestBytes)
+			_ = registry.RegisterCounterVec("agentic-model", "delivery_refusals_total", metrics.deliveryRefusals)
 		} else {
 			// Fallback to default prometheus registry for testing
 			_ = prometheus.DefaultRegisterer.Register(metrics.requestsTotal)
@@ -180,6 +191,7 @@ func getMetrics(registry *metric.MetricsRegistry) *modelMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.lengthTruncationsTotal)
 			_ = prometheus.DefaultRegisterer.Register(metrics.endpointHealthState)
 			_ = prometheus.DefaultRegisterer.Register(metrics.requestBytes)
+			_ = prometheus.DefaultRegisterer.Register(metrics.deliveryRefusals)
 		}
 	})
 	return metrics
@@ -259,6 +271,11 @@ func (m *modelMetrics) recordRateLimitHit(model string) {
 // recordRateLimitRetry increments the rate-limit retry counter for the given model.
 func (m *modelMetrics) recordRateLimitRetry(model string) {
 	m.rateLimitRetries.WithLabelValues(model).Inc()
+}
+
+// recordDeliveryRefused counts one delivery a latched lane refused.
+func (m *modelMetrics) recordDeliveryRefused(lane string) {
+	m.deliveryRefusals.WithLabelValues(lane).Inc()
 }
 
 // recordLengthTruncation increments the length truncation counter for the given model.

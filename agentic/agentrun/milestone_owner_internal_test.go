@@ -60,10 +60,10 @@ func newOwnerUnderTest(t *testing.T, s *MilestoneSubscriber) *ownerUnderTest {
 		completeHandle: newLaneHandle(),
 		failedHandle:   newLaneHandle(),
 	}
-	// One admission per lane, each feeding the subscriber's own onFatal — the
-	// argument Start passes, with nil onRefused as ruled (OQ1, 2026-09-22).
-	under.completeAdmit = s.newLaneAdmission()
-	under.failedAdmit = s.newLaneAdmission()
+	// One admission per lane, each feeding the subscriber's own onFatal and
+	// refusal declarer — the arguments Start passes.
+	under.completeAdmit = s.newLaneAdmission(milestoneLaneComplete)
+	under.failedAdmit = s.newLaneAdmission(milestoneLaneFailed)
 	under.completeLaneFixt = milestoneLaneFixture{
 		policy:    milestonePolicyFor(t, s, milestoneLaneComplete),
 		admission: under.completeAdmit,
