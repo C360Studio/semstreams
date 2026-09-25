@@ -465,12 +465,13 @@ func (m *loopMetrics) recordGraphWritePublishTimeout(state string) {
 // TERMINATES, and ("cold-fork", "continuation_unheld") is a well-formed turn
 // for a loop no process holds, which is acknowledged without effect because
 // no redelivery of it could ever be applied (#1330).
-func (m *loopMetrics) recordDeliveryRefused(lane string) {
-	m.deliveryRefusals.WithLabelValues(lane).Inc()
-}
-
 func (m *loopMetrics) recordTaskIntakeRejection(lane, reason string) {
 	m.taskIntakeRejections.WithLabelValues(lane, reason).Inc()
+}
+
+// recordDeliveryRefused counts one delivery a latched lane refused.
+func (m *loopMetrics) recordDeliveryRefused(lane string) {
+	m.deliveryRefusals.WithLabelValues(lane).Inc()
 }
 
 func (m *loopMetrics) recordTrajectoryAuditFailure(stage trajectoryAuditStage, kind agentic.TrajectoryKind, reason trajectoryAuditReason) {

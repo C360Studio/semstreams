@@ -43,7 +43,8 @@ type Admission struct {
 // delivery the closed latch refuses (a log line and the lane-labelled refusal
 // counter); every production lane passes one. nil leaves the refusal
 // undeclared — a silent drop the consumer-policy spec forbids — and exists only
-// for tests that exercise the latch alone.
+// for tests that exercise the latch alone
+// (TestEveryProductionAdmissionDeclaresRefusal in test/contract enforces it).
 func NewAdmission(
 	onFatal func(natsclient.DeliveryResult),
 	onRefused func(subject string),
@@ -203,7 +204,7 @@ func NewBinding(handle jetstream.ConsumeContext) *Binding {
 // On the FATAL path the ordering does hold, because Observe drains only after
 // onFatal has returned and the result has been buffered — so every delivery
 // that drain flushes hits closed admission, runs no work, attempts no terminal
-// method, and stays pending for the reconstructed owner; an already-admitted
+// method, and stays unsettled (one delivery attempt consumed); an already-admitted
 // in-flight delivery can finish and settle instead of being abandoned
 // mid-effect. Repeated calls rejoin the one drain.
 func (b *Binding) Drain() { b.drainOnce.Do(b.handle.Drain) }

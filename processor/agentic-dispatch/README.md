@@ -215,7 +215,7 @@ type CommandConfig struct {
 | `router_tasks_submitted_total` | counter | | Tasks submitted |
 | `router_routing_duration_seconds` | histogram | | Message routing latency |
 | `router_terminal_settlement_total` | counter | `reason` | Terminal validation/routing/publication disposition |
-| `router_delivery_refusals_total` | counter | `lane` | Deliveries a latched lane (`user.message`, `agent.complete`, `agent.failed`) refused unsettled; each stays pending for the reconstructed owner |
+| `router_delivery_refusals_total` | counter | `lane` | Deliveries a latched lane (`user.message`, `agent.complete`, `agent.failed`) refused unsettled. Each refusal consumes one delivery attempt: it is redelivered while the lane's `max_deliver` allows (always on `agent.complete`/`agent.failed`, where it is 0; up to 3 on `user.message`), otherwise counted by `semstreams_nats_max_delivery_exhaustions_total` |
 
 The former `semstreams_router_active_loops` gauge is removed. Use `/loops` while the shared view is caught up;
 the separate loop execution gauge is process-local telemetry, not a durable loop count. `/loops` and `/debug/state`

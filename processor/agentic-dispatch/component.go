@@ -690,9 +690,12 @@ func (c *Component) observeTerminalDelivery(err error) {
 // recordDeliveryRefused declares a delivery a latched lane refused, on any of
 // this component's three lanes. Each lane is drained rather than stopped, so
 // buffered deliveries keep arriving after the first fatal; refusing them is
-// safe because no work runs and no terminal method is attempted — each stays
-// pending for redelivery to the reconstructed owner. Without this line the
-// refusals are a silent drop: every call-site branch is guarded on admission.
+// safe because no work runs and no terminal method is attempted. Without this
+// line the refusals are a silent drop: every call-site branch is guarded on
+// admission.
+// Unsettled is not the same as kept: the delivery already consumed one attempt,
+// so it is redelivered while the consumer's MaxDeliver allows (always, where
+// MaxDeliver is 0) and otherwise reaches the max-delivery exhaustion path.
 func (c *Component) recordDeliveryRefused(lane, subject string) {
 	if c.metrics != nil {
 		c.metrics.recordDeliveryRefused(lane)
@@ -702,7 +705,7 @@ func (c *Component) recordDeliveryRefused(lane, subject string) {
 			slog.String("lane", lane),
 			slog.String("subject", subject),
 			slog.Bool("settled", false),
-			slog.String("resolution", "left pending for redelivery after explicit lane reconstruction"))
+			slog.String("resolution", "unsettled; consumes one delivery attempt, redelivered while max_deliver allows, otherwise counted by semstreams_nats_max_delivery_exhaustions_total"))
 	}
 }
 

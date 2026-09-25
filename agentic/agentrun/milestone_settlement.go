@@ -282,16 +282,18 @@ func (s *MilestoneSubscriber) newLaneAdmission(lane string) *deliverylane.Admiss
 // recordDeliveryRefused declares a delivery a latched lane refused. The lane's
 // exact handle is drained rather than stopped, so buffered milestones keep
 // arriving after the first fatal; refusing them is safe because no work runs
-// and no terminal method is attempted — each stays pending for redelivery to
-// a replacement process. Without this line the refusals are a silent drop:
-// consumeLane returns early on refusal.
+// and no terminal method is attempted. Without this line the refusals are a
+// silent drop: consumeLane returns early on refusal.
+// Unsettled is not the same as kept: the delivery already consumed one attempt,
+// so it is redelivered while the consumer's MaxDeliver allows (always, where
+// MaxDeliver is 0) and otherwise reaches the max-delivery exhaustion path.
 func (s *MilestoneSubscriber) recordDeliveryRefused(lane, subject string) {
 	s.refusals.WithLabelValues(lane).Inc()
 	s.logger.Warn("agentrun: milestone delivery refused by latched lane",
 		slog.String("lane", lane),
 		slog.String("subject", subject),
 		slog.Bool("settled", false),
-		slog.String("resolution", "left pending for redelivery to a replacement process"))
+		slog.String("resolution", "unsettled; consumes one delivery attempt, redelivered while max_deliver allows, otherwise counted by semstreams_nats_max_delivery_exhaustions_total"))
 }
 
 // observeLane wraps one acquired handle in its binding and starts that lane's
