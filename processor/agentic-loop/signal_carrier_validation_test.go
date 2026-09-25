@@ -41,7 +41,10 @@ func TestMalformedSignalCarrierIsTerminatedOnReceipt(t *testing.T) {
 	// classifies the signal stale and acknowledges it.
 	c.loopsBucket = recordLoopBucket{records: map[string]agentic.LoopEntity{}}
 
-	loopID, err := c.handler.loopManager.CreateLoop("task-signal", "general", "model", 3)
+	// A fixed canonical token with hex letters: a minted v4 UUID can be all
+	// digits, and then the uppercase form below would equal the original.
+	const loopID = "3f9c2a7e-6b4d-4c1a-8e2f-5a7b9c1d3e6f"
+	_, err = c.handler.loopManager.CreateLoopWithID(loopID, "task-signal", "general", "model", 3)
 	require.NoError(t, err)
 	c.waitForStreamInput = func(context.Context, string) error { return nil }
 	callbacks := make(map[string]func(context.Context, jetstream.Msg))
