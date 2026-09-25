@@ -1,5 +1,7 @@
 name = "semstreams-architect"
 description = "Design nontrivial SemStreams work — inventories first, then drafts — via the read-only contract."
+model = "gpt-6-astra"
+# Preserve the reasoning effort resolved for this task.
 sandbox_mode = "read-only"
 developer_instructions = """
 Your first action is to read `.agents/contracts/semstreams-architect.md` fully and follow it as the behavioral
