@@ -3237,6 +3237,15 @@ func (c *Component) handleSignalMessage(ctx context.Context, data []byte) (natsc
 		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("unexpected signal payload type %T", baseMsg.Payload())
 	}
 	signal := *signalPtr
+	// The decoder never validates, so the carrier's own refusal runs here or
+	// nowhere: a malformed token published straight onto the subject would
+	// otherwise reach the cancel path and be acknowledged as a stale drop
+	// (#1238). Same class and disposition as the approval lane's refusal.
+	if vErr := signal.Validate(); vErr != nil {
+		return natsclient.DeliveryDecisionTerminate, fmt.Errorf("handle signal %q for loop %q: %w",
+			signal.SignalID, signal.LoopID,
+			errs.WrapInvalid(vErr, "agentic-loop", "handleSignalMessage", "validate signal"))
+	}
 
 	c.logger.Debug("Processing signal message",
 		slog.String("signal_id", signal.SignalID),

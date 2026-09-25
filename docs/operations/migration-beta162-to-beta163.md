@@ -1098,6 +1098,12 @@ anything. If you publish any of the other six, `UserSignal.Validate()` now refus
 Delete the call; there is no replacement, because there was never an implementation. If the intent was
 approval, move to `ApprovalResponse`.
 
+**The signal consumer now validates on receipt (#1238).** A `UserSignal` that fails `Validate()` — a non-canonical
+`loop_id`, or a missing `signal_id` or `user_id` — published directly onto `agent.signal.*` is now terminated
+(`MSG_TERMINATED` advisory on the signal consumer) instead of acknowledged as a stale drop or, for the missing
+fields, applied. Dispatch's gate and `BaseMessage` marshalling already refused it upstream, so only publishers that
+write the envelope JSON themselves see a difference.
+
 **No sister publishes the four.** Swept read-only across `/Users/coby/Code/c360`: no sister references
 `SignalApprove`, `SignalReject`, `SignalFeedback` or `SignalRetry`. The only sister break from this release is
 semsage's pause/resume compile failure, recorded above.
