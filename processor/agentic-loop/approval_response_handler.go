@@ -91,6 +91,17 @@ func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response ag
 		PublishedMessages: []PublishedMessage{},
 	}
 
+	// The LOOP deadline outranks the human's answer, whatever it decided: an
+	// approve or a modify must not dispatch a call on a loop whose budget is
+	// spent, and a reject has nothing left to advance. This is the record's own
+	// TimeoutAt, which a rebuild keeps (owner ruling, #1330
+	// issuecomment-5781101792) — not the approval deadline. Checked after the
+	// resolve, so the gate is cleared on the loop that fails, exactly as the
+	// reject path always cleared it before reaching HandleToolResult's arm.
+	if h.loopManager.IsTimedOut(loopID) {
+		return h.failTimedOutLoop(loopID, result, "HandleApprovalResponse")
+	}
+
 	switch response.Decision {
 	case agentic.ApprovalDecisionApprove:
 		return result, h.dispatchApprovedCall(loopID, pending, pending.Arguments, response.ApprovedBy, &result)
@@ -195,6 +206,28 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 		// Rebuilt: this process holds the gated loop now, and the answer takes
 		// the warm path it would have taken on the process that gated it.
 		result, err = c.handler.HandleApprovalResponse(ctx, response)
+	}
+	if err != nil && result.State.IsTerminal() && !result.terminalOwnedElsewhere {
+		// A business failure — the loop's deadline, from this handler or from
+		// HandleToolResult's arm on a reject — returns its populated terminal
+		// result WITH the error. That result is the loop's settlement, so it is
+		// committed through the terminal owner and the delivery settles on the
+		// commit, as settleFailedToolResult does on the tool lane. Discarding
+		// it behind a quarantine left the record gated and the lane stopped.
+		c.logger.Warn("Approval answer settled its loop as failed",
+			slog.String("loop_id", response.LoopID),
+			slog.String("call_id", response.CallID),
+			slog.String("error", err.Error()))
+		err = c.persistHandlerResult(ctx, result, writeThenPublish)
+		if err == nil {
+			return natsclient.DeliveryDecisionAck, nil
+		}
+		if !errs.IsFatal(err) {
+			return natsclient.DeliveryDecisionRetry,
+				fmt.Errorf("approval failure for loop %q must be retried: %w", response.LoopID, err)
+		}
+		return natsclient.DeliveryDecisionQuarantine,
+			fmt.Errorf("approval failure for loop %q has unknown durable state: %w", response.LoopID, err)
 	}
 	if err != nil {
 		wrapped := fmt.Errorf("handle approval response for loop %q call %q: %w", response.LoopID, response.CallID, err)

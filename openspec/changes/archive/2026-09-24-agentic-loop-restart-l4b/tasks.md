@@ -181,3 +181,13 @@ Mutation evidence uses a `cp` backup and a checksum.
   - the breaker count, if any rider rode along
   - No rider rode along: the owner ruled on 2026-09-24 that #1342, #1238 and #1345 follow #1366 (#1362
     issuecomment-5820695479), so there is no breaker count.
+
+## Post-archive review fixes
+
+Owner-run review of `c45d1063` (PR #1366 issuecomment-5827554362). Spec text changes land directly in
+`openspec/specs/agentic-loop/spec.md`; this change stays archived.
+
+- P1: an approval answer to a loop past its LOOP deadline dispatched the approved call (approve, modify) or quarantined
+  a populated timeout failure (reject), warm and cold. `HandleApprovalResponse` now fails the loop on the timeout
+  before it dispatches anything, and the approval lane commits a terminal result a handler returns with its error.
+  Scenario: "An approval answer does not outlive its loop's deadline". Tests: `approval_loop_deadline_test.go`.

@@ -1466,19 +1466,7 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 
 	// Check for timeout before processing
 	if h.loopManager.IsTimedOut(loopID) {
-		_ = h.loopManager.TransitionLoop(loopID, agentic.LoopStateFailed)
-		if err := h.loopManager.UpdateCompletion(loopID, agentic.OutcomeFailed, "", "loop timeout exceeded"); err != nil {
-			h.logger.Warn("failed to update completion for timed out loop",
-				slog.String("loop_id", loopID),
-				slog.String("error", err.Error()))
-		}
-		result.State = agentic.LoopStateFailed
-		// Publish failure events for reactive workflows to observe
-		if failure, failMsgs, fErr := h.BuildFailureMessages(loopID, "timeout", "loop timeout exceeded"); fErr == nil {
-			result.PublishedMessages = failMsgs
-			result.FailureState = failure
-		}
-		return result, errs.WrapFatal(fmt.Errorf("loop timeout exceeded"), "agentic-loop", "HandleModelResponse", "check timeout")
+		return h.failTimedOutLoop(loopID, result, "HandleModelResponse")
 	}
 
 	// Check if max iterations reached
@@ -2700,19 +2688,7 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 
 	// Check for timeout before processing
 	if h.loopManager.IsTimedOut(loopID) {
-		_ = h.loopManager.TransitionLoop(loopID, agentic.LoopStateFailed)
-		if err := h.loopManager.UpdateCompletion(loopID, agentic.OutcomeFailed, "", "loop timeout exceeded"); err != nil {
-			h.logger.Warn("failed to update completion for timed out loop",
-				slog.String("loop_id", loopID),
-				slog.String("error", err.Error()))
-		}
-		result.State = agentic.LoopStateFailed
-		// Publish failure events for reactive workflows to observe
-		if failure, failMsgs, fErr := h.BuildFailureMessages(loopID, "timeout", "loop timeout exceeded"); fErr == nil {
-			result.PublishedMessages = failMsgs
-			result.FailureState = failure
-		}
-		return result, errs.WrapFatal(fmt.Errorf("loop timeout exceeded"), "agentic-loop", "HandleToolResult", "check timeout")
+		return h.failTimedOutLoop(loopID, result, "HandleToolResult")
 	}
 
 	// Truncate oversized tool results before they enter the context window.
@@ -3383,6 +3359,28 @@ func (h *MessageHandler) BuildFailureEvent(loopID, reason, errorMsg string) (*ag
 
 // BuildFailureMessages creates a failure event and serializes it for NATS publishing.
 // Returns the event (for graph emission) and published messages (for reactive workflows).
+// failTimedOutLoop is the one timeout arm: a loop past its deadline fails in
+// memory and returns its populated failure — the failed state, the failure
+// event and its publication — WITH a fatal error. The lane owns the commit: it
+// persists a terminal result through the terminal owner (the tool-result and
+// approval lanes) or re-derives the failure (the model-response lane), and
+// never discards the populated result behind the error.
+func (h *MessageHandler) failTimedOutLoop(loopID string, result HandlerResult, op string) (HandlerResult, error) {
+	_ = h.loopManager.TransitionLoop(loopID, agentic.LoopStateFailed)
+	if err := h.loopManager.UpdateCompletion(loopID, agentic.OutcomeFailed, "", "loop timeout exceeded"); err != nil {
+		h.logger.Warn("failed to update completion for timed out loop",
+			slog.String("loop_id", loopID),
+			slog.String("error", err.Error()))
+	}
+	result.State = agentic.LoopStateFailed
+	// Publish failure events for reactive workflows to observe
+	if failure, failMsgs, fErr := h.BuildFailureMessages(loopID, "timeout", "loop timeout exceeded"); fErr == nil {
+		result.PublishedMessages = failMsgs
+		result.FailureState = failure
+	}
+	return result, errs.WrapFatal(fmt.Errorf("loop timeout exceeded"), "agentic-loop", op, "check timeout")
+}
+
 func (h *MessageHandler) BuildFailureMessages(loopID, reason, errorMsg string) (*agentic.LoopFailedEvent, []PublishedMessage, error) {
 	failure, err := h.buildFailureEvent(loopID, reason, errorMsg)
 	if err != nil {

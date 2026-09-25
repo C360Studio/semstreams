@@ -1852,7 +1852,9 @@ keeps its ORIGINAL deadline: nothing refreshes it, and the time the process was 
 replacement whose gap outran that deadline rebuilds the loop and then fails it on the very first delivery, with a
 terminal on `agent.failed.<loopID>` carrying `loop timeout exceeded`. The delivery itself is ACKNOWLEDGED — the loop
 settled and nothing is owed — so this shape is invisible to consumer-health and settlement checks and shows up only
-on `agent.failed`. **Action:** size `timeout` on the `agentic-loop` component above the replacement window you
+on `agent.failed`. An approval answer is one such delivery: an approve or modify reaching a loop past its deadline
+dispatches nothing, and approve, modify and reject alike fail the loop on the timeout, whether this process held the
+loop or rebuilt it for the answer. **Action:** size `timeout` on the `agentic-loop` component above the replacement window you
 expect to operate under. A 30s loop timeout and a 60s rolling restart mean every in-flight loop dies on recovery.
 
 What is deliberately NOT replayed is the per-iteration framing. A retained request is not the loop's conversation —
