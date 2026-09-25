@@ -43,6 +43,9 @@ type governanceMetrics struct {
 	// near 1.0 because cosine similarity above 0.5 is the
 	// interesting range.
 	classifierScore prometheus.Histogram
+
+	// Deliveries a latched input lane refused unsettled, by port
+	deliveryRefusals *prometheus.CounterVec
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors)
@@ -126,6 +129,13 @@ func getMetrics(registry *metric.MetricsRegistry) *governanceMetrics {
 				Help:      "Best-match cosine similarity score per classifier invocation",
 				Buckets:   []float64{0.1, 0.3, 0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.99},
 			}),
+
+			deliveryRefusals: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "governance",
+				Name:      "delivery_refusals_total",
+				Help:      "Deliveries refused unsettled by a latched lane, by port",
+			}, []string{"lane"}),
 		}
 
 		// Register metrics with the metrics registry if available
@@ -140,6 +150,7 @@ func getMetrics(registry *metric.MetricsRegistry) *governanceMetrics {
 			_ = registry.RegisterCounterVec("agentic-governance", "messages_processed_total", metrics.messagesProcessed)
 			_ = registry.RegisterCounterVec("agentic-governance", "injection_classifier_decisions_total", metrics.classifierDecisions)
 			_ = registry.RegisterHistogram("agentic-governance", "injection_classifier_score", metrics.classifierScore)
+			_ = registry.RegisterCounterVec("agentic-governance", "delivery_refusals_total", metrics.deliveryRefusals)
 		} else {
 			// Fallback to default prometheus registry for testing
 			_ = prometheus.DefaultRegisterer.Register(metrics.filterTotal)
@@ -152,6 +163,7 @@ func getMetrics(registry *metric.MetricsRegistry) *governanceMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.messagesProcessed)
 			_ = prometheus.DefaultRegisterer.Register(metrics.classifierDecisions)
 			_ = prometheus.DefaultRegisterer.Register(metrics.classifierScore)
+			_ = prometheus.DefaultRegisterer.Register(metrics.deliveryRefusals)
 		}
 	})
 	return metrics
@@ -167,6 +179,11 @@ func (m *governanceMetrics) recordClassifierDecision(verdict, signal string) {
 // recordClassifierScore records a similarity score sample.
 func (m *governanceMetrics) recordClassifierScore(score float64) {
 	m.classifierScore.Observe(score)
+}
+
+// recordDeliveryRefused counts one delivery a latched lane refused.
+func (m *governanceMetrics) recordDeliveryRefused(lane string) {
+	m.deliveryRefusals.WithLabelValues(lane).Inc()
 }
 
 // recordFilterResult records filter invocation result.

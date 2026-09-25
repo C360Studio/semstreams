@@ -487,7 +487,9 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port, hand
 	if c.consumeStream != nil {
 		consume = c.consumeStream
 	}
-	admission := deliverylane.NewAdmission(c.recordDeliveryOwnerFatal, nil)
+	admission := deliverylane.NewAdmission(c.recordDeliveryOwnerFatal, func(subject string) {
+		c.recordDeliveryRefused(port.Name, subject)
+	})
 	handle, err := consume(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: port.Name}, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		result, admitted := deliverylane.Settle(msgCtx, msg, natsclient.ImmediateDeliveryRetry(),
 			admission, "governance", handler)
@@ -694,6 +696,25 @@ func (c *Component) Health() component.HealthStatus {
 		LastError:  lastError,
 		Uptime:     time.Since(startTime),
 		Status:     status,
+	}
+}
+
+// recordDeliveryRefused declares a delivery a latched lane refused. The exact
+// handle is drained rather than stopped, so buffered deliveries keep arriving
+// after the first fatal; refusing them is safe because no work runs and no
+// terminal method is attempted — each stays pending for redelivery to the
+// reconstructed owner. Without this line the refusals are a silent drop: the
+// call site returns early on refusal.
+func (c *Component) recordDeliveryRefused(lane, subject string) {
+	if c.metrics != nil {
+		c.metrics.recordDeliveryRefused(lane)
+	}
+	if c.logger != nil {
+		c.logger.Warn("Governance delivery refused by latched lane",
+			"lane", lane,
+			"subject", subject,
+			"settled", false,
+			"resolution", "left pending for redelivery after explicit lane reconstruction")
 	}
 }
 

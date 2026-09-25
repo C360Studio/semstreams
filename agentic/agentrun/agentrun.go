@@ -534,6 +534,10 @@ type MilestoneSubscriber struct {
 	// dereference on the delivery path.
 	decisions *prometheus.CounterVec
 
+	// refusals counts every delivery a latched lane refused, by lane. Built in
+	// the constructor for the same reason as decisions.
+	refusals *prometheus.CounterVec
+
 	// mu guards deliveryFatalErr only. Handler registration stays the
 	// before-start contract AddHandler documents.
 	mu               sync.Mutex
@@ -584,11 +588,17 @@ func NewMilestoneSubscriberWithRunStateReader(
 			Name:      "milestone_decisions_total",
 			Help:      "Milestone deliveries that did not acknowledge, by lane, decision and reason",
 		}, []string{"lane", "decision", "reason"}),
+		refusals: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "semstreams",
+			Subsystem: "agentrun",
+			Name:      "delivery_refusals_total",
+			Help:      "Milestone deliveries refused unsettled by a latched lane, by lane",
+		}, []string{"lane"}),
 	}
 }
 
-// RegisterMetrics publishes this subscriber's decisions counter on r, and is
-// the one thing that makes the delivery path's increments visible.
+// RegisterMetrics publishes this subscriber's decisions and refusals counters
+// on r, and is the one thing that makes the delivery path's increments visible.
 //
 // The vec is built in the constructor, so an increment before (or without)
 // registration is a local no-op: the counts accumulate on a vec no /metrics
@@ -607,6 +617,9 @@ func (s *MilestoneSubscriber) RegisterMetrics(r metric.MetricsRegistrar) error {
 	}
 	if err := r.RegisterCounterVec("agentrun", "milestone_decisions_total", s.decisions); err != nil {
 		return fmt.Errorf("agentrun: register milestone decisions counter: %w", err)
+	}
+	if err := r.RegisterCounterVec("agentrun", "delivery_refusals_total", s.refusals); err != nil {
+		return fmt.Errorf("agentrun: register milestone delivery refusals counter: %w", err)
 	}
 	return nil
 }
@@ -978,7 +991,7 @@ func (s *MilestoneSubscriber) Start(
 		return nil, fmt.Errorf(
 			"agentrun: MilestoneSubscriber: validate agent.complete.* delivery policy: %w", err)
 	}
-	completeAdmission := s.newLaneAdmission()
+	completeAdmission := s.newLaneAdmission(milestoneLaneComplete)
 	completeHandle, err := client.ConsumeInternalStreamWithConfig(
 		runCtx, completeCfg, s.consumeLane(milestoneLaneComplete, completePolicy, completeAdmission),
 	)
@@ -1042,7 +1055,7 @@ func (s *MilestoneSubscriber) Start(
 		}
 		return stop, errors.Join(startErr, rollbackErr)
 	}
-	failedAdmission := s.newLaneAdmission()
+	failedAdmission := s.newLaneAdmission(milestoneLaneFailed)
 	failedHandle, err := client.ConsumeInternalStreamWithConfig(
 		runCtx, failedCfg, s.consumeLane(milestoneLaneFailed, failedPolicy, failedAdmission),
 	)

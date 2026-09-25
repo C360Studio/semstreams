@@ -246,7 +246,7 @@ func TestRefusedTerminalDeliveryIsLoggedAndCounted(t *testing.T) {
 	require.Equal(t, before+1,
 		testutil.ToFloat64(c.metrics.deliveryRefusals.WithLabelValues("agent.complete")),
 		"a refused delivery must increment the refusal counter")
-	require.Contains(t, logs.String(), "Terminal delivery refused by latched lane")
+	require.Contains(t, logs.String(), "Delivery refused by latched lane")
 	require.Contains(t, logs.String(), "subject=agent.complete")
 }
 

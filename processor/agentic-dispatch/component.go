@@ -565,7 +565,9 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 		MaxAckPending: bindings.userMessage.consumerConfig.MaxAckPending,
 		AutoCreate:    false,
 	}
-	userMessageAdmission := deliverylane.NewAdmission(c.recordDeliveryOwnerFatal, nil)
+	userMessageAdmission := deliverylane.NewAdmission(c.recordDeliveryOwnerFatal, func(subject string) {
+		c.recordDeliveryRefused(bindings.userMessage.portName, subject)
+	})
 	handle, err := c.consumeStreamHandle(ctx, natsclient.PortConsumerContext{Component: c.Meta().Name, Port: bindings.userMessage.portName}, userMsgCfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		result, admitted := deliverylane.Settle(msgCtx, msg, natsclient.ImmediateDeliveryRetry(),
 			userMessageAdmission, "dispatch", c.handleUserMessage)
@@ -685,18 +687,18 @@ func (c *Component) observeTerminalDelivery(err error) {
 	}
 }
 
-// recordDeliveryRefused declares a delivery the latched lane refused. Both
-// terminal lanes are drained rather than stopped (tasks.md 4.7), so buffered
-// deliveries keep arriving after the first fatal; refusing them is safe
-// because no terminal method is attempted — each stays pending for redelivery
-// to the reconstructed owner. Without this line the refusals are a silent
-// drop: every call-site branch is guarded on admission.
+// recordDeliveryRefused declares a delivery a latched lane refused, on any of
+// this component's three lanes. Each lane is drained rather than stopped, so
+// buffered deliveries keep arriving after the first fatal; refusing them is
+// safe because no work runs and no terminal method is attempted — each stays
+// pending for redelivery to the reconstructed owner. Without this line the
+// refusals are a silent drop: every call-site branch is guarded on admission.
 func (c *Component) recordDeliveryRefused(lane, subject string) {
 	if c.metrics != nil {
 		c.metrics.recordDeliveryRefused(lane)
 	}
 	if c.logger != nil {
-		c.logger.Warn("Terminal delivery refused by latched lane",
+		c.logger.Warn("Delivery refused by latched lane",
 			slog.String("lane", lane),
 			slog.String("subject", subject),
 			slog.Bool("settled", false),

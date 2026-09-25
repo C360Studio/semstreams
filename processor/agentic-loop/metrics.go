@@ -58,6 +58,8 @@ type loopMetrics struct {
 	graphWritePublishTimeouts *prometheus.CounterVec
 	// Permanent decoded task-intake rejection. Labels are bounded enums only.
 	taskIntakeRejections *prometheus.CounterVec
+	// Deliveries a latched input lane refused unsettled, by port.
+	deliveryRefusals *prometheus.CounterVec
 
 	// Tool-call governance (ADR-039)
 	governanceVerdictDuration                *prometheus.HistogramVec
@@ -260,6 +262,13 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Help:      "Total tasks refused at intake, by bounded lane and reason. lane=\"decoded-task\", reason=\"structural-invalid\": the decoded task is structurally unusable (lineage identity), so the delivery is terminated rather than retried. lane=\"cold-fork\", reason=\"continuation_unheld\": the task's id differs from the one the live record names, and no process holds the loop — either a new turn submitted for a loop no process holds, or a redelivered task the record has already moved past. Either way the delivery cannot be applied here: it is acknowledged without effect, and a turn that was never applied must be re-sent once a redelivered input has rebuilt the loop. Sustained non-zero continuation_unheld points at work arriving for loops across a process replacement.",
 			}, []string{"lane", "reason"}),
 
+			deliveryRefusals: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_loop",
+				Name:      "delivery_refusals_total",
+				Help:      "Deliveries refused unsettled by a latched lane, by port",
+			}, []string{"lane"}),
+
 			// Tool-call governance (ADR-039) drives the timeout-tuning
 			// decision in beta.70 — buckets span 1ms → 5s to capture
 			// both fast in-process rule fires and slow networked
@@ -321,6 +330,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = registry.RegisterGauge("agentic-loop", "context_compacted_region_tokens", metrics.contextCompactedRegionTokens)
 			_ = registry.RegisterCounterVec("agentic-loop", "graph_write_publish_timeout_total", metrics.graphWritePublishTimeouts)
 			_ = registry.RegisterCounterVec("agentic-loop", "task_intake_rejections_total", metrics.taskIntakeRejections)
+			_ = registry.RegisterCounterVec("agentic-loop", "delivery_refusals_total", metrics.deliveryRefusals)
 			_ = registry.RegisterHistogramVec("agentic-loop", "tool_call_governance_verdict_duration_seconds", metrics.governanceVerdictDuration)
 			_ = registry.RegisterCounterVec("agentic-loop", "tool_call_governance_verdict_total", metrics.governanceVerdictTotal)
 			_ = registry.RegisterCounterVec("agentic-loop", "tool_call_governance_subscribe_before_publish_failures_total", metrics.governanceSubscribeBeforePublishFailures)
@@ -352,6 +362,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.contextCompactedRegionTokens)
 			_ = prometheus.DefaultRegisterer.Register(metrics.graphWritePublishTimeouts)
 			_ = prometheus.DefaultRegisterer.Register(metrics.taskIntakeRejections)
+			_ = prometheus.DefaultRegisterer.Register(metrics.deliveryRefusals)
 			_ = prometheus.DefaultRegisterer.Register(metrics.governanceVerdictDuration)
 			_ = prometheus.DefaultRegisterer.Register(metrics.governanceVerdictTotal)
 			_ = prometheus.DefaultRegisterer.Register(metrics.governanceSubscribeBeforePublishFailures)
@@ -454,6 +465,10 @@ func (m *loopMetrics) recordGraphWritePublishTimeout(state string) {
 // TERMINATES, and ("cold-fork", "continuation_unheld") is a well-formed turn
 // for a loop no process holds, which is acknowledged without effect because
 // no redelivery of it could ever be applied (#1330).
+func (m *loopMetrics) recordDeliveryRefused(lane string) {
+	m.deliveryRefusals.WithLabelValues(lane).Inc()
+}
+
 func (m *loopMetrics) recordTaskIntakeRejection(lane, reason string) {
 	m.taskIntakeRejections.WithLabelValues(lane, reason).Inc()
 }
