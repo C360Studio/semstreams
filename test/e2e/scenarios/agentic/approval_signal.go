@@ -68,11 +68,6 @@ const (
 	// mapped reason (processor/agentic-dispatch/metrics.go).
 	loopAdmissionRefusalsMetric = "semstreams_router_loop_admission_refusals_total"
 
-	// approvalTrackerWindow bounds the retry on a 409 from the approval
-	// endpoint — see submitApproval for why that status is a race rather than
-	// an answer.
-	approvalTrackerWindow = 10 * time.Second
-
 	// toolExecutionsMetric counts executor invocations by tool name AND status.
 	// For approvalGatedTool it can only be nonzero via an approved re-dispatch:
 	// the approval filter refuses every un-approved call to it.
@@ -733,60 +728,47 @@ func terminalOutcome(payload message.Payload) (string, error) {
 // naming the execution it is answering — the endpoint refuses a body that does
 // not, and refuses one that names an execution other than the pending gate.
 //
-// A 409 is retried inside a bounded window instead of being failed on. The
-// endpoint decides from the loop's AGENT_LOOPS record, not from an in-memory
-// tracker: it answers 409 when that record is not awaiting approval, or when
-// the execution named is not the record's pending gate. The scenario reads the
-// ApprovalPendingEvent off the AGENT stream directly, and that event can be on
-// the stream before the loop writes the awaiting_approval record. That is a
-// race between the event and the record, not a refusal. Across a process
-// replacement there is no such race: verify-approval-across-replacement has
-// already read the record awaiting before it answers, so a 409 there means the
-// record is not awaiting, and the retry only delays that failure by the
-// window. Every other status is the answer and is reported as one, and a 409
-// that outlasts the window still fails. reason is the free text a reviewer
-// attaches; empty sends none.
+// Every status but 200 is the answer and fails the walk; a 409 is not retried.
+// The endpoint decides from the loop's AGENT_LOOPS record, and every caller
+// has already read that record awaiting this gate before it answers — the
+// walk's awaitLoopState, the replacement walk's parked records — so there is
+// no window in which the record could still be catching up. Nor could the
+// ApprovalPendingEvent outrun it: a gate is written before its event is
+// published (persistHandlerResult keeps write-then-publish for an
+// awaiting_approval result), and a re-echo is built from a gate already
+// written. A 409 therefore means the record is not awaiting this gate, which
+// across a replacement is a lost gate, not a race. reason is the free text a
+// reviewer attaches; empty sends none.
 func (s *Scenario) submitApproval(ctx context.Context, loopID, executionID, decision, reason string) error {
-	deadline := time.Now().Add(approvalTrackerWindow)
-	for {
-		status, body, err := s.postJSON(ctx,
-			fmt.Sprintf("%s/loops/%s/approval", dispatchRoutePrefix, loopID),
-			agenticdispatch.ApprovalRequest{
-				Decision:    decision,
-				ExecutionID: executionID,
-				Reason:      reason,
-				UserID:      approvalRequester,
-			})
-		if err != nil {
-			return fmt.Errorf("post approval for loop %s: %w", loopID, err)
-		}
-		if status == http.StatusOK {
-			var accepted agenticdispatch.ApprovalAcceptResponse
-			if err := json.Unmarshal(body, &accepted); err != nil {
-				return fmt.Errorf("decode approval acceptance: %w", err)
-			}
-			if !accepted.Accepted || accepted.LoopID != loopID || accepted.Decision != decision {
-				return fmt.Errorf("approval acceptance = %+v, want accepted %s for loop %s", accepted, decision, loopID)
-			}
-			// The acceptance names the execution it answered. This is the one
-			// walk that reaches a 200, so it is where the echo is observed:
-			// a caller that cannot see WHICH gate it just answered is back to
-			// inferring it from the request it sent.
-			if accepted.ExecutionID != executionID {
-				return fmt.Errorf("approval acceptance execution_id = %q, want the execution the decision named (%q)",
-					accepted.ExecutionID, executionID)
-			}
-			return nil
-		}
-		if status != http.StatusConflict || !time.Now().Before(deadline) {
-			return fmt.Errorf("approval status = %d, want 200 (body %s)", status, strings.TrimSpace(string(body)))
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(250 * time.Millisecond):
-		}
+	status, body, err := s.postJSON(ctx,
+		fmt.Sprintf("%s/loops/%s/approval", dispatchRoutePrefix, loopID),
+		agenticdispatch.ApprovalRequest{
+			Decision:    decision,
+			ExecutionID: executionID,
+			Reason:      reason,
+			UserID:      approvalRequester,
+		})
+	if err != nil {
+		return fmt.Errorf("post approval for loop %s: %w", loopID, err)
 	}
+	if status != http.StatusOK {
+		return fmt.Errorf("approval status = %d, want 200 (body %s)", status, strings.TrimSpace(string(body)))
+	}
+	var accepted agenticdispatch.ApprovalAcceptResponse
+	if err := json.Unmarshal(body, &accepted); err != nil {
+		return fmt.Errorf("decode approval acceptance: %w", err)
+	}
+	if !accepted.Accepted || accepted.LoopID != loopID || accepted.Decision != decision {
+		return fmt.Errorf("approval acceptance = %+v, want accepted %s for loop %s", accepted, decision, loopID)
+	}
+	// The acceptance names the execution it answered: a caller that cannot
+	// see WHICH gate it just answered is back to inferring it from the
+	// request it sent.
+	if accepted.ExecutionID != executionID {
+		return fmt.Errorf("approval acceptance execution_id = %q, want the execution the decision named (%q)",
+			accepted.ExecutionID, executionID)
+	}
+	return nil
 }
 
 // chatCommand submits a slash command on the dispatch HTTP message endpoint and
