@@ -50,7 +50,7 @@ func TestIntegrationPartialPublishQuarantinesRatherThanRetrying(t *testing.T) {
 		},
 	}
 
-	persistErr := c.persistHandlerResult(ctx, result, writeThenPublish)
+	persistErr := c.persistHandlerResult(ctx, result)
 	require.Error(t, persistErr)
 	require.Contains(t, persistErr.Error(), "unknown durability",
 		"a partial publish must be declared commit-unknown, not a bare publish error")
@@ -66,7 +66,7 @@ func TestIntegrationPartialPublishQuarantinesRatherThanRetrying(t *testing.T) {
 	policy, err := newLoopHeartbeatDeliveryPolicy(ctx, natsclient.StreamConsumerConfig{
 		AckWait: 2 * time.Minute, BackOff: []time.Duration{30 * time.Second, 2 * time.Minute}, MaxDeliver: 2,
 	}, 15*time.Second, "agent.response", func(workCtx context.Context, _ []byte) error {
-		return c.persistHandlerResult(workCtx, result, writeThenPublish)
+		return c.persistHandlerResult(workCtx, result)
 	})
 	require.NoError(t, err)
 

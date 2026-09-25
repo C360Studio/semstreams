@@ -184,7 +184,7 @@ func TestATaskRedeliveredOverAProgressedFirstBatchIsNotRepublished(t *testing.T)
 	retainModelResponse(t, client, batch)
 	dispatch, err := handler.HandleModelResponse(t.Context(), loopID, batch)
 	require.NoError(t, err)
-	require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch, publishThenWrite))
+	require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch))
 	callA, executeSubject := dispatchedToolCall(t, dispatch)
 
 	resultA := agentic.ToolResult{
@@ -306,7 +306,7 @@ func TestATaskRedeliveredOverADispatchedFirstBatchIsAcknowledged(t *testing.T) {
 	retainModelResponse(t, client, batch)
 	dispatch, err := handler.HandleModelResponse(t.Context(), loopID, batch)
 	require.NoError(t, err)
-	require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch, publishThenWrite))
+	require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch))
 	callA, executeSubject := dispatchedToolCall(t, dispatch)
 
 	dispatched := loopRecordOf(t, predecessor, loopID)
@@ -820,7 +820,7 @@ func TestAColdContinuationForALoopNoProcessHoldsIsRefused(t *testing.T) {
 		retainModelResponse(t, client, batch)
 		dispatch, err := handler.HandleModelResponse(t.Context(), loopID, batch)
 		require.NoError(t, err)
-		require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch, publishThenWrite))
+		require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch))
 		call, _ := dispatchedToolCall(t, dispatch)
 
 		_, applied := deliverToolResult(t, predecessor, agentic.ToolResult{

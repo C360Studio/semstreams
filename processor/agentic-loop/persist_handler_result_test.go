@@ -66,7 +66,7 @@ func TestPersistHandlerResultReleasesTheLoopWhenItsTerminalPublicationFails(t *t
 			Subject: "agent.complete." + loopID,
 			Data:    []byte(`{"complete":true}`),
 		}},
-	}, writeThenPublish)
+	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "publish result")
 	_, err = handler.trajectoryManager.getTrajectory(loopID)
@@ -198,14 +198,14 @@ func TestGraphWritePublishBudget_IsReasonable(t *testing.T) {
 	}
 }
 
-// TestAGateIsWrittenBeforeItIsPublishedWhateverItsLaneAsks is task 1.6's gate
-// branch at the carrier seam (docket OQ8): a result that CREATES an approval
-// gate is written before its ApprovalPendingEvent is published even when the
-// lane asks for publish-then-write, so an unpublishable client still leaves
-// the gate durable.
+// TestAGateIsWrittenBeforeItIsPublished is task 1.6's gate branch at the
+// carrier seam (docket OQ8): a result that CREATES an approval gate is written
+// before its ApprovalPendingEvent is published — the shape decides, no lane
+// can ask otherwise (#1376) — so an unpublishable client still leaves the gate
+// durable.
 //
 // spec: agentic-loop / The loop record names its outstanding request
-func TestAGateIsWrittenBeforeItIsPublishedWhateverItsLaneAsks(t *testing.T) {
+func TestAGateIsWrittenBeforeItIsPublished(t *testing.T) {
 	c, bucket, loopID := carrierLoop(t)
 	entity, err := c.handler.GetLoop(loopID)
 	require.NoError(t, err)
@@ -221,7 +221,7 @@ func TestAGateIsWrittenBeforeItIsPublishedWhateverItsLaneAsks(t *testing.T) {
 			Subject: "agent.approval_pending." + loopID,
 			Data:    []byte(`{"gate":true}`),
 		}},
-	}, publishThenWrite)
+	})
 
 	require.Error(t, err, "the unconnected publish must fail so the order is observable")
 	require.Equal(t, []string{loopID}, bucket.written(),

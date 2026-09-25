@@ -180,7 +180,7 @@ func TestARebuiltLoopDispatchesWithItsTaskEnforcementMetadata(t *testing.T) {
 		retainModelResponse(t, client, batch)
 		dispatch, err := handler.HandleModelResponse(t.Context(), loopID, batch)
 		require.NoError(t, err)
-		require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch, publishThenWrite))
+		require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch))
 		callA, _ := dispatchedToolCall(t, dispatch)
 		requireEnforcedMetadata(t, dispatchedToolCallOn(t, client, toolExecuteSubjectFor(t, appliedTool)),
 			"warm dispatch (the premise: the holder of the cache stamps these keys)")

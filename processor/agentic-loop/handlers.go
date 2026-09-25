@@ -2637,6 +2637,15 @@ func terminalGuardResult(loopID string, state agentic.LoopState) HandlerResult {
 	}
 }
 
+// failedTerminal reads a handler's (result, err) pair once: it reports whether
+// the error accompanies a populated terminal the loop owner must commit — the
+// business failure IS the loop's settlement, and the delivery settles on the
+// commit, not on the error's class. A guard result never carries an error
+// (#1376 design P3); the conjunct keeps the three sites identical.
+func failedTerminal(result HandlerResult, err error) bool {
+	return err != nil && result.State.IsTerminal() && !result.terminalOwnedElsewhere
+}
+
 // HandleToolResult processes a tool execution result
 func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, toolResult agentic.ToolResult) (HandlerResult, error) {
 	// Check for cancellation before processing

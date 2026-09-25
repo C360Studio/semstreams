@@ -213,7 +213,7 @@ func TestToolResultRedeliveredToAReplacementProcess(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
-		require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch, publishThenWrite))
+		require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch))
 		call, executeSubject := dispatchedToolCall(t, dispatch)
 
 		// From here the predecessor is dying: it will publish and never record.
@@ -283,7 +283,7 @@ func TestToolResultRedeliveredToAReplacementProcess(t *testing.T) {
 		retainModelResponse(t, client, batch)
 		dispatch, err := handler.HandleModelResponse(t.Context(), loopID, batch)
 		require.NoError(t, err)
-		require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch, publishThenWrite))
+		require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch))
 		call, executeSubject := dispatchedToolCall(t, dispatch)
 		require.Equal(t, uint64(1), messagesOn(t, client, executeSubject),
 			"an assistant batch dispatches serially: one call out, the sibling queued")
@@ -419,7 +419,7 @@ func TestToolResultRedeliveredToAReplacementProcess(t *testing.T) {
 		retainModelResponse(t, client, batch)
 		dispatch, err := handler.HandleModelResponse(t.Context(), loopID, batch)
 		require.NoError(t, err)
-		require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch, publishThenWrite))
+		require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch))
 		call, _ := dispatchedToolCall(t, dispatch)
 
 		predecessor.loopsBucket = crashedBeforeRecordUpdate{KeyValue: predecessor.loopsBucket}
@@ -575,7 +575,7 @@ func TestAReplayedAppliedToolResultDoesNotQuarantineItsLane(t *testing.T) {
 	retainModelResponse(t, client, batch)
 	dispatch, err := handler.HandleModelResponse(t.Context(), loopID, batch)
 	require.NoError(t, err)
-	require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch, publishThenWrite))
+	require.NoError(t, predecessor.persistHandlerResult(t.Context(), dispatch))
 	callA, _ := dispatchedToolCall(t, dispatch)
 
 	resultA := agentic.ToolResult{

@@ -45,7 +45,7 @@ func TestPublishPhaseFailureLeavesPersistHandlerResultFatalClassified(t *testing
 		PublishedMessages: []PublishedMessage{{Subject: "agent.first", Data: []byte(`{"n":1}`)}},
 	}
 
-	persistErr := c.persistHandlerResult(t.Context(), result, writeThenPublish)
+	persistErr := c.persistHandlerResult(t.Context(), result)
 	require.Error(t, persistErr)
 	require.True(t, errs.IsFatal(persistErr),
 		"a publish-phase failure is commit-unknown and must be fatal-classified, not an ordinary error")
@@ -54,7 +54,7 @@ func TestPublishPhaseFailureLeavesPersistHandlerResultFatalClassified(t *testing
 	// A result with nothing to publish reaches the same line and succeeds, so
 	// the classification above is the publish's, not the path's.
 	require.NoError(t, c.persistHandlerResult(t.Context(),
-		HandlerResult{LoopID: "loop-publish-phase", State: agentic.LoopStateExploring}, writeThenPublish))
+		HandlerResult{LoopID: "loop-publish-phase", State: agentic.LoopStateExploring}))
 }
 
 // And the mapping that consumes it. The heartbeat work function must test

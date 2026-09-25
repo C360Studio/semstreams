@@ -110,7 +110,7 @@ func (c *Component) sweepExpiredApprovals(ctx context.Context) {
 				slog.String("call_id", cand.CallID))
 			continue
 		}
-		if err != nil && result.State.IsTerminal() && !result.terminalOwnedElsewhere {
+		if failedTerminal(result, err) {
 			// The loop's own deadline passed before its approval's did, and the
 			// handler failed it on the timeout (failTimedOutLoop). That failure is
 			// the loop's settlement: commit it through the terminal owner, as the
@@ -120,7 +120,7 @@ func (c *Component) sweepExpiredApprovals(ctx context.Context) {
 				slog.String("loop_id", cand.LoopID),
 				slog.String("call_id", cand.CallID),
 				slog.String("error", err.Error()))
-			if commitErr := c.persistHandlerResult(ctx, result, writeThenPublish); commitErr != nil {
+			if commitErr := c.persistHandlerResult(ctx, result); commitErr != nil {
 				c.logger.Warn("approval timeout sweep did not commit the loop's timeout failure",
 					slog.String("loop_id", cand.LoopID),
 					slog.String("error", commitErr.Error()))
@@ -155,7 +155,7 @@ func (c *Component) sweepExpiredApprovals(ctx context.Context) {
 		// stream does not retain is I1 broken — and a lost compare-and-swap
 		// has already released the loop. The advance this process made IN
 		// MEMORY when a publication failed is left as it is.
-		if err := c.persistHandlerResult(ctx, result, publishThenWrite); err != nil {
+		if err := c.persistHandlerResult(ctx, result); err != nil {
 			c.logger.Warn("approval timeout auto-reject did not publish its results and commit the loop record",
 				slog.String("loop_id", cand.LoopID),
 				slog.String("call_id", cand.CallID),

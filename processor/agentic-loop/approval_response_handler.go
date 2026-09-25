@@ -207,7 +207,7 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 		// the warm path it would have taken on the process that gated it.
 		result, err = c.handler.HandleApprovalResponse(ctx, response)
 	}
-	if err != nil && result.State.IsTerminal() && !result.terminalOwnedElsewhere {
+	if failedTerminal(result, err) {
 		// A business failure — the loop's deadline, from this handler or from
 		// HandleToolResult's arm on a reject — returns its populated terminal
 		// result WITH the error. That result is the loop's settlement, so it is
@@ -218,7 +218,7 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 			slog.String("loop_id", response.LoopID),
 			slog.String("call_id", response.CallID),
 			slog.String("error", err.Error()))
-		err = c.persistHandlerResult(ctx, result, writeThenPublish)
+		err = c.persistHandlerResult(ctx, result)
 		if err == nil {
 			return natsclient.DeliveryDecisionAck, nil
 		}
@@ -269,7 +269,7 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 		}
 		return natsclient.DeliveryDecisionAck, nil
 	}
-	if err := c.persistHandlerResult(ctx, result, publishThenWrite); err != nil {
+	if err := c.persistHandlerResult(ctx, result); err != nil {
 		// A transient failure — a lost compare-and-swap, which has released
 		// the loop — is retried, not quarantined (#1362 re-review M3):
 		// quarantining it would latch the lane's health on a benign race.
