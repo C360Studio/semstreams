@@ -40,11 +40,8 @@ func TestTerminalPathsEvictActiveTrajectory(t *testing.T) {
 		require.NoError(t, err)
 		_, err = handler.trajectoryManager.startTrajectory(loopID)
 		require.NoError(t, err)
-		entity, err := handler.loopManager.GetLoop(loopID)
-		require.NoError(t, err)
-
 		component := &Component{handler: handler, config: DefaultConfig(), logger: discardLogger()}
-		component.handleLoopFailure(context.Background(), loopID, entity, "test_failure", errors.New("boom"))
+		component.handleLoopFailure(context.Background(), loopID, "test_failure", errors.New("boom"))
 
 		_, err = handler.trajectoryManager.getTrajectory(loopID)
 		require.Error(t, err, "failed loop retained its active trajectory")
@@ -209,12 +206,9 @@ func TestTerminalPathsReleaseObservedAuditLoss(t *testing.T) {
 		require.NoError(t, err)
 		_, err = handler.trajectoryManager.startTrajectory(loopID)
 		require.NoError(t, err)
-		entity, err := handler.loopManager.GetLoop(loopID)
-		require.NoError(t, err)
-
 		component := &Component{handler: handler, config: DefaultConfig(), logger: discardLogger()}
 		observe(t, component, loopID)
-		component.handleLoopFailure(context.Background(), loopID, entity, "test_failure", errors.New("boom"))
+		component.handleLoopFailure(context.Background(), loopID, "test_failure", errors.New("boom"))
 
 		require.False(t, component.trajectoryAuditLoss.observed(loopID),
 			"failed loop retained its audit-loss marker")

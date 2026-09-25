@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
@@ -143,6 +144,10 @@ func decodeTerminalMarker(data []byte) (terminalOutcome, error) {
 // A lost compare-and-swap is returned as persistLoopState returned it —
 // transient, with the loop already released — so the redelivery re-reads the
 // record. Every other failure leaves the terminal commit unknown and is fatal.
+//
+// The owner is also the one place a terminal is counted (#1374): a commit that
+// lands counts it once, after step 4, and a commit that does not land counts
+// nothing — its redelivery, which adopts the marker, is the commit that counts.
 func (c *Component) commitTerminal(ctx context.Context, candidate terminalOutcome, publication HandlerResult) error {
 	err := c.commitTerminalSteps(ctx, candidate, publication)
 	if err != nil && !errors.Is(err, natsclient.ErrKVRevisionMismatch) {
@@ -191,7 +196,54 @@ func (c *Component) commitTerminalSteps(ctx context.Context, candidate terminalO
 		}
 		return errs.WrapFatal(err, "agentic-loop", "commitTerminal", "terminal loop record has unknown durability")
 	}
+	c.recordCommittedTerminal(loopID, outcome)
 	return nil
+}
+
+// recordCommittedTerminal counts the terminal commitTerminal just made durable:
+// one terminal counter and one active_loops decrement. The reason is the one
+// the committed failure event carries — the adopted one when the marker was
+// adopted — so loops_failed_total{reason} and LoopFailedEvent.Reason cannot
+// disagree. A cancel is counted as a failure with reason "cancelled", as the
+// cancel lane always counted it.
+//
+// A terminal whose event could not be built (BuildFailureMessages refused it)
+// still committed its record, so it is counted from the record's state, and a
+// failure with no event to name its reason is counted as "unknown".
+func (c *Component) recordCommittedTerminal(loopID string, outcome terminalOutcome) {
+	if c.metrics == nil {
+		return
+	}
+	// persistLoopState wrote the record from this entity a line ago; the
+	// callers release it only after the owner returns.
+	entity, err := c.handler.GetLoop(loopID)
+	if err != nil {
+		c.logger.Warn("Committed terminal not counted — the loop was released before the owner returned",
+			slog.String("loop_id", loopID), slog.String("error", err.Error()))
+		return
+	}
+	duration := time.Since(entity.StartedAt).Seconds()
+	reason := ""
+	switch {
+	case outcome.completed != nil:
+		c.metrics.recordLoopCompleted(entity.Iterations, duration)
+	case outcome.failed != nil:
+		reason = outcome.failed.Reason
+	case outcome.cancelled != nil, entity.State == agentic.LoopStateCancelled:
+		reason = "cancelled"
+	case entity.State == agentic.LoopStateComplete:
+		c.metrics.recordLoopCompleted(entity.Iterations, duration)
+	default:
+		reason = "unknown"
+	}
+	if reason != "" {
+		c.metrics.recordLoopFailed(reason, entity.Iterations, duration)
+	}
+	c.logger.Info("Loop terminal committed",
+		slog.String("loop_id", loopID),
+		slog.String("state", entity.State.String()),
+		slog.String("reason", reason),
+		slog.Int("iterations", entity.Iterations))
 }
 
 // createTerminalMarker is step 1 of the terminal owner. It reports the terminal

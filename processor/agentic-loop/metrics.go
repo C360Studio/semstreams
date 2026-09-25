@@ -15,7 +15,6 @@ type loopMetrics struct {
 	loopsCreated   prometheus.Counter
 	loopsCompleted prometheus.Counter
 	loopsFailed    *prometheus.CounterVec
-	loopsTimeout   prometheus.Counter
 	activeLoops    prometheus.Gauge
 
 	// Iterations
@@ -98,15 +97,8 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "loops_failed_total",
-				Help:      "Total number of agentic loops that failed",
+				Help:      "Total number of agentic loops that failed, counted once when the terminal owner commits the failure. reason is the committed LoopFailedEvent.Reason (a loop past its own deadline is reason=\"timeout\" on every lane), or \"cancelled\" for a cancelled loop.",
 			}, []string{"reason"}),
-
-			loopsTimeout: prometheus.NewCounter(prometheus.CounterOpts{
-				Namespace: "semstreams",
-				Subsystem: "agentic_loop",
-				Name:      "loops_timeout_total",
-				Help:      "Total number of agentic loops that timed out",
-			}),
 
 			activeLoops: prometheus.NewGauge(prometheus.GaugeOpts{
 				Namespace: "semstreams",
@@ -299,7 +291,6 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = registry.RegisterCounter("agentic-loop", "loops_created_total", metrics.loopsCreated)
 			_ = registry.RegisterCounter("agentic-loop", "loops_completed_total", metrics.loopsCompleted)
 			_ = registry.RegisterCounterVec("agentic-loop", "loops_failed_total", metrics.loopsFailed)
-			_ = registry.RegisterCounter("agentic-loop", "loops_timeout_total", metrics.loopsTimeout)
 			_ = registry.RegisterGauge("agentic-loop", "active_loops", metrics.activeLoops)
 			_ = registry.RegisterCounter("agentic-loop", "iterations_total", metrics.iterationsTotal)
 			_ = registry.RegisterHistogram("agentic-loop", "iterations_per_loop", metrics.iterationsPerLoop)
@@ -330,7 +321,6 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.loopsCreated)
 			_ = prometheus.DefaultRegisterer.Register(metrics.loopsCompleted)
 			_ = prometheus.DefaultRegisterer.Register(metrics.loopsFailed)
-			_ = prometheus.DefaultRegisterer.Register(metrics.loopsTimeout)
 			_ = prometheus.DefaultRegisterer.Register(metrics.activeLoops)
 			_ = prometheus.DefaultRegisterer.Register(metrics.iterationsTotal)
 			_ = prometheus.DefaultRegisterer.Register(metrics.iterationsPerLoop)
@@ -504,7 +494,8 @@ func (m *loopMetrics) recordLoopCreated() {
 	m.activeLoops.Inc()
 }
 
-// recordLoopCompleted records a successful loop completion.
+// recordLoopCompleted records a successful loop completion. The terminal
+// owner is its one caller (recordCommittedTerminal), as it is recordLoopFailed's.
 func (m *loopMetrics) recordLoopCompleted(iterations int, durationSeconds float64) {
 	m.loopsCompleted.Inc()
 	m.activeLoops.Dec()
@@ -518,14 +509,6 @@ func (m *loopMetrics) recordLoopFailed(reason string, iterations int, durationSe
 	m.activeLoops.Dec()
 	m.iterationsPerLoop.Observe(float64(iterations))
 	m.loopDuration.WithLabelValues("failed").Observe(durationSeconds)
-}
-
-// recordLoopTimeout records a loop timeout.
-func (m *loopMetrics) recordLoopTimeout(iterations int, durationSeconds float64) {
-	m.loopsTimeout.Inc()
-	m.activeLoops.Dec()
-	m.iterationsPerLoop.Observe(float64(iterations))
-	m.loopDuration.WithLabelValues("timeout").Observe(durationSeconds)
 }
 
 // recordIteration increments the total iterations counter.

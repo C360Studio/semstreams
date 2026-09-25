@@ -1832,7 +1832,7 @@ func (c *Component) handleSpawnIdentityFailure(ctx context.Context, loopID strin
 	if c.metrics != nil && entity.ID != "" {
 		c.metrics.recordLoopCreated()
 	}
-	return c.handleLoopFailure(ctx, loopID, entity, reason, err)
+	return c.handleLoopFailure(ctx, loopID, reason, err)
 }
 
 // handleResponseMessage processes incoming agent response messages
@@ -1857,8 +1857,6 @@ func (c *Component) handleResponseMessage(ctx context.Context, data []byte) erro
 				"agentic-loop", "handleResponseMessage", "route the response to the rebuilt loop")
 		}
 	}
-
-	entity, _ := c.handler.GetLoop(loopID)
 
 	result, err := c.handler.HandleModelResponse(ctx, loopID, *response)
 	if err != nil {
@@ -1904,7 +1902,7 @@ func (c *Component) handleResponseMessage(ctx context.Context, data []byte) erro
 		// A handler error is this loop's business failure, and the delivery
 		// that carried it is done once that failure is durable — not once it
 		// has been logged. handleLoopFailure answers for the difference.
-		return c.handleLoopFailure(ctx, loopID, entity, failureReasonForHandlerError(err), err)
+		return c.handleLoopFailure(ctx, loopID, failureReasonForHandlerError(err), err)
 	}
 
 	if result.terminalOwnedElsewhere {
@@ -1916,7 +1914,7 @@ func (c *Component) handleResponseMessage(ctx context.Context, data []byte) erro
 			}
 		})
 	}
-	c.recordResponseMetrics(response, result, entity)
+	c.recordResponseMetrics(response)
 	return c.persistHandlerResult(ctx, result, publishThenWrite)
 }
 
@@ -1924,11 +1922,16 @@ func (c *Component) handleResponseMessage(ctx context.Context, data []byte) erro
 // the loop-terminal failure reason handleLoopFailure publishes. gh#529: every
 // iteration-budget-exhaustion detection path must agree on the reason
 // "max_iterations" — matched via errors.Is against the typed sentinel
-// ErrMaxIterationsReached, never by string-matching err.Error(). All other
-// handler errors keep the pre-existing generic "handler_error" reason.
+// ErrMaxIterationsReached, never by string-matching err.Error(). #1374: the
+// same holds for the loop deadline, which every lane reports as
+// loopTimeoutReason, matched against errLoopTimedOut. All other handler errors
+// keep the generic "handler_error" reason.
 func failureReasonForHandlerError(err error) string {
-	if errors.Is(err, ErrMaxIterationsReached) {
+	switch {
+	case errors.Is(err, ErrMaxIterationsReached):
 		return "max_iterations"
+	case errors.Is(err, errLoopTimedOut):
+		return loopTimeoutReason
 	}
 	return "handler_error"
 }
@@ -2043,9 +2046,9 @@ func (c *Component) settleResponseWithoutLoop(ctx context.Context, requestID str
 	return false, fmt.Errorf("loop %q for request %q is not held by this process", loopID, requestID)
 }
 
-// handleLoopFailure records failure metrics and commits the loop's terminal
-// failure through the terminal owner, and reports whether that failure was
-// durably established.
+// handleLoopFailure commits the loop's terminal failure through the terminal
+// owner, and reports whether that failure was durably established. The owner
+// counts the failure when it commits it (#1374), not this path.
 //
 // nil means the failure's `COMPLETE_<loopID>` marker, its graph stamp, its
 // failure event and the failed loop record are committed, in that order
@@ -2063,9 +2066,7 @@ func (c *Component) settleResponseWithoutLoop(ctx context.Context, requestID str
 // error is a loop that could not be transitioned at all: nothing was written,
 // so there is no partial effect, and the redelivery resolves against the loop
 // record instead of memory.
-func (c *Component) handleLoopFailure(
-	ctx context.Context, loopID string, entity agentic.LoopEntity, reason string, err error,
-) error {
+func (c *Component) handleLoopFailure(ctx context.Context, loopID string, reason string, err error) error {
 	// Failure-event construction reads token totals below. Release the active
 	// aggregate only after those terminal consumers have returned.
 	defer c.releaseLoopTransientState(loopID)
@@ -2082,10 +2083,6 @@ func (c *Component) handleLoopFailure(
 	}
 	c.handler.loopManager.UpdateCompletion(loopID, agentic.OutcomeFailed, "", err.Error())
 
-	if c.metrics != nil && entity.ID != "" {
-		duration := time.Since(entity.StartedAt).Seconds()
-		c.metrics.recordLoopFailed(reason, entity.Iterations, duration)
-	}
 	latest, _ := c.handler.GetLoop(loopID)
 	failure, failMsgs, buildErr := c.handler.BuildFailureMessages(loopID, reason, err.Error())
 	if buildErr != nil {
@@ -2114,8 +2111,10 @@ func (c *Component) handleLoopFailure(
 		"loop failure was not durably established")
 }
 
-// recordResponseMetrics records metrics and logs for a successful response.
-func (c *Component) recordResponseMetrics(response *agentic.AgentResponse, result HandlerResult, entity agentic.LoopEntity) {
+// recordResponseMetrics records metrics for a response the handler applied.
+// A terminal the response produced is counted by the terminal owner when it
+// commits it (#1374), not here.
+func (c *Component) recordResponseMetrics(response *agentic.AgentResponse) {
 	if c.metrics == nil {
 		return
 	}
@@ -2129,44 +2128,6 @@ func (c *Component) recordResponseMetrics(response *agentic.AgentResponse, resul
 		for _, toolCall := range response.Message.ToolCalls {
 			c.metrics.recordToolCallDispatched(toolCall.Name)
 		}
-	}
-
-	var failureReason string
-	switch response.Status {
-	case agentic.StatusError:
-		failureReason = "model_error"
-	case agentic.StatusLengthTruncated:
-		failureReason = "length_truncated"
-	default:
-		failureReason = "unknown"
-	}
-	c.recordTerminalState(result, entity, failureReason)
-}
-
-// recordTerminalState fires the active_loops decrement and the matching
-// terminal counter for a loop that has just transitioned to LoopStateComplete
-// or LoopStateFailed. No-op for non-terminal states. Pulled out of
-// recordResponseMetrics so the tool-result path (handleToolResultMessage)
-// can decrement the gauge when handleToolsComplete transitions a loop to
-// LoopStateFailed (max iterations) without going through a model response —
-// without this, every max-iterations failure leaks one unit on the gauge.
-func (c *Component) recordTerminalState(result HandlerResult, entity agentic.LoopEntity, failureReason string) {
-	if c.metrics == nil || entity.ID == "" {
-		return
-	}
-	duration := time.Since(entity.StartedAt).Seconds()
-	switch result.State {
-	case agentic.LoopStateComplete:
-		c.metrics.recordLoopCompleted(entity.Iterations, duration)
-		c.logger.Info("Loop completed",
-			slog.String("loop_id", result.LoopID),
-			slog.Int("iterations", entity.Iterations))
-	case agentic.LoopStateFailed:
-		c.metrics.recordLoopFailed(failureReason, entity.Iterations, duration)
-		c.logger.Warn("Loop failed",
-			slog.String("loop_id", result.LoopID),
-			slog.Int("iterations", entity.Iterations),
-			slog.String("reason", failureReason))
 	}
 }
 
@@ -2585,22 +2546,6 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) er
 		// Before metrics and trajectory, for the same reason as the response
 		// lane: a guard result changed nothing.
 		return c.settleTerminalGuard(ctx, result, c.recordTerminalToolResultDropped)
-	}
-
-	// Decrement active_loops if HandleToolResult drove the loop to a terminal
-	// state. handleToolsComplete (handlers.go) transitions to LoopStateFailed
-	// when max_iterations trips while tools were in flight; without this
-	// recording the gauge would not be decremented for that path. The
-	// model-response path (handleResponseMessage) records via
-	// recordResponseMetrics and is unchanged.
-	if result.State == agentic.LoopStateComplete || result.State == agentic.LoopStateFailed {
-		failureReason := "unknown"
-		if result.MaxIterationsReached {
-			failureReason = "max_iterations"
-		}
-		if entity, entErr := c.handler.GetLoop(loopID); entErr == nil {
-			c.recordTerminalState(result, entity, failureReason)
-		}
 	}
 
 	// Publish results, persist state, and handle terminal states (StopLoop).
@@ -3374,12 +3319,6 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 	entity, err := c.handler.CancelLoop(loopID, signal.UserID)
 	if err != nil {
 		return c.settleUncancellableLoop(ctx, loopID, err)
-	}
-
-	// Record metrics
-	if c.metrics != nil {
-		duration := time.Since(entity.StartedAt).Seconds()
-		c.metrics.recordLoopFailed("cancelled", entity.Iterations, duration)
 	}
 
 	// Publish completion event with workflow context for reactive workflows
