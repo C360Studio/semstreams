@@ -14,12 +14,9 @@ import (
 func TestHealthServeDoneDoesNotCompleteBeforeServeReturns(t *testing.T) {
 	deps := createTestServiceDependencies(nil)
 	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
-	port := freePort(t)
-	if err := manager.StartHealthListener(context.Background(), port); err != nil {
-		t.Fatalf("StartHealthListener: %v", err)
-	}
+	listener := startHealthOnBoundListener(t, manager, t.Context())
 	t.Cleanup(func() { _ = manager.StopHealthListener(context.Background()) })
-	waitForListener(t, fmt.Sprintf("http://127.0.0.1:%d/healthz", port), 10*time.Second)
+	waitForListener(t, "http://"+listener.Addr().String()+"/healthz", 10*time.Second)
 
 	select {
 	case <-manager.healthServeDone:
@@ -34,12 +31,11 @@ func TestHealthServeDoneDoesNotCompleteBeforeServeReturns(t *testing.T) {
 
 func TestManagerHTTPServeDoneDoesNotCompleteBeforeServeReturns(t *testing.T) {
 	deps := createTestServiceDependencies(nil)
-	port := freePort(t)
-	manager := createTestServiceManager(ManagerConfig{HTTPPort: port}, deps)
+	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
 	require.NoError(t, manager.initializeHTTPInfrastructure())
 	require.NoError(t, manager.startHTTPRuntime(t.Context()))
 	t.Cleanup(func() { _ = manager.stopRuntimeServers(context.Background()) })
-	waitForListener(t, fmt.Sprintf("http://127.0.0.1:%d/healthz", port), 10*time.Second)
+	waitForListener(t, observedManagerHTTPURL(t, manager)+"/healthz", 10*time.Second)
 
 	select {
 	case <-manager.httpServeDone:
@@ -62,7 +58,7 @@ func TestListenerBaseContextsPreserveExactStartValues(t *testing.T) {
 	require.Equal(t, "exact-parent", manager.httpServer.BaseContext(manager.httpListener).Value(key))
 
 	healthManager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, createTestServiceDependencies(nil))
-	require.NoError(t, healthManager.StartHealthListener(startCtx, freePort(t)))
+	startHealthOnBoundListener(t, healthManager, startCtx)
 	t.Cleanup(func() { _ = healthManager.StopHealthListener(context.Background()) })
 	require.Equal(t, "exact-parent", healthManager.healthServer.BaseContext(healthManager.healthListener).Value(key))
 }
@@ -78,9 +74,19 @@ func TestListenerStartsRejectCanceledContextBeforeAcquisition(t *testing.T) {
 	require.Nil(t, manager.httpListener)
 
 	healthManager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, createTestServiceDependencies(nil))
-	require.ErrorIs(t, healthManager.StartHealthListener(canceled, freePort(t)), context.Canceled)
+	called := false
+	require.ErrorIs(t, healthManager.startHealthListener(canceled, 1, func(string, string) (net.Listener, error) {
+		called = true
+		return nil, fmt.Errorf("unexpected acquisition")
+	}), context.Canceled)
+	require.False(t, called)
 	require.False(t, healthManager.healthUsed)
 	require.Nil(t, healthManager.healthListener)
+	require.Error(t, healthManager.startHealthListener(nil, 1, func(string, string) (net.Listener, error) {
+		called = true
+		return nil, fmt.Errorf("unexpected acquisition")
+	}))
+	require.False(t, called)
 }
 
 // TestStartHealthListener_BindsHealthAndHealthz verifies that
@@ -97,10 +103,7 @@ func TestStartHealthListener_BindsHealthAndHealthz(t *testing.T) {
 	deps := createTestServiceDependencies(nil)
 	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
 
-	port := freePort(t)
-	if err := manager.StartHealthListener(context.Background(), port); err != nil {
-		t.Fatalf("StartHealthListener(context.Background(), %d) error = %v", port, err)
-	}
+	listener := startHealthOnBoundListener(t, manager, t.Context())
 	t.Cleanup(func() {
 		if err := manager.StopHealthListener(context.Background()); err != nil {
 			t.Errorf("StopHealthListener cleanup error = %v", err)
@@ -120,7 +123,7 @@ func TestStartHealthListener_BindsHealthAndHealthz(t *testing.T) {
 	// fast (test binary finishes in ~0.3s total for 3 health-listener
 	// tests) so the wider budget doesn't slow the suite; the budget
 	// is the timeout cap, not the expected wall-clock.
-	addr := fmt.Sprintf("http://127.0.0.1:%d", port)
+	addr := "http://" + listener.Addr().String()
 	waitForListener(t, addr+"/healthz", 10*time.Second)
 
 	// /healthz is the liveness probe — should always 200 once the
@@ -160,9 +163,14 @@ func TestStartHealthListener_ZeroIsNoOp(t *testing.T) {
 	deps := createTestServiceDependencies(nil)
 	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
 
-	if err := manager.StartHealthListener(context.Background(), 0); err != nil {
-		t.Errorf("StartHealthListener(context.Background(), 0) error = %v, want nil (no-op)", err)
+	called := false
+	if err := manager.startHealthListener(t.Context(), 0, func(string, string) (net.Listener, error) {
+		called = true
+		return nil, fmt.Errorf("unexpected acquisition")
+	}); err != nil {
+		t.Errorf("startHealthListener(port 0) error = %v, want nil (no-op)", err)
 	}
+	require.False(t, called)
 	if manager.healthServer != nil {
 		t.Error("healthServer should remain nil when port is 0")
 	}
@@ -199,13 +207,17 @@ func TestStartHTTPRuntimeReportsBindFailureSynchronously(t *testing.T) {
 
 func TestHealthListenerCannotRebindAfterCompletedStop(t *testing.T) {
 	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, createTestServiceDependencies(nil))
-	port := freePort(t)
-	require.NoError(t, manager.StartHealthListener(t.Context(), port))
+	startHealthOnBoundListener(t, manager, t.Context())
 	require.NoError(t, manager.StopHealthListener(t.Context()))
 
-	err := manager.StartHealthListener(t.Context(), freePort(t))
+	called := false
+	err := manager.startHealthListener(t.Context(), 1, func(string, string) (net.Listener, error) {
+		called = true
+		return nil, fmt.Errorf("unexpected acquisition")
+	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "already used")
+	require.False(t, called)
 }
 
 // TestStartHealthListener_DoubleStartErrors verifies the one-shot
@@ -222,13 +234,10 @@ func TestStartHealthListener_DoubleStartErrors(t *testing.T) {
 	deps := createTestServiceDependencies(nil)
 	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
 
-	port := freePort(t)
-	if err := manager.StartHealthListener(context.Background(), port); err != nil {
-		t.Fatalf("first StartHealthListener error = %v", err)
-	}
+	startHealthOnBoundListener(t, manager, t.Context())
 	t.Cleanup(func() { _ = manager.StopHealthListener(context.Background()) })
 
-	if err := manager.StartHealthListener(context.Background(), port); err == nil {
+	if err := manager.StartHealthListener(context.Background(), 1); err == nil {
 		t.Error("second StartHealthListener should error; got nil")
 	}
 }
@@ -244,14 +253,11 @@ func TestStopAll_TearsDownHealthListener(t *testing.T) {
 	deps := createTestServiceDependencies(nil)
 	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
 
-	port := freePort(t)
-	if err := manager.StartHealthListener(context.Background(), port); err != nil {
-		t.Fatalf("StartHealthListener(context.Background(), %d) error = %v", port, err)
-	}
+	listener := startHealthOnBoundListener(t, manager, t.Context())
 
 	// Sanity: listener is up before shutdown.
 	// gh#209/gh#220: 3s → 10s for the same reason as the sister test.
-	addr := fmt.Sprintf("http://127.0.0.1:%d", port)
+	addr := "http://" + listener.Addr().String()
 	waitForListener(t, addr+"/healthz", 10*time.Second)
 
 	// StopAll is the production shutdown entry point. It must tear
@@ -272,17 +278,15 @@ func TestStopAll_TearsDownHealthListener(t *testing.T) {
 	waitForListenerGone(t, addr+"/healthz", 2*time.Second)
 }
 
-// freePort asks the kernel for an unused TCP port. Used by tests that
-// need a real port without colliding under parallel test runs.
-func freePort(t *testing.T) int {
+func startHealthOnBoundListener(t *testing.T, manager *Manager, ctx context.Context) net.Listener {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("net.Listen for free port: %v", err)
-	}
-	port := l.Addr().(*net.TCPAddr).Port
-	_ = l.Close()
-	return port
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+	require.NoError(t, manager.startHealthListener(ctx, 1, func(string, string) (net.Listener, error) {
+		return listener, nil
+	}))
+	return listener
 }
 
 // waitForListener polls url with short HTTP GETs until one succeeds or

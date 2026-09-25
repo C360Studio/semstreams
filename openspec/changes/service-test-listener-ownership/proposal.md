@@ -8,7 +8,7 @@ same number later. Another process can take the released port. Independent inven
 
 ## What Changes
 
-This is a proposed design awaiting owner acceptance, with no implementation or spec delta yet.
+The owner accepted the independently reviewed design on 2026-09-25; implementation is now in progress.
 The independently reviewed inventory identifies 27 calls across six test files. The design proposes one additive
 `metric.Server.StartWithListener` method, accurate active-listener reporting through existing `Address`, private
 health/pprof/service test seams, and tests that retain their acquired listeners through production cleanup.
@@ -22,4 +22,4 @@ constraints. Adjacent UDP, websocket, and maxdelivery helpers and agentic safe-r
 
 `inventory.md` is the frozen inventory checkpoint. `design.md` defines the proposed ownership contract, alternatives,
 and verification slice. `review.md` records exact reviewed identities. Independent design review and explicit owner
-acceptance are required before the developer receives this design or a runtime/spec delta is written.
+acceptance are recorded in `review.md`. Broader E2E/composer API work remains with #1301.

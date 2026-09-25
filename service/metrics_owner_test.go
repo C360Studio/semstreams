@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
-	"strconv"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -98,14 +98,15 @@ func TestMetricsFailedStartCleanupRetainsAuthorityUntilSuccessfulStop(t *testing
 }
 
 func TestMetricsRollsBackBoundProviderWhenBaseCommitFails(t *testing.T) {
-	port := freeMetricsPort(t)
+	listener := boundMetricsListener(t)
 	base := NewBaseServiceWithOptions("metrics", nil)
 	require.NoError(t, base.Start(t.Context()))
 	require.NoError(t, base.Stop(t.Context()))
 	m := &Metrics{
-		BaseService: base,
-		config:      MetricsConfig{Port: port, Path: "/metrics"},
-		registry:    metric.NewMetricsRegistry(),
+		BaseService:  base,
+		config:       MetricsConfig{Port: 9090, Path: "/metrics"},
+		registry:     metric.NewMetricsRegistry(),
+		testListener: listener,
 	}
 
 	err := m.Start(t.Context())
@@ -114,7 +115,7 @@ func TestMetricsRollsBackBoundProviderWhenBaseCommitFails(t *testing.T) {
 	require.True(t, m.terminal)
 	require.Nil(t, m.server)
 
-	connection, dialErr := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 100*time.Millisecond)
+	connection, dialErr := net.DialTimeout("tcp", listener.Addr().String(), 100*time.Millisecond)
 	require.Error(t, dialErr, "failed BaseService commit must release the bound metrics listener")
 	if connection != nil {
 		_ = connection.Close()
@@ -122,26 +123,48 @@ func TestMetricsRollsBackBoundProviderWhenBaseCommitFails(t *testing.T) {
 }
 
 func TestMetricsStopWaitsForStartFinalizationBeforeProviderCleanup(t *testing.T) {
-	port := freeMetricsPort(t)
+	listener := boundMetricsListener(t)
 	published := make(chan struct{})
 	releaseStart := make(chan struct{})
 	stopWaitObserved := make(chan struct{})
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(releaseStart) }) }
-	t.Cleanup(release)
 
 	m := &Metrics{
 		BaseService:           NewBaseServiceWithOptions("metrics", nil),
-		config:                MetricsConfig{Port: port, Path: "/metrics"},
+		config:                MetricsConfig{Port: 9090, Path: "/metrics"},
 		registry:              metric.NewMetricsRegistry(),
+		testListener:          listener,
 		testServerPublished:   published,
 		testStartRelease:      releaseStart,
 		testStartWaitUnlocked: stopWaitObserved,
 	}
 
 	startResult := make(chan error, 1)
-	go func() { startResult <- m.Start(t.Context()) }()
-	<-published
+	startFinished := make(chan struct{})
+	t.Cleanup(func() {
+		release()
+		select {
+		case <-startFinished:
+		case <-time.After(5 * time.Second):
+			t.Error("Metrics.Start did not finish after start gate released")
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := m.Stop(ctx); err != nil {
+			t.Errorf("clean up Metrics after blocked Start: %v", err)
+		}
+	})
+	go func() {
+		defer close(startFinished)
+		startResult <- m.Start(t.Context())
+	}()
+	select {
+	case <-published:
+	case <-startFinished:
+		t.Fatal("Metrics.Start returned before publishing the bound server")
+	}
 
 	m.lifecycleMu.Lock()
 	provider := m.server
@@ -149,11 +172,20 @@ func TestMetricsStopWaitsForStartFinalizationBeforeProviderCleanup(t *testing.T)
 	require.NotNil(t, m.startDone)
 	require.False(t, m.running)
 	m.lifecycleMu.Unlock()
+	concrete, ok := provider.(*metric.Server)
+	require.True(t, ok, "standalone Metrics must retain the concrete server")
+	require.Equal(t, "http://"+listener.Addr().String()+"/metrics", concrete.Address())
+	request, requestErr := http.NewRequestWithContext(t.Context(), http.MethodGet, concrete.Address(), nil)
+	require.NoError(t, requestErr)
+	response, requestErr := (&http.Client{Timeout: 2 * time.Second}).Do(request)
+	require.NoError(t, requestErr)
+	require.NoError(t, response.Body.Close())
+	require.Equal(t, http.StatusOK, response.StatusCode)
 	m.BaseService.mu.RLock()
 	require.Nil(t, m.BaseService.done, "BaseService commit must remain blocked until Start is released")
 	require.Equal(t, StatusStopped, m.BaseService.status.Load())
 	m.BaseService.mu.RUnlock()
-	requireMetricsPortOwned(t, port)
+	requireMetricsListenerOwned(t, listener)
 
 	stopCtx, cancelStop := context.WithCancel(t.Context())
 	stopResult := make(chan error, 1)
@@ -165,7 +197,7 @@ func TestMetricsStopWaitsForStartFinalizationBeforeProviderCleanup(t *testing.T)
 	m.lifecycleMu.Lock()
 	require.Same(t, provider, m.server)
 	m.lifecycleMu.Unlock()
-	requireMetricsPortOwned(t, port)
+	requireMetricsListenerOwned(t, listener)
 
 	cancelStop()
 	stopErr := <-stopResult
@@ -176,7 +208,7 @@ func TestMetricsStopWaitsForStartFinalizationBeforeProviderCleanup(t *testing.T)
 	require.Same(t, provider, m.server)
 	require.False(t, m.terminal)
 	m.lifecycleMu.Unlock()
-	requireMetricsPortOwned(t, port)
+	requireMetricsListenerOwned(t, listener)
 
 	release()
 	require.NoError(t, <-startResult)
@@ -188,13 +220,15 @@ func TestMetricsStopWaitsForStartFinalizationBeforeProviderCleanup(t *testing.T)
 	require.True(t, m.terminal)
 	m.lifecycleMu.Unlock()
 
-	listener, err := net.Listen("tcp", net.JoinHostPort("", strconv.Itoa(port)))
-	require.NoError(t, err, "completed Metrics.Stop must release the provider listener")
-	require.NoError(t, listener.Close())
+	connection, err := net.DialTimeout("tcp", listener.Addr().String(), 100*time.Millisecond)
+	require.Error(t, err, "completed Metrics.Stop must release the provider listener")
+	if connection != nil {
+		_ = connection.Close()
+	}
 }
 
 func TestMetricsLifecycleContextAndStopBeforeStartAreImmutable(t *testing.T) {
-	raw, err := json.Marshal(MetricsConfig{Port: freeMetricsPort(t), Path: "/metrics"})
+	raw, err := json.Marshal(MetricsConfig{Port: 9090, Path: "/metrics"})
 	require.NoError(t, err)
 	svc, err := NewMetrics(raw, &Dependencies{MetricsRegistry: metric.NewMetricsRegistry()})
 	require.NoError(t, err)
@@ -213,20 +247,17 @@ func TestMetricsLifecycleContextAndStopBeforeStartAreImmutable(t *testing.T) {
 	require.NoError(t, m.Stop(t.Context()))
 }
 
-func freeMetricsPort(t *testing.T) int {
+func boundMetricsListener(t *testing.T) net.Listener {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	port := listener.Addr().(*net.TCPAddr).Port
-	require.NoError(t, listener.Close())
-	return port
+	t.Cleanup(func() { _ = listener.Close() })
+	return listener
 }
 
-func requireMetricsPortOwned(t *testing.T, port int) {
+func requireMetricsListenerOwned(t *testing.T, listener net.Listener) {
 	t.Helper()
-	listener, err := net.Listen("tcp", net.JoinHostPort("", strconv.Itoa(port)))
-	require.Error(t, err, "published metrics provider must retain its exact listener")
-	if listener != nil {
-		require.NoError(t, listener.Close())
-	}
+	connection, err := net.DialTimeout("tcp", listener.Addr().String(), 100*time.Millisecond)
+	require.NoError(t, err, "published metrics provider must retain its listener")
+	require.NoError(t, connection.Close())
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -313,11 +312,9 @@ func TestComponentMetricPublicationRemainsMonotonicUnderReverseCompletion(t *tes
 }
 
 func TestManagerPrebindPublishesConcreteComponentCountsBeforeComponentManagerStart(t *testing.T) {
-	httpPort := freePort(t)
-	metricsPort := freePort(t)
 	registry := metric.NewMetricsRegistry()
 	deps := &Dependencies{Logger: slog.Default(), MetricsRegistry: registry}
-	manager := createTestServiceManager(ManagerConfig{HTTPPort: httpPort}, deps)
+	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
 	firstRelease := make(chan struct{})
 	first := newGatedStartupService("first", firstRelease)
 	componentRelease := make(chan struct{})
@@ -337,18 +334,21 @@ func TestManagerPrebindPublishesConcreteComponentCountsBeforeComponentManagerSta
 	}
 	cm.components["plain"] = &component.ManagedComponent{Component: plain, State: component.StateCreated}
 	cm.initialized.Store(true)
-	metricsService, err := NewMetrics(
-		json.RawMessage(fmt.Sprintf(`{"port":%d,"path":"/metrics"}`, metricsPort)), deps,
-	)
+	metricsService, err := NewMetrics(json.RawMessage(`{"port":9090,"path":"/metrics"}`), deps)
 	require.NoError(t, err)
+	metricsListener := boundMetricsListener(t)
+	metricsService.(*Metrics).testListener = metricsListener
 	require.NoError(t, manager.RegisterInstance("first", first))
 	require.NoError(t, manager.RegisterInstance("component-manager", cm))
 	require.NoError(t, manager.RegisterInstance("metrics", metricsService))
 
-	startDone := make(chan error, 1)
-	go func() { startDone <- manager.StartAll(t.Context()) }()
-	<-first.entered
-	response, err := (&http.Client{}).Get(fmt.Sprintf("http://127.0.0.1:%d/metrics", metricsPort))
+	var releaseFirstOnce, releaseComponentOnce sync.Once
+	releaseFirst := func() { releaseFirstOnce.Do(func() { close(firstRelease) }) }
+	releaseComponent := func() { releaseComponentOnce.Do(func() { close(componentRelease) }) }
+	start := beginObservedManagerStart(t, manager, func() { releaseFirst(); releaseComponent() })
+	start.requireSignal(t, first.entered, "first service Start entry")
+	require.Equal(t, "http://"+metricsListener.Addr().String()+"/metrics", observedManagerMetricsURL(t, manager))
+	response, err := (&http.Client{}).Get(observedManagerMetricsURL(t, manager))
 	require.NoError(t, err)
 	body, err := io.ReadAll(response.Body)
 	require.NoError(t, err)
@@ -359,33 +359,41 @@ func TestManagerPrebindPublishesConcreteComponentCountsBeforeComponentManagerSta
 	require.Contains(t, text, `semstreams_startup_units{owner="components",stage="starts_invoked"} 0`)
 	require.Contains(t, text, `semstreams_startup_units{owner="components",stage="starts_completed"} 0`)
 
-	close(firstRelease)
-	<-lifecycleComponent.entered
-	close(componentRelease)
-	require.NoError(t, <-startDone)
+	releaseFirst()
+	start.requireSignal(t, lifecycleComponent.entered, "lifecycle component Start entry")
+	releaseComponent()
+	require.NoError(t, start.wait(t))
 	require.NoError(t, manager.StopAll(t.Context()))
 }
 
 func TestConcreteMetricsLifecycleRetainsRegistrationAndReverseStopOrder(t *testing.T) {
-	httpPort := freePort(t)
-	metricsPort := freePort(t)
 	registry := metric.NewMetricsRegistry()
 	deps := &Dependencies{Logger: slog.Default(), MetricsRegistry: registry}
-	manager := createTestServiceManager(ManagerConfig{HTTPPort: httpPort}, deps)
+	manager := createTestServiceManager(ManagerConfig{HTTPPort: 0}, deps)
 	componentManager := newOrderGateService("component-manager")
 	later := newOrderGateService("later")
-	metricsServiceValue, err := NewMetrics(
-		json.RawMessage(fmt.Sprintf(`{"port":%d,"path":"/metrics"}`, metricsPort)), deps,
-	)
+	metricsServiceValue, err := NewMetrics(json.RawMessage(`{"port":9090,"path":"/metrics"}`), deps)
 	require.NoError(t, err)
 	metricsService := metricsServiceValue.(*Metrics)
+	metricsListener := boundMetricsListener(t)
+	metricsService.testListener = metricsListener
 	require.NoError(t, manager.RegisterInstance("component-manager", componentManager))
 	require.NoError(t, manager.RegisterInstance("metrics", metricsService))
 	require.NoError(t, manager.RegisterInstance("later", later))
 
-	startDone := make(chan error, 1)
-	go func() { startDone <- manager.StartAll(t.Context()) }()
-	<-componentManager.startEntered
+	var startFirstOnce, startLaterOnce, stopFirstOnce, stopLaterOnce sync.Once
+	releaseStartFirst := func() { startFirstOnce.Do(func() { close(componentManager.startRelease) }) }
+	releaseStartLater := func() { startLaterOnce.Do(func() { close(later.startRelease) }) }
+	releaseStopFirst := func() { stopFirstOnce.Do(func() { close(componentManager.stopRelease) }) }
+	releaseStopLater := func() { stopLaterOnce.Do(func() { close(later.stopRelease) }) }
+	start := beginObservedManagerStart(t, manager, func() {
+		releaseStartFirst()
+		releaseStartLater()
+		releaseStopFirst()
+		releaseStopLater()
+	})
+	start.requireSignal(t, componentManager.startEntered, "component-manager Start entry")
+	require.Equal(t, "http://"+metricsListener.Addr().String()+"/metrics", observedManagerMetricsURL(t, manager))
 	metricsService.lifecycleMu.Lock()
 	require.False(t, metricsService.used)
 	metricsService.lifecycleMu.Unlock()
@@ -394,13 +402,13 @@ func TestConcreteMetricsLifecycleRetainsRegistrationAndReverseStopOrder(t *testi
 		t.Fatal("later service started before first registered service released")
 	default:
 	}
-	close(componentManager.startRelease)
-	<-later.startEntered
+	releaseStartFirst()
+	start.requireSignal(t, later.startEntered, "later service Start entry")
 	metricsService.lifecycleMu.Lock()
 	require.True(t, metricsService.running)
 	metricsService.lifecycleMu.Unlock()
-	close(later.startRelease)
-	require.NoError(t, <-startDone)
+	releaseStartLater()
+	require.NoError(t, start.wait(t))
 
 	stopDone := make(chan error, 1)
 	go func() { stopDone <- manager.StopAll(t.Context()) }()
@@ -413,12 +421,12 @@ func TestConcreteMetricsLifecycleRetainsRegistrationAndReverseStopOrder(t *testi
 		t.Fatal("component-manager stopped before later service released")
 	default:
 	}
-	close(later.stopRelease)
+	releaseStopLater()
 	<-componentManager.stopEntered
 	metricsService.lifecycleMu.Lock()
 	require.True(t, metricsService.terminal)
 	metricsService.lifecycleMu.Unlock()
-	close(componentManager.stopRelease)
+	releaseStopFirst()
 	require.NoError(t, <-stopDone)
 }
 

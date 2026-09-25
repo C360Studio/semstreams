@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 )
 
@@ -25,15 +26,27 @@ import (
 // this helper serves that mux (nil handler). The blank import stays in the mains,
 // not here, so importing package service does not silently arm pprof everywhere.
 func MaybeStartPProf(debug bool, port int) {
+	_ = startPProf(debug, port, &http.Server{}, net.Listen)
+}
+
+func startPProf(debug bool, port int, server *http.Server, listen func(string, string) (net.Listener, error)) <-chan struct{} {
+	done := make(chan struct{})
 	if !debug || port <= 0 {
-		return
+		close(done)
+		return done
 	}
 	go func() {
+		defer close(done)
 		addr := fmt.Sprintf(":%d", port)
 		// stdout because this runs before slog is configured (pre-Phase-A).
 		fmt.Printf("Starting pprof server on %s\n", addr)
-		if err := http.ListenAndServe(addr, nil); err != nil && err != http.ErrServerClosed {
+		listener, err := listen("tcp", addr)
+		if err == nil {
+			err = server.Serve(listener)
+		}
+		if err != nil && err != http.ErrServerClosed {
 			fmt.Printf("pprof server error: %v\n", err)
 		}
 	}()
+	return done
 }

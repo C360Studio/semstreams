@@ -61,7 +61,28 @@ the aggregate status consequently failed. Both jobs in the
 [E2E ladder](https://github.com/C360Studio/semstreams/actions/runs/36148599224) passed. These are baseline checks,
 not evidence for an implementation that has not been written.
 
-## Hold
+## Owner acceptance and current work
 
-Await explicit owner acceptance of the final design identity above before handing it to a developer, changing
-runtime code, or writing a capability spec delta. Keep the PR draft. No implementation or merge is claimed.
+The owner accepted the reviewed design on 2026-09-25 in the coordinating Codex task (verbatim):
+
+> thanks.  let's continue with current work as you recommend then
+
+Recorded on [#1120](https://github.com/C360Studio/semstreams/issues/1120#issuecomment-5835779961).
+The discussion confirmed that broader reusable E2E/composer APIs stay with #1301. The accepted design remains
+byte-identical at its reviewed hash; its proposed/pending wording is historical and superseded by this acceptance.
+The proposal now reflects accepted work, so its earlier hash identifies the pre-owner review checkpoint only.
+
+Implementation and a capability spec delta are authorized. Implementation review, verification, and archive/spec
+sync remain required before landing. Keep the PR draft until those gates are satisfied.
+
+## Accepted capability delta review
+
+Independent role: `semstreams-reviewer` (`/root/nats_flake_review`, GPT-6 Astra).
+Verdict: **SPEC CONFORMANCE PASS**, 2026-09-25; documentation review only.
+Delta: `specs/framework-composition/spec.md`,
+SHA-256 `420a3ca4d75475a16f19c88222f886083b25f7525202a31ac3e9ee0335010cac`.
+
+The reviewer compared the delta to the accepted design hash and found no added obligations or missing contract.
+Transfer on success, rejection ownership and one-shot distinctions, actual address observation, TLS/context
+behavior, native Start proof, and terminal ownership remain represented. No unstable Go changes were inspected
+and no tests were run in this review. Implementation approval remains outstanding.
