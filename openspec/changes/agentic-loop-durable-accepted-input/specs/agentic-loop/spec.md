@@ -8,8 +8,13 @@
 > verbatim the three scenarios of the removed requirement that were never about the exemption. The REMOVED
 > requirement is `Task intake is the one loop input class this layer does not convert` (`spec.md:1104-1143`): its
 > premise ends with this change, and two of its sentences were already false at `9e5d8455` (inventory § Fact 4).
-> Scenario bodies assume design § 0's recommendations: OQ1 (a) one text field, OQ2 (a) the observed payload ceiling,
-> OQ3 (b) a busy refusal is retried by class. Each (b)/(a) alternative names the clause it would change in design § 0.
+> Its one sentence that still states a fact (`spec.md:1112-1113`, the transient-lineage resume) is carried into the
+> MODIFIED task-lane scenario. Two existing headings read false after archive (`…its errors stay exempt`, `…is owed to
+> #1365`): openspec cannot rename a scenario inside a MODIFIED block, and ruling 2 forbids the REMOVED + ADDED pair
+> that could — design § 0 OQ0 names this as ruling 2's cost. Scenario bodies assume design § 0's pre-selections: OQ1
+> (a) one text field, OQ2 (a) the observed ceiling over the whole record, OQ3 (a) a busy refusal stays acknowledged,
+> OQ4 (a) a logged duplicate in the one window the record cannot tell apart, OQ5 (a) `task_prompt` is birth-only.
+> Each alternative names the clause it would change in design § 0.
 
 ## MODIFIED Requirements
 
@@ -49,12 +54,18 @@ ordinary advance or terminal — SHALL be a function of the result's shape alone
 every lane that produces it.
 
 The input a task delivery was accepted with SHALL be a fact of the loop record it was accepted into, never of the
-process that accepted it: `task_prompt` carries the prompt of the task the record's `task_id` names from the birth
-write on, and `pending_continuation_prompt` carries the text of a deferred turn from the write that sets its marker
-to the write that clears it. A rebuild that seats the record restores both, and a rebuilt loop's next request SHALL
-carry an uncarried deferred turn exactly once. A task delivery that fails before any durable effect SHALL be retried
-or terminated by its error's class and never acknowledged; a task whose loop record exists SHALL resume from that
-record on redelivery. The record's text fields share the wire's payload ceiling: a record the NATS payload ceiling
+process that accepted it: `task_prompt` carries the prompt of the task that bore the loop from the birth write on
+and is never rewritten, and `pending_continuation_prompt` carries the text of a deferred turn from the write that
+sets its marker to the write that clears it. A rebuild that seats the record restores both and replays an uncarried
+turn after the retained conversation, so a rebuilt loop's next request SHALL carry it — once, except in the one
+window the record cannot tell apart (a carrier minted after the turn whose record write was lost), where it is
+carried twice and logged, and never zero. A task delivery that fails before any durable effect SHALL settle by its
+error's class — malformed or invalid terminated, transient retried — and SHALL NOT be acknowledged except as one of
+the lane's defined refusals, each named below: a duplicate, an applied task, an unheld continuation, and a
+continuation of a loop with work in flight, which stays acknowledged because a Retry would park the whole task lane
+(MaxAckPending 1) on a turn no redelivery can fix. A task whose loop record exists SHALL resume from that record on
+redelivery; the birth-failure and transient-lineage paths of the same lane settle on their durable effect and are not
+exempt. The WHOLE record shares the wire's payload ceiling, every field summed; a record the NATS payload ceiling
 refuses is not supported, and the refusal is permanent at birth.
 
 #### Scenario: Required output publication fails
@@ -221,10 +232,15 @@ refuses is not supported, and the refusal is permanent at birth.
   the task is acknowledged with the turn held in process memory only
 - **WHEN** it returns an error
 - **THEN** the delivery takes the disposition the lane's policy derives from the error's class: a refusal naming
-  invalid input — an over-depth task, a continuation of a settled loop — is terminated, and every other error,
-  including a continuation refused because its loop has work in flight, is retried; a birth that fails after
-  registering its loop releases it before returning, so the retry is a fresh birth and not a duplicate acknowledged
-  against the loop the failed attempt left. The exemption this heading names ended with #1345
+  invalid input — an over-depth task, a continuation of a settled loop — is terminated, and every other error is
+  retried, except a continuation refused because its loop has work in flight, which stays acknowledged as a defined
+  refusal: a Retry parks the whole task lane, which runs at MaxAckPending 1, for the redelivery budget on a turn no
+  redelivery can fix, and the turn must be re-sent. No production path fails after a birth registered its loop; one
+  that did would be retried into the duplicate acknowledgement of the loop it left registered. The exemption this
+  heading names ended with #1345
+- **AND** the birth-failure and transient-lineage paths of the same lane settle on their durable effect: a failed
+  graph birth establishes the loop's terminal before the delivery is acknowledged, and a transient lineage write
+  remembers the spawn result so its redelivery resumes it rather than deduplicating it
 
 #### Scenario: The deferred continuation's replacement behaviour is owed to #1365
 
@@ -235,9 +251,11 @@ refuses is not supported, and the refusal is permanent at birth.
   that carries it is named as its carrier, and the marker, its carrier and its text clear when that request settles
 - **AND** a record whose marker names a carrier is left as it is, because the retained request carries the turn; a
   record whose marker is uncarried but carries no text is cleared with a warning, as before this change
-- **AND** a rebuild that finds a request newer than the one the record names adopts it and names it as the turn's
-  carrier in the same write — every request minted after the deferral carries the loop's context — so the rebuild
-  replays nothing and the turn is still carried exactly once
+- **AND** a rebuild that finds a request newer than the one the record names adopts it and leaves the marker as it
+  found it, then replays the text after that request's conversation: once when the request was minted before the
+  turn (a turn deferred behind a request tracked but not yet on the record), twice when the request already carries
+  it (a carrier whose record write was lost) — the record cannot tell the two apart, the replay is logged naming the
+  loop and the request, and the turn is never lost
 
 #### Scenario: A durable terminal with a non-terminal record is owed to #1377
 
@@ -255,9 +273,9 @@ refuses is not supported, and the refusal is permanent at birth.
   completes or fails, or its context is emptied by repair
 - **THEN** `LoopCompletedEvent.Prompt` and `LoopFailedEvent.Prompt` carry the record's prompt, and the empty-context
   recovery re-injects it rather than its placeholder
-- **AND** the prompt reaches the record on the ordinary record writes and on no write of its own: birth renders the
-  task's, a continuation's next carrier write renders the continuation's, and a record with no prompt leaves the
-  readers reading empty, as before this change
+- **AND** the prompt is the one that bore the loop: birth renders it and no later write rewrites it — a
+  continuation's turn is the record's pending text or its retained request, never its prompt — and a record with no
+  prompt leaves the readers reading empty, as before this change
 
 #### Scenario: A malformed task is terminated, never acknowledged as done
 
@@ -266,23 +284,28 @@ refuses is not supported, and the refusal is permanent at birth.
   response and tool-result lanes terminate theirs
 - **AND** no record makes such a delivery resumable: the bytes will never decode
 
-#### Scenario: A task that fails before its record exists is redelivered into a fresh birth
+#### Scenario: A task that fails before anything is registered is redelivered into a fresh birth
 
-- **WHEN** a task's handler fails after registering the loop in memory and before its record is written
-- **THEN** the loop it registered is released, the delivery is retried, and the redelivery is a birth: it finds no
-  record, is not deduplicated against the failed attempt, and creates the loop
+- **WHEN** a task's handler refuses before it registered a loop — the delivery context was cancelled, or a create
+  failed — and the delivery is retried
+- **THEN** the redelivery is a birth: it finds no record and no loop in memory, is not deduplicated, and creates the
+  loop
 - **AND** a task that fails after its record exists is redelivered into the cold fork, which republishes the request
   the record names and writes nothing; the record written before the first publication is the resumable fact, and
   no second one is kept
 
 #### Scenario: A loop record the payload ceiling refuses is not retried
 
-- **WHEN** the NATS client refuses a record write because the rendered record exceeds the server's payload ceiling
+- **WHEN** the NATS client refuses a record write because the whole rendered record — every field summed, the prompt
+  and a deferred turn's text included — exceeds the server's payload ceiling
 - **THEN** at birth the refusal is permanent: the loop is released and the task is terminated with the loop id and
-  the record's size in the cause, never retried into the same refusal
-- **AND** at the deferred turn's marker write the refusal is logged as any other best-effort write failure and the
-  turn is held in process memory only; the record's text fields share the wire's ceiling, so a prompt or turn that
-  fit its own message fits the record unless the record's other fields fill it
+  the record's size in the cause, never retried into the same refusal on a lane that runs at MaxAckPending 1
+- **AND** at the deferred turn's marker write the refusal is logged with the size, the text is dropped from the
+  in-memory entity so later record writes fit, and the delivery is acknowledged as any other best-effort marker
+  write failure: the turn is in the loop's context and is carried by the next request, and it is not durable
+- **AND** at a carrier write the refusal quarantines the delivery as any other carrier write failure does; the
+  record's text fields count toward it, so a turn that fit its own message fits the record unless the record's
+  other fields have filled it
 
 #### Scenario: A tool result is cancelled after the loop has advanced
 
@@ -317,5 +340,7 @@ the record-before-publish reordering (`processor/agentic-loop/component.go:1699-
 scenario `The task lane's results settle on their own owner…` in the same file said so nine lines above it. Its three
 scenarios that were not about the exemption — `A tool result is cancelled after the loop has advanced`, `A terminal
 failure's record is written before its event is published`, `A loop-execution birth failure is not exempt` — move
-verbatim into the MODIFIED requirement above; `A task delivery fails after its loop exists` is superseded by the
-rewritten task-lane scenario and the two added intake scenarios.
+verbatim into the MODIFIED requirement above, as does its sentence "the birth-failure and transient-lineage paths of
+the same lane are NOT exempt" (the `pendingTaskResult` resume), now an AND-clause of the task-lane scenario; `A task
+delivery fails after its loop exists` is superseded by the rewritten task-lane scenario and the two added intake
+scenarios.

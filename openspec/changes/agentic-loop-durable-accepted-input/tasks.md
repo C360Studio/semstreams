@@ -2,14 +2,15 @@
 
 Base: `9e5d8455`. Pin keys: C `processor/agentic-loop/component.go`, H `handlers.go`, ST `state.go`, LE
 `loop_evidence.go`, A `agentic/state.go`. Pins are generated from the files at base (`sed -n "${n}p"`); an `I:` pin is
-the inventory's. Design: `design.md`; rows § 2; owner questions OQ0–OQ3 are § 0. Tasks marked **[OQn (x)]** run only
-under that answer. **No task asserts a post-merge fact.** Implementation serializes with other shared loop changes and
-precedes #1377 (ruling 5).
+the inventory's. Design: `design.md` (amended after review round 1); rows § 2; owner questions OQ0–OQ5 are § 0, each
+pre-selected. Tasks marked **[OQn (x)]** run only under that answer. **No task asserts a post-merge fact.**
+Implementation serializes with other shared loop changes and precedes #1377 (ruling 5).
 
 ## 0. Gates before any code (design phase closes here)
 
-- [ ] 0.1 Independent Tier 1 design review of `design.md` and the delta (contract § Required workflow 7; ADR-106: the
-      `agentic` package changes), then owner acceptance and answers to OQ0–OQ3 on #1365. Implementation waits for both.
+- [ ] 0.1 Independent Tier 1 design review of the amended `design.md` and delta (contract § Required workflow 7;
+      ADR-106: the `agentic` package changes), then owner acceptance and answers to OQ0–OQ5 on #1365. Implementation
+      waits for both.
 - [ ] 0.2 `task inventory:verify -- openspec/changes/agentic-loop-durable-accepted-input/inventory.md` reads
       `pins=149 ok=149` at the implementation's starting commit; the pins are pre-change evidence and are not
       re-pinned after the change lands (a red verify on the landed change is the correct reading).
@@ -24,7 +25,9 @@ precedes #1377 (ruling 5).
 - [ ] 1.2 Delete the cache: `processor/agentic-loop/state.go:90` — `taskPrompts          map[string]string                   // loopID -> original task prompt (for context recovery)`, its `make` in the constructor, and
       `processor/agentic-loop/state.go:940` — `delete(m.taskPrompts, loopID)`. `CacheTaskPrompt` (`processor/agentic-loop/state.go:1062` — `func (m *LoopManager) CacheTaskPrompt(loopID, prompt string) {`) sets
       `entity.TaskPrompt` on `m.loops[loopID]` under `m.mu`; `GetTaskPrompt`
-      (`processor/agentic-loop/state.go:1069` — `func (m *LoopManager) GetTaskPrompt(loopID string) string {`) reads it. Callers `processor/agentic-loop/handlers.go:1016` — `h.loopManager.CacheTaskPrompt(loopID, task.Prompt)`,
+      (`processor/agentic-loop/state.go:1069` — `func (m *LoopManager) GetTaskPrompt(loopID string) string {`) reads it. **[OQ5 (a)]** the call at
+      `processor/agentic-loop/handlers.go:1016` — `h.loopManager.CacheTaskPrompt(loopID, task.Prompt)` runs only when `!continuation` (birth-only; the deferred turn's text
+      is then on the entity once); **[OQ5 (b)]** it runs on every delivery as today. Readers
       `processor/agentic-loop/handlers.go:2529` — `Prompt:       h.loopManager.GetTaskPrompt(loopID),`, `processor/agentic-loop/handlers.go:3336` — `Prompt:       h.loopManager.GetTaskPrompt(loopID),`,
       `processor/agentic-loop/handlers.go:3302` — `prompt := h.loopManager.GetTaskPrompt(loopID)` are unchanged; the literal fallback at
       `processor/agentic-loop/handlers.go:3303` — `if prompt == "" {` stays as the empty-field branch.
@@ -37,22 +40,27 @@ precedes #1377 (ruling 5).
       carried marker.
 - [ ] 1.4 `SettleRequest` (`processor/agentic-loop/state.go:1295` — `func (m *LoopManager) SettleRequest(loopID, requestID string) {`) clears the text beside
       `processor/agentic-loop/state.go:1302` — `entity.PendingContinuation = false` and `processor/agentic-loop/state.go:1303` — `entity.PendingContinuationRequestID = ""`.
-- [ ] 1.5 The marker write (`processor/agentic-loop/component.go:3105` — `// sentinel the task lane reads as "redeliver this turn to whoever holds the`) overlays the text as its third owned field
-      beside `processor/agentic-loop/component.go:3140` — `entity.PendingContinuation = true` and `processor/agentic-loop/component.go:3144` — `entity.PendingContinuationRequestID = ""`; the text
-      reaches it on the `HandlerResult` from `deferredContinuationResult`
-      (`processor/agentic-loop/handlers.go:1097` — `return h.deferredContinuationResult(loopID, task.TaskID, entity), nil`) through an unexported field, not by re-reading the live entity
-      (design § 6.9). The call at `processor/agentic-loop/component.go:1564` — `if err := c.persistDeferredContinuationMarker(ctx, result.LoopID); errors.Is(err, natsclient.ErrKVRevisionMismatch) {` passes it. Rows at
-      `openspec/specs/agentic-loop/spec.md:1083` — `- **WHEN** it returns an error` (lost CAS → Retry, other → best-effort Ack) are unchanged.
-- [ ] 1.6 Adoption names the carrier: one line after `processor/agentic-loop/loop_evidence.go:507` — `adopted.PendingToolResults = nil` —
-      `if adopted.PendingContinuation && adopted.PendingContinuationRequestID == "" { adopted.PendingContinuationRequestID = retained.RequestID }`
-      — with a comment citing `agentic/state.go:140` — `// closed by identity adoption rather than by this field.` (the claim the code now honours) and design § 3.1 W-c.
+- [ ] 1.5 The marker write (`processor/agentic-loop/component.go:3107` — `func (c *Component) persistDeferredContinuationMarker(ctx context.Context, loopID string) error {`) overlays the text as its third owned field
+      beside `processor/agentic-loop/component.go:3140` — `entity.PendingContinuation = true` and `processor/agentic-loop/component.go:3144` — `entity.PendingContinuationRequestID = ""`; its doc
+      comment's "owns exactly two" (`processor/agentic-loop/component.go:3088` — `// A lane writes only the fields it owns. The deferred turn owns exactly two —`) becomes three. The text reaches it
+      on the `HandlerResult` from `deferredContinuationResult` (`processor/agentic-loop/handlers.go:1119` — `func (h *MessageHandler) deferredContinuationResult(loopID, taskID string, entity agentic.LoopEntity) HandlerResult {`) through
+      an unexported field, not by re-reading the live entity (design § 6.9). The call at
+      `processor/agentic-loop/component.go:1564` — `if err := c.persistDeferredContinuationMarker(ctx, result.LoopID); errors.Is(err, natsclient.ErrKVRevisionMismatch) {` passes it. Rows at `openspec/specs/agentic-loop/spec.md:1083` — `- **WHEN** it returns an error`
+      (lost CAS → Retry, other → best-effort Ack) are unchanged.
+- [ ] 1.6 **Adoption is NOT changed** (design OQ4, § 6.11): `adoptNewerRetainedRequest` at
+      `processor/agentic-loop/loop_evidence.go:503` — `adopted.PublishedRequestID = retained.RequestID` – `processor/agentic-loop/loop_evidence.go:507` — `adopted.PendingToolResults = nil` keeps leaving
+      the marker as it found it; the first draft's carrier-naming line is withdrawn and 3.1's W-e subtest pins why.
+      **[OQ4 (b)]** instead: a third field `PendingContinuationBehind` set at 1.3 to the outstanding request, cleared
+      at 1.4, and the replay in 1.7 runs only when the retained request equals it.
 - [ ] 1.7 Replay in `restoreLoopFromRequest` (`processor/agentic-loop/state.go:383` — `func (m *LoopManager) restoreLoopFromRequest(`): after
-      `processor/agentic-loop/state.go:475` — `cm.RepairToolPairs()` and before `processor/agentic-loop/state.go:481` — `m.cachedTools[record.ID] = request.Tools`, when the marker is
-      uncarried and the text is non-empty, `cm.AddMessage(RegionRecentHistory, {Role: "user", Content: text})` and an
-      Info line naming the loop; the marker is KEPT. The existing clear at `processor/agentic-loop/state.go:435` — `if entity.PendingContinuation && entity.PendingContinuationRequestID == "" {` –
-      `processor/agentic-loop/state.go:442` — `entity.PendingContinuation = false` narrows to the text-less marker (`&& entity.PendingContinuationPrompt == ""`)
-      and keeps its warning. The doc comment at `processor/agentic-loop/state.go:410` — `// A continuation admitted while a request was outstanding is durable as a` – :434 is rewritten to describe
-      the replay and design § 7.1/7.2 as residuals. **[OQ1 (b)]** replay every element in order.
+      `processor/agentic-loop/state.go:475` — `cm.RepairToolPairs()` and before `processor/agentic-loop/state.go:481` — `m.cachedTools[record.ID] = request.Tools`, on EVERY uncarried
+      marker whose text is non-empty, `cm.AddMessage(RegionRecentHistory, {Role: "user", Content: text})` and an Info
+      line naming the loop and `request.RequestID` (design § 3.1: once in W-b/W-e, a logged second copy in W-c); the
+      marker is KEPT. The existing clear at `processor/agentic-loop/state.go:435` — `if entity.PendingContinuation && entity.PendingContinuationRequestID == "" {` –
+      `processor/agentic-loop/state.go:442` — `entity.PendingContinuation = false` narrows to the text-less marker
+      (`&& entity.PendingContinuationPrompt == ""`) and keeps its warning. The doc comment at
+      `processor/agentic-loop/state.go:410` — `// A continuation admitted while a request was outstanding is durable as a` – :434 is rewritten to describe the replay, the five windows and design
+      § 7.1/7.2 as residuals. **[OQ1 (b)]** replay every element in order.
 
 ## 2. Task intake (design § 3.3)
 
@@ -63,54 +71,72 @@ precedes #1377 (ruling 5).
 - [ ] 2.2 `HandleTask` errors take their class: at `processor/agentic-loop/component.go:1547` — `return nil` return `err`; before
       it, `errs.IsInvalid(err)` returns `natsclient.TerminateDelivery(err)` in the shape of
       `processor/agentic-loop/component.go:1494` — `return natsclient.TerminateDelivery(err)` (the heartbeat policy at `processor/agentic-loop/component.go:1318` — `var permanent *natsclient.PermanentDeliveryError`
-      – :1321 does not read the Invalid class). **[OQ3 (b)]** the `ErrLoopBusy` branch at
-      `processor/agentic-loop/component.go:1541` — `if errors.Is(err, ErrLoopBusy) {` keeps its `Warn` and returns `err`; **[OQ3 (a)]** it keeps
-      `return nil` and the comment names it a defined refusal.
-- [ ] 2.3 A failed birth releases its loop inside `HandleTask` (`processor/agentic-loop/handlers.go:866` — `func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (HandlerResult, error) {`): a deferred
-      `if err != nil && !continuation && loopID != "" { _ = h.loopManager.DeleteLoop(loopID) }` beside the trajectory
-      discard at `processor/agentic-loop/handlers.go:971` — `defer func() {`; never on a continuation
-      (`processor/agentic-loop/trajectory_handler_wiring.go:60` — `// either — since #1227 that loop may be one it ATTACHED to rather than created,` – :62 states why). The component's own release
-      (`processor/agentic-loop/trajectory_handler_wiring.go:63` — `func (c *Component) releaseLoopTransientState(loopID string) {`) is not called from the error path: the revision was
-      not seeded and the audit-loss marker not set before `HandleTask` returned.
-- [ ] 2.4 **[OQ2 (a)]** In the birth arm at `processor/agentic-loop/component.go:1699` — `} else if err := c.createLoopState(ctx, result.LoopID); err != nil {` – :1716, an
-      `errors.Is(err, nats.ErrMaxPayload)` branch releases the loop and returns `natsclient.TerminateDelivery` with the
-      loop id and `len(data)` in the cause (precedent `graph/clustering/storage.go:138` — `if stderrors.Is(err, nats.ErrMaxPayload) {`); `createLoopState`
-      (`processor/agentic-loop/component.go:2907` — `func (c *Component) createLoopState(ctx context.Context, loopID string) error {`) wraps the client's error with `%w` so the branch can see it. The
-      marker write's over-bound case keeps its best-effort row and logs the refusal. **[OQ2 (b)]** instead: a constant
-      cap checked in `preflightDecodedTask` (`processor/agentic-loop/component.go:1782` — `func (c *Component) preflightDecodedTask(task *agentic.TaskMessage) (map[string]any, bool, error) {`) with a Terminate.
-- [ ] 2.5 Rewrite the comments that state the old limitation: `processor/agentic-loop/doc.go:280` — `// rather than leave a loop that would spend an iteration re-asking the model with nothing` – :303 (the
-      re-send paragraphs and the task-prompt paragraph), `processor/agentic-loop/component.go:1550` — `// A deferred continuation is not a dedup and not a spawn: the loop already` – :1558 (the
-      deferred branch's "the turn's text does not" sentence), `agentic/state.go:134` — `// It was originally introduced to survive a publish whose durability was` – :140 (the marker's
-      replacement paragraph now names the text field and the adoption line).
+      – :1321 does not read the Invalid class). **[OQ3 (a), pre-selected]** the `ErrLoopBusy` branch at
+      `processor/agentic-loop/component.go:1541` — `if errors.Is(err, ErrLoopBusy) {` is unchanged (`Warn` + `return nil`); its comment names it a defined
+      refusal and cites `processor/agentic-loop/component.go:1440` — `// The other two settlements were rejected on this lane: Retry parks the whole` – :1442 for why Retry is rejected on a lane at
+      MaxAckPending 1 (`processor/agentic-loop/component.go:1261` — `if port.Name == "agent.task" || port.Name == "agent.response" || port.Name == "tool.result" {`). **[OQ3 (b)]** would return `err` there — rejected
+      in design § 0.
+- [ ] 2.3 **No release code in `HandleTask`** (design § 6.12, § 7.3): one doc sentence at
+      `processor/agentic-loop/handlers.go:1102` — `return HandlerResult{}, err` — a failure after `CreateLoop`/`CreateLoopWithID`/`attachContinuation`
+      registered or rebound the loop (`startTrajectory` `processor/agentic-loop/handlers.go:968` — `return HandlerResult{}, err` always nil,
+      `processor/agentic-loop/trajectory.go:24` — `func (m *trajectoryManager) startTrajectory(loopID string) (agentic.Trajectory, error) {`; `GetLoop` `processor/agentic-loop/handlers.go:980` — `entity, err = h.loopManager.GetLoop(loopID)` only on a
+      release race; `buildTaskRequest` never) has no production producer, and a Retry there would meet
+      `HasActiveLoopForTask` (`processor/agentic-loop/state.go:642` — `func (m *LoopManager) HasActiveLoopForTask(taskID string) (string, bool) {`) on the rebound `TaskID`
+      (`processor/agentic-loop/state.go:318` — `entity.TaskID = taskID`) and be acknowledged as a duplicate
+      (`processor/agentic-loop/component.go:1580` — `c.logger.Debug("Task deduplicated — loop already active",`) with the turn nowhere.
+- [ ] 2.4 **[OQ2 (a), pre-selected]** Over the payload ceiling, three sites: in the birth arm at
+      `processor/agentic-loop/component.go:1699` — `} else if err := c.createLoopState(ctx, result.LoopID); err != nil {` – :1716, an `errors.Is(err, nats.ErrMaxPayload)` branch releases the
+      loop and returns `natsclient.TerminateDelivery` with the loop id and `len(data)` in the cause (precedent
+      `graph/clustering/storage.go:138` — `if stderrors.Is(err, nats.ErrMaxPayload) {`); `createLoopState` (`processor/agentic-loop/component.go:2907` — `func (c *Component) createLoopState(ctx context.Context, loopID string) error {`) already
+      wraps with `%w`. In the marker write after `processor/agentic-loop/component.go:3150` — `committed, err := c.loopsBucket.Update(ctx, loopID, data, revision)`, the same `errors.Is`
+      clears `PendingContinuationPrompt` on the in-memory entity (under `m.mu`), logs a `Warn` with the loop id and
+      `len(data)`, and returns as best-effort. The carrier write (`processor/agentic-loop/component.go:3071` — `committed, err := c.loopsBucket.Update(ctx, loopID, data, revision)` –
+      `processor/agentic-loop/component.go:3079` — `return fmt.Errorf("persist loop state %s: %w", loopID, err)`) is unchanged: its plain error is the carrier's existing Quarantine
+      row, now stated in the delta. **[OQ2 (b)]** instead: compare `len(data)` with `c.natsClient.MaxPayload()`
+      (`natsclient/client.go:214` — `func (m *Client) MaxPayload() (int64, error) {`) before each CAS — rejected in design § 0.
+- [ ] 2.5 Rewrite the comments that state the old limitation or over-claim: `processor/agentic-loop/doc.go:280` — `// rather than leave a loop that would spend an iteration re-asking the model with nothing` –
+      :303 (the re-send paragraphs and the task-prompt paragraph), `processor/agentic-loop/component.go:1550` — `// A deferred continuation is not a dedup and not a spawn: the loop already` –
+      :1558 (the deferred branch's "the turn's text does not" sentence), `agentic/state.go:134` — `// It was originally introduced to survive a publish whose durability was` – :140 (the marker's
+      replacement paragraph: "closed by identity adoption" is not true — adoption leaves the marker as it found it and
+      the rebuild replays; name W-c's duplicate and W-e), and the over-bound sentence at the marker write.
 
 ## 3. Tests (design § 4)
 
 - [ ] 3.1 `TestARebuiltLoopCarriesTheTurnItsRecordAccepted` beside
-      `processor/agentic-loop/loop_rebuild_test.go:429` — `func TestARebuiltLoopDoesNotReAskForATurnItCannotRecover(t *testing.T) {`: four subtests = design § 3.1 W-a/W-b/W-c/W-d, counting the
-      turn's occurrences in the next minted request (exactly 1 / 0), asserting the carrier the marker names, and in
-      W-b `CompletionState.Prompt == record.TaskPrompt` after the loop settles; a fifth subtest drives
-      `recoverEmptyContext` on the rebuilt loop with an emptied context and asserts the record's prompt, not the
-      literal. `TestARebuiltLoopDoesNotReAskForATurnItCannotRecover` keeps only the text-less-marker case (its
-      assertion at `processor/agentic-loop/loop_rebuild_test.go:474` — `require.Empty(t, completion.CompletionState.Prompt,` moves to the new test as its inverse).
+      `processor/agentic-loop/loop_rebuild_test.go:429` — `func TestARebuiltLoopDoesNotReAskForATurnItCannotRecover(t *testing.T) {`: **five** subtests = design § 3.1 W-a/W-b/W-c/W-d/W-e,
+      counting the turn's occurrences in the next minted request (W-a 0; W-b 1, marker names the minted request; W-c 2
+      and the replay log names the loop and R(N+1) — 1 under **[OQ4 (b)]**; W-d 1; W-e 1 over an adopted R(N) built
+      before the turn — the blocking finding's pin). W-c/W-e drive `adoptNewerRetainedRequest` first through the fake
+      bucket and retained-request seam `loop_carrier_test.go`'s adoption tests use. W-b also asserts
+      `CompletionState.Prompt == record.TaskPrompt` after the loop settles; a sixth subtest drives `recoverEmptyContext`
+      on the rebuilt loop with an emptied context and asserts the record's prompt, not the literal; **[OQ5 (a)]** a
+      seventh asserts a continued loop's completion carries the BIRTH prompt.
+      `TestARebuiltLoopDoesNotReAskForATurnItCannotRecover` keeps only the text-less-marker case (its assertion at
+      `processor/agentic-loop/loop_rebuild_test.go:474` — `require.Empty(t, completion.CompletionState.Prompt,` moves to the new test as its inverse).
       `// spec: agentic-loop / Loop input classes settle after owner-specific durable done`.
 - [ ] 3.2 `TestADeferredContinuationWritesOnlyTheMarkerItOwns`
       (`processor/agentic-loop/deferred_continuation_record_integration_test.go:178` — `func TestADeferredContinuationWritesOnlyTheMarkerItOwns(t *testing.T) {`): the record assertions gain
       `pending_continuation_prompt`; the crash arm at
-      `processor/agentic-loop/deferred_continuation_record_integration_test.go:211` — `t.Run("a crash in the interval leaves a record the batch can be replayed against", func(t *testing.T) {` asserts the replacement's next
-      request on `agent.request.<loopID>` contains the turn exactly once.
+      `processor/agentic-loop/deferred_continuation_record_integration_test.go:211` — `t.Run("a crash in the interval leaves a record the batch can be replayed against", func(t *testing.T) {` (W-b: R2's PubAck never lands)
+      asserts the replacement's next request on `agent.request.<loopID>` contains the turn exactly once.
 - [ ] 3.3 `TestTheTaskLaneSettlesEachProducedErrorOnItsOwnDisposition` in
       `processor/agentic-loop/transition_result_test.go`, driven through the production heartbeat callback like
       `processor/agentic-loop/transition_result_test.go:120` — `func TestTheToolLaneSettlesEachProducedErrorPairOnItsOwnDisposition(t *testing.T) {`: undecodable → Terminate; wrong type → Terminate;
-      depth → Terminate; `ctx` cancelled → Retry; `ErrLoopTerminal` → Terminate; `ErrLoopBusy` → Retry **[OQ3 (b)]** /
-      Ack **[OQ3 (a)]**; a birth failing after registration → Retry, `HasActiveLoopForTask` false, the redelivery
-      `Created`; **[OQ2 (a)]** `nats.ErrMaxPayload` from `Create` → Terminate, loop released (a fake `KeyValue` in the
-      shape of `loop_carrier_test.go`'s). Every row is today's Ack, which is the counterexample.
-- [ ] 3.4 Mutation evidence for the WIRING (`cp` backup, `md5 -q` before and after, one site at a time, recorded in
-      the PR body): delete the replay `AddMessage` → 3.1 W-b red only; delete the adoption line → 3.1 W-c red only
-      (count 2); delete the `SettleRequest` clear → 3.1's settle assertion red; delete the overlay's text line → 3.2
-      red; delete 2.3's `DeleteLoop` → 3.3's birth row red ("deduplicated"); replace one `TerminateDelivery` with
-      `return nil` → its 3.3 row red.
-- [ ] 3.5 Controls run by name with `-race -count=1`, unchanged beyond an `attachContinuation` argument:
+      depth → Terminate; `ctx` cancelled → Retry and `HasActiveLoopForTask` false; `ErrLoopTerminal` → Terminate;
+      `ErrLoopBusy` → Ack **[OQ3 (a)]**. No injected post-registration fault (no producer, design § 6.12). Every row is
+      today's Ack, which is the counterexample.
+- [ ] 3.4 **[OQ2 (a)]** Over-the-ceiling rows with a fake `jetstream.KeyValue` returning `nats.ErrMaxPayload` (the
+      shape of `loop_carrier_test.go`'s fake, `processor/agentic-loop/loop_carrier_test.go:352` — `func TestBirthRefusesASecondCreateForTheSameLoop(t *testing.T) {`): birth `Create`
+      refused → Terminate, loop released; marker `Update` refused → Ack, `PendingContinuationPrompt` empty on the
+      in-memory entity afterwards, the `Warn` names the size, and a following carrier write on the same loop is NOT
+      refused; carrier `Update` refused → the existing Quarantine row, asserted so the delta's sentence is proved.
+- [ ] 3.5 Mutation evidence for the WIRING (`cp` backup, `md5 -q` before and after, one site at a time, recorded in
+      the PR body): delete the replay `AddMessage` → 3.1 W-b, W-c, W-e red (0); re-add the withdrawn adoption line →
+      3.1 W-e red (0, silent); delete the `SettleRequest` clear → 3.1's settle assertion red; delete the overlay's text
+      line → 3.2 red; replace one `TerminateDelivery` with `return nil` → its 3.3 row red; replace the `errs.IsInvalid`
+      branch with `return err` → the depth row red; delete the marker write's over-bound clear → 3.4's "following
+      carrier write" red.
+- [ ] 3.6 Controls run by name with `-race -count=1`, unchanged beyond an `attachContinuation` argument:
       `processor/agentic-loop/continuation_deferral_test.go:115` — `func TestDeferredContinuationIsCarriedByTheCompletionResponse(t *testing.T) {`,
       `processor/agentic-loop/continuation_deferral_test.go:336` — `func TestASecondContinuationUncarriesTheDeferralAndSendsBothTurns(t *testing.T) {`,
       `processor/agentic-loop/continuation_deferral_test.go:563` — `func TestATerminalToolAtTheIterationCeilingKeepsTheDeferredTurnOnTheRecord(t *testing.T) {`,
@@ -118,25 +144,30 @@ precedes #1377 (ruling 5).
       `processor/agentic-loop/task_redelivery_integration_test.go:408` — `func TestABirthWhoseRecordWriteFailedIsFinishedByItsRetry(t *testing.T) {`,
       `processor/agentic-loop/task_redelivery_integration_test.go:718` — `func TestAColdContinuationForALoopNoProcessHoldsIsRefused(t *testing.T) {`,
       `processor/agentic-loop/applied_facts_property_test.go:123` — `func TestPropAppliedFactsHoldAcrossEveryCrashWindow(t *testing.T) {`. Paste the `--- PASS` lines, not "green".
-- [ ] 3.6 `task e2e:agentic`: extend `verifyMidFlightLoopAcrossReplacement`
+- [ ] 3.7 `task e2e:agentic`: extend `verifyMidFlightLoopAcrossReplacement`
       (`test/e2e/scenarios/agentic/stage_a_process_replacement.go:898` — `func (s *Scenario) verifyMidFlightLoopAcrossReplacement(`) — with the model-request consumer paused
       (`test/e2e/scenarios/agentic/stage_a_process_replacement.go:909` — `if _, err := agentStream.PauseConsumer(ctx, modelRequestConsumerName, time.Now().Add(2*time.Minute)); err != nil {`) and R1 retained, publish a continuation task
-      naming the loop, replace, resume; assert R2 carries the turn once and `agent.complete` carries `prompt`. Final
-      validation of the landed diff (proposal § Impact), not the iteration loop; `pgrep -fl e2e.test` into the tier
-      log first.
+      naming the loop, replace, resume; assert R2 carries the turn once and `agent.complete` carries `prompt`. This
+      reaches W-b only (design § 10). Final validation of the landed diff (proposal § Impact), not the iteration loop;
+      `pgrep -fl e2e.test` into the tier log first.
 
-## 4. Spec, docs, gates
+## 4. Spec and docs
 
 - [ ] 4.1 `openspec validate agentic-loop-durable-accepted-input --strict` green; `task spec:properties` count moves
       only by the new `// spec:` lines (`git add` the new test first; the S:886 heading is unchanged, so the 26 existing
       citations resolve).
 - [ ] 4.2 Migration section in `docs/operations/migration-beta162-to-beta163.md` per design § 5, after the #1374
       section; mark `docs/operations/migration-beta162-to-beta163.md:1873` — `**A deferred turn is durable as a MARKER only, and so is nothing about the task prompt.** A continuation admitted` and
-      `docs/operations/migration-beta162-to-beta163.md:1885` — `The loop's task prompt is the same limitation one field over. A loop rebuilt from its record and a retained request —` superseded by it.
-- [ ] 4.3 `task check:push` green (build, lint, tagged vet, schema drift, contract, race unit, integration); paste the
-      summary lines. `task api:compat`: `agentic` reads additions only (two exported fields), `processor/agentic-loop`
-      no exported change; paste the per-package lines.
-- [ ] 4.4 PR body: `implemented-by: <persona>`, the OQ0–OQ3 answers quoted from #1365, the 3.4 mutation runs, the 3.5
-      control runs, the 3.6 tier line.
-- [ ] 4.5 Archive: `openspec archive agentic-loop-durable-accepted-input --yes` as the last content commit; the MODIFIED
-      block syncs into `openspec/specs/agentic-loop/spec.md` and the REMOVED requirement leaves it (OQ0 (a)).
+      `docs/operations/migration-beta162-to-beta163.md:1885` — `The loop's task prompt is the same limitation one field over. A loop rebuilt from its record and a retained request —` superseded by it; name the birth-prompt change on
+      continued loops **[OQ5 (a)]**, the W-c duplicate, and the whole-record bound.
+
+## 5. Gates
+
+- [ ] 5.1 `task check:push` green (build, lint, tagged vet, schema drift, contract, race unit, integration); paste the
+      summary lines, not "green".
+- [ ] 5.2 `task api:compat`: `agentic` reads additions only (two exported fields), `processor/agentic-loop` no exported
+      change; paste the per-package lines.
+- [ ] 5.3 PR body: `implemented-by: <persona>`, the OQ0–OQ5 answers quoted from #1365, the 3.5 mutation runs, the 3.6
+      control runs, the 3.7 tier line.
+- [ ] 5.4 Archive: `openspec archive agentic-loop-durable-accepted-input --yes` as the last content commit; the MODIFIED
+      block syncs into `openspec/specs/agentic-loop/spec.md` and the REMOVED requirement leaves it (OQ0).
