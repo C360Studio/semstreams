@@ -33,4 +33,4 @@ Inline the mutation diffs and outputs in a PR comment. The scratchpad alone does
 ## 5. Land
 
 - [x] 5.1 Pass the gates `task check:push` runs, then a `semstreams-reviewer` pass.
-- [ ] 5.2 Archive and sync the spec as the last content commit.
+- [x] 5.2 Archive and sync the spec as the last content commit.
