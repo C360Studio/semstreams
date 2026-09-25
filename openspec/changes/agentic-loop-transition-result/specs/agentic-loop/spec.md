@@ -2,13 +2,11 @@
 
 > One MODIFIED requirement (ruling 2, #1146 issuecomment-5828511934): it restates
 > `openspec/specs/agentic-loop/spec.md:886-982` (`f15a528e`) in full — the requirement text and all ten existing
-> scenarios verbatim — and adds the `(result, error)` table's rows as scenarios plus the two sentences that carry them.
-> The ORDER authority, "The loop record names its outstanding request" (`spec.md:1467`), is cited, not modified.
-> Two additions depend on owner questions in `design.md` § 0: the sentence beginning "A result whose state is terminal"
-> and the scenario "A terminal-shaped result with no terminal event is refused" are **OQ1 (b)**; the scenario "An
-> approval answer that fails after its gate resolved is a partial effect" is **OQ2 (b)**. Under (a) each becomes a
-> statement of today's disposition, named in that scenario's own text. The scenario "A tool result whose loop was
-> released mid-delivery is quarantined" records today's disposition (OQ3 (a)).
+> scenarios verbatim — and adds the `(result, error)` table's produced rows as scenarios (`design.md` § 2) plus the
+> sentences that carry the one reading this change unifies. The ORDER authority, "The loop record names its outstanding
+> request" (`spec.md:1467`), is cited, not modified. No scenario below depends on an owner question; every scenario
+> states today's disposition (design § 0 recommends (a) on all four). OQ1 (b), if taken, would add one sentence and one
+> scenario (a terminal with no event refused by the terminal owner), named in `design.md` § 0.
 
 ## MODIFIED Requirements
 
@@ -39,20 +37,14 @@ from the loop's new terminal state and the result the first attempt built cannot
 business failure SHALL be positively acknowledged only once its failed loop state, its terminal record and its
 failure events have committed.
 
-A handler's `(result, error)` pair SHALL be read once, at the loop owner, as exactly one of four transitions, and no
-lane SHALL decide any of them on its own: a **refusal** — an error with no terminal event in the result — commits
-nothing, and the error's class is the disposition (Retry, Terminate or Quarantine, as the lane's classification
-already derives it); a **terminal guard** — a result the handler marked as owned elsewhere — is settled by the loop's
-durable record, acknowledged when the record is absent or terminal and retried when it is live or unreadable; an
-**applied** transition — a result with no error — is committed by the carrier in the order the result's shape implies:
-birth (the record by create-once, then the first request), gate (the record, then the approval request), ordinary
-advance (every publication, then the record by compare-and-swap) or terminal (the terminal owner's order); a **failed
-terminal** — an error accompanying a result that carries a completion or failure event — is the loop's settlement: the
-terminal owner commits it, the delivery settles on that commit, and the error's class is not read. Which order an
-applied result takes SHALL follow from the result's shape, never from an argument its caller passes. A result whose
-state is terminal and which carries neither a completion nor a failure event SHALL be refused as a fatal,
-commit-unknown failure before any record is written, with the loop released from memory: no terminal record is written
-with no `COMPLETE_<loopID>` and no terminal event behind it.
+An error accompanying a result that carries a completion or failure event SHALL be read as that terminal's cause,
+never as the delivery's disposition: the terminal is the loop's settlement, the terminal owner commits it in its order,
+and the delivery settles on that commit — acknowledged once it lands, retried on a lost compare-and-swap, quarantined
+on any other commit failure. That reading SHALL be the same on every lane that produces such a result, the
+approval-timeout sweeper included, and the error's class SHALL NOT be read for it. Every other error keeps its lane's
+own disposition, as the scenarios below record it per lane. The carrier order an applied result takes — birth, gate,
+ordinary advance or terminal — SHALL be a function of the result's shape alone: the same shape takes the same order on
+every lane that produces it.
 
 #### Scenario: Required output publication fails
 
@@ -125,14 +117,6 @@ with no `COMPLETE_<loopID>` and no terminal event behind it.
 - **AND** a later fatal result in the same or another lane neither overwrites nor recounts that first cause
 - **AND** the latch itself adds no metric family, public state, durable state, or communication path
 
-#### Scenario: A handler's result and error are read once, as one of four transitions
-
-- **WHEN** the model-response, tool-result or approval-response lane, or the approval-timeout sweeper, receives a
-  `(result, error)` pair from its handler
-- **THEN** the pair is exactly one of: a refusal, a terminal guard, an applied transition, or a failed terminal
-- **AND** the failed-terminal reading is made by one owner-side decision that the approval lane, the sweeper and the
-  tool lane's failed-result path all call, so no lane carries its own copy of that decision
-
 #### Scenario: A populated terminal result that arrives with an error is the loop's settlement
 
 - **GIVEN** a loop past its own deadline
@@ -151,41 +135,34 @@ with no `COMPLETE_<loopID>` and no terminal event behind it.
   the error rather than from the handed result, and the delivery settles on that commit exactly as on the other lanes
 - **AND** the handed result's own event is not the one published; the two carry the same reason
 
-#### Scenario: A non-terminal result with an error commits nothing, and the error's class is the disposition
+#### Scenario: A non-terminal result with an error settles on its lane's own disposition
 
 - **WHEN** a handler returns a result that carries no terminal event together with an error that is not one of the
   model lane's classification sentinels
-- **THEN** the tool lane quarantines it, unless the error proves the cancellation happened before any mutation, which
-  is retried
+- **THEN** the tool lane quarantines it whatever the error's class, unless the error proves the cancellation happened
+  before any mutation, which is retried
 - **AND** the model lane fails the loop through the terminal owner — reason `max_iterations` for the budget sentinel,
   `timeout` for the loop deadline, `handler_error` otherwise — and the delivery settles on that commit; a loop that
   cannot be transitioned at all is retried
 - **AND** the approval lane settles by class: fatal is quarantined, invalid is terminated, anything else is retried
 
-#### Scenario: An applied result takes the order its shape implies, never the order its caller asks
+#### Scenario: The same result shape takes the same order on every lane
 
 - **WHEN** a handler returns a result with no error
 - **THEN** a result that created the loop is written by create-once before its first request is published; a result
   that gates the loop for approval is written before its approval request is published; any other non-terminal result
   publishes every output first and writes the record by compare-and-swap after; a result carrying a completion or
   failure event goes to the terminal owner
-- **AND** the carrier takes no order argument, so a lane cannot select an order for a shape
-
-#### Scenario: A terminal-shaped result with no terminal event is refused
-
-- **WHEN** a result's state is `complete` or `failed` but it carries neither a completion event nor a failure event,
-  whether or not an error accompanies it — a completion whose event could not be built or published, or a failure
-  whose event could not be built because the loop was released meanwhile
-- **THEN** the carrier refuses it as a fatal, commit-unknown failure before writing the record, releases the loop from
-  memory, and the delivery is quarantined
-- **AND** no record is written terminal with no `COMPLETE_<loopID>` and no terminal event behind it
+- **AND** a gate created by a tool result, by an operator's rejection or by the sweep's auto-reject is written before
+  it is published on every one of those lanes, and an ordinary advance produced on the model, tool or approval lane or
+  by the sweep publishes before it writes on every one of them
 
 #### Scenario: A terminal-guard result is settled by the record, whichever lane produced it
 
 - **WHEN** a handler answers a delivery with an effect-free result because the loop is already terminal in memory
 - **THEN** the loop's record decides: absent or terminal is acknowledged and counted as the lane's drop; live or
   unreadable is retried, because the terminal in memory may be a commit still in flight on another lane
-- **AND** a guard result is never returned together with an error, so the failed-terminal decision never reads one
+- **AND** a guard result is never returned together with an error, so the failed-terminal reading never meets one
 
 #### Scenario: A refusal before any mutation is retried; a refusal naming invalid input is terminated
 
@@ -195,13 +172,13 @@ with no `COMPLETE_<loopID>` and no terminal event behind it.
   refused for either reason keeps the log-and-acknowledge exemption named under "Task intake is the one loop input
   class this layer does not convert"
 
-#### Scenario: An approval answer that fails after its gate resolved is a partial effect
+#### Scenario: An approval answer whose loop was released after its gate resolved is recovered cold
 
-- **GIVEN** an approval answer that won the resolve, so the gate is cleared in memory and the loop restored to its
-  prior state
-- **WHEN** the loop cannot be re-read, or the approved call cannot be dispatched
-- **THEN** the delivery is quarantined, not retried: a retry would find no gate, report the answer as stale and
-  acknowledge it, leaving the record gated and the loop un-gated in memory with nothing outstanding
+- **GIVEN** an approval answer that won the resolve, so the gate is cleared in memory
+- **WHEN** the loop is released before the handler re-reads it, so the handler returns an empty result with a
+  not-found error
+- **THEN** the delivery is retried; the redelivery finds no loop in memory, reads the still-gated record, rebuilds the
+  loop and applies the answer exactly as the process that gated the loop would have
 
 #### Scenario: A tool result whose loop was released mid-delivery is quarantined
 
@@ -250,12 +227,3 @@ with no `COMPLETE_<loopID>` and no terminal event behind it.
   adopts it by loop identifier and terminal kind through the terminal owner; a timer is never redelivered
 - **AND** issue #1377 owns making the record converge on the durable terminal through the declared recovery path,
   adding no row and changing no disposition here
-
-#### Scenario: A bare publication carrier is not a transition
-
-- **WHEN** the cancel lane, the model lane's failure path, the gate re-publication for a redelivered
-  `approval_required` result, or the cold cancel adoption builds a `HandlerResult` holding only a loop identifier and
-  messages
-- **THEN** it is a publication carrier for the terminal owner or for the publish step, not a transition: no
-  `(result, error)` pair is read from it, the terminal ones are committed by the terminal owner in its order, and the
-  governance-verdict lane reads no `HandlerResult` at all
