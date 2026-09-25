@@ -24,11 +24,15 @@ const deliveryLaneImportPath = "github.com/c360studio/semstreams/internal/delive
 //
 // The scan reads the AST of every non-test .go file and flags any call of
 // NewAdmission — under every import alias of internal/deliverylane, or bare
-// inside that package — whose second argument is the identifier nil or which
-// does not pass exactly two arguments. Like TestDeliveryLaneLatchHasOneHome it
-// catches drift as written, not an adversary: a variable that happens to hold
-// nil passes. A file that does not parse FAILS the test rather than being
-// skipped.
+// inside that package — whose second argument is a nil literal (bare,
+// parenthesised, or converted, as in `(func(string))(nil)`) or which does not
+// pass exactly two arguments. Like TestDeliveryLaneLatchHasOneHome it catches
+// drift as written, not an adversary, and it does no flow analysis. Known blind
+// spots: a variable that happens to hold nil, and a wrapper that takes
+// onRefused as a parameter and forwards it to NewAdmission — a nil passed to
+// the wrapper is invisible here. Such a wrapper must supply the declarer
+// itself, as agentrun's newLaneAdmission does. A file that does not parse FAILS
+// the test rather than being skipped.
 func TestEveryProductionAdmissionDeclaresRefusal(t *testing.T) {
 	t.Parallel()
 
@@ -141,7 +145,20 @@ func isNewAdmission(fun ast.Expr, qualifiers map[string]bool, bare bool) bool {
 	return ok && qualifiers[pkg.Name]
 }
 
+// isNilIdent reports whether expr is the nil literal, looking through
+// parentheses and through a single-argument conversion such as
+// `(func(string))(nil)`. A one-argument call whose argument is nil is treated as
+// a conversion; a real function called with nil would be a false positive, and
+// no NewAdmission call site passes one.
 func isNilIdent(expr ast.Expr) bool {
-	ident, ok := expr.(*ast.Ident)
-	return ok && ident.Name == "nil"
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return e.Name == "nil"
+	case *ast.ParenExpr:
+		return isNilIdent(e.X)
+	case *ast.CallExpr:
+		return len(e.Args) == 1 && isNilIdent(e.Args[0])
+	default:
+		return false
+	}
 }
