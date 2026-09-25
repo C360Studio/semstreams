@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"sync"
 	"syscall"
@@ -289,5 +290,5 @@ func (s *Server) Address() string {
 	if s.security.TLS.Server.Enabled {
 		scheme = "https"
 	}
-	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(port)) + s.path
+	return (&url.URL{Scheme: scheme, Host: net.JoinHostPort(host, strconv.Itoa(port)), Path: s.path}).String()
 }

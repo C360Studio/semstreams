@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -39,6 +40,13 @@ type observedTCPListener struct {
 	closed   atomic.Bool
 	accepted atomic.Int32
 }
+
+type scopedTCPListener struct {
+	net.Listener
+	addr *net.TCPAddr
+}
+
+func (l *scopedTCPListener) Addr() net.Addr { return l.addr }
 
 func (l *observedTCPListener) Accept() (net.Conn, error) {
 	connection, err := l.Listener.Accept()
@@ -109,6 +117,29 @@ func TestServerNativeStartReportsOwnedEphemeralListener(t *testing.T) {
 	if connection != nil {
 		_ = connection.Close()
 	}
+}
+
+func TestServerAddressEscapesScopedIPv6Zone(t *testing.T) {
+	loopback := boundServerListener(t)
+	endpoint := loopback.Addr().(*net.TCPAddr)
+	listener := &scopedTCPListener{
+		Listener: loopback,
+		addr: &net.TCPAddr{
+			IP: net.ParseIP("fe80::1"), Port: endpoint.Port, Zone: "en0",
+		},
+	}
+	server := NewServer(9090, "/metrics", NewMetricsRegistry(), security.Config{})
+	require.NoError(t, server.StartWithListener(t.Context(), listener))
+	registerServerCleanup(t, server)
+
+	address := server.Address()
+	require.Equal(t, "http://"+net.JoinHostPort("fe80::1%25en0", strconv.Itoa(endpoint.Port))+"/metrics", address)
+	parsed, err := url.Parse(address)
+	require.NoError(t, err, "Address must be a valid URL even when TCPAddr has a zone")
+	require.Equal(t, "fe80::1%en0", parsed.Hostname())
+	require.Equal(t, strconv.Itoa(endpoint.Port), parsed.Port())
+	_, err = http.NewRequestWithContext(t.Context(), http.MethodGet, address, nil)
+	require.NoError(t, err, "Address must be accepted by the standard HTTP request parser")
 }
 
 func TestServerStartOwnsListenerAndRequiresFreshInstanceForRestart(t *testing.T) {

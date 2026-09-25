@@ -93,33 +93,34 @@ Environment: Go 1.26.4, darwin/arm64, macOS 26.5.2, Task 3.51.1, OpenSpec 1.7.0.
 Source baseline: `b7970702dc49c0fc028d3c500ffe39fe3b14d65d` plus the ten-file final snapshot above.
 The implementation commit containing this record retains those exact source and test bytes.
 Local scratch paths above identify execution artifacts; the decisive final-run output is retained here durably.
+Machine-specific source prefixes are removed, tabs expanded, and trailing whitespace trimmed for Markdown.
 
 ### accepted
 
 baseline (exit 0):
 
 ```text
-ok  	github.com/c360studio/semstreams/metric	0.369s
+ok      github.com/c360studio/semstreams/metric 0.369s
 ```
 
 mutant (exit 1):
 
 ```text
 --- FAIL: TestServerStartWithListenerKeepsOriginalOpenWhileServing (0.00s)
-    handler_test.go:163: 
-        	Error Trace:	metric/handler_test.go:163
-        	Error:      	Should be false
-        	Test:       	TestServerStartWithListenerKeepsOriginalOpenWhileServing
-        	Messages:   	serving must retain the supplied listener
+    handler_test.go:163:
+            Error Trace:    metric/handler_test.go:163
+            Error:          Should be false
+            Test:           TestServerStartWithListenerKeepsOriginalOpenWhileServing
+            Messages:       serving must retain the supplied listener
 FAIL
-FAIL	github.com/c360studio/semstreams/metric	0.359s
+FAIL    github.com/c360studio/semstreams/metric 0.359s
 FAIL
 ```
 
 restored (exit 0):
 
 ```text
-ok  	github.com/c360studio/semstreams/metric	0.234s
+ok      github.com/c360studio/semstreams/metric 0.234s
 ```
 
 ### address
@@ -127,35 +128,35 @@ ok  	github.com/c360studio/semstreams/metric	0.234s
 baseline (exit 0):
 
 ```text
-ok  	github.com/c360studio/semstreams/metric	0.241s
+ok      github.com/c360studio/semstreams/metric 0.241s
 ```
 
 mutant (exit 1):
 
 ```text
 --- FAIL: TestServerStartOwnsListenerAndRequiresFreshInstanceForRestart (0.00s)
-    handler_test.go:122: 
-        	Error Trace:	metric/handler_test.go:122
-        	Error:      	Not equal: 
-        	            	expected: "http://127.0.0.1:57157/metrics"
-        	            	actual  : "http://localhost:9090/metrics"
-        	            	
-        	            	Diff:
-        	            	--- Expected
-        	            	+++ Actual
-        	            	@@ -1 +1 @@
-        	            	-http://127.0.0.1:57157/metrics
-        	            	+http://localhost:9090/metrics
-        	Test:       	TestServerStartOwnsListenerAndRequiresFreshInstanceForRestart
+    handler_test.go:122:
+            Error Trace:    metric/handler_test.go:122
+            Error:          Not equal:
+                            expected: "http://127.0.0.1:57157/metrics"
+                            actual  : "http://localhost:9090/metrics"
+
+                            Diff:
+                            --- Expected
+                            +++ Actual
+                            @@ -1 +1 @@
+                            -http://127.0.0.1:57157/metrics
+                            +http://localhost:9090/metrics
+            Test:           TestServerStartOwnsListenerAndRequiresFreshInstanceForRestart
 FAIL
-FAIL	github.com/c360studio/semstreams/metric	0.354s
+FAIL    github.com/c360studio/semstreams/metric 0.354s
 FAIL
 ```
 
 restored (exit 0):
 
 ```text
-ok  	github.com/c360studio/semstreams/metric	0.249s
+ok      github.com/c360studio/semstreams/metric 0.249s
 ```
 
 ### release
@@ -163,7 +164,7 @@ ok  	github.com/c360studio/semstreams/metric	0.249s
 baseline (exit 0):
 
 ```text
-ok  	github.com/c360studio/semstreams/service	0.566s
+ok      github.com/c360studio/semstreams/service    0.566s
 ```
 
 mutant (exit 1):
@@ -171,20 +172,20 @@ mutant (exit 1):
 ```text
 2026/09/25 18:55:23 INFO Starting metrics server port=9090 path=/metrics
 --- FAIL: TestMetricsRollsBackBoundProviderWhenBaseCommitFails (0.00s)
-    metrics_owner_test.go:119: 
-        	Error Trace:	service/metrics_owner_test.go:119
-        	Error:      	An error is expected but got nil.
-        	Test:       	TestMetricsRollsBackBoundProviderWhenBaseCommitFails
-        	Messages:   	failed BaseService commit must release the bound metrics listener
+    metrics_owner_test.go:119:
+            Error Trace:    service/metrics_owner_test.go:119
+            Error:          An error is expected but got nil.
+            Test:           TestMetricsRollsBackBoundProviderWhenBaseCommitFails
+            Messages:       failed BaseService commit must release the bound metrics listener
 FAIL
-FAIL	github.com/c360studio/semstreams/service	0.567s
+FAIL    github.com/c360studio/semstreams/service    0.567s
 FAIL
 ```
 
 restored (exit 0):
 
 ```text
-ok  	github.com/c360studio/semstreams/service	0.455s
+ok      github.com/c360studio/semstreams/service    0.455s
 ```
 
 ### standalone-bridge
@@ -192,7 +193,7 @@ ok  	github.com/c360studio/semstreams/service	0.455s
 baseline (exit 0):
 
 ```text
-ok  	github.com/c360studio/semstreams/service	0.566s
+ok      github.com/c360studio/semstreams/service    0.566s
 ```
 
 mutant (exit 1):
@@ -200,20 +201,20 @@ mutant (exit 1):
 ```text
 2026/09/25 18:55:56 INFO Starting metrics server port=9090 path=/metrics
 --- FAIL: TestMetricsRollsBackBoundProviderWhenBaseCommitFails (0.00s)
-    metrics_owner_test.go:119: 
-        	Error Trace:	service/metrics_owner_test.go:119
-        	Error:      	An error is expected but got nil.
-        	Test:       	TestMetricsRollsBackBoundProviderWhenBaseCommitFails
-        	Messages:   	failed BaseService commit must release the bound metrics listener
+    metrics_owner_test.go:119:
+            Error Trace:    service/metrics_owner_test.go:119
+            Error:          An error is expected but got nil.
+            Test:           TestMetricsRollsBackBoundProviderWhenBaseCommitFails
+            Messages:       failed BaseService commit must release the bound metrics listener
 FAIL
-FAIL	github.com/c360studio/semstreams/service	0.560s
+FAIL    github.com/c360studio/semstreams/service    0.560s
 FAIL
 ```
 
 restored (exit 0):
 
 ```text
-ok  	github.com/c360studio/semstreams/service	0.447s
+ok      github.com/c360studio/semstreams/service    0.447s
 ```
 
 ### manager-bridge
@@ -221,7 +222,7 @@ ok  	github.com/c360studio/semstreams/service	0.447s
 baseline (exit 0):
 
 ```text
-ok  	github.com/c360studio/semstreams/service	0.577s
+ok      github.com/c360studio/semstreams/service    0.577s
 ```
 
 mutant (exit 1):
@@ -229,37 +230,132 @@ mutant (exit 1):
 ```text
 2026/09/25 18:51:00 ERROR Manager.StartAll: Failed to start service name=component-manager error="context canceled"
 --- FAIL: TestStartAllBindsSharedAndMetricsBeforeBlockedService (0.00s)
-    startup_observability_test.go:594: 
-        	Error Trace:	service/startup_observability_test.go:594
-        	Error:      	Not equal: 
-        	            	expected: "http://127.0.0.1:56992/metrics"
-        	            	actual  : "http://localhost:9090/metrics"
-        	            	
-        	            	Diff:
-        	            	--- Expected
-        	            	+++ Actual
-        	            	@@ -1 +1 @@
-        	            	-http://127.0.0.1:56992/metrics
-        	            	+http://localhost:9090/metrics
-        	Test:       	TestStartAllBindsSharedAndMetricsBeforeBlockedService
+    startup_observability_test.go:594:
+            Error Trace:    service/startup_observability_test.go:594
+            Error:          Not equal:
+                            expected: "http://127.0.0.1:56992/metrics"
+                            actual  : "http://localhost:9090/metrics"
+
+                            Diff:
+                            --- Expected
+                            +++ Actual
+                            @@ -1 +1 @@
+                            -http://127.0.0.1:56992/metrics
+                            +http://localhost:9090/metrics
+            Test:           TestStartAllBindsSharedAndMetricsBeforeBlockedService
 FAIL
-FAIL	github.com/c360studio/semstreams/service	0.575s
+FAIL    github.com/c360studio/semstreams/service    0.575s
 FAIL
 ```
 
 restored (exit 0):
 
 ```text
-ok  	github.com/c360studio/semstreams/service	0.439s
+ok      github.com/c360studio/semstreams/service    0.439s
 ```
 
 ### Final focused race
 
 ```text
-ok  	github.com/c360studio/semstreams/metric	1.320s
-ok  	github.com/c360studio/semstreams/service	1.700s
+ok      github.com/c360studio/semstreams/metric 1.320s
+ok      github.com/c360studio/semstreams/service    1.700s
 ```
 
 ## Lint argument-order correction
 
 The full gate's revive pass found `context-as-argument` in the test-only `startHealthOnBoundListener` helper. Its signature is now `(ctx context.Context, t *testing.T, manager *Manager)` and its six call sites pass context first. Only `service/service_manager_health_listener_test.go` changed in this correction; mutation-target source and test bytes above are unchanged. New SHA-256 for this file is `8f9209c2680d4a121a7b0ed2bf3b5326ef40b720158e11db22ae7e1996c758e3` (replacing the one entry in the final-byte snapshot above). `go test -race ./service -run '^(TestHealthServeDoneDoesNotCompleteBeforeServeReturns|TestListenerBaseContextsPreserveExactStartValues|TestStartHealthListener_BindsHealthAndHealthz|TestHealthListenerCannotRebindAfterCompletedStop|TestStartHealthListener_DoubleStartErrors|TestStopAll_TearsDownHealthListener)$' -count=1 -timeout=3m` exited 0 (`service` 1.756s); `/private/tmp/semstreams-1386-health-arg-order-race.log`. `git diff --check -- service/service_manager_health_listener_test.go` exited 0. Full gate retry remains parent-owned.
+
+## Scoped IPv6 Address review correction
+
+The independent reviewer found that concatenating a raw `TCPAddr.Zone` into a URL host yielded e.g. `http://[fe80::1%en0]:port/metrics`, which Go's URL parser rejects. The new deterministic test uses a real loopback-bound listener with a wrapper reporting a `TCPAddr` containing `fe80::1`, its actually assigned port, and zone `en0`; it does not require a host link-local interface. `TestServerAddressEscapesScopedIPv6Zone` checks exact `%25` URL escaping, parsed hostname/port, and standard HTTP request construction. `Server.Address` now serializes `url.URL{Scheme, Host: net.JoinHostPort(...), Path}` so the zone is escaped while ordinary scheme/path/fallback tests continue to pass.
+
+- TDD backup: `cp metric/handler_test.go /private/tmp/semstreams-1386-handler-test.pre-ipv6.go` (original and backup MD5 `862a602a2739badd076036aba3e8dcf5`), and `cp metric/handler.go /private/tmp/semstreams-1386-handler.pre-ipv6.go` (MD5 `18319da0f541175af03067f7622077d1`).
+- Red: `go test ./metric -run '^TestServerAddressEscapesScopedIPv6Zone$' -count=1 -timeout=1m` exited 1 at the exact URL assertion: expected `%25en0`, actual `%en0`; `/private/tmp/semstreams-1386-ipv6-red.log`.
+- Green: the same command exited 0 after `net/url.URL` serialization; `/private/tmp/semstreams-1386-ipv6-green.log`.
+- Focused race: `go test -race ./metric -run '^TestServer' -count=1 -timeout=3m` exited 0 both before and after mutation restoration; `/private/tmp/semstreams-1386-ipv6-race.log`, `/private/tmp/semstreams-1386-ipv6-race-restored.log` (restored run `metric` 1.342s).
+- Address mutation post-fix: `cp metric/handler.go /private/tmp/semstreams-1386-handler.post-ipv6.before-address-mutant.go` with equal MD5 `402a77ca372271a60309ed73a61082c6`. Replaced `if s.listener != nil {` with `if false && s.listener != nil {`. `go test ./metric -run '^TestServerStartOwnsListenerAndRequiresFreshInstanceForRestart$|^TestServerAddressEscapesScopedIPv6Zone$' -count=1 -timeout=1m` exited baseline 0, mutant 1 (both scoped and ordinary assigned-endpoint assertions failed against `localhost:9090`), restored 0. Logs: `/private/tmp/semstreams-1386-mut-address-v3-{baseline,mutant,restored}.log`. Restored using `cp` from the post-fix backup; MD5 returned to `402a77ca372271a60309ed73a61082c6`.
+- Final source SHA-256: `metric/handler.go` `9df65e3bc6798937f9f32f572807b3bd5d6386f6c45e2d229d7535dd9b0b7b83`; test SHA-256: `metric/handler_test.go` `3469360c62b4baae9fbd35a1805da0509eeedb698fe6c58972141d0890006252`. These replace the two metric entries in the previous snapshot; other files and earlier unrelated mutation comparisons are unchanged. `git diff --check -- metric/handler.go metric/handler_test.go` exited 0.
+
+### Retained scoped-IPv6 correction output
+
+ipv6-red:
+
+```text
+--- FAIL: TestServerAddressEscapesScopedIPv6Zone (0.00s)
+    handler_test.go:136:
+            Error Trace:    metric/handler_test.go:136
+            Error:          Not equal:
+                            expected: "http://[fe80::1%25en0]:58623/metrics"
+                            actual  : "http://[fe80::1%en0]:58623/metrics"
+
+                            Diff:
+                            --- Expected
+                            +++ Actual
+                            @@ -1 +1 @@
+                            -http://[fe80::1%25en0]:58623/metrics
+                            +http://[fe80::1%en0]:58623/metrics
+            Test:           TestServerAddressEscapesScopedIPv6Zone
+FAIL
+FAIL    github.com/c360studio/semstreams/metric 0.435s
+FAIL
+```
+
+ipv6-green:
+
+```text
+ok      github.com/c360studio/semstreams/metric 0.348s
+```
+
+mut-address-v3-baseline:
+
+```text
+ok      github.com/c360studio/semstreams/metric 0.245s
+```
+
+mut-address-v3-mutant:
+
+```text
+--- FAIL: TestServerAddressEscapesScopedIPv6Zone (0.00s)
+    handler_test.go:136:
+            Error Trace:    metric/handler_test.go:136
+            Error:          Not equal:
+                            expected: "http://[fe80::1%25en0]:58701/metrics"
+                            actual  : "http://localhost:9090/metrics"
+
+                            Diff:
+                            --- Expected
+                            +++ Actual
+                            @@ -1 +1 @@
+                            -http://[fe80::1%25en0]:58701/metrics
+                            +http://localhost:9090/metrics
+            Test:           TestServerAddressEscapesScopedIPv6Zone
+--- FAIL: TestServerStartOwnsListenerAndRequiresFreshInstanceForRestart (0.00s)
+    handler_test.go:153:
+            Error Trace:    metric/handler_test.go:153
+            Error:          Not equal:
+                            expected: "http://127.0.0.1:58702/metrics"
+                            actual  : "http://localhost:9090/metrics"
+
+                            Diff:
+                            --- Expected
+                            +++ Actual
+                            @@ -1 +1 @@
+                            -http://127.0.0.1:58702/metrics
+                            +http://localhost:9090/metrics
+            Test:           TestServerStartOwnsListenerAndRequiresFreshInstanceForRestart
+FAIL
+FAIL    github.com/c360studio/semstreams/metric 0.361s
+FAIL
+```
+
+mut-address-v3-restored:
+
+```text
+ok      github.com/c360studio/semstreams/metric 0.247s
+```
+
+ipv6-race-restored:
+
+```text
+ok      github.com/c360studio/semstreams/metric 1.342s
+```

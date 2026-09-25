@@ -97,3 +97,25 @@ The first full `task check:push` attempt on this snapshot built successfully, th
 with `context-as-argument` at `service/service_manager_health_listener_test.go:281`.
 The helper's context parameter requires first position. This is a deterministic lint finding, not a flaky run.
 No full-suite success is claimed for that attempt (Task exit 201). Implementation review is in progress.
+
+## First implementation review
+
+Independent role: `semstreams-reviewer` (`/root/nats_flake_review`, GPT-6 Astra).
+Reviewed snapshot: `48236a57ca93c0648d6938e361938647318e3aa2`,
+against source base `50742980ea341443bb96726033c9a59e58a72fc6`.
+Verdict: **CHANGES REQUESTED**, one HIGH finding.
+
+`metric/handler.go:283` appends a scoped IPv6 zone directly into an HTTP URL. For an admitted native
+TCP endpoint such as `fe80::1%en0`, Go's URL parser requires the percent delimiter to be escaped as `%25`.
+The raw zone makes requests through Address fail before dialing. The required correction is URL serialization
+with a focused regression, preserving endpoint, scheme, path, and existing fallback behavior.
+
+The reviewer found no other blocking/high issue. Native Start proof, listener ownership, both concrete service
+bridges, the context-first lint correction, five mutation comparisons, and deterministic lifecycle histories
+were independently accepted. Custom malformed address implementations were considered and did not establish
+a production-path defect within the documented raw TCP listener scope.
+
+The second full `task check:push` attempt cleared build, lint, tagged vet, schema checks, contracts, and
+the full unit race pass. Root deliberately stopped its own process group during early integration execution
+to address the confirmed review defect. The shell exited 143; this attempt is interrupted, not a full pass.
+The integration lock and Docker resources were released. Source remains unpushed pending corrected verification.
