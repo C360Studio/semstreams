@@ -12,10 +12,11 @@ task names it with `(de1413d7)`. Design: `design.md`; rows are § 2; owner quest
 - [x] 0.1 Independent design review of `design.md` and the delta (contract § Required workflow 7); then owner
       acceptance of the table and answers to OQ1–OQ4 on #1376. Implementation waits for both and for #1380 to merge.
       **Done:** design review PASS at `95848963` and owner acceptance, option (a) on OQ1–OQ4, recorded at #1376 issuecomment-5832902240 (2026-09-25); #1380 merged as `eb955c2f`. Implementation rebased onto `97d268d8`.
-- [ ] 0.2 After #1380 merges: `task inventory:verify -- openspec/changes/agentic-loop-transition-result/inventory.md`
+- [x] 0.2 After #1380 merges: `task inventory:verify -- openspec/changes/agentic-loop-transition-result/inventory.md`
       and refresh the pins it reports moved (`recordCommittedTerminal(entity, …)` and the held-loop read shift TO;
       `handleLoopFailure`'s signature shifts C; `errLoopTimedOut` shifts H); update `base:`.
       **Not run as written (caller instruction, 2026-09-25):** the pins are pre-change evidence and are not re-pinned. `task inventory:verify` after the implementation commit reports `pins=198 ok=107 moved=38 ambiguous=18 drift=35 malformed=0 unparsed=0` (exit 1) — #1380 and this change moved them. Current lines are in the task notes below.
+      **Resolved, pins deliberately NOT refreshed:** `task inventory:verify` is red on this landed change, which is the correct reading — pins are pre-change evidence at the `f15a528e` baseline and re-pinning after landing destroys them (reviewer at `7c6d646d` re-measured the ones that matter: P3 guard results, ARH:90/139/210, H:2036 exact at the baseline).
 
 ## 1. The one decision (design § 4)
 
@@ -79,7 +80,7 @@ task names it with `(de1413d7)`. Design: `design.md`; rows are § 2; owner quest
 
 ## 3. Boundary validation — none by default (design § 4; E1 has no production trigger, OQ1)
 
-- [ ] 3.1 **[OQ1 (b) only]** In `commitTerminal` (TO:151 at `de1413d7`), the one owner — NOT the carrier's terminal
+- [x] 3.1 **[OQ1 (b) only]** In `commitTerminal` (TO:151 at `de1413d7`), the one owner — NOT the carrier's terminal
       branch at `processor/agentic-loop/component.go:2278` — `if err := c.commitTerminal(ctx, terminalOutcomeOf(result), result); err != nil {`, which `handleLoopFailure` bypasses at
       `processor/agentic-loop/component.go:2102` — `established := c.commitTerminal(errorCtx, terminalOutcome{failed: failure},` — refuse `candidate.kind() == ""` before
       `createTerminalMarker`: release the loop and return `errs.WrapFatal` carrying the build error, on the cancel
@@ -90,6 +91,7 @@ task names it with `(de1413d7)`. Design: `design.md`; rows are § 2; owner quest
       dead: `case entity.State == agentic.LoopStateComplete:` (TO:238 at `de1413d7`) and `default: reason = "unknown"`
       (TO:240-241 at `de1413d7`). Under (a): not run; the silent `fErr` skip is recorded as a residual in design § 0.
       **Not run: OQ1 ruled (a)** (#1376 issuecomment-5832902240).
+      **N/A:** OQ1 = (a) (#1376 issuecomment-5832902240); no (b) work landed.
 
 ## 4. Tests (design § 5) and spec
 
@@ -97,11 +99,12 @@ task names it with `(de1413d7)`. Design: `design.md`; rows are § 2; owner quest
       fatal); every row named, none sampled. `// spec: agentic-loop / Loop input classes settle after owner-specific
       durable done`.
       **Done, as produced rows:** `processor/agentic-loop/transition_result_test.go` — `TestFailedTerminalReadsEachProducedPairOnce`, 28 named rows with literal expectations (every produced design row A1–A8, B1–B8, C1, C2, D1–D3, the cancelled-with-error pair P1 was amended for ("D3 cancelled"), plus E1, which has no production trigger, and three rows marked "not produced" that pin a clause), and `TestTheToolLaneSettlesEachProducedErrorPairOnItsOwnDisposition`, 6 rows driven through the production heartbeat policy. Not the full state × payload × owned-elsewhere × error product the line above names: a product row's expectation would be the predicate's own formula. Narrowing the predicate's `IsTerminal()` to complete/failed (`cp` backup, md5 restored) turns only the "D3 cancelled" row red (`expected: true`, `actual: false`). The approval lane has no cheap fixture for that race, so it has no lane-disposition row.
-- [ ] 4.2 **[OQ1 (b) only]** A held loop whose event build fails is quarantined with no record written, through
+- [x] 4.2 **[OQ1 (b) only]** A held loop whose event build fails is quarantined with no record written, through
       `commitTerminal` from the carrier (`handleToolResultMessage`) and from `handleLoopFailure`; the counterexample on
       the `handleLoopFailure` path is today's record-then-Fatal (probe-confirmed) — prove it against the pre-3.1 tree
       (`cp` backup + checksum).
       **Not run: OQ1 ruled (a).**
+      **N/A:** OQ1 = (a) (#1376 issuecomment-5832902240); no (b) work landed.
 - [x] 4.3 Mutation evidence for the WIRING: delete the `failedTerminal` call at ONE site at a time and run that lane's
       failed-terminal test — approval `processor/agentic-loop/approval_loop_deadline_test.go:82` — `func TestAWarmApprovalAnswerForAnExpiredLoopSettlesTheTimeout(t *testing.T) {`, sweeper
       `processor/agentic-loop/approval_loop_deadline_test.go:143` — `func TestTheApprovalSweepSettlesAnExpiredLoopOnItsTimeout(t *testing.T) {`, tool: #1380's
@@ -118,12 +121,17 @@ task names it with `(de1413d7)`. Design: `design.md`; rows are § 2; owner quest
 
 ## 5. Gates
 
-- [ ] 5.1 `task check:push` green (build, lint, tagged vet, schema drift, contract, race unit, integration); paste the
+- [x] 5.1 `task check:push` green (build, lint, tagged vet, schema drift, contract, race unit, integration); paste the
       summary lines, not "green".
-- [ ] 5.2 `task api:compat` reports no Tier 1 break in `processor/agentic-loop` (no exported symbol changes; OQ4 (a)).
+      **Done at `9f35cd72` (2026-09-25):** build ok; lint clean (vet, fmt, revive, test-ports, nats-kv-sdk-pin, request-guard); tagged vet `integration`/`live_llm`/`e2e_process_barrier` ok; `schema:generate` then `git diff --exit-code schemas/ specs/openapi.v3.yaml` clean; `go test ./test/contract/...` ok; `go test -race ./...` 318 ok / 0 FAIL / 40 no-test-files; `scripts/run-integration-tests.sh` → `[INTEGRATION] tests complete`; exit 0. Hosted CI 8/8 green on the same head.
+- [x] 5.2 `task api:compat` reports no Tier 1 break in `processor/agentic-loop` (no exported symbol changes; OQ4 (a)).
       **Run, exit 1, not from this diff:** `task api:compat` compares HEAD with tag `v1.0.0-beta.162` and reports 15 Tier 1 breaks already on main; none in `processor/agentic-loop` names `failedTerminal`, `carrierOrder` or `persistHandlerResult`, and the diff adds or removes no exported declaration.
-- [ ] 5.3 `task e2e:agentic` not required under (a) (proposal § Impact: only a changed observable disposition gates on
+      **Re-run at `9f35cd72`:** same 15 pre-existing breaks vs `v1.0.0-beta.162`; the five under `processor/agentic-loop` (`IncrementTruncationRetry`/`ResetTruncationRetry` removed, `ResolveApprovalIfPending`, `Config.LoopsBucket`, `GovernanceDispatcher.HandleVerdict`) have 0 hits in `git diff d3f23bd0...HEAD`; the six exported declarations the diff touches are all `Test*` functions. CI `Tier 1 API Compatibility` green.
+- [x] 5.3 `task e2e:agentic` not required under (a) (proposal § Impact: only a changed observable disposition gates on
       the tier) — say so in the PR body; required only if a (b) landed.
-- [ ] 5.4 PR body: `implemented-by: <persona>`, the three mutation runs from 4.3, the OQ answers quoted from #1376.
-- [ ] 5.5 Archive: `openspec archive agentic-loop-transition-result --yes` as the last content commit; the MODIFIED
+      **Done:** (a) landed; the PR body says the tier is not required.
+- [x] 5.4 PR body: `implemented-by: <persona>`, the three mutation runs from 4.3, the OQ answers quoted from #1376.
+      **Done:** PR body carries `implemented-by`, the OQ1–OQ4 answers, and the three 4.3 site mutations (ARH:210 → 6 tests, AS:113 → 3, C:2591 → 4, from the `7c6d646d` review).
+- [x] 5.5 Archive: `openspec archive agentic-loop-transition-result --yes` as the last content commit; the MODIFIED
       block syncs into `openspec/specs/agentic-loop/spec.md`.
+      **Done:** archived in this commit; the MODIFIED block synced into `openspec/specs/agentic-loop/spec.md`.
