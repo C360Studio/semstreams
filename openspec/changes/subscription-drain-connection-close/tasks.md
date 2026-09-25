@@ -27,8 +27,8 @@
 
 Inline the mutation diffs and outputs in a PR comment. The scratchpad alone does not count.
 
-- [ ] 4.1 Put back the wait on `StatusChanged(SubscriptionClosed)`: 1.2 and 2.1 go red.
-- [ ] 4.2 Return right after native `ErrConnectionClosed` without waiting on `done`: 1.3 and 2.1 go red.
+- [x] 4.1 Put back the wait on `StatusChanged(SubscriptionClosed)`: 1.2 and 2.1 go red.
+- [x] 4.2 Return right after native `ErrConnectionClosed` without waiting on `done`: 1.3 and 2.1 go red.
 
 ## 5. Land
 
