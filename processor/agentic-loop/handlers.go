@@ -3357,8 +3357,6 @@ func (h *MessageHandler) BuildFailureEvent(loopID, reason, errorMsg string) (*ag
 	return h.buildFailureEvent(loopID, reason, errorMsg)
 }
 
-// BuildFailureMessages creates a failure event and serializes it for NATS publishing.
-// Returns the event (for graph emission) and published messages (for reactive workflows).
 // failTimedOutLoop is the one timeout arm: a loop past its deadline fails in
 // memory and returns its populated failure — the failed state, the failure
 // event and its publication — WITH a fatal error. The lane owns the commit: it
@@ -3381,6 +3379,8 @@ func (h *MessageHandler) failTimedOutLoop(loopID string, result HandlerResult, o
 	return result, errs.WrapFatal(fmt.Errorf("loop timeout exceeded"), "agentic-loop", op, "check timeout")
 }
 
+// BuildFailureMessages creates a failure event and serializes it for NATS publishing.
+// Returns the event (for graph emission) and published messages (for reactive workflows).
 func (h *MessageHandler) BuildFailureMessages(loopID, reason, errorMsg string) (*agentic.LoopFailedEvent, []PublishedMessage, error) {
 	failure, err := h.buildFailureEvent(loopID, reason, errorMsg)
 	if err != nil {
