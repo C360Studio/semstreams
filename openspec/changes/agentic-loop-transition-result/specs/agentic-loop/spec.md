@@ -153,9 +153,9 @@ every lane that produces it.
   that gates the loop for approval is written before its approval request is published; any other non-terminal result
   publishes every output first and writes the record by compare-and-swap after; a result carrying a completion or
   failure event goes to the terminal owner
-- **AND** a gate created by a tool result, by an operator's rejection or by the sweep's auto-reject is written before
-  it is published on every one of those lanes, and an ordinary advance produced on the model, tool or approval lane or
-  by the sweep publishes before it writes on every one of them
+- **AND** a gate, which only the tool-result lane creates, is written before it is published, and an ordinary
+  advance produced on the model, tool or approval lane or by the sweep publishes before it writes on every one of
+  them
 
 #### Scenario: A terminal-guard result is settled by the record, whichever lane produced it
 
