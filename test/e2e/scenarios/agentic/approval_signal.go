@@ -695,6 +695,112 @@ func (s *Scenario) refuseNonCanonicalSignal(ctx context.Context, result *scenari
 	return nil
 }
 
+// signalsDroppedMetric counts control signals the loop acknowledged without
+// effect, by reason.
+const signalsDroppedMetric = "semstreams_agentic_loop_signals_dropped_total"
+
+// refuseNonCanonicalSignalCarrier asserts the UserSignal CARRIER's own
+// loop-token refusal (UserSignal.Validate, agentic/user_types.go), which
+// refuse-non-canonical-signal cannot reach: the dispatch admission gate
+// refuses a malformed token before any UserSignal is built (#1238).
+//
+// The carrier is the one the loop validates on receipt (handleSignalMessage),
+// and the signal lane is open to any publisher. So the signal is published
+// straight onto the lane, with the cancelled signal loop's token re-spelled
+// out of canonical form. The production marshaller refuses to author that
+// payload (it runs the same Validate), so the bytes are built by marshalling
+// the canonical signal and re-spelling its one token occurrence.
+//
+// Two observations, both required:
+//   - the loop TERMINATES the delivery — the agentic-loop spec's disposition
+//     for an input the lane cannot accept — read from the server's
+//     MSG_TERMINATED advisory for the exact stream sequence published, on the
+//     exact consumer the loop runs over the lane;
+//   - the signal is NOT acknowledged as a stale drop. Without the carrier
+//     refusal the re-spelled token misses memory and names no record, so
+//     settleUncancellableLoop acknowledges it and moves
+//     signals_dropped_total{reason="stale_loop_id"}; that is the effect whose
+//     absence is asserted.
+func (s *Scenario) refuseNonCanonicalSignalCarrier(ctx context.Context, result *scenarios.Result) error {
+	loopID, _ := result.Details["signal_loop_id"].(string)
+	if loopID == "" {
+		return fmt.Errorf("signal carrier refusal proof requires the cancelled loop id")
+	}
+	malformed := nonCanonicalToken(loopID)
+	signal := agentic.UserSignal{
+		SignalID:  uuid.NewString(),
+		Type:      agentic.SignalCancel,
+		LoopID:    loopID,
+		UserID:    signalLoopOwner,
+		Timestamp: time.Now().UTC(),
+	}
+	canonical, err := json.Marshal(message.NewBaseMessage(signal.Schema(), &signal, "e2e-test"))
+	if err != nil {
+		return fmt.Errorf("marshal the canonical signal: %w", err)
+	}
+	if n := bytes.Count(canonical, []byte(loopID)); n != 1 {
+		return fmt.Errorf("canonical signal carries loop token %s %d times, want exactly 1", loopID, n)
+	}
+	data := bytes.Replace(canonical, []byte(loopID), []byte(malformed), 1)
+
+	js, err := s.nats.Client().JetStream()
+	if err != nil {
+		return fmt.Errorf("open JetStream: %w", err)
+	}
+	stream, err := js.Stream(ctx, agentStream)
+	if err != nil {
+		return fmt.Errorf("open %s stream: %w", agentStream, err)
+	}
+	consumer, err := laneConsumerName(ctx, stream, consumerLane{
+		stream: agentStream, owner: loopLaneOwner, subjectRoot: "agent.signal",
+	})
+	if err != nil {
+		return fmt.Errorf("find the loop's signal consumer: %w", err)
+	}
+
+	stale := map[string]string{"reason": "stale_loop_id"}
+	before, err := s.metricWithLabels(ctx, signalsDroppedMetric, stale)
+	if err != nil {
+		return fmt.Errorf("read stale signal drops before the malformed signal: %w", err)
+	}
+
+	// Subscribed and flushed BEFORE the publish, so the advisory cannot be
+	// emitted ahead of the subscription that is waiting for it.
+	conn := s.nats.Client().GetConnection()
+	advisories, err := conn.SubscribeSync(msgTerminatedAdvisoryPrefix + agentStream + "." + consumer)
+	if err != nil {
+		return fmt.Errorf("subscribe to %s terminations: %w", consumer, err)
+	}
+	defer func() { _ = advisories.Unsubscribe() }()
+	// FlushWithContext refuses a context without a deadline.
+	flushCtx, cancelFlush := context.WithTimeout(ctx, 5*time.Second)
+	err = conn.FlushWithContext(flushCtx)
+	cancelFlush()
+	if err != nil {
+		return fmt.Errorf("flush the advisory subscription: %w", err)
+	}
+
+	ack, err := js.Publish(ctx, "agent.signal."+malformed, data)
+	if err != nil {
+		return fmt.Errorf("publish the malformed signal: %w", err)
+	}
+	if err := awaitTermination(ctx, advisories, ack.Sequence, 15*time.Second); err != nil {
+		return fmt.Errorf("the loop did not terminate a signal naming non-canonical loop token %s "+
+			"(stream %s seq %d, consumer %s): %w", malformed, agentStream, ack.Sequence, consumer, err)
+	}
+
+	after, err := s.metricWithLabels(ctx, signalsDroppedMetric, stale)
+	if err != nil {
+		return fmt.Errorf("read stale signal drops after the malformed signal: %w", err)
+	}
+	if after != before {
+		return fmt.Errorf("%s%v moved %v -> %v: the malformed signal was acknowledged as a stale drop "+
+			"instead of refused", signalsDroppedMetric, stale, before, after)
+	}
+	result.Details["signal_carrier_refusal_stream_seq"] = ack.Sequence
+	return nil
+}
+
 // publishTask marshals a task through the production BaseMessage envelope and
 // publishes it on the agent.task.* input port subject.
 func (s *Scenario) publishTask(ctx context.Context, subject string, task agentic.TaskMessage) error {

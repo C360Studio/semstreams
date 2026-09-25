@@ -273,6 +273,10 @@ func (s *Scenario) stages() []agenticStage {
 		{name: "refuse-non-canonical-approval-carrier", fn: s.refuseNonCanonicalApprovalCarrier, asserts: true},
 		{name: "walk-signal-path", fn: s.walkSignalPath, asserts: true},
 		{name: "refuse-non-canonical-signal", fn: s.refuseNonCanonicalSignal, asserts: true},
+		// refuse-non-canonical-signal-carrier proves the UserSignal carrier's
+		// own token refusal on the signal lane, which the dispatch gate the
+		// stage above proves never lets a cancel reach (#1238).
+		{name: "refuse-non-canonical-signal-carrier", fn: s.refuseNonCanonicalSignalCarrier, asserts: true},
 		// verify-approval-across-replacement runs after the approval walk, not
 		// before it: the walk asserts the gated tool has never succeeded on the
 		// running process, and this stage's approved call makes that one.
