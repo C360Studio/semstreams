@@ -17,14 +17,43 @@ thin and must point to exactly one canonical contract.
   - Canonical: `.agents/contracts/semstreams-reviewer.md`
   - Claude: `.claude/agents/semstreams-reviewer.md`
   - Codex: `.codex/agents/semstreams-reviewer.toml`
-- SemStreams explorer (enumerate-only; cheap model; writes the inventory file the architect may start from)
+- SemStreams explorer (enumerate-only; writes the inventory file the architect may start from)
   - Canonical: `.agents/contracts/semstreams-explorer.md`
   - Claude: `.claude/agents/semstreams-explorer.md`
   - Codex: `.codex/agents/semstreams-explorer.toml`
-- SemStreams judge (one bounded question over collected evidence; read-only; the one role pinned to Fable)
+- SemStreams judge (one bounded question over collected evidence; read-only; platform-specific model selection)
   - Canonical: `.agents/contracts/semstreams-judge.md`
   - Claude: `.claude/agents/semstreams-judge.md`
   - Codex: `.codex/agents/semstreams-judge.toml`
+
+## Codex model routing
+
+Project adapters select these defaults for the role's existing contract and permissions:
+
+| Role | Model | Reasoning effort |
+| --- | --- | --- |
+| Explorer | `gpt-6-luna` | `high` |
+| Developer | `gpt-6-sol` | `high` |
+| Architect | `gpt-6-astra` | Inherit the task's resolved effort; no adapter override |
+| Reviewer | `gpt-6-astra` | `high` |
+| Judge | Explicit caller selection under the judge contract | Explicit caller selection; no adapter override |
+
+Codex applies adapter model and effort values after resolving spawn settings, agent defaults, and parent settings.
+The architect sets only the model, preserving that resolved effort. The judge omits both keys so the caller can
+select them. See [Codex subagent configuration](https://learn.chatgpt.com/docs/agent-configuration/subagents).
+The role choices are project defaults informed by [current model guidance](https://learn.chatgpt.com/docs/models);
+quality, latency, and cost effects still need measurement on project work.
+
+Before spawning a Codex judge, the caller must read the
+[judge selection contract](contracts/semstreams-judge.md#codex-caller-selection-prerequisite), identify every model
+that produced a judgment under examination, and explicitly select the model and effort through the spawn fields.
+Use fresh, bounded evidence paths (`fork_turns: "none"` when available), and include the producer provenance and
+selected route in the task. A different coordinator model is insufficient. Missing provenance, an unavailable
+route, or judgments spanning both configured routes returns to the owner; never silently inherit or fall back.
+The contract defines the eligible routes and the judge's stop condition. Model diversity does not prove independence.
+
+Claude keeps its own adapter frontmatter, including the judge's Fable pin and existing Opus fallback, documented in
+[Claude model selection](contracts/semstreams-judge.md#claude-model-selection).
 
 ## Shared work protocol
 
@@ -78,7 +107,8 @@ Run this procedure after changing a contract, adapter, or repository routing rul
 7. For every row in the shared-skills table, confirm the canonical file and Claude adapter exist, the adapter
    points to that canonical file and says to read it fully, and it contains no copied checklist. Resolve the
    `preflight` name mapping explicitly. Confirm both repository entry points route to the same shared skills.
-8. Validate changed skill frontmatter and relative links. A structurally valid adapter does not prove its
+8. Confirm Codex model and effort settings match the table above, and that the judge leaves both unset.
+9. Validate changed skill frontmatter and relative links. A structurally valid adapter does not prove its
    instructions make the right decisions; walk the applicable scenarios below without private memory.
 
 Use these semantic fixtures when reading the routing text:
@@ -92,6 +122,10 @@ Use these semantic fixtures when reading the routing text:
   recorded); the architect may start from that file and the reviewer re-derives it independently.
 - "Which of these two shapes / is this finding real / what should the owner rule on X" routes to SemStreams judge
   (one bounded question over evidence given as paths; a recommendation and the ruling it prepares — the owner rules).
+- "Judge a Sol/Luna-produced judgment in Codex" requires an explicit Astra/xhigh route and fresh bounded evidence.
+- "Judge an Astra-produced judgment in Codex" requires an explicit Sol/xhigh route and fresh bounded evidence.
+- "Judge mixed Astra/Sol judgments, or unknown model provenance" returns to the owner with no eligible configured
+  different-model route. Missing caller selection or unavailable routing also stops before judgment.
 - "Check an isolated Go idiom" may use a generic Go agent only as a second pass.
 - "Add a payload" reaches explicit registration and the applicable production/E2E composition roots.
 - "Verify an integration change" reaches the canonical runner and its shared host lock.
