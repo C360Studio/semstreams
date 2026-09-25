@@ -131,3 +131,24 @@ func TestAnApprovalForAnExpiredLoopDispatchesNothing(t *testing.T) {
 		})
 	}
 }
+
+// TestTheApprovalSweepSettlesAnExpiredLoopOnItsTimeout is the same defect one
+// caller over: the approval-timeout sweeper feeds its auto-reject through
+// HandleApprovalResponse, and on a loop past its LOOP deadline that returns the
+// populated timeout failure with its error. The sweeper logged the error and
+// dropped the failure, leaving memory terminal and the record gated.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestTheApprovalSweepSettlesAnExpiredLoopOnItsTimeout(t *testing.T) {
+	a := newColdApproval(t, nil, func(e *agentic.LoopEntity) {
+		e.TimeoutAt = time.Now().Add(-time.Minute)
+		e.PendingApproval.RequestedAt = time.Now().Add(-2 * time.Hour)
+	})
+	rebuilt, err := a.c.settleApprovalResponseWithoutLoop(t.Context(), a.answer(agentic.ApprovalDecisionReject))
+	require.NoError(t, err)
+	require.True(t, rebuilt, "fixture: this process holds the gated loop and sweeps its deadline")
+
+	a.c.sweepExpiredApprovals(t.Context())
+
+	requireLoopTimedOut(t, a)
+}

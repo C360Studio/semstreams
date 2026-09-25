@@ -191,5 +191,7 @@ Owner-run review of `c45d1063` (PR #1366 issuecomment-5827554362). Spec text cha
   a populated timeout failure (reject), warm and cold. `HandleApprovalResponse` now fails the loop on the timeout
   before it dispatches anything, and the approval lane commits a terminal result a handler returns with its error.
   Scenario: "An approval answer does not outlive its loop's deadline". Tests: `approval_loop_deadline_test.go`.
+  The approval-timeout sweeper had the same drop one caller over (its auto-reject on a loop past its own deadline
+  logged the timeout failure and discarded it); it now commits that failure through the terminal owner too.
 - P3: `submitApproval`'s 409 retry was justified by an event-before-record race the write-then-publish gate order rules
   out, and every caller reads the record awaiting before it answers. The retry is removed; a 409 fails the walk.

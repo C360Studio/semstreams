@@ -110,6 +110,23 @@ func (c *Component) sweepExpiredApprovals(ctx context.Context) {
 				slog.String("call_id", cand.CallID))
 			continue
 		}
+		if err != nil && result.State.IsTerminal() && !result.terminalOwnedElsewhere {
+			// The loop's own deadline passed before its approval's did, and the
+			// handler failed it on the timeout (failTimedOutLoop). That failure is
+			// the loop's settlement: commit it through the terminal owner, as the
+			// approval lane does. Dropping it here left memory terminal and the
+			// record gated. No auto-reject was applied, so nothing is echoed.
+			c.logger.Warn("approval timeout auto-reject found the loop past its own deadline",
+				slog.String("loop_id", cand.LoopID),
+				slog.String("call_id", cand.CallID),
+				slog.String("error", err.Error()))
+			if commitErr := c.persistHandlerResult(ctx, result, writeThenPublish); commitErr != nil {
+				c.logger.Warn("approval timeout sweep did not commit the loop's timeout failure",
+					slog.String("loop_id", cand.LoopID),
+					slog.String("error", commitErr.Error()))
+			}
+			continue
+		}
 		if err != nil {
 			c.logger.Error("approval timeout auto-reject failed",
 				slog.String("loop_id", cand.LoopID),
