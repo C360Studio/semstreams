@@ -1,0 +1,11 @@
+--- /tmp/semstreams-gh1292-model-mutations.TILVxn/component.go.bak	2026-09-26 07:53:23
++++ processor/graph-index/component.go	2026-09-26 07:53:30
+@@ -1571,7 +1571,7 @@
+ 		// Required writes did not all land — withhold readiness until re-index (P1b).
+ 		// Do NOT store the projection baseline, so the next delivery re-attempts rather
+ 		// than being suppressed as a no-op.
+-		c.markEntityFailed(resolvedID)
++		// mutation: suppress required-write failure tracking
+ 		return errs.WrapTransient(writeErr, "Component", "processEntityUpdateFromData",
+ 			fmt.Sprintf("index writes failed for %s after %d attempts", resolvedID, indexWriteMaxAttempts))
+ 	}

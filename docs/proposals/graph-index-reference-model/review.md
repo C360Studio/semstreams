@@ -68,3 +68,27 @@ classified refusal after injected write failure. The early-bootstrap mutation no
 This supersedes the initial proposed successful status-reader adapter and direct computeIndexStatus unit claim.
 Actual computeIndexStatus assembly, server LastSeq and published-status evidence remain required in the existing
 real-NATS confirmation. No runtime/helper change, SDK shim or new behavioral approval is implied.
+
+## Implementation review
+
+Independent implementation review initially requested two corrections: stale-work parity did not assert the
+pending revision boundary, and hydration chose its head-bearing owner using map iteration. Both were corrected:
+completed parity requires exact caught-up revisions, the older/newer work boundaries are asserted separately,
+and hydration selects the lowest live owner deterministically. Narrow hash comparison confirmed no unrelated edits.
+
+Final verdict: **APPROVE** at a1307297 plus the three new test files. Approved SHA-256 values:
+
+| Test file | SHA-256 |
+| --- | --- |
+| reconciliation_model_helpers_test.go | 88b74689b3703094282577e21c893b51666722beb08856033092a52efba6db27 |
+| reconciliation_model_test.go | 69aecde621c73224fd2e3a9638b69c72bb46e1162a63b83e1fcf421c7ad74397 |
+| reconciliation_prop_test.go | c2d5dea64bbc63312637f8fa8f3a83a8efd1af90bef350cbd63ac46ce3e1b0d5 |
+
+The reviewer inspected all three files and independently verified the raw patches, logs, commands and restored
+source checksums. Seeds 1292/1293 and default100 passed under race in 2.29/2.25/2.40 seconds. All four production
+mutations triggered their intended assertions. A synthetic suffix mismatch shrank to one action, replayed the same
+assertion and passed after restoration. The reviewer ran no tests and wrote no files.
+
+[Execution evidence](evidence/execution.md) and [sensitivity evidence](evidence/evidence.md) retain exact commands,
+source identities, patches and logs. SHA256SUMS binds the persisted copies to the reviewed artifacts.
+Full pre-push gates and existing real-NATS confirmation remain pending at this checkpoint.

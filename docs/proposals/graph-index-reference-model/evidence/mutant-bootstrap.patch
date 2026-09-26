@@ -1,0 +1,11 @@
+--- /tmp/semstreams-gh1292-model-mutations.TILVxn/watermark.go.bak	2026-09-26 07:52:34
++++ processor/graph-index/watermark.go	2026-09-26 07:52:42
+@@ -134,7 +134,7 @@
+ // there would conflate "never built" with "built, then broke", and the two want
+ // different operator responses.
+ func (c *Component) latchBootstrap(status graph.IndexStatusResponse) graph.IndexStatusResponse {
+-	if status.Ready || c.initialBuildApplied(status.IndexedRevision) {
++	if status.Ready || c.initialEnumerationComplete.Load() { // mutation: latch before work
+ 		c.indexBootstrapped.Store(true)
+ 	}
+ 	status.BootstrapComplete = c.indexBootstrapped.Load()
