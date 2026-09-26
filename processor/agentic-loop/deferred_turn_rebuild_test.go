@@ -333,7 +333,7 @@ func TestTheAgenticTierCarriesADeferredTurnPastARebuiltToolCall(t *testing.T) {
 	require.NoError(t, c.restoreLoopFromEvidence(t.Context(), rebuildLoopID, adopted, ""))
 	require.Contains(t, logs.String(), "replayed the deferred turn")
 
-	call := agentic.ToolCall{ID: "call-tier", Name: "query_entity", Arguments: map[string]any{"entity_id": "drawer"}}
+	call := agentic.ToolCall{ID: "call-tier", Name: "query_entity", Arguments: map[string]any{"entity_id": "acme.ops.semstreams.agentic.sensor.drawer"}}
 	dispatched, err := h.HandleModelResponse(t.Context(), rebuildLoopID, agentic.AgentResponse{
 		RequestID:    first.RequestID,
 		Status:       agentic.StatusToolCall,
