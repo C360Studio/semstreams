@@ -165,9 +165,11 @@ type Component struct {
 	// testLineageWriteHook injects lineage-write outcomes without NATS. Always
 	// nil in production.
 	testLineageWriteHook func(context.Context, string, map[string]any) error
-	// testCarrierHook, if non-nil, is called by the loop-record carrier at two
-	// named stages of a non-terminal result (#1377, design § 3.3): "checked"
-	// after persistHandlerResult's entry check, and "published" in
+	// testCarrierHook, if non-nil, is called by the loop-record carrier at
+	// three named stages of a non-terminal result (#1377, design § 3.3):
+	// "entered" on entry, before the audit attempt and the entry check (the
+	// handler has returned; Codex merge review finding 1); "checked" after
+	// persistHandlerResult's entry check; and "published" in
 	// publishThenPersistResultState after publishResults and before the
 	// request is stamped. Tests pause there to force a cancel into the
 	// sub-window orderings. Precedent: testPublishHook. Always nil in
@@ -2326,6 +2328,12 @@ const graphWritePublishBudget = 2 * time.Second
 // A required persistence or publication failure leaves the joined delivery in
 // an unknown partial state; the caller quarantines rather than claiming done.
 //
+// A non-terminal result whose loop went terminal in memory, or was released,
+// after the handler returned is refused before any work is published or any
+// loop record written (#1377 W3/W4) — but only after its audit attempt: the
+// observations the handler already collected are recorded first, as for any
+// ordinary attempt, because this carrier is their only durable attempt.
+//
 // Any other NON-terminal result that does not gate the loop publishes FIRST
 // and then writes by compare-and-swap, on the model-response, tool-result and
 // approval lanes and the approval-timeout sweeper alike (#1330 L4a; #1362 task
@@ -2361,13 +2369,32 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 		return c.settleTerminalGuard(ctx, result, nil)
 	}
 
+	if !terminal && c.testCarrierHook != nil {
+		c.testCarrierHook(result.LoopID, "entered")
+	}
+
+	// The audit attempt runs before the entry check below, on the refused
+	// branch as on every other (#1377, Codex merge review finding 1). Unlike
+	// a handler-entry guard, which refuses before it collects anything, a
+	// result reaching this carrier already carries observations the handler
+	// collected while it applied the input — a completed tool's result and
+	// its dispatch arguments, whose pending entry is gone — and this is their
+	// only durable attempt. A non-terminal result's observations are built
+	// by the handler and the batch reads nothing the cancel lane tears down
+	// (resultTerminalObservation reads the loop only for a terminal result),
+	// so recording them after the loop went terminal or was released records
+	// exactly what was collected. What the refusal still suppresses is work:
+	// every publication and every loop-record write.
+	c.recordHandlerResultTrajectory(ctx, result)
+
 	if !terminal {
 		// A non-terminal result whose loop went terminal in memory, or is no
 		// longer held, meets a terminal commit in flight on another lane — the
 		// cancel lane, or a lost compare-and-swap that released it (#1377 W3,
 		// W4). The handler's own guard ran before the loop moved, so it could
-		// not see this. This delivery owns no terminal and must publish and
-		// write nothing: the record decides, as it does for a guard result.
+		// not see this. This delivery owns no terminal and must publish no
+		// work and write no loop record: the record decides, as it does for a
+		// guard result. Its audit attempt has already run, above.
 		// A publication already in flight past this check is the stated
 		// residual; the write below refuses to render a terminal snapshot
 		// (writeLoopRecord), so it never lands a second terminal writer.
@@ -2382,8 +2409,6 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 			c.testCarrierHook(result.LoopID, "checked")
 		}
 	}
-
-	c.recordHandlerResultTrajectory(ctx, result)
 
 	if terminal {
 		// A terminal result mints no request — its one publication is the

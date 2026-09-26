@@ -35,6 +35,7 @@ import (
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
+	"github.com/c360studio/semstreams/storage/storeregistry"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -970,4 +971,166 @@ func TestACancelBetweenTheCarriersCheckAndItsPublicationLetsOnePublicationOut(t 
 	require.Equal(t, "cancel-lane", writes[0].lane)
 	require.Equal(t, agentic.LoopStateCancelled, writes[0].state)
 	requireLaneNotLatched(t, lane, "agent.approval_response")
+}
+
+// healthyRecorder replaces the lane's trajectory recorder with one over an
+// in-memory fact bucket and evidence store that accept every write, so any
+// observation the carrier attempts is durable and readable, and any audit
+// failure is collected rather than lost.
+type healthyRecorder struct {
+	bucket *trajectoryTestBucket
+	store  *trajectoryTestStore
+	mu     sync.Mutex
+	failed []trajectoryAuditFailure
+}
+
+func installHealthyRecorder(t *testing.T, c *Component) *healthyRecorder {
+	t.Helper()
+	h := &healthyRecorder{
+		bucket: &trajectoryTestBucket{values: make(map[string][]byte)},
+		store:  &trajectoryTestStore{values: make(map[string][]byte)},
+	}
+	registry := storeregistry.New()
+	require.NoError(t, registry.Register("objectstore", h.store))
+	c.trajectoryRecorder = newTrajectoryRecorder(h.bucket, registry, "objectstore", func(f trajectoryAuditFailure) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		h.failed = append(h.failed, f)
+	})
+	return h
+}
+
+// toolCompletion returns the durable tool.completed fact for callID and the
+// completion evidence its fact references, or ok=false when none was stored.
+func (h *healthyRecorder) toolCompletion(t *testing.T, callID string) (trajectoryToolCompletionEvidence, bool) {
+	t.Helper()
+	h.bucket.mu.Lock()
+	values := make([][]byte, 0, len(h.bucket.values))
+	for _, v := range h.bucket.values {
+		values = append(values, v)
+	}
+	h.bucket.mu.Unlock()
+	for _, raw := range values {
+		var fact agentic.TrajectoryFactV1
+		require.NoError(t, json.Unmarshal(raw, &fact))
+		if fact.Kind != agentic.TrajectoryKindToolCompleted || fact.Evidence == nil {
+			continue
+		}
+		h.store.mu.Lock()
+		body, ok := h.store.values[fact.Evidence.Key]
+		h.store.mu.Unlock()
+		require.True(t, ok, "the fact references evidence the store does not hold")
+		var envelope agentic.TrajectoryEvidenceV1
+		require.NoError(t, json.Unmarshal(body, &envelope))
+		var evidence trajectoryToolCompletionEvidence
+		require.NoError(t, json.Unmarshal(envelope.Body, &evidence))
+		if evidence.Result.CallID == callID {
+			return evidence, true
+		}
+	}
+	return trajectoryToolCompletionEvidence{}, false
+}
+
+// A tool result finishes HandleToolResult while a sibling is still owed, then
+// meets a cancel before the carrier's entry check (#1377, Codex merge review
+// finding 1). The handler has already collected the completed call's
+// tool.completed observation — its original result and dispatch arguments —
+// and removed its pending entry, so the carrier is that evidence's only
+// durable attempt. The carrier records it, and still publishes no work (the
+// sibling's tool.execute) and writes no loop record.
+//
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
+func TestACarrierRefusalStillRecordsTheEvidenceTheHandlerCollected(t *testing.T) {
+	for _, released := range []bool{true, false} {
+		name := "the cancel released the loop"
+		if !released {
+			name = "the cancel moved the loop terminal in memory, its commit in flight"
+		}
+		t.Run(name, func(t *testing.T) {
+			lane := startRaceLane(t)
+			c, h := lane.c, lane.h
+			born, err := h.HandleTask(t.Context(), TaskMessage{
+				TaskID: "task-evidence", Role: "general", Model: "test-model", Prompt: bornLoopPrompt,
+			})
+			require.NoError(t, err)
+			loopID := born.LoopID
+			require.NoError(t, c.createLoopState(t.Context(), loopID))
+			require.NoError(t, c.publishResults(t.Context(), born))
+			batch := agentic.AgentResponse{
+				RequestID: mintedRequest(t, born), Status: agentic.StatusToolCall, FinishReason: "tool_calls",
+				Message: agentic.ChatMessage{Role: "assistant", ToolCalls: []agentic.ToolCall{
+					{ID: "call-first", Name: "search", Arguments: map[string]any{"q": "first"}},
+					{ID: "call-sibling", Name: "search", Arguments: map[string]any{"q": "sibling"}},
+				}},
+			}
+			retainModelResponse(t, lane.client, batch)
+			dispatch, err := h.HandleModelResponse(t.Context(), loopID, batch)
+			require.NoError(t, err)
+			require.NoError(t, c.persistHandlerResult(t.Context(), dispatch))
+			first, _ := dispatchedToolCall(t, dispatch)
+			require.Equal(t, "call-first", first.ID)
+
+			recorder := installHealthyRecorder(t, c)
+			bucket := newRaceBucket(c.loopsBucket, loopID)
+			c.loopsBucket = bucket
+			pause := newStagePause(loopID, "entered")
+			c.testCarrierHook = pause.hook
+			executionsBefore := toolExecutionsOn(t, lane.client, loopID)
+			requestsBefore := messagesOn(t, lane.client, "agent.request."+loopID)
+
+			resultMsg, resultDone := deliverHeartbeatOn(t, lane, "tool.result", baseMessageBytes(t, &agentic.ToolResult{
+				CallID: first.ID, Name: first.Name, Content: "the first answer, in full", LoopID: loopID,
+				RequestID: first.RequestID, ExecutionID: first.ExecutionID, CallOrdinal: first.CallOrdinal,
+			}))
+			waitFor(t, pause.reached, "carrier entered with the handler's result")
+			held, err := h.GetLoop(loopID)
+			require.NoError(t, err)
+			require.False(t, held.State.IsTerminal(), "fixture: the handler returned a non-terminal result")
+
+			var signalDone chan struct{}
+			var signalMsg *loopSettlementMsg
+			if released {
+				signalMsg, signalDone = deliverOn(t, lane, "agent.signal", cancelSignalBytes(t, loopID))
+				waitFor(t, signalDone, "signal callback returned")
+				_, heldErr := h.GetLoop(loopID)
+				require.Error(t, heldErr, "fixture: the cancel released the loop")
+			} else {
+				bucket.pauseMarker.Store(true)
+				signalMsg, signalDone = deliverOn(t, lane, "agent.signal", cancelSignalBytes(t, loopID))
+				waitFor(t, bucket.markerReached, "cancel lane at COMPLETE_ create")
+				held, err := h.GetLoop(loopID)
+				require.NoError(t, err)
+				require.Equal(t, agentic.LoopStateCancelled, held.State, "fixture: terminal in memory")
+			}
+
+			close(pause.release)
+			waitFor(t, resultDone, "tool result callback returned")
+			evidence, stored := recorder.toolCompletion(t, first.ID)
+			t.Logf("%s: %s; evidence stored=%v; writes %+v", name, heartbeatDisposition(resultMsg), stored, bucket.recorded())
+			assert.True(t, stored, "the completed tool's tool.completed fact survives the carrier's refusal")
+			assert.Equal(t, "the first answer, in full", evidence.Result.Content, "with its original result")
+			assert.Equal(t, map[string]any{"q": "first"}, evidence.DispatchArguments, "and its dispatch arguments")
+			recorder.mu.Lock()
+			assert.Empty(t, recorder.failed, "the healthy recorder reports no audit failure")
+			recorder.mu.Unlock()
+			assert.Equal(t, executionsBefore, toolExecutionsOn(t, lane.client, loopID),
+				"the sibling's tool.execute is not published")
+			assert.Equal(t, requestsBefore, messagesOn(t, lane.client, "agent.request."+loopID), "no request is published")
+			assert.Zero(t, resultMsg.terms.Load())
+			if released {
+				assert.Equal(t, int32(1), resultMsg.acks.Load(), "the cancelled record settles the result")
+				assert.Len(t, bucket.recorded(), 1, "only the cancel lane wrote the record")
+			} else {
+				assert.Equal(t, int32(1), resultMsg.naks.Load(), "the live record retries the result")
+				assert.Empty(t, bucket.recorded(), "the carrier writes no loop record")
+				close(bucket.markerRelease)
+				waitFor(t, signalDone, "signal callback returned")
+				writes := bucket.recorded()
+				require.Len(t, writes, 1)
+				require.Equal(t, "cancel-lane", writes[0].lane)
+			}
+			require.Equal(t, int32(1), signalMsg.acks.Load())
+			requireLaneNotLatched(t, lane, "tool.result")
+		})
+	}
 }

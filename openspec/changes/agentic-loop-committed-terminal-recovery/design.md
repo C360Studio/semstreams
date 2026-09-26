@@ -220,7 +220,7 @@ every row (2026-09-22 rule).
 | Window | Path | Existing durable fact | Guaranteed | Only bounded | Smallest fix, seam | (a) = epic amendment? |
 |---|---|---|---|---|---|---|
 | **W1** lost record CAS after marker + event (C:2242-2250; S:1617-1619) | **(a)** documented. (b)/(c): warm lanes reading the marker → own design (#1362 ruling 2) → returned with (a) | `COMPLETE_<loopID>` (TO:84), adopted by the owner's step 1 (TO:262-313) | the marker is never overwritten; a same-kind later terminal adopts it, republishes the saved event, writes the record terminal (TO:171-208); a different kind is refused (TO:296) and quarantined, first terminal wins (S:1612-1614); the redelivered terminal input is acknowledged as older (S:1623-1624) | the loop resumes ordinary work in whichever process holds it next, until its own terminal: its remaining iteration cap or `timeout_at` (no time bound if zero, or while gated); sources: a second process, this process's step-0 adopt on a loop it still held (LE:416-423), a spawn-path birth failure under a producer-supplied loop ID (MIG:2019) | none | **YES** — the first clause is not met between the lost write and the loop's next terminal |
-| **W2** sweeper terminal commits marker, publish fails (AS:152-163; S:1620-1623) | **(a)** documented, recommended. **(b)** the approval cold branch adopts a failed marker under the gated record (OQ2, a reinterpretation of ruling 4's (b)) | `COMPLETE_<loopID>` and the gated record (`awaiting_approval`, `pending_approval`) read at ARH:364-380 | (a): the record converges on the next answer to the gate; reject, and any answer past `timeout_at`, dispatch nothing (ARH:101; ALD:219-241); an approve at the cap dispatches once and the terminal is adopted when its result completes the batch (H:3005-3037 → TO:262). (b): nothing is dispatched; the answer adopts the terminal and is acknowledged inapplicable | until the next answer (no time bound: parked `awaiting_approval`); a cancel of the loop is retried to `MaxDeliver` exhaustion and observed in the MaxDeliver ledger, never applied (OQ7); (a) admits one approved call after the durable terminal | (a) none. (b) ~20 lines after ARH:380 + a marker-read helper, via `seatRecordToFail` + `handleLoopFailure` (ARH:421-431) | (a) **YES**, for the one approved call and for the cancel that cannot land. (b): the cancel half stays (OQ7) |
+| **W2** sweeper terminal commits marker, publish fails (AS:152-163; S:1620-1623) | **(a)** documented, recommended. **(b)** the approval cold branch adopts a failed marker under the gated record (OQ2, a reinterpretation of ruling 4's (b)) | `COMPLETE_<loopID>` and the gated record (`awaiting_approval`, `pending_approval`) read at ARH:364-380 | (a): the record converges on the next answer to the gate; reject, and any answer past `timeout_at`, dispatch nothing (ARH:101; ALD:219-241); an approve at the cap dispatches once and the terminal is adopted when its result completes the batch (H:3005-3037 → TO:262). (b): nothing is dispatched; the answer adopts the terminal and is acknowledged inapplicable | until the next answer (no time bound: parked `awaiting_approval`); a cancel of the loop is retried to `MaxDeliver` exhaustion and observed in the MaxDeliver ledger, never applied (OQ7); (a) admits one approved call after the durable terminal; an approved terminal tool (`decide`, `StopLoop`) derives a completion that the saved failure refuses as a different kind — quarantined, the record non-terminal, converging only on a later same-kind terminal or not at all (Codex merge review at `0bcc9f12`, finding 2: a widening of the same (a) bound, shown here for the owner) | (a) none. (b) ~20 lines after ARH:380 + a marker-read helper, via `seatRecordToFail` + `handleLoopFailure` (ARH:421-431) | (a) **YES**, for the one approved call and for the cancel that cannot land. (b): the cancel half stays (OQ7) |
 | **W3** cancel lands while the loop is held, after `AddPendingTool` (PROBE:373; ARH:107 → H:2036 → C:2261) | **fix** (no (a): the coordinating read rules "not supported" unavailable). OQ3: (i) entry check, (ii) entry check + render-time refusal (recommended) | the loop's in-memory terminal (the cancel lane's `CancelLoop`, ST:1925-1959) and its record (`readLoopRecord`, LE:282) | (ii): a non-terminal result reaching the carrier after the cancel committed in memory publishes nothing and writes nothing; one that passed the check writes nothing once the loop is terminal or released at its render; the delivery is retried or acknowledged by the record and its redelivery is settled by the lane's cold branch (ARH:368-380); exactly one terminal-record writer (TO:225-230). (i): the first sentence only | a cancel inside one publish latency after the carrier's check lets one publication out, and the owner's marker may land before that publication's PubAck: work published after the durable terminal; the executor never stops it (P5) and its result is acknowledged without effect (LC:284-297 warm, LE:282 cold). Under (i) additionally orderings A, B, C (OQ3) | (ii): one read of the held loop at the top of the non-terminal path (C:2232) + the refusal on the rendered entity in the carrier's write (C:3047-3050) + `ErrLoopNotFound` wrapped at ST:664 | **YES** — for the publication in the sub-window (narrow under (ii); under (i) also the record hazards). Requested explicitly |
 | **W4** cancel completes and releases the loop while the approval is mid-dispatch (PROBE:467; C:3168 Fatal → ARH:280-281 → latch C:1071) | **(a)** the sentence ("latches the lane; restart clears it"), or **the check** (recommended, OQ4) | the record, already `cancelled` | with (ii): the delivery is acknowledged without effect from the record whether the release preceded the carrier's check or fell between its publish and its write; nothing published after the check, nothing written, health untouched, the lane keeps consuming — the next valid answer dispatches. With (i): only a release before the check | the pre-`AddPendingTool` variant is unforced (OQ4): Retry → cold → inapplicable Ack, from code; under (i) ordering B still latches | the same read at entry; under (ii) the same refusal at the render | not an (a) row under the recommendation; (a) would be a bound on availability |
 
@@ -229,16 +229,19 @@ every row (2026-09-22 rule).
 **Block 1 — `Loop input classes settle after owner-specific durable done` (S:886-1100, 22 scenarios restated).** One
 sentence appended to the partial-effect paragraph (S:907-911): "A non-terminal result whose loop is terminal in
 memory, or no longer held, when the carrier is entered, when it names the request it published, or when it renders the
-loop's record is not this delivery's partial effect: the carrier publishes nothing further, writes nothing, and the
-loop's record decides the delivery." Four scenarios change (titles unchanged — openspec refuses renames):
+loop's record is not this delivery's partial effect: the carrier publishes no work and writes no loop record, and the
+loop's record decides the delivery; the audit attempt for the observations the handler already collected proceeds
+first, as for any ordinary attempt." Four scenarios change (titles unchanged — openspec refuses renames):
 
 - *The same result shape takes the same order on every lane* — new AND: "a non-terminal result whose loop is terminal
   in memory or no longer held when the carrier is entered, when it names the request it published, or when it renders
-  the loop's record, publishes nothing further and writes nothing on every lane: the record decides it".
+  the loop's record, publishes no further work and writes no loop record on every lane, after the audit attempt for
+  the observations the handler already collected: the record decides it".
 - *A terminal-guard result is settled by the record, whichever lane produced it* — new AND: "the carrier settles a
   non-terminal result the same way when it finds the loop terminal in memory or no longer held — a case the handler's
-  guard could not see because the loop moved after the handler returned — counting an acknowledged drop under the
-  tool-result family's terminal reason on every lane, and retrying a live record".
+  guard could not see because the loop moved after the handler returned — recording the observations the handler
+  already collected first, as any ordinary attempt does, then publishing no work and writing no loop record, counting
+  an acknowledged drop under the tool-result family's terminal reason on every lane, and retrying a live record".
 - *An approval answer whose loop was released after its gate resolved is recovered cold* — THEN becomes: "the delivery
   takes the cold branch on that first delivery: it reads the still-gated record, rebuilds the loop and applies the
   answer exactly as the process that gated the loop would have; a released loop whose record is already terminal is
@@ -265,16 +268,20 @@ sentences (S:1617-1623) are replaced by:
 > converges only on the next answer to that gate. A reject, and any answer to a loop past its own deadline, dispatches
 > nothing: the rebuilt loop re-derives the failure and adopts the durable terminal. An approve of a loop at its
 > iteration cap dispatches the approved call once, and the durable terminal is adopted when that call's result
-> completes the batch. A cancel of that loop is retried until the signal consumer's redelivery budget is exhausted and
-> is observed there, never applied, because the cold cancel arm adopts only a cancel marker. A non-terminal result
-> that reaches the carrier after its loop went terminal in memory, or after the loop was released, SHALL publish
-> nothing and write nothing, and a non-terminal result whose loop is terminal in memory or no longer held when the
-> carrier names the request it published or renders its record SHALL NOT be written: the loop's record decides the
-> delivery exactly as it decides a terminal-guard result — a terminal or absent record is acknowledged without effect,
-> a live one is retried, and the redelivery is classified by its lane against the record. A terminal that lands
-> between the carrier's check and its publication lets that one publication out, and the durable terminal may be
-> created before that publication's PubAck; the published call's result is acknowledged without effect on the terminal
-> loop.
+> completes the batch with a terminal of the same kind; a result that instead derives a completion — an approved
+> terminal tool such as `decide`, which returns `StopLoop` — meets the saved failure as a different kind and is
+> refused and quarantined, and the record stays non-terminal: the first terminal wins, and the loop converges only on
+> a later terminal of the same kind or not at all. A cancel of that loop is retried until the signal consumer's
+> redelivery budget is exhausted and is observed there, never applied, because the cold cancel arm adopts only a
+> cancel marker. A non-terminal result that reaches the carrier after its loop went terminal in memory, or after the
+> loop was released, SHALL publish no work and write no loop record — its audit attempt for the observations the
+> handler already collected proceeds first, as for any ordinary attempt — and a non-terminal result whose loop is
+> terminal in memory or no longer held when the carrier names the request it published or renders its record SHALL NOT
+> be written: the loop's record decides the delivery exactly as it decides a terminal-guard result — a terminal or
+> absent record is acknowledged without effect, a live one is retried, and the redelivery is classified by its lane
+> against the record. A terminal that lands between the carrier's check and its publication lets that one publication
+> out, and the durable terminal may be created before that publication's PubAck; the published call's result is
+> acknowledged without effect on the terminal loop.
 
 Under OQ2 (b) the sentence "A reject, and any answer … completes the batch." becomes: "The next answer to that gate
 adopts the durable failed terminal before any rebuild — nothing is dispatched, the saved event is republished, the
@@ -311,16 +318,22 @@ the third scenario's first THEN reads as the (b) sentence above.
 
 ### 3.1 Change point — the carrier reads the loop it publishes for (W3, W4; OQ3 (i) and (ii))
 
-`persistHandlerResult` (C:2218). After the `terminalOwnedElsewhere` backstop (C:2224-2230) and before
-`recordHandlerResultTrajectory` (C:2232), for a non-terminal result:
+`persistHandlerResult` (C:2218). After the `terminalOwnedElsewhere` backstop (C:2224-2230) and after
+`recordHandlerResultTrajectory` (C:2232), for a non-terminal result. Amended by the Codex merge review at `0bcc9f12`
+(finding 1): the audit attempt for the observations the handler already collected — a completed tool's result and
+dispatch arguments, whose pending entry is already gone — runs before the check, on the refused branch as on every
+other, because the carrier is their only durable attempt; the refusal suppresses only work publication and loop-record
+writes. A non-terminal result's observations are built by the handler and recording them reads nothing the cancel lane
+tears down:
 
 ```go
 	if !terminal {
 		// A non-terminal result whose loop went terminal in memory, or is no
 		// longer held, meets a terminal commit in flight on another lane — the
 		// cancel lane, or a lost compare-and-swap that released it (#1377 W3,
-		// W4). This delivery owns no terminal and must publish and write
-		// nothing: the record decides, as it does for a guard result.
+		// W4). This delivery owns no terminal and must publish no work and
+		// write no loop record: the record decides, as it does for a guard
+		// result. Its audit attempt has already run.
 		held, err := c.handler.GetLoop(result.LoopID)
 		switch {
 		case errors.Is(err, ErrLoopNotFound), err == nil && held.State.IsTerminal():
@@ -448,29 +461,33 @@ on § 3.1, T7–T9 on § 3.2, T2 on § 3.4 if taken.
 >   `awaiting_approval`; a timer is never redelivered. The record converges only on the next answer to that gate: a
 >   reject, and any answer to a loop past its own deadline, dispatches nothing and adopts the durable terminal; an
 >   approve of a loop at its iteration cap dispatches the approved call once, and the terminal is adopted when that
->   call's result completes the batch. [(b): The next answer to that gate adopts the durable failed terminal before any
->   rebuild and is acknowledged as inapplicable; nothing is dispatched.] A cancel of that loop does not settle it: the
->   cold cancel arm adopts only a cancel marker, so the cancel is retried until the signal consumer's `MaxDeliver` is
->   exhausted and is recorded in the MaxDeliver ledger, never applied.
+>   call's result completes the batch with a terminal of the same kind; a result that instead derives a completion —
+>   an approved terminal tool such as `decide`, which returns `StopLoop` — meets the saved failure as a different kind
+>   and is refused and quarantined, and the record stays non-terminal: the first terminal wins, and the loop converges
+>   only on a later terminal of the same kind or not at all. [(b): The next answer to that gate adopts the durable
+>   failed terminal before any rebuild and is acknowledged as inapplicable; nothing is dispatched.] A cancel of that
+>   loop does not settle it: the cold cancel arm adopts only a cancel marker, so the cancel is retried until the
+>   signal consumer's `MaxDeliver` is exhausted and is recorded in the MaxDeliver ledger, never applied.
 >
 > **A cancel racing a result on its way to the record.** A non-terminal result — an approved call, a model response's
 > tool batch, a tool result's next request, a sweeper auto-reject — that reaches the loop-record carrier after a
-> cancel moved the loop terminal in memory, or after the loop was released, now publishes nothing and writes nothing;
-> one that passed the carrier's check but finds the loop terminal or released when its record is rendered writes
-> nothing. The record decides the delivery, and the redelivered input is acknowledged as inapplicable once the
-> cancel's record has landed. Before this, the carrier published the call for the cancelled loop and wrote a cancelled
-> record outside the terminal owner — before, after, or beside the owner's own — and a cancel that released the loop
-> mid-dispatch quarantined the delivery and latched the approval lane until restart. What remains: a cancel that lands
-> inside one publish latency after the carrier's check lets that one publication out, and the durable terminal may be
-> created before its PubAck; the executed call's result is acknowledged without effect on the terminal loop. The
-> approval-timeout sweeper acts after the carrier returns: when the carrier settles its auto-reject this way, the
-> sweeper still publishes its `agent.approval_response` echo of that auto-reject and still logs Info `approval timed
-> out; auto-rejected` — the carrier's Warn and the `terminal_unproven` count, not the echo, say what happened to the
-> loop. **Action:** none for a consumer of `agent.complete` / `AGENT_LOOPS`. A consumer that reads
-> `tool_results_dropped_total` sees a result the carrier settled this way counted under `reason="terminal_unproven"`
-> on every lane — approval answer, model response and sweeper auto-reject included — where each lane's own
-> handler-entry guard counts under its own family (`model_responses_dropped_total{stale_request_id}`,
-> `tool_results_dropped_total{approval_inapplicable}`).
+> cancel moved the loop terminal in memory, or after the loop was released, now publishes no work and writes no loop
+> record — the audit attempt for the observations the handler already collected, such as a completed tool's result and
+> dispatch arguments, still runs first, as for any ordinary attempt; one that passed the carrier's check but finds the
+> loop terminal or released when its record is rendered writes no loop record. The record decides the delivery, and
+> the redelivered input is acknowledged as inapplicable once the cancel's record has landed. Before this, the carrier
+> published the call for the cancelled loop and wrote a cancelled record outside the terminal owner — before, after,
+> or beside the owner's own — and a cancel that released the loop mid-dispatch quarantined the delivery and latched
+> the approval lane until restart. What remains: a cancel that lands inside one publish latency after the carrier's
+> check lets that one publication out, and the durable terminal may be created before its PubAck; the executed call's
+> result is acknowledged without effect on the terminal loop. The approval-timeout sweeper acts after the carrier
+> returns: when the carrier settles its auto-reject this way, the sweeper still publishes its
+> `agent.approval_response` echo of that auto-reject and still logs Info `approval timed out; auto-rejected` — the
+> carrier's Warn and the `terminal_unproven` count, not the echo, say what happened to the loop. **Action:** none for
+> a consumer of `agent.complete` / `AGENT_LOOPS`. A consumer that reads `tool_results_dropped_total` sees a result the
+> carrier settled this way counted under `reason="terminal_unproven"` on every lane — approval answer, model response
+> and sweeper auto-reject included — where each lane's own handler-entry guard counts under its own family
+> (`model_responses_dropped_total{stale_request_id}`, `tool_results_dropped_total{approval_inapplicable}`).
 
 ## 6. Costs and rejected simpler alternatives (docket order)
 
@@ -520,7 +537,7 @@ on § 3.1, T7–T9 on § 3.2, T2 on § 3.4 if taken.
 | Window | Path taken | What is guaranteed | What is only bounded | Owner amendment of the first exit clause? |
 |---|---|---|---|---|
 | W1 — lost record CAS after marker and event | (a) documented bound | the durable terminal is never overwritten; a same-kind later terminal converges the record and republishes the saved event; a different kind is refused (first terminal wins); the redelivered terminal input is acknowledged as older | the loop resumes ordinary work in whichever process holds it next until its own terminal — its iteration cap or `timeout_at` (no time bound if zero, or while gated); sources: a second process, the process's own step-0 adopt on a held loop, a spawn-path birth failure | **YES** — requested |
-| W2 — sweeper terminal committed, publication failed | (a) documented bound [(b) if taken: cold-branch adoption on the next answer] | the record converges on the next answer to the gate; reject and past-deadline answers dispatch nothing [(b): no answer dispatches anything] | parked `awaiting_approval` with no time bound; (a) admits one approved call after the durable terminal; a cancel of the loop is retried to `MaxDeliver` exhaustion and observed there, never applied (OQ7) | (a) **YES** for that one call and for the cancel — requested [(b): the cancel half remains] |
+| W2 — sweeper terminal committed, publication failed | (a) documented bound [(b) if taken: cold-branch adoption on the next answer] | the record converges on the next answer to the gate; reject and past-deadline answers dispatch nothing [(b): no answer dispatches anything] | parked `awaiting_approval` with no time bound; (a) admits one approved call after the durable terminal; a cancel of the loop is retried to `MaxDeliver` exhaustion and observed there, never applied (OQ7); an approved terminal tool (`decide`, `StopLoop`) derives a completion that the saved failure refuses as a different kind — quarantined, the record non-terminal, converging only on a later same-kind terminal or not at all (Codex merge review at `0bcc9f12`, finding 2: a widening of the same (a) bound, shown here for the owner) | (a) **YES** for that one call and for the cancel — requested [(b): the cancel half remains] |
 | W3 — cancel lands while the loop is held, mid-dispatch | fix: the carrier reads the loop it publishes for, and its write refuses a terminal snapshot (OQ3 (ii)) | after a cancel commits in memory before the carrier's check, a non-terminal result publishes and writes nothing; after the check, it writes nothing once the loop is terminal or released at the render; the redelivery is acknowledged inapplicable; one terminal-record writer | a cancel inside one publish latency after the check lets one publication out, and `COMPLETE_<loopID>` may be created before that publication's PubAck — work published after the durable terminal; the executor never stops it; its result is dropped on the terminal loop | **YES** — for that publication; requested explicitly (under (i): also the record hazards A/B/C) |
 | W4 — cancel releases the loop mid-dispatch | the same check and refusal | the answer is acknowledged without effect from the cancelled record whether the release preceded the check or fell between publish and write; nothing published after the check, nothing written, no quarantine, no latch; the lane keeps consuming | the pre-`AddPendingTool` release: Retry → cold → inapplicable (from code, unforced) | no (under (i): ordering B still latches — an availability bound) |
 

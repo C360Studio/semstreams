@@ -137,6 +137,47 @@ func TestASweepAtTheIterationCapWhosePublishFailedSettlesOnTheNextAnswer(t *test
 			"nothing further is dispatched once the batch completes at the cap")
 	})
 
+	// The documented bound's other edge (#1377, Codex merge review finding 2;
+	// an (a) row, so no mutation): an approved TERMINAL tool — `decide`
+	// returns StopLoop: true — derives a completion before the iteration-cap
+	// check, and a completion is a different kind from the saved failure.
+	// The terminal owner refuses it: the first terminal wins, nothing adopts
+	// the durable failure, and the record stays non-terminal. The approved
+	// call's result is SHAPED as the terminal tool's (StopLoop, its content
+	// the decision); the real decide executor lives in agentic-tools.
+	t.Run("an approved terminal tool's completion is refused against the saved failure", func(t *testing.T) {
+		a, marker := sweptAtTheCap(t, newLoopNATS(t))
+		completedBefore := testutil.ToFloat64(a.c.metrics.loopsCompleted)
+
+		settled, err := a.deliver(t, a.answerOf(agentic.ApprovalDecisionApprove))
+		require.NoError(t, err)
+		require.Equal(t, natsclient.DeliveryDecisionAck, settled)
+		require.Equal(t, 1, approvedToolCallsOn(t, a.c.natsClient, coldApprovalLoopID),
+			"fixture: the approved call is published once")
+		approved := persistedLoop(t, a.bucket, coldApprovalLoopID)
+		approvedRevision := a.c.readLoopRecord(t.Context(), coldApprovalLoopID).revision
+
+		_, delivered := deliverToolResult(t, a.c, agentic.ToolResult{
+			CallID: a.gate.CallID, Name: a.gate.ToolName, Content: "decided: delete the rule", StopLoop: true,
+			LoopID: coldApprovalLoopID, RequestID: a.gate.RequestID, ExecutionID: a.gate.ExecutionID,
+			CallOrdinal: a.gate.CallOrdinal,
+		})
+
+		require.Equal(t, natsclient.DeliveryDecisionQuarantine, delivered.Decision(),
+			"a completion meeting a durable failure is refused: the first terminal wins")
+		current, ok := a.bucket.value(terminalMarkerKey(coldApprovalLoopID))
+		require.True(t, ok)
+		require.Equal(t, string(marker), string(current), "the saved failure is kept byte for byte")
+		require.Zero(t, messagesOn(t, a.c.natsClient, "agent.complete."+coldApprovalLoopID),
+			"no completion event is published")
+		after := persistedLoop(t, a.bucket, coldApprovalLoopID)
+		require.False(t, after.State.IsTerminal(), "the record stays non-terminal")
+		require.Equal(t, approved.State, after.State)
+		require.Equal(t, approvedRevision, a.c.readLoopRecord(t.Context(), coldApprovalLoopID).revision,
+			"at the revision the approve wrote")
+		require.Equal(t, completedBefore, testutil.ToFloat64(a.c.metrics.loopsCompleted), "nothing is counted")
+	})
+
 	t.Run("a cancel is retried and never settles the record", func(t *testing.T) {
 		a, marker := sweptAtTheCap(t, newLoopNATS(t))
 		before := persistedLoop(t, a.bucket, coldApprovalLoopID)
