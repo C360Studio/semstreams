@@ -401,22 +401,18 @@ func TestAColdToolResultRebuildsTheBatchItBelongsTo(t *testing.T) {
 	require.False(t, queued, "the batch's last call is in flight, so nothing is left queued")
 }
 
-// TestARebuiltLoopDoesNotReAskForATurnItCannotRecover is the documented
-// limitation, asserted.
+// TestARebuiltLoopDoesNotReAskForATurnItCannotRecover is the one deferred turn
+// a rebuild still cannot recover: a record whose marker is uncarried and that
+// carries NO text — written before pending_continuation_prompt existed, or by
+// a fixture that wrote the marker alone. Every record the deferred lane writes
+// since #1365 carries the text, and TestARebuiltLoopCarriesTheTurnItsRecordAccepted
+// is the rebuild replaying it.
 //
-// A continuation admitted while a request was outstanding is durable as a
-// MARKER only: PendingContinuation says a turn was admitted, and its TEXT went
-// into the predecessor's context manager, which died with it.
-// PendingContinuationRequestID is empty precisely because no request ever
-// carried it. Seated wholesale by the rebuild, that marker made
-// HasPendingContinuation true on a loop with nothing new to say — the next
-// completion spent an iteration re-asking the model with a context that had
-// gained nothing, and then settled anyway.
-//
-// So the rebuild clears it with a warning, and the limitation is documented
-// where an adopter reads it: the turn must be re-sent. The durable-turn field
-// that would recover it is filed as #1365 (owner ruling on #1330 Q2,
-// 2026-09-23, answering finding 4 of the owner Codex round on PR #1361).
+// Seated wholesale, a text-less marker made HasPendingContinuation true on a
+// loop with nothing new to say — the next completion spent an iteration
+// re-asking the model with a context that had gained nothing, and then settled
+// anyway. So the rebuild clears it with a warning naming the loop (#1330 Q2,
+// 2026-09-23).
 //
 // The completion event's empty Prompt is the SAME limitation, one field over
 // (#1330 Q8): taskPrompts is the one per-loop cache the rebuild does not
