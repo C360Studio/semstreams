@@ -149,8 +149,16 @@ to a doc sentence or "not supported" before it gets code.
 
 ## 7. Gates before each push, and the e2e evidence
 
-- [ ] 7.1 `task lint`, `go run ./cmd/entity-id-audit .`, `task schema:generate` + `git diff schemas/ specs/` empty,
+- [x] 7.1 `task lint`, `go run ./cmd/entity-id-audit .`, `task schema:generate` + `git diff schemas/ specs/` empty,
       `go test ./test/contract/...`, `go test -race ./...`, `task test:integration` — before every push.
+      Run, all exit 0, plus `go vet ./...` with no `-tags=`, before the push of sections 1–4 (at `963d8de7`) and
+      before the push of sections 5–7.1; the per-run exit codes and package counts are in the developer hand-back to
+      the coordinating session, not an in-tree artifact. Sections 1–3
+      were pushed together with 4, not one by one: until the compose files set the option variables (4.2), the
+      e2e ladder's statistical and slow-consumer jobs could not pass on this draft branch. Smoke after section 4, with
+      `docker compose ls` = 0 first: `task e2e:slow-consumer` exit=0 (`core-slow-consumer` completed,
+      `assertions_run:11 known_dropped:8`, on the `e2e` target) and `task e2e:core` exit=0 (both phases; phase 2's
+      `core-graph-roundtrip` passed against the e2e target with `SEMSTREAMS_E2E_EXAMPLES=1`).
 - [ ] 7.2 E2E per the OQ1 ruling; default (a): `docker compose ls` = 0, then `task e2e:all` at the final revision; the
       tier log's own `exit=` line is the result. Record the revision and durations here: ____. Watch the five tiers
       that newly forward logs (`design.md` § 2.3) for any scenario reading container log text.
