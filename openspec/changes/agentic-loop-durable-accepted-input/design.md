@@ -197,9 +197,12 @@ delta as written assumes the pre-selection.
   **Why empty-context recovery cannot inject the turn twice:** it runs only when the context holds no user or
   assistant message (`hasUserOrAssistantMessage`, at both callers `emitRetryRequest` and `publishIterationRequest`),
   and the turn is a user message, so the context it re-injects into cannot already hold the turn. A truncation the
-  loop cannot retry fails the loop with the deferral kept — the terminal record keeps the unanswered turn, as it
-  keeps one at the iteration ceiling (CDT:563). The marker-write size drop stays a documented loss (§ 7.7): a turn
-  whose text the record refused is not recovered when a later compaction empties the context.
+  loop cannot retry fails the loop with the deferral kept — the terminal record keeps the unanswered turn, marker,
+  carrier and text, as a loop cancelled or timed out while its carrier is outstanding already does (`SettleRequest`
+  is the only clear site); the iteration ceiling (CDT:563) keeps an UNCARRIED marker, a different shape. Owner
+  2026-09-26 (#1365, conditional ruling, applied on the re-review's finding): an existing failure shape reached by a
+  new path, not a new one. The marker-write size drop stays a documented loss (§ 7.7): a turn whose text the record
+  refused is not recovered when a later compaction empties the context.
 
 ## 1. The docket
 
@@ -428,6 +431,10 @@ the property, it is a follow-up on the model, not on this change.
    rebuilds without knowing a turn was deferred (today's W-a). The `Warn` names the loop and the size. With the text
    gone, a later compaction that empties the context cannot re-inject the turn either (F3 (b) re-injects from the
    text): the recovery carries the birth prompt alone. The ceiling, documented in the delta and the migration section.
+8. **A failed carrier's turn: its fate depends on the status** (re-review at `783a18b7`; it follows from ruling (b)'s
+   text, not a developer choice). A carrier that fails `length_truncated` keeps its deferral — marker, carrier and
+   text — on the terminal record; a carrier that fails `model_error`, or the timeout and max-iterations early returns
+   under any other status, clears it through `SettleRequest`. Recorded here, not coded.
 
 ## 8. Adopter seam (contract § The adopter seam inventory)
 

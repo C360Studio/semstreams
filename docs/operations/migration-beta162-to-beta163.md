@@ -2291,7 +2291,9 @@ text included. The client's refusal is observed at the three writes that can mee
   with the task lane parked); the cause names the loop and the record's size. The loop-execution entity, born just
   before, is stamped `agent.loop.outcome` failed with `agent.loop.terminal-reason` `record_exceeds_payload_ceiling`,
   and the refusal counts on `task_intake_rejections_total{lane="birth",reason="record_exceeds_payload_ceiling"}`;
-  no `agent.failed` event is published — it would carry the prompt the ceiling refused;
+  no `agent.failed` event is published — it would carry the prompt the ceiling refused; a rule that fires on this
+  stamp and follows the reference with `read_loop_result` gets not-found — no completion record is written for a
+  birth the ceiling refused;
 - a deferred turn's **marker** write it refuses is logged at Warn with the size, the text is dropped from the live
   loop so later writes fit, and the delivery is acknowledged: the turn is carried from process memory and is not
   durable — neither is the marker. A deferred turn whose text the record refused for size is not recovered when a

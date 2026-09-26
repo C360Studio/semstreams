@@ -1796,7 +1796,10 @@ func taskHandlerErrorDisposition(err error) error {
 // the loop record all carry the prompt the ceiling just refused, and there is
 // no record to write a terminal onto. The stamp carries no prompt. It is
 // best-effort, as every graph stamp outside the terminal owner is: a failed
-// stamp is logged by the writer and the task is terminated regardless.
+// stamp is logged by the writer and the task is terminated regardless. A rule
+// that fires on this stamp and follows the reference with read_loop_result
+// gets not-found: no completion record is written for a birth the ceiling
+// refused.
 func (c *Component) terminateOversizedBirth(ctx context.Context, loopID, taskID string, err error) error {
 	c.logger.Error("Loop record exceeds the NATS payload ceiling at birth — the task is terminated",
 		"loop_id", loopID, "task_id", taskID, "error", err)

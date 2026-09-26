@@ -99,6 +99,10 @@ Implementation serializes with other shared loop changes and precedes #1377 (rul
 
 ## 2. Task intake (design § 3.3)
 
+      Re-review at `783a18b7` (PASS WITH AMENDMENTS, PR comment): MEDIUM — the `read_loop_result` not-found sentence in
+      the migration row and in `terminateOversizedBirth`'s doc comment; NIT — the precedent for "keeps the turn on
+      failure" corrected (cancelled/timed-out carrier, not the iteration ceiling) and § 7.8 records the status-dependent
+      fate of a failed carrier's turn; NIT — `DetachContextWithTrace` call site noted as #1012 root-half debt, no change.
 - [x] 2.1 Decode and payload-type failures terminate: `processor/agentic-loop/component.go:1476` — `return nil` and
       `processor/agentic-loop/component.go:1482` — `return nil` return `natsclient.TerminateDelivery(fmt.Errorf(…))` in the shape of
       `processor/agentic-loop/component.go:1978` — `return nil, "", natsclient.TerminateDelivery(` and `processor/agentic-loop/component.go:1985` — `return nil, "", natsclient.TerminateDelivery(`. No counter
