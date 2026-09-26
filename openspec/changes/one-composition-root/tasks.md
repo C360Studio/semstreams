@@ -15,7 +15,7 @@ to a doc sentence or "not supported" before it gets code.
       in-session, transcribed under the docket: **OQ1 (a)** — `task e2e:all` once locally + the ladder; **OQ2 (a)** —
       the `init()` vocabulary superset is a residual, nothing removed. The two "decided, not asked" items (D8/D14,
       D15) drew no objection and stand.
-- [ ] 0.3 PR #1390's body carries `implemented-by: <persona>` before the first implementation push; the worktree is
+- [x] 0.3 PR #1390's body carries `implemented-by: <persona>` before the first implementation push; the worktree is
       rebased onto `origin/main` (`git fetch origin main` first).
 
 ## 1. `internal/boot`
@@ -29,7 +29,7 @@ to a doc sentence or "not supported" before it gets code.
       ldflags in `docker/Dockerfile:48-58` and `.github/workflows/release.yml:58` keep working — verify with
       `go run ./cmd/semstreams --version` after a `-ldflags` build). Verified: `go build -ldflags "-X main.Version=v9.9.9-ldflags
       …"` then `--version` prints `semstreams version v9.9.9-ldflags`.
-- [x] 1.3 `RegistryFor(opts, full bool)` (D9) replaces both `fullComponentRegistry`s; both mains' composition verbs call
+- [x] 1.3 `RegistryFor(opts, cfg, full)` (D9; signature per `reconciliation.md` row 2) replaces both `fullComponentRegistry`s; both mains' composition verbs call
       it.
 - [x] 1.4 Move the tests listed in `design.md` § 7 row 1; delete the e2e duplicates and
       `cmd/e2e-semstreams/bootstrap_observability_test.go` (it asserts the retired E2E Phase-A). Delete
@@ -159,8 +159,21 @@ to a doc sentence or "not supported" before it gets code.
       `docker compose ls` = 0 first: `task e2e:slow-consumer` exit=0 (`core-slow-consumer` completed,
       `assertions_run:11 known_dropped:8`, on the `e2e` target) and `task e2e:core` exit=0 (both phases; phase 2's
       `core-graph-roundtrip` passed against the e2e target with `SEMSTREAMS_E2E_EXAMPLES=1`).
+      Coordinator's re-measurement at `e1f1bd8b` (in-tree record): `task lint` 0, `go vet ./...` 0 (no `-tags=`),
+      `go run ./cmd/entity-id-audit .` 0, `go test ./test/contract/...` ok, boot packages 11 ok / 0 fail, Dockerfile
+      0 `tags=` / 3 `FROM`, production closure ∩ forbidden = 0, e2e closure ⊇ the seven hook packages. Fix pass
+      (`reconciliation.md` § Fix pass) gated before its push with: `go build ./...`, `task lint`, `go vet ./...`,
+      `go test -race` over `internal/boot`, `internal/e2eboot`, `test/contract`, `cmd/...` — the FULL `go test -race
+      ./...` and `task test:integration` were NOT re-run locally on the fix-pass commit (session handed off under
+      compaction pressure); CI's Test job on that commit is the evidence until the next session re-runs them.
 - [ ] 7.2 E2E per the OQ1 ruling; default (a): `docker compose ls` = 0, then `task e2e:all` at the final revision; the
       tier log's own `exit=` line is the result. Record the revision and durations here: ____. Watch the five tiers
       that newly forward logs (`design.md` § 2.3) for any scenario reading container log text.
+      **Attempt 1 at `e1f1bd8b` (2026-09-26 15:41Z, before the fix pass): core (both phases, incl. the
+      pre-identity-bucket refusal), structural and statistical scenarios all "Scenario completed successfully"; the
+      semantic tier then wedged for 36 minutes pulling `ghcr.io/c360studio/seminstruct:latest` (~35 KB/s, then 0 B in
+      a 20 s sample; the image is not on the host — only `semembed` is) and the run was aborted by the coordinator.
+      Not evidence for the gate; the gate run is still owed at the final code revision on a network that can pull
+      seminstruct (`docker pull ghcr.io/c360studio/seminstruct:latest` first, then `task e2e:all`).**
 - [ ] 7.3 Archive + spec sync is the last content commit; the squash body is authored (`--body-file`) and checked with
       `git log -1 --format=%B origin/main` after the merge; grep it for closing keywords without `\b`.

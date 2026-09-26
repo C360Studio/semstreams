@@ -132,7 +132,7 @@ func Run(runtimeCtx context.Context, opts Options) (runErr error) {
 
 	// NATS is required. Publish the inert client to root ownership before
 	// connection/readiness so every partial acquisition reaches bounded cleanup.
-	natsClient, err := createNATSClient(opts.NATSURLs, cfg, phaseLogging.Client, metricsRegistry)
+	natsClient, err := createNATSClient(cfg, phaseLogging.Client, metricsRegistry)
 	if err != nil {
 		return fmt.Errorf("create NATS client: %w", err)
 	}
@@ -399,10 +399,9 @@ func ensureStreamsWithSpinner(
 	return nil
 }
 
-// createNATSClient creates a NATS client. The URL precedence is the override,
-// then SEMSTREAMS_NATS_URLS, then the config's nats.urls, then the default.
+// createNATSClient creates a NATS client. The URL precedence is
+// SEMSTREAMS_NATS_URLS, then the config's nats.urls, then the default.
 func createNATSClient(
-	override string,
 	cfg *config.Config,
 	logger *slog.Logger,
 	metricsRegistry *metric.MetricsRegistry,
@@ -410,8 +409,6 @@ func createNATSClient(
 	natsURLs := "nats://localhost:4222"
 
 	switch envURL := os.Getenv("SEMSTREAMS_NATS_URLS"); {
-	case override != "":
-		natsURLs = override
 	case envURL != "":
 		natsURLs = envURL
 	case len(cfg.NATS.URLs) > 0:

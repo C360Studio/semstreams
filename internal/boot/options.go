@@ -45,9 +45,6 @@ type Options struct {
 	// for both mains.
 	CLI
 
-	// NATSURLs overrides the NATS server URLs; empty falls through to
-	// SEMSTREAMS_NATS_URLS, then the config's nats.urls, then the default.
-	NATSURLs string
 	// Build is the release metadata the main was linked with.
 	Build BuildInfo
 

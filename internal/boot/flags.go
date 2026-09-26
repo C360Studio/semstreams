@@ -28,9 +28,9 @@ type CLI struct {
 // process with status 2, as the standard flag package does. Composition verbs
 // (catalog, validate, graph) are positional and stop flag parsing, so a verb's
 // own arguments are left for the verb.
-func ParseFlags(args []string) CLI {
+func ParseFlags(args []string, build BuildInfo) CLI {
 	var cfg CLI
-	fs := newFlagSet(&cfg)
+	fs := newFlagSet(&cfg, build)
 	_ = fs.Parse(args) // ExitOnError: Parse never returns a non-nil error.
 
 	// Override log level if debug is set
@@ -42,7 +42,7 @@ func ParseFlags(args []string) CLI {
 
 // newFlagSet declares every flag against cfg. It is also how help prints the
 // defaults, so the help text can never drift from the parser.
-func newFlagSet(cfg *CLI) *flag.FlagSet {
+func newFlagSet(cfg *CLI, build BuildInfo) *flag.FlagSet {
 	fs := flag.NewFlagSet(appName, flag.ExitOnError)
 
 	fs.StringVar(&cfg.ConfigPath, "config",
@@ -89,7 +89,7 @@ func newFlagSet(cfg *CLI) *flag.FlagSet {
 	fs.BoolVar(&cfg.ShowHelp, "h", false, "Show help information")
 	fs.BoolVar(&cfg.Validate, "validate", false, "Validate configuration and exit")
 
-	fs.Usage = func() { printDetailedHelp(BuildInfo{}) }
+	fs.Usage = func() { printDetailedHelp(build) }
 	return fs
 }
 
@@ -139,7 +139,7 @@ Usage: %s [options]
 
 Options:
 `, appName, os.Args[0], os.Args[0], os.Args[0], os.Args[0])
-	fs := newFlagSet(&CLI{})
+	fs := newFlagSet(&CLI{}, build)
 	fs.SetOutput(os.Stderr)
 	fs.PrintDefaults()
 	_, _ = fmt.Fprintf(os.Stderr, `

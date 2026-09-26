@@ -40,7 +40,16 @@ time of writing.
 | 11 | I7's test is behavioural (in-process NATS server; the extension sees the connected client and its error fails the connection step) instead of a source-order pin; `boot_order_test.go` still pins `connectNATSWithSpinner` before `StartValidatedConfigManager` | **Accepted — stronger than designed.** | § 6 I7 |
 | 12 | Four stale pins outside the 6.1 sweep, stale before this change: `docs/advanced/12-coordinator-pattern.md:85,156`, `configs/rules/lessons/README.md:26`, `docs/operations/09-http-middleware.md:14`, `processor/agentic-tools/README.md:118` | **Left alone.** Pre-existing; not this change's residue. Recorded here so the next docs pass sees them. | — |
 
-## Fix pass after review
+## Fix pass after the implementation review (`implementation-review.md`, PASS WITH AMENDMENTS at `f44b51e0`)
 
-Row 4 (drop `NATSURLs`) plus whatever the implementation review finds, in one commit, before the OQ1 e2e evidence is
-taken at the final code revision. The archive + spec sync follows as the last content commit.
+| Finding | Disposition |
+|---|---|
+| MEDIUM 1 `NATSURLs` dead field + the `override` parameter/case in `createNATSClient` | Deleted; `createNATSClient(cfg, logger, metrics)` restores `main`'s `SEMSTREAMS_NATS_URLS` → config → default chain. |
+| MEDIUM 2 no test closes responder closers on abort | `TestRootResourcesAbortClosesRespondersOnce` (counting `io.Closer`; exactly once; second abort a no-op). |
+| MEDIUM 3 stale `os.Getenv` comment in the contract test | Reworded to `e2eboot.FromEnv`'s nonempty-value rule. |
+| NIT 4 usage text on a bad flag printed blank build metadata | `ParseFlags(args, build)`; `newFlagSet(cfg, build)`; the mains hoist `build` and pass it to both `ParseFlags` and the options constructor. |
+| NIT 5 `Names()` exported with no external caller | Unexported (`names()`); `Spinner`/`NewSpinner` left as carried over. |
+| NIT 6 task truth | 0.3 ticked; 1.3 reworded to `RegistryFor(opts, cfg, full)`; 7.1 carries the coordinator's re-measurement. |
+
+The archive + spec sync follows as the last content commit, after the OQ1 evidence (task 7.2) at the final code
+revision.

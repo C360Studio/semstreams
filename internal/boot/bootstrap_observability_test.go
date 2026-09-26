@@ -21,7 +21,7 @@ func TestCreateNATSClientUsesProductionPhaseAObservability(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	client, err := createNATSClient("", &config.Config{}, phase.Client, metrics)
+	client, err := createNATSClient(&config.Config{}, phase.Client, metrics)
 	require.NoError(t, err)
 	require.NotNil(t, client)
 
@@ -39,7 +39,7 @@ func TestCreateNATSClientFailureUsesProductionPhaseALoggerExactlyOnce(t *testing
 	require.NoError(t, err)
 	logger := slog.New(local).With("service", "semstreams", "component", "natsclient")
 
-	_, err = createNATSClient("", &config.Config{}, logger, nil)
+	_, err = createNATSClient(&config.Config{}, logger, nil)
 	require.ErrorContains(t, err, "client metrics registry cannot be nil")
 
 	var record map[string]any

@@ -39,9 +39,8 @@ func main() {
 		}
 	}()
 
-	opts := e2eboot.FromEnv(boot.ParseFlags(os.Args[1:]), boot.BuildInfo{
-		Version: Version, GitCommit: GitCommit, BuildTime: BuildTime,
-	}, os.LookupEnv)
+	build := boot.BuildInfo{Version: Version, GitCommit: GitCommit, BuildTime: BuildTime}
+	opts := e2eboot.FromEnv(boot.ParseFlags(os.Args[1:], build), build, os.LookupEnv)
 
 	// Composition verbs serve the catalog this binary can compose — including
 	// the components its enabled options register — and exit.

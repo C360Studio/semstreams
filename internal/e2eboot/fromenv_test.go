@@ -44,7 +44,7 @@ func extensionLengths(opts boot.Options) map[string]int {
 func TestE2EBootWithNoOptionsIsTheProductionOptions(t *testing.T) {
 	unset := map[string]string{}
 	allEmpty := map[string]string{}
-	for _, name := range Names() {
+	for _, name := range names() {
 		allEmpty[name] = ""
 	}
 	for name, values := range map[string]map[string]string{
@@ -106,8 +106,8 @@ func TestE2EBootOptionAppendsExactlyItsExtensions(t *testing.T) {
 		"SEMSTREAMS_E2E_MILESTONE_PROBE": {"MilestoneHooks": 1},
 		"SEMSTREAMS_E2E_SLOW_CONSUMER":   {"AfterConnect": 1},
 	}
-	if len(declared) != len(Names()) {
-		t.Fatalf("FromEnv reads %d variables %v, design § 2.2 declares %d", len(Names()), Names(), len(declared))
+	if len(declared) != len(names()) {
+		t.Fatalf("FromEnv reads %d variables %v, design § 2.2 declares %d", len(names()), names(), len(declared))
 	}
 
 	for name, growth := range declared {

@@ -574,10 +574,9 @@ func TestE2ETierTableMatchesComposeAndDockerfile(t *testing.T) {
 		if got, want := strings.Join(sortedKeysOf(armed), ","), strings.Join(sorted(row.envGates), ","); got != want {
 			t.Errorf("%s: compose sets [%s], spec table says [%s]", row, got, want)
 		}
-		// The name alone is not the gate. `milestoneprobe.Register` returns
-		// without installing the handler when os.Getenv reads "", so
-		// `NAME=` declares the variable, satisfies a name comparison, and
-		// leaves the tier's proof unarmed and silent.
+		// The name alone is not the gate. `e2eboot.FromEnv` enables an option
+		// only on a nonempty value, so `NAME=` declares the variable, satisfies
+		// a name comparison, and leaves the tier's hook unarmed and silent.
 		for _, gate := range row.envGates {
 			if value, declared := armed[gate]; declared && value == "" {
 				t.Errorf("%s: %s is declared with an empty effective value, which does not arm the hook", row, gate)

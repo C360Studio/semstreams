@@ -55,8 +55,8 @@ func FromEnv(cli boot.CLI, build boot.BuildInfo, lookup func(string) (string, bo
 	return opts
 }
 
-// Names returns the variables FromEnv reads, sorted.
-func Names() []string {
+// names returns the variables FromEnv reads, sorted.
+func names() []string {
 	names := make([]string, 0, len(options))
 	for _, opt := range options {
 		names = append(names, opt.name)

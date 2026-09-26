@@ -38,9 +38,8 @@ func main() {
 		}
 	}()
 
-	opts := boot.Production(boot.ParseFlags(os.Args[1:]), boot.BuildInfo{
-		Version: Version, GitCommit: GitCommit, BuildTime: BuildTime,
-	})
+	build := boot.BuildInfo{Version: Version, GitCommit: GitCommit, BuildTime: BuildTime}
+	opts := boot.Production(boot.ParseFlags(os.Args[1:], build), build)
 
 	// Composition verbs (catalog, validate <config>, graph <config>) serve
 	// the catalog this binary can compose and exit; no NATS, no banner.
