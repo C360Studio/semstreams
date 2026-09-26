@@ -750,6 +750,10 @@ type stubEvidenceReader struct {
 	// response, when set, is the retained response for that request: the
 	// tool batch the record cannot carry and the rebuild's tool lane needs.
 	response *agentic.AgentResponse
+	// messages, when set, is the retained request's conversation; nil keeps
+	// the one-message default. The deferred-turn windows need it to say
+	// whether the retained request already carries the turn.
+	messages []agentic.ChatMessage
 }
 
 func (r stubEvidenceReader) ReadRetainedRequest(context.Context, string, string) ([]byte, bool, error) {
@@ -760,6 +764,9 @@ func (r stubEvidenceReader) ReadRetainedRequest(context.Context, string, string)
 		RequestID: r.requestID,
 		LoopID:    "unused",
 		Messages:  []agentic.ChatMessage{{Role: "user", Content: "retained"}},
+	}
+	if r.messages != nil {
+		request.Messages = r.messages
 	}
 	data, err := json.Marshal(message.NewBaseMessage(request.Schema(), &request, "test"))
 	if err != nil {

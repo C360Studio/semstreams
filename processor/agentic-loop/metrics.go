@@ -251,7 +251,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
 				Name:      "task_intake_rejections_total",
-				Help:      "Total tasks refused at intake, by bounded lane and reason. lane=\"decoded-task\", reason=\"structural-invalid\": the decoded task is structurally unusable (lineage identity), so the delivery is terminated rather than retried. lane=\"cold-fork\", reason=\"continuation_unheld\": the task's id differs from the one the live record names, and no process holds the loop — either a new turn submitted for a loop no process holds, or a redelivered task the record has already moved past. Either way the delivery cannot be applied here: it is acknowledged without effect, and a turn that was never applied must be re-sent once a redelivered input has rebuilt the loop. Sustained non-zero continuation_unheld points at work arriving for loops across a process replacement.",
+				Help:      "Total tasks refused at intake, by bounded lane and reason. lane=\"decoded-task\", reason=\"structural-invalid\": the decoded task is structurally unusable (lineage identity), so the delivery is terminated rather than retried. lane=\"cold-fork\", reason=\"continuation_unheld\": the task's id differs from the one the live record names, and no process holds the loop — either a new turn submitted for a loop no process holds, or a redelivered task the record has already moved past. Either way the delivery cannot be applied here: it is acknowledged without effect, and a turn that was never applied must be re-sent once a redelivered input has rebuilt the loop. Sustained non-zero continuation_unheld points at work arriving for loops across a process replacement. lane=\"birth\", reason=\"record_exceeds_payload_ceiling\": the loop's record at birth exceeds the NATS payload ceiling, so the task is terminated and its loop-execution entity is stamped failed with that reason.",
 			}, []string{"lane", "reason"}),
 
 			deliveryRefusals: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -450,11 +450,13 @@ func (m *loopMetrics) recordGraphWritePublishTimeout(state string) {
 
 // recordTaskIntakeRejection counts a task the component refused at intake.
 //
-// Two (lane, reason) pairs exist, and they are different kinds of refusal:
+// Three (lane, reason) pairs exist, and they are different kinds of refusal:
 // ("decoded-task", "structural-invalid") is a malformed task the lane
-// TERMINATES, and ("cold-fork", "continuation_unheld") is a well-formed turn
+// TERMINATES, ("cold-fork", "continuation_unheld") is a well-formed turn
 // for a loop no process holds, which is acknowledged without effect because
-// no redelivery of it could ever be applied (#1330).
+// no redelivery of it could ever be applied (#1330), and ("birth",
+// "record_exceeds_payload_ceiling") is a birth whose loop record the NATS
+// payload ceiling refused, which the lane TERMINATES (#1365).
 func (m *loopMetrics) recordTaskIntakeRejection(lane, reason string) {
 	m.taskIntakeRejections.WithLabelValues(lane, reason).Inc()
 }

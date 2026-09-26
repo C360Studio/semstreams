@@ -87,7 +87,6 @@ type LoopManager struct {
 	cachedMetadata       map[string]map[string]any           // loopID -> metadata (domain context, not persisted)
 	cachedRequestTimeout map[string]string                   // loopID -> request timeout (from TaskMessage.Timeout, not persisted)
 	cachedResponseFormat map[string]*agentic.ResponseFormat  // loopID -> response_format (from TaskMessage.ResponseFormat, not persisted)
-	taskPrompts          map[string]string                   // loopID -> original task prompt (for context recovery)
 	requestToLoop        map[string]string                   // requestID -> loopID
 	// outstandingRequests names the ONE model request a loop has published and
 	// not yet had answered. requestToLoop cannot answer that question: it is
@@ -139,7 +138,6 @@ func NewLoopManager(opts ...LoopManagerOption) *LoopManager {
 		cachedMetadata:         make(map[string]map[string]any),
 		cachedRequestTimeout:   make(map[string]string),
 		cachedResponseFormat:   make(map[string]*agentic.ResponseFormat),
-		taskPrompts:            make(map[string]string),
 		requestToLoop:          make(map[string]string),
 		outstandingRequests:    make(map[string]string),
 		toolCallToLoop:         make(map[string]string),
@@ -169,7 +167,6 @@ func NewLoopManagerWithConfig(contextConfig ContextConfig, opts ...LoopManagerOp
 		cachedMetadata:         make(map[string]map[string]any),
 		cachedRequestTimeout:   make(map[string]string),
 		cachedResponseFormat:   make(map[string]*agentic.ResponseFormat),
-		taskPrompts:            make(map[string]string),
 		requestToLoop:          make(map[string]string),
 		outstandingRequests:    make(map[string]string),
 		toolCallToLoop:         make(map[string]string),
@@ -289,7 +286,7 @@ func (m *LoopManager) CreateLoopWithID(loopID, taskID, role, model string, maxIt
 //
 // No other per-loop state is touched: the context manager, the pending-tool
 // set, and every cache stay exactly as the live loop left them.
-func (m *LoopManager) attachContinuation(loopID, taskID string) (agentic.LoopEntity, bool, error) {
+func (m *LoopManager) attachContinuation(loopID, taskID, prompt string) (agentic.LoopEntity, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -331,6 +328,11 @@ func (m *LoopManager) attachContinuation(loopID, taskID string) (agentic.LoopEnt
 		// carrying, this turn is uncarried, so the next completion must carry
 		// it rather than settle.
 		entity.PendingContinuationRequestID = ""
+		// The turn's text, beside its marker (#1365): the deferred lane's
+		// marker write carries it to the record, and a rebuild replays it.
+		// One string — a second turn deferred behind the same request
+		// replaces the first as the record's uncarried turn.
+		entity.PendingContinuationPrompt = prompt
 		return *entity, true, nil
 	}
 
@@ -407,35 +409,58 @@ func (m *LoopManager) restoreLoopFromRequest(
 	}
 
 	entity := record
-	// A continuation admitted while a request was outstanding is durable as a
-	// MARKER and nothing else. The turn's TEXT went into the predecessor's
-	// context manager, which died with it, and PendingContinuationRequestID is
-	// empty precisely because no request ever carried it. Seated as-is, the
-	// marker makes HasPendingContinuation true on a loop that has nothing new
-	// to say: the next completion spends an iteration re-asking the model with
-	// a context that gained nothing, and then settles anyway.
+	// A continuation admitted while a request was outstanding is durable as its
+	// MARKER and its TEXT (#1365): the deferred lane's marker write puts both on
+	// the record in one compare-and-swap, with an empty carrier because no
+	// request carried the turn yet. A record whose marker is uncarried has its
+	// text replayed below, after the retained conversation, and the marker is
+	// KEPT: HasPendingContinuation then reads true on the rebuilt loop, the next
+	// completion advances instead of settling, its request carries the turn and
+	// names itself the carrier, and SettleRequest clears the three together.
 	//
-	// So it is cleared here, with a warning, and the limitation is documented
-	// where an adopter reads it (doc.go § Recovery across a process
-	// replacement, the beta.163 migration note, and this change's delta): the
-	// turn must be re-sent. The durable-turn field that would recover it is
-	// #1365 (owner ruling on #1330 Q2, 2026-09-23).
+	// The replay runs on EVERY uncarried marker, whichever request is retained.
+	// Adoption (adoptNewerRetainedRequest) may have moved the record's name to a
+	// newer retained request and left the marker as it found it, and the record
+	// cannot tell which side of the turn that request was minted on. Five
+	// windows, by where the replacement fell:
+	//
+	//   - before the marker write landed: no marker, nothing to replay — the
+	//     turn lived in the replaced process only (the marker write's own
+	//     Retry and best-effort rows);
+	//   - after it, the record naming the request the turn deferred behind: one
+	//     replay, carried once;
+	//   - a carrier minted AFTER the turn, PubAck'd, its record write lost: that
+	//     request already holds the turn and the replay adds it again — carried
+	//     twice, logged below with the retained request's name, never zero;
+	//   - the carrier's record write landed: the marker names it, nothing is
+	//     replayed, and the retained request carries the turn once;
+	//   - a turn deferred behind a request tracked but not yet on the record,
+	//     that request retained and adopted: it was minted BEFORE the turn, so
+	//     the replay is the only copy — carried once.
+	//
+	// Residuals, recorded rather than coded (design § 7.1, § 7.2): a marker
+	// write landing after the carrier's own record write rebuilds as the
+	// duplicate window, and a replacement between the marker write and the next
+	// carrier write rebuilds a loop whose TaskID is the previous task's, since
+	// the marker write does not move it.
 	//
 	// A NON-EMPTY PendingContinuationRequestID is left alone: that turn is
 	// inside a retained request, so the replay above carries it and the marker
 	// still has the job it was set for — stopping the carrier's own completion
 	// from settling before the turn is answered.
 	//
-	// The warning is the whole signal, by the ruled shape of this clear
-	// (#1330 Q2, 2026-09-23: the two-line clear plus a warning naming the
-	// loop). The sibling drop at intake, settleUnheldContinuation, carries a
-	// counted reason as well because a REFUSED turn is a rate an operator acts
-	// on; this one is a consequence of a replacement that is already visible.
-	// A counter here would be an owner question, not a developer's.
-	if entity.PendingContinuation && entity.PendingContinuationRequestID == "" {
+	// A marker that is uncarried and carries NO text claims a turn the record
+	// does not hold — a record written before the text field existed, or a
+	// fixture that wrote the marker alone. Seated as-is it would make the next
+	// completion spend an iteration re-asking the model with a context that
+	// gained nothing, so it is cleared with a warning naming the loop (#1330
+	// Q2, 2026-09-23: the two-line clear plus the warning is the ruled shape;
+	// a counter would be an owner question).
+	if entity.PendingContinuation && entity.PendingContinuationRequestID == "" &&
+		entity.PendingContinuationPrompt == "" {
 		m.logger.WarnContext(ctx,
-			"rebuilt loop cleared a deferred turn it cannot recover — the turn's text lived only in "+
-				"the replaced process and must be re-sent",
+			"rebuilt loop cleared a deferred turn it cannot recover — the record carries its marker "+
+				"but not its text, and the turn must be re-sent",
 			slog.String("loop_id", record.ID),
 			slog.String("published_request_id", record.PublishedRequestID),
 			slog.Int("iterations", record.Iterations))
@@ -473,6 +498,27 @@ func (m *LoopManager) restoreLoopFromRequest(
 		}
 	}
 	cm.RepairToolPairs()
+	// The deferred turn, after the conversation it was typed into (#1365; the
+	// windows are above). The marker stays set, so the next completion carries
+	// it and names the carrier.
+	if entity.PendingContinuation && entity.PendingContinuationRequestID == "" &&
+		entity.PendingContinuationPrompt != "" {
+		if err := cm.AddMessage(RegionRecentHistory, agentic.ChatMessage{
+			Role:    "user",
+			Content: entity.PendingContinuationPrompt,
+		}); err != nil {
+			delete(m.loops, record.ID)
+			delete(m.pendingTools, record.ID)
+			return errs.WrapTransient(err, "LoopManager", "restoreLoopFromRequest",
+				"replay the record's deferred turn into the rebuilt conversation")
+		}
+		m.logger.InfoContext(ctx,
+			"rebuilt loop replayed the deferred turn its record accepted — carried once, or twice when the "+
+				"retained request was minted after the turn",
+			slog.String("loop_id", record.ID),
+			slog.String("retained_request_id", request.RequestID),
+			slog.Int("prompt_bytes", len(entity.PendingContinuationPrompt)))
+	}
 	m.contextManagers[record.ID] = cm
 
 	// The settings the loop was running with, read off the request it last
@@ -937,7 +983,6 @@ func (m *LoopManager) DeleteLoop(loopID string) error {
 	delete(m.cachedMetadata, loopID)
 	delete(m.cachedRequestTimeout, loopID)
 	delete(m.cachedResponseFormat, loopID)
-	delete(m.taskPrompts, loopID)
 	delete(m.outstandingRequests, loopID)
 
 	prefix := loopID + ":"
@@ -1056,20 +1101,30 @@ func (m *LoopManager) GetCachedResponseFormat(loopID string) *agentic.ResponseFo
 	return m.cachedResponseFormat[loopID]
 }
 
-// CacheTaskPrompt stores the original task prompt for context recovery.
-// If GC/repair leaves the context empty, this prompt is re-injected as a
-// synthetic user message so the model always has contents to work with.
+// CacheTaskPrompt records the prompt of the task that bore the loop on its
+// entity (TaskPrompt, #1365), so the birth write puts it on the record and a
+// rebuild's wholesale seat restores it. If GC/repair leaves the context
+// empty, this prompt is re-injected as a synthetic user message so the model
+// always has contents to work with; the terminal events publish it as Prompt.
+// HandleTask calls it on a birth only — a continuation's turn is never the
+// loop's prompt.
 func (m *LoopManager) CacheTaskPrompt(loopID, prompt string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.taskPrompts[loopID] = prompt
+	if entity, exists := m.loops[loopID]; exists {
+		entity.TaskPrompt = prompt
+	}
 }
 
-// GetTaskPrompt retrieves the cached task prompt for a loop
+// GetTaskPrompt returns the prompt of the task that bore the loop, "" when
+// the loop is not held or its record carries none.
 func (m *LoopManager) GetTaskPrompt(loopID string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.taskPrompts[loopID]
+	if entity, exists := m.loops[loopID]; exists {
+		return entity.TaskPrompt
+	}
+	return ""
 }
 
 // GetCurrentIteration returns the current iteration for a loop
@@ -1295,12 +1350,64 @@ func (m *LoopManager) registerRequestRoute(requestID, loopID string) {
 func (m *LoopManager) SettleRequest(loopID, requestID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if outstanding, ok := m.outstandingRequests[loopID]; ok && outstanding == requestID {
-		delete(m.outstandingRequests, loopID)
-	}
+	m.settleOutstandingLocked(loopID, requestID)
 	if entity, exists := m.loops[loopID]; exists && requestID != "" && entity.PendingContinuationRequestID == requestID {
 		entity.PendingContinuation = false
 		entity.PendingContinuationRequestID = ""
+		entity.PendingContinuationPrompt = ""
+	}
+}
+
+// settleTruncatedRequest is SettleRequest for a length_truncated response
+// (#1365, F3): it clears the outstanding mark and leaves the deferral alone.
+// A truncated answer is not an answer to the turn its request carried — the
+// model was cut off — so marker, carrier and text survive into the compaction
+// retry, whose TrackRequest names it the new carrier and whose answer settles
+// the deferral. A truncation the loop cannot retry fails the loop, and the
+// terminal record keeps the unanswered turn, as it keeps one at the iteration
+// ceiling.
+func (m *LoopManager) settleTruncatedRequest(loopID, requestID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.settleOutstandingLocked(loopID, requestID)
+}
+
+// settleOutstandingLocked clears the outstanding mark when it names requestID.
+// Callers hold m.mu.
+func (m *LoopManager) settleOutstandingLocked(loopID, requestID string) {
+	if outstanding, ok := m.outstandingRequests[loopID]; ok && outstanding == requestID {
+		delete(m.outstandingRequests, loopID)
+	}
+}
+
+// deferredContinuationPrompt returns the deferred turn's text while the marker
+// is set, CARRIED or not, and "" otherwise. Its one reader is
+// recoverEmptyContext: an emptied context holds no user message, so the turn
+// is in no request the loop is about to send whether or not an earlier request
+// carried it — a carrier's truncation retry is the carried case (#1365, F3).
+// The rebuild's replay keeps the narrower "uncarried" predicate on purpose: a
+// rebuilt context is the retained request's conversation, which already holds
+// a carried turn.
+func (m *LoopManager) deferredContinuationPrompt(loopID string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	entity, exists := m.loops[loopID]
+	if !exists || !entity.PendingContinuation {
+		return ""
+	}
+	return entity.PendingContinuationPrompt
+}
+
+// dropPendingContinuationPrompt removes a deferred turn's text from the loop's
+// in-memory entity after the record refused it for size (#1365), so the loop's
+// later record writes do not render it into the same refusal. It clears only
+// while the entity still holds that turn: a later turn that replaced it is a
+// different admission, with its own marker write to answer for it.
+func (m *LoopManager) dropPendingContinuationPrompt(loopID, prompt string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if entity, exists := m.loops[loopID]; exists && entity.PendingContinuationPrompt == prompt {
+		entity.PendingContinuationPrompt = ""
 	}
 }
 

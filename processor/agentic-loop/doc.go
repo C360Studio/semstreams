@@ -123,7 +123,7 @@
 //	context := agenticloop.ContextConfig{
 //	    Enabled:            true,
 //	    CompactThreshold:   0.60,  // Trigger compaction at 60% utilization
-//	    HeadroomTokens:     6400,  // Reserve tokens for new content
+//	    HeadroomTokens:     4000,  // Floor under the ratio-based headroom (the default)
 //	}
 //
 // Model context limits are resolved from the unified model registry
@@ -273,34 +273,42 @@
 // so do not start one with them. Only a leading run is dropped: a message further in is the
 // conversation, whatever it says.
 //
-// A deferred turn is durable as a MARKER, not as the turn. A continuation admitted while
-// a request is outstanding writes its text into the loop's context and sets
-// PendingContinuation; only the marker reaches the record, so across a process
-// replacement the text is not recovered. The rebuild CLEARS the marker with a warning
-// rather than leave a loop that would spend an iteration re-asking the model with nothing
-// new, and the turn must be re-sent. A turn already inside a retained request is a
-// different case and is untouched: that request replays, so the marker still names its
-// carrier and still stops the carrier's own completion from settling early.
+// A deferred turn is durable as its MARKER and its TEXT. A continuation admitted while a
+// request is outstanding writes its text into the loop's context, sets PendingContinuation,
+// and the task lane writes the marker and the text (pending_continuation_prompt) onto the
+// record in one compare-and-swap. A rebuild replays the text after the retained
+// conversation and keeps the marker, so the next completion carries the turn. It is carried
+// once, except in the one window the record cannot tell apart — a carrier minted after the
+// turn whose record write was lost — where it is carried twice and the replay is logged; it
+// is never lost there. A turn already inside a retained request is untouched: that request
+// replays, so the marker still names its carrier and still stops the carrier's own
+// completion from settling early. A record carrying the marker without the text (written
+// before the field existed) is cleared with a warning, and that turn must be re-sent. One
+// string holds the latest uncarried turn: two turns deferred behind the same request and a
+// replacement in that window replay only the second. A marker write the NATS payload
+// ceiling refuses leaves the turn in process memory only.
+// Carried means placed in the conversation as the user's turn: from then on it is an
+// ordinary message, and compaction may summarize it like any user turn; only an emptied
+// context re-injects it (recoverEmptyContext), the same backstop the birth prompt has.
 //
-// A turn arriving AFTER the replacement is the same limitation from the other side. A
-// continuation reaches only a loop some process holds: a task whose id differs from the one
-// the live record names is REFUSED — acknowledged without effect, with a warning naming both
-// tasks and a continuation_unheld reason on task_intake_rejections_total — because the loop's
+// A turn arriving AFTER the replacement is a different case. A continuation reaches only a
+// loop some process holds: a task whose id differs from the one the live record names is
+// REFUSED — acknowledged without effect, with a warning naming both tasks and a
+// continuation_unheld reason on task_intake_rejections_total — because the loop's
 // conversation is in no process's memory and no redelivery of that turn could ever be applied
 // here. The test is task identity, so the same refusal also answers a redelivered BIRTH task
 // whose record a later continuation moved onto its own id; that one needs no re-send, because
 // the turn it carries was applied when the loop was born. Re-send a turn that was never
 // applied once a redelivered input has rebuilt the loop.
 //
-// The loop's TASK PROMPT is the same limitation one field over. taskPrompts is the one
-// per-loop cache the WHOLESALE rebuild does not restore, because the record has no field to
-// restore it from, so a loop rebuilt from its record and a retained request — the
-// model-response and tool-result cold arms — publishes LoopCompletedEvent.Prompt and
-// LoopFailedEvent.Prompt EMPTY and recoverEmptyContext falls back to its "Continue with the
-// task." placeholder. The cold task arm is the exception: it runs the ordinary HandleTask,
-// which caches the redelivered task's prompt, so its terminal events carry it. A consumer
-// that reads Prompt off a completion must tolerate an empty one. The durable field
-// for the turn and the prompt is https://github.com/C360Studio/semstreams/issues/1365.
+// The loop's TASK PROMPT is on the record (task_prompt): the birth write carries the prompt of
+// the task that bore the loop and no later write rewrites it, so a loop rebuilt from its
+// record publishes LoopCompletedEvent.Prompt and LoopFailedEvent.Prompt, and
+// recoverEmptyContext re-injects it as the "Original task". On a loop that took a
+// continuation that is still the BIRTH prompt: a continuation's turn is the record's pending
+// text or its retained request, never its prompt. A record written before the field existed
+// carries none, and those readers read empty or fall back to the "Continue with the task."
+// placeholder, as before.
 //
 // A rebuild is not a reprieve. TimeoutAt is written at birth and lives on the record, so a
 // rebuilt loop keeps its ORIGINAL deadline; nothing refreshes it and downtime is not

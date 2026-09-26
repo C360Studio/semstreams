@@ -287,11 +287,12 @@ func TestTruncationRetryCarriesTheDeferredTurn(t *testing.T) {
 		t.Fatalf("the retry reused the truncated request's name %q", birth)
 	}
 	// The turn is in the request either as the message the deferral wrote or,
-	// when compaction at this utilization empties the context, as the prompt
-	// recoverEmptyContext re-seeds from — CacheTaskPrompt (handlers.go:974) runs
-	// on the continuation too, so the recovered prompt is this turn and not the
-	// birth task's. Both are "the model has been asked", which is what makes
-	// ending the deferral correct here rather than a dropped turn.
+	// when compaction at this utilization empties the context, as the turn
+	// recoverEmptyContext re-injects after the BIRTH prompt: the loop's prompt
+	// is written at birth only (#1365, OQ5 (a′)), so the uncarried turn is
+	// re-seeded from PendingContinuationPrompt. Both are "the model has been
+	// asked", which is what makes ending the deferral correct here rather than
+	// a dropped turn.
 	if !requestBodyContains(t, retry, continuationPrompt) {
 		t.Fatalf("the retry request does not contain the continuation's turn %q", continuationPrompt)
 	}
@@ -315,6 +316,126 @@ func TestTruncationRetryCarriesTheDeferredTurn(t *testing.T) {
 	}
 	if completion.CompletionState == nil {
 		t.Fatal("no completion record was built for a loop with nothing left deferred")
+	}
+}
+
+// The same truncation retry one request later (#1365, F3): the turn deferred
+// behind R1, R1's answer advanced the loop, and R2 CARRIES the turn. R2 comes
+// back length_truncated. A truncated answer is not an answer to the turn — the
+// model was cut off — so the deferral must survive into the compaction retry:
+// when compaction empties the context, recovery re-injects the birth prompt AND
+// the carried turn, the retry is named the new carrier, and the retry's answer
+// is what settles the deferral. When the truncation ended the deferral, the
+// retry re-asked the birth task alone and the user's turn was never answered,
+// with nothing but the generic empty-context warning to say so.
+//
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
+func TestTheCarriersTruncationRetryCarriesTheDeferredTurn(t *testing.T) {
+	handler := agenticloop.NewMessageHandler(createTestConfig())
+	handler.SetToolRegistry(newTestToolRegistry(t))
+	ctx := context.Background()
+
+	birthResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		TaskID: "task-carrier-truncation",
+		Role:   "general",
+		Model:  "qwen-32b",
+		Prompt: "summarise the first thing",
+	})
+	if err != nil {
+		t.Fatalf("HandleTask (birth): %v", err)
+	}
+	loopID := birthResult.LoopID
+	birth := oneMintedRequestID(t, "birth", birthResult)
+
+	fillContextToHighUtilization(t, handler, loopID, 80000)
+	continuation, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		TaskID: "task-carrier-truncation-2",
+		LoopID: loopID,
+		Role:   "general",
+		Model:  "qwen-32b",
+		Prompt: continuationPrompt,
+	})
+	if err != nil {
+		t.Fatalf("HandleTask (continuation): %v", err)
+	}
+	if !continuation.Deferred {
+		t.Fatalf("the continuation was not deferred; state=%s", continuation.State)
+	}
+
+	// R1's answer advances the loop and R2 carries the turn.
+	advance, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+		RequestID: birth,
+		Status:    agentic.StatusComplete,
+		Message:   agentic.ChatMessage{Role: "assistant", Content: "the first thing is done"},
+	})
+	if err != nil {
+		t.Fatalf("HandleModelResponse(complete R1): %v", err)
+	}
+	carrier := oneMintedRequestID(t, "deferred carry", advance)
+	if !requestBodyContains(t, advance, continuationPrompt) {
+		t.Fatalf("R2 does not contain the continuation's turn %q", continuationPrompt)
+	}
+	carrierStamp(t, handler, advance)
+
+	// Above the compaction threshold again, so R2's truncation self-heals.
+	fillContextToHighUtilization(t, handler, loopID, 80000)
+	retry, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+		RequestID:    carrier,
+		Status:       agentic.StatusLengthTruncated,
+		FinishReason: agentic.FinishReasonLength,
+		Message:      agentic.ChatMessage{Role: "assistant", Content: "half an answer"},
+		TokenUsage:   agentic.TokenUsage{PromptTokens: 50, CompletionTokens: 4096},
+	})
+	if err != nil {
+		t.Fatalf("HandleModelResponse(length_truncated R2): %v", err)
+	}
+	if retry.State == agentic.LoopStateFailed {
+		t.Fatalf("the truncation failed the loop instead of retrying; state=%s", retry.State)
+	}
+	retryID := oneMintedRequestID(t, "carrier truncation retry", retry)
+	// The path under test is the emptied context: the retry is rebuilt by
+	// recoverEmptyContext. If the harness stops reaching it, this test no longer
+	// pins F3 and must say so rather than pass.
+	if !requestBodyContains(t, retry, "Original task: summarise the first thing") {
+		t.Fatal("the retry was not built by empty-context recovery; this test no longer reaches the F3 path")
+	}
+	if !requestBodyContains(t, retry, continuationPrompt) {
+		t.Fatalf("the carrier's truncation retry does not contain the deferred turn %q", continuationPrompt)
+	}
+
+	// The retry is the turn's carrier now, through the ordinary TrackRequest.
+	entity, err := handler.GetLoop(loopID)
+	if err != nil {
+		t.Fatalf("GetLoop: %v", err)
+	}
+	if !entity.PendingContinuation || entity.PendingContinuationRequestID != retryID {
+		t.Fatalf("after the retry: marker=%v carrier=%q, want marker set and carrier %q",
+			entity.PendingContinuation, entity.PendingContinuationRequestID, retryID)
+	}
+
+	// And its answer settles the deferral: the loop completes, no re-ask.
+	carrierStamp(t, handler, retry)
+	completion, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+		RequestID: retryID,
+		Status:    agentic.StatusComplete,
+		Message:   agentic.ChatMessage{Role: "assistant", Content: "both things are done"},
+	})
+	if err != nil {
+		t.Fatalf("HandleModelResponse(complete retry): %v", err)
+	}
+	if ids := mintedRequestIDs(t, completion); len(ids) != 0 {
+		t.Fatalf("the retry's answer spent another iteration re-asking: minted %v", ids)
+	}
+	if !completion.State.IsTerminal() {
+		t.Fatalf("the loop did not complete after the retry answered its turn; state=%s", completion.State)
+	}
+	settled, err := handler.GetLoop(loopID)
+	if err != nil {
+		t.Fatalf("GetLoop after settle: %v", err)
+	}
+	if settled.PendingContinuation || settled.PendingContinuationPrompt != "" {
+		t.Fatalf("the retry's answer did not settle the deferral: marker=%v text=%q",
+			settled.PendingContinuation, settled.PendingContinuationPrompt)
 	}
 }
 

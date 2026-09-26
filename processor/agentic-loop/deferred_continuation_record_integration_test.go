@@ -133,6 +133,9 @@ func startMidAdvance(t *testing.T, client *natsclient.Client, loopID, taskID, to
 	}
 }
 
+// deferredTurnText is the turn deferContinuation admits.
+const deferredTurnText = "a turn typed while the agent was thinking"
+
 // deferContinuation admits a new turn to the loop while its request is
 // unpublished, which is the one sibling writer that can reach the record in
 // this interval, and returns the record that write left behind.
@@ -143,7 +146,7 @@ func deferContinuation(t *testing.T, c *Component, loopID, taskID string) loopRe
 		LoopID: loopID,
 		Role:   "general",
 		Model:  "test-model",
-		Prompt: "a turn typed while the agent was thinking",
+		Prompt: deferredTurnText,
 	})
 	require.Equal(t, natsclient.DeliveryDecisionAck, deferred.Decision(),
 		"a deferred continuation is admitted, not refused: the turn is in the loop's context")
@@ -152,6 +155,8 @@ func deferContinuation(t *testing.T, c *Component, loopID, taskID string) loopRe
 		"the marker is the whole durable effect this delivery owns")
 	require.Empty(t, record.entity.PendingContinuationRequestID,
 		"a turn admitted now is in no retained request, so the marker names no carrier")
+	require.Equal(t, deferredTurnText, record.entity.PendingContinuationPrompt,
+		"the turn's text rides the marker's own write, or a replacement has nothing to replay (#1365)")
 	return record
 }
 
@@ -229,5 +234,23 @@ func TestADeferredContinuationWritesOnlyTheMarkerItOwns(t *testing.T) {
 		require.Equal(t, uint64(2), messagesOn(t, client, stage.executeSubject),
 			"the record named the batch's applied result, so recovery re-dispatched nothing: a "+
 				"drained applied set re-runs a tool that already ran")
+
+		// The turn deferred behind R2, which never reached the stream: the
+		// record's text is its only copy. The replacement's R2 must ask it
+		// exactly once (#1365) — before, the rebuild cleared the marker with a
+		// warning and R2 asked it zero times.
+		next, found, err := replacement.readRetainedAgentRequest(t.Context(), loopID)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, stage.secondRequest, next.RequestID)
+		carried := 0
+		for _, m := range next.Messages {
+			if m.Role == "user" && m.Content == deferredTurnText {
+				carried++
+			}
+		}
+		require.Equal(t, 1, carried, "the replacement's next request must carry the deferred turn exactly once")
+		require.Equal(t, stage.secondRequest, recovered.entity.PendingContinuationRequestID,
+			"the request that carries the turn is named as its carrier")
 	})
 }

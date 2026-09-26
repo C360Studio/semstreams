@@ -401,29 +401,22 @@ func TestAColdToolResultRebuildsTheBatchItBelongsTo(t *testing.T) {
 	require.False(t, queued, "the batch's last call is in flight, so nothing is left queued")
 }
 
-// TestARebuiltLoopDoesNotReAskForATurnItCannotRecover is the documented
-// limitation, asserted.
+// TestARebuiltLoopDoesNotReAskForATurnItCannotRecover is the one deferred turn
+// a rebuild still cannot recover: a record whose marker is uncarried and that
+// carries NO text — written before pending_continuation_prompt existed, or by
+// a fixture that wrote the marker alone. Every record the deferred lane writes
+// since #1365 carries the text, and TestARebuiltLoopCarriesTheTurnItsRecordAccepted
+// is the rebuild replaying it.
 //
-// A continuation admitted while a request was outstanding is durable as a
-// MARKER only: PendingContinuation says a turn was admitted, and its TEXT went
-// into the predecessor's context manager, which died with it.
-// PendingContinuationRequestID is empty precisely because no request ever
-// carried it. Seated wholesale by the rebuild, that marker made
-// HasPendingContinuation true on a loop with nothing new to say — the next
-// completion spent an iteration re-asking the model with a context that had
-// gained nothing, and then settled anyway.
+// Seated wholesale, a text-less marker made HasPendingContinuation true on a
+// loop with nothing new to say — the next completion spent an iteration
+// re-asking the model with a context that had gained nothing, and then settled
+// anyway. So the rebuild clears it with a warning naming the loop (#1330 Q2,
+// 2026-09-23).
 //
-// So the rebuild clears it with a warning, and the limitation is documented
-// where an adopter reads it: the turn must be re-sent. The durable-turn field
-// that would recover it is filed as #1365 (owner ruling on #1330 Q2,
-// 2026-09-23, answering finding 4 of the owner Codex round on PR #1361).
-//
-// The completion event's empty Prompt is the SAME limitation, one field over
-// (#1330 Q8): taskPrompts is the one per-loop cache the rebuild does not
-// restore, because the record has no field to restore it from, so
-// LoopCompletedEvent.Prompt, LoopFailedEvent.Prompt and recoverEmptyContext's
-// fallback all see it empty after a replacement. It rides #1365 too, and it is
-// asserted here so the documented limitation is a tested one.
+// The record here carries no task_prompt either — the pre-#1365 shape — so the
+// completion publishes an empty Prompt; a record that carries one is
+// TestARebuiltLoopCarriesTheTurnItsRecordAccepted's W-b.
 //
 // spec: agentic-loop / The loop record names its outstanding request
 func TestARebuiltLoopDoesNotReAskForATurnItCannotRecover(t *testing.T) {
@@ -472,8 +465,7 @@ func TestARebuiltLoopDoesNotReAskForATurnItCannotRecover(t *testing.T) {
 	require.NotNil(t, completion.CompletionState,
 		"a settling completion builds its terminal record")
 	require.Empty(t, completion.CompletionState.Prompt,
-		"a rebuilt loop has no durable task prompt to publish (#1330 Q8, see #1365); an assertion "+
-			"that expects one here would be asserting a field the record does not carry")
+		"a record written before task_prompt existed has no prompt to publish")
 }
 
 // mintedRequestIDsFromResult returns the RequestID of every agent.request in a

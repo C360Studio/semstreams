@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/test/e2e/harness/processbarrier"
 )
 
@@ -142,5 +145,86 @@ func TestComposeProcessControllerRejectsIncompleteTarget(t *testing.T) {
 		if err := controller.kill(t.Context()); err == nil {
 			t.Fatalf("kill() accepted incomplete controller: %#v", controller)
 		}
+	}
+}
+
+// The W-b assertions of the mid-flight replacement check (#1365, task 3.7)
+// refuse each wrong shape the tier could observe, and name it.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestDeferredTurnCarriedOnceRefusesEveryWrongCount(t *testing.T) {
+	const (
+		loop  = "d4e5f607-1829-4a3b-8c4d-5e6f70819203"
+		birth = "Analyze the temperature sensor."
+		want  = loop + ":req:2:0"
+	)
+	turn := deferredTurnPrompt(loop)
+	user := func(content string) agentic.ChatMessage { return agentic.ChatMessage{Role: "user", Content: content} }
+	call := agentic.ChatMessage{Role: "assistant", ToolCalls: []agentic.ToolCall{{ID: "call_1", Name: "query_entity"}}}
+	answer := agentic.ChatMessage{Role: "tool", ToolCallID: "call_1", Content: "{}"}
+
+	tests := []struct {
+		name     string
+		request  *agentic.AgentRequest
+		wantFail string
+	}{
+		{"carried once after the birth prompt", &agentic.AgentRequest{RequestID: want,
+			Messages: []agentic.ChatMessage{user(birth), user(turn), call, answer}}, ""},
+		{"lost", &agentic.AgentRequest{RequestID: want,
+			Messages: []agentic.ChatMessage{user(birth), call, answer}}, "in 0 user messages"},
+		{"replayed over a carrier", &agentic.AgentRequest{RequestID: want,
+			Messages: []agentic.ChatMessage{user(birth), user(turn), user(turn), call, answer}}, "in 2 user messages"},
+		{"ahead of the conversation", &agentic.AgentRequest{RequestID: want,
+			Messages: []agentic.ChatMessage{user(turn), user(birth), call, answer}}, "before R1's conversation"},
+		{"birth prompt seated twice", &agentic.AgentRequest{RequestID: want,
+			Messages: []agentic.ChatMessage{user(birth), user(birth), user(turn), call, answer}}, "birth prompt in 2"},
+		{"another request", &agentic.AgentRequest{RequestID: loop + ":req:1:0",
+			Messages: []agentic.ChatMessage{user(birth), user(turn)}}, "next request id"},
+		// The 4a4e070e tier red: compaction summarized the turn into a system
+		// message. Quoted there, it is not carried — only a user message counts.
+		{"quoted only in a compaction summary", &agentic.AgentRequest{RequestID: want,
+			Messages: []agentic.ChatMessage{user(birth), {Role: "system", Content: "Summary so far: " + turn}, call, answer}},
+			"in 0 user messages"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkDeferredTurnCarriedOnce(tt.request, want, birth, turn)
+			assertCheck(t, err, tt.wantFail)
+		})
+	}
+}
+
+// spec: agentic-loop / The loop record names its outstanding request
+func TestCompletionPromptIsTheBirthPrompt(t *testing.T) {
+	const birth = "Analyze the temperature sensor."
+	turn := deferredTurnPrompt("d4e5f607-1829-4a3b-8c4d-5e6f70819203")
+	tests := []struct {
+		name     string
+		payload  message.Payload
+		wantFail string
+	}{
+		{"birth prompt", &agentic.LoopCompletedEvent{Prompt: birth}, ""},
+		{"no prompt", &agentic.LoopCompletedEvent{}, "carries no prompt"},
+		{"the continuation's turn", &agentic.LoopCompletedEvent{Prompt: turn}, "carries the continuation's turn"},
+		{"another prompt", &agentic.LoopCompletedEvent{Prompt: "something else"}, "want the birth prompt"},
+		{"a failure event", &agentic.LoopFailedEvent{Prompt: birth}, "want *agentic.LoopCompletedEvent"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertCheck(t, checkCompletionPrompt(tt.payload, birth, turn), tt.wantFail)
+		})
+	}
+}
+
+func assertCheck(t *testing.T, err error, wantFail string) {
+	t.Helper()
+	if wantFail == "" {
+		if err != nil {
+			t.Fatalf("check refused a correct observation: %v", err)
+		}
+		return
+	}
+	if err == nil || !strings.Contains(err.Error(), wantFail) {
+		t.Fatalf("check error = %v, want one naming %q", err, wantFail)
 	}
 }

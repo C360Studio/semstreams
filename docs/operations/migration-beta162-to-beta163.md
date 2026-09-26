@@ -1870,6 +1870,11 @@ them, because seating them would pin one iteration's budget at the top of the re
 the loop's life while every later request prepends a fresh one. Only a LEADING run is dropped, so a message of the
 conversation that happens to start with either string is kept.
 
+> **Superseded in part** by
+> [Durable accepted input; task intake settles by class (#1365, #1345)](#durable-accepted-input-task-intake-settles-by-class-1365-1345)
+> below: a deferred turn's text is on the record from that change and a rebuild replays it. The refusal of a turn
+> *arriving after* the replacement stands.
+
 **A deferred turn is durable as a MARKER only, and so is nothing about the task prompt.** A continuation admitted
 while the loop's model request is outstanding puts the user's turn into the loop's context and records only *that* a
 turn was admitted (`pending_continuation`). Across a process replacement the turn's TEXT is gone: it lived in the
@@ -1881,6 +1886,9 @@ some process holds, so a task naming a loop whose record belongs to a different 
 without effect**, with a warning naming both tasks and a `continuation_unheld` reason on
 `task_intake_rejections_total`. **Action:** re-send the turn once a redelivered input has rebuilt the loop; nothing
 retries it for you, and the submission itself still counted on `tasks_submitted_total`.
+
+> **Superseded** by the #1365 section below: `task_prompt` is on the record, so a rebuilt loop publishes its
+> prompt and recovery re-injects it.
 
 The loop's task prompt is the same limitation one field over. A loop rebuilt from its record and a retained request —
 the model-response and tool-result cold arms — does not recover it, so its `LoopCompletedEvent.prompt` and
@@ -2220,3 +2228,85 @@ model-lane deadline to another class.
 
 `grep -rn -E '"handler_error"|handler_error'` over the Go, TypeScript, Svelte, JSON and YAML of every other listed
 sister exited 1 with no output.
+
+## Durable accepted input; task intake settles by class (#1365, #1345)
+
+Not BREAKING under ADR-106 § 5: no exported symbol is removed or changed, and `task api:compat` reads `agentic` as
+additions only. The intake disposition change is behaviour on a failure path.
+
+### Two fields are added to `agentic.LoopEntity`
+
+Both are additive, `omitempty`, and not required by `Validate()` — the shape of the `published_request_id` field
+above. A record written before this tag decodes with both empty.
+
+- `pending_continuation_prompt` — the deferred turn's text while `pending_continuation` is true and
+  `pending_continuation_request_id` is empty. The task lane writes it in the same compare-and-swap as the marker; it
+  clears with the marker when the carrying request settles. It holds the LATEST uncarried turn: two turns deferred
+  behind the same request and a replacement in that window replay only the second.
+- `task_prompt` — the prompt of the task that bore the loop, written once by the birth write and never rewritten.
+
+### A rebuilt loop's terminal event carries its prompt — the birth prompt
+
+`LoopCompletedEvent.prompt` and `LoopFailedEvent.prompt` are populated after a process replacement (they were empty;
+a consumer that tolerated empty keeps working). On a loop that took a continuation they carry the **birth** prompt,
+where they carried the latest turn's before this tag. When GC or repair empties a loop's context,
+`recoverEmptyContext` re-injects the birth prompt as the "Original task" and then, while a deferred turn's marker
+is set, that turn after it — before this tag it re-injected the latest turn alone. A `length_truncated` answer does
+not end a deferral: when the request carrying a deferred turn is truncated and its compaction retry empties the
+context, the retry carries the birth prompt and the turn, and the retry's answer settles it. **Action:** a
+consumer that read `prompt` as "the latest user turn" reads the birth prompt now; the latest turn is the conversation's.
+
+### A replacement replays a deferred turn instead of dropping it
+
+A rebuild that finds an uncarried marker with its text replays the text after the retained conversation as the
+user's turn and keeps the marker, so the next completion asks the model the turn and names its carrier. It is asked
+**once**, except in one window the record cannot tell apart — a carrier minted after the turn, PubAck'd, whose record
+write was lost — where it is asked **twice** and the replay is logged at Info naming the loop and the retained
+request. It is never dropped there; before this tag it was dropped with a warning. A record carrying the marker
+without the text — written before this tag — is still cleared with that warning, and that turn must be re-sent.
+The terminal trajectory evidence embeds the whole record, so a loop that ended owing a turn carries its text there
+too — the auditable fact that the turn was accepted and never answered. **Action:** none; an operator correlating a
+doubled turn reads the replay line beside the adoption line.
+
+### Task intake settles by class (`agent.task`)
+
+No wire or subject change; observable through the consumer's redelivery behaviour and advisories.
+
+| Delivery | Before | After |
+|---|---|---|
+| undecodable, or a payload that is not a task | Ack | Terminate |
+| an over-depth task, or a continuation of a settled loop | Ack | Terminate |
+| any other `HandleTask` error | Ack | Retry, on the configured policy (default one redelivery after 30 s, `max_deliver` 2; the lane runs at MaxAckPending 1, so a Retry parks intake for that budget). The production producer is a cancelled delivery context — shutdown or stop, `HandleTask`'s first check — and nothing was registered, so the redelivery is a fresh birth. A fatal-class error quarantines instead, as on the response and tool-result lanes |
+| a continuation refused because its loop has tool calls in flight or awaits approval | Ack | Ack, unchanged — a defined refusal; re-send the turn |
+
+`tasks_submitted_total` is unchanged (at-least-once, above). **Action:** a producer that relied on a malformed task
+being consumed silently now sees it terminated, as the response and tool-result lanes already terminate theirs.
+
+### The whole loop record shares the NATS payload ceiling
+
+The record is one KV value under the server's `max_payload` (1 MiB default) — every field summed, a deferred turn's
+text included. The client's refusal is observed at the three writes that can meet it, never predicted:
+
+- a **birth** write it refuses terminates the task and releases the loop (before: retried to the redelivery budget
+  with the task lane parked); the cause names the loop and the record's size. The loop-execution entity, born just
+  before, is stamped `agent.loop.outcome` failed with `agent.loop.terminal-reason` `record_exceeds_payload_ceiling`,
+  and the refusal counts on `task_intake_rejections_total{lane="birth",reason="record_exceeds_payload_ceiling"}`;
+  no `agent.failed` event is published — it would carry the prompt the ceiling refused; a rule that fires on this
+  stamp and follows the reference with `read_loop_result` gets not-found — no completion record is written for a
+  birth the ceiling refused;
+- a deferred turn's **marker** write it refuses is logged at Warn with the size, the text is dropped from the live
+  loop so later writes fit, and the delivery is acknowledged: the turn is carried from process memory and is not
+  durable — neither is the marker. A deferred turn whose text the record refused for size is not recovered when a
+  later compaction empties the context: recovery re-injects only the birth prompt;
+- a **carrier** write it refuses quarantines the delivery, as any other carrier write failure does (unchanged).
+
+**Action:** a producer sending turns near the ceiling should expect the marker-write case; nothing else changes.
+
+### Measured impact across the family
+
+Read-only inventory (`openspec/changes/agentic-loop-durable-accepted-input/inventory.md` § Fact 6): no reader or
+writer of `pending_continuation*`, `task_prompt` or any prompt key on a loop record in semsource, semboids, semsage,
+semops, semdragon, semconnect, semmem, semembed, seminstruct, semmachina, semteams, semspec, semdev or servicesim.
+semsage's `processor/ui-api/types.go:14-27` decodes a narrow struct and ignores the new keys. Nothing to do. NOT RUN:
+`agent.task` producers per sister; the disposition change is invisible to a fire-and-forget producer except as a
+redelivery or a terminated delivery, so the line stands either way.

@@ -121,6 +121,12 @@ type HandlerResult struct {
 	// ErrLoopNotFound and the component's cold branch reads the record, which
 	// acknowledges a settled loop the same way (#1362, D35).
 	staleDrop bool
+
+	// deferredPrompt is the text of the turn a deferred continuation admitted
+	// (#1365). It travels from the admitted task to the deferred lane's marker
+	// write, which records it beside the marker from this value rather than by
+	// re-reading the live entity another lane may be moving (design § 6.9).
+	deferredPrompt string
 }
 
 // SyntheticDecideRequest carries the data needed for graphWriter to stamp
@@ -915,7 +921,7 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 		switch {
 		case err == nil:
 		case errors.Is(err, ErrLoopAlreadyExists):
-			entity, deferred, err = h.loopManager.attachContinuation(task.LoopID, task.TaskID)
+			entity, deferred, err = h.loopManager.attachContinuation(task.LoopID, task.TaskID, task.Prompt)
 			if err != nil {
 				// A settled loop (ErrLoopTerminal) and a loop with work in
 				// flight (ErrLoopBusy) both refuse the continuation outright;
@@ -1013,7 +1019,12 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 		Role:    "user",
 		Content: task.Prompt,
 	})
-	h.loopManager.CacheTaskPrompt(loopID, task.Prompt)
+	// The loop's prompt is the one that bore it (#1365): written once, at
+	// birth, and never by a continuation, whose turn is the record's pending
+	// text or its retained request.
+	if !continuation {
+		h.loopManager.CacheTaskPrompt(loopID, task.Prompt)
+	}
 
 	// If embedded context is present, add it directly (skips hydration)
 	if task.Context != nil && task.Context.Content != "" {
@@ -1094,11 +1105,19 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 	// outstanding response carries this turn into iteration N+1 instead.
 	if deferred {
 		keepTrajectory = true
-		return h.deferredContinuationResult(loopID, task.TaskID, entity), nil
+		return h.deferredContinuationResult(loopID, task.TaskID, task.Prompt, entity), nil
 	}
 
 	result, err := h.buildTaskRequest(loopID, task, entity, messages, tools)
 	if err != nil {
+		// A failure here, at startTrajectory or at GetLoop above leaves the
+		// loop registered (a birth) or its TaskID rebound (a continuation), and
+		// no record touched; the task lane retries it by class, and the retry
+		// meets HasActiveLoopForTask and is acknowledged as a duplicate with the
+		// turn nowhere durable. No production path fails at any of the three:
+		// startTrajectory always returns nil, GetLoop fails only on a release
+		// race, and buildTaskRequest's marshal and ResolveSubject never do — so
+		// no release code guards them (#1345, design § 6.12, § 7.3).
 		return HandlerResult{}, err
 	}
 	keepTrajectory = true
@@ -1116,7 +1135,7 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 // Agent execution evidence is a first-class capability (openspec/project.md
 // § Purpose) and ADR-098 routes an agent-execution signal to graph conditions
 // rather than to logs.
-func (h *MessageHandler) deferredContinuationResult(loopID, taskID string, entity agentic.LoopEntity) HandlerResult {
+func (h *MessageHandler) deferredContinuationResult(loopID, taskID, prompt string, entity agentic.LoopEntity) HandlerResult {
 	h.logger.Info("Continuation deferred behind an outstanding model request",
 		slog.String("loop_id", loopID),
 		slog.String("task_id", taskID),
@@ -1125,6 +1144,7 @@ func (h *MessageHandler) deferredContinuationResult(loopID, taskID string, entit
 		LoopID:            loopID,
 		State:             entity.State,
 		Deferred:          true,
+		deferredPrompt:    prompt,
 		PublishedMessages: []PublishedMessage{},
 		TrajectorySteps:   []agentic.TrajectoryStep{},
 		ContextEvents:     []agentic.ContextEvent{},
@@ -1437,7 +1457,16 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 	// outstanding mark here rather than in the success arms means an early
 	// return (timeout, terminal loop, budget exhausted) does not leave the loop
 	// looking like it is still waiting on a model.
-	h.loopManager.SettleRequest(loopID, response.RequestID)
+	//
+	// The early clear is for the outstanding mark. A deferred turn's carrier is
+	// settled with it on every status but one: a length_truncated answer did
+	// not answer the turn, so the deferral survives into the compaction retry
+	// and recoverEmptyContext can still re-inject it (#1365, F3).
+	if response.Status == agentic.StatusLengthTruncated {
+		h.loopManager.settleTruncatedRequest(loopID, response.RequestID)
+	} else {
+		h.loopManager.SettleRequest(loopID, response.RequestID)
+	}
 	result := HandlerResult{
 		LoopID:            loopID,
 		State:             entity.State,
@@ -3314,6 +3343,17 @@ func (h *MessageHandler) recoverEmptyContext(loopID string, cm *ContextManager, 
 		Content: fmt.Sprintf("[Context recovered after tool pair cleanup]\n\nOriginal task: %s\n\nPrevious tool calls encountered errors. Please continue or try a different approach.", prompt),
 	}
 	_ = cm.AddMessage(RegionRecentHistory, synthetic)
+	// The prompt is the BIRTH prompt (#1365, OQ5 (a′)), so a deferred turn
+	// would be in no request once its context is gone: the request built here
+	// is named its carrier and its answer settles the loop. The turn is
+	// re-injected after the birth prompt, from the one place it is stored —
+	// the entity's PendingContinuationPrompt — whether or not an earlier
+	// request carried it: a carrier's truncation retry keeps the deferral
+	// (F3), and an emptied context holds no user message, so this cannot
+	// inject the turn a second time.
+	if pending := h.loopManager.deferredContinuationPrompt(loopID); pending != "" {
+		_ = cm.AddMessage(RegionRecentHistory, agentic.ChatMessage{Role: "user", Content: pending})
+	}
 	return cm.GetContext()
 }
 

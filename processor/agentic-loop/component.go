@@ -25,6 +25,7 @@ import (
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/agentic-loop/internal/loopbucket"
 	"github.com/c360studio/semstreams/processor/agentic-loop/prompt"
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -41,6 +42,12 @@ const (
 	// turn is a turn no process can apply.
 	taskIntakeColdForkLane             = "cold-fork"
 	taskIntakeContinuationUnheldReason = "continuation_unheld"
+
+	// A birth whose record the NATS payload ceiling refused (#1365, #857).
+	// The reason is also the loop-execution entity's terminal reason: the
+	// entity was born before the record write, and this is its terminal.
+	taskIntakeBirthLane                  = "birth"
+	taskIntakeRecordExceedsCeilingReason = "record_exceeds_payload_ceiling"
 )
 
 // Component implements the agentic-loop processor
@@ -1470,16 +1477,21 @@ func (c *Component) settleUnheldContinuation(
 
 // handleTaskMessage processes incoming task messages
 func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
+	// A task that does not decode, or decodes to another payload, is
+	// terminated — never acknowledged as done — exactly as the response and
+	// tool-result lanes terminate theirs (#1345). No record can make it
+	// resumable: the bytes will never decode.
 	baseMsg, err := c.decoder.Decode(data)
 	if err != nil {
 		c.logger.Error("Failed to unmarshal BaseMessage", "error", err)
-		return nil
+		return natsclient.TerminateDelivery(fmt.Errorf("decode task BaseMessage: %w", err))
 	}
 
 	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
 	if !ok {
 		c.logger.Error("Unexpected payload type", "type", fmt.Sprintf("%T", baseMsg.Payload()))
-		return nil
+		return natsclient.TerminateDelivery(
+			fmt.Errorf("task payload is %T, not *agentic.TaskMessage", baseMsg.Payload()))
 	}
 	// The loop token the PRODUCER sent, read before preflight can reserve one.
 	// Everything below distinguishes "this message named a loop" from "intake
@@ -1538,30 +1550,36 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 		// intake started attaching (#1227). ERROR here would manufacture a
 		// false-alarm class out of a refusal that is working as designed. Every
 		// other handler failure keeps ERROR.
+		//
+		// It is a DEFINED refusal, acknowledged, and the turn must be re-sent.
+		// The class-derived Retry was rejected on this lane for the reason
+		// settleUnheldContinuation gives: a Retry parks the whole task lane,
+		// which runs at MaxAckPending 1, for the redelivery budget (#1345,
+		// design OQ3 (a)).
 		if errors.Is(err, ErrLoopBusy) {
 			c.logger.Warn("Task refused — the loop it names still has work in flight",
 				"error", err, "task_id", task.TaskID, "loop_id", task.LoopID)
 			return nil
 		}
 		c.logger.Error("Failed to handle task", "error", err, "task_id", task.TaskID)
-		return nil
+		return taskHandlerErrorDisposition(err)
 	}
 
 	// A deferred continuation is not a dedup and not a spawn: the loop already
 	// exists, the turn is already in its context, and the durable effect this
 	// delivery owns is the pending-continuation marker on the loop entity. There
 	// is nothing to publish and no graph birth to do — the loop was born on its
-	// first task. Persisting the entity is best-effort here exactly as it is on
-	// the spawn path below. Across a replacement the marker reaches the record
-	// but the turn's text does not: a rebuild clears a marker that names no
-	// carrying request, with a warning, and the turn must be re-sent
-	// (restoreLoopFromRequest in state.go; #1365 owns recovering it).
+	// first task. The marker and the turn's text reach the record in one
+	// compare-and-swap; any failure other than a lost compare-and-swap is
+	// best-effort. Across a replacement the rebuild replays the text after the
+	// retained conversation and keeps the marker, so the next completion
+	// carries the turn (restoreLoopFromRequest in state.go; #1365).
 	if result.Deferred {
 		c.logger.Debug("Task deferred behind the loop's outstanding model request",
 			slog.String("loop_id", result.LoopID),
 			slog.String("task_id", task.TaskID))
 		c.recordTrajectoryObservations(ctx, result)
-		if err := c.persistDeferredContinuationMarker(ctx, result.LoopID); errors.Is(err, natsclient.ErrKVRevisionMismatch) {
+		if err := c.persistDeferredContinuationMarker(ctx, result.LoopID, result.deferredPrompt); errors.Is(err, natsclient.ErrKVRevisionMismatch) {
 			// A lost compare-and-swap already released this loop, so the
 			// user's turn is held by nothing in this process. Acknowledging
 			// here would discard it; the delivery retries into whichever
@@ -1697,6 +1715,9 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 			"published_request_id", record.entity.PublishedRequestID,
 			"timeout_at", record.entity.TimeoutAt)
 	} else if err := c.createLoopState(ctx, result.LoopID); err != nil {
+		if errors.Is(err, nats.ErrMaxPayload) {
+			return c.terminateOversizedBirth(ctx, result.LoopID, task.TaskID, err)
+		}
 		if errors.Is(err, natsclient.ErrKVKeyExists) {
 			c.logger.Warn("Loop record already exists — this birth is not the one that created the loop",
 				"loop_id", result.LoopID, "task_id", task.TaskID)
@@ -1745,6 +1766,109 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 		return err
 	}
 	return nil
+}
+
+// taskHandlerErrorDisposition is how a HandleTask error settles, by its class
+// (#1345): a refusal naming invalid input — an over-depth task, a continuation
+// of a settled loop — is terminated, because the heartbeat policy does not read
+// the Invalid class and would retry it to exhaustion; anything else is returned
+// for the policy to derive (Fatal → Quarantine, else Retry). Nothing durable
+// was written before any of these, so a retried birth is a fresh birth.
+func taskHandlerErrorDisposition(err error) error {
+	if errs.IsInvalid(err) {
+		return natsclient.TerminateDelivery(err)
+	}
+	return err
+}
+
+// terminateOversizedBirth settles a birth whose record the NATS client refused
+// for size (#857, #1365). The whole rendered record exceeds the server's
+// payload ceiling, and every redelivery renders the same bytes into the same
+// refusal on a lane that runs at MaxAckPending 1, so the refusal is permanent:
+// the loop this process built is released and the task is terminated, with the
+// loop and the record's size in the cause (createLoopState names both).
+//
+// The loop-execution entity was already born (WriteSpawnIdentity runs before
+// the record write) and handleTaskMessage already recorded the loop's initial
+// trajectory observations, so the refusal is also that execution's terminal.
+// It does not go through the terminal owner: COMPLETE_<loopID>, the failure
+// event and the loop record all carry the prompt the ceiling just refused, and
+// there is no record to write a terminal onto. What it owes of the terminal
+// owner's failure path (handleLoopFailure → commitTerminal), in that path's
+// order (PR #1387 Codex round 1):
+//
+//   - error log: owed, done (first line below).
+//   - TransitionLoop(failed), UpdateCompletion: owed, done — there is no
+//     record for them to reach, but the terminal evidence embeds the held loop
+//     and the record IS the evidence of the loop's state at its terminal
+//     (design § 8), so it shows failed, not the state the birth left. A
+//     transition error is logged and termination continues: the loop is
+//     released in this same call, so there is nothing to retry against.
+//   - BuildFailureMessages (event with prompt, token totals, agent.failed
+//     message): not owed — ruled (PR #1387 re-review MEDIUM 1): the event and
+//     message carry the refused prompt. The stamp's event is built here
+//     without it, with the held loop's role and model.
+//   - terminal trajectory observation (loop.terminal, status failed): owed,
+//     done through recordTerminalObservation — same bounded batch, same
+//     non-blocking audit failure. Its evidence is the whole held loop, as
+//     every terminal observation's is (design § 8 (a); option 6.14 rejected),
+//     plus a failure event built without the prompt. The loop.started and
+//     model.requested observations recorded before the refusal carry the
+//     prompt already; the ruled omissions are about the payload ceiling, and
+//     trajectory evidence is not held to it.
+//   - createTerminalMarker (COMPLETE_<loopID>): not owed — ruled, as above.
+//   - stampTerminal → stampLoopFailureWithBudget, whose observed-audit-loss
+//     read gives agent.loop.evidence-integrity=incomplete: owed, done through
+//     that same helper, after the terminal observation (which can itself
+//     observe a loss) and before the release (which deletes the per-loop
+//     marker). Best-effort, as every graph stamp outside the terminal owner is:
+//     a failed or timed-out stamp is logged and counted by the writer and the
+//     helper, and the task is terminated regardless.
+//   - publishResults (agent.failed): not owed — ruled, as above.
+//   - settleTerminal, persistLoopState: not owed — no record exists; the
+//     create is what the ceiling refused.
+//   - recordCommittedTerminal (loops_failed_total{reason}, active_loops
+//     decrement, "Loop terminal committed" log): not owed as a committed
+//     terminal — none was committed; the refusal is counted as
+//     task_intake_rejections_total{lane="birth"} instead. The active-loops
+//     gauge keeps the +1 recordLoopCreated gave this birth, as every released
+//     birth arm above does: a residual of the same class as #1242, which
+//     records the continuation double increment and rebuilt-loop drift.
+//   - releaseLoopTransientState: owed, done last before the settlement.
+//
+// A rule that fires on this stamp and follows the reference with
+// read_loop_result gets not-found: no completion record is written for a birth
+// the ceiling refused.
+func (c *Component) terminateOversizedBirth(ctx context.Context, loopID, taskID string, err error) error {
+	c.logger.Error("Loop record exceeds the NATS payload ceiling at birth — the task is terminated",
+		"loop_id", loopID, "task_id", taskID, "error", err)
+	if c.metrics != nil {
+		c.metrics.recordTaskIntakeRejection(taskIntakeBirthLane, taskIntakeRecordExceedsCeilingReason)
+	}
+	if transErr := c.handler.loopManager.TransitionLoop(loopID, agentic.LoopStateFailed); transErr != nil {
+		c.logger.Warn("Oversized birth could not be transitioned to failed; terminating regardless",
+			"error", transErr, "loop_id", loopID, "task_id", taskID)
+	}
+	c.handler.loopManager.UpdateCompletion(loopID, agentic.OutcomeFailed, "", err.Error())
+	held, _ := c.handler.GetLoop(loopID)
+	failure := &agentic.LoopFailedEvent{
+		LoopID:   loopID,
+		TaskID:   taskID,
+		Outcome:  agentic.OutcomeFailed,
+		Reason:   taskIntakeRecordExceedsCeilingReason,
+		Error:    err.Error(),
+		Role:     held.Role,
+		Model:    held.Model,
+		FailedAt: time.Now(),
+	}
+	c.recordTerminalObservation(ctx, loopID, agentic.TrajectoryStatusFailed, agentic.TrajectoryErrorUnknown,
+		trajectoryTerminalEvidence{Loop: held, Failure: failure})
+	stampCtx, cancel := natsclient.DetachContextWithTrace(ctx, 5*time.Second)
+	// The helper logs and counts its own timeout; the stamp is best-effort here.
+	_ = c.stampLoopFailureWithBudget(stampCtx, loopID, failure)
+	cancel()
+	c.releaseLoopTransientState(loopID)
+	return natsclient.TerminateDelivery(err)
 }
 
 func (c *Component) writeLineageTriples(ctx context.Context, loopID string, related map[string]any) error {
@@ -2925,7 +3049,7 @@ func (c *Component) createLoopState(ctx context.Context, loopID string) error {
 		if natsclient.IsKVConflictError(err) {
 			return fmt.Errorf("create loop state %s: %w", loopID, natsclient.ErrKVKeyExists)
 		}
-		return fmt.Errorf("create loop state %s: %w", loopID, err)
+		return fmt.Errorf("create loop state %s (%d bytes): %w", loopID, len(data), err)
 	}
 	c.rememberLoopRevision(loopID, revision)
 	return nil
@@ -3085,8 +3209,9 @@ func (c *Component) persistLoopState(ctx context.Context, loopID string) error {
 // persistDeferredContinuationMarker commits the deferred-continuation marker
 // onto the record it READ, rather than onto a render of the live entity.
 //
-// A lane writes only the fields it owns. The deferred turn owns exactly two —
-// PendingContinuation and PendingContinuationRequestID — and the entity it
+// A lane writes only the fields it owns. The deferred turn owns exactly three —
+// PendingContinuation, PendingContinuationRequestID and, since #1365,
+// PendingContinuationPrompt, the turn's text — and the entity it
 // would otherwise render belongs, at this instant, to the tool lane: by the
 // time a continuation can defer, the request it is deferring behind has been
 // tracked as outstanding, which means handleToolsComplete has already
@@ -3104,7 +3229,16 @@ func (c *Component) persistLoopState(ctx context.Context, loopID string) error {
 // process observed, and a lost CAS releasing the loop and returning the
 // sentinel the task lane reads as "redeliver this turn to whoever holds the
 // record now" (docket OQ3).
-func (c *Component) persistDeferredContinuationMarker(ctx context.Context, loopID string) error {
+//
+// The whole record shares the NATS payload ceiling, the turn's text included
+// (#1365, #857). A write the client refuses for size is dropped rather than
+// retried into the same refusal: the text leaves the in-memory entity — only
+// while it is still this turn's, since a later turn may have replaced it — so
+// the loop's later record writes fit, a Warn names the loop and the size, and
+// the delivery is acknowledged as any best-effort marker write is. The turn is
+// in the loop's context and the next request carries it; it is not durable,
+// and neither is the marker, which is the state before the marker write.
+func (c *Component) persistDeferredContinuationMarker(ctx context.Context, loopID, prompt string) error {
 	if c.loopsBucket == nil {
 		return nil
 	}
@@ -3142,6 +3276,13 @@ func (c *Component) persistDeferredContinuationMarker(ctx context.Context, loopI
 	// request, so the marker names no carrier. LoopManager.attachContinuation
 	// writes the same pair in memory; this is that fact reaching the record.
 	entity.PendingContinuationRequestID = ""
+	// The turn's text, from the value this delivery admitted (#1365). A
+	// carrier's own record write can land between attachContinuation and this
+	// write; overlaying "" onto it then leaves a record whose carrier already
+	// holds the turn, which a replacement rebuilds as a logged duplicate or —
+	// when the carrier read the context before the turn was appended — as a
+	// single replay. Either way the turn is not lost (design § 7.1).
+	entity.PendingContinuationPrompt = prompt
 	data, err := json.Marshal(entity)
 	if err != nil {
 		return fmt.Errorf("marshal loop entity %s: %w", loopID, err)
@@ -3149,6 +3290,15 @@ func (c *Component) persistDeferredContinuationMarker(ctx context.Context, loopI
 
 	committed, err := c.loopsBucket.Update(ctx, loopID, data, revision)
 	if err != nil {
+		if errors.Is(err, nats.ErrMaxPayload) {
+			c.handler.loopManager.dropPendingContinuationPrompt(loopID, prompt)
+			c.logger.WarnContext(ctx, "Deferred turn not marked — the loop record with its text exceeds the NATS "+
+				"payload ceiling; the turn is carried from process memory and is not durable",
+				slog.String("loop_id", loopID),
+				slog.Int("record_bytes", len(data)),
+				slog.Int("prompt_bytes", len(prompt)))
+			return fmt.Errorf("persist deferred continuation marker %s (%d bytes): %w", loopID, len(data), err)
+		}
 		if natsclient.IsKVConflictError(err) {
 			c.releaseLoopTransientState(loopID)
 			return errs.WrapTransient(

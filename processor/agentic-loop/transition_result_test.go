@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/internal/deliverylane"
@@ -175,6 +176,106 @@ func TestTheToolLaneSettlesEachProducedErrorPairOnItsOwnDisposition(t *testing.T
 				require.Equal(t, agentic.LoopStateFailed, persistedLoop(t, bucket, loopID).State)
 			} else {
 				require.Empty(t, bucket.written(), "a refusal on this lane writes nothing")
+			}
+		})
+	}
+}
+
+// TestTheTaskLaneSettlesEachProducedErrorOnItsOwnDisposition drives the task
+// lane's failure sites through the production heartbeat policy (#1345), so the
+// decision asserted is the one the lane's binding settles. Before #1345 every
+// row below was acknowledged: the delivery was consumed and the task was gone,
+// with an error log as its only trace.
+//
+// Nothing durable precedes any of these failures, so the class decides: bytes
+// that never decode and invalid input are terminated, a transient refusal is
+// retried into a fresh birth, and the one defined refusal among them — a
+// continuation of a loop with work in flight — stays acknowledged, because a
+// Retry would park the whole task lane at MaxAckPending 1 (design OQ3 (a)).
+// There is no post-registration row: no production path fails there (design
+// § 6.12).
+//
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
+func TestTheTaskLaneSettlesEachProducedErrorOnItsOwnDisposition(t *testing.T) {
+	const heldLoop = "0d5e7f3a-2b1c-4e8d-9f60-7a8b9c0d1e2f"
+	task := func(taskID, loopID string, shape func(*agentic.TaskMessage)) []byte {
+		msg := agentic.TaskMessage{TaskID: taskID, LoopID: loopID, Role: "general", Model: "model-a",
+			Prompt: "a turn"}
+		if shape != nil {
+			shape(&msg)
+		}
+		return baseMessageBytes(t, &msg)
+	}
+	for _, row := range []struct {
+		name string
+		// held prepares a loop this process holds, when the row needs one.
+		held     func(t *testing.T, c *Component)
+		data     func(t *testing.T) []byte
+		cancel   bool
+		decision natsclient.DeliveryDecision
+	}{
+		{name: "undecodable bytes are terminated",
+			data:     func(*testing.T) []byte { return []byte("not a message") },
+			decision: natsclient.DeliveryDecisionTerminate},
+		{name: "a payload that is not a task is terminated",
+			data: func(t *testing.T) []byte {
+				return baseMessageBytes(t, &agentic.AgentResponse{RequestID: "r", Status: agentic.StatusComplete})
+			},
+			decision: natsclient.DeliveryDecisionTerminate},
+		{name: "an over-depth task is terminated",
+			data: func(*testing.T) []byte {
+				return task("task-too-deep", "", func(m *agentic.TaskMessage) { m.Depth, m.MaxDepth = 2, 2 })
+			},
+			decision: natsclient.DeliveryDecisionTerminate},
+		{name: "a task whose delivery was cancelled before anything is registered is retried",
+			data:     func(*testing.T) []byte { return task("task-cancelled", "", nil) },
+			cancel:   true,
+			decision: natsclient.DeliveryDecisionRetry},
+		{name: "a continuation of a settled loop is terminated",
+			held: func(t *testing.T, c *Component) {
+				require.NoError(t, c.handler.loopManager.TransitionLoop(heldLoop, agentic.LoopStateComplete))
+			},
+			data:     func(*testing.T) []byte { return task("task-after-the-end", heldLoop, nil) },
+			decision: natsclient.DeliveryDecisionTerminate},
+		{name: "a continuation of a loop with a tool call in flight is acknowledged as a defined refusal",
+			held: func(t *testing.T, c *Component) {
+				require.NoError(t, c.handler.loopManager.AddPendingTool(heldLoop, "call-in-flight"))
+			},
+			data:     func(*testing.T) []byte { return task("task-while-busy", heldLoop, nil) },
+			decision: natsclient.DeliveryDecisionAck},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			handler := NewMessageHandler(DefaultConfig())
+			c := releaseTestComponent(t, handler)
+			c.loopsBucket = &recordingLoopBucket{}
+			if row.held != nil {
+				_, err := handler.loopManager.CreateLoopWithID(heldLoop, "task-held", "general", "model-a", 5)
+				require.NoError(t, err)
+				seedLoopRecord(t, c, heldLoop)
+				row.held(t, c)
+			}
+			lane := c.taskInputHandler(time.Minute)
+			if row.cancel {
+				// handleTaskMessage's own answer, under a context cancelled
+				// before it ran. taskInputHandler would also turn a nil into
+				// Retry on its expired work context; this row pins that the
+				// lane's handler no longer answers nil there itself.
+				lane = func(ctx context.Context, data []byte) error {
+					cancelled, cancel := context.WithCancel(ctx)
+					cancel()
+					return c.handleTaskMessage(cancelled, data)
+				}
+			}
+			msg := &loopDeliveryOwnerMsg{data: row.data(t)}
+			settled, admitted := deliverylane.Consume(t.Context(), msg,
+				heartbeatPolicyForTest(t, "agent.task", lane), deliverylane.NewAdmission(nil, nil))
+
+			require.True(t, admitted)
+			require.Equal(t, row.decision, settled.Decision())
+			if row.cancel {
+				_, active := handler.loopManager.HasActiveLoopForTask("task-cancelled")
+				require.False(t, active,
+					"nothing may be registered, or the retry would be deduplicated into an acknowledgement")
 			}
 		})
 	}

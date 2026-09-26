@@ -40,7 +40,7 @@ func loopWithADeferredTurn(t *testing.T) (*Component, *recordingLoopBucket, stri
 	requestID := handler.loopManager.GenerateRequestID(loopID)
 	handler.loopManager.TrackRequest(requestID, loopID)
 
-	_, deferred, err := handler.loopManager.attachContinuation(loopID, "task-superseded-2")
+	_, deferred, err := handler.loopManager.attachContinuation(loopID, "task-superseded-2", "a second turn")
 	require.NoError(t, err)
 	require.True(t, deferred, "the fixture must leave a turn deferred behind the outstanding request")
 
