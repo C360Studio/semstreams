@@ -245,12 +245,15 @@ Implementation serializes with other shared loop changes and precedes #1377 (rul
 
 ## 5. Gates
 
-- [ ] 5.1 `task check:push` green (build, lint, tagged vet, schema drift, contract, race unit, integration); paste the
+- [x] 5.1 `task check:push` green (build, lint, tagged vet, schema drift, contract, race unit, integration); paste the
       summary lines, not "green".
+      Evidence: `task check:push` at `783a18b7` (coordinating session, PR comment): `exit=0`, 0 FAIL lines; build, lint, tagged vet ×3, schema drift clean, contract, `go test -race ./...` = 158 packages ok, canonical integration runner (`-race -tags=integration -p 2`, host lock) = 158 ok. Every commit since is docs, test or `configs/agentic.json` (`d9c50321`, `4a4e070e`, `7ae290bb`, `efe6e37c`, `d1e71f5e`, `9c6f6090`), each pushed with lint, the touched packages `-race`, tagged vet, schema drift and `spec:properties` green; hosted CI green at `d1e71f5e`. `task check:push` runs once more at the archive head; its lines land as a PR comment.
 - [x] 5.2 `task api:compat`: `agentic` reads additions only (two exported fields), `processor/agentic-loop` no exported
       change; paste the per-package lines.
       Evidence: `FAILING TOTAL: 15` (unchanged from main); `agentic` gains only `LoopEntity.PendingContinuationPrompt: added` and `LoopEntity.TaskPrompt: added`; `processor/agentic-loop` lists nothing from this branch.
-- [ ] 5.3 PR body: `implemented-by: <persona>`, the OQ0–OQ5 answers quoted from #1365, the 3.5 mutation runs, the 3.6
+- [x] 5.3 PR body: `implemented-by: <persona>`, the OQ0–OQ5 answers quoted from #1365, the 3.5 mutation runs, the 3.6
       control runs, the 3.7 tier line.
-- [ ] 5.4 Archive (both MODIFIED blocks sync: S:886 and, per the 2026-09-26 ruling, S:1587): `openspec archive agentic-loop-durable-accepted-input --yes` as the last content commit; the MODIFIED
+      Evidence: PR #1387 body — `implemented-by: opus (semstreams-developer)`; the rulings quoted from #1365 (OQ0–OQ5 (a) issuecomment-5843050955; (a′) + second MODIFIED block 5843291275; F3 (b) 5843437754; the conditional ruling 5843561393 applied 5843591939); M1–M12 mutation runs; the seven 3.6 controls by name; the 3.7 tier line (`7ae290bb`, `Scenario completed successfully` 5m35.2s `exit=0`).
+- [x] 5.4 Archive (both MODIFIED blocks sync: S:886 and, per the 2026-09-26 ruling, S:1587): `openspec archive agentic-loop-durable-accepted-input --yes` as the last content commit; the MODIFIED
       block syncs into `openspec/specs/agentic-loop/spec.md` and the REMOVED requirement leaves it (OQ0).
+      Evidence: archived in this commit (`openspec archive agentic-loop-durable-accepted-input --yes`: `~ 2, - 1`); both MODIFIED requirements synced into `openspec/specs/agentic-loop/spec.md` (the carried-once sentence present), the REMOVED requirement gone (OQ0); `task spec:properties` 413/413 against the synced spec; `openspec validate --specs` 57 passed; `task openspec:queue` empty.
