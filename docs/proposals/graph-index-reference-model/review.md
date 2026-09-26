@@ -50,3 +50,21 @@ independent implementation review and broker confirmation remain required.
 All review verdicts were read-only, with no tests or writes by the reviewer. They imply no new behavioral owner
 approval. Existing owner-approved issue #1292 and the current instruction to continue authorize this proof-only
 scope; a runtime or contract change remains outside it.
+
+## Successful status-reader limitation
+
+Implementation inspection found that successful BucketLastSeq acquisition requires an SDK concrete type with
+private construction state. No supported successful in-memory status fixture exists in the inspected SDK/test
+surface. Unsafe layout access was rejected. The architect recorded the supported existing unit projection seam
+in status-seam.md, SHA-256 `542e5ca819747dff59b989975f22d664297e11f1f535ce22ca1f4119d7a93e56`;
+its eight repository pins passed mechanical verification.
+
+The narrow correction received **DESIGN REVIEW PASS**, full design SHA-256
+`866efc6c5796c963fcf8285680fd0c847e1285cf0db3b6d5e7461107289b1d7b`.
+It uses real reconciliation/watermark/failure outcomes through existing production readiness projections and latch.
+Cold readiness is observed through the canonical gate. Actual handlers prove exact sets after bootstrap and
+classified refusal after injected write failure. The early-bootstrap mutation now targets the production latch.
+
+This supersedes the initial proposed successful status-reader adapter and direct computeIndexStatus unit claim.
+Actual computeIndexStatus assembly, server LastSeq and published-status evidence remain required in the existing
+real-NATS confirmation. No runtime/helper change, SDK shim or new behavioral approval is implied.
