@@ -603,15 +603,13 @@ func (f *modelFixture) hydrate() (*modelFixture, error) {
 	return other, nil
 }
 
-func runModelHistory(actions []modelAction) modelRunResult {
-	f, err := newModelFixture()
-	if err != nil {
-		return modelRunResult{err: err}
-	}
-	defer func() { f.cancel() }()
-	result := modelRunResult{}
-	fail := func(stage string, err error) modelRunResult {
-		return modelRunResult{activation: result.activation, err: fmt.Errorf("%s: %w", stage, err)}
+// runModelPrefix activates every mandatory observation before Rapid's optional
+// suffix. The fixture pointer changes only after fresh-owner hydration succeeds.
+func runModelPrefix(current **modelFixture) (modelActivation, error) {
+	f := *current
+	activation := modelActivation{}
+	fail := func(stage string, err error) (modelActivation, error) {
+		return activation, fmt.Errorf("%s: %w", stage, err)
 	}
 	// Two distinct owners are delivered before enumeration completes. Neither
 	// an empty bucket nor one completed owner can license a partial answer.
@@ -638,7 +636,7 @@ func runModelHistory(actions []modelAction) modelRunResult {
 	if err := f.parity(); err != nil {
 		return fail("initial convergence", err)
 	}
-	result.activation.cold++
+	activation.cold++
 
 	if err := f.writeWork(0, modelEntity{name: 2, literals: [2]bool{false, true},
 		edges: []modelEdge{{predicate: 1, target: 3}}}); err != nil {
@@ -647,14 +645,14 @@ func runModelHistory(actions []modelAction) modelRunResult {
 	if err := f.writeWork(0, modelEntity{name: -1}); err != nil {
 		return fail("B-to-empty replacement", err)
 	}
-	result.activation.replacement++
+	activation.replacement++
 	if err := f.deleteWork(0); err != nil {
 		return fail("target deletion preserving source assertion", err)
 	}
 	if err := f.deleteWork(1); err != nil {
 		return fail("source deletion retracting owned assertion", err)
 	}
-	result.activation.ownership++
+	activation.ownership++
 	if err := f.writeWork(0, modelEntity{name: -1}); err != nil {
 		return fail("restore first source", err)
 	}
@@ -679,24 +677,41 @@ func runModelHistory(actions []modelAction) modelRunResult {
 	if err := f.parity(); err != nil {
 		return fail("new work completion", err)
 	}
-	result.activation.stale++
+	activation.stale++
 	f.work(0, latest)
 	if err := f.parity(); err != nil {
 		return fail("duplicate work", err)
 	}
-	result.activation.duplicate++
+	activation.duplicate++
 	if err := f.failAndRepair(0, modelEntity{name: 0}); err != nil {
 		return fail("persistent Put failure and repair", err)
 	}
-	result.activation.failure++
-	result.activation.repair++
+	activation.failure++
+	activation.repair++
 	other, err := f.hydrate()
 	if err != nil {
 		return fail("fresh owner hydration", err)
 	}
 	f.cancel()
-	f = other
-	result.activation.hydration++
+	*current = other
+	activation.hydration++
+	return activation, nil
+}
+
+func runModelHistory(actions []modelAction) modelRunResult {
+	f, err := newModelFixture()
+	if err != nil {
+		return modelRunResult{err: err}
+	}
+	defer func() { f.cancel() }()
+	activation, err := runModelPrefix(&f)
+	if err != nil {
+		return modelRunResult{activation: activation, err: err}
+	}
+	result := modelRunResult{activation: activation}
+	fail := func(stage string, err error) modelRunResult {
+		return modelRunResult{activation: result.activation, err: fmt.Errorf("%s: %w", stage, err)}
+	}
 
 	for step, action := range actions {
 		stage := fmt.Sprintf("suffix %d %s", step, action)

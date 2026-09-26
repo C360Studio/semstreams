@@ -1,5 +1,9 @@
 # Issue #1292 focused source execution
 
+The focused unit and mutation results below describe the pre-lint-refactor helper. Current final-byte proof is
+recorded in [the lint-refactor refresh](lint-refactor/evidence.md). Existing broker confirmation remains valid:
+the extraction changes only a unit-test driver and leaves its production/broker test sources unchanged.
+
 Candidate HEAD at execution: `a1307297b600cfc763761aeca5450e858297487f`.
 Executed from `/Users/coby/Code/c360/semstreams-wt/codex/gh1292-graph-index-properties` against these test SHA-256 values:
 

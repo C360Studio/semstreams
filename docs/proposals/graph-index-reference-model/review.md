@@ -99,3 +99,24 @@ The existing real-NATS replacement/restart and failure/repair witnesses subseque
 runner on code candidate 684f2ead, with both named executions retained in evidence/broker-confirmation.log.
 No test or runtime source changed after implementation approval. This supplies the previously pending broker
 confirmation; the model claim's full pre-push gate and hosted CI remain pending.
+
+## Lint correction and evidence refresh
+
+The first full pre-push attempt on 5c26519d stopped at revive: runModelHistory had 109 statements, above the
+80-statement limit. It reached no unit or integration test stage. The retained log is
+evidence/lint-refactor/pre-refactor-gate.log.
+
+The developer extracted the mandatory prefix into runModelPrefix without changing the model, action bounds,
+production code or timings. Independent narrow review found no change in observations, partial activation/error
+reporting, fixture ownership/cleanup, or generated suffix and shrinking behavior. The final helper SHA-256 is
+`bbfdf4f859ab0a7ec4eebc5de97d6373e84e1a0e4e3a8b5e48fbe8c05bf11528`; the other two test hashes are unchanged.
+
+Fresh race executions passed 100 checks at seed 1292 (2.31s), seed 1293 (2.24s) and the default count (2.33s).
+All four production mutations triggered the intended assertions and passed after checksum-verified restoration.
+A synthetic suffix mismatch again shrank to one action and replayed. Lint and all 404 citations passed.
+The raw artifacts and exact commands are retained in evidence/lint-refactor/; earlier evidence remains historical.
+
+Final independent verdict: **APPROVE** for the extracted helper and refreshed evidence. The reviewer verified
+all 57 persisted checksums, compared 26 refreshed artifacts to their originals, checked exact source commands
+and base identity, and confirmed the corrected conformance pins. No tests or writes were performed by the reviewer.
+Full pre-push validation and hosted CI remain the subsequent landing gates.

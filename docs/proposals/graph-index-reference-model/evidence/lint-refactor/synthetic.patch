@@ -1,0 +1,17 @@
+--- /tmp/semstreams-gh1292-lintfix-evidence.688Kp8/synthetic.bak	2026-09-26 08:30:21
++++ processor/graph-index/reconciliation_model_helpers_test.go	2026-09-26 08:30:21
+@@ -772,6 +772,14 @@
+ 	}
+ 	if err := result.activation.complete(); err != nil {
+ 		return fail("activation", err)
++	}
++	if len(actions) > 0 { // synthetic model mismatch for shrink/replay
++		ghost := f.facts[3]
++		ghost.literals[0] = !ghost.literals[0]
++		f.facts[3] = ghost
++		if err := f.parity(); err != nil {
++			return fail("synthetic oracle mismatch", err)
++		}
+ 	}
+ 	return result
+ }

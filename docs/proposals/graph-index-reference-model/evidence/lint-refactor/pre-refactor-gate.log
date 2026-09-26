@@ -1,0 +1,18 @@
+task: [build:default] go build -o bin/semstreams ./cmd/semstreams
+task: [build:default] echo "Built bin/semstreams"
+Built bin/semstreams
+task: [lint:default] go vet ./...
+task: [lint:default] go fmt ./...
+task: [lint:default] go tool revive -config revive.toml -formatter friendly ./...
+  ⚠  https://revive.run/r#function-length  maximum number of statements per function exceeded; max 80 but got 109
+  processor/graph-index/reconciliation_model_helpers_test.go:606:1
+
+⚠ 1 problem (0 errors, 1 warning)
+
+Warnings:
+  1  function-length
+
+
+task: Failed to run task "check:push": task: Failed to run task "lint:default": exit status 1
+
+check_push_exit=201

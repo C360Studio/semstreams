@@ -1,0 +1,17 @@
+=== RUN   TestGraphIndexModelRequiredHistory
+    reconciliation_model_test.go:34: mandatory model observations: {cold:1 replacement:1 ownership:1 stale:1 duplicate:2 failure:1 repair:1 hydration:2}
+--- PASS: TestGraphIndexModelRequiredHistory (0.03s)
+=== RUN   TestGraphIndexModelEmptyAndHealthyLag
+--- PASS: TestGraphIndexModelEmptyAndHealthyLag (0.00s)
+=== RUN   TestGraphIndexModelStableNameKeyCaseReplacement
+--- PASS: TestGraphIndexModelStableNameKeyCaseReplacement (0.00s)
+=== RUN   TestGraphIndexModelRequiredDeleteFailureAndRepair
+2000/01/01 01:00:00 WARN failed to delete owned index row component=graph-index index=incoming key=acme.ops.robotics.gcs.drone.003.acme.ops.robotics.gcs.drone.001.726f626f746963732e61737369676e65642e6d697373696f6e error="kv delete acme.ops.robotics.gcs.drone.003.acme.ops.robotics.gcs.drone.001.726f626f746963732e61737369676e65642e6d697373696f6e: injected persistent incoming Delete failure"
+--- PASS: TestGraphIndexModelRequiredDeleteFailureAndRepair (0.00s)
+=== RUN   TestPropGraphIndexReconciliation
+    reconciliation_prop_test.go:114: rapid seed=1292
+    reconciliation_prop_test.go:117: [rapid] OK, passed 100 tests (2.307907791s)
+    reconciliation_prop_test.go:129: valid checks=100 activation={cold:100 replacement:100 ownership:100 stale:173 duplicate:196 failure:136 repair:136 hydration:149}
+--- PASS: TestPropGraphIndexReconciliation (2.31s)
+PASS
+ok  	github.com/c360studio/semstreams/processor/graph-index	3.899s
