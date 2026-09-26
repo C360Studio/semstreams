@@ -317,6 +317,9 @@ is inside `e2e:all`.
 
 ## 10. Owner docket — alternative first, recommendation marked
 
+**RULED 2026-09-26** (#1301, transcribed from session — the owner's words govern): **OQ1 (a)**, **OQ2 (a)**; the two
+"decided, not asked" items stand.
+
 | # | Question | (a) | (b) | Recommendation |
 |---|---|---|---|---|
 | OQ1 | E2E gate for this PR | `task e2e:all` once locally at the final revision + the ladder in CI | Only the tiers whose options or logging change (core, structural, statistical, semantic, lifecycle, ops, research-graph, agentic, slow-consumer — nine of twelve) | **(a)** — every service's compose contract changes and five tiers start forwarding logs; the first run reveals any under-declared row, and (b) is already nine tiers. |

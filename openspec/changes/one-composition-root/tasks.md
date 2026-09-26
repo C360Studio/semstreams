@@ -11,9 +11,10 @@ to a doc sentence or "not supported" before it gets code.
 
 - [x] 0.1 Independent pre-owner design review of `design.md` (one round, `design-review.md` at `dfaeb69c`): DESIGN
       CHANGES REQUESTED — every finding applied in the amendment commit; the shape is unchanged.
-- [ ] 0.2 The § 10 docket (OQ1, OQ2) is posted on #1301 and the owner rules; each ruling is transcribed under the
-      docket as "transcribed from session … owner's words govern" if given in-session. The two "decided, not asked"
-      items (D8/D14 Phase-A reversal, D15 parser convergence) are named in the same post.
+- [x] 0.2 The § 10 docket (OQ1, OQ2) is posted on #1301 (issuecomment-5846936695) and the owner ruled 2026-09-26,
+      in-session, transcribed under the docket: **OQ1 (a)** — `task e2e:all` once locally + the ladder; **OQ2 (a)** —
+      the `init()` vocabulary superset is a residual, nothing removed. The two "decided, not asked" items (D8/D14,
+      D15) drew no objection and stand.
 - [ ] 0.3 PR #1390's body carries `implemented-by: <persona>` before the first implementation push; the worktree is
       rebased onto `origin/main` (`git fetch origin main` first).
 
