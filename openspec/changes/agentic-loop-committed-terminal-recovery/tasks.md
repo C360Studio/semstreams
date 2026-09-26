@@ -95,7 +95,7 @@ takes (i); **[OQ7 (b)]** likewise. Under an option not taken nothing replaces it
       `checked` after the 1.1 block; `published` after `processor/agentic-loop/component.go:2307` — `if err := c.publishResults(ctx, result); err != nil {`'s
       block, before `stampPublishedRequest`. `git grep -n "testApprovedDispatchHook\|testCarrierHook" -- '*.go' ':!*_test.go'`
       → exactly 6 lines (2 fields, 4 calls). Cheaper row (OQ5): the `dispatched` call alone — then T7–T9 stay
-      unforced and 4.3 is marked unproven. DONE: 2 fields and 4 nil-checked call sites (`git grep` prints 12 lines: each call site is two lines, each field one line plus one doc-comment line naming it). `before_dispatch` is consumed by `TestALoopReleasedBeforeTheApprovedCallIsRegisteredIsRetriedThenInapplicable`; `checked` has no landed consumer.
+      unforced and 4.3 is marked unproven. DONE: 2 fields and 4 nil-checked call sites (`git grep` prints 12 lines: each call site is two lines, each field one line plus one doc-comment line naming it). `before_dispatch` is consumed by `TestALoopReleasedBeforeTheApprovedCallIsRegisteredIsRetriedThenInapplicable` and `TestARejectWhoseLoopWasReleasedAfterItsGateResolvedIsSettledColdOnItsFirstDelivery`; `checked` by `TestACancelBetweenTheCarriersCheckAndItsPublicationLetsOnePublicationOut` (review 1 MEDIUM 3).
 
 ## 4. OQ2 (b) and OQ7 (b) only
 
@@ -142,16 +142,24 @@ takes (i); **[OQ7 (b)]** likewise. Under an option not taken nothing replaces it
       and, separately, an approve) and the cancel arm (a cancel signal on the released W2 loop → Retry, record still
       gated): under (a) assert one `tool.execute` on the approve and adoption when its result completes the batch;
       **[OQ2 (b)]** assert nothing dispatched, `approval_inapplicable` +1, record `failed` with the saved reason, and
-      mutation evidence: delete the marker read of 4.1 → red on "no tool.execute". DONE (OQ2 (a)): `TestASweepAtTheIterationCapWhosePublishFailedSettlesOnTheNextAnswer` (reject, approve, cancel arms).
+      mutation evidence: delete the marker read of 4.1 → red on "no tool.execute". DONE (OQ2 (a)): `TestASweepAtTheIterationCapWhosePublishFailedSettlesOnTheNextAnswer` (reject, approve, cancel arms) in `approval_cap_sweep_integration_test.go`, counting `tool.execute` on a real stream: the reject publishes none, the approve publishes one (review 1 LOW 9).
 - [x] 5.5 Fix the one test the check changes: `processor/agentic-loop/publish_phase_fatal_test.go:31` — `t.Parallel()` — `TestPublishPhaseFailureLeavesPersistHandlerResultFatalClassified`
       creates `loop-publish-phase` in the handler (`CreateLoopWithID`, as `trajectory_eviction_internal_test.go:39`)
       so its non-terminal result passes the check and the classification stays the publish's. Run every
       `persistHandlerResult` test call site (`git grep -n "persistHandlerResult(" -- 'processor/agentic-loop/*_test.go'`
       → 28 at base) and name any other that drives a non-terminal result on an unheld loop. DONE: `publish_phase_fatal_test.go` holds its loop. With the check applied, the full unit and integration suites for the package showed only this test and the two probe tests red; no other `persistHandlerResult` call site drives a non-terminal result on an unheld loop.
-- [x] 5.6 Mutation evidence for the WIRING (`cp` backup, `md5 -q` before and after equal): delete the 1.1 block → T3
-      red on "approved tool.execute unchanged" and "no carrier write", T4 red on acks and health; **[OQ3 (ii)]** delete
-      the 2.1 refusal → T7 red on "no carrier write" and the second component's `stale_loop_id`, T8 red on acks/health,
-      T9 red on the write count. Record the runs in the PR body. **[OQ2 (b)]**: the 5.4 mutation. DONE: M1 (delete the 1.1 block), M2 (delete the 2.1 refusal), M3 (drop the stamp mapping), M4 (revert the 2.3 wrap); each red, each restored with equal `md5 -q`. Runs recorded for the PR body.
+- [x] 5.6 Mutation evidence for the WIRING (`cp` backup, `md5 -q` before and after equal). Observed (the design's
+      pre-(ii) predictions for M1 are superseded — under OQ3 (ii) the 2.1 refusal also produces the write refusal, the
+      Ack and the `terminal_unproven` count, so stopping the publication is the entry check's only unshared effect):
+      M1, delete the 1.1 block → T3 red on "no approved tool.execute is published for a loop cancelled in memory" and
+      "the redelivery publishes nothing", T4 red on "nothing is published" (its acks and health stay green);
+      the `checked` variant stays green under M1 (the cancel lands after the check). **[OQ3 (ii)]** M2, delete the 2.1
+      refusal → T7 red on the disposition, "no carrier write", the record state and the second process's cancel
+      (`stale_loop_id`); T8's approval arm red on acks and drain; T9 red on the write count (two writers); the
+      `checked` variant red on "no carrier write", the Nak, the revision and "exactly one terminal writer". M3, drop
+      the stamp mapping → T8's tool arm red on acks and drain. M4, revert the 2.3 wrap → `state_test.go` red on the
+      sentinel, and the released reject red on its first-delivery disposition (Nak instead of the cold Ack, no
+      `approval_inapplicable`). Every run restored with equal `md5 -q`; runs recorded for the PR body.
 - [x] 5.7 Controls green by name with `-count=1`, output pasted — the 14 order tests the archived transition-result
       design § 5 lists: `TestAnApprovalGateIsWrittenBeforeItsEventIsPublished`,
       `TestTheApprovalTimeoutSweepNamesTheRequestItPublished`, `TestBirthRefusesASecondCreateForTheSameLoop`,
@@ -166,9 +174,9 @@ takes (i); **[OQ7 (b)]** likewise. Under an option not taken nothing replaces it
       `TestAColdApprovalAnswerRebuildsTheLoopAndAppliesIt` (`processor/agentic-loop/approval_restore_order_test.go:316`),
       `TestTheResultShapeDecidesWhatAFailedPublishLeavesBehind`, `TestApprovalLanePublishesBeforeItWrites`
       (loop_carrier_test.go:70/:106). **[OQ3 (ii)]** the A8 test `TestAnApprovalWhoseRecordMovedIsRetried` and the
-      S:886 "recovered cold" scenario's test(s) are re-read for the first-delivery cold branch. DONE: all 17 named controls PASS with `-count=1`. A8 re-read: `TestAnApprovalWhoseRecordMovedIsRetried` drives a lost CAS, not ARH's re-read; no test forces the ARH re-read race (no seam between the resolve and `GetLoop`) — the first-delivery cold branch rests on the sentinel test and the fixture rows.
+      S:886 "recovered cold" scenario's test(s) are re-read for the first-delivery cold branch. DONE: all 17 named controls PASS with `-count=1`. A8 re-read: `TestAnApprovalWhoseRecordMovedIsRetried` drives a lost CAS, not ARH's re-read; the literal ARH re-read race stays unforced (no seam between the resolve and `GetLoop`), but block 1's changed scenario is forced on the lane one read later by `TestARejectWhoseLoopWasReleasedAfterItsGateResolvedIsSettledColdOnItsFirstDelivery` (a reject reaching `HandleToolResult`'s `GetLoop`; M4 turns it red).
 - [x] 5.8 `openspec validate agentic-loop-committed-terminal-recovery --strict` green; `task spec:properties` count
-      moves by the new `// spec:` citations (`git add` the new test file first). DONE: `openspec validate --strict` valid; `task spec:properties` 430 -> 438 (six in the race file, T1, T2).
+      moves by the new `// spec:` citations (`git add` the new test file first). DONE: `openspec validate --strict` valid; `task spec:properties` 430 -> 440 (eight in the race file, T1, T2).
 - [x] 5.9 Migration: replace `docs/operations/migration-beta162-to-beta163.md:2015` — `**Two residuals, recorded and not reconciled** (#1362 issuecomment-5808903072 and issuecomment-5809906669):`
       through `:2025` with design § 5 (the bracketed (b) variant only under OQ2 (b); the spawn-path source
       `docs/operations/migration-beta162-to-beta163.md:2019` — `a different outcome is quarantined. The same shape follows a spawn-path birth failure under a producer-supplied loop` is kept);
