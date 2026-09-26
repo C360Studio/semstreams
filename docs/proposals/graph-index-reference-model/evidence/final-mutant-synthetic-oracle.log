@@ -1,0 +1,13 @@
+=== RUN   TestPropGraphIndexReconciliation
+    reconciliation_prop_test.go:114: rapid seed=1292
+    reconciliation_prop_test.go:117: [rapid] failed after 0 tests: history=[kind=1 id=0 entity={name:-1 literals:[false false] edges:[]}]: synthetic oracle mismatch: predicate core.identity.name: got [], want [acme.ops.robotics.gcs.drone.004]
+        To reproduce, specify -run="TestPropGraphIndexReconciliation" -rapid.seed=1292
+        Failed test output:
+    reconciliation_prop_test.go:53: [rapid] draw suffixLength: 1
+    reconciliation_prop_test.go:68: [rapid] draw kind_00: 0x1
+    reconciliation_prop_test.go:69: [rapid] draw id_00: 0
+    reconciliation_prop_test.go:124: history=[kind=1 id=0 entity={name:-1 literals:[false false] edges:[]}]: synthetic oracle mismatch: predicate core.identity.name: got [], want [acme.ops.robotics.gcs.drone.004]
+--- FAIL: TestPropGraphIndexReconciliation (2.05s)
+FAIL
+FAIL	github.com/c360studio/semstreams/processor/graph-index	2.575s
+FAIL

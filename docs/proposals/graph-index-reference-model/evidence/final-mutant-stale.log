@@ -1,0 +1,21 @@
+=== RUN   TestGraphIndexModelRequiredHistory
+    reconciliation_model_test.go:29: A-to-B replacement: predicate robotics.status.armed: got [acme.ops.robotics.gcs.drone.001], want []
+--- FAIL: TestGraphIndexModelRequiredHistory (0.01s)
+=== RUN   TestGraphIndexModelEmptyAndHealthyLag
+--- PASS: TestGraphIndexModelEmptyAndHealthyLag (0.00s)
+=== RUN   TestGraphIndexModelStableNameKeyCaseReplacement
+--- PASS: TestGraphIndexModelStableNameKeyCaseReplacement (0.00s)
+=== RUN   TestGraphIndexModelRequiredDeleteFailureAndRepair
+2000/01/01 01:00:00 WARN failed to delete owned index row component=graph-index index=incoming key=acme.ops.robotics.gcs.drone.003.acme.ops.robotics.gcs.drone.001.726f626f746963732e61737369676e65642e6d697373696f6e error="kv delete acme.ops.robotics.gcs.drone.003.acme.ops.robotics.gcs.drone.001.726f626f746963732e61737369676e65642e6d697373696f6e: injected persistent incoming Delete failure"
+--- PASS: TestGraphIndexModelRequiredDeleteFailureAndRepair (0.00s)
+=== RUN   TestPropGraphIndexReconciliation
+    reconciliation_prop_test.go:114: rapid seed=1292
+    reconciliation_prop_test.go:117: [rapid] failed after 0 tests: history=[]: A-to-B replacement: predicate robotics.status.armed: got [acme.ops.robotics.gcs.drone.001], want []
+        To reproduce, specify -run="TestPropGraphIndexReconciliation" -rapid.seed=1292
+        Failed test output:
+    reconciliation_prop_test.go:53: [rapid] draw suffixLength: 0
+    reconciliation_prop_test.go:124: history=[]: A-to-B replacement: predicate robotics.status.armed: got [acme.ops.robotics.gcs.drone.001], want []
+--- FAIL: TestPropGraphIndexReconciliation (0.03s)
+FAIL
+FAIL	github.com/c360studio/semstreams/processor/graph-index	0.575s
+FAIL

@@ -1,0 +1,11 @@
+--- /tmp/semstreams-gh1292-model-mutations.TILVxn/owner_reconcile.go.bak	2026-09-26 07:49:42
++++ processor/graph-index/owner_reconcile.go	2026-09-26 07:52:03
+@@ -73,7 +73,7 @@
+ 
+ 	var failures []error
+ 	for _, key := range stale {
+-		delErr := bucket.Delete(ctx, key)
++		delErr := error(nil) // mutation: omit stale-row deletion
+ 		if natsclient.IsKVNotFoundError(delErr) {
+ 			delErr = nil
+ 		}

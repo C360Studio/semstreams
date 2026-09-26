@@ -1,0 +1,11 @@
+--- /tmp/semstreams-gh1292-model-mutations.TILVxn/component.go.bak	2026-09-26 07:53:23
++++ processor/graph-index/component.go	2026-09-26 07:54:14
+@@ -1143,7 +1143,7 @@
+ 	// unbounded per-entity generation ledger.
+ 	completionAllowed := c.reconcileEntity(ctx, work.entityID)
+ 	if completionAllowed && c.watermark != nil && work.completionRevision > 0 {
+-		c.watermark.Complete(work.entityID, work.completionRevision)
++		c.watermark.Complete(work.entityID, c.watermark.Observed()) // mutation: premature high completion
+ 	}
+ }
+ 
