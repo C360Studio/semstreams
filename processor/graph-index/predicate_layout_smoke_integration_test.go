@@ -571,8 +571,7 @@ func provePredicateSmokeBucketConsumer(
 		// Best-effort observation for streams too small to guarantee the
 		// consumer outlives the polling granularity (gh#555): a consumer
 		// that delivered all keys can be gone before the first Info poll —
-		// the Stop() tolerance for ErrBadSubscription below anticipates
-		// exactly that fast-completion case.
+		// the Stop() tolerance below anticipates that fast-completion case.
 		deadline := time.Now().Add(time.Second)
 		for time.Now().Before(deadline) && !observeVisibility() {
 			time.Sleep(time.Millisecond)
@@ -580,7 +579,9 @@ func provePredicateSmokeBucketConsumer(
 		t.Logf("consumer visibility (observation-only): baseline=%d high_water=%d", baseline, highWater)
 	}
 	stopErr := lister.Stop()
-	require.True(t, stopErr == nil || errors.Is(stopErr, gonats.ErrBadSubscription),
+	// Completed KeyListers may already have stopped and deleted their consumer.
+	require.True(t, stopErr == nil || errors.Is(stopErr, gonats.ErrBadSubscription) ||
+		errors.Is(stopErr, gonats.ErrConsumerNotFound),
 		"stop held key lister: %v", stopErr)
 	for range lister.Keys() {
 	}
