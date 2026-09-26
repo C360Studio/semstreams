@@ -190,6 +190,16 @@ type MessageHandler struct {
 	// via the CRUD tools) take effect immediately on the next loop
 	// without a component restart.
 	personaFragments PersonaFragmentSource
+
+	// testApprovedDispatchHook, if non-nil, is called on the approval lane at
+	// two named stages of an approve or modify (#1377, design § 3.3):
+	// "before_dispatch" after the loop-deadline check and before the decision
+	// switch, and "dispatched" after dispatchToolCall has registered the call
+	// as pending and before the result reaches the carrier. Tests pause there
+	// to force a cancel into the window; no log line exists after
+	// AddPendingTool to pause on. Precedent: Component.testPublishHook.
+	// Always nil in production.
+	testApprovedDispatchHook func(loopID, stage string)
 }
 
 // PersonaFragmentSource is the minimum surface the handler needs to pull
@@ -2652,6 +2662,14 @@ func (h *MessageHandler) handleCompleteResponse(result *HandlerResult, loopID st
 // The marker wraps the context error rather than replacing it, so every
 // existing errors.Is(err, context.Canceled) reader is unaffected.
 var errCancelledBeforeMutation = errors.New("cancelled before any loop mutation")
+
+// errTerminalOwnedElsewhere is the carrier's own write refusing to render a
+// terminal snapshot for a non-terminal result (#1377 W3, ordering A and C;
+// W4, ordering B): the loop went terminal in memory, or was released, after
+// the carrier's entry check. The terminal owner is the one writer of a
+// terminal record, so the carrier maps this to settleTerminalGuard and lets
+// the record decide the delivery.
+var errTerminalOwnedElsewhere = errors.New("loop is terminal in memory or no longer held; the terminal owner writes its record")
 
 // terminalGuardResult is the effect-free answer both handlers give a delivery
 // that finds its loop already terminal in memory.

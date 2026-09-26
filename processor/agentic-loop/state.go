@@ -708,13 +708,18 @@ func (m *LoopManager) GetLoop(loopID string) (agentic.LoopEntity, error) {
 
 	entity, exists := m.loops[loopID]
 	if !exists {
-		return agentic.LoopEntity{}, errs.Wrap(fmt.Errorf("loop %s not found", loopID), "LoopManager", "GetLoop", "find loop")
+		// ErrLoopNotFound, as CancelLoop and ResolveApprovalIfPending wrap it:
+		// the carrier reads "no longer held" by the sentinel (#1377 W3/W4), so
+		// a released loop is told apart from an invalid ID, which stays
+		// Invalid above and is never acknowledged as stale.
+		return agentic.LoopEntity{}, errs.Wrap(fmt.Errorf("loop %s: %w", loopID, ErrLoopNotFound), "LoopManager", "GetLoop", "find loop")
 	}
 
 	// A struct copy is shallow, so the applied set would travel out of this
 	// lock as the SAME map the live entity holds — and every caller reads the
-	// returned entity after this lock is released. marshalLoopRecord marshals
-	// it into the record's bytes while StoreToolResult, on the handler
+	// returned entity after this lock is released. The record writers
+	// (writeLoopRecord, marshalLoopRecord) marshal it into the record's bytes
+	// while StoreToolResult, on the handler
 	// goroutine, writes the same map under this mutex: a data race, not a
 	// stale read. One copy makes the returned entity a value the caller owns.
 	//

@@ -30,7 +30,15 @@ import (
 func TestPublishPhaseFailureLeavesPersistHandlerResultFatalClassified(t *testing.T) {
 	t.Parallel()
 
-	c := releaseTestComponent(t, NewMessageHandler(DefaultConfig()))
+	handler := NewMessageHandler(DefaultConfig())
+	c := releaseTestComponent(t, handler)
+	// The loop is held: the carrier's entry check (#1377) settles a
+	// non-terminal result for a loop this process does not hold from its
+	// record before anything is published, so an unheld loop would observe
+	// that check, not the publish phase.
+	loopID, err := handler.loopManager.CreateLoopWithID(handler.loopManager.GenerateLoopID(),
+		"task-publish-phase", "general", "test-model")
+	require.NoError(t, err)
 	// Constructed, never connected: publishToStream refuses with
 	// ErrNotConnected before it touches a socket.
 	client, err := natsclient.NewClient("nats://127.0.0.1:1")
@@ -40,7 +48,7 @@ func TestPublishPhaseFailureLeavesPersistHandlerResultFatalClassified(t *testing
 	// Non-terminal, and loopsBucket stays nil, so the only thing that can fail
 	// in this result is the publish.
 	result := HandlerResult{
-		LoopID:            "loop-publish-phase",
+		LoopID:            loopID,
 		State:             agentic.LoopStateExploring,
 		PublishedMessages: []PublishedMessage{{Subject: "agent.first", Data: []byte(`{"n":1}`)}},
 	}
@@ -54,7 +62,7 @@ func TestPublishPhaseFailureLeavesPersistHandlerResultFatalClassified(t *testing
 	// A result with nothing to publish reaches the same line and succeeds, so
 	// the classification above is the publish's, not the path's.
 	require.NoError(t, c.persistHandlerResult(t.Context(),
-		HandlerResult{LoopID: "loop-publish-phase", State: agentic.LoopStateExploring}))
+		HandlerResult{LoopID: loopID, State: agentic.LoopStateExploring}))
 }
 
 // And the mapping that consumes it. The heartbeat work function must test

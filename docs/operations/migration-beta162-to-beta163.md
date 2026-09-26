@@ -2020,19 +2020,44 @@ What moved:
 watches `AGENT_LOOPS` for it and does not assume it is terminal when the event arrives. A consumer that already keys
 on the record's terminal `state` (a KV watch) sees the same transition, slightly later.
 
-**Two residuals, recorded and not reconciled** (#1362 issuecomment-5808903072 and issuecomment-5809906669):
+**Two residuals, now bounded** (#1362 issuecomment-5808903072 and issuecomment-5809906669; #1377):
 
-- A terminal whose record update loses its compare-and-swap after `COMPLETE_<loopID>` and its event have landed is not
-  reconciled. The loop may keep running under a durable terminal and a published event, and its own later terminal of
-  a different outcome is quarantined. The same shape follows a spawn-path birth failure under a producer-supplied loop
-  ID. A watcher keyed on the record's terminal `state` may never see that loop go terminal. One keyed on
-  `COMPLETE_<loopID>` counts it as finished while it runs.
+- A terminal whose record update loses its compare-and-swap after `COMPLETE_<loopID>` and its event have landed leaves
+  a durable terminal and a published event over a live record — whether the record moved under a second process,
+  under the process's own adoption of a newer retained request for a loop it still held, or under a spawn-path
+  birth failure with a producer-supplied loop ID. The record converges at the loop's next terminal commit in
+  whichever process holds it next: a terminal of the same kind adopts the durable terminal, republishes the saved
+  event and writes the record terminal; a terminal of a different kind is refused and quarantined — the first
+  terminal wins. Until then the loop runs on under a durable terminal, bounded only by its own iteration budget and
+  `timeout_at` (no time bound while `timeout_at` is zero or the loop is gated). A watcher keyed on `COMPLETE_<loopID>`
+  counts it as finished while it runs; one keyed on the record's terminal `state` sees it at that next terminal.
 - An approval-timeout sweep terminal (its `max_iterations` auto-reject, or the loop's own timeout) that commits
-  `COMPLETE_<loopID>` and then fails to publish is not reconciled either. A timer is never redelivered, so the record
-  stays `awaiting_approval`. After a `max_iterations` terminal, a later human answer is applied cold on a loop that
-  already has a durable failed terminal. After the loop's own timeout, a later answer to that gate re-derives the
-  timeout on the rebuilt loop and adopts the durable failed terminal, so the loop settles on that answer. (The owner
-  ruling cited above covers the `max_iterations` case; the loop-timeout case is this change's residual beside it.)
+  `COMPLETE_<loopID>` and then fails to publish leaves a durable failed terminal under a record that stays
+  `awaiting_approval`; a timer is never redelivered. The record converges only on the next answer to that gate: a
+  reject, and any answer to a loop past its own deadline, dispatches nothing and adopts the durable terminal; an
+  approve of a loop at its iteration cap dispatches the approved call once, and the terminal is adopted when that
+  call's result completes the batch. A cancel of that loop does not settle it: the cold cancel arm adopts only a
+  cancel marker, so the cancel is retried until the signal consumer's `MaxDeliver` is exhausted and is recorded in the
+  MaxDeliver ledger, never applied.
+
+**A cancel racing a result on its way to the record.** A non-terminal result — an approved call, a model response's
+tool batch, a tool result's next request, a sweeper auto-reject — that reaches the loop-record carrier after a cancel
+moved the loop terminal in memory, or after the loop was released, now publishes nothing and writes nothing; one that
+passed the carrier's check but finds the loop terminal or released when its record is rendered writes nothing. The
+record decides the delivery, and the redelivered input is acknowledged as inapplicable once the cancel's record has
+landed. Before this, the carrier published the call for the cancelled loop and wrote a cancelled record outside the
+terminal owner — before, after, or beside the owner's own — and a cancel that released the loop mid-dispatch
+quarantined the delivery and latched the approval lane until restart. What remains: a cancel that lands inside one
+publish latency after the carrier's check lets that one publication out, and the durable terminal may be created
+before its PubAck; the executed call's result is acknowledged without effect on the terminal loop. The
+approval-timeout sweeper acts after the carrier returns: when the carrier settles its auto-reject this way, the
+sweeper still publishes its `agent.approval_response` echo of that auto-reject and still logs Info `approval timed
+out; auto-rejected` — the carrier's Warn and the `terminal_unproven` count, not the echo, say what happened to the
+loop. **Action:** none for a consumer of `agent.complete` / `AGENT_LOOPS`. A consumer that reads
+`tool_results_dropped_total` sees a result the carrier settled this way counted under `reason="terminal_unproven"` on
+every lane — approval answer, model response and sweeper auto-reject included — where each lane's own handler-entry
+guard counts under its own family (`model_responses_dropped_total{stale_request_id}`,
+`tool_results_dropped_total{approval_inapplicable}`).
 
 ### A terminal record carries no approval gate
 

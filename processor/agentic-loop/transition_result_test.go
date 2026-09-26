@@ -86,8 +86,11 @@ func TestFailedTerminalReadsEachProducedPairOnce(t *testing.T) {
 		{"A6 approval handler panic", HandlerResult{LoopID: loopID},
 			errs.WrapFatal(errors.New("panic"), "agentic-loop", "HandleApprovalResponse", "recover panic"), false},
 		{"A7 store failure after routing", HandlerResult{}, errTransitionResultStore, false},
+		// GetLoop wraps ErrLoopNotFound since #1377 (OQ3 (ii)), so the lane
+		// takes the cold branch on this delivery; the pair is still not a
+		// failed terminal.
 		{"A8 loop released after the gate resolved", HandlerResult{},
-			errs.Wrap(fmt.Errorf("loop %s not found", loopID), "LoopManager", "GetLoop", "find loop"), false},
+			errs.Wrap(fmt.Errorf("loop %s: %w", loopID, ErrLoopNotFound), "LoopManager", "GetLoop", "find loop"), false},
 		{"D1 budget exhausted on the model lane", HandlerResult{LoopID: loopID, State: agentic.LoopStateExploring},
 			errs.WrapFatal(ErrMaxIterationsReached, "agentic-loop", "HandleModelResponse", "iteration budget"), false},
 		{"D2 tool-lane error after a mutation", HandlerResult{LoopID: loopID, State: agentic.LoopStateExecuting},
@@ -135,7 +138,9 @@ func TestTheToolLaneSettlesEachProducedErrorPairOnItsOwnDisposition(t *testing.T
 			}, natsclient.DeliveryDecisionRetry, false},
 		{"A3 a loop released mid-delivery is quarantined",
 			func(_ *MessageHandler, loopID string) (HandlerResult, error) {
-				return HandlerResult{}, errs.Wrap(fmt.Errorf("loop %s not found", loopID), "LoopManager", "GetLoop", "find loop")
+				// GetLoop's own shape since #1377: the sentinel is wrapped, and
+				// the tool lane still does not read it (design OQ3 (ii)).
+				return HandlerResult{}, errs.Wrap(fmt.Errorf("loop %s: %w", loopID, ErrLoopNotFound), "LoopManager", "GetLoop", "find loop")
 			}, natsclient.DeliveryDecisionQuarantine, false},
 		{"A7 a store failure after routing is quarantined",
 			func(_ *MessageHandler, _ string) (HandlerResult, error) {

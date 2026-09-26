@@ -101,6 +101,9 @@ func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response ag
 	if h.loopManager.IsTimedOut(loopID) {
 		return h.failTimedOutLoop(loopID, result, "HandleApprovalResponse")
 	}
+	if h.testApprovedDispatchHook != nil {
+		h.testApprovedDispatchHook(loopID, "before_dispatch")
+	}
 
 	switch response.Decision {
 	case agentic.ApprovalDecisionApprove:
@@ -136,7 +139,15 @@ func (h *MessageHandler) dispatchApprovedCall(loopID string, pending agentic.Pen
 		ApprovedBy:  approvedBy,
 	}
 	if err := h.dispatchToolCall(result, loopID, tc); err != nil {
+		// A cancel that released the loop before AddPendingTool lands here as
+		// "loop not found", unclassified, so the lane retries it; the
+		// redelivery takes the cold branch and the cancelled record
+		// acknowledges it as inapplicable (#1377 design OQ4;
+		// TestALoopReleasedBeforeTheApprovedCallIsRegisteredIsRetriedThenInapplicable).
 		return errs.Wrap(err, "agentic-loop", "dispatchApprovedCall", "dispatch approved tool call")
+	}
+	if h.testApprovedDispatchHook != nil {
+		h.testApprovedDispatchHook(loopID, "dispatched")
 	}
 	return nil
 }
