@@ -79,14 +79,20 @@ to a doc sentence or "not supported" before it gets code.
 - [ ] 5.4 `test/contract/e2e_tier_binary_contract_test.go`: Dockerfile reader → two runnable targets, zero `-tags=`; Gate
       column → env set; `TestProductionRootReachesNoE2EHarnessWithoutABuildTag` → `TestProductionRootClosureHoldsNoE2EHarness`
       (D11, precedent `test/contract/core_composition_deps_test.go:43`), absorbing `TestProductionBinaryExcludesExamplePackages`
-      (`:30-34`). Mutation evidence: add a harness import to `cmd/semstreams/main.go`, watch it fail, revert (`cp`
-      backup + checksum, never stash).
+      (`:30-34`). `tierTable` precedence flipped per `design.md` § 7 row 13: exactly one in-flight delta carrying the
+      header governs, else the live spec — so the suite is green on this branch from the first compose edit and on
+      `main` behaves as today. Mutation evidence: add a harness import to `cmd/semstreams/main.go`, watch it fail,
+      revert (`cp` backup + checksum, never stash); for the precedence flip, point the delta's agentic row back at
+      `e2e-process-barrier` and watch the table test fail.
 
 ## 6. Docs
 
 - [ ] 6.1 Sweep: `git grep -n -E 'cmd/(e2e-)?semstreams/main\.go|e2e-semstreams/main\.go|e2e_process_barrier|e2e_slow_consumer|e2e-process-barrier|e2e-slow-consumer|buildPayloadRegistry|registerExampleComponents|--lifecycle-seed|NewE2EPhaseA' -- docs/contributing docs/concepts docs/basics .agents openspec/specs CLAUDE.md AGENTS.md README.md '*_test.go'`
       → every hit updated or recorded here as history (`docs/proposals/*`, ADR-051/058, `migration-beta18.md` are
       history and stay). The `.agents/contracts/semstreams-{developer,reviewer}.md:246` sentence names the composer.
+      `CLAUDE.md` and `AGENTS.md`: the rules-table cell "per-binary parity is prose" names
+      `TestE2EBootWithNoOptionsIsTheProductionOptions`; both files stay byte-identical and ≤1,100 words
+      (`go test ./internal/agentprofiles/`).
 - [ ] 6.2 `docs/contributing/02-e2e-tests.md:180-220` navigation copy matches the MODIFIED table.
 
 ## 7. Gates before each push, and the e2e evidence
