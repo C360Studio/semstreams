@@ -179,6 +179,12 @@ delta as written assumes the pre-selection.
   the record twice until settle, the record's headroom for a turn halves, and the over-bound clear must revert two
   fields (to a previous value the lane no longer has). More lines, less honest bound.
 - Pre-selected (a); changes the terminal-event scenario's AND-clause and one migration line.
+- **Ruled (a′), 2026-09-26 (owner, transcribed on #1365, answering implementation finding F1).** (a) alone lost a
+  deferred turn: `TestTruncationRetryCarriesTheDeferredTurn` (`continuation_deferral_test.go:237`) went red because an
+  emptied context re-injected the BIRTH prompt, the retry was named the turn's carrier, and its completion settled.
+  (a′) keeps `task_prompt` birth-only and makes `recoverEmptyContext` re-inject the birth prompt and then, when the
+  marker is uncarried (marker set, no carrier — the replay's predicate), `pending_continuation_prompt` after it. No
+  double store: the turn is read from the one field that holds it.
 
 ## 1. The docket
 
@@ -222,6 +228,14 @@ archived transition-result design § 2.
 | O2 | obligation row | closed by this change | — |
 | O3 | obligation row | closed except `ErrLoopBusy`, which keeps Ack as a defined refusal (OQ3) | — |
 
+**Second MODIFIED block (ruling 2026-09-26 on implementation finding F2).** `### Requirement: The loop record names
+its outstanding request` (S:1587) stated the L4a limitation as a SHALL. The delta restates it with all 22 scenarios
+byte-identical but one; changed: the paragraph at S:1649-1654 now reads "a rebuild SHALL replay the
+`pending_continuation_prompt` the record carries after the retained conversation as the user's turn and SHALL keep
+the marker; it SHALL clear the marker and warn only when the record carries no text (a record written before this
+tag)", and the body of `A rebuilt loop clears a deferred turn whose text it cannot recover` (heading kept) says the
+same.
+
 **Counts.** Disposition changes on production paths: 3 rows (decode, wrong type, handler error — with A1/A2/A5 as its
 sub-rows). Under OQ2 (b) one added scenario gains a predicted check. No other row of the table moves (ruling 3's
 "B3's replacement column changes, nothing else").
@@ -259,6 +273,7 @@ turn — a fact the record does not hold. (a) errs to the duplicate; (b) would h
 |---|---|---|
 | Set (memory) | `CacheTaskPrompt` ST:1062-1065, called from H:1016 | writes `entity.TaskPrompt` on the in-memory entity instead of `m.taskPrompts[loopID]`; under OQ5 (a) the call at H:1016 runs only when `!continuation` (the birth), so the field is written once. Under OQ5 (b) it runs as today, on every delivery. |
 | Read | `GetTaskPrompt` ST:1069-1072 | reads the field. Callers H:2529, H:3336, H:3302 unchanged. H:3303-3305's literal stays as the empty-field branch. |
+| Recover (OQ5 (a′)) | `recoverEmptyContext` — `processor/agentic-loop/handlers.go:3342` — `if pending := h.loopManager.uncarriedContinuationPrompt(loopID); pending != "" {`; `processor/agentic-loop/state.go:1366` — `func (m *LoopManager) uncarriedContinuationPrompt(loopID string) string {` | after the synthetic "Original task" message (the birth prompt), the uncarried turn as a user message. Its callers are `emitRetryRequest` (truncation retry) and `publishIterationRequest` (advance); no other reader synthesises context. |
 | Write (record) | birth: `createLoopState` C:2907 → `marshalLoopRecord` C:3167 (renders the in-memory entity); every later write renders the same value | zero new lines. The deferred lane's marker write does NOT overlay it (§ 6.7). |
 | Restore | the wholesale seat `m.loops[record.ID] = &entity` ST:444 | zero lines. The cold R1 arm (`taskRepublishFirstRequest`) runs the ordinary `HandleTask` and caches the redelivered task's prompt, as today (D:300-301). |
 | Delete | `DeleteLoop` ST:927 | the `delete(m.taskPrompts, loopID)` line (ST:940) and the map (ST:90) go. |
@@ -320,7 +335,7 @@ the property, it is a follow-up on the model, not on this change.
   rather than deleted (the tag range is the same).
 - **What a consumer sees**: `LoopCompletedEvent.prompt` / `LoopFailedEvent.prompt` are populated after a process
   replacement (they were empty; a consumer that tolerated empty keeps working) and, on a loop that took a
-  continuation, carry the BIRTH prompt where they carried the latest turn's (OQ5 (a); under (b) this line goes), and `recoverEmptyContext` on a continued loop re-injects the birth prompt as its "Original task" where it re-injected the latest turn (H:3313-3315; same option); a loop
+  continuation, carry the BIRTH prompt where they carried the latest turn's (OQ5 (a); under (b) this line goes), and `recoverEmptyContext` on a continued loop re-injects the birth prompt as its "Original task" and then the uncarried deferred turn, where it re-injected the latest turn alone (H:3313-3315; OQ5 (a′)); a loop
   record now carries prompt text, so a listing that decodes the whole record pulls it (semsage's
   `processor/ui-api/types.go:14-27` decodes a narrow struct and is unaffected — I: § Fact 6); the terminal trajectory
   evidence embeds the whole record and therefore carries both keys (§ 8).
@@ -537,6 +552,11 @@ processor/agentic-loop/component.go` → 4 (all inside the marker write; the col
 MODIFIED block must restate every current scenario by name).
 
 ## 10. Unproven, NOT RUN
+
+- **Recovery ordering on a rebuilt tool batch.** OQ5 (a′)'s re-injection and the rebuild's replay are both proved at
+  unit level (`TestARebuiltLoopCarriesTheTurnItsRecordAccepted`, `TestTruncationRetryCarriesTheDeferredTurn`); on a
+  cold tool-result rebuild the replayed turn precedes the restored batch's assistant turn (replay runs before
+  `restoreToolBatch`). Not a loss; the model sees the turn earlier than it was typed. Not measured against a model.
 
 - **The attach-vs-append race.** § 7.1's "R(N+1) already carries the turn" assumes the advance's `cm.GetContext()` ran
   after H:1014's append; the lanes are not serialized per loop (H:1862-1866: "nothing in this package serializes them

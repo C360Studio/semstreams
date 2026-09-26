@@ -1887,6 +1887,9 @@ without effect**, with a warning naming both tasks and a `continuation_unheld` r
 `task_intake_rejections_total`. **Action:** re-send the turn once a redelivered input has rebuilt the loop; nothing
 retries it for you, and the submission itself still counted on `tasks_submitted_total`.
 
+> **Superseded** by the #1365 section below: `task_prompt` is on the record, so a rebuilt loop publishes its
+> prompt and recovery re-injects it.
+
 The loop's task prompt is the same limitation one field over. A loop rebuilt from its record and a retained request —
 the model-response and tool-result cold arms — does not recover it, so its `LoopCompletedEvent.prompt` and
 `LoopFailedEvent.prompt` are published **empty**, and the empty-context recovery path falls back to its literal
@@ -2240,9 +2243,16 @@ above. A record written before this tag decodes with both empty.
   `pending_continuation_request_id` is empty. The task lane writes it in the same compare-and-swap as the marker; it
   clears with the marker when the carrying request settles. It holds the LATEST uncarried turn: two turns deferred
   behind the same request and a replacement in that window replay only the second.
-- `task_prompt` — the prompt of the task that bore the loop. **Its writer is held on an open question on
-  [#1365](https://github.com/C360Studio/semstreams/issues/1365); until it lands the field is always empty and the
-  task-prompt paragraph of the L4a section above still describes the behaviour.**
+- `task_prompt` — the prompt of the task that bore the loop, written once by the birth write and never rewritten.
+
+### A rebuilt loop's terminal event carries its prompt — the birth prompt
+
+`LoopCompletedEvent.prompt` and `LoopFailedEvent.prompt` are populated after a process replacement (they were empty;
+a consumer that tolerated empty keeps working). On a loop that took a continuation they carry the **birth** prompt,
+where they carried the latest turn's before this tag. When GC or repair empties a loop's context,
+`recoverEmptyContext` re-injects the birth prompt as the "Original task" and then, when a deferred turn is not yet
+carried by any request, that turn after it — before this tag it re-injected the latest turn alone. **Action:** a
+consumer that read `prompt` as "the latest user turn" reads the birth prompt now; the latest turn is the conversation's.
 
 ### A replacement replays a deferred turn instead of dropping it
 

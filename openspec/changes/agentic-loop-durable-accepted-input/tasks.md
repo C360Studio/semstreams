@@ -6,14 +6,12 @@ the inventory's. Design: `design.md` (amended after review round 1); rows § 2; 
 pre-selected. Tasks marked **[OQn (x)]** run only under that answer. **No task asserts a post-merge fact.**
 Implementation serializes with other shared loop changes and precedes #1377 (ruling 5).
 
-> **Two design findings from implementation, both owner questions (not improvised):**
-> 1. OQ5 (a) × `recoverEmptyContext` drops a deferred turn on an emptied context (task 1.2, held).
-> 2. The delta leaves `### Requirement: The loop record names its outstanding request`
->    (`openspec/specs/agentic-loop/spec.md:1587`) untouched, and it states the old limitation as a SHALL: "A deferred
->    continuation is durable as a MARKER only … a rebuild SHALL clear the marker and warn, and SHALL NOT synthesise the
->    turn" (:1649-1654) and the scenario `A rebuilt loop clears a deferred turn whose text it cannot recover`. The
->    replay implemented here contradicts both; archiving the delta as written leaves the spec false. Resolving it is a
->    second MODIFIED block, which ruling 2's "one MODIFIED requirement" does not allow.
+> **Two design findings from implementation, both RULED by the owner 2026-09-26 (transcribed on #1365):**
+> 1. OQ5 (a) × `recoverEmptyContext` dropped a deferred turn on an emptied context → **(a′)**: `task_prompt` stays
+>    birth-only and recovery re-injects the birth prompt, then the uncarried `pending_continuation_prompt`.
+> 2. The delta missed `### Requirement: The loop record names its outstanding request` (`spec.md:1587`), which stated
+>    the L4a limitation as a SHALL → **a second MODIFIED block** (all 22 scenarios restated; the deferred-continuation
+>    paragraph and one scenario body changed).
 
 ## 0. Gates before any code (design phase closes here)
 
@@ -34,7 +32,7 @@ Implementation serializes with other shared loop changes and precedes #1377 (rul
       comment stating design I-C / I-A (the write that sets it, the write that clears it, what a rebuild does with
       it). `Validate()` (`agentic/state.go:164` — `func (e *LoopEntity) Validate() error {`) is not changed.
       Evidence: `855b920e`; `task api:compat` `agentic` section adds exactly `LoopEntity.PendingContinuationPrompt: added` and `LoopEntity.TaskPrompt: added`.
-- [ ] 1.2 Delete the cache: `processor/agentic-loop/state.go:90` — `taskPrompts          map[string]string                   // loopID -> original task prompt (for context recovery)`, its `make` in the constructor, and
+- [x] 1.2 Delete the cache: `processor/agentic-loop/state.go:90` — `taskPrompts          map[string]string                   // loopID -> original task prompt (for context recovery)`, its `make` in the constructor, and
       `processor/agentic-loop/state.go:940` — `delete(m.taskPrompts, loopID)`. `CacheTaskPrompt` (`processor/agentic-loop/state.go:1062` — `func (m *LoopManager) CacheTaskPrompt(loopID, prompt string) {`) sets
       `entity.TaskPrompt` on `m.loops[loopID]` under `m.mu`; `GetTaskPrompt`
       (`processor/agentic-loop/state.go:1069` — `func (m *LoopManager) GetTaskPrompt(loopID string) string {`) reads it. **[OQ5 (a)]** the call at
@@ -44,7 +42,7 @@ Implementation serializes with other shared loop changes and precedes #1377 (rul
       `processor/agentic-loop/handlers.go:3302` — `prompt := h.loopManager.GetTaskPrompt(loopID)` are unchanged; the literal fallback at
       `processor/agentic-loop/handlers.go:3303` — `if prompt == "" {` stays as the empty-field branch.
       `git grep -n "taskPrompts" -- '*.go'` must return 0 lines.
-      **HELD (not done) — owner question.** OQ5 (a)'s birth-only guard at H:1016 turns `TestTruncationRetryCarriesTheDeferredTurn` (`continuation_deferral_test.go:237`, fails at :296: "the retry request does not contain the continuation's turn") red: when compaction empties the context, `recoverEmptyContext` re-injects the BIRTH prompt, the deferred turn is in no request, the retry is named its carrier, and the completion settles — the turn is lost silently. Mutation: removing the guard turns it green. No fix inside the docket rows exists (F2 keeps the readers unchanged); the diff is parked unpushed. `task_prompt` has no writer until this lands.
+      Evidence: `362d1a2d`; `git grep -n "taskPrompts" -- '*.go'` → 0 lines. Ruled (a′): `recoverEmptyContext` also re-injects the uncarried turn; `--- PASS: TestTruncationRetryCarriesTheDeferredTurn`. M10 (drop the re-injection) → `continuation_deferral_test.go:297: the retry request does not contain the continuation's turn "and also summarise the second thing"`; M11 (drop the birth guard) → `expected: "look in the first drawer" actual: "and also check the second drawer"`; M12 (field write blanked) → `expected: "first turn" actual: ""`.
 - [x] 1.3 `attachContinuation` (`processor/agentic-loop/state.go:292` — `func (m *LoopManager) attachContinuation(loopID, taskID string) (agentic.LoopEntity, bool, error) {`) takes the prompt and sets
       `entity.PendingContinuationPrompt = prompt` inside the `outstanding` branch beside
       `processor/agentic-loop/state.go:328` — `entity.PendingContinuation = true` and `processor/agentic-loop/state.go:333` — `entity.PendingContinuationRequestID = ""`. Its one production caller
@@ -116,16 +114,16 @@ Implementation serializes with other shared loop changes and precedes #1377 (rul
       row, now stated in the delta. **[OQ2 (b)]** instead: compare `len(data)` with `c.natsClient.MaxPayload()`
       (`natsclient/client.go:214` — `func (m *Client) MaxPayload() (int64, error) {`) before each CAS — rejected in design § 0.
       Evidence: `42dd961f` (birth, helper `terminateOversizedBirth` in `d80456d9`), `9885d4eb` (marker, clears only while the entity still holds the refused turn); mutations M9 (birth `0x3`→`0x2`), M7 (marker: text kept AND the following carrier write refused), M8 (drop the owned-turn check → a later turn's text cleared).
-- [ ] 2.5 Rewrite the comments that state the old limitation or over-claim: `processor/agentic-loop/doc.go:280` — `// rather than leave a loop that would spend an iteration re-asking the model with nothing` –
+- [x] 2.5 Rewrite the comments that state the old limitation or over-claim: `processor/agentic-loop/doc.go:280` — `// rather than leave a loop that would spend an iteration re-asking the model with nothing` –
       :303 (the re-send paragraphs and the task-prompt paragraph), `processor/agentic-loop/component.go:1550` — `// A deferred continuation is not a dedup and not a spawn: the loop already` –
       :1558 (the deferred branch's "the turn's text does not" sentence), `agentic/state.go:134` — `// It was originally introduced to survive a publish whose durability was` – :140 (the marker's
       replacement paragraph: "closed by identity adoption" is not true — adoption leaves the marker as it found it and
       the rebuild replays; name W-c's duplicate and W-e), and the over-bound sentence at the marker write.
-      Done except the task-prompt paragraph of `doc.go`, which waits on 1.2 (it still states the L4a limitation, which remains true while `task_prompt` has no writer).
+      Evidence: `9885d4eb` + `362d1a2d` (`doc.go` task-prompt paragraph rewritten for (a′)).
 
 ## 3. Tests (design § 4)
 
-- [ ] 3.1 `TestARebuiltLoopCarriesTheTurnItsRecordAccepted` beside
+- [x] 3.1 `TestARebuiltLoopCarriesTheTurnItsRecordAccepted` beside
       `processor/agentic-loop/loop_rebuild_test.go:429` — `func TestARebuiltLoopDoesNotReAskForATurnItCannotRecover(t *testing.T) {`: **five** subtests = design § 3.1 W-a/W-b/W-c/W-d/W-e,
       counting the turn's occurrences in the next minted request (W-a 0; W-b 1, marker names the minted request; W-c 2
       and the replay log names the loop and R(N+1) — 1 under **[OQ4 (b)]**; W-d 1; W-e 1 over an adopted R(N) built
@@ -137,7 +135,7 @@ Implementation serializes with other shared loop changes and precedes #1377 (rul
       `TestARebuiltLoopDoesNotReAskForATurnItCannotRecover` keeps only the text-less-marker case (its assertion at
       `processor/agentic-loop/loop_rebuild_test.go:474` — `require.Empty(t, completion.CompletionState.Prompt,` moves to the new test as its inverse).
       `// spec: agentic-loop / Loop input classes settle after owner-specific durable done`.
-      Five window subtests landed (`c6f810bd`, `deferred_turn_rebuild_test.go`), all PASS; the W-b `CompletionState.Prompt`, sixth (`recoverEmptyContext`) and seventh (birth prompt on a continued loop) subtests wait on 1.2. LRT:429 keeps its text-less case; its `Prompt` assertion moves when 1.2 lands.
+      Evidence: `c6f810bd` + `362d1a2d`: five windows, W-b's `CompletionState.Prompt`, the emptied-context subtest (birth prompt then the turn), and `TestTheLoopsPromptIsTheOneThatBoreIt` (birth record; a continued loop's completion carries the birth prompt) — all `--- PASS`. LRT:429 keeps its text-less case.
 - [x] 3.2 `TestADeferredContinuationWritesOnlyTheMarkerItOwns`
       (`processor/agentic-loop/deferred_continuation_record_integration_test.go:178` — `func TestADeferredContinuationWritesOnlyTheMarkerItOwns(t *testing.T) {`): the record assertions gain
       `pending_continuation_prompt`; the crash arm at
@@ -163,7 +161,7 @@ Implementation serializes with other shared loop changes and precedes #1377 (rul
       line → 3.2 red; replace one `TerminateDelivery` with `return nil` → its 3.3 row red; replace the `errs.IsInvalid`
       branch with `return err` → the depth row red; delete the marker write's over-bound clear → 3.4's "following
       carrier write" red.
-      Evidence: M1–M9 in the PR body; each `cp` backup + `shasum -a 256` restored equal, `git status --porcelain` 0 lines.
+      Evidence: M1–M12 in the PR body (M10–M12 are the (a′) and `task_prompt` wiring); each `cp` backup + `shasum -a 256` restored equal, `git status --porcelain` 0 lines.
 - [x] 3.6 Controls run by name with `-race -count=1`, unchanged beyond an `attachContinuation` argument:
       `processor/agentic-loop/continuation_deferral_test.go:115` — `func TestDeferredContinuationIsCarriedByTheCompletionResponse(t *testing.T) {`,
       `processor/agentic-loop/continuation_deferral_test.go:336` — `func TestASecondContinuationUncarriesTheDeferralAndSendsBothTurns(t *testing.T) {`,
@@ -186,11 +184,11 @@ Implementation serializes with other shared loop changes and precedes #1377 (rul
       only by the new `// spec:` lines (`git add` the new test first; the S:886 heading is unchanged, so the 26 existing
       citations resolve).
       Evidence: `Change 'agentic-loop-durable-accepted-input' is valid`; `spec-properties: 407/407 citations resolve` (404 at `9e5d8455` + 3 new `// spec:` lines, all tracked).
-- [ ] 4.2 Migration section in `docs/operations/migration-beta162-to-beta163.md` per design § 5, after the #1374
+- [x] 4.2 Migration section in `docs/operations/migration-beta162-to-beta163.md` per design § 5, after the #1374
       section; mark `docs/operations/migration-beta162-to-beta163.md:1873` — `**A deferred turn is durable as a MARKER only, and so is nothing about the task prompt.** A continuation admitted` and
       `docs/operations/migration-beta162-to-beta163.md:1885` — `The loop's task prompt is the same limitation one field over. A loop rebuilt from its record and a retained request —` superseded by it; name the birth-prompt change on
       continued loops **[OQ5 (a)]**, the W-c duplicate, and the whole-record bound.
-      Section landed (`621807b2`) and the L4a deferred-turn paragraph is marked superseded in part; the birth-prompt line and the task-prompt paragraph's supersession wait on 1.2.
+      Evidence: `621807b2` + the (a′) commit: the section states the birth prompt on events and recovery's birth-prompt-then-turn; both L4a paragraphs are marked superseded (the deferred-turn one in part).
 
 ## 5. Gates
 
@@ -201,5 +199,5 @@ Implementation serializes with other shared loop changes and precedes #1377 (rul
       Evidence: `FAILING TOTAL: 15` (unchanged from main); `agentic` gains only `LoopEntity.PendingContinuationPrompt: added` and `LoopEntity.TaskPrompt: added`; `processor/agentic-loop` lists nothing from this branch.
 - [ ] 5.3 PR body: `implemented-by: <persona>`, the OQ0–OQ5 answers quoted from #1365, the 3.5 mutation runs, the 3.6
       control runs, the 3.7 tier line.
-- [ ] 5.4 Archive: `openspec archive agentic-loop-durable-accepted-input --yes` as the last content commit; the MODIFIED
+- [ ] 5.4 Archive (both MODIFIED blocks sync: S:886 and, per the 2026-09-26 ruling, S:1587): `openspec archive agentic-loop-durable-accepted-input --yes` as the last content commit; the MODIFIED
       block syncs into `openspec/specs/agentic-loop/spec.md` and the REMOVED requirement leaves it (OQ0).
