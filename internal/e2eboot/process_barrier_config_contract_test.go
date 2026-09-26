@@ -1,4 +1,4 @@
-package main
+package e2eboot
 
 import (
 	"os"
@@ -7,9 +7,10 @@ import (
 )
 
 // TestShippedAgenticConfigDoesNotAdmitProcessBarrier keeps the E2E-only barrier
-// executor out of the config this repository ships. The build-time half — that
-// only the tagged target compiles it, and only into the binary the agentic tier
-// boots — is pinned by test/contract/e2e_tier_binary_contract_test.go.
+// executor out of the config this repository ships; the process-barrier option
+// admits it at boot instead. The link-time half — that only the E2E binary links
+// the barrier, and only the agentic tier enables it — is pinned by
+// test/contract/e2e_tier_binary_contract_test.go.
 func TestShippedAgenticConfigDoesNotAdmitProcessBarrier(t *testing.T) {
 	shipped, err := os.ReadFile("../../configs/agentic.json")
 	if err != nil {

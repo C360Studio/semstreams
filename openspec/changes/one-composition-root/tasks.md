@@ -47,13 +47,22 @@ to a doc sentence or "not supported" before it gets code.
 
 ## 2. `internal/e2eboot`
 
-- [ ] 2.1 `FromEnv(cli boot.CLI, build boot.BuildInfo, lookup func(string) (string, bool)) boot.Options` for the seven
+- [x] 2.1 `FromEnv(cli boot.CLI, build boot.BuildInfo, lookup func(string) (string, bool)) boot.Options` for the seven
       names in `design.md` § 2.2; a nonempty value enables; unknown `SEMSTREAMS_E2E_*` names are ignored (D4).
-- [ ] 2.2 One file per option holding the moved body (`design.md` § 7 row 2). `milestoneprobe.Register` no longer reads
+- [x] 2.2 One file per option holding the moved body (`design.md` § 7 row 2). `milestoneprobe.Register` no longer reads
       the env (D5, `milestoneprobe.go:199`).
 - [ ] 2.3 Tests I1, I2, I6 (`design.md` § 6) plus the three untagged config-patch tests from
       `process_barrier_e2e_test.go`. Mutation evidence per site: for I1, add one extension to `Production()` and watch
       the parity test fail; for I2, set `SEMSTREAMS_E2E_EXAMPLES=` (empty) in a row and watch it enable nothing.
+      I1 and I2 landed with section 2 (`internal/e2eboot/fromenv_test.go`); I6 reads the tier table through
+      `test/contract`'s `tierTable` helper, so it lives in `test/contract` and lands with 5.4. Mutation evidence
+      (`cp` backup, `shasum` equal before and after every restore): I1 — `Production()` returns one `Workflows`
+      entry → `fromenv_test.go:71` "production Workflows has 1 extensions" FAIL; I2 — the task's own mutation,
+      the EXAMPLES row's value set to empty → `fromenv_test.go:118` "Components grew by 0, want 2" FAIL; `FromEnv`
+      enabling on presence instead of a nonempty value → `fromenv_test.go:131` "SEMSTREAMS_E2E_EXAMPLES= (empty):
+      Components grew by 2" FAIL; EXAMPLES dropping `fixtures.RegisterPayloads` → `fromenv_test.go:118` "Payloads
+      grew by 2, want 3" and `examples_test.go:32` FAIL. `internal/e2eslowconsumer` lost its build tag here rather
+      than in 3.2: `e2eboot` imports `e2eslowconsumer.Run`, which an untagged build could not reach before.
 
 ## 3. Thin mains and deletions
 

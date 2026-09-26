@@ -1,5 +1,3 @@
-//go:build e2e_slow_consumer
-
 package e2eslowconsumer
 
 import (
