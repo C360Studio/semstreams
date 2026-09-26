@@ -47,9 +47,18 @@ func (s LoopState) IsTerminal() bool {
 
 // LoopEntity represents an agentic loop instance
 type LoopEntity struct {
-	ID                 string                `json:"id"`
-	TaskID             string                `json:"task_id"`
-	State              LoopState             `json:"state"`
+	ID     string    `json:"id"`
+	TaskID string    `json:"task_id"`
+	State  LoopState `json:"state"`
+	// TaskPrompt is the prompt of the task that bore this loop (#1365). The
+	// birth write sets it — it is on the in-memory entity when the record is
+	// created — and no later write rewrites it: a continuation's turn is the
+	// record's PendingContinuationPrompt or its retained request, never this
+	// field. Nothing clears it. A rebuild seats the record wholesale, so a
+	// replacement's LoopCompletedEvent.Prompt, LoopFailedEvent.Prompt and
+	// empty-context recovery read it; a record written before the field
+	// existed decodes it empty and those readers read empty, as they did.
+	TaskPrompt         string                `json:"task_prompt,omitempty"`
 	Role               string                `json:"role"`
 	Model              string                `json:"model"`
 	Iterations         int                   `json:"iterations"`
@@ -135,10 +144,25 @@ type LoopEntity struct {
 	// unknown, because the carrier stamped the entity BEFORE it emitted the
 	// request. Since #1330 the model-response and tool-result lanes publish
 	// first and write after, so a publish that did not commit writes no record
-	// at all and the durable state stays "deferred and uncarried" — and the
-	// opposite window, a request that PubAck'd before the record update, is
-	// closed by identity adoption rather than by this field.
+	// at all and the durable state stays "deferred and uncarried". The
+	// opposite window — a request that PubAck'd before its record update — is
+	// NOT closed by identity adoption: adoption moves the record's
+	// PublishedRequestID and leaves this pair as it found it, and the rebuild
+	// replays PendingContinuationPrompt on every uncarried marker. When the
+	// adopted request was minted after the turn it already carries it, and the
+	// replay sends the turn twice, logged; when it was minted before the turn
+	// the replay sends it once. The record cannot tell the two apart (#1365).
 	PendingContinuationRequestID string `json:"pending_continuation_request_id,omitempty"`
+
+	// PendingContinuationPrompt is the text of the deferred turn, from the
+	// write that sets PendingContinuation to the write that clears it (#1365).
+	// The deferred lane's marker write sets it in the same compare-and-swap as
+	// the marker; the settle of the carrying request clears it with the marker.
+	// A rebuild that finds the marker uncarried replays it after the retained
+	// conversation as the user's turn and keeps the marker, so the next
+	// completion carries it. It holds the LATEST uncarried turn: a second turn
+	// deferred behind the same outstanding request replaces the first.
+	PendingContinuationPrompt string `json:"pending_continuation_prompt,omitempty"`
 
 	// User context (for routing responses)
 	UserID      string `json:"user_id,omitempty"`      // User who initiated the loop
