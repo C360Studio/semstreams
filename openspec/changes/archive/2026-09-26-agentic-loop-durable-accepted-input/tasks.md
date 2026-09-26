@@ -257,3 +257,18 @@ Implementation serializes with other shared loop changes and precedes #1377 (rul
 - [x] 5.4 Archive (both MODIFIED blocks sync: S:886 and, per the 2026-09-26 ruling, S:1587): `openspec archive agentic-loop-durable-accepted-input --yes` as the last content commit; the MODIFIED
       block syncs into `openspec/specs/agentic-loop/spec.md` and the REMOVED requirement leaves it (OQ0).
       Evidence: archived in this commit (`openspec archive agentic-loop-durable-accepted-input --yes`: `~ 2, - 1`); both MODIFIED requirements synced into `openspec/specs/agentic-loop/spec.md` (the carried-once sentence present), the REMOVED requirement gone (OQ0); `task spec:properties` 413/413 against the synced spec; `openspec validate --specs` 57 passed; `task openspec:queue` empty.
+- [x] 5.5 Codex round 1 (PR #1387 issuecomment-5844450287, merge review at `06f29ed2`): two HIGH on
+      `terminateOversizedBirth` — (1) no terminal trajectory observation, so readers saw the birth's initial facts and
+      `terminal_observed: false` forever; (2) a literal `false` for the evidence-integrity condition, dropping a per-loop
+      loss and the startup no-recorder latch before the release deleted the marker.
+      Evidence: fixed in `7cba6e07` — the failed `loop.terminal` observation goes through `recordTerminalObservation`
+      (evidence: the held loop with its task prompt cleared, the prompt-free failure event), then the stamp through
+      `stampLoopFailureWithBudget`, whose `trajectoryAuditLoss.observed` read runs after that attempt and before the
+      release; the doc comment carries the per-obligation disposition against `handleLoopFailure`/`commitTerminal`.
+      `TestAnOversizedBirthStampsItsExecutionFailed` gains healthy / per-loop-loss / no-recorder subtests (the last via
+      the real `initializeKVBuckets` path). Mutations (`cp` + md5, restored `8fc4a4c9…` each time): delete the
+      observation call → healthy fails `:128` "the reader sees the birth's initial facts and no terminal: 2 facts";
+      restore the literal `false` → per-loop fails `:156` and no-recorder fails `:183` (`expected: []interface {}{"incomplete"}`,
+      `actual: []interface {}(nil)`); move the stamp after the release → per-loop fails `:156`; keep the task prompt →
+      healthy fails `:141` "the terminal evidence carries the prompt the ceiling refused". `task spec:properties`
+      413 → 415 (two new citations on the test).
