@@ -92,3 +92,10 @@ assertion and passed after restoration. The reviewer ran no tests and wrote no f
 [Execution evidence](evidence/execution.md) and [sensitivity evidence](evidence/evidence.md) retain exact commands,
 source identities, patches and logs. SHA256SUMS binds the persisted copies to the reviewed artifacts.
 Full pre-push gates and existing real-NATS confirmation remain pending at this checkpoint.
+
+## Broker confirmation checkpoint
+
+The existing real-NATS replacement/restart and failure/repair witnesses subsequently passed through the canonical
+runner on code candidate 684f2ead, with both named executions retained in evidence/broker-confirmation.log.
+No test or runtime source changed after implementation approval. This supplies the previously pending broker
+confirmation; the model claim's full pre-push gate and hosted CI remain pending.

@@ -1,0 +1,107 @@
+[INTEGRATION] docker info latency: 0ms (integer-second clock fallback)
+[INTEGRATION] using cached nats:2.14-alpine (registry pull skipped)
+[INTEGRATION] running Docker-backed tests (-race, integration tag, at most 2 packages at a time)
+2026/09/26 08:14:23 github.com/testcontainers/testcontainers-go - Connected to docker: 
+  Server Version: 29.8.0
+  API Version: 1.51
+  Operating System: Docker Desktop
+  Total Memory: 23742 MB
+  Labels:
+    com.docker.desktop.address=unix:///Users/coby/Library/Containers/com.docker.docker/Data/docker-cli.sock
+  Testcontainers for Go Version: v0.40.0
+  Resolved Docker Host: unix:///var/run/docker.sock
+  Resolved Docker Socket Path: /var/run/docker.sock
+  Test SessionID: 2753bfcbce5d869f64653c3b36d28f61a22d4d0dcd2b053f526178300fbdcdec
+  Test ProcessID: 104748a6-c678-4c8c-aea2-31fae90d21d2
+2026/09/26 08:14:23 🐳 Creating container for image nats:2.14-alpine
+2026/09/26 08:14:23 🐳 Creating container for image testcontainers/ryuk:0.13.0
+2026/09/26 08:14:23 ✅ Container created: 71849034d560
+2026/09/26 08:14:23 🐳 Starting container: 71849034d560
+2026/09/26 08:14:23 ✅ Container started: 71849034d560
+2026/09/26 08:14:23 ⏳ Waiting for container id 71849034d560 image: testcontainers/ryuk:0.13.0. Waiting for: port 8080/tcp to be listening
+2026/09/26 08:14:23 Shell not found in container
+2026/09/26 08:14:23 🔔 Container is ready: 71849034d560
+2026/09/26 08:14:23 ✅ Container created: 1e01fc1a2d47
+2026/09/26 08:14:23 🐳 Starting container: 1e01fc1a2d47
+2026/09/26 08:14:23 ✅ Container started: 1e01fc1a2d47
+2026/09/26 08:14:23 ⏳ Waiting for container id 1e01fc1a2d47 image: nats:2.14-alpine. Waiting for: log message "Server is ready"
+2026/09/26 08:14:23 🔔 Container is ready: 1e01fc1a2d47
+2026/09/26 08:14:23 INFO Connecting to NATS urls=nats://localhost:57916
+2026/09/26 08:14:23 INFO Successfully connected to NATS urls=nats://localhost:57916
+2026/09/26 08:14:23 INFO Created new KV bucket bucket=ENTITY_STATES
+=== RUN   TestIntegration_ReplacementWatcherWatermarkPublicParityAndRestart
+2026/09/26 08:14:23 🐳 Creating container for image nats:2.14-alpine
+2026/09/26 08:14:23 ✅ Container created: f5b9f280faaf
+2026/09/26 08:14:23 🐳 Starting container: f5b9f280faaf
+2026/09/26 08:14:23 ✅ Container started: f5b9f280faaf
+2026/09/26 08:14:23 ⏳ Waiting for container id f5b9f280faaf image: nats:2.14-alpine. Waiting for: log message "Server is ready"
+2026/09/26 08:14:23 🔔 Container is ready: f5b9f280faaf
+2026/09/26 08:14:23 INFO Connecting to NATS urls=nats://localhost:57917
+2026/09/26 08:14:23 INFO Successfully connected to NATS urls=nats://localhost:57917
+2026/09/26 08:14:23 INFO Created new KV bucket bucket=ENTITY_STATES
+2026/09/26 08:14:23 INFO component initialized component=graph-index component=graph-index
+2026/09/26 08:14:23 INFO Created new KV bucket bucket=OUTGOING_INDEX
+2026/09/26 08:14:23 INFO Created new KV bucket bucket=INCOMING_INDEX
+2026/09/26 08:14:23 INFO Created new KV bucket bucket=ALIAS_INDEX
+2026/09/26 08:14:23 INFO Created new KV bucket bucket=PREDICATE_INDEX
+2026/09/26 08:14:23 INFO Created new KV bucket bucket=NAME_INDEX
+2026/09/26 08:14:23 INFO Created new KV bucket bucket=GRAPH_STATUS
+2026/09/26 08:14:23 INFO resource available component=graph-index resource=ENTITY_STATES attempt=1
+2026/09/26 08:14:23 INFO query handlers registered component=graph-index subjects="[graph.index.query.outgoing graph.index.query.incoming graph.index.query.alias graph.index.query.predicate graph.index.query.predicateList graph.index.query.predicateStats graph.index.query.predicateCompound graph.index.query.byName]"
+2026/09/26 08:14:23 INFO component started component=graph-index component=graph-index start_time=2026-09-26T08:14:23.999+02:00
+2026/09/26 08:14:24 INFO entity watcher started component=graph-index bucket=ENTITY_STATES
+2026/09/26 08:14:24 INFO component stopped gracefully component=graph-index component=graph-index
+2026/09/26 08:14:24 INFO component initialized component=graph-index component=graph-index
+2026/09/26 08:14:24 INFO Using existing KV bucket bucket=OUTGOING_INDEX
+2026/09/26 08:14:24 INFO Using existing KV bucket bucket=INCOMING_INDEX
+2026/09/26 08:14:24 INFO Using existing KV bucket bucket=ALIAS_INDEX
+2026/09/26 08:14:24 INFO Using existing KV bucket bucket=PREDICATE_INDEX
+2026/09/26 08:14:24 INFO Using existing KV bucket bucket=NAME_INDEX
+2026/09/26 08:14:24 INFO Using existing KV bucket bucket=GRAPH_STATUS
+2026/09/26 08:14:24 INFO resource available component=graph-index resource=ENTITY_STATES attempt=1
+2026/09/26 08:14:24 INFO query handlers registered component=graph-index subjects="[graph.index.query.outgoing graph.index.query.incoming graph.index.query.alias graph.index.query.predicate graph.index.query.predicateList graph.index.query.predicateStats graph.index.query.predicateCompound graph.index.query.byName]"
+2026/09/26 08:14:24 INFO component started component=graph-index component=graph-index start_time=2026-09-26T08:14:24.358+02:00
+2026/09/26 08:14:24 INFO entity watcher started component=graph-index bucket=ENTITY_STATES
+2026/09/26 08:14:24 INFO component stopped gracefully component=graph-index component=graph-index
+2026/09/26 08:14:24 🐳 Stopping container: f5b9f280faaf
+2026/09/26 08:14:24 ✅ Container stopped: f5b9f280faaf
+2026/09/26 08:14:24 🐳 Terminating container: f5b9f280faaf
+2026/09/26 08:14:24 🚫 Container terminated: f5b9f280faaf
+--- PASS: TestIntegration_ReplacementWatcherWatermarkPublicParityAndRestart (0.82s)
+=== RUN   TestIntegration_ReplacementPartialFailureWithholdsUntilOrderedRepair
+2026/09/26 08:14:24 🐳 Creating container for image nats:2.14-alpine
+2026/09/26 08:14:24 ✅ Container created: a0f77bfe6088
+2026/09/26 08:14:24 🐳 Starting container: a0f77bfe6088
+2026/09/26 08:14:24 ✅ Container started: a0f77bfe6088
+2026/09/26 08:14:24 ⏳ Waiting for container id a0f77bfe6088 image: nats:2.14-alpine. Waiting for: log message "Server is ready"
+2026/09/26 08:14:24 🔔 Container is ready: a0f77bfe6088
+2026/09/26 08:14:24 INFO Connecting to NATS urls=nats://localhost:57918
+2026/09/26 08:14:24 INFO Successfully connected to NATS urls=nats://localhost:57918
+2026/09/26 08:14:24 INFO Created new KV bucket bucket=ENTITY_STATES
+2026/09/26 08:14:24 INFO component initialized component=graph-index component=graph-index
+2026/09/26 08:14:24 INFO Created new KV bucket bucket=OUTGOING_INDEX
+2026/09/26 08:14:24 INFO Created new KV bucket bucket=INCOMING_INDEX
+2026/09/26 08:14:24 INFO Created new KV bucket bucket=ALIAS_INDEX
+2026/09/26 08:14:24 INFO Created new KV bucket bucket=PREDICATE_INDEX
+2026/09/26 08:14:24 INFO Created new KV bucket bucket=NAME_INDEX
+2026/09/26 08:14:24 INFO Created new KV bucket bucket=GRAPH_STATUS
+2026/09/26 08:14:24 INFO resource available component=graph-index resource=ENTITY_STATES attempt=1
+2026/09/26 08:14:24 INFO query handlers registered component=graph-index subjects="[graph.index.query.outgoing graph.index.query.incoming graph.index.query.alias graph.index.query.predicate graph.index.query.predicateList graph.index.query.predicateStats graph.index.query.predicateCompound graph.index.query.byName]"
+2026/09/26 08:14:24 INFO component started component=graph-index component=graph-index start_time=2026-09-26T08:14:24.839+02:00
+2026/09/26 08:14:24 INFO entity watcher started component=graph-index bucket=ENTITY_STATES
+2026/09/26 08:14:25 INFO component stopped gracefully component=graph-index component=graph-index
+2026/09/26 08:14:25 🐳 Stopping container: a0f77bfe6088
+2026/09/26 08:14:25 ✅ Container stopped: a0f77bfe6088
+2026/09/26 08:14:25 🐳 Terminating container: a0f77bfe6088
+2026/09/26 08:14:25 🚫 Container terminated: a0f77bfe6088
+--- PASS: TestIntegration_ReplacementPartialFailureWithholdsUntilOrderedRepair (0.51s)
+PASS
+2026/09/26 08:14:25 🐳 Stopping container: 1e01fc1a2d47
+2026/09/26 08:14:25 ✅ Container stopped: 1e01fc1a2d47
+2026/09/26 08:14:25 🐳 Terminating container: 1e01fc1a2d47
+2026/09/26 08:14:25 🚫 Container terminated: 1e01fc1a2d47
+ok  	github.com/c360studio/semstreams/processor/graph-index	3.452s
+[INTEGRATION] no latency distributions recorded
+[INTEGRATION] tests complete
+
+broker_confirmation_exit=0

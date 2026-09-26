@@ -50,3 +50,23 @@ time 2.40s; all named tests passed. This command supplied no `-rapid.checks` ove
 
 `task spec:properties` passed 404/404 citations; `git diff --check` exited 0. Mutation and shrink evidence is
 indexed separately in `evidence.md` in this directory.
+
+## Existing real-NATS confirmation
+
+Code candidate `684f2ead7574a5c3c10b7fab5f2800148798236d` includes #1395 and preserves all reviewed source/test hashes.
+The existing broker witnesses ran through the canonical host-locked runner:
+
+```bash
+scripts/run-integration-tests.sh -v \
+  -run '^TestIntegration_Replacement(WatcherWatermarkPublicParityAndRestart|PartialFailureWithholdsUntilOrderedRepair)$' \
+  ./processor/graph-index
+```
+
+`broker-confirmation.log` records both tests executing and passing: replacement/watermark/public-query parity with
+a fresh owner (0.82s), and partial-write failure/refusal/ordered repair (0.51s). The package passed in 3.452s,
+including race instrumentation; runner exit was 0. Its containers were removed during cleanup.
+
+This confirms the existing broker assembly witnesses alongside the generated unit model. It does not turn the
+unit model into generated broker histories or establish abrupt process/broker-crash recovery. The short run
+briefly overlapped a newly started E2E run; no isolated performance claim is made. The full model gate remains
+held until competing heavy local work ends.
