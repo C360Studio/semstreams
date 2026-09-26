@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -109,7 +110,10 @@ func TestALoopRecordThePayloadCeilingRefusesIsNotRetried(t *testing.T) {
 		entity, err := handler.GetLoop(loopID)
 		require.NoError(t, err)
 		require.True(t, entity.PendingContinuation, "the turn is still deferred in the live loop")
-		require.Empty(t, entity.PendingContinuationPrompt,
+		// assert, not require: the text left on the entity and the refusal it
+		// causes one write later are the same defect seen twice, and the
+		// second is the one that costs the loop its record.
+		assert.Empty(t, entity.PendingContinuationPrompt,
 			"the refused text stayed on the entity, so every later record write renders it into the same refusal")
 		warned := logLineContaining(t, logs.String(), "exceeds the NATS payload ceiling")
 		require.Contains(t, warned, "loop_id="+loopID)
