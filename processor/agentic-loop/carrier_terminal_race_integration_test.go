@@ -779,9 +779,14 @@ func TestACarrierWriteAfterTheOwnersRecordIsRefused(t *testing.T) {
 	c.testCarrierHook = pause.hook
 	gauge := &pausingGauge{Gauge: c.metrics.activeLoops, reached: make(chan struct{}), release: make(chan struct{})}
 	// The loop metrics are a process-wide singleton (getMetrics), so the
-	// pausing gauge is removed again when the test ends.
-	c.metrics.activeLoops = gauge
-	t.Cleanup(func() { c.metrics.activeLoops = gauge.Gauge })
+	// pausing gauge goes on a shallow per-component copy, never on the
+	// singleton; the copy's collectors are the singleton's, so every count
+	// below is still the one the process exports.
+	shared := c.metrics
+	local := *shared
+	local.activeLoops = gauge
+	c.metrics = &local
+	t.Cleanup(func() { c.metrics = shared })
 	before := snapshotRaceMetrics(c)
 
 	approvalMsg, approvalDone := deliverOn(t, lane, "agent.approval_response", approveAnswer(t, gate, loopID))
@@ -822,9 +827,12 @@ func TestACarrierWriteAfterTheOwnersRecordIsRefused(t *testing.T) {
 // and releases the loop after the approval resolved its gate and before the
 // approved call is registered. AddPendingTool refuses the released loop with
 // an unclassified error, so the approval is retried; the redelivery takes the
-// cold branch and the cancelled record acknowledges it as inapplicable.
+// cold branch and the cancelled record acknowledges it as inapplicable. The
+// first disposition is block 1's "the approval lane settles by class ...
+// anything else is retried" (scenario "A non-terminal result with an error
+// settles on its lane's own disposition").
 //
-// spec: agentic-loop / The loop record names its outstanding request
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
 func TestALoopReleasedBeforeTheApprovedCallIsRegisteredIsRetriedThenInapplicable(t *testing.T) {
 	lane := startRaceLane(t)
 	loopID, gate := gatedLaneLoop(t, lane, "task-pre-add")
@@ -860,5 +868,104 @@ func TestALoopReleasedBeforeTheApprovedCallIsRegisteredIsRetriedThenInapplicable
 	require.Equal(t, int32(1), redelivered.acks.Load(), "the redelivery is acknowledged (%s)", dispositionOf(redelivered))
 	require.Equal(t, map[string]float64{"approval_inapplicable": 1}, delta.dropped)
 	require.Len(t, bucket.recorded(), 1, "only the cancel lane wrote the record")
+	requireLaneNotLatched(t, lane, "agent.approval_response")
+}
+
+// Block 1's "An approval answer whose loop was released after its gate
+// resolved is recovered cold", on the lane (#1377 task 2.3, review 1 MEDIUM 2):
+// a REJECT resolves its gate, the cancel commits and releases the loop, and
+// the reject then reaches HandleToolResult's GetLoop. GetLoop's not-found is
+// ErrLoopNotFound, so this FIRST delivery takes the cold branch: the record is
+// cancelled, and the answer is acknowledged as inapplicable — never retried.
+//
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
+func TestARejectWhoseLoopWasReleasedAfterItsGateResolvedIsSettledColdOnItsFirstDelivery(t *testing.T) {
+	lane := startRaceLane(t)
+	loopID, gate := gatedLaneLoop(t, lane, "task-reject-released")
+	c := lane.c
+
+	bucket := newRaceBucket(c.loopsBucket, loopID)
+	c.loopsBucket = bucket
+	pause := newStagePause(loopID, "before_dispatch")
+	lane.h.testApprovedDispatchHook = pause.hook
+	before := snapshotRaceMetrics(c)
+	requestsBefore := messagesOn(t, lane.client, "agent.request."+loopID)
+
+	reject := baseMessageBytes(t, &agentic.ApprovalResponse{
+		LoopID: loopID, CallID: gate.CallID, ExecutionID: gate.ExecutionID, RequestID: gate.RequestID,
+		Decision: agentic.ApprovalDecisionReject, ApprovedBy: "operator", Reason: "not this rule",
+	})
+	rejectMsg, rejectDone := deliverOn(t, lane, "agent.approval_response", reject)
+	waitFor(t, pause.reached, "approval lane after the resolve, before the decision switch")
+
+	signalMsg, signalDone := deliverOn(t, lane, "agent.signal", cancelSignalBytes(t, loopID))
+	waitFor(t, signalDone, "signal callback returned")
+	require.Equal(t, int32(1), signalMsg.acks.Load())
+	_, heldErr := lane.h.GetLoop(loopID)
+	require.ErrorIs(t, heldErr, ErrLoopNotFound, "fixture: the cancel lane released the loop")
+	cancelled := loopRecordOf(t, c, loopID)
+	require.Equal(t, agentic.LoopStateCancelled, cancelled.entity.State)
+
+	close(pause.release)
+	waitFor(t, rejectDone, "approval callback returned")
+	delta := metricDelta(before, snapshotRaceMetrics(c))
+	t.Logf("released reject: %s; deltas %+v", dispositionOf(rejectMsg), delta)
+	assert.Equal(t, int32(1), rejectMsg.acks.Load(), "the first delivery is settled cold, not retried")
+	assert.Zero(t, rejectMsg.naks.Load()+rejectMsg.terms.Load())
+	assert.Equal(t, map[string]float64{"approval_inapplicable": 1}, delta.dropped)
+	require.Equal(t, requestsBefore, messagesOn(t, lane.client, "agent.request."+loopID), "nothing is published")
+	require.Equal(t, cancelled.revision, loopRecordOf(t, c, loopID).revision, "nothing is written")
+	require.Len(t, bucket.recorded(), 1, "only the cancel lane wrote the record")
+	requireLaneNotLatched(t, lane, "agent.approval_response")
+}
+
+// The sub-window between the carrier's check and its publication (block 2:
+// "A terminal that lands between the carrier's check and its publication lets
+// that one publication out"; review 1 MEDIUM 3): the approval passes the entry
+// check on a live loop, the cancel moves it cancelled in memory and pauses
+// before its marker, and the carrier then publishes the approved call — the
+// one publication let out — and its record write is refused.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestACancelBetweenTheCarriersCheckAndItsPublicationLetsOnePublicationOut(t *testing.T) {
+	lane := startRaceLane(t)
+	loopID, gate := gatedLaneLoop(t, lane, "task-checked")
+	c := lane.c
+
+	bucket := newRaceBucket(c.loopsBucket, loopID)
+	c.loopsBucket = bucket
+	pause := newStagePause(loopID, "checked")
+	c.testCarrierHook = pause.hook
+	approvedBefore := approvedToolCallsOn(t, lane.client, loopID)
+	gatedRecord := loopRecordOf(t, c, loopID)
+
+	approvalMsg, approvalDone := deliverOn(t, lane, "agent.approval_response", approveAnswer(t, gate, loopID))
+	waitFor(t, pause.reached, "carrier after its entry check")
+	require.Equal(t, approvedBefore, approvedToolCallsOn(t, lane.client, loopID),
+		"fixture: nothing is published before the check passes")
+
+	bucket.pauseMarker.Store(true)
+	signalMsg, signalDone := deliverOn(t, lane, "agent.signal", cancelSignalBytes(t, loopID))
+	waitFor(t, bucket.markerReached, "cancel lane at COMPLETE_ create")
+
+	close(pause.release)
+	waitFor(t, approvalDone, "approval callback returned")
+	afterApproval := loopRecordOf(t, c, loopID)
+	t.Logf("checked: %s; record %s rev %d; writes %+v",
+		dispositionOf(approvalMsg), afterApproval.entity.State, afterApproval.revision, bucket.recorded())
+	assert.Equal(t, approvedBefore+1, approvedToolCallsOn(t, lane.client, loopID),
+		"the one publication in the sub-window is let out")
+	assert.Empty(t, bucket.recorded(), "no carrier write")
+	assert.Equal(t, int32(1), approvalMsg.naks.Load(), "the live record retries the approval")
+	assert.Zero(t, approvalMsg.acks.Load()+approvalMsg.terms.Load())
+	assert.Equal(t, gatedRecord.revision, afterApproval.revision, "the record stays as the gate left it")
+
+	close(bucket.markerRelease)
+	waitFor(t, signalDone, "signal callback returned")
+	writes := bucket.recorded()
+	require.Equal(t, int32(1), signalMsg.acks.Load())
+	require.Len(t, writes, 1, "the record has exactly one terminal writer")
+	require.Equal(t, "cancel-lane", writes[0].lane)
+	require.Equal(t, agentic.LoopStateCancelled, writes[0].state)
 	requireLaneNotLatched(t, lane, "agent.approval_response")
 }

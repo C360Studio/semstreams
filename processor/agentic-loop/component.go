@@ -3192,9 +3192,11 @@ func (c *Component) stampPublishedRequest(result HandlerResult) error {
 // persistLoopState writes the loop's record under compare-and-swap against the
 // revision this process observed (#1330, owner ruling Q2).
 //
-// Every caller takes this form. The model-response, tool-result and approval
-// lanes and the approval-timeout sweeper reach it through persistHandlerResult
-// AFTER their publications have PubAck'd, which is what makes the written
+// Every writer takes this compare-and-swap, through writeLoopRecord: the
+// carrier with terminalWriter false, this wrapper with true. The
+// model-response, tool-result and approval lanes and the approval-timeout
+// sweeper reach it through persistHandlerResult AFTER their publications have
+// PubAck'd, which is what makes the written
 // PublishedRequestID mean "this request is durably retained" rather than "a
 // process meant to publish one". The terminal owner (commitTerminal) reaches
 // it last on the carrier, loop-failure and cancel lanes, after the
@@ -3235,8 +3237,8 @@ func (c *Component) writeLoopRecord(ctx context.Context, loopID string, terminal
 	// observation and commit it against another.
 	//
 	// What this lock does NOT do is freeze the loop's in-memory state.
-	// marshalLoopRecord takes its snapshot through LoopManager.GetLoop, under
-	// the MANAGER's mutex, and marshals it after that mutex is released — so a
+	// The snapshot below is taken through LoopManager.GetLoop, under the
+	// MANAGER's mutex, and marshalled after that mutex is released — so a
 	// mutation landing on the handler goroutine in between is not in these
 	// bytes. That is a boundary, not a loss: the mutation belongs to another
 	// delivery, and that delivery's own write carries it. What the snapshot

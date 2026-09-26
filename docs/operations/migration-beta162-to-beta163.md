@@ -2049,11 +2049,15 @@ landed. Before this, the carrier published the call for the cancelled loop and w
 terminal owner — before, after, or beside the owner's own — and a cancel that released the loop mid-dispatch
 quarantined the delivery and latched the approval lane until restart. What remains: a cancel that lands inside one
 publish latency after the carrier's check lets that one publication out, and the durable terminal may be created
-before its PubAck; the executed call's result is acknowledged without effect on the terminal loop. **Action:** none
-for a consumer of `agent.complete` / `AGENT_LOOPS`. A consumer that reads `tool_results_dropped_total` sees a result
-the carrier settled this way counted under `reason="terminal_unproven"` on every lane — approval answer, model
-response and sweeper auto-reject included — where each lane's own handler-entry guard counts under its own family
-(`model_response_dropped{stale_request_id}`, `tool_results_dropped_total{approval_inapplicable}`).
+before its PubAck; the executed call's result is acknowledged without effect on the terminal loop. The
+approval-timeout sweeper acts after the carrier returns: when the carrier settles its auto-reject this way, the
+sweeper still publishes its `agent.approval_response` echo of that auto-reject and still logs Info `approval timed
+out; auto-rejected` — the carrier's Warn and the `terminal_unproven` count, not the echo, say what happened to the
+loop. **Action:** none for a consumer of `agent.complete` / `AGENT_LOOPS`. A consumer that reads
+`tool_results_dropped_total` sees a result the carrier settled this way counted under `reason="terminal_unproven"` on
+every lane — approval answer, model response and sweeper auto-reject included — where each lane's own handler-entry
+guard counts under its own family (`model_responses_dropped_total{stale_request_id}`,
+`tool_results_dropped_total{approval_inapplicable}`).
 
 ### A terminal record carries no approval gate
 

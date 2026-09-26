@@ -520,7 +520,7 @@ func (c *Component) settleTerminalGuard(ctx context.Context, result HandlerResul
 // answer, a model response's batch, a tool result's next request and a
 // sweeper auto-reject alike — because the carrier does not know the lane.
 // The handler-entry guards keep their own families
-// (model_response_dropped{stale_request_id}, approval_inapplicable).
+// (model_responses_dropped_total{stale_request_id}, approval_inapplicable).
 func (c *Component) recordTerminalToolResultDropped() {
 	if c.metrics != nil {
 		c.metrics.recordToolResultDropped("terminal_unproven")

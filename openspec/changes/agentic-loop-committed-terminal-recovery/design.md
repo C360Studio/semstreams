@@ -140,7 +140,7 @@ carrier's PubAck, so in every ordering a call may be published after the **durab
   carrier does not know the lane, so it passes the existing `terminal_unproven` recorder (TO:508-511):
   `tool_results_dropped_total{reason="terminal_unproven"}` for an approval answer, a model response's batch, a tool
   result's next request and a sweeper auto-reject alike, whereas each lane's own handler-entry guard counts under its
-  own family (the model lane: `model_response_dropped{stale_request_id}`, C:1935-1939; the approval lane's cold branch:
+  own family (the model lane: `model_responses_dropped_total{stale_request_id}`, C:1935-1939; the approval lane's cold branch:
   `approval_inapplicable`, ARH:370/378). Doc comments name it (§ 7); the Retry branch — the common case — leaves
   counting to the lane's cold branch.
 
@@ -454,19 +454,23 @@ on § 3.1, T7–T9 on § 3.2, T2 on § 3.4 if taken.
 >   exhausted and is recorded in the MaxDeliver ledger, never applied.
 >
 > **A cancel racing a result on its way to the record.** A non-terminal result — an approved call, a model response's
-> tool batch, a tool result's next request, a sweeper auto-reject — that reaches the loop-record carrier after a cancel
-> moved the loop terminal in memory, or after the loop was released, now publishes nothing and writes nothing; one that
-> passed the carrier's check but finds the loop terminal or released when its record is rendered writes nothing. The
-> record decides the delivery, and the redelivered input is acknowledged as inapplicable once the cancel's record has
-> landed. Before this, the carrier published the call for the cancelled loop and wrote a cancelled record outside the
-> terminal owner — before, after, or beside the owner's own — and a cancel that released the loop mid-dispatch
-> quarantined the delivery and latched the approval lane until restart. What remains: a cancel that lands inside one
-> publish latency after the carrier's check lets that one publication out, and the durable terminal may be created
-> before its PubAck; the executed call's result is acknowledged without effect on the terminal loop. **Action:** none
-> for a consumer of `agent.complete` / `AGENT_LOOPS`. A consumer that reads `tool_results_dropped_total` sees a result
-> the carrier settled this way counted under `reason="terminal_unproven"` on every lane — approval answer, model
-> response and sweeper auto-reject included — where each lane's own handler-entry guard counts under its own family
-> (`model_response_dropped{stale_request_id}`, `tool_results_dropped_total{approval_inapplicable}`).
+> tool batch, a tool result's next request, a sweeper auto-reject — that reaches the loop-record carrier after a
+> cancel moved the loop terminal in memory, or after the loop was released, now publishes nothing and writes nothing;
+> one that passed the carrier's check but finds the loop terminal or released when its record is rendered writes
+> nothing. The record decides the delivery, and the redelivered input is acknowledged as inapplicable once the
+> cancel's record has landed. Before this, the carrier published the call for the cancelled loop and wrote a cancelled
+> record outside the terminal owner — before, after, or beside the owner's own — and a cancel that released the loop
+> mid-dispatch quarantined the delivery and latched the approval lane until restart. What remains: a cancel that lands
+> inside one publish latency after the carrier's check lets that one publication out, and the durable terminal may be
+> created before its PubAck; the executed call's result is acknowledged without effect on the terminal loop. The
+> approval-timeout sweeper acts after the carrier returns: when the carrier settles its auto-reject this way, the
+> sweeper still publishes its `agent.approval_response` echo of that auto-reject and still logs Info `approval timed
+> out; auto-rejected` — the carrier's Warn and the `terminal_unproven` count, not the echo, say what happened to the
+> loop. **Action:** none for a consumer of `agent.complete` / `AGENT_LOOPS`. A consumer that reads
+> `tool_results_dropped_total` sees a result the carrier settled this way counted under `reason="terminal_unproven"`
+> on every lane — approval answer, model response and sweeper auto-reject included — where each lane's own
+> handler-entry guard counts under its own family (`model_responses_dropped_total{stale_request_id}`,
+> `tool_results_dropped_total{approval_inapplicable}`).
 
 ## 6. Costs and rejected simpler alternatives (docket order)
 

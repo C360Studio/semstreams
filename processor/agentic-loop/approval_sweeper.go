@@ -105,9 +105,11 @@ func (c *Component) sweepExpiredApprovals(ctx context.Context) {
 		if errors.Is(err, ErrLoopNotFound) {
 			// The loop settled and was released between the snapshot and this
 			// call: a benign race, nothing left to reject. Since #1377 this
-			// also matches a loop released between the handler's resolve and
-			// its re-read (GetLoop wraps ErrLoopNotFound), which used to log
-			// "auto-reject failed" below for the same benign race.
+			// also matches a loop released after the handler's resolve — at
+			// its re-read of the loop, or, for this auto-reject, at
+			// HandleToolResult's own read of it (GetLoop wraps
+			// ErrLoopNotFound) — which used to log "auto-reject failed" below
+			// for the same benign race.
 			c.logger.Warn("approval timeout auto-reject found its loop already released",
 				slog.String("loop_id", cand.LoopID),
 				slog.String("call_id", cand.CallID))
@@ -165,6 +167,13 @@ func (c *Component) sweepExpiredApprovals(ctx context.Context) {
 				slog.String("error", err.Error()))
 			continue
 		}
+		// A nil here also covers an auto-reject the carrier settled without
+		// effect because a cancel moved the loop terminal or released it
+		// (#1377): the echo and the Info line below still run, and the
+		// carrier's Warn and terminal_unproven count are what happened to the
+		// loop (migration beta162-to-beta163, "A cancel racing a result on its
+		// way to the record").
+		//
 		// Publish the ApprovalResponse onto agent.approval_response.<loopID> so
 		// wire observers (sister-repo dashboards, audit consumers) see timeout
 		// auto-rejects the same way they see human responses. The component's

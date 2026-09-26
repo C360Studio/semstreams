@@ -141,7 +141,9 @@ func TestALostTerminalRecordConvergesAtTheLoopsNextTerminal(t *testing.T) {
 		entry, getErr := b.loopsBucket.Get(t.Context(), terminalMarkerKey(loopID))
 		require.NoError(t, getErr)
 		require.Equal(t, string(marker), string(entry.Value()), "the marker is still the completion")
-		require.Equal(t, uint64(1), messagesOn(t, client, "agent.complete."+loopID), "no failure event is published")
+		require.Zero(t, messagesOn(t, client, "agent.failed."+loopID), "no failure event is published")
+		require.Equal(t, uint64(1), messagesOn(t, client, "agent.complete."+loopID),
+			"and the durable completion's event is not republished by a refused terminal")
 		after := loopRecordOf(t, b, loopID)
 		require.Equal(t, before.revision, after.revision, "the record is not written")
 		require.Equal(t, failedBefore, testutil.ToFloat64(b.metrics.loopsFailed.WithLabelValues("model_error")),
