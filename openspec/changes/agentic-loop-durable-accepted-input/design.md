@@ -435,6 +435,12 @@ the property, it is a follow-up on the model, not on this change.
    text, not a developer choice). A carrier that fails `length_truncated` keeps its deferral — marker, carrier and
    text — on the terminal record; a carrier that fails `model_error`, or the timeout and max-iterations early returns
    under any other status, clears it through `SettleRequest`. Recorded here, not coded.
+9. **A carried turn is an ordinary message: compaction may summarize it** (owner 2026-09-26, (a), from the 3.7 tier
+   red). Once placed in the conversation the deferred turn has the birth prompt's fate under OQ5 (a): compaction can
+   replace it with a summary, and only an emptied context re-injects it. Said in the delta's carried-once scenario and
+   in `doc.go`. The agentic e2e tier compacted on every answer by accident (mock window 4096 vs the 4000 floor) until
+   `7ae290bb` moved the window to 128000; the tier now runs no compaction — #1396 (beta.165) owns that coverage and
+   the two test flows that keep the old window.
 
 ## 8. Adopter seam (contract § The adopter seam inventory)
 

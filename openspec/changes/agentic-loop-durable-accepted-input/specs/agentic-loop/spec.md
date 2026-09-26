@@ -253,7 +253,9 @@ refuses is not supported, and the refusal is permanent at birth.
 - **WHEN** a replacement process rebuilds the loop from that record and the request the record names
 - **THEN** the retained conversation is replayed and the turn's text is appended after it as the user's turn, the
   marker is kept, and the next completion carries the turn into the loop's next request exactly once; the request
-  that carries it is named as its carrier, and the marker, its carrier and its text clear when that request settles
+  that carries it is named as its carrier, and the marker, its carrier and its text clear when that request settles.
+  Carried means placed in the conversation as the user's turn: from then on it is an ordinary message, and
+  compaction may summarize it like any user turn; only an emptied context re-injects it (owner 2026-09-26, (a))
 - **AND** a record whose marker names a carrier is left as it is, because the retained request carries the turn; a
   record whose marker is uncarried but carries no text is cleared with a warning, as before this change
 - **AND** a rebuild that finds a request newer than the one the record names adopts it and leaves the marker as it

@@ -123,7 +123,7 @@
 //	context := agenticloop.ContextConfig{
 //	    Enabled:            true,
 //	    CompactThreshold:   0.60,  // Trigger compaction at 60% utilization
-//	    HeadroomTokens:     6400,  // Reserve tokens for new content
+//	    HeadroomTokens:     4000,  // Floor under the ratio-based headroom (the default)
 //	}
 //
 // Model context limits are resolved from the unified model registry
@@ -287,6 +287,9 @@
 // string holds the latest uncarried turn: two turns deferred behind the same request and a
 // replacement in that window replay only the second. A marker write the NATS payload
 // ceiling refuses leaves the turn in process memory only.
+// Carried means placed in the conversation as the user's turn: from then on it is an
+// ordinary message, and compaction may summarize it like any user turn; only an emptied
+// context re-injects it (recoverEmptyContext), the same backstop the birth prompt has.
 //
 // A turn arriving AFTER the replacement is a different case. A continuation reaches only a
 // loop some process holds: a task whose id differs from the one the live record names is
