@@ -1,4 +1,4 @@
-package main
+package boot
 
 import (
 	"testing"
@@ -25,7 +25,7 @@ func TestRootResourcesAbortClosesPublishedNATSClientOnce(t *testing.T) {
 	client, err := natsclient.NewClient("nats://unused")
 	require.NoError(t, err)
 	client.SetConnection(connection)
-	resources := &semstreamsRootResources{natsClient: client}
+	resources := &rootResources{natsClient: client}
 	bootErr := error(nil)
 
 	resources.abortOnReturn(time.Second, &bootErr)

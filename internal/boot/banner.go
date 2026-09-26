@@ -1,4 +1,4 @@
-package main
+package boot
 
 import (
 	"fmt"
@@ -15,9 +15,9 @@ const banner = `
           semantic stream processing framework
 `
 
-func printBanner() {
+func printBanner(version string) {
 	fmt.Print(banner)
-	fmt.Printf("  version %s\n\n", Version)
+	fmt.Printf("  version %s\n\n", version)
 }
 
 // Spinner provides a simple animated spinner for long-running operations.

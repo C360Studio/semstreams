@@ -1,4 +1,4 @@
-package main
+package boot
 
 import (
 	"bytes"
@@ -12,16 +12,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCreateNATSClientUsesE2EPhaseAObservability(t *testing.T) {
+func TestCreateNATSClientUsesProductionPhaseAObservability(t *testing.T) {
 	t.Setenv("SEMSTREAMS_NATS_URLS", "")
 	var output bytes.Buffer
-	metrics, phase, err := bootstrapobservability.NewE2EPhaseA(
+	metrics, phase, err := bootstrapobservability.NewProductionPhaseA(
 		&output, "debug", "json",
-		[]slog.Attr{slog.String("service", "e2e-semstreams"), slog.String("version", "test")},
+		[]slog.Attr{slog.String("service", "semstreams"), slog.String("version", "test")},
 	)
 	require.NoError(t, err)
 
-	client, err := createNATSClient(&config.Config{}, phase.Client, metrics)
+	client, err := createNATSClient("", &config.Config{}, phase.Client, metrics)
 	require.NoError(t, err)
 	require.NotNil(t, client)
 
@@ -29,17 +29,17 @@ func TestCreateNATSClientUsesE2EPhaseAObservability(t *testing.T) {
 	require.NoError(t, json.Unmarshal(bytes.TrimSpace(output.Bytes()), &record))
 	assert.Equal(t, "Created NATS client", record["msg"])
 	assert.Equal(t, "natsclient", record["component"])
-	assert.Equal(t, "e2e-semstreams", record["service"])
+	assert.Equal(t, "semstreams", record["service"])
 }
 
-func TestCreateNATSClientFailureUsesE2EPhaseALoggerExactlyOnce(t *testing.T) {
+func TestCreateNATSClientFailureUsesProductionPhaseALoggerExactlyOnce(t *testing.T) {
 	t.Setenv("SEMSTREAMS_NATS_URLS", "")
 	var output bytes.Buffer
 	local, err := bootstrapobservability.NewLocalHandler(&output, "info", "json")
 	require.NoError(t, err)
-	logger := slog.New(local).With("service", "e2e-semstreams", "component", "natsclient")
+	logger := slog.New(local).With("service", "semstreams", "component", "natsclient")
 
-	_, err = createNATSClient(&config.Config{}, logger, nil)
+	_, err = createNATSClient("", &config.Config{}, logger, nil)
 	require.ErrorContains(t, err, "client metrics registry cannot be nil")
 
 	var record map[string]any

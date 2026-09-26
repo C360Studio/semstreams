@@ -1,4 +1,4 @@
-package main
+package boot
 
 import (
 	"flag"
@@ -8,8 +8,9 @@ import (
 	"time"
 )
 
-// CLIConfig holds command-line configuration
-type CLIConfig struct {
+// CLI holds the command-line configuration both framework binaries parse with
+// one parser and one set of defaults (design D15).
+type CLI struct {
 	ConfigPath      string
 	LogLevel        string
 	LogFormat       string
@@ -22,35 +23,53 @@ type CLIConfig struct {
 	Validate        bool
 }
 
-func parseFlags() *CLIConfig {
-	cfg := &CLIConfig{}
+// ParseFlags parses args (the process arguments without the program name) into
+// a CLI, with environment-variable fallbacks. A malformed flag exits the
+// process with status 2, as the standard flag package does. Composition verbs
+// (catalog, validate, graph) are positional and stop flag parsing, so a verb's
+// own arguments are left for the verb.
+func ParseFlags(args []string) CLI {
+	var cfg CLI
+	fs := newFlagSet(&cfg)
+	_ = fs.Parse(args) // ExitOnError: Parse never returns a non-nil error.
 
-	// Define flags with environment variable fallback
-	flag.StringVar(&cfg.ConfigPath, "config",
+	// Override log level if debug is set
+	if cfg.Debug {
+		cfg.LogLevel = "debug"
+	}
+	return cfg
+}
+
+// newFlagSet declares every flag against cfg. It is also how help prints the
+// defaults, so the help text can never drift from the parser.
+func newFlagSet(cfg *CLI) *flag.FlagSet {
+	fs := flag.NewFlagSet(appName, flag.ExitOnError)
+
+	fs.StringVar(&cfg.ConfigPath, "config",
 		getEnv("SEMSTREAMS_CONFIG", "configs/example.json"),
 		"Path to configuration file (env: SEMSTREAMS_CONFIG)")
 
-	flag.StringVar(&cfg.ConfigPath, "c",
+	fs.StringVar(&cfg.ConfigPath, "c",
 		getEnv("SEMSTREAMS_CONFIG", "configs/example.json"),
 		"Path to configuration file (env: SEMSTREAMS_CONFIG)")
 
-	flag.StringVar(&cfg.LogLevel, "log-level",
+	fs.StringVar(&cfg.LogLevel, "log-level",
 		getEnv("SEMSTREAMS_LOG_LEVEL", "info"),
 		"Log level: debug, info, warn, error (env: SEMSTREAMS_LOG_LEVEL)")
 
-	flag.StringVar(&cfg.LogFormat, "log-format",
+	fs.StringVar(&cfg.LogFormat, "log-format",
 		getEnv("SEMSTREAMS_LOG_FORMAT", "json"),
 		"Log format: json, text (env: SEMSTREAMS_LOG_FORMAT)")
 
-	flag.BoolVar(&cfg.Debug, "debug",
+	fs.BoolVar(&cfg.Debug, "debug",
 		getEnvBool("SEMSTREAMS_DEBUG", false),
 		"Enable debug mode (env: SEMSTREAMS_DEBUG)")
 
-	flag.IntVar(&cfg.DebugPort, "debug-port",
+	fs.IntVar(&cfg.DebugPort, "debug-port",
 		getEnvInt("SEMSTREAMS_DEBUG_PORT", 8083),
 		"Debug server port, 0 to disable (env: SEMSTREAMS_DEBUG_PORT)")
 
-	flag.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout",
+	fs.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout",
 		getEnvDuration("SEMSTREAMS_SHUTDOWN_TIMEOUT", 30*time.Second),
 		"Graceful shutdown timeout (env: SEMSTREAMS_SHUTDOWN_TIMEOUT)")
 
@@ -60,32 +79,21 @@ func parseFlags() *CLIConfig {
 	// want a stable, lightweight health surface. The service-manager's
 	// main HTTP server still serves /health on services.service-manager.
 	// config.http_port; this flag is additive.
-	flag.IntVar(&cfg.HealthPort, "health-port",
+	fs.IntVar(&cfg.HealthPort, "health-port",
 		getEnvInt("SEMSTREAMS_HEALTH_PORT", 0),
 		"Dedicated /health + /healthz listener port, 0 to disable (env: SEMSTREAMS_HEALTH_PORT). Independent of services.service-manager.config.http_port.")
 
-	flag.BoolVar(&cfg.ShowVersion, "version", false, "Show version information")
-	flag.BoolVar(&cfg.ShowVersion, "v", false, "Show version information")
-	flag.BoolVar(&cfg.ShowHelp, "help", false, "Show help information")
-	flag.BoolVar(&cfg.ShowHelp, "h", false, "Show help information")
-	flag.BoolVar(&cfg.Validate, "validate", false, "Validate configuration and exit")
+	fs.BoolVar(&cfg.ShowVersion, "version", false, "Show version information")
+	fs.BoolVar(&cfg.ShowVersion, "v", false, "Show version information")
+	fs.BoolVar(&cfg.ShowHelp, "help", false, "Show help information")
+	fs.BoolVar(&cfg.ShowHelp, "h", false, "Show help information")
+	fs.BoolVar(&cfg.Validate, "validate", false, "Validate configuration and exit")
 
-	// Custom usage
-	flag.Usage = func() {
-		printDetailedHelp()
-	}
-
-	flag.Parse()
-
-	// Override log level if debug is set
-	if cfg.Debug {
-		cfg.LogLevel = "debug"
-	}
-
-	return cfg
+	fs.Usage = func() { printDetailedHelp(BuildInfo{}) }
+	return fs
 }
 
-func validateFlags(cfg *CLIConfig) error {
+func validateFlags(cfg Options) error {
 	// Skip validation for special flags
 	if cfg.ShowVersion || cfg.ShowHelp {
 		return nil
@@ -121,7 +129,7 @@ func validateFlags(cfg *CLIConfig) error {
 	return nil
 }
 
-func printDetailedHelp() {
+func printDetailedHelp(build BuildInfo) {
 	_, _ = fmt.Fprintf(os.Stderr, `%s - Semantic Stream Processing
 
 Usage: %s [options]
@@ -131,7 +139,9 @@ Usage: %s [options]
 
 Options:
 `, appName, os.Args[0], os.Args[0], os.Args[0], os.Args[0])
-	flag.PrintDefaults()
+	fs := newFlagSet(&CLI{})
+	fs.SetOutput(os.Stderr)
+	fs.PrintDefaults()
 	_, _ = fmt.Fprintf(os.Stderr, `
 Examples:
   # Run with custom config
@@ -150,7 +160,7 @@ Examples:
 
 Version: %s
 Build: %s
-`, os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], Version, BuildTime)
+`, os.Args[0], os.Args[0], os.Args[0], os.Args[0], os.Args[0], build.Version, build.BuildTime)
 }
 
 // Environment variable helper functions

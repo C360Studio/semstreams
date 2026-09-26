@@ -1,4 +1,4 @@
-package main
+package boot
 
 import (
 	"encoding/json"
@@ -10,7 +10,7 @@ import (
 
 func TestRegisterPayloadsAddsResearchOnlyWhenSelected(t *testing.T) {
 	t.Run("absent", func(t *testing.T) {
-		registry, err := registerPayloads(&config.Config{})
+		registry, err := registerPayloads(&config.Config{}, nil)
 		if err != nil {
 			t.Fatalf("registerPayloads: %v", err)
 		}
@@ -35,7 +35,7 @@ func TestRegisterPayloadsAddsResearchOnlyWhenSelected(t *testing.T) {
 			},
 		}}
 
-		registry, err := registerPayloads(cfg)
+		registry, err := registerPayloads(cfg, nil)
 		if err != nil {
 			t.Fatalf("registerPayloads: %v", err)
 		}

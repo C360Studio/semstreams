@@ -20,22 +20,29 @@ to a doc sentence or "not supported" before it gets code.
 
 ## 1. `internal/boot`
 
-- [ ] 1.1 Move `cmd/semstreams/main.go:115-380` (`run`) and its helpers into `internal/boot/run.go`; `Options` and
+- [x] 1.1 Move `cmd/semstreams/main.go:115-380` (`run`) and its helpers into `internal/boot/run.go`; `Options` and
       `Production()` per `design.md` § 2.1; the nine extension slices applied at the phases named in § 2.3. Production
       copy wins every divergence (§ 2.3, D8) — including Phase-A: `NewProductionPhaseA` + `Steady(forwardingHandler)`
       for both binaries.
-- [ ] 1.2 `cmd/semstreams/flags.go` → `internal/boot/flags.go` as `ParseFlags` (D15); `Options` gains `DebugPort` and
+- [x] 1.2 `cmd/semstreams/flags.go` → `internal/boot/flags.go` as `ParseFlags` (D15); `Options` gains `DebugPort` and
       `Build`; each main copies its own `Version`/`GitCommit`/`BuildTime` into `Options.Build` (the `-X main.*`
       ldflags in `docker/Dockerfile:48-58` and `.github/workflows/release.yml:58` keep working — verify with
-      `go run ./cmd/semstreams --version` after a `-ldflags` build).
-- [ ] 1.3 `RegistryFor(opts, full bool)` (D9) replaces both `fullComponentRegistry`s; both mains' composition verbs call
+      `go run ./cmd/semstreams --version` after a `-ldflags` build). Verified: `go build -ldflags "-X main.Version=v9.9.9-ldflags
+      …"` then `--version` prints `semstreams version v9.9.9-ldflags`.
+- [x] 1.3 `RegistryFor(opts, full bool)` (D9) replaces both `fullComponentRegistry`s; both mains' composition verbs call
       it.
 - [ ] 1.4 Move the tests listed in `design.md` § 7 row 1; delete the e2e duplicates and
       `cmd/e2e-semstreams/bootstrap_observability_test.go` (it asserts the retired E2E Phase-A). Delete
       `bootstrapobservability.NewE2EPhaseA` and `internal/bootstrapobservability/bootstrap_test.go:102-133` (D14).
       Re-point the production half of `internal/maxdelivery/boot_order_test.go` (`:24`) at `internal/boot/run.go`;
       delete its e2e half (`:111-158`).
-- [ ] 1.5 `go test -race ./internal/boot/... ./internal/bootstrapobservability/... ./internal/maxdelivery/...` and
+      Landed in two commits: the moves, the e2e duplicates and the production re-point with section 1; the
+      `NewE2EPhaseA` deletion and the e2e half of `boot_order_test.go` with section 3, because the e2e root calls
+      `NewE2EPhaseA` until its main is thinned (3.1) — deleting it first does not compile. The I7 test is now
+      behavioural (an in-process NATS server; the extension sees the connected client, and its error fails the
+      connection step); mutation: drop the `runAfterConnect` call in `connectNATSWithSpinner` →
+      `slow_consumer_hook_contract_test.go:47` "Should be true" FAIL; restored, `shasum` equal before and after.
+- [x] 1.5 `go test -race ./internal/boot/... ./internal/bootstrapobservability/... ./internal/maxdelivery/...` and
       `go vet ./...` green with **no** `-tags=`.
 
 ## 2. `internal/e2eboot`

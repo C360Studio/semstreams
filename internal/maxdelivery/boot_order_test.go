@@ -12,21 +12,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestBinaryBootOrder is a sister-binary guard: both production assemblies must
-// complete the shared Phase-A client, effective-config, and stream-provisioning
-// chain before starting the MaxDeliver observer or handing control to the
-// function whose first action is Manager.StartAll.
+// TestBinaryBootOrder guards the framework boot (internal/boot.Run, which both
+// framework binaries boot through): it must complete the shared Phase-A client,
+// effective-config, and stream-provisioning chain before starting the
+// MaxDeliver observer or handing control to the function whose first action is
+// Manager.StartAll.
 //
 //revive:disable-next-line:function-length // One guard compares the complete production and E2E composition roots.
 func TestBinaryBootOrder(t *testing.T) {
 	t.Parallel()
 
-	productionPath := filepath.Join("..", "..", "cmd", "semstreams", "main.go")
-	productionRun := functionDecl(t, productionPath, "run")
-	productionCalls := functionCalls(t, productionPath, "run")
+	productionPath := filepath.Join("..", "boot", "run.go")
+	productionRun := functionDecl(t, productionPath, "Run")
+	productionCalls := functionCalls(t, productionPath, "Run")
 	requireCallOrder(t, productionCalls,
 		"bootstrapobservability.NewProductionPhaseA",
-		"context.Background",
 		"signal.NotifyContext",
 		"createNATSClient",
 		"connectNATSWithSpinner",
@@ -58,22 +58,24 @@ func TestBinaryBootOrder(t *testing.T) {
 	require.NoError(t, err)
 	productionMetrics, err := siblingAssignedResult(productionRun, productionPhase, 0)
 	require.NoError(t, err)
-	productionRuntimeCtx, err := assignedCallResult(productionRun, "context.Background", 0)
+	productionRuntimeCtx, err := parameterName(productionRun, 0)
 	require.NoError(t, err)
+	require.NotContains(t, productionCalls, "context.Background",
+		"the framework boot must run under its caller's runtime authority, never an invented root")
 	productionBootCtx, err := assignedCallResult(productionRun, "signal.NotifyContext", 0)
 	require.NoError(t, err)
 	require.NoError(t, requireIdentArgument(productionRun, "signal.NotifyContext", 0, productionRuntimeCtx))
 	productionClient, err := assignedCallResult(productionRun, "createNATSClient", 0)
 	require.NoError(t, err)
-	require.NoError(t, requireSelectorArgument(productionRun, "createNATSClient", 1, productionPhase, "Client"))
-	require.NoError(t, requireIdentArgument(productionRun, "createNATSClient", 2, productionMetrics))
+	require.NoError(t, requireSelectorArgument(productionRun, "createNATSClient", 2, productionPhase, "Client"))
+	require.NoError(t, requireIdentArgument(productionRun, "createNATSClient", 3, productionMetrics))
 	require.NoError(t, requireIdentArgument(productionRun, "connectNATSWithSpinner", 0, productionBootCtx))
 	require.NoError(t, requireIdentArgument(productionRun, "connectNATSWithSpinner", 1, productionClient))
 	require.NoError(t, requireSelectorArgument(productionRun, "connectNATSWithSpinner", 2, productionPhase, "Client"))
-	ownedClient, err := compositeFieldIdentifier(productionRun, "semstreamsRootResources", "natsClient")
+	ownedClient, err := compositeFieldIdentifier(productionRun, "rootResources", "natsClient")
 	require.NoError(t, err)
 	require.Equal(t, productionClient, ownedClient)
-	requireCallOrder(t, productionCalls, "rootResources.abortOnReturn", "connectNATSWithSpinner")
+	requireCallOrder(t, productionCalls, "resources.abortOnReturn", "connectNATSWithSpinner")
 	require.NoError(t, requireIdentArgument(
 		productionRun, "bootstrapobservability.StartValidatedConfigManager", 0, productionRuntimeCtx,
 	))
@@ -105,7 +107,11 @@ func TestBinaryBootOrder(t *testing.T) {
 	require.NoError(t, requireIdentArgument(productionRun, "phaseLogging.Steady", 0, forwarding))
 	requireProductionConnectionChain(t, productionPath)
 	requireStreamWrapper(t, productionPath)
-	requireCompositionConstructors(t, productionPath)
+	productionRegistryCalls := functionCalls(t, productionPath, "setupRegistriesAndManager")
+	require.Contains(t, productionRegistryCalls, "RegistryFor")
+	require.Contains(t, productionRegistryCalls, "service.NewServiceManager")
+	require.Contains(t, functionCalls(t, filepath.Join("..", "boot", "registry.go"), "RegistryFor"), "component.NewRegistry")
+	require.Contains(t, functionCalls(t, productionPath, "configureAndCreateServices"), "manager.ConfigureFromServices")
 	require.Contains(t, functionCalls(t, productionPath, "runUntilShutdown"), "manager.StartAll")
 
 	e2ePath := filepath.Join("..", "..", "cmd", "e2e-semstreams", "main.go")
@@ -320,7 +326,7 @@ func requireConnectionChain(t *testing.T, path string) {
 func requireProductionConnectionChain(t *testing.T, path string) {
 	t.Helper()
 	requireCallOrder(t, functionCalls(t, path, "connectNATSWithSpinner"),
-		"bootstrapobservability.ConnectClient", "runSlowConsumerProbe")
+		"bootstrapobservability.ConnectClient", "runAfterConnect")
 	require.Contains(t, functionCalls(t, path, "createNATSClient"), "bootstrapobservability.NewClient")
 }
 

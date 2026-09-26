@@ -1,6 +1,6 @@
 //go:build integration
 
-package main
+package boot
 
 import (
 	"context"
@@ -50,7 +50,7 @@ func TestIntegrationProductionBootstrapObservability(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		client, err := createNATSClient(fileCfg, phase.Client, metrics)
+		client, err := createNATSClient("", fileCfg, phase.Client, metrics)
 		require.NoError(t, err)
 		require.NoError(t, client.Connect(ctx))
 		t.Cleanup(func() { _ = client.Close(context.Background()) })
@@ -151,7 +151,7 @@ func TestIntegrationProductionBootstrapObservability(t *testing.T) {
 			Enabled: true,
 			Config:  json.RawMessage(`{"min_level":"DEBUG"}`),
 		}
-		client, err := createNATSClient(cfg, phase.Client, metrics)
+		client, err := createNATSClient("", cfg, phase.Client, metrics)
 		require.NoError(t, err)
 		require.NoError(t, client.Connect(ctx))
 		t.Cleanup(func() { _ = client.Close(context.Background()) })

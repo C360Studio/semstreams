@@ -1,4 +1,4 @@
-package main
+package boot
 
 import (
 	"context"
@@ -30,12 +30,35 @@ func (m *signalTestManager) StartAll(ctx context.Context) error {
 	return m.startErr
 }
 
+func TestRunUntilShutdownDoesNotStartAfterShutdownRequested(t *testing.T) {
+	manager := &signalTestManager{started: make(chan struct{})}
+	shutdownRequested := make(chan struct{})
+	close(shutdownRequested)
+	transportClosed := false
+
+	err := runUntilShutdown(
+		t.Context(), shutdownRequested, manager, time.Second, 0, nil,
+		func(context.Context) error {
+			transportClosed = true
+			return nil
+		},
+	)
+
+	require.ErrorContains(t, err, "shutdown requested before service startup")
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	require.Empty(t, manager.operations)
+	require.Nil(t, manager.startCtx)
+	require.Nil(t, manager.stopCtx)
+	require.False(t, transportClosed)
+}
+
 func TestRunUntilShutdownStartFailureUsesBoundedAbortCleanup(t *testing.T) {
 	wantErr := errors.New("start failed")
 	manager := &signalTestManager{started: make(chan struct{}), startErr: wantErr}
 	var closeCtx context.Context
 	err := runUntilShutdown(
-		t.Context(), make(chan struct{}), manager, time.Second, nil,
+		t.Context(), make(chan struct{}), manager, time.Second, 0, nil,
 		func(ctx context.Context) error {
 			closeCtx = ctx
 			return nil
@@ -47,6 +70,8 @@ func TestRunUntilShutdownStartFailureUsesBoundedAbortCleanup(t *testing.T) {
 	_, hasDeadline := closeCtx.Deadline()
 	require.True(t, hasDeadline)
 }
+
+func (*signalTestManager) StartHealthListener(context.Context, int) error { return nil }
 
 func (m *signalTestManager) StopAll(ctx context.Context) error {
 	m.mu.Lock()
@@ -70,6 +95,7 @@ func TestRunUntilShutdownKeepsRuntimeAuthorityAndSharesOneBudgetWithClose(t *tes
 			shutdownRequested,
 			manager,
 			time.Second,
+			0,
 			nil,
 			func(ctx context.Context) error {
 				manager.mu.Lock()
@@ -101,7 +127,7 @@ func TestRunUntilShutdownClosesTransportAfterStopFailure(t *testing.T) {
 	result := make(chan error, 1)
 	go func() {
 		result <- runUntilShutdown(
-			t.Context(), shutdownRequested, manager, time.Second, nil,
+			t.Context(), shutdownRequested, manager, time.Second, 0, nil,
 			func(context.Context) error {
 				close(closed)
 				return nil
@@ -121,7 +147,7 @@ func TestRunUntilShutdownAttributesTransportCloseFailure(t *testing.T) {
 	result := make(chan error, 1)
 	go func() {
 		result <- runUntilShutdown(
-			t.Context(), shutdownRequested, manager, time.Second, nil,
+			t.Context(), shutdownRequested, manager, time.Second, 0, nil,
 			func(context.Context) error { return wantErr },
 		)
 	}()
@@ -148,4 +174,52 @@ func TestStopWithinShutdownBudgetReportsExpiredContext(t *testing.T) {
 	var shutdownErr *shutdownerrs.ShutdownError
 	require.ErrorAs(t, err, &shutdownErr)
 	require.Equal(t, shutdownerrs.PhaseDrainSubscriptions, shutdownErr.Phase)
+}
+
+// TestRunUntilShutdownRunsPostStartAfterStartUnderRuntimeAuthority pins the
+// post-start extension phase: it runs once every service has started, under
+// the runtime authority, before shutdown is awaited.
+func TestRunUntilShutdownRunsPostStartAfterStartUnderRuntimeAuthority(t *testing.T) {
+	manager := &signalTestManager{started: make(chan struct{})}
+	shutdownRequested := make(chan struct{})
+	var postStartCtx context.Context
+	result := make(chan error, 1)
+	go func() {
+		result <- runUntilShutdown(
+			t.Context(), shutdownRequested, manager, time.Second, 0,
+			func(ctx context.Context) error {
+				manager.mu.Lock()
+				defer manager.mu.Unlock()
+				postStartCtx = ctx
+				manager.operations = append(manager.operations, "post-start")
+				return nil
+			},
+			nil,
+		)
+	}()
+	<-manager.started
+	close(shutdownRequested)
+	require.NoError(t, <-result)
+
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	require.Equal(t, []string{"start", "post-start", "stop"}, manager.operations)
+	require.Same(t, manager.startCtx, postStartCtx)
+}
+
+func TestRunUntilShutdownPostStartFailureUsesBoundedCleanup(t *testing.T) {
+	wantErr := errors.New("seed failed")
+	manager := &signalTestManager{started: make(chan struct{})}
+	closed := false
+	err := runUntilShutdown(
+		t.Context(), make(chan struct{}), manager, time.Second, 0,
+		func(context.Context) error { return wantErr },
+		func(context.Context) error {
+			closed = true
+			return nil
+		},
+	)
+	require.ErrorIs(t, err, wantErr)
+	require.NotNil(t, manager.stopCtx)
+	require.True(t, closed)
 }
