@@ -95,7 +95,7 @@ takes (i); **[OQ7 (b)]** likewise. Under an option not taken nothing replaces it
       `checked` after the 1.1 block; `published` after `processor/agentic-loop/component.go:2307` — `if err := c.publishResults(ctx, result); err != nil {`'s
       block, before `stampPublishedRequest`. `git grep -n "testApprovedDispatchHook\|testCarrierHook" -- '*.go' ':!*_test.go'`
       → exactly 6 lines (2 fields, 4 calls). Cheaper row (OQ5): the `dispatched` call alone — then T7–T9 stay
-      unforced and 4.3 is marked unproven. DONE: 2 fields and 4 nil-checked call sites (`git grep` prints 12 lines: each call site is two lines, each field one line plus one doc-comment line naming it). `before_dispatch` is consumed by `TestALoopReleasedBeforeTheApprovedCallIsRegisteredIsRetriedThenInapplicable` and `TestARejectWhoseLoopWasReleasedAfterItsGateResolvedIsSettledColdOnItsFirstDelivery`; `checked` by `TestACancelBetweenTheCarriersCheckAndItsPublicationLetsOnePublicationOut` (review 1 MEDIUM 3).
+      unforced and 4.3 is marked unproven. DONE: 2 fields and 4 nil-checked call sites (`git grep` prints 12 lines: each call site is two lines, each field one line plus one doc-comment line naming it). `before_dispatch` is consumed by `TestALoopReleasedBeforeTheApprovedCallIsRegisteredIsRetriedThenInapplicable` and `TestARejectWhoseLoopWasReleasedAfterItsGateResolvedIsSettledColdOnItsFirstDelivery`; `checked` by `TestACancelBetweenTheCarriersCheckAndItsPublicationLetsOnePublicationOut` (review 1 MEDIUM 3). A third carrier stage, `entered` (before the audit attempt and the entry check), was added for the Codex merge review's finding 1 (task 7.1) and is consumed by `TestACarrierRefusalStillRecordsTheEvidenceTheHandlerCollected`: 2 fields and 5 nil-checked call sites.
 
 ## 4. OQ2 (b) and OQ7 (b) only
 
@@ -142,7 +142,7 @@ takes (i); **[OQ7 (b)]** likewise. Under an option not taken nothing replaces it
       and, separately, an approve) and the cancel arm (a cancel signal on the released W2 loop → Retry, record still
       gated): under (a) assert one `tool.execute` on the approve and adoption when its result completes the batch;
       **[OQ2 (b)]** assert nothing dispatched, `approval_inapplicable` +1, record `failed` with the saved reason, and
-      mutation evidence: delete the marker read of 4.1 → red on "no tool.execute". DONE (OQ2 (a)): `TestASweepAtTheIterationCapWhosePublishFailedSettlesOnTheNextAnswer` (reject, approve, cancel arms) in `approval_cap_sweep_integration_test.go`, counting `tool.execute` on a real stream: the reject publishes none, the approve publishes one (review 1 LOW 9).
+      mutation evidence: delete the marker read of 4.1 → red on "no tool.execute". DONE (OQ2 (a)): `TestASweepAtTheIterationCapWhosePublishFailedSettlesOnTheNextAnswer` (reject, approve, cancel arms) in `approval_cap_sweep_integration_test.go`, counting `tool.execute` on a real stream: the reject publishes none, the approve publishes one (review 1 LOW 9). A fourth arm (task 7.2) approves a terminal tool: its completion is refused against the saved failure.
 - [x] 5.5 Fix the one test the check changes: `processor/agentic-loop/publish_phase_fatal_test.go:31` — `t.Parallel()` — `TestPublishPhaseFailureLeavesPersistHandlerResultFatalClassified`
       creates `loop-publish-phase` in the handler (`CreateLoopWithID`, as `trajectory_eviction_internal_test.go:39`)
       so its non-terminal result passes the check and the classification stays the publish's. Run every
@@ -201,3 +201,28 @@ takes (i); **[OQ7 (b)]** likewise. Under an option not taken nothing replaces it
       lines; the § 8 table posted on #1146 with the amendment flags before the epic closes.
 - [ ] 6.5 Archive: `openspec archive agentic-loop-committed-terminal-recovery --yes` as the last content commit; both
       MODIFIED blocks sync into `openspec/specs/agentic-loop/spec.md`.
+
+## 7. Codex merge review at `0bcc9f12`
+
+- [x] 7.1 Finding 1 (HIGH): preserve the evidence the handler already collected when the carrier refuses. DONE:
+      `persistHandlerResult` runs `recordHandlerResultTrajectory` before the non-terminal entry check (the refusal still
+      publishes no work and writes no loop record; the `terminalOwnedElsewhere` backstop is unchanged). For a
+      non-terminal result the batch is the handler's pre-built observations — `resultTerminalObservation` reads the
+      loop only for a terminal result — and the recorder's per-loop state is its own (attempt ordinals, batch token),
+      untouched by `releaseLoopTransientState`, so recording after the loop went terminal or was released records
+      exactly what was collected. A nil-checked `testCarrierHook` stage `entered` forces handler-return → cancel →
+      carrier. `TestACarrierRefusalStillRecordsTheEvidenceTheHandlerCollected` (both the released and the
+      terminal-in-memory case, healthy recorder) asserts the `tool.completed` fact with its original result and
+      dispatch arguments, no audit failure, no sibling `tool.execute`, no request, no loop-record write, and the
+      disposition (Ack on the cancelled record; Nak on the live one). Mutation: moving the audit back after the check
+      turns both cases red on the evidence assertions, restored with equal `md5 -q`. Spec: block 1's appended sentence,
+      its same-order and terminal-guard ANDs, and block 2's carrier sentence now say "no work, no loop record, the audit
+      attempt first"; design § 2, § 3.1, § 5 and the migration mirror them (§ 5 and the migration identical).
+- [x] 7.2 Finding 2 (HIGH): W2's recovery for an approved terminal tool, under the accepted (a) bound (no code). DONE:
+      block 2's requirement sentence and its sweeper scenario (the approve THEN, plus a new WHEN/THEN for the terminal
+      tool), design § 1 and § 8 W2 rows (flagged as a widening of the same (a) bound for the owner), design § 5 and the
+      migration (identical) say adoption needs the same kind and that an approved terminal tool's completion is refused
+      against the saved failure and quarantined, the record staying non-terminal. The cap test's fourth arm observes it
+      with a tool result SHAPED as the terminal tool's (`StopLoop: true`; the real `decide` executor lives in
+      agentic-tools): Quarantine, the marker unchanged byte for byte, no `agent.complete`, the record non-terminal at the
+      revision the approve wrote, nothing counted. An (a) row: no mutation.
