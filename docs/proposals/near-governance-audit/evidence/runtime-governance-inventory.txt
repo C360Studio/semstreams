@@ -1,0 +1,1039 @@
+# Inventory: SemStreams runtime human approval and operator intervention
+base: c4a79fd5b7a48c45114262ed85db5b50a72197de
+
+Observed checkout: /Users/coby/Code/c360/semstreams; initial git status --short: empty.
+
+## Claimed gap
+
+- `docs/basics/07-agentic-quickstart.md:98` — `"approval_timeout": "5m",   // Auto-reject a gated call after this long; empty = wait forever`
+- `docs/basics/07-agentic-quickstart.md:159` — `"approval_required": ["query_by_type"]               // These tools need a human first`
+- `docs/basics/07-agentic-quickstart.md:164` — `A tool named in `approval_required` is not executed when the model calls it.`
+- `docs/basics/07-agentic-quickstart.md:165` — `The loop parks in `awaiting_approval` and publishes an approval-pending event;`
+- `docs/basics/07-agentic-quickstart.md:166` — `a human answers over `POST /agentic-dispatch/loops/{id}/approval` with`
+- `docs/basics/07-agentic-quickstart.md:167` — ``approve`, `reject`, or `modify`, and only then does the call run. The prefix is`
+- `docs/basics/07-agentic-quickstart.md:170` — `rejection result and carries on. Pair it with `agentic-loop`'s `approval_timeout``
+- `docs/basics/07-agentic-quickstart.md:172` — `subjects, the state transitions, and what a product-layer approval UI has to`
+- `docs/basics/07-agentic-quickstart.md:173` — `implement are in [Approval Flow](../concepts/17-approval-flow.md).`
+- `openspec/specs/agentic-loop/spec.md:1354` — `A supplied value SHALL be a JSON string parsing as a Go duration satisfying `0 < timeout <= 12h`.`
+- `openspec/specs/agentic-loop/spec.md:1355` — `Explicit empty, null, non-string, malformed, zero, negative and above-12h values SHALL fail configuration admission`
+- `openspec/specs/agentic-loop/spec.md:1356` — `before dependent loop work. Invalid values SHALL NOT be defaulted or clamped.`
+- `openspec/specs/agentic-loop/spec.md:1358` — `Startup SHALL additionally require the actual loop-state authority policy defined by`
+- `openspec/specs/agentic-loop/spec.md:1359` — `"Loop-state authority is acquired and observed before loop work."`
+- `openspec/specs/agentic-loop/spec.md:1360` — `Scalar timeout validation SHALL NOT substitute for observed KV policy, nor SHALL a shorter timeout admit a bucket`
+- `openspec/specs/agentic-loop/spec.md:1361` — `with a different TTL.`
+- `openspec/specs/agentic-loop/spec.md:1363` — `The 12h maximum and observed TTL24h provide nominal grace only. They SHALL NOT be represented as a guarantee of`
+- `openspec/specs/agentic-loop/spec.md:1364` — `successful continuation, timeout application or settlement before expiry. This configuration rule SHALL NOT reset,`
+
+## Spellings of the fact
+
+- `agentic/approval.go:16` — `const ApprovalRequiredPrefix = "approval_required: "`
+- `agentic/approval.go:23` — `const ApprovalRejectedPrefix = "approval_rejected: "`
+- `agentic/approval.go:45` — `type ApprovalPendingEvent struct {`
+- `agentic/approval.go:46` — `LoopID string `json:"loop_id"``
+- `agentic/approval.go:47` — `CallID string `json:"call_id"``
+- `agentic/approval.go:53` — `ExecutionID string `json:"execution_id,omitempty"``
+- `agentic/approval.go:57` — `RequestID   string         `json:"request_id,omitempty"``
+- `agentic/approval.go:58` — `ToolName    string         `json:"tool_name"``
+- `agentic/approval.go:59` — `Arguments   map[string]any `json:"arguments,omitempty"``
+- `agentic/approval.go:60` — `Reason      string         `json:"reason"` // Original "approval_required: ..." rejection reason`
+- `agentic/approval.go:61` — `RequestedAt time.Time      `json:"requested_at"``
+- `agentic/approval.go:64` — `Timeout time.Duration `json:"timeout,omitempty"``
+- `agentic/approval.go:67` — `TraceID string `json:"trace_id,omitempty"``
+- `agentic/approval.go:78` — `return fmt.Errorf("loop_id required")`
+- `agentic/approval.go:88` — `return fmt.Errorf("call_id required")`
+- `agentic/approval.go:91` — `return fmt.Errorf("tool_name required")`
+- `agentic/approval.go:114` — `type ApprovalResponse struct {`
+- `agentic/approval.go:115` — `LoopID string `json:"loop_id"``
+- `agentic/approval.go:116` — `CallID string `json:"call_id"``
+- `agentic/approval.go:123` — `ExecutionID string `json:"execution_id,omitempty"``
+- `agentic/approval.go:126` — `RequestID string `json:"request_id,omitempty"``
+- `agentic/approval.go:127` — `Decision  string `json:"decision"` // ApprovalDecisionApprove | ApprovalDecisionReject | ApprovalDecisionModify`
+- `agentic/approval.go:129` — `// Decision == ApprovalDecisionModify. Ignored for approve/reject.`
+- `agentic/approval.go:130` — `ModifiedArguments map[string]any `json:"modified_arguments,omitempty"``
+- `agentic/approval.go:134` — `Reason string `json:"reason,omitempty"``
+- `agentic/approval.go:139` — `ApprovedBy string    `json:"approved_by,omitempty"``
+- `agentic/approval.go:140` — `DecidedAt  time.Time `json:"decided_at"``
+- `agentic/approval.go:151` — `return fmt.Errorf("loop_id required")`
+- `agentic/approval.go:161` — `return fmt.Errorf("call_id required")`
+- `agentic/approval.go:164` — `case ApprovalDecisionApprove, ApprovalDecisionModify:`
+- `agentic/approval.go:166` — `return fmt.Errorf("approved_by required for decision=%q", r.Decision)`
+- `agentic/approval.go:168` — `case ApprovalDecisionReject:`
+- `agentic/approval.go:172` — `return fmt.Errorf("decision must be one of %q, %q, %q (got %q)",`
+- `agentic/approval.go:173` — `ApprovalDecisionApprove, ApprovalDecisionReject, ApprovalDecisionModify, r.Decision)`
+- `processor/agentic-dispatch/identity.go:24` — `//  2. fallbackBody — the request payload's claimed user_id if any.`
+- `processor/agentic-dispatch/identity.go:27` — `// SECURITY NOTE: an explicitly-empty body field (e.g., `user_id: ""``
+- `processor/agentic-dispatch/identity.go:33` — `// body with `user_id: ""` won't suddenly inherit the middleware's`
+- `processor/agentic-dispatch/identity.go:70` — `// semteams reading X-User-Id and writing to ctx) to call without a`
+- `processor/agentic-tools/approval_filter.go:9` — `// ApprovalRequiredPrefix is an alias for agentic.ApprovalRequiredPrefix`
+- `processor/agentic-tools/approval_filter.go:15` — `const ApprovalRequiredPrefix = agentic.ApprovalRequiredPrefix`
+- `processor/agentic-tools/approval_filter.go:17` — `// IsApprovalRequired delegates to agentic.IsApprovalRequired so this`
+- `processor/agentic-tools/approval_filter.go:19` — `func IsApprovalRequired(reason string) bool {`
+- `processor/agentic-tools/approval_filter.go:20` — `return agentic.IsApprovalRequired(reason)`
+- `processor/agentic-tools/approval_filter.go:23` — `// ApprovalFilter gates tool calls that require human approval before`
+- `processor/agentic-tools/approval_filter.go:27` — `// rejected with an ApprovalRequiredPrefix reason so the higher-level`
+- `processor/agentic-tools/approval_filter.go:28` — `// loop can transition to awaiting_approval.`
+- `processor/agentic-tools/approval_filter.go:31` — `// interface. ApprovalFilter no longer implements it; the`
+- `processor/agentic-tools/approval_filter.go:34` — `type ApprovalFilter struct {`
+- `processor/agentic-tools/approval_filter.go:35` — `approvalSet map[string]bool`
+- `processor/agentic-tools/approval_filter.go:38` — `// NewApprovalFilter creates a filter from the configured list of tool names`
+- `processor/agentic-tools/approval_filter.go:39` — `// that require approval.`
+- `processor/agentic-tools/approval_filter.go:40` — `func NewApprovalFilter(approvalRequired []string) *ApprovalFilter {`
+- `processor/agentic-tools/approval_filter.go:41` — `set := make(map[string]bool, len(approvalRequired))`
+- `processor/agentic-tools/approval_filter.go:42` — `for _, name := range approvalRequired {`
+- `processor/agentic-tools/approval_filter.go:45` — `return &ApprovalFilter{approvalSet: set}`
+- `processor/agentic-tools/approval_filter.go:48` — `// ApprovalFilterResult is the outcome of evaluating a batch of tool`
+- `processor/agentic-tools/approval_filter.go:49` — `// calls against the approval gate. Approved calls flow through to`
+- `processor/agentic-tools/approval_filter.go:50` — `// execution; Rejected calls carry a reason for the awaiting_approval`
+- `processor/agentic-tools/approval_filter.go:52` — `type ApprovalFilterResult struct {`
+- `processor/agentic-tools/approval_filter.go:53` — `Approved []agentic.ToolCall`
+- `processor/agentic-tools/approval_filter.go:54` — `Rejected []ApprovalRejection`
+- `processor/agentic-tools/approval_filter.go:57` — `// ApprovalRejection pairs a rejected call with its approval-required`
+- `processor/agentic-tools/approval_filter.go:59` — `type ApprovalRejection struct {`
+- `processor/agentic-tools/approval_filter.go:64` — `// FilterToolCalls checks each call against the configured approval`
+- `processor/agentic-tools/approval_filter.go:65` — `// list. A call carrying a non-empty ApprovedBy is the explicit bypass`
+- `processor/agentic-tools/approval_filter.go:67` — `// ApprovalResponse arrived, so we trust it and pass the call through`
+- `processor/agentic-tools/approval_filter.go:68` — `// regardless of the gating list. Empty ApprovedBy means the call has`
+- `processor/agentic-tools/approval_filter.go:69` — `// not been through approval and the gating list applies normally.`
+- `processor/agentic-tools/approval_filter.go:70` — `func (f *ApprovalFilter) FilterToolCalls(_ string, calls []agentic.ToolCall) ApprovalFilterResult {`
+- `processor/agentic-tools/approval_filter.go:71` — `var result ApprovalFilterResult`
+- `processor/agentic-tools/approval_filter.go:74` — `if !f.approvalSet[call.Name] {`
+- `processor/agentic-tools/approval_filter.go:75` — `result.Approved = append(result.Approved, call)`
+- `processor/agentic-tools/approval_filter.go:78` — `if call.ApprovedBy != "" {`
+- `processor/agentic-tools/approval_filter.go:79` — `// Loop-injected bypass after an ApprovalResponse —`
+- `processor/agentic-tools/approval_filter.go:80` — `// approver identity flows through into trajectory audit`
+- `processor/agentic-tools/approval_filter.go:82` — `result.Approved = append(result.Approved, call)`
+- `processor/agentic-tools/approval_filter.go:85` — `result.Rejected = append(result.Rejected, ApprovalRejection{`
+- `processor/agentic-tools/approval_filter.go:87` — `Reason: fmt.Sprintf("%sTool '%s' requires human approval before execution", ApprovalRequiredPrefix, call.Name),`
+- `processor/agentic-tools/config.go:20` — `ApprovalRequired   []string              `json:"approval_required,omitempty" schema:"type:array,description:Tool names requiring human approval before execution,category:advanced"``
+- `agentic/approval.go:12` — `// ApprovalRequiredPrefix is prepended to rejection reasons when a tool`
+- `agentic/approval.go:25` — `// IsApprovalRequired reports whether a rejection reason indicates the`
+- `agentic/approval.go:27` — `func IsApprovalRequired(reason string) bool {`
+- `agentic/approval.go:28` — `return strings.HasPrefix(reason, ApprovalRequiredPrefix)`
+- `agentic/approval.go:32` — `// from a denied ApprovalResponse. Distinct from IsApprovalRequired so`
+- `agentic/approval.go:40` — `// is gated by Config.ApprovalRequired and the loop has transitioned to`
+- `agentic/approval.go:72` — `return message.Type{Domain: Domain, Category: CategoryApprovalPending, Version: SchemaVersion}`
+- `agentic/approval.go:135` — `// ApprovedBy identifies the approver. Required for approve and`
+- `agentic/approval.go:137` — `// for reject. Propagated to ToolCall.ApprovedBy on re-dispatch so`
+- `agentic/approval.go:145` — `return message.Type{Domain: Domain, Category: CategoryApprovalResponse, Version: SchemaVersion}`
+- `agentic/approval.go:165` — `if r.ApprovedBy == "" {`
+- `agentic/constants.go:24` — `CategoryApprovalPending  = "approval_pending"`
+- `agentic/constants.go:25` — `CategoryApprovalResponse = "approval_response"`
+- `agentic/constants.go:31` — `ApprovalDecisionApprove = "approve"`
+- `agentic/constants.go:32` — `ApprovalDecisionReject  = "reject"`
+- `agentic/constants.go:33` — `ApprovalDecisionModify  = "modify"`
+- `agentic/payload_registry.go:47` — `{Domain: Domain, Category: CategoryApprovalPending, Version: SchemaVersion, Description: "Approval-pending event for human-in-the-loop tool gating", Factory: func() any { return &ApprovalPendingEvent{} }, IndexingProfile: control},`
+- `agentic/payload_registry.go:48` — `{Domain: Domain, Category: CategoryApprovalResponse, Version: SchemaVersion, Description: "Approval response from human-in-the-loop UI", Factory: func() any { return &ApprovalResponse{} }, IndexingProfile: control},`
+- `agentic/rule_fields.go:341` — `putString(fields, "approved_by", r.ApprovedBy)`
+- `agentic/rule_fields.go:362` — `putString(fields, "approved_by", t.ApprovedBy)`
+- `agentic/state.go:105` — `PendingApproval     *PendingApprovalState `json:"pending_approval,omitempty"``
+- `agentic/state.go:220` — `// PendingApprovalState captures the gated tool call so the loop can`
+- `agentic/state.go:224` — `type PendingApprovalState struct {`
+- `agentic/state.go:237` — `// BeginAwaitingApproval transitions the loop into`
+- `agentic/state.go:243` — `func (e *LoopEntity) BeginAwaitingApproval(callID, toolName string, arguments map[string]any, reason string, timeout time.Duration, traceID string) error {`
+- `agentic/state.go:247` — `if e.PendingApproval != nil && e.PendingApproval.CallID != callID {`
+- `agentic/state.go:248` — `return fmt.Errorf("loop already awaiting approval for call %s", e.PendingApproval.CallID)`
+- `agentic/state.go:258` — `e.PendingApproval = &PendingApprovalState{`
+- `agentic/state.go:270` — `// ResolveApproval clears the pending approval and restores the prior`
+- `agentic/state.go:274` — `func (e *LoopEntity) ResolveApproval() error {`
+- `agentic/state.go:278` — `if e.PendingApproval == nil {`
+- `agentic/state.go:279` — `return fmt.Errorf("loop awaiting approval but PendingApproval is nil")`
+- `agentic/state.go:285` — `// BeginAwaitingApproval always captures it.`
+- `agentic/state.go:290` — `e.PendingApproval = nil`
+- `agentic/tools.go:543` — `// ApprovalRequiredPrefix — a stringly-typed magic-string sniffed off`
+- `processor/agentic-loop/config.go:17` — `// Tool-call governance mode constants. ADR-039.`
+- `processor/agentic-loop/config.go:36` — `ToolCallGovernanceModeDisabled = "disabled"`
+- `processor/agentic-loop/config.go:37` — `ToolCallGovernanceModeAudit    = "audit"`
+- `processor/agentic-loop/config.go:38` — `ToolCallGovernanceModeEnforce  = "enforce"`
+- `processor/agentic-loop/config.go:59` — `ToolCallGovernance                ToolCallGovernanceConfig `json:"tool_call_governance,omitempty" schema:"type:object,description:Subject-mode tool-call governance (ADR-039). Default mode=disabled is no-op (no governance gate),category:advanced"``
+- `processor/agentic-loop/config.go:100` — `return c.Mode == ToolCallGovernanceModeAudit || c.Mode == ToolCallGovernanceModeEnforce`
+- `processor/agentic-loop/config.go:106` — `return c.Mode == ToolCallGovernanceModeEnforce`
+- `processor/agentic-loop/config.go:128` — `case "", ToolCallGovernanceModeDisabled, ToolCallGovernanceModeAudit, ToolCallGovernanceModeEnforce:`
+- `processor/agentic-loop/config.go:155` — `c.Mode = ToolCallGovernanceModeDisabled`
+- `processor/agentic-loop/config.go:362` — `Mode:    ToolCallGovernanceModeDisabled,`
+- `processor/agentic-loop/doc.go:237` — `//   - I4. A PendingApproval names the request the record names.`
+- `processor/agentic-loop/doc.go:313` — `// An approval deadline is not recovered. PendingApproval is durable, but the timer is the`
+- `processor/agentic-loop/governance_dispatcher.go:354` — `case ToolCallGovernanceModeAudit:`
+- `processor/agentic-loop/governance_dispatcher.go:360` — `case ToolCallGovernanceModeEnforce:`
+- `processor/agentic-loop/governance_dispatcher.go:394` — `func (d *disabledDispatcher) Mode() string { return ToolCallGovernanceModeDisabled }`
+- `processor/agentic-loop/governance_dispatcher.go:445` — `d.metrics.RecordGovernanceVerdict(decision, ToolCallGovernanceModeAudit, 0)`
+- `processor/agentic-loop/governance_dispatcher.go:450` — `func (d *auditDispatcher) Mode() string { return ToolCallGovernanceModeAudit }`
+- `processor/agentic-loop/governance_dispatcher.go:551` — `d.metrics.RecordGovernanceVerdict(decision, ToolCallGovernanceModeEnforce, waitDuration)`
+- `processor/agentic-loop/governance_dispatcher.go:654` — `func (d *enforceDispatcher) Mode() string { return ToolCallGovernanceModeEnforce }`
+- `processor/agentic-loop/handlers.go:2821` — `if !agentic.IsApprovalRequired(toolResult.Error) {`
+- `processor/agentic-loop/handlers.go:2850` — `if err := entity.BeginAwaitingApproval(toolResult.CallID, toolName, args, toolResult.Error, h.config.ApprovalTimeout(), toolResult.TraceID); err != nil {`
+- `processor/agentic-loop/handlers.go:2853` — `entity.PendingApproval.RequestID = toolResult.RequestID`
+- `processor/agentic-loop/handlers.go:2854` — `entity.PendingApproval.ExecutionID = toolResult.ExecutionID`
+- `processor/agentic-loop/handlers.go:2855` — `entity.PendingApproval.CallOrdinal = toolResult.CallOrdinal`
+- `processor/agentic-loop/handlers.go:3207` — `// Composes with the ApprovalRequiredPrefix in-band signaling pattern`
+- `processor/agentic-loop/loop_evidence.go:508` — `if adopted.PendingApproval != nil {`
+- `processor/agentic-loop/loop_evidence.go:509` — `if err := adopted.ResolveApproval(); err != nil {`
+- `processor/agentic-loop/metrics.go:270` — `Name:      "tool_call_governance_verdict_duration_seconds",`
+- `processor/agentic-loop/metrics.go:278` — `Name:      "tool_call_governance_verdict_total",`
+- `processor/agentic-loop/metrics.go:285` — `Name:      "tool_call_governance_subscribe_before_publish_failures_total",`
+- `processor/agentic-loop/metrics.go:324` — `_ = registry.RegisterHistogramVec("agentic-loop", "tool_call_governance_verdict_duration_seconds", metrics.governanceVerdictDuration)`
+- `processor/agentic-loop/metrics.go:325` — `_ = registry.RegisterCounterVec("agentic-loop", "tool_call_governance_verdict_total", metrics.governanceVerdictTotal)`
+- `processor/agentic-loop/metrics.go:326` — `_ = registry.RegisterCounterVec("agentic-loop", "tool_call_governance_subscribe_before_publish_failures_total", metrics.governanceSubscribeBeforePublishFailures)`
+- `processor/agentic-loop/metrics.go:390` — `// semstreams_agentic_loop_tool_call_governance_subscribe_before_publish_failures_total.`
+- `processor/agentic-loop/state.go:634` — `// place. PendingApproval is replaced wholesale by BeginAwaitingApproval`
+- `processor/agentic-loop/state.go:635` — `// and cleared by ResolveApproval, and Metadata is written once at birth.`
+- `processor/agentic-loop/state.go:676` — `// SnapshotExpiredApprovals returns a snapshot of loops whose pending`
+- `processor/agentic-loop/state.go:687` — `func (m *LoopManager) SnapshotExpiredApprovals(now time.Time) []ApprovalTimeoutCandidate {`
+- `processor/agentic-loop/state.go:692` — `if loop.State != agentic.LoopStateAwaitingApproval || loop.PendingApproval == nil {`
+- `processor/agentic-loop/state.go:695` — `if loop.PendingApproval.Timeout == 0 {`
+- `processor/agentic-loop/state.go:698` — `deadline := loop.PendingApproval.RequestedAt.Add(loop.PendingApproval.Timeout)`
+- `processor/agentic-loop/state.go:704` — `CallID:      loop.PendingApproval.CallID,`
+- `processor/agentic-loop/state.go:705` — `ExecutionID: loop.PendingApproval.ExecutionID,`
+- `processor/agentic-loop/state.go:706` — `RequestID:   loop.PendingApproval.RequestID,`
+- `processor/agentic-loop/state.go:707` — `ToolName:    loop.PendingApproval.ToolName,`
+- `processor/agentic-loop/state.go:708` — `RequestedAt: loop.PendingApproval.RequestedAt,`
+- `processor/agentic-loop/state.go:709` — `Timeout:     loop.PendingApproval.Timeout,`
+- `processor/agentic-loop/state.go:715` — `// ResolveApprovalIfPending atomically transitions the loop out of`
+- `processor/agentic-loop/state.go:717` — `// matches the currently pinned PendingApproval. Returns a snapshot`
+- `processor/agentic-loop/state.go:725` — `// This is the only path that should mutate PendingApproval +`
+- `processor/agentic-loop/state.go:726` — `// State out of awaiting_approval after BeginAwaitingApproval. The`
+- `processor/agentic-loop/state.go:731` — `func (m *LoopManager) ResolveApprovalIfPending(loopID, callID, executionID string) (agentic.PendingApprovalState, bool, error) {`
+- `processor/agentic-loop/state.go:743` — `return agentic.PendingApprovalState{}, false, errs.Wrap(`
+- `processor/agentic-loop/state.go:745` — `"LoopManager", "ResolveApprovalIfPending", "find loop")`
+- `processor/agentic-loop/state.go:748` — `return agentic.PendingApprovalState{}, false, nil`
+- `processor/agentic-loop/state.go:750` — `if entity.PendingApproval == nil {`
+- `processor/agentic-loop/state.go:751` — `return agentic.PendingApprovalState{}, false, nil`
+- `processor/agentic-loop/state.go:764` — `if entity.PendingApproval.ExecutionID != "" {`
+- `processor/agentic-loop/state.go:765` — `if entity.PendingApproval.ExecutionID != executionID {`
+- `processor/agentic-loop/state.go:766` — `return agentic.PendingApprovalState{}, false, nil`
+- `processor/agentic-loop/state.go:768` — `} else if entity.PendingApproval.CallID != callID {`
+- `processor/agentic-loop/state.go:769` — `return agentic.PendingApprovalState{}, false, nil`
+- `processor/agentic-loop/state.go:772` — `pending := *entity.PendingApproval`
+- `processor/agentic-loop/state.go:773` — `if err := entity.ResolveApproval(); err != nil {`
+- `processor/agentic-loop/state.go:774` — `return agentic.PendingApprovalState{}, false, errs.Wrap(err, "LoopManager", "ResolveApprovalIfPending", "resolve approval")`
+- `processor/agentic-tools/approval_filter.go:66` — `// token: the loop only sets it when re-dispatching after a human`
+- `processor/agentic-tools/approval_filter.go:73` — `for _, call := range calls {`
+- `processor/agentic-tools/approval_filter.go:76` — `continue`
+- `processor/agentic-tools/approval_filter.go:77` — `}`
+- `processor/agentic-tools/approval_filter.go:81` — `// via the dispatched ToolCall envelope.`
+- `processor/agentic-tools/approval_filter.go:83` — `continue`
+- `processor/agentic-tools/approval_filter.go:84` — `}`
+- `processor/agentic-tools/approval_filter.go:86` — `Call:   call,`
+- `processor/agentic-tools/approval_filter.go:88` — `})`
+- `processor/agentic-tools/approval_filter.go:89` — `}`
+- `processor/agentic-dispatch/identity.go:19` — `// IdentityFromRequest returns the caller's identity for an incoming`
+- `processor/agentic-dispatch/identity.go:20` — `// HTTP request. Resolution order:`
+- `processor/agentic-dispatch/identity.go:21` — `//`
+- `processor/agentic-dispatch/identity.go:22` — `//  1. Context (set by middleware via WithIdentity) — wins when`
+- `processor/agentic-dispatch/identity.go:23` — `//     non-empty.`
+- `processor/agentic-dispatch/identity.go:25` — `//  3. DefaultIdentity ("http-user") — final fallback.`
+- `processor/agentic-dispatch/identity.go:26` — `//`
+- `processor/agentic-dispatch/identity.go:28` — `// in JSON) is treated as "no claim from the body" and falls through`
+- `processor/agentic-dispatch/identity.go:29` — `// to ctx-or-default. This is deliberate so today's behavior matches`
+- `processor/agentic-dispatch/identity.go:30` — `// the prior `if req.UserID == "" { req.UserID = "http-user" }``
+- `processor/agentic-dispatch/identity.go:31` — `// inline pattern. When ADR-030's middleware contract lands, an`
+- `processor/agentic-dispatch/identity.go:32` — `// authenticated identity in ctx will dominate any body claim — but a`
+- `processor/agentic-dispatch/identity.go:34` — `// identity by accident, because the precedence is "ctx wins over`
+- `processor/agentic-dispatch/identity.go:35` — `// absent body," not "body-empty means use ctx." The order above is`
+- `processor/agentic-dispatch/identity.go:36` — `// the contract; the regression test`
+- `processor/agentic-dispatch/identity.go:37` — `// TestIdentityFromRequest_BodyEmptyDoesNotInheritCtxBody guards it.`
+- `processor/agentic-dispatch/identity.go:38` — `//`
+- `processor/agentic-dispatch/identity.go:39` — `// Today no framework middleware populates ctx; the helper degrades`
+- `processor/agentic-dispatch/identity.go:40` — `// to body+default, behaviorally identical to the inline pattern that`
+- `processor/agentic-dispatch/identity.go:42` — `// duplicate. When ADR-030's HTTP middleware contract lands, framework`
+- `processor/agentic-dispatch/identity.go:43` — `// or product middleware will inject authenticated identity via`
+- `processor/agentic-dispatch/identity.go:44` — `// WithIdentity and every handler picks it up automatically with no`
+- `processor/agentic-dispatch/identity.go:45` — `// handler edits — a single seam that future-proofs the surface`
+- `processor/agentic-dispatch/identity.go:46` — `// without locking us into a specific middleware shape today.`
+- `processor/agentic-dispatch/identity.go:47` — `//`
+- `processor/agentic-dispatch/identity.go:48` — `// The fallbackBody parameter is the body's claimed identity (e.g.,`
+- `processor/agentic-dispatch/identity.go:50` — `// Pass an empty string when the request has no body identity field —`
+- `processor/agentic-dispatch/identity.go:51` — `// the helper treats it the same as a missing ctx value.`
+- `processor/agentic-dispatch/identity.go:52` — `func IdentityFromRequest(r *http.Request, fallbackBody string) string {`
+- `processor/agentic-dispatch/identity.go:53` — `if v, ok := r.Context().Value(identityKey{}).(string); ok && v != "" {`
+- `processor/agentic-dispatch/identity.go:54` — `return v`
+- `processor/agentic-dispatch/identity.go:55` — `}`
+- `processor/agentic-dispatch/identity.go:56` — `if fallbackBody != "" {`
+- `processor/agentic-dispatch/identity.go:57` — `return fallbackBody`
+- `processor/agentic-dispatch/identity.go:58` — `}`
+- `processor/agentic-dispatch/identity.go:59` — `return DefaultIdentity`
+- `processor/agentic-dispatch/identity.go:60` — `}`
+- `processor/agentic-dispatch/identity.go:62` — `// WithIdentity returns a derived context with the supplied identity`
+- `processor/agentic-dispatch/identity.go:63` — `// attached. Intended for HTTP middleware to populate before the`
+- `processor/agentic-loop/config.go:234` — `// The caller must validate configuration first; there is no runtime fallback.`
+- `processor/agentic-loop/config.go:237` — `return 0`
+- `processor/agentic-loop/config.go:238` — `}`
+- `processor/agentic-loop/config.go:240` — `if err != nil {`
+- `processor/agentic-loop/config.go:241` — `return 0`
+- `processor/agentic-loop/config.go:242` — `}`
+- `processor/agentic-loop/config.go:243` — `return d`
+- `processor/agentic-loop/config.go:244` — `}`
+- `processor/agentic-loop/approval_sweeper.go:34` — `// loop. Started when the component starts; stopped when ctx cancels.`
+- `processor/agentic-loop/approval_sweeper.go:38` — `// rather than leaving the gated tool_call orphaned indefinitely.`
+- `processor/agentic-loop/approval_sweeper.go:39` — `//`
+- `processor/agentic-loop/approval_sweeper.go:40` — `// Memory-only, deliberately (#1330, docket OQ2): the sweep reads the`
+- `processor/agentic-loop/approval_sweeper.go:41` — `// loops THIS process holds, and no startup pass reads AGENT_LOOPS to`
+- `processor/agentic-loop/approval_sweeper.go:44` — `// back with its original deadline already computed; a loop nothing`
+- `processor/agentic-loop/approval_sweeper.go:45` — `// rebuilds is never swept by this process at all and stays parked`
+- `processor/agentic-dispatch/http.go:539` — `// ExecutionID names the execution this decision is FOR: the execution_id`
+- `processor/agentic-dispatch/http.go:542` — `// POST landed, so a decision made about execution A, retried after A`
+- `processor/agentic-dispatch/http.go:544` — `// loop's own matcher accepted it, because dispatch had relabelled it with`
+- `processor/agentic-dispatch/http.go:546` — `ExecutionID       string         `json:"execution_id"``
+- `processor/agentic-dispatch/http.go:547` — `ModifiedArguments map[string]any `json:"modified_arguments,omitempty"` // only meaningful for modify`
+- `processor/agentic-dispatch/http.go:548` — `Reason            string         `json:"reason,omitempty"`             // optional, free text`
+- `processor/agentic-dispatch/http.go:549` — `UserID            string         `json:"user_id,omitempty"`            // optional; resolves via IdentityFromRequest`
+- `processor/agentic-dispatch/http.go:550` — `}`
+
+## Adjacent claims
+
+- `docs/adr/030-http-middleware-and-identity-pattern.md:29` — `| `POST /loops/{id}/approval` (beta.22) | Body field `user_id` via `IdentityFromRequest`, default `"http-user"` | No — claimed | Yes |`
+- `docs/adr/030-http-middleware-and-identity-pattern.md:31` — `| NATS `agentic.ApprovalResponse.ApprovedBy` | Wire field, set by publisher | No — claimed | Yes (documented in `feedback_approval_bypass_forgery.md`) |`
+- `docs/adr/030-http-middleware-and-identity-pattern.md:32` — `| NATS `agentic.ToolCall.ApprovedBy` | Bypass token on the wire | No — trusted-because-non-empty | Yes (M2 finding from beta.19 review) |`
+- `docs/adr/030-http-middleware-and-identity-pattern.md:130` — `(`UserMessage.UserID`, `ApprovalResponse.ApprovedBy`,`
+- `docs/adr/030-http-middleware-and-identity-pattern.md:131` — ``ToolCall.ApprovedBy`) become "presenter claims" — opaque metadata,`
+- `docs/adr/030-http-middleware-and-identity-pattern.md:136` — ``ToolCall.ApprovedBy` (and any future bypass tokens) move off the`
+- `docs/adr/030-http-middleware-and-identity-pattern.md:139` — `- **HMAC-signed claim:** the loop signs `(call_id, approver, exp)``
+- `docs/adr/030-http-middleware-and-identity-pattern.md:144` — `a framework-owned KV bucket when issuing the approval; the`
+- `docs/adr/030-http-middleware-and-identity-pattern.md:166` — ``agentic.ApprovalResponse` payload shape (`ApprovedBy` becomes`
+- `docs/adr/039-tool-call-governance-rule-driven.md:1` — `# ADR-039: Tool-Call Governance is Rule-Driven`
+- `docs/adr/039-tool-call-governance-rule-driven.md:6` — `— 2026-06-11. The `approve`/`deny` "auditability via the graph" choice (audit`
+- `docs/adr/039-tool-call-governance-rule-driven.md:14` — `**Proposed — 2026-05-12.** Migrates tool-call governance from the`
+- `docs/adr/039-tool-call-governance-rule-driven.md:17` — `parallel-observer subject path while wiring tool-call governance`
+- `docs/adr/039-tool-call-governance-rule-driven.md:42` — `Last shipped tag is `v1.0.0-beta.68` (PR #59 — tool-call governance`
+- `docs/adr/039-tool-call-governance-rule-driven.md:47` — `### How tool-call governance ended up parallel to the rules engine`
+- `docs/adr/039-tool-call-governance-rule-driven.md:92` — `For tool-call governance via rules, two extensions are required:`
+- `docs/adr/039-tool-call-governance-rule-driven.md:99` — `2. **`approve` action.** Symmetric to `deny` — publishes to a`
+- `docs/adr/039-tool-call-governance-rule-driven.md:100` — `configurable approved subject and writes an audit triple. Closes`
+- `docs/adr/039-tool-call-governance-rule-driven.md:103` — `approve" below.`
+- `docs/adr/039-tool-call-governance-rule-driven.md:108` — `### Why explicit `approve`, not optimistic "absence of deny"`
+- `docs/adr/039-tool-call-governance-rule-driven.md:120` — `approved" against the triple store, only "show me every tool call`
+- `docs/adr/039-tool-call-governance-rule-driven.md:127` — `decision. Approve as its mirror is the framework-honest pattern.`
+- `docs/adr/039-tool-call-governance-rule-driven.md:153` — `"name": "tool_call_governance",`
+- `docs/adr/039-tool-call-governance-rule-driven.md:167` — `// The loop's tool_call_governance.mode flag turns on the subject path.`
+- `docs/adr/039-tool-call-governance-rule-driven.md:202` — `**Tool-call governance is rule-driven, subject-based.** Concrete`
+- `docs/adr/039-tool-call-governance-rule-driven.md:214` — ``agent.toolcall.approved.<loop_id>.<call_id>` and`
+- `docs/adr/039-tool-call-governance-rule-driven.md:218` — `race (see implementation section). Approved → dispatch. Rejected`
+- `docs/adr/039-tool-call-governance-rule-driven.md:227` — `4. **Rules engine gains `approve` action.** Symmetric to `deny` —`
+- `docs/adr/039-tool-call-governance-rule-driven.md:228` — `publishes to a configurable approved subject and writes a`
+- `docs/adr/039-tool-call-governance-rule-driven.md:231` — `verdict" discipline. `approve` does NOT short-circuit subsequent`
+- `docs/adr/039-tool-call-governance-rule-driven.md:236` — `"tool_call_governance": {`
+- `docs/adr/039-tool-call-governance-rule-driven.md:251` — ``tool_call_governance_verdict_duration_seconds`. Default`
+- `docs/adr/039-tool-call-governance-rule-driven.md:257` — ``createFilter` "tool_call_governance" case, and the`
+- `docs/adr/039-tool-call-governance-rule-driven.md:266` — ``filter_chain.filters[tool_call_governance].tool_call_config``
+- `docs/adr/039-tool-call-governance-rule-driven.md:279` — `tool-call governance. Separate decision.`
+- `docs/adr/039-tool-call-governance-rule-driven.md:285` — `this batch is X" semantics. Not required for tool-call governance`
+- `docs/adr/039-tool-call-governance-rule-driven.md:308` — `Tool-call governance is rule-driven. Two small engine extensions`
+- `docs/adr/039-tool-call-governance-rule-driven.md:309` — `(`$message.*` substitution, `approve` action). Filter chain's`
+- `docs/adr/039-tool-call-governance-rule-driven.md:347` — `orchestration AND tool-call governance. Operators learn one DSL.`
+- `docs/adr/039-tool-call-governance-rule-driven.md:354` — `- **Auditability for free.** Both `approve` and `deny` write audit`
+- `docs/adr/039-tool-call-governance-rule-driven.md:366` — `that produce findings; rules consume them). Tool-call governance`
+- `docs/adr/039-tool-call-governance-rule-driven.md:376` — ``approve` action) + loop changes (mode flag, publish/subscribe,`
+- `docs/adr/039-tool-call-governance-rule-driven.md:410` — `tool-call governance path before tag per the CLAUDE.md`
+- `docs/adr/039-tool-call-governance-rule-driven.md:429` — `**Engine extension B: `approve` action.**`
+- `docs/adr/039-tool-call-governance-rule-driven.md:430` — `- New action type constant `ActionTypeApprove = "approve"` in`
+- `docs/adr/039-tool-call-governance-rule-driven.md:432` — `- `executeApprove` mirror of `executeDeny`: writes audit triple via`
+- `docs/adr/039-tool-call-governance-rule-driven.md:433` — ``tripleMutator` (with new `PredicateRuleApprove` constant), then`
+- `docs/adr/039-tool-call-governance-rule-driven.md:434` — `publishes to the configured approved subject via`
+- `docs/adr/039-tool-call-governance-rule-driven.md:438` — `actions via `*DenyVerdict`; `approve` does NOT short-circuit`
+- `docs/adr/039-tool-call-governance-rule-driven.md:447` — `"tool_call_governance": {`
+- `docs/adr/039-tool-call-governance-rule-driven.md:456` — `- New input ports `agent.toolcall.approved.*` and`
+- `docs/adr/039-tool-call-governance-rule-driven.md:480` — `| `enforce` | Subscribe-then-publish (see race fix below), wait `timeout`, dispatch on approve / fail on reject / fail-closed on timeout. |`
+- `docs/adr/039-tool-call-governance-rule-driven.md:506` — `- New histogram `tool_call_governance_verdict_duration_seconds``
+- `docs/adr/039-tool-call-governance-rule-driven.md:509` — `- New counter `tool_call_governance_verdict_total` with labels`
+- `docs/adr/039-tool-call-governance-rule-driven.md:510` — ``{decision, mode}` where `decision ∈ {approved, rejected,`
+- `docs/adr/039-tool-call-governance-rule-driven.md:512` — `- New counter `tool_call_governance_subscribe_before_publish_failures_total``
+- `docs/adr/039-tool-call-governance-rule-driven.md:521` — `- `docs/operations/16-tool-call-governance.md` (new): subject`
+- `docs/adr/039-tool-call-governance-rule-driven.md:525` — `tool-call governance subjects.`
+- `docs/adr/039-tool-call-governance-rule-driven.md:537` — ``createFilter` "tool_call_governance" branch, and the`
+- `docs/adr/039-tool-call-governance-rule-driven.md:547` — `- **Tighten default `tool_call_governance.timeout`** based on p99`
+- `docs/adr/039-tool-call-governance-rule-driven.md:573` — `pattern for `executeApprove`)`
+- `docs/adr/039-tool-call-governance-rule-driven.md:575` — `target for `executeApprove`)`
+- `docs/adr/039-tool-call-governance-rule-driven.md:616` — `1. **`approve` as peer of `deny` signals a sub-typing refactor when`
+- `docs/adr/039-tool-call-governance-rule-driven.md:620` — `publish/approve-specific; etc.). Adding `approve` extends that`
+- `docs/adr/039-tool-call-governance-rule-driven.md:626` — `this ADR's `approve` is the second. **Commit to revisiting at`
+- `docs/adr/039-tool-call-governance-rule-driven.md:629` — ``FireEveryNEvents` is per-rule globally. Tool-call governance`
+- `docs/adr/039-tool-call-governance-rule-driven.md:650` — `1. **Approved subject shape.** Single subject`
+- `docs/adr/039-tool-call-governance-rule-driven.md:651` — ``agent.toolcall.approved.<loop_id>.<call_id>` (fully-scoped) vs`
+- `docs/adr/039-tool-call-governance-rule-driven.md:652` — `broader `agent.toolcall.approved.<loop_id>` carrying call_id in`
+- `docs/adr/039-tool-call-governance-rule-driven.md:680` — `7. **Resolved: `approve` short-circuit semantics.** Confirmed`
+- `openspec/specs/agentic-dispatch/spec.md:6` — `token and asks it to do something with the loop that token names: continue it, cancel it, approve a tool`
+- `openspec/specs/agentic-dispatch/spec.md:65` — ``GET` and `approval` loop endpoints`
+- `openspec/specs/agentic-dispatch/spec.md:72` — `### Requirement: The ownership model binds the user lane, and approval is deliberately not owner-scoped`
+- `openspec/specs/agentic-dispatch/spec.md:79` — `- **approve**: the requester MUST appear in the configured approve list. **Ownership is deliberately NOT`
+- `openspec/specs/agentic-dispatch/spec.md:80` — `consulted.** A second-party reviewer is the entire point of an approval, and a future change that "fixes" this`
+- `openspec/specs/agentic-dispatch/spec.md:81` — `by adding an owner check removes the capability. The approve list has been advertised in configuration and`
+- `openspec/specs/agentic-dispatch/spec.md:114` — `#### Scenario: an approver who does not own the loop is admitted`
+- `openspec/specs/agentic-dispatch/spec.md:116` — `- **GIVEN** a loop created by `user-a` awaiting approval, and `reviewer-b` in the approve list`
+- `openspec/specs/agentic-dispatch/spec.md:117` — `- **WHEN** `reviewer-b` submits the approval`
+- `openspec/specs/agentic-dispatch/spec.md:119` — `- **AND WHEN** `stranger-c`, absent from the approve list, submits the same approval`
+- `openspec/specs/agentic-dispatch/spec.md:121` — `- **AND** the tests that verify this are `TestApprovalIsNotOwnerScoped` and`
+- `openspec/specs/agentic-dispatch/spec.md:122` — ``TestApprovalRefusedForCallerOutsideApproveList``
+- `openspec/specs/agentic-dispatch/spec.md:196` — `measurement then applied to the rest of the vocabulary: `approve`, `reject`, `feedback` and `retry` were`
+- `openspec/specs/agentic-dispatch/spec.md:200` — `any other verb MUST be refused by validation rather than accepted and ignored. Approval and rejection are`
+- `openspec/specs/agentic-dispatch/spec.md:201` — `unaffected: they travel as `ApprovalResponse` on `agent.approval_response.*` (ADR-039) and were never`
+- `openspec/specs/agentic-dispatch/spec.md:240` — `- **GIVEN** a control signal carrying any verb other than `cancel` — `pause`, `resume`, `approve`, `reject`,`
+- `openspec/specs/agentic-dispatch/spec.md:260` — `- **Framework-published loop events** — loop-created, approval-pending, and terminal completion and failure`
+- `openspec/specs/agentic-dispatch/spec.md:263` — `approval-pending arrival buffer.`
+- `openspec/specs/agentic-dispatch/spec.md:264` — `- **Outbound approval-pending events.** An event dispatch publishes, not a request it admits. Its token still`
+- `openspec/specs/agentic-dispatch/spec.md:286` — `NOT settle any of them before its durable effect has committed. `agent.created` and `agent.approval_pending` leave`
+- `openspec/specs/agentic-dispatch/spec.md:291` — `A `UserMessage` SHALL not be positively acknowledged until every required task, cancel signal, approval response,`
+- `openspec/specs/agentic-dispatch/spec.md:422` — `Cancel, approval-response, refusal, terminal user-response, and other ordinary publications SHALL be at-least-once.`
+- `openspec/specs/agentic-dispatch/spec.md:441` — `- **WHEN** a cancel, approval response, refusal, or user response does not receive PubAck`
+- `openspec/specs/agentic-dispatch/spec.md:445` — `### Requirement: An approval decision names the execution it answers`
+- `openspec/specs/agentic-dispatch/spec.md:447` — `The HTTP approval endpoint SHALL require the execution identity the caller reviewed — the `execution_id` carried on`
+- `openspec/specs/agentic-dispatch/spec.md:448` — `the `ApprovalPendingEvent` — in the request body, and SHALL refuse a body that omits it. A decision naming an`
+- `openspec/specs/agentic-dispatch/spec.md:451` — `echo the execution identity it answered.`
+- `openspec/specs/agentic-dispatch/spec.md:453` — `Without the field the endpoint approved whichever gate was pending when the request landed: a decision made about`
+- `openspec/specs/agentic-dispatch/spec.md:454` — `one execution, retried after that call finished and the next one gated, was republished as an approval of a call`
+- `openspec/specs/agentic-dispatch/spec.md:456` — `A human approves one call, not "the next one".`
+- `openspec/specs/agentic-dispatch/spec.md:458` — `An execution identity SHALL be compared only when the pending gate carries one, matching the loop's own matcher: a`
+- `openspec/specs/agentic-dispatch/spec.md:463` — `- **WHEN** an approval body naming one execution arrives while a DIFFERENT execution is the pending gate`
+- `openspec/specs/agentic-dispatch/spec.md:467` — `#### Scenario: An approval body names no execution`
+- `openspec/specs/agentic-dispatch/spec.md:469` — `- **WHEN** an approval body omits the execution identity, whatever the loop's state is`
+- `openspec/specs/agentic-dispatch/spec.md:475` — `Dispatch SHALL only admit external requests and publish task, cancel, and approval work; expose exact LoopID reads`
+- `openspec/specs/agentic-dispatch/spec.md:477` — `authority carries a user route. Agentic-loop SHALL exclusively own loop birth, pending approval, every intermediate`
+- `openspec/specs/agentic-dispatch/spec.md:481` — ``agent.created` or `agent.approval_pending` as correctness inputs. Those publications remain available to external`
+- `openspec/specs/agentic-dispatch/spec.md:509` — ``LoopTracker` and pending-approval process caches SHALL NOT exist. `/loops` and `/debug/state` SHALL preserve the`
+- `openspec/specs/agentic-dispatch/spec.md:510` — `existing immutable `LoopInfo` JSON schema, including `execution_id` on the existing nested `PendingApprovalInfo`,`
+- `openspec/specs/agentic-dispatch/spec.md:517` — `Explicit LoopID approval, read, continuation, cancellation, terminal-route, and command-owner operations SHALL`
+- `openspec/specs/agentic-dispatch/spec.md:521` — `An approval SHALL read the current durable record on every decision rather than a process-local pending cache, and`
+- `openspec/specs/agentic-dispatch/spec.md:522` — `SHALL obtain from validated `PendingApproval` state both its CallID and the framework execution identity it echoes`
+- `openspec/specs/agentic-dispatch/spec.md:523` — `onto the published `ApprovalResponse` — the loop authorises on that identity and refuses a response that omits it,`
+- `openspec/specs/agentic-dispatch/spec.md:525` — `of `PendingApproval` does: a record that is readable but not `awaiting_approval` SHALL refuse as conflict regardless`
+- `openspec/specs/agentic-dispatch/spec.md:526` — `of whether it still carries a pending block. An unreadable or invalid record, and an `awaiting_approval` record`
+- `openspec/specs/agentic-dispatch/spec.md:533` — `#### Scenario: Approval follows replacement`
+- `openspec/specs/agentic-dispatch/spec.md:535` — `- **GIVEN** exact current state is awaiting approval`
+- `openspec/specs/agentic-dispatch/spec.md:536` — `- **WHEN** an authorized approval names its canonical LoopID`
+- `openspec/specs/agentic-dispatch/spec.md:537` — `- **THEN** dispatch obtains CallID from validated `PendingApproval` state read at decision time`
+- `openspec/specs/agentic-dispatch/spec.md:538` — `- **AND** echoes that record's execution identity onto the response it publishes`
+- `openspec/specs/agentic-dispatch/spec.md:539` — `- **AND** requires no earlier approval-pending event`
+- `openspec/specs/agentic-dispatch/spec.md:543` — `- **GIVEN** exact validated current authority contains a pending approval`
+- `openspec/specs/agentic-dispatch/spec.md:545` — `- **THEN** it carries the pending record's ExecutionID as `execution_id``
+- `openspec/specs/agentic-dispatch/spec.md:551` — `- **WHEN** an approval decision arrives`
+- `openspec/specs/agentic-dispatch/spec.md:561` — `#### Scenario: A loop that left awaiting-approval still carries its pending block`
+- `openspec/specs/agentic-dispatch/spec.md:563` — `- **GIVEN** a record whose state is cancelled, failed or executing and whose `PendingApproval` was never cleared`
+- `openspec/specs/agentic-dispatch/spec.md:564` — `- **WHEN** an approval decision names it`
+- `openspec/specs/agentic-dispatch/spec.md:577` — `- **GIVEN** a validated pending approval`
+- `openspec/specs/agentic-dispatch/spec.md:594` — ``execution_id` addition`
+- `openspec/specs/agentic-dispatch/spec.md:644` — `executing, paused and awaiting-approval. Terminal authority SHALL refuse continuation while remaining readable,`
+- `openspec/specs/agentic-dispatch/spec.md:645` — `cancellable and approvable at the gate. Reading authority SHALL NOT mutate it.`
+- `openspec/specs/agentic-dispatch/spec.md:688` — `- **AND** read, cancel and approve still resolve that record and report its terminal state`
+- `openspec/specs/agentic-governance/spec.md:78` — `missing its decision or its execution identity SHALL terminate — redelivery cannot supply either. A SECOND verdict`
+- `openspec/specs/agentic-governance/spec.md:79` — `under one execution identity SHALL quarantine, because only one of the two can have been acted on and which one is`
+- `openspec/specs/agentic-governance/spec.md:83` — `the execution identity cannot supply that loop — it is an opaque digest — so the loop comes from the verdict's own`
+- `openspec/specs/agentic-governance/spec.md:103` — `published shapes — top level, and nested under `properties`. The rule engine's approve action publishes a`
+- `openspec/specs/agentic-governance/spec.md:123` — `- **WHEN** a verdict carries no decision or no execution identity`
+- `openspec/specs/agentic-governance/spec.md:129` — `- **WHEN** a verdict's execution identity has no registered waiter and the loop it names is terminal, absent, or`
+- `openspec/specs/agentic-governance/spec.md:136` — `- **WHEN** a verdict's execution identity has no registered waiter and the loop it names is non-terminal`
+- `openspec/specs/agentic-governance/spec.md:147` — `#### Scenario: Two verdicts name one execution identity`
+- `openspec/specs/agentic-governance/spec.md:149` — `- **WHEN** a second verdict arrives for an execution identity whose waiter already holds one`
+- `openspec/specs/agentic-governance/spec.md:155` — `- **WHEN** a verdict arrives as an approve-action envelope, or as a publish-action map whose fields are nested`
+- `openspec/specs/agentic-governance/spec.md:157` — `- **THEN** the audit line records the decision, execution identity, rule, reason and fingerprint the rule actually`
+- `openspec/specs/agentic-governance/spec.md:164` — `- **THEN** the verdict still reaches the waiter named by its execution identity`
+- `openspec/specs/agentic-loop/spec.md:544` — `be a separately approved derived index consuming the durable fact log. No projector state, graph-pending flag, repair`
+- `openspec/specs/agentic-loop/spec.md:711` — `flight when the loop holds outstanding tool calls, or when the loop is awaiting a human approval decision.`
+- `openspec/specs/agentic-loop/spec.md:715` — `context manager concurrently; and an attach to a loop awaiting approval moves it off that state, so the human's`
+- `openspec/specs/agentic-loop/spec.md:774` — `#### Scenario: a continuation naming a loop awaiting a human approval is refused`
+- `openspec/specs/agentic-loop/spec.md:776` — `- **GIVEN** a registered loop in `awaiting_approval` holding a pending approval for a gated tool call`
+- `openspec/specs/agentic-loop/spec.md:778` — `- **THEN** the task is refused with the in-flight condition and the loop is still `awaiting_approval`, so the`
+- `openspec/specs/agentic-loop/spec.md:780` — `- **AND** the test that verifies this is `TestContinuationOfLoopAwaitingApprovalIsRefused``
+- `openspec/specs/agentic-loop/spec.md:813` — `that arrives for a settled loop — a late or duplicate approval response, a late tool result, a late model`
+- `openspec/specs/agentic-loop/spec.md:820` — `the in-process maps. Approval-timeout sweeping MUST be unaffected, because a candidate is by definition not`
+- `openspec/specs/agentic-loop/spec.md:845` — `#### Scenario: a late approval response for a settled loop is a quiet expected drop`
+- `openspec/specs/agentic-loop/spec.md:848` — `- **WHEN** an approval response for it arrives`
+- `openspec/specs/agentic-loop/spec.md:852` — `- **AND** the tests that verify this are `TestLateApprovalResponseForSettledLoopIsExpectedDrop`,`
+- `openspec/specs/agentic-loop/spec.md:863` — `#### Scenario: approval-timeout sweeping is unaffected`
+- `openspec/specs/agentic-loop/spec.md:865` — `- **GIVEN** a loop awaiting approval past its timeout and a set of already-settled loops`
+- `openspec/specs/agentic-loop/spec.md:866` — `- **WHEN** the approval sweeper snapshots expired approvals`
+- `openspec/specs/agentic-loop/spec.md:868` — `- **AND** the test that verifies this is `TestApprovalSweepUnaffectedByTerminalRelease``
+- `openspec/specs/agentic-loop/spec.md:872` — `Agentic-loop SHALL classify task, response, tool-result, cancel-signal, approval-response, and governance-verdict`
+- `openspec/specs/agentic-loop/spec.md:876` — `heartbeat owner. Cancel signal, approval response, approved verdict, and rejected verdict SHALL retain native`
+- `openspec/specs/agentic-loop/spec.md:943` — `#### Scenario: Approval handler panics`
+- `openspec/specs/agentic-loop/spec.md:945` — `- **WHEN** approval work panics`
+- `openspec/specs/agentic-loop/spec.md:1053` — `#### Scenario: Terminal approval rejection reaches a bounded graph write`
+- `openspec/specs/agentic-loop/spec.md:1055` — `- **WHEN** an approval rejection produces a terminal result and its bounded graph write reaches cancellation`
+- `openspec/specs/agentic-loop/spec.md:1057` — `- **AND** the approval source is not settled while that work remains live`
+- `openspec/specs/agentic-loop/spec.md:1092` — `- **WHEN** the cancel-signal, approval-response, approved-verdict, or rejected-verdict lane is set up`
+- `openspec/specs/agentic-loop/spec.md:1142` — `waiting for executors or a human approval, so for that whole window the loop is waiting on no model response at`
+- `openspec/specs/agentic-loop/spec.md:1228` — `tools or an approval and is therefore waiting on no model response at all`
+- `openspec/specs/agentic-loop/spec.md:1243` — `The framework SHALL preserve provider ToolCall ID for conversation semantics and stamp a distinct execution identity`
+- `openspec/specs/agentic-loop/spec.md:1244` — `derived from RequestID, provider CallID, and positive call ordinal. Tool, approval, governance, and completed-outcome`
+- `openspec/specs/agentic-loop/spec.md:1247` — `A human approval authorises one EXECUTION, not one provider CallID. The approval-pending event SHALL carry the gated`
+- `openspec/specs/agentic-loop/spec.md:1248` — `call's execution identity, and an approval response SHALL echo it. A loop SHALL resolve a pending approval only on a`
+- `openspec/specs/agentic-loop/spec.md:1249` — `response whose execution identity matches the pending one, and SHALL refuse a response that carries none against a`
+- `openspec/specs/agentic-loop/spec.md:1250` — `pending approval that has one — there SHALL be no fallback to provider CallID. Every responder SHALL echo it,`
+- `openspec/specs/agentic-loop/spec.md:1251` — `including the approval-timeout sweeper's synthetic rejection.`
+- `openspec/specs/agentic-loop/spec.md:1256` — `- **THEN** their execution identities differ and their completed outcomes cannot collide`
+- `openspec/specs/agentic-loop/spec.md:1258` — `#### Scenario: An earlier approval is replayed against a later call with the same provider CallID`
+- `openspec/specs/agentic-loop/spec.md:1260` — `- **WHEN** a loop gates a second call whose provider CallID repeats an earlier, already-approved call's, and the`
+- `openspec/specs/agentic-loop/spec.md:1261` — `earlier approval response is delivered again`
+- `openspec/specs/agentic-loop/spec.md:1263` — `- **AND** the loop stays awaiting approval with the later call still pending, so a real decision on it can arrive`
+- `openspec/specs/agentic-loop/spec.md:1265` — `#### Scenario: An approval response carries no execution identity`
+- `openspec/specs/agentic-loop/spec.md:1267` — `- **WHEN** a response naming the pending call's provider CallID arrives with no execution identity, against a`
+- `openspec/specs/agentic-loop/spec.md:1268` — `pending approval that has one`
+- `openspec/specs/agentic-loop/spec.md:1270` — `- **AND** a pending approval minted before execution identity existed still resolves on provider CallID, because it`
+- `openspec/specs/agentic-loop/spec.md:1277` — `work SHALL carry the framework execution identity derived from RequestID, provider CallID, and positive call ordinal.`
+- `openspec/specs/agentic-loop/spec.md:1279` — `Created, request, approval, continuation, and terminal publications are ordinary durable at-least-once outputs.`
+- `openspec/specs/agentic-loop/spec.md:1301` — `- **WHEN** one RequestID or framework execution identity names conflicting required correlation`
+- `openspec/specs/agentic-loop/spec.md:1307` — `- **WHEN** PubAck uncertainty causes a created, request, approval, continuation, or terminal publication to repeat`
+- `openspec/specs/agentic-loop/spec.md:1351` — `### Requirement: Approval lifetime is bounded by loop-state authority`
+- `openspec/specs/agentic-loop/spec.md:1353` — `Agentic-loop approval timeout SHALL default to 12h when `approval_timeout` is omitted.`
+- `openspec/specs/agentic-loop/spec.md:1365` — `shorten or otherwise rewrite an already retained pending approval deadline.`
+- `openspec/specs/agentic-loop/spec.md:1369` — `- **WHEN** configuration omits `approval_timeout``
+- `openspec/specs/agentic-loop/spec.md:1383` — `- **AND** no approval wait, bucket acquisition or dependent consumer starts`
+- `openspec/specs/agentic-loop/spec.md:1387` — `- **GIVEN** a valid retained pending approval and different valid replacement configuration`
+- `openspec/specs/agentic-loop/spec.md:1390` — `- **AND** this startup configuration rule does not select or apply an approval decision`
+- `openspec/specs/agentic-loop/spec.md:1404` — `Only after both observed policy and the effective approval-lifetime requirement pass SHALL the component publish`
+- `openspec/specs/agentic-loop/spec.md:1405` — `the handle, perform approval-deadline discovery, allocate dependent consumers/query subscriptions or start its sweeper.`
+- `openspec/specs/agentic-loop/spec.md:1439` — `- **WHEN** loop authority or approval-lifetime admission fails`
+- `openspec/specs/agentic-loop/spec.md:1441` — `- **AND** deadline discovery, task/response/result/signal/approval/verdict consumers and query subscriptions have not started`
+- `openspec/specs/agentic-loop/spec.md:1442` — `- **AND** no approval sweeper is running`
+- `openspec/specs/agentic-loop/spec.md:1446` — `- **GIVEN** loop authority and approval lifetime are admitted`
+- `openspec/specs/agentic-loop/spec.md:1461` — `- Every `pending_tool_results[e]` whose `request_id` is `R` names an execution ID derived from a tool call of the`
+- `openspec/specs/agentic-loop/spec.md:1464` — `- `pending_approval`, when present, names `request_id = published_request_id`.`
+- `openspec/specs/agentic-loop/spec.md:1469` — `approval lane keeps its present write-then-publish order until #1362, and so does an update that CREATES an approval`
+- `openspec/specs/agentic-loop/spec.md:1470` — `gate, on whichever lane produces it: a gate published before it is written leaves a human an approval request with no`
+- `openspec/specs/agentic-loop/spec.md:1471` — `durable gate behind it. The approval-timeout sweeper keeps its own publish-then-write pair, which is the order it`
+- `openspec/specs/agentic-loop/spec.md:1496` — `An approval deadline is process-local and is not a durable fact: a replaced process SHALL re-arm no approval deadline`
+- `openspec/specs/agentic-loop/spec.md:1497` — `at startup, and a loop in `awaiting_approval` SHALL stay in `awaiting_approval` until the approval is answered or the`
+- `openspec/specs/agentic-loop/spec.md:1498` — `loop is cancelled. A loop the replacement later rebuilds for a redelivered input carries its record's own approval`
+- `openspec/specs/agentic-loop/spec.md:1516` — ``iterations = N+1`, `pending_tool_results` empty, any `pending_approval` cleared with `state = running`), then`
+- `openspec/specs/agentic-loop/spec.md:1537` — `#### Scenario: A replaced process re-arms no approval deadline`
+- `openspec/specs/agentic-loop/spec.md:1539` — `- **GIVEN** a loop whose record is `awaiting_approval` and whose process was replaced`
+- `openspec/specs/agentic-loop/spec.md:1540` — `- **WHEN** the replacement starts and holds no in-memory approval deadline for that loop`
+- `openspec/specs/agentic-loop/spec.md:1541` — `- **THEN** no approval deadline is re-armed and no record is written, and the loop stays `awaiting_approval` until the`
+- `openspec/specs/agentic-loop/spec.md:1542` — `approval is answered or the loop is cancelled`
+- `openspec/specs/agentic-loop/spec.md:1544` — `#### Scenario: An approval timeout whose rejection could not be published leaves the record as it was`
+- `openspec/specs/agentic-loop/spec.md:1546` — `- **GIVEN** a loop gated on a human approval whose deadline has passed, whose record names `R` with the gate on it,`
+- `openspec/specs/agentic-loop/spec.md:1550` — `approval gate intact, and a redelivered result of the gated batch is still classified against it — a record naming a`
+
+## Consumers
+
+- `processor/agentic-dispatch/README.md:15` — `Agentic-loop owns loop creation, approval waits, intermediate transitions, and terminal state. Dispatch does not`
+- `processor/agentic-dispatch/README.md:18` — `current state without replaying already-acknowledged creation or approval notifications.`
+- `processor/agentic-dispatch/README.md:33` — `"approve": ["admin", "reviewer"]`
+- `processor/agentic-dispatch/README.md:66` — `and `agent.approval_pending` for external subscribers, but dispatch does not consume them to reconstruct state.`
+- `processor/agentic-dispatch/README.md:83` — `plus the decode-rejection reasons.`
+- `processor/agentic-dispatch/command_effect.go:95` — `// publishDefinitelyRejected reports whether err PROVES the broker stored`
+- `processor/agentic-dispatch/command_effect.go:137` — `func publishDefinitelyRejected(err error) bool {`
+- `processor/agentic-dispatch/command_effect.go:178` — `if !effect.attemptedUnconfirmed() || !targetResolved || publishDefinitelyRejected(err) {`
+- `processor/agentic-dispatch/commands.go:88` — `// asking about an awaiting_approval loop after dispatch was replaced was told to`
+- `processor/agentic-dispatch/component.go:245` — `config.Permissions.CancelAny == nil && config.Permissions.Approve == nil &&`
+- `processor/agentic-dispatch/component.go:725` — `// and agent.approval_pending lanes were deleted with the in-process loop`
+- `processor/agentic-dispatch/component.go:1069` — `// field TaskMessage.Validate rejected on a refused payload.`
+- `processor/agentic-dispatch/component.go:1255` — `// capacity rejection is the concrete case: it is deliberately circuit-neutral`
+- `processor/agentic-dispatch/component.go:1308` — `case "approve":`
+- `processor/agentic-dispatch/component.go:1309` — `return c.inList(userID, c.config.Permissions.Approve)`
+- `processor/agentic-dispatch/config.go:37` — `Approve    []string `json:"approve"`     // Who can approve results`
+- `processor/agentic-dispatch/config.go:109` — `Approve:    []string{"*"}, // Everyone can approve`
+- `processor/agentic-dispatch/config.go:148` — `Name: "agent.approval_response", Config: component.JetStreamPort{Subjects: []string{"agent.approval_response.*"}, StreamName: "AGENT"}, Description: "Approval responses submitted via the dispatch HTTP /loops/{id}/approval endpoint, consumed by agentic-loop's approval-response handler",`
+- `processor/agentic-dispatch/doc.go:91` — `//   - approve - Approve/reject results`
+- `processor/agentic-dispatch/http.go:126` — `mux.HandleFunc("POST "+prefix+"loops/{id}/approval", c.handleLoopApproval)`
+- `processor/agentic-dispatch/http.go:527` — `// ApprovalRequest is the body of POST /loops/{id}/approval. Drives`
+- `processor/agentic-dispatch/http.go:528` — `// the beta.19 approval flow from an HTTP caller — the framework's`
+- `processor/agentic-dispatch/http.go:529` — `// approval-response handler subscribes on`
+- `processor/agentic-dispatch/http.go:530` — `// agent.approval_response.<loop_id>; this endpoint marshals the`
+- `processor/agentic-dispatch/http.go:537` — `type ApprovalRequest struct {`
+- `processor/agentic-dispatch/http.go:538` — `Decision string `json:"decision"` // approve | reject | modify`
+- `processor/agentic-dispatch/http.go:540` — `// the caller was shown on the ApprovalPendingEvent. REQUIRED. Without it`
+- `processor/agentic-dispatch/http.go:541` — `// the endpoint approved whichever gate happened to be pending when the`
+- `processor/agentic-dispatch/http.go:543` — `// finished and B gated, was republished as an approval of B — and the`
+- `processor/agentic-dispatch/http.go:545` — `// B's identity. A human approves one call, not "the next one".`
+- `processor/agentic-dispatch/http.go:552` — `// ApprovalAcceptResponse is the dispatch HTTP response for a`
+- `processor/agentic-dispatch/http.go:553` — `// successful approval submission. Named distinctly from the`
+- `processor/agentic-dispatch/http.go:554` — `// agentic.ApprovalResponse wire payload to avoid type confusion —`
+- `processor/agentic-dispatch/http.go:557` — `type ApprovalAcceptResponse struct {`
+- `processor/agentic-dispatch/http.go:747` — `// approvalIdentityMismatch reports whether the execution the caller reviewed is`
+- `processor/agentic-dispatch/http.go:750` — `// it the handler took whichever approval was pending and stamped THAT identity`
+- `processor/agentic-dispatch/http.go:751` — `// onto the response, so a retried POST approved a call nobody had reviewed.`
+- `processor/agentic-dispatch/http.go:755` — `// loop record (`agentic.PendingApprovalState`) instead of the retired tracker`
+- `processor/agentic-dispatch/http.go:760` — `// already refuses an awaiting-approval record that carries no execution`
+- `processor/agentic-dispatch/http.go:763` — `func approvalIdentityMismatch(requested, pending string) bool {`
+- `processor/agentic-dispatch/http.go:767` — `// handleLoopApproval drives the beta.19 approval flow over HTTP.`
+- `processor/agentic-dispatch/http.go:775` — `// agent.approval_response.<loop_id>; this handler publishes the`
+- `processor/agentic-dispatch/http.go:776` — `// agentic.ApprovalResponse wire payload there. Concurrent races`
+- `processor/agentic-dispatch/http.go:778` — `// LoopManager.ResolveApprovalIfPending (beta.19 M1 fix), so dispatch`
+- `processor/agentic-dispatch/http.go:780` — `func (c *Component) handleLoopApproval(w http.ResponseWriter, r *http.Request) {`
+- `processor/agentic-dispatch/http.go:786` — `c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "400")`
+- `processor/agentic-dispatch/http.go:791` — `// Decode body BEFORE the gate: the approve permission is checked against`
+- `processor/agentic-dispatch/http.go:794` — `var req ApprovalRequest`
+- `processor/agentic-dispatch/http.go:796` — `c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "400")`
+- `processor/agentic-dispatch/http.go:801` — `approver := IdentityFromRequest(r, req.UserID)`
+- `processor/agentic-dispatch/http.go:803` — `// Form, existence, and the approve permission, through the one gate.`
+- `processor/agentic-dispatch/http.go:805` — `// entire point of an approval. The permission's default admits everyone, so`
+- `processor/agentic-dispatch/http.go:808` — `Seam:      seamHTTPLoopApproval,`
+- `processor/agentic-dispatch/http.go:810` — `Operation: loopOpApprove,`
+- `processor/agentic-dispatch/http.go:812` — `Requester: approver,`
+- `processor/agentic-dispatch/http.go:814` — `c.answerLoopRefusal(w, "/loops/{id}/approval", "POST", startTime, err)`
+- `processor/agentic-dispatch/http.go:820` — `case agentic.ApprovalDecisionApprove,`
+- `processor/agentic-dispatch/http.go:821` — `agentic.ApprovalDecisionReject,`
+- `processor/agentic-dispatch/http.go:822` — `agentic.ApprovalDecisionModify:`
+- `processor/agentic-dispatch/http.go:825` — `c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "400")`
+- `processor/agentic-dispatch/http.go:829` — `agentic.ApprovalDecisionApprove,`
+- `processor/agentic-dispatch/http.go:830` — `agentic.ApprovalDecisionReject,`
+- `processor/agentic-dispatch/http.go:831` — `agentic.ApprovalDecisionModify,`
+- `processor/agentic-dispatch/http.go:841` — `c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "400")`
+- `processor/agentic-dispatch/http.go:843` — `"execution_id is required: name the execution_id from the approval_pending event you are answering")`
+- `processor/agentic-dispatch/http.go:847` — `// Approval follows current durable authority. This process may never have`
+- `processor/agentic-dispatch/http.go:856` — `readErr = fmt.Errorf("loop %q vanished between admission and approval", loopID)`
+- `processor/agentic-dispatch/http.go:858` — `readErr = fmt.Errorf("validate loop %q for approval: %w", loopID, persisted.Validate())`
+- `processor/agentic-dispatch/http.go:862` — `c.logger.ErrorContext(ctx, "agentic-dispatch: admitted approval state could not be read",`
+- `processor/agentic-dispatch/http.go:866` — `c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "503")`
+- `processor/agentic-dispatch/http.go:867` — `c.metrics.recordHTTPDuration("/loops/{id}/approval", "POST", time.Since(startTime).Seconds())`
+- `processor/agentic-dispatch/http.go:871` — `// The recorded state decides before anything about PendingApproval does.`
+- `processor/agentic-dispatch/http.go:872` — `// loopOpApprove deliberately skips the gate's terminal check, so a terminal`
+- `processor/agentic-dispatch/http.go:873` — `// record reaches here; and no transition clears PendingApproval, so a loop`
+- `processor/agentic-dispatch/http.go:874` — `// cancelled while awaiting approval lands `state: cancelled` WITH a pending`
+- `processor/agentic-dispatch/http.go:883` — `if persisted.State != agentic.LoopStateAwaitingApproval {`
+- `processor/agentic-dispatch/http.go:884` — `c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "409")`
+- `processor/agentic-dispatch/http.go:885` — `c.writeJSONError(w, http.StatusConflict, "loop not awaiting approval")`
+- `processor/agentic-dispatch/http.go:888` — `if persisted.PendingApproval == nil || persisted.PendingApproval.CallID == "" ||`
+- `processor/agentic-dispatch/http.go:889` — `persisted.PendingApproval.ExecutionID == "" {`
+- `processor/agentic-dispatch/http.go:890` — `c.logger.ErrorContext(ctx, "agentic-dispatch: admitted approval state could not be read",`
+- `processor/agentic-dispatch/http.go:893` — `slog.String("error", fmt.Sprintf("loop %q awaits approval without a pending execution identity", loopID)))`
+- `processor/agentic-dispatch/http.go:894` — `c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "503")`
+- `processor/agentic-dispatch/http.go:895` — `c.metrics.recordHTTPDuration("/loops/{id}/approval", "POST", time.Since(startTime).Seconds())`
+- `processor/agentic-dispatch/http.go:899` — `gated := *persisted.PendingApproval`
+- `processor/agentic-dispatch/http.go:901` — `if approvalIdentityMismatch(req.ExecutionID, gated.ExecutionID) {`
+- `processor/agentic-dispatch/http.go:902` — `c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "409")`
+- `processor/agentic-dispatch/http.go:904` — `"execution %q is not the approval pending on this loop", req.ExecutionID))`
+- `processor/agentic-dispatch/http.go:908` — `c.logger.DebugContext(ctx, "submitting approval response for loop",`
+- `processor/agentic-dispatch/http.go:914` — `slog.String("approved_by", approver))`
+- `processor/agentic-dispatch/http.go:916` — `// Build + publish the framework's ApprovalResponse payload.`
+- `processor/agentic-dispatch/http.go:917` — `subject, err := c.publishApprovalResponse(ctx, loopID, gated, &req, approver)`
+- `processor/agentic-dispatch/http.go:919` — `c.logger.ErrorContext(ctx, "failed to publish approval response",`
+- `processor/agentic-dispatch/http.go:923` — `c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "500")`
+- `processor/agentic-dispatch/http.go:924` — `c.metrics.recordLoopApproval(req.Decision, false)`
+- `processor/agentic-dispatch/http.go:929` — `c.metrics.recordHTTPRequest("/loops/{id}/approval", "POST", "200")`
+- `processor/agentic-dispatch/http.go:930` — `c.metrics.recordHTTPDuration("/loops/{id}/approval", "POST", time.Since(startTime).Seconds())`
+- `processor/agentic-dispatch/http.go:931` — `c.metrics.recordLoopApproval(req.Decision, true)`
+- `processor/agentic-dispatch/http.go:933` — `c.logger.DebugContext(ctx, "approval response published",`
+- `processor/agentic-dispatch/http.go:939` — `resp := ApprovalAcceptResponse{`
+- `processor/agentic-dispatch/http.go:944` — `Message:     fmt.Sprintf("Approval '%s' submitted for loop %s", req.Decision, loopID),`
+- `processor/agentic-dispatch/http.go:950` — `c.logger.ErrorContext(ctx, "failed to encode approval response",`
+- `processor/agentic-dispatch/http.go:956` — `// publishApprovalResponse builds the agentic.ApprovalResponse wire`
+- `processor/agentic-dispatch/http.go:957` — `// envelope and publishes it on agent.approval_response.<loop_id>.`
+- `processor/agentic-dispatch/http.go:959` — `// marshal or publish. Extracted from handleLoopApproval to keep the`
+- `processor/agentic-dispatch/http.go:966` — `func (c *Component) publishApprovalResponse(ctx context.Context, loopID string, pending agentic.PendingApprovalState, req *ApprovalRequest, approver string) (string, error) {`
+- `processor/agentic-dispatch/http.go:970` — `response := &agentic.ApprovalResponse{`
+- `processor/agentic-dispatch/http.go:974` — `// omits it against a pending approval that has one is refused as stale`
+- `processor/agentic-dispatch/http.go:982` — `ApprovedBy:        approver,`
+- `processor/agentic-dispatch/http.go:988` — `return "", fmt.Errorf("marshal approval response: %w", err)`
+- `processor/agentic-dispatch/http.go:991` — `subject, err := component.ResolveSubject(c.config.Ports.Outputs, "agent.approval_response", loopID)`
+- `processor/agentic-dispatch/http.go:993` — `return "", fmt.Errorf("resolve approval response subject: %w", err)`
+- `processor/agentic-dispatch/http.go:996` — `return subject, fmt.Errorf("publish approval response on %s: %w", subject, err)`
+- `processor/agentic-dispatch/http.go:1188` — `{Name: "state", In: "query", Description: "Filter by loop state (pending, exploring, planning, architecting, executing, reviewing, awaiting_approval, complete, failed, cancelled)"},`
+- `processor/agentic-dispatch/http.go:1232` — `"/loops/{id}/approval": {`
+- `processor/agentic-dispatch/http.go:1234` — `Summary:     "Submit human approval response for a gated tool call",`
+- `processor/agentic-dispatch/http.go:1235` — `Description: "Drives the beta.19 approval flow over HTTP. The loop must be awaiting approval (see config.approval_required). Decision is one of approve, reject, modify; modified_arguments substitutes for the original tool call arguments when decision=modify. Identity comes from X-User-Id-aware middleware via ctx (preferred) or the body user_id field (fallback), defaulting to http-user.",`
+- `processor/agentic-dispatch/http.go:1238` — `Description: "Approval decision and optional modifications",`
+- `processor/agentic-dispatch/http.go:1240` — `SchemaRef:   "#/components/schemas/ApprovalRequest",`
+- `processor/agentic-dispatch/http.go:1247` — `Description: "Approval submitted",`
+- `processor/agentic-dispatch/http.go:1254` — `Description: "Requester is not in the approve permission list (default admits everyone)",`
+- `processor/agentic-dispatch/http.go:1260` — `Description: "Loop exists but is not awaiting approval",`
+- `processor/agentic-dispatch/http.go:1263` — `Description: "Failed to publish approval (NATS error)",`
+- `processor/agentic-dispatch/http.go:1309` — `reflect.TypeOf(ApprovalAcceptResponse{}),`
+- `processor/agentic-dispatch/http.go:1314` — `reflect.TypeOf(ApprovalRequest{}),`
+- `processor/agentic-dispatch/identity.go:15` — `// POST /message default ("http-user") so the new approval endpoint`
+- `processor/agentic-dispatch/identity.go:41` — `// `handleHTTPMessage` and the new `handleLoopApproval` would otherwise`
+- `processor/agentic-dispatch/identity.go:49` — `// `req.UserID` from `HTTPMessageRequest` or `ApprovalRequest`).`
+- `processor/agentic-dispatch/intent_classifier.go:25` — `// (#1239); approval travels as ApprovalResponse, not as a signal.`
+- `processor/agentic-dispatch/intent_classifier.go:114` — `// Resolve per-call LLM timeout via the model registry's capability ladder`
+- `processor/agentic-dispatch/intent_classifier.go:115` — `// (endpoint.request_timeout → capability.timeout → fallback). 15s mirrors`
+- `processor/agentic-dispatch/intent_classifier.go:118` — `// against a slower local model raise it via capability.timeout. See`
+- `processor/agentic-dispatch/intent_classifier.go:119` — `// docs/operations/14-timeout-chain.md for the full chain.`
+- `processor/agentic-dispatch/intent_classifier.go:120` — `const intentClassificationTimeoutDefault = 15 * time.Second`
+- `processor/agentic-dispatch/intent_classifier.go:121` — `classifyTimeout := model.ResolveCapabilityTimeout(c.modelRegistry, model.CapabilityIntentClassification, intentClassificationTimeoutDefault, c.logger)`
+- `processor/agentic-dispatch/intent_classifier.go:122` — `reqCtx, cancel := context.WithTimeout(ctx, classifyTimeout)`
+- `processor/agentic-dispatch/loop_admission.go:22` — `// authority rejection.`
+- `processor/agentic-dispatch/loop_admission.go:67` — `// seamHTTPLoopApproval: POST /loops/{id}/approval.`
+- `processor/agentic-dispatch/loop_admission.go:68` — `seamHTTPLoopApproval = "http_loop_approval"`
+- `processor/agentic-dispatch/loop_admission.go:81` — `// the check owns followed by its case — the shape mutation_rejections uses. The`
+- `processor/agentic-dispatch/loop_admission.go:110` — `// loopOpApprove: an approval decision on a gated tool call.`
+- `processor/agentic-dispatch/loop_admission.go:111` — `loopOpApprove = "approve"`
+- `processor/agentic-dispatch/loop_admission.go:152` — `// awaiting_approval, and telling a user "running" for the second of those`
+- `processor/agentic-dispatch/loop_admission.go:165` — `// the producing agentic-loop had no `timeout` configured, which is the one`
+- `processor/agentic-dispatch/loop_admission.go:262` — `//   - approve: requester in the approve list, ownership NOT consulted — a`
+- `processor/agentic-dispatch/loop_admission.go:263` — `//     second-party reviewer is the entire point of an approval, and a later`
+- `processor/agentic-dispatch/loop_admission.go:275` — `// never traverses this gate at all. It also does not reach approve or read,`
+- `processor/agentic-dispatch/loop_admission.go:276` — `// which do not consult the owner: gating an approval on an owner the loop never`
+- `processor/agentic-dispatch/loop_admission.go:277` — `// had would delete approvals for every autonomously spawned loop.`
+- `processor/agentic-dispatch/loop_admission.go:283` — `case loopOpApprove:`
+- `processor/agentic-dispatch/loop_admission.go:284` — `if !c.hasPermission(req.Requester, "approve") {`
+- `processor/agentic-dispatch/loop_admission.go:286` — `fmt.Errorf("requester is not permitted to approve loop %q", req.LoopID))`
+- `processor/agentic-dispatch/loop_info.go:41` — `// PendingApproval exposes the exact persisted gate for approval callers to echo.`
+- `processor/agentic-dispatch/loop_info.go:42` — `PendingApproval *PendingApprovalInfo `json:"pending_approval,omitempty"``
+- `processor/agentic-dispatch/loop_info.go:45` — `// PendingApprovalInfo projects the reviewed call; the loop alone enforces its deadline.`
+- `processor/agentic-dispatch/loop_info.go:46` — `type PendingApprovalInfo struct {`
+- `processor/agentic-dispatch/loop_info.go:51` — `// approval lane; dropping it here would narrow a DTO an adopter already has.`
+- `processor/agentic-dispatch/loop_info.go:68` — `// no `timeout` configured (only SetTimeout writes it), and the revision`
+- `processor/agentic-dispatch/loop_info.go:81` — `PendingApproval: pendingApprovalInfo(e.PendingApproval),`
+- `processor/agentic-dispatch/loop_info.go:85` — `func pendingApprovalInfo(pending *agentic.PendingApprovalState) *PendingApprovalInfo {`
+- `processor/agentic-dispatch/loop_info.go:89` — `return &PendingApprovalInfo{`
+- `processor/agentic-dispatch/loop_wire.go:40` — `// PendingApproval is populated when the loop is in awaiting_approval state.`
+- `processor/agentic-dispatch/loop_wire.go:41` — `PendingApproval *PendingApprovalInfo `json:"pending_approval,omitempty"``
+- `processor/agentic-dispatch/loop_wire.go:66` — `PendingApproval: in.PendingApproval,`
+- `processor/agentic-dispatch/loop_wire.go:84` — `pending := pendingApprovalInfo(e.PendingApproval)`
+- `processor/agentic-dispatch/loop_wire.go:103` — `PendingApproval: pending,`
+- `processor/agentic-dispatch/metrics.go:25` — `// is a response that disappears with no record. A stream capacity rejection`
+- `processor/agentic-dispatch/metrics.go:34` — `// Loop approval metrics — counts approval submissions through the`
+- `processor/agentic-dispatch/metrics.go:35` — `// HTTP /loops/{id}/approval endpoint by decision and outcome.`
+- `processor/agentic-dispatch/metrics.go:36` — `loopApprovalsSubmitted *prometheus.CounterVec`
+- `processor/agentic-dispatch/metrics.go:168` — `// Loop approval metrics`
+- `processor/agentic-dispatch/metrics.go:169` — `loopApprovalsSubmitted: prometheus.NewCounterVec(prometheus.CounterOpts{`
+- `processor/agentic-dispatch/metrics.go:172` — `Name:      "loop_approvals_submitted_total",`
+- `processor/agentic-dispatch/metrics.go:173` — `Help:      "Total number of approval responses submitted via HTTP, labelled by decision and submission outcome (status: success/error)",`
+- `processor/agentic-dispatch/metrics.go:269` — `_ = registry.RegisterCounterVec("router", "loop_approvals_submitted_total", m.loopApprovalsSubmitted)`
+- `processor/agentic-dispatch/metrics.go:293` — `_ = prometheus.DefaultRegisterer.Register(m.loopApprovalsSubmitted)`
+- `processor/agentic-dispatch/metrics.go:357` — `// recordLoopApproval records an HTTP approval submission attempt.`
+- `processor/agentic-dispatch/metrics.go:359` — `// agent.approval_response.<loop_id>; success=false means the publish`
+- `processor/agentic-dispatch/metrics.go:360` — `// failed or the request was rejected at the dispatch boundary`
+- `processor/agentic-dispatch/metrics.go:364` — `func (m *routerMetrics) recordLoopApproval(decision string, success bool) {`
+- `processor/agentic-dispatch/metrics.go:369` — `m.loopApprovalsSubmitted.WithLabelValues(decision, status).Inc()`
+- `processor/agentic-dispatch/terminal_settlement.go:406` — `// rejected, exactly as a partial route on the terminal's own record is.`
+- `processor/agentic-loop/approval_response_handler.go:14` — `// HandleApprovalResponse processes an ApprovalResponse for a loop`
+- `processor/agentic-loop/approval_response_handler.go:15` — `// awaiting human approval. Returns a HandlerResult populated with`
+- `processor/agentic-loop/approval_response_handler.go:16` — `// either a re-dispatched ToolCall (approve/modify) or a synthesised`
+- `processor/agentic-loop/approval_response_handler.go:17` — `// rejection ToolResult fed through the normal HandleToolResult path`
+- `processor/agentic-loop/approval_response_handler.go:18` — `// (reject). The component publishes any messages and persists the`
+- `processor/agentic-loop/approval_response_handler.go:21` — `// The transition out of awaiting_approval happens atomically inside`
+- `processor/agentic-loop/approval_response_handler.go:22` — `// LoopManager.ResolveApprovalIfPending. Two concurrent responses`
+- `processor/agentic-loop/approval_response_handler.go:23` — `// (e.g., a human approve racing an automated reject scheduler) cannot`
+- `processor/agentic-loop/approval_response_handler.go:32` — `func (h *MessageHandler) HandleApprovalResponse(ctx context.Context, response agentic.ApprovalResponse) (result HandlerResult, err error) {`
+- `processor/agentic-loop/approval_response_handler.go:37` — `h.logger.Error("panic recovered in HandleApprovalResponse",`
+- `processor/agentic-loop/approval_response_handler.go:43` — `err = errs.WrapFatal(fmt.Errorf("approval response handler panicked: %v", r),`
+- `processor/agentic-loop/approval_response_handler.go:44` — `"agentic-loop", "HandleApprovalResponse", "recover panic")`
+- `processor/agentic-loop/approval_response_handler.go:49` — `return HandlerResult{}, errs.WrapInvalid(vErr, "agentic-loop", "HandleApprovalResponse", "validate response")`
+- `processor/agentic-loop/approval_response_handler.go:54` — `pending, ok, resolveErr := h.loopManager.ResolveApprovalIfPending(loopID, response.CallID, response.ExecutionID)`
+- `processor/agentic-loop/approval_response_handler.go:60` — `// approval, the response targets a different call_id than the one`
+- `processor/agentic-loop/approval_response_handler.go:73` — `h.logger.Warn("approval response ignored: not awaiting, or its identity does not match the pending call",`
+- `processor/agentic-loop/approval_response_handler.go:95` — `case agentic.ApprovalDecisionApprove:`
+- `processor/agentic-loop/approval_response_handler.go:96` — `return result, h.dispatchApprovedCall(loopID, pending, pending.Arguments, response.ApprovedBy, &result)`
+- `processor/agentic-loop/approval_response_handler.go:97` — `case agentic.ApprovalDecisionModify:`
+- `processor/agentic-loop/approval_response_handler.go:102` — `return result, h.dispatchApprovedCall(loopID, pending, args, response.ApprovedBy, &result)`
+- `processor/agentic-loop/approval_response_handler.go:103` — `case agentic.ApprovalDecisionReject:`
+- `processor/agentic-loop/approval_response_handler.go:104` — `return h.handleRejectedApproval(ctx, loopID, pending, response)`
+- `processor/agentic-loop/approval_response_handler.go:106` — `// Validate above already rejected unknown decisions; this is a`
+- `processor/agentic-loop/approval_response_handler.go:108` — `return HandlerResult{}, fmt.Errorf("unknown approval decision %q", response.Decision)`
+- `processor/agentic-loop/approval_response_handler.go:112` — `// dispatchApprovedCall builds a ToolCall from the pending approval`
+- `processor/agentic-loop/approval_response_handler.go:113` — `// state (substituting modified args when present), stamps ApprovedBy`
+- `processor/agentic-loop/approval_response_handler.go:114` — `// so the agentic-tools approval filter recognises the bypass, and`
+- `processor/agentic-loop/approval_response_handler.go:117` — `func (h *MessageHandler) dispatchApprovedCall(loopID string, pending agentic.PendingApprovalState, args map[string]any, approvedBy string, result *HandlerResult) error {`
+- `processor/agentic-loop/approval_response_handler.go:125` — `ApprovedBy:  approvedBy,`
+- `processor/agentic-loop/approval_response_handler.go:128` — `return errs.Wrap(err, "agentic-loop", "dispatchApprovedCall", "dispatch approved tool call")`
+- `processor/agentic-loop/approval_response_handler.go:133` — `// handleRejectedApproval synthesises a ToolResult carrying the`
+- `processor/agentic-loop/approval_response_handler.go:134` — `// distinctive ApprovalRejectedPrefix (NOT ApprovalRequiredPrefix) so`
+- `processor/agentic-loop/approval_response_handler.go:136` — `// rejection. The synthesised result feeds through HandleToolResult so`
+- `processor/agentic-loop/approval_response_handler.go:139` — `func (h *MessageHandler) handleRejectedApproval(ctx context.Context, loopID string, pending agentic.PendingApprovalState, response agentic.ApprovalResponse) (HandlerResult, error) {`
+- `processor/agentic-loop/approval_response_handler.go:140` — `approver := response.ApprovedBy`
+- `processor/agentic-loop/approval_response_handler.go:141` — `if approver == "" {`
+- `processor/agentic-loop/approval_response_handler.go:142` — `approver = "anonymous" // Timeout-driven auto-rejects have no human approver.`
+- `processor/agentic-loop/approval_response_handler.go:155` — `Error:       fmt.Sprintf("%srejected by %s: %s", agentic.ApprovalRejectedPrefix, approver, reasonSuffix),`
+- `processor/agentic-loop/approval_response_handler.go:161` — `// handleApprovalResponseMessage is the component-level entry point`
+- `processor/agentic-loop/approval_response_handler.go:164` — `func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []byte) (natsclient.DeliveryDecision, error) {`
+- `processor/agentic-loop/approval_response_handler.go:167` — `return natsclient.DeliveryDecisionTerminate, fmt.Errorf("decode approval response: %w", err)`
+- `processor/agentic-loop/approval_response_handler.go:169` — `respPtr, ok := baseMsg.Payload().(*agentic.ApprovalResponse)`
+- `processor/agentic-loop/approval_response_handler.go:172` — `fmt.Errorf("unexpected approval response payload type %T", baseMsg.Payload())`
+- `processor/agentic-loop/approval_response_handler.go:176` — `c.logger.Debug("Processing approval response",`
+- `processor/agentic-loop/approval_response_handler.go:180` — `slog.String("approved_by", response.ApprovedBy))`
+- `processor/agentic-loop/approval_response_handler.go:182` — `result, err := c.handler.HandleApprovalResponse(ctx, response)`
+- `processor/agentic-loop/approval_response_handler.go:184` — `wrapped := fmt.Errorf("handle approval response for loop %q call %q: %w", response.LoopID, response.CallID, err)`
+- `processor/agentic-loop/approval_response_handler.go:202` — `// Approval responses use the same persistence boundary as every other`
+- `processor/agentic-loop/approval_response_handler.go:203` — `// handler result. This keeps a rejection that reaches the iteration cap from`
+- `processor/agentic-loop/approval_response_handler.go:205` — `// The approval lane keeps write-then-publish until #1362: reordering it`
+- `processor/agentic-loop/approval_response_handler.go:206` — `// opens a reject-minted crash window whose only handler is that lane's own`
+- `processor/agentic-loop/approval_response_handler.go:210` — `fmt.Errorf("approval result for loop %q has unknown durable state: %w", response.LoopID, err)`
+- `processor/agentic-loop/approval_sweeper.go:15` — `// approvalSweepInterval is the cadence at which the component scans`
+- `processor/agentic-loop/approval_sweeper.go:16` — `// loops in LoopStateAwaitingApproval for expired timeouts. Hardcoded`
+- `processor/agentic-loop/approval_sweeper.go:18` — `// cheap, human-approval timeouts are typically minutes, and a few-`
+- `processor/agentic-loop/approval_sweeper.go:21` — `const approvalSweepInterval = 5 * time.Second`
+- `processor/agentic-loop/approval_sweeper.go:23` — `// approvalTimeoutSystemApprover is stamped into ApprovalResponse.ApprovedBy`
+- `processor/agentic-loop/approval_sweeper.go:24` — `// for sweeper-driven auto-rejects so downstream observers (audit,`
+- `processor/agentic-loop/approval_sweeper.go:25` — `// ops.diagnosis.* triples, metrics keyed on ApprovedBy) can`
+- `processor/agentic-loop/approval_sweeper.go:26` — `// distinguish framework auto-rejects from human "anonymous" rejects.`
+- `processor/agentic-loop/approval_sweeper.go:28` — `// because handleRejectedApproval's "anonymous" fallback fires for`
+- `processor/agentic-loop/approval_sweeper.go:31` — `const approvalTimeoutSystemApprover = "system:approval-timeout"`
+- `processor/agentic-loop/approval_sweeper.go:33` — `// runApprovalTimeoutSweeper drives the approval-timeout auto-reject`
+- `processor/agentic-loop/approval_sweeper.go:35` — `// Closes mode (f) of orphan-tool-call recovery: a stuck human-approval`
+- `processor/agentic-loop/approval_sweeper.go:36` — `// flow now auto-rejects after Config.ApprovalTimeoutStr, feeding a`
+- `processor/agentic-loop/approval_sweeper.go:37` — `// synth-rejection through the existing HandleApprovalResponse path`
+- `processor/agentic-loop/approval_sweeper.go:42` — `// restore the ones it does not. PendingApproval is KV-persisted with`
+- `processor/agentic-loop/approval_sweeper.go:43` — `// RequestedAt and Timeout, so a loop a redelivery rebuilds here comes`
+- `processor/agentic-loop/approval_sweeper.go:46` — `// until the approval is answered or the loop is cancelled.`
+- `processor/agentic-loop/approval_sweeper.go:47` — `func (c *Component) runApprovalTimeoutSweeper(ctx context.Context) {`
+- `processor/agentic-loop/approval_sweeper.go:48` — `ticker := time.NewTicker(approvalSweepInterval)`
+- `processor/agentic-loop/approval_sweeper.go:55` — `c.sweepExpiredApprovals(ctx)`
+- `processor/agentic-loop/approval_sweeper.go:60` — `// sweepExpiredApprovals snapshots loops with expired approval`
+- `processor/agentic-loop/approval_sweeper.go:61` — `// deadlines and feeds an auto-rejection through the normal approval`
+- `processor/agentic-loop/approval_sweeper.go:64` — `// the loop count and HandleApprovalResponse is fast (no I/O beyond`
+- `processor/agentic-loop/approval_sweeper.go:68` — `// stuck loop can't block timeouts on its peers.`
+- `processor/agentic-loop/approval_sweeper.go:69` — `func (c *Component) sweepExpiredApprovals(ctx context.Context) {`
+- `processor/agentic-loop/approval_sweeper.go:73` — `candidates := c.handler.loopManager.SnapshotExpiredApprovals(time.Now().UTC())`
+- `processor/agentic-loop/approval_sweeper.go:77` — `c.logger.Info("processing expired approval timeouts",`
+- `processor/agentic-loop/approval_sweeper.go:81` — `response := agentic.ApprovalResponse{`
+- `processor/agentic-loop/approval_sweeper.go:86` — `// it against a pending approval that has one, and an auto-reject`
+- `processor/agentic-loop/approval_sweeper.go:90` — `Decision:    agentic.ApprovalDecisionReject,`
+- `processor/agentic-loop/approval_sweeper.go:91` — `Reason: fmt.Sprintf("approval timed out after %s",`
+- `processor/agentic-loop/approval_sweeper.go:92` — `cand.Timeout.Round(time.Second)),`
+- `processor/agentic-loop/approval_sweeper.go:93` — `ApprovedBy: approvalTimeoutSystemApprover,`
+- `processor/agentic-loop/approval_sweeper.go:96` — `result, err := c.handler.HandleApprovalResponse(ctx, response)`
+- `processor/agentic-loop/approval_sweeper.go:98` — `c.logger.Error("approval timeout auto-reject failed",`
+- `processor/agentic-loop/approval_sweeper.go:107` — `// order puts it: the auto-reject is a request-MINTING transition`
+- `processor/agentic-loop/approval_sweeper.go:108` — `// (handleRejectedApproval → HandleToolResult → handleToolsComplete),`
+- `processor/agentic-loop/approval_sweeper.go:127` — `// over an approval that merely timed out. Skipping only the stamp`
+- `processor/agentic-loop/approval_sweeper.go:139` — `c.logger.Warn("approval timeout auto-reject did not publish its results — "+`
+- `processor/agentic-loop/approval_sweeper.go:147` — `c.logger.Warn("approval timeout auto-reject did not name the request it published",`
+- `processor/agentic-loop/approval_sweeper.go:155` — `c.logger.Warn("approval timeout auto-reject did not commit the loop record",`
+- `processor/agentic-loop/approval_sweeper.go:160` — `// Publish the ApprovalResponse onto agent.approval_response.<loopID> so`
+- `processor/agentic-loop/approval_sweeper.go:161` — `// wire observers (sister-repo dashboards, audit consumers) see timeout`
+- `processor/agentic-loop/approval_sweeper.go:162` — `// auto-rejects the same way they see human responses. The component's`
+- `processor/agentic-loop/approval_sweeper.go:164` — `// approval is already resolved by HandleApprovalResponse above), so`
+- `processor/agentic-loop/approval_sweeper.go:166` — `c.publishApprovalResponseToWire(ctx, response)`
+- `processor/agentic-loop/approval_sweeper.go:167` — `c.logger.Info("approval timed out; auto-rejected",`
+- `processor/agentic-loop/approval_sweeper.go:171` — `slog.Duration("timeout", cand.Timeout))`
+- `processor/agentic-loop/approval_sweeper.go:175` — `// publishApprovalResponseToWire publishes an ApprovalResponse to the`
+- `processor/agentic-loop/approval_sweeper.go:176` — `// agent.approval_response.<loopID> JetStream subject so wire observers`
+- `processor/agentic-loop/approval_sweeper.go:177` — `// (dashboards, audit consumers, sister repos) see timeout auto-rejects`
+- `processor/agentic-loop/approval_sweeper.go:178` — `// symmetrically with human approvals.`
+- `processor/agentic-loop/approval_sweeper.go:182` — `// message as a stale-response idempotent no-op because the approval is`
+- `processor/agentic-loop/approval_sweeper.go:187` — `// HandleApprovalResponse is already committed.`
+- `processor/agentic-loop/approval_sweeper.go:188` — `func (c *Component) publishApprovalResponseToWire(ctx context.Context, response agentic.ApprovalResponse) {`
+- `processor/agentic-loop/approval_sweeper.go:192` — `c.logger.Error("failed to marshal approval response for wire publish",`
+- `processor/agentic-loop/approval_sweeper.go:202` — `subject, err := component.ResolveSubject(inputs, "agent.approval_response", response.LoopID)`
+- `processor/agentic-loop/approval_sweeper.go:204` — `c.logger.Error("failed to resolve approval response subject", slog.String("loop_id", response.LoopID), slog.String("error", err.Error()))`
+- `processor/agentic-loop/approval_sweeper.go:216` — `c.logger.Error("failed to publish approval response to wire",`
+- `processor/agentic-loop/config.go:30` — `// Enforce subscribes-then-publishes, waits up to ToolCallGovernance.Timeout`
+- `processor/agentic-loop/config.go:31` — `// for a per-call verdict, and dispatches on approve / fails on`
+- `processor/agentic-loop/config.go:32` — `// reject / fail-closed on timeout. The default 1s timeout is`
+- `processor/agentic-loop/config.go:41` — `// DefaultToolCallGovernanceTimeout is the wait window for a per-call`
+- `processor/agentic-loop/config.go:43` — `// the absence of a verdict as a reject). 1s is generous for beta.69 to`
+- `processor/agentic-loop/config.go:46` — `const DefaultToolCallGovernanceTimeout = "1s"`
+- `processor/agentic-loop/config.go:51` — `Timeout                           string                   `json:"timeout" schema:"type:string,description:Timeout duration for loop execution (e.g. 120s or 5m),default:120s,category:basic,required"``
+- `processor/agentic-loop/config.go:56` — `ApprovalTimeoutStr                string                   `json:"approval_timeout,omitempty" schema:"type:string,description:Positive approval wait at most 12h inclusive. Omission defaults to 12h. TTL24h provides nominal grace not a completion guarantee,default:12h,category:advanced"``
+- `processor/agentic-loop/config.go:79` — `// verdict on agent.toolcall.approved/rejected.* subjects, with Timeout`
+- `processor/agentic-loop/config.go:90` — `// Timeout is the per-call wait window in enforce mode before the`
+- `processor/agentic-loop/config.go:91` — `// dispatcher fails-closed (rejects). Parsed as a Go duration string`
+- `processor/agentic-loop/config.go:93` — `Timeout string `json:"timeout,omitempty" schema:"type:string,description:Per-call verdict wait window in enforce mode (e.g. 500ms or 2s). Default 1s,default:1s,category:advanced"``
+- `processor/agentic-loop/config.go:109` — `// ParsedTimeout returns the parsed Timeout duration. Falls back to the`
+- `processor/agentic-loop/config.go:112` — `func (c ToolCallGovernanceConfig) ParsedTimeout() time.Duration {`
+- `processor/agentic-loop/config.go:113` — `if c.Timeout == "" {`
+- `processor/agentic-loop/config.go:114` — `d, _ := time.ParseDuration(DefaultToolCallGovernanceTimeout)`
+- `processor/agentic-loop/config.go:117` — `d, err := time.ParseDuration(c.Timeout)`
+- `processor/agentic-loop/config.go:119` — `fallback, _ := time.ParseDuration(DefaultToolCallGovernanceTimeout)`
+- `processor/agentic-loop/config.go:136` — `if c.Timeout != "" {`
+- `processor/agentic-loop/config.go:137` — `d, err := time.ParseDuration(c.Timeout)`
+- `processor/agentic-loop/config.go:139` — `return errs.WrapInvalid(err, "ToolCallGovernanceConfig", "Validate", "parse timeout")`
+- `processor/agentic-loop/config.go:143` — `fmt.Errorf("timeout must be positive (got %s)", c.Timeout),`
+- `processor/agentic-loop/config.go:144` — `"ToolCallGovernanceConfig", "Validate", "check timeout value")`
+- `processor/agentic-loop/config.go:152` — `// stable Mode + Timeout instead of empty strings.`
+- `processor/agentic-loop/config.go:157` — `if c.Timeout == "" {`
+- `processor/agentic-loop/config.go:158` — `c.Timeout = DefaultToolCallGovernanceTimeout`
+- `processor/agentic-loop/config.go:194` — `// Validate timeout`
+- `processor/agentic-loop/config.go:195` — `if strings.TrimSpace(c.Timeout) == "" {`
+- `processor/agentic-loop/config.go:196` — `return errs.WrapInvalid(fmt.Errorf("timeout is required"), "Config", "Validate", "check timeout")`
+- `processor/agentic-loop/config.go:199` — `// Parse timeout to ensure it's valid`
+- `processor/agentic-loop/config.go:200` — `duration, err := time.ParseDuration(c.Timeout)`
+- `processor/agentic-loop/config.go:202` — `return errs.WrapInvalid(err, "Config", "Validate", "parse timeout format")`
+- `processor/agentic-loop/config.go:205` — `// Ensure timeout is positive`
+- `processor/agentic-loop/config.go:207` — `return errs.WrapInvalid(fmt.Errorf("timeout must be positive"), "Config", "Validate", "check timeout value")`
+- `processor/agentic-loop/config.go:214` — `approvalTimeout, err := time.ParseDuration(c.ApprovalTimeoutStr)`
+- `processor/agentic-loop/config.go:215` — `if err != nil || approvalTimeout <= 0 || approvalTimeout > 12*time.Hour {`
+- `processor/agentic-loop/config.go:216` — `return errs.WrapInvalid(fmt.Errorf("approval_timeout %q must be a Go duration in (0,12h]", c.ApprovalTimeoutStr), "Config", "Validate", "check approval_timeout")`
+- `processor/agentic-loop/config.go:233` — `// ApprovalTimeout returns the parsed duration for ApprovalTimeoutStr.`
+- `processor/agentic-loop/config.go:235` — `func (c Config) ApprovalTimeout() time.Duration {`
+- `processor/agentic-loop/config.go:236` — `if c.ApprovalTimeoutStr == "" {`
+- `processor/agentic-loop/config.go:239` — `d, err := time.ParseDuration(c.ApprovalTimeoutStr)`
+- `processor/agentic-loop/config.go:358` — `// behavior) with the framework default Timeout for when an operator`
+- `processor/agentic-loop/config.go:363` — `Timeout: DefaultToolCallGovernanceTimeout,`
+- `processor/agentic-loop/config.go:371` — `Timeout:                           "120s",`
+- `processor/agentic-loop/config.go:373` — `ApprovalTimeoutStr:                "12h",`
+- `processor/agentic-loop/config.go:405` — `Name: "agent.approval_response", Config: component.JetStreamPort{Subjects: []string{"agent.approval_response.*"}, StreamName: "AGENT"}, Required: false,`
+- `processor/agentic-loop/config.go:406` — `Description: "Human approval responses for gated tool calls",`
+- `processor/agentic-loop/config.go:409` — `Name: "agent.toolcall.approved", Config: component.JetStreamPort{Subjects: []string{"agent.toolcall.approved.>"}, StreamName: "AGENT"}, Required: false,`
+- `processor/agentic-loop/config.go:410` — `Description: "Approve verdicts from rule-driven tool-call governance (ADR-039). Wildcard subscription; demuxed by execution_id.",`
+- `processor/agentic-loop/config.go:413` — `Name: "agent.toolcall.rejected", Config: component.JetStreamPort{Subjects: []string{"agent.toolcall.rejected.>"}, StreamName: "AGENT"}, Required: false,`
+- `processor/agentic-loop/config.go:414` — `Description: "Reject verdicts from rule-driven tool-call governance (ADR-039). Wildcard subscription; demuxed by execution_id.",`
+- `processor/agentic-loop/config.go:450` — `Name: "agent.approval_pending", Config: component.JetStreamPort{Subjects: []string{"agent.approval_pending.*"}, StreamName: "AGENT"}, Description: "Tool calls awaiting human approval (JetStream)",`
+- `agentic/tools.go:215` — `ExecutionID string         `json:"execution_id,omitempty"``
+- `agentic/tools.go:217` — `// ApprovedBy is set by the loop when re-dispatching a previously`
+- `agentic/tools.go:218` — `// gated tool call after receiving an ApprovalResponse. The`
+- `agentic/tools.go:219` — `// agentic-tools approval filter recognises a non-empty ApprovedBy`
+- `agentic/tools.go:222` — `ApprovedBy string `json:"approved_by,omitempty"``
+- `agentic/tools.go:640` — `ExecutionID string         `json:"execution_id,omitempty"``
+- `processor/agentic-loop/component.go:153` — `// testPublishHook, if non-nil, is called by publishApprovalResponseToWire`
+- `processor/agentic-loop/component.go:984` — `case "agent.approval_response":`
+- `processor/agentic-loop/component.go:985` — `settleHandlerFn = c.handleApprovalResponseMessage`
+- `processor/agentic-loop/component.go:1044` — `default: // agent.signal, agent.approval_response, agent.toolcall.* — fast`
+- `processor/agentic-loop/component.go:2272` — `// a crash between the ApprovalPendingEvent and the record leaves an approval`
+- `processor/agentic-loop/component.go:2278` — `// ApprovalPendingEvent, which carries no MsgID — so mintedRequestID returns ""`
+- `processor/agentic-loop/component.go:2594` — `loopID := c.findLoopIDForToolCall(toolResult.ExecutionID)`
+- `processor/agentic-loop/component.go:2602` — `loopID = c.findLoopIDForToolCall(toolResult.ExecutionID)`
+- `processor/agentic-loop/component.go:2606` — `toolResult.ExecutionID),`
+- `processor/agentic-loop/component.go:2653` — `slog.String("execution_id", toolResult.ExecutionID),`
+- `processor/agentic-loop/component.go:2772` — `"execution_id", toolResult.ExecutionID, "call_id", toolResult.CallID)`
+- `processor/agentic-loop/component.go:2789` — `"loop_id", loopID, "execution_id", toolResult.ExecutionID,`
+- `processor/agentic-loop/component.go:2818` — `if _, applied := adopted.entity.PendingToolResults[toolResult.ExecutionID]; applied {`
+- `processor/agentic-loop/component.go:2820` — `"loop_id", loopID, "execution_id", toolResult.ExecutionID,`
+- `processor/agentic-loop/component.go:2831` — `if err := c.restoreLoopFromEvidence(ctx, loopID, adopted, toolResult.ExecutionID); err != nil {`
+- `processor/agentic-loop/component.go:2845` — `"execution_id", toolResult.ExecutionID, "call_id", toolResult.CallID, "loop_id", loopID)`
+- `processor/agentic-loop/component.go:3566` — `executionID := payload.effectiveExecutionID()`
+- `processor/agentic-loop/component.go:3674` — `p.ExecutionID = v`
+- `agentic/approval_state_test.go:12` — `func TestLoopEntity_BeginAwaitingApproval(t *testing.T) {`
+- `agentic/approval_state_test.go:102` — `func TestLoopEntity_BeginAwaitingApproval_DuplicateCall(t *testing.T) {`
+- `agentic/approval_state_test.go:123` — `func TestLoopEntity_ResolveApproval(t *testing.T) {`
+- `agentic/approval_state_test.go:192` — `func TestLoopEntity_ApprovalRoundTripJSON(t *testing.T) {`
+- `agentic/approval_test.go:29` — `func TestApprovalPendingEvent_Validate(t *testing.T) {`
+- `agentic/approval_test.go:90` — `func TestApprovalResponse_Validate(t *testing.T) {`
+- `agentic/approval_test.go:191` — `func TestApprovalPendingEvent_BaseMessageRoundTrip(t *testing.T) {`
+- `agentic/approval_test.go:234` — `func TestApprovalResponse_BaseMessageRoundTrip(t *testing.T) {`
+- `agentic/approval_test.go:298` — `func TestApprovalPendingEventRefusesNonCanonicalLoopID(t *testing.T) {`
+- `agentic/approval_test.go:328` — `func TestApprovalResponseRefusesNonCanonicalLoopID(t *testing.T) {`
+- `processor/agentic-dispatch/approval_execution_identity_test.go:66` — `func TestStaleApprovalPOSTIsRefusedAgainstTheGateThatIsPending(t *testing.T) {`
+- `processor/agentic-dispatch/approval_execution_identity_test.go:102` — `func TestApprovalWithoutAnExecutionIdentityIsRefused(t *testing.T) {`
+- `processor/agentic-dispatch/approval_handler_test.go:26` — `func TestHandleLoopApproval_CurrentAuthority(t *testing.T) {`
+- `processor/agentic-dispatch/approval_handler_test.go:144` — `func TestHandleLoopApproval_MissingLoopID(t *testing.T) {`
+- `processor/agentic-dispatch/approval_handler_test.go:157` — `func TestHandleLoopApproval_LoopNotFound(t *testing.T) {`
+- `processor/agentic-dispatch/approval_handler_test.go:170` — `func TestHandleLoopApproval_InvalidBody(t *testing.T) {`
+- `processor/agentic-dispatch/approval_handler_test.go:182` — `func TestHandleLoopApproval_UnknownDecision(t *testing.T) {`
+- `processor/agentic-dispatch/approval_handler_test.go:205` — `func TestHandleLoopApproval_NotAwaitingApproval(t *testing.T) {`
+- `processor/agentic-dispatch/approval_handler_test.go:231` — `func TestHandleLoopApproval_DecisionValidation(t *testing.T) {`
+- `processor/agentic-dispatch/approval_handler_test.go:266` — `func TestHandleLoopApproval_BodyIdentityFallback(t *testing.T) {`
+- `processor/agentic-dispatch/approval_handler_test.go:289` — `func TestHandleLoopApproval_CtxIdentityWinsOverBody(t *testing.T) {`
+- `processor/agentic-dispatch/approval_handler_test.go:309` — `func TestHandleLoopApproval_ModifiedArgumentsAccepted(t *testing.T) {`
+- `processor/agentic-dispatch/approval_handler_test.go:331` — `func TestHandleLoopApproval_FailedPublishPreservesPendingApproval(t *testing.T) {`
+- `processor/agentic-dispatch/identity_test.go:11` — `func TestIdentityFromRequest_CtxWins(t *testing.T) {`
+- `processor/agentic-dispatch/identity_test.go:19` — `func TestIdentityFromRequest_BodyFallback(t *testing.T) {`
+- `processor/agentic-dispatch/identity_test.go:27` — `func TestIdentityFromRequest_DefaultFallback(t *testing.T) {`
+- `processor/agentic-dispatch/identity_test.go:40` — `func TestIdentityFromRequest_EmptyCtxFallsThroughToBody(t *testing.T) {`
+- `processor/agentic-dispatch/identity_test.go:51` — `func TestIdentityFromRequest_ForeignCtxKeyIgnored(t *testing.T) {`
+- `processor/agentic-dispatch/identity_test.go:73` — `func TestIdentityFromRequest_BodyEmptyDoesNotInheritCtxBody(t *testing.T) {`
+- `processor/agentic-dispatch/loop_seams_test.go:361` — `func TestApprovalIsNotOwnerScoped(t *testing.T) {`
+- `processor/agentic-dispatch/loop_seams_test.go:385` — `func TestApprovalRefusedForCallerOutsideApproveList(t *testing.T) {`
+- `processor/agentic-dispatch/loop_seams_test.go:400` — `func TestApprovalDefaultAdmitsEveryone(t *testing.T) {`
+- `processor/agentic-dispatch/loop_seams_test.go:490` — `func TestAssertedIdentityIsNotVerified(t *testing.T) {`
+- `processor/agentic-dispatch/loop_wire_test.go:14` — `func TestColdLoopWirePreservesPendingExecutionEcho(t *testing.T) {`
+- `processor/agentic-loop/approval_deadline_hydration_integration_test.go:41` — `func TestAReplacementReArmsNoApprovalDeadline(t *testing.T) {`
+- `processor/agentic-loop/approval_execution_identity_test.go:60` — `func TestReplayedApprovalDoesNotAuthoriseALaterCallWithTheSameProviderCallID(t *testing.T) {`
+- `processor/agentic-loop/approval_execution_identity_test.go:112` — `func TestApprovalWithoutExecutionIdentityIsRefusedAgainstAGatedCall(t *testing.T) {`
+- `processor/agentic-loop/approval_execution_identity_test.go:141` — `func TestApprovalPendingEventCarriesTheGatedExecutionIdentity(t *testing.T) {`
+- `processor/agentic-loop/approval_execution_identity_test.go:178` — `func TestExpiredApprovalCandidateCarriesTheGatedExecutionIdentity(t *testing.T) {`
+- `processor/agentic-loop/approval_gate_test.go:18` — `func TestHandleToolResult_ApprovalGated(t *testing.T) {`
+- `processor/agentic-loop/approval_gate_test.go:141` — `func TestHandleToolResult_AwaitingApprovalAbsorbsSiblings(t *testing.T) {`
+- `processor/agentic-loop/approval_integration_test.go:55` — `func TestIntegration_ApprovalFlow_Approve(t *testing.T) {`
+- `processor/agentic-loop/approval_integration_test.go:343` — `func TestIntegration_ApprovalTimeoutSweeper_PublishesWireResponse(t *testing.T) {`
+- `processor/agentic-loop/approval_response_test.go:85` — `func TestHandleApprovalResponse_Approve(t *testing.T) {`
+- `processor/agentic-loop/approval_response_test.go:133` — `func TestHandleApprovalResponse_Modify(t *testing.T) {`
+- `processor/agentic-loop/approval_response_test.go:168` — `func TestHandleApprovalResponse_Reject(t *testing.T) {`
+- `processor/agentic-loop/approval_response_test.go:217` — `func TestHandleApprovalResponse_NotAwaiting(t *testing.T) {`
+- `processor/agentic-loop/approval_response_test.go:257` — `func TestHandleApprovalResponse_ConcurrentResponsesAtomicResolve(t *testing.T) {`
+- `processor/agentic-loop/approval_response_test.go:336` — `func TestHandleApprovalResponse_CallIDMismatch(t *testing.T) {`
+- `processor/agentic-loop/approval_sweeper_test.go:46` — `func TestSnapshotExpiredApprovals_PicksUpExpiredOnly(t *testing.T) {`
+- `processor/agentic-loop/approval_sweeper_test.go:73` — `func TestSnapshotExpiredApprovals_SkipsNonAwaitingLoops(t *testing.T) {`
+- `processor/agentic-loop/approval_sweeper_test.go:94` — `func TestSnapshotExpiredApprovals_CarriesCallIDAndToolName(t *testing.T) {`
+- `processor/agentic-loop/approval_sweeper_test.go:149` — `func TestHandleApprovalResponse_StaleResponseReturnsBenignEmpty(t *testing.T) {`
+- `processor/agentic-loop/approval_sweeper_test.go:183` — `func TestApprovalTimeoutAutoReject_DrivesHandleApprovalResponse(t *testing.T) {`
+- `processor/agentic-loop/approval_sweeper_test.go:243` — `func TestSnapshotExpiredApprovals_StableUnderRepeatedSweeps(t *testing.T) {`
+- `processor/agentic-loop/approval_sweeper_test.go:260` — `func TestRunApprovalTimeoutSweeper_ExitsOnContextCancel(t *testing.T) {`
+- `processor/agentic-loop/approval_sweeper_test.go:295` — `func TestSweepExpiredApprovals_PublishesApprovalResponseToWire(t *testing.T) {`
+- `processor/agentic-loop/approval_sweeper_test.go:365` — `func TestPublishApprovalResponseToWire_NilNATSClientIsNoop(t *testing.T) {`
+- `processor/agentic-loop/approval_timeout_publish_failure_integration_test.go:48` — `func TestAnApprovalTimeoutWhosePublicationFailedLeavesTheRecordAsItWas(t *testing.T) {`
+- `processor/agentic-loop/create_vs_exists_fence_test.go:529` — `func TestContinuationOfLoopAwaitingApprovalIsRefused(t *testing.T) {`
+- `processor/agentic-loop/delivery_owner_test.go:502` — `func TestLoopApprovalPanicProductionCallbackQuarantinesExactOwner(t *testing.T) {`
+- `processor/agentic-loop/delivery_settlement_integration_test.go:23` — `func TestIntegrationApprovalRejectionJoinsCancelledGraphRequestBeforeQuarantine(t *testing.T) {`
+- `processor/agentic-loop/delivery_settlement_integration_test.go:118` — `func TestIntegrationLoopSignalAndApprovalCallbacksCommitBeforeAck(t *testing.T) {`
+- `processor/agentic-loop/dispatch_test.go:113` — `func TestDispatchToolCall_ApprovalRedispatchStampsLoopID(t *testing.T) {`
+- `processor/agentic-loop/dispatch_test.go:385` — `func TestDispatchToolCall_ApprovalRedispatchStampsRunAnchor(t *testing.T) {`
+- `processor/agentic-loop/execution_identity_test.go:175` — `func TestApprovalRedispatchSeparatesRepeatedProviderCallIDAcrossLoops(t *testing.T) {`
+- `processor/agentic-loop/loop_authority_test.go:71` — `func TestLoopAuthorityApprovalTimeoutJSON(t *testing.T) {`
+- `processor/agentic-loop/loop_carrier_test.go:99` — `func TestApprovalLaneKeepsWriteThenPublish(t *testing.T) {`
+- `processor/agentic-loop/loop_carrier_test.go:149` — `func TestAnApprovalGateIsWrittenBeforeItsEventIsPublished(t *testing.T) {`
+- `processor/agentic-loop/loop_carrier_test.go:223` — `func TestTheApprovalTimeoutSweepNamesTheRequestItPublished(t *testing.T) {`
+- `processor/agentic-loop/terminal_release_test.go:310` — `func TestLateApprovalResponseForSettledLoopIsExpectedDrop(t *testing.T) {`
+- `processor/agentic-loop/terminal_release_test.go:531` — `func TestApprovalSweepUnaffectedByTerminalRelease(t *testing.T) {`
+- `processor/agentic-loop/trajectory_recorder_test.go:666` — `func TestApprovalRejectionAtIterationCapRecordsTerminalBeforeAdjacentSurfaces(t *testing.T) {`
+- `processor/agentic-tools/approval_filter_test.go:10` — `func TestApprovalFilter_ApprovesNormalTools(t *testing.T) {`
+- `processor/agentic-tools/approval_filter_test.go:24` — `func TestApprovalFilter_RejectsApprovalRequired(t *testing.T) {`
+- `processor/agentic-tools/approval_filter_test.go:39` — `func TestApprovalFilter_MixedBatch(t *testing.T) {`
+- `processor/agentic-tools/approval_filter_test.go:55` — `func TestApprovalFilter_EmptyList(t *testing.T) {`
+- `processor/agentic-tools/approval_filter_test.go:74` — `func TestApprovalFilter_ApprovedByBypass(t *testing.T) {`
+- `processor/agentic-tools/approval_filter_test.go:91` — `func TestApprovalFilter_ApprovedByDoesNotAffectNonGatedTool(t *testing.T) {`
+- `processor/agentic-tools/approval_filter_test.go:107` — `func TestApprovalFilter_MixedBatchWithBypass(t *testing.T) {`
+- `processor/agentic-tools/approval_filter_test.go:126` — `func TestApprovalFilter_EmptyApprovedByStillGates(t *testing.T) {`
+- `processor/agentic-tools/approval_filter_test.go:139` — `func TestIsApprovalRequired(t *testing.T) {`
+- `processor/agentic-tools/approval_hook_test.go:16` — `func TestNewComponent_ApprovalFilter_NonEmptyList(t *testing.T) {`
+- `processor/agentic-tools/approval_hook_test.go:37` — `func TestNewComponent_ApprovalFilter_EmptyList(t *testing.T) {`
+- `processor/agentic-tools/outcomes_test.go:187` — `func TestApprovalGateSameIDRedispatchExecutesOnceAndPublishesTerminalResult(t *testing.T) {`
+- `processor/agentic-tools/slice_f2_integration_test.go:33` — `func TestSliceF2ApprovalRequiredFormerNameInterceptsBeforeRegistryMiss(t *testing.T) {`
+- `processor/agentic-tools/tool_effect_approval_test.go:68` — `func TestApprovalFilter_IsBlindToEffect_ThroughTheComponent(t *testing.T) {`
+- `processor/agentic-tools/tool_effect_blindness_test.go:76` — `func TestApprovalFilter_GatesOnNameAlone(t *testing.T) {`
+
+## Problem shape
+
+- `gateway/lifecycle-gateway/doc.go:28` — `//   - POST   {prefix}/{type}/{id}/state                   → operator patch (validates lifecycle:"operator_writable")`
+- `gateway/lifecycle-gateway/doc.go:29` — `//   - POST   {prefix}/{type}/{id}/transition              → operator-initiated transition (validates transitions table)`
+- `gateway/lifecycle-gateway/handlers.go:12` — `//	{root}/{type}/{id}/state                POST  → operator patch`
+- `gateway/lifecycle-gateway/handlers.go:13` — `//	{root}/{type}/{id}/transition           POST  → operator transition`
+- `gateway/lifecycle-gateway/handlers.go:157` — `// rendering "0 instances in every phase" with full operator`
+- `gateway/lifecycle-gateway/handlers.go:175` — `OperatorWritableFields []string       `json:"operator_writable_fields"``
+- `gateway/lifecycle-gateway/handlers.go:349` — `// lifecycle:"operator_writable" tags runs in pkg/lifecycle; the`
+- `gateway/lifecycle-gateway/handlers.go:403` — `// Phase is required; Note is optional operator commentary that lands`
+- `gateway/lifecycle-gateway/handlers.go:542` — `// operator_writable" / "transition from terminal" detail to fix their request.`
+- `gateway/lifecycle-gateway/handlers.go:611` — `return operatorMutationError{http.StatusConflict, code, "authority revision mismatch"}, true`
+- `gateway/lifecycle-gateway/handlers.go:613` — `return operatorMutationError{http.StatusServiceUnavailable, "unavailable", "mutation service unavailable; mutation was not committed"}, true`
+- `gateway/lifecycle-gateway/openapi.go:22` — `// against `lifecycle:"operator_writable"` tags.`
+- `gateway/lifecycle-gateway/openapi.go:26` — `// Phase is required; Note is operator commentary persisted into the`
+- `gateway/lifecycle-gateway/openapi.go:86` — `Description: "Creates a new instance of the registered workflow from an operator-supplied initial state through the lifecycle Manager and canonical graph mutation port. This is the BIRTH lane and the only route carrying a full initial-state envelope — the must-exist lanes (state patch, transition) stay envelope-free and require an existing entity; nothing auto-vivifies. Create-or-fail: a duplicate entity ID returns 409 and never overwrites, so there is no upsert lane on the operator surface. The body is the workflow's registered state struct, and must include the entity ID and an initial phase declared in the workflow's transitions table. Responds 201 with the committed state projected from the causal mutation response, not the submitted body echoed. If delivery occurred without a valid mutation response, responds 503 with code `commit_unknown`; callers must inspect authoritative state before deciding whether another mutation is safe.",`
+- `gateway/lifecycle-gateway/openapi.go:125` — `Description: "Returns the fixed recent operator window of phase-transition records retained in the participant entity. Each entry includes from/to phases, wallclock timestamp, the TransitionSource (rule/operator/component/framework), and any supplied note. This is not an unbounded audit log.",`
+- `gateway/lifecycle-gateway/openapi.go:156` — `Description: "Applies a JSON-body patch to the Participant. The body is a `{<field>: <value>}` map; every field MUST be tagged `lifecycle:\"operator_writable\"` on the registered state struct. Identity (`lifecycle:\"id\"`) and phase fields are protected by the same default-deny gate the rule layer enforces (ADR-047 § AssertRuleWritable).",`
+- `gateway/lifecycle-gateway/openapi.go:169` — `"400": {Description: "Invalid body OR field is not operator_writable OR type mismatch"},`
+- `gateway/lifecycle-gateway/openapi.go:180` — `Summary:     "Operator-initiated phase transition",`
+- `gateway/lifecycle-gateway/openapi.go:181` — `Description: "Transitions the Participant to the requested phase via Manager.Transition with TransitionSourceOperator. Phase must be declared in the workflow's Transitions table; current → target must be a declared edge; current must not be terminal.",`
+- `gateway/lifecycle-gateway/openapi.go:188` — `Description: "Target phase + optional operator note for the audit trail",`
+
+## Searches
+
+- `cat .agents/contracts/semstreams-explorer.md` → full contract read
+- `git rev-parse HEAD` → c4a79fd5b7a48c45114262ed85db5b50a72197de
+- `git status --short` → 0
+- `git grep -n -A 65 '^## Purpose' -- openspec/project.md` → 1 match, 66 context lines
+- `gopls workspace_symbol -matcher=fuzzy Approval` → 0
+- `git grep -n -i -E 'approval|human.in.the.loop|human.involvement' -- processor/agentic-loop processor/agentic-tools processor/agentic-dispatch agentic service gateway` → 1544; output truncated; focused searches below
+- `gopls references agentic/approval.go:114:6` → 6
+  - agentic/approval.go:144:10-26
+  - agentic/approval.go:149:10-26
+  - agentic/approval.go:179:10-26
+  - agentic/approval.go:180:13-29
+  - agentic/approval.go:185:10-26
+  - agentic/approval.go:186:13-29
+- `gopls references agentic/approval.go:45:6` → 6
+  - agentic/approval.go:103:10-30
+  - agentic/approval.go:104:13-33
+  - agentic/approval.go:71:10-30
+  - agentic/approval.go:76:10-30
+  - agentic/approval.go:97:10-30
+  - agentic/approval.go:98:13-33
+- `git grep -n -i -E 'approval|human.in.the.loop|human.involvement' -- processor/agentic-loop processor/agentic-tools processor/agentic-dispatch agentic service gateway (count)` → 1544
+- `git grep -n -E 'json:|return .*Error|ApprovalDecision|^type |^const ' -- agentic/approval.go` → 34
+- `git grep -n -i -E 'approval|approv|reject|timeout' -- processor/agentic-loop/approval*.go processor/agentic-loop/config.go processor/agentic-dispatch (excluding tests)` → 345
+- `git grep -n -i -E 'approv|tool.call.governance|human.in.the.loop' -- openspec/specs docs/adr openspec/changes docs/operations/migration-*.md` → 2167; output truncated
+- `git grep -n -i -E 'approv|execution.id|user.id' -- processor/agentic-tools/approval_filter.go processor/agentic-tools/config.go processor/agentic-dispatch/identity.go` → 48
+- `git grep -n -i -E 'approval|operator|cancel|pause|resume' -- gateway service (excluding tests)` → 328
+- `gopls call_hierarchy processor/agentic-loop/approval_response_handler.go:32:26` → 5
+  - identifier: function HandleApprovalResponse in processor/agentic-loop/approval_response_handler.go:32:26-48
+  - callee[0]: ranges 55:34-36 in processor/agentic-loop/approval_response_handler.go from/to function Is in /usr/local/go/src/errors/wrap.go:45:6-8
+  - callee[1]: ranges 43:29-35, 108:31-37 in processor/agentic-loop/approval_response_handler.go from/to function Errorf in /usr/local/go/src/fmt/errors.go:23:6-12
+  - callee[2]: ranges 39:10-16, 40:10-16, 41:10-16, 74:9-15, 75:9-15, 76:9-15, 77:9-15 in processor/agentic-loop/approval_response_handler.go from/to function String in /usr/local/go/src/log/slog/attr.go:18:6-12
+  - callee[3]: ranges 38:10-13 in processor/agentic-loop/approval_response_handler.go from/to function Any in /usr/local/go/src/log/slog/attr.go:93:6-9
+- `openspec list` → 0 active changes
+- `git grep -n -i -E 'approv|execution.id|approved.by' -- openspec/specs` → 214
+- `git grep -n -E 'ApprovalTimeout|12.*time.Hour|ApprovalTimeoutStr|SnapshotExpiredApprovals|RequestedAt.Add|Timeout ==|Timeout <=|ExpiresAt' -- processor/agentic-loop/manager*.go processor/agentic-loop/config.go agentic/loop*.go` → 0; NOT RUN: shell rejected unquoted unmatched glob
+- `git grep -n -i -E 'approv|wait forever' -- docs/basics/07-agentic-quickstart.md` → 9
+- `git grep -n -E 'agent.approval|ApprovalPending|ApprovalResponse|ApprovedBy|ExecutionID' -- agentic/registry.go agentic/register.go agentic/registration.go agentic/tool*.go processor/agentic-loop/handler_tool_results.go processor/agentic-loop/component.go processor/agentic-loop/loop_manager.go` → 24
+- `git grep -n -E '^func Test.*(Approval|Identity|Execution)' -- processor/agentic-loop processor/agentic-dispatch processor/agentic-tools agentic` → 165
+- `git grep -n -E 'ApprovalDecision|PendingApproval|ResolveApproval|BeginAwaitingApproval|SnapshotExpiredApprovals|ApprovalRequired|tool_call_governance|GovernanceMode|governance mode|approvalResponse|CategoryApproval|ApprovedBy' -- agentic processor/agentic-loop processor/agentic-tools/config.go processor/agentic-dispatch/loop_seams.go (excluding tests)` → 131
+- `sed -n selected windows (approval filter 64-90; dispatch identity 18-63; loop config 233-245; loop approval sweeper 33-46; dispatch HTTP 537-551; spec loop 1351-1365)` → 130
+- NOT RUN: GitHub issue and draft PR listing (parent owns current #1362/PR #1366 and #1205 tracker context).
+- NOT RUN: Remaining archived-change matches from the truncated 2167-hit adjacent-claims search.
+- NOT RUN: Further gopls implementation/reference expansion; bounded brief exhausted; workspace_symbol returned no symbols, references returned only local receiver/type uses.
+- NOT RUN: Execution identity internals beyond approval payload, pending state and HTTP matching.
+- NOT RUN: Live approval flow and test execution (inventory only).
+- NOT RUN: Sister-repository or product UI inventory (outside brief).
+
+- Python exact-line inventory validation (first attempt) → stopped at shell-error pseudo-pin zsh:1; removed pseudo-pin.
+- `git rev-parse HEAD` (final) → c4a79fd5b7a48c45114262ed85db5b50a72197de
+- `git status --short` (final) → 0
+- Python exact-line inventory validation (corrected) → 966 checked; 0 mismatches

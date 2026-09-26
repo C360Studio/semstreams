@@ -1,0 +1,14 @@
+Historical pin verification
+Captured UTC: 2026-09-24T09:50:00.203539+00:00
+Method: read each pinned source with git show <declared-base>:<path>; compare its numbered line with the pinned literal.
+Scope: literal pin fidelity only; no completeness, runtime, or human-usability verdict.
+
+Artifact: inventory.md
+SHA256: 9df378e82091c35a55e45c79936af7c9334acc107ef5a3e8e115a27345fd75e2
+Declared base: c3c65889e7525009ce50aa91e8804eba6c7daf08
+Pins=46 matched=46 mismatched=0
+
+Artifact: semstreams-human-governance-inventory.md
+SHA256: 64bfe1d71588ef1ce96b57f5e7300099cbf114d6131a2f627f1983c878db49ec
+Declared base: c4a79fd5b7a48c45114262ed85db5b50a72197de
+Pins=966 matched=966 mismatched=0
