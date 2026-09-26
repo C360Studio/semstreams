@@ -18,7 +18,7 @@ import (
 // MaxDeliver observer or handing control to the function whose first action is
 // Manager.StartAll.
 //
-//revive:disable-next-line:function-length // One guard compares the complete production and E2E composition roots.
+//revive:disable-next-line:function-length // One guard walks the complete framework boot.
 func TestBinaryBootOrder(t *testing.T) {
 	t.Parallel()
 
@@ -114,54 +114,10 @@ func TestBinaryBootOrder(t *testing.T) {
 	require.Contains(t, functionCalls(t, productionPath, "configureAndCreateServices"), "manager.ConfigureFromServices")
 	require.Contains(t, functionCalls(t, productionPath, "runUntilShutdown"), "manager.StartAll")
 
-	e2ePath := filepath.Join("..", "..", "cmd", "e2e-semstreams", "main.go")
-	e2eRun := functionDecl(t, e2ePath, "run")
-	e2eCalls := functionCalls(t, e2ePath, "run")
-	requireCallOrder(t, e2eCalls,
-		"bootstrapobservability.NewE2EPhaseA",
-		"completeE2EPhaseA",
-		"maxdelivery.Start",
-		"setupRegistriesAndManager",
-		"configureAndCreateServices",
-		"runWithSignalHandling",
-	)
-	require.NotContains(t, e2eCalls, "bootstrapobservability.NewProductionPhaseA")
-	e2ePhase, err := assignedCallResult(e2eRun, "bootstrapobservability.NewE2EPhaseA", 1)
-	require.NoError(t, err)
-	e2eMetrics, err := siblingAssignedResult(e2eRun, e2ePhase, 0)
-	require.NoError(t, err)
-	require.NoError(t, requireIdentArgument(e2eRun, "completeE2EPhaseA", 2, e2ePhase))
-	require.NoError(t, requireIdentArgument(e2eRun, "completeE2EPhaseA", 3, e2eMetrics))
-	e2eComplete := functionDecl(t, e2ePath, "completeE2EPhaseA")
-	e2ePhaseParam, err := parameterName(e2eComplete, 2)
-	require.NoError(t, err)
-	e2eMetricsParam, err := parameterName(e2eComplete, 3)
-	require.NoError(t, err)
-	require.NoError(t, checkBootstrapDataflow(e2eComplete, e2ePhaseParam, e2eMetricsParam,
-		"connectToNATSWithSpinner", "bootstrapobservability.StartValidatedConfigManager", "ensureStreamsWithSpinner"))
-	require.NoError(t, requireIdentArgument(e2eComplete, "phaseLogging.Steady", 0, "nil"))
-	e2ePhaseCalls := functionCalls(t, e2ePath, "completeE2EPhaseA")
-	requireCallOrder(t, e2ePhaseCalls,
-		"connectToNATSWithSpinner",
-		"bootstrapobservability.StartValidatedConfigManager",
-		"ensureStreamsWithSpinner",
-		"phaseLogging.Steady",
-	)
-	require.NotContains(t, e2eCalls, "bootstrapobservability.NewForwardingHandler")
-	require.NotContains(t, e2ePhaseCalls, "bootstrapobservability.NewForwardingHandler")
-	requireConnectionChain(t, e2ePath)
-	requireStreamWrapper(t, e2ePath)
-	requireCompositionConstructors(t, e2ePath)
-	require.Contains(t, functionCalls(t, e2ePath, "runWithSignalHandling"), "runUntilShutdown")
-	require.Contains(t, functionCalls(t, e2ePath, "runUntilShutdown"), "manager.StartAll")
-
 	sharedPath := filepath.Join("..", "bootstrapobservability", "bootstrap.go")
 	requireCallOrder(t, functionCalls(t, sharedPath, "NewProductionPhaseA"),
 		"metric.NewMetricsRegistry", "NewLocalHandler", "NewPhaseALogging")
 	require.Contains(t, functionCalls(t, sharedPath, "NewProductionPhaseA"), "logging.NewCounterHandler")
-	requireCallOrder(t, functionCalls(t, sharedPath, "NewE2EPhaseA"),
-		"metric.NewMetricsRegistry", "NewLocalHandler", "NewPhaseALogging")
-	require.NotContains(t, functionCalls(t, sharedPath, "NewE2EPhaseA"), "logging.NewCounterHandler")
 	requireCallOrder(t, functionCalls(t, sharedPath, "ConnectClient"),
 		"client.Connect", "client.WaitForConnection")
 	validatedConfigCalls := functionCalls(t, sharedPath, "StartValidatedConfigManager")
@@ -233,21 +189,6 @@ func run() {
 func TestRemainingBootDataflowRejectsMutations(t *testing.T) {
 	t.Parallel()
 
-	t.Run("E2E metrics handoff", func(t *testing.T) {
-		const source = `package fixture
-func run() {
-	metrics, phase, err := bootstrapobservability.NewE2EPhaseA()
-	result, err := complete(ctx, cfg, phase, otherMetrics)
-	_, _, _ = metrics, result, err
-}`
-		fn := parseFunctionSource(t, source, "run")
-		phase, err := assignedCallResult(fn, "bootstrapobservability.NewE2EPhaseA", 1)
-		require.NoError(t, err)
-		metrics, err := siblingAssignedResult(fn, phase, 0)
-		require.NoError(t, err)
-		require.Error(t, requireIdentArgument(fn, "complete", 3, metrics))
-	})
-
 	t.Run("validated effective config", func(t *testing.T) {
 		const valid = `package fixture
 func startValidated() (any, any, error) {
@@ -316,13 +257,6 @@ func run() {
 	})
 }
 
-func requireConnectionChain(t *testing.T, path string) {
-	t.Helper()
-	requireCallOrder(t, functionCalls(t, path, "connectToNATSWithSpinner"),
-		"createNATSClient", "bootstrapobservability.ConnectClient")
-	require.Contains(t, functionCalls(t, path, "createNATSClient"), "bootstrapobservability.NewClient")
-}
-
 func requireProductionConnectionChain(t *testing.T, path string) {
 	t.Helper()
 	requireCallOrder(t, functionCalls(t, path, "connectNATSWithSpinner"),
@@ -335,14 +269,6 @@ func requireStreamWrapper(t *testing.T, path string) {
 	ensureCalls := functionCalls(t, path, "ensureStreamsWithSpinner")
 	require.Contains(t, ensureCalls, "bootstrapobservability.EnsureEffectiveStreams")
 	require.NotContains(t, ensureCalls, "maxdelivery.EnsureCaptureStream")
-}
-
-func requireCompositionConstructors(t *testing.T, path string) {
-	t.Helper()
-	registryCalls := functionCalls(t, path, "setupRegistriesAndManager")
-	require.Contains(t, registryCalls, "component.NewRegistry")
-	require.Contains(t, registryCalls, "service.NewServiceManager")
-	require.Contains(t, functionCalls(t, path, "configureAndCreateServices"), "manager.ConfigureFromServices")
 }
 
 func checkBootstrapDataflow(

@@ -31,7 +31,7 @@ to a doc sentence or "not supported" before it gets code.
       …"` then `--version` prints `semstreams version v9.9.9-ldflags`.
 - [x] 1.3 `RegistryFor(opts, full bool)` (D9) replaces both `fullComponentRegistry`s; both mains' composition verbs call
       it.
-- [ ] 1.4 Move the tests listed in `design.md` § 7 row 1; delete the e2e duplicates and
+- [x] 1.4 Move the tests listed in `design.md` § 7 row 1; delete the e2e duplicates and
       `cmd/e2e-semstreams/bootstrap_observability_test.go` (it asserts the retired E2E Phase-A). Delete
       `bootstrapobservability.NewE2EPhaseA` and `internal/bootstrapobservability/bootstrap_test.go:102-133` (D14).
       Re-point the production half of `internal/maxdelivery/boot_order_test.go` (`:24`) at `internal/boot/run.go`;
@@ -66,12 +66,15 @@ to a doc sentence or "not supported" before it gets code.
 
 ## 3. Thin mains and deletions
 
-- [ ] 3.1 `cmd/semstreams/main.go` and `cmd/e2e-semstreams/main.go` reduced to `boot.ParseFlags` → options → `boot.Run`;
+- [x] 3.1 `cmd/semstreams/main.go` and `cmd/e2e-semstreams/main.go` reduced to `boot.ParseFlags` → options → `boot.Run`;
       the e2e `parseCLI`, `getEnvOrDefault`, `text` default, `DebugPort: 6060` and `--lifecycle-seed` are gone.
-- [ ] 3.2 Delete the six tagged hook files and their three tests in `cmd/semstreams/`; `internal/e2eslowconsumer/probe_e2e.go`
+- [x] 3.2 Delete the six tagged hook files and their three tests in `cmd/semstreams/`; `internal/e2eslowconsumer/probe_e2e.go`
       → `probe.go`, tag removed, same for its test (D10). `git grep -n 'go:build e2e_'` → 0.
-- [ ] 3.3 `Taskfile.yml:163` removed; `check:push` description (`:152`) corrected.
-- [ ] 3.4 `test/e2e/scenarios/ops/composition_root_contract_test.go:26` reads the file that now carries the
+      `git grep -n 'go:build e2e_' -- '*.go'` after this section: one hit, a comment in the build-tag contract test
+      that 5.4 replaces. The e2e binary's `--version` now prints `semstreams version …` (one application name,
+      production's); `test/release/release_smoke_test.go`'s e2e expectation follows.
+- [x] 3.3 `Taskfile.yml:163` removed; `check:push` description (`:152`) corrected.
+- [x] 3.4 `test/e2e/scenarios/ops/composition_root_contract_test.go:26` reads the file that now carries the
       `persona.LoadFromDirectory` call (`internal/boot/run.go`).
 
 ## 4. Dockerfile and compose

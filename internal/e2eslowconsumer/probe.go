@@ -104,10 +104,7 @@ func Run(parent context.Context, client *natsclient.Client) error {
 	}
 
 	close(releaseCallback)
-	if err := waitSignal(ctx, callbackHandled, "production error handler did not return"); err != nil {
-		return err
-	}
-	return nil
+	return waitSignal(ctx, callbackHandled, "production error handler did not return")
 }
 
 func gatedErrorHandler(
