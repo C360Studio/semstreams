@@ -1457,7 +1457,16 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 	// outstanding mark here rather than in the success arms means an early
 	// return (timeout, terminal loop, budget exhausted) does not leave the loop
 	// looking like it is still waiting on a model.
-	h.loopManager.SettleRequest(loopID, response.RequestID)
+	//
+	// The early clear is for the outstanding mark. A deferred turn's carrier is
+	// settled with it on every status but one: a length_truncated answer did
+	// not answer the turn, so the deferral survives into the compaction retry
+	// and recoverEmptyContext can still re-inject it (#1365, F3).
+	if response.Status == agentic.StatusLengthTruncated {
+		h.loopManager.settleTruncatedRequest(loopID, response.RequestID)
+	} else {
+		h.loopManager.SettleRequest(loopID, response.RequestID)
+	}
 	result := HandlerResult{
 		LoopID:            loopID,
 		State:             entity.State,
@@ -3334,12 +3343,15 @@ func (h *MessageHandler) recoverEmptyContext(loopID string, cm *ContextManager, 
 		Content: fmt.Sprintf("[Context recovered after tool pair cleanup]\n\nOriginal task: %s\n\nPrevious tool calls encountered errors. Please continue or try a different approach.", prompt),
 	}
 	_ = cm.AddMessage(RegionRecentHistory, synthetic)
-	// The prompt is the BIRTH prompt (#1365, OQ5 (a′)), so a turn deferred and
-	// not yet carried would be in no request once its context is gone: the
-	// request built here is named its carrier and its answer settles the loop.
-	// The uncarried turn is re-injected after the birth prompt, from the one
-	// place it is stored — the entity's PendingContinuationPrompt.
-	if pending := h.loopManager.uncarriedContinuationPrompt(loopID); pending != "" {
+	// The prompt is the BIRTH prompt (#1365, OQ5 (a′)), so a deferred turn
+	// would be in no request once its context is gone: the request built here
+	// is named its carrier and its answer settles the loop. The turn is
+	// re-injected after the birth prompt, from the one place it is stored —
+	// the entity's PendingContinuationPrompt — whether or not an earlier
+	// request carried it: a carrier's truncation retry keeps the deferral
+	// (F3), and an emptied context holds no user message, so this cannot
+	// inject the turn a second time.
+	if pending := h.loopManager.deferredContinuationPrompt(loopID); pending != "" {
 		_ = cm.AddMessage(RegionRecentHistory, agentic.ChatMessage{Role: "user", Content: pending})
 	}
 	return cm.GetContext()

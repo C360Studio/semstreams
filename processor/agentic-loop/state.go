@@ -1350,9 +1350,7 @@ func (m *LoopManager) registerRequestRoute(requestID, loopID string) {
 func (m *LoopManager) SettleRequest(loopID, requestID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if outstanding, ok := m.outstandingRequests[loopID]; ok && outstanding == requestID {
-		delete(m.outstandingRequests, loopID)
-	}
+	m.settleOutstandingLocked(loopID, requestID)
 	if entity, exists := m.loops[loopID]; exists && requestID != "" && entity.PendingContinuationRequestID == requestID {
 		entity.PendingContinuation = false
 		entity.PendingContinuationRequestID = ""
@@ -1360,14 +1358,41 @@ func (m *LoopManager) SettleRequest(loopID, requestID string) {
 	}
 }
 
-// uncarriedContinuationPrompt returns the deferred turn's text while no request
-// carries it — the predicate HasPendingContinuation and the rebuild's replay
-// use — and "" otherwise.
-func (m *LoopManager) uncarriedContinuationPrompt(loopID string) string {
+// settleTruncatedRequest is SettleRequest for a length_truncated response
+// (#1365, F3): it clears the outstanding mark and leaves the deferral alone.
+// A truncated answer is not an answer to the turn its request carried — the
+// model was cut off — so marker, carrier and text survive into the compaction
+// retry, whose TrackRequest names it the new carrier and whose answer settles
+// the deferral. A truncation the loop cannot retry fails the loop, and the
+// terminal record keeps the unanswered turn, as it keeps one at the iteration
+// ceiling.
+func (m *LoopManager) settleTruncatedRequest(loopID, requestID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.settleOutstandingLocked(loopID, requestID)
+}
+
+// settleOutstandingLocked clears the outstanding mark when it names requestID.
+// Callers hold m.mu.
+func (m *LoopManager) settleOutstandingLocked(loopID, requestID string) {
+	if outstanding, ok := m.outstandingRequests[loopID]; ok && outstanding == requestID {
+		delete(m.outstandingRequests, loopID)
+	}
+}
+
+// deferredContinuationPrompt returns the deferred turn's text while the marker
+// is set, CARRIED or not, and "" otherwise. Its one reader is
+// recoverEmptyContext: an emptied context holds no user message, so the turn
+// is in no request the loop is about to send whether or not an earlier request
+// carried it — a carrier's truncation retry is the carried case (#1365, F3).
+// The rebuild's replay keeps the narrower "uncarried" predicate on purpose: a
+// rebuilt context is the retained request's conversation, which already holds
+// a carried turn.
+func (m *LoopManager) deferredContinuationPrompt(loopID string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	entity, exists := m.loops[loopID]
-	if !exists || !entity.PendingContinuation || entity.PendingContinuationRequestID != "" {
+	if !exists || !entity.PendingContinuation {
 		return ""
 	}
 	return entity.PendingContinuationPrompt
