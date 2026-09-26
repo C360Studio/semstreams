@@ -42,6 +42,12 @@ const (
 	// turn is a turn no process can apply.
 	taskIntakeColdForkLane             = "cold-fork"
 	taskIntakeContinuationUnheldReason = "continuation_unheld"
+
+	// A birth whose record the NATS payload ceiling refused (#1365, #857).
+	// The reason is also the loop-execution entity's terminal reason: the
+	// entity was born before the record write, and this is its terminal.
+	taskIntakeBirthLane                  = "birth"
+	taskIntakeRecordExceedsCeilingReason = "record_exceeds_payload_ceiling"
 )
 
 // Component implements the agentic-loop processor
@@ -1710,7 +1716,7 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 			"timeout_at", record.entity.TimeoutAt)
 	} else if err := c.createLoopState(ctx, result.LoopID); err != nil {
 		if errors.Is(err, nats.ErrMaxPayload) {
-			return c.terminateOversizedBirth(result.LoopID, task.TaskID, err)
+			return c.terminateOversizedBirth(ctx, result.LoopID, task.TaskID, err)
 		}
 		if errors.Is(err, natsclient.ErrKVKeyExists) {
 			c.logger.Warn("Loop record already exists — this birth is not the one that created the loop",
@@ -1781,9 +1787,34 @@ func taskHandlerErrorDisposition(err error) error {
 // refusal on a lane that runs at MaxAckPending 1, so the refusal is permanent:
 // the loop this process built is released and the task is terminated, with the
 // loop and the record's size in the cause (createLoopState names both).
-func (c *Component) terminateOversizedBirth(loopID, taskID string, err error) error {
+//
+// The loop-execution entity was already born (WriteSpawnIdentity runs before
+// the record write), so the refusal is also that execution's terminal, and it
+// is stamped on the entity as a failure with this reason (ADR-098: agent
+// execution is a graph condition) and counted as an intake rejection. It does
+// not go through the terminal owner: COMPLETE_<loopID>, the failure event and
+// the loop record all carry the prompt the ceiling just refused, and there is
+// no record to write a terminal onto. The stamp carries no prompt. It is
+// best-effort, as every graph stamp outside the terminal owner is: a failed
+// stamp is logged by the writer and the task is terminated regardless.
+func (c *Component) terminateOversizedBirth(ctx context.Context, loopID, taskID string, err error) error {
 	c.logger.Error("Loop record exceeds the NATS payload ceiling at birth — the task is terminated",
 		"loop_id", loopID, "task_id", taskID, "error", err)
+	if c.metrics != nil {
+		c.metrics.recordTaskIntakeRejection(taskIntakeBirthLane, taskIntakeRecordExceedsCeilingReason)
+	}
+	if c.graphWriter != nil {
+		stampCtx, cancel := natsclient.DetachContextWithTrace(ctx, 5*time.Second)
+		c.graphWriter.WriteLoopFailure(stampCtx, &agentic.LoopFailedEvent{
+			LoopID:   loopID,
+			TaskID:   taskID,
+			Outcome:  agentic.OutcomeFailed,
+			Reason:   taskIntakeRecordExceedsCeilingReason,
+			Error:    err.Error(),
+			FailedAt: time.Now(),
+		}, false)
+		cancel()
+	}
 	c.releaseLoopTransientState(loopID)
 	return natsclient.TerminateDelivery(err)
 }

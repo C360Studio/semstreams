@@ -11,9 +11,11 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/internal/deliverylane"
+	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -79,6 +81,12 @@ func TestALoopRecordThePayloadCeilingRefusesIsNotRetried(t *testing.T) {
 		// Below any record: the refusal is what is under test, not what
 		// made the record large.
 		c.loopsBucket = &payloadCeilingBucket{recordingLoopBucket: &recordingLoopBucket{}, ceiling: 16}
+		c.metrics = getMetrics(metric.NewMetricsRegistry())
+		rejected := func() float64 {
+			return testutil.ToFloat64(c.metrics.taskIntakeRejections.WithLabelValues(
+				taskIntakeBirthLane, taskIntakeRecordExceedsCeilingReason))
+		}
+		before := rejected()
 
 		msg, settled := deliverBirth(t, c, loopID)
 
@@ -91,6 +99,9 @@ func TestALoopRecordThePayloadCeilingRefusesIsNotRetried(t *testing.T) {
 		require.Contains(t, settled.Cause().Error(), "bytes", "the cause names the record's size")
 		_, err := c.handler.GetLoop(loopID)
 		require.Error(t, err, "a terminated birth must not leave its loop in memory")
+		// The refusal is declared, not only logged: counted as an intake
+		// rejection (the graph stamp is the integration test's half).
+		assert.Equal(t, before+1, rejected(), "the terminated birth is not counted")
 	})
 
 	t.Run("a marker write the ceiling refuses drops the text, acknowledges, and the next carrier write fits", func(t *testing.T) {
