@@ -1789,35 +1789,70 @@ func taskHandlerErrorDisposition(err error) error {
 // loop and the record's size in the cause (createLoopState names both).
 //
 // The loop-execution entity was already born (WriteSpawnIdentity runs before
-// the record write), so the refusal is also that execution's terminal, and it
-// is stamped on the entity as a failure with this reason (ADR-098: agent
-// execution is a graph condition) and counted as an intake rejection. It does
-// not go through the terminal owner: COMPLETE_<loopID>, the failure event and
-// the loop record all carry the prompt the ceiling just refused, and there is
-// no record to write a terminal onto. The stamp carries no prompt. It is
-// best-effort, as every graph stamp outside the terminal owner is: a failed
-// stamp is logged by the writer and the task is terminated regardless. A rule
-// that fires on this stamp and follows the reference with read_loop_result
-// gets not-found: no completion record is written for a birth the ceiling
-// refused.
+// the record write) and handleTaskMessage already recorded the loop's initial
+// trajectory observations, so the refusal is also that execution's terminal.
+// It does not go through the terminal owner: COMPLETE_<loopID>, the failure
+// event and the loop record all carry the prompt the ceiling just refused, and
+// there is no record to write a terminal onto. What it owes of the terminal
+// owner's failure path (handleLoopFailure → commitTerminal), in that path's
+// order (PR #1387 Codex round 1):
+//
+//   - error log: owed, done (first line below).
+//   - TransitionLoop(failed), UpdateCompletion: not owed — they move the
+//     in-memory loop the record is rendered from, and there is no record; the
+//     loop is released below.
+//   - BuildFailureMessages (event with prompt, token totals, agent.failed
+//     message): not owed — ruled (PR #1387 re-review MEDIUM 1): the event and
+//     message carry the refused prompt. The stamp's event is built here
+//     without it.
+//   - terminal trajectory observation (loop.terminal, status failed): owed,
+//     done through recordTerminalObservation — same bounded batch, same
+//     non-blocking audit failure. Its evidence is the held loop with its task
+//     prompt cleared plus the prompt-free failure event.
+//   - createTerminalMarker (COMPLETE_<loopID>): not owed — ruled, as above.
+//   - stampTerminal → stampLoopFailureWithBudget, whose observed-audit-loss
+//     read gives agent.loop.evidence-integrity=incomplete: owed, done through
+//     that same helper, after the terminal observation (which can itself
+//     observe a loss) and before the release (which deletes the per-loop
+//     marker). Best-effort, as every graph stamp outside the terminal owner is:
+//     a failed or timed-out stamp is logged and counted by the writer and the
+//     helper, and the task is terminated regardless.
+//   - publishResults (agent.failed): not owed — ruled, as above.
+//   - settleTerminal, persistLoopState: not owed — no record exists; the
+//     create is what the ceiling refused.
+//   - recordCommittedTerminal (loops_failed_total{reason}, active_loops
+//     decrement, "Loop terminal committed" log): not owed as a committed
+//     terminal — none was committed; the refusal is counted as
+//     task_intake_rejections_total{lane="birth"} instead. The active-loops
+//     gauge keeps the +1 recordLoopCreated gave this birth, as every released
+//     birth arm above does: the existing residual #1242.
+//   - releaseLoopTransientState: owed, done last before the settlement.
+//
+// A rule that fires on this stamp and follows the reference with
+// read_loop_result gets not-found: no completion record is written for a birth
+// the ceiling refused.
 func (c *Component) terminateOversizedBirth(ctx context.Context, loopID, taskID string, err error) error {
 	c.logger.Error("Loop record exceeds the NATS payload ceiling at birth — the task is terminated",
 		"loop_id", loopID, "task_id", taskID, "error", err)
 	if c.metrics != nil {
 		c.metrics.recordTaskIntakeRejection(taskIntakeBirthLane, taskIntakeRecordExceedsCeilingReason)
 	}
-	if c.graphWriter != nil {
-		stampCtx, cancel := natsclient.DetachContextWithTrace(ctx, 5*time.Second)
-		c.graphWriter.WriteLoopFailure(stampCtx, &agentic.LoopFailedEvent{
-			LoopID:   loopID,
-			TaskID:   taskID,
-			Outcome:  agentic.OutcomeFailed,
-			Reason:   taskIntakeRecordExceedsCeilingReason,
-			Error:    err.Error(),
-			FailedAt: time.Now(),
-		}, false)
-		cancel()
+	failure := &agentic.LoopFailedEvent{
+		LoopID:   loopID,
+		TaskID:   taskID,
+		Outcome:  agentic.OutcomeFailed,
+		Reason:   taskIntakeRecordExceedsCeilingReason,
+		Error:    err.Error(),
+		FailedAt: time.Now(),
 	}
+	held, _ := c.handler.GetLoop(loopID)
+	held.TaskPrompt = ""
+	c.recordTerminalObservation(ctx, loopID, agentic.TrajectoryStatusFailed, agentic.TrajectoryErrorUnknown,
+		trajectoryTerminalEvidence{Loop: held, Failure: failure})
+	stampCtx, cancel := natsclient.DetachContextWithTrace(ctx, 5*time.Second)
+	// The helper logs and counts its own timeout; the stamp is best-effort here.
+	_ = c.stampLoopFailureWithBudget(stampCtx, loopID, failure)
+	cancel()
 	c.releaseLoopTransientState(loopID)
 	return natsclient.TerminateDelivery(err)
 }
