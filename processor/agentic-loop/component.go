@@ -2397,11 +2397,13 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 		// re-reads the record, and adopts the durable terminal through the
 		// owner only while the record still names the request this terminal
 		// came from. A compare-and-swap lost to a writer that moved the
-		// record to a later request is not reconciled: the redelivered input
-		// then classifies as older and is acknowledged
-		// (loop_classification.go, requestOrderApplied). That is the recorded
-		// residual (#1362 issuecomment-5808903072; migration
-		// beta162-to-beta163, "Two residuals, recorded and not reconciled").
+		// record to a later request leaves the durable terminal over a live
+		// record: the redelivered input classifies as older and is
+		// acknowledged (loop_classification.go, requestOrderApplied), and the
+		// record converges at the loop's next terminal of the same kind, which
+		// adopts the marker (#1362 issuecomment-5808903072; #1377 W1, the
+		// documented bound; migration beta162-to-beta163, "Two residuals, now
+		// bounded").
 		if err := c.commitTerminal(ctx, terminalOutcomeOf(result), result); err != nil {
 			return err
 		}
