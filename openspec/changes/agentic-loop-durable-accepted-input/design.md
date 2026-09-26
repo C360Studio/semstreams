@@ -90,7 +90,7 @@ delta as written assumes the pre-selection.
 
 - **The bound is over the whole record.** `AGENT_LOOPS` has no per-value guard (I: § Fact 5); the NATS client refuses
   a message larger than the server's `max_payload` (1 MiB default; nothing in this repository sets it, § 9) before
-  sending it (`nats.go@v1.53.1:4585-4589`, `ErrMaxPayload`; `KeyValue.Create`/`Update` reach it through `js.PublishMsg`
+  sending it (`nats.go@v1.52.0:4461-4463`, the version `go.mod` pins, `ErrMaxPayload`; `KeyValue.Create`/`Update` reach it through `js.PublishMsg`
   → `nc.publish`). What is bounded is `len(json.Marshal(entity))` — every field summed: `PendingToolResults` with tool
   outputs, `Metadata`, and now `task_prompt` plus, while a turn is deferred, `pending_continuation_prompt`. Under
   OQ5 (a) the deferred turn's text is on the record ONCE; under OQ5 (b) it is on it twice until settle, so a turn
@@ -185,6 +185,21 @@ delta as written assumes the pre-selection.
   (a′) keeps `task_prompt` birth-only and makes `recoverEmptyContext` re-inject the birth prompt and then, when the
   marker is uncarried (marker set, no carrier — the replay's predicate), `pending_continuation_prompt` after it. No
   double store: the turn is read from the one field that holds it.
+- **Ruled F3 → (b), 2026-09-26 (owner, transcribed on #1365, issuecomment-5843437754; the finding is
+  issuecomment-5843409525).** (a′)'s "uncarried" predicate composed with `SettleRequest` settling the carrier on every
+  response status lost a CARRIED turn: R2 carries the turn, R2 comes back `length_truncated`, the settle at the top of
+  `HandleModelResponse` cleared marker, carrier and text, and a compaction that emptied the context re-injected only
+  the birth prompt. Now a `length_truncated` answer settles only the outstanding mark (`settleTruncatedRequest`) and
+  the deferral survives into the compaction retry; `recoverEmptyContext` re-injects the turn whenever the marker is
+  set and its text is non-empty, carried or not (`deferredContinuationPrompt`); the retry's `TrackRequest` names it
+  the carrier and its answer settles the deferral. The rebuild's replay keeps the "uncarried" predicate: a restart
+  inside the truncation window reads a carried marker, and the retained request already holds the turn.
+  **Why empty-context recovery cannot inject the turn twice:** it runs only when the context holds no user or
+  assistant message (`hasUserOrAssistantMessage`, at both callers `emitRetryRequest` and `publishIterationRequest`),
+  and the turn is a user message, so the context it re-injects into cannot already hold the turn. A truncation the
+  loop cannot retry fails the loop with the deferral kept — the terminal record keeps the unanswered turn, as it
+  keeps one at the iteration ceiling (CDT:563). The marker-write size drop stays a documented loss (§ 7.7): a turn
+  whose text the record refused is not recovered when a later compaction empties the context.
 
 ## 1. The docket
 
@@ -251,7 +266,7 @@ sub-rows). Under OQ2 (b) one added scenario gains a predicted check. No other ro
 | Render (every carrier write) | `marshalLoopRecord` C:3167 renders the in-memory entity | no change: after `TrackRequest` names a carrier (ST:1239-1240) the record says carried and the text is inert until settle. A gate write (awaiting_approval, no request minted) renders the uncarried marker and its text unchanged — which is why the entity must hold the text and a carrier write cannot be asked to preserve a field it does not own. |
 | Adopt | `adoptNewerRetainedRequest` — LE:487-507 | **not touched** (OQ4). Adoption moves the record's name to the newest retained request and leaves the marker as it found it; the rebuild that follows cannot tell whether that request was minted before or after the turn. |
 | Replay | `restoreLoopFromRequest` — after the conversation loop ST:463-474 and `RepairToolPairs` ST:475, before the caches ST:481 | `if entity.PendingContinuation && entity.PendingContinuationRequestID == "" && entity.PendingContinuationPrompt != "" { cm.AddMessage(RegionRecentHistory, {user, text}); Info naming the loop and request.RequestID }`. On EVERY uncarried marker, whichever request is retained. The marker is KEPT: `HasPendingContinuation` (ST:633-637) then reads true on the rebuilt loop, the next completion advances instead of settling (H:1564, H:2764) with a context that holds the turn, `TrackRequest` names the carrier, `SettleRequest` clears. The existing clear-with-warning (ST:435-442) narrows to the text-less case — a record that claims a turn it does not carry — and stays where it is (before the seat). |
-| Clear | `SettleRequest` ST:1301-1303 | `entity.PendingContinuationPrompt = ""` beside the two clears. `DeleteLoop` (ST:927) drops the entity. A terminal record may carry an uncarried turn's text (CDT:563 already keeps the marker there): the honest record of an accepted, unanswered turn; the bucket's 24 h TTL (acquire.go:20) is its retention. |
+| Clear | `SettleRequest` ST:1301-1303 | `entity.PendingContinuationPrompt = ""` beside the two clears. Not on a `length_truncated` answer (F3 (b), OQ5): that status settles only the outstanding mark, and the compaction retry becomes the carrier. `DeleteLoop` (ST:927) drops the entity. A terminal record may carry an uncarried turn's text (CDT:563 already keeps the marker there): the honest record of an accepted, unanswered turn; the bucket's 24 h TTL (acquire.go:20) is its retention. |
 
 **The five windows a replacement can fall in** (the test plan's five named examples, § 4.1). "Record" is what the
 marker write left; "retained newest" is what adoption (LE:487-503) moves the record's name to before the rebuild.
@@ -273,7 +288,7 @@ turn — a fact the record does not hold. (a) errs to the duplicate; (b) would h
 |---|---|---|
 | Set (memory) | `CacheTaskPrompt` ST:1062-1065, called from H:1016 | writes `entity.TaskPrompt` on the in-memory entity instead of `m.taskPrompts[loopID]`; under OQ5 (a) the call at H:1016 runs only when `!continuation` (the birth), so the field is written once. Under OQ5 (b) it runs as today, on every delivery. |
 | Read | `GetTaskPrompt` ST:1069-1072 | reads the field. Callers H:2529, H:3336, H:3302 unchanged. H:3303-3305's literal stays as the empty-field branch. |
-| Recover (OQ5 (a′)) | `recoverEmptyContext` — `processor/agentic-loop/handlers.go:3342` — `if pending := h.loopManager.uncarriedContinuationPrompt(loopID); pending != "" {`; `processor/agentic-loop/state.go:1366` — `func (m *LoopManager) uncarriedContinuationPrompt(loopID string) string {` | after the synthetic "Original task" message (the birth prompt), the uncarried turn as a user message. Its callers are `emitRetryRequest` (truncation retry) and `publishIterationRequest` (advance); no other reader synthesises context. |
+| Recover (OQ5 (a′), F3 (b)) | `recoverEmptyContext` — `processor/agentic-loop/handlers.go:3342` — `if pending := h.loopManager.uncarriedContinuationPrompt(loopID); pending != "" {`; `processor/agentic-loop/state.go:1366` — `func (m *LoopManager) uncarriedContinuationPrompt(loopID string) string {` (pins at `31775e25`, before F3) | after the synthetic "Original task" message (the birth prompt), the deferred turn as a user message. Under F3 (b) the predicate is "marker set and text non-empty", carried or not (`deferredContinuationPrompt` replaces `uncarriedContinuationPrompt`, whose only caller this was). Its callers are `emitRetryRequest` (truncation retry) and `publishIterationRequest` (advance); no other reader synthesises context. |
 | Write (record) | birth: `createLoopState` C:2907 → `marshalLoopRecord` C:3167 (renders the in-memory entity); every later write renders the same value | zero new lines. The deferred lane's marker write does NOT overlay it (§ 6.7). |
 | Restore | the wholesale seat `m.loops[record.ID] = &entity` ST:444 | zero lines. The cold R1 arm (`taskRepublishFirstRequest`) runs the ordinary `HandleTask` and caches the redelivered task's prompt, as today (D:300-301). |
 | Delete | `DeleteLoop` ST:927 | the `delete(m.taskPrompts, loopID)` line (ST:940) and the map (ST:90) go. |
@@ -286,7 +301,7 @@ turn — a fact the record does not hold. (a) errs to the duplicate; (b) would h
 | C:1479-1482 payload type | same | `TerminateDelivery(fmt.Errorf("task payload is %T, not *agentic.TaskMessage", …))` (C:1985's shape) |
 | C:1533-1547 `HandleTask` error | `ErrLoopBusy` → `Warn` + `return nil`; else `Error` + `return nil` | `ErrLoopBusy` → unchanged (OQ3 (a)), its comment names it a defined refusal and why Retry is rejected (C:1440-1442); `errs.IsInvalid(err)` → `Error` + `return natsclient.TerminateDelivery(err)` (C:1494's shape); else `Error` + `return err` |
 | H:968 / H:980 / H:1102 a birth failure after registration | the loop stays in `m.loops` | **no code** (no producer): one doc sentence at H:1102 — "a failure here leaves the loop registered; a Retry meets `HasActiveLoopForTask` and is acknowledged as a duplicate; no production path fails here (`startTrajectory` TJ:24-32, `GetLoop` only on a release race, `buildTaskRequest` never)" — § 7.3 |
-| C:1699-1716 birth record write | any error → `WrapTransient` → Retry | `errors.Is(err, nats.ErrMaxPayload)` → release + `TerminateDelivery` (OQ2 (a)); every other error as today |
+| C:1699-1716 birth record write | any error → `WrapTransient` → Retry | `errors.Is(err, nats.ErrMaxPayload)` → release + `TerminateDelivery` (OQ2 (a)); the loop-execution entity, born by `WriteSpawnIdentity` before this write, is stamped failed with reason `record_exceeds_payload_ceiling` and the refusal counts on `task_intake_rejections_total{lane="birth"}` (PR #1387 review MEDIUM 1; not through the terminal owner — COMPLETE_, the event and the record all carry the refused prompt); every other error as today |
 | C:3150 marker write | any non-conflict error → best-effort | `errors.Is(err, nats.ErrMaxPayload)` → drop the in-memory text, `Warn`, then the same best-effort return (OQ2 (a)) |
 
 The policy that reads these is unchanged: C:1314-1321.
@@ -410,7 +425,9 @@ the property, it is a follow-up on the model, not on this change.
 6. **The W-c duplicate** (OQ4 (a)): logged at the replay and at adoption; never counted. A counter would be an owner
    question, as the L4a clear's was.
 7. **The over-bound marker write** drops the text from memory and does not land the marker: a replacement then
-   rebuilds without knowing a turn was deferred (today's W-a). The `Warn` names the loop and the size.
+   rebuilds without knowing a turn was deferred (today's W-a). The `Warn` names the loop and the size. With the text
+   gone, a later compaction that empties the context cannot re-inject the turn either (F3 (b) re-injects from the
+   text): the recovery carries the birth prompt alone. The ceiling, documented in the delta and the migration section.
 
 ## 8. Adopter seam (contract § The adopter seam inventory)
 
@@ -547,16 +564,21 @@ for each heading the delta rewrites or removes → 0 for every scenario heading,
 "ErrMaxPayload\|MaxPayload" -- '*.go'` → 10 (the two pinned); `grep -n "PendingContinuation"
 processor/agentic-loop/component.go` → 4 (all inside the marker write; the cold arms do not touch the marker);
 `grep -rn "deferred\|continuation\|prompt" test/e2e/scenarios/agentic/{process_replacement,stage_a_process_replacement}.go`
-→ 0 (the tier does not cover the turn today); nats.go `v1.53.1` `jetstream/kv.go:1049,1146,1199` (`Create`/`Update`
-→ `js.PublishMsg`) and `nats.go:4585-4589` (`ErrMaxPayload`); `openspec` 1.7.0 `dist/core/specs-apply.js:287` (a
+→ 0 (the tier does not cover the turn today); nats.go `v1.52.0` (the `go.mod` pin; an earlier draft cited v1.53.1's lines)
+`jetstream/kv.go:1059,1089` (`Create`/`Update` → `updateRevision` → `js.PublishMsg` at `:1117`) and `nats.go:4461-4463`
+(`ErrMaxPayload`); `openspec` 1.7.0 `dist/core/specs-apply.js:287` (a
 MODIFIED block must restate every current scenario by name).
 
 ## 10. Unproven, NOT RUN
 
 - **Recovery ordering on a rebuilt tool batch.** OQ5 (a′)'s re-injection and the rebuild's replay are both proved at
-  unit level (`TestARebuiltLoopCarriesTheTurnItsRecordAccepted`, `TestTruncationRetryCarriesTheDeferredTurn`); on a
-  cold tool-result rebuild the replayed turn precedes the restored batch's assistant turn (replay runs before
-  `restoreToolBatch`). Not a loss; the model sees the turn earlier than it was typed. Not measured against a model.
+  unit level (`TestARebuiltLoopCarriesTheTurnItsRecordAccepted`, `TestTruncationRetryCarriesTheDeferredTurn`,
+  `TestTheCarriersTruncationRetryCarriesTheDeferredTurn`). On a cold tool-result rebuild the replayed turn precedes
+  the restored batch's assistant turn (replay runs before `restoreToolBatch`), and that IS the order it was typed in:
+  a turn defers only while a request is outstanding (`attachContinuation` refuses with `ErrLoopBusy` while tools are
+  in flight), so the live context was already [conversation, user(turn), assistant(tool_calls), tool…], and the
+  rebuild (the retained conversation, then the replay at `state.go:503-521`, then `restoreToolBatch`'s assistant message at `:609`,
+  both at `31775e25`) reproduces it. Not a loss and not a reorder. Not measured against a model.
 
 - **The attach-vs-append race.** § 7.1's "R(N+1) already carries the turn" assumes the advance's `cm.GetContext()` ran
   after H:1014's append; the lanes are not serialized per loop (H:1862-1866: "nothing in this package serializes them

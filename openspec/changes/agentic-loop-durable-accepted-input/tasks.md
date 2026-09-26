@@ -6,12 +6,15 @@ the inventory's. Design: `design.md` (amended after review round 1); rows § 2; 
 pre-selected. Tasks marked **[OQn (x)]** run only under that answer. **No task asserts a post-merge fact.**
 Implementation serializes with other shared loop changes and precedes #1377 (ruling 5).
 
-> **Two design findings from implementation, both RULED by the owner 2026-09-26 (transcribed on #1365):**
+> **Three design findings from implementation, all RULED by the owner 2026-09-26 (transcribed on #1365):**
 > 1. OQ5 (a) × `recoverEmptyContext` dropped a deferred turn on an emptied context → **(a′)**: `task_prompt` stays
 >    birth-only and recovery re-injects the birth prompt, then the uncarried `pending_continuation_prompt`.
 > 2. The delta missed `### Requirement: The loop record names its outstanding request` (`spec.md:1587`), which stated
 >    the L4a limitation as a SHALL → **a second MODIFIED block** (all 22 scenarios restated; the deferred-continuation
 >    paragraph and one scenario body changed).
+> 3. F3 (implementation review, PR #1387): (a′)'s "uncarried" predicate × `SettleRequest` on every status lost a
+>    CARRIED turn through its carrier's truncation retry → **(b)** (issuecomment-5843437754): a `length_truncated`
+>    answer settles only the outstanding mark; recovery re-injects a set marker's text, carried or not (task 1.8).
 
 ## 0. Gates before any code (design phase closes here)
 
@@ -77,6 +80,22 @@ Implementation serializes with other shared loop changes and precedes #1377 (rul
       `processor/agentic-loop/state.go:410` — `// A continuation admitted while a request was outstanding is durable as a` – :434 is rewritten to describe the replay, the five windows and design
       § 7.1/7.2 as residuals. **[OQ1 (b)]** replay every element in order.
       Evidence: `9885d4eb`; mutation M1 (delete the replay `AddMessage`) → W-b `expected: 1 actual: 0`, W-c `expected: 2 actual: 1`, W-e `expected: 1 actual: 0`, DCRIT:252 `expected: 1 actual: 0`.
+
+- [x] 1.8 **[F3 (b)]** `HandleModelResponse` settles a `length_truncated` answer with `settleTruncatedRequest` (the
+      outstanding mark only; marker, carrier and text survive into the compaction retry), every other status with
+      `SettleRequest` as before; `recoverEmptyContext` reads `deferredContinuationPrompt` (marker set, text non-empty,
+      carried or not), replacing `uncarriedContinuationPrompt`, whose only caller it was; the rebuild's replay
+      predicate is unchanged. Counterexample `TestTheCarriersTruncationRetryCarriesTheDeferredTurn`
+      (`continuation_deferral_test.go`: birth, fill, defer, R1 complete, fill, R2 truncated), which also asserts the
+      retry is named the carrier and its answer settles the deferral.
+      Evidence: `fe0ce4df`; red before the fix (`continuation_deferral_test.go:403: the carrier's truncation retry does not contain the deferred turn "and also summarise the second thing"`); M-F3a (every status settles) and M-F3b (predicate back to uncarried) each → the same line; `TestTruncationRetryCarriesTheDeferredTurn` `--- PASS` under both.
+- [x] 1.9 Review items on PR #1387 applied with F3 (no ruling needed): MEDIUM 1 — `terminateOversizedBirth` stamps
+      the born loop-execution entity failed with reason `record_exceeds_payload_ceiling` and counts
+      `task_intake_rejections_total{lane="birth",reason="record_exceeds_payload_ceiling"}`; MEDIUM 2 — the migration
+      row and the delta's task-lane scenario name the cancelled context as the production Retry producer and
+      fatal-class errors as Quarantine; NIT 1 — design § 10's replay-order bullet; NIT 2 — nats.go citations at the
+      pinned v1.52.0.
+      Evidence: `0451e1b8`; `TestAnOversizedBirthStampsItsExecutionFailed` (integration) `--- PASS`, M-M1a (stamp call deleted) → `oversized_birth_integration_test.go:94 expected: string("failed") actual: <nil>`; the birth subtest of `TestALoopRecordThePayloadCeilingRefusesIsNotRetried` gains the counter, M-M1b (counter call deleted) → `payload_ceiling_test.go:104 expected: 1 actual: 0`.
 
 ## 2. Task intake (design § 3.3)
 
@@ -183,7 +202,7 @@ Implementation serializes with other shared loop changes and precedes #1377 (rul
 - [x] 4.1 `openspec validate agentic-loop-durable-accepted-input --strict` green; `task spec:properties` count moves
       only by the new `// spec:` lines (`git add` the new test first; the S:886 heading is unchanged, so the 26 existing
       citations resolve).
-      Evidence: `Change 'agentic-loop-durable-accepted-input' is valid`; `spec-properties: 407/407 citations resolve` (404 at `9e5d8455` + 3 new `// spec:` lines, all tracked).
+      Evidence: `Change 'agentic-loop-durable-accepted-input' is valid`; `spec-properties: 407/407 citations resolve` (404 at `9e5d8455` + 3 new `// spec:` lines, all tracked); after (a′) 408; after F3 and MEDIUM 1 `spec-properties: 410/410 citations resolve` (+2: `TestTheCarriersTruncationRetryCarriesTheDeferredTurn`, `TestAnOversizedBirthStampsItsExecutionFailed`, both tracked).
 - [x] 4.2 Migration section in `docs/operations/migration-beta162-to-beta163.md` per design § 5, after the #1374
       section; mark `docs/operations/migration-beta162-to-beta163.md:1873` — `**A deferred turn is durable as a MARKER only, and so is nothing about the task prompt.** A continuation admitted` and
       `docs/operations/migration-beta162-to-beta163.md:1885` — `The loop's task prompt is the same limitation one field over. A loop rebuilt from its record and a retained request —` superseded by it; name the birth-prompt change on

@@ -7,7 +7,8 @@
 > restates `openspec/specs/agentic-loop/spec.md:886-1102` (`9e5d8455`) in full — the requirement text and all
 > twenty-two existing scenarios under their exact headings (openspec 1.7.0 refuses a MODIFIED block that omits a
 > current scenario) — changes the bodies of three (`A refusal before any mutation is retried…`, `The task lane's
-> results settle…`, `The deferred continuation's replacement behaviour is owed to #1365`), adds four, and carries in
+> results settle…`, `The deferred continuation's replacement behaviour is owed to #1365`), adds five (the fifth, `A
+deferred turn survives its carrier's truncation retry`, by the owner ruling of 2026-09-26 on #1365, F3 → (b)), and carries in
 > verbatim the three scenarios of the removed requirement that were never about the exemption. The REMOVED
 > requirement is `Task intake is the one loop input class this layer does not convert` (`spec.md:1104-1143`): its
 > premise ends with this change, and two of its sentences were already false at `9e5d8455` (inventory § Fact 4).
@@ -235,8 +236,9 @@ refuses is not supported, and the refusal is permanent at birth.
   the task is acknowledged with the turn held in process memory only
 - **WHEN** it returns an error
 - **THEN** the delivery takes the disposition the lane's policy derives from the error's class: a refusal naming
-  invalid input — an over-depth task, a continuation of a settled loop — is terminated, and every other error is
-  retried, except a continuation refused because its loop has work in flight, which stays acknowledged as a defined
+  invalid input — an over-depth task, a continuation of a settled loop — is terminated, a fatal-class error is
+  quarantined, and every other error — a cancelled delivery context at shutdown or stop among them — is retried,
+  except a continuation refused because its loop has work in flight, which stays acknowledged as a defined
   refusal: a Retry parks the whole task lane, which runs at MaxAckPending 1, for the redelivery budget on a turn no
   redelivery can fix, and the turn must be re-sent. No production path fails after a birth registered its loop; one
   that did would be retried into the duplicate acknowledgement of the loop it left registered. The exemption this
@@ -280,6 +282,17 @@ refuses is not supported, and the refusal is permanent at birth.
   continuation's turn is the record's pending text or its retained request, never its prompt — and a record with no
   prompt leaves the readers reading empty, as before this change
 
+#### Scenario: A deferred turn survives its carrier's truncation retry
+
+- **GIVEN** a deferred turn carried by the loop's outstanding request, its marker naming that request
+- **WHEN** that request's answer is `length_truncated` and the loop compacts and retries
+- **THEN** the answer settles only the outstanding request: the marker, its carrier and its text are kept, because a
+  truncated answer did not answer the turn
+- **AND** when compaction empties the context, the recovery re-injects the birth prompt and then the turn; the retry
+  is named the turn's carrier, and the retry's answer settles the deferral
+- **AND** a rebuild inside the truncation window still reads a carried marker and replays nothing, because the
+  retained request holds the turn
+
 #### Scenario: A malformed task is terminated, never acknowledged as done
 
 - **WHEN** the task lane receives bytes that do not decode, or that decode to a payload type the lane does not handle
@@ -302,10 +315,14 @@ refuses is not supported, and the refusal is permanent at birth.
 - **WHEN** the NATS client refuses a record write because the whole rendered record — every field summed, the prompt
   and a deferred turn's text included — exceeds the server's payload ceiling
 - **THEN** at birth the refusal is permanent: the loop is released and the task is terminated with the loop id and
-  the record's size in the cause, never retried into the same refusal on a lane that runs at MaxAckPending 1
+  the record's size in the cause, never retried into the same refusal on a lane that runs at MaxAckPending 1; the
+  loop-execution entity born before the write is stamped failed with the ceiling as its terminal reason, and the
+  refusal is counted as a task intake rejection
 - **AND** at the deferred turn's marker write the refusal is logged with the size, the text is dropped from the
   in-memory entity so later record writes fit, and the delivery is acknowledged as any other best-effort marker
-  write failure: the turn is in the loop's context and is carried by the next request, and it is not durable
+  write failure: the turn is in the loop's context and is carried by the next request, and it is not durable. A
+  deferred turn whose text the record refused for size is not recovered when a later compaction empties the
+  context
 - **AND** at a carrier write the refusal quarantines the delivery as any other carrier write failure does; the
   record's text fields count toward it, so a turn that fit its own message fits the record unless the record's
   other fields have filled it

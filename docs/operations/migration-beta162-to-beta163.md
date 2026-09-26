@@ -2250,8 +2250,10 @@ above. A record written before this tag decodes with both empty.
 `LoopCompletedEvent.prompt` and `LoopFailedEvent.prompt` are populated after a process replacement (they were empty;
 a consumer that tolerated empty keeps working). On a loop that took a continuation they carry the **birth** prompt,
 where they carried the latest turn's before this tag. When GC or repair empties a loop's context,
-`recoverEmptyContext` re-injects the birth prompt as the "Original task" and then, when a deferred turn is not yet
-carried by any request, that turn after it — before this tag it re-injected the latest turn alone. **Action:** a
+`recoverEmptyContext` re-injects the birth prompt as the "Original task" and then, while a deferred turn's marker
+is set, that turn after it — before this tag it re-injected the latest turn alone. A `length_truncated` answer does
+not end a deferral: when the request carrying a deferred turn is truncated and its compaction retry empties the
+context, the retry carries the birth prompt and the turn, and the retry's answer settles it. **Action:** a
 consumer that read `prompt` as "the latest user turn" reads the birth prompt now; the latest turn is the conversation's.
 
 ### A replacement replays a deferred turn instead of dropping it
@@ -2274,7 +2276,7 @@ No wire or subject change; observable through the consumer's redelivery behaviou
 |---|---|---|
 | undecodable, or a payload that is not a task | Ack | Terminate |
 | an over-depth task, or a continuation of a settled loop | Ack | Terminate |
-| any other `HandleTask` error | Ack | Retry, on the configured policy (default one redelivery after 30 s, `max_deliver` 2; the lane runs at MaxAckPending 1, so a Retry parks intake for that budget — no production path produces one today) |
+| any other `HandleTask` error | Ack | Retry, on the configured policy (default one redelivery after 30 s, `max_deliver` 2; the lane runs at MaxAckPending 1, so a Retry parks intake for that budget). The production producer is a cancelled delivery context — shutdown or stop, `HandleTask`'s first check — and nothing was registered, so the redelivery is a fresh birth. A fatal-class error quarantines instead, as on the response and tool-result lanes |
 | a continuation refused because its loop has tool calls in flight or awaits approval | Ack | Ack, unchanged — a defined refusal; re-send the turn |
 
 `tasks_submitted_total` is unchanged (at-least-once, above). **Action:** a producer that relied on a malformed task
@@ -2286,10 +2288,14 @@ The record is one KV value under the server's `max_payload` (1 MiB default) — 
 text included. The client's refusal is observed at the three writes that can meet it, never predicted:
 
 - a **birth** write it refuses terminates the task and releases the loop (before: retried to the redelivery budget
-  with the task lane parked); the cause names the loop and the record's size;
+  with the task lane parked); the cause names the loop and the record's size. The loop-execution entity, born just
+  before, is stamped `agent.loop.outcome` failed with `agent.loop.terminal-reason` `record_exceeds_payload_ceiling`,
+  and the refusal counts on `task_intake_rejections_total{lane="birth",reason="record_exceeds_payload_ceiling"}`;
+  no `agent.failed` event is published — it would carry the prompt the ceiling refused;
 - a deferred turn's **marker** write it refuses is logged at Warn with the size, the text is dropped from the live
   loop so later writes fit, and the delivery is acknowledged: the turn is carried from process memory and is not
-  durable — neither is the marker;
+  durable — neither is the marker. A deferred turn whose text the record refused for size is not recovered when a
+  later compaction empties the context: recovery re-injects only the birth prompt;
 - a **carrier** write it refuses quarantines the delivery, as any other carrier write failure does (unchanged).
 
 **Action:** a producer sending turns near the ceiling should expect the marker-write case; nothing else changes.
