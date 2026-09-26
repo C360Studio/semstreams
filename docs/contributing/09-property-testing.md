@@ -56,6 +56,18 @@ results and forbidden effects. Reset subject/model state for each `rapid.Check` 
 Bound collection sizes and expensive work in the action definitions. Do not introduce a production state-machine
 runtime to make the test possible.
 
+A test-owned reference model is useful even when production already has state. For example, a map from generated
+entity identities to their latest contract-defined triples can supply expected query membership after replacement
+or deletion. Update that map from the generated operations; compare it with observations of the production subject.
+Do not call the production reconciliation algorithm to populate the expected map. Model size alone does not decide
+independence: the question is whether the expectation can disagree with a plausible implementation error.
+
+Check assertion activation separately from generator reachability. A loop over an always-empty applied-result set
+executes no membership assertion; a gate invariant behind a gate that no action creates is equally unexercised.
+A named prefix can establish the required nonempty set or gate before generating subsequent actions. Alternatively,
+retain a deterministic witness for that obligation and describe the property's narrower scope. Do not require a
+random run to hit an arbitrary quota of rare states.
+
 A sampled history does not guarantee a particular failure/retry sequence. Retain deterministic sequences for those
 obligations. Sequential model testing does not establish concurrent interleavings, abrupt process replacement, or
 broker recovery; those need the existing tests at the appropriate tier. Use explicit synchronization for concurrent
@@ -131,6 +143,26 @@ Record the PBT decision, cited invariant, independent expectation, generated cla
 actual execution summary, and retained witness or remaining gap. Run `task spec:properties` to check citation
 resolution; independently review the property's meaning. The task exists but is not currently wired into the common
 CI/pre-push path. [#1293](https://github.com/C360Studio/semstreams/issues/1293) owns that verification work.
+
+Use the policy's [visible evidence record](01-testing.md#visible-pbt-evidence-and-assertion-reachability), subject
+to its prospective rollout. These two worked records illustrate the distinction; they claim no new execution:
+
+- **Generated-property choice:** the milestone aggregate's contract defines outcome precedence independently of
+  the implementation's ordinal ordering. Generate lists of the four outcome classes and permutations; assert the
+  highest contract-priority member and permutation invariance. The equality assertion executes on every list,
+  including the empty list; retain deterministic examples for any composition claimed as definitely exercised.
+  Record the selected test's revision, command, seed and actual Rapid summary when run. Until then, execution is
+  **unrun**, even if citation validation passes. This property observes aggregation of already-classified outcomes;
+  it does not prove handler classification, broker settlement or delivery.
+- **Named-example choice:** for a narrowly scoped first-fatal latch change, examples that exercise clean-only,
+  first-fatal, and a second distinct fatal can pin refusal and first-cause retention. The rationale must explain why
+  these cases cover the changed obligation and why arbitrary repeated results add no distinct state transition.
+  Identify any concurrent observer/Stop race separately and drive it with explicit synchronization. Record the exact
+  named examples and their run evidence; an untested race remains a limit. The existing delivery-lane Rapid property
+  also explores result histories, so a change affecting its broader contract should assess and retain that evidence.
+
+Keep the four evidence labels separate in the summary. For example, a passing `task spec:properties` belongs under
+citation validation while the Rapid test's actual check summary belongs under generated property execution.
 
 Apply the separate [mutation criteria](01-testing.md#when-targeted-mutation-evidence-is-required) to check sensitivity
 when triggered. Passing generated checks provide scoped evidence, not a guarantee over every possible input/history.

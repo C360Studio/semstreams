@@ -89,6 +89,40 @@ It does not reopen completed reviews, force restacks, or require retroactive PBT
 Existing correctness, fuzzing, mutation, verification, and release obligations remain in force. This guidance adds
 no automated gate and does not claim the separately tracked test improvements are complete.
 
+### Visible PBT Evidence and Assertion Reachability
+
+The presentation and review additions in this section apply to claims opened after
+[#1392](https://github.com/C360Studio/semstreams/pull/1392) merges. Claims already open retain their existing testing
+obligations and acceptance criteria; this addition requests no restack, retrofit, or reopening of reviewed work.
+
+For an applicable change, keep this compact record in the existing PR or design, link its detailed evidence, and
+surface the decision and limits in the implementation handoff. Record the decision before writing checks; fill in
+execution after running them, leaving unrun checks explicit.
+
+```text
+PBT decision: generated property / named examples sufficient / not applicable, with the failure-specific reason.
+Obligation and oracle: cited invariant; independent source of the expected result.
+Scope: generated input/action classes; deterministic witnesses; assertion activation conditions.
+Execution: source revision, exact command, seed or witness, actual completed checks, result, and evidence link.
+Limits: obligations not exercised, evidence-tier limits, and reviewer assessment or pending review.
+```
+
+An examples-based rationale names the cases and explains why they cover the relevant combinations, repetition and
+ordering. Counting individual crash windows does not establish coverage of histories spanning those windows.
+An independent reference model is permitted: derive its expected state from the contract and generated operations.
+Copying production decisions or using the subject's output as its own expected result defeats that independence.
+
+For each claimed invariant, the reviewer identifies what activates its assertion and checks how the test reaches
+that state. Inspect guards, empty collections, early returns and skipped actions. When the claim requires a class to
+execute, use deterministic setup, a named example or a retained witness. A reachable generator branch alone proves
+neither execution nor detection; a minimum random-hit quota can make the suite flaky and is not required.
+The [Rapid guide](09-property-testing.md#review-and-hand-off) gives worked records and implementation examples.
+
+Label evidence by what ran: **citation validation**, **generated property execution**, **fuzz exploration**, or
+**mutation sensitivity**. Ordinary fuzz seed replay is named separately from exploration. `task spec:properties`
+validates citation resolution; its count is neither a generated-check count nor evidence that an assertion can fail.
+This record adds no runner, automated gate, per-change property quota, or mutation experiment beyond existing policy.
+
 ### When Targeted Mutation Evidence Is Required
 
 For each material behavior change, record whether the following criteria apply in the existing issue, design, or
