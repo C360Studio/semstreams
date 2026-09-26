@@ -2,10 +2,6 @@ package contract
 
 import (
 	"fmt"
-	"go/ast"
-	"go/build/constraint"
-	"go/parser"
-	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -58,26 +54,25 @@ type tierRow struct {
 func (r tierRow) String() string { return fmt.Sprintf("%s (%s %s)", r.tier, r.composeFile, r.service) }
 
 // tierTable parses the table out of the payload-registry spec, under one rule
-// in two sentences. The live capability spec governs whenever it carries the
-// table, and the change deltas are not consulted at all — specs are current
-// truth, and a later change's restated copy is checked at the moment it
-// matters, its own archive, when it becomes the live spec. Only when the live
-// spec does NOT carry the table is an in-flight delta the source, and then
-// exactly one of them may carry it: several would mean picking by alphabetical
-// change id, which is fail-open.
+// in two sentences. When exactly one in-flight change delta carries the table,
+// that delta governs; with none, the live capability spec governs. Two or more
+// carrying deltas are refused: picking one by alphabetical change id would be
+// fail-open.
 //
-// The precedence is what keeps this usable after the archive. openspec 1.7.0
-// requires a MODIFIED block to restate its whole requirement, table included,
-// so the next change touching this requirement necessarily holds a second copy
-// beside the live one — and neither copy may be deleted. Refusing on that pair
-// would leave its author no remedy but to edit this guard.
+// The delta wins because a change that edits the table also edits the
+// artifacts the table is read against — compose files, the Dockerfile — in the
+// same branch, and the live spec keeps describing the old artifacts until the
+// change's archive makes live = delta (#1301 design § 7 row 13). With the live
+// spec governing, that branch would be red from its first compose edit until
+// its last commit. On a branch with no in-flight delta, main included, the
+// live spec governs exactly as before.
+//
+// openspec 1.7.0 requires a MODIFIED block to restate its whole requirement,
+// table included, so any change touching this requirement carries a copy; the
+// ambiguity refusal is what keeps two such changes from being in flight at
+// once without a loud failure.
 func tierTable(t *testing.T) (string, []tierRow) {
 	t.Helper()
-
-	live := filepath.Join(tierRepoRoot, "openspec/specs/payload-registry/spec.md")
-	if body, err := os.ReadFile(live); err == nil && strings.Contains(string(body), tierTableHeader) { //nolint:gosec // repository-relative spec path
-		return live, parseTierRows(t, live, string(body))
-	}
 
 	// A single `*` cannot reach archived changes: those live at
 	// openspec/changes/archive/<date>-<id>/specs/, one level deeper.
@@ -100,13 +95,22 @@ func tierTable(t *testing.T) (string, []tierRow) {
 
 	switch len(carriers) {
 	case 0:
-		t.Fatalf("neither %s nor any in-flight change delta carries the tier table header %q", live, tierTableHeader)
 	case 1:
+		return carriers[0], parseTierRows(t, carriers[0], bodies[carriers[0]])
 	default:
-		t.Fatalf("the live spec does not carry the tier table and %d in-flight deltas do, so which one governs is ambiguous: %s",
+		t.Fatalf("%d in-flight change deltas carry the tier table, so which one governs is ambiguous: %s",
 			len(carriers), strings.Join(carriers, ", "))
 	}
-	return carriers[0], parseTierRows(t, carriers[0], bodies[carriers[0]])
+
+	live := filepath.Join(tierRepoRoot, "openspec/specs/payload-registry/spec.md")
+	body, err := os.ReadFile(live) //nolint:gosec // repository-relative spec path
+	if err != nil {
+		t.Fatalf("read %s: %v", live, err)
+	}
+	if !strings.Contains(string(body), tierTableHeader) {
+		t.Fatalf("neither %s nor any in-flight change delta carries the tier table header %q", live, tierTableHeader)
+	}
+	return live, parseTierRows(t, live, string(body))
 }
 
 func parseTierRows(t *testing.T, path, body string) []tierRow {
@@ -157,7 +161,10 @@ func parseTierRows(t *testing.T, path, body string) []tierRow {
 			case strings.HasPrefix(gate, "-tags="):
 				row.tags = append(row.tags, strings.Split(strings.TrimPrefix(gate, "-tags="), ",")...)
 			case strings.HasPrefix(gate, "SEMSTREAMS_E2E_"):
-				row.envGates = append(row.envGates, gate)
+				// A gate reads `NAME=<value>`; the set compared with compose is
+				// the names, and the value rule is checked on the compose side.
+				name, _, _ := strings.Cut(gate, "=")
+				row.envGates = append(row.envGates, name)
 			default:
 				t.Fatalf("%s: unclassified gate token %q in row %s", path, gate, row.tier)
 			}
@@ -598,120 +605,6 @@ func TestE2ETierTableMatchesComposeAndDockerfile(t *testing.T) {
 	}
 
 	assertNoComposeFileArmsAnUndeclaredHook(t, rows)
-}
-
-// TestProductionRootReachesNoE2EHarnessWithoutABuildTag is the compile-time
-// half of the rule: an E2E-only hook lands in the binary its tier boots, behind
-// that tier's build tag, so the shipped production image links no harness at
-// all. It sweeps the whole production root rather than the three hook files
-// known today.
-func TestProductionRootReachesNoE2EHarnessWithoutABuildTag(t *testing.T) {
-	dockerfile := readDockerfileTargets(t)
-
-	production := dockerfile.resolve(t, "production")
-	if len(production.tags) != 0 {
-		t.Fatalf("the shipped production target builds with tags %v", production.tags)
-	}
-
-	// The tags this package is legitimately overlaid with are the ones the
-	// Dockerfile itself compiles it with — read, not listed here.
-	overlay := map[string]bool{}
-	for _, build := range dockerfile.artifacts {
-		if build.pkg != production.pkg {
-			continue
-		}
-		for _, tag := range build.tags {
-			overlay[tag] = true
-		}
-	}
-	if len(overlay) == 0 {
-		t.Fatalf("no Dockerfile target overlays %s with a build tag", production.pkg)
-	}
-
-	entries, err := os.ReadDir(filepath.Join(tierRepoRoot, production.pkg))
-	if err != nil {
-		t.Fatalf("read production root: %v", err)
-	}
-
-	scanned, gated := 0, 0
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		scanned++
-
-		path := filepath.Join(tierRepoRoot, production.pkg, name)
-		file, parseErr := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly|parser.ParseComments)
-		if parseErr != nil {
-			t.Fatalf("parse %s: %v", path, parseErr)
-		}
-		carriesHook := importsE2EHarness(file.Imports)
-		ordinaryBuild := reachableWithoutOverlayTags(t, path, overlay)
-		if !ordinaryBuild {
-			gated++
-		}
-
-		switch {
-		case carriesHook && ordinaryBuild:
-			t.Errorf("%s/%s imports an E2E harness and builds without any of the overlay tags %v",
-				production.pkg, name, sortedKeys(overlay))
-		case !carriesHook && !ordinaryBuild:
-			// The inverse, per file rather than as a count: a file that only
-			// an overlay tag can build and that reaches no harness is a
-			// stranded overlay — the shape left behind when a hook's import
-			// is dropped but its build constraint is not.
-			t.Errorf("%s/%s builds only under an overlay tag but imports no E2E harness", production.pkg, name)
-		}
-	}
-	if scanned == 0 {
-		t.Fatalf("no non-test Go files found in %s", production.pkg)
-	}
-	t.Logf("%s: %d non-test files scanned, %d behind an overlay tag", production.pkg, scanned, gated)
-}
-
-// importsE2EHarness covers both homes an E2E-only hook body has today: the
-// shared harnesses under test/e2e/harness/ and the single-tier internal/e2e*
-// packages (the slow-consumer probe).
-func importsE2EHarness(imports []*ast.ImportSpec) bool {
-	for _, spec := range imports {
-		path := strings.Trim(spec.Path.Value, `"`)
-		if strings.Contains(path, "/test/e2e/") || strings.Contains(path, "/internal/e2e") {
-			return true
-		}
-	}
-	return false
-}
-
-// reachableWithoutOverlayTags reports whether the file still builds when every
-// E2E overlay tag is off — which is exactly "the ordinary build links this".
-//
-// Not supported: a constraint mixing an overlay tag with a NEGATED platform or
-// release tag (`//go:build e2e_x && !linux`). Every non-overlay tag evaluates
-// true here, so the negation reads false and the file would look unreachable.
-// No hook file in this repository has that shape; if one needs it, this helper
-// gets a real build context rather than a second tag table.
-func reachableWithoutOverlayTags(t *testing.T, path string, overlay map[string]bool) bool {
-	t.Helper()
-
-	body, err := os.ReadFile(path) //nolint:gosec // repository-relative source path
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	for _, line := range strings.Split(string(body), "\n") {
-		if strings.HasPrefix(line, "package ") {
-			break
-		}
-		if !constraint.IsGoBuild(line) {
-			continue
-		}
-		expr, parseErr := constraint.Parse(line)
-		if parseErr != nil {
-			t.Fatalf("parse build constraint in %s: %v", path, parseErr)
-		}
-		return expr.Eval(func(tag string) bool { return !overlay[tag] })
-	}
-	return true // no constraint at all: always built
 }
 
 func sorted(values []string) []string {

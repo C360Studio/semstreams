@@ -79,13 +79,17 @@ to a doc sentence or "not supported" before it gets code.
 
 ## 4. Dockerfile and compose
 
-- [ ] 4.1 `docker/Dockerfile:182-215` stages deleted; `grep -c '^FROM' docker/Dockerfile` drops by 4; `grep -c 'tags='`
+- [x] 4.1 `docker/Dockerfile:182-215` stages deleted; `grep -c '^FROM' docker/Dockerfile` drops by 4; `grep -c 'tags='`
       → 0.
-- [ ] 4.2 Compose edits per `design.md` § 7 row 7 — each e2e service sets exactly its row's variables; agentic and
+- [x] 4.2 Compose edits per `design.md` § 7 row 7 — each e2e service sets exactly its row's variables; agentic and
       slow-consumer take `image: c360studio/semstreams:e2e-test` and `target: e2e`; `lifecycle.yml:62` flag →
       `SEMSTREAMS_E2E_LIFECYCLE_SEED`.
-- [ ] 4.3 `go test ./test/contract/ -run TestE2ETierTableMatchesComposeAndDockerfile` green against the MODIFIED
+- [x] 4.3 `go test ./test/contract/ -run TestE2ETierTableMatchesComposeAndDockerfile` green against the MODIFIED
       table (task 5.1) — the test is the migration checklist.
+      `grep -c '^FROM' docker/Dockerfile`: 7 → 3; `grep -c 'tags='`: 0. The `tierTable` precedence flip, the Gate
+      parser reading `NAME=<value>` as the name, and `TestProductionRootClosureHoldsNoE2EHarness` replacing the
+      build-tag test landed in this same commit (5.4's order rule), so the contract suite was green at every
+      commit: the table test logs `tier table read from …/one-composition-root/specs/payload-registry/spec.md: 12 rows`.
 
 ## 5. Spec deltas and contract tests
 

@@ -61,11 +61,11 @@ services:
   # SemStreams Application with Agentic Components
   semstreams:
     # Per-target image tag — see docker/compose/e2e.yml for rationale.
-    image: c360studio/semstreams:e2e-process-barrier
+    image: c360studio/semstreams:e2e-test
     build:
       context: ../..
       dockerfile: docker/Dockerfile
-      target: e2e-process-barrier
+      target: e2e
     container_name: semstreams-agentic-app
     command: ["--config", "/app/configs/agentic.json"]
     depends_on:
@@ -79,11 +79,12 @@ services:
       - SEMSTREAMS_DEBUG=${SEMSTREAMS_DEBUG:-false}
       - SEMSTREAMS_DEBUG_PORT=6060
       - AGENTIC_LLM_URL=${AGENTIC_LLM_URL:-http://mock-llm:8080/v1}
+      # Enables the process-barrier tool executor (internal/e2eboot).
+      - SEMSTREAMS_E2E_PROCESS_BARRIER=1
       # Arms the E2E milestone settlement probe (#1155 stage D). The handler it
-      # registers deliberately crashes the process, panics, and stays transient,
-      # so it is gated twice: this variable, and the e2e_process_barrier build
-      # tag that is the only build containing the code that reads it. No other
-      # compose file sets it; no production binary can.
+      # registers deliberately crashes the process, panics, and stays transient.
+      # Only the E2E binary links it, and only this variable enables it; no
+      # other compose file sets it, and the production binary cannot.
       - SEMSTREAMS_E2E_MILESTONE_PROBE=1
     volumes:
       - ../../configs:/app/configs:ro
