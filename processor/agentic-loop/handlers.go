@@ -121,6 +121,12 @@ type HandlerResult struct {
 	// ErrLoopNotFound and the component's cold branch reads the record, which
 	// acknowledges a settled loop the same way (#1362, D35).
 	staleDrop bool
+
+	// deferredPrompt is the text of the turn a deferred continuation admitted
+	// (#1365). It travels from the admitted task to the deferred lane's marker
+	// write, which records it beside the marker from this value rather than by
+	// re-reading the live entity another lane may be moving (design § 6.9).
+	deferredPrompt string
 }
 
 // SyntheticDecideRequest carries the data needed for graphWriter to stamp
@@ -915,7 +921,7 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 		switch {
 		case err == nil:
 		case errors.Is(err, ErrLoopAlreadyExists):
-			entity, deferred, err = h.loopManager.attachContinuation(task.LoopID, task.TaskID)
+			entity, deferred, err = h.loopManager.attachContinuation(task.LoopID, task.TaskID, task.Prompt)
 			if err != nil {
 				// A settled loop (ErrLoopTerminal) and a loop with work in
 				// flight (ErrLoopBusy) both refuse the continuation outright;
@@ -1094,7 +1100,7 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 	// outstanding response carries this turn into iteration N+1 instead.
 	if deferred {
 		keepTrajectory = true
-		return h.deferredContinuationResult(loopID, task.TaskID, entity), nil
+		return h.deferredContinuationResult(loopID, task.TaskID, task.Prompt, entity), nil
 	}
 
 	result, err := h.buildTaskRequest(loopID, task, entity, messages, tools)
@@ -1116,7 +1122,7 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 // Agent execution evidence is a first-class capability (openspec/project.md
 // § Purpose) and ADR-098 routes an agent-execution signal to graph conditions
 // rather than to logs.
-func (h *MessageHandler) deferredContinuationResult(loopID, taskID string, entity agentic.LoopEntity) HandlerResult {
+func (h *MessageHandler) deferredContinuationResult(loopID, taskID, prompt string, entity agentic.LoopEntity) HandlerResult {
 	h.logger.Info("Continuation deferred behind an outstanding model request",
 		slog.String("loop_id", loopID),
 		slog.String("task_id", taskID),
@@ -1125,6 +1131,7 @@ func (h *MessageHandler) deferredContinuationResult(loopID, taskID string, entit
 		LoopID:            loopID,
 		State:             entity.State,
 		Deferred:          true,
+		deferredPrompt:    prompt,
 		PublishedMessages: []PublishedMessage{},
 		TrajectorySteps:   []agentic.TrajectoryStep{},
 		ContextEvents:     []agentic.ContextEvent{},

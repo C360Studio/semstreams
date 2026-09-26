@@ -53,7 +53,7 @@ func TestSettleRequestEndsTheDeferralOnlyForTheCarrier(t *testing.T) {
 
 	first := m.GenerateRequestID(loopID)
 	m.TrackRequest(first, loopID)
-	_, deferred, err := m.attachContinuation(loopID, "task-carrier-2")
+	_, deferred, err := m.attachContinuation(loopID, "task-carrier-2", "a second turn")
 	require.NoError(t, err)
 	require.True(t, deferred)
 

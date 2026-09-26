@@ -25,6 +25,7 @@ import (
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/agentic-loop/internal/loopbucket"
 	"github.com/c360studio/semstreams/processor/agentic-loop/prompt"
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -1551,17 +1552,17 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 	// exists, the turn is already in its context, and the durable effect this
 	// delivery owns is the pending-continuation marker on the loop entity. There
 	// is nothing to publish and no graph birth to do — the loop was born on its
-	// first task. Persisting the entity is best-effort here exactly as it is on
-	// the spawn path below. Across a replacement the marker reaches the record
-	// but the turn's text does not: a rebuild clears a marker that names no
-	// carrying request, with a warning, and the turn must be re-sent
-	// (restoreLoopFromRequest in state.go; #1365 owns recovering it).
+	// first task. The marker and the turn's text reach the record in one
+	// compare-and-swap; any failure other than a lost compare-and-swap is
+	// best-effort. Across a replacement the rebuild replays the text after the
+	// retained conversation and keeps the marker, so the next completion
+	// carries the turn (restoreLoopFromRequest in state.go; #1365).
 	if result.Deferred {
 		c.logger.Debug("Task deferred behind the loop's outstanding model request",
 			slog.String("loop_id", result.LoopID),
 			slog.String("task_id", task.TaskID))
 		c.recordTrajectoryObservations(ctx, result)
-		if err := c.persistDeferredContinuationMarker(ctx, result.LoopID); errors.Is(err, natsclient.ErrKVRevisionMismatch) {
+		if err := c.persistDeferredContinuationMarker(ctx, result.LoopID, result.deferredPrompt); errors.Is(err, natsclient.ErrKVRevisionMismatch) {
 			// A lost compare-and-swap already released this loop, so the
 			// user's turn is held by nothing in this process. Acknowledging
 			// here would discard it; the delivery retries into whichever
@@ -3085,8 +3086,9 @@ func (c *Component) persistLoopState(ctx context.Context, loopID string) error {
 // persistDeferredContinuationMarker commits the deferred-continuation marker
 // onto the record it READ, rather than onto a render of the live entity.
 //
-// A lane writes only the fields it owns. The deferred turn owns exactly two —
-// PendingContinuation and PendingContinuationRequestID — and the entity it
+// A lane writes only the fields it owns. The deferred turn owns exactly three —
+// PendingContinuation, PendingContinuationRequestID and, since #1365,
+// PendingContinuationPrompt, the turn's text — and the entity it
 // would otherwise render belongs, at this instant, to the tool lane: by the
 // time a continuation can defer, the request it is deferring behind has been
 // tracked as outstanding, which means handleToolsComplete has already
@@ -3104,7 +3106,16 @@ func (c *Component) persistLoopState(ctx context.Context, loopID string) error {
 // process observed, and a lost CAS releasing the loop and returning the
 // sentinel the task lane reads as "redeliver this turn to whoever holds the
 // record now" (docket OQ3).
-func (c *Component) persistDeferredContinuationMarker(ctx context.Context, loopID string) error {
+//
+// The whole record shares the NATS payload ceiling, the turn's text included
+// (#1365, #857). A write the client refuses for size is dropped rather than
+// retried into the same refusal: the text leaves the in-memory entity — only
+// while it is still this turn's, since a later turn may have replaced it — so
+// the loop's later record writes fit, a Warn names the loop and the size, and
+// the delivery is acknowledged as any best-effort marker write is. The turn is
+// in the loop's context and the next request carries it; it is not durable,
+// and neither is the marker, which is the state before the marker write.
+func (c *Component) persistDeferredContinuationMarker(ctx context.Context, loopID, prompt string) error {
 	if c.loopsBucket == nil {
 		return nil
 	}
@@ -3142,6 +3153,13 @@ func (c *Component) persistDeferredContinuationMarker(ctx context.Context, loopI
 	// request, so the marker names no carrier. LoopManager.attachContinuation
 	// writes the same pair in memory; this is that fact reaching the record.
 	entity.PendingContinuationRequestID = ""
+	// The turn's text, from the value this delivery admitted (#1365). A
+	// carrier's own record write can land between attachContinuation and this
+	// write; overlaying "" onto it then leaves a record whose carrier already
+	// holds the turn, which a replacement rebuilds as a logged duplicate or —
+	// when the carrier read the context before the turn was appended — as a
+	// single replay. Either way the turn is not lost (design § 7.1).
+	entity.PendingContinuationPrompt = prompt
 	data, err := json.Marshal(entity)
 	if err != nil {
 		return fmt.Errorf("marshal loop entity %s: %w", loopID, err)
@@ -3149,6 +3167,15 @@ func (c *Component) persistDeferredContinuationMarker(ctx context.Context, loopI
 
 	committed, err := c.loopsBucket.Update(ctx, loopID, data, revision)
 	if err != nil {
+		if errors.Is(err, nats.ErrMaxPayload) {
+			c.handler.loopManager.dropPendingContinuationPrompt(loopID, prompt)
+			c.logger.WarnContext(ctx, "Deferred turn not marked — the loop record with its text exceeds the NATS "+
+				"payload ceiling; the turn is carried from process memory and is not durable",
+				slog.String("loop_id", loopID),
+				slog.Int("record_bytes", len(data)),
+				slog.Int("prompt_bytes", len(prompt)))
+			return fmt.Errorf("persist deferred continuation marker %s (%d bytes): %w", loopID, len(data), err)
+		}
 		if natsclient.IsKVConflictError(err) {
 			c.releaseLoopTransientState(loopID)
 			return errs.WrapTransient(
