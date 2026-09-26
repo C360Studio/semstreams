@@ -53,7 +53,6 @@ func TestBinaryBootOrder(t *testing.T) {
 		"setupRegistriesAndManager",
 	)
 	require.NotContains(t, productionCalls, "runWithSignalHandling")
-	require.NotContains(t, productionCalls, "bootstrapobservability.NewE2EPhaseA")
 	productionPhase, err := assignedCallResult(productionRun, "bootstrapobservability.NewProductionPhaseA", 1)
 	require.NoError(t, err)
 	productionMetrics, err := siblingAssignedResult(productionRun, productionPhase, 0)

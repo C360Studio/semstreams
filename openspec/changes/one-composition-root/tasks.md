@@ -129,13 +129,23 @@ to a doc sentence or "not supported" before it gets code.
 
 ## 6. Docs
 
-- [ ] 6.1 Sweep: `git grep -n -E 'cmd/(e2e-)?semstreams/main\.go|e2e-semstreams/main\.go|e2e_process_barrier|e2e_slow_consumer|e2e-process-barrier|e2e-slow-consumer|buildPayloadRegistry|registerExampleComponents|--lifecycle-seed|NewE2EPhaseA' -- docs/contributing docs/concepts docs/basics .agents openspec/specs CLAUDE.md AGENTS.md README.md '*_test.go'`
+- [x] 6.1 Sweep: `git grep -n -E 'cmd/(e2e-)?semstreams/main\.go|e2e-semstreams/main\.go|e2e_process_barrier|e2e_slow_consumer|e2e-process-barrier|e2e-slow-consumer|buildPayloadRegistry|registerExampleComponents|--lifecycle-seed|NewE2EPhaseA' -- docs/contributing docs/concepts docs/basics .agents openspec/specs CLAUDE.md AGENTS.md README.md '*_test.go'`
       → every hit updated or recorded here as history (`docs/proposals/*`, ADR-051/058, `migration-beta18.md` are
       history and stay). The `.agents/contracts/semstreams-{developer,reviewer}.md:246` sentence names the composer.
       `CLAUDE.md` and `AGENTS.md`: the rules-table cell "per-binary parity is prose" names
       `TestE2EBootWithNoOptionsIsTheProductionOptions`; both files stay byte-identical and ≤1,100 words
       (`go test ./internal/agentprofiles/`).
-- [ ] 6.2 `docs/contributing/02-e2e-tests.md:180-220` navigation copy matches the MODIFIED table.
+      Sweep result after this section: remaining hits are the compose file name `e2e-slow-consumer.yml` (a file, not
+      a target), the beta.18 case study `docs/contributing/02-e2e-tests.md:331-332` (history), the barrier's tool
+      name `e2e_process_barrier` (`processbarrier.ToolName`, read by the shipped-config guard), and the live
+      `openspec/specs/payload-registry/spec.md` table (synced by the archive). Also updated beyond the regex: the
+      quickstart commands in `docs/basics/05-first-processor.md:50-52` (the hello-world config needs
+      `SEMSTREAMS_E2E_EXAMPLES=1` now that the examples are an option) and stale `cmd/semstreams/main.go` /
+      `--lifecycle-seed` / `buildPayloadRegistry` comments in Go sources. Not updated (outside the sweep, pins
+      already stale before this change): `docs/advanced/12-coordinator-pattern.md:85,156`,
+      `configs/rules/lessons/README.md:26`, `docs/operations/09-http-middleware.md:14`,
+      `processor/agentic-tools/README.md:118`.
+- [x] 6.2 `docs/contributing/02-e2e-tests.md:180-220` navigation copy matches the MODIFIED table.
 
 ## 7. Gates before each push, and the e2e evidence
 

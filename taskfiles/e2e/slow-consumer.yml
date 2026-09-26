@@ -2,7 +2,7 @@ version: "3"
 
 tasks:
   default:
-    desc: Run isolated cmd/semstreams slow-consumer attribution E2E
+    desc: Run isolated slow-consumer attribution E2E (cmd/e2e-semstreams, SEMSTREAMS_E2E_SLOW_CONSUMER)
     silent: false
     deps: [":build:e2e"]
     cmds:
