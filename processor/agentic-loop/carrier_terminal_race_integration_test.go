@@ -817,3 +817,48 @@ func TestACarrierWriteAfterTheOwnersRecordIsRefused(t *testing.T) {
 	require.Equal(t, map[string]float64{"cancelled": 1}, delta.failed)
 	requireLaneNotLatched(t, lane, "agent.approval_response")
 }
+
+// The pre-AddPendingTool release (design OQ4, § 10 item 7): the cancel commits
+// and releases the loop after the approval resolved its gate and before the
+// approved call is registered. AddPendingTool refuses the released loop with
+// an unclassified error, so the approval is retried; the redelivery takes the
+// cold branch and the cancelled record acknowledges it as inapplicable.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestALoopReleasedBeforeTheApprovedCallIsRegisteredIsRetriedThenInapplicable(t *testing.T) {
+	lane := startRaceLane(t)
+	loopID, gate := gatedLaneLoop(t, lane, "task-pre-add")
+	c := lane.c
+
+	bucket := newRaceBucket(c.loopsBucket, loopID)
+	c.loopsBucket = bucket
+	pause := newStagePause(loopID, "before_dispatch")
+	lane.h.testApprovedDispatchHook = pause.hook
+	before := snapshotRaceMetrics(c)
+	approvedBefore := approvedToolCallsOn(t, lane.client, loopID)
+
+	approvalMsg, approvalDone := deliverOn(t, lane, "agent.approval_response", approveAnswer(t, gate, loopID))
+	waitFor(t, pause.reached, "approval lane before the decision switch")
+	require.Empty(t, lane.h.loopManager.GetPendingTools(loopID), "fixture: the approved call is not registered yet")
+
+	signalMsg, signalDone := deliverOn(t, lane, "agent.signal", cancelSignalBytes(t, loopID))
+	waitFor(t, signalDone, "signal callback returned")
+	require.Equal(t, int32(1), signalMsg.acks.Load())
+	cancelled := loopRecordOf(t, c, loopID)
+	require.Equal(t, agentic.LoopStateCancelled, cancelled.entity.State)
+
+	close(pause.release)
+	waitFor(t, approvalDone, "approval callback returned")
+	require.Equal(t, int32(1), approvalMsg.naks.Load(), "AddPendingTool's refusal is retried (%s)", dispositionOf(approvalMsg))
+	require.Zero(t, approvalMsg.acks.Load()+approvalMsg.terms.Load())
+	require.Equal(t, approvedBefore, approvedToolCallsOn(t, lane.client, loopID), "nothing is published")
+	require.Equal(t, cancelled.revision, loopRecordOf(t, c, loopID).revision, "nothing is written")
+
+	redelivered, redeliveredDone := deliverOn(t, lane, "agent.approval_response", approveAnswer(t, gate, loopID))
+	waitFor(t, redeliveredDone, "redelivered approval returned")
+	delta := metricDelta(before, snapshotRaceMetrics(c))
+	require.Equal(t, int32(1), redelivered.acks.Load(), "the redelivery is acknowledged (%s)", dispositionOf(redelivered))
+	require.Equal(t, map[string]float64{"approval_inapplicable": 1}, delta.dropped)
+	require.Len(t, bucket.recorded(), 1, "only the cancel lane wrote the record")
+	requireLaneNotLatched(t, lane, "agent.approval_response")
+}

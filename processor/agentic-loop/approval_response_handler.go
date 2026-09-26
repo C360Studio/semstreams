@@ -142,8 +142,8 @@ func (h *MessageHandler) dispatchApprovedCall(loopID string, pending agentic.Pen
 		// A cancel that released the loop before AddPendingTool lands here as
 		// "loop not found", unclassified, so the lane retries it; the
 		// redelivery takes the cold branch and the cancelled record
-		// acknowledges it as inapplicable. Read from code, not forced by a
-		// test (#1377 design § 10 item 7).
+		// acknowledges it as inapplicable (#1377 design OQ4;
+		// TestALoopReleasedBeforeTheApprovedCallIsRegisteredIsRetriedThenInapplicable).
 		return errs.Wrap(err, "agentic-loop", "dispatchApprovedCall", "dispatch approved tool call")
 	}
 	if h.testApprovedDispatchHook != nil {
