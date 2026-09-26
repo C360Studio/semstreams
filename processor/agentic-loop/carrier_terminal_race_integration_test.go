@@ -778,7 +778,10 @@ func TestACarrierWriteAfterTheOwnersRecordIsRefused(t *testing.T) {
 	pause := newStagePause(loopID, "published")
 	c.testCarrierHook = pause.hook
 	gauge := &pausingGauge{Gauge: c.metrics.activeLoops, reached: make(chan struct{}), release: make(chan struct{})}
+	// The loop metrics are a process-wide singleton (getMetrics), so the
+	// pausing gauge is removed again when the test ends.
 	c.metrics.activeLoops = gauge
+	t.Cleanup(func() { c.metrics.activeLoops = gauge.Gauge })
 	before := snapshotRaceMetrics(c)
 
 	approvalMsg, approvalDone := deliverOn(t, lane, "agent.approval_response", approveAnswer(t, gate, loopID))
