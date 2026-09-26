@@ -229,7 +229,7 @@ func TestHTTPRequestExecutor_EmitObservation_HappyPath(t *testing.T) {
 	}
 	call := agentic.ToolCall{ID: "call-1", Name: "http_request", LoopID: "loop-abc"}
 
-	e.emitObservation(context.Background(), call, "https://example.com/docs", resp, "<html>body</html>", false)
+	e.emitObservation(context.Background(), call, "https://example.com/docs", resp, "body", false)
 
 	if got := len(pub.triples); got != 8 {
 		t.Fatalf("triples published = %d, want 8 (7 URL-side + 1 loop back-link)", got)
@@ -255,7 +255,7 @@ func TestHTTPRequestExecutor_EmitObservation_HappyPath(t *testing.T) {
 		agvocab.WebURL:         "https://example.com/docs",
 		agvocab.WebContentType: "text/html; charset=utf-8",
 		agvocab.WebStatusCode:  200,
-		agvocab.WebText:        "<html>body</html>",
+		agvocab.WebText:        "body",
 		agvocab.WebTruncated:   false,
 	}
 	for pred, want := range checks {
