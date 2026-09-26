@@ -605,8 +605,8 @@ func TestACancelAfterTheCheckBeforeItsMarkerLeavesTheRecordToItsOwner(t *testing
 	assert.Equal(t, int32(1), approvalMsg.naks.Load(), "the live record retries the approval")
 	assert.Zero(t, approvalMsg.acks.Load()+approvalMsg.terms.Load())
 	assert.Empty(t, bucket.recorded(), "no carrier write: no cancelled record precedes its marker")
-	require.Equal(t, gatedRecord.revision, afterApproval.revision)
-	require.Equal(t, agentic.LoopStateAwaitingApproval, afterApproval.entity.State, "the record stays live")
+	assert.Equal(t, gatedRecord.revision, afterApproval.revision)
+	assert.Equal(t, agentic.LoopStateAwaitingApproval, afterApproval.entity.State, "the record stays live")
 
 	// The process dies here. A second process takes the same cancel: the record
 	// is live and no marker exists, so the honest answer is Retry — never
