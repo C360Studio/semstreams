@@ -1471,16 +1471,21 @@ func (c *Component) settleUnheldContinuation(
 
 // handleTaskMessage processes incoming task messages
 func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
+	// A task that does not decode, or decodes to another payload, is
+	// terminated — never acknowledged as done — exactly as the response and
+	// tool-result lanes terminate theirs (#1345). No record can make it
+	// resumable: the bytes will never decode.
 	baseMsg, err := c.decoder.Decode(data)
 	if err != nil {
 		c.logger.Error("Failed to unmarshal BaseMessage", "error", err)
-		return nil
+		return natsclient.TerminateDelivery(fmt.Errorf("decode task BaseMessage: %w", err))
 	}
 
 	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
 	if !ok {
 		c.logger.Error("Unexpected payload type", "type", fmt.Sprintf("%T", baseMsg.Payload()))
-		return nil
+		return natsclient.TerminateDelivery(
+			fmt.Errorf("task payload is %T, not *agentic.TaskMessage", baseMsg.Payload()))
 	}
 	// The loop token the PRODUCER sent, read before preflight can reserve one.
 	// Everything below distinguishes "this message named a loop" from "intake
@@ -1539,13 +1544,29 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 		// intake started attaching (#1227). ERROR here would manufacture a
 		// false-alarm class out of a refusal that is working as designed. Every
 		// other handler failure keeps ERROR.
+		//
+		// It is a DEFINED refusal, acknowledged, and the turn must be re-sent.
+		// The class-derived Retry was rejected on this lane for the reason
+		// settleUnheldContinuation gives: a Retry parks the whole task lane,
+		// which runs at MaxAckPending 1, for the redelivery budget (#1345,
+		// design OQ3 (a)).
 		if errors.Is(err, ErrLoopBusy) {
 			c.logger.Warn("Task refused — the loop it names still has work in flight",
 				"error", err, "task_id", task.TaskID, "loop_id", task.LoopID)
 			return nil
 		}
 		c.logger.Error("Failed to handle task", "error", err, "task_id", task.TaskID)
-		return nil
+		// Every other handler error settles by its class (#1345): a refusal
+		// naming invalid input — an over-depth task, a continuation of a
+		// settled loop — is terminated, because the heartbeat policy does not
+		// read the Invalid class and would retry it to exhaustion; anything
+		// else is returned for the policy to derive (Fatal → Quarantine, else
+		// Retry). Nothing durable was written before any of these, so a
+		// retried birth is a fresh birth.
+		if errs.IsInvalid(err) {
+			return natsclient.TerminateDelivery(err)
+		}
+		return err
 	}
 
 	// A deferred continuation is not a dedup and not a spawn: the loop already
@@ -1698,6 +1719,15 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 			"published_request_id", record.entity.PublishedRequestID,
 			"timeout_at", record.entity.TimeoutAt)
 	} else if err := c.createLoopState(ctx, result.LoopID); err != nil {
+		if errors.Is(err, nats.ErrMaxPayload) {
+			// The whole rendered record exceeds the server's payload ceiling
+			// (#857, #1365): every redelivery renders the same bytes into the
+			// same refusal, on a lane that runs at MaxAckPending 1. Permanent.
+			c.logger.Error("Loop record exceeds the NATS payload ceiling at birth — the task is terminated",
+				"loop_id", result.LoopID, "task_id", task.TaskID, "error", err)
+			c.releaseLoopTransientState(result.LoopID)
+			return natsclient.TerminateDelivery(err)
+		}
 		if errors.Is(err, natsclient.ErrKVKeyExists) {
 			c.logger.Warn("Loop record already exists — this birth is not the one that created the loop",
 				"loop_id", result.LoopID, "task_id", task.TaskID)
@@ -2926,7 +2956,7 @@ func (c *Component) createLoopState(ctx context.Context, loopID string) error {
 		if natsclient.IsKVConflictError(err) {
 			return fmt.Errorf("create loop state %s: %w", loopID, natsclient.ErrKVKeyExists)
 		}
-		return fmt.Errorf("create loop state %s: %w", loopID, err)
+		return fmt.Errorf("create loop state %s (%d bytes): %w", loopID, len(data), err)
 	}
 	c.rememberLoopRevision(loopID, revision)
 	return nil

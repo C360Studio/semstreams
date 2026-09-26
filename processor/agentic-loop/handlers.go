@@ -1105,6 +1105,14 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 
 	result, err := h.buildTaskRequest(loopID, task, entity, messages, tools)
 	if err != nil {
+		// A failure here, at startTrajectory or at GetLoop above leaves the
+		// loop registered (a birth) or its TaskID rebound (a continuation), and
+		// no record touched; the task lane retries it by class, and the retry
+		// meets HasActiveLoopForTask and is acknowledged as a duplicate with the
+		// turn nowhere durable. No production path fails at any of the three:
+		// startTrajectory always returns nil, GetLoop fails only on a release
+		// race, and buildTaskRequest's marshal and ResolveSubject never do — so
+		// no release code guards them (#1345, design § 6.12, § 7.3).
 		return HandlerResult{}, err
 	}
 	keepTrajectory = true
