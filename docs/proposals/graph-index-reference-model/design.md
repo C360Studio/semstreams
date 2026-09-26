@@ -16,7 +16,7 @@ This change adds tests in new files only. No runtime, API, storage, configuratio
 | Do nothing | No new maintenance | Leaves #1292's generated-history and sensitivity obligations unmet. |
 
 Use the second option. Reuse `newMockKVBucket` for derived storage; retain fixture ownership, authority records,
-status adapter, fault configuration and observations in new test files. Retain bucket references directly rather
+fault configuration and observations in new test files. Retain bucket references directly rather
 than adding each generated owner to the global component-to-mock registry. Existing service and graph-query
 properties provide the action/model and independent semantic expectation patterns.
 
@@ -26,12 +26,23 @@ Drive `Component.processEntityWork` synchronously with `entityIndexWork`: produc
 planning, replacement, bounded write retries, failure tracking and watermark completion. Drive recovery through
 `repairFailedEntities`, using synchronous submission when no dispatcher is installed.
 
-Observe production incoming, outgoing, predicate and by-name query handlers and `computeIndexStatus`. Separately
-inspect OUTGOING owner presence: absent ownership and a present empty array can produce identical query results.
+Observe production incoming, outgoing, predicate and by-name query handlers after the production bootstrap latch
+admits queries. Separately inspect OUTGOING presence: absent ownership and a present empty array can look identical.
 
-The fixture supplies current authoritative entity bytes and a separate status reader reporting monotonic committed
-revision. Register delivered revisions with the real watermark. Do not set `indexBootstrapped` directly. Enumeration
-completion and its fixed target are fixture inputs; production status code decides bootstrap completion.
+The fixture supplies authoritative entity bytes and a monotonic committed head. Register delivered revisions with
+real watermark bookkeeping. Enumeration completion and its fixed target are fixture inputs. Do not directly store
+indexBootstrapped. The [status-seam evidence](status-seam.md) rules out a successful in-memory SDK status fake.
+
+At each boundary, use the existing unit projection seam: graph.ComputeIndexStatus receives actual subject watermark
+and fixture head; applyKnownIncompleteOverrides receives actual enumeration/failure state; Component.latchBootstrap
+updates the production latch; graph.EvaluateReadinessGate observes that envelope. These calls are subject observations,
+never the oracle. Expected readiness conditions come independently from the history.
+
+This is readiness projection/composition evidence. It does not execute the enclosing computeIndexStatus, acquire
+server LastSeq, exercise separate SDK handles or prove published status. Existing real-NATS witnesses own that proof.
+Cold hydration asserts incomplete bootstrap/canonical-gate refusal. Do not count cold handler refusal caused by an
+unavailable status reader as bootstrap proof. After bootstrap, injected failures must cause classified refusal through
+the actual handlers, where failedCount is checked before the latch. No SDK shim, unsafe access or helper change.
 
 This tier proves the reconciliation callback, repair entry, completion and readiness for admitted sequential
 histories. It does not prove WatchAll delivery, dispatcher FIFO/concurrency, periodic repair scheduling, full Start
@@ -94,8 +105,9 @@ and arbitrary same-key conflicting names are outside this model.
 One bounded Rapid property and named witnesses share the driver and oracle. Each generated case starts with a short
 deterministic prefix. Assert activation counters for required observations; choosing an action is not proof it ran.
 
-1. Cold nonempty owner: two distinct delivered entities remain pending when enumeration completes. Queries refuse
-   before work and after only one entity finishes. After both complete, compare exact results.
+1. Cold nonempty owner: two distinct delivered entities remain pending when enumeration completes. Require refusal
+   through the canonical readiness gate before work and after one entity finishes. After both complete, compare exact
+   handler results.
 2. Replacement: change a source's name, literal predicate and target from A to B, then empty. Query old and new
    values after each catch-up boundary; assert explicit empty OUTGOING storage.
 3. Ownership: a second source still points at a target that is deleted. Preserve that source's INCOMING assertion.
@@ -157,7 +169,7 @@ composition. The actual repository property independently owes execution, mutati
 | Mutation | Required detection |
 | --- | --- |
 | Omit stale-row deletion in reconcileOwnedRows | Exact membership mismatch after A-to-B or B-to-empty. |
-| Bypass bootstrap check in ensureQueryReady | Successful admission while initial owner work remains pending. |
+| Latch bootstrap on enumeration alone | Premature bootstrap/canonical-gate admission while initial owner work remains pending. |
 | Suppress required-write failure tracking | Successful admission or non-degraded envelope after an actually injected persistent fault. |
 
 Run one mutation at a time in an isolated disposable copy with fixed tests/model/expectations/command. Retain only new
