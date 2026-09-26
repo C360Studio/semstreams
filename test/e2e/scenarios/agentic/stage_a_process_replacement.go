@@ -1109,6 +1109,19 @@ func (s *Scenario) deferTurnBehindFirstRequest(
 func (s *Scenario) verifyDeferredTurnAcrossReplacement(
 	ctx context.Context, agentStream jetstream.Stream, task agentic.TaskMessage, nextRequest, turn string,
 ) error {
+	// Premise: a compaction summarizes the conversation — birth prompt and
+	// replayed turn alike — so the next request can carry neither verbatim,
+	// warm or rebuilt. The tier's model window keeps this loop below the
+	// threshold; if that stops holding, say so instead of blaming the rebuild.
+	compactions, err := streamSubjectCount(ctx, agentStream, "agent.context.compaction."+task.LoopID)
+	if err != nil {
+		return fmt.Errorf("W-b premise: count the mid-flight loop's compaction events: %w", err)
+	}
+	if compactions != 0 {
+		return fmt.Errorf("W-b premise: the mid-flight loop published %d compaction events, so its context was "+
+			"summarized and no request can carry the turn verbatim — check the mock endpoint's max_tokens in "+
+			"configs/agentic.json against agentic-loop's context headroom", compactions)
+	}
 	stored, err := agentStream.GetLastMsgForSubject(ctx, "agent.request."+task.LoopID)
 	if err != nil {
 		return fmt.Errorf("W-b: read the mid-flight loop's next request: %w", err)

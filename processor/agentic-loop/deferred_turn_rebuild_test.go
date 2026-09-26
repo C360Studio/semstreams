@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest"
+	"github.com/c360studio/semstreams/processor/agentic-loop/prompt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -257,6 +260,124 @@ func TestARebuiltLoopCarriesTheTurnItsRecordAccepted(t *testing.T) {
 		assert.Equal(t, deferredTurn, users[1],
 			"the uncarried turn is in no request once the context is gone; recovery must carry it")
 	})
+}
+
+// TestTheAgenticTierCarriesADeferredTurnPastARebuiltToolCall is W-b as the
+// agentic E2E tier runs it (#1365, task 3.7): the loop is rebuilt under the
+// configuration the tier ships — configs/agentic.json, through the production
+// loader, the component's own config resolution and the model registry wired
+// the way NewComponent wires it — and R1 is answered with a TOOL CALL, so the
+// turn has to survive that answer's handling and the tool result before the
+// request that carries it is built.
+//
+// TestARebuiltLoopCarriesTheTurnItsRecordAccepted drives the same rebuild
+// seams, but under DefaultConfig with no registry: every model falls back to
+// DefaultContextLimit and compaction never fires. The tier's mock endpoint once
+// declared a 4096-token window against the 4000-token headroom floor, so every
+// model answer compacted RegionRecentHistory — the birth prompt and the
+// replayed turn with it — into a summary, and the request after the tool
+// result carried neither. The unit harness was green and the tier was red on
+// the same seams; this is the harness with the tier's configuration.
+//
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
+func TestTheAgenticTierCarriesADeferredTurnPastARebuiltToolCall(t *testing.T) {
+	// Read here and loaded through the production merge: the loader's own
+	// file path refuses a path outside the working directory.
+	raw, err := os.ReadFile("../../configs/agentic.json")
+	require.NoError(t, err)
+	shipped, err := config.NewLoader().LoadFromBytes(raw)
+	require.NoError(t, err)
+	require.NotNil(t, shipped.ModelRegistry, "the tier config must declare the registry its loops resolve against")
+	loopConfig, _, _, err := resolveConfig(shipped.Components["agentic-loop"].Config)
+	require.NoError(t, err)
+	tierModel := shipped.ModelRegistry.Defaults.Model
+	require.NotEmpty(t, tierModel)
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	h := NewMessageHandler(loopConfig, WithLoopManagerLogger(logger),
+		WithLoopManagerModelRegistry(shipped.ModelRegistry))
+	h.modelRegistry = shipped.ModelRegistry
+	c := releaseTestComponent(t, h)
+	c.logger = logger
+	c.loopsBucket = &recordingLoopBucket{}
+
+	// R1 as the predecessor process built it: the birth under the same
+	// configuration, with the prompt registry initPromptRegistry seeds at
+	// Start. Its conversation is what the stream retains and the rebuild
+	// replays; a hand-written one sizes the context by the fixture's choice.
+	birth := agentic.ChatMessage{Role: "user", Content: "look in the first drawer"}
+	predecessor := NewMessageHandler(loopConfig, WithLoopManagerModelRegistry(shipped.ModelRegistry))
+	predecessor.modelRegistry = shipped.ModelRegistry
+	prompts := prompt.NewRegistry()
+	prompts.AddAll(prompt.DefaultFragments())
+	predecessor.SetPromptRegistry(prompts)
+	born, err := predecessor.HandleTask(t.Context(), TaskMessage{
+		LoopID: rebuildLoopID, TaskID: "task-tier", Role: "general", Model: tierModel, Prompt: birth.Content,
+	})
+	require.NoError(t, err)
+	first := oneRetainedRequest(t, born)
+	require.Equal(t, looprequest.ID{LoopID: rebuildLoopID, Iteration: 1, Retry: 0}.String(), first.RequestID)
+	c.requestEvidence = stubEvidenceReader{requestID: first.RequestID, messages: first.Messages}
+	coldRecord(t, c, rebuildLoopID, func(e *agentic.LoopEntity) {
+		e.Model = tierModel
+		e.PublishedRequestID = first.RequestID
+		e.Iterations = 0
+		e.TaskPrompt = birth.Content
+		e.PendingContinuation = true
+		e.PendingContinuationPrompt = deferredTurn
+	})
+
+	adopted, err := c.adoptNewerRetainedRequest(t.Context(), rebuildLoopID)
+	require.NoError(t, err)
+	require.NoError(t, c.restoreLoopFromEvidence(t.Context(), rebuildLoopID, adopted, ""))
+	require.Contains(t, logs.String(), "replayed the deferred turn")
+
+	call := agentic.ToolCall{ID: "call-tier", Name: "query_entity", Arguments: map[string]any{"entity_id": "drawer"}}
+	dispatched, err := h.HandleModelResponse(t.Context(), rebuildLoopID, agentic.AgentResponse{
+		RequestID:    first.RequestID,
+		Status:       agentic.StatusToolCall,
+		FinishReason: "tool_calls",
+		Message:      agentic.ChatMessage{Role: "assistant", ToolCalls: []agentic.ToolCall{call}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, -1, turnsInMintedRequest(t, dispatched, deferredTurn),
+		"a tool-call answer mints no request; the tools have not answered")
+
+	answered, err := h.HandleToolResult(t.Context(), rebuildLoopID, agentic.ToolResult{
+		CallID:      call.ID,
+		Name:        call.Name,
+		Content:     "the drawer is empty",
+		LoopID:      rebuildLoopID,
+		RequestID:   first.RequestID,
+		ExecutionID: deriveToolExecutionID(first.RequestID, call.ID, 1),
+		CallOrdinal: 1,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, turnsInMintedRequest(t, answered, deferredTurn),
+		"the request after the tool result must ask the replayed turn once; 0 is the turn compacted away "+
+			"under the tier's context budget")
+	assert.Equal(t, 1, turnsInMintedRequest(t, answered, birth.Content),
+		"the request after the tool result must still carry the birth prompt once")
+}
+
+// oneRetainedRequest decodes the one agent.request a result minted: what the
+// stream retains for a replacement to rebuild from.
+func oneRetainedRequest(t *testing.T, result HandlerResult) agentic.AgentRequest {
+	t.Helper()
+	var requests []agentic.AgentRequest
+	for _, msg := range result.PublishedMessages {
+		if !strings.Contains(msg.Subject, "agent.request") {
+			continue
+		}
+		var envelope struct {
+			Payload agentic.AgentRequest `json:"payload"`
+		}
+		require.NoError(t, json.Unmarshal(msg.Data, &envelope), "decode agent.request on %s", msg.Subject)
+		requests = append(requests, envelope.Payload)
+	}
+	require.Len(t, requests, 1, "the birth mints exactly one request")
+	return requests[0]
 }
 
 // rebuildAcrossAReplacementWithoutAnswer is rebuildAcrossAReplacement stopped
