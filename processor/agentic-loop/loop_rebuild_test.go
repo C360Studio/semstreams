@@ -414,12 +414,9 @@ func TestAColdToolResultRebuildsTheBatchItBelongsTo(t *testing.T) {
 // anyway. So the rebuild clears it with a warning naming the loop (#1330 Q2,
 // 2026-09-23).
 //
-// The completion event's empty Prompt is the SAME limitation, one field over
-// (#1330 Q8): taskPrompts is the one per-loop cache the rebuild does not
-// restore, because the record has no field to restore it from, so
-// LoopCompletedEvent.Prompt, LoopFailedEvent.Prompt and recoverEmptyContext's
-// fallback all see it empty after a replacement. It rides #1365 too, and it is
-// asserted here so the documented limitation is a tested one.
+// The record here carries no task_prompt either — the pre-#1365 shape — so the
+// completion publishes an empty Prompt; a record that carries one is
+// TestARebuiltLoopCarriesTheTurnItsRecordAccepted's W-b.
 //
 // spec: agentic-loop / The loop record names its outstanding request
 func TestARebuiltLoopDoesNotReAskForATurnItCannotRecover(t *testing.T) {
@@ -468,8 +465,7 @@ func TestARebuiltLoopDoesNotReAskForATurnItCannotRecover(t *testing.T) {
 	require.NotNil(t, completion.CompletionState,
 		"a settling completion builds its terminal record")
 	require.Empty(t, completion.CompletionState.Prompt,
-		"a rebuilt loop has no durable task prompt to publish (#1330 Q8, see #1365); an assertion "+
-			"that expects one here would be asserting a field the record does not carry")
+		"a record written before task_prompt existed has no prompt to publish")
 }
 
 // mintedRequestIDsFromResult returns the RequestID of every agent.request in a

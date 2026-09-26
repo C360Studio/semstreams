@@ -136,6 +136,7 @@ func TestARebuiltLoopCarriesTheTurnItsRecordAccepted(t *testing.T) {
 		h, logs, answer := rebuildAcrossAReplacement(t, func(e *agentic.LoopEntity) {
 			e.PublishedRequestID = req(2)
 			e.Iterations = 1
+			e.TaskPrompt = original.Content
 			e.PendingContinuation = true
 			e.PendingContinuationPrompt = deferredTurn
 		}, req(2), []agentic.ChatMessage{system, original})
@@ -169,6 +170,9 @@ func TestARebuiltLoopCarriesTheTurnItsRecordAccepted(t *testing.T) {
 		assert.Empty(t, after.PendingContinuationRequestID)
 		assert.Empty(t, after.PendingContinuationPrompt,
 			"the turn's text outlived the settle of the request that carried it")
+		require.NotNil(t, settled.CompletionState)
+		assert.Equal(t, original.Content, settled.CompletionState.Prompt,
+			"a rebuilt loop's completion publishes the prompt its record carries (was empty before #1365)")
 	})
 
 	t.Run("W-c a carrier minted after the turn, its record write lost: carried twice, logged", func(t *testing.T) {
@@ -225,5 +229,107 @@ func TestARebuiltLoopCarriesTheTurnItsRecordAccepted(t *testing.T) {
 		assert.Equal(t, 1, turnsInContext(h, rebuildLoopID, deferredTurn))
 		assert.Equal(t, 1, turnsInMintedRequest(t, answer, deferredTurn),
 			"the adopted request was minted before the turn; the replay is its only copy")
+	})
+
+	t.Run("an emptied context on the rebuilt loop recovers the record's prompt, then the uncarried turn", func(t *testing.T) {
+		h := rebuildAcrossAReplacementWithoutAnswer(t, func(e *agentic.LoopEntity) {
+			e.PublishedRequestID = req(2)
+			e.Iterations = 1
+			e.TaskPrompt = original.Content
+			e.PendingContinuation = true
+			e.PendingContinuationPrompt = deferredTurn
+		}, req(2), []agentic.ChatMessage{system, original})
+
+		// A fresh manager is the emptied context: GC/repair left nothing.
+		emptied := NewContextManager(rebuildLoopID, "test-model", h.loopManager.contextConfig)
+		recovered := h.recoverEmptyContext(rebuildLoopID, emptied, 2, 0)
+
+		var users []string
+		for _, m := range recovered {
+			if m.Role == "user" {
+				users = append(users, m.Content)
+			}
+		}
+		require.Len(t, users, 2, "the birth prompt, then the uncarried turn")
+		assert.Contains(t, users[0], "Original task: "+original.Content,
+			"recovery re-injects the record's prompt, not the placeholder")
+		assert.NotContains(t, users[0], "Continue with the task.")
+		assert.Equal(t, deferredTurn, users[1],
+			"the uncarried turn is in no request once the context is gone; recovery must carry it")
+	})
+}
+
+// rebuildAcrossAReplacementWithoutAnswer is rebuildAcrossAReplacement stopped
+// before the model's answer is applied.
+func rebuildAcrossAReplacementWithoutAnswer(
+	t *testing.T,
+	shape func(*agentic.LoopEntity),
+	retainedID string,
+	retained []agentic.ChatMessage,
+) *MessageHandler {
+	t.Helper()
+	h := NewMessageHandler(DefaultConfig())
+	c := releaseTestComponent(t, h)
+	c.loopsBucket = &recordingLoopBucket{}
+	c.requestEvidence = stubEvidenceReader{requestID: retainedID, messages: retained}
+	coldRecord(t, c, rebuildLoopID, shape)
+	adopted, err := c.adoptNewerRetainedRequest(t.Context(), rebuildLoopID)
+	require.NoError(t, err)
+	require.NoError(t, c.restoreLoopFromEvidence(t.Context(), rebuildLoopID, adopted, ""))
+	return h
+}
+
+// TestTheLoopsPromptIsTheOneThatBoreIt is task_prompt's write (#1365, OQ5
+// (a′)): the birth write carries the prompt of the task that bore the loop, and
+// a continuation — deferred and then carried — never rewrites it, so the
+// continued loop's completion publishes the BIRTH prompt.
+//
+// spec: agentic-loop / Loop input classes settle after owner-specific durable done
+func TestTheLoopsPromptIsTheOneThatBoreIt(t *testing.T) {
+	const loopID = "9a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d"
+	const birthPrompt, turnPrompt = "look in the first drawer", "and also check the second drawer"
+
+	t.Run("the birth record carries the prompt", func(t *testing.T) {
+		c := evidenceComponent(t, "")
+		c.natsClient = unpublishableClient(t)
+		deliverBirth(t, c, loopID)
+		require.Equal(t, "first turn", decodeRecord(t, c, loopID).TaskPrompt,
+			"the birth write must put the task's prompt on the record, or a rebuild has none to restore")
+	})
+
+	t.Run("a continued loop's completion carries the birth prompt", func(t *testing.T) {
+		h := NewMessageHandler(DefaultConfig())
+		birth, err := h.HandleTask(t.Context(), TaskMessage{
+			TaskID: "task-bore", LoopID: loopID, Role: "general", Model: "model-a", Prompt: birthPrompt,
+		})
+		require.NoError(t, err)
+		r1 := mintedRequestIDsFromResult(t, birth)
+		require.Len(t, r1, 1)
+		require.NoError(t, h.loopManager.SetPublishedRequest(loopID, r1[0]))
+
+		deferred, err := h.HandleTask(t.Context(), TaskMessage{
+			TaskID: "task-continued", LoopID: loopID, Role: "general", Model: "model-a", Prompt: turnPrompt,
+		})
+		require.NoError(t, err)
+		require.True(t, deferred.Deferred)
+
+		advanced, err := h.HandleModelResponse(t.Context(), loopID, agentic.AgentResponse{
+			RequestID: r1[0], Status: agentic.StatusComplete,
+			Message: agentic.ChatMessage{Role: "assistant", Content: "the first drawer is empty"},
+		})
+		require.NoError(t, err)
+		r2 := mintedRequestIDsFromResult(t, advanced)
+		require.Len(t, r2, 1, "the deferred turn advances the loop")
+		require.NoError(t, h.loopManager.SetPublishedRequest(loopID, r2[0]))
+
+		done, err := h.HandleModelResponse(t.Context(), loopID, agentic.AgentResponse{
+			RequestID: r2[0], Status: agentic.StatusComplete,
+			Message: agentic.ChatMessage{Role: "assistant", Content: "both drawers are empty"},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, done.CompletionState)
+		assert.Equal(t, birthPrompt, done.CompletionState.Prompt,
+			"a continuation's turn became the loop's prompt; the record stores the turn twice and the "+
+				"event names the wrong task")
 	})
 }

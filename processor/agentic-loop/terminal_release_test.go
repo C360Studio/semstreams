@@ -133,9 +133,6 @@ func perLoopMapCount(m *LoopManager, loopID string) map[string]bool {
 	if _, ok := m.cachedResponseFormat[loopID]; ok {
 		held["cachedResponseFormat"] = true
 	}
-	if _, ok := m.taskPrompts[loopID]; ok {
-		held["taskPrompts"] = true
-	}
 	for k, owner := range m.requestToLoop {
 		if owner == loopID {
 			held["requestToLoop:"+k] = true

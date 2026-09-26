@@ -1019,7 +1019,12 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 		Role:    "user",
 		Content: task.Prompt,
 	})
-	h.loopManager.CacheTaskPrompt(loopID, task.Prompt)
+	// The loop's prompt is the one that bore it (#1365): written once, at
+	// birth, and never by a continuation, whose turn is the record's pending
+	// text or its retained request.
+	if !continuation {
+		h.loopManager.CacheTaskPrompt(loopID, task.Prompt)
+	}
 
 	// If embedded context is present, add it directly (skips hydration)
 	if task.Context != nil && task.Context.Content != "" {
@@ -3329,6 +3334,14 @@ func (h *MessageHandler) recoverEmptyContext(loopID string, cm *ContextManager, 
 		Content: fmt.Sprintf("[Context recovered after tool pair cleanup]\n\nOriginal task: %s\n\nPrevious tool calls encountered errors. Please continue or try a different approach.", prompt),
 	}
 	_ = cm.AddMessage(RegionRecentHistory, synthetic)
+	// The prompt is the BIRTH prompt (#1365, OQ5 (a′)), so a turn deferred and
+	// not yet carried would be in no request once its context is gone: the
+	// request built here is named its carrier and its answer settles the loop.
+	// The uncarried turn is re-injected after the birth prompt, from the one
+	// place it is stored — the entity's PendingContinuationPrompt.
+	if pending := h.loopManager.uncarriedContinuationPrompt(loopID); pending != "" {
+		_ = cm.AddMessage(RegionRecentHistory, agentic.ChatMessage{Role: "user", Content: pending})
+	}
 	return cm.GetContext()
 }
 

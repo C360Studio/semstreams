@@ -87,7 +87,6 @@ type LoopManager struct {
 	cachedMetadata       map[string]map[string]any           // loopID -> metadata (domain context, not persisted)
 	cachedRequestTimeout map[string]string                   // loopID -> request timeout (from TaskMessage.Timeout, not persisted)
 	cachedResponseFormat map[string]*agentic.ResponseFormat  // loopID -> response_format (from TaskMessage.ResponseFormat, not persisted)
-	taskPrompts          map[string]string                   // loopID -> original task prompt (for context recovery)
 	requestToLoop        map[string]string                   // requestID -> loopID
 	// outstandingRequests names the ONE model request a loop has published and
 	// not yet had answered. requestToLoop cannot answer that question: it is
@@ -139,7 +138,6 @@ func NewLoopManager(opts ...LoopManagerOption) *LoopManager {
 		cachedMetadata:         make(map[string]map[string]any),
 		cachedRequestTimeout:   make(map[string]string),
 		cachedResponseFormat:   make(map[string]*agentic.ResponseFormat),
-		taskPrompts:            make(map[string]string),
 		requestToLoop:          make(map[string]string),
 		outstandingRequests:    make(map[string]string),
 		toolCallToLoop:         make(map[string]string),
@@ -169,7 +167,6 @@ func NewLoopManagerWithConfig(contextConfig ContextConfig, opts ...LoopManagerOp
 		cachedMetadata:         make(map[string]map[string]any),
 		cachedRequestTimeout:   make(map[string]string),
 		cachedResponseFormat:   make(map[string]*agentic.ResponseFormat),
-		taskPrompts:            make(map[string]string),
 		requestToLoop:          make(map[string]string),
 		outstandingRequests:    make(map[string]string),
 		toolCallToLoop:         make(map[string]string),
@@ -986,7 +983,6 @@ func (m *LoopManager) DeleteLoop(loopID string) error {
 	delete(m.cachedMetadata, loopID)
 	delete(m.cachedRequestTimeout, loopID)
 	delete(m.cachedResponseFormat, loopID)
-	delete(m.taskPrompts, loopID)
 	delete(m.outstandingRequests, loopID)
 
 	prefix := loopID + ":"
@@ -1105,20 +1101,30 @@ func (m *LoopManager) GetCachedResponseFormat(loopID string) *agentic.ResponseFo
 	return m.cachedResponseFormat[loopID]
 }
 
-// CacheTaskPrompt stores the original task prompt for context recovery.
-// If GC/repair leaves the context empty, this prompt is re-injected as a
-// synthetic user message so the model always has contents to work with.
+// CacheTaskPrompt records the prompt of the task that bore the loop on its
+// entity (TaskPrompt, #1365), so the birth write puts it on the record and a
+// rebuild's wholesale seat restores it. If GC/repair leaves the context
+// empty, this prompt is re-injected as a synthetic user message so the model
+// always has contents to work with; the terminal events publish it as Prompt.
+// HandleTask calls it on a birth only — a continuation's turn is never the
+// loop's prompt.
 func (m *LoopManager) CacheTaskPrompt(loopID, prompt string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.taskPrompts[loopID] = prompt
+	if entity, exists := m.loops[loopID]; exists {
+		entity.TaskPrompt = prompt
+	}
 }
 
-// GetTaskPrompt retrieves the cached task prompt for a loop
+// GetTaskPrompt returns the prompt of the task that bore the loop, "" when
+// the loop is not held or its record carries none.
 func (m *LoopManager) GetTaskPrompt(loopID string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.taskPrompts[loopID]
+	if entity, exists := m.loops[loopID]; exists {
+		return entity.TaskPrompt
+	}
+	return ""
 }
 
 // GetCurrentIteration returns the current iteration for a loop
@@ -1352,6 +1358,19 @@ func (m *LoopManager) SettleRequest(loopID, requestID string) {
 		entity.PendingContinuationRequestID = ""
 		entity.PendingContinuationPrompt = ""
 	}
+}
+
+// uncarriedContinuationPrompt returns the deferred turn's text while no request
+// carries it — the predicate HasPendingContinuation and the rebuild's replay
+// use — and "" otherwise.
+func (m *LoopManager) uncarriedContinuationPrompt(loopID string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	entity, exists := m.loops[loopID]
+	if !exists || !entity.PendingContinuation || entity.PendingContinuationRequestID != "" {
+		return ""
+	}
+	return entity.PendingContinuationPrompt
 }
 
 // dropPendingContinuationPrompt removes a deferred turn's text from the loop's

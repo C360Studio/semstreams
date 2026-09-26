@@ -287,11 +287,12 @@ func TestTruncationRetryCarriesTheDeferredTurn(t *testing.T) {
 		t.Fatalf("the retry reused the truncated request's name %q", birth)
 	}
 	// The turn is in the request either as the message the deferral wrote or,
-	// when compaction at this utilization empties the context, as the prompt
-	// recoverEmptyContext re-seeds from — CacheTaskPrompt (handlers.go:974) runs
-	// on the continuation too, so the recovered prompt is this turn and not the
-	// birth task's. Both are "the model has been asked", which is what makes
-	// ending the deferral correct here rather than a dropped turn.
+	// when compaction at this utilization empties the context, as the turn
+	// recoverEmptyContext re-injects after the BIRTH prompt: the loop's prompt
+	// is written at birth only (#1365, OQ5 (a′)), so the uncarried turn is
+	// re-seeded from PendingContinuationPrompt. Both are "the model has been
+	// asked", which is what makes ending the deferral correct here rather than
+	// a dropped turn.
 	if !requestBodyContains(t, retry, continuationPrompt) {
 		t.Fatalf("the retry request does not contain the continuation's turn %q", continuationPrompt)
 	}

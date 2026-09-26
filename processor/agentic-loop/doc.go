@@ -298,15 +298,14 @@
 // the turn it carries was applied when the loop was born. Re-send a turn that was never
 // applied once a redelivered input has rebuilt the loop.
 //
-// The loop's TASK PROMPT is the same limitation one field over. taskPrompts is the one
-// per-loop cache the WHOLESALE rebuild does not restore, because the record has no field to
-// restore it from, so a loop rebuilt from its record and a retained request — the
-// model-response and tool-result cold arms — publishes LoopCompletedEvent.Prompt and
-// LoopFailedEvent.Prompt EMPTY and recoverEmptyContext falls back to its "Continue with the
-// task." placeholder. The cold task arm is the exception: it runs the ordinary HandleTask,
-// which caches the redelivered task's prompt, so its terminal events carry it. A consumer
-// that reads Prompt off a completion must tolerate an empty one. The durable field
-// for the turn and the prompt is https://github.com/C360Studio/semstreams/issues/1365.
+// The loop's TASK PROMPT is on the record (task_prompt): the birth write carries the prompt of
+// the task that bore the loop and no later write rewrites it, so a loop rebuilt from its
+// record publishes LoopCompletedEvent.Prompt and LoopFailedEvent.Prompt, and
+// recoverEmptyContext re-injects it as the "Original task". On a loop that took a
+// continuation that is still the BIRTH prompt: a continuation's turn is the record's pending
+// text or its retained request, never its prompt. A record written before the field existed
+// carries none, and those readers read empty or fall back to the "Continue with the task."
+// placeholder, as before.
 //
 // A rebuild is not a reprieve. TimeoutAt is written at birth and lives on the record, so a
 // rebuilt loop keeps its ORIGINAL deadline; nothing refreshes it and downtime is not
