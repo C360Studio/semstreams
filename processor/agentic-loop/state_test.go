@@ -1,6 +1,7 @@
 package agenticloop_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -134,6 +135,12 @@ func TestLoopManager_GetLoop(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Errorf("GetLoop() error = %v, wantErr %v", err, tt.wantErr)
 				return
+			}
+			// A loop the manager does not hold is ErrLoopNotFound, which the
+			// carrier reads as "released" (#1377); an empty ID is Invalid and
+			// never reads as a released loop.
+			if notFound := errors.Is(err, agenticloop.ErrLoopNotFound); notFound != (tt.name == "get non-existent loop") {
+				t.Errorf("errors.Is(GetLoop() error, ErrLoopNotFound) = %v for %q (error %v)", notFound, tt.name, err)
 			}
 
 			if !tt.wantErr {
