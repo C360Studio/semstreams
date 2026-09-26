@@ -1,0 +1,5 @@
+stale before=fed28aeec5ddd71ef78fd4e3fe4218b0 after=fed28aeec5ddd71ef78fd4e3fe4218b0 mutant=failed restored=passed
+bootstrap before=5a102bad1fd58c0fa544d70b72d09333 after=5a102bad1fd58c0fa544d70b72d09333 mutant=failed restored=passed
+failure before=416491cec8f3a2c617acdbf830deff8c after=416491cec8f3a2c617acdbf830deff8c mutant=failed restored=passed
+watermark before=416491cec8f3a2c617acdbf830deff8c after=416491cec8f3a2c617acdbf830deff8c mutant=failed restored=passed
+synthetic before=9c29cbab6d5fb30b2aaecb2d8efd27ff after=9c29cbab6d5fb30b2aaecb2d8efd27ff mutant=failed restored=passed

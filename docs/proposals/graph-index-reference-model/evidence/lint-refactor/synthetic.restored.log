@@ -1,0 +1,7 @@
+=== RUN   TestPropGraphIndexReconciliation
+    reconciliation_prop_test.go:114: rapid seed=1292
+    reconciliation_prop_test.go:117: [rapid] OK, passed 100 tests (2.360078958s)
+    reconciliation_prop_test.go:129: valid checks=100 activation={cold:100 replacement:100 ownership:100 stale:173 duplicate:196 failure:136 repair:136 hydration:149}
+--- PASS: TestPropGraphIndexReconciliation (2.36s)
+PASS
+ok  	github.com/c360studio/semstreams/processor/graph-index	3.800s

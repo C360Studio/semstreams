@@ -1,0 +1,2 @@
+task: [spec:properties] scripts/spec-properties.sh 
+spec-properties: 404/404 citations resolve.

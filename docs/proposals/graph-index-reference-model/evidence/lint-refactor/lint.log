@@ -1,0 +1,25 @@
+task: [lint:default] go vet ./...
+task: [lint:default] go fmt ./...
+task: [lint:default] go tool revive -config revive.toml -formatter friendly ./...
+task: [lint:test-ports] echo "running fixed-port lint guard (scripts/lint-test-ports.sh)"
+running fixed-port lint guard (scripts/lint-test-ports.sh)
+task: [lint:test-ports] bash scripts/lint-test-ports.sh
+task: [lint:nats-kv-sdk-pin] bash scripts/lint-nats-kv-sdk-pin.sh
+OK: selected nats.go module matches KV and graph-index pins v1.52.0 without replacement
+task: [lint:nats-kv-sdk-pin:test] bash scripts/lint-nats-kv-sdk-pin_fixture_test.sh
+OK: selected direct pin
+OK: version drift
+OK: same-version fork replacement
+OK: local replacement
+OK: wrong module path
+OK: empty output
+OK: malformed output
+OK: module lookup failure
+OK: graph-index pin drift
+OK: absent graph-index pin
+OK: malformed graph-index pin
+OK: multiple graph-index pins
+OK: absent pin
+OK: multiple pins
+task: [lint:request-guard] go test ./test/natsclient/
+ok  	github.com/c360studio/semstreams/test/natsclient	(cached)

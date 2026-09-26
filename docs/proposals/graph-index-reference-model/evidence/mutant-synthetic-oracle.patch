@@ -1,0 +1,17 @@
+--- /tmp/semstreams-gh1292-model-mutations.TILVxn/reconciliation_model_helpers_test.go.bak	2026-09-26 07:56:16
++++ processor/graph-index/reconciliation_model_helpers_test.go	2026-09-26 07:56:32
+@@ -757,6 +757,14 @@
+ 	}
+ 	if err := result.activation.complete(); err != nil {
+ 		return fail("activation", err)
++	}
++	if len(actions) > 0 { // synthetic model mismatch to prove Rapid shrinking across the bubble
++		ghost := f.facts[3]
++		ghost.literals[0] = !ghost.literals[0]
++		f.facts[3] = ghost
++		if err := f.parity(); err != nil {
++			return fail("synthetic oracle mismatch", err)
++		}
+ 	}
+ 	return result
+ }
