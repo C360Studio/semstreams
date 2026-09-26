@@ -180,6 +180,11 @@ func TestDeferredTurnCarriedOnceRefusesEveryWrongCount(t *testing.T) {
 			Messages: []agentic.ChatMessage{user(birth), user(birth), user(turn), call, answer}}, "birth prompt in 2"},
 		{"another request", &agentic.AgentRequest{RequestID: loop + ":req:1:0",
 			Messages: []agentic.ChatMessage{user(birth), user(turn)}}, "next request id"},
+		// The 4a4e070e tier red: compaction summarized the turn into a system
+		// message. Quoted there, it is not carried — only a user message counts.
+		{"quoted only in a compaction summary", &agentic.AgentRequest{RequestID: want,
+			Messages: []agentic.ChatMessage{user(birth), {Role: "system", Content: "Summary so far: " + turn}, call, answer}},
+			"in 0 user messages"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -194,25 +194,42 @@ Implementation serializes with other shared loop changes and precedes #1377 (rul
       `processor/agentic-loop/task_redelivery_integration_test.go:718` — `func TestAColdContinuationForALoopNoProcessHoldsIsRefused(t *testing.T) {`,
       `processor/agentic-loop/applied_facts_property_test.go:123` — `func TestPropAppliedFactsHoldAcrossEveryCrashWindow(t *testing.T) {`. Paste the `--- PASS` lines, not "green".
       Evidence: `-race -count=1 -tags integration`: `--- PASS` for all seven by name (PR body).
-- [ ] 3.7 `task e2e:agentic`: extend `verifyMidFlightLoopAcrossReplacement`
+- [x] 3.7 `task e2e:agentic`: extend `verifyMidFlightLoopAcrossReplacement`
       (`test/e2e/scenarios/agentic/stage_a_process_replacement.go:898` — `func (s *Scenario) verifyMidFlightLoopAcrossReplacement(`) — with the model-request consumer paused
       (`test/e2e/scenarios/agentic/stage_a_process_replacement.go:909` — `if _, err := agentStream.PauseConsumer(ctx, modelRequestConsumerName, time.Now().Add(2*time.Minute)); err != nil {`) and R1 retained, publish a continuation task
       naming the loop, replace, resume; assert R2 carries the turn once and `agent.complete` carries `prompt`. This
       reaches W-b only (design § 10). Final validation of the landed diff (proposal § Impact), not the iteration loop;
       `pgrep -fl e2e.test` into the tier log first.
-      Code half (the function now opens at `:899`, one import line down): after the birth task settles and before the
-      kill, `test/e2e/scenarios/agentic/stage_a_process_replacement.go:966` — `turn, err := s.deferTurnBehindFirstRequest(ctx, handles, task, firstRequest)`
-      publishes a continuation `TaskMessage` naming the loop on `agent.task.midflight`
-      (`test/e2e/scenarios/agentic/stage_a_process_replacement.go:1088` — `if err := s.nats.Publish(ctx, "agent.task.midflight", continuationData); err != nil {`)
-      and waits, as the W-b premise, for the record to carry marker, empty carrier and the turn's text while naming R1,
-      and for the continuation to settle (`:1095`, "W-b premise: …"). After the existing assertions,
-      `test/e2e/scenarios/agentic/stage_a_process_replacement.go:1056` — `if err := s.verifyDeferredTurnAcrossReplacement(ctx, agentStream, task, nextRequest, turn); err != nil {`
-      reads R2 and `agent.complete` through the production registry: (1) `checkDeferredTurnCarriedOnce` (`:1150`) — R2
-      carries the turn in exactly one user message, after the birth prompt (itself once); (2) `checkCompletionPrompt`
-      (`:1189`) — `LoopCompletedEvent.Prompt` is the BIRTH prompt, never the turn (OQ5 (a)); (3) the existing
-      assertions stand unchanged (exactly 2 requests, record advanced to `req:2:0`, response lane settled, health).
-      Both checks are unit-tested with `-race` (`test/e2e/scenarios/agentic/process_replacement_test.go:155`,
-      `:193`), each mutation-checked. Tier run owed to the coordinating session.
+      Code half (`4a4e070e`; the function opens at `:899`, one import line down): after the birth task settles and
+      before the kill, `stage_a_process_replacement.go:966` calls `deferTurnBehindFirstRequest` (`:1077`), which
+      publishes a continuation `TaskMessage` naming the loop on `agent.task.midflight` (`:1088`) and waits, as the
+      W-b premise, for the record to carry marker, empty carrier and the turn's text while naming R1, and for the
+      continuation to settle (`:1095`, "W-b premise: …"). After the existing assertions, `:1056` calls
+      `verifyDeferredTurnAcrossReplacement` (`:1109`), which reads R2 and `agent.complete` through the production
+      registry: (1) `checkDeferredTurnCarriedOnce` (`:1163`) — R2 carries the turn in exactly one USER message, after
+      the birth prompt (itself once); (2) `checkCompletionPrompt` (`:1202`) — `LoopCompletedEvent.Prompt` is the BIRTH
+      prompt, never the turn (OQ5 (a)); (3) the existing assertions stand unchanged. Both checks are unit-tested with
+      `-race` (`process_replacement_test.go:155`, `:193`).
+      Tier at `4a4e070e`: RED — `W-b carries-once: request …:req:2:0 carries the deferred turn in 0 user messages`.
+      Evidence run (container logs + record + AGENT payloads captured): the replay was correct (`state.go:505-520`
+      log "rebuilt loop replayed the deferred turn its record accepted"); then `maybeCompact` (`handlers.go:1554`)
+      fired — `model_limit=4096 headroom=4000`, effective window 96 tokens (`configs/agentic.json` mock `max_tokens`
+      4096 vs the `HeadroomTokens: 4000` floor, `config.go:352`; `context_manager.go:133-134`) — and `Compact`
+      replaced RecentHistory (birth prompt + replayed turn) with the mock's canned summary; R2 held no user message;
+      a WARM loop in the same run lost its birth prompt the same way. Root cause is the tier fixture, not the rebuild.
+      Fix (`7ae290bb`, test/config only): `configs/agentic.json` `max_tokens` 4096 → 128000 (= `DefaultContextLimit`);
+      the scenario checks the W-b premise "no `agent.context.compaction.<loopID>` event" before carries-once
+      (`:1109-1124`); `TestTheAgenticTierCarriesADeferredTurnPastARebuiltToolCall` (`deferred_turn_rebuild_test.go`)
+      loads `configs/agentic.json` through the production loader, resolves the component config as `NewComponent`
+      does, builds R1 via `HandleTask`, then cold record → `adoptNewerRetainedRequest` → `restoreLoopFromEvidence` →
+      `HandleModelResponse(tool_call)` → `HandleToolResult`, asserting R2 carries the turn once and the birth prompt
+      once. Mutations (`cp`+md5, `-race`): config → 4096: `:357 expected: 1 actual: 0`, `:360`; replay disabled:
+      `:334 … does not contain "replayed the deferred turn"`; replay log kept but `AddMessage` dropped: `:357`;
+      `turnAt < birthAt` disabled: `process_replacement_test.go:187`; `case turn:` unreachable: `:209`; the user-role
+      filter removed: the "quoted only in a compaction summary" row (added after review) fails with `in 0 user messages`.
+      **Tier at `7ae290bb`: `Scenario completed successfully` `duration=5m35.2s` `exit=0`** (pre-checks in the log:
+      compose 0, no e2e runners, head verified; compose 0 after). Review of `d9c50321..7ae290bb`: PASS WITH
+      AMENDMENTS (PR comment), both amendments applied in the commit after `7ae290bb`.
 
 ## 4. Spec and docs
 
