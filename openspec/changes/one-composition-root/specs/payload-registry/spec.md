@@ -22,8 +22,8 @@ binary boots `cmd/semstreams` through the `production` Dockerfile target, which 
 registration or hook — examples and fixtures, the mission workflow, a control responder, a probe, a barrier, a fault
 injector — is a boot option that its tier's compose service enables by setting exactly that option's variable on the
 `e2e` target, and a tier that proves the production composition WITH a hook inside it boots the `e2e` target with only
-that hook's variable set: with nothing set, the `e2e` binary is the production composition (the parity scenario in the
-framework-composition specification). No build tag gates an E2E-only registration or hook.
+that hook's variable set: with nothing set, the `e2e` binary's boot options are the production options (the parity
+scenario in the framework-composition specification). No build tag gates an E2E-only registration or hook.
 
 The tier's binary, target and gate are READ from the artifacts that boot it — `build.target` in the tier's compose service,
 the Go package of that target in `docker/Dockerfile`, the `SEMSTREAMS_E2E_*` variables the service sets — never predicted
@@ -85,8 +85,8 @@ from the word "test". This table is the observation, and a contract test re-read
 - **AND** no compose file mentions a `SEMSTREAMS_E2E_*` variable its rows do not declare — including in an overlay service
   with no `build:` block, since compose merges `environment:` across `-f` files, and including in a comment
 - **AND** each declared variable carries a nonempty LITERAL value, every value containing `$` counting as empty because the
-  guard cannot establish what the host interpolates it to, since a hook reading its gate with `os.Getenv` treats `NAME=`
-  exactly as unset and leaves the tier's proof silently unarmed
+  guard cannot establish what the host interpolates it to, since the E2E binary enables an option only on a nonempty
+  value, so `NAME=` leaves the tier's proof silently unarmed
 - **AND** no two Dockerfile targets share an `image:` tag, so a build for one tier cannot leak into another
 - **AND** the test that verifies this is `TestE2ETierTableMatchesComposeAndDockerfile`
 
@@ -96,7 +96,8 @@ from the word "test". This table is the observation, and a contract test re-read
 - **WHEN** its non-test import closure is read as `go list -deps` reports it
 - **THEN** it holds no package under `test/e2e/harness`, `internal/e2eboot`, `internal/e2eslowconsumer`,
   `examples/processors`, or `cmd/e2e-semstreams`, so the shipped binary links no harness and can enable no option
-- **AND** the converse holds for the E2E root: its closure holds every such package that exists, so a hook cannot be left
-  stranded where no binary reaches it
+- **AND** the converse holds for the E2E root: its closure holds every package under `test/e2e/harness`, plus
+  `internal/e2eboot`, `internal/e2eslowconsumer`, `cmd/e2e-semstreams/fixtures` and `cmd/e2e-semstreams/mission`, so a
+  hook cannot be left stranded where no binary reaches it
 - **AND** the test that verifies this is `TestProductionRootClosureHoldsNoE2EHarness`
 
