@@ -267,6 +267,9 @@ a completion checkbox is not evidence.
 Independently apply the [PBT decision](../../docs/contributing/01-testing.md#when-to-use-property-based-testing),
 including the rationale for existing examples/fuzz checks, generator reachability, and assertion independence.
 Use the [Rapid guide](../../docs/contributing/09-property-testing.md) to check execution and replay claims.
+For claims covered by the policy's
+[prospective evidence record](../../docs/contributing/01-testing.md#visible-pbt-evidence-and-assertion-reachability),
+check the recorded assertion activation and examples-based rationale, and distinguish the four evidence labels.
 The SemStreams checks below remain additional obligations.
 
 - Tests drive production constructors, registries, codecs, NATS handlers, and wire envelopes rather than only helpers.

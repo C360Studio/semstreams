@@ -304,3 +304,6 @@ Summarize the implemented task slice, semantic blast radius, tests and exact res
 follow-up owned by the architect, reviewer, or technical writer. Name every issue the slice filed and where each was
 placed (protocol **File** ritual); an unplaced filing is an unresolved gate. Do not claim completion from compilation
 alone.
+For claims covered by the testing policy's
+[prospective evidence record](../../docs/contributing/01-testing.md#visible-pbt-evidence-and-assertion-reachability),
+surface the PBT decision and limits in this handoff and link the complete record.
