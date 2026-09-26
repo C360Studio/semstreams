@@ -165,6 +165,14 @@ type Component struct {
 	// testLineageWriteHook injects lineage-write outcomes without NATS. Always
 	// nil in production.
 	testLineageWriteHook func(context.Context, string, map[string]any) error
+	// testCarrierHook, if non-nil, is called by the loop-record carrier at two
+	// named stages of a non-terminal result (#1377, design § 3.3): "checked"
+	// after persistHandlerResult's entry check, and "published" in
+	// publishThenPersistResultState after publishResults and before the
+	// request is stamped. Tests pause there to force a cancel into the
+	// sub-window orderings. Precedent: testPublishHook. Always nil in
+	// production.
+	testCarrierHook func(loopID, stage string)
 }
 
 type requestSubscription interface{ Drain(context.Context) error }
@@ -2353,6 +2361,28 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 		return c.settleTerminalGuard(ctx, result, nil)
 	}
 
+	if !terminal {
+		// A non-terminal result whose loop went terminal in memory, or is no
+		// longer held, meets a terminal commit in flight on another lane — the
+		// cancel lane, or a lost compare-and-swap that released it (#1377 W3,
+		// W4). The handler's own guard ran before the loop moved, so it could
+		// not see this. This delivery owns no terminal and must publish and
+		// write nothing: the record decides, as it does for a guard result.
+		// A publication already in flight past this check is the stated
+		// residual; the write below refuses to render a terminal snapshot
+		// (writeLoopRecord), so it never lands a second terminal writer.
+		held, err := c.handler.GetLoop(result.LoopID)
+		switch {
+		case errors.Is(err, ErrLoopNotFound), err == nil && held.State.IsTerminal():
+			return c.settleTerminalGuard(ctx, result, c.recordTerminalToolResultDropped)
+		case err != nil:
+			return err // an invalid loop ID is the caller's error, never a stale loop
+		}
+		if c.testCarrierHook != nil {
+			c.testCarrierHook(result.LoopID, "checked")
+		}
+	}
+
 	c.recordHandlerResultTrajectory(ctx, result)
 
 	if terminal {
@@ -2392,7 +2422,12 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 		return errs.WrapFatal(err, "agentic-loop", "persistHandlerResult",
 			"name the published request on the loop this process holds")
 	}
-	if err := c.persistLoopState(ctx, result.LoopID); err != nil {
+	if err := c.writeLoopRecord(ctx, result.LoopID, false); err != nil {
+		if errors.Is(err, errTerminalOwnedElsewhere) {
+			// Terminal or released since the entry check: nothing was written
+			// and the gate's event was not published. The record decides.
+			return c.settleTerminalGuard(ctx, result, c.recordTerminalToolResultDropped)
+		}
 		// A lost compare-and-swap is the one failure here that is NOT unknown:
 		// nothing was written, nothing was published, and persistLoopState has
 		// already released this loop's in-process state so the redelivery
@@ -2432,15 +2467,37 @@ func (c *Component) publishThenPersistResultState(ctx context.Context, result Ha
 		return errs.WrapFatal(err, "agentic-loop", "persistHandlerResult",
 			"published results have unknown durability")
 	}
+	// The publication in flight (#1377, design § 7): a cancel that landed
+	// after the carrier's entry check lets these outputs out, and the terminal
+	// owner's COMPLETE_<loopID> may be created before their PubAck. The
+	// executor runs a published call regardless; its result is acknowledged
+	// without effect on the terminal loop. What the carrier still refuses is
+	// the record write below.
+	if c.testCarrierHook != nil {
+		c.testCarrierHook(result.LoopID, "published")
+	}
 	// The request this result minted is now retained, so this is the first
 	// moment the loop may name it. Before the PubAck the name is an intention,
 	// and a SIBLING LANE writing this same loop would have made that intention
 	// durable on its behalf.
 	if err := c.stampPublishedRequest(result); err != nil {
+		if errors.Is(err, ErrLoopNotFound) {
+			// A result that mints the next request stamps before the record is
+			// rendered, so a loop the terminal owner released in between
+			// (#1377 ordering B) meets the stamp first. That is the same
+			// benign race the render refuses below, not an unknown state.
+			return c.settleTerminalGuard(ctx, result, c.recordTerminalToolResultDropped)
+		}
 		return errs.WrapFatal(err, "agentic-loop", "persistHandlerResult",
 			"name the published request on the loop this process holds")
 	}
-	if err := c.persistLoopState(ctx, result.LoopID); err != nil {
+	if err := c.writeLoopRecord(ctx, result.LoopID, false); err != nil {
+		if errors.Is(err, errTerminalOwnedElsewhere) {
+			// Terminal or released between the entry check and the render
+			// (#1377 orderings A, B, C): the carrier writes no terminal
+			// snapshot — the terminal owner is that record's one writer.
+			return c.settleTerminalGuard(ctx, result, c.recordTerminalToolResultDropped)
+		}
 		// A compare-and-swap loss already released this loop and is transient:
 		// the redelivery re-enters against the record that won. The test is
 		// the sentinel, never errs.IsTransient — that one matches any error
@@ -3146,7 +3203,22 @@ func (c *Component) stampPublishedRequest(result HandlerResult) error {
 // and the delivery is returned transient, so the redelivery re-enters against
 // the record that won rather than re-applying against a loop that no longer
 // exists. Without the release the loser keeps a stale conversation forever.
+//
+// This is the terminal owner's form (commitTerminal's step 4): it renders the
+// loop as it is, terminal included. The carrier writes through
+// writeLoopRecord with terminalWriter false.
 func (c *Component) persistLoopState(ctx context.Context, loopID string) error {
+	return c.writeLoopRecord(ctx, loopID, true)
+}
+
+// writeLoopRecord is persistLoopState's body. With terminalWriter false — the
+// carrier's two sites in persistHandlerResult — the render refuses a loop that
+// is terminal in memory or no longer held and returns errTerminalOwnedElsewhere
+// (#1377, OQ3 (ii)): a non-terminal result must never write a terminal
+// snapshot, because the terminal owner is that record's one writer. The
+// refusal reads the SAME entity the write would carry, under loopRecordMu, so
+// no cancel can land between the check and the bytes.
+func (c *Component) writeLoopRecord(ctx context.Context, loopID string, terminalWriter bool) error {
 	if c.loopsBucket == nil {
 		return nil
 	}
@@ -3171,9 +3243,16 @@ func (c *Component) persistLoopState(ctx context.Context, loopID string) error {
 	c.loopRecordMu.Lock()
 	defer c.loopRecordMu.Unlock()
 
-	data, err := c.marshalLoopRecord(loopID)
+	entity, err := c.handler.GetLoop(loopID)
+	if !terminalWriter && (errors.Is(err, ErrLoopNotFound) || err == nil && entity.State.IsTerminal()) {
+		return errTerminalOwnedElsewhere
+	}
 	if err != nil {
-		return err
+		return fmt.Errorf("get loop %s for persistence: %w", loopID, err)
+	}
+	data, err := json.Marshal(entity)
+	if err != nil {
+		return fmt.Errorf("marshal loop entity %s: %w", loopID, err)
 	}
 
 	revision, held := c.observedLoopRevision(loopID)
@@ -3238,6 +3317,12 @@ func (c *Component) persistLoopState(ctx context.Context, loopID string) error {
 // the delivery is acknowledged as any best-effort marker write is. The turn is
 // in the loop's context and the next request carries it; it is not durable,
 // and neither is the marker, which is the state before the marker write.
+//
+// Residual (#1377, design § 7): a cancel landing between attachContinuation
+// and this write has the shape of the carrier's W3 — a lane writing a loop
+// the cancel lane is committing. The record read below settles a terminal
+// record; a cancel still in flight is not checked here. Outside #1377's
+// docket and not observed by a test.
 func (c *Component) persistDeferredContinuationMarker(ctx context.Context, loopID, prompt string) error {
 	if c.loopsBucket == nil {
 		return nil

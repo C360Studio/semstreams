@@ -486,25 +486,41 @@ func (c *Component) writeRecordCancelled(
 // delivery is retried, and the redelivery finds that commit landed (a
 // terminal record) or failed and released the loop (a live record to rebuild
 // from). An unreadable record is retried.
+//
+// The carrier reaches it too (#1377 W3/W4), for a NON-terminal result whose
+// loop went terminal in memory or was released after the handler returned —
+// so "terminal in memory" is not assumed: the loop may no longer be held at
+// all, and the result's own state is not the loop's. Both are logged.
 func (c *Component) settleTerminalGuard(ctx context.Context, result HandlerResult, recordDrop func()) error {
 	record := c.readLoopRecord(ctx, result.LoopID)
 	if record.presence == loopPresenceStale {
-		c.logger.WarnContext(ctx, "Delivery acknowledged without effect — the loop's record is terminal",
+		c.logger.WarnContext(ctx, "Delivery acknowledged without effect — the loop is terminal in memory or no "+
+			"longer held, and its record is absent or terminal",
 			slog.String("loop_id", result.LoopID),
-			slog.String("state", result.State.String()))
+			slog.String("state", result.State.String()),
+			slog.String("record_state", record.entity.State.String()))
 		if recordDrop != nil {
 			recordDrop()
 		}
 		return nil
 	}
 	return errs.WrapTransient(
-		fmt.Errorf("loop %s is terminal in memory and its record is not: the terminal commit is not settled",
-			result.LoopID),
+		fmt.Errorf("loop %s is terminal in memory or no longer held; the record decides, and it is live or "+
+			"unreadable (record state %q): the terminal commit is not settled",
+			result.LoopID, record.entity.State),
 		"agentic-loop", "settleTerminalGuard", "leave an uncommitted terminal to its owner")
 }
 
 // recordTerminalToolResultDropped counts a tool result a terminal loop can no
 // longer apply, on the reason Q7 already names.
+//
+// It is also the carrier's recorder (#1377, design § 7): a non-terminal
+// result the carrier settles because its loop went terminal or was released
+// counts here under reason="terminal_unproven" on EVERY lane — an approval
+// answer, a model response's batch, a tool result's next request and a
+// sweeper auto-reject alike — because the carrier does not know the lane.
+// The handler-entry guards keep their own families
+// (model_response_dropped{stale_request_id}, approval_inapplicable).
 func (c *Component) recordTerminalToolResultDropped() {
 	if c.metrics != nil {
 		c.metrics.recordToolResultDropped("terminal_unproven")

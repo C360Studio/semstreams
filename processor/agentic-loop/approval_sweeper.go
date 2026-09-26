@@ -104,7 +104,10 @@ func (c *Component) sweepExpiredApprovals(ctx context.Context) {
 		result, err := c.handler.HandleApprovalResponse(ctx, response)
 		if errors.Is(err, ErrLoopNotFound) {
 			// The loop settled and was released between the snapshot and this
-			// call: a benign race, nothing left to reject.
+			// call: a benign race, nothing left to reject. Since #1377 this
+			// also matches a loop released between the handler's resolve and
+			// its re-read (GetLoop wraps ErrLoopNotFound), which used to log
+			// "auto-reject failed" below for the same benign race.
 			c.logger.Warn("approval timeout auto-reject found its loop already released",
 				slog.String("loop_id", cand.LoopID),
 				slog.String("call_id", cand.CallID))
