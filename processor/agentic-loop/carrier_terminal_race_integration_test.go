@@ -38,6 +38,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -486,11 +487,11 @@ func TestACancelBeforeTheCarriersCheckPublishesAndWritesNothing(t *testing.T) {
 	_, markerErr := bucket.KeyValue.Get(t.Context(), terminalMarkerKey(loopID))
 	t.Logf("T3 at approval return: %s; record %s rev %d; writes %+v",
 		dispositionOf(approvalMsg), afterApproval.entity.State, afterApproval.revision, bucket.recorded())
-	require.Equal(t, int32(1), approvalMsg.naks.Load(), "the live record retries the approval")
+	assert.Equal(t, int32(1), approvalMsg.naks.Load(), "the live record retries the approval")
 	require.Zero(t, approvalMsg.acks.Load()+approvalMsg.terms.Load())
-	require.Equal(t, approvedBefore, approvedToolCallsOn(t, lane.client, loopID),
+	assert.Equal(t, approvedBefore, approvedToolCallsOn(t, lane.client, loopID),
 		"no approved tool.execute is published for a loop cancelled in memory")
-	require.Empty(t, bucket.recorded(), "the carrier writes no record")
+	assert.Empty(t, bucket.recorded(), "the carrier writes no record")
 	require.Equal(t, gatedRecord.revision, afterApproval.revision)
 	require.ErrorIs(t, markerErr, jetstream.ErrKeyNotFound, "fixture: the cancel's marker is not created yet")
 
@@ -555,12 +556,12 @@ func TestALoopReleasedBeforeTheCarriersCheckIsSettledByItsRecord(t *testing.T) {
 	t.Logf("T4 approval: %s; record %s rev %d; writes %+v; deltas %+v; health %q %q",
 		dispositionOf(approvalMsg), after.entity.State, after.revision, bucket.recorded(), delta,
 		c.Health().Status, c.Health().LastError)
-	require.Equal(t, int32(1), approvalMsg.acks.Load(), "the approval is acknowledged without effect")
+	assert.Equal(t, int32(1), approvalMsg.acks.Load(), "the approval is acknowledged without effect")
 	require.Zero(t, approvalMsg.naks.Load()+approvalMsg.terms.Load())
 	requireLaneNotLatched(t, lane, "agent.approval_response")
-	require.Equal(t, approvedBefore, approvedToolCallsOn(t, lane.client, loopID), "nothing is published")
-	require.Equal(t, cancelled.revision, after.revision, "the record's revision is unchanged")
-	require.Len(t, bucket.recorded(), 1, "only the cancel lane wrote the record")
+	assert.Equal(t, approvedBefore, approvedToolCallsOn(t, lane.client, loopID), "nothing is published")
+	assert.Equal(t, cancelled.revision, after.revision, "the record's revision is unchanged")
+	assert.Len(t, bucket.recorded(), 1, "only the cancel lane wrote the record")
 	require.Equal(t, map[string]float64{"terminal_unproven": 1}, delta.dropped)
 	require.Equal(t, map[string]float64{"cancelled": 1}, delta.failed)
 	require.Equal(t, float64(-1), delta.active)
@@ -601,9 +602,9 @@ func TestACancelAfterTheCheckBeforeItsMarkerLeavesTheRecordToItsOwner(t *testing
 	afterApproval := loopRecordOf(t, c, loopID)
 	t.Logf("T7 at approval return: %s; record %s rev %d; writes %+v",
 		dispositionOf(approvalMsg), afterApproval.entity.State, afterApproval.revision, bucket.recorded())
-	require.Equal(t, int32(1), approvalMsg.naks.Load(), "the live record retries the approval")
+	assert.Equal(t, int32(1), approvalMsg.naks.Load(), "the live record retries the approval")
 	require.Zero(t, approvalMsg.acks.Load()+approvalMsg.terms.Load())
-	require.Empty(t, bucket.recorded(), "no carrier write: no cancelled record precedes its marker")
+	assert.Empty(t, bucket.recorded(), "no carrier write: no cancelled record precedes its marker")
 	require.Equal(t, gatedRecord.revision, afterApproval.revision)
 	require.Equal(t, agentic.LoopStateAwaitingApproval, afterApproval.entity.State, "the record stays live")
 
@@ -616,9 +617,9 @@ func TestACancelAfterTheCheckBeforeItsMarkerLeavesTheRecordToItsOwner(t *testing
 	waitFor(t, secondDone, "second process's cancel returned")
 	secondDelta := metricDelta(secondBefore, snapshotRaceMetrics(second.c))
 	t.Logf("T7 second process cancel: %s; deltas %+v", dispositionOf(secondSignal), secondDelta)
-	require.Equal(t, int32(1), secondSignal.naks.Load(), "the second process retries the cancel")
+	assert.Equal(t, int32(1), secondSignal.naks.Load(), "the second process retries the cancel")
 	require.Zero(t, secondSignal.acks.Load()+secondSignal.terms.Load())
-	require.Empty(t, secondDelta.signalsDrop, "never acknowledged as stale_loop_id")
+	assert.Empty(t, secondDelta.signalsDrop, "never acknowledged as stale_loop_id")
 
 	close(bucket.markerRelease)
 	waitFor(t, signalDone, "signal callback returned")
@@ -673,13 +674,13 @@ func TestALoopReleasedBetweenPublishAndWriteIsSettledByItsRecord(t *testing.T) {
 		t.Logf("T8 approval: %s; record %s rev %d; writes %+v; deltas %+v; health %q %q",
 			dispositionOf(approvalMsg), after.entity.State, after.revision, bucket.recorded(), delta,
 			c.Health().Status, c.Health().LastError)
-		require.Equal(t, int32(1), approvalMsg.acks.Load(), "no Fatal: the record settles the delivery")
+		assert.Equal(t, int32(1), approvalMsg.acks.Load(), "no Fatal: the record settles the delivery")
 		require.Zero(t, approvalMsg.naks.Load()+approvalMsg.terms.Load())
 		requireLaneNotLatched(t, lane, "agent.approval_response")
-		require.Equal(t, approvedBefore+1, approvedToolCallsOn(t, lane.client, loopID),
+		assert.Equal(t, approvedBefore+1, approvedToolCallsOn(t, lane.client, loopID),
 			"the one publication let out before the release")
 		require.Equal(t, cancelled.revision, after.revision)
-		require.Len(t, bucket.recorded(), 1, "only the cancel lane wrote the record")
+		assert.Len(t, bucket.recorded(), 1, "only the cancel lane wrote the record")
 		require.Equal(t, map[string]float64{"terminal_unproven": 1}, delta.dropped)
 
 		// The published call's result arrives for the released, cancelled loop
@@ -739,13 +740,13 @@ func TestALoopReleasedBetweenPublishAndWriteIsSettledByItsRecord(t *testing.T) {
 		t.Logf("T8 tool: %s; record %s rev %d published %s; writes %+v; deltas %+v; health %q %q",
 			heartbeatDisposition(resultMsg), after.entity.State, after.revision, after.entity.PublishedRequestID,
 			bucket.recorded(), delta, c.Health().Status, c.Health().LastError)
-		require.Equal(t, int32(1), resultMsg.acks.Load(), "no Fatal: the stamp's not-found is the release")
+		assert.Equal(t, int32(1), resultMsg.acks.Load(), "no Fatal: the stamp's not-found is the release")
 		require.Zero(t, resultMsg.naks.Load()+resultMsg.terms.Load())
 		requireLaneNotLatched(t, lane, "tool.result")
 		require.Equal(t, uint64(2), messagesOn(t, lane.client, requestSubject), "the minted request is retained once")
 		require.Equal(t, call.RequestID, after.entity.PublishedRequestID, "and named by no record")
 		require.Equal(t, cancelled.revision, after.revision)
-		require.Len(t, bucket.recorded(), 1, "only the cancel lane wrote the record")
+		assert.Len(t, bucket.recorded(), 1, "only the cancel lane wrote the record")
 		require.Equal(t, map[string]float64{"terminal_unproven": 1}, delta.dropped)
 
 		// Control: the same result shape on a held loop mints, stamps and writes.
