@@ -119,8 +119,12 @@ func TestAnOversizedBirthStampsItsExecutionFailed(t *testing.T) {
 		c.trajectoryRecorder = newTrajectoryRecorder(facts, registry, "objectstore", c.reportTrajectoryAuditFailure)
 
 		stamped := requireOversizedBirthTerminated(t, c, collector)
+		require.False(t, c.trajectoryAuditLoss.observed(oversizedBirthLoopID),
+			"the per-loop audit-loss marker outlived the terminated birth")
 		require.Empty(t, stamped[agvocab.LoopEvidenceIntegrity],
 			"a birth with no observed audit loss was stamped incomplete")
+		require.Equal(t, []any{agentic.ModelEndpointEntityID("acme", "ops", "model-a")},
+			stamped[agvocab.LoopModelUsed], "the failure stamp does not name the held loop's model")
 
 		page, err := newTrajectoryReader(facts).read(t.Context(),
 			agentic.TrajectoryQueryRequest{LoopID: oversizedBirthLoopID}, 1<<20)
@@ -138,8 +142,12 @@ func TestAnOversizedBirthStampsItsExecutionFailed(t *testing.T) {
 		require.NotNil(t, terminal.Evidence, "the terminal fact captured no evidence")
 		evidence, ok := store.values[terminal.Evidence.Key]
 		require.True(t, ok, "the terminal fact's evidence is not in the store")
-		require.NotContains(t, string(evidence), "first turn",
-			"the terminal evidence carries the prompt the ceiling refused")
+		var envelope agentic.TrajectoryEvidenceV1
+		require.NoError(t, json.Unmarshal(evidence, &envelope))
+		var body trajectoryTerminalEvidence
+		require.NoError(t, json.Unmarshal(envelope.Body, &body))
+		require.Equal(t, agentic.LoopStateFailed, body.Loop.State,
+			"the terminal evidence embeds the loop in a non-terminal state beside a failed fact")
 	})
 
 	t.Run("a per-loop audit loss is stamped incomplete", func(t *testing.T) {
@@ -155,6 +163,26 @@ func TestAnOversizedBirthStampsItsExecutionFailed(t *testing.T) {
 		stamped := requireOversizedBirthTerminated(t, c, collector)
 		require.Equal(t, []any{"incomplete"}, stamped[agvocab.LoopEvidenceIntegrity],
 			"the loop's observed audit loss did not reach its failure stamp")
+		require.False(t, c.trajectoryAuditLoss.observed(oversizedBirthLoopID),
+			"the per-loop audit-loss marker outlived the terminated birth")
+	})
+
+	t.Run("a loss seen only on the terminal attempt is stamped incomplete", func(t *testing.T) {
+		tc := natsclient.NewTestClient(t, natsclient.WithFastStartup())
+		collector := oversizedBirthGraph(t, tc)
+		c := oversizedBirthComponent(t, tc)
+		registry := storeregistry.New()
+		require.NoError(t, registry.Register("objectstore", &trajectoryTestStore{
+			values: make(map[string][]byte), putErrKind: agentic.TrajectoryKindLoopTerminal,
+		}))
+		c.trajectoryRecorder = newTrajectoryRecorder(&trajectoryTestBucket{values: make(map[string][]byte)},
+			registry, "objectstore", c.reportTrajectoryAuditFailure)
+
+		stamped := requireOversizedBirthTerminated(t, c, collector)
+		require.Equal(t, []any{"incomplete"}, stamped[agvocab.LoopEvidenceIntegrity],
+			"the loss the terminal observation itself saw did not reach the failure stamp")
+		require.False(t, c.trajectoryAuditLoss.observed(oversizedBirthLoopID),
+			"the per-loop audit-loss marker outlived the terminated birth")
 	})
 
 	t.Run("a component that records no trajectory evidence stamps incomplete", func(t *testing.T) {
@@ -182,5 +210,11 @@ func TestAnOversizedBirthStampsItsExecutionFailed(t *testing.T) {
 		stamped := requireOversizedBirthTerminated(t, c, collector)
 		require.Equal(t, []any{"incomplete"}, stamped[agvocab.LoopEvidenceIntegrity],
 			"a birth in a process that records no trajectory evidence was stamped as if healthy")
+		// observed answers true for every loop under the component-wide latch,
+		// so the per-loop marker is read directly.
+		c.trajectoryAuditLoss.mu.Lock()
+		_, marked := c.trajectoryAuditLoss.loops[oversizedBirthLoopID]
+		c.trajectoryAuditLoss.mu.Unlock()
+		require.False(t, marked, "the per-loop audit-loss marker outlived the terminated birth")
 	})
 }

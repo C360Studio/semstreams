@@ -1798,17 +1798,24 @@ func taskHandlerErrorDisposition(err error) error {
 // order (PR #1387 Codex round 1):
 //
 //   - error log: owed, done (first line below).
-//   - TransitionLoop(failed), UpdateCompletion: not owed — they move the
-//     in-memory loop the record is rendered from, and there is no record; the
-//     loop is released below.
+//   - TransitionLoop(failed), UpdateCompletion: owed, done — there is no
+//     record for them to reach, but the terminal evidence embeds the held loop
+//     and the record IS the evidence of the loop's state at its terminal
+//     (design § 8), so it shows failed, not the state the birth left. A
+//     transition error is logged and termination continues: the loop is
+//     released in this same call, so there is nothing to retry against.
 //   - BuildFailureMessages (event with prompt, token totals, agent.failed
 //     message): not owed — ruled (PR #1387 re-review MEDIUM 1): the event and
 //     message carry the refused prompt. The stamp's event is built here
-//     without it.
+//     without it, with the held loop's role and model.
 //   - terminal trajectory observation (loop.terminal, status failed): owed,
 //     done through recordTerminalObservation — same bounded batch, same
-//     non-blocking audit failure. Its evidence is the held loop with its task
-//     prompt cleared plus the prompt-free failure event.
+//     non-blocking audit failure. Its evidence is the whole held loop, as
+//     every terminal observation's is (design § 8 (a); option 6.14 rejected),
+//     plus a failure event built without the prompt. The loop.started and
+//     model.requested observations recorded before the refusal carry the
+//     prompt already; the ruled omissions are about the payload ceiling, and
+//     trajectory evidence is not held to it.
 //   - createTerminalMarker (COMPLETE_<loopID>): not owed — ruled, as above.
 //   - stampTerminal → stampLoopFailureWithBudget, whose observed-audit-loss
 //     read gives agent.loop.evidence-integrity=incomplete: owed, done through
@@ -1825,7 +1832,8 @@ func taskHandlerErrorDisposition(err error) error {
 //     terminal — none was committed; the refusal is counted as
 //     task_intake_rejections_total{lane="birth"} instead. The active-loops
 //     gauge keeps the +1 recordLoopCreated gave this birth, as every released
-//     birth arm above does: the existing residual #1242.
+//     birth arm above does: a residual of the same class as #1242, which
+//     records the continuation double increment and rebuilt-loop drift.
 //   - releaseLoopTransientState: owed, done last before the settlement.
 //
 // A rule that fires on this stamp and follows the reference with
@@ -1837,16 +1845,22 @@ func (c *Component) terminateOversizedBirth(ctx context.Context, loopID, taskID 
 	if c.metrics != nil {
 		c.metrics.recordTaskIntakeRejection(taskIntakeBirthLane, taskIntakeRecordExceedsCeilingReason)
 	}
+	if transErr := c.handler.loopManager.TransitionLoop(loopID, agentic.LoopStateFailed); transErr != nil {
+		c.logger.Warn("Oversized birth could not be transitioned to failed; terminating regardless",
+			"error", transErr, "loop_id", loopID, "task_id", taskID)
+	}
+	c.handler.loopManager.UpdateCompletion(loopID, agentic.OutcomeFailed, "", err.Error())
+	held, _ := c.handler.GetLoop(loopID)
 	failure := &agentic.LoopFailedEvent{
 		LoopID:   loopID,
 		TaskID:   taskID,
 		Outcome:  agentic.OutcomeFailed,
 		Reason:   taskIntakeRecordExceedsCeilingReason,
 		Error:    err.Error(),
+		Role:     held.Role,
+		Model:    held.Model,
 		FailedAt: time.Now(),
 	}
-	held, _ := c.handler.GetLoop(loopID)
-	held.TaskPrompt = ""
 	c.recordTerminalObservation(ctx, loopID, agentic.TrajectoryStatusFailed, agentic.TrajectoryErrorUnknown,
 		trajectoryTerminalEvidence{Loop: held, Failure: failure})
 	stampCtx, cancel := natsclient.DetachContextWithTrace(ctx, 5*time.Second)

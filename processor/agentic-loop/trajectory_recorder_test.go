@@ -135,6 +135,10 @@ type trajectoryTestStore struct {
 	putErrBefore bool
 	putErrAfter  bool
 	blockGet     bool
+	// putErrKind rejects, as putErrBefore does, only the evidence whose
+	// envelope names this kind. Keys are content-addressed, so the kind is
+	// read from the canonical envelope the recorder is putting.
+	putErrKind agentic.TrajectoryKind
 }
 
 func (s *trajectoryTestStore) Put(_ context.Context, key string, value []byte) error {
@@ -142,6 +146,15 @@ func (s *trajectoryTestStore) Put(_ context.Context, key string, value []byte) e
 	defer s.mu.Unlock()
 	if s.putErrBefore {
 		return errors.New("object store rejected the write")
+	}
+	if s.putErrKind != "" {
+		var envelope agentic.TrajectoryEvidenceV1
+		if err := json.Unmarshal(value, &envelope); err != nil {
+			return err
+		}
+		if envelope.Kind == s.putErrKind {
+			return errors.New("object store rejected the write")
+		}
 	}
 	s.values[key] = append([]byte(nil), value...)
 	if s.putErrAfter {
