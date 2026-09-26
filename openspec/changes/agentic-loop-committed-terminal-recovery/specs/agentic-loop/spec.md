@@ -1,17 +1,18 @@
 # agentic-loop — delta (#1377, committed terminal recovery)
 
-> Two MODIFIED requirements (design OQ6; ruling 2's cost called out there). Block 1 restates
-> `openspec/specs/agentic-loop/spec.md:886-1103` (`6876fe51`) — "Loop input classes settle after owner-specific
-> durable done", #1376's table, all 22 scenarios verbatim — appending one sentence to its partial-effect paragraph and
-> changing four scenarios' clauses (titles unchanged): the order scenario, the terminal-guard scenario, the
-> released-after-resolve scenario (design OQ3 (ii)), and the "owed to #1377" row, which is discharged. Block 2 restates
-> `spec.md:1587-1861` — "The loop record names its outstanding request", all 22 scenarios verbatim — replacing the two
-> "not reconciled" residual sentences (`spec.md:1617-1623`, #1362 issuecomment-5808903072 / issuecomment-5809906669)
-> with the proved behaviour and its stated bounds, adding the carrier's terminal-in-memory refusal, its render-time
-> refusal (design § 3.1, § 3.2) and the publication in flight as a bound, and adding six scenarios (design § 2). Every
-> scenario states the design's recommended answers (OQ1 (a), OQ2 (a), OQ3 (ii), OQ4 the check, OQ7 (a)); the texts under
-> OQ2 (b) and OQ3 (i) are named in `design.md` § 2. PR #1387 also MODIFIES block 1's requirement and lands first: block
-> 1 is re-based on the synced spec before archive (tasks 0.2).
+> Two MODIFIED requirements (design OQ6; ruling 2's cost called out there). Both blocks restate the spec as PR #1387
+> synced it (main `8d53c084`); task 0.2 re-based them on 2026-09-26 by a three-way merge of the pre-#1387 text, the
+> synced text and this delta, with no conflict. Block 1 restates `openspec/specs/agentic-loop/spec.md:886-1212` —
+> "Loop input classes settle after owner-specific durable done", #1376's table, all 30 scenarios verbatim (the eight
+> #1387 added included) — appending one sentence to its partial-effect paragraph and changing four scenarios' clauses
+> (titles unchanged): the order scenario, the terminal-guard scenario, the released-after-resolve scenario (design
+> OQ3 (ii)), and the "owed to #1377" row, which is discharged. Block 2 restates `spec.md:1657-1932` — "The loop record
+> names its outstanding request", all 22 scenarios verbatim (#1387's durable-text wording included) — replacing the
+> two "not reconciled" residual sentences (#1362 issuecomment-5808903072 / issuecomment-5809906669) with the proved
+> behaviour and its stated bounds, adding the carrier's terminal-in-memory refusal, its render-time refusal (design
+> § 3.1, § 3.2) and the publication in flight as a bound, and adding six scenarios (design § 2). Every scenario states
+> the design's recommended answers, accepted by the owner on #1377 (2026-09-26): OQ1 (a), OQ2 (a), OQ3 (ii), OQ4 the
+> check, OQ7 (a); the texts under OQ2 (b) and OQ3 (i) are named in `design.md` § 2.
 
 ## MODIFIED Requirements
 
@@ -19,9 +20,8 @@
 
 Agentic-loop SHALL classify task, response, tool-result, cancel-signal, approval-response, and governance-verdict
 deliveries through their existing binding owners, and SHALL NOT positively acknowledge a delivery on a converted
-class before that lane's durable effect has committed. Task intake is classified through the same owner but is not
-converted here; the requirement below names it. Task, response, and tool-result SHALL use the permanent typed
-heartbeat owner. Cancel signal, approval response, approved verdict, and rejected verdict SHALL retain native
+class before that lane's durable effect has committed. Task intake is classified through the same owner and, since
+#1345, settles by the same rule. Task, response, and tool-result SHALL use the permanent typed heartbeat owner. Cancel signal, approval response, approved verdict, and rejected verdict SHALL retain native
 settlement only in their four private binding owners and SHALL expose no native message or work-owning no-heartbeat
 adapter.
 
@@ -52,6 +52,21 @@ approval-timeout sweeper included, and the error's class SHALL NOT be read for i
 own disposition, as the scenarios below record it per lane. The carrier order an applied result takes — birth, gate,
 ordinary advance or terminal — SHALL be a function of the result's shape alone: the same shape takes the same order on
 every lane that produces it.
+
+The input a task delivery was accepted with SHALL be a fact of the loop record it was accepted into, never of the
+process that accepted it: `task_prompt` carries the prompt of the task that bore the loop from the birth write on
+and is never rewritten, and `pending_continuation_prompt` carries the text of a deferred turn from the write that
+sets its marker to the write that clears it. A rebuild that seats the record restores both and replays an uncarried
+turn after the retained conversation, so a rebuilt loop's next request SHALL carry it — once, except in the one
+window the record cannot tell apart (a carrier minted after the turn whose record write was lost), where it is
+carried twice and logged, and never zero. A task delivery that fails before any durable effect SHALL settle by its
+error's class — malformed or invalid terminated, transient retried — and SHALL NOT be acknowledged except as one of
+the lane's defined refusals, each named below: a duplicate, an applied task, an unheld continuation, and a
+continuation of a loop with work in flight, which stays acknowledged because a Retry would park the whole task lane
+(MaxAckPending 1) on a turn no redelivery can fix. A task whose loop record exists SHALL resume from that record on
+redelivery; the birth-failure and transient-lineage paths of the same lane settle on their durable effect and are not
+exempt. The WHOLE record shares the wire's payload ceiling, every field summed; a record the NATS payload ceiling
+refuses is not supported, and the refusal is permanent at birth.
 
 #### Scenario: Required output publication fails
 
@@ -179,11 +194,10 @@ every lane that produces it.
 
 #### Scenario: A refusal before any mutation is retried; a refusal naming invalid input is terminated
 
-- **WHEN** a handler refuses before it touched the loop — the delivery context was cancelled first, or an approval
-  answer fails validation
-- **THEN** the cancelled model response or tool result is retried; the invalid approval answer is terminated; a task
-  refused for either reason keeps the log-and-acknowledge exemption named under "Task intake is the one loop input
-  class this layer does not convert"
+- **WHEN** a handler refuses before it touched the loop — the delivery context was cancelled first, an approval
+  answer fails validation, or a task names a depth at or past its limit
+- **THEN** the cancelled model response, tool result or task is retried; the invalid approval answer and the
+  over-depth task are terminated; nothing was registered for any of them
 
 #### Scenario: An approval answer whose loop was released after its gate resolved is recovered cold
 
@@ -215,23 +229,43 @@ every lane that produces it.
 
 - **WHEN** `HandleTask` returns a result that created the loop
 - **THEN** the task lane writes the record by create-once, then publishes the first request; a refused create or a
-  failed publish releases the loop and is retried
+  failed publish releases the loop and is retried, and the redelivery finds the record and republishes the request
+  it names rather than birthing a second loop
 - **WHEN** it returns only the loop identifier of an active loop
 - **THEN** the task is acknowledged as a duplicate
 - **WHEN** it returns a deferred continuation
-- **THEN** the pending-continuation marker is written; a lost compare-and-swap is retried, any other write failure is
-  best-effort and the task is acknowledged
+- **THEN** the pending-continuation marker and the turn's text are written together by one compare-and-swap onto the
+  record the lane read; a lost compare-and-swap is retried, any other write failure is logged as best-effort and
+  the task is acknowledged with the turn held in process memory only
 - **WHEN** it returns an error
-- **THEN** the failure is logged and the delivery acknowledged, the exemption tracked as issue #1345; when that issue
-  converts the lane, the error rows take the class-derived disposition and no other row here moves
+- **THEN** the delivery takes the disposition the lane's policy derives from the error's class: a refusal naming
+  invalid input — an over-depth task, a continuation of a settled loop — is terminated, a fatal-class error is
+  quarantined, and every other error — a cancelled delivery context at shutdown or stop among them — is retried,
+  except a continuation refused because its loop has work in flight, which stays acknowledged as a defined
+  refusal: a Retry parks the whole task lane, which runs at MaxAckPending 1, for the redelivery budget on a turn no
+  redelivery can fix, and the turn must be re-sent. No production path fails after a birth registered its loop; one
+  that did would be retried into the duplicate acknowledgement of the loop it left registered. The exemption this
+  heading names ended with #1345
+- **AND** the birth-failure and transient-lineage paths of the same lane settle on their durable effect: a failed
+  graph birth establishes the loop's terminal before the delivery is acknowledged, and a transient lineage write
+  remembers the spawn result so its redelivery resumes it rather than deduplicating it
 
 #### Scenario: The deferred continuation's replacement behaviour is owed to #1365
 
-- **GIVEN** a deferred continuation whose marker reached the record
-- **WHEN** a replacement process rebuilds the loop
-- **THEN** today the turn's text and the task prompt are not recoverable: the marker is cleared with a warning
-- **AND** issue #1365, with #1345, owns making the rebuilt loop recover them from durable accepted-input facts; that
-  changes this row's replacement behaviour and nothing else in this requirement
+- **GIVEN** a deferred continuation whose marker and text reached the record, and whose carrier is still empty
+- **WHEN** a replacement process rebuilds the loop from that record and the request the record names
+- **THEN** the retained conversation is replayed and the turn's text is appended after it as the user's turn, the
+  marker is kept, and the next completion carries the turn into the loop's next request exactly once; the request
+  that carries it is named as its carrier, and the marker, its carrier and its text clear when that request settles.
+  Carried means placed in the conversation as the user's turn: from then on it is an ordinary message, and
+  compaction may summarize it like any user turn; only an emptied context re-injects it (owner 2026-09-26, (a))
+- **AND** a record whose marker names a carrier is left as it is, because the retained request carries the turn; a
+  record whose marker is uncarried but carries no text is cleared with a warning, as before this change
+- **AND** a rebuild that finds a request newer than the one the record names adopts it and leaves the marker as it
+  found it, then replays the text after that request's conversation: once when the request was minted before the
+  turn (a turn deferred behind a request tracked but not yet on the record), twice when the request already carries
+  it (a carrier whose record write was lost) — the record cannot tell the two apart, the replay is logged naming the
+  loop and the request, and the turn is never lost
 
 #### Scenario: A durable terminal with a non-terminal record is owed to #1377
 
@@ -243,6 +277,83 @@ every lane that produces it.
   terminal adopts the marker and converges the record, and a sweeper terminal is adopted on the next answer to its
   gate; a cancel of that gated loop is retried to exhaustion; neither adds a row nor changes a row's disposition
   here — the carrier's refusal widens the terminal-guard row's condition
+
+#### Scenario: A rebuilt loop's terminal event carries the prompt its record accepted
+
+- **GIVEN** a loop whose record carries `task_prompt` from its birth write
+- **WHEN** a replacement process rebuilds the loop from the record and a retained request, and the loop later
+  completes or fails, or its context is emptied by repair
+- **THEN** `LoopCompletedEvent.Prompt` and `LoopFailedEvent.Prompt` carry the record's prompt, and the empty-context
+  recovery re-injects it rather than its placeholder
+- **AND** the prompt is the one that bore the loop: birth renders it and no later write rewrites it — a
+  continuation's turn is the record's pending text or its retained request, never its prompt — and a record with no
+  prompt leaves the readers reading empty, as before this change
+
+#### Scenario: A deferred turn survives its carrier's truncation retry
+
+- **GIVEN** a deferred turn carried by the loop's outstanding request, its marker naming that request
+- **WHEN** that request's answer is `length_truncated` and the loop compacts and retries
+- **THEN** the answer settles only the outstanding request: the marker, its carrier and its text are kept, because a
+  truncated answer did not answer the turn
+- **AND** when compaction empties the context, the recovery re-injects the birth prompt and then the turn; the retry
+  is named the turn's carrier, and the retry's answer settles the deferral
+- **AND** a rebuild inside the truncation window still reads a carried marker and replays nothing, because the
+  retained request holds the turn
+
+#### Scenario: A malformed task is terminated, never acknowledged as done
+
+- **WHEN** the task lane receives bytes that do not decode, or that decode to a payload type the lane does not handle
+- **THEN** the delivery is terminated with a non-nil cause and is neither acknowledged nor retried, exactly as the
+  response and tool-result lanes terminate theirs
+- **AND** no record makes such a delivery resumable: the bytes will never decode
+
+#### Scenario: A task that fails before anything is registered is redelivered into a fresh birth
+
+- **WHEN** a task's handler refuses before it registered a loop — the delivery context was cancelled, or a create
+  failed — and the delivery is retried
+- **THEN** the redelivery is a birth: it finds no record and no loop in memory, is not deduplicated, and creates the
+  loop
+- **AND** a task that fails after its record exists is redelivered into the cold fork, which republishes the request
+  the record names and writes nothing; the record written before the first publication is the resumable fact, and
+  no second one is kept
+
+#### Scenario: A loop record the payload ceiling refuses is not retried
+
+- **WHEN** the NATS client refuses a record write because the whole rendered record — every field summed, the prompt
+  and a deferred turn's text included — exceeds the server's payload ceiling
+- **THEN** at birth the refusal is permanent: the loop is released and the task is terminated with the loop id and
+  the record's size in the cause, never retried into the same refusal on a lane that runs at MaxAckPending 1; the
+  loop-execution entity born before the write is stamped failed with the ceiling as its terminal reason, and the
+  refusal is counted as a task intake rejection
+- **AND** at the deferred turn's marker write the refusal is logged with the size, the text is dropped from the
+  in-memory entity so later record writes fit, and the delivery is acknowledged as any other best-effort marker
+  write failure: the turn is in the loop's context and is carried by the next request, and it is not durable. A
+  deferred turn whose text the record refused for size is not recovered when a later compaction empties the
+  context
+- **AND** at a carrier write the refusal quarantines the delivery as any other carrier write failure does; the
+  record's text fields count toward it, so a turn that fit its own message fits the record unless the record's
+  other fields have filled it
+
+#### Scenario: A tool result is cancelled after the loop has advanced
+
+- **WHEN** delivery work for a tool result is cancelled after the handler has stored the result, advanced the
+  iteration, or drained accumulated results
+- **THEN** the delivery quarantines, because a replay meets a loop that has already moved
+- **AND** only a cancellation the handler observed before it touched anything is retried, so a clean stop that
+  mutated nothing does not latch delivery ownership lost
+
+#### Scenario: A terminal failure's record is written before its event is published
+
+- **WHEN** a terminal handler result carries a failure state
+- **THEN** `COMPLETE_<loopID>` is written before the graph stamp and before any failure event is published
+- **AND** a record write that fails quarantines the delivery with nothing published, so no watcher reads a failure
+  event with no terminal record behind it
+
+#### Scenario: A loop-execution birth failure is not exempt
+
+- **WHEN** a task's graph birth or lineage write fails
+- **THEN** the loop's terminal business failure is established before the delivery is acknowledged
+- **AND** a failure that could not be recorded quarantines instead
 
 ### Requirement: The loop record names its outstanding request
 
@@ -322,12 +433,13 @@ redelivered input as applied or inapplicable, that classification SHALL take pre
 "A loop absent from process memory is settled from its record". Recovery SHALL never compare rendered messages, result
 content, or terminal content to decide whether an input was applied.
 
-A deferred continuation is durable as a MARKER only. Where the record carries `pending_continuation` with an empty
-`pending_continuation_request_id`, the admitted turn's text was never inside a retained request and is not
-recoverable: a rebuild SHALL clear the marker and warn, and SHALL NOT synthesise the turn. Neither the turn nor the
-loop's task prompt is carried by the record, so a loop rebuilt FROM that record and its retained request — the
-model-response and tool-result cold arms — publishes its terminal event with an empty `prompt`; a loop rebuilt from a
-redelivered task runs the ordinary birth path and keeps the prompt that task carries.
+A deferred continuation is durable as its marker AND its text. Where the record carries `pending_continuation` with an
+empty `pending_continuation_request_id`, a rebuild SHALL replay the `pending_continuation_prompt` the record carries
+after the retained conversation as the user's turn and SHALL keep the marker; it SHALL clear the marker and warn only
+when the record carries no text (a record written before this tag). The record carries the loop's `task_prompt` from
+its birth write, so a loop rebuilt FROM that record and its retained request — the model-response and tool-result cold
+arms — publishes its terminal event with that `prompt`; a loop rebuilt from a redelivered task runs the ordinary birth
+path and keeps the prompt that task carries.
 A continuation reaches only a loop some process holds: a task whose `task_id` differs from the one the live record
 carries SHALL be refused — acknowledged without effect, with a warning naming both tasks and a counted intake
 rejection — and SHALL NOT be acknowledged as an applied task nor used to rebuild the loop's first request, because
@@ -493,12 +605,13 @@ deadline from then on.
 #### Scenario: A rebuilt loop clears a deferred turn whose text it cannot recover
 
 - **GIVEN** a loop record with `pending_continuation = true` and an empty `pending_continuation_request_id` — a
-  continuation admitted while the loop's request was outstanding, whose text lived only in the replaced process
+  continuation admitted while the loop's request was outstanding
 - **WHEN** a replacement rebuilds the loop from that record and its retained request
-- **THEN** the rebuilt loop's marker is cleared and a warning names the loop, the next completion settles the loop
-  instead of spending an iteration re-asking the model with a context that gained nothing, and the completion event
-  it publishes carries an empty `prompt`, because a rebuilt loop recovers neither the deferred turn's text nor its
-  task prompt — both must be re-sent by the caller
+- **THEN** a record that carries the turn's `pending_continuation_prompt` has it replayed after the retained
+  conversation and keeps its marker, and the next completion carries the turn rather than settling
+- **AND** only a record that carries no text — one written before this tag — has its marker cleared with a warning
+  naming the loop; the next completion then settles the loop instead of spending an iteration re-asking the model
+  with a context that gained nothing, and that turn must be re-sent by the caller
 
 #### Scenario: A cold replacement adopts past a rejection-minted request and acknowledges the stale approval response
 

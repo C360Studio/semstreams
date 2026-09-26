@@ -12,18 +12,25 @@ takes (i); **[OQ7 (b)]** likewise. Under an option not taken nothing replaces it
 
 ## 0. Gates before any code (design phase closes here)
 
-- [ ] 0.1 Independent design review of `design.md` and the delta (contract § Required workflow 7) — round 1 PASS WITH
+- [x] 0.1 Independent design review of `design.md` and the delta (contract § Required workflow 7) — round 1 PASS WITH
       AMENDMENTS at `40bb373f`, amendments applied in this revision; round 2 on this revision; then owner acceptance
       of the docket and answers to OQ1–OQ7 on #1377. Implementation waits for both, and for PR #1387 to merge (ruling
       5). The (a) rows on W1 and W2 and the W3 publication sub-window are posted on #1146 as the § 8 table with the
       amendment flags before the epic closes; OQ6's ruling-2 cost and OQ7's ruling-1 composition are called out on
-      #1377 in the same posting.
-- [ ] 0.2 After PR #1387 merges: rebase; re-read `openspec/specs/agentic-loop/spec.md` § "Loop input classes settle
+      #1377 in the same posting. DONE 2026-09-26: round 2 PASS WITH AMENDMENTS at `8817d6d4`, the stamp-ordering HIGH
+      corrected at `2a5762bb`; owner acceptance on #1377 (OQ1–OQ7 as recommended, two epic amendments accepted); PR
+      #1387 merged as `8d53c084`. The § 8 posting on #1146 is carried by 6.4.
+- [x] 0.2 After PR #1387 merges: rebase; re-read `openspec/specs/agentic-loop/spec.md` § "Loop input classes settle
       after owner-specific durable done" — #1387 at `d2b6a20e` MODIFIES that requirement and REMOVES "Task intake is
       the one loop input class this layer does not convert" (design P10) — and re-base the delta's block 1 (its
       restated text and 22 scenarios) on the synced spec; block 2 is re-checked the same way. Pins are pre-change
       evidence and are NOT re-pinned; `task inventory:verify` red on moved lines after the rebase is the correct
-      reading (record the line).
+      reading (record the line). DONE 2026-09-26 on main `8d53c084`: both blocks re-based by a three-way merge
+      (`git merge-file` of the synced block, the `9e5d8455` block and the delta block), no conflict; block 1 now
+      restates 30 scenarios (main's eight new ones included) and differs from main by exactly the five edits design
+      § 2 names; block 2 restates main's 22 (the #1387 durable-text wording included) and adds six. `openspec validate
+      --strict` valid. Recorded: `pins=121 ok=80 moved=38 ambiguous=3 drift=0 malformed=0 unparsed=0` (exit 1, moved
+      lines only; the spec pins S:1618/1621 moved to 1688/1691, the migration pins 2015/2023 to 2023/2031).
 
 ## 1. The carrier reads the loop it publishes for (design § 3.1; W3 and W4; OQ3 (i) and (ii))
 
