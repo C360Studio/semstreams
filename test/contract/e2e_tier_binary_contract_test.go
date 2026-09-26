@@ -2,10 +2,14 @@ package contract
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -20,10 +24,11 @@ import (
 // The owner ruling on #1249 (2026-09-22, amending Q5) put the fact in one
 // table, in the payload-registry capability spec, and required it to be READ
 // from the artifacts that boot each tier rather than predicted: `build.target`
-// in the tier's compose service, and the Go package plus `-tags=` of that
-// target in docker/Dockerfile. The spec table is the source of truth here — the
-// test parses it and drives every assertion from its rows, so there is no
-// second copy of the table to drift.
+// in the tier's compose service, the Go package of that target in
+// docker/Dockerfile, and the SEMSTREAMS_E2E_* variables the service sets
+// (#1301 replaced the build tags with those boot options). The spec table is
+// the source of truth here — the test parses it and drives every assertion
+// from its rows, so there is no second copy of the table to drift.
 
 const tierRepoRoot = "../.."
 
@@ -47,7 +52,6 @@ type tierRow struct {
 	service     string
 	target      string
 	binary      string
-	tags        []string
 	envGates    []string
 }
 
@@ -155,11 +159,11 @@ func parseTierRows(t *testing.T, path, body string) []tierRow {
 			binary:      target[1],
 		}
 		// A gate token this test cannot classify is a defect in the row, not a
-		// gate to ignore: an unread gate is the fail-open shape.
+		// gate to ignore: an unread gate is the fail-open shape. A gate is an
+		// environment variable and nothing else — a `-tags=` token is refused
+		// here, because no build tag may gate an E2E-only registration or hook.
 		for _, gate := range codeSpans(cells[3]) {
 			switch {
-			case strings.HasPrefix(gate, "-tags="):
-				row.tags = append(row.tags, strings.Split(strings.TrimPrefix(gate, "-tags="), ",")...)
 			case strings.HasPrefix(gate, "SEMSTREAMS_E2E_"):
 				// A gate reads `NAME=<value>`; the set compared with compose is
 				// the names, and the value rule is checked on the compose side.
@@ -559,8 +563,8 @@ func TestE2ETierTableMatchesComposeAndDockerfile(t *testing.T) {
 		if build.pkg != row.binary {
 			t.Errorf("%s: Dockerfile target %q builds %q, spec table says %q", row, row.target, build.pkg, row.binary)
 		}
-		if got, want := strings.Join(sorted(build.tags), ","), strings.Join(sorted(row.tags), ","); got != want {
-			t.Errorf("%s: Dockerfile target %q builds with tags [%s], spec table says [%s]", row, row.target, got, want)
+		if len(build.tags) != 0 {
+			t.Errorf("%s: Dockerfile target %q builds with tags %v; no build tag may gate a tier", row, row.target, build.tags)
 		}
 
 		// Both directions of the env gate. The milestone probe crashes and
@@ -605,6 +609,112 @@ func TestE2ETierTableMatchesComposeAndDockerfile(t *testing.T) {
 	}
 
 	assertNoComposeFileArmsAnUndeclaredHook(t, rows)
+	assertTwoRunnableTargetsAndNoTags(t, dockerfile)
+}
+
+// assertTwoRunnableTargetsAndNoTags pins the Dockerfile's whole binary
+// vocabulary: exactly the production and e2e targets install a binary, and no
+// build anywhere in the file carries `-tags=`, so there is no third binary
+// shape for a tier to boot. The raw-text sweep also covers a tagged build no
+// target installs.
+func assertTwoRunnableTargetsAndNoTags(t *testing.T, dockerfile dockerfileTargets) {
+	t.Helper()
+
+	runnable := map[string]bool{}
+	for stage := range dockerfile.installs {
+		runnable[stage] = true
+	}
+	if got := strings.Join(sortedKeys(runnable), ","); got != "e2e,production" {
+		t.Errorf("docker/Dockerfile runnable targets = [%s], want exactly [e2e,production]", got)
+	}
+	body, err := os.ReadFile(filepath.Join(tierRepoRoot, "docker/Dockerfile"))
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+	if n := strings.Count(string(body), "-tags="); n != 0 {
+		t.Errorf("docker/Dockerfile carries %d `-tags=` builds; no build tag may gate an E2E-only hook", n)
+	}
+}
+
+// TestE2EBootVariableSetMatchesTierTable is invariant I6: the variables the
+// E2E binary's options constructor reads are exactly the union of the tier
+// table's Gate column. A variable the table declares but the binary does not
+// read would leave its tier silently unarmed; one the binary reads but no row
+// declares would be an option no tier can enable.
+//
+// The names are read from internal/e2eboot's option table in source, not by
+// importing the package: importing it would link the example and mission
+// packages into this test binary, and their vocabulary init() functions
+// (design OQ2, recorded as a residual) would register predicates the
+// framework-predicate ratchet in this same package then sees.
+func TestE2EBootVariableSetMatchesTierTable(t *testing.T) {
+	specPath, rows := tierTable(t)
+
+	declared := map[string]bool{}
+	for _, row := range rows {
+		for _, gate := range row.envGates {
+			declared[gate] = true
+		}
+	}
+	read := e2eBootOptionNames(t)
+	if got, want := strings.Join(sortedKeys(read), ","), strings.Join(sortedKeys(declared), ","); got != want {
+		t.Errorf("e2eboot.FromEnv reads [%s]; the Gate column of %s declares [%s]", got, specPath, want)
+	}
+}
+
+// e2eBootOptionNames returns the `name:` of every entry in internal/e2eboot's
+// `options` table — the one table FromEnv iterates. Any entry whose name is not
+// a string literal fails the test rather than being skipped.
+func e2eBootOptionNames(t *testing.T) map[string]bool {
+	t.Helper()
+
+	path := filepath.Join(tierRepoRoot, "internal/e2eboot/fromenv.go")
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	var table *ast.CompositeLit
+	ast.Inspect(file, func(node ast.Node) bool {
+		spec, ok := node.(*ast.ValueSpec)
+		if !ok || len(spec.Names) != 1 || spec.Names[0].Name != "options" || len(spec.Values) != 1 {
+			return true
+		}
+		table, _ = spec.Values[0].(*ast.CompositeLit)
+		return false
+	})
+	if table == nil || len(table.Elts) == 0 {
+		t.Fatalf("%s: no non-empty `options` table", path)
+	}
+	names := map[string]bool{}
+	for _, element := range table.Elts {
+		entry, ok := element.(*ast.CompositeLit)
+		if !ok {
+			t.Fatalf("%s: options entry is not a composite literal", path)
+		}
+		name := ""
+		for _, field := range entry.Elts {
+			pair, pairOK := field.(*ast.KeyValueExpr)
+			if !pairOK {
+				t.Fatalf("%s: options entries must use keyed fields", path)
+			}
+			if key, keyOK := pair.Key.(*ast.Ident); !keyOK || key.Name != "name" {
+				continue
+			}
+			literal, literalOK := pair.Value.(*ast.BasicLit)
+			if !literalOK || literal.Kind != token.STRING {
+				t.Fatalf("%s: an options entry's name is not a string literal", path)
+			}
+			name, err = strconv.Unquote(literal.Value)
+			if err != nil {
+				t.Fatalf("%s: unquote %s: %v", path, literal.Value, err)
+			}
+		}
+		if name == "" {
+			t.Fatalf("%s: an options entry has no name", path)
+		}
+		names[name] = true
+	}
+	return names
 }
 
 func sorted(values []string) []string {

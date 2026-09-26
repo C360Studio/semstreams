@@ -51,7 +51,7 @@ to a doc sentence or "not supported" before it gets code.
       names in `design.md` § 2.2; a nonempty value enables; unknown `SEMSTREAMS_E2E_*` names are ignored (D4).
 - [x] 2.2 One file per option holding the moved body (`design.md` § 7 row 2). `milestoneprobe.Register` no longer reads
       the env (D5, `milestoneprobe.go:199`).
-- [ ] 2.3 Tests I1, I2, I6 (`design.md` § 6) plus the three untagged config-patch tests from
+- [x] 2.3 Tests I1, I2, I6 (`design.md` § 6) plus the three untagged config-patch tests from
       `process_barrier_e2e_test.go`. Mutation evidence per site: for I1, add one extension to `Production()` and watch
       the parity test fail; for I2, set `SEMSTREAMS_E2E_EXAMPLES=` (empty) in a row and watch it enable nothing.
       I1 and I2 landed with section 2 (`internal/e2eboot/fromenv_test.go`); I6 reads the tier table through
@@ -93,13 +93,13 @@ to a doc sentence or "not supported" before it gets code.
 
 ## 5. Spec deltas and contract tests
 
-- [ ] 5.1 `specs/payload-registry/spec.md` MODIFIED block: rule paragraph, rows, the three named clause edits per
+- [x] 5.1 `specs/payload-registry/spec.md` MODIFIED block: rule paragraph, rows, the three named clause edits per
       `design.md` § 7 row 9; every other scenario byte-identical to `openspec/specs/payload-registry/spec.md:10-103` at
       the rebase base (`openspec validate one-composition-root --strict` valid).
-- [ ] 5.2 `specs/framework-composition/spec.md` ADDED requirement with scenarios I1, I2, I4, I6.
-- [ ] 5.3 `specs/application-logging/spec.md` MODIFIED: the E2E scenario says the E2E binary composes the production
+- [x] 5.2 `specs/framework-composition/spec.md` ADDED requirement with scenarios I1, I2, I4, I6.
+- [x] 5.3 `specs/application-logging/spec.md` MODIFIED: the E2E scenario says the E2E binary composes the production
       Phase-A (I8); the requirement text and scenario 1 byte-identical to `openspec/specs/application-logging/spec.md:6-21`.
-- [ ] 5.4 `test/contract/e2e_tier_binary_contract_test.go`: Dockerfile reader → two runnable targets, zero `-tags=`; Gate
+- [x] 5.4 `test/contract/e2e_tier_binary_contract_test.go`: Dockerfile reader → two runnable targets, zero `-tags=`; Gate
       column → env set; `TestProductionRootReachesNoE2EHarnessWithoutABuildTag` → `TestProductionRootClosureHoldsNoE2EHarness`
       (D11, precedent `test/contract/core_composition_deps_test.go:43`), absorbing `TestProductionBinaryExcludesExamplePackages`
       (`:30-34`). `tierTable` precedence flipped per `design.md` § 7 row 13: exactly one in-flight delta carrying the
@@ -107,6 +107,25 @@ to a doc sentence or "not supported" before it gets code.
       `main` behaves as today. Mutation evidence: add a harness import to `cmd/semstreams/main.go`, watch it fail,
       revert (`cp` backup + checksum, never stash); for the precedence flip, point the delta's agentic row back at
       `e2e-process-barrier` and watch the table test fail.
+      Verified at this commit: `openspec validate one-composition-root --strict` valid; `diff` of live
+      `payload-registry/spec.md:10-103` against the delta differs only in the regions `design.md` § 7 row 9 names;
+      `application-logging` `:6-21` byte-identical to the delta. I6 (`TestE2EBootVariableSetMatchesTierTable`) reads
+      `internal/e2eboot/fromenv.go`'s `options` table from source through the same `tierTable` helper: importing
+      `e2eboot` links the example and mission packages, whose vocabulary `init()`s (OQ2, residual) then trip
+      `TestFrameworkPredicateDataTypesAreCanonicalAndRatcheted` in this same test binary — measured, 8 `mission.*`
+      predicates. Mutation evidence (`cp` backup, `shasum` equal before and after every restore):
+      | Invariant | Mutation | Failing line |
+      |---|---|---|
+      | I4 | `cmd/semstreams/main.go` blank-imports `test/e2e/harness/processbarrier` | `core_composition_deps_test.go:52` "production binary links …/processbarrier" |
+      | I4 converse | the milestone-probe option stops referencing `milestoneprobe` | `core_composition_deps_test.go:70` "E2E binary does not link …/milestoneprobe" |
+      | precedence | the delta's agentic row back at `e2e-process-barrier` → `cmd/semstreams` | `e2e_tier_binary_contract_test.go:558` "compose target = \"e2e\", spec table says \"e2e-process-barrier\"" |
+      | precedence | no delta consulted (the live spec governs) | `e2e_tier_binary_contract_test.go:539` "unclassified gate token \"-tags=e2e_process_barrier\"" |
+      | I5 | a `-tags=e2e_x` e2e build | `e2e_tier_binary_contract_test.go:567` "Dockerfile target \"e2e\" builds with tags [e2e_x]" |
+      | I5 | a third runnable target `e2e-third` | `e2e_tier_binary_contract_test.go:612` "runnable targets = [e2e,e2e-third,production]" |
+      | I5 | a `-tags=` token in a Gate cell | `e2e_tier_binary_contract_test.go:539` "unclassified gate token" |
+      | I6 | an eighth option `SEMSTREAMS_E2E_EXTRA` | `e2e_tier_binary_contract_test.go:661` "e2eboot.FromEnv reads […EXTRA…]" |
+      | I8 | `Run` calls `phaseLogging.Steady(nil)` | `internal/maxdelivery/boot_order_test.go:107` FAIL |
+      | I8 | `NewProductionPhaseA` passes a nil counter | `internal/bootstrapobservability/bootstrap_test.go:93` "Not equal" FAIL |
 
 ## 6. Docs
 

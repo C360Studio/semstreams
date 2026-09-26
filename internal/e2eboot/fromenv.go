@@ -23,14 +23,18 @@ type option struct {
 	enable func(opts *boot.Options, value string)
 }
 
-// options is the one table of E2E boot options, in design § 2.2 order.
+// options is the one table of E2E boot options, in design § 2.2 order. Every
+// name is a string literal on purpose: test/contract reads this table from
+// source (TestE2EBootVariableSetMatchesTierTable) because linking this package
+// into the contract test binary would run the example and mission packages'
+// vocabulary init() functions there.
 var options = []option{
 	{name: "SEMSTREAMS_E2E_EXAMPLES", enable: enableExamples},
 	{name: "SEMSTREAMS_E2E_MISSION", enable: enableMission},
 	{name: "SEMSTREAMS_E2E_LIFECYCLE_SEED", enable: enableLifecycleSeed},
 	{name: "SEMSTREAMS_E2E_LESSON_CURATION", enable: enableLessonCuration},
 	{name: "SEMSTREAMS_E2E_PROCESS_BARRIER", enable: enableProcessBarrier},
-	{name: milestoneProbeVariable, enable: enableMilestoneProbe},
+	{name: "SEMSTREAMS_E2E_MILESTONE_PROBE", enable: enableMilestoneProbe},
 	{name: "SEMSTREAMS_E2E_SLOW_CONSUMER", enable: enableSlowConsumer},
 }
 

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/internal/boot"
+	"github.com/c360studio/semstreams/test/e2e/harness/milestoneprobe"
 )
 
 var (
@@ -132,5 +133,14 @@ func TestE2EBootOptionAppendsExactlyItsExtensions(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestMilestoneProbeOptionUsesTheProbesOwnVariable keeps the table's literal
+// and the harness's EnvVar one spelling.
+func TestMilestoneProbeOptionUsesTheProbesOwnVariable(t *testing.T) {
+	opts := FromEnv(testCLI, testBuild, env(map[string]string{milestoneprobe.EnvVar: "1"}))
+	if len(opts.MilestoneHooks) != 1 {
+		t.Fatalf("%s=1 enabled %d milestone hooks, want 1", milestoneprobe.EnvVar, len(opts.MilestoneHooks))
 	}
 }
