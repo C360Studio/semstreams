@@ -603,7 +603,7 @@ func TestACancelAfterTheCheckBeforeItsMarkerLeavesTheRecordToItsOwner(t *testing
 	t.Logf("T7 at approval return: %s; record %s rev %d; writes %+v",
 		dispositionOf(approvalMsg), afterApproval.entity.State, afterApproval.revision, bucket.recorded())
 	assert.Equal(t, int32(1), approvalMsg.naks.Load(), "the live record retries the approval")
-	require.Zero(t, approvalMsg.acks.Load()+approvalMsg.terms.Load())
+	assert.Zero(t, approvalMsg.acks.Load()+approvalMsg.terms.Load())
 	assert.Empty(t, bucket.recorded(), "no carrier write: no cancelled record precedes its marker")
 	require.Equal(t, gatedRecord.revision, afterApproval.revision)
 	require.Equal(t, agentic.LoopStateAwaitingApproval, afterApproval.entity.State, "the record stays live")
