@@ -179,37 +179,39 @@ docker logs -f semstreams-e2e-app
 
 ## Every tier and the binary it boots
 
-All compose files are in `docker/compose/`. A tier boots the binary whose composition it proves: a tier proving the
-production composition boots `cmd/semstreams`, and a tier that needs non-production registrations — examples,
-fixtures, the mission workflow, a control responder — boots `cmd/e2e-semstreams`. An E2E-only hook that must run
-*inside* the production composition lands in the binary its tier boots, behind that tier's build tag and, where it
-must stay inert in the tier's other stages, an environment variable only that tier sets.
+All compose files are in `docker/compose/`. Both framework binaries boot through one composition function,
+`internal/boot`; they differ only by the options `cmd/e2e-semstreams` enables from `SEMSTREAMS_E2E_*` environment
+variables (`internal/e2eboot`). A tier proving the shipped binary boots `cmd/semstreams` through the `production`
+target, which can enable no option. Every E2E-only registration or hook — examples and fixtures, the mission workflow,
+the lifecycle seed, a control responder, a probe, a barrier — is an option its tier's compose service enables on the
+`e2e` target by setting exactly that option's variable to a nonempty value; with none set, the E2E binary's boot
+options are the production options. No build tag gates an E2E-only hook, and `docker/Dockerfile` has exactly two
+runnable targets.
 
-**The source of truth is the tier table in `openspec/specs/payload-registry/spec.md`** — until this change archives,
-the table lives in `openspec/changes/agentrun-fanout-settlement/specs/payload-registry/spec.md`, and
-`test/contract/e2e_tier_binary_contract_test.go` reads the live spec when it carries the table, otherwise exactly one
-in-flight delta. That table
-additionally carries each tier's gate, its E2E-only hooks, and the synthetic types it stamps, and the test re-reads it
-against these compose files and `docker/Dockerfile` on every run. The list below is the navigation copy — when the two
-disagree, the spec is right.
+**The source of truth is the tier table in `openspec/specs/payload-registry/spec.md`**, and
+`test/contract/e2e_tier_binary_contract_test.go` re-reads it against these compose files and `docker/Dockerfile` on
+every run. While an in-flight change carries a restated copy of the table in its delta, exactly one such delta governs
+instead (it describes the artifacts that change is editing); two are refused as ambiguous. That table additionally
+carries each tier's E2E-only hooks and the synthetic types it stamps. The list below is the navigation copy — when the
+two disagree, the spec is right.
 
 Twelve compose services, thirteen `e2e:<tier>` tasks. The units differ on purpose: `core` runs in two phases
 against two services (rows 1 and 2), and rows 2 and 4 each serve two tasks off one service.
 
-| Tier (`task e2e:<tier>`) | Compose file : service | Dockerfile target | Binary |
-|---|---|---|---|
-| `core` phase 1 | `e2e.yml` : `semstreams` | `production` | `cmd/semstreams` |
-| `core` phase 2, `lessons` | `e2e.yml` : `semstreams-fixtures` (profile `fixtures`) | `e2e` | `cmd/e2e-semstreams` |
-| `structural` | `tiered.yml` : `semstreams-structural` (profile `structural`) | `e2e` | `cmd/e2e-semstreams` |
-| `statistical`, `throughput` | `tiered.yml` : `semstreams` (profile `statistical`) | `e2e` | `cmd/e2e-semstreams` |
-| `semantic` (`:8b`, `:frontier` overlays) | `tiered.yml` : `semstreams-ml` (profile `semantic`) | `e2e` | `cmd/e2e-semstreams` |
-| `lifecycle` | `lifecycle.yml` : `semstreams` | `e2e` | `cmd/e2e-semstreams` |
-| `ops` | `ops.yml` : `semstreams` | `e2e` | `cmd/e2e-semstreams` |
-| `research-graph` | `research-graph.yml` : `semstreams` | `e2e` | `cmd/e2e-semstreams` |
-| `crud-tools` | `crud-tools.yml` : `semstreams` | `production` | `cmd/semstreams` |
-| `deep-research` | `deep-research.yml` : `semstreams` | `production` | `cmd/semstreams` |
-| `agentic` | `agentic.yml` : `semstreams` | `e2e-process-barrier` | `cmd/semstreams` (tagged) |
-| `slow-consumer` | `e2e-slow-consumer.yml` : `semstreams` | `e2e-slow-consumer` | `cmd/semstreams` (tagged) |
+| Tier (`task e2e:<tier>`) | Compose file : service | Dockerfile target | Binary | Gate (`SEMSTREAMS_E2E_*`) |
+|---|---|---|---|---|
+| `core` phase 1 | `e2e.yml` : `semstreams` | `production` | `cmd/semstreams` | none |
+| `core` phase 2, `lessons` | `e2e.yml` : `semstreams-fixtures` (profile `fixtures`) | `e2e` | `cmd/e2e-semstreams` | `EXAMPLES` |
+| `structural` | `tiered.yml` : `semstreams-structural` (profile `structural`) | `e2e` | `cmd/e2e-semstreams` | `EXAMPLES` |
+| `statistical`, `throughput` | `tiered.yml` : `semstreams` (profile `statistical`) | `e2e` | `cmd/e2e-semstreams` | `EXAMPLES` |
+| `semantic` (`:8b`, `:frontier` overlays) | `tiered.yml` : `semstreams-ml` (profile `semantic`) | `e2e` | `cmd/e2e-semstreams` | `EXAMPLES` |
+| `lifecycle` | `lifecycle.yml` : `semstreams` | `e2e` | `cmd/e2e-semstreams` | `MISSION`, `LIFECYCLE_SEED` |
+| `ops` | `ops.yml` : `semstreams` | `e2e` | `cmd/e2e-semstreams` | `LESSON_CURATION` |
+| `research-graph` | `research-graph.yml` : `semstreams` | `e2e` | `cmd/e2e-semstreams` | `EXAMPLES` |
+| `crud-tools` | `crud-tools.yml` : `semstreams` | `production` | `cmd/semstreams` | none |
+| `deep-research` | `deep-research.yml` : `semstreams` | `production` | `cmd/semstreams` | none |
+| `agentic` | `agentic.yml` : `semstreams` | `e2e` | `cmd/e2e-semstreams` | `PROCESS_BARRIER`, `MILESTONE_PROBE` |
+| `slow-consumer` | `e2e-slow-consumer.yml` : `semstreams` | `e2e` | `cmd/e2e-semstreams` | `SLOW_CONSUMER` |
 
 `task e2e:openai-responses` is the fourteenth task and is not in this table: it is a live wire test against the paid
 API with no container of its own. Each tier file above defines its own `nats:`; `services.yml` carries the shared

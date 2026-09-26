@@ -51,9 +51,9 @@ import (
 )
 
 // MissionSuffix is the last four canonical positions the e2e binary seeds via
-// `--lifecycle-seed`. Matches docker/compose/lifecycle.yml. The binary composes
-// the authority itself from its own platform.org / platform.id, so the flag
-// carries no pair to get wrong — since ADR-104 that pair includes an entropy
+// SEMSTREAMS_E2E_LIFECYCLE_SEED. Matches docker/compose/lifecycle.yml. The binary
+// composes the authority itself from its own platform.org / platform.id, so the
+// variable carries no pair to get wrong — since ADR-104 that pair includes an entropy
 // suffix minted at first boot and is not knowable from the shipped config.
 const MissionSuffix = "gcs.lifecycle.mission.m001"
 
@@ -141,7 +141,7 @@ func (s *Scenario) Description() string { return s.description }
 
 // Setup reads the authority the running deployment mints under and composes
 // the seeded mission's identifier under it. The e2e binary seeds the mission
-// via its --lifecycle-seed flag at container start, composing the same pair
+// via SEMSTREAMS_E2E_LIFECYCLE_SEED at container start, composing the same pair
 // from its own configuration; this is the observation of that value rather than
 // a second prediction of it (ADR-104).
 func (s *Scenario) Setup(ctx context.Context) error {

@@ -28,8 +28,8 @@ import (
 // duplicate-key rejection is the collision detector for every framework
 // type (ADR-103).
 //
-// Called from cmd/semstreams/main.go and cmd/e2e-semstreams/main.go
-// after the registry is constructed but before component lifecycle
+// Called from the framework boot (internal/boot, shared by cmd/semstreams and
+// cmd/e2e-semstreams) after the registry is constructed but before component lifecycle
 // begins. Downstream binaries (semspec, semdragon) may call this and
 // then layer their own custom payload registrations on top via
 // reg.Register(...).

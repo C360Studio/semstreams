@@ -3,13 +3,13 @@ package contract
 import (
 	"fmt"
 	"go/ast"
-	"go/build/constraint"
 	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -24,10 +24,11 @@ import (
 // The owner ruling on #1249 (2026-09-22, amending Q5) put the fact in one
 // table, in the payload-registry capability spec, and required it to be READ
 // from the artifacts that boot each tier rather than predicted: `build.target`
-// in the tier's compose service, and the Go package plus `-tags=` of that
-// target in docker/Dockerfile. The spec table is the source of truth here — the
-// test parses it and drives every assertion from its rows, so there is no
-// second copy of the table to drift.
+// in the tier's compose service, the Go package of that target in
+// docker/Dockerfile, and the SEMSTREAMS_E2E_* variables the service sets
+// (#1301 replaced the build tags with those boot options). The spec table is
+// the source of truth here — the test parses it and drives every assertion
+// from its rows, so there is no second copy of the table to drift.
 
 const tierRepoRoot = "../.."
 
@@ -51,33 +52,31 @@ type tierRow struct {
 	service     string
 	target      string
 	binary      string
-	tags        []string
 	envGates    []string
 }
 
 func (r tierRow) String() string { return fmt.Sprintf("%s (%s %s)", r.tier, r.composeFile, r.service) }
 
 // tierTable parses the table out of the payload-registry spec, under one rule
-// in two sentences. The live capability spec governs whenever it carries the
-// table, and the change deltas are not consulted at all — specs are current
-// truth, and a later change's restated copy is checked at the moment it
-// matters, its own archive, when it becomes the live spec. Only when the live
-// spec does NOT carry the table is an in-flight delta the source, and then
-// exactly one of them may carry it: several would mean picking by alphabetical
-// change id, which is fail-open.
+// in two sentences. When exactly one in-flight change delta carries the table,
+// that delta governs; with none, the live capability spec governs. Two or more
+// carrying deltas are refused: picking one by alphabetical change id would be
+// fail-open.
 //
-// The precedence is what keeps this usable after the archive. openspec 1.7.0
-// requires a MODIFIED block to restate its whole requirement, table included,
-// so the next change touching this requirement necessarily holds a second copy
-// beside the live one — and neither copy may be deleted. Refusing on that pair
-// would leave its author no remedy but to edit this guard.
+// The delta wins because a change that edits the table also edits the
+// artifacts the table is read against — compose files, the Dockerfile — in the
+// same branch, and the live spec keeps describing the old artifacts until the
+// change's archive makes live = delta (#1301 design § 7 row 13). With the live
+// spec governing, that branch would be red from its first compose edit until
+// its last commit. On a branch with no in-flight delta, main included, the
+// live spec governs exactly as before.
+//
+// openspec 1.7.0 requires a MODIFIED block to restate its whole requirement,
+// table included, so any change touching this requirement carries a copy; the
+// ambiguity refusal is what keeps two such changes from being in flight at
+// once without a loud failure.
 func tierTable(t *testing.T) (string, []tierRow) {
 	t.Helper()
-
-	live := filepath.Join(tierRepoRoot, "openspec/specs/payload-registry/spec.md")
-	if body, err := os.ReadFile(live); err == nil && strings.Contains(string(body), tierTableHeader) { //nolint:gosec // repository-relative spec path
-		return live, parseTierRows(t, live, string(body))
-	}
 
 	// A single `*` cannot reach archived changes: those live at
 	// openspec/changes/archive/<date>-<id>/specs/, one level deeper.
@@ -100,13 +99,22 @@ func tierTable(t *testing.T) (string, []tierRow) {
 
 	switch len(carriers) {
 	case 0:
-		t.Fatalf("neither %s nor any in-flight change delta carries the tier table header %q", live, tierTableHeader)
 	case 1:
+		return carriers[0], parseTierRows(t, carriers[0], bodies[carriers[0]])
 	default:
-		t.Fatalf("the live spec does not carry the tier table and %d in-flight deltas do, so which one governs is ambiguous: %s",
+		t.Fatalf("%d in-flight change deltas carry the tier table, so which one governs is ambiguous: %s",
 			len(carriers), strings.Join(carriers, ", "))
 	}
-	return carriers[0], parseTierRows(t, carriers[0], bodies[carriers[0]])
+
+	live := filepath.Join(tierRepoRoot, "openspec/specs/payload-registry/spec.md")
+	body, err := os.ReadFile(live) //nolint:gosec // repository-relative spec path
+	if err != nil {
+		t.Fatalf("read %s: %v", live, err)
+	}
+	if !strings.Contains(string(body), tierTableHeader) {
+		t.Fatalf("neither %s nor any in-flight change delta carries the tier table header %q", live, tierTableHeader)
+	}
+	return live, parseTierRows(t, live, string(body))
 }
 
 func parseTierRows(t *testing.T, path, body string) []tierRow {
@@ -151,13 +159,16 @@ func parseTierRows(t *testing.T, path, body string) []tierRow {
 			binary:      target[1],
 		}
 		// A gate token this test cannot classify is a defect in the row, not a
-		// gate to ignore: an unread gate is the fail-open shape.
+		// gate to ignore: an unread gate is the fail-open shape. A gate is an
+		// environment variable and nothing else — a `-tags=` token is refused
+		// here, because no build tag may gate an E2E-only registration or hook.
 		for _, gate := range codeSpans(cells[3]) {
 			switch {
-			case strings.HasPrefix(gate, "-tags="):
-				row.tags = append(row.tags, strings.Split(strings.TrimPrefix(gate, "-tags="), ",")...)
 			case strings.HasPrefix(gate, "SEMSTREAMS_E2E_"):
-				row.envGates = append(row.envGates, gate)
+				// A gate reads `NAME=<value>`; the set compared with compose is
+				// the names, and the value rule is checked on the compose side.
+				name, _, _ := strings.Cut(gate, "=")
+				row.envGates = append(row.envGates, name)
 			default:
 				t.Fatalf("%s: unclassified gate token %q in row %s", path, gate, row.tier)
 			}
@@ -552,8 +563,8 @@ func TestE2ETierTableMatchesComposeAndDockerfile(t *testing.T) {
 		if build.pkg != row.binary {
 			t.Errorf("%s: Dockerfile target %q builds %q, spec table says %q", row, row.target, build.pkg, row.binary)
 		}
-		if got, want := strings.Join(sorted(build.tags), ","), strings.Join(sorted(row.tags), ","); got != want {
-			t.Errorf("%s: Dockerfile target %q builds with tags [%s], spec table says [%s]", row, row.target, got, want)
+		if len(build.tags) != 0 {
+			t.Errorf("%s: Dockerfile target %q builds with tags %v; no build tag may gate a tier", row, row.target, build.tags)
 		}
 
 		// Both directions of the env gate. The milestone probe crashes and
@@ -563,10 +574,9 @@ func TestE2ETierTableMatchesComposeAndDockerfile(t *testing.T) {
 		if got, want := strings.Join(sortedKeysOf(armed), ","), strings.Join(sorted(row.envGates), ","); got != want {
 			t.Errorf("%s: compose sets [%s], spec table says [%s]", row, got, want)
 		}
-		// The name alone is not the gate. `milestoneprobe.Register` returns
-		// without installing the handler when os.Getenv reads "", so
-		// `NAME=` declares the variable, satisfies a name comparison, and
-		// leaves the tier's proof unarmed and silent.
+		// The name alone is not the gate. `e2eboot.FromEnv` enables an option
+		// only on a nonempty value, so `NAME=` declares the variable, satisfies
+		// a name comparison, and leaves the tier's hook unarmed and silent.
 		for _, gate := range row.envGates {
 			if value, declared := armed[gate]; declared && value == "" {
 				t.Errorf("%s: %s is declared with an empty effective value, which does not arm the hook", row, gate)
@@ -598,120 +608,112 @@ func TestE2ETierTableMatchesComposeAndDockerfile(t *testing.T) {
 	}
 
 	assertNoComposeFileArmsAnUndeclaredHook(t, rows)
+	assertTwoRunnableTargetsAndNoTags(t, dockerfile)
 }
 
-// TestProductionRootReachesNoE2EHarnessWithoutABuildTag is the compile-time
-// half of the rule: an E2E-only hook lands in the binary its tier boots, behind
-// that tier's build tag, so the shipped production image links no harness at
-// all. It sweeps the whole production root rather than the three hook files
-// known today.
-func TestProductionRootReachesNoE2EHarnessWithoutABuildTag(t *testing.T) {
-	dockerfile := readDockerfileTargets(t)
-
-	production := dockerfile.resolve(t, "production")
-	if len(production.tags) != 0 {
-		t.Fatalf("the shipped production target builds with tags %v", production.tags)
-	}
-
-	// The tags this package is legitimately overlaid with are the ones the
-	// Dockerfile itself compiles it with — read, not listed here.
-	overlay := map[string]bool{}
-	for _, build := range dockerfile.artifacts {
-		if build.pkg != production.pkg {
-			continue
-		}
-		for _, tag := range build.tags {
-			overlay[tag] = true
-		}
-	}
-	if len(overlay) == 0 {
-		t.Fatalf("no Dockerfile target overlays %s with a build tag", production.pkg)
-	}
-
-	entries, err := os.ReadDir(filepath.Join(tierRepoRoot, production.pkg))
-	if err != nil {
-		t.Fatalf("read production root: %v", err)
-	}
-
-	scanned, gated := 0, 0
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		scanned++
-
-		path := filepath.Join(tierRepoRoot, production.pkg, name)
-		file, parseErr := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly|parser.ParseComments)
-		if parseErr != nil {
-			t.Fatalf("parse %s: %v", path, parseErr)
-		}
-		carriesHook := importsE2EHarness(file.Imports)
-		ordinaryBuild := reachableWithoutOverlayTags(t, path, overlay)
-		if !ordinaryBuild {
-			gated++
-		}
-
-		switch {
-		case carriesHook && ordinaryBuild:
-			t.Errorf("%s/%s imports an E2E harness and builds without any of the overlay tags %v",
-				production.pkg, name, sortedKeys(overlay))
-		case !carriesHook && !ordinaryBuild:
-			// The inverse, per file rather than as a count: a file that only
-			// an overlay tag can build and that reaches no harness is a
-			// stranded overlay — the shape left behind when a hook's import
-			// is dropped but its build constraint is not.
-			t.Errorf("%s/%s builds only under an overlay tag but imports no E2E harness", production.pkg, name)
-		}
-	}
-	if scanned == 0 {
-		t.Fatalf("no non-test Go files found in %s", production.pkg)
-	}
-	t.Logf("%s: %d non-test files scanned, %d behind an overlay tag", production.pkg, scanned, gated)
-}
-
-// importsE2EHarness covers both homes an E2E-only hook body has today: the
-// shared harnesses under test/e2e/harness/ and the single-tier internal/e2e*
-// packages (the slow-consumer probe).
-func importsE2EHarness(imports []*ast.ImportSpec) bool {
-	for _, spec := range imports {
-		path := strings.Trim(spec.Path.Value, `"`)
-		if strings.Contains(path, "/test/e2e/") || strings.Contains(path, "/internal/e2e") {
-			return true
-		}
-	}
-	return false
-}
-
-// reachableWithoutOverlayTags reports whether the file still builds when every
-// E2E overlay tag is off — which is exactly "the ordinary build links this".
-//
-// Not supported: a constraint mixing an overlay tag with a NEGATED platform or
-// release tag (`//go:build e2e_x && !linux`). Every non-overlay tag evaluates
-// true here, so the negation reads false and the file would look unreachable.
-// No hook file in this repository has that shape; if one needs it, this helper
-// gets a real build context rather than a second tag table.
-func reachableWithoutOverlayTags(t *testing.T, path string, overlay map[string]bool) bool {
+// assertTwoRunnableTargetsAndNoTags pins the Dockerfile's whole binary
+// vocabulary: exactly the production and e2e targets install a binary, and no
+// build anywhere in the file carries `-tags=`, so there is no third binary
+// shape for a tier to boot. The raw-text sweep also covers a tagged build no
+// target installs.
+func assertTwoRunnableTargetsAndNoTags(t *testing.T, dockerfile dockerfileTargets) {
 	t.Helper()
 
-	body, err := os.ReadFile(path) //nolint:gosec // repository-relative source path
+	runnable := map[string]bool{}
+	for stage := range dockerfile.installs {
+		runnable[stage] = true
+	}
+	if got := strings.Join(sortedKeys(runnable), ","); got != "e2e,production" {
+		t.Errorf("docker/Dockerfile runnable targets = [%s], want exactly [e2e,production]", got)
+	}
+	body, err := os.ReadFile(filepath.Join(tierRepoRoot, "docker/Dockerfile"))
 	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
+		t.Fatalf("read Dockerfile: %v", err)
 	}
-	for _, line := range strings.Split(string(body), "\n") {
-		if strings.HasPrefix(line, "package ") {
-			break
-		}
-		if !constraint.IsGoBuild(line) {
-			continue
-		}
-		expr, parseErr := constraint.Parse(line)
-		if parseErr != nil {
-			t.Fatalf("parse build constraint in %s: %v", path, parseErr)
-		}
-		return expr.Eval(func(tag string) bool { return !overlay[tag] })
+	if n := strings.Count(string(body), "-tags="); n != 0 {
+		t.Errorf("docker/Dockerfile carries %d `-tags=` builds; no build tag may gate an E2E-only hook", n)
 	}
-	return true // no constraint at all: always built
+}
+
+// TestE2EBootVariableSetMatchesTierTable is invariant I6: the variables the
+// E2E binary's options constructor reads are exactly the union of the tier
+// table's Gate column. A variable the table declares but the binary does not
+// read would leave its tier silently unarmed; one the binary reads but no row
+// declares would be an option no tier can enable.
+//
+// The names are read from internal/e2eboot's option table in source, not by
+// importing the package: importing it would link the example and mission
+// packages into this test binary, and their vocabulary init() functions
+// (design OQ2, recorded as a residual) would register predicates the
+// framework-predicate ratchet in this same package then sees.
+func TestE2EBootVariableSetMatchesTierTable(t *testing.T) {
+	specPath, rows := tierTable(t)
+
+	declared := map[string]bool{}
+	for _, row := range rows {
+		for _, gate := range row.envGates {
+			declared[gate] = true
+		}
+	}
+	read := e2eBootOptionNames(t)
+	if got, want := strings.Join(sortedKeys(read), ","), strings.Join(sortedKeys(declared), ","); got != want {
+		t.Errorf("e2eboot.FromEnv reads [%s]; the Gate column of %s declares [%s]", got, specPath, want)
+	}
+}
+
+// e2eBootOptionNames returns the `name:` of every entry in internal/e2eboot's
+// `options` table — the one table FromEnv iterates. Any entry whose name is not
+// a string literal fails the test rather than being skipped.
+func e2eBootOptionNames(t *testing.T) map[string]bool {
+	t.Helper()
+
+	path := filepath.Join(tierRepoRoot, "internal/e2eboot/fromenv.go")
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	var table *ast.CompositeLit
+	ast.Inspect(file, func(node ast.Node) bool {
+		spec, ok := node.(*ast.ValueSpec)
+		if !ok || len(spec.Names) != 1 || spec.Names[0].Name != "options" || len(spec.Values) != 1 {
+			return true
+		}
+		table, _ = spec.Values[0].(*ast.CompositeLit)
+		return false
+	})
+	if table == nil || len(table.Elts) == 0 {
+		t.Fatalf("%s: no non-empty `options` table", path)
+	}
+	names := map[string]bool{}
+	for _, element := range table.Elts {
+		entry, ok := element.(*ast.CompositeLit)
+		if !ok {
+			t.Fatalf("%s: options entry is not a composite literal", path)
+		}
+		name := ""
+		for _, field := range entry.Elts {
+			pair, pairOK := field.(*ast.KeyValueExpr)
+			if !pairOK {
+				t.Fatalf("%s: options entries must use keyed fields", path)
+			}
+			if key, keyOK := pair.Key.(*ast.Ident); !keyOK || key.Name != "name" {
+				continue
+			}
+			literal, literalOK := pair.Value.(*ast.BasicLit)
+			if !literalOK || literal.Kind != token.STRING {
+				t.Fatalf("%s: an options entry's name is not a string literal", path)
+			}
+			name, err = strconv.Unquote(literal.Value)
+			if err != nil {
+				t.Fatalf("%s: unquote %s: %v", path, literal.Value, err)
+			}
+		}
+		if name == "" {
+			t.Fatalf("%s: an options entry has no name", path)
+		}
+		names[name] = true
+	}
+	return names
 }
 
 func sorted(values []string) []string {

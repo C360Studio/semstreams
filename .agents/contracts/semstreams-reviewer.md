@@ -242,8 +242,8 @@ until the owner explicitly accepts the reviewed design.
 
 ### Component and schema wiring
 
-- Register new or migrated components and payloads in every framework binary, including `cmd/semstreams` and
-  `cmd/e2e-semstreams` where applicable.
+- New or migrated components and payloads register through the framework boot (`internal/boot`), which both
+  framework binaries run; an E2E-only registration is an `internal/e2eboot` option, never a build tag.
 - Configuration changes run schema generation and leave no uncommitted schema/spec drift.
 - Operator-reachable config fields have production JSON round-trip tests that preserve destination types.
 - Every OpenAPI `SchemaRef` type is registered in the applicable request/response registry.

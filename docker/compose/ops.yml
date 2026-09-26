@@ -85,6 +85,8 @@ services:
       - SEMSTREAMS_NATS_URLS=nats://nats:4222
       - SEMSTREAMS_LOG_LEVEL=debug
       - SEMSTREAMS_DEBUG=${SEMSTREAMS_DEBUG:-false}
+      # Enables the lesson-curation control responder (internal/e2eboot).
+      - SEMSTREAMS_E2E_LESSON_CURATION=1
     volumes:
       - ../../configs:/app/configs:ro
     ports:

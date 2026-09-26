@@ -243,7 +243,7 @@ type Processor struct {
 	// kvConfigManager is the component-internal hot-reload manager. It owns a
 	// KV watcher on semstreams_config:rules.* and calls ApplyConfigUpdate when
 	// the watcher fires. Constructed in Start; nil when NATS is unavailable.
-	// See also: cmd/semstreams/main.go buildRuleManager — a second ConfigManager
+	// See also: internal/boot/run.go buildRuleManager — a second ConfigManager
 	// instance (processor=nil) for agent CRUD tools. Both share the same KV bucket.
 	kvConfigManager *ConfigManager
 	streamConsumers []ruleStreamConsumer

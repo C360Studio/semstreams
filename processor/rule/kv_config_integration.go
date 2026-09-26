@@ -28,7 +28,7 @@ const hotReloadDebounce = 250 * time.Millisecond
 // ConfigManager manages rules through NATS KV configuration.
 //
 // Two instances of ConfigManager coexist in a running binary:
-//  1. The Pattern-B CRUD manager constructed in cmd/semstreams/main.go
+//  1. The Pattern-B CRUD manager constructed in internal/boot/run.go
 //     (buildRuleManager) with processor=nil. It handles agent tool writes
 //     (create_rule, update_rule, delete_rule) and has no watcher.
 //  2. The component-internal manager constructed inside Processor.Start
@@ -82,7 +82,7 @@ func NewConfigManager(processor *Processor, configMgr *config.Manager, logger *s
 // Start begins watching for rule configuration updates.
 //
 // When processor is nil (Pattern-B CRUD path), Start is a no-op so that
-// cmd/semstreams/main.go can safely call it without wiring a watcher.
+// internal/boot/run.go can safely call it without wiring a watcher.
 //
 // When processor is non-nil (component-internal path), Start:
 //  1. Seeds file-loaded rules into KV idempotently via SeedFromRuntime.

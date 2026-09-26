@@ -69,22 +69,14 @@ func TestOrdinaryTerminalIsANoOpBeforeAnyIO(t *testing.T) {
 	}
 }
 
-// TestRegisterIsInertWithoutTheEnvironmentVariable pins the second gate: the
-// tagged image boots identically to an untagged one until the tier asks.
-func TestRegisterIsInertWithoutTheEnvironmentVariable(t *testing.T) {
+// TestRegisterRefusesIncompleteWiring is the fail-closed half: an armed probe
+// with nothing to register on is a harness defect that must be loud at boot,
+// not a silently missing proof three stages later. Arming itself is
+// internal/e2eboot's decision, so the refusal no longer depends on EnvVar.
+func TestRegisterRefusesIncompleteWiring(t *testing.T) {
 	t.Setenv(EnvVar, "")
-	if err := Register(nil, nil, nil); err != nil {
-		t.Fatalf("Register() error = %v with %s unset, want an inert nil", err, EnvVar)
-	}
-}
-
-// TestRegisterRefusesIncompleteWiringWhenArmed is the fail-closed half: an
-// armed probe with nothing to register on is a harness defect that must be
-// loud at boot, not a silently missing proof three stages later.
-func TestRegisterRefusesIncompleteWiringWhenArmed(t *testing.T) {
-	t.Setenv(EnvVar, "1")
 	if err := Register(nil, nil, nil); err == nil {
-		t.Fatalf("Register(nil, nil, nil) error = nil with %s set, want a refusal", EnvVar)
+		t.Fatal("Register(nil, nil, nil) error = nil, want a refusal")
 	}
 }
 

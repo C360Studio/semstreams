@@ -94,9 +94,10 @@ func RegisterPayloads(reg *payloadregistry.Registry) error {
 
 `RegisterPayloads` only runs when something calls it. `payloadbuiltins.Register` (`payloadbuiltins/register.go`)
 aggregates every first-party framework payload's `RegisterPayloads` call and is itself called once at boot from
-`cmd/semstreams/main.go` and `cmd/e2e-semstreams/main.go`. Domain-specific or config-gated payloads (example
-processors, `graphresearch`) register directly at each binary's own composition root instead — see
-`cmd/e2e-semstreams/main.go`'s `buildPayloadRegistry`. A type registered in one binary's composition root but not
+the framework boot, `internal/boot/run.go`'s `registerPayloads`, which both `cmd/semstreams` and
+`cmd/e2e-semstreams` run. Config-gated payloads (`graphresearch`) register there when the configuration selects them;
+example and fixture payloads register only in the E2E binary, through a boot option `internal/e2eboot` enables from a
+`SEMSTREAMS_E2E_*` variable (`options_examples.go`). A type registered in one binary's composition but not
 another silently half-migrates that deployment — every message of that type decodes fine where it's registered and
 is rejected everywhere else.
 
@@ -286,8 +287,8 @@ In a unit test that only needs a key to pass graph-ingest's create seam (no wire
 
 **Critical**: a `RegisterPayloads` function nothing calls never runs — there is no `init()` to fall back on. Add
 the call to `payloadbuiltins.Register` (`payloadbuiltins/register.go`) for a first-party framework type, or to
-each binary's own composition root (`cmd/semstreams/main.go`'s `registerPayloads`,
-`cmd/e2e-semstreams/main.go`'s `buildPayloadRegistry`) for a domain/example/config-gated type. Then grep every
+the framework boot (`internal/boot/run.go`'s `registerPayloads`) for a config-gated type, or an `internal/e2eboot`
+option for an E2E-only example or fixture type. Then grep every
 binary that should carry it:
 
 ```bash
