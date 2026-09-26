@@ -781,12 +781,12 @@ func TestACarrierWriteAfterTheOwnersRecordIsRefused(t *testing.T) {
 	// The loop metrics are a process-wide singleton (getMetrics), so the
 	// pausing gauge goes on a shallow per-component copy, never on the
 	// singleton; the copy's collectors are the singleton's, so every count
-	// below is still the one the process exports.
-	shared := c.metrics
-	local := *shared
+	// below is still the one the process exports. The component is per-test,
+	// so the copy is never swapped back: a restore in t.Cleanup would run
+	// before the component stops and race any stop path that reads c.metrics.
+	local := *c.metrics
 	local.activeLoops = gauge
 	c.metrics = &local
-	t.Cleanup(func() { c.metrics = shared })
 	before := snapshotRaceMetrics(c)
 
 	approvalMsg, approvalDone := deliverOn(t, lane, "agent.approval_response", approveAnswer(t, gate, loopID))

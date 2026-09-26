@@ -184,12 +184,19 @@ takes (i); **[OQ7 (b)]** likewise. Under an option not taken nothing replaces it
 
 ## 6. Gates
 
-- [ ] 6.1 `task check:push` green (build, lint, tagged vet, schema drift, contract, race unit, integration); paste the
+- [x] 6.1 `task check:push` green (build, lint, tagged vet, schema drift, contract, race unit, integration); paste the
       summary lines, not "green". The landed W3/W4/T7–T9 tests run under `-race -count=20` once, output pasted.
+      DONE at `89d71673`: build, lint, tagged vet, `schema:check-changes`, contract, `go test -race ./...` all green;
+      integration through the runner 154 `ok`, ONE red = `test/testinfra`
+      `TestIntegrationRunner_TerminationReapsPullBeforeReleasingLock` = #1397 (outside this diff; waived by the owner
+      for this merge, PR #1388 comment 2026-09-26). `-race -count=20`: the six W3/W4/T7–T9 tests 20/20 at `08f17344`;
+      the released-reject test, the `checked` variant, T9 and T2 20/20 at `89d71673`; `DATA RACE: 0` both runs.
 - [ ] 6.2 `task e2e:agentic` green on the final diff (proposal § Impact: the BREAKING gate walks the approval path;
       `verifyApprovalAcrossReplacement` is the replacement control, design § 4 T5). Paste the tier's summary line.
-- [ ] 6.3 `task api:compat`: no exported symbol is added or removed by this diff (the hooks and the sentinel are
+- [x] 6.3 `task api:compat`: no exported symbol is added or removed by this diff (the hooks and the sentinel are
       unexported; `GetLoop`'s signature is unchanged); report the pre-existing Tier 1 breaks as the archived task 5.2 did.
+      DONE: `compared: 62 clean: 47 incompatible: 15 removed: 0 added: 0` — the 15 are the pre-existing Tier 1 breaks
+      against beta.162; the production diff against `282e650e` adds and removes no exported declaration.
 - [ ] 6.4 PR body: `implemented-by: <persona>`, the OQ answers quoted from #1377, the 5.6 mutation runs, the 6.1/6.2
       lines; the § 8 table posted on #1146 with the amendment flags before the epic closes.
 - [ ] 6.5 Archive: `openspec archive agentic-loop-committed-terminal-recovery --yes` as the last content commit; both

@@ -545,14 +545,22 @@ they know?* Nothing; the gap is exactly the amended clauses in § 8.
 
 ## 10. Unproven (named, not claimed)
 
-1. The three sub-window orderings A, B, C — argued from C:3167-3168, C:3081, C:3303-3309, C:1071; forced only when
-   T7–T9 land. Block 2's sub-window scenario is unproven until then.
+1. The three sub-window orderings A, B, C — argued from C:3167-3168, C:3081, C:3303-3309, C:1071; FORCED at
+   implementation by T7–T9 and the `checked` variant (`carrier_terminal_race_integration_test.go`). What the
+   `checked` variant leaves unasserted, deliberately (review 2 LOW B, not extended): the redelivered approval's Ack
+   once the cancel has landed, and the executed call's result acknowledged without effect on the cancelled loop —
+   both are asserted only for a RELEASED loop, by T8.
 2. W2's reject-at-cap arm (a reject on a loop at its iteration cap re-derives `max_iterations` and adopts) — argued
-   from H:3005-3037; T2's cap arm.
-3. W2's cancel: retried to exhaustion (OQ7) — argued from C:3311-3323 and TO:397-399; T2's cancel arm.
+   from H:3005-3037; FORCED by T2's cap arm (`approval_cap_sweep_integration_test.go`).
+3. W2's cancel: retried to exhaustion (OQ7) — argued from C:3311-3323 and TO:397-399; FORCED by T2's cancel arm.
 4. P6 (a non-terminal result at the carrier with no held loop is always a release) — argued from the producers, not
    tested; PPF:31-59 is the only unit fixture and it is changed.
 5. In-process terminal CAS loss via step 0 (LE:416-423) — stated by the code's own comment, not observed; T1 arm (c).
 6. The spawn-path W1 source (MIG:2019) — carried from #1362 ruling 2, not re-derived here.
-7. The pre-`AddPendingTool` release path (OQ4) — from code; the `before_dispatch` stage forces it if wanted.
+7. The pre-`AddPendingTool` release path (OQ4) — FORCED by the `before_dispatch` test
+   (`TestALoopReleasedBeforeTheApprovedCallIsRegisteredIsRetriedThenInapplicable`).
 8. The task lane's deferred-marker write racing a cancel (§ 7) — out of the docket; not observed.
+9. The literal A8 re-read race (the approval handler's own `GetLoop` at ARH:83 racing a release) — no seam between the
+   resolve and that read; the block-1 scenario is forced one read later, on the reject path's `HandleToolResult` read
+   (`TestARejectWhoseLoopWasReleasedAfterItsGateResolvedIsSettledColdOnItsFirstDelivery`), and the still-gated branch
+   rests on `TestAColdApprovalAnswerRebuildsTheLoopAndAppliesIt`.
