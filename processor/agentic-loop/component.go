@@ -1556,17 +1556,7 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 			return nil
 		}
 		c.logger.Error("Failed to handle task", "error", err, "task_id", task.TaskID)
-		// Every other handler error settles by its class (#1345): a refusal
-		// naming invalid input — an over-depth task, a continuation of a
-		// settled loop — is terminated, because the heartbeat policy does not
-		// read the Invalid class and would retry it to exhaustion; anything
-		// else is returned for the policy to derive (Fatal → Quarantine, else
-		// Retry). Nothing durable was written before any of these, so a
-		// retried birth is a fresh birth.
-		if errs.IsInvalid(err) {
-			return natsclient.TerminateDelivery(err)
-		}
-		return err
+		return taskHandlerErrorDisposition(err)
 	}
 
 	// A deferred continuation is not a dedup and not a spawn: the loop already
@@ -1720,13 +1710,7 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 			"timeout_at", record.entity.TimeoutAt)
 	} else if err := c.createLoopState(ctx, result.LoopID); err != nil {
 		if errors.Is(err, nats.ErrMaxPayload) {
-			// The whole rendered record exceeds the server's payload ceiling
-			// (#857, #1365): every redelivery renders the same bytes into the
-			// same refusal, on a lane that runs at MaxAckPending 1. Permanent.
-			c.logger.Error("Loop record exceeds the NATS payload ceiling at birth — the task is terminated",
-				"loop_id", result.LoopID, "task_id", task.TaskID, "error", err)
-			c.releaseLoopTransientState(result.LoopID)
-			return natsclient.TerminateDelivery(err)
+			return c.terminateOversizedBirth(result.LoopID, task.TaskID, err)
 		}
 		if errors.Is(err, natsclient.ErrKVKeyExists) {
 			c.logger.Warn("Loop record already exists — this birth is not the one that created the loop",
@@ -1776,6 +1760,32 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 		return err
 	}
 	return nil
+}
+
+// taskHandlerErrorDisposition is how a HandleTask error settles, by its class
+// (#1345): a refusal naming invalid input — an over-depth task, a continuation
+// of a settled loop — is terminated, because the heartbeat policy does not read
+// the Invalid class and would retry it to exhaustion; anything else is returned
+// for the policy to derive (Fatal → Quarantine, else Retry). Nothing durable
+// was written before any of these, so a retried birth is a fresh birth.
+func taskHandlerErrorDisposition(err error) error {
+	if errs.IsInvalid(err) {
+		return natsclient.TerminateDelivery(err)
+	}
+	return err
+}
+
+// terminateOversizedBirth settles a birth whose record the NATS client refused
+// for size (#857, #1365). The whole rendered record exceeds the server's
+// payload ceiling, and every redelivery renders the same bytes into the same
+// refusal on a lane that runs at MaxAckPending 1, so the refusal is permanent:
+// the loop this process built is released and the task is terminated, with the
+// loop and the record's size in the cause (createLoopState names both).
+func (c *Component) terminateOversizedBirth(loopID, taskID string, err error) error {
+	c.logger.Error("Loop record exceeds the NATS payload ceiling at birth — the task is terminated",
+		"loop_id", loopID, "task_id", taskID, "error", err)
+	c.releaseLoopTransientState(loopID)
+	return natsclient.TerminateDelivery(err)
 }
 
 func (c *Component) writeLineageTriples(ctx context.Context, loopID string, related map[string]any) error {
