@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -961,6 +962,12 @@ func (s *Scenario) verifyMidFlightLoopAcrossReplacement(
 			"rebuild the loop warm and the response would never take the cold arm: %w", err)
 	}
 
+	// Still inside the window: R1 outstanding, unanswered, and retained.
+	turn, err := s.deferTurnBehindFirstRequest(ctx, handles, task, firstRequest)
+	if err != nil {
+		return err
+	}
+
 	// The process that minted the first request is gone. Nothing of this loop
 	// survives except its record and the request the stream retains.
 	//
@@ -1046,12 +1053,158 @@ func (s *Scenario) verifyMidFlightLoopAcrossReplacement(
 	if err := s.waitForComponentHealth(ctx, "agentic-loop", true, 10*time.Second); err != nil {
 		return fmt.Errorf("agentic-loop did not stay healthy across the mid-flight recovery: %w", err)
 	}
+	if err := s.verifyDeferredTurnAcrossReplacement(ctx, agentStream, task, nextRequest, turn); err != nil {
+		return err
+	}
 
 	result.Details["midflight_loop_id"] = loopID
 	result.Details["midflight_published_request_id"] = advanced.entity.PublishedRequestID
 	result.Metrics["midflight_requests_published"] = requests
 	result.Metrics["midflight_record_revision_delta"] = advanced.revision - midFlight.revision
 	return nil
+}
+
+// deferTurnBehindFirstRequest arranges W-b (#1365, design § 3.1, task 3.7): a
+// turn typed while R1 is outstanding is DEFERRED behind it, and the
+// replacement must carry it. It returns the turn's text. The turn goes
+// in through the production intake — a continuation TaskMessage naming
+// this loop on agent.task, where HandleTask's attachContinuation defers it
+// and the task lane writes marker and text onto the record — never by
+// writing the record. It is W-b only when the kill lands after that write:
+// before it (W-a) the turn is the honest loss, so wait for the record to
+// carry the text, still naming R1, and for the continuation to settle, or
+// its redelivery would reach a replacement that holds no loop and be refused.
+func (s *Scenario) deferTurnBehindFirstRequest(
+	ctx context.Context, handles midFlightHandles, task agentic.TaskMessage, firstRequest string,
+) (string, error) {
+	turn := deferredTurnPrompt(task.LoopID)
+	continuation := task
+	continuation.TaskID = task.TaskID + "-turn"
+	continuation.Prompt = turn
+	continuationData, err := json.Marshal(message.NewBaseMessage(continuation.Schema(), &continuation, "e2e-test"))
+	if err != nil {
+		return "", fmt.Errorf("marshal the deferred continuation: %w", err)
+	}
+	if err := s.nats.Publish(ctx, "agent.task.midflight", continuationData); err != nil {
+		return "", fmt.Errorf("publish the deferred continuation: %w", err)
+	}
+	if _, err := waitForLoopRecord(ctx, handles.loops, task.LoopID, 30*time.Second, func(entity agentic.LoopEntity) bool {
+		return entity.PendingContinuation && entity.PendingContinuationRequestID == "" &&
+			entity.PendingContinuationPrompt == turn && entity.PublishedRequestID == firstRequest
+	}); err != nil {
+		return "", fmt.Errorf("W-b premise: the record never carried the deferred turn's marker and text, uncarried, "+
+			"while naming %s — a replacement now would test the W-a loss, not W-b: %w", firstRequest, err)
+	}
+	if err := waitForConsumerSettled(ctx, handles.taskConsumer, handles.taskFloor+2, 30*time.Second); err != nil {
+		return "", fmt.Errorf("W-b premise: the deferred continuation never settled, so its redelivery would reach "+
+			"the replacement: %w", err)
+	}
+	return turn, nil
+}
+
+// verifyDeferredTurnAcrossReplacement reads, off the wire, what the W-b turn
+// became after the replacement: the loop's next request (the last on its
+// request subject, the count already pinned to 2) and its agent.complete event,
+// both through the production registry.
+func (s *Scenario) verifyDeferredTurnAcrossReplacement(
+	ctx context.Context, agentStream jetstream.Stream, task agentic.TaskMessage, nextRequest, turn string,
+) error {
+	stored, err := agentStream.GetLastMsgForSubject(ctx, "agent.request."+task.LoopID)
+	if err != nil {
+		return fmt.Errorf("W-b: read the mid-flight loop's next request: %w", err)
+	}
+	decoded, err := s.decoder.Decode(stored.Data)
+	if err != nil {
+		return fmt.Errorf("W-b: decode the next request through the production registry: %w", err)
+	}
+	request, ok := decoded.Payload().(*agentic.AgentRequest)
+	if !ok {
+		return fmt.Errorf("W-b: next request payload type = %T, want *agentic.AgentRequest", decoded.Payload())
+	}
+	if err := checkDeferredTurnCarriedOnce(request, nextRequest, task.Prompt, turn); err != nil {
+		return err
+	}
+
+	terminal, err := agentStream.GetLastMsgForSubject(ctx, "agent.complete."+task.LoopID)
+	if err != nil {
+		return fmt.Errorf("W-b: read the mid-flight loop's agent.complete: %w", err)
+	}
+	settled, err := s.decoder.Decode(terminal.Data)
+	if err != nil {
+		return fmt.Errorf("W-b: decode agent.complete through the production registry: %w", err)
+	}
+	return checkCompletionPrompt(settled.Payload(), task.Prompt, turn)
+}
+
+// deferredTurnPrompt is the W-b turn's text: unique to the loop, and sharing no
+// substring with the birth prompt, so counting one never counts the other.
+func deferredTurnPrompt(loopID string) string {
+	return "Deferred turn for loop " + loopID + ": also state when the sensor last reported."
+}
+
+// checkDeferredTurnCarriedOnce is W-b's first assertion (#1365, design § 3.1):
+// the request after R1 carries the deferred turn in exactly one user message,
+// after R1's conversation (the birth prompt, itself exactly once). Zero is the
+// turn lost across the replacement; two is a replay on top of a turn some
+// request already carried.
+func checkDeferredTurnCarriedOnce(request *agentic.AgentRequest, wantRequestID, birthPrompt, turn string) error {
+	if request.RequestID != wantRequestID {
+		return fmt.Errorf("W-b carries-once: next request id = %q, want %q", request.RequestID, wantRequestID)
+	}
+	birthAt, turnAt := -1, -1
+	var births, turns int
+	for i, msg := range request.Messages {
+		if msg.Role != "user" {
+			continue
+		}
+		if strings.Contains(msg.Content, birthPrompt) {
+			births++
+			birthAt = i
+		}
+		if strings.Contains(msg.Content, turn) {
+			turns++
+			turnAt = i
+		}
+	}
+	if turns != 1 {
+		return fmt.Errorf("W-b carries-once: request %s carries the deferred turn in %d user messages, want "+
+			"exactly 1 (0: the replacement lost the turn the record held; 2+: it was replayed over a carrier)",
+			wantRequestID, turns)
+	}
+	if births != 1 {
+		return fmt.Errorf("W-b carries-once: request %s carries the birth prompt in %d user messages, want "+
+			"exactly 1 (%s)", wantRequestID, births, rebuildFault(births))
+	}
+	if turnAt < birthAt {
+		return fmt.Errorf("W-b carries-once: request %s carries the deferred turn at message %d, before R1's "+
+			"conversation (birth prompt at %d); the replay must follow it", wantRequestID, turnAt, birthAt)
+	}
+	return nil
+}
+
+// checkCompletionPrompt is W-b's second assertion: the rebuilt loop's
+// agent.complete carries the prompt its record accepted, and under OQ5 (a)
+// (design § 0, spec "A rebuilt loop's terminal event carries the prompt its
+// record accepted") that is the BIRTH prompt, never the continuation's turn.
+func checkCompletionPrompt(payload message.Payload, birthPrompt, turn string) error {
+	completed, ok := payload.(*agentic.LoopCompletedEvent)
+	if !ok {
+		return fmt.Errorf("W-b completion prompt: agent.complete payload type = %T, want *agentic.LoopCompletedEvent",
+			payload)
+	}
+	switch completed.Prompt {
+	case birthPrompt:
+		return nil
+	case "":
+		return fmt.Errorf("W-b completion prompt: agent.complete carries no prompt — the rebuilt loop did not " +
+			"read task_prompt from its record")
+	case turn:
+		return fmt.Errorf("W-b completion prompt: agent.complete carries the continuation's turn %q, want the "+
+			"birth prompt — task_prompt is birth-only (OQ5 (a)) and the continuation rewrote it", turn)
+	default:
+		return fmt.Errorf("W-b completion prompt: agent.complete prompt = %q, want the birth prompt %q",
+			completed.Prompt, birthPrompt)
+	}
 }
 
 // loopRecordObservation is one read of a loop's AGENT_LOOPS record with the

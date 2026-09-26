@@ -200,6 +200,19 @@ Implementation serializes with other shared loop changes and precedes #1377 (rul
       naming the loop, replace, resume; assert R2 carries the turn once and `agent.complete` carries `prompt`. This
       reaches W-b only (design § 10). Final validation of the landed diff (proposal § Impact), not the iteration loop;
       `pgrep -fl e2e.test` into the tier log first.
+      Code half (the function now opens at `:899`, one import line down): after the birth task settles and before the
+      kill, `test/e2e/scenarios/agentic/stage_a_process_replacement.go:966` — `turn, err := s.deferTurnBehindFirstRequest(ctx, handles, task, firstRequest)`
+      publishes a continuation `TaskMessage` naming the loop on `agent.task.midflight`
+      (`test/e2e/scenarios/agentic/stage_a_process_replacement.go:1088` — `if err := s.nats.Publish(ctx, "agent.task.midflight", continuationData); err != nil {`)
+      and waits, as the W-b premise, for the record to carry marker, empty carrier and the turn's text while naming R1,
+      and for the continuation to settle (`:1095`, "W-b premise: …"). After the existing assertions,
+      `test/e2e/scenarios/agentic/stage_a_process_replacement.go:1056` — `if err := s.verifyDeferredTurnAcrossReplacement(ctx, agentStream, task, nextRequest, turn); err != nil {`
+      reads R2 and `agent.complete` through the production registry: (1) `checkDeferredTurnCarriedOnce` (`:1150`) — R2
+      carries the turn in exactly one user message, after the birth prompt (itself once); (2) `checkCompletionPrompt`
+      (`:1189`) — `LoopCompletedEvent.Prompt` is the BIRTH prompt, never the turn (OQ5 (a)); (3) the existing
+      assertions stand unchanged (exactly 2 requests, record advanced to `req:2:0`, response lane settled, health).
+      Both checks are unit-tested with `-race` (`test/e2e/scenarios/agentic/process_replacement_test.go:155`,
+      `:193`), each mutation-checked. Tier run owed to the coordinating session.
 
 ## 4. Spec and docs
 
