@@ -77,21 +77,21 @@ Codex review of `22e80614` on PR #1404 (2026-09-27T18:42Z): one HIGH, two MEDIUM
 archive commit was dropped so the fixes land before it; task 3.4's `e2e:core` run predates these code changes and is
 re-run by the coordinating session at the new final code revision.
 
-- [ ] 4.1 HIGH, `config/key_family.go`: a member name outside the watch `<prefix>.*` was stored but never delivered.
+- [x] 4.1 HIGH, `config/key_family.go`: a member name outside the watch `<prefix>.*` was stored but never delivered.
       `NewKeyFamily` validates the prefix, and every family method the member name and completed key, with
       `natsclient.ValidateKVLiteralToken` / `ValidateKVLiteralKey` before any I/O; `Names` lists only one-token members.
       Tests: `TestBoundKeyFamilyRefusesBeforeAnyStoreAccess`, `TestNewKeyFamilyRefusesAPrefixThatIsNotOneToken`, and
       the nested-name half of `TestKeyFamilyDeliversSnapshotThenChanges` (real NATS). Migration note obligation 7 and
       the spec delta's family requirement carry the token rule.
-- [ ] 4.2 MEDIUM, `processor/rule/kv_config_integration.go`: `Start` publishes cancel and the completion fence before
+- [x] 4.2 MEDIUM, `processor/rule/kv_config_integration.go`: `Start` publishes cancel and the completion fence before
       seeding, skips the initial reconcile once cancelled, and hands the fence to the loop; `Stop` never clears it, so
       every concurrent caller joins it. Tests: `TestConfigManagerStopDuringSeedingJoinsStart`,
       `TestConfigManagerConcurrentStopsBothJoinTheLoop` (explicit synchronization on the parked Stop's goroutine
       state, no sleeps); `go test -race -count=50 ./processor/rule/` at default GOMAXPROCS: ok, 202 s. `pkg/lifecycle`
       is the workflow harness (ADR-049) and has no start/stop fence primitive, so the fence stays local.
-- [ ] 4.3 MEDIUM, `config/key_family.go`: `Get`, `Put`, `Create`, `Delete` and `Names` refuse a nil context with a
+- [x] 4.3 MEDIUM, `config/key_family.go`: `Get`, `Put`, `Create`, `Delete` and `Names` refuse a nil context with a
       classified invalid error before store access. Test: `TestBoundKeyFamilyRefusesBeforeAnyStoreAccess/nil_context`.
-- [ ] 4.4 Mutation evidence (cp backup plus md5, restored checksum verified each time):
+- [x] 4.4 Mutation evidence (cp backup plus md5, restored checksum verified each time):
       M9a the member-name `ValidateKVLiteralToken` call deleted from `key()`: `TestBoundKeyFamilyRefusesBeforeAnyStoreAccess`
       panics (store reached) and `TestKeyFamilyDeliversSnapshotThenChanges` fails at the dotted `Put`; M9b the `Names`
       membership filter reverted to `name != ""`: `TestKeyFamilyDeliversSnapshotThenChanges` fails "a nested key is
@@ -100,4 +100,9 @@ re-run by the coordinating session at the new final code revision.
       returned while the work it must join was still running"; M10b `Stop` clearing `cancel`/`done` again:
       `TestConfigManagerConcurrentStopsBothJoinTheLoop` fails. M11a the nil-context check deleted from `member()` and
       M11b from `Names`: `TestBoundKeyFamilyRefusesBeforeAnyStoreAccess/nil_context` panics.
-- [ ] 4.5 Gates green before the push, listed in 3.2.
+- [x] 4.5 Gates green before the push, on the Codex round-1 fix commits: `go build ./...`, `task lint`, `go vet ./...`,
+      `go vet -tags=integration ./...`, `go run ./cmd/entity-id-audit .` (1334 candidates) each exit 0; `task test:race`
+      exit 0, 160 ok / 0 FAIL / 20 no test files; `task test:integration` exit 0, 160 ok / 0 FAIL / 20 no test files;
+      `task schema:generate` exit 0 with an empty `git diff schemas/ specs/`; `openspec validate
+      config-bucket-authority-namespace --strict` valid; `openspec validate --all --strict` 58/58; `task
+      spec:properties` 449/449.
