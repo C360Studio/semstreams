@@ -132,17 +132,44 @@ func NewConfigManager(cfg *Config, natsClient *natsclient.Client, logger *slog.L
 		logger:      logger,
 	}
 	for _, opt := range opts {
-		if opt != nil {
-			opt(cm)
+		if opt == nil {
+			return nil, fmt.Errorf("config manager option cannot be nil")
 		}
+		opt(cm)
 	}
 	for _, family := range cm.families {
 		if family == nil {
 			return nil, fmt.Errorf("key family cannot be nil")
 		}
+		if managerOwnedKeyPrefixes[family.prefix] {
+			return nil, fmt.Errorf(
+				"key family prefix %q is a key the config manager owns; a registered family must use its own prefix",
+				family.prefix)
+		}
 	}
 	return cm, nil
 }
+
+// managerWatchPatterns are the keys the Manager watches (2-part keys only);
+// * is a single-level wildcard, so property-level keys are excluded.
+var managerWatchPatterns = []string{
+	"services.*",     // Matches services.metrics but NOT services.metrics.enabled
+	"components.*",   // Matches components.udp but NOT components.udp.port
+	"platform",       // Single key
+	"nats",           // Single key
+	"model_registry", // Single key
+}
+
+// managerOwnedKeyPrefixes are the first key tokens of the Manager's own keys:
+// its watch patterns and the identity record. A registered key family may not
+// claim one, so a family holder cannot reach them.
+var managerOwnedKeyPrefixes = func() map[string]bool {
+	owned := map[string]bool{platformIdentityKVKey: true}
+	for _, pattern := range managerWatchPatterns {
+		owned[strings.SplitN(pattern, ".", 2)[0]] = true
+	}
+	return owned
+}()
 
 // errBucketNotAcquired is returned by any bucket-dependent method called before
 // Start. Fail closed and say why: before Start the Manager has no bucket, and a
@@ -378,15 +405,7 @@ func (cm *Manager) Start(ctx context.Context) error {
 		}
 	}
 
-	// Watch specific patterns (2-part keys only)
-	// Use * for single-level wildcard to exclude property-level keys
-	patterns := []string{
-		"services.*",     // Matches services.metrics but NOT services.metrics.enabled
-		"components.*",   // Matches components.udp but NOT components.udp.port
-		"platform",       // Single key
-		"nats",           // Single key
-		"model_registry", // Single key
-	}
+	patterns := managerWatchPatterns
 
 	// Create watchers with cleanup on error
 	cm.watchers = make([]jetstream.KeyWatcher, 0, len(patterns))

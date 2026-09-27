@@ -58,9 +58,10 @@ var errFamilyNotRegistered = errors.New(
 // KeyFamily is the family of keys "<prefix>.<name>" in the configuration
 // bucket, together with the handler that receives the family's entries.
 //
-// Its reads and writes are scoped to the family. A holder cannot reach the
-// identity record or any other key the Manager owns, and never learns the
-// bucket's name. They return the not-acquired error until a Manager that
+// Its reads and writes are scoped to the family's "<prefix>." keys, and
+// NewConfigManager refuses a family whose prefix is one of the Manager's own
+// key prefixes, so a holder cannot reach the identity record or any other key
+// the Manager owns, and never learns the bucket's name. They return the not-acquired error until a Manager that
 // registered the family has started successfully.
 type KeyFamily struct {
 	prefix string
