@@ -440,6 +440,11 @@ func (c *Component) adoptDurableCancel(ctx context.Context, loopID string) (bool
 	return true, nil
 }
 
+// cancelledByUserError is the error a cancelled loop entity carries, whichever
+// path wrote it cancelled: CancelLoop, the cold cancel adoption below, and
+// settleTerminal's re-seat to an adopted cancel.
+const cancelledByUserError = "cancelled by user"
+
 // writeRecordCancelled writes a record this process does not hold to match an
 // adopted cancel, under compare-and-swap against the revision it read. A
 // record that moved retries; a record that is already terminal is settled.
@@ -464,7 +469,7 @@ func (c *Component) writeRecordCancelled(
 	entity.CancelledBy = cancelled.CancelledBy
 	entity.CancelledAt = cancelled.CancelledAt
 	entity.CompletedAt = cancelled.CancelledAt
-	entity.Error = "cancelled by user"
+	entity.Error = cancelledByUserError
 	entity.PendingApproval = nil
 	entity.StateBeforeApproval = ""
 	data, err := json.Marshal(entity)

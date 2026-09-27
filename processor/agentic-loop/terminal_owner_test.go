@@ -25,8 +25,8 @@ import (
 //	    at the lanes' own classification, and a lost compare-and-swap is a Retry
 //	    that lands here on the redelivery);
 //	(b) record not terminal, the marker exists → the Create is refused, the
-//	    saved terminal is read back and adopted by loop ID + terminal kind, and
-//	    a content difference is logged, never a disposition;
+//	    saved terminal is read back and adopted by loop ID, whatever its kind,
+//	    and a content or kind difference is logged, never a disposition;
 //	(c) no marker → Create, publish, Update, ACK.
 //
 // These run against the recording bucket with no NATS client, so publication
@@ -538,6 +538,26 @@ func TestSettleTerminalReSeatsTheEntityToTheAdoptedKind(t *testing.T) {
 				require.True(t, at.Equal(e.CancelledAt))
 				require.Equal(t, "cancelled by user", e.Error, "as the cold cancel adoption writes it")
 				require.Empty(t, e.Result, "the losing completion's result is cleared")
+			},
+		},
+		{
+			name: "a saved failure adopted over a cancel",
+			candidate: func(m *LoopManager, loopID string) {
+				_, err := m.CancelLoop(loopID, "operator")
+				require.NoError(t, err)
+			},
+			adopted: func(loopID string) terminalOutcome {
+				return terminalOutcome{failed: &agentic.LoopFailedEvent{
+					LoopID: loopID, Outcome: agentic.OutcomeFailed, Reason: "max_iterations",
+					Error: "max iterations reached", FailedAt: at,
+				}}
+			},
+			want: func(t *testing.T, e agentic.LoopEntity) {
+				require.Equal(t, agentic.LoopStateFailed, e.State)
+				require.Equal(t, agentic.OutcomeFailed, e.Outcome)
+				require.Equal(t, "max iterations reached", e.Error)
+				require.Empty(t, e.CancelledBy, "the losing cancel's canceller is cleared")
+				require.True(t, e.CancelledAt.IsZero(), "and so is its time")
 			},
 		},
 		{

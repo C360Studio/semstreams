@@ -19,7 +19,7 @@ govern):
 | Site | Before | After |
 |---|---|---|
 | `terminal_owner.go` `createTerminalMarker` | `saved.loopID() != loopID \|\| saved.kind() != candidate.kind()` refuses (→ Fatal → Quarantine → latch) | only `saved.loopID() != loopID` refuses; a same-loop saved terminal of any kind is adopted, `return saved, true, nil`; the "Terminal adopted" Warn line gains `candidate_kind` beside `kind` |
-| `terminal_owner.go` synthetic decide | set when `saved.completed != nil && candidate.syntheticDecide != nil` | unchanged: a saved failure or cancel adopted over a completed candidate carries none; a saved completion adopted over a failed or cancelled candidate carries none either (those candidates never carry one; the original commit stamped its own) |
+| `terminal_owner.go` synthetic decide | set when `saved.completed != nil && candidate.syntheticDecide != nil` | unchanged: a saved failure or cancel adopted over a completed candidate carries none; a saved completion adopted over a failed or cancelled candidate carries none either (a residual, § 4) |
 | `state.go` `settleTerminal` | adopted content written over an entity assumed to be of the same kind | `State` and `Outcome` set from the adopted kind; completion clears `Error` and the cancel fields; failure clears `Result` and the cancel fields; cancel sets `CancelledBy`/`CancelledAt`, `Error = "cancelled by user"` (as `writeRecordCancelled` writes it) and clears `Result` |
 | `commitTerminalSteps` | — | unchanged in shape: adopted → `terminalPublication` republishes the saved event; `settleTerminal` re-seats before `persistLoopState`; `recordCommittedTerminal` counts from the adopted outcome, so `loops_failed_total{reason}` and `LoopFailedEvent.Reason` agree |
 | `component.go` carrier comment, `doc.go` COMPLETE_ section, migration note | "next terminal of the same kind", "another outcome is quarantined" | "of any kind", adoption |
@@ -58,8 +58,16 @@ the W1 scenario (retitled "… of any kind"); "A terminal of a different kind me
 
 ## 4. Declared residuals
 
+- A saved completion adopted by a terminal of another kind gets its completion triples but no #133 synthetic-decide
+  triples: `createTerminalMarker` attaches them only when `candidate.syntheticDecide != nil`, and the marker does not
+  record whether one was owed. Under W1 the original commit's stamp ran before the lost record write, so nothing is
+  missing; after a crash between the marker `Create` and `stampTerminal` the synthetic decide is lost. Before this
+  change that delivery was quarantined and the record never converged, so the residual is strictly narrower than
+  what it replaces.
 - The attempt's trajectory records the candidate's terminal (`recordHandlerResultTrajectory` runs before the owner),
   so a `decide` completion adopted as the saved failure is audited as the completion the handler derived. The same
-  holds today for a same-kind content difference; the trajectory is attempt evidence, not the loop's outcome.
+  holds today for a same-kind content difference. It is in contract: `openspec/specs/agentic-loop/spec.md:455-458`
+  — a `loop.terminal` fact means only "that one terminal outcome was observed and recorded", a redelivery MAY append
+  another, and no terminal fact is a seal.
 - A lane's own post-commit log line (the cancel lane's "Loop cancelled") still names the lane's candidate; the
   owner's "Terminal adopted" and "Loop terminal committed" lines name the committed kind.

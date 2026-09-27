@@ -2039,7 +2039,7 @@ func (m *LoopManager) settleTerminal(loopID string, adopted *terminalOutcome) {
 		// As the cold cancel adoption writes it (writeRecordCancelled).
 		reseatTerminalKind(entity, agentic.LoopStateCancelled, agentic.OutcomeCancelled)
 		entity.Result = ""
-		entity.Error = "cancelled by user"
+		entity.Error = cancelledByUserError
 		entity.CancelledBy = adopted.cancelled.CancelledBy
 		entity.CancelledAt = adopted.cancelled.CancelledAt
 		entity.CompletedAt = adopted.cancelled.CancelledAt
@@ -2087,7 +2087,7 @@ func (m *LoopManager) CancelLoop(loopID, cancelledBy string) (agentic.LoopEntity
 	entity.CancelledAt = now
 	entity.Outcome = agentic.OutcomeCancelled
 	entity.CompletedAt = now
-	entity.Error = "cancelled by user"
+	entity.Error = cancelledByUserError
 
 	// Clear queued tool calls so no further tools are dispatched.
 	delete(m.queuedToolCalls, loopID)
