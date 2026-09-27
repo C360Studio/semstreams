@@ -41,14 +41,18 @@ record, deciding from a single pre-mint read of the bucket's keys and under the 
 
 - the record is present — Start SHALL adopt its identifier as the effective `platform.id`, and SHALL fail unless the
   record's organization equals the configuration's `platform.org` and the configuration's `platform.id` equals the
-  record's stem. Configuration declares the STEM and only the stem. A configuration declaring a minted identifier
-  names that identifier's own bucket and is a new deployment there; where that bucket's record carries the declared
-  value as its minted identifier, Start SHALL refuse with guidance naming the stem to declare instead — decided by
-  comparison against the recorded identifier, never by inspecting the value's grammar. An adopted identifier SHALL be
-  validated under the same segment grammar and authority-pair bound as a configured one;
-- the record is absent and the bucket holds no other key — Start SHALL mint the entropy suffix, write the record with
-  an atomic `Create`, and adopt the result; if that `Create` conflicts with a concurrent process, Start SHALL re-read
-  the record and adopt the winner's identifier rather than its own;
+  record's stem. Configuration declares the STEM and only the stem. Where the record carries the declared value as its
+  minted identifier, Start SHALL refuse with guidance naming the stem to declare instead. An adopted identifier SHALL
+  be validated under the same segment grammar and authority-pair bound as a configured one;
+- the record is absent and the bucket holds no other key — before minting, Start SHALL list the configuration buckets
+  once and read the `platform_identity` record of every other bucket named `semstreams_config_<org>_*`, one read per
+  bucket, under the context passed to Start and without retries. When one records the configuration's `platform.org`
+  and the declared `platform.id` as its minted identifier, Start SHALL refuse with guidance naming that record's stem
+  to declare instead, and SHALL mint nothing; a sibling that cannot be read other than as absent SHALL fail Start
+  closed. Otherwise Start SHALL mint the entropy suffix, write the record with an atomic `Create`, and adopt the
+  result; if that `Create` conflicts with a concurrent process, Start SHALL re-read the record and adopt the winner's
+  identifier rather than its own. Both minted-identifier refusals are decided by comparison against recorded
+  identifiers, never by inspecting the declared value's grammar;
 - the record is absent and the bucket holds other keys — Start SHALL fail, naming that the bucket predates identity
   minting and instructing fresh storage. It SHALL mint nothing and SHALL create nothing.
 
@@ -107,11 +111,15 @@ configuration — it remains a published mirror only — and version arbitration
 - **THEN** both adopt `dep-7f3a9c` and neither creates a second record — the loser of the atomic Create reads the winner's
 - **AND** when that record is in the bucket a file declaring `other`, or a different `platform.org`, names — by hand or
   through an alias — Start returns the identity mismatch
-- **AND** when it is in the bucket a file declaring `platform.id` `dep-7f3a9c` names, Start refuses with guidance to
-  declare `dep`
+- **AND** a process whose file declares `platform.id` `dep-7f3a9c` names its own empty bucket, finds that record in
+  the sibling bucket before minting, refuses with guidance to declare `dep`, and mints nothing; a file declaring a
+  different stem still mints
+- **AND** a file declaring org `a` with `platform.id` `b_c`, whose bucket a deployment of org `a_b` with stem `c`
+  already holds, returns the identity mismatch naming the alias case
 - **AND** the tests that verify this are `TestConfigManagerAdoptsPersistedPlatformIdentity`,
-  `TestConfigManagerConcurrentFirstBootConvergesOnOneIdentity` and
-  `TestFileDeclaringTheMintedIdentifierIsRefusedWithGuidance`
+  `TestConfigManagerConcurrentFirstBootConvergesOnOneIdentity`,
+  `TestFileDeclaringTheMintedIdentifierIsRefusedWithGuidance` and
+  `TestAliasingPairsAreRefusedWithTheAliasMessage`
 
 #### Scenario: A bucket that predates identity minting refuses without minting
 

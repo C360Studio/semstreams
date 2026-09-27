@@ -37,8 +37,8 @@ landing choreography. Pins are at base `fe9482b7` (design.md § 1). Every gate l
 - [x] 2.4 Tests: `TestBucketIsNamedByTheDeclaredPair` (different pairs use different buckets, the same pair shares
       one) and `TestEnvironmentDoesNotSeparateDeployments`. The gh#459 refusal test flips to no refusal, and the
       environment-race test is deleted. Tests that relied on a foreign deployment sharing the bucket now seed a
-      foreign record into the declared pair's own bucket. Design R5 records the minted-identifier case, which is
-      handled by the doc sentence rather than code.
+      foreign record into the declared pair's own bucket. Design R5 records the minted-identifier case, ruled Q4 (b): the
+      mint branch reads the org's sibling buckets and refuses a declared minted identifier.
 - [x] 2.5 Update `test/contract` (resolving owners), `test/e2e/config` (`PlatformIdentityBucket(declared)`), the
       scenarios that read or write the bucket, and crud-tools.
 - [x] 2.6 Update the docs that spell the bucket: `config/README.md`, `docs/operations/05-model-registry.md`, and the

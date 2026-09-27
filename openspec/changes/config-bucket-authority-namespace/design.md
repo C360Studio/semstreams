@@ -140,18 +140,20 @@ existing `CoreAuthorityStem` pattern.
 - **R4.** Catalog `Write` policy stays guard-scoped (#1188's 2026-08-31 second constraint). Re-cutting acquisition did
   not make it universal. After this change `config.Manager` is the bucket's only acquirer, which narrows the question
   without answering it.
-- **R5 — found during implementation; not covered by a ruling, so taken as the doc sentence, not code.** A file that
-  declares the *minted* identifier (`platform.id` `dep-7f3a9c`) now names bucket `semstreams_config_<org>_dep-7f3a9c`.
-  It boots there as a new deployment and mints a second suffix. It is no longer refused with "declare the stem".
-  - That refusal (`config/manager.go` adoption compare) still fires, but only where the declared pair's own bucket
-    records the value as its minted identifier.
-  - This follows the 2026-09-01 ruling: "The operator-facing answer becomes a different `platform.id` … it lands in
-    the bucket name *and* in every entity ID." It also follows the standing owner preference for a doc sentence over
-    edge-case code.
-  - The code alternative would scan sibling `semstreams_config_<org>_*` buckets for a record whose `id` equals the
-    declared value, then refuse. That is observation rather than grammar, so ADR-104 allows it. It is additive and
-    can land later without migration.
-  - Recorded in the migration note; the spec delta restates the scenario.
+- **R5 — found during implementation, ruled by the owner on #1188 (docket 2, Q4 (b): "continue with
+  recommendations").** A file that declares the *minted* identifier (`platform.id` `dep-7f3a9c`) names bucket
+  `semstreams_config_<org>_dep-7f3a9c`, which is empty, so the adoption compare cannot see that the value was minted.
+  - Ruled: observation on the mint branch only. Before minting, Start lists the configuration buckets once and reads
+    `platform_identity` from each other `semstreams_config_<org>_*` bucket, one Get each, under the Start context, no
+    retries. A record with this org and `id` equal to the declared value refuses with the ADR-104 d5 guidance naming
+    its stem, and nothing is minted (`config/manager.go` `refuseDeclaredMintedIdentifier`).
+  - The prefix is over-inclusive because an org may contain `_`; the recorded org and id are compared, so that is
+    harmless. A sibling that is gone or has no record is skipped; any other read failure fails Start closed.
+  - ADR-104 d5 stays in force. It is observation, not grammar, so ADR-104's "no shape inspection" holds.
+  - Residual: the refused Start has already acquired its (empty) bucket, which stays behind. It holds no record, so a
+    later boot declaring that value is refused the same way.
+  - Tests: `TestFileDeclaringTheMintedIdentifierIsRefusedWithGuidance` (two real managers, plus the different-stem
+    negative arm); mutation M8.
 - **R6.** ADR-104 (`docs/adr/104-unique-platform-authority.md:21,32,109,146`) still spells
   `semstreams_config/platform_identity`. ADRs are history. The record's address now lives in `component-runtime-config`
   and the migration note, and its `{org, stem, id}` shape is unchanged.

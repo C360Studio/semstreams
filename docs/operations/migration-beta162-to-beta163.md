@@ -807,10 +807,10 @@ refuses a wire value that disagrees, so it needed no change.
    never re-decided (ADR-102 d7); a deliberate environment change is a fresh-storage move. (Before this, the
    environment was compared only on the subsequent-boot branch, so two first boots raced and both published.)
 8. **Declare the STEM in `platform.id`, never the minted identifier.** If you copy the effective value out of
-   `semstreams_config_<org>_<stem>/platform_identity` back into your configuration file, you name a different
-   bucket and boot a new deployment under a second suffix (#1188, below). The refusal that names the stem to declare
-   fires only where that bucket's own record carries the value. The framework composes the effective value; the file
-   names what it was composed from.
+   `semstreams_config_<org>_<stem>/platform_identity` back into your configuration file, you name a different, empty
+   bucket (#1188, below). Before minting there, Start reads the identity record of the org's other configuration
+   buckets, finds the one that recorded that value, and refuses, naming the stem to declare. The framework composes
+   the effective value; the file names what it was composed from.
 9. **A rule pack may not write a configuration bucket (`semstreams_config_<org>_<stem>`) at all.** The shared
    configuration bucket is owner-only in the
    framework bucket catalog, so a rule `update_kv` action targeting it — any key, named literally or resolved from a
@@ -853,7 +853,8 @@ refuses a wire value that disagrees, so it needed no change.
 - *(Retired by #1188.)* A second `platform.environment` against the same bucket **refuses Start, LOUD**, naming both
   environments.
 - A configuration file that declares the minted identifier instead of the stem **refuses Start, LOUD**, naming the
-  stem to declare.
+  stem to declare. Since #1188 the refusal comes from observation on first boot of the file's own, fresh bucket:
+  Start reads the org's other configuration buckets before minting and finds the record that minted the value.
 - An external writer that puts a `platform` key into the shared bucket no longer changes the running deployment's
   authority. If you relied on that as a runtime override, it is gone; identity is established at Start and nothing
   moves it afterwards.
@@ -2377,10 +2378,12 @@ manager serves other writers a key family; the rule manager exists once, in the 
 - **A name can alias.** `_` is legal inside both parts, so org `a_b` with `platform.id` `c` and org `a` with
   `platform.id` `b_c` name the same bucket. The second to boot reads the first's identity record and **refuses Start,
   LOUD**, naming both pairs. Declare pairs that do not alias.
-- **Declaring the minted identifier now names a new deployment.** A file declaring `platform.id` `dep-7f3a9c` (the
-  identifier minted from stem `dep`) names bucket `semstreams_config_<org>_dep-7f3a9c`, not `dep`'s bucket. It boots
-  as a new deployment and mints its own suffix. The ADR-104 guidance refusal ("declare the stem") fires only when that
-  bucket's own record carries the declared value as its minted identifier. Keep declaring the stem.
+- **Declaring the minted identifier is still refused, by a new check.** A file declaring `platform.id` `dep-7f3a9c`
+  (the identifier minted from stem `dep`) names bucket `semstreams_config_<org>_dep-7f3a9c`, which is empty. Before
+  minting into it, Start lists the configuration buckets once, reads `platform_identity` from every other
+  `semstreams_config_<org>_*` bucket, and refuses with the ADR-104 guidance ("declare the stem `dep`") when one
+  recorded `dep-7f3a9c`. Nothing is minted; the refused Start leaves the empty bucket behind, and you can delete it.
+  An unreadable sibling bucket fails Start closed rather than risk a second authority. Keep declaring the stem.
 
 ### The obligations
 
@@ -2407,9 +2410,36 @@ manager serves other writers a key family; the rule manager exists once, in the 
    - calls `rcm.Start(ctx, targets)` after its services start, where `targets` are its `rule.HotReloadTarget`s (every
      `*rule.Processor` is one), and `rcm.Stop()` before they stop.
 
-   Known holder: semteams `ce22c961` `cmd/semteams/main.go:549-557` (`buildRuleManager`, already on a stale
-   `InitializeKVStore` signature). A root that skips this still runs its rule processors with the rules they loaded
-   from files and inline configuration, with no hot reload.
+   The shape to copy, from this repo's root (`internal/boot/run.go`):
+
+   ```go
+   rcm, err := rule.NewConfigManager(logger)
+   if err != nil {
+       return err
+   }
+   cm, err := config.NewConfigManager(cfg, natsClient, logger, config.WithKeyFamily(rcm.KeyFamily()))
+   // ... cm.Start(ctx), build the services, hand rcm to the agent tools ...
+   targets := service.ComponentsImplementing[rule.HotReloadTarget](serviceManager)
+   // after serviceManager.StartAll(ctx) succeeds:
+   if err := rcm.Start(ctx, targets); err != nil {
+       return err
+   }
+   // on shutdown, before serviceManager.StopAll(ctx):
+   err = errors.Join(rcm.Stop(), serviceManager.StopAll(ctx))
+   ```
+
+   Roots that register the framework `componentregistry` (and with it `rule.Register`,
+   `componentregistry/register.go:201`) and so run rule processors, read-only at their current heads:
+   - semsource `cmd/semsource/run.go`
+   - semspec `cmd/semspec/main.go`
+   - semmem `cmd/semmem/main.go`
+   - semdev `internal/boot/boot.go`
+   - semteams `ce22c961` `cmd/semteams/main.go:549-557` (`buildRuleManager`, already on a stale `InitializeKVStore`
+     signature, so it stops compiling)
+
+   **A root that does not wire this keeps its file and inline rules only, with no signal**: it still compiles unless
+   it called the old `rule.NewConfigManager`, and its rule processors never see a KV-authored rule, never seed the
+   bucket, and log nothing about it (owner ruling on #1188, Q5 (a): documented, no runtime warning).
 5. **`config.NewConfigManager` takes `...ManagerOption`** (additive). A `platform.org` or `platform.id` that cannot
    name a bucket is refused at construction. Configuration validation already refuses every such pair.
 6. **A rule pack still may not write the configuration bucket** (obligation 9 above). The owner-only guard now covers
@@ -2422,3 +2452,6 @@ manager serves other writers a key family; the rule manager exists once, in the 
   is the fix.
 - Tooling that reads the literal `semstreams_config` reads the orphan: stale values from before the upgrade, or
   key-not-found on a fresh server.
+- A composition root that does not wire the rule manager (obligation 4: semsource, semspec, semmem, semdev, semteams)
+  loses rule hot reload **silently**. File and inline rules still apply; rules written to `rules.*` never reach a
+  processor, the bucket is never seeded, and nothing is logged.
