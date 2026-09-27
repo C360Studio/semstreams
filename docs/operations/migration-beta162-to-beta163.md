@@ -2447,10 +2447,18 @@ manager serves other writers a key family; the rule manager exists once, in the 
 6. **A rule pack still may not write the configuration bucket** (obligation 9 above). The owner-only guard now covers
    every `semstreams_config_<suffix>` member, not one fixed name.
 7. **A rule ID is one KV literal token** (`natsclient.ValidateKVLiteralToken`: ASCII letters, digits, `-`, `/`, `_`,
-   `=`, at most 512 bytes). A rule ID is a member name of the `rules` key family, and a name holding `.` is now refused
-   at write with an invalid error, as is any other name outside that alphabet. Before, a dotted name was stored and
-   never hot-reloaded, because the watch `rules.*` never delivered it. A file or inline rule with such an ID is not seeded
-   (the seed logs a warning), so the first reconcile's full replace removes it from the processor. Rename such rules.
+   `=`, at most 512 bytes). A rule ID is the member name of the `rules` key family, whose watch `rules.*` delivers
+   exactly one token. Every byte outside that alphabet except `.`, `:` for one, was never storable: nats.go's key
+   grammar refused it at write. So the only newly refused class is an ID containing `.` (and, at the edge, one name over 512
+   bytes). Before, a dotted ID was stored and never hot-reloaded. Two lines now refuse it:
+   - **Definition validation, loudly, naming the rule** (owner ruling on #1188, Q8 (b)). `rule.ValidateDefinition`
+     refuses the ID, so an inline rule fails `rule.Config.Validate`, a rule file fails the rule processor's
+     preflight and Start, and `rule.ConfigManager.SaveRule` refuses the definition before writing.
+   - **The key family, at write.** Every family read and write refuses a member name that is not one token, before
+     any I/O. It catches a caller that writes the family directly, or passes `SaveRule` a key that differs from the
+     definition's ID.
+
+   Rename such rules.
 
 ### Doing nothing
 

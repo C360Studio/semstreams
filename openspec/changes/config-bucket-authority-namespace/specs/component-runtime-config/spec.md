@@ -213,6 +213,8 @@ The prefix and every member name SHALL each be one NATS KV literal token, becaus
 exactly one token after the prefix. A read or write naming anything else, or passing a nil context, SHALL return an
 invalid error before any bucket access, and a key with more than one token after `<prefix>.` SHALL NOT be listed as a
 member.
+The rule processor SHALL also refuse a rule whose ID is not one KV literal token at definition validation, naming the
+rule, so a file or inline rule with a dotted ID fails loudly before any write.
 
 The rule engine's `rules.*` family SHALL be registered this way, by the composition root, which owns the one rule
 `ConfigManager`. That manager SHALL serve rule CRUD through the family. After every service has started it SHALL seed
