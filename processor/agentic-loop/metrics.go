@@ -160,6 +160,10 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Help:      "Total tool results received by status",
 			}, []string{"status"}),
 
+			// reason="terminal_unproven" also counts a non-terminal result the
+			// carrier settled because its loop went terminal or was released
+			// mid-delivery, on every lane — approval answer, model response and
+			// sweeper auto-reject included (#1377, recordTerminalToolResultDropped).
 			toolResultsDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Namespace: "semstreams",
 				Subsystem: "agentic_loop",
