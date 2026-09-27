@@ -641,6 +641,26 @@ func TestFileDeclaringTheMintedIdentifierIsRefusedWithGuidance(t *testing.T) {
 	require.NotEqual(t, minted, other.GetConfig().Get().Platform.ID)
 }
 
+// TestAliasingPairsAreRefusedWithTheAliasMessage: `_` is legal inside both
+// parts, so org "a_b" + stem "c" and org "a" + stem "b_c" name one bucket. The
+// ruled answer is a refusal at adoption, not injective naming (#1188, Q2 (a)).
+func TestAliasingPairsAreRefusedWithTheAliasMessage(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	first := newIdentityManager(t, tc, "a_b", "c")
+	require.NoError(t, first.Start(ctx))
+	defer first.Stop(5 * time.Second)
+
+	alias := newIdentityManager(t, tc, "a", "b_c")
+	require.Equal(t, first.bucketName, alias.bucketName, "precondition: the two pairs alias to one bucket")
+	err := alias.Start(ctx)
+	require.ErrorContains(t, err, "config bucket platform identity mismatch")
+	require.ErrorContains(t, err, "two pairs alias to one name")
+	require.ErrorContains(t, err, first.bucketName)
+}
+
 // TestStartRejectsNilContextWithoutSideEffects pins the repository hard rule at
 // the boundary the B4 fix created: Start became this package's exported,
 // error-returning, context-taking seam, so it must REJECT a nil context rather
