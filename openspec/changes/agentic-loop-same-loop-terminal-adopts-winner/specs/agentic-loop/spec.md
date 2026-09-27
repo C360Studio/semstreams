@@ -271,9 +271,9 @@ refuses is not supported, and the refusal is permanent at birth.
   adopts it by loop identifier through the terminal owner, whatever terminal kind it derives; a timer is never
   redelivered
 - **AND** the recovery path is declared under `The loop record names its outstanding request`: the loop's next
-  terminal of any kind adopts the marker and converges the record, and a sweeper terminal is adopted on the next answer to its
-  gate; a cancel of that gated loop is retried to exhaustion; neither adds a row nor changes a row's disposition
-  here — the carrier's refusal widens the terminal-guard row's condition
+  terminal of any kind adopts the marker and converges the record, and a sweeper terminal is adopted on the next
+  answer to its gate; a cancel of that gated loop is retried to exhaustion; neither adds a row nor changes a row's
+  disposition here — the carrier's refusal widens the terminal-guard row's condition
 
 #### Scenario: A rebuilt loop's terminal event carries the prompt its record accepted
 
@@ -404,8 +404,9 @@ and the durable terminal is adopted when that call's result ends the loop, whate
 that completes the batch re-derives the failure, and a result that instead derives a completion — an approved
 terminal tool such as `decide`, which returns `StopLoop` — adopts the saved failure as the durable winner. Either way
 the saved failure is republished, the record is written terminal with the saved reason, the delivery is acknowledged,
-and the process's `tool.result` lane keeps consuming for every loop. Until that answer, a cancel of that loop is retried until
-the signal consumer's redelivery budget is exhausted and is observed there, never applied, because the cold cancel arm
+and the process's `tool.result` lane keeps consuming for every loop. Until that answer, a cancel of that loop is
+retried until the signal consumer's redelivery budget is exhausted and is observed there, never applied, because the
+cold cancel arm
 adopts only a cancel marker. A non-terminal result that reaches the carrier after its loop went terminal in memory, or
 after the loop was released, SHALL publish no work and write no loop record — its audit attempt for the observations
 the handler already collected proceeds first, as for any ordinary attempt — and a non-terminal result whose loop is
@@ -663,10 +664,10 @@ deadline from then on.
 - **WHEN** the loop reaches its own next terminal, of the durable terminal's kind or another, in the process that
   holds it next
 - **THEN** the terminal owner there adopts the durable terminal by loop ID, republishes the saved event, writes the
-  record terminal under compare-and-swap in the durable terminal's kind and counts the terminal once, as that kind; the input that produced A's terminal, when
-  redelivered, is acknowledged as older; and between the lost write and that terminal the loop ran ordinary work under
-  a durable terminal, bounded by its remaining iteration budget and `timeout_at` (no time bound while `timeout_at` is
-  zero or the loop is gated)
+  record terminal under compare-and-swap in the durable terminal's kind and counts the terminal once, as that kind;
+  the input that produced A's terminal, when redelivered, is acknowledged as older; and between the lost write and
+  that terminal the loop ran ordinary work under a durable terminal, bounded by its remaining iteration budget and
+  `timeout_at` (no time bound while `timeout_at` is zero or the loop is gated)
 
 #### Scenario: A terminal of a different kind meeting the loop's durable terminal adopts it
 
