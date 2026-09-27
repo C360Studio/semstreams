@@ -1143,11 +1143,12 @@ refuses is not supported, and the refusal is permanent at birth.
 - **GIVEN** a terminal whose `COMPLETE_<loopID>` and event landed and whose record write lost its compare-and-swap, or
   an approval-timeout sweep terminal whose marker landed and whose publication failed
 - **THEN** the commitment is known for the marker and unknown for the record; a redelivered input meeting the marker
-  adopts it by loop identifier and terminal kind through the terminal owner; a timer is never redelivered
-- **AND** the recovery path is declared under `The loop record names its outstanding request`: a same-kind later
-  terminal adopts the marker and converges the record, and a sweeper terminal is adopted on the next answer to its
-  gate; a cancel of that gated loop is retried to exhaustion; neither adds a row nor changes a row's disposition
-  here — the carrier's refusal widens the terminal-guard row's condition
+  adopts it by loop identifier through the terminal owner, whatever terminal kind it derives; a timer is never
+  redelivered
+- **AND** the recovery path is declared under `The loop record names its outstanding request`: the loop's next
+  terminal of any kind adopts the marker and converges the record, and a sweeper terminal is adopted on the next
+  answer to its gate; a cancel of that gated loop is retried to exhaustion; neither adds a row nor changes a row's
+  disposition here — the carrier's refusal widens the terminal-guard row's condition
 
 #### Scenario: A rebuilt loop's terminal event carries the prompt its record accepted
 
@@ -1696,8 +1697,12 @@ request with no durable gate behind it. A terminal outcome SHALL be committed as
 before its terminal event is published, and the loop entity's terminal state SHALL be written after that event, the
 approval-timeout sweeper's automatic rejection included. The terminal transition SHALL clear the loop's approval gate,
 so a terminal record carries neither `pending_approval` nor `state_before_approval`. A redelivered terminal input
-SHALL adopt the loop's durable terminal by loop ID and terminal kind. On that commit path a durable terminal of a
-different kind from the one the redelivered input derives SHALL be quarantined, not adopted: the first terminal wins.
+SHALL adopt the loop's durable terminal by loop ID. On that commit path a durable terminal of a different kind from
+the one the delivery derives for the same loop SHALL be adopted, not quarantined: the first terminal wins, and once
+create-once has decided, the later terminal is stale, not poison. The loop entity SHALL be re-seated to the durable
+terminal's kind, with the losing outcome's result or error cleared, the saved event SHALL be republished, the record
+SHALL be written terminal from it, and the delivery SHALL be acknowledged. A durable terminal naming another loop
+SHALL be refused, and the delivery quarantined.
 A redelivered cancel that reaches a process not holding the loop, whose record is live and whose durable terminal is a
 cancel, SHALL adopt that cancel; when that durable terminal is a completion or a failure, the cancel SHALL be retried,
 not quarantined, because the loop's own terminal redelivery writes the record terminal. A terminal whose record update
@@ -1705,21 +1710,21 @@ loses its compare-and-swap after `COMPLETE_<loopID>` and its event have landed l
 published event over a live record — whether the record moved under a second process, under this process's own
 adoption of a newer retained request for a loop it still held, or under a spawn-path birth failure with a
 producer-supplied loop ID. The record converges at the loop's next terminal commit in whichever process holds it next:
-a terminal of the same kind adopts the durable terminal, republishes it and writes the record from it; a terminal of a
-different kind is refused and quarantined, the first terminal wins. Until then the loop runs on under a durable
+the loop's next terminal of any kind converges the record — it adopts the durable terminal, republishes it and writes
+the record from it. Until then the loop runs on under a durable
 terminal, bounded only by its own remaining iteration budget and `timeout_at`, with no time bound while `timeout_at`
 is zero or the loop is gated. An approval-timeout sweep terminal (its `max_iterations` auto-reject, or the loop's own
 timeout) that commits `COMPLETE_<loopID>` and then fails to publish leaves a durable failed terminal under a record
 that stays `awaiting_approval`: a timer is never redelivered, and the record converges only on the next answer to that
 gate. A reject, and any answer to a loop past its own deadline, dispatches nothing: the rebuilt loop re-derives the
 failure and adopts the durable terminal. An approve of a loop at its iteration cap dispatches the approved call once,
-and the durable terminal is adopted when that call's result completes the batch with a terminal of the same kind; a
-result that instead derives a completion — an approved terminal tool such as `decide`, which returns `StopLoop` —
-meets the saved failure as a different kind and is refused and quarantined, and the record stays non-terminal: the
-first terminal wins, and the loop converges only on a later terminal of the same kind or not at all. That quarantine
-latches the process's `tool.result` lane: loop health reads `delivery ownership lost`, the lane's handle drains, and
-tool results for every loop in that process stop until the process restarts. A cancel of that loop is retried until
-the signal consumer's redelivery budget is exhausted and is observed there, never applied, because the cold cancel arm
+and the durable terminal is adopted when that call's result ends the loop, whatever terminal it derives: a result
+that completes the batch re-derives the failure, and a result that instead derives a completion — an approved
+terminal tool such as `decide`, which returns `StopLoop` — adopts the saved failure as the durable winner. Either way
+the saved failure is republished, the record is written terminal with the saved reason, the delivery is acknowledged,
+and the process's `tool.result` lane keeps consuming for every loop. Until that answer, a cancel of that loop is
+retried until the signal consumer's redelivery budget is exhausted and is observed there, never applied, because the
+cold cancel arm
 adopts only a cancel marker. A non-terminal result that reaches the carrier after its loop went terminal in memory, or
 after the loop was released, SHALL publish no work and write no loop record — its audit attempt for the observations
 the handler already collected proceeds first, as for any ordinary attempt — and a non-terminal result whose loop is
@@ -1954,7 +1959,7 @@ deadline from then on.
 - **GIVEN** a loop whose durable terminal (`COMPLETE_<loopID>`) exists and whose record is not yet terminal, because the
   process crashed after publishing the terminal event and before the record update
 - **WHEN** the input that produced the terminal is redelivered and this delivery derives a terminal whose content differs
-- **THEN** the loop adopts the durable terminal by loop ID and terminal kind, publishes it, writes the record terminal under
+- **THEN** the loop adopts the durable terminal by loop ID, publishes it, writes the record terminal under
   compare-and-swap, acknowledges, and logs the content difference at the audit line without retrying or quarantining
 
 #### Scenario: A governance verdict naming a request of another loop is terminated and the verdict lane keeps consuming
@@ -1968,25 +1973,31 @@ deadline from then on.
   never acknowledged as applied, because the request is checked before membership; the verdict consumer is not
   stopped, so one misconfigured verdict rule terminates only its own deliveries and later verdicts are still consumed
 
-#### Scenario: A terminal whose record write was lost converges at the loop's next terminal of the same kind
+#### Scenario: A terminal whose record write was lost converges at the loop's next terminal of any kind
 
 - **GIVEN** a loop held by process A whose terminal committed `COMPLETE_<loopID>` and published its event, and whose
   record write lost its compare-and-swap because process B had rebuilt the loop from a redelivered input and advanced
   the record to a later request — or because A's own cold adoption of a newer retained request wrote the loop it still
   held
-- **WHEN** the loop reaches its own terminal of the same kind in the process that holds it next
-- **THEN** the terminal owner there adopts the durable terminal by loop ID and kind, republishes the saved event, writes
-  the record terminal under compare-and-swap and counts the terminal once; the input that produced A's terminal, when
-  redelivered, is acknowledged as older; and between the lost write and that terminal the loop ran ordinary work under
-  a durable terminal, bounded by its remaining iteration budget and `timeout_at` (no time bound while `timeout_at` is
-  zero or the loop is gated)
+- **WHEN** the loop reaches its own next terminal, of the durable terminal's kind or another, in the process that
+  holds it next
+- **THEN** the terminal owner there adopts the durable terminal by loop ID, republishes the saved event, writes the
+  record terminal under compare-and-swap in the durable terminal's kind and counts the terminal once, as that kind;
+  the input that produced A's terminal, when redelivered, is acknowledged as older; and between the lost write and
+  that terminal the loop ran ordinary work under a durable terminal, bounded by its remaining iteration budget and
+  `timeout_at` (no time bound while `timeout_at` is zero or the loop is gated)
 
-#### Scenario: A terminal of a different kind meeting a durable terminal is refused
+#### Scenario: A terminal of a different kind meeting the loop's durable terminal adopts it
 
 - **GIVEN** the same loop, with `COMPLETE_<loopID>` holding a completion
 - **WHEN** the loop fails instead
-- **THEN** the failure is refused rather than adopted — the marker is not overwritten, no event is published, the record
-  is not written — and the delivery is quarantined: the first terminal wins
+- **THEN** the failure adopts the durable completion rather than being refused — the marker is not overwritten, the
+  saved completion is republished and no failure event is published, the record is written `complete` with the
+  completion's result and no error, the terminal is counted once as a completion — and the delivery is
+  acknowledged: the first terminal wins
+- **WHEN** `COMPLETE_<loopID>` instead holds a terminal whose loop ID is another loop's
+- **THEN** the terminal is refused — the marker is not overwritten, no event is published, the record is not
+  written — and the delivery is quarantined
 
 #### Scenario: A sweeper terminal whose publication failed is adopted on the next answer to its gate
 
@@ -2004,11 +2015,11 @@ deadline from then on.
   terminal
 - **WHEN** the approved call is instead a terminal tool, such as `decide`, whose result ends the loop with a
   completion
-- **THEN** the completion meets the saved failure as a different kind: the terminal owner refuses it, the delivery is
-  quarantined, `COMPLETE_<loopID>` keeps the failure, no completion event is published and the record stays
-  non-terminal — the first terminal wins, and the loop converges only on a later terminal of the same kind or not at
-  all; the quarantine latches the process's `tool.result` lane: loop health reads `delivery ownership lost`, the
-  lane's handle drains, and tool results for every loop in that process stop until the process restarts
+- **THEN** the completion meets the saved failure as a different kind and adopts it as the durable winner:
+  `COMPLETE_<loopID>` keeps the failure, the saved failure event is republished and no completion event is
+  published, the record is written `failed` with the saved reason and the gate cleared, and the delivery is
+  acknowledged as an ordinary commit — no quarantine; loop health is not latched, and a tool result for another loop
+  in the same process is still consumed and applied
 - **WHEN** a cancel signal for that loop is delivered instead
 - **THEN** it is retried — the cold cancel arm adopts only a cancel marker — until the signal consumer's redelivery
   budget is exhausted and recorded in the MaxDeliver ledger; the record stays `awaiting_approval` and converges only on

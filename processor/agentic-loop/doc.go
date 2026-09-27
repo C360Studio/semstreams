@@ -395,9 +395,10 @@
 // created once, by Create, BEFORE the terminal event (agent.complete /
 // agent.failed) is published, and the loop's own record is written terminal
 // only AFTER that event (#1362). A redelivered terminal whose Create is
-// refused adopts the saved terminal by loop ID and outcome and republishes
-// it; it never overwrites it, and a saved terminal of another outcome is
-// quarantined (the first terminal wins). A terminal produced by the
+// refused adopts the saved terminal by loop ID, whatever its outcome, and
+// republishes it; it never overwrites it — the first terminal wins, and the
+// loop's record is written in the saved outcome (#1399). A saved terminal
+// naming another loop is quarantined. A terminal produced by the
 // approval-timeout sweeper's auto-reject (a max_iterations failure) takes the
 // same order.
 //

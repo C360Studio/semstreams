@@ -16,8 +16,9 @@ import (
 
 // W1 of #1377, the documented bound (OQ1 (a)): a terminal whose record write
 // lost its compare-and-swap after COMPLETE_<loopID> and its event landed. The
-// test asserts the bound, not a fix — there is no mutation, because nothing
-// here is new code (design § 4 T1).
+// same-kind arm asserts the bound, not a fix (design § 4 T1). The
+// different-kind arm is #1399's: the loop's next terminal of any kind
+// converges the record.
 //
 // Two processes over one broker, the predecessor/replacement pattern: A holds
 // the loop at R1 with the model request outstanding; B, with no memory of the
@@ -123,10 +124,13 @@ func TestALostTerminalRecordConvergesAtTheLoopsNextTerminal(t *testing.T) {
 		require.ErrorIs(t, heldErr, ErrLoopNotFound)
 	})
 
-	t.Run("a terminal of a different kind is refused", func(t *testing.T) {
+	// #1399 (owner ruling #1146 issuecomment-5854830449, Q2): the loop's next
+	// terminal of ANY kind converges the record. B's loop fails where A's
+	// completed; the failure adopts A's durable completion.
+	t.Run("a terminal of a different kind adopts the durable terminal", func(t *testing.T) {
 		b, handlerB, client, loopID, marker := lostTerminalRecord(t)
 		secondRequest := looprequest.ID{LoopID: loopID, Iteration: 2, Retry: 0}.String()
-		before := loopRecordOf(t, b, loopID)
+		completedBefore := testutil.ToFloat64(b.metrics.loopsCompleted)
 		failedBefore := testutil.ToFloat64(b.metrics.loopsFailed.WithLabelValues("model_error"))
 
 		failure, err := handlerB.HandleModelResponse(t.Context(), loopID, agentic.AgentResponse{
@@ -134,19 +138,25 @@ func TestALostTerminalRecordConvergesAtTheLoopsNextTerminal(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, agentic.LoopStateFailed, failure.State)
-		err = b.persistHandlerResult(t.Context(), failure)
+		require.NoError(t, b.persistHandlerResult(t.Context(), failure),
+			"a different kind adopts the durable terminal: an ordinary commit, never a quarantine")
 
-		require.Error(t, err)
-		require.True(t, errs.IsFatal(err), "a different kind is refused and quarantined: the first terminal wins")
-		entry, getErr := b.loopsBucket.Get(t.Context(), terminalMarkerKey(loopID))
-		require.NoError(t, getErr)
+		record := loopRecordOf(t, b, loopID)
+		require.Equal(t, agentic.LoopStateComplete, record.entity.State,
+			"the record converges terminal in the durable terminal's kind")
+		require.Equal(t, "done in A", record.entity.Result, "with the durable completion's result")
+		require.Empty(t, record.entity.Error, "and not the losing failure's error")
+		entry, err := b.loopsBucket.Get(t.Context(), terminalMarkerKey(loopID))
+		require.NoError(t, err)
 		require.Equal(t, string(marker), string(entry.Value()), "the marker is still the completion")
 		require.Zero(t, messagesOn(t, client, "agent.failed."+loopID), "no failure event is published")
-		require.Equal(t, uint64(1), messagesOn(t, client, "agent.complete."+loopID),
-			"and the durable completion's event is not republished by a refused terminal")
-		after := loopRecordOf(t, b, loopID)
-		require.Equal(t, before.revision, after.revision, "the record is not written")
+		require.Equal(t, uint64(2), messagesOn(t, client, "agent.complete."+loopID),
+			"A's event, and the saved completion republished by the adopting commit")
+		require.Equal(t, completedBefore+1, testutil.ToFloat64(b.metrics.loopsCompleted),
+			"the terminal is counted once, as the durable completion")
 		require.Equal(t, failedBefore, testutil.ToFloat64(b.metrics.loopsFailed.WithLabelValues("model_error")),
-			"a refused terminal is not counted")
+			"the failure that lost is not counted")
+		_, heldErr := handlerB.GetLoop(loopID)
+		require.ErrorIs(t, heldErr, ErrLoopNotFound)
 	})
 }

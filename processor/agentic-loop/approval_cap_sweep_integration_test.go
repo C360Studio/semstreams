@@ -137,15 +137,16 @@ func TestASweepAtTheIterationCapWhosePublishFailedSettlesOnTheNextAnswer(t *test
 			"nothing further is dispatched once the batch completes at the cap")
 	})
 
-	// The documented bound's other edge (#1377, Codex merge review finding 2;
-	// an (a) row, so no mutation): an approved TERMINAL tool — `decide`
-	// returns StopLoop: true — derives a completion before the iteration-cap
-	// check, and a completion is a different kind from the saved failure.
-	// The terminal owner refuses it: the first terminal wins, nothing adopts
-	// the durable failure, and the record stays non-terminal. The approved
-	// call's result is SHAPED as the terminal tool's (StopLoop, its content
-	// the decision); the real decide executor lives in agentic-tools.
-	t.Run("an approved terminal tool's completion is refused against the saved failure", func(t *testing.T) {
+	// The approved TERMINAL tool at the cap (#1399; owner ruling #1146
+	// issuecomment-5854830449, Q2): `decide` returns StopLoop: true, so the
+	// result derives a completion before the iteration-cap check, and a
+	// completion is a different kind from the saved failure. Before #1399 the
+	// terminal owner refused it and the delivery was quarantined; now the
+	// saved failure is the durable winner — adopted, republished, and the
+	// record written from it. The approved call's result is SHAPED as the
+	// terminal tool's (StopLoop, its content the decision); the real decide
+	// executor lives in agentic-tools.
+	t.Run("an approved terminal tool's completion adopts the saved failure as the durable winner", func(t *testing.T) {
 		a, marker := sweptAtTheCap(t, newLoopNATS(t))
 		completedBefore := testutil.ToFloat64(a.c.metrics.loopsCompleted)
 		failedBefore := testutil.ToFloat64(a.c.metrics.loopsFailed.WithLabelValues("max_iterations"))
@@ -155,8 +156,6 @@ func TestASweepAtTheIterationCapWhosePublishFailedSettlesOnTheNextAnswer(t *test
 		require.Equal(t, natsclient.DeliveryDecisionAck, settled)
 		require.Equal(t, 1, approvedToolCallsOn(t, a.c.natsClient, coldApprovalLoopID),
 			"fixture: the approved call is published once")
-		approved := persistedLoop(t, a.bucket, coldApprovalLoopID)
-		approvedRevision := a.c.readLoopRecord(t.Context(), coldApprovalLoopID).revision
 
 		_, delivered := deliverToolResult(t, a.c, agentic.ToolResult{
 			CallID: a.gate.CallID, Name: a.gate.ToolName, Content: "decided: delete the rule", StopLoop: true,
@@ -164,21 +163,18 @@ func TestASweepAtTheIterationCapWhosePublishFailedSettlesOnTheNextAnswer(t *test
 			CallOrdinal: a.gate.CallOrdinal,
 		})
 
-		require.Equal(t, natsclient.DeliveryDecisionQuarantine, delivered.Decision(),
-			"a completion meeting a durable failure is refused: the first terminal wins")
-		current, ok := a.bucket.value(terminalMarkerKey(coldApprovalLoopID))
-		require.True(t, ok)
-		require.Equal(t, string(marker), string(current), "the saved failure is kept byte for byte")
+		require.Equal(t, natsclient.DeliveryDecisionAck, delivered.Decision(),
+			"a completion meeting this loop's durable failure adopts it: an ordinary commit, never a quarantine")
+		requireAdoptedAtTheCap(t, a, marker, failedBefore)
+		require.Equal(t, "max_iterations", terminalMarkerOf(t, a.bucket, coldApprovalLoopID)["reason"])
+		require.Equal(t, uint64(1), messagesOn(t, a.c.natsClient, "agent.failed."+coldApprovalLoopID),
+			"the saved failure event is republished once")
 		require.Zero(t, messagesOn(t, a.c.natsClient, "agent.complete."+coldApprovalLoopID),
 			"no completion event is published")
-		after := persistedLoop(t, a.bucket, coldApprovalLoopID)
-		require.False(t, after.State.IsTerminal(), "the record stays non-terminal")
-		require.Equal(t, approved.State, after.State)
-		require.Equal(t, approvedRevision, a.c.readLoopRecord(t.Context(), coldApprovalLoopID).revision,
-			"at the revision the approve wrote")
-		require.Equal(t, completedBefore, testutil.ToFloat64(a.c.metrics.loopsCompleted), "nothing is counted")
-		require.Equal(t, failedBefore, testutil.ToFloat64(a.c.metrics.loopsFailed.WithLabelValues("max_iterations")),
-			"nor is the saved failure counted again")
+		require.Empty(t, persistedLoop(t, a.bucket, coldApprovalLoopID).Result,
+			"the losing completion's result is not written")
+		require.Equal(t, completedBefore, testutil.ToFloat64(a.c.metrics.loopsCompleted),
+			"the completion that lost is not counted")
 	})
 
 	t.Run("a cancel is retried and never settles the record", func(t *testing.T) {
@@ -203,19 +199,21 @@ func TestASweepAtTheIterationCapWhosePublishFailedSettlesOnTheNextAnswer(t *test
 	})
 }
 
-// The terminal-tool refusal's availability cost, observed on the production
-// lanes (#1377 review 3 MEDIUM A; an (a) row, so no mutation). The fourth arm
-// above settles through deliverylane.Consume with no admission, so it cannot
-// see what a quarantine does to the lane that took it. Here the W2 state is
-// built on a startRaceLane process: a gated loop at its iteration cap, an
-// approval-timeout sweep that commits its max_iterations failure and cannot
-// publish it, and then a cold approve and the approved terminal tool's
-// completion on the tool.result lane. The refusal quarantines the result, and
-// that latches loop health and drains the process's tool.result lane: a valid
-// tool result for another loop in the same process is then refused unsettled.
+// The terminal tool at the cap on the production lanes (#1399, inverting the
+// #1377 review 3 MEDIUM A observation; owner ruling #1146
+// issuecomment-5854830449, Q2). The fourth arm above settles through
+// deliverylane.Consume with no admission, so it cannot see what the lane does
+// with the disposition. Here the W2 state is built on a startRaceLane
+// process: a gated loop at its iteration cap, an approval-timeout sweep that
+// commits its max_iterations failure and cannot publish it, and then a cold
+// approve and the approved terminal tool's completion on the tool.result lane.
+// The completion adopts the saved failure and is acknowledged; before #1399 it
+// was quarantined, which latched loop health and drained the lane, and a valid
+// tool result for another loop in the same process was then refused
+// unsettled. That second loop's result is now consumed and applied.
 //
 // spec: agentic-loop / The loop record names its outstanding request
-func TestAnApprovedTerminalToolRefusedAtTheCapLatchesTheToolResultLane(t *testing.T) {
+func TestAnApprovedTerminalToolAtTheCapAdoptsTheSavedFailureAndTheLaneKeepsConsuming(t *testing.T) {
 	lane := startRaceLane(t)
 	c, h := lane.c, lane.h
 	loopID, gate := gatedLaneLoop(t, lane, "task-cap-terminal-tool")
@@ -252,30 +250,38 @@ func TestAnApprovedTerminalToolRefusedAtTheCapLatchesTheToolResultLane(t *testin
 		LoopID: loopID, RequestID: gate.RequestID, ExecutionID: gate.ExecutionID, CallOrdinal: gate.CallOrdinal,
 	}))
 	waitFor(t, resultDone, "terminal tool result returned")
-	// The owner stop drains the exact handle after the callback returns.
-	waitFor(t, lane.handles["tool.result"].drained, "the tool.result lane's owner stop")
-	health := c.Health()
-	t.Logf("terminal tool at the cap: %s; drains=%d; health %q %q",
-		heartbeatDisposition(resultMsg), lane.handles["tool.result"].drains.Load(), health.Status, health.LastError)
+	t.Logf("terminal tool at the cap: %s; drains=%d", heartbeatDisposition(resultMsg),
+		lane.handles["tool.result"].drains.Load())
 
-	require.Zero(t, resultMsg.acks.Load()+resultMsg.naks.Load()+resultMsg.terms.Load(),
-		"the refused completion is quarantined: no terminal method at all")
-	require.Equal(t, int32(1), lane.handles["tool.result"].drains.Load(), "the tool.result lane's consumer is drained")
-	require.Equal(t, "delivery ownership lost", health.Status, "loop health is latched")
+	require.Equal(t, int32(1), resultMsg.acks.Load(),
+		"the completion adopts the saved failure and is acknowledged (%s)", heartbeatDisposition(resultMsg))
+	require.Zero(t, resultMsg.naks.Load()+resultMsg.terms.Load())
 	after, err := c.loopsBucket.Get(t.Context(), terminalMarkerKey(loopID))
 	require.NoError(t, err)
 	require.Equal(t, string(marker.Value()), string(after.Value()), "the saved failure is kept byte for byte")
+	require.Equal(t, uint64(1), messagesOn(t, lane.client, "agent.failed."+loopID),
+		"the saved failure event is republished")
 	require.Zero(t, messagesOn(t, lane.client, "agent.complete."+loopID), "no completion event is published")
-	require.Equal(t, approved.revision, loopRecordOf(t, c, loopID).revision, "the record is not written")
+	terminal := loopRecordOf(t, c, loopID)
+	require.Equal(t, agentic.LoopStateFailed, terminal.entity.State, "the record is terminal in the saved kind")
+	require.Contains(t, terminal.entity.Error, "max iterations", "with the saved failure's error")
+	require.Nil(t, terminal.entity.PendingApproval)
+	require.Less(t, approved.revision, terminal.revision, "the record is written past the approve's revision")
+	requireLaneNotLatched(t, lane, "tool.result")
 
-	// Every loop in this process: a valid tool result for another loop is
-	// refused by the latched lane, unsettled.
+	// Every other loop in this process: a valid tool result for another loop
+	// is consumed and applied.
+	otherBefore := loopRecordOf(t, c, otherLoopID)
 	otherMsg, otherDone := deliverHeartbeatOn(t, lane, "tool.result", baseMessageBytes(t, &agentic.ToolResult{
 		CallID: otherCall.ID, Name: otherCall.Name, Content: "searched", LoopID: otherLoopID,
 		RequestID: otherCall.RequestID, ExecutionID: otherCall.ExecutionID, CallOrdinal: otherCall.CallOrdinal,
 	}))
 	waitFor(t, otherDone, "the other loop's tool result returned")
-	require.Zero(t, otherMsg.acks.Load()+otherMsg.naks.Load()+otherMsg.terms.Load(),
-		"the latched lane refuses a valid result for another loop, unsettled")
-	require.Contains(t, lane.logs.String(), `msg="Loop delivery refused by latched lane" lane=tool.result`)
+	require.Equal(t, int32(1), otherMsg.acks.Load(),
+		"the lane still consumes another loop's result (%s)", heartbeatDisposition(otherMsg))
+	otherAfter := loopRecordOf(t, c, otherLoopID)
+	require.Less(t, otherBefore.revision, otherAfter.revision, "and applies it: the other loop's record moves")
+	require.NotEqual(t, otherCall.RequestID, otherAfter.entity.PublishedRequestID,
+		"its completed batch published the loop's next request")
+	requireLaneNotLatched(t, lane, "tool.result")
 }

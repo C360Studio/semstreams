@@ -2432,10 +2432,10 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 		// record to a later request leaves the durable terminal over a live
 		// record: the redelivered input classifies as older and is
 		// acknowledged (loop_classification.go, requestOrderApplied), and the
-		// record converges at the loop's next terminal of the same kind, which
+		// record converges at the loop's next terminal of any kind, which
 		// adopts the marker (#1362 issuecomment-5808903072; #1377 W1, the
-		// documented bound; migration beta162-to-beta163, "Two residuals, now
-		// bounded").
+		// documented bound; #1399 for a terminal of another kind; migration
+		// beta162-to-beta163, "Two residuals, now bounded").
 		if err := c.commitTerminal(ctx, terminalOutcomeOf(result), result); err != nil {
 			return err
 		}

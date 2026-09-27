@@ -25,8 +25,8 @@ import (
 //	    at the lanes' own classification, and a lost compare-and-swap is a Retry
 //	    that lands here on the redelivery);
 //	(b) record not terminal, the marker exists → the Create is refused, the
-//	    saved terminal is read back and adopted by loop ID + terminal kind, and
-//	    a content difference is logged, never a disposition;
+//	    saved terminal is read back and adopted by loop ID, whatever its kind,
+//	    and a content or kind difference is logged, never a disposition;
 //	(c) no marker → Create, publish, Update, ACK.
 //
 // These run against the recording bucket with no NATS client, so publication
@@ -122,11 +122,47 @@ func TestTerminalOwnerArms(t *testing.T) {
 			"the content difference is logged at the audit line")
 	})
 
-	t.Run("(b) a durable terminal of another kind is refused, not adopted", func(t *testing.T) {
-		c, bucket, published, _ := terminalOwnerLoop(t)
+	// #1399 (owner ruling #1146 issuecomment-5854830449, Q2): once create-once
+	// has decided, a terminal of another kind for the same loop is stale, not
+	// poison. It adopts the durable terminal exactly as a same-kind one does.
+	t.Run("(b) a durable terminal of another kind for this loop is adopted, and the entity re-seated to it", func(t *testing.T) {
+		c, bucket, published, logs := terminalOwnerLoop(t)
 		saved := agentic.LoopCancelledEvent{
 			LoopID: terminalOwnerLoopID, TaskID: "task-replacement", Outcome: agentic.OutcomeCancelled,
-			CancelledBy: "operator",
+			CancelledBy: "operator", CancelledAt: time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC),
+		}
+		savedBytes, err := json.Marshal(&saved)
+		require.NoError(t, err)
+		_, err = bucket.Create(t.Context(), "COMPLETE_"+terminalOwnerLoopID, savedBytes)
+		require.NoError(t, err)
+		markerRevision := bucket.revisionOf("COMPLETE_" + terminalOwnerLoopID)
+		bucket.resetWritten()
+
+		msg, delivered := deliverResponse(t, c, completionFor(published, "the answer"))
+
+		require.Equal(t, natsclient.DeliveryDecisionAck, delivered.Decision(),
+			"a completion meeting this loop's durable cancel adopts it: the first terminal wins, the later is stale")
+		require.Equal(t, int32(1), msg.acks.Load())
+		require.Equal(t, markerRevision, bucket.revisionOf("COMPLETE_"+terminalOwnerLoopID),
+			"the durable terminal is never overwritten")
+		require.Equal(t, []string{terminalOwnerLoopID}, bucket.written(), "adoption writes only the loop record")
+
+		record := persistedLoop(t, bucket, terminalOwnerLoopID)
+		require.Equal(t, agentic.LoopStateCancelled, record.State, "the record is written in the durable terminal's kind")
+		require.Equal(t, agentic.OutcomeCancelled, record.Outcome)
+		require.Equal(t, saved.CancelledBy, record.CancelledBy)
+		require.Empty(t, record.Result, "the losing completion's result is cleared")
+		require.Contains(t, logs.String(), "adopted the loop's durable terminal")
+		require.Contains(t, logs.String(), `"kind":"cancelled"`)
+		require.Contains(t, logs.String(), `"candidate_kind":"success"`,
+			"the audit line names both kinds when they differ")
+	})
+
+	t.Run("(b) a durable terminal naming another loop is refused, not adopted", func(t *testing.T) {
+		c, bucket, published, logs := terminalOwnerLoop(t)
+		saved := agentic.LoopCompletedEvent{
+			LoopID: "6e2d8f3b-0c51-4a47-9b32-4d5e6f7a8b9c", TaskID: "task-other", Outcome: agentic.OutcomeSuccess,
+			Result: "another loop's answer",
 		}
 		savedBytes, err := json.Marshal(&saved)
 		require.NoError(t, err)
@@ -138,11 +174,11 @@ func TestTerminalOwnerArms(t *testing.T) {
 		_, delivered := deliverResponse(t, c, completionFor(published, "the answer"))
 
 		require.Equal(t, natsclient.DeliveryDecisionQuarantine, delivered.Decision(),
-			"a terminal whose identity (loop ID + kind) does not match the candidate's is conflicting "+
-				"evidence, and conflicting evidence fails closed")
+			"a durable terminal whose loop ID is not this loop's is conflicting evidence, and it fails closed")
 		require.Equal(t, markerRevision, bucket.revisionOf("COMPLETE_"+terminalOwnerLoopID))
 		require.Equal(t, recordRevision, bucket.revisionOf(terminalOwnerLoopID),
 			"nothing is written behind a refused adoption")
+		require.Contains(t, logs.String(), "Terminal refused")
 	})
 
 	t.Run("(a) a lost compare-and-swap retries, and the redelivery finds the record terminal", func(t *testing.T) {
@@ -431,4 +467,154 @@ func TestAnApprovalWhoseRecordMovedIsRetried(t *testing.T) {
 	require.Equal(t, natsclient.DeliveryDecisionRetry, decision,
 		"a lost compare-and-swap is transient; quarantining it latches the lane on a benign race")
 	require.Empty(t, bucket.written())
+}
+
+// settleTerminal re-seats the entity to the kind it adopted (#1399). The
+// entity arrives terminal in the candidate's kind — the handler moved it there
+// before the owner ran — and leaves in the durable terminal's, with the losing
+// outcome's fields cleared, because the record is rendered from it next.
+//
+// spec: agentic-loop / The loop record names its outstanding request
+func TestSettleTerminalReSeatsTheEntityToTheAdoptedKind(t *testing.T) {
+	at := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name      string
+		candidate func(m *LoopManager, loopID string)
+		adopted   func(loopID string) terminalOutcome
+		want      func(t *testing.T, e agentic.LoopEntity)
+	}{
+		{
+			name: "a saved failure adopted over a completion",
+			candidate: func(m *LoopManager, loopID string) {
+				require.NoError(t, m.TransitionLoop(loopID, agentic.LoopStateComplete))
+				require.NoError(t, m.UpdateCompletion(loopID, agentic.OutcomeSuccess, "decided: delete the rule", ""))
+			},
+			adopted: func(loopID string) terminalOutcome {
+				return terminalOutcome{failed: &agentic.LoopFailedEvent{
+					LoopID: loopID, Outcome: agentic.OutcomeFailed, Reason: "max_iterations",
+					Error: "max iterations reached", FailedAt: at,
+				}}
+			},
+			want: func(t *testing.T, e agentic.LoopEntity) {
+				require.Equal(t, agentic.LoopStateFailed, e.State)
+				require.Equal(t, agentic.OutcomeFailed, e.Outcome)
+				require.Equal(t, "max iterations reached", e.Error)
+				require.Empty(t, e.Result, "the losing completion's result is cleared")
+			},
+		},
+		{
+			name: "a saved completion adopted over a failure",
+			candidate: func(m *LoopManager, loopID string) {
+				require.NoError(t, m.TransitionLoop(loopID, agentic.LoopStateFailed))
+				require.NoError(t, m.UpdateCompletion(loopID, agentic.OutcomeFailed, "", "the provider failed"))
+			},
+			adopted: func(loopID string) terminalOutcome {
+				return terminalOutcome{completed: &agentic.LoopCompletedEvent{
+					LoopID: loopID, Outcome: agentic.OutcomeSuccess, Result: "done in A", CompletedAt: at,
+				}}
+			},
+			want: func(t *testing.T, e agentic.LoopEntity) {
+				require.Equal(t, agentic.LoopStateComplete, e.State)
+				require.Equal(t, agentic.OutcomeSuccess, e.Outcome)
+				require.Equal(t, "done in A", e.Result)
+				require.Empty(t, e.Error, "the losing failure's error is cleared")
+			},
+		},
+		{
+			name: "a saved cancel adopted over a completion",
+			candidate: func(m *LoopManager, loopID string) {
+				require.NoError(t, m.TransitionLoop(loopID, agentic.LoopStateComplete))
+				require.NoError(t, m.UpdateCompletion(loopID, agentic.OutcomeSuccess, "an answer after the cancel", ""))
+			},
+			adopted: func(loopID string) terminalOutcome {
+				return terminalOutcome{cancelled: &agentic.LoopCancelledEvent{
+					LoopID: loopID, Outcome: agentic.OutcomeCancelled, CancelledBy: "operator", CancelledAt: at,
+				}}
+			},
+			want: func(t *testing.T, e agentic.LoopEntity) {
+				require.Equal(t, agentic.LoopStateCancelled, e.State)
+				require.Equal(t, agentic.OutcomeCancelled, e.Outcome)
+				require.Equal(t, "operator", e.CancelledBy)
+				require.True(t, at.Equal(e.CancelledAt))
+				require.Equal(t, "cancelled by user", e.Error, "as the cold cancel adoption writes it")
+				require.Empty(t, e.Result, "the losing completion's result is cleared")
+			},
+		},
+		{
+			name: "a saved failure adopted over a cancel",
+			candidate: func(m *LoopManager, loopID string) {
+				_, err := m.CancelLoop(loopID, "operator")
+				require.NoError(t, err)
+			},
+			adopted: func(loopID string) terminalOutcome {
+				return terminalOutcome{failed: &agentic.LoopFailedEvent{
+					LoopID: loopID, Outcome: agentic.OutcomeFailed, Reason: "max_iterations",
+					Error: "max iterations reached", FailedAt: at,
+				}}
+			},
+			want: func(t *testing.T, e agentic.LoopEntity) {
+				require.Equal(t, agentic.LoopStateFailed, e.State)
+				require.Equal(t, agentic.OutcomeFailed, e.Outcome)
+				require.Equal(t, "max iterations reached", e.Error)
+				require.Empty(t, e.CancelledBy, "the losing cancel's canceller is cleared")
+				require.True(t, e.CancelledAt.IsZero(), "and so is its time")
+			},
+		},
+		{
+			// The control: a same-kind adoption keeps the entity's finer
+			// outcome, because every failure marker says "failed".
+			name: "a saved failure adopted over a length-truncated failure",
+			candidate: func(m *LoopManager, loopID string) {
+				require.NoError(t, m.TransitionLoop(loopID, agentic.LoopStateFailed))
+				require.NoError(t, m.UpdateCompletion(loopID, agentic.OutcomeTruncated, "", "truncated"))
+			},
+			adopted: func(loopID string) terminalOutcome {
+				return terminalOutcome{failed: &agentic.LoopFailedEvent{
+					LoopID: loopID, Outcome: agentic.OutcomeFailed, Reason: "length_truncated",
+					Error: "the saved truncation", FailedAt: at,
+				}}
+			},
+			want: func(t *testing.T, e agentic.LoopEntity) {
+				require.Equal(t, agentic.LoopStateFailed, e.State)
+				require.Equal(t, agentic.OutcomeTruncated, e.Outcome)
+				require.Equal(t, "the saved truncation", e.Error)
+			},
+		},
+		{
+			name: "a saved completion adopted over a cancel",
+			candidate: func(m *LoopManager, loopID string) {
+				_, err := m.CancelLoop(loopID, "operator")
+				require.NoError(t, err)
+			},
+			adopted: func(loopID string) terminalOutcome {
+				return terminalOutcome{completed: &agentic.LoopCompletedEvent{
+					LoopID: loopID, Outcome: agentic.OutcomeSuccess, Result: "done first", CompletedAt: at,
+				}}
+			},
+			want: func(t *testing.T, e agentic.LoopEntity) {
+				require.Equal(t, agentic.LoopStateComplete, e.State)
+				require.Equal(t, agentic.OutcomeSuccess, e.Outcome)
+				require.Equal(t, "done first", e.Result)
+				require.Empty(t, e.Error, "the losing cancel's error is cleared")
+				require.Empty(t, e.CancelledBy, "and so is its canceller")
+				require.True(t, e.CancelledAt.IsZero())
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewLoopManager()
+			loopID, err := m.CreateLoopWithID(terminalOwnerLoopID, "task-settle", "general", "model")
+			require.NoError(t, err)
+			tc.candidate(m, loopID)
+			adopted := tc.adopted(loopID)
+
+			m.settleTerminal(loopID, &adopted)
+
+			entity, err := m.GetLoop(loopID)
+			require.NoError(t, err)
+			tc.want(t, entity)
+			require.True(t, at.Equal(entity.CompletedAt), "completed_at is the durable terminal's")
+		})
+	}
 }
