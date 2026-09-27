@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 )
 
 // collectingFamily returns a family whose handler forwards every entry to a
@@ -82,6 +83,28 @@ func TestKeyFamilyDeliversSnapshotThenChanges(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []byte(`"b1"`), value)
 	require.ErrorIs(t, family.Create(ctx, "b", []byte(`"b2"`)), natsclient.ErrKVKeyExists)
+
+	// A nested name is not a member: the watch "rules.*" would never deliver
+	// it. The family refuses it before any I/O, and a nested key another writer
+	// stored is neither listed, read, nor deleted through the family.
+	require.True(t, errs.IsInvalid(family.Put(ctx, "dotted.name", []byte(`"d"`))))
+	require.True(t, errs.IsInvalid(family.Create(ctx, "dotted.name", []byte(`"d"`))))
+	_, err = store.Get(ctx, "rules.dotted.name")
+	require.ErrorIs(t, err, natsclient.ErrKVKeyNotFound, "a refused write must not reach the bucket")
+	_, err = store.Put(ctx, "rules.nested.name", []byte(`"n"`))
+	require.NoError(t, err)
+	_, err = family.Get(ctx, "nested.name")
+	require.True(t, errs.IsInvalid(err))
+	require.True(t, errs.IsInvalid(family.Delete(ctx, "nested.name")))
+	_, err = store.Get(ctx, "rules.nested.name")
+	require.NoError(t, err, "a refused delete must not reach the bucket")
+	// The nested put was written before rules.c, so had the watch delivered
+	// it, it would arrive first.
+	require.NoError(t, family.Put(ctx, "c", []byte(`"c1"`)))
+	require.Equal(t, KeyFamilyEntry{Name: "c", Value: []byte(`"c1"`), Operation: KeyFamilyPut}, nextEntry(t, entries))
+	names, err = family.Names(ctx)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"b", "c"}, names, "a nested key is not a family member")
 
 	// A refused Start binds nothing: a manager whose bucket records a foreign
 	// identity leaves its family unable to write, exactly like its own writers.
