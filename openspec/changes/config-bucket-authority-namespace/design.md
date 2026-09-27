@@ -158,3 +158,16 @@ existing `CoreAuthorityStem` pattern.
 - **R6.** ADR-104 (`docs/adr/104-unique-platform-authority.md:21,32,109,146`) still spells
   `semstreams_config/platform_identity`. ADRs are history. The record's address now lives in `component-runtime-config`
   and the migration note, and its `{org, stem, id}` shape is unchanged.
+- **R7 — round-2 review MEDIUM, ruled by the owner on #1188 (docket 3, Q6 (a): "continue as recommended").** The
+  mint-branch scan fails Start closed on every error class: listing, open, read and parse. Skipping a parse failure
+  was rejected: an unparseable sibling record may belong to a RUNNING sibling that adopted before the corruption, so
+  skipping it would mint a second authority beside a live one, the fork Q4 (b) exists to catch. The framework never
+  writes a record that fails to parse (one `Create` from a fixed struct, never rewritten under ADR-102 d7, unknown
+  fields ignored on read), so the class is tamper or corruption, which a human resolves. The over-inclusive prefix
+  (org `acme` scans `acme_labs`) is accepted with the Q2 (a) alias. Only a first boot scans; the migration note
+  carries the remedy.
+- **R8 — round-2 review NIT, ruled Q7 (a).** The d5 branch on the adopt path (`adoptPlatformIdentity`, the
+  `declared.ID == record.ID` compare) is reachable only by a hand-written record, because a framework-minted record's
+  stem is always the bucket's stem. It stays, covered by the "file declares the minted identifier" case of
+  `TestConfigManagerAdoptsPersistedPlatformIdentity`, and is deleted together with that case on the next touch of the
+  identity path.

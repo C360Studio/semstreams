@@ -2383,7 +2383,9 @@ manager serves other writers a key family; the rule manager exists once, in the 
   minting into it, Start lists the configuration buckets once, reads `platform_identity` from every other
   `semstreams_config_<org>_*` bucket, and refuses with the ADR-104 guidance ("declare the stem `dep`") when one
   recorded `dep-7f3a9c`. Nothing is minted; the refused Start leaves the empty bucket behind, and you can delete it.
-  An unreadable sibling bucket fails Start closed rather than risk a second authority. Keep declaring the stem.
+  An unreadable sibling bucket fails Start closed rather than risk a second authority (owner ruling on #1188, Q6):
+  repair or delete the bucket the refusal names, then boot again. Deployments already running are unaffected, because
+  only a first boot scans. Keep declaring the stem.
 
 ### The obligations
 

@@ -64,3 +64,9 @@ landing choreography. Pins are at base `fe9482b7` (design.md § 1). Every gate l
       rewritten body. `openspec archive config-bucket-authority-namespace -y` printed "Totals: + 2, ~ 3, - 0, → 0",
       "Specs updated successfully." and archived the change; before the fix it aborted on the renamed scenario.
       Re-run on `git archive HEAD` after the round-2 fixes: same result.
+- [x] 3.4 `task e2e:core` at the final code revision `e5a10a56` (rebased on `origin/main` `3dc4ccbe`), run by the
+      coordinating session on a clear host (`docker compose ls -q` 0, no `e2e.test` process, window announced to the
+      sibling session first): exit 0, 116 s (2026-09-27 16:11:24Z to 16:13:21Z), 6 of 6 scenarios "completed
+      successfully", no failure line. The round-2 review passed with amendments and docket 3 (Q6, Q7) was ruled (a)
+      and (a), both doc-only, so this run is the breaking-change evidence (`docs/contributing/02-e2e-tests.md`
+      § Breaking Changes) for the code that merges.
