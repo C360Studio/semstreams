@@ -66,9 +66,13 @@ func (s *MintedAuthorityScenario) Execute(ctx context.Context) (*Result, error) 
 		return result, nil
 	}
 
-	raw, err := s.nats.GetKV(ctx, e2econfig.PlatformIdentityBucket, e2econfig.PlatformIdentityKey)
+	bucket, err := e2econfig.PlatformIdentityBucket(s.declaredStem)
 	if err != nil {
-		return fail(fmt.Errorf("read %s/%s: %w", e2econfig.PlatformIdentityBucket, e2econfig.PlatformIdentityKey, err))
+		return fail(err)
+	}
+	raw, err := s.nats.GetKV(ctx, bucket, e2econfig.PlatformIdentityKey)
+	if err != nil {
+		return fail(fmt.Errorf("read %s/%s: %w", bucket, e2econfig.PlatformIdentityKey, err))
 	}
 
 	// Exactly three fields — the record's shape is a cross-repo contract.
@@ -189,23 +193,28 @@ func (s *PreIdentityBucketScenario) Execute(ctx context.Context) (*Result, error
 		return finish(fmt.Errorf("declared authority %q is not org.platform", s.stem))
 	}
 
+	bucket, err := e2econfig.PlatformIdentityBucket(s.stem)
+	if err != nil {
+		return finish(err)
+	}
+
 	switch s.mode {
 	case "seed":
 		platform, err := json.Marshal(map[string]string{"org": org, "id": stem, "type": "test"})
 		if err != nil {
 			return finish(err)
 		}
-		if err := s.nats.PutKV(ctx, e2econfig.PlatformIdentityBucket, "platform", platform); err != nil {
+		if err := s.nats.PutKV(ctx, bucket, "platform", platform); err != nil {
 			return finish(fmt.Errorf("seed the platform key: %w", err))
 		}
 		version, err := json.Marshal("1.0.0")
 		if err != nil {
 			return finish(err)
 		}
-		if err := s.nats.PutKV(ctx, e2econfig.PlatformIdentityBucket, "version", version); err != nil {
+		if err := s.nats.PutKV(ctx, bucket, "version", version); err != nil {
 			return finish(fmt.Errorf("seed the version key: %w", err))
 		}
-		if err := s.requireNoIdentityRecord(ctx,
+		if err := s.requireNoIdentityRecord(ctx, bucket,
 			"the seeded bucket already holds a platform_identity record; it does not predate identity minting"); err != nil {
 			return finish(err)
 		}
@@ -213,7 +222,7 @@ func (s *PreIdentityBucketScenario) Execute(ctx context.Context) (*Result, error
 		return finish(nil)
 
 	case "assert":
-		if err := s.requireNoIdentityRecord(ctx,
+		if err := s.requireNoIdentityRecord(ctx, bucket,
 			"a refused pre-identity boot created a platform_identity record; it must mint nothing and create nothing"); err != nil {
 			return finish(err)
 		}
@@ -235,8 +244,8 @@ func (s *PreIdentityBucketScenario) Execute(ctx context.Context) (*Result, error
 // measuring nothing. The seed half writes `platform` before probing, so the
 // bucket exists by then: key-not-found is the only benign outcome on either
 // half.
-func (s *PreIdentityBucketScenario) requireNoIdentityRecord(ctx context.Context, presentMsg string) error {
-	_, err := s.nats.GetKV(ctx, e2econfig.PlatformIdentityBucket, e2econfig.PlatformIdentityKey)
+func (s *PreIdentityBucketScenario) requireNoIdentityRecord(ctx context.Context, bucket, presentMsg string) error {
+	_, err := s.nats.GetKV(ctx, bucket, e2econfig.PlatformIdentityKey)
 	switch {
 	case err == nil:
 		return errors.New(presentMsg)
@@ -245,7 +254,7 @@ func (s *PreIdentityBucketScenario) requireNoIdentityRecord(ctx context.Context,
 	default:
 		return fmt.Errorf(
 			"cannot prove %s/%s is absent: the read failed for a reason other than key-not-found: %w",
-			e2econfig.PlatformIdentityBucket, e2econfig.PlatformIdentityKey, err,
+			bucket, e2econfig.PlatformIdentityKey, err,
 		)
 	}
 }

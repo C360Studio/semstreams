@@ -62,7 +62,7 @@ type TieredScenario struct {
 	detectedVariant *variantInfo
 
 	// effectiveAuthority is `org.platform` as the running stack RECORDS it —
-	// read once per run from semstreams_config/platform_identity, never
+	// read once per run from semstreams_config_<org>_<stem>/platform_identity, never
 	// predicted from a configuration file. Since ADR-104 the framework mints an
 	// entropy suffix onto platform.id at first boot, so a fixture composed from
 	// the shipped config is right about nothing and reports "entity not found"

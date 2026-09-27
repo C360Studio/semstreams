@@ -62,7 +62,7 @@ const (
 	// It is a suffix and not a whole entity ID because positions 1-2 are the
 	// DEPLOYMENT's own authority, and since ADR-104 that pair carries an entropy
 	// suffix minted onto platform.id at first boot. Nothing outside the running
-	// stack can spell it; Setup reads it from semstreams_config/platform_identity
+	// stack can spell it; Setup reads it from semstreams_config_<org>_<stem>/platform_identity
 	// and composes the whole ID once, into Scenario.controlledSeedEntityID.
 	ControlledSeedSuffix = "seed.research.document.controlled"
 
@@ -140,7 +140,7 @@ type Config struct {
 	// never writes the observed value back here. Their whole job is the
 	// cross-check — "the stack I am driving is the configuration I name" —
 	// which EffectiveAuthority performs against the identifier the running
-	// deployment records in semstreams_config/platform_identity, carrying the
+	// deployment records in semstreams_config_<org>_<stem>/platform_identity, carrying the
 	// entropy suffix minted onto platform.id at first boot (ADR-104).
 	//
 	// These are NEVER an entity ID's positions 1-2. The observed authority
