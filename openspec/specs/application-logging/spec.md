@@ -22,10 +22,12 @@ handler instance.
 
 #### Scenario: E2E client uses the same configured local output
 
-- **GIVEN** the E2E Phase-A composition
-- **WHEN** the client emits a record at an enabled level
-- **THEN** its configured local output matches application-local formatting and base attributes
-- **AND** no counter handler or NATS log handler receives the record
+- **GIVEN** the E2E binary, which boots through the same composition function as the production binary and therefore
+  composes the production Phase-A
+- **WHEN** the client emits a WARN record
+- **THEN** configured local output receives the record once, with application-local formatting and base attributes
+- **AND** `semstreams_log_entries_total{component="natsclient",level="warn"}` increments once
+- **AND** no E2E-specific Phase-A constructor exists for a binary to select
 
 ### Requirement: Client and configuration logging cannot forward through their own client
 
@@ -51,3 +53,4 @@ the returned boot error.
 - **WHEN** a primary binary attempts to connect
 - **THEN** the failure is visible through configured local output and the returned boot error
 - **AND** no NATS forwarding handler is required for visibility
+

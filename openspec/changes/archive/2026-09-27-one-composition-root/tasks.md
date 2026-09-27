@@ -188,5 +188,5 @@ to a doc sentence or "not supported" before it gets code.
       a 20 s sample; the image is not on the host — only `semembed` is) and the run was aborted by the coordinator.
       Not evidence for the gate; the gate run is still owed at the final code revision on a network that can pull
       seminstruct (`docker pull ghcr.io/c360studio/seminstruct:latest` first, then `task e2e:all`).**
-- [ ] 7.3 Archive + spec sync is the last content commit; the squash body is authored (`--body-file`) and checked with
+- [x] 7.3 (archived 2026-09-27 in the last content commit; the post-merge body check below is owed at the squash) Archive + spec sync is the last content commit; the squash body is authored (`--body-file`) and checked with
       `git log -1 --format=%B origin/main` after the merge; grep it for closing keywords without `\b`.
