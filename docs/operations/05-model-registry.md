@@ -8,7 +8,8 @@
 The **model registry** is the single config block that names every LLM
 and embedding endpoint a SemStreams deployment can reach, and binds each
 LLM workload (called a **capability**) to a preferred endpoint. It lives
-in NATS KV under the key `model_registry` (bucket `semstreams_config`)
+in NATS KV under the key `model_registry` (bucket `semstreams_config_<org>_<stem>`, named from the
+deployment's declared `platform.org` and `platform.id`)
 and hot-reloads at runtime — components that depend on it auto-restart
 when the key changes.
 
@@ -176,7 +177,7 @@ handles the rest. See [agentic component patterns](../advanced/08-agentic-compon
 
 ```text
 operator runs:                         config.Manager:                    ComponentManager:
-nats kv put semstreams_config \        receives KV watcher event,         receives OnChange("model_registry"),
+nats kv put "$BUCKET" \                receives KV watcher event,         receives OnChange("model_registry"),
     model_registry @new.json   ──▶    parses + replaces internal     ──▶  iterates registered components,
                                        ModelRegistry, fires               restarts those declaring
                                        OnChange("model_registry")         component.DepModelRegistry
@@ -248,18 +249,21 @@ func (h *atomic.Pointer[model.Registry]) Resolve(cap string) string {
 ### Updating the KV Key from Operations
 
 ```bash
+# The configuration bucket is named from the declared platform.org and platform.id
+BUCKET=semstreams_config_acme_field-ops-7
+
 # Read current registry
-nats kv get semstreams_config model_registry
+nats kv get "$BUCKET" model_registry
 
 # Update from a JSON file
-nats kv put semstreams_config model_registry "$(cat new-registry.json)"
+nats kv put "$BUCKET" model_registry "$(cat new-registry.json)"
 
 # Roll back to a prior revision
-nats kv get --history semstreams_config model_registry
-nats kv put semstreams_config model_registry "$(nats kv get --raw semstreams_config model_registry --revision N)"
+nats kv get --history "$BUCKET" model_registry
+nats kv put "$BUCKET" model_registry "$(nats kv get --raw "$BUCKET" model_registry --revision N)"
 ```
 
-The KV bucket keeps the last 5 revisions (`semstreams_config` History=5).
+The KV bucket keeps the last 5 revisions (History=5).
 
 ## Validation
 

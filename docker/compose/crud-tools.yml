@@ -2,7 +2,7 @@
 #
 # Exercises the ADR-029 Pattern-B CRUD tools (create_rule etc.) end to
 # end. Mock LLM scripts one create_rule call; scenario verifies the
-# resulting rule lands in the semstreams_config KV bucket.
+# resulting rule lands in the configuration bucket semstreams_config_c360_crud-tools.
 #
 # Usage:
 #   task e2e:crud-tools

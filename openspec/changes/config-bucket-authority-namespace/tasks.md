@@ -27,19 +27,21 @@ landing choreography. Pins are at base `fe9482b7` (design.md § 1). Every gate l
 
 ## 2. The name (step 2)
 
-- [ ] 2.1 Add `config.BucketName(org, stem)` with `TestBucketNameIsLegalForEveryValidPair` and `FuzzBucketName`. The
+- [x] 2.1 Add `config.BucketName(org, stem)` with `TestBucketNameIsLegalForEveryValidPair` and `FuzzBucketName`. The
       manager derives the name at construction.
-- [ ] 2.2 Make the catalog row a name family (design D5) and add `TestConfigBucketFamilyResolvesEveryMember`. Update
+- [x] 2.2 Make the catalog row a name family (design D5) and add `TestConfigBucketFamilyResolvesEveryMember`. Update
       the rule ownership tests to a namespaced name, and drop the guard-key target.
-- [ ] 2.3 Retire the gh#459 guard, `kvPlatformIdentity`, `platformHasIdentity`, `platformIdentityTuple`,
+- [x] 2.3 Retire the gh#459 guard, `kvPlatformIdentity`, `platformHasIdentity`, `platformIdentityTuple`,
       `claimEnvironment` and `platformEnvironmentGuardKey`. Re-read the pre-identity and adoption refusal messages,
       and demote `platform.Environment` to a log label in its doc.
-- [ ] 2.4 Tests: `TestBucketIsNamedByTheDeclaredPair` (different pairs use different buckets, the same pair shares
+- [x] 2.4 Tests: `TestBucketIsNamedByTheDeclaredPair` (different pairs use different buckets, the same pair shares
       one) and `TestEnvironmentDoesNotSeparateDeployments`. The gh#459 refusal test flips to no refusal, and the
-      environment-race test is deleted.
-- [ ] 2.5 Update `test/contract` (resolving owners), `test/e2e/config` (`PlatformIdentityBucket(declared)`), the
+      environment-race test is deleted. Tests that relied on a foreign deployment sharing the bucket now seed a
+      foreign record into the declared pair's own bucket. Design R5 records the minted-identifier case, which is
+      handled by the doc sentence rather than code.
+- [x] 2.5 Update `test/contract` (resolving owners), `test/e2e/config` (`PlatformIdentityBucket(declared)`), the
       scenarios that read or write the bucket, and crud-tools.
-- [ ] 2.6 Update the docs that spell the bucket: `config/README.md`, `docs/operations/05-model-registry.md`, and the
+- [x] 2.6 Update the docs that spell the bucket: `config/README.md`, `docs/operations/05-model-registry.md`, and the
       comments at `internal/boot/run.go:702` and `processor/rule/kv_config_integration.go:30-40`. The migration note
       gets a new section and amends the ADR-104 obligations.
 

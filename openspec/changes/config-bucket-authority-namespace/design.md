@@ -124,7 +124,9 @@ func (f *KeyFamily) Get / Put / Create / Delete / Names
 
 **D7 — the e2e harness.** `test/e2e/config` gets `PlatformIdentityBucket(declared string) (string, error)`, which
 splits `org.stem` and calls `config.BucketName`. `EffectiveAuthority` and the scenarios that read or write the bucket
-use it with the pair they already hold. crud-tools derives its rules bucket from its compose config's declared pair.
+use it with the pair they already hold. crud-tools derives its rules bucket from `CrudToolsAuthorityStem`, which is
+pinned to `configs/flows/crud-tools-test.json` by `TestCrudToolsAuthorityMatchesShippedConfig`. That follows the
+existing `CoreAuthorityStem` pattern.
 
 ## 3. Residuals (recorded, not filed)
 
@@ -138,3 +140,18 @@ use it with the pair they already hold. crud-tools derives its rules bucket from
 - **R4.** Catalog `Write` policy stays guard-scoped (#1188's 2026-08-31 second constraint). Re-cutting acquisition did
   not make it universal. After this change `config.Manager` is the bucket's only acquirer, which narrows the question
   without answering it.
+- **R5 — found during implementation; not covered by a ruling, so taken as the doc sentence, not code.** A file that
+  declares the *minted* identifier (`platform.id` `dep-7f3a9c`) now names bucket `semstreams_config_<org>_dep-7f3a9c`.
+  It boots there as a new deployment and mints a second suffix. It is no longer refused with "declare the stem".
+  - That refusal (`config/manager.go` adoption compare) still fires, but only where the declared pair's own bucket
+    records the value as its minted identifier.
+  - This follows the 2026-09-01 ruling: "The operator-facing answer becomes a different `platform.id` … it lands in
+    the bucket name *and* in every entity ID." It also follows the standing owner preference for a doc sentence over
+    edge-case code.
+  - The code alternative would scan sibling `semstreams_config_<org>_*` buckets for a record whose `id` equals the
+    declared value, then refuse. That is observation rather than grammar, so ADR-104 allows it. It is additive and
+    can land later without migration.
+  - Recorded in the migration note; the spec delta restates the scenario.
+- **R6.** ADR-104 (`docs/adr/104-unique-platform-authority.md:21,32,109,146`) still spells
+  `semstreams_config/platform_identity`. ADRs are history. The record's address now lives in `component-runtime-config`
+  and the migration note, and its `{org, stem, id}` shape is unchanged.

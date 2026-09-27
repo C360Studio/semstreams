@@ -752,7 +752,8 @@ refuses a wire value that disagrees, so it needed no change.
 
 - `platform.id` becomes `<your id>-<6 hex>` on your deployment's first boot against fresh storage. Every entity you
   mint carries the suffixed value; the boot log line `Platform identity configured` prints it; the record
-  `semstreams_config/platform_identity` — exactly `{"org": …, "stem": …, "id": …}` — is where it durably lives.
+  `semstreams_config_<org>_<stem>/platform_identity` — exactly `{"org": …, "stem": …, "id": …}` — is where it durably
+  lives (#1188 named the bucket by the declared pair; see the section below).
 - The suffix is minted once, with an atomic `Create`, and adopted by every later boot and by every co-process
   sharing that configuration bucket. ADR-102 decision 7 forbids rewriting it.
 - **There is no configuration key that disables it.** The opt-out is operational — see obligation 2.
@@ -774,7 +775,7 @@ refuses a wire value that disagrees, so it needed no change.
    line, per deployment, impossible to clone through a configuration template:
 
    ```bash
-   nats kv put semstreams_config platform_identity \
+   nats kv put semstreams_config_acme_field-ops-7 platform_identity \
      '{"org":"acme","stem":"field-ops-7","id":"field-ops-7"}'
    ```
 
@@ -785,7 +786,7 @@ refuses a wire value that disagrees, so it needed no change.
 3. **Stop predicting the pair; read it.** Any fixture, e2e helper, seed file, dashboard, or tool that composes an
    entity ID by concatenating a configuration file's `platform.org`/`platform.id` will compose under `dep` while the
    deployment is `dep-7f3a9c`, and the graph boundary will refuse the write `foreign_authority`. Read
-   `semstreams_config/platform_identity` (or pre-create it per obligation 2). Known holders: semteams (4 configs),
+   `semstreams_config_<org>_<stem>/platform_identity` (or pre-create it per obligation 2). Known holders: semteams (4 configs),
    semspec and semspec-ui-* (13/11/11), semdragon (3), semdev (2), semmem (3), semboids, semsage, semconnect.
 4. **semmachina** composes `platform.id` per world in Go; each world's identifier is suffixed on its own first boot.
    Pre-create the record for a world that must stay unsuffixed.
@@ -793,21 +794,25 @@ refuses a wire value that disagrees, so it needed no change.
    org bound from `semtypes.MaxAuthorityPairBytes()` minus the seven reserved suffix bytes — 163 — rather than a
    local constant. That is the bound on what a config may DECLARE, which is what `MaxOrgLen` governs; an identifier
    already carrying the minted suffix is bounded at 170.
-6. **Provision the configuration bucket with no TTL and no size cap.** `semstreams_config` now holds create-once
-   identity state, so Start reads the bucket's live policy and refuses to boot into one that can delete keys, naming
+6. **Provision the configuration bucket with no TTL and no size cap.** `semstreams_config_<org>_<stem>` now holds
+   create-once identity state, so Start reads the bucket's live policy and refuses to boot into one that can delete keys, naming
    the offending value. Acquisition returns an existing bucket unchanged, and the bucket has more than one creator,
    so this is checked rather than assumed — whoever created it, an evicting policy means the identity would expire
    and the next boot would mint a second authority ADR-102 d7 forbids reconciling.
-7. **One environment per configuration bucket.** Two deployments sharing `platform.org` and `platform.id` but
+7. **Retired by #1188 (below): `platform.environment` separates nothing.** What follows is the rule as it briefly
+   stood. **One environment per configuration bucket.** Two deployments sharing `platform.org` and `platform.id` but
    differing in `platform.environment` can no longer both start against one bucket: the second is refused, naming
    both environments. Give each environment its own NATS storage. The same refusal fires when a single deployment
    RENAMES `platform.environment` against its established bucket — the environment is bound at first boot and is
    never re-decided (ADR-102 d7); a deliberate environment change is a fresh-storage move. (Before this, the
    environment was compared only on the subsequent-boot branch, so two first boots raced and both published.)
 8. **Declare the STEM in `platform.id`, never the minted identifier.** If you copy the effective value out of
-   `semstreams_config/platform_identity` back into your configuration file, Start refuses and tells you which stem
-   to write instead. The framework composes the effective value; the file names what it was composed from.
-9. **A rule pack may not write `semstreams_config` at all.** The shared configuration bucket is owner-only in the
+   `semstreams_config_<org>_<stem>/platform_identity` back into your configuration file, you name a different
+   bucket and boot a new deployment under a second suffix (#1188, below). The refusal that names the stem to declare
+   fires only where that bucket's own record carries the value. The framework composes the effective value; the file
+   names what it was composed from.
+9. **A rule pack may not write a configuration bucket (`semstreams_config_<org>_<stem>`) at all.** The shared
+   configuration bucket is owner-only in the
    framework bucket catalog, so a rule `update_kv` action targeting it — any key, named literally or resolved from a
    variable at runtime — is refused at load validation, at action runtime, and at writer acquisition. This is ruled
    contract, not an implementation choice: owner ruling 2026-08-31 (#1168 comment 5479005060, "concur with option
@@ -831,8 +836,9 @@ refuses a wire value that disagrees, so it needed no change.
 - A configuration bucket carried over from before this change **refuses Start, LOUD**, naming the pre-identity
   bucket as the cause and instructing fresh storage — and it creates no record, so the refusal is repeatable rather
   than a wedge. This is the one upgrade path, and it is deliberately not silent.
-- The same refusal fires when **another writer created the bucket first**. `semstreams_config` is a fixed global
-  name and the config manager is not its only writer: a rule processor's own ConfigManager creates it for its
+- *(Superseded by #1188: the bucket is per deployment and the config manager is its only writer until Start
+  succeeds.)* The same refusal fires when **another writer created the bucket first**. `semstreams_config` is a fixed
+  global name and the config manager is not its only writer: a rule processor's own ConfigManager creates it for its
   `rules.*` keys. On a shared NATS server, another sem* app's rules can therefore make your genuinely-first boot
   refuse. The message names both possibilities and lists the keys it found; the remedy is the same for both —
   fresh storage per deployment, or pre-create the identity record.
@@ -844,7 +850,8 @@ refuses a wire value that disagrees, so it needed no change.
 - A bucket carrying a TTL or a size cap **refuses Start, LOUD**, naming the policy value. Nothing is minted, so the
   refusal is repeatable. Before this check the identity simply expired and the next boot minted a different
   authority — silent, and unrepairable once two authorities existed.
-- A second `platform.environment` against the same bucket **refuses Start, LOUD**, naming both environments.
+- *(Retired by #1188.)* A second `platform.environment` against the same bucket **refuses Start, LOUD**, naming both
+  environments.
 - A configuration file that declares the minted identifier instead of the stem **refuses Start, LOUD**, naming the
   stem to declare.
 - An external writer that puts a `platform` key into the shared bucket no longer changes the running deployment's
@@ -2344,3 +2351,74 @@ semops, semdragon, semconnect, semmem, semembed, seminstruct, semmachina, semtea
 semsage's `processor/ui-api/types.go:14-27` decodes a narrow struct and ignores the new keys. Nothing to do. NOT RUN:
 `agent.task` producers per sister; the disposition change is invisible to a fire-and-forget producer except as a
 redelivery or a terminated delivery, so the line stands either way.
+
+## The configuration bucket is named by the authority pair (#1188) — BREAKING
+
+Owner ruling on #1188, 2026-09-01: **"Bucket = `semstreams_config_<org>_<stem>`, looked up by the same."** and, on
+`platform.environment`, *"retire it — the bucket name is the separation."* Owner ruling, 2026-09-27 (Q1): the config
+manager serves other writers a key family; the rule manager exists once, in the composition root.
+
+### What changes on the wire
+
+- The configuration bucket is `semstreams_config_<org>_<stem>`. `<org>` is the configuration's `platform.org` and
+  `<stem>` is the `platform.id` it declares, taken before the suffix is minted. Examples: `acme` + `field-ops-7`
+  becomes `semstreams_config_acme_field-ops-7`; the core e2e stack's is `semstreams_config_c360_streamkit-pure`. The
+  one derivation is `config.BucketName(org, stem)`.
+- The identity record moves with its bucket: `semstreams_config_<org>_<stem>/platform_identity`, still exactly
+  `{"org": …, "stem": …, "id": …}` (ADR-104 d2's shape is unchanged).
+- **Two different apps on one NATS server now get different buckets.** They no longer see each other's
+  configuration, and the gh#459 startup refusal ("shared bucket … belongs to another platform") is gone because it has
+  nothing left to catch. Two processes declaring the same pair share one bucket and one authority, as clones should.
+- The old `semstreams_config` bucket is **orphaned, not migrated**. Nothing reads it any more, and a rule pack can
+  write it again because it is no longer framework state. Delete it when convenient: `nats kv del semstreams_config`.
+- **`platform.environment` separates nothing.** It is a startup log label. The `platform_identity_guard` key and the
+  "one environment per bucket" refusal are removed (this retires obligation 7 of the ADR-104 section above). Prod and
+  dev declaring the same `platform.org` and `platform.id` are **one deployment** and share configuration and entity IDs.
+- **A name can alias.** `_` is legal inside both parts, so org `a_b` with `platform.id` `c` and org `a` with
+  `platform.id` `b_c` name the same bucket. The second to boot reads the first's identity record and **refuses Start,
+  LOUD**, naming both pairs. Declare pairs that do not alias.
+- **Declaring the minted identifier now names a new deployment.** A file declaring `platform.id` `dep-7f3a9c` (the
+  identifier minted from stem `dep`) names bucket `semstreams_config_<org>_dep-7f3a9c`, not `dep`'s bucket. It boots
+  as a new deployment and mints its own suffix. The ADR-104 guidance refusal ("declare the stem") fires only when that
+  bucket's own record carries the declared value as its minted identifier. Keep declaring the stem.
+
+### The obligations
+
+1. **Nothing to do for a normal beta.162 → beta.163 upgrade.** The new bucket name is empty on first boot, so identity
+   mints exactly once and the pre-identity refusal (the ADR-104 section's obligation 1) does not fire. The rename
+   *is* the fresh storage.
+2. **Give each environment its own `platform.id`** if prod and dev share a NATS server: `myapp-dev`, `myapp-prod`.
+   Known setters of `environment`: semsource, semboids, semmem, and every config under `configs/` here. The field is
+   still accepted, and it no longer separates anything.
+3. **Tools that name the bucket must derive it.** Replace the literal `semstreams_config` with
+   `semstreams_config_<org>_<stem>` from the configuration they operate on. Known holders, read-only at their pinned
+   SHAs:
+   - semsource `4093d3c`: `test/e2e/beta148_cutover_test.go:164,182`, which probes the literal bucket.
+   - semdev `ca3956a`: `test/conformance/conversation_rules_test.go:857`, a comment.
+   - semteams `ce22c961`: `cmd/semteams/main.go:282,586`, comments.
+   - Documentation and evidence logs: semsource (45 hits in total), semconnect (26), semspec (13). None of those are
+     code.
+4. **`rule.NewConfigManager` changed shape (Go).** It is now `rule.NewConfigManager(logger) (*ConfigManager, error)`.
+   `InitializeKVStore`, `SeedFromRuntime` and `WatchRules` are removed, and a rule processor no longer builds its own
+   manager or watches `rules.*` itself. A composition root that needs rule CRUD or hot reload does four things:
+   - builds the one manager;
+   - passes `config.WithKeyFamily(rcm.KeyFamily())` to `config.NewConfigManager`;
+   - hands `rcm` to the agent tools;
+   - calls `rcm.Start(ctx, targets)` after its services start, where `targets` are its `rule.HotReloadTarget`s (every
+     `*rule.Processor` is one), and `rcm.Stop()` before they stop.
+
+   Known holder: semteams `ce22c961` `cmd/semteams/main.go:549-557` (`buildRuleManager`, already on a stale
+   `InitializeKVStore` signature). A root that skips this still runs its rule processors with the rules they loaded
+   from files and inline configuration, with no hot reload.
+5. **`config.NewConfigManager` takes `...ManagerOption`** (additive). A `platform.org` or `platform.id` that cannot
+   name a bucket is refused at construction. Configuration validation already refuses every such pair.
+6. **A rule pack still may not write the configuration bucket** (obligation 9 above). The owner-only guard now covers
+   every `semstreams_config_<suffix>` member, not one fixed name.
+
+### Doing nothing
+
+- A normal upgrade boots cleanly into its new bucket. The old bucket's keys stay behind, unread.
+- Prod and dev sharing a pair start **both**, without refusal, and share one authority. Nothing tells you. Obligation 2
+  is the fix.
+- Tooling that reads the literal `semstreams_config` reads the orphan: stale values from before the upgrade, or
+  key-not-found on a fresh server.

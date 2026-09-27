@@ -41,8 +41,9 @@ record, deciding from a single pre-mint read of the bucket's keys and under the 
 
 - the record is present — Start SHALL adopt its identifier as the effective `platform.id`, and SHALL fail unless the
   record's organization equals the configuration's `platform.org` and the configuration's `platform.id` equals the
-  record's stem. Configuration declares the STEM and only the stem: the minted identifier is not a declarable value,
-  and a configuration declaring it SHALL be refused with guidance naming the stem to declare instead — decided by
+  record's stem. Configuration declares the STEM and only the stem. A configuration declaring a minted identifier
+  names that identifier's own bucket and is a new deployment there; where that bucket's record carries the declared
+  value as its minted identifier, Start SHALL refuse with guidance naming the stem to declare instead — decided by
   comparison against the recorded identifier, never by inspecting the value's grammar. An adopted identifier SHALL be
   validated under the same segment grammar and authority-pair bound as a configured one;
 - the record is absent and the bucket holds no other key — Start SHALL mint the entropy suffix, write the record with
@@ -100,12 +101,14 @@ configuration — it remains a published mirror only — and version arbitration
 
 #### Scenario: A later boot and a co-process adopt the persisted identity
 
-- **GIVEN** `platform_identity` records organization `acme`, stem `dep`, and identifier `dep-7f3a9c`
+- **GIVEN** a configuration bucket whose `platform_identity` records organization `acme`, stem `dep`, and identifier
+  `dep-7f3a9c`
 - **WHEN** a process whose file declares `platform.id` `dep` starts, and concurrently a second process with the same file starts
 - **THEN** both adopt `dep-7f3a9c` and neither creates a second record — the loser of the atomic Create reads the winner's
-- **AND** a file declaring `other`, or one declaring a different `platform.org`, returns the identity mismatch
-- **AND** a file declaring `platform.id` `dep-7f3a9c` — the minted identifier rather than the stem — is refused with
-  guidance to declare `dep`
+- **AND** when that record is in the bucket a file declaring `other`, or a different `platform.org`, names — by hand or
+  through an alias — Start returns the identity mismatch
+- **AND** when it is in the bucket a file declaring `platform.id` `dep-7f3a9c` names, Start refuses with guidance to
+  declare `dep`
 - **AND** the tests that verify this are `TestConfigManagerAdoptsPersistedPlatformIdentity`,
   `TestConfigManagerConcurrentFirstBootConvergesOnOneIdentity` and
   `TestFileDeclaringTheMintedIdentifierIsRefusedWithGuidance`

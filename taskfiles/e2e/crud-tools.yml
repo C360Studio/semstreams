@@ -2,7 +2,7 @@ version: "3"
 
 # Crud-tools tier: verifies ADR-029 Pattern-B CRUD tools end to end.
 # Mock LLM scripts a single create_rule call; scenario validates the
-# rule appears in the semstreams_config KV bucket with expected content.
+# rule appears in the configuration bucket semstreams_config_c360_crud-tools with expected content.
 # Runs on ports 6xxxx alongside agentic (3xxxx) and deep-research (5xxxx).
 
 tasks:
