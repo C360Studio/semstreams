@@ -93,6 +93,23 @@ func TestBinaryBootOrder(t *testing.T) {
 		require.NoError(t, requireIdentArgument(productionRun, call, 0, productionBootCtx), call)
 	}
 	require.NoError(t, requireIdentArgument(productionRun, "runUntilShutdown", 0, productionRuntimeCtx))
+	// #1188: the one rule manager registers its `rules` key family with the
+	// config manager it is started beside, and the runtime handed to
+	// runUntilShutdown is the wrapper that orders rule hot reload around the
+	// services. Removing any link here must fail this test.
+	ruleManager, err := assignedCallResult(productionRun, "rulepkg.NewConfigManager", 0)
+	require.NoError(t, err)
+	requireCallOrder(t, productionCalls, "rulepkg.NewConfigManager", "bootstrapobservability.StartValidatedConfigManager")
+	require.NoError(t, requireMethodCallArgument(productionRun, "config.WithKeyFamily", 0, ruleManager, "KeyFamily"))
+	wrappedRules, err := compositeFieldIdentifier(productionRun, "ruleHotReloadRuntime", "rules")
+	require.NoError(t, err)
+	require.Equal(t, ruleManager, wrappedRules)
+	wrappedServices, err := compositeFieldIdentifier(productionRun, "ruleHotReloadRuntime", "runtimeManager")
+	require.NoError(t, err)
+	productionRuntime, err := assignedCallResult(productionRun, "setupRegistriesAndManager", 1)
+	require.NoError(t, err)
+	require.Equal(t, productionRuntime, wrappedServices)
+	require.NoError(t, requireIdentArgument(productionRun, "runUntilShutdown", 2, "runtime"))
 	require.NoError(t, requireMethodCallArgument(productionRun, "runUntilShutdown", 1, productionBootCtx, "Done"))
 	require.NoError(t, requireSelectorArgument(productionRun,
 		"bootstrapobservability.NewForwardingHandler", 0, productionEffective, "Services"))
