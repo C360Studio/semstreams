@@ -11,17 +11,17 @@ landing choreography. Pins are at base `fe9482b7` (design.md § 1). Every gate l
 
 ## 1. Watcher ownership (step 1)
 
-- [ ] 1.1 Add `config.ManagerOption`, `WithKeyFamily` and `KeyFamily` (design D1): the watch opens before publication
+- [x] 1.1 Add `config.ManagerOption`, `WithKeyFamily` and `KeyFamily` (design D1): the watch opens before publication
       and the family is bound at `publishBucket`. Add `TestKeyFamilyDeliversSnapshotThenChanges` (real NATS,
       snapshot, put, delete, not-acquired before Start and after a refused Start).
-- [ ] 1.2 Rework the rule `ConfigManager` around the family: `NewConfigManager(logger)`, `KeyFamily()`,
-      `Start(ctx, targets)` and `Stop()`. Add `(*Processor).LoadedRuleDefinitions` and the `RuleTarget` interface.
+- [x] 1.2 Rework the rule `ConfigManager` around the family: `NewConfigManager(logger)`, `KeyFamily()`,
+      `Start(ctx, targets)` and `Stop()`. Add `(*Processor).LoadedRuleDefinitions` and the `HotReloadTarget` interface.
       Delete `InitializeKVStore`, `ensureKVStore`, the literal-name acquisition, `WatchRules`, and the
       component-internal construction and stop (`processor/rule/processor.go:1019-1028`, `:1335`).
-- [ ] 1.3 In the root, construct the one rule manager and register its family through `StartValidatedConfigManager`.
+- [x] 1.3 In the root, construct the one rule manager and register its family through `StartValidatedConfigManager`.
       Serve it to the tools, and wrap `runtimeManager` so that `StartAll` then seeds and reconciles, and `StopAll`
       stops the loop first (design D3).
-- [ ] 1.4 Add `TestRootRuleManagerHotReloadsIntoTheProcessor`: write `rules.x` through the root's manager and observe
+- [x] 1.4 Add `TestRootRuleManagerHotReloadsIntoTheProcessor`: write `rules.x` through the root's manager and observe
       the processor's `ApplyConfigUpdate` (real NATS, `-race`, explicit synchronization). Migrate the rule package's
       hot-reload, seeding and lifecycle tests to the new seam.
 

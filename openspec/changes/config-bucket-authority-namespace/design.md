@@ -66,9 +66,9 @@ func (f *KeyFamily) Get / Put / Create / Delete / Names
 - CRUD (`SaveRule`, `GetRule`, `DeleteRule`, `ListRules`) goes through the family.
 - The handler only wakes the reconcile loop (non-blocking, buffer of one). Reconcile stays a full `ListRules`
   replace, so it needs no per-entry state.
-- `Start(ctx, targets []RuleTarget)` seeds, reconciles once, then debounces at 250 ms as before. `Stop()` cancels and
+- `Start(ctx, targets []HotReloadTarget)` seeds, reconciles once, then debounces at 250 ms as before. `Stop()` cancels and
   joins.
-- `RuleTarget` is the small interface the processor exposes: `LoadedRuleDefinitions()` *(new, on `*Processor`)*,
+- `HotReloadTarget` is the small interface the processor exposes: `LoadedRuleDefinitions()` *(new, on `*Processor`)*,
   `ValidateConfigUpdate`, `ApplyConfigUpdate`.
 
 **D3 — ordering (the brief asked for it to be recorded).**
@@ -82,8 +82,12 @@ func (f *KeyFamily) Get / Put / Create / Delete / Names
   (`processor/rule/processor.go:1335`). Stopping the loop first keeps any reconcile from racing a processor's teardown.
 - Entries delivered before `rules.Start` only leave a wake-up pending. The first reconcile lists the bucket fresh, so
   nothing is lost and the pending wake costs one extra reconcile.
-- Targets are the enabled rule processors after `configureAndCreateServices` (P6). With more than one, each receives
-  the full `rules.*` set, which is what each processor's own watcher did before.
+- Targets are the enabled rule processors after `configureAndCreateServices` (P6). The root finds them with
+  `service.ComponentsImplementing[rule.HotReloadTarget]` *(new)*. It is the generic form of the existing
+  `ProjectionBinders` walk, and this is its one consumer. With more than one processor, each receives the full
+  `rules.*` set, which is what each processor's own watcher did before.
+- The runtime holds the rule manager through a two-method `ruleHotReload` interface, so
+  `TestRuleHotReloadRuntimeOrdersAroundServices` can pin the order without NATS.
 
 **D4 — the name (step 2).**
 - `config.BucketName(org, stem string) (string, error)` returns `graph.BucketSemStreamsConfig + "_" + org + "_" +

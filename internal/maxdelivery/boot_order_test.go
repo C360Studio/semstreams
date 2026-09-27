@@ -88,7 +88,6 @@ func TestBinaryBootOrder(t *testing.T) {
 		"service.WireGraphRuntime",
 		"persona.LoadFromDirectory",
 		"executors.RegisterBuiltins",
-		"buildRuleManager",
 		"graphresearch.RegisterTool",
 	} {
 		require.NoError(t, requireIdentArgument(productionRun, call, 0, productionBootCtx), call)

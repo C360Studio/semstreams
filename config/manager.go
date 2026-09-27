@@ -43,6 +43,7 @@ type Manager struct {
 	kvStore  *natsclient.KVStore // KVStore abstraction for safe operations
 
 	watchers    []jetstream.KeyWatcher   // Watchers for specific patterns
+	families    []*KeyFamily             // Key families registered by WithKeyFamily
 	subscribers map[string][]chan Update // Pattern -> channels
 	mu          sync.RWMutex             // Protects subscribers map
 	logger      *slog.Logger             // Structured logger
@@ -112,7 +113,7 @@ type platformIdentityRecord struct {
 }
 
 // NewConfigManager creates a new configuration manager
-func NewConfigManager(cfg *Config, natsClient *natsclient.Client, logger *slog.Logger) (*Manager, error) {
+func NewConfigManager(cfg *Config, natsClient *natsclient.Client, logger *slog.Logger, opts ...ManagerOption) (*Manager, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config cannot be nil")
 	}
@@ -130,12 +131,23 @@ func NewConfigManager(cfg *Config, natsClient *natsclient.Client, logger *slog.L
 	// unable to bound the acquisition. It became removal work rather than
 	// inherited debt the moment this package made that bucket the home of
 	// create-once identity state.
-	return &Manager{
+	cm := &Manager{
 		config:      NewSafeConfig(cfg),
 		natsClient:  natsClient,
 		subscribers: make(map[string][]chan Update),
 		logger:      logger,
-	}, nil
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(cm)
+		}
+	}
+	for _, family := range cm.families {
+		if family == nil {
+			return nil, fmt.Errorf("key family cannot be nil")
+		}
+	}
+	return cm, nil
 }
 
 // errBucketNotAcquired is returned by any bucket-dependent method called before
@@ -177,6 +189,9 @@ func (cm *Manager) publishBucket(kv jetstream.KeyValue, kvStore *natsclient.KVSt
 	cm.kv = kv
 	cm.kvStore = kvStore
 	cm.bucketMu.Unlock()
+	for _, family := range cm.families {
+		family.bind(kvStore)
+	}
 }
 
 // store returns the acquired KVStore, or errBucketNotAcquired before Start.
@@ -441,6 +456,23 @@ func (cm *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to create any watchers")
 	}
 
+	// A registered key family is a declared dependency, not an optional
+	// pattern: its owner has no other way to reach this bucket, so a family
+	// that cannot be watched refuses Start. Opened WITHOUT UpdatesOnly, so the
+	// owner receives the entries present now, then every change.
+	familyWatchers := make([]jetstream.KeyWatcher, 0, len(cm.families))
+	for _, family := range cm.families {
+		watcher, err := kvHandle.Watch(ctx, family.pattern())
+		if err != nil {
+			for _, w := range familyWatchers {
+				_ = w.Stop()
+			}
+			cleanup()
+			return fmt.Errorf("watch key family %q in config bucket %q: %w", family.pattern(), configBucketName, err)
+		}
+		familyWatchers = append(familyWatchers, watcher)
+	}
+
 	// Every step that can refuse has now passed. Publishing the handles here,
 	// and only here, is what makes errBucketNotAcquired truthful for a Start
 	// that was attempted and refused — not merely for one never called.
@@ -450,6 +482,11 @@ func (cm *Manager) Start(ctx context.Context) error {
 	for _, watcher := range cm.watchers {
 		cm.wg.Add(1)
 		go cm.processWatcher(ctx, watcher)
+	}
+	for i, family := range cm.families {
+		cm.watchers = append(cm.watchers, familyWatchers[i])
+		cm.wg.Add(1)
+		go cm.processFamily(ctx, family, familyWatchers[i])
 	}
 
 	return nil

@@ -38,6 +38,34 @@ func (m *Manager) ProjectionBinders() []ProjectionBinder {
 	return result
 }
 
+// ComponentsImplementing returns the constructed boot components that
+// implement T. The component set is immutable after construction, so the
+// composition root can wire a component-facing seam once, after
+// configureAndCreateServices — the rule hot-reload targets are its consumer.
+func ComponentsImplementing[T any](m *Manager) []T {
+	if m == nil {
+		return nil
+	}
+	cmService, exists := m.services["component-manager"]
+	if !exists {
+		return nil
+	}
+	cm, ok := cmService.(*ComponentManager)
+	if !ok {
+		return nil
+	}
+	var result []T
+	_ = cm.withComponents(func(components map[string]*component.ManagedComponent) error {
+		for _, managed := range components {
+			if match, ok := managed.Component.(T); ok {
+				result = append(result, match)
+			}
+		}
+		return nil
+	})
+	return result
+}
+
 type rulePackMutationPlan struct {
 	binder    ProjectionBinder
 	packID    string
