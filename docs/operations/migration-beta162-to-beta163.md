@@ -2006,9 +2006,11 @@ What moved:
   `loop_completed` for every `COMPLETE_` key (`processor/agentic-dispatch/http.go:1017`), both count those loops as
   finished. They are finished, so the effect is benign. semteams reads that SSE; its row in the table below.
 - **A second terminal for the same loop adopts the first; it never overwrites it.** A redelivered terminal whose
-  `Create` is refused reads the saved terminal back and, when its outcome matches, republishes that saved terminal and
-  writes the record from it. A content difference is logged at the audit line and changes nothing. A saved terminal of
-  a different outcome is quarantined: the first terminal wins.
+  `Create` is refused reads the saved terminal back and, when it names the same loop, republishes that saved terminal
+  and writes the record from it, whatever outcome the second terminal derived: the first terminal wins, and the record
+  is written in the saved outcome with the losing outcome's result or error cleared. A content or outcome difference is
+  logged at the audit line and changes nothing else; the delivery is acknowledged (#1399). A saved terminal naming
+  another loop is quarantined.
 - **A crashed cancel is settled cold.** A cancel that created its marker and published, then died before its record
   update, leaves a cancel marker, a published cancellation and a live record. Its redelivery, on a process that does
   not hold the loop, now reads the marker, republishes the saved cancellation, writes the record `cancelled` under
@@ -2022,28 +2024,27 @@ on the record's terminal `state` (a KV watch) sees the same transition, slightly
 
 **Two residuals, now bounded** (#1362 issuecomment-5808903072 and issuecomment-5809906669; #1377):
 
-- A terminal whose record update loses its compare-and-swap after `COMPLETE_<loopID>` and its event have landed leaves
-  a durable terminal and a published event over a live record — whether the record moved under a second process,
-  under the process's own adoption of a newer retained request for a loop it still held, or under a spawn-path
-  birth failure with a producer-supplied loop ID. The record converges at the loop's next terminal commit in
-  whichever process holds it next: a terminal of the same kind adopts the durable terminal, republishes the saved
-  event and writes the record terminal; a terminal of a different kind is refused and quarantined — the first
-  terminal wins. Until then the loop runs on under a durable terminal, bounded only by its own iteration budget and
-  `timeout_at` (no time bound while `timeout_at` is zero or the loop is gated). A watcher keyed on `COMPLETE_<loopID>`
-  counts it as finished while it runs; one keyed on the record's terminal `state` sees it at that next terminal.
+- A terminal whose record update loses its compare-and-swap after `COMPLETE_<loopID>` and its event have landed leaves a
+  durable terminal and a published event over a live record — whether the record moved under a second process, under the
+  process's own adoption of a newer retained request for a loop it still held, or under a spawn-path birth failure with
+  a producer-supplied loop ID. The record converges at the loop's next terminal commit in whichever process holds it
+  next: the loop's next terminal of any kind converges the record — it adopts the durable terminal, republishes the
+  saved event and writes the record terminal in the saved kind. Until then the loop runs on under a durable terminal,
+  bounded only by its own iteration budget and `timeout_at` (no time bound while `timeout_at` is zero or the loop is
+  gated). A watcher keyed on `COMPLETE_<loopID>` counts it as finished while it runs; one keyed on the record's terminal
+  `state` sees it at that next terminal.
 - An approval-timeout sweep terminal (its `max_iterations` auto-reject, or the loop's own timeout) that commits
   `COMPLETE_<loopID>` and then fails to publish leaves a durable failed terminal under a record that stays
   `awaiting_approval`; a timer is never redelivered. The record converges only on the next answer to that gate: a
-  reject, and any answer to a loop past its own deadline, dispatches nothing and adopts the durable terminal; an
-  approve of a loop at its iteration cap dispatches the approved call once, and the terminal is adopted when that
-  call's result completes the batch with a terminal of the same kind; a result that instead derives a completion — an
-  approved terminal tool such as `decide`, which returns `StopLoop` — meets the saved failure as a different kind and
-  is refused and quarantined, and the record stays non-terminal: the first terminal wins, and the loop converges only
-  on a later terminal of the same kind or not at all. That quarantine latches the process's `tool.result` lane: loop
-  health reads `delivery ownership lost`, the lane's handle drains, and tool results for every loop in that process
-  stop until the process restarts. A cancel of that loop does not settle it: the cold cancel arm adopts only a cancel
-  marker, so the cancel is retried until the signal consumer's `MaxDeliver` is exhausted and is recorded in the
-  MaxDeliver ledger, never applied.
+  reject, and any answer to a loop past its own deadline, dispatches nothing and adopts the durable terminal; an approve
+  of a loop at its iteration cap dispatches the approved call once, and the terminal is adopted when that call's result
+  ends the loop, whatever terminal it derives: a result that completes the batch re-derives the failure, and a result
+  that instead derives a completion — an approved terminal tool such as `decide`, which returns `StopLoop` — adopts the
+  saved failure as the durable winner (#1399). Either way the saved `agent.failed` event is republished, the record is
+  written `failed` with the saved reason, the delivery is acknowledged, and the process's `tool.result` lane keeps
+  consuming for every loop; no `agent.complete` is published for that loop. Until that answer, a cancel of that loop
+  does not settle it: the cold cancel arm adopts only a cancel marker, so the cancel is retried until the signal
+  consumer's `MaxDeliver` is exhausted and is recorded in the MaxDeliver ledger, never applied.
 
 **A cancel racing a result on its way to the record.** A non-terminal result — an approved call, a model response's
 tool batch, a tool result's next request, a sweeper auto-reject — that reaches the loop-record carrier after a cancel
@@ -2309,6 +2310,7 @@ No wire or subject change; observable through the consumer's redelivery behaviou
 | an over-depth task, or a continuation of a settled loop | Ack | Terminate |
 | any other `HandleTask` error | Ack | Retry, on the configured policy (default one redelivery after 30 s, `max_deliver` 2; the lane runs at MaxAckPending 1, so a Retry parks intake for that budget). The production producer is a cancelled delivery context — shutdown or stop, `HandleTask`'s first check — and nothing was registered, so the redelivery is a fresh birth. A fatal-class error quarantines instead, as on the response and tool-result lanes |
 | a continuation refused because its loop has tool calls in flight or awaits approval | Ack | Ack, unchanged — a defined refusal; re-send the turn |
+| a deferred turn whose record write fails for any reason but a size refusal (#1400) | Ack, the turn in process memory only | Retry, logged at Warn; the redelivery re-runs the write while the loop still shows the turn uncarried and acknowledges without writing once a later request carried it or a later turn replaced it — the turn is appended once. The write is retried and resumed while `max_deliver` allows — once at the default of 2 — or until a later request carries the turn; each Retry delays all task intake for the retry delay (30 s at MaxAckPending 1). A delivery that exhausts `max_deliver` is counted by `semstreams_nats_max_delivery_exhaustions_total`, so the delivery is never dropped silently; the turn is then, as when the process no longer holds the loop, in process memory only and not durable, as before this tag. Never quarantined: the Retry is explicitly transient-classified |
 
 `tasks_submitted_total` is unchanged (at-least-once, above). **Action:** a producer that relied on a malformed task
 being consumed silently now sees it terminated, as the response and tool-result lanes already terminate theirs.
@@ -2326,7 +2328,8 @@ text included. The client's refusal is observed at the three writes that can mee
   stamp and follows the reference with `read_loop_result` gets not-found — no completion record is written for a
   birth the ceiling refused;
 - a deferred turn's **marker** write it refuses is logged at Warn with the size, the text is dropped from the live
-  loop so later writes fit, and the delivery is acknowledged: the turn is carried from process memory and is not
+  loop so later writes fit, and the delivery is acknowledged — a deterministic refusal, so a permanent limit and never
+  retried (#1400): the turn is carried from process memory and is not
   durable — neither is the marker. A deferred turn whose text the record refused for size is not recovered when a
   later compaction empties the context: recovery re-injects only the birth prompt;
 - a **carrier** write it refuses quarantines the delivery, as any other carrier write failure does (unchanged).

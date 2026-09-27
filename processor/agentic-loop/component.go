@@ -151,10 +151,13 @@ type Component struct {
 	// Graph writer for model endpoint and loop execution entities
 	graphWriter *graphWriter
 
-	// pendingTaskResults retains the not-yet-published spawn result when a
-	// transient lineage write NAKs the task. Redelivery first hits HandleTask's
-	// active-loop dedup path, then resumes from this result so the original
-	// agent.request is not silently lost. Protected by mu.
+	// pendingTaskResults retains a task's result when a durable write after
+	// HandleTask NAKs the delivery: the not-yet-published spawn result of a
+	// transient lineage write, and a deferred turn whose record write failed
+	// (#1400). Redelivery resumes from it — the lineage result after
+	// HandleTask's active-loop dedup, the deferred one before HandleTask — so
+	// the work is not silently lost. releaseLoopTransientState clears a
+	// released loop's entries. Protected by mu.
 	pendingTaskResults map[string]HandlerResult
 
 	// testPublishHook, if non-nil, is called by publishApprovalResponseToWire
@@ -1551,6 +1554,14 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 		return nil
 	}
 
+	// A deferred turn whose record write failed on an earlier delivery (#1400)
+	// resumes here, BEFORE HandleTask: HandleTask's task-id dedup would
+	// acknowledge it without re-running the write, and once a later turn has
+	// rebound the loop's task id it would attach this turn a second time.
+	if pending, ok := c.pendingTaskResult(task.TaskID, task.LoopID); ok && pending.Deferred {
+		return c.resumeDeferredContinuation(ctx, *task, pending)
+	}
+
 	// Handle the task using the message handler
 	result, err := c.handler.HandleTask(ctx, *task)
 	if err != nil {
@@ -1580,26 +1591,16 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 	// delivery owns is the pending-continuation marker on the loop entity. There
 	// is nothing to publish and no graph birth to do — the loop was born on its
 	// first task. The marker and the turn's text reach the record in one
-	// compare-and-swap; any failure other than a lost compare-and-swap is
-	// best-effort. Across a replacement the rebuild replays the text after the
-	// retained conversation and keeps the marker, so the next completion
-	// carries the turn (restoreLoopFromRequest in state.go; #1365).
+	// compare-and-swap (settleDeferredContinuation). Across a replacement the
+	// rebuild replays the text after the retained conversation and keeps the
+	// marker, so the next completion carries the turn (restoreLoopFromRequest
+	// in state.go; #1365).
 	if result.Deferred {
 		c.logger.Debug("Task deferred behind the loop's outstanding model request",
 			slog.String("loop_id", result.LoopID),
 			slog.String("task_id", task.TaskID))
 		c.recordTrajectoryObservations(ctx, result)
-		if err := c.persistDeferredContinuationMarker(ctx, result.LoopID, result.deferredPrompt); errors.Is(err, natsclient.ErrKVRevisionMismatch) {
-			// A lost compare-and-swap already released this loop, so the
-			// user's turn is held by nothing in this process. Acknowledging
-			// here would discard it; the delivery retries into whichever
-			// process now holds the record (#1330, docket OQ3). Every other
-			// write failure stays best-effort, as it was.
-			c.logger.Warn("Deferred continuation lost the record race — the turn is redelivered",
-				"loop_id", result.LoopID, "task_id", task.TaskID, "error", err)
-			return err
-		}
-		return nil
+		return c.settleDeferredContinuation(ctx, *task, result)
 	}
 
 	if !result.Created {
@@ -1910,6 +1911,18 @@ func (c *Component) clearPendingTaskResult(taskID, loopID string) {
 	result, ok := c.pendingTaskResults[taskID]
 	if ok && result.LoopID == loopID {
 		delete(c.pendingTaskResults, taskID)
+	}
+}
+
+// clearPendingTaskResultsForLoop drops every pending result for the loop,
+// under whichever task it was remembered.
+func (c *Component) clearPendingTaskResultsForLoop(loopID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for taskID, result := range c.pendingTaskResults {
+		if result.LoopID == loopID {
+			delete(c.pendingTaskResults, taskID)
+		}
 	}
 }
 
@@ -2432,10 +2445,10 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 		// record to a later request leaves the durable terminal over a live
 		// record: the redelivered input classifies as older and is
 		// acknowledged (loop_classification.go, requestOrderApplied), and the
-		// record converges at the loop's next terminal of the same kind, which
+		// record converges at the loop's next terminal of any kind, which
 		// adopts the marker (#1362 issuecomment-5808903072; #1377 W1, the
-		// documented bound; migration beta162-to-beta163, "Two residuals, now
-		// bounded").
+		// documented bound; #1399 for a terminal of another kind; migration
+		// beta162-to-beta163, "Two residuals, now bounded").
 		if err := c.commitTerminal(ctx, terminalOutcomeOf(result), result); err != nil {
 			return err
 		}
@@ -3321,6 +3334,72 @@ func (c *Component) writeLoopRecord(ctx context.Context, loopID string, terminal
 	return nil
 }
 
+// settleDeferredContinuation writes a deferred turn's marker and text and
+// settles the delivery by what the write answered (#1400, owner ruling Q3 on
+// #1146, issuecomment-5854830449: "the deferred turn Retries on any write
+// error").
+//
+//   - Written: acknowledged.
+//   - A lost compare-and-swap: the write already released the loop, so the
+//     turn is held by nothing in this process and the delivery retries into
+//     whichever process now holds the record (#1330, docket OQ3).
+//   - A size refusal: acknowledged. It is deterministic, so a retry parks the
+//     lane to max_deliver for nothing; the write declared it (owner,
+//     issuecomment-5856565994).
+//   - Any other failure: the result is remembered and the delivery retried;
+//     the redelivery resumes it in resumeDeferredContinuation, because
+//     HandleTask's task-id dedup would acknowledge it without writing.
+//
+// Every Retry is errs.WrapTransient outermost. The policy reads Fatal as
+// Quarantine, and errs.IsFatal also matches error TEXT ("disk full",
+// "corrupted"), so a bare bucket error could latch the whole task lane over
+// one loop's write. The no-observed-revision refusal, Fatal at its source,
+// takes the same Retry: one loop's write is never lane-unsafe, and max_deliver
+// bounds it.
+//
+// The cost is the lane's: each Retry parks all task intake on it for the retry
+// delay (30 s, MaxAckPending 1), at most max_deliver-1 times (once by default).
+func (c *Component) settleDeferredContinuation(ctx context.Context, task agentic.TaskMessage, result HandlerResult) error {
+	err := c.persistDeferredContinuationMarker(ctx, result.LoopID, result.deferredPrompt)
+	switch {
+	case err == nil:
+		c.clearPendingTaskResult(task.TaskID, result.LoopID)
+		return nil
+	case errors.Is(err, natsclient.ErrKVRevisionMismatch):
+		c.logger.Warn("Deferred continuation lost the record race — the turn is redelivered",
+			"loop_id", result.LoopID, "task_id", task.TaskID, "error", err)
+		return err
+	case errors.Is(err, nats.ErrMaxPayload):
+		c.clearPendingTaskResult(task.TaskID, result.LoopID)
+		return nil
+	}
+	c.rememberPendingTaskResult(task.TaskID, result)
+	c.logger.Warn("Deferred turn's record write failed — the delivery is retried and the write re-run",
+		"loop_id", result.LoopID, "task_id", task.TaskID, "error", err)
+	return errs.WrapTransient(err, "agentic-loop", "handleTaskMessage", "write the deferred turn to the loop record")
+}
+
+// resumeDeferredContinuation re-runs the write for a deferred turn whose write
+// failed on an earlier delivery, but only while the loop still shows THIS turn
+// uncarried. Otherwise a later request carried it, or a later turn replaced it
+// as the record's one uncarried turn (the text is a single string), and the
+// write that followed already said so: overlaying this turn would re-mark a
+// carried turn, or flip the record back to the older turn. Acknowledged then.
+//
+// A loop this process no longer holds cannot reach here: the release seam
+// clears what it left pending (releaseLoopTransientState).
+func (c *Component) resumeDeferredContinuation(ctx context.Context, task agentic.TaskMessage, pending HandlerResult) error {
+	entity, err := c.handler.GetLoop(pending.LoopID)
+	if err != nil || entity.TaskID != task.TaskID || !entity.PendingContinuation ||
+		entity.PendingContinuationRequestID != "" || entity.PendingContinuationPrompt != pending.deferredPrompt {
+		c.clearPendingTaskResult(task.TaskID, pending.LoopID)
+		c.logger.Info("Deferred turn redelivered after its loop moved past it — acknowledged",
+			"loop_id", pending.LoopID, "task_id", task.TaskID, "loop_task_id", entity.TaskID)
+		return nil
+	}
+	return c.settleDeferredContinuation(ctx, task, pending)
+}
+
 // persistDeferredContinuationMarker commits the deferred-continuation marker
 // onto the record it READ, rather than onto a render of the live entity.
 //
@@ -3350,9 +3429,10 @@ func (c *Component) writeLoopRecord(ctx context.Context, loopID string, terminal
 // retried into the same refusal: the text leaves the in-memory entity — only
 // while it is still this turn's, since a later turn may have replaced it — so
 // the loop's later record writes fit, a Warn names the loop and the size, and
-// the delivery is acknowledged as any best-effort marker write is. The turn is
-// in the loop's context and the next request carries it; it is not durable,
-// and neither is the marker, which is the state before the marker write.
+// the delivery is acknowledged — a permanent limit, never retried into the
+// same refusal (settleDeferredContinuation). The turn is in the loop's context
+// and the next request carries it; it is not durable, and neither is the
+// marker, which is the state before the marker write.
 //
 // Residual (#1377, design § 7): a cancel landing between attachContinuation
 // and this write has the shape of the carrier's W3 — a lane writing a loop

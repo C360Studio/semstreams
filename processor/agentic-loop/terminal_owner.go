@@ -121,10 +121,10 @@ func decodeTerminalMarker(data []byte) (terminalOutcome, error) {
 // through it. The order:
 //
 //  1. COMPLETE_<loopID> by Create. A refused Create means the loop already has
-//     a durable terminal: it is read back and ADOPTED by loop ID and terminal
+//     a durable terminal: it is read back and ADOPTED by loop ID, whatever its
 //     kind, and the saved payload replaces this delivery's candidate for every
-//     step below. A content difference is logged at the audit line and never
-//     decides the disposition.
+//     step below. A content or kind difference is logged at the audit line and
+//     never decides the disposition.
 //  2. The graph stamps.
 //  3. The terminal publication. A republished terminal is an accepted
 //     duplicate.
@@ -254,11 +254,14 @@ func (c *Component) recordCommittedTerminal(entity agentic.LoopEntity, outcome t
 // every later step commits — the candidate, or the saved terminal it adopted —
 // and whether it adopted.
 //
-// Adoption is by identity: the saved marker's loop ID and terminal kind must
-// be this loop's and the candidate's. A marker that decodes to neither is
-// conflicting evidence, and refusing it is the fail-closed answer; adopting a
-// terminal of another kind would publish one outcome for a delivery that
-// derived another.
+// Adoption is by loop identity: a saved marker naming this loop is adopted
+// whatever its kind (#1399; owner ruling #1146 issuecomment-5854830449, Q2,
+// superseding #1362 ruling 2 for the same loop). Once create-once has decided,
+// a candidate of another kind is stale, not poison: the loop's one outcome is
+// the saved one, its event is the one republished, and the record is written
+// from it — settleTerminal re-seats the entity to the saved kind. A marker
+// naming another loop is conflicting evidence, and refusing it is the
+// fail-closed answer.
 func (c *Component) createTerminalMarker(
 	ctx context.Context, loopID string, candidate terminalOutcome,
 ) (terminalOutcome, bool, error) {
@@ -287,8 +290,8 @@ func (c *Component) createTerminalMarker(
 	if err != nil {
 		return terminalOutcome{}, false, fmt.Errorf("loop %s: %w", loopID, err)
 	}
-	if saved.loopID() != loopID || saved.kind() != candidate.kind() {
-		c.logger.WarnContext(ctx, "Terminal refused — the loop's durable terminal is not this terminal's identity",
+	if saved.loopID() != loopID {
+		c.logger.WarnContext(ctx, "Terminal refused — the loop's durable terminal names another loop",
 			slog.String("loop_id", loopID),
 			slog.String("marker_loop_id", saved.loopID()),
 			slog.String("candidate_kind", candidate.kind()),
@@ -299,12 +302,15 @@ func (c *Component) createTerminalMarker(
 	}
 	if saved.completed != nil && candidate.syntheticDecide != nil {
 		// The synthesized decision's reason is the completion's result; the
-		// saved payload replaces the candidate, so it replaces that too.
+		// saved payload replaces the candidate, so it replaces that too. A
+		// saved failure or cancel adopted over a completion carries no
+		// decision: the loop did not complete.
 		saved.syntheticDecide = &SyntheticDecideRequest{LoopID: loopID, Reason: saved.completed.Result}
 	}
 	c.logger.WarnContext(ctx, "Terminal adopted the loop's durable terminal",
 		slog.String("loop_id", loopID),
 		slog.String("kind", saved.kind()),
+		slog.String("candidate_kind", candidate.kind()),
 		slog.Uint64("marker_revision", entry.Revision()),
 		slog.Bool("content_differs", !bytes.Equal(data, entry.Value())))
 	return saved, true, nil
@@ -434,6 +440,11 @@ func (c *Component) adoptDurableCancel(ctx context.Context, loopID string) (bool
 	return true, nil
 }
 
+// cancelledByUserError is the error a cancelled loop entity carries, whichever
+// path wrote it cancelled: CancelLoop, the cold cancel adoption below, and
+// settleTerminal's re-seat to an adopted cancel.
+const cancelledByUserError = "cancelled by user"
+
 // writeRecordCancelled writes a record this process does not hold to match an
 // adopted cancel, under compare-and-swap against the revision it read. A
 // record that moved retries; a record that is already terminal is settled.
@@ -458,7 +469,7 @@ func (c *Component) writeRecordCancelled(
 	entity.CancelledBy = cancelled.CancelledBy
 	entity.CancelledAt = cancelled.CancelledAt
 	entity.CompletedAt = cancelled.CancelledAt
-	entity.Error = "cancelled by user"
+	entity.Error = cancelledByUserError
 	entity.PendingApproval = nil
 	entity.StateBeforeApproval = ""
 	data, err := json.Marshal(entity)
