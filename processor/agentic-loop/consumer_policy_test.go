@@ -23,10 +23,21 @@ import (
 type loopPolicyHandle struct {
 	drains atomic.Int32
 	closed chan struct{}
+	// drained, when non-nil, is signalled on each Drain so a test can wait
+	// for an owner stop that runs after the delivery's callback returned.
+	drained chan struct{}
 }
 
-func (*loopPolicyHandle) Stop()                     {}
-func (h *loopPolicyHandle) Drain()                  { h.drains.Add(1) }
+func (*loopPolicyHandle) Stop() {}
+func (h *loopPolicyHandle) Drain() {
+	h.drains.Add(1)
+	if h.drained != nil {
+		select {
+		case h.drained <- struct{}{}:
+		default:
+		}
+	}
+}
 func (h *loopPolicyHandle) Closed() <-chan struct{} { return h.closed }
 
 func TestAgenticLoopConsumerPolicyOwnsMaxAckPending(t *testing.T) {

@@ -225,7 +225,7 @@ func startRaceLaneOn(t *testing.T, client *natsclient.Client) *raceLane {
 	}
 	c.waitForStreamInput = func(context.Context, string) error { return nil }
 	c.consumeStream = func(_ context.Context, _ context.Context, owner natsclient.PortConsumerContext, _ natsclient.StreamConsumerConfig, callback func(context.Context, jetstream.Msg)) (jetstream.ConsumeContext, error) {
-		handle := &loopPolicyHandle{closed: make(chan struct{})}
+		handle := &loopPolicyHandle{closed: make(chan struct{}), drained: make(chan struct{}, 1)}
 		lane.callbacks[owner.Port] = callback
 		lane.handles[owner.Port] = handle
 		return handle, nil
@@ -1031,6 +1031,37 @@ func (h *healthyRecorder) toolCompletion(t *testing.T, callID string) (trajector
 	return trajectoryToolCompletionEvidence{}, false
 }
 
+// siblingPendingLoop births a loop and dispatches a two-call batch: serial
+// dispatch sends the first call and queues the sibling, so the first call's
+// result completes nothing and its handler result carries the sibling's
+// tool.execute and no request.
+func siblingPendingLoop(t *testing.T) (*raceLane, string, agentic.ToolCall) {
+	t.Helper()
+	lane := startRaceLane(t)
+	c, h := lane.c, lane.h
+	born, err := h.HandleTask(t.Context(), TaskMessage{
+		TaskID: "task-evidence", Role: "general", Model: "test-model", Prompt: bornLoopPrompt,
+	})
+	require.NoError(t, err)
+	loopID := born.LoopID
+	require.NoError(t, c.createLoopState(t.Context(), loopID))
+	require.NoError(t, c.publishResults(t.Context(), born))
+	batch := agentic.AgentResponse{
+		RequestID: mintedRequest(t, born), Status: agentic.StatusToolCall, FinishReason: "tool_calls",
+		Message: agentic.ChatMessage{Role: "assistant", ToolCalls: []agentic.ToolCall{
+			{ID: "call-first", Name: "search", Arguments: map[string]any{"q": "first"}},
+			{ID: "call-sibling", Name: "search", Arguments: map[string]any{"q": "sibling"}},
+		}},
+	}
+	retainModelResponse(t, lane.client, batch)
+	dispatch, err := h.HandleModelResponse(t.Context(), loopID, batch)
+	require.NoError(t, err)
+	require.NoError(t, c.persistHandlerResult(t.Context(), dispatch))
+	first, _ := dispatchedToolCall(t, dispatch)
+	require.Equal(t, "call-first", first.ID)
+	return lane, loopID, first
+}
+
 // A tool result finishes HandleToolResult while a sibling is still owed, then
 // meets a cancel before the carrier's entry check (#1377, Codex merge review
 // finding 1). The handler has already collected the completed call's
@@ -1047,29 +1078,8 @@ func TestACarrierRefusalStillRecordsTheEvidenceTheHandlerCollected(t *testing.T)
 			name = "the cancel moved the loop terminal in memory, its commit in flight"
 		}
 		t.Run(name, func(t *testing.T) {
-			lane := startRaceLane(t)
+			lane, loopID, first := siblingPendingLoop(t)
 			c, h := lane.c, lane.h
-			born, err := h.HandleTask(t.Context(), TaskMessage{
-				TaskID: "task-evidence", Role: "general", Model: "test-model", Prompt: bornLoopPrompt,
-			})
-			require.NoError(t, err)
-			loopID := born.LoopID
-			require.NoError(t, c.createLoopState(t.Context(), loopID))
-			require.NoError(t, c.publishResults(t.Context(), born))
-			batch := agentic.AgentResponse{
-				RequestID: mintedRequest(t, born), Status: agentic.StatusToolCall, FinishReason: "tool_calls",
-				Message: agentic.ChatMessage{Role: "assistant", ToolCalls: []agentic.ToolCall{
-					{ID: "call-first", Name: "search", Arguments: map[string]any{"q": "first"}},
-					{ID: "call-sibling", Name: "search", Arguments: map[string]any{"q": "sibling"}},
-				}},
-			}
-			retainModelResponse(t, lane.client, batch)
-			dispatch, err := h.HandleModelResponse(t.Context(), loopID, batch)
-			require.NoError(t, err)
-			require.NoError(t, c.persistHandlerResult(t.Context(), dispatch))
-			first, _ := dispatchedToolCall(t, dispatch)
-			require.Equal(t, "call-first", first.ID)
-
 			recorder := installHealthyRecorder(t, c)
 			bucket := newRaceBucket(c.loopsBucket, loopID)
 			c.loopsBucket = bucket
@@ -1133,4 +1143,24 @@ func TestACarrierRefusalStillRecordsTheEvidenceTheHandlerCollected(t *testing.T)
 			requireLaneNotLatched(t, lane, "tool.result")
 		})
 	}
+
+	// Control (review 3 LOW B): with no cancel, the same result publishes the
+	// sibling's tool.execute and records the same evidence — so the "not
+	// published" assertions above observe the refusal, not an empty result.
+	t.Run("control: no cancel", func(t *testing.T) {
+		lane, loopID, first := siblingPendingLoop(t)
+		recorder := installHealthyRecorder(t, lane.c)
+		executionsBefore := toolExecutionsOn(t, lane.client, loopID)
+		resultMsg, resultDone := deliverHeartbeatOn(t, lane, "tool.result", baseMessageBytes(t, &agentic.ToolResult{
+			CallID: first.ID, Name: first.Name, Content: "the first answer, in full", LoopID: loopID,
+			RequestID: first.RequestID, ExecutionID: first.ExecutionID, CallOrdinal: first.CallOrdinal,
+		}))
+		waitFor(t, resultDone, "tool result callback returned")
+		require.Equal(t, int32(1), resultMsg.acks.Load(), "control: %s", heartbeatDisposition(resultMsg))
+		require.Equal(t, executionsBefore+1, toolExecutionsOn(t, lane.client, loopID),
+			"control: the result carries the sibling's tool.execute")
+		evidence, stored := recorder.toolCompletion(t, first.ID)
+		require.True(t, stored)
+		require.Equal(t, "the first answer, in full", evidence.Result.Content)
+	})
 }
