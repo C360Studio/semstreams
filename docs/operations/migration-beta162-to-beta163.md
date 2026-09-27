@@ -2446,6 +2446,11 @@ manager serves other writers a key family; the rule manager exists once, in the 
    name a bucket is refused at construction. Configuration validation already refuses every such pair.
 6. **A rule pack still may not write the configuration bucket** (obligation 9 above). The owner-only guard now covers
    every `semstreams_config_<suffix>` member, not one fixed name.
+7. **A rule ID is one KV literal token** (`natsclient.ValidateKVLiteralToken`: ASCII letters, digits, `-`, `/`, `_`,
+   `=`, at most 512 bytes). A rule ID is a member name of the `rules` key family, and a name holding `.` is now refused
+   at write with an invalid error, as is any other name outside that alphabet. Before, a dotted name was stored and
+   never hot-reloaded, because the watch `rules.*` never delivered it. A file or inline rule with such an ID is not seeded
+   (the seed logs a warning), so the first reconcile's full replace removes it from the processor. Rename such rules.
 
 ### Doing nothing
 

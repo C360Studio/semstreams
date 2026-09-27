@@ -209,12 +209,17 @@ before the handles are published, and SHALL fail when it cannot. After Start suc
 handler every entry present when the watch opened, marked initial, and then every put and delete as it happens, each
 with its member name, value, and operation. The family's reads and writes SHALL be scoped to `<prefix>.<name>` and
 SHALL return the not-acquired lifecycle error until Start has succeeded. Stop SHALL end delivery before it returns.
+The prefix and every member name SHALL each be one NATS KV literal token, because the watch `<prefix>.*` delivers
+exactly one token after the prefix. A read or write naming anything else, or passing a nil context, SHALL return an
+invalid error before any bucket access, and a key with more than one token after `<prefix>.` SHALL NOT be listed as a
+member.
 
 The rule engine's `rules.*` family SHALL be registered this way, by the composition root, which owns the one rule
 `ConfigManager`. That manager SHALL serve rule CRUD through the family. After every service has started it SHALL seed
 each rule processor's loaded rules with create-if-absent, then reconcile the full `rules.*` set into each processor
-through `ApplyConfigUpdate`, debouncing later changes. It SHALL stop before the services stop. No rule processor SHALL
-acquire the configuration bucket itself.
+through `ApplyConfigUpdate`, debouncing later changes. It SHALL stop before the services stop, and its Stop SHALL
+return only after Start's seeding and initial reconcile and the reconcile loop have finished, for every concurrent
+caller. No rule processor SHALL acquire the configuration bucket itself.
 
 #### Scenario: a registered family receives its snapshot and its changes
 
@@ -223,6 +228,24 @@ acquire the configuration bucket itself.
 - **THEN** the handler receives `a` marked initial, then `b` as a put and `a` as a delete, and no key outside `rules.*`
 - **AND** before Start, and after a refused Start, the family's `Put` returns the not-acquired lifecycle error
 - **AND** the test that verifies this is `TestKeyFamilyDeliversSnapshotThenChanges`
+
+#### Scenario: a name the family's watch cannot deliver is refused before any I/O
+
+- **GIVEN** a started `rules` family
+- **WHEN** `Put`, `Create`, `Get` or `Delete` names `dotted.name`, or any family method receives a nil context
+- **THEN** it returns an invalid error and the bucket is neither read nor written
+- **AND** a `rules.nested.name` key another writer stored is absent from `Names`, and the next delivered entry is the
+  put that followed it
+- **AND** the tests that verify this are `TestKeyFamilyDeliversSnapshotThenChanges` and
+  `TestBoundKeyFamilyRefusesBeforeAnyStoreAccess`
+
+#### Scenario: the rule manager's Stop joins Start and the reconcile loop
+
+- **GIVEN** a rule `ConfigManager` whose Start is seeding a target, or whose reconcile loop is running
+- **WHEN** Stop is called, once or by two callers concurrently
+- **THEN** each Stop returns only after Start has released the target and the reconcile loop has exited
+- **AND** the tests that verify this are `TestConfigManagerStopDuringSeedingJoinsStart` and
+  `TestConfigManagerConcurrentStopsBothJoinTheLoop`
 
 #### Scenario: a rule written through the root's manager reaches the running processor
 
