@@ -51,7 +51,9 @@ landing choreography. Pins are at base `fe9482b7` (design.md § 1). Every gate l
       loop's stop-before-`StopAll`, and the name derivation. Killed: M1 delete mapping (key-family test), M2 StopAll order (ordering test), M3 unbound
       family, M4 `WithKeyFamily` dropped from `run.go` (boot_order AST), M5 `nameFamilies` match (graph catalog tests
       and `TestKVWriterRefusesCatalogedOwnerOnlyBucket`), M6 separator (`TestBucketNameIsLegalForEveryValidPair`,
-      `FuzzBucketName`); checksums restored each time.
+      `FuzzBucketName`), M7 `ruleHotReloadRuntime.targets` set to `nil` in `run.go`
+      (`TestBinaryBootOrder`), M8 the sibling-bucket refusal ignored on the mint branch
+      (`TestFileDeclaringTheMintedIdentifierIsRefusedWithGuidance`); checksums restored each time.
 - [ ] 3.2 Gates green before each push: `go build ./...`, `task lint`, `go vet ./...`, `go vet -tags=integration
       ./...`, `go run ./cmd/entity-id-audit .`, `task test:race`, `task test:integration`, `task schema:generate`
       with a clean `git diff schemas/ specs/`, and `openspec validate config-bucket-authority-namespace --strict`. Open: every gate is

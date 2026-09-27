@@ -144,7 +144,8 @@ existing `CoreAuthorityStem` pattern.
   recommendations").** A file that declares the *minted* identifier (`platform.id` `dep-7f3a9c`) names bucket
   `semstreams_config_<org>_dep-7f3a9c`, which is empty, so the adoption compare cannot see that the value was minted.
   - Ruled: observation on the mint branch only. Before minting, Start lists the configuration buckets once and reads
-    `platform_identity` from each other `semstreams_config_<org>_*` bucket, one Get each, under the Start context, no
+    `platform_identity` from each other `semstreams_config_<org>_*` bucket through the catalog reader seam
+    (`graph.OpenCatalogReader`: must-exist, never creates), one Get each, under the Start context, no
     retries. A record with this org and `id` equal to the declared value refuses with the ADR-104 d5 guidance naming
     its stem, and nothing is minted (`config/manager.go` `refuseDeclaredMintedIdentifier`).
   - The prefix is over-inclusive because an org may contain `_`; the recorded org and id are compared, so that is

@@ -1171,8 +1171,11 @@ func (cm *Manager) refuseDeclaredMintedIdentifier(ctx context.Context, org, decl
 // found=false when the bucket or the record is gone.
 func (cm *Manager) readSiblingIdentity(ctx context.Context, bucket string) (platformIdentityRecord, bool, error) {
 	var record platformIdentityRecord
-	kv, err := cm.natsClient.GetKeyValueBucket(ctx, bucket)
-	if errors.Is(err, jetstream.ErrBucketNotFound) {
+	// The catalog's reader seam: must-exist, never creates, never reconciles a
+	// bucket this Manager does not own.
+	kv, err := graph.OpenCatalogReader(ctx, cm.natsClient, bucket)
+	var classified *errs.ClassifiedError
+	if errors.As(err, &classified) && classified.Code == natsclient.ErrorCodeBucketNotReady {
 		return record, false, nil
 	}
 	if err != nil {
