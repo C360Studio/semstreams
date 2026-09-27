@@ -31,11 +31,24 @@ func TestReferenceRuleConfigsUseDeclaredPredicates(t *testing.T) {
 			}
 			definitions := []rule.Definition{}
 			if err := json.Unmarshal(data, &definitions); err != nil {
-				var definition rule.Definition
-				if err := json.Unmarshal(data, &definition); err != nil {
+				// A rule-processor config file carries its rules under
+				// inline_rules; decoding it as one Definition would validate
+				// an empty rule instead of the rules it holds.
+				var processorConfig struct {
+					InlineRules []rule.Definition `json:"inline_rules"`
+				}
+				if err := json.Unmarshal(data, &processorConfig); err != nil {
 					t.Fatalf("decode %s: %v", path, err)
 				}
-				definitions = append(definitions, definition)
+				if processorConfig.InlineRules != nil {
+					definitions = processorConfig.InlineRules
+				} else {
+					var definition rule.Definition
+					if err := json.Unmarshal(data, &definition); err != nil {
+						t.Fatalf("decode %s: %v", path, err)
+					}
+					definitions = append(definitions, definition)
+				}
 			}
 			for _, definition := range definitions {
 				if err := rule.ValidateDefinition(definition); err != nil {
