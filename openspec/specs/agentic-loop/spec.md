@@ -1106,8 +1106,18 @@ refuses is not supported, and the refusal is permanent at birth.
 - **THEN** the task is acknowledged as a duplicate
 - **WHEN** it returns a deferred continuation
 - **THEN** the pending-continuation marker and the turn's text are written together by one compare-and-swap onto the
-  record the lane read; a lost compare-and-swap is retried, any other write failure is logged as best-effort and
-  the task is acknowledged with the turn held in process memory only
+  record the lane read; a lost compare-and-swap releases the loop and is retried; a size refusal is acknowledged
+  as the payload-ceiling scenario says; any other write failure is logged at Warn and retried, with the result
+  remembered, and the redelivery into a process still holding the loop re-runs the write before HandleTask's
+  task-id dedup can acknowledge it. The redelivery writes only while the loop still shows this turn uncarried —
+  a later request carried it, or a later turn replaced it as the record's one uncarried turn, is acknowledged
+  without writing — so the turn is appended once and the record never flips back to an older turn. The write is
+  retried and resumed while max_deliver allows — once at the default of 2 — or until a later request carries the
+  turn; each Retry delays all task intake for the lane's retry delay (30 s by default, at MaxAckPending 1). A
+  delivery that exhausts max_deliver takes the max-delivery exhaustion path and is counted by
+  semstreams_nats_max_delivery_exhaustions_total, so the delivery is never silently dropped; the turn is not
+  durable then, nor when the process no longer holds the loop — it is in process memory only, as before. A released loop
+  takes its remembered result with it, so its redelivery meets the cold fork
 - **WHEN** it returns an error
 - **THEN** the delivery takes the disposition the lane's policy derives from the error's class: a refusal naming
   invalid input — an over-depth task, a continuation of a settled loop — is terminated, a fatal-class error is
@@ -1198,8 +1208,9 @@ refuses is not supported, and the refusal is permanent at birth.
   loop-execution entity born before the write is stamped failed with the ceiling as its terminal reason, and the
   refusal is counted as a task intake rejection
 - **AND** at the deferred turn's marker write the refusal is logged with the size, the text is dropped from the
-  in-memory entity so later record writes fit, and the delivery is acknowledged as any other best-effort marker
-  write failure: the turn is in the loop's context and is carried by the next request, and it is not durable. A
+  in-memory entity so later record writes fit, and the delivery is acknowledged: the refusal is deterministic, so
+  it is a permanent limit and is never retried into the same refusal on a lane that runs at MaxAckPending 1. The
+  turn is in the loop's context and is carried by the next request, and it is not durable. A
   deferred turn whose text the record refused for size is not recovered when a later compaction empties the
   context
 - **AND** at a carrier write the refusal quarantines the delivery as any other carrier write failure does; the
