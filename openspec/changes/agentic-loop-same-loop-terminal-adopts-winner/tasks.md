@@ -23,7 +23,7 @@ Base: main `078782b1`. Design: `design.md`; the ruling is § 0. **No task assert
       crashed cancel.
 - [x] 2.5 Mutation evidence per site (the refusal condition restored; the re-seat removed), recorded on PR #1402.
       DONE at `7076af89`: five mutants, each killed and each restored by `cp` with a matching md5 — the refusal
-      condition (five tests red), the re-seat disabled (eight subtests red), the re-seat forced on the same kind (the
+      condition (five tests red), the re-seat disabled (nine tests and subtests red), the re-seat forced on the same kind (the
       truncated control red), the failure branch keeping `Result` (two red), and the audit line's `candidate_kind`
       dropped (two red).
 
