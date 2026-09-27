@@ -2310,6 +2310,7 @@ No wire or subject change; observable through the consumer's redelivery behaviou
 | an over-depth task, or a continuation of a settled loop | Ack | Terminate |
 | any other `HandleTask` error | Ack | Retry, on the configured policy (default one redelivery after 30 s, `max_deliver` 2; the lane runs at MaxAckPending 1, so a Retry parks intake for that budget). The production producer is a cancelled delivery context — shutdown or stop, `HandleTask`'s first check — and nothing was registered, so the redelivery is a fresh birth. A fatal-class error quarantines instead, as on the response and tool-result lanes |
 | a continuation refused because its loop has tool calls in flight or awaits approval | Ack | Ack, unchanged — a defined refusal; re-send the turn |
+| a deferred turn whose record write fails for any reason but a size refusal (#1400) | Ack, the turn in process memory only | Retry, logged at Warn; the redelivery re-runs the write while the loop still shows the turn uncarried and acknowledges without writing once a later request carried it or a later turn replaced it — the turn is appended once. The write is retried and resumed until the marker lands or the turn is carried; each Retry delays all task intake for the retry delay (30 s at MaxAckPending 1), and a delivery that exhausts `max_deliver` is counted by `semstreams_nats_max_delivery_exhaustions_total`, never dropped silently. Never quarantined: the Retry is explicitly transient-classified |
 
 `tasks_submitted_total` is unchanged (at-least-once, above). **Action:** a producer that relied on a malformed task
 being consumed silently now sees it terminated, as the response and tool-result lanes already terminate theirs.
@@ -2327,7 +2328,8 @@ text included. The client's refusal is observed at the three writes that can mee
   stamp and follows the reference with `read_loop_result` gets not-found — no completion record is written for a
   birth the ceiling refused;
 - a deferred turn's **marker** write it refuses is logged at Warn with the size, the text is dropped from the live
-  loop so later writes fit, and the delivery is acknowledged: the turn is carried from process memory and is not
+  loop so later writes fit, and the delivery is acknowledged — a deterministic refusal, so a permanent limit and never
+  retried (#1400): the turn is carried from process memory and is not
   durable — neither is the marker. A deferred turn whose text the record refused for size is not recovered when a
   later compaction empties the context: recovery re-injects only the birth prompt;
 - a **carrier** write it refuses quarantines the delivery, as any other carrier write failure does (unchanged).

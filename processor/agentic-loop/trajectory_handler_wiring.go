@@ -67,6 +67,9 @@ func (c *Component) releaseLoopTransientState(loopID string) {
 	// would let a later loop under the same token compare-and-swap against a
 	// revision observed for a loop this process no longer holds.
 	c.forgetLoopRevision(loopID)
+	// So is a task result it left pending (#1400): a redelivery must meet the
+	// cold fork, not resume a write against a loop nobody here holds.
+	c.clearPendingTaskResultsForLoop(loopID)
 	// Always nil; the signature predates this, its only production caller.
 	_ = c.handler.loopManager.DeleteLoop(loopID)
 }
