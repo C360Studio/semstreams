@@ -121,11 +121,12 @@ configuration — it remains a published mirror only — and version arbitration
 - **AND** no `platform_identity` key exists in the bucket afterwards and no suffix was minted
 - **AND** the test that verifies this is `TestPreIdentityBucketRefusesStartWithoutMinting`
 
-#### Scenario: Environment does not separate deployments
+#### Scenario: A second environment cannot establish against the same bucket
 
 - **GIVEN** a deployment established against its configuration bucket with `platform.environment` `prod`
 - **WHEN** a deployment declaring the same `platform.org` and `platform.id` with `platform.environment` `dev` starts
-- **THEN** Start succeeds and adopts the recorded identifier
+- **THEN** Start succeeds and adopts the recorded identifier: `platform.environment` is a log label, so the second
+  process joins the established deployment and never establishes a separate one
 - **AND** the test that verifies this is `TestEnvironmentDoesNotSeparateDeployments`
 
 #### Scenario: A bucket whose policy can evict the identity is refused before minting

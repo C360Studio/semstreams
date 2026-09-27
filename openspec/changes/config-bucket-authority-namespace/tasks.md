@@ -57,3 +57,7 @@ landing choreography. Pins are at base `fe9482b7` (design.md § 1). Every gate l
       with a clean `git diff schemas/ specs/`, and `openspec validate config-bucket-authority-namespace --strict`. Open: every gate is
       green except `task test:integration`, red only on `TestIntegrationRunner_TerminationReapsPullBeforeReleasingLock`
       (open flake #1397, reproduced 3/3 at base `fe9482b7`).
+- [x] 3.3 Archive dry-run on a scratch copy of the tracked tree (the real change is never archived): the MODIFIED
+      block keeps the scenario heading "A second environment cannot establish against the same bucket" with a
+      rewritten body. `openspec archive config-bucket-authority-namespace -y` printed "Totals: + 2, ~ 3, - 0, → 0",
+      "Specs updated successfully." and archived the change; before the fix it aborted on the renamed scenario.
