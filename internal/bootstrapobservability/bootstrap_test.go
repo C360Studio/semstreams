@@ -97,28 +97,6 @@ func TestProductionPhaseALoggingReusesLocalHandlerAndCountsClientWarnExactlyOnce
 	assertRegisteredMetric(t, metrics, "jetstream.stream_messages")
 }
 
-func TestE2EPhaseALoggingIsLocalOnlyAndDoesNotCount(t *testing.T) {
-	var output lockedBuffer
-	metrics, phase, err := NewE2EPhaseA(&output, "info", "json",
-		[]slog.Attr{slog.String("service", "e2e-semstreams"), slog.String("version", "test")})
-	require.NoError(t, err)
-
-	_, err = NewClient("nats://127.0.0.1:1", phase.Client, metrics)
-	require.NoError(t, err)
-	phase.Client.Warn("client warning")
-	phase.Process.Warn("application warning")
-
-	records := decodeJSONRecords(t, output.Bytes())
-	require.Len(t, records, 2)
-	assert.Equal(t, "natsclient", records[0]["component"])
-	assert.Nil(t, records[1]["component"])
-	assert.Equal(t, float64(0), testutil.ToFloat64(
-		metrics.CoreMetrics().LogEntriesTotal.WithLabelValues("natsclient", "warn")))
-	assert.Equal(t, float64(0), testutil.ToFloat64(
-		metrics.CoreMetrics().LogEntriesTotal.WithLabelValues("unknown", "warn")))
-	assertRegisteredMetric(t, metrics, "jetstream.stream_messages")
-}
-
 func TestLoggerChildrenKeepCommonBaseAttributes(t *testing.T) {
 	var output lockedBuffer
 	local, err := NewLocalHandler(&output, "info", "json")

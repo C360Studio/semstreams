@@ -264,7 +264,7 @@ func (c *Config) Validate() error {
 	// bounds contract every ordinary stream owes. This runs here, and not only
 	// in the provisioner, because `semstreams --validate` prints
 	// "✓ Configuration is valid" and exits BEFORE streams are ensured
-	// (cmd/semstreams/main.go) — so without it a config that hard-fails boot
+	// (internal/boot/run.go) — so without it a config that hard-fails boot
 	// would be greenlit by the very tool an operator uses to avoid that.
 	// Resolution is pure and I/O-free precisely so it can run here, which is
 	// also what lets the port-derived lane be checked at validation rather than

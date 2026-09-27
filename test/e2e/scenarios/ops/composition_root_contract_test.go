@@ -9,10 +9,12 @@ import (
 )
 
 // TestE2ECompositionRootLoadsCheckedInPersonaFragments pins the one thing the
-// ops tier needs from the E2E composition root beyond its lesson-curation
-// control responder: the persona fragments must be loaded before the ops loop
-// starts. That the ops tier boots that root at all — target e2e, binary
-// cmd/e2e-semstreams, its own image tag — is pinned for every tier at once by
+// ops tier needs from the framework boot beyond its lesson-curation control
+// responder: the persona fragments must be loaded before the ops loop starts.
+// Both framework binaries boot through internal/boot, so its Run is the one
+// place the load can live. That the ops tier boots the E2E binary at all —
+// target e2e, binary cmd/e2e-semstreams, its own image tag, its option
+// variable — is pinned for every tier at once by
 // test/contract/e2e_tier_binary_contract_test.go.
 func TestE2ECompositionRootLoadsCheckedInPersonaFragments(t *testing.T) {
 	t.Parallel()
@@ -23,11 +25,11 @@ func TestE2ECompositionRootLoadsCheckedInPersonaFragments(t *testing.T) {
 	}
 	root := filepath.Clean(filepath.Join(filepath.Dir(filename), "../../../.."))
 
-	e2eMain, err := os.ReadFile(filepath.Join(root, "cmd/e2e-semstreams/main.go"))
+	bootRun, err := os.ReadFile(filepath.Join(root, "internal/boot/run.go"))
 	if err != nil {
-		t.Fatalf("read E2E composition root: %v", err)
+		t.Fatalf("read framework boot: %v", err)
 	}
-	if !strings.Contains(string(e2eMain), `persona.LoadFromDirectory(ctx, "configs/personas/fragments", personaMgr, logger)`) {
-		t.Error("E2E composition root must load checked-in persona fragments before the ops loop starts")
+	if !strings.Contains(string(bootRun), `persona.LoadFromDirectory(bootCtx, "configs/personas/fragments", personaMgr, logger)`) {
+		t.Error("the framework boot must load checked-in persona fragments before the ops loop starts")
 	}
 }

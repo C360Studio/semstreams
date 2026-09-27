@@ -63,8 +63,8 @@ var e2eStamps = []message.Type{
 }
 
 // RegisterPayloads registers every e2e stamp as a verbatim carrier with floor
-// control. Called from cmd/e2e-semstreams's buildPayloadRegistry after
-// payloadbuiltins.Register.
+// control. Registered by the E2E boot's SEMSTREAMS_E2E_EXAMPLES option
+// (internal/e2eboot), after payloadbuiltins.Register.
 func RegisterPayloads(reg *payloadregistry.Registry) error {
 	var errs []error
 	for _, mt := range e2eStamps {

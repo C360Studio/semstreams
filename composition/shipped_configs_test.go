@@ -20,8 +20,9 @@ import (
 
 // shippedRegistry is the union of what the two shipped binaries compose:
 // cmd/semstreams (core + graph-research + OTEL) and cmd/e2e-semstreams (the
-// same plus the bundled example components), so every checked-in config
-// validates against the catalog its binary would give it.
+// same plus the example and mission components its SEMSTREAMS_E2E_* options
+// enable), so every checked-in config validates against the catalog its binary
+// would give it.
 func shippedRegistry(t *testing.T) *component.Registry {
 	t.Helper()
 	registry := component.NewRegistry()

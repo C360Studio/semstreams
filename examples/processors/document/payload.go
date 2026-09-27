@@ -223,7 +223,8 @@ func buildSensorDocument(fields map[string]any) (any, error) {
 // RegisterPayloads registers all document payload types
 // (Document, Maintenance, Observation, SensorDocument) with the
 // supplied registry. Called by binaries that load this example
-// processor — typically cmd/e2e-semstreams/main.go.
+// processor — in this repository, the E2E boot's SEMSTREAMS_E2E_EXAMPLES option
+// (internal/e2eboot).
 func RegisterPayloads(reg *payloadregistry.Registry) error {
 	registrations := []*payloadregistry.Registration{
 		{

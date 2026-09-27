@@ -110,14 +110,14 @@ type State struct {
 // New returns a freshly-initialized State. Apps don't call this on
 // read — Manager.Get projects fresh instances from the registered
 // Schema via reflection. New is here for Create-side callers
-// (e.g. seedMission in cmd/e2e-semstreams/main.go).
+// (e.g. seedMission in internal/e2eboot).
 func New() *State {
 	return &State{}
 }
 
 // WorkflowDeclaration returns the lifecycle.Workflow ready to pass
-// to Manager.Register. Centralized here so cmd/e2e-semstreams/main.go
-// + the lifecycle-gateway both see the same schema.
+// to Manager.Register. Centralized here so the E2E boot's mission option
+// (internal/e2eboot) + the lifecycle-gateway both see the same schema.
 func WorkflowDeclaration() lifecycle.Workflow {
 	return lifecycle.Workflow{
 		Name:            Workflow,

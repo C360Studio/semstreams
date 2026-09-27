@@ -243,7 +243,7 @@ func TestStartHealthListener_DoubleStartErrors(t *testing.T) {
 }
 
 // TestStopAll_TearsDownHealthListener verifies the #100 production
-// shutdown contract: cmd/semstreams/main.go's shutdown() calls
+// shutdown contract: internal/boot/run.go's shutdown path calls
 // manager.StopAll, NOT manager.Stop, so the dedicated health-port
 // listener must be torn down by StopAll (otherwise the port stays
 // bound until process exit and graceful-drain semantics are broken).

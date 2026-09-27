@@ -1,5 +1,6 @@
 // Package bootstrapobservability contains the plain Phase-A construction
-// helpers shared by the production and E2E composition roots.
+// helpers the framework boot (internal/boot) composes for both framework
+// binaries.
 package bootstrapobservability
 
 import (
@@ -54,25 +55,6 @@ func NewProductionPhaseA(
 	return metrics, phase, nil
 }
 
-// NewE2EPhaseA creates the E2E metrics registry and explicit stdout-only
-// logger graph as one ordered Phase-A operation.
-func NewE2EPhaseA(
-	output io.Writer,
-	level, format string,
-	baseAttrs []slog.Attr,
-) (*metric.MetricsRegistry, *PhaseALogging, error) {
-	metrics := metric.NewMetricsRegistry()
-	local, err := NewLocalHandler(output, level, format)
-	if err != nil {
-		return nil, nil, err
-	}
-	phase, err := NewPhaseALogging(local, nil, baseAttrs)
-	if err != nil {
-		return nil, nil, err
-	}
-	return metrics, phase, nil
-}
-
 // NewLocalHandler creates the one explicitly configured local handler shared
 // by all Phase-A and steady-state logger graphs.
 func NewLocalHandler(output io.Writer, level, format string) (slog.Handler, error) {
@@ -98,8 +80,8 @@ func NewLocalHandler(output io.Writer, level, format string) (slog.Handler, erro
 }
 
 // NewPhaseALogging creates process, client, and config-manager loggers from
-// one explicit local handler. counter is optional only because E2E explicitly
-// requires stdout-only behavior.
+// one explicit local handler. counter may be nil; NewProductionPhaseA, the one
+// Phase-A both framework binaries compose, always supplies it.
 func NewPhaseALogging(local, counter slog.Handler, baseAttrs []slog.Attr) (*PhaseALogging, error) {
 	if local == nil {
 		return nil, fmt.Errorf("local log handler cannot be nil")

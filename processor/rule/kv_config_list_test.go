@@ -27,7 +27,7 @@ func TestListRules_KVStorePath(t *testing.T) {
 	defer cancel()
 
 	// Construct a bare ConfigManager — no processor. The CRUD-only
-	// usage from cmd/semstreams/main.go:buildRuleManager takes this
+	// usage from internal/boot/run.go:buildRuleManager takes this
 	// exact shape so the test mirrors production.
 	rcm := NewConfigManager(nil, nil, nil)
 	require.NoError(t, rcm.InitializeKVStore(ctx, tc.Client))

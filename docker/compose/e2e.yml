@@ -119,6 +119,9 @@ services:
       - SEMSTREAMS_LOG_LEVEL=debug
       - SEMSTREAMS_DEBUG=${SEMSTREAMS_DEBUG:-false}
       - SEMSTREAMS_DEBUG_PORT=6060
+      # Enables the bundled example components and the fixture payloads
+      # (internal/e2eboot; the tier table in the payload-registry spec).
+      - SEMSTREAMS_E2E_EXAMPLES=1
     volumes:
       - ../../configs:/app/configs:ro
     ports:

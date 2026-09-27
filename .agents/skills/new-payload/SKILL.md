@@ -149,11 +149,13 @@ func Register(reg *payloadregistry.Registry) error {
 }
 ```
 
-Example/domain-specific or config-gated payloads (not first-party framework types) register directly at
-each binary's own composition root instead — see `cmd/e2e-semstreams/main.go`'s `buildPayloadRegistry`
-(calls `iotsensor.RegisterPayloads`, `document.RegisterPayloads`, `mission.RegisterPayloads` alongside
-`payloadbuiltins.Register`) and `cmd/semstreams/main.go`'s `registerPayloads`, which conditionally adds
-`graphresearch.RegisterPayloads` only `if graphresearch.Selected(cfg)`. Downstream products (semspec,
+Example/domain-specific or config-gated payloads (not first-party framework types) register outside
+`payloadbuiltins` instead. Both framework binaries boot through `internal/boot`, whose `registerPayloads`
+(`internal/boot/run.go`) calls `payloadbuiltins.Register`, then the E2E options' payloads, then
+`graphresearch.RegisterPayloads` only `if graphresearch.Selected(cfg)`. An E2E-only type (examples,
+fixtures, the mission workflow) is an `internal/e2eboot` option — e.g. `options_examples.go` appends
+`iotsensor.RegisterPayloads`, `document.RegisterPayloads` and `fixtures.RegisterPayloads` — enabled by its
+tier's `SEMSTREAMS_E2E_*` variable. Downstream products (semspec,
 semdragon) call `payloadbuiltins.Register(reg)` and layer their own `reg.Register(...)` calls on top.
 
 **A type registered in one binary but not another silently half-migrates the deployment** — see the

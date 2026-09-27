@@ -23,12 +23,12 @@ see [Prerequisites](00-prerequisites.md).
 
 This run uses Docker, `curl`, `jq` and netcat (`nc`), in addition to Go.
 
-The example is composed by **`cmd/e2e-semstreams`**, the repository's example/test harness. It explicitly registers
-the IoT component and its payloads. The core `cmd/semstreams` binary does not include that example registration;
+The example is composed by **`cmd/e2e-semstreams`**, the repository's example/test harness. Its
+`SEMSTREAMS_E2E_EXAMPLES` option registers the IoT component and its payloads. The core `cmd/semstreams` binary does not include that example registration;
 `task dev:start` currently builds the core binary, so use the commands here for this example.
 
 Use a fresh local NATS instance. The checked config uses TCP 4222 for NATS, TCP 8080 for HTTP, TCP 9090 for metrics,
-and UDP 14550 for input. Run without `SEMSTREAMS_NATS_URLS` or `SEMSTREAMS_LIFECYCLE_SEED` overrides.
+and UDP 14550 for input. Run without a `SEMSTREAMS_NATS_URLS` override.
 
 ### 1. Start NATS
 
@@ -48,8 +48,8 @@ In another terminal, from the repository root:
 
 ```bash
 go build -o bin/e2e-semstreams ./cmd/e2e-semstreams
-./bin/e2e-semstreams validate configs/hello-world.json
-./bin/e2e-semstreams --config configs/hello-world.json
+SEMSTREAMS_E2E_EXAMPLES=1 ./bin/e2e-semstreams validate configs/hello-world.json
+SEMSTREAMS_E2E_EXAMPLES=1 ./bin/e2e-semstreams --config configs/hello-world.json
 ```
 
 Validation should report no errors. This config reports warnings for optional API ports and unwatched indexes.
@@ -129,9 +129,10 @@ components. Importing a package does not perform payload registration. For stand
 Follow the [Payload Registry Guide](../concepts/15-payload-registry.md)
 for registration, encoding and decoding; do not introduce an `init()` payload singleton.
 
-For a working composition, inspect the explicit example registrations and service dependencies in
-[cmd/e2e-semstreams](../../cmd/e2e-semstreams/main.go). Select your own application components and capabilities;
-the harness's additional test facilities are not required in an adopter binary.
+For a working composition, inspect the example registrations in
+[internal/e2eboot](../../internal/e2eboot/options_examples.go) and the service dependencies in the framework boot,
+[internal/boot](../../internal/boot/run.go), which both framework binaries run. Select your own application components
+and capabilities; the harness's additional test facilities are not required in an adopter binary.
 
 ### 3. Declare the dataflow
 

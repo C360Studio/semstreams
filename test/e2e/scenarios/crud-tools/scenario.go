@@ -340,7 +340,7 @@ func (s *Scenario) verifyHotreloadPickup(ctx context.Context, result *scenarios.
 // verifyRegisteredTools confirms the component catalog tool actually
 // registered into the shared tool registry at
 // binary startup. This catches wiring regressions that unit tests
-// can't see — e.g. cmd/semstreams/main.go dropping
+// can't see — e.g. internal/boot/run.go dropping
 // ComponentRegistry from ToolDependencies, or executors.RegisterBuiltins
 // dropping the registerComponentCatalog call. Each register fn emits
 // a distinct slog.Info "Registered <tool> tool" line on success and a
@@ -375,7 +375,7 @@ func (s *Scenario) verifyRegisteredTools(ctx context.Context, result *scenarios.
 	if len(missing) > 0 {
 		return fmt.Errorf(
 			"ADR-026 M2 tools not registered at startup: %v — "+
-				"check cmd/semstreams/main.go ToolDependencies and "+
+				"check internal/boot/run.go ToolDependencies and "+
 				"executors.RegisterBuiltins wiring",
 			missing)
 	}

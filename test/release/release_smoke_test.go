@@ -27,10 +27,12 @@ func TestReleaseArtifactsReportInjectedVersions(t *testing.T) {
 			wantOutput: "semstreams version " + version,
 		},
 		{
-			name:       "e2e",
-			pkg:        "./cmd/e2e-semstreams",
-			ldflags:    "-X main.Version=" + version + " -X main.BuildTime=2026-07-17T00:00:00Z",
-			wantOutput: "e2e-semstreams version " + version,
+			name:    "e2e",
+			pkg:     "./cmd/e2e-semstreams",
+			ldflags: "-X main.Version=" + version + " -X main.BuildTime=2026-07-17T00:00:00Z",
+			// Both binaries boot through internal/boot, whose one application
+			// name is the production one (#1301, production copy wins).
+			wantOutput: "semstreams version " + version,
 		},
 	}
 

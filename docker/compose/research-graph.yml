@@ -58,8 +58,8 @@ services:
     # Per-target image tag — see docker/compose/e2e.yml for rationale.
     # e2e target (ADR-103): the research-graph scenario seeds
     # research.e2e_search_seed.v1 through entity.create, a synthetic type only
-    # cmd/e2e-semstreams registers; the e2e binary is the production binary
-    # plus the example and fixture registrations.
+    # cmd/e2e-semstreams registers; the e2e binary is the production boot plus
+    # the options its SEMSTREAMS_E2E_* variables enable.
     image: c360studio/semstreams:e2e-test
     build:
       context: ../..
@@ -78,6 +78,9 @@ services:
       - SEMSTREAMS_DEBUG=${SEMSTREAMS_DEBUG:-false}
       - SEMSTREAMS_DEBUG_PORT=6060
       - AGENTIC_LLM_URL=${AGENTIC_LLM_URL:-http://mock-llm:8080/v1}
+      # Enables the bundled example components and the fixture payloads
+      # (internal/e2eboot; the tier table in the payload-registry spec).
+      - SEMSTREAMS_E2E_EXAMPLES=1
     volumes:
       - ../../configs:/app/configs:ro
       - ../../testdata:/data/testdata:ro

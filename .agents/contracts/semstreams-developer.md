@@ -243,7 +243,8 @@ PRs fell into the four classes below.
 - Only graph-ingest writes domain entities to `ENTITY_STATES`; other components emit `Graphable` or use an explicitly
   owned operational bucket.
 - Single-valued lifecycle and projection facts replace old triples; they do not append competing scalar values.
-- Register every new or migrated component/payload in `cmd/semstreams` and `cmd/e2e-semstreams` as applicable.
+- Register every new or migrated component/payload through the framework boot (`internal/boot`), which both
+  framework binaries run; an E2E-only registration is an `internal/e2eboot` option, never a build tag.
 - Run schema generation for operator-facing configuration and verify committed schemas/specs have no drift.
 - Register every OpenAPI `SchemaRef` type and test configuration through production JSON and wiring paths.
 

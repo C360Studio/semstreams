@@ -8,12 +8,12 @@
 //
 // It is test-only in two independent ways, and both are load-bearing:
 //
-//  1. The registration hook that reaches this package lives behind the
-//     `e2e_process_barrier` build tag (cmd/semstreams/milestone_probe_e2e.go),
-//     so an ordinary cmd/semstreams build does not import it at all.
-//  2. Even inside that tagged image the handler is registered only when the
-//     EnvVar environment variable is set, which only docker/compose/agentic.yml
-//     does.
+//  1. Only internal/e2eboot imports this package, and only cmd/e2e-semstreams
+//     imports internal/e2eboot, so the production binary does not link it at
+//     all (test/contract pins that closure).
+//  2. Even in the E2E binary the handler is registered only when the EnvVar
+//     environment variable is set, which only docker/compose/agentic.yml does.
+//     internal/e2eboot.FromEnv is the one reader of that variable.
 //
 // The evidence is an ordinary JetStream stream the scenario creates and reads:
 // one APPEND-ONLY attempt record per handler invocation, and one effect record
@@ -46,7 +46,8 @@ import (
 )
 
 const (
-	// EnvVar arms the probe. It is read once, at registration, by Register.
+	// EnvVar arms the probe. internal/e2eboot.FromEnv reads it once and, when
+	// it is set, adds Register to the boot's milestone hooks.
 	// docker/compose/agentic.yml sets it on the agentic tier's SemStreams
 	// service; nothing else in the tree does, and no production binary
 	// contains the code that reads it.
@@ -188,17 +189,13 @@ func (e Effect) Validate(sourceMessageID string) error {
 	}
 }
 
-// Register installs the probe on the milestone subscriber, but only when EnvVar
-// is set. An unset variable is the ordinary case and is not an error: the
-// tagged image boots identically to an untagged one until the agentic tier asks
-// for the probe.
+// Register installs the probe on the milestone subscriber. Whether it is
+// called at all is the E2E boot's decision (internal/e2eboot, on EnvVar); a
+// call with nothing to register on is a wiring defect and is refused.
 //
 // It must be called before the subscriber starts, which is what
 // agentrun.MilestoneSubscriber.AddHandler already requires.
 func Register(subscriber *agentrun.MilestoneSubscriber, client *natsclient.Client, logger *slog.Logger) error {
-	if os.Getenv(EnvVar) == "" {
-		return nil
-	}
 	if subscriber == nil {
 		return fmt.Errorf("register milestone probe: nil milestone subscriber")
 	}

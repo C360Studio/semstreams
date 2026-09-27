@@ -55,13 +55,7 @@ services:
       dockerfile: docker/Dockerfile
       target: e2e
     container_name: semstreams-lifecycle-app
-    command:
-      [
-        "--config",
-        "/app/configs/lifecycle-flow.json",
-        "--lifecycle-seed",
-        "gcs.lifecycle.mission.m001",
-      ]
+    command: ["--config", "/app/configs/lifecycle-flow.json"]
     depends_on:
       nats:
         condition: service_healthy
@@ -69,6 +63,12 @@ services:
       - SEMSTREAMS_NATS_URLS=nats://nats:4222
       - SEMSTREAMS_CONFIG=/app/configs/lifecycle-flow.json
       - SEMSTREAMS_LOG_LEVEL=info
+      # Enables the mission component and workflow, and seeds one mission
+      # Participant after start-up; the seed is the last four canonical
+      # positions and the binary composes positions 1-2 itself
+      # (internal/e2eboot).
+      - SEMSTREAMS_E2E_MISSION=1
+      - SEMSTREAMS_E2E_LIFECYCLE_SEED=gcs.lifecycle.mission.m001
     volumes:
       - ../../configs:/app/configs:ro
     ports:
