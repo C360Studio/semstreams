@@ -191,15 +191,21 @@ takes (i); **[OQ7 (b)]** likewise. Under an option not taken nothing replaces it
       `TestIntegrationRunner_TerminationReapsPullBeforeReleasingLock` = #1397 (outside this diff; waived by the owner
       for this merge, PR #1388 comment 2026-09-26). `-race -count=20`: the six W3/W4/T7–T9 tests 20/20 at `08f17344`;
       the released-reject test, the `checked` variant, T9 and T2 20/20 at `89d71673`; `DATA RACE: 0` both runs.
-- [ ] 6.2 `task e2e:agentic` green on the final diff (proposal § Impact: the BREAKING gate walks the approval path;
+- [x] 6.2 DONE 2026-09-26 on `89d71673` and again 2026-09-27 on `fcfd9d36` (the final production code; every later commit
+      changes tests and docs only): `Scenario completed successfully duration=5m35.74s … assertions_run=20`, exit 0,
+      `verify-approval-across-replacement` ran; compose stacks 0 before and after. `task e2e:agentic` green on the final diff (proposal § Impact: the BREAKING gate walks the approval path;
       `verifyApprovalAcrossReplacement` is the replacement control, design § 4 T5). Paste the tier's summary line.
 - [x] 6.3 `task api:compat`: no exported symbol is added or removed by this diff (the hooks and the sentinel are
       unexported; `GetLoop`'s signature is unchanged); report the pre-existing Tier 1 breaks as the archived task 5.2 did.
       DONE: `compared: 62 clean: 47 incompatible: 15 removed: 0 added: 0` — the 15 are the pre-existing Tier 1 breaks
       against beta.162; the production diff against `282e650e` adds and removes no exported declaration.
-- [ ] 6.4 PR body: `implemented-by: <persona>`, the OQ answers quoted from #1377, the 5.6 mutation runs, the 6.1/6.2
+- [x] 6.4 DONE: PR #1388's body carries `implemented-by: opus`, the #1377 ruling quoted, the developer reports (mutations
+      M1–M4 and the amendment reds, the finding-1 red taken by the coordinating session, the 6.1 lines) and the 6.2 tier
+      lines; review rounds 1–3, both Codex rounds and their responses, the #1397 waiver and the latch ruling are PR or
+      issue comments. The § 8 table posts on #1146 at the squash merge. PR body: `implemented-by: <persona>`, the OQ answers quoted from #1377, the 5.6 mutation runs, the 6.1/6.2
       lines; the § 8 table posted on #1146 with the amendment flags before the epic closes.
-- [ ] 6.5 Archive: `openspec archive agentic-loop-committed-terminal-recovery --yes` as the last content commit; both
+- [x] 6.5 DONE (this commit; re-done after each review round so the archive stays the last content commit; the synced
+      blocks are byte-identical to the delta every time). Archive: `openspec archive agentic-loop-committed-terminal-recovery --yes as the last content commit; both
       MODIFIED blocks sync into `openspec/specs/agentic-loop/spec.md`.
 
 ## 7. Codex merge review at `0bcc9f12`
