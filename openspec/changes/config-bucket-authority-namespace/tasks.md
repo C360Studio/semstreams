@@ -54,12 +54,13 @@ landing choreography. Pins are at base `fe9482b7` (design.md § 1). Every gate l
       `FuzzBucketName`), M7 `ruleHotReloadRuntime.targets` set to `nil` in `run.go`
       (`TestBinaryBootOrder`), M8 the sibling-bucket refusal ignored on the mint branch
       (`TestFileDeclaringTheMintedIdentifierIsRefusedWithGuidance`); checksums restored each time.
-- [ ] 3.2 Gates green before each push: `go build ./...`, `task lint`, `go vet ./...`, `go vet -tags=integration
+- [x] 3.2 Gates green before each push: `go build ./...`, `task lint`, `go vet ./...`, `go vet -tags=integration
       ./...`, `go run ./cmd/entity-id-audit .`, `task test:race`, `task test:integration`, `task schema:generate`
-      with a clean `git diff schemas/ specs/`, and `openspec validate config-bucket-authority-namespace --strict`. Open: every gate is
-      green except `task test:integration`, red only on `TestIntegrationRunner_TerminationReapsPullBeforeReleasingLock`
-      (open flake #1397, reproduced 3/3 at base `fe9482b7`).
+      with a clean `git diff schemas/ specs/`, and `openspec validate config-bucket-authority-namespace --strict`.
+      Round-2 run, rebased on `origin/main`: every gate exit 0; race 160 ok / 0 FAIL / 20 no test files; integration
+      160 ok / 0 FAIL / 20 no test files; `openspec validate --all --strict` 58/58; `task spec:properties` 449/449.
 - [x] 3.3 Archive dry-run on a scratch copy of the tracked tree (the real change is never archived): the MODIFIED
       block keeps the scenario heading "A second environment cannot establish against the same bucket" with a
       rewritten body. `openspec archive config-bucket-authority-namespace -y` printed "Totals: + 2, ~ 3, - 0, → 0",
       "Specs updated successfully." and archived the change; before the fix it aborted on the renamed scenario.
+      Re-run on `git archive HEAD` after the round-2 fixes: same result.
