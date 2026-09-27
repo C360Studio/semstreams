@@ -272,11 +272,12 @@ refuses is not supported, and the refusal is permanent at birth.
 - **GIVEN** a terminal whose `COMPLETE_<loopID>` and event landed and whose record write lost its compare-and-swap, or
   an approval-timeout sweep terminal whose marker landed and whose publication failed
 - **THEN** the commitment is known for the marker and unknown for the record; a redelivered input meeting the marker
-  adopts it by loop identifier and terminal kind through the terminal owner; a timer is never redelivered
-- **AND** the recovery path is declared under `The loop record names its outstanding request`: a same-kind later
-  terminal adopts the marker and converges the record, and a sweeper terminal is adopted on the next answer to its
-  gate; a cancel of that gated loop is retried to exhaustion; neither adds a row nor changes a row's disposition
-  here — the carrier's refusal widens the terminal-guard row's condition
+  adopts it by loop identifier through the terminal owner, whatever terminal kind it derives; a timer is never
+  redelivered
+- **AND** the recovery path is declared under `The loop record names its outstanding request`: the loop's next
+  terminal of any kind adopts the marker and converges the record, and a sweeper terminal is adopted on the next
+  answer to its gate; a cancel of that gated loop is retried to exhaustion; neither adds a row nor changes a row's
+  disposition here — the carrier's refusal widens the terminal-guard row's condition
 
 #### Scenario: A rebuilt loop's terminal event carries the prompt its record accepted
 
