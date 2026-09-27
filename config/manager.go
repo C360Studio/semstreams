@@ -1089,6 +1089,9 @@ func (cm *Manager) mintPlatformIdentity(ctx context.Context, kvStore *natsclient
 			declared.Org, declared.ID,
 		)
 	}
+	if err := cm.refuseDeclaredMintedIdentifier(ctx, declared.Org, declared.ID); err != nil {
+		return err
+	}
 	suffix, mintErr := mintIdentitySuffix()
 	if mintErr != nil {
 		return fmt.Errorf("mint platform identity suffix: %w", mintErr)
@@ -1119,6 +1122,75 @@ func (cm *Manager) mintPlatformIdentity(ctx context.Context, kvStore *natsclient
 	cm.logger.Info("Minted platform identity",
 		"org", record.Org, "stem", record.Stem, "platform", record.ID)
 	return cm.applyEffectivePlatformID(record.ID)
+}
+
+// refuseDeclaredMintedIdentifier keeps ADR-104 decision 5 on the mint branch.
+//
+// The bucket is named by the declared pair, so a configuration that declares
+// an identifier minted from stem s names the empty bucket
+// semstreams_config_<org>_<s-xxxxxx> and would silently mint a second
+// authority there — unrepairable under ADR-102 decision 7. Before minting, it
+// reads the identity record of every other bucket in the org's family and
+// refuses with the d5 guidance when one recorded this org and exactly the
+// declared value as its minted identifier. That is a comparison against stored
+// values, never a reading of the declared string's shape (owner ruling on
+// #1188, Q4 (b)).
+//
+// Bounded: one bucket listing and one Get per sibling bucket, under the
+// caller's context, with no retries. The prefix is over-inclusive — an org may
+// itself contain `_` — which is harmless because the recorded org and id are
+// compared, not the bucket name. A sibling that vanishes between the listing
+// and its read, or holds no record, is skipped; any other read failure fails
+// closed, because guessing "no match" here mints a second authority.
+func (cm *Manager) refuseDeclaredMintedIdentifier(ctx context.Context, org, declaredID string) error {
+	names, err := cm.natsClient.ListKeyValueBuckets(ctx)
+	if err != nil {
+		return fmt.Errorf("list configuration buckets before minting platform identity: %w", err)
+	}
+	prefix := graph.BucketSemStreamsConfig + "_" + org + "_"
+	for _, name := range names {
+		if name == cm.bucketName || !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		record, found, err := cm.readSiblingIdentity(ctx, name)
+		if err != nil {
+			return err
+		}
+		if found && record.Org == org && record.ID == declaredID {
+			return fmt.Errorf(
+				"config bucket %q records platform identity %q, minted from stem %q, and this configuration declares the minted identifier: "+
+					"declare the stem %q, not the minted identifier %q — the framework composes the effective value and records it there",
+				name, record.ID, record.Stem, record.Stem, record.ID,
+			)
+		}
+	}
+	return nil
+}
+
+// readSiblingIdentity reads one other bucket's identity record, reporting
+// found=false when the bucket or the record is gone.
+func (cm *Manager) readSiblingIdentity(ctx context.Context, bucket string) (platformIdentityRecord, bool, error) {
+	var record platformIdentityRecord
+	kv, err := cm.natsClient.GetKeyValueBucket(ctx, bucket)
+	if errors.Is(err, jetstream.ErrBucketNotFound) {
+		return record, false, nil
+	}
+	if err != nil {
+		return record, false, fmt.Errorf("open config bucket %q before minting platform identity: %w", bucket, err)
+	}
+	entry, err := kv.Get(ctx, platformIdentityKVKey)
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return record, false, nil
+	}
+	if err != nil {
+		return record, false, fmt.Errorf("read %q of config bucket %q before minting platform identity: %w",
+			platformIdentityKVKey, bucket, err)
+	}
+	if err := json.Unmarshal(entry.Value(), &record); err != nil {
+		return record, false, fmt.Errorf("parse %q of config bucket %q before minting platform identity: %w",
+			platformIdentityKVKey, bucket, err)
+	}
+	return record, true, nil
 }
 
 // mintIdentitySuffix returns the six lowercase hex bytes of the entropy suffix.

@@ -607,36 +607,38 @@ func TestEnvironmentDoesNotSeparateDeployments(t *testing.T) {
 	require.NotContains(t, keys, "platform_identity_guard", "the retired environment claim must not be written")
 }
 
-// TestFileDeclaringTheMintedIdentifierIsRefusedWithGuidance is the Codex B3
-// reproduction, from the other side of the contradiction it names.
+// TestFileDeclaringTheMintedIdentifierIsRefusedWithGuidance keeps ADR-104
+// decision 5 now that the bucket is named by the declared pair (#1188, Q4 (b)).
 //
-// The adopt arm accepted a file whose platform.id equalled the record's stem OR
-// its full identifier. But the load boundary treats every configured value as a
-// STEM and reserves seven bytes for the suffix, so at the legal boundary — a
-// 163-byte stem minting to a 170-byte identifier — putting that identifier in
-// the file is rejected at load and never reaches adopt. One field, two admitted
-// kinds, and the ADR's "no path sees both kinds" claim false.
-//
-// Resolved by making configuration always declare the stem. The refusal stays
-// observation-based: it compares against the STORED identifier, never detects a
-// minted value by grammar, and tells the operator what to write instead.
+// A file declaring the identifier minted from stem s names a different, empty
+// bucket, so nothing in that bucket can say the value was minted. The mint
+// branch therefore reads the org's sibling buckets before minting and refuses
+// when one recorded the declared value as its minted identifier — a
+// comparison against stored values, never a reading of the string's shape.
+// Both deployments are real managers; nothing is seeded by hand.
 func TestFileDeclaringTheMintedIdentifierIsRefusedWithGuidance(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithJetStream(), natsclient.WithKV())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Since #1188 a file declaring the minted identifier names a DIFFERENT
-	// bucket — the declared pair is the separation — so the guidance fires
-	// where that bucket's record carries the declared value as its minted
-	// identifier: a hand-written record, or one an alias reached.
-	const minted = "dep-7f3a9c"
-	manager := newIdentityManager(t, tc, "acme", minted)
-	seedIdentityRecord(t, ctx, manager, platformIdentityRecord{Org: "acme", Stem: "dep", ID: minted})
-	err := manager.Start(ctx)
+	first := newIdentityManager(t, tc, "acme", "s")
+	require.NoError(t, first.Start(ctx))
+	defer first.Stop(5 * time.Second)
+	minted := first.GetConfig().Get().Platform.ID
+	require.NotEqual(t, "s", minted, "the first boot mints a suffixed identifier")
+
+	copied := newIdentityManager(t, tc, "acme", minted)
+	err := copied.Start(ctx)
 	require.Error(t, err, "configuration declares the stem; the minted identifier is not a declarable value")
-	require.ErrorContains(t, err, "declare the stem")
-	require.ErrorContains(t, err, "dep")
+	require.ErrorContains(t, err, "declare the stem \"s\"")
 	require.ErrorContains(t, err, minted)
+	require.NotContains(t, bucketEntries(t, ctx, tc, copied.bucketName), platformIdentityKVKey,
+		"the refused deployment must mint nothing")
+
+	other := newIdentityManager(t, tc, "acme", "t")
+	require.NoError(t, other.Start(ctx), "a different stem is a different deployment, not a copied identifier")
+	defer other.Stop(5 * time.Second)
+	require.NotEqual(t, minted, other.GetConfig().Get().Platform.ID)
 }
 
 // TestStartRejectsNilContextWithoutSideEffects pins the repository hard rule at
