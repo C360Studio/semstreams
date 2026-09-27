@@ -106,3 +106,13 @@ re-run by the coordinating session at the new final code revision.
       `task schema:generate` exit 0 with an empty `git diff schemas/ specs/`; `openspec validate
       config-bucket-authority-namespace --strict` valid; `openspec validate --all --strict` 58/58; `task
       spec:properties` 449/449.
+- [ ] 4.6 Owner ruling on #1188, docket 4 Q8 (b): `rule.ValidateDefinition` also requires the rule ID to be one KV
+      literal token and refuses it with a classified invalid error naming the rule, so a file or inline rule with a
+      dotted ID fails loudly (`rule.Config.Validate` for inline rules; the processor's preflight and Start for rule
+      files) and the agent CRUD path (`SaveRule`) refuses before writing; the family's write-time refusal is the second
+      line. Test: `TestConfigValidateRefusesARuleIDThatIsNotOneKVToken` (`a.b` refused with the message, `a-b`
+      accepted). Migration obligation 7 states both lines and the corrected premise (`:` was never storable under
+      nats.go's key grammar, so only `.` is newly refused); the spec delta's family requirement names the
+      definition-validation refusal. M12 the check deleted from `ValidateDefinition` (cp backup plus md5, restored
+      checksum verified): `TestConfigValidateRefusesARuleIDThatIsNotOneKVToken` fails "An error is expected but got
+      nil". Gates on this change: GATES.
