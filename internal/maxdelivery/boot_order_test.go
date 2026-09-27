@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -109,6 +110,14 @@ func TestBinaryBootOrder(t *testing.T) {
 	productionRuntime, err := assignedCallResult(productionRun, "setupRegistriesAndManager", 1)
 	require.NoError(t, err)
 	require.Equal(t, productionRuntime, wrappedServices)
+	// The rule processors the root reconciles into are the ones the same
+	// service manager built; a nil or hand-built list silently stops hot
+	// reload and file-rule seeding in both binaries.
+	wrappedTargets, err := compositeFieldValue(productionRun, "ruleHotReloadRuntime", "targets")
+	require.NoError(t, err)
+	require.Equal(t,
+		"service.ComponentsImplementing[rulepkg.HotReloadTarget]("+productionRuntime+")",
+		types.ExprString(wrappedTargets))
 	require.NoError(t, requireIdentArgument(productionRun, "runUntilShutdown", 2, "runtime"))
 	require.NoError(t, requireMethodCallArgument(productionRun, "runUntilShutdown", 1, productionBootCtx, "Done"))
 	require.NoError(t, requireSelectorArgument(productionRun,
@@ -348,7 +357,21 @@ func requireMethodCallArgument(
 }
 
 func compositeFieldIdentifier(fn *ast.FuncDecl, typeName, field string) (string, error) {
-	var result string
+	value, err := compositeFieldValue(fn, typeName, field)
+	if err != nil {
+		return "", err
+	}
+	assigned, ok := value.(*ast.Ident)
+	if !ok {
+		return "", fmt.Errorf("%s.%s is not assigned an identifier", typeName, field)
+	}
+	return assigned.Name, nil
+}
+
+// compositeFieldValue returns the expression a keyed field of the first
+// typeName composite literal in fn is assigned.
+func compositeFieldValue(fn *ast.FuncDecl, typeName, field string) (ast.Expr, error) {
+	var result ast.Expr
 	ast.Inspect(fn.Body, func(node ast.Node) bool {
 		literal, ok := node.(*ast.CompositeLit)
 		if !ok {
@@ -363,17 +386,15 @@ func compositeFieldIdentifier(fn *ast.FuncDecl, typeName, field string) (string,
 			if !pairOK {
 				continue
 			}
-			key, keyOK := pair.Key.(*ast.Ident)
-			assigned, assignedOK := pair.Value.(*ast.Ident)
-			if keyOK && assignedOK && key.Name == field {
-				result = assigned.Name
+			if key, keyOK := pair.Key.(*ast.Ident); keyOK && key.Name == field {
+				result = pair.Value
 				return false
 			}
 		}
 		return true
 	})
-	if result == "" {
-		return "", fmt.Errorf("%s.%s is not assigned an identifier", typeName, field)
+	if result == nil {
+		return nil, fmt.Errorf("%s.%s is not assigned", typeName, field)
 	}
 	return result, nil
 }

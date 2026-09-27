@@ -85,11 +85,16 @@ func nextApplied(t *testing.T, applied <-chan map[string]any) map[string]any {
 	}
 }
 
-// TestRootRuleManagerHotReloadsIntoTheProcessor drives the composition root's
-// wiring: the one rule ConfigManager registers its family with the config
-// manager through StartValidatedConfigManager, the root's runtime starts it
-// after the services, and a rule saved through the manager's CRUD reaches the
-// running processor's ApplyConfigUpdate.
+// TestRootRuleManagerHotReloadsIntoTheProcessor proves the parts the root
+// composes, assembled by hand in the root's shape: the rule ConfigManager
+// registers its family with the config manager through
+// StartValidatedConfigManager, a ruleHotReloadRuntime starts it after the
+// services, and a rule saved through the manager's CRUD reaches the running
+// processor's ApplyConfigUpdate. It passes the processor as the target
+// directly, so it does not prove how the production root finds its targets;
+// TestBinaryBootOrder (internal/maxdelivery) pins that wiring in run.go and
+// TestComponentsImplementingReturnsTheBuiltComponentsThatImplementTheSeam
+// (service) proves the walk it uses.
 //
 // spec: component-runtime-config / Config Manager delivers a registered key family to its owner
 func TestRootRuleManagerHotReloadsIntoTheProcessor(t *testing.T) {

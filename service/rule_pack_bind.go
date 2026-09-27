@@ -18,24 +18,7 @@ type ProjectionBinder interface {
 
 // ProjectionBinders returns enabled components that require projection clients.
 func (m *Manager) ProjectionBinders() []ProjectionBinder {
-	cmService, exists := m.services["component-manager"]
-	if !exists {
-		return nil
-	}
-	cm, ok := cmService.(*ComponentManager)
-	if !ok {
-		return nil
-	}
-	var result []ProjectionBinder
-	_ = cm.withComponents(func(components map[string]*component.ManagedComponent) error {
-		for _, managed := range components {
-			if binder, ok := managed.Component.(ProjectionBinder); ok {
-				result = append(result, binder)
-			}
-		}
-		return nil
-	})
-	return result
+	return ComponentsImplementing[ProjectionBinder](m)
 }
 
 // ComponentsImplementing returns the constructed boot components that
