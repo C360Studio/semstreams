@@ -109,6 +109,10 @@ func (rcm *ConfigManager) onRuleEntry(config.KeyFamilyEntry) {
 // finds processors whose subscriptions and scheduler exist, and after
 // seeding, so a full-replace reconcile never meets an empty family and removes
 // the file rules. Entries delivered before Start only leave a wake-up pending.
+//
+// Cancellation and the completion fence are published before the seeding
+// work, so a Stop that races Start cancels it and waits until Start has
+// released its targets and the reconcile loop has exited.
 func (rcm *ConfigManager) Start(ctx context.Context, targets []HotReloadTarget) error {
 	if ctx == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "ConfigManager", "Start", "context cannot be nil")
@@ -119,46 +123,42 @@ func (rcm *ConfigManager) Start(ctx context.Context, targets []HotReloadTarget) 
 		return errs.WrapInvalid(errs.ErrAlreadyStarted, "ConfigManager", "Start", "rule configuration manager is one-shot")
 	}
 	rcm.started = true
-	rcm.lifecycleMu.Unlock()
-
 	if len(targets) == 0 {
+		rcm.lifecycleMu.Unlock()
 		rcm.logger.Debug("No rule processor constructed; rule hot reload has nothing to reconcile")
 		return nil
 	}
-	targets = append([]HotReloadTarget(nil), targets...)
-
-	rcm.seed(ctx, targets)
-	if err := rcm.reconcile(ctx, targets); err != nil {
-		// Declared, not silent: the processors keep the rules they loaded and
-		// the next change retries the whole set.
-		rcm.logger.Error("Initial rule reconcile failed; processors keep their loaded rules", "error", err)
-	}
-
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
-	rcm.lifecycleMu.Lock()
-	if rcm.terminal {
-		rcm.lifecycleMu.Unlock()
-		cancel()
-		return nil
-	}
 	rcm.cancel = cancel
 	rcm.done = done
 	rcm.lifecycleMu.Unlock()
 
+	targets = append([]HotReloadTarget(nil), targets...)
+	rcm.seed(runCtx, targets)
+	if runCtx.Err() == nil {
+		if err := rcm.reconcile(runCtx, targets); err != nil {
+			// Declared, not silent: the processors keep the rules they loaded and
+			// the next change retries the whole set.
+			rcm.logger.Error("Initial rule reconcile failed; processors keep their loaded rules", "error", err)
+		}
+	}
+
+	// run owns done from here: it closes it when runCtx ends, which is at once
+	// if a Stop already cancelled it.
 	go rcm.run(runCtx, targets, done)
 	rcm.logger.Info("Rule configuration hot reload started", "targets", len(targets))
 	return nil
 }
 
-// Stop ends the reconcile loop and waits for it. The root calls it before the
-// services stop, so no reconcile races a processor's teardown. Stop is
-// idempotent and is a no-op before Start.
+// Stop ends the reconcile loop and waits for it, and for a Start still seeding
+// or reconciling. The root calls it before the services stop, so no reconcile
+// races a processor's teardown. Stop is idempotent, and every concurrent Stop
+// waits on the same completion fence; it is a no-op before Start.
 func (rcm *ConfigManager) Stop() error {
 	rcm.lifecycleMu.Lock()
 	rcm.terminal = true
 	cancel, done := rcm.cancel, rcm.done
-	rcm.cancel, rcm.done = nil, nil
 	rcm.lifecycleMu.Unlock()
 	if cancel != nil {
 		cancel()
