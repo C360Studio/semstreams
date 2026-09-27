@@ -3,7 +3,7 @@
 ## 1. Inventory
 
 - [x] 1.1 Line-pinned surface inventory at a named `base:` sha, readers and writers named for every durable home of the terminal fact (this tree and the sisters, read-only); `task inventory:verify` green
-- [ ] 1.2 Independent inventory review → `INVENTORY PASS`
+- [x] 1.2 Independent inventory review → `INVENTORY PASS`
 
 ## 2. Design
 
