@@ -1,4 +1,4 @@
-# Change: a deferred turn whose record write fails is retried until it lands
+# Change: a deferred turn whose record write fails is retried
 
 ## Why
 
@@ -28,6 +28,7 @@ it attaches the turn a second time (design § 1, measured).
 
 - Spec: `agentic-loop` — requirement "Loop input classes settle after owner-specific durable done", two scenarios
   reworded (titles unchanged).
-- Code: `processor/agentic-loop/component.go`, `trajectory_handler_wiring.go`. No exported surface change.
+- Code: `processor/agentic-loop/component.go` (the settle and resume); `trajectory_handler_wiring.go` (one line: the
+  release seam `releaseLoopTransientState` clears the released loop's pending results). No exported surface change.
 - Operations: a Retry on the task lane parks all task intake for the retry delay (30 s at MaxAckPending 1);
   recorded in `docs/operations/migration-beta162-to-beta163.md`.

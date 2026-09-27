@@ -1,4 +1,4 @@
-# Design: a deferred turn whose record write fails is retried until it lands
+# Design: a deferred turn whose record write fails is retried
 
 ## 0. Ruling (verbatim)
 
@@ -16,7 +16,7 @@ refusal of the marker write stays acknowledged and documented as a permanent lim
 
 Measured with an integration probe on the production task-lane entry path (`deliverTask` → `taskInputHandler` →
 `newLoopHeartbeatDeliveryPolicy`), real NATS, a loops-bucket wrapper whose `Update` fails; the probe became
-`TestADeferredTurnWhoseWriteFailsIsRetriedUntilItLands`.
+`TestADeferredTurnWhoseWriteFailsIsRetried`.
 
 **1.1 Error → decision.** The task lane's policy (`component.go`, `newLoopHeartbeatDeliveryPolicy`) maps `nil` → Ack,
 `errs.IsFatal` → Quarantine, `*natsclient.PermanentDeliveryError` → Terminate, anything else → Retry (30 s delay).
@@ -59,3 +59,19 @@ with an Info line. No new map, no exported surface; the existing `pendingTaskRes
   the same Retry and is bounded by `max_deliver`.
 - A turn replaced by a later deferred turn during the delay is not re-written: the record holds one uncarried turn
   (#1365's single string), and the later write already carries the later turn.
+- The write is retried while `max_deliver` allows — once at the default of 2 (`config.go` `DefaultConfig`
+  `MaxDeliver: 2`). After exhaustion, or once the process no longer holds the loop, the turn is in process memory
+  only and not durable, as before this change. "Never silently dropped" is about the delivery, not the turn.
+
+## 7. Residuals
+
+- **No in-place re-attempt (reviewer suggestion, declined).** One immediate re-run of the write before returning the
+  Retry would absorb a momentary bucket blip without parking the lane for 30 s. Not taken: after a commit-unknown
+  failure (a timeout whose Update did land) the re-run meets its own commit as a lost compare-and-swap and releases
+  a healthy loop, a second write path whose ordering needs its own review. Record it here, revisit if the 30 s
+  intake stall is observed.
+- **Commit-unknown write, then the redelivery.** The same shape reaches the resume: the remembered revision predates
+  the landed write, the re-run loses its compare-and-swap, and the loop is released and retried. The record already
+  carries the marker and text, so a later cold rebuild replays the turn; the redelivered task itself settles on the
+  cold fork (a record naming the previous task → `taskContinuationUnheld`, acknowledged without effect). Not
+  observed by a test.

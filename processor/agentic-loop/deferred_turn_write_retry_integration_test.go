@@ -14,6 +14,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/processor/agentic-loop/internal/looprequest"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
@@ -94,7 +95,7 @@ func (s deferredWriteStage) timesInContext(prompt string) int {
 	return n
 }
 
-// TestADeferredTurnWhoseWriteFailsIsRetriedUntilItLands is #1400 (owner ruling
+// TestADeferredTurnWhoseWriteFailsIsRetried is #1400 (owner ruling
 // Q3 on #1146, issuecomment-5854830449): a deferred turn's durable write that
 // fails for any reason but a size refusal leaves the delivery unacknowledged,
 // and the redelivery re-runs the write rather than being deduplicated away.
@@ -104,7 +105,7 @@ func (s deferredWriteStage) timesInContext(prompt string) int {
 // wrapper would quarantine the task lane over one loop's write.
 //
 // spec: agentic-loop / Loop input classes settle after owner-specific durable done
-func TestADeferredTurnWhoseWriteFailsIsRetriedUntilItLands(t *testing.T) {
+func TestADeferredTurnWhoseWriteFailsIsRetried(t *testing.T) {
 	client := newLoopNATS(t)
 	bucketDown := errors.New("nats: insufficient storage — disk full on the loops bucket")
 
@@ -154,6 +155,43 @@ func TestADeferredTurnWhoseWriteFailsIsRetriedUntilItLands(t *testing.T) {
 		require.True(t, record.PendingContinuation)
 		require.Equal(t, second, record.PendingContinuationPrompt,
 			"the record keeps the latest uncarried turn; the redelivery must not flip it back")
+	})
+
+	t.Run("a redelivery after the outstanding response carried the turn does not un-carry it", func(t *testing.T) {
+		// The case production meets most: the model answers during the retry
+		// delay, TrackRequest names the carrier and leaves the marker, the task
+		// id and the text exactly as they were, so only the carrier clause of
+		// the resume gate stops a re-write that would overlay "no carrier" onto
+		// the carrier's record — and a replacement would then replay a turn the
+		// carrier already sent.
+		stage := startDeferredWriteStage(t, client, "c6f1e2d9-8a47-4b30-9d5c-3e7a0b1f6c28")
+		const prompt = "a turn whose carrier went out during the retry delay"
+		turn := stage.turn("task-deferred-carried", prompt)
+
+		stage.bucket.failWith(bucketDown)
+		_, failed := deliverTask(t, stage.component, turn)
+		require.Equal(t, natsclient.DeliveryDecisionRetry, failed.Decision())
+
+		stage.bucket.heal()
+		firstRequest := looprequest.ID{LoopID: stage.loopID, Iteration: 1, Retry: 0}.String()
+		completion := agentic.AgentResponse{
+			RequestID: firstRequest,
+			Status:    agentic.StatusComplete,
+			Message:   agentic.ChatMessage{Role: "assistant", Content: "the first thing is done"},
+		}
+		retainModelResponse(t, client, completion)
+		_, answered := deliverResponse(t, stage.component, completion)
+		require.Equal(t, natsclient.DeliveryDecisionAck, answered.Decision())
+		carrier := looprequest.ID{LoopID: stage.loopID, Iteration: 2, Retry: 0}.String()
+		require.Equal(t, carrier, loopRecordOf(t, stage.component, stage.loopID).entity.PendingContinuationRequestID,
+			"the carrier's own write names it")
+
+		_, redelivered := deliverTask(t, stage.component, turn)
+		require.Equal(t, natsclient.DeliveryDecisionAck, redelivered.Decision())
+		record := loopRecordOf(t, stage.component, stage.loopID).entity
+		require.Equal(t, carrier, record.PendingContinuationRequestID,
+			"the redelivery must not overlay no-carrier onto a turn its carrier already sent")
+		require.Equal(t, 1, stage.timesInContext(prompt))
 	})
 
 	t.Run("a loop with no observed revision retries rather than quarantining the lane", func(t *testing.T) {

@@ -1,4 +1,4 @@
-# Tasks: a deferred turn whose record write fails is retried until it lands
+# Tasks: a deferred turn whose record write fails is retried
 
 Tasks record work when it happens. No task asserts a post-merge fact. Claimed by PR #1403.
 
@@ -9,11 +9,13 @@ Tasks record work when it happens. No task asserts a post-merge fact. Claimed by
 - [x] 1.2 `resumeDeferredContinuation` before `HandleTask`: re-write only while this turn is still the loop's
       uncarried turn; otherwise acknowledge.
 - [x] 1.3 `releaseLoopTransientState` clears a released loop's pending results.
-- [x] 1.4 `TestADeferredTurnWhoseWriteFailsIsRetriedUntilItLands` (integration, production entry path, real NATS):
-      same-process redelivery, second-turn-in-between, no-observed-revision, release clears; controls success, CAS,
-      size refusal.
+- [x] 1.4 `TestADeferredTurnWhoseWriteFailsIsRetried` (integration, production entry path, real NATS):
+      same-process redelivery, second-turn-in-between, carried-by-the-outstanding-response, no-observed-revision,
+      release clears; controls success, CAS, size refusal.
 - [x] 1.5 Migration note: `docs/operations/migration-beta162-to-beta163.md` § Task intake settles by class.
 
 ## 2. Review
 
-- [ ] 2.1 SemStreams implementation review recorded on PR #1403.
+- [x] 2.1 SemStreams implementation review at `1c572823`: PASS WITH AMENDMENTS (one MEDIUM, two LOW), relayed by the
+      coordinator; amendments applied in the next commit.
+- [ ] 2.2 Re-review of the amendments recorded on PR #1403.

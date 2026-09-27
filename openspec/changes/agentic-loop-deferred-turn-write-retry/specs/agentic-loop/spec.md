@@ -231,10 +231,11 @@ refuses is not supported, and the refusal is permanent at birth.
   task-id dedup can acknowledge it. The redelivery writes only while the loop still shows this turn uncarried —
   a later request carried it, or a later turn replaced it as the record's one uncarried turn, is acknowledged
   without writing — so the turn is appended once and the record never flips back to an older turn. The write is
-  retried and resumed until the marker lands or the turn is carried by a later request; each Retry delays all
-  task intake for the lane's retry delay (30 s by default, at MaxAckPending 1), and a delivery that exhausts
-  max_deliver takes the max-delivery exhaustion path and is counted by
-  semstreams_nats_max_delivery_exhaustions_total, never silently dropped. A released loop
+  retried and resumed while max_deliver allows — once at the default of 2 — or until a later request carries the
+  turn; each Retry delays all task intake for the lane's retry delay (30 s by default, at MaxAckPending 1). A
+  delivery that exhausts max_deliver takes the max-delivery exhaustion path and is counted by
+  semstreams_nats_max_delivery_exhaustions_total, so the delivery is never silently dropped; the turn is not
+  durable then, nor when the process no longer holds the loop — it is in process memory only, as before. A released loop
   takes its remembered result with it, so its redelivery meets the cold fork
 - **WHEN** it returns an error
 - **THEN** the delivery takes the disposition the lane's policy derives from the error's class: a refusal naming

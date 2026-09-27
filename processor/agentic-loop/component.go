@@ -3356,6 +3356,9 @@ func (c *Component) writeLoopRecord(ctx context.Context, loopID string, terminal
 // one loop's write. The no-observed-revision refusal, Fatal at its source,
 // takes the same Retry: one loop's write is never lane-unsafe, and max_deliver
 // bounds it.
+//
+// The cost is the lane's: each Retry parks all task intake on it for the retry
+// delay (30 s, MaxAckPending 1), at most max_deliver-1 times (once by default).
 func (c *Component) settleDeferredContinuation(ctx context.Context, task agentic.TaskMessage, result HandlerResult) error {
 	err := c.persistDeferredContinuationMarker(ctx, result.LoopID, result.deferredPrompt)
 	switch {
