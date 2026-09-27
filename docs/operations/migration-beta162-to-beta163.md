@@ -2039,9 +2039,11 @@ on the record's terminal `state` (a KV watch) sees the same transition, slightly
   call's result completes the batch with a terminal of the same kind; a result that instead derives a completion — an
   approved terminal tool such as `decide`, which returns `StopLoop` — meets the saved failure as a different kind and
   is refused and quarantined, and the record stays non-terminal: the first terminal wins, and the loop converges only
-  on a later terminal of the same kind or not at all. A cancel of that loop does not settle it: the cold cancel arm
-  adopts only a cancel marker, so the cancel is retried until the signal consumer's `MaxDeliver` is exhausted and is
-  recorded in the MaxDeliver ledger, never applied.
+  on a later terminal of the same kind or not at all. That quarantine latches the process's `tool.result` lane: loop
+  health reads `delivery ownership lost`, the lane's handle drains, and tool results for every loop in that process
+  stop until the process restarts. A cancel of that loop does not settle it: the cold cancel arm adopts only a cancel
+  marker, so the cancel is retried until the signal consumer's `MaxDeliver` is exhausted and is recorded in the
+  MaxDeliver ledger, never applied.
 
 **A cancel racing a result on its way to the record.** A non-terminal result — an approved call, a model response's
 tool batch, a tool result's next request, a sweeper auto-reject — that reaches the loop-record carrier after a cancel

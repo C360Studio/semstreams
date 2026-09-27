@@ -226,3 +226,38 @@ takes (i); **[OQ7 (b)]** likewise. Under an option not taken nothing replaces it
       with a tool result SHAPED as the terminal tool's (`StopLoop: true`; the real `decide` executor lives in
       agentic-tools): Quarantine, the marker unchanged byte for byte, no `agent.complete`, the record non-terminal at the
       revision the approve wrote, nothing counted. An (a) row: no mutation.
+
+## 7b. Review 3 (PASS WITH AMENDMENTS)
+
+- [x] 7.3 MEDIUM A: the W2 terminal-tool refusal latches the process's `tool.result` lane. DONE, documentation plus
+      observation, no production code: (i) the latch clause — the quarantine latches the process's `tool.result` lane,
+      loop health reads `delivery ownership lost`, the lane's handle drains, and tool results for every loop in that
+      process stop until the process restarts — is in block 2's requirement sentence (delta spec:409) and the
+      terminal-tool WHEN/THEN (delta spec:700), design § 1's W2 row (design.md:224), § 2 (design.md:275), § 5
+      (design.md:471) and the migration (`docs/operations/migration-beta162-to-beta163.md:2042`; § 5 and the migration
+      compare identical after whitespace normalization, the [(b)] bracket aside), and design § 8's W2 row
+      (design.md:546) in "what is only bounded" and, in the amendment column, as the OWNER QUESTION: accept the latch
+      as part of the (a) bound, or narrow it by code — the carrier acknowledging or retrying a different-kind refusal
+      on a gated record — which is outside OQ2 (a). (ii) OBSERVED, not unforced:
+      `TestAnApprovedTerminalToolRefusedAtTheCapLatchesTheToolResultLane`
+      (`processor/agentic-loop/approval_cap_sweep_integration_test.go:218`) drives the sweep-at-the-cap, cold approve and
+      a `StopLoop`-shaped result through `startRaceLane`'s production callbacks and asserts no ack/nak/term, one drain,
+      health `delivery ownership lost`, the marker unchanged byte for byte, no `agent.complete`, the record revision
+      unchanged, and another loop's valid tool result left unsettled on the latched lane. The test handle gains a
+      `drained` signal (`processor/agentic-loop/consumer_policy_test.go:26-38`) because the heartbeat lane drains after
+      the callback returns. An (a) row: no mutation.
+- [x] 7.4 LOW B: the evidence test's control. DONE: `TestACarrierRefusalStillRecordsTheEvidenceTheHandlerCollected`
+      gains "control: no cancel" (`processor/agentic-loop/carrier_terminal_race_integration_test.go:1150`) over the
+      same fixture (`siblingPendingLoop`, :1038): Ack, the sibling's `tool.execute` +1, the evidence stored in full.
+- [x] 7.5 LOW C: one documenting sentence at the carrier's audit call (`processor/agentic-loop/component.go:2387`): a
+      failed audit attempt after release leaves a stale `loopAuditLoss` entry, one per affected loop, and the
+      evidence-incomplete stamp it leaves is accurate.
+- [x] 7.6 LOW D: design § 3.3 (design.md:386) lists `entered`, `checked` and `published` with their lines; OQ5
+      (design.md:171) no longer says `checked` precedes `recordHandlerResultTrajectory` — the audit attempt runs first,
+      between `entered` and `checked` — and counts five nil checks.
+- [x] 7.7 LOW E: the cap test's fourth arm asserts `loops_failed_total{max_iterations}` unchanged
+      (`processor/agentic-loop/approval_cap_sweep_integration_test.go:180`).
+- [x] 7.8 NIT: the block 2 scenario is retitled "A cancel that lands while a non-terminal result is on its way to the
+      carrier publishes no work and writes no loop record" (delta spec:707; design § 2 echoes it), and its sibling
+      scenario's THEN and design § 1/§ 8 W3 rows say "writes no loop record". Only one ADDED title carried the
+      overstatement; no title reads "records nothing".
