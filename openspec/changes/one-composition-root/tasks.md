@@ -165,9 +165,22 @@ to a doc sentence or "not supported" before it gets code.
       (`reconciliation.md` § Fix pass) gated before its push with: `go build ./...`, `task lint`, `go vet ./...`,
       `go test -race` over `internal/boot`, `internal/e2eboot`, `test/contract`, `cmd/...` — the FULL `go test -race
       ./...` and `task test:integration` were NOT re-run locally on the fix-pass commit (session handed off under
-      compaction pressure); CI's Test job on that commit is the evidence until the next session re-runs them.
-- [ ] 7.2 E2E per the OQ1 ruling; default (a): `docker compose ls` = 0, then `task e2e:all` at the final revision; the
-      tier log's own `exit=` line is the result. Record the revision and durations here: ____. Watch the five tiers
+      compaction pressure); CI's Test job on that commit is the evidence until the next session re-runs them. Re-run 2026-09-27 at `05182c2e`: CI's Test job at `9a069bf3` was RED on `TestBinaryBootOrder`
+      (`internal/maxdelivery/boot_order_test.go`, an AST test over `../boot/run.go` that still asserted `createNATSClient`'s
+      pre-fix-pass argument positions; not the #1397 flake; fixed in `05182c2e`, a two-line test change). At `05182c2e`:
+      `task check:push` green through the race unit suite (162 ok / 0 FAIL; its integration step yielded the host lock to a
+      sibling worktree's run), `task test:integration` separately exit=0 (160 ok / 0 FAIL), CI green.
+- [x] 7.2 E2E per the OQ1 ruling; default (a): `docker compose ls` = 0, then `task e2e:all` at the final revision; the
+      tier log's own `exit=` line is the result. Record the revision and durations here: **`05182c2e` (the final code
+      revision; the archive commit after it carries no code), 2026-09-27 08:50:06Z → 09:13:07Z, `task e2e:all` `exit=0` by
+      the tier log's own line, 1381 s wall; pre-check compose stacks 0, e2e processes 0. Ladder order — core: 6 scenarios
+      "Scenario completed successfully" (both phases: minted authority, health, main pipeline 36.3 s, SIGTERM during
+      blocked bootstrap, pre-identity-bucket refusal, phase-2 graph round-trip); structural 0.64 s; statistical 29.3 s;
+      semantic 11 m 20 s (LLM wait enhanced=2 failed=8 pending=8 and NL intent probes 0/3, 0/2 under the 0.6b model — inside
+      the tier's own tolerance, the scenario reported success); agentic 5 m 35.5 s, `assertions_run=20`. Totals: 10
+      scenarios successful, 0 failed, 0 FAIL/panic lines in 2046 log lines. Images pulled first: `seminstruct:qwen3-0.6b`
+      and `qwen3-1.7b` (what `docker/compose/tiered.yml` pins; `:latest` is only `services.yml`'s), 90 s on 2026-09-27's
+      network. The log is the coordinating session's scratchpad `e2e-all-05182c2e.log`, not in tree.** Watch the five tiers
       that newly forward logs (`design.md` § 2.3) for any scenario reading container log text.
       **Attempt 1 at `e1f1bd8b` (2026-09-26 15:41Z, before the fix pass): core (both phases, incl. the
       pre-identity-bucket refusal), structural and statistical scenarios all "Scenario completed successfully"; the
