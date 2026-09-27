@@ -2384,12 +2384,14 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 	// (resultTerminalObservation reads the loop only for a terminal result),
 	// so recording them after the loop went terminal or was released records
 	// exactly what was collected. What the refusal still suppresses is work:
-	// every publication and every loop-record write. One cost, accepted: an
-	// audit attempt that fails after the loop was released marks the loop in
-	// trajectoryAuditLoss, which releaseLoopTransientState has already
-	// cleared for it, so the entry stays — one per affected loop — and a
-	// later holder of that loop stamps its terminal evidence-incomplete,
-	// which is accurate (#1377 review 3).
+	// every publication and every loop-record write. One pre-existing
+	// contract gap this ordering can reach (#1398; present before #1377):
+	// an audit attempt that starts after the loop was released is not
+	// flagged Late, so an immediate backend failure re-marks the loop in
+	// trajectoryAuditLoss after releaseLoopTransientState cleared it, and
+	// the mark outlives the loop — which the audit-loss requirement forbids
+	// ("a late report from an abandoned audit attempt SHALL NOT re-mark a
+	// released loop"). Not an accepted exception: the fix is #1398's.
 	c.recordHandlerResultTrajectory(ctx, result)
 
 	if !terminal {

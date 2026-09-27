@@ -261,3 +261,12 @@ takes (i); **[OQ7 (b)]** likewise. Under an option not taken nothing replaces it
       carrier publishes no work and writes no loop record" (delta spec:707; design § 2 echoes it), and its sibling
       scenario's THEN and design § 1/§ 8 W3 rows say "writes no loop record". Only one ADDED title carried the
       overstatement; no title reads "records nothing".
+- [x] 7.9 Codex re-review at `ff4a0abf`, finding 1 (MEDIUM): the comment at the carrier's audit call no longer
+      describes the post-release re-mark as an accepted exception; it names a pre-existing contract gap against
+      "Trajectory audit loss is machine-readable" (present at `8d53c084`), tracked as #1398 (beta.165).
+- [x] 7.10 Codex re-review at `ff4a0abf`, finding 2 (MEDIUM): the W2 "what is guaranteed" cells in design § 1 and
+      § 8 and the § 9 adopter line are qualified by the same-kind outcome — an approved terminal tool's completion
+      does not converge and latches the lane — matching the spec and the migration.
+- [ ] 7.11 OWNER RULING OWED (merge hold, Codex re-review at `ff4a0abf`): the W2 `tool.result` lane latch in the § 8
+      amendment column — accept it as part of the (a) bound, or authorize narrower behaviour. Ticked with the
+      owner's words when ruled; the ruling is transcribed onto #1377.
