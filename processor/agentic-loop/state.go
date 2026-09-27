@@ -1997,9 +1997,14 @@ func isValidOutcome(outcome string) bool {
 // passes through here too; its auto-reject has already resolved the gate.
 //
 // adopted is the durable terminal the owner adopted, or nil when this
-// delivery's own terminal was committed. Adopted, the entity is written to
-// match the saved terminal's content rather than the candidate's; its kind is
-// already this entity's, because adoption requires it.
+// delivery's own terminal was committed. Adopted, the entity is re-seated to
+// the saved terminal — its kind as well as its content, because adoption no
+// longer requires the kinds to match (#1399): the handler moved the entity
+// terminal in the candidate's kind, and the record is rendered from it next.
+// The losing outcome's fields are cleared so the record names one outcome.
+// State and Outcome move only when the kind differs: a same-kind adoption
+// keeps the entity's own Outcome, which can be finer than the marker's (a
+// length-truncated failure's "truncated"; every failure marker says "failed").
 //
 // A loop this process no longer holds has nothing in memory to settle; the
 // record write that follows answers for it (persistLoopState refuses to render
@@ -2019,16 +2024,36 @@ func (m *LoopManager) settleTerminal(loopID string, adopted *terminalOutcome) {
 	}
 	switch {
 	case adopted.completed != nil:
+		reseatTerminalKind(entity, agentic.LoopStateComplete, agentic.OutcomeSuccess)
 		entity.Result = adopted.completed.Result
+		entity.Error = ""
+		entity.CancelledBy, entity.CancelledAt = "", time.Time{}
 		entity.CompletedAt = adopted.completed.CompletedAt
 	case adopted.failed != nil:
+		reseatTerminalKind(entity, agentic.LoopStateFailed, agentic.OutcomeFailed)
+		entity.Result = ""
 		entity.Error = adopted.failed.Error
+		entity.CancelledBy, entity.CancelledAt = "", time.Time{}
 		entity.CompletedAt = adopted.failed.FailedAt
 	case adopted.cancelled != nil:
+		// As the cold cancel adoption writes it (writeRecordCancelled).
+		reseatTerminalKind(entity, agentic.LoopStateCancelled, agentic.OutcomeCancelled)
+		entity.Result = ""
+		entity.Error = "cancelled by user"
 		entity.CancelledBy = adopted.cancelled.CancelledBy
 		entity.CancelledAt = adopted.cancelled.CancelledAt
 		entity.CompletedAt = adopted.cancelled.CancelledAt
 	}
+}
+
+// reseatTerminalKind moves a terminal entity to the adopted terminal's kind
+// when it is in another one; the caller holds the manager's lock.
+func reseatTerminalKind(entity *agentic.LoopEntity, state agentic.LoopState, outcome string) {
+	if entity.State == state {
+		return
+	}
+	entity.State = state
+	entity.Outcome = outcome
 }
 
 // CancelLoop atomically cancels a loop and populates completion data.

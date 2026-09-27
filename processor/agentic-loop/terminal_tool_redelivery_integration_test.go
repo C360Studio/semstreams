@@ -265,12 +265,15 @@ func TestACancelRedeliveredAfterItsPublicationAdoptsTheDurableCancel(t *testing.
 // TestAResponseRedeliveredFirstDoesNotStrandACrashedCancel is review H1 of
 // #1362: P1's cancel creates its marker and publishes, then dies before its
 // record. On P2 the loop's model response is redelivered FIRST: it rebuilds the
-// loop cold and completes it in memory, and the terminal owner refuses that
-// completion against the cancel marker (a durable terminal of another kind).
-// The cancel's redelivery must still be adopted. Before the fix the refused
-// completion stayed terminal in memory, so CancelLoop answered "already
-// terminal", the cancel was acknowledged without effect, and the record stayed
-// live under a published cancellation.
+// loop cold and completes it in memory. Before the #1362 fix the terminal
+// owner refused that completion against the cancel marker and the refused
+// completion stayed terminal in memory, so the cancel's redelivery was
+// acknowledged as "already terminal" and the record stayed live under a
+// published cancellation. Since #1399 (owner ruling #1146
+// issuecomment-5854830449, Q2) the completion itself adopts this loop's
+// durable cancel — a terminal of another kind for the same loop is stale, not
+// poison — and converges the record; the cancel's redelivery then finds the
+// record terminal and is acknowledged.
 //
 // spec: agentic-loop / The loop record names its outstanding request
 func TestAResponseRedeliveredFirstDoesNotStrandACrashedCancel(t *testing.T) {
@@ -298,20 +301,35 @@ func TestAResponseRedeliveredFirstDoesNotStrandACrashedCancel(t *testing.T) {
 	replacement.logger = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
 	_, answered := deliverResponse(t, replacement, completion)
-	require.Equal(t, natsclient.DeliveryDecisionQuarantine, answered.Decision(),
-		"a completion against a durable cancel is conflicting evidence: the first terminal wins")
+	require.Equal(t, natsclient.DeliveryDecisionAck, answered.Decision(),
+		"a completion against this loop's durable cancel adopts it: the first terminal wins")
 	_, heldErr := replacement.handler.GetLoop(loopID)
-	require.Error(t, heldErr, "the refused completion stayed terminal in memory")
+	require.ErrorIs(t, heldErr, ErrLoopNotFound, "the committed terminal released the loop")
+	adopted := loopRecordOf(t, replacement, loopID)
+	require.Equal(t, agentic.LoopStateCancelled, adopted.entity.State,
+		"the record converges in the durable cancel's kind, never under a published cancellation")
+	require.Equal(t, "operator", adopted.entity.CancelledBy)
+	require.Empty(t, adopted.entity.Result, "the losing completion's result is not written")
+	require.Equal(t, uint64(2), messagesOn(t, client, "agent.complete."+loopID),
+		"the crashed cancel's event, and one republication by the adopting commit")
+	stream, err := client.GetStream(t.Context(), loopStreamName)
+	require.NoError(t, err)
+	raw, err := stream.GetLastMsgForSubject(t.Context(), "agent.complete."+loopID)
+	require.NoError(t, err)
+	var envelope struct {
+		Payload agentic.LoopCancelledEvent `json:"payload"`
+	}
+	require.NoError(t, json.Unmarshal(raw.Data, &envelope))
+	require.Equal(t, agentic.OutcomeCancelled, envelope.Payload.Outcome,
+		"the republication is the saved cancel, never the losing completion")
+	require.Contains(t, logs.String(), `"candidate_kind":"success"`,
+		"the adoption is declared at its audit line with both kinds")
 
 	decision, err := replacement.handleSignalMessage(t.Context(), signal)
 	require.NoError(t, err)
-	require.Equal(t, natsclient.DeliveryDecisionAck, decision)
-	record := loopRecordOf(t, replacement, loopID)
-	require.Equal(t, agentic.LoopStateCancelled, record.entity.State,
-		"the cancel was acknowledged as already terminal and never adopted: the record is still live "+
-			"under a published cancellation")
-	require.Contains(t, logs.String(), "Cancel adopted the loop's durable cancel terminal",
-		"the cold cancel adoption is declared at its audit line")
+	require.Equal(t, natsclient.DeliveryDecisionAck, decision,
+		"the cancel's redelivery finds the record terminal and is acknowledged")
+	require.Equal(t, adopted.revision, loopRecordOf(t, replacement, loopID).revision, "and writes nothing")
 }
 
 // lockedLogBuffer is a log sink safe for the goroutines a component logs from.
