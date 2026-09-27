@@ -23,7 +23,8 @@ readers and writers (in this tree and in the sisters at their `origin/main`, rea
 a publish against a KV write with the gap policy it chose, every cold arm, every `ErrLoopNotFound` decision, every
 adopt function, every inapplicable-delivery token, every drop-metric family, every `WrapFatal` site feeding the lane
 latch, and the test hooks — as the BEFORE column of the owner's acceptance test. It also re-measures each figure the
-#1146 census asserted at `078782b1` and records which figure is right and why.
+#1146 census asserted at `078782b1` and records which figure is right and why. Two loop kinds write the record at the bare key and only one ever writes it
+terminal; the graph stamp is the one home whose failure the owner does not see.
 
 ## Method and starting point
 
@@ -41,6 +42,21 @@ carries the verdict drop reasons, the in-tree event consumers (`agentic/agentrun
 (semdragon, semdev — readers; semops, semembed — zero hits). STRUCK: the explorer's `WrapFatal` per-file summary
 (21/13/12) — its pins sum to 19/14/13, which is the measured split; and its "8 sites check `errs.IsFatal`" — six
 lines call `errs.IsFatal(` (the other listed lines are the Quarantine returns those six guard).
+
+Revision 2, after the independent inventory review (PR #1407 issuecomment-5858959863: 2 BLOCKING, 7 MEDIUM; every
+finding was re-measured here and none is contested). ADDED: `frameworkcapabilities/graphresearch` as the second
+production writer of `AGENT_LOOPS/<loopID>` (`register_tool.go:92`) and the second provisioner of the bucket (`:49`,
+`:72`); the research-pipeline loop as a second loop kind whose record is created `executing` and never written terminal
+(§ Home (g)); the three terminal stamp builders' Warn-and-continue on a mutation failure or a missing platform identity
+(row 1's S cell, gap policy 5, Seams 3 and 4, a new Measurements row); four more rule readers of `agent.loop.outcome`;
+the e2e writers of the marker and of the stamp; the e2e wait on the record's cancelled state; semspec
+`req_watcher.go:207` and `pkg/health/capture.go:75`; semstreams-ui; the zero-hit searches for semboids, semlink,
+semmem, seminstruct and semdocs. CORRECTED: the `COMPLETE_` line count (57, not 41); the `errs.IsFatal(` list
+(`component.go:1335` in, `governance_dispatcher.go:637` relabelled a Quarantine return); the test-hook search (the `-E`
+form returns 0, the `-P` form returns the 4). STRUCK: "a rule never sees an event without its stamp"; "the agentic tier
+waits on the event, never on the record". Three adopter-seam Q4 answers were restated as knowledge gaps only. Sister
+rows remain measurements — writers, readers, sha, pinned semstreams version — and the semspec questions are recorded as
+migration inputs (owner ruling #1405 issuecomment-5858896669: sisters get migration notes only; no design inference).
 
 ## Claimed gap (category 1)
 
@@ -81,7 +97,8 @@ The second writer is a different subsystem writing a different payload (a resear
 not create-once) under the same key convention — the reader `read_loop_result` decodes whatever it finds as a
 `LoopCompletedEvent` (`loop_result.go:132`). The payload is `Created` by `graph-ingest` for the graph stamp only;
 the marker itself has exactly these two writers in this tree (`git grep -n "COMPLETE_" -- '*.go' | grep -v _test.go`
-→ 41 lines, of which 3 are writes: the two above plus the `Put` behind `PutLoopCompletion`).
+→ 57 lines, 44 outside `test/`, of which 3 are production write sites: the two above plus the `Put` behind
+`PutLoopCompletion`; the e2e ops scenario seeds the key directly by `PutKV`, a fourth, test-only writer).
 
 Readers in `processor/agentic-loop` (the owner's own adoption reads):
 
@@ -100,8 +117,10 @@ Readers outside `processor/agentic-loop`, production:
 - `processor/agentic-dispatch/terminal_settlement.go:208` — `// OTHER writer of this bucket is prefixed — COMPLETE_<id>,`
 - `processor/rule/entity_substitution.go:5` — `// `read_loop_result` tool: AGENT_LOOPS keys are `COMPLETE_<bare-uuid>`,`
 
-Readers, tests and e2e:
+Tests and e2e (a reader at `:559`; a writer at `:439`, which seeds `COMPLETE_` keys built at `:419`):
 
+- `test/e2e/scenarios/ops/scenario.go:419` — `kvKey = "COMPLETE_" + seed.loopID`
+- `test/e2e/scenarios/ops/scenario.go:439` — `if err := s.nats.PutKV(ctx, loopsBucket, kvKey, loopData); err != nil {`
 - `test/e2e/scenarios/ops/scenario.go:559` — `if strings.HasPrefix(key, "COMPLETE_") && !seededKeys[key] {`
 - `test/e2e/scenarios/research-graph/scenario.go:840` — `envelope, err := s.nats.GetKV(ctx, "AGENT_LOOPS", "COMPLETE_"+loopID)`
 
@@ -140,11 +159,19 @@ A second stamp writer outside the owner (best-effort, no marker, no event, no re
 - `processor/agentic-loop/component.go:1853` — `func (c *Component) terminateOversizedBirth(ctx context.Context, loopID, taskID string, err error) error {`
 
 Readers: `gopls references vocabulary/agentic/predicates.go:398:2` → 19 total, 4 non-test (3 builders + the
-registration); 0 Go readers outside `processor/agentic-loop`. The readers are rule configurations and the e2e ops
-seed:
+registration); 0 Go readers outside `processor/agentic-loop`. The readers are six rule configurations
+(`git grep -n 'agent\.loop\.outcome' -- configs/` → 6):
 
 - `configs/rules/deep-research/01-spawn-researcher.json:15` — `"field": "agent.loop.outcome",`
+- `configs/rules/deep-research/02-collect-evidence.json:15` — `"field": "agent.loop.outcome",`
+- `configs/rules/deep-research/05-retry-insufficient.json:15` — `"field": "agent.loop.outcome",`
+- `configs/rules/deep-research/06-timeout-partial.json:15` — `"field": "agent.loop.outcome",`
+- `configs/rules/deep-research/07-spawn-coordinator.json:15` — `"field": "agent.loop.outcome",`
 - `configs/rules/example-fan-out/02-stamp-completion-on-parent.json:15` — `"field": "agent.loop.outcome",`
+
+A test WRITER of home (b): the e2e ops scenario seeds the triple straight into `ENTITY_STATES` (`Source:
+"e2e-ops-seed"`), bypassing the owner and the `graph-ingest` stamp path:
+
 - `test/e2e/scenarios/ops/scenario.go:456` — `Predicate: "agent.loop.outcome",`
 
 ### Home (c) — the terminal event on `agent.complete.<loopID>` / `agent.failed.<loopID>` (stream `AGENT`)
@@ -191,7 +218,8 @@ Readers in this tree, production (the explorer's "not traced further" gap, close
 - `internal/agentterminal/terminal.go:1` — `// Package agentterminal is the repository-internal interpretation boundary for`
 - `internal/agentterminal/terminal.go:125` — `case *agentic.LoopCompletedEvent:`
 
-Readers, e2e (the agentic tier waits on the event, never on the record):
+Readers, e2e (the agentic tier waits on the event at these two sites; it also waits on the record's terminal state —
+`git grep -n 'awaitLoopState(' -- test/e2e` → 3 calls, one on `LoopStateCancelled` — pinned under home (d)):
 
 - `test/e2e/scenarios/agentic/approval_signal.go:922` — `stored, getErr := stream.GetLastMsgForSubject(ctx, "agent.complete."+loopID)`
 - `test/e2e/scenarios/agentic/stage_a_process_replacement.go:1141` — `terminal, err := agentStream.GetLastMsgForSubject(ctx, "agent.complete."+task.LoopID)`
@@ -227,19 +255,26 @@ Readers outside the owner package, production:
 - `processor/agentic-dispatch/config.go:130` — `Name: agentLoopsPortName, Config: component.KVReadPort{Bucket: "AGENT_LOOPS"}, Required: false,`
 - `processor/agentic-dispatch/terminal_settlement.go:158` — `entry, err := kv.Get(ctx, loopID)`
 - `processor/agentic-dispatch/loop_admission.go:361` — `// persistedLoopFacts projects the durable AGENT_LOOPS record.`
+- `processor/agentic-dispatch/loop_admission.go:368` — `Terminal:      record.State.IsTerminal(),`
+- `processor/agentic-dispatch/http_activity.go:329` — `if entity == nil || entity.State.IsTerminal() || msg.UserID == "" || msg.ChannelType == "" || msg.ChannelID == "" ||`
 - `agentic/doc.go:260` — `//   - AGENT_LOOPS: LoopEntity per loop ID`
 - `graph/kvcatalog.go:9` — `// Application/product buckets (AGENT_LOOPS, personas, governance`
 
 Readers, e2e:
 
 - `test/e2e/scenarios/agentic/approval_signal.go:876` — `// awaitLoopState polls the durable AGENT_LOOPS record until the loop reports`
+- `test/e2e/scenarios/agentic/approval_signal.go:880` — `func (s *Scenario) awaitLoopState(`
+- `test/e2e/scenarios/agentic/approval_signal.go:643` — `cancelled, err := s.awaitLoopState(ctx, task.LoopID, agentic.LoopStateCancelled)`
 
 ### Home (e) — the other writers of the same record (non-terminal; the W3 racers)
 
-Five distinct functions write `AGENT_LOOPS/<loopID>` (1 `Create`, 4 compare-and-swap `Update`); the explorer pinned
-three. Every one is in `processor/agentic-loop`
+Six distinct functions in two packages write `AGENT_LOOPS/<loopID>` (2 `Create`, 4 compare-and-swap `Update`); the
+explorer pinned three and revision 1 of this file five. Five are in `processor/agentic-loop`
 (`git grep -n "loopsBucket\.\(Create\|Update\|Put\)(" -- 'processor/agentic-loop/*.go' | grep -v _test.go` → 6 lines:
-the marker `Create` at `terminal_owner.go:277` plus these five).
+the marker `Create` at `terminal_owner.go:277` plus these five); the sixth is `frameworkcapabilities/graphresearch`'s
+`CreateLoopEntity`, which creates a research-pipeline record at the bare key with `State = executing` and is the second
+production writer `agentic-dispatch` already documents (`terminal_settlement.go:196-203`). That package also provisions
+the bucket a second way, with the same `History: 10, TTL: 24h` policy the loop's `AcquireOwner` verifies.
 
 - `processor/agentic-loop/component.go:3151` — `revision, err := c.loopsBucket.Create(ctx, loopID, data)`
 - `processor/agentic-loop/component.go:3323` — `committed, err := c.loopsBucket.Update(ctx, loopID, data, revision)`
@@ -248,6 +283,11 @@ the marker `Create` at `terminal_owner.go:277` plus these five).
 - `processor/agentic-loop/loop_evidence.go:425` — `func (c *Component) adoptNewerRetainedRequest(ctx context.Context, loopID string) (loopRecord, error) {`
 - `processor/agentic-loop/loop_evidence.go:528` — `committed, err := c.loopsBucket.Update(ctx, loopID, data, record.revision)`
 - `processor/agentic-loop/terminal_owner.go:479` — `if _, err := c.loopsBucket.Update(ctx, loopID, data, record.revision); err != nil {`
+- `frameworkcapabilities/graphresearch/register_tool.go:92` — `_, err := w.kv.Create(ctx, loopID, value)`
+- `frameworkcapabilities/graphresearch/executor.go:267` — `if err := e.kv.CreateLoopEntity(ctx, loopID, loopBytes); err != nil {`
+- `frameworkcapabilities/graphresearch/register_tool.go:49` — `return natsClient.CreateKeyValueBucket(ctx, loopResultBucketConfig(bucketName))`
+- `frameworkcapabilities/graphresearch/register_tool.go:72` — `return jetstream.KeyValueConfig{Bucket: bucket, History: 10, TTL: 24 * time.Hour}`
+- `processor/agentic-dispatch/terminal_settlement.go:196` — `// The whole entity is validated, not just the state. TWO production`
 
 The carrier's non-terminal write refuses to render a terminal snapshot (the #1377 fix), which is the sentinel that
 routes it to the guard:
@@ -276,6 +316,28 @@ marker, no event and no record — so for that loop the fact exists in home (b) 
 - `processor/agentic-loop/component.go:2452` — `if err := c.commitTerminal(ctx, terminalOutcomeOf(result), result); err != nil {`
 - `processor/agentic-loop/component.go:3732` — `if err := c.commitTerminal(ctx, terminalOutcome{cancelled: &completion}, HandlerResult{`
 
+### Home (g) — the research-pipeline loop: a second loop kind whose record never becomes terminal
+
+`frameworkcapabilities/graphresearch` creates a `LoopEntity` at the bare key `AGENT_LOOPS/<loopID>` with
+`role = research_pipeline` and `State = executing`, then writes the R0 trigger key. No code in `processor/research-graph-*`,
+`frameworkcapabilities/` or `agentic/research/` writes a terminal `State` to that record
+(`git grep -nE 'LoopStateComplete|LoopStateFailed|LoopStateCancelled|IsTerminal'` over those paths, non-test → 0), so it
+stays `executing` until the bucket TTL removes it. That loop kind's terminal fact is spelled in three OTHER places — the
+`search_result.complete.<loopID>` key (R6's trigger), a `COMPLETE_<loopID>` key holding the `SearchResult` envelope by
+`Put`, and the `research.search-result.complete` graph stamp — none of them one of homes (a)–(d) as the terminal owner
+writes them, and none on the record. Every reader keyed on the record's terminal `state` (in-tree dispatch `/loops` and
+`/activity`; semspec's watchers and `findLoopIDForTask`; semsage `ui-api`) therefore reads a research loop as running
+for up to 24 h after its result landed. Recorded as measured; whether that is intended is not judged here.
+
+- `agentic/research/constants.go:98` — `const PipelineRole = "research_pipeline"`
+- `frameworkcapabilities/graphresearch/executor.go:248` — `loopEntity := agentic.NewLoopEntity(loopID, "", research.PipelineRole, "", persistedIntent.MaxIterations)`
+- `frameworkcapabilities/graphresearch/executor.go:249` — `loopEntity.State = agentic.LoopStateExecuting`
+- `frameworkcapabilities/graphresearch/executor.go:291` — `if err := e.kv.PutResearchTrigger(ctx, loopID, triggerBytes); err != nil {`
+- `frameworkcapabilities/graphresearch/register_tool.go:101` — `_, err := w.kv.Put(ctx, researchTriggerKeyPrefix+loopID, value)`
+- `processor/research-graph-synthesize/adapters.go:152` — `_, err := s.kv.Put(ctx, loopStoreKeySearchResultComplete(loopID), envelope)`
+- `processor/research-graph-synthesize/component.go:496` — `if err := c.loops.PutSearchResult(ctx, loopID, envelopeBytes); err != nil {`
+- `agentic/research/orchestration.go:236` — `func BuildSearchResultCompleteTriples(loopEntityID, resultRef string, ts time.Time) []message.Triple {`
+
 ### The fifth durable effect on every terminal path — the ObjectStore trajectory observation
 
 Not a home of the fact (it is evidence, ADR-068), but a durable write sequenced before the owner on each lane, so it
@@ -301,6 +363,8 @@ separately; non-Go tracked content counted with `':!*.go'`.
 | semspec | same | same | (d) | `processor/execution-manager/loop_completions.go:20` — `// This replaces the old agent.complete.> JetStream consumer. AGENT_LOOPS is` | reader: KV watch on the record, keyed on `loop.State.IsTerminal()` (`:249`) |
 | semspec | same | same | (d) | 11 processors define `watchLoopCompletions` (`architecture-generator`, `execution-manager`, `lesson-decomposer`, `plan-reviewer`, `planner`, `qa-reviewer`, `recovery-agent`, `requirement-executor`, `requirement-generator`, `scenario-generator`, `story-preparer`) | readers: derived owners over a KV watch of the record's terminal state |
 | semspec | same | same | (c) | `configs/semspec.json:458` — `"subject": "agentic.loop_completed.v1",` | a config subject that is not this tree's `agent.complete.*` (not traced; recorded) |
+| semspec | same | same | (d) | `processor/execution-manager/req_watcher.go:207` — `bucket, err := js.KeyValue(ctx, "AGENT_LOOPS")` | reader: `findLoopIDForTask` (`:190`) does a `Keys`+`Get` full scan, decodes every value as `LoopEntity`, branches on `loop.State.IsTerminal()` — a record reader of a different shape from the 11 watchers |
+| semspec | same | same | (d) | `pkg/health/capture.go:75` — `var DefaultKVBuckets = []string{"PLAN_STATES", "AGENT_LOOPS"}` | diagnostic reader: the health bundle captures the whole bucket |
 | semteams | `ce22c961d30014c463a09f8f8a2a90044ee1a1cf` | `v1.0.0-beta.160` | (c) | `cmd/semteams/chainpause/pauser.go:65` — `func (p *Pauser) HandleFailed(ctx context.Context, ev *agentic.LoopFailedEvent) (PauseResult, error) {` | reader: `agent.failed.>` subscriber |
 | semteams | same | same | (c) | `cmd/semteams/chainpause/subscriber.go:21` — `const DefaultLoopFailedSubject = "agent.failed.>"` | reader |
 | semteams | same | same | (c) | `cmd/semteams/main.go:913` — `// agent.complete.*/agent.failed.*, pre-resolves the run, and fans out to` | reader: the framework `MilestoneSubscriber` |
@@ -319,14 +383,22 @@ separately; non-Go tracked content counted with `':!*.go'`.
 | semsource | `34bda6406fb06fd723a040988647b204204a1583` | `v1.0.0-beta.161` | — | 0 Go hits; 1 skill-doc mention of `AGENT_LOOPS` | none |
 | semops | `d9ac7511c151b58de479ce3060adb7a1f7af9a7c` | — | — | 0 hits | none |
 | semembed | `7ceb5281c96b3664321f3f28c9d7f96acbb41843` | — | — | 0 hits | none |
+| semstreams-ui | `3814b3d59dab7136011429cad99a8148aeceb0cc` | — (TypeScript) | (a) via `/activity` | `src/lib/types/api.generated.ts:7` — `"/activity": {`; `:16` carries the generated description naming `loop_completed` and `COMPLETE_<id>` | a generated OpenAPI type only; no runtime consumer found (`git grep -n -E 'loop_completed|COMPLETE_|/activity|EventSource' origin/main -- 'src/**'` → the two generated lines and an unrelated `EventSource` mock in `RuntimePanel.test.ts`) |
+| semboids | `8c03cc53836ced93a5df7064473c63ff144e64f1` | — | — | 0 hits | none |
+| semlink | `a223955eb9a37269f5cedf2c3679a94d196773e8` | — | — | 0 hits | none |
+| semmem | `5cb14ccf43e082bbac5072e87bf667e6f44f3224` | — | — | 0 hits | none |
+| seminstruct | `7f9135a99cd27a6c63a2a60db5daeee9f5622be4` | — | — | 0 hits | none |
+| semdocs | `2b96f6008a02b23ded7bb2665280c6a7317314d6` | — | — | 0 hits | none |
+| semsummarize | — | — | — | not a git repository | not searchable at an `origin/main` |
 
 Summary by home: (a) marker — semspec reads it (two spellings), no other sister; (b) predicate — semteams and semdev
 rule packs, in-tree deep-research rules; (c) event — semteams, semsage, semmachina, semdragon, plus in-tree agentrun,
-otel, dispatch; (d) record — semspec (11 KV-watching processors keyed on terminal `state`), semsage (`ui-api` KV
+otel, dispatch; (d) record — semspec (11 KV-watching processors keyed on terminal `state`, a `Keys`+`Get` scan in `findLoopIDForTask`, and the `pkg/health` bundle capture), semsage (`ui-api` KV
 watch), semmachina (explicitly refuses it as liveness), in-tree agentic-dispatch. The `/activity` SSE named in the
 issue is consumed by semteams' UI per its docs (`docs/ui-integration-notes.md:29`) and has a sibling implementation
-in semsage (`processor/ui-api/http.go:38`); no sister Go code consumes `loop_completed` (0 non-test Go hits in all
-ten).
+in semsage (`processor/ui-api/http.go:38`); no sister Go or TypeScript runtime code consumes `loop_completed` (0 non-test Go hits in all
+sixteen; semstreams-ui carries it only in a generated OpenAPI type). Sister rows are measurements only; the owner
+ruled (#1405 issuecomment-5858896669) that sisters receive migration notes and never gate the design.
 
 ## Hand-ordered publish + KV-write sites (measurement; scope item 1 and the acceptance BEFORE column)
 
@@ -340,9 +412,9 @@ CAS `Update`, RC = record `Create`, O = ObjectStore trajectory observation, mem 
 
 | # | Function | Pin | Order as spelled | Disposition per failing step |
 |---|---|---|---|---|
-| 1 | `commitTerminalSteps` | `terminal_owner.go:166` | M → (adopt: rebuild P) → S → P → mem settle → GetLoop → R → count | M Fatal; adopt-build Fatal; S Fatal; P Fatal; GetLoop Fatal; R `ErrKVRevisionMismatch` returned as-is (loop already released) else Fatal |
+| 1 | `commitTerminalSteps` | `terminal_owner.go:166` | M → (adopt: rebuild P) → S → P → mem settle → GetLoop → R → count | M Fatal; adopt-build Fatal; S: Fatal on budget expiry only — a mutation failure or a missing platform identity is Warn-and-continue inside the builder, no error, no metric (`graph_writer.go:285`, `:297`); P Fatal; GetLoop Fatal; R `ErrKVRevisionMismatch` returned as-is (loop already released) else Fatal |
 | 2 | `createTerminalMarker` | `terminal_owner.go:265` | M Create → on conflict MG → decode → same loop ADOPT / other loop REFUSE | marshal/Create/Get/decode: raw error (Fatal at row 1); foreign loop: `fmt.Errorf` (Fatal at row 1); same loop: adopt, no error |
-| 3 | `adoptDurableCancel` | `terminal_owner.go:391` | MG → decode → S → P → R (row 4) → count | not found/deleted: no-op; Get error Transient; decode Fatal; not a cancel: no-op; foreign Fatal; S Fatal; P Fatal; R per row 4 |
+| 3 | `adoptDurableCancel` | `terminal_owner.go:391` | MG → decode → S → P → R (row 4) → count | not found/deleted: no-op; Get error Transient; decode Fatal; not a cancel: no-op; foreign Fatal; S: Fatal on `ctx.Err()` only, else Warn-and-continue (`graph_writer.go:509`, `:517`); P Fatal; R per row 4 |
 | 4 | `writeRecordCancelled` | `terminal_owner.go:452` | read record → mutate → R | stale: no-op; unknown Transient; conflict Transient; other Fatal |
 | 5 | `handleLoopFailure` | `component.go:2241` | mem Transition → mem UpdateCompletion → build event → O → row 1 (detached 5 s) → release | Transition error: plain error (Retry via closure), nothing written; build error with commit landed: plain error; CAS as-is; other Fatal |
 | 6 | `handleCancelSignal` | `component.go:3678` | drain → mem CancelLoop → O → marshal → resolve subject → row 1 → release | CancelLoop error → `settleUncancellableLoop`; marshal/resolve: release + Fatal; CAS as-is; other Fatal |
@@ -373,9 +445,32 @@ sequences: 3 (rows 4, 11, 13); publish-only: 1 (row 14); stamp-only terminal: 1 
 (what a failure between two durable effects does to the delivery), enumerated from the table: 6 — (1) Fatal →
 Quarantine for commit-unknown; (2) `ErrKVRevisionMismatch` → Transient → Retry with the loop released; (3) adopt the
 durable fact found (marker at row 2, retained request at rows 13 and 15) and continue; (4) Ack without effect
-(row 24 stale; row 17 `ErrMaxPayload`; row 11 stale); (5) best-effort log-and-continue (rows 18, 19; row 12's stamp;
-`stampTerminal`'s cancellation branch); (6) Terminate (row 12; `errs.IsInvalid` → `PermanentDeliveryError` at
+(row 24 stale; row 17 `ErrMaxPayload`; row 11 stale); (5) best-effort log-and-continue (rows 18, 19; the graph stamp at rows 1, 3 and 12 on a mutation failure or a
+missing platform identity — the three builders return nothing, `graph_writer.go:297`, `:323`, `:517`, and
+`WriteSyntheticDecide` at `:206` — so the event and the record land with no stamp and no metric); (6) Terminate (row 12; `errs.IsInvalid` → `PermanentDeliveryError` at
 `component.go:1340`).
+
+Outside the package definition, `graphresearch` sequences `RC → P` for the same record (`executor.go:267`, then the
+trigger `Put` at `:291`); it is not counted in the 16.
+
+Stamp failure policy, measured from the builders' bodies: `WriteLoopCompletion`, `WriteLoopFailure` and
+`WriteLoopCancellation` return nothing; each returns silently when the platform identity is missing and logs a `Warn`
+when `writeBatch` fails (a `MutationFailed` result or a request error). `WriteSyntheticDecide` has the same two exits.
+The budget wrappers return an error only when `runWithBudget` times out, and the cancellation branch only on `ctx.Err()`.
+`git grep -n "metrics\." -- processor/agentic-loop/graph_writer.go` → 0: no metric counts a swallowed stamp; only the
+budget expiry is counted (`graph_write_publish_timeout_total`).
+
+- `processor/agentic-loop/graph_writer.go:285` — `w.logger.Warn("graph_writer: cannot write loop completion, platform identity missing",`
+- `processor/agentic-loop/graph_writer.go:297` — `w.logger.Warn("graph_writer: failed to write loop completion batch",`
+- `processor/agentic-loop/graph_writer.go:311` — `w.logger.Warn("graph_writer: cannot write loop failure, platform identity missing",`
+- `processor/agentic-loop/graph_writer.go:323` — `w.logger.Warn("graph_writer: failed to write loop failure batch",`
+- `processor/agentic-loop/graph_writer.go:509` — `w.logger.Warn("graph_writer: cannot write loop cancellation, platform identity missing",`
+- `processor/agentic-loop/graph_writer.go:517` — `w.logger.Warn("graph_writer: failed to write loop cancellation batch",`
+- `processor/agentic-loop/graph_writer.go:160` — `func (w *graphWriter) WriteSyntheticDecide(ctx context.Context, loopID, modelText string) {`
+- `processor/agentic-loop/graph_writer.go:206` — `w.logger.Warn("graph_writer: failed to write synthetic decide triples",`
+- `processor/agentic-loop/component.go:2578` — `timedOut := runWithBudget(ctx, graphWritePublishBudget, func(bctx context.Context) {`
+- `processor/agentic-loop/component.go:2633` — `timedOut := runWithBudget(ctx, graphWritePublishBudget, func(bctx context.Context) {`
+- `processor/agentic-loop/terminal_owner.go:356` — `if err := ctx.Err(); err != nil {`
 
 Pins for the rows above not already pinned in § Spellings:
 
@@ -625,13 +720,19 @@ The terminal counters the owner increments once per committed terminal, for the 
 `loop_evidence.go` 14, `terminal_owner.go` 13 (the explorer lists all 52 lines; they are not repeated here).
 `errs.WrapTransient(` → 36 in 5 files (`component.go` 15, `loop_classification.go` 2, `loop_evidence.go` 10,
 `state.go` 5, `terminal_owner.go` 4). A Fatal reaches the latch through six `errs.IsFatal(` checks (git grep) that
-return `DeliveryDecisionQuarantine`, and every Quarantine stops the owner:
+return `DeliveryDecisionQuarantine` — four on the approval lane, one on the signal lane, and the generic closure at
+`component.go:1335` that converts the task, response and tool-result lanes — and every Quarantine stops the owner:
 
 - `processor/agentic-loop/approval_response_handler.go:209` — `if errs.IsFatal(coldErr) {`
 - `processor/agentic-loop/approval_response_handler.go:236` — `if !errs.IsFatal(err) {`
 - `processor/agentic-loop/approval_response_handler.go:246` — `case errs.IsFatal(err):`
 - `processor/agentic-loop/approval_response_handler.go:287` — `if !errs.IsFatal(err) {`
+- `processor/agentic-loop/component.go:1335` — `if errs.IsFatal(handlerErr) {`
 - `processor/agentic-loop/component.go:3622` — `if errs.IsFatal(err) {`
+
+One Quarantine return bypasses `IsFatal`: the enforce dispatcher's fail-closed placeholder, paired with
+`ErrNoGovernanceWaiter` so that `handleToolCallVerdictMessage` replaces it from the record (§ Cold arms, arm 5):
+
 - `processor/agentic-loop/governance_dispatcher.go:637` — `return natsclient.DeliveryDecisionQuarantine,`
 - `natsclient/delivery_settlement.go:404` — `case DeliveryDecisionRetry, DeliveryDecisionTerminate, DeliveryDecisionQuarantine:`
 - `natsclient/delivery_settlement.go:419` — `ownerStopNeeded: work.decision == DeliveryDecisionQuarantine,`
@@ -685,8 +786,8 @@ inline closure ×1 (`component.go:2083`), `nil` ×1 (`component.go:2382`).
 
 ## Ad hoc test hooks
 
-Four function-valued fields (`git grep -nE "^\s+test[A-Za-z]+\s+func\(" -- 'processor/agentic-loop/*.go' | grep -v _test.go`
-→ 4), set at five test sites:
+Four function-valued fields (`git grep -nP "^\s+test[A-Za-z]+\s+func\(" -- 'processor/agentic-loop/*.go' | grep -v _test.go`
+→ 4; the `-E` form of the same pattern returns 0 because `\s` is not ERE), set at five test sites:
 
 - `processor/agentic-loop/component.go:167` — `testPublishHook func(subject string, data []byte)`
 - `processor/agentic-loop/component.go:170` — `testLineageWriteHook func(context.Context, string, map[string]any) error`
@@ -731,6 +832,8 @@ Four function-valued fields (`git grep -nE "^\s+test[A-Za-z]+\s+func\(" -- 'proc
 - semmachina: `internal/resume/pending.go:88` records why `AGENT_LOOPS` `state=running` is not a liveness signal — a sister constraint on any design that widens the record's role
 - semspec: `cmd/semspec/watch_live.go:240` attributes the `COMPLETE_` write to execution-manager / requirement-executor — a sister belief about the writer that is already wrong at beta.107
 - Active changes: `agentic-loop-commit-disposition-consolidation` is the only non-archived entry in `openspec/changes/` (`ls openspec/changes/ | grep -v archive` → 1)
+- #1405 issuecomment-5858896669 — owner ruling 2026-09-27 (transcribed), binding the design phase; the owner's words verbatim: "semspec is out of date anyway. we understand that we are green field and need only note migration requirements for downstreams sisters. we want to maintain feature parity but we do not want deprecated code". For this inventory: sister rows are measurements (writers, readers, sha, pinned semstreams version); the semspec open questions are recorded as migration inputs; no design inference is drawn either way
+- `processor/agentic-dispatch/terminal_settlement.go:196` — `// The whole entity is validated, not just the state. TWO production`
 
 Overlaps stated plainly: the `agentic-terminal-events` spec already requires one shared interpretation of the event
 for framework consumers (`internal/agentterminal`) — a consolidation of the WRITER side has a reader-side precedent
@@ -782,14 +885,14 @@ the loop is no longer held". Every cell cites evidence above or the search that 
 | Dimension | Evidence at this base |
 |---|---|
 | Semantic class | The terminal fact (kind + payload) and the "held → warm / not held → record → decide" authority question; the "inapplicable" disposition vocabulary |
-| Owners | `commitTerminal` (`terminal_owner.go:151`, one owner by #1362 ruling); `adoptDurableCancel`/`writeRecordCancelled` (second terminal-record writer, `:391`/`:452`); `terminateOversizedBirth` (terminal outside the owner by ruling, `component.go:1853`); `research-graph-synthesize` (writes the marker key with a foreign payload, `adapters.go:170`); `graph-ingest` (physical writer of the stamp); `agentic-dispatch` (derives `loop_completed` from the key, `http.go:1017`; settles user-facing terminal from the record, `terminal_settlement.go:158`); `internal/agentterminal` (one reader-side interpretation); `agentic/agentrun.MilestoneSubscriber` (`agentrun.go:519`) |
+| Owners | `commitTerminal` (`terminal_owner.go:151`, one owner by #1362 ruling); `adoptDurableCancel`/`writeRecordCancelled` (second terminal-record writer, `:391`/`:452`); `terminateOversizedBirth` (terminal outside the owner by ruling, `component.go:1853`); `research-graph-synthesize` (writes the marker key with a foreign payload, `adapters.go:170`); `graph-ingest` (physical writer of the stamp); `agentic-dispatch` (derives `loop_completed` from the key, `http.go:1017`; settles user-facing terminal from the record, `terminal_settlement.go:158`); `internal/agentterminal` (one reader-side interpretation); `agentic/agentrun.MilestoneSubscriber` (`agentrun.go:519`); `frameworkcapabilities/graphresearch` (creates a research-pipeline record at the bare key, `register_tool.go:92`, and provisions the bucket, `:49`; that loop kind's terminal is spelled at `search_result.complete.<loopID>`, `COMPLETE_<loopID>` and `research.search-result.complete`, never on the record) |
 | Catalogs | Port declarations `config.go:426`, `:438`, `:444`; dispatch `config.go:122`, `:130`; `graph/kvcatalog.go:9` (application bucket, no framework catalog entry); vocabulary `register.go:435`; `configs/agentic.json:408` and 8 more flow configs declare the bucket; no schema for the marker payload beyond `agentic/events.go` |
-| Status | Health latches on `deliveryFatalErr` (`component.go:149`, read at `:530`); `loops_completed_total` / `loops_failed_total{reason}` / `active_loops` counted once at `recordCommittedTerminal` (`terminal_owner.go:225`); three `*_dropped_total` families + the governance family; dispatch activity-view metrics (`processor/agentic-dispatch/metrics.go:211`, `:218`) |
-| Lifecycle | Bucket policy verified at acquisition: `History: 10, TTL: 24h` (`acquire.go:20`) — the marker and the record both expire at 24 h; the marker is never deleted by the owner; `ENTITY_STATES` history 1 for the stamp; `AGENT` stream retention for the event (`agentic-terminal-events/spec.md:217` "Delivery attempts SHALL be unlimited only within AGENT retention"); per-loop memory released at terminal through one release point (`spec.md:813`, `trajectory_handler_wiring.go:63`, 17 non-test callers by gopls) |
+| Status | Health latches on `deliveryFatalErr` (`component.go:149`, read at `:530`); `loops_completed_total` / `loops_failed_total{reason}` / `active_loops` counted once at `recordCommittedTerminal` (`terminal_owner.go:225`); three `*_dropped_total` families + the governance family; dispatch activity-view metrics (`processor/agentic-dispatch/metrics.go:211`, `:218`); a graph stamp that fails inside its builder has no metric (`graph_writer.go:297`, `:323`, `:517`) — only the budget expiry counts (`graph_write_publish_timeout_total`) |
+| Lifecycle | Bucket policy verified at acquisition: `History: 10, TTL: 24h` (`acquire.go:20`) — the marker and the record both expire at 24 h; the marker is never deleted by the owner; a research-pipeline record is never written terminal and ends only by that TTL (`executor.go:249`; 0 terminal-state writes in `processor/research-graph-*`, `frameworkcapabilities/`, `agentic/research/`); `ENTITY_STATES` history 1 for the stamp; `AGENT` stream retention for the event (`agentic-terminal-events/spec.md:217` "Delivery attempts SHALL be unlimited only within AGENT retention"); per-loop memory released at terminal through one release point (`spec.md:813`, `trajectory_handler_wiring.go:63`, 17 non-test callers by gopls) |
 | Ownership | Marker: create-once, adoption by loop ID whatever the kind (#1399); record: compare-and-swap against a per-process observed revision (`component.go:3108`), serialized in-process by `loopRecordMu` (6 sites); no cross-process lease — `loopbucket.AcquireOwner` verifies bucket policy, not exclusivity (`acquire.go:14`); a second holder is detected only at CAS |
 | Readers | Production: § Spellings (a)–(d) in-tree lists; sisters: table above (semspec key scan + 11 KV-watch processors; semteams, semsage, semmachina, semdragon event subscribers; semteams/semdev rule packs on the predicate); diagnostic: semspec `pkg/health`; gateway: dispatch `/activity`, semsage `/api/activity`; tests: 18 package test files, agentic + ops + research-graph e2e |
-| Writers | Direct: rows 1–4 (owner), 10 (birth), 11 (deferred), 13 (step 0), 16 (carrier); indirect: `graph-ingest` for the stamp; provisioning: `AcquireOwner` creates the bucket when absent; recovery: `adoptDurableCancel` (`:391`), `createTerminalMarker` adopt (`:285`); tests: `test/e2e/scenarios/agentic/stage_a_process_replacement.go:480` and `ops/scenario.go:419` seed records and markers by direct `PutKV`; sister writer: none (research-graph-synthesize is in-tree) |
-| Recovery | Redelivery re-enters at row 2 (marker adopt) or a cold arm (rows 1–12 of § Cold arms); W1 converges at the loop's next terminal (`spec.md:1990`, `migration:2027`); W2 converges at the next gate answer; the deferred write Retries (#1400); exhausted retries land in `internal/maxdelivery`; no reconciler, scan or repair pass reads the marker against the record (`git grep -n "WatchAll\|Watch(" -- 'processor/agentic-loop/*.go' | grep -v _test.go` → 0) |
+| Writers | Direct: rows 1–4 (owner), 10 (birth), 11 (deferred), 13 (step 0), 16 (carrier); indirect: `graph-ingest` for the stamp; provisioning: `AcquireOwner` creates the bucket when absent (`acquire.go:20`) and `graphresearch.RegisterTool` creates it a second way (`register_tool.go:49`, `:72`); second production writer of the bare record: `graphresearch` `CreateLoopEntity` (`register_tool.go:92`, `executor.go:267`); recovery: `adoptDurableCancel` (`:391`), `createTerminalMarker` adopt (`:285`); tests: `test/e2e/scenarios/agentic/stage_a_process_replacement.go:480` and `ops/scenario.go:419` seed records and markers by direct `PutKV`; e2e writers: `ops/scenario.go:439` (marker and record by `PutKV`), `:456` (stamp by direct triple seed); sister writer: none (research-graph-synthesize and graphresearch are in-tree) |
+| Recovery | Redelivery re-enters at row 2 (marker adopt) or a cold arm (rows 1–12 of § Cold arms); W1 converges at the loop's next terminal (`spec.md:1990`, `migration:2027`); W2 converges at the next gate answer; the deferred write Retries (#1400); exhausted retries land in `internal/maxdelivery`; no path terminalizes a research-pipeline record; no reconciler, scan or repair pass reads the marker against the record (`git grep -n "WatchAll\|Watch(" -- 'processor/agentic-loop/*.go' | grep -v _test.go` → 0) |
 
 Unknowns the table leaves open are listed under § Open evidence questions.
 
@@ -814,8 +917,8 @@ Surfaces reached from outside this repository, answered as a developer who has n
    to align; after 24 h a still-live record loses its marker sibling and reappears as "active".
 3. Where they find out: doc (`docs/operations/migration-beta162-to-beta163.md:2020-2035`, `doc.go:393`) and nowhere
    for the TTL and the foreign-payload case — no compile, boot or typed runtime signal names the key's contract.
-4. What they should have to know: a key name from one exported home and a payload type; the ordering and TTL facts
-   are predictions of framework behaviour the framework could carry in the payload or in the record.
+4. What they should have to know: nothing about the write order, the TTL, or a second payload shape under the same
+   key. The gap between 1 and 4 is those facts; they are recorded as the gap, not as a mechanism.
 
 ### Seam 2 — the `AGENT_LOOPS/<loopID>` record's terminal `state` (semspec's 11 KV-watch processors, `loop_completions.go:249`; semsage `ui-api/sse.go:15`; in-tree dispatch `terminal_settlement.go:158`, `loop_admission.go:361`)
 
@@ -824,11 +927,16 @@ Surfaces reached from outside this repository, answered as a developer who has n
    signal (semmachina `pending.go:88`); the deferred-turn and step-0 writers move the record's revision without
    changing `state`; the bucket TTL is 24 h; a KV watch has no ack or redelivery, so a derived owner must repair and
    publish readiness itself (`docs/concepts/03-streams-vs-kv-watches.md:121`); the record may be absent for a loop
-   whose birth was refused for size (`terminateOversizedBirth`) while its graph stamp exists.
+   whose birth was refused for size (`terminateOversizedBirth`) while its graph stamp exists; two loop kinds write a
+   record at the bare key (agentic-loop, research-pipeline) and only the first ever writes it terminal (§ Home (g)).
 2. If they do nothing: a watcher keyed on terminal `state` sees a completed loop "slightly later" than the event
    (`migration:2023`) or, under W1, only at the loop's next terminal — semspec's pipeline stage progression waits on
    exactly this signal (`loop_completions.go:16-30`); a watcher that treats `running` as live resumes work on a dead
-   holder (the inference semmachina refused).
+   holder (the inference semmachina refused). A research-pipeline record is created `executing` (`executor.go:249`) and
+   nothing writes it terminal, so every reader keyed on the record's terminal `state` — semspec's 11 watchers and
+   `findLoopIDForTask`, semsage `ui-api`, dispatch `/loops` and `/activity` (`loop_admission.go:368`,
+   `http_activity.go:329`) — reads it as running until the 24 h TTL removes it; that loop's terminal is spelled at
+   `search_result.complete.<loopID>`, `COMPLETE_<loopID>` and a research predicate instead.
 3. Where they find out: doc (`migration:2020-2035`, `agentic-dispatch/spec.md:628`) and the semmachina comment; the
    `agentic-dispatch` spec is the only spec-level statement, and it is another capability's.
 4. What they should have to know: that the record is terminal when the fact is terminal. The gap between 1 and 4 is
@@ -841,7 +949,9 @@ Surfaces reached from outside this repository, answered as a developer who has n
    republished on adoption (`terminal_owner.go:129` "A republished terminal is an accepted duplicate"), so a subscriber
    must dedupe (semsage `executor.go` discards duplicates by channel capacity; semteams/semmachina use durable
    consumers); the event precedes the record's terminal state; the stamp precedes the event
-   (`terminal_owner.go:338-340`), so triples are walkable at the event — but only for stamps inside the owner; a
+   (`terminal_owner.go:338-340`) when it lands, but a stamp whose mutation failed or whose platform identity was
+   missing is skipped with a `Warn` and the event still publishes (`graph_writer.go:285`, `:297`), so triples are not
+   guaranteed walkable at the event; a
    `MaxPayload` birth refusal publishes no event at all; the wildcard is one token (`agent.failed.*`) and a sister's
    own stream over `agent.failed.>` is refused by NATS for overlap (semmachina `loopfailure.go:100-104`).
 2. If they do nothing: a core-NATS subscriber (semsage `executor.go:184`) misses an event published before its
@@ -849,23 +959,27 @@ Surfaces reached from outside this repository, answered as a developer who has n
    a subscriber that keys the kind on the subject treats a cancel as a completion.
 3. Where they find out: typed at decode (`internal/agentterminal` fails closed for in-tree consumers; a sister that
    unmarshals directly, as semsage and semdragon do, gets a zero-valued struct — nowhere); doc for the ordering.
-4. What they should have to know: one subject per kind or one typed decoder every consumer uses. The
-   `agentic-terminal-events` spec already requires the latter for framework consumers (`:245`) and says "No new
-   exported normalized terminal type SHALL be introduced" — the sisters are outside that boundary by design (Go
-   `internal`).
+4. What they should have to know: nothing about which subject a kind rides on, whether a duplicate is an adoption,
+   or whether the stamp landed. The gap is those three facts. Recorded beside it, as a fact about the tree: the
+   `agentic-terminal-events` spec requires one interpretation for framework consumers (`:245`) and says "No new
+   exported normalized terminal type SHALL be introduced"; the sisters are outside that boundary by Go `internal`
+   visibility.
 
 ### Seam 4 — the `agent.loop.outcome` predicate (semteams rule packs, 47 mentions; semdev rule packs, 19; in-tree `configs/rules/deep-research`)
 
 1. What must they know: the value space (`success`, `failed`, `cancelled`) is documented, not validated (semdev
    `condition_literals.go:65` pins that fact; semstreams #1057); the stamp is written before the event and inside the
-   owner for every terminal except an oversized birth, where it is best-effort; a stamp can be timed out and withheld
-   (`graph_write_publish_timeout_total`), in which case the owner fails the commit (row 1, S Fatal) — no event, no
-   record — so a rule never sees an event without its stamp, but may see neither.
+   owner for every terminal except an oversized birth, where it is best-effort; a stamp that exceeds the graph-write budget fails the
+   commit (`graph_write_publish_timeout_total`; row 1) — no event, no record — but a stamp whose mutation fails or
+   whose platform identity is missing is skipped with a `Warn` and no metric while the event and the record still
+   land (`graph_writer.go:285`, `:297`, `:311`, `:323`, `:509`, `:517`), so a rule keyed on the stamp can miss a
+   terminal whose event was published.
 2. If they do nothing: a rule keyed on `agent.loop.outcome == "failed"` never fires for a tool that refused without
    failing its loop (semdev `05-classifier-fault-note.json:5` records this as "the shipped bug"); a rule that fires
    on `outcome ne ""` fires on cancellations too.
 3. Where they find out: doc and a sister conformance test; no vocabulary validator.
-4. What they should have to know: a closed value set the framework validates at the stamp.
+4. What they should have to know: nothing about whether the value set is validated or whether the stamp can be
+   skipped. The gap is those two facts.
 
 ### Prefer observation to prediction
 
@@ -880,8 +994,10 @@ recommendation.
 |---|---|---|
 | Durable homes of the terminal fact | 4 (marker, stamp, event, record) + 1 record-only writer class (deferred marker, step 0) racing the terminal write | § Spellings |
 | Terminal paths that bypass the owner | 1 (`terminateOversizedBirth`: stamp only) | gopls callers of `commitTerminal` (3) and `handleLoopFailure` (3); grep |
-| Writers of `AGENT_LOOPS/<loopID>` | 5 functions (1 `Create`, 4 CAS `Update`); terminal-record writers 2 | `git grep "loopsBucket\.\(Create\|Update\)("` → 6 incl. the marker |
-| Writers of `COMPLETE_<loopID>` | 2 (owner `Create`; research-graph-synthesize `Put` with a foreign payload) | git grep |
+| Loop kinds writing a bare `AGENT_LOOPS/<loopID>` record / kinds whose record ever turns terminal | 2 (agentic-loop, research-pipeline) / 1 | git grep; 0 terminal-state writes under `processor/research-graph-*`, `frameworkcapabilities/`, `agentic/research/` |
+| Durable effects on a terminal path that fail with only a log line (no error, no metric) | 4 builders, 8 swallow sites (3 missing-identity returns, 3 `writeBatch` Warns, 2 in `WriteSyntheticDecide`) | sed; `git grep -n "metrics\." -- processor/agentic-loop/graph_writer.go` → 0 |
+| Writers of `AGENT_LOOPS/<loopID>` | 6 functions in 2 packages (2 `Create`, 4 CAS `Update`); terminal-record writers 2; bucket provisioners 2 | `git grep "loopsBucket\.\(Create\|Update\)("` → 6 incl. the marker; KV-verb grep over `processor/research-graph-*` and `frameworkcapabilities/graphresearch` → 27 lines, 1 bare-key `Create` |
+| Writers of `COMPLETE_<loopID>` | 2 production (owner `Create`; research-graph-synthesize `Put` with a foreign payload) + 1 e2e seed (`ops/scenario.go:439`) | git grep |
 | Spellings of the `COMPLETE_` literal | 4 in-tree + 2 in semspec | git grep |
 | Spellings of the event port names in the owner package | 4 sites (`terminal_owner.go:322/324`, `handlers.go:2637`, `:3472`, `component.go:3722`) | git grep |
 | Sequencing functions (≥2 durable effects, or 1 + disposition) | 16 | § Sequencing table rows 1–16 |
@@ -899,7 +1015,7 @@ recommendation.
 | `errs.WrapFatal(` / `errs.WrapTransient(` | 52 / 6 files; 36 / 5 files | git grep -c |
 | `errs.IsFatal(` checks | 6 | git grep |
 | `DeliveryDecision` constant returns in the package | 50 (component 27, approval 17, governance 6) | git grep |
-| `DeliveryDecision` references repo-wide / in the package | 101 / 27 | gopls |
+| `DeliveryDecision` references repo-wide / in the package | 101 (39 non-test) / 27 (12 non-test) | gopls |
 | Handler seams returning the typed decision / a bare error | 3 / 3 (+ 1 converting closure) | grep |
 | `settleTerminalGuard` callers; drop-callback shapes | 8; 3 | gopls; grep |
 | `releaseLoopTransientState` non-test callers | 17 | gopls (28 total) |
@@ -910,7 +1026,7 @@ recommendation.
 | Lines: `processor/agentic-loop` non-test / files | 18,272 / 31 | `wc -l` |
 | `terminal_owner.go` / `loop_presence.go` / `loop_evidence.go` | 539 / 72 / 653 | `wc -l` |
 | Test files in package / touching the terminal surface | 124 / 18 | `ls`, git grep -l |
-| Sisters reading a home / with zero hits | 6 (semspec, semteams, semsage, semmachina, semdragon, semdev) / 4 (semsource, semconnect, semops, semembed) | sister table |
+| Sisters reading a home / carrying only a generated type / with zero hits | 6 (semspec, semteams, semsage, semmachina, semdragon, semdev) / 1 (semstreams-ui) / 9 (semsource, semconnect, semops, semembed, semboids, semlink, semmem, seminstruct, semdocs); semsummarize is not a git repository | sister table |
 | Sister KV-watch derived owners of the record's terminal state | 11 semspec processors + semsage `ui-api` | sister grep |
 
 ## Census mismatches re-measured
@@ -937,7 +1053,7 @@ recommendation.
 - `gopls references processor/agentic-loop/terminal_owner.go:505:21` (`settleTerminalGuard`) → 8, all non-test; `git grep -n "settleTerminalGuard" -- 'processor/agentic-loop/*.go'` → 13 lines (8 calls, 1 decl, 1 own error string, 3 comments)
 - `git grep -c 'errs.WrapFatal(' -- 'processor/agentic-loop/*.go' | grep -v _test.go` → 3/19/2/1/14/13 = 52; `errs.WrapTransient(` → 15/2/10/5/4 = 36
 - `git grep -n "errs.IsFatal(" -- 'processor/agentic-loop/*.go' | grep -v _test.go` → 6
-- `git grep -nE "^\s+test[A-Za-z]+\s+func\(" -- 'processor/agentic-loop/*.go' | grep -v _test.go` → 4
+- `git grep -nP "^\s+test[A-Za-z]+\s+func\(" -- 'processor/agentic-loop/*.go' | grep -v _test.go` → 4 (`-E` with the same pattern → 0; `git grep -n "^\s*test[A-Za-z]*Hook\s" -- 'processor/agentic-loop/*.go' | grep -v _test.go` → 4)
 - `gopls references processor/agentic-loop/loop_presence.go:28:2` (`loopPresenceStale`) → 15 (13 non-test); `handlers.go:123:2` (`staleDrop`) → 8 (3 non-test); `handlers.go:109:2` (`terminalOwnedElsewhere`) → 8 (6 non-test)
 - `git grep -n "errTerminalOwnedElsewhere" -- 'processor/agentic-loop/*.go' | grep -v _test.go` → 6 (3 uses, 1 decl, 2 comments)
 - `git grep -n "requestOrderApplied\|taskApplied\b\|requestOrderForeign" -- 'processor/agentic-loop/*.go' | grep -v _test.go` → 19 (5 `requestOrderApplied` uses, 4 `taskApplied` uses, 6 `requestOrderForeign` uses, 4 decls/returns in `loop_classification.go`)
@@ -953,7 +1069,7 @@ recommendation.
 - `git grep -n "loopsBucket" -- 'processor/agentic-loop/*.go' | grep -v _test.go` → 20 (2 `Create`, 4 `Update`, 3 `Get`, nil guards, decl, acquisition)
 - `git grep -n "loopRecordMu.Lock()" -- 'processor/agentic-loop/*.go' | grep -v _test.go` → 6
 - `git grep -n "publishResults(" -- 'processor/agentic-loop/*.go' | grep -v _test.go` → 7 (6 calls + decl); `\.Publish(\|\.PublishMsg(\|publisher\.` → 1 (`governance_dispatcher.go:736`, proposed-call publish, no KV pair)
-- `git grep -n "COMPLETE_" -- '*.go' | grep -v _test.go` → 41; `git grep -c "COMPLETE_" -- . ':!*.go'` → top files `openspec/specs/agentic-loop/spec.md` 20, archive design 17, migration 16
+- `git grep -n "COMPLETE_" -- '*.go' | grep -v _test.go` → 57 (44 outside `test/`; 3 production write sites + 1 e2e seed `PutKV`); `git grep -c "COMPLETE_" -- . ':!*.go'` → top files `openspec/specs/agentic-loop/spec.md` 20, archive design 17, migration 16
 - `git grep -c '"agent.cancelled"' -- 'processor/agentic-loop/*.go'` → 0
 - `git grep -n "AGENT_LOOPS" -- '*.go' | grep -v _test.go | grep -v "^processor/agentic-loop/"` → readers in `agentic-dispatch`, `agentic-tools`, `research-graph-*`, `frameworkcapabilities/graphresearch`, `internal/looptoken`, `graph/kvcatalog.go`
 - `git grep -n "AGENT_LOOPS" -- 'configs/'` → 11 (all component `"bucket"`/`loops_bucket` declarations); `git grep -n '"bucket"' -- 'configs/rules/'` → `RESEARCH_EVIDENCE`, `ENTITY_STATES` only (no rule watches `AGENT_LOOPS`)
@@ -961,7 +1077,7 @@ recommendation.
 - `gopls references vocabulary/agentic/predicates.go:398:2` (`LoopOutcome`) → 19 (4 non-test, 0 outside agentic-loop/vocabulary); `git grep -n "agent\.loop\.outcome" -- . ':!*.go'` → 6 rule configs + docs
 - `git grep -n "LoopCompletedEvent\|LoopFailedEvent\|LoopCancelledEvent" -- '*.go' | grep -v _test.go | grep -v "^processor/agentic-loop/\|^agentic/"` → `internal/agentterminal`, `processor/agentic-dispatch`, `processor/agentic-tools`, e2e
 - `git grep -n "IsKVConflictError\|ErrKVRevisionMismatch" -- '*.go' | grep -v _test.go | grep -v "^processor/agentic-loop/"` → 20, all single-store (`natsclient/kv.go`, `graph-ingest`, `pkg/lifecycle`, `persona`, `graph/clustering`)
-- `git grep -n "\.Create(ctx, " -- '*.go' | grep -v _test.go | grep -v "^processor/agentic-loop/"` → 30 (create-once anchors on other planes: `agentic-tools/outcomes.go:51`, `graph/clustering/summary_store.go:207`, `graph-ingest/canonical_mutations.go:280`, `config/manager.go:1078`, `graphresearch/register_tool.go:92`)
+- `git grep -n "\.Create(ctx, " -- '*.go' | grep -v _test.go | grep -v "^processor/agentic-loop/"` → 30 (create-once anchors on other planes: `agentic-tools/outcomes.go:51`, `graph/clustering/summary_store.go:207`, `graph-ingest/canonical_mutations.go:280`, `config/manager.go:1078`; `graphresearch/register_tool.go:92` is NOT another plane — it is the second production writer of this very record, § Home (e))
 - `git grep -n "WatchAll\|Watch(" -- 'processor/agentic-loop/*.go' | grep -v _test.go` → 0 (the owner package runs no watch; no reconciler)
 - `git grep -l "COMPLETE_\|commitTerminal\|settleTerminalGuard\|adoptDurableCancel\|createTerminalMarker\|terminalMarkerKey" -- 'processor/agentic-loop/*_test.go' | wc -l` → 18; `ls processor/agentic-loop/*_test.go | wc -l` → 124
 - `git grep -n "ErrKVRevisionMismatch\|lost the record race\|record moved past" -- 'test/e2e/'` → 0; `git grep -ln "converges at the loop's next terminal\|next terminal of any kind\|lostCAS\|LostCAS\|lost_cas" -- 'processor/agentic-loop/*_test.go'` → `lost_terminal_record_integration_test.go`
@@ -975,6 +1091,16 @@ recommendation.
 - `git -C <sister> grep -n "loop_completed" origin/main -- '*.go' | grep -v _test.go` → 0 for all ten (no sister Go code consumes the `/activity` event type; semteams consumes it from its UI per `docs/ui-integration-notes.md:29`)
 - `ls internal/loopbucket/` → does not exist; `git grep -n "^func AcquireOwner" -- '*.go'` → `processor/agentic-loop/internal/loopbucket/acquire.go:14`
 - `openspec/project.md` § Purpose and § Product Boundary read (contract step 1); `docs/contributing/07-pattern-adoption.md` headings read
+- `git grep -nE '\.(Put|Create|Update|Get|Watch|WatchAll|Keys|ListKeys|Delete|Purge)\(ctx' -- 'processor/research-graph-*/*.go' 'frameworkcapabilities/graphresearch/*.go' ':!*_test.go'` → 27 lines: 1 bare-key `Create` (`register_tool.go:92`), 1 trigger `Put` (`:101`), 8 stage-key `Put`s, 12 stage-key `Get`s, the `COMPLETE_` `Put` (`adapters.go:170`), the `search_result.complete` `Put` (`:152`), 2 graph `Create`s in `llmwrap`
+- `git grep -nE 'LoopStateComplete|LoopStateFailed|LoopStateCancelled|IsTerminal' -- 'processor/research-graph-*' 'frameworkcapabilities/' 'agentic/research/' ':!*_test.go'` → 0 (no research code writes or reads a terminal record state)
+- `git grep -n 'PipelineRole' -- '*.go' | grep -v _test.go` → 5 (the constant, its doc, the kickoff triple, the constructor call, the e2e scenario)
+- `git grep -n "metrics\." -- processor/agentic-loop/graph_writer.go` → 0; `git grep -n "Warn(" -- processor/agentic-loop/graph_writer.go` → 14 (8 of them on the four terminal/synthetic stamp paths)
+- `git grep -n 'agent\.loop\.outcome' -- configs/` → 6 rule files (deep-research 01, 02, 05, 06, 07; example-fan-out 02)
+- `git grep -n 'awaitLoopState(' -- test/e2e` → 4 lines (3 calls at `approval_signal.go:198`, `:599`, `:643` + the declaration at `:880`)
+- `gopls references natsclient/delivery_settlement.go:17:6 | grep -v _test.go` → 39 (agentic-loop 12, natsclient 8, agentic-dispatch 5, agentic-governance 4, agentrun 4, agentic-tools 3, agentic-model 2, deliverylane 1)
+- Sisters, second pass: `ls -d /Users/coby/Code/c360/*` → semstreams-ui, semboids, semlink, semmem, seminstruct, semdocs, semsummarize also present; `git -C <s> grep -c -E 'COMPLETE_|AGENT_LOOPS|agent\.complete|agent\.failed|agent\.loop\.outcome|loop_completed|/activity|LoopCompletedEvent|LoopFailedEvent|LoopCancelledEvent' origin/main` summed → semstreams-ui 9 (2 generated-type lines + 7 unrelated `EventSource` test-mock lines), semboids 0, semlink 0, semmem 0, seminstruct 0, semdocs 0; semsummarize is not a git repository (`git rev-parse --git-dir` fails)
+- `git -C semspec show origin/main:processor/execution-manager/req_watcher.go | sed -n '190,215p'` → `findLoopIDForTask` `Keys`+`Get` scan; `git -C semspec show origin/main:pkg/health/capture.go | sed -n '73,77p'` → `DefaultKVBuckets` includes `AGENT_LOOPS`
+- `gh api repos/C360Studio/semstreams/issues/comments/5858896669 -q .body` → the owner ruling quoted verbatim under § Adjacent claims
 - NOT RUN: no test suite, no Docker, no e2e (a sister session shares the host); no `git` command that mutates any tree; no sister repository was modified
 
 ## Open evidence questions
@@ -987,14 +1113,15 @@ recommendation.
    (`loop_wire.go:129`) decode a `COMPLETE_` value as a terminal event, while `research-graph-synthesize` writes a
    `SearchResult` envelope under the same key (`adapters.go:170`); whether those readers fail closed or partially
    decode was not executed (no Docker on this pass) — it is a code-path observation only.
-3. semdragon pins `v1.0.0-beta.21` and semsage `v1.0.0-alpha.3`; whether they are live adopters or stale checkouts is
-   an owner question that sizes the migration table (memory notes semdragon decoupled at beta.135; its
-   `origin/main` still subscribes to `agent.complete.*`).
-4. semspec's 11 `watchLoopCompletions` processors key pipeline progression on the record's terminal `state`; whether
-   any of them tolerates W1 (event and marker before a record that stays `running`) is not measurable from this tree
-   — semspec's own comment names the wrong writer of `COMPLETE_` (`watch_live.go:240`).
+3. Migration input (owner ruling #1405 issuecomment-5858896669: sisters get migration notes only): semdragon pins
+   `v1.0.0-beta.21` and semsage `v1.0.0-alpha.3`; both `origin/main` trees still subscribe to `agent.complete.*`.
+   Whether a migration note is owed to either is the owner's; no design inference is drawn.
+4. Migration input (same ruling; the owner's words: "semspec is out of date anyway"): semspec's 11
+   `watchLoopCompletions` processors and `findLoopIDForTask` key on the record's terminal `state`, and its
+   `watch_live.go:240` names the wrong writer of `COMPLETE_`. Recorded for the migration table; not a design premise.
 5. No e2e tier asserts a lost-CAS convergence (`git grep` → 0 in `test/e2e/`); the only test of W1 is a
-   package-level integration test. Any design that touches the owner's order will need to name the tier that proves
+   package-level integration test. The agentic tier does assert the record's terminal state for a cancel
+   (`approval_signal.go:643`), so record-state e2e evidence exists; lost-CAS evidence does not. Any design that touches the owner's order will need to name the tier that proves
    it, per `docs/contributing/02-e2e-tests.md` § Breaking Changes.
 6. `terminateOversizedBirth` leaves `active_loops` incremented (its own doc names it a #1242-class residual) and
    leaves the fact in home (b) only; whether that path is inside this change's "every terminal is one function"
@@ -1002,5 +1129,13 @@ recommendation.
 7. The bucket TTL of 24 h (`acquire.go:20`) applies to the marker and the record alike; no reader inventoried here
    accounts for a marker expiring under a still-live record. Whether that is reachable in practice (a loop older than
    24 h) was not measured.
-8. `configs/semspec.json:458` subscribes to `agentic.loop_completed.v1` on the `AGENT` stream — a subject this tree
-   never publishes; not traced further (sister, read-only).
+8. Migration input (same ruling): `configs/semspec.json:458` subscribes to `agentic.loop_completed.v1` on the `AGENT`
+   stream — a subject this tree never publishes; not traced further (sister, read-only).
+9. A research-pipeline record (`executor.go:249`) is never written terminal; every record-state reader in-tree
+   (dispatch `/loops` selection at `http_activity.go:329`, `/activity`, `loop_admission.go:368`) and in the sisters
+   treats it as running until the TTL. Its terminal lives at `search_result.complete.<loopID>`, `COMPLETE_<loopID>` and
+   the research predicate (§ Home (g)). Recorded as measured; for the sisters it is a migration input.
+10. The three terminal stamp builders and `WriteSyntheticDecide` swallow a mutation failure or a missing platform
+    identity with a `Warn` (8 sites, no error, no metric), so a terminal can publish its event and write its record
+    with no `agent.loop.outcome` stamp. Measured from the builders' bodies, not executed. It is evidence for scope
+    item 2 (whether home (b) can be dropped or derived); no inference is drawn here.
