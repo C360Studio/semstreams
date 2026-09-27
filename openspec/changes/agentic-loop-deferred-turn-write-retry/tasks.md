@@ -18,4 +18,8 @@ Tasks record work when it happens. No task asserts a post-merge fact. Claimed by
 
 - [x] 2.1 SemStreams implementation review at `1c572823`: PASS WITH AMENDMENTS (one MEDIUM, two LOW), relayed by the
       coordinator; amendments applied in the next commit.
-- [ ] 2.2 Re-review of the amendments recorded on PR #1403.
+- [x] 2.2 Re-review: round 1 PASS WITH AMENDMENTS at `1c572823` (PR #1403 issuecomment-5856771283); amendments at
+      `89ce0f54`, rebased `d7e27de2`. The coordinator accepts the fix pass on the reported mutation evidence and CI's
+      Test job; no second reviewer round.
+- [x] 2.3 BREAKING gate: `task e2e:agentic` at revision `d7e27de2` (coordinator run) — `msg="Scenario completed
+      successfully" duration=5m35.582566875s ... assertions_run=20`, `task_exit=0`, compose stacks 0 before and after.
